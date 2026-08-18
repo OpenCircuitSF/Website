@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Circuit SF — Hands-on electronics workshops in San Francisco</title>
+<meta name="description" content="Open Circuit SF runs hands-on electronics workshops in San Francisco. Beginners welcome, tools and parts provided, hosted anywhere from a makerspace to a neighborhood garage.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0A0D0B" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F4F6F3" media="(prefers-color-scheme: light)">
+
+<link rel="canonical" href="https://www.opencircuitsf.com/">
+<link rel="icon" href="mark-green-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://www.opencircuitsf.com/">
+<meta property="og:site_name" content="Open Circuit SF">
+<meta property="og:title" content="Open Circuit SF — Hands-on electronics workshops">
+<meta property="og:description" content="Hands-on electronics workshops in San Francisco. Beginners welcome, tools and parts provided.">
+<meta property="og:image" content="https://www.opencircuitsf.com/og-default.png">
+<meta name="twitter:card" content="summary_large_image">
+
+<script>
+  // Applied before first paint so the correct theme is never repainted.
+  try {
+    var t = localStorage.getItem('theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+</script>
+
+<style>
+/* ── Tokens ─────────────────────────────────────────────────────────────────
+   Light is the bare :root definition. Dark is restated twice: once under
+   prefers-color-scheme guarded against an explicit light override, and once
+   under [data-theme="dark"] so the toggle wins in both directions.
+   ------------------------------------------------------------------------ */
+:root {
+  color-scheme: light dark;
+
+  --bg-page:      #F4F6F3;
+  --bg-panel:     #FFFFFF;
+  --bg-subtle:    #E9EEE6;
+  --bg-header:    #E1E8DE;
+  --border:       #CFD8CA;
+  --border-strong:#87977F;
+  --text:         #10140F;
+  --text-muted:   #4C574A;
+  --text-faint:   #5F6A5C;
+  --accent:       #2F7D0C;
+  --accent-hover: #245F09;
+  --accent-dim:   #79C34A;
+  --accent-text:  #FFFFFF;
+  --accent-subtle:#E4F1DB;
+  --warning:      #8A5A00;
+  --danger:       #B4231B;
+
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
+  --space-4: 16px; --space-5: 24px; --space-6: 32px;
+  --radius: 4px;
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --lh: 1.55;
+  --measure: 62ch;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-page:      #0A0D0B;
+    --bg-panel:     #121712;
+    --bg-subtle:    #182018;
+    --bg-header:    #1B231C;
+    --border:       #243028;
+    --border-strong:#4E6553;
+    --text:         #E8F0E8;
+    --text-muted:   #9AA79E;
+    --text-faint:   #7E8D82;
+    --accent:       #68FF23;
+    --accent-hover: #8AFF55;
+    --accent-dim:   #3C9E0F;
+    --accent-text:  #0A0D0B;
+    --accent-subtle:#142B0C;
+    --warning:      #E5B22C;
+    --danger:       #FF5F56;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg-page:      #0A0D0B;
+  --bg-panel:     #121712;
+  --bg-subtle:    #182018;
+  --bg-header:    #1B231C;
+  --border:       #243028;
+  --border-strong:#4E6553;
+  --text:         #E8F0E8;
+  --text-muted:   #9AA79E;
+  --text-faint:   #7E8D82;
+  --accent:       #68FF23;
+  --accent-hover: #8AFF55;
+  --accent-dim:   #3C9E0F;
+  --accent-text:  #0A0D0B;
+  --accent-subtle:#142B0C;
+  --warning:      #E5B22C;
+  --danger:       #FF5F56;
+}
+
+/* ── Reset / base ───────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+body, h1, h2, p, ul, li, figure { margin: 0; padding: 0; }
+ul { list-style: none; }
+
+body {
+  background: var(--bg-page);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: var(--lh);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { color: var(--accent-hover); }
+
+:where(a, button):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.skip {
+  position: absolute; left: -9999px; top: var(--space-3);
+  background: var(--bg-panel); color: var(--text);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: 14px;
+}
+.skip:focus { left: var(--space-4); z-index: 10; }
+
+.shell { width: 100%; max-width: 880px; margin-inline: auto; padding-inline: var(--space-5); }
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.site-header {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  padding-block: var(--space-4);
+}
+.site-header .shell { display: flex; align-items: center; gap: var(--space-4); }
+
+.brand { display: flex; align-items: center; gap: var(--space-3); margin-right: auto; }
+.brand-mark {
+  width: 34px; height: 34px; flex: none;
+  background-color: var(--accent);
+  -webkit-mask-image: url('mark-mask-64.png');
+  mask-image: url('mark-mask-64.png');
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.brand-name {
+  font-family: var(--font-mono);
+  font-size: 15px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text);
+}
+.brand-name .sf { color: var(--text-faint); }
+
+.theme-toggle {
+  font-family: var(--font-mono); font-size: 13px;
+  color: var(--text-muted); background: var(--bg-subtle);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer; min-height: 36px;
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--border-strong); }
+
+/* ── Terminal panel ─────────────────────────────────────────────────────── */
+main { flex: 1 0 auto; padding-block: var(--space-6) var(--space-6); }
+
+.terminal {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-block-end: var(--space-6);
+}
+.terminal-bar {
+  display: flex; align-items: center; gap: 7px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border);
+}
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.dot-1 { background: var(--danger); }
+.dot-2 { background: var(--warning); }
+.dot-3 { background: var(--accent); }
+.terminal-body { padding: var(--space-6) var(--space-5) var(--space-5); }
+
+.prompt {
+  font-family: var(--font-mono); font-size: clamp(13px, 2.4vw, 15px);
+  color: var(--accent); margin-block-end: var(--space-5);
+  overflow-wrap: anywhere;
+}
+.prompt::before { content: '> '; color: var(--accent-dim); }
+
+h1 {
+  font-size: clamp(2rem, 8.5vw, 3.75rem);
+  font-weight: 800; line-height: 1.02;
+  letter-spacing: -0.02em; text-transform: uppercase;
+  text-wrap: balance;
+  margin-block-end: var(--space-5);
+}
+
+.status { display: grid; gap: var(--space-2); margin-block-end: var(--space-5); }
+.status li {
+  font-family: var(--font-mono); font-size: clamp(13px, 2.3vw, 15px);
+  color: var(--text-muted);
+  display: grid; grid-template-columns: auto 1fr; gap: var(--space-3);
+  align-items: baseline;
+}
+.status .ok { color: var(--accent); white-space: nowrap; }
+
+.cmdline {
+  font-family: var(--font-mono); font-size: clamp(13px, 2.4vw, 15px);
+  color: var(--text); padding-top: var(--space-4);
+  border-top: 1px dashed var(--border);
+  overflow-wrap: anywhere;
+}
+.cmdline::before { content: '$ '; color: var(--accent); }
+.cursor {
+  display: inline-block; width: .58em; height: 1.05em;
+  background: var(--accent); vertical-align: text-bottom;
+  margin-left: 2px; animation: blink 1.1s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+
+/* ── Content ────────────────────────────────────────────────────────────── */
+.lede { max-width: var(--measure); margin-block-end: var(--space-6); }
+.lede p + p { margin-block-start: var(--space-4); }
+.lede p { color: var(--text-muted); font-size: 1.0625rem; }
+.lede strong { color: var(--text); font-weight: 600; }
+
+h2 {
+  font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--text-faint);
+  margin-block-end: var(--space-4);
+}
+
+.cta { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-block-end: var(--space-6); }
+.btn {
+  font-family: var(--font-mono); font-size: 14px; font-weight: 700;
+  padding: var(--space-3) var(--space-5); min-height: 44px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius); text-decoration: none; border: 1px solid transparent;
+}
+.btn-primary { background: var(--accent); color: var(--accent-text); }
+.btn-primary:hover { background: var(--accent-hover); color: var(--accent-text); }
+.btn-ghost { border-color: var(--border-strong); color: var(--text); background: var(--bg-panel); }
+.btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+.logo-full {
+  width: min(300px, 68vw); aspect-ratio: 1; margin: var(--space-6) auto 0;
+  background-color: var(--accent);
+  -webkit-mask-image: url('logo-mask-512.png');
+  mask-image: url('logo-mask-512.png');
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────────── */
+.site-footer {
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  padding-block: var(--space-5);
+  margin-top: var(--space-6);
+  font-family: var(--font-mono); font-size: 13px; color: var(--text-faint);
+}
+.site-footer .shell { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); align-items: baseline; }
+.site-footer .spacer { margin-left: auto; }
+
+@media (max-width: 480px) {
+  .shell { padding-inline: var(--space-4); }
+  .terminal-body { padding: var(--space-5) var(--space-4) var(--space-4); }
+  .btn { width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="shell">
+    <div class="brand">
+      <span class="brand-mark" role="img" aria-label="Open Circuit SF logo"></span>
+      <span class="brand-name">Open Circuit<span class="sf">_SF</span></span>
+    </div>
+    <button class="theme-toggle" type="button" id="theme-toggle" aria-live="polite">theme: auto</button>
+  </div>
+</header>
+
+<main id="main">
+  <div class="shell">
+
+    <section class="terminal" aria-labelledby="headline">
+      <div class="terminal-bar" aria-hidden="true">
+        <span class="dot dot-1"></span><span class="dot dot-2"></span><span class="dot dot-3"></span>
+      </div>
+      <div class="terminal-body">
+        <p class="prompt">open_circuit_sf // san_francisco</p>
+
+        <h1 id="headline">Hands-on electronics workshops</h1>
+
+        <ul class="status">
+          <li><span class="ok" aria-hidden="true">[ OK ]</span><span>absolute beginners welcome</span></li>
+          <li><span class="ok" aria-hidden="true">[ OK ]</span><span>tools and parts provided</span></li>
+          <li><span class="ok" aria-hidden="true">[ OK ]</span><span>hosted anywhere &mdash; makerspace to neighborhood garage</span></li>
+          <li><span class="ok" aria-hidden="true">[ OK ]</span><span>microcontrollers &middot; soldering &middot; homelab &middot; automation</span></li>
+        </ul>
+
+        <p class="cmdline">www.opencircuitsf.com<span class="cursor" aria-hidden="true"></span></p>
+      </div>
+    </section>
+
+    <section class="lede" aria-labelledby="about-h">
+      <h2 id="about-h">What this is</h2>
+      <p><strong>Open Circuit SF</strong> is a San Francisco group running hands-on
+      electronics workshops &mdash; soldering, microcontrollers, homelab, home
+      automation, and whatever else the room wants to build next.</p>
+      <p>We are deliberately venue-independent. A workshop might run in a
+      makerspace, a co-working room, or somebody&rsquo;s garage. Bring curiosity;
+      we bring the tools.</p>
+      <p>The full site is being built now &mdash; workshop listings and an
+      interest-based mailing list are on the way. In the meantime, the Discord
+      is where everything happens.</p>
+    </section>
+
+    <section aria-labelledby="cta-h">
+      <h2 id="cta-h">Get involved</h2>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://discord.gg/Fq9ug6QXV3" rel="noopener">Join the Discord</a>
+      </div>
+    </section>
+
+    <div class="logo-full" role="img" aria-label="Open Circuit SF"></div>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="shell">
+    <span>&copy; <span id="year">2026</span> Open Circuit SF</span>
+    <span class="spacer">$ hack &middot; build &middot; learn</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var order = ['auto', 'light', 'dark'];
+
+  function current() {
+    var t = root.getAttribute('data-theme');
+    return (t === 'light' || t === 'dark') ? t : 'auto';
+  }
+  function label() { btn.textContent = 'theme: ' + current(); }
+  function apply(next) {
+    if (next === 'auto') {
+      root.removeAttribute('data-theme');
+      try { localStorage.removeItem('theme'); } catch (e) {}
+    } else {
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem('theme', next); } catch (e) {}
+    }
+    label();
+  }
+
+  btn.addEventListener('click', function () {
+    apply(order[(order.indexOf(current()) + 1) % order.length]);
+  });
+
+  label();
+  document.getElementById('year').textContent = new Date().getFullYear();
+})();
+</script>
+
+</body>
+</html>
