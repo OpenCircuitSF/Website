@@ -154,7 +154,7 @@ Any additional context, guesses at root cause, related code locations.
 4. Set status to `open`.
 5. Use today's date for First seen.
 6. Phrase the title as a single declarative sentence describing the bug, not a question or a fix description.
-7. **Plan it (phase 1).** Dispatch a fresh subagent on the **top available model (currently Fable)** to read this guide, `CLAUDE.md`, the new issue, and the relevant code, then write a `## Plan` section into `issues/NNNN.md` (after `## Description`). It writes no code and leaves status at `open`. This gives whoever picks the issue up a running start. Record the planner's usage in `## Work log`. Skip if the user is jotting a quick note and doesn't want planning yet.
+7. **Plan it (phase 1).** Dispatch a fresh subagent on the **planning model (Opus)** to read this guide, `CLAUDE.md`, the new issue, and the relevant code, then write a `## Plan` section into `issues/NNNN.md` (after `## Description`). It writes no code and leaves status at `open`. This gives whoever picks the issue up a running start. Record the planner's usage in `## Work log`. Skip if the user is jotting a quick note and doesn't want planning yet.
 8. **If `issues/` is tracked by git**, commit the new file with message `#NNNN <issue title>` so the issue enters git history with its `open` status — the `## Plan` rides along if it's landed, else commit it separately as `#NNNN Plan`. If ignored, skip.
 
 ## Updating an issue
@@ -169,11 +169,13 @@ Issues move from filed to resolved through a **three-phase pipeline**. Each phas
 
 | Phase | When | Model | The subagent does | Status after |
 |---|---|---|---|---|
-| **1. Planning** | at issue creation (see "Filing a new issue") | **Fable** (top model) | reads conventions + issue, writes `## Plan`; no code | `open` |
+| **1. Planning** | selectively, before an issue is worked (see `CLAUDE.md` §Model policy) | **Opus** | reads conventions + issue, writes `## Plan`; no code | `open` |
 | **2. Implementation** | when the issue is worked | **Sonnet** | follows the plan, fixes, builds + verifies, code commit, drafts resolution sections | `in-progress` |
 | **3. Review** | after implementation returns | **Opus** | independently re-verifies the diff, then approves or bounces | `resolved` or `open` |
 
-Fresh context per phase is deliberate: each subagent reloads this guide and `CLAUDE.md` cleanly, so edits to those files take effect on the next dispatch. The top model runs *only* in a subagent, never in the orchestrator's own context, to keep its large context isolated.
+Fresh context per phase is deliberate: each subagent reloads this guide and `CLAUDE.md` cleanly, so edits to those files take effect on the next dispatch. Planning and review both run *only* in a subagent, never in the orchestrator's own context — the orchestrator stays cheap and holds the queue, not the code.
+
+**Fable is not used on this project.** Planning runs on Opus. See `CLAUDE.md` §Model policy for which issues get a planning pass at all — most of this tracker's issues already carry acceptance criteria and skip phase 1.
 
 ### Orchestrator: pick and dispatch
 
@@ -247,17 +249,17 @@ Status flow: `open` (with `## Plan`) → `in-progress` → review → `resolved`
 Backend:
 
 ```bash
-go build ./...
-go vet ./...
-go test ./...
+go build ./... 2>&1 | tail -40
+go vet ./...   2>&1 | tail -40
+go test ./...  2>&1 | tail -40
 ```
 
 Frontend (from `web/`):
 
 ```bash
-npm run check   # svelte-check — type errors
-npm test        # vitest run
-npm run build   # vite build; must succeed before `go build` embeds dist/
+npm run check 2>&1 | tail -40   # svelte-check — type errors
+npm test      2>&1 | tail -40   # vitest run
+npm run build 2>&1 | tail -20   # vite build; must precede `go build` embedding dist/
 ```
 
 Full local run:
@@ -266,6 +268,8 @@ Full local run:
 ./scripts/dev.sh            # Vite :5173 + Go API :8080, hot reload
 ./scripts/dev.sh --built    # production embedding at :8080
 ```
+
+Bound the output — `tail -40` keeps the summary and drops the noise; re-run a single failing package unbounded when you need the detail. See `CLAUDE.md` §5.
 
 **`go build ./...` passing is not verification.** Tests must actually execute and their output must be read. Issues touching the SPA require `npm run check` and `npm test` in addition to the Go suite. Issues touching email rendering or the send worker require the relevant unit tests to run and be named in `## Verification`.
 
@@ -283,7 +287,7 @@ Never use `wontfix` or `closed` to escape a stuck issue.
 
 ## Token usage and cost tracking
 
-Every subagent dispatch gets a usage record on the issue it worked: which model did the work, exactly how many tokens it consumed, and an estimated cost. The **orchestrator** records this after the subagent returns — a subagent can't measure its own totals. Under the three-phase workflow each issue accumulates a row per phase — **planning (Fable), recorded at filing time; implementation (Sonnet); review (Opus)** — plus a row for every bounce or bail.
+Every subagent dispatch gets a usage record on the issue it worked: which model did the work, exactly how many tokens it consumed, and an estimated cost. The **orchestrator** records this after the subagent returns — a subagent can't measure its own totals. Under the three-phase workflow each issue accumulates a row per phase — **planning (Opus), when run; implementation (Sonnet); review (Opus)** — plus a row for every bounce or bail.
 
 ### Pricing cache (`issues/model-pricing.json`)
 
@@ -295,9 +299,8 @@ Anthropic publishes prices on the docs site (no API endpoint). Fetch once per da
   "source": "https://docs.claude.com/en/docs/about-claude/pricing",
   "currency": "USD per MTok",
   "models": {
-    "claude-fable-5": { "input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50 },
-    "claude-opus-4-8": { "input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50 },
-    "claude-sonnet-4-6": { "input": 3.00, "output": 15.00, "cache_write_5m": 3.75, "cache_read": 0.30 }
+    "claude-opus-5": { "input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50 },
+    "claude-sonnet-5": { "input": 3.00, "output": 15.00, "cache_write_5m": 3.75, "cache_read": 0.30 }
   }
 }
 ```
@@ -326,9 +329,9 @@ One row per work session, conventionally the last section of the issue file (alw
 
 | Date | Phase | Model | Input | Output | Cache read | Cache write | Cost |
 |---|---|---|---|---|---|---|---|
-| 2026-06-03 | plan | claude-fable-5 | 84 | 6,102 | 512,400 | 41,200 | $0.58 |
-| 2026-06-04 | implement | claude-sonnet-4-6 | 120 | 18,530 | 2,904,110 | 98,400 | $1.12 |
-| 2026-06-04 | review | claude-opus-4-8 | 96 | 9,240 | 1,331,200 | 44,800 | $1.05 |
+| 2026-06-03 | plan | claude-opus-5 | 84 | 6,102 | 512,400 | 41,200 | $0.58 |
+| 2026-06-04 | implement | claude-sonnet-5 | 120 | 18,530 | 2,904,110 | 98,400 | $1.12 |
+| 2026-06-04 | review | claude-opus-5 | 96 | 9,240 | 1,331,200 | 44,800 | $1.05 |
 
 **Total: $2.75**
 ```
