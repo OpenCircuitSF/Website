@@ -1,0 +1,286 @@
+#!/usr/bin/env python3
+"""List the issue tracker grouped by build phase, with completion percentages.
+
+A companion to ~/bin/list-recent-issues. That tool answers "what did I touch
+lately"; this one answers "how far through the plan am I". Issues are grouped
+under their `**Phase**` metadata row, phases run in numeric order, and both the
+overall header and each phase header carry a completion percentage.
+
+    scripts/list-issues-by-phase              # everything, grouped by phase
+    scripts/list-issues-by-phase --open       # hide finished issues
+    scripts/list-issues-by-phase --phase 3    # just phase 3
+    scripts/list-issues-by-phase --no-color   # plain columns for grep/awk
+
+On a terminal the output is colored and grouped. When piped or redirected it
+degrades to plain aligned columns (number, status, phase, title) so it stays
+greppable. NO_COLOR is honored.
+
+Completion is measured in issues, not acceptance criteria: an issue counts as
+done when its status is resolved or closed. `wontfix` issues are excluded from
+the denominator entirely — they are never going to be done, so leaving them in
+would cap the project below 100%. In-progress issues additionally show their
+acceptance-criteria tally, which is the only sub-issue progress signal the
+tracker records.
+
+The issues folder is found the same way list-recent-issues finds it: ./issues
+if present, otherwise the first immediate subdirectory holding an Issues.md or
+project.json marker, repeated up the parent directories and stopping at the
+enclosing git repo root.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import sys
+from pathlib import Path
+
+DONE = {"resolved", "closed", "done", "fixed", "complete", "completed"}
+IN_PROGRESS = {"in-progress", "in progress", "wip"}
+OPENISH = {"open", "new", "todo", "reopened"}
+WONTFIX = {"wontfix", "won't fix", "duplicate", "invalid"}
+
+TITLE_RE = re.compile(r"^#\s*(\d+)\s*[—-]\s*(.+?)\s*$")
+ROW_RE = re.compile(r"^\|\s*\*\*(?P<key>[^*]+)\*\*\s*\|\s*(?P<val>.*?)\s*\|\s*$")
+PHASE_RE = re.compile(r"^(?P<num>\d+)\s*[—-]?\s*(?P<label>.*)$")
+AC_RE = re.compile(r"^- \[(?P<mark>[ xX])\]")
+
+
+class Palette:
+    """ANSI codes, or empty strings when color is off."""
+
+    NAMES = dict(
+        reset="0", dim="2", bold="1", red="31", green="32",
+        yellow="33", blue="34", magenta="35", cyan="36", gray="90",
+    )
+
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+        for name, code in self.NAMES.items():
+            setattr(self, name, f"\033[{code}m" if enabled else "")
+
+
+class Issue:
+    __slots__ = ("num", "title", "status", "phase_num", "phase_label", "ac_done", "ac_total")
+
+    def __init__(self, path: Path):
+        self.num = path.stem
+        self.title = "(no title)"
+        self.status = "?"
+        self.phase_num: int | None = None
+        self.phase_label = ""
+        self.ac_done = 0
+        self.ac_total = 0
+
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
+            if i == 0:
+                m = TITLE_RE.match(line)
+                if m:
+                    self.num, self.title = m.group(1), m.group(2)
+                continue
+            m = ROW_RE.match(line)
+            if m:
+                key, val = m.group("key").strip().lower(), m.group("val").strip()
+                if key == "status":
+                    self.status = val or "?"
+                elif key == "phase":
+                    pm = PHASE_RE.match(val)
+                    if pm:
+                        self.phase_num = int(pm.group("num"))
+                        self.phase_label = pm.group("label").strip()
+                continue
+            m = AC_RE.match(line)
+            if m:
+                self.ac_total += 1
+                if m.group("mark") in "xX":
+                    self.ac_done += 1
+
+    @property
+    def key(self) -> str:
+        return self.status.strip().lower()
+
+    @property
+    def is_done(self) -> bool:
+        return self.key in DONE
+
+    @property
+    def is_wontfix(self) -> bool:
+        return self.key in WONTFIX
+
+    @property
+    def counts(self) -> bool:
+        """Whether this issue belongs in a completion denominator."""
+        return not self.is_wontfix
+
+    def glyph(self) -> str:
+        if self.is_done:
+            return "✓"
+        if self.key in IN_PROGRESS:
+            return "◐"
+        if self.key in OPENISH:
+            return "○"
+        if self.is_wontfix:
+            return "⊘"
+        return "•"
+
+    def color(self, p: Palette) -> str:
+        if self.is_done:
+            return p.green
+        if self.key in IN_PROGRESS:
+            return p.cyan
+        if self.key in OPENISH:
+            return p.yellow
+        if self.is_wontfix:
+            return p.gray
+        return p.magenta
+
+
+def is_issues_dir(d: Path) -> bool:
+    return any((d / n).is_file() for n in ("project.json", "Issues.md", "Issue.md"))
+
+
+def find_issues_in(base: Path) -> Path | None:
+    if (base / "issues").is_dir() and is_issues_dir(base / "issues"):
+        return base / "issues"
+    try:
+        candidates = [d for d in sorted(base.iterdir()) if d.is_dir() and is_issues_dir(d)]
+    except OSError:
+        return None
+    for c in candidates:
+        if "issue" in c.name.lower():
+            return c
+    return candidates[0] if candidates else None
+
+
+def resolve_issues_dir(arg: str | None) -> Path:
+    if arg:
+        p = Path(arg)
+        return p if p.is_absolute() else Path.cwd() / p
+    d = Path.cwd()
+    home = Path.home()
+    while d != d.parent and d != home:
+        found = find_issues_in(d)
+        if found:
+            return found
+        if (d / ".git").exists():   # repo root is the boundary
+            break
+        d = d.parent
+    return Path.cwd() / "issues"
+
+
+def project_name(issues_dir: Path) -> str:
+    """The tracker's canonical name from project.json, else the repo folder."""
+    try:
+        return json.loads((issues_dir / "project.json").read_text())["name"]
+    except (OSError, ValueError, KeyError):
+        return issues_dir.parent.name
+
+
+def bar(done: int, total: int, width: int = 12) -> str:
+    if total <= 0:
+        return "░" * width
+    filled = round(width * done / total)
+    return "█" * filled + "░" * (width - filled)
+
+
+def pct(done: int, total: int) -> int:
+    return round(100 * done / total) if total else 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="list-issues-by-phase",
+        description="List issues grouped by build phase, with completion percentages.",
+    )
+    ap.add_argument("dir", nargs="?", help="issues directory (default: auto-detect)")
+    ap.add_argument("--open", action="store_true", dest="only_open",
+                    help="hide finished issues; phase percentages still reflect everything")
+    ap.add_argument("--phase", type=int, metavar="N", help="show only phase N")
+    ap.add_argument("--color", action="store_const", const="always", dest="color_mode")
+    ap.add_argument("--no-color", action="store_const", const="never", dest="color_mode")
+    args = ap.parse_args()
+
+    issues_dir = resolve_issues_dir(args.dir)
+    if not issues_dir.is_dir():
+        print(f"error: {issues_dir} not found", file=sys.stderr)
+        return 1
+
+    files = sorted(issues_dir.glob("[0-9][0-9][0-9][0-9].md"))
+    if not files:
+        print(f"no issue files in {issues_dir}", file=sys.stderr)
+        return 0
+
+    issues = [Issue(f) for f in files]
+
+    mode = args.color_mode or "auto"
+    use_color = mode == "always" or (
+        mode == "auto" and sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    )
+    p = Palette(use_color)
+
+    # Group by phase; unphased issues sort last under a sentinel.
+    groups: dict[int | None, list[Issue]] = {}
+    for it in issues:
+        groups.setdefault(it.phase_num, []).append(it)
+    ordered = sorted(groups, key=lambda k: (k is None, k if k is not None else 0))
+    if args.phase is not None:
+        ordered = [k for k in ordered if k == args.phase]
+        if not ordered:
+            print(f"no issues in phase {args.phase}", file=sys.stderr)
+            return 1
+
+    if not use_color:
+        for k in ordered:
+            for it in sorted(groups[k], key=lambda i: i.num):
+                if args.only_open and it.is_done:
+                    continue
+                ph = f"{k}" if k is not None else "-"
+                print(f"{it.num}  {it.status:<12}  {ph:<2}  {it.title}")
+        return 0
+
+    counted = [i for i in issues if i.counts]
+    total_done = sum(1 for i in counted if i.is_done)
+    wontfix = sum(1 for i in issues if i.is_wontfix)
+    width = shutil.get_terminal_size((100, 24)).columns
+
+    head = f"{project_name(issues_dir)} · {total_done}/{len(counted)} issues · {pct(total_done, len(counted))}%"
+    print(f"\n{p.bold}{head}{p.reset}  {p.green}{bar(total_done, len(counted), 24)}{p.reset}")
+    if wontfix:
+        print(f"{p.dim}{wontfix} won't-fix excluded from the total{p.reset}")
+
+    for k in ordered:
+        members = sorted(groups[k], key=lambda i: i.num)
+        cm = [i for i in members if i.counts]
+        d = sum(1 for i in cm if i.is_done)
+        label = members[0].phase_label if k is not None else "Unphased"
+        title = f"Phase {k} — {label}" if k is not None else label
+        pc = pct(d, len(cm))
+        pcolor = p.green if pc == 100 else (p.cyan if pc else p.dim)
+        print(f"\n{p.bold}{p.blue}{title}{p.reset}  "
+              f"{p.dim}{d}/{len(cm)}{p.reset}  "
+              f"{pcolor}{pc:>3}%{p.reset} {pcolor}{bar(d, len(cm))}{p.reset}")
+
+        for it in members:
+            if args.only_open and it.is_done:
+                continue
+            tcolor = p.dim if (it.is_done or it.is_wontfix) else p.reset
+            status = f"{it.glyph()} {it.status}"
+            extra = ""
+            if it.key in IN_PROGRESS and it.ac_total:
+                extra = f"  {p.dim}{it.ac_done}/{it.ac_total} AC{p.reset}"
+            # Budget: 2 indent + 4 num + 2 + 13 status + 2 + trailing AC note.
+            avail = max(20, width - 23 - (len(f"  {it.ac_done}/{it.ac_total} AC") if extra else 0))
+            t = it.title if len(it.title) <= avail else it.title[: avail - 1] + "…"
+            print(f"  {p.gray}{it.num}{p.reset}  "
+                  f"{it.color(p)}{status:<13}{p.reset}  "
+                  f"{tcolor}{t}{p.reset}{extra}")
+
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
