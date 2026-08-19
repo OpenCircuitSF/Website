@@ -270,12 +270,17 @@ func TestConfirmationAndAlreadySubscribed_NoCampaignHeaders(t *testing.T) {
 	}
 }
 
-// TestRegistrationAndRecovery_NoListFooter proves the two account emails do
-// NOT carry mailing-list footer links or a physical address — they have
-// nothing to do with subscriber list membership, and PRD §6.6's physical
-// address requirement is scoped to commercial/list mail.
+// TestRegistrationAndRecovery_NoListFooter proves the three account emails
+// (registration, recovery, and — since #0076's review bounce — the themed
+// sessions_revoked notice) do NOT carry mailing-list footer links or a
+// physical address — they have nothing to do with subscriber list
+// membership, and PRD §6.6's physical address requirement is scoped to
+// commercial/list mail. Before this test named sessions_revoked, the
+// "no unsubscribe link on a security notice" property was golden-locked
+// only; an unsubscribe link on a security notice would be actively
+// misleading, since these are transactional, not campaign, mail.
 func TestRegistrationAndRecovery_NoListFooter(t *testing.T) {
-	for _, name := range []string{"registration", "recovery"} {
+	for _, name := range []string{"registration", "recovery", "sessions_revoked"} {
 		msg := allMessages()[name]
 		if strings.Contains(msg.HTMLBody, "Manage your interests") {
 			t.Errorf("%s: HTML unexpectedly carries the mailing-list footer", name)
@@ -445,14 +450,57 @@ func TestNoTextBodyContainsButton(t *testing.T) {
 // "link" where only a raw URL does. Without this, TestNoTextBodyContainsButton
 // alone would also pass for a renderer that dropped the CTA sentence from
 // text entirely, which is not the fix this issue asked for.
+//
+// This asserts on the resolved CTA SENTENCE ("Click the button below" /
+// "Click the link below"), not a bare substring. A bare "button" check is
+// satisfied for every template by the unconditional "If the button above
+// doesn't work…" fallback line renderHTML always emits when ButtonURL is
+// set, and a bare "link" check is satisfied for registration/recovery by
+// "This link expires in N minutes." — neither proves resolveCTA actually
+// ran. #0076's review bounce caught this: the previous version of this test
+// only genuinely exercised sessions_revoked. Mutation proof: replace either
+// resolveCTA call in renderHTML/renderText with the other word (or the
+// hard-coded literal) and this test fails on the sentence check, same as
+// before, but now it also fails if the CTA sentence is silently dropped from
+// a template while the unrelated "expires"/"doesn't work" lines remain.
 func TestHTMLAndTextCTAWordingDiffer(t *testing.T) {
 	for _, name := range []string{"registration", "recovery", "sessions_revoked"} {
 		msg := allMessages()[name]
-		if !strings.Contains(strings.ToLower(msg.HTMLBody), "button") {
-			t.Errorf("%s: HTML body should say 'button' where the HTML button actually is", name)
+		if !strings.Contains(msg.HTMLBody, "Click the button below") {
+			t.Errorf("%s: HTML body missing the resolved CTA sentence 'Click the button below'", name)
 		}
-		if !strings.Contains(strings.ToLower(msg.TextBody), "link") {
-			t.Errorf("%s: text body should say 'link' since text readers only see a raw URL", name)
+		if !strings.Contains(msg.TextBody, "Click the link below") {
+			t.Errorf("%s: text body missing the resolved CTA sentence 'Click the link below'", name)
+		}
+	}
+}
+
+// TestNoRenderedBodyContainsCTAToken is #0076's review-bounce finding 1:
+// resolveCTA only runs over IntroParagraphs and NoteParagraphs. A probe
+// template that placed {{cta}} in Subject, Preheader, Eyebrow, Heading,
+// ButtonText, or ButtonURL shipped the literal token verbatim — 8 unresolved
+// occurrences in the HTML part (including inside the href) and 4 in the
+// text part. There's no injection risk (substitution precedes
+// html.EscapeString, so an unresolved token is just escaped text) but it
+// undercuts fix 1's claim that HTML and text "cannot be recoupled by
+// accident": a future author who writes {{cta}} into any field but the two
+// paragraph slices ships the raw token. This guards the templates that
+// actually exist today; it will not catch a *new* field misuse until that
+// field is added to allMessages()'s inputs, but it does prove none of the
+// five current templates leak the token anywhere in their rendered output.
+//
+// Mutation proof: add "{{cta}}" to any Build*Email's Subject or ButtonText
+// and this test fails, naming the field and the leaked token.
+func TestNoRenderedBodyContainsCTAToken(t *testing.T) {
+	for name, msg := range allMessages() {
+		if strings.Contains(msg.HTMLBody, ctaToken) {
+			t.Errorf("%s: HTMLBody contains unresolved %q", name, ctaToken)
+		}
+		if strings.Contains(msg.TextBody, ctaToken) {
+			t.Errorf("%s: TextBody contains unresolved %q", name, ctaToken)
+		}
+		if strings.Contains(msg.Subject, ctaToken) {
+			t.Errorf("%s: Subject contains unresolved %q", name, ctaToken)
 		}
 	}
 }

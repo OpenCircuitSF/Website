@@ -14,7 +14,7 @@ the `.txt` fixtures carry the override below.
 `.gitattributes` marks `internal/mailing/testdata/*.txt -text` so git does
 not normalise them to LF on checkout. Without that override, the repo-wide
 `* text=auto eol=lf` rule silently rewrites these files to LF on a fresh
-clone or `git worktree add`, and the four golden tests above fail — the
+clone or `git worktree add`, and the five golden tests above fail — the
 working tree stays CRLF (and `git status` stays clean) only on the machine
 that originally wrote them. See `issues/0078.md` for the full incident and
 the deliberate choice of `-text` over normalising the comparison in

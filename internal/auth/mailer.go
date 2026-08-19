@@ -28,11 +28,13 @@ type Mailer interface {
 
 	// SendSessionsRevoked notifies toEmail that every active session was just
 	// signed out ("sign out everywhere") at the given time. Unlike
-	// SendVerification/SendRecovery this is a plain notification: no token, no
-	// link with credentials, nothing single-use — it carries no TTL and is safe
-	// to re-read. It must say the account's EXISTING passkey still works;
-	// enrolling a new one is only a conditional follow-up for the lost-device
-	// case, never the primary instruction.
+	// SendVerification/SendRecovery this carries no credentials: no token, no
+	// single-use link, nothing that expires — it is safe to re-read at any
+	// time. (It is themed the same HTML+text pair as the other two — see
+	// internal/mailing.BuildSessionsRevokedEmail — this sentence is about the
+	// payload, not the formatting.) It must say the account's EXISTING passkey
+	// still works; enrolling a new one is only a conditional follow-up for the
+	// lost-device case, never the primary instruction.
 	SendSessionsRevoked(ctx context.Context, toEmail string, at time.Time) error
 }
 

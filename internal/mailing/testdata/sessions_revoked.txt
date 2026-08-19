@@ -6,7 +6,7 @@ All sessions for alice@example.com were signed out on Thu, 06 Aug 2026 15:04:05 
 
 Click the link below to sign in with your existing passkey — it still works and nothing about your account has changed.
 
-Sign in: https://www.opencircuitsf.com
+Sign in: https://www.opencircuitsf.com/login
 
 If you did this because a device was lost or is no longer yours, also open Account settings after signing in and revoke that device's passkey. You can enroll a replacement from the same screen.
 If you did not do this, sign in and revoke your passkeys immediately.

@@ -145,10 +145,18 @@ func BuildRecoveryEmail(to, baseURL, token string, ttl time.Duration) Message {
 //
 // Unlike BuildRegistrationEmail/BuildRecoveryEmail this carries no token and
 // no single-use link — signing out everywhere is not itself an action with
-// something to confirm — so there is no "expires in" note, and the primary
-// CTA points at baseURL itself rather than a magic-link path. ShowListFooter
-// is false for the same reason it is on the other two account mails: this is
-// account security email, not mailing-list email, so it carries neither a
+// something to confirm — so there is no "expires in" note. The primary CTA
+// points at baseURL+"/login", the SPA's passkey sign-in route (PRD §5.1;
+// web/src/lib/router.ts maps it to web/src/views/Login.svelte, and it is
+// already the canonical post-passkey destination — both
+// RegisterVerify.svelte and RecoverVerify.svelte navigate there after
+// enrollment). It is not a magic-link path — there's no token to carry — but
+// it is a real, existing sign-in destination, not the marketing homepage:
+// this is the one message where the recipient is already asking "was this
+// me?", and a button labelled "Sign in" that lands on a hero and a subscribe
+// form is itself the shape of a phishing lure. ShowListFooter is false for
+// the same reason it is on the other two account mails: this is account
+// security email, not mailing-list email, so it carries neither a
 // manage/unsubscribe footer nor a physical address.
 func BuildSessionsRevokedEmail(to, baseURL string, at time.Time) Message {
 	c := emailContent{
@@ -161,7 +169,7 @@ func BuildSessionsRevokedEmail(to, baseURL string, at time.Time) Message {
 			"Click the {{cta}} below to sign in with your existing passkey — it still works and nothing about your account has changed.",
 		},
 		ButtonText: "Sign in",
-		ButtonURL:  baseURL,
+		ButtonURL:  baseURL + "/login",
 		NoteParagraphs: []string{
 			"If you did this because a device was lost or is no longer yours, also open Account settings after signing in and revoke that device's passkey. You can enroll a replacement from the same screen.",
 			"If you did not do this, sign in and revoke your passkeys immediately.",
