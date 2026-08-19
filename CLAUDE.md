@@ -282,6 +282,25 @@ recoverable. Stage narrowly — `git add <specific-path>`, never `git add -A` or
 `git commit -a`, which sweep up other agents' work into a commit that does not
 describe it.
 
+## 8b. Ports, when agents run concurrently
+
+**Never bind a fixed, shared port for a verification server.** A subagent
+started the binary on `:8099`, its own process died with `bind: address already
+in use`, and `curl` cheerfully returned 200 — **from a different agent's server
+on the same port**. It came within one step of proving its fix against someone
+else's build.
+
+- Pick a port unlikely to collide, and **verify the server you are talking to is
+  yours**: check the bind succeeded, and confirm a build-specific detail in the
+  response (the hashed asset filename, a string you just changed) before
+  trusting a single byte of it.
+- A `curl` that succeeds is not evidence the *right* server answered.
+- Kill your server when done; never leave one listening for the next agent to
+  hit by accident.
+
+The same caution applies to any shared mutable resource — a database, a
+scratch directory, `web/dist/`. Namespace it or verify ownership.
+
 ## 9. Restricted areas
 
 - **Never mark an issue `resolved`, `closed`, or `wontfix` by inference.** The
