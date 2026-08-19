@@ -188,6 +188,11 @@ func servePostgres(cfg *config.Config) error {
 	// route instead of a new one.
 	preferencesH := handlers.NewPreferencesHandler(subscribersStore, interestsStore, auditLogger, nil)
 
+	// Confirmation (#0030, PRD §6.3): POST /api/subscribe/confirm completes
+	// double opt-in. A new handler/file rather than an addition to
+	// subscribe.go — see confirm.go's package doc comment.
+	confirmH := handlers.NewConfirmHandler(subscribersStore, interestsStore, auditLogger, slog.Default())
+
 	// SSE event broker: the in-memory pub/sub singleton reused for live
 	// campaign send progress once the mailing subsystem lands.
 	broker := events.NewBroker()
@@ -211,7 +216,7 @@ func servePostgres(cfg *config.Config) error {
 
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH,
+		publicInterestsH, preferencesH, confirmH,
 		requireSession, requireAdmin, nil /* no outer middleware in production */)
 }
 
@@ -353,10 +358,11 @@ func serveDevMode(cfg *config.Config) error {
 	// handler is non-nil, mirroring subscribeH's own nil-guard.
 	var publicInterestsH *handlers.PublicInterestsHandler
 	var preferencesH *handlers.PreferencesHandler
+	var confirmH *handlers.ConfirmHandler
 
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH,
+		publicInterestsH, preferencesH, confirmH,
 		requireSession, requireAdmin, devAutoLogin)
 }
 
@@ -440,6 +446,7 @@ func mountAndServe(
 	subscribeH *handlers.SubscribeHandler,
 	publicInterestsH *handlers.PublicInterestsHandler,
 	preferencesH *handlers.PreferencesHandler,
+	confirmH *handlers.ConfirmHandler,
 	requireSession func(http.Handler) http.Handler,
 	requireAdmin func(http.Handler) http.Handler,
 	outerMiddleware func(http.Handler) http.Handler,
@@ -533,17 +540,21 @@ func mountAndServe(
 		mux.Handle("GET /api/interests", http.HandlerFunc(publicInterestsH.List))
 	}
 
-	// Preference center (#0031) — public, unauthenticated, token-gated by
-	// the secret in the request itself rather than a session. Rate-limited
-	// at the same scale as subscribeLimiter above: this accepts a
-	// caller-supplied token and, while a 32-byte random value isn't
-	// brute-forceable at any rate this limiter would need to stop, matching
-	// the existing public-endpoint convention costs nothing and blunts
-	// naive scripted retries.
+	// Preference center (#0031) and confirmation (#0030) — public,
+	// unauthenticated, token-gated by the secret in the request itself
+	// rather than a session. Rate-limited at the same scale as
+	// subscribeLimiter above: these accept a caller-supplied token and,
+	// while a 32-byte random value isn't brute-forceable at any rate this
+	// limiter would need to stop, matching the existing public-endpoint
+	// convention costs nothing and blunts naive scripted retries.
 	preferencesLimiter := middleware.NewRateLimiter(rate.Every(time.Minute/10), 5)
 	if preferencesH != nil {
 		mux.Handle("GET /api/preferences", preferencesLimiter.Middleware(http.HandlerFunc(preferencesH.Get)))
 		mux.Handle("PATCH /api/preferences", preferencesLimiter.Middleware(http.HandlerFunc(preferencesH.Patch)))
+	}
+	confirmLimiter := middleware.NewRateLimiter(rate.Every(time.Minute/5), 3)
+	if confirmH != nil {
+		mux.Handle("POST /api/subscribe/confirm", confirmLimiter.Middleware(http.HandlerFunc(confirmH.Confirm)))
 	}
 
 	// SEO: server-injected per-route meta tags (#0019) and generated

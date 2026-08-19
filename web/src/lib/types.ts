@@ -132,10 +132,9 @@ export interface SubscribersPage {
 /**
  * One interest as shown to an anonymous visitor (GET /api/interests item, and
  * the active_interests list embedded in the confirm/preferences responses
- * added in #0030/#0031). Matches
- * internal/handlers/public_interests.go's publicInterestView -- deliberately
- * narrower than Interest above: no id, active, or subscriber_count, which
- * are admin-only fields from GET /admin/interests.
+ * below). Matches internal/handlers/public_interests.go's publicInterestView
+ * -- deliberately narrower than Interest above: no id, active, or
+ * subscriber_count, which are admin-only fields from GET /admin/interests.
  */
 export interface PublicInterest {
   slug: string;
@@ -144,9 +143,22 @@ export interface PublicInterest {
   sort_order: number;
 }
 
+/** POST /api/subscribe/confirm success body (#0030). manage_token lets the SPA
+ * show the preference center inline, already authenticated, without a second
+ * confirmation email; email is unmasked here (unlike GET /api/preferences)
+ * because reaching this response already proved fresh control of the
+ * mailbox. Matches internal/handlers/confirm.go's confirmResponse. */
+export interface ConfirmResponse {
+  message: string;
+  manage_token: string;
+  email: string;
+  interests: string[];
+  active_interests: PublicInterest[];
+}
+
 /** GET/PATCH /api/preferences body (#0031). email is masked
  * ("b•••••n@gmail.com") except when the SPA already holds the unmasked
- * address from a fresh confirm response (#0030; see PreferenceCenter.svelte).
+ * address from a fresh ConfirmResponse (see PreferenceCenter.svelte).
  * unsubscribed is true only on a successful "Unsubscribe from everything"
  * PATCH. Matches internal/handlers/preferences.go's preferencesResponse. */
 export interface PreferencesResponse {

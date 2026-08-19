@@ -49,6 +49,11 @@ const (
 	// path (#0026) — actor NULL (pre-auth, the visitor is anonymous), same
 	// convention as ActionAccountRegistrationStarted above.
 	ActionSubscriberSignup = "subscriber.signup"
+	// ActionSubscriberConfirmed is written by POST /api/subscribe/confirm
+	// (#0030) when a pending subscriber's token is successfully consumed and
+	// the row transitions to active. Actor NULL (pre-auth, the visitor is
+	// anonymous) — same convention as ActionSubscriberSignup.
+	ActionSubscriberConfirmed = "subscriber.confirmed"
 	// ActionSubscriberPreferencesUpdated is written by PATCH
 	// /api/preferences (#0031) whenever a subscriber's interest selection is
 	// replaced. Actor NULL — the caller is authenticated only by possessing
@@ -67,8 +72,6 @@ const (
 	// everything" action before #0034 existed, and #0034 should reuse it
 	// rather than mint a second name for the same event.
 	ActionSubscriberUnsubscribed = "subscriber.unsubscribed"
-	// Later phases (#0030's subscriber.confirmed, per PRD §6.3) add their
-	// own constant here when it lands.
 
 	// Subscriber admin actions (PRD §5.2, §6.5; #0032's admin screen).
 	// Actor is always the acting admin, unlike ActionSubscriberSignup above.

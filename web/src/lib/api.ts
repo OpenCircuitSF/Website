@@ -13,6 +13,7 @@ import type {
   Subscriber,
   SubscribersPage,
   PublicInterest,
+  ConfirmResponse,
   PreferencesResponse,
 } from './types';
 import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
@@ -485,6 +486,18 @@ export function subscribe(body: SubscribeRequestBody): Promise<unknown> {
 }
 
 /**
+ * POST /api/subscribe/confirm — completes double opt-in (#0030). Throws
+ * ApiError(400) for an unknown, expired, replayed, or complained-locked
+ * token; the SPA (ConfirmSubscription.svelte) renders one friendly,
+ * non-technical state for all of those rather than asserting which one
+ * occurred, since the server itself cannot always tell them apart (see
+ * confirm.go's package doc comment).
+ */
+export function confirmSubscription(token: string): Promise<ConfirmResponse> {
+  return apiPost<ConfirmResponse>('/api/subscribe/confirm', { token });
+}
+
+/**
  * GET /api/preferences?token=... — the preference center's read (#0031).
  * Email always comes back masked; throws ApiError(404) for an invalid,
  * unknown, or rotated token, which PreferenceCenter.svelte renders as a
@@ -505,5 +518,3 @@ export function getPreferences(token: string): Promise<PreferencesResponse> {
 export function patchPreferences(body: PreferencesPatchBody): Promise<PreferencesResponse> {
   return apiPatch<PreferencesResponse>('/api/preferences', body);
 }
-
-// confirmSubscription (#0030) lands in its own commit later in this batch.
