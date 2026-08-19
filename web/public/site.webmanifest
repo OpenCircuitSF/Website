@@ -1,0 +1,13 @@
+{
+  "name": "Open Circuit SF",
+  "short_name": "Open Circuit SF",
+  "description": "Hands-on electronics workshops in San Francisco.",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#0A0D0B",
+  "background_color": "#0A0D0B",
+  "icons": [
+    { "src": "/mark-green-256.png", "sizes": "256x256", "type": "image/png" },
+    { "src": "/mark-green-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

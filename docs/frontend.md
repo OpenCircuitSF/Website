@@ -77,6 +77,34 @@ name and payload type. Originally hardwired to ShortLinks'
 longer exists here. `#0048` (live campaign send progress) is the first
 consumer in this project.
 
+## Logo, favicon, and app icons (`#0018`)
+
+`web/public/` carries a curated subset of `assets/logo/`'s output (the
+1254 px masters stay in `assets/logo/`; only what the site actually serves
+lives here): `logo.svg`/`mark.svg` (vector traces, `currentColor`-driven),
+`favicon.svg` (self-contained — switches tint via its own internal
+`prefers-color-scheme` media query, so it works with no page context),
+`favicon-32.png` (raster fallback), `apple-touch-icon.png` (180×180,
+deliberately opaque), `logo-mask-512.png`/`mark-mask-64.png` (white alpha
+masks for the `background-color: currentColor`-style tinting technique),
+`mark-green-256.png`/`mark-green-512.png` (opaque-context webmanifest
+icons), and `site.webmanifest`. `web/src/lib/Logo.svelte` wraps the mask
+technique as a component (`variant="mark" | "full"`, `size`) — see
+`docs/design.md` for the full rationale and `assets/logo/README.md` for the
+contrast measurements behind the two logo tints.
+
+**⚠️ CSS masks fail silently under `file://`.** `Logo.svelte` and any other
+`mask-image`-based element render **fully transparent** — not broken-image,
+not a console error, just empty — when the page is opened by double-clicking
+`dist/index.html` instead of being served over HTTP. Verified directly while
+building `#0018`: the identical mask markup rendered the mark correctly over
+`python3 -m http.server` and rendered nothing at all under `file://`, with no
+error in either case. Always preview with `./scripts/dev.sh` or
+`python3 -m http.server`, never by opening a built file directly. The plain
+`<link rel="icon">`/`<link rel="apple-touch-icon">` references in
+`index.html`'s `<head>` are unaffected — only elements using the
+`mask-image` technique.
+
 ## Testing
 
 ```bash

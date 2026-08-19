@@ -46,6 +46,16 @@
    * low-contrast; must never carry text or state. */
   --accent-dim:    #79C34A;
 
+  /* Logo tint (PRD §4.5, #0018) — deliberately its own token, NOT an alias
+   * for --accent. The dark value matches --accent exactly (both are the
+   * literal brand green off the mark, #68FF23), but the light value
+   * (#30800C) is a separately-tuned tint from assets/logo/build-logo.py,
+   * not identical to light --accent (#2F7D0C) — same hue/saturation
+   * relationship, independently derived to clear 4.5:1 on white. Drives the
+   * logo/mark mask technique (background-color tinting a white alpha mask)
+   * documented in assets/logo/README.md. */
+  --logo-color: #30800C;
+
   /* Status (use sparingly, never as the only signal of state) */
   --warning: #8A5A00;
   --danger:  #B4231B;
@@ -121,6 +131,7 @@
     --accent-text:   #0A0D0B;
     --accent-subtle: #142B0C;
     --accent-dim:    #3C9E0F;
+    --logo-color:    #68FF23;
 
     --warning: #E5B22C;
     --danger:  #FF5F56;
@@ -157,6 +168,7 @@
   --accent-text:   #0A0D0B;
   --accent-subtle: #142B0C;
   --accent-dim:    #3C9E0F;
+  --logo-color:    #68FF23;
 
   --warning: #E5B22C;
   --danger:  #FF5F56;

@@ -4,13 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <title>Short Links</title>
-    <!-- PNG-only favicons (no favicon.ico). The ?v= is a cache-buster: browsers
-         cache favicons very aggressively and will otherwise keep painting a
-         previously-cached icon (e.g. the old white-line one). Bump on change. -->
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png?v=3" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=3" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3" />
+    <meta name="theme-color" content="#0A0D0B" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#F4F6F3" media="(prefers-color-scheme: light)" />
+    <title>Open Circuit SF</title>
+    <!-- SVG favicon first (currentColor-free, self-switches light/dark via its
+         own internal prefers-color-scheme, so it works before app.css loads);
+         favicon-32.png is the raster fallback for browsers that don't support
+         SVG favicons. The ?v= is a cache-buster: browsers cache favicons very
+         aggressively and will otherwise keep painting a previously-cached icon
+         (e.g. ShortLinks' old white-line one, replaced in #0018). Bump on
+         change. See docs/frontend.md for the file:// mask restriction that
+         affects the header logo (not these <link> icons, which are plain
+         <img>-equivalent references and work under file:// too). -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=1" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=4" />
+    <link rel="manifest" href="/site.webmanifest" />
     <script>
       // Applied before first paint so the correct theme is never repainted.
       // Cycles auto -> light -> dark (theme-toggle script, #0011); "auto"
