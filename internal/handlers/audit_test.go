@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -240,7 +241,7 @@ func TestAdminAudit_UserIDFilter(t *testing.T) {
 	insertAuditRow(t, pool, &admin, &bob, audit.ActionAccountDeactivated, audit.TargetUser, &bob, `{"reason":"phishing"}`, nil, base.Add(2*time.Minute))
 
 	// Filter to alice: only her 2 rows.
-	resp, body := getAudit(t, srv, "admin-token", "?user_id="+itoa(alice))
+	resp, body := getAudit(t, srv, "admin-token", "?user_id="+strconv.FormatInt(alice, 10))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("filter status = %d, want 200", resp.StatusCode)
 	}

@@ -41,10 +41,9 @@ type ManagedUser struct {
 }
 
 // UserDetail extends ManagedUser with the per-account counts shown on the detail
-// view: how many links the user owns and how many passkeys they have registered.
+// view: how many passkeys the user has registered.
 type UserDetail struct {
 	ManagedUser
-	LinkCount    int64
 	PasskeyCount int64
 }
 
@@ -77,20 +76,19 @@ func (s *Store) ListUsers(ctx context.Context) ([]ManagedUser, error) {
 	return out, nil
 }
 
-// GetUser returns one account's detail, including its link and passkey counts.
+// GetUser returns one account's detail, including its passkey count.
 // ErrUserNotFound is returned when no row matches the id so the handler can answer
-// 404 without leaking whether the id ever existed. The counts are computed with
-// correlated subqueries in the same round trip.
+// 404 without leaking whether the id ever existed. The count is computed with a
+// correlated subquery in the same round trip.
 func (s *Store) GetUser(ctx context.Context, id int64) (UserDetail, error) {
 	var d UserDetail
 	var lastLogin *time.Time
 	err := s.pool.QueryRow(ctx,
 		`SELECT u.id, u.email, u.is_admin, u.active, u.created_at, u.last_login_at,
-		        (SELECT COUNT(*) FROM links l WHERE l.user_id = u.id)               AS link_count,
 		        (SELECT COUNT(*) FROM passkey_credentials c WHERE c.user_id = u.id) AS passkey_count
 		   FROM users u
 		  WHERE u.id = $1`, id,
-	).Scan(&d.ID, &d.Email, &d.IsAdmin, &d.Active, &d.CreatedAt, &lastLogin, &d.LinkCount, &d.PasskeyCount)
+	).Scan(&d.ID, &d.Email, &d.IsAdmin, &d.Active, &d.CreatedAt, &lastLogin, &d.PasskeyCount)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return UserDetail{}, ErrUserNotFound

@@ -3,7 +3,6 @@ package handlers
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,13 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
-	"github.com/brennanMKE/OpenCircuitSF/internal/cache"
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
-	"github.com/brennanMKE/OpenCircuitSF/internal/filters"
-	"github.com/brennanMKE/OpenCircuitSF/internal/links"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
@@ -60,7 +54,7 @@ func (b *countingBroker) counts() (subs, unsubs int) {
 
 // TestEventsStream_DeliversFrameAndUnsubscribesOnCancel drives the SSE handler
 // through the REAL RequireSession (live DB session): it subscribes, writes a
-// well-formed link.created frame for a published event, and—when the client
+// well-formed frame for a published event, and—when the client
 // disconnects (request context canceled)—unsubscribes and returns.
 func TestEventsStream_DeliversFrameAndUnsubscribesOnCancel(t *testing.T) {
 	pool := credsTestPool(t) // skips when TEST_DATABASE_URL unset.
@@ -110,13 +104,13 @@ func TestEventsStream_DeliversFrameAndUnsubscribesOnCancel(t *testing.T) {
 		t.Fatal("handler never subscribed")
 	}
 
-	broker.inner.Publish(uid, events.Event{Name: "link.created", Payload: []byte(`{"id":1,"key":"abc123"}`)})
+	broker.inner.Publish(uid, events.Event{Name: "test.event", Payload: []byte(`{"ok":true}`)})
 
 	frame := readFrame(t, reader)
-	if !strings.Contains(frame, "event: link.created\n") {
+	if !strings.Contains(frame, "event: test.event\n") {
 		t.Errorf("frame missing event line:\n%q", frame)
 	}
-	if !strings.Contains(frame, `data: {"id":1,"key":"abc123"}`) {
+	if !strings.Contains(frame, `data: {"ok":true}`) {
 		t.Errorf("frame missing/incorrect data line:\n%q", frame)
 	}
 
@@ -176,114 +170,4 @@ func TestEventsStream_Unauthenticated(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}
-}
-
-// broadcastLinksMux wires the POST /api/links route through the real
-// RequireSession, the real links + filters stores, and the given broker as the
-// #0026 publisher, so a create end-to-end fans out (or doesn't) over the broker.
-func broadcastLinksMux(t *testing.T, pool *pgxpool.Pool, broker eventPublisher, ruleCache *cache.RuleCache) http.Handler {
-	t.Helper()
-	authStore := auth.NewStore(pool)
-	var rules ruleProvider
-	if ruleCache != nil {
-		rules = ruleCache
-	}
-	h := NewLinksHandler(links.NewStore(pool), nil, rules, nil, broker, nil, nil)
-	requireSession := middleware.RequireSession(authStore)
-	mux := http.NewServeMux()
-	mux.Handle("POST /api/links", requireSession(http.HandlerFunc(h.Create)))
-	return mux
-}
-
-// postCreate POSTs body as token and returns the HTTP status (the body is
-// drained/closed). It mirrors postLink but returns only the status, which is all
-// the broadcast assertions need.
-func postCreate(t *testing.T, srv *httptest.Server, token, body string) int {
-	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/links", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := srv.Client().Do(withCookie(req, token))
-	if err != nil {
-		t.Fatalf("POST /api/links: %v", err)
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode
-}
-
-// recvEvent reads one event from ch within a timeout; fails if none arrives.
-func recvEvent(t *testing.T, ch chan events.Event) events.Event {
-	t.Helper()
-	select {
-	case ev := <-ch:
-		return ev
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for broker event")
-		return events.Event{}
-	}
-}
-
-// assertNoEvent asserts ch delivers nothing within a brief window.
-func assertNoBrokerEvent(t *testing.T, ch chan events.Event) {
-	t.Helper()
-	select {
-	case ev := <-ch:
-		t.Fatalf("unexpected broker event %q", ev.Name)
-	case <-time.After(300 * time.Millisecond):
-	}
-}
-
-// TestLinksCreate_BroadcastsOnInsertNotOnDuplicateOrDenied is the #0026
-// end-to-end proof against the live DB: a fresh insert publishes link.created to
-// the user's subscriber with the created link JSON; an active-DUPLICATE create
-// does NOT publish; and a filter-DENIED create does NOT publish.
-func TestLinksCreate_BroadcastsOnInsertNotOnDuplicateOrDenied(t *testing.T) {
-	pool := filterTestPool(t) // skips when TEST_DATABASE_URL unset; clears auth + url_filter_rules.
-
-	broker := events.NewBroker()
-	ruleCache := newFilterRuleCache(pool)
-	srv := httptest.NewServer(broadcastLinksMux(t, pool, broker, ruleCache))
-	defer srv.Close()
-
-	alice := seedUser(t, pool, "alice@example.com")
-	seedSession(t, pool, alice, "alice-token")
-
-	// A rule that denies anything containing "evil.com".
-	seedFilterRule(t, pool, `evil\.com`, int16(filters.ReasonMalware))
-
-	// Subscribe BEFORE any create so no event is missed.
-	sub := broker.Subscribe(alice)
-	defer broker.Unsubscribe(alice, sub)
-
-	const dest = "https://www.example.org/sse"
-
-	// 1) Fresh insert → MUST publish link.created with the created link JSON.
-	if status := postCreate(t, srv, "alice-token", `{"destination_url":"`+dest+`","title":"SSE"}`); status != http.StatusCreated {
-		t.Fatalf("insert status = %d, want 201", status)
-	}
-	ev := recvEvent(t, sub)
-	if ev.Name != "link.created" {
-		t.Errorf("event name = %q, want link.created", ev.Name)
-	}
-	var got linkView
-	if err := json.Unmarshal(ev.Payload, &got); err != nil {
-		t.Fatalf("decode event payload: %v", err)
-	}
-	if got.DestinationURL != dest {
-		t.Errorf("event payload destination_url = %q, want %q", got.DestinationURL, dest)
-	}
-	if got.Key == "" || !got.Active {
-		t.Errorf("event payload key=%q active=%v, want non-empty key, active", got.Key, got.Active)
-	}
-
-	// 2) Active DUPLICATE (same URL, same user) → MUST NOT publish.
-	if status := postCreate(t, srv, "alice-token", `{"destination_url":"`+dest+`","title":"again"}`); status != http.StatusCreated {
-		t.Fatalf("duplicate status = %d, want 201", status)
-	}
-	assertNoBrokerEvent(t, sub)
-
-	// 3) Filter DENIED → MUST NOT publish.
-	if status := postCreate(t, srv, "alice-token", `{"destination_url":"https://evil.com/x","title":"bad"}`); status != http.StatusUnprocessableEntity {
-		t.Fatalf("denied status = %d, want 422", status)
-	}
-	assertNoBrokerEvent(t, sub)
 }

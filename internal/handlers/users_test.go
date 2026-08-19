@@ -56,17 +56,6 @@ func sessionCountFor(t *testing.T, pool *pgxpool.Pool, id int64) int {
 	return n
 }
 
-// linkCountFor reports how many links rows exist for a user.
-func linkCountFor(t *testing.T, pool *pgxpool.Pool, id int64) int {
-	t.Helper()
-	var n int
-	if err := pool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM links WHERE user_id = $1`, id).Scan(&n); err != nil {
-		t.Fatalf("count links for %d: %v", id, err)
-	}
-	return n
-}
-
 // TestAdminUsers_NonAdminForbidden asserts a non-admin with a VALID session is
 // rejected with 403 on all four routes — proving RequireAdmin guards them and is
 // reached only after RequireSession succeeds.
@@ -207,7 +196,7 @@ func TestAdminUsers_ListReturnsSeeded(t *testing.T) {
 }
 
 // TestAdminUsers_DetailAndNotFound asserts the detail route returns the account
-// with link/passkey counts, and 404 for a missing id.
+// with its passkey count, and 404 for a missing id.
 func TestAdminUsers_DetailAndNotFound(t *testing.T) {
 	pool := credsTestPool(t)
 	srv := httptest.NewServer(adminUsersMux(pool))
@@ -216,8 +205,6 @@ func TestAdminUsers_DetailAndNotFound(t *testing.T) {
 	admin := seedAdmin(t, pool, "admin@example.com")
 	alice := seedUser(t, pool, "alice@example.com")
 	seedSession(t, pool, admin, "admin-token")
-	seedLink(t, pool, alice, "lk0001", "https://a.example.com")
-	seedLink(t, pool, alice, "lk0002", "https://b.example.com")
 	seedCredential(t, pool, alice, "Alice MacBook", "a1")
 
 	// Detail for an existing user.
@@ -233,7 +220,6 @@ func TestAdminUsers_DetailAndNotFound(t *testing.T) {
 	var detail struct {
 		ID           int64  `json:"id"`
 		Email        string `json:"email"`
-		LinkCount    int64  `json:"link_count"`
 		PasskeyCount int64  `json:"passkey_count"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
@@ -241,9 +227,6 @@ func TestAdminUsers_DetailAndNotFound(t *testing.T) {
 	}
 	if detail.ID != alice || detail.Email != "alice@example.com" {
 		t.Errorf("detail id/email = %d/%q, want %d/alice@example.com", detail.ID, detail.Email, alice)
-	}
-	if detail.LinkCount != 2 {
-		t.Errorf("link_count = %d, want 2", detail.LinkCount)
 	}
 	if detail.PasskeyCount != 1 {
 		t.Errorf("passkey_count = %d, want 1", detail.PasskeyCount)
@@ -263,8 +246,8 @@ func TestAdminUsers_DetailAndNotFound(t *testing.T) {
 
 // TestAdminUsers_DeactivateNormalUser is the core proof: deactivating a normal
 // user flips active to false, DELETES all of that user's sessions (2 seeded → 0
-// after), leaves their links intact, and writes an account.deactivated audit row
-// with {reason, note} attributed to the admin and affecting the target.
+// after), and writes an account.deactivated audit row with {reason, note}
+// attributed to the admin and affecting the target.
 func TestAdminUsers_DeactivateNormalUser(t *testing.T) {
 	pool := credsTestPool(t)
 	srv := httptest.NewServer(adminUsersMux(pool))
@@ -273,10 +256,9 @@ func TestAdminUsers_DeactivateNormalUser(t *testing.T) {
 	admin := seedAdmin(t, pool, "admin@example.com")
 	alice := seedUser(t, pool, "alice@example.com")
 	seedSession(t, pool, admin, "admin-token")
-	// Two live sessions for alice + a link that must survive deactivation.
+	// Two live sessions for alice.
 	seedSession(t, pool, alice, "alice-token-1")
 	seedSession(t, pool, alice, "alice-token-2")
-	seedLink(t, pool, alice, "keepme", "https://keep.example.com")
 
 	if got := sessionCountFor(t, pool, alice); got != 2 {
 		t.Fatalf("precondition: alice should have 2 sessions, got %d", got)
@@ -313,11 +295,6 @@ func TestAdminUsers_DeactivateNormalUser(t *testing.T) {
 	if got := sessionCountFor(t, pool, admin); got != 1 {
 		t.Errorf("admin sessions = %d, want 1 (admin must not be logged out)", got)
 	}
-	// Links remain.
-	if got := linkCountFor(t, pool, alice); got != 1 {
-		t.Errorf("alice links = %d after deactivate, want 1 (links must remain)", got)
-	}
-
 	// account.deactivated audit row with the right shape.
 	row := lastAuditFor(t, pool, audit.ActionAccountDeactivated)
 	if row.ActorID == nil || *row.ActorID != admin {

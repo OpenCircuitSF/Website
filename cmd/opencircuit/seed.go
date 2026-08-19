@@ -6,27 +6,20 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
-	"github.com/brennanMKE/OpenCircuitSF/internal/links"
 )
 
-// seedDestination is the destination URL used for the bootstrap test link.
-const seedDestination = "https://www.wikipedia.org"
-
-// seedLinkPrefix is the canonical short-URL prefix printed for the seeded link.
-// It is the production namespace from the PRD (`https://go.sstools.co/u/{key}`)
-// and is intentionally fixed rather than derived from BASE_URL so the seed
-// output is stable regardless of the local development host.
-const seedLinkPrefix = "https://go.sstools.co/u/"
-
 // seed bootstraps a fresh install: it ensures the admin user (from ADMIN_EMAIL)
-// exists and that the admin owns a test link pointing at Wikipedia. Both steps
-// are idempotent, so `shortlinks seed` is safe to re-run without creating
+// exists. Idempotent, so `opencircuit seed` is safe to re-run without creating
 // duplicate rows.
+//
+// This is a minimal placeholder pending #0010 ("Add the seed command for the
+// bootstrap admin"), which extends this with the fuller bootstrap behavior the
+// PRD describes. The shortener's test-link seeding step (ensureTestLink) was
+// removed with internal/links in #0002 — this project has no links table.
 func seed() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -50,13 +43,7 @@ func seed() error {
 		return err
 	}
 
-	key, err := ensureTestLink(ctx, pool, adminID)
-	if err != nil {
-		return err
-	}
-
 	fmt.Printf("Seed admin: %s (id=%d)\n", email, adminID)
-	fmt.Printf("Seed link: %s%s -> %s\n", seedLinkPrefix, key, seedDestination)
 	fmt.Println("Hint: to enroll the admin passkey, use \"Recover account\" on the login page (not Register).")
 	return nil
 }
@@ -90,51 +77,4 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email string) (int
 	}
 
 	return id, nil
-}
-
-// ensureTestLink ensures the admin owns a non-denied link to seedDestination
-// and returns its key. If such a link already exists it is reused; otherwise a
-// unique key is generated and a new link inserted. The dedup check mirrors the
-// idx_links_user_destination partial index (denied_reason = 0).
-func ensureTestLink(ctx context.Context, pool *pgxpool.Pool, adminID int64) (string, error) {
-	// Reuse an existing non-denied link to the same destination if present.
-	var key string
-	err := pool.QueryRow(ctx,
-		`SELECT key FROM links
-		 WHERE user_id = $1 AND destination_url = $2 AND denied_reason = 0
-		 ORDER BY id
-		 LIMIT 1`,
-		adminID, seedDestination,
-	).Scan(&key)
-	switch {
-	case err == nil:
-		return key, nil
-	case !errors.Is(err, pgx.ErrNoRows):
-		return "", fmt.Errorf("seed: checking for existing test link: %w", err)
-	}
-
-	// No existing link; generate a unique key backed by a DB existence check.
-	key, err = links.GenerateUniqueKey(func(candidate string) (bool, error) {
-		var exists bool
-		if qErr := pool.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM links WHERE key = $1)`,
-			candidate,
-		).Scan(&exists); qErr != nil {
-			return false, qErr
-		}
-		return exists, nil
-	})
-	if err != nil {
-		return "", fmt.Errorf("seed: generating link key: %w", err)
-	}
-
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO links (user_id, key, destination_url, active, denied_reason, created_at)
-		 VALUES ($1, $2, $3, TRUE, 0, now())`,
-		adminID, key, seedDestination,
-	); err != nil {
-		return "", fmt.Errorf("seed: inserting test link: %w", err)
-	}
-
-	return key, nil
 }

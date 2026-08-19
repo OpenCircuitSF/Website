@@ -91,7 +91,6 @@ func toUserView(u auth.ManagedUser) userView {
 // userDetailView extends userView with the per-account counts on the detail view.
 type userDetailView struct {
 	userView
-	LinkCount    int64 `json:"link_count"`
 	PasskeyCount int64 `json:"passkey_count"`
 }
 
@@ -116,8 +115,8 @@ func (h *AdminUsersHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, usersResponse{Users: views})
 }
 
-// Get handles GET /admin/users/{id}. It returns the account detail plus its link
-// and passkey counts, or 404 when no such account exists.
+// Get handles GET /admin/users/{id}. It returns the account detail plus its
+// passkey count, or 404 when no such account exists.
 func (h *AdminUsersHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUserID(w, r)
 	if !ok {
@@ -128,7 +127,6 @@ func (h *AdminUsersHandler) Get(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		writeJSON(w, http.StatusOK, userDetailView{
 			userView:     toUserView(d.ManagedUser),
-			LinkCount:    d.LinkCount,
 			PasskeyCount: d.PasskeyCount,
 		})
 	case errors.Is(err, auth.ErrUserNotFound):
