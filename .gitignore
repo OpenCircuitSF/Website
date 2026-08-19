@@ -36,3 +36,9 @@ web/dist/*
 
 # ── Transient agent state ─────────────────────────────────────────────────────
 CERBERUS.md
+
+# Subagent git worktrees. Anchored (leading slash) so it matches only the
+# repo-root directory the agent runner creates — an unanchored pattern would
+# match a `.claude/worktrees` at any depth. See CLAUDE.md §8: the same anchoring
+# mistake on the binary name silently excluded cmd/opencircuit/ in ShortLinks.
+/.claude/worktrees/
