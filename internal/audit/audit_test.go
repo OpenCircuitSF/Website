@@ -3,45 +3,25 @@ package audit
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// auditTestPool connects to TEST_DATABASE_URL or skips. It truncates audit_log
-// (and the users it references) before and after the test so each run starts
-// clean and leaves the DB clean.
+// auditTestPool returns the package's single shared pool (opened once in
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset. It truncates
+// audit_log (and the users it references) on entry only, so each test still
+// starts clean.
 func auditTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
+	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test db: %v", err)
+	pool := testDBPool
+	if _, err := pool.Exec(context.Background(),
+		`TRUNCATE audit_log, users RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("truncate audit_log: %v", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Fatalf("ping test db: %v", err)
-	}
-
-	truncate := func() {
-		if _, err := pool.Exec(context.Background(),
-			`TRUNCATE audit_log, users RESTART IDENTITY CASCADE`); err != nil {
-			t.Fatalf("truncate audit_log: %v", err)
-		}
-	}
-	truncate()
-	t.Cleanup(func() {
-		truncate()
-		pool.Close()
-	})
 	return pool
 }
 

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -21,7 +20,8 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
-// adminSubscribersTestPool connects to TEST_DATABASE_URL or skips. Like
+// adminSubscribersTestPool returns the package's single shared pool (opened
+// once in TestMain — #0091) or skips if TEST_DATABASE_URL was unset. Like
 // interestsTestPool (interests_test.go), it truncates ONLY the auth tables —
 // never `interests` (the seeded taxonomy) or `subscribers` (shared with
 // #0026's own concurrent test runs against TEST_DATABASE_URL, CLAUDE.md §8b).
@@ -29,31 +29,16 @@ import (
 // prefix and cleaned up individually via t.Cleanup.
 func adminSubscribersTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
+	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test db: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Fatalf("ping test db: %v", err)
-	}
-
-	truncateCredsTables(t, pool)
+	truncateCredsTables(t, testDBPool)
 	t.Cleanup(func() {
-		truncateCredsTables(t, pool)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, _ = pool.Exec(ctx, `DELETE FROM subscribers WHERE email LIKE 'zz-subtest-%'`)
-		pool.Close()
+		_, _ = testDBPool.Exec(ctx, `DELETE FROM subscribers WHERE email LIKE 'zz-subtest-%'`)
 	})
-	return pool
+	return testDBPool
 }
 
 // testSubscriberEmail returns an email scoped to this test run.

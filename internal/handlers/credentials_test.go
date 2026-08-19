@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,33 +20,17 @@ import (
 // jsonBody wraps a JSON literal as a request body reader.
 func jsonBody(s string) io.Reader { return strings.NewReader(s) }
 
-// credsTestPool connects to TEST_DATABASE_URL or skips. It truncates the auth
-// tables before and after the test so each run starts clean and leaves the DB
-// clean, matching the convention in internal/auth integration tests.
+// credsTestPool returns the package's single shared pool (opened once in
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset. It truncates
+// the auth tables on entry only, so each test still starts clean, matching
+// the convention in internal/auth integration tests.
 func credsTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
+	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test db: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Fatalf("ping test db: %v", err)
-	}
-
-	truncateCredsTables(t, pool)
-	t.Cleanup(func() {
-		truncateCredsTables(t, pool)
-		pool.Close()
-	})
-	return pool
+	truncateCredsTables(t, testDBPool)
+	return testDBPool
 }
 
 func truncateCredsTables(t *testing.T, pool *pgxpool.Pool) {

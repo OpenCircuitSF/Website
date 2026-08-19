@@ -4,39 +4,27 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// testPool connects to TEST_DATABASE_URL or skips. Unlike internal/auth's
-// testPool, this does NOT truncate the interests table: migrations/000009
-// seeds it with the twelve production taxonomy rows on `migrate up`, and
+// testPool returns the package's single shared pool (opened once in
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset. Unlike
+// internal/auth's testPool, this does NOT truncate the interests table:
+// migrations/000009 seeds it with the twelve production taxonomy rows on
+// `migrate up`, and
 // tests that truncated it would either destroy that seed for the rest of the
 // suite or force every other package's tests to re-seed it themselves. Tests
 // here instead create rows with a slug scoped to the test (testSlug) and
 // delete exactly those rows in cleanup, leaving the seed untouched.
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
+	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test db: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Fatalf("ping test db: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	return testDBPool
 }
 
 // testSlug returns a slug unique to this test (and this run), scoped with a

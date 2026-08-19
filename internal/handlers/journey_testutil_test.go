@@ -9,42 +9,25 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// journeyTestPool connects to TEST_DATABASE_URL or skips, then truncates
-// subscribers/subscriber_interests/audit_log (never `interests` -- it
-// carries the seeded taxonomy every test in this batch resolves slugs
-// against, mirroring subscribeTestPool/interestsTestPool's shared
-// convention).
+// journeyTestPool returns the package's single shared pool (opened once in
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset, truncating
+// subscribers/subscriber_interests/audit_log on entry only (never
+// `interests` -- it carries the seeded taxonomy every test in this batch
+// resolves slugs against, mirroring subscribeTestPool/interestsTestPool's
+// shared convention).
 func journeyTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
+	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test db: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Fatalf("ping test db: %v", err)
-	}
-
-	truncateJourneyTables(t, pool)
-	t.Cleanup(func() {
-		truncateJourneyTables(t, pool)
-		pool.Close()
-	})
-	return pool
+	truncateJourneyTables(t, testDBPool)
+	return testDBPool
 }
 
 func truncateJourneyTables(t *testing.T, pool *pgxpool.Pool) {

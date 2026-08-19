@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -11,36 +10,20 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
-// signupTestPool connects to TEST_DATABASE_URL or skips, truncating the
-// subscribers tables so the test starts from a clean slate. Mirrors the
-// helper in internal/subscribers/store_test.go; this package already
-// serializes DB-backed test packages via testdb.Lock in main_test.go, so
-// truncating a table another concurrently-running package also owns is
-// safe — only one package holds the advisory lock at a time.
+// signupTestPool returns the package's single shared pool (opened once in
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset, truncating the
+// subscribers tables on entry only so the test starts from a clean slate.
+// Mirrors the helper in internal/subscribers/store_test.go; this package
+// already serializes DB-backed test packages via testdb.Lock in
+// main_test.go, so truncating a table another concurrently-running package
+// also owns is safe — only one package holds the advisory lock at a time.
 func signupTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
+	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test db: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Fatalf("ping test db: %v", err)
-	}
-
-	truncateSubscribers(t, pool)
-	t.Cleanup(func() {
-		truncateSubscribers(t, pool)
-		pool.Close()
-	})
-	return pool
+	truncateSubscribers(t, testDBPool)
+	return testDBPool
 }
 
 func truncateSubscribers(t *testing.T, pool *pgxpool.Pool) {

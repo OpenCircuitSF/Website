@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -80,33 +79,17 @@ func (m *recordingMailer) sessionsRevokedRecorded() (int, string, time.Time) {
 	return m.sessionsRevokedCalls, m.sessionsRevokedTo, m.sessionsRevokedAt
 }
 
-// testPool connects to TEST_DATABASE_URL or skips. It also registers a cleanup
-// that truncates the auth tables so each test run starts from a clean slate and
-// re-runs are deterministic.
+// testPool returns the package's single shared pool (opened once in
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset. It truncates
+// the auth tables on entry only, so each test still starts from a clean
+// slate and re-runs are deterministic.
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
+	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test db: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Fatalf("ping test db: %v", err)
-	}
-
-	truncateAuthTables(t, pool)
-	t.Cleanup(func() {
-		truncateAuthTables(t, pool)
-		pool.Close()
-	})
-	return pool
+	truncateAuthTables(t, testDBPool)
+	return testDBPool
 }
 
 // truncateAuthTables clears every auth-related table (and its dependents) so
