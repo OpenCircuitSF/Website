@@ -38,7 +38,7 @@ const devAuthAdminID int64 = 1
 // devMode is false, so it is structurally impossible to wire this into the
 // production (Postgres) path even by accident.
 //
-// This must be wired only inside serveDevMode (cmd/shortlinks/main.go), which
+// This must be wired only inside serveDevMode (cmd/opencircuit/main.go), which
 // itself is only reached when STORAGE=json is set.
 func DevAutoLogin(creator devSessionCreator, devMode bool) func(http.Handler) http.Handler {
 	if !devMode {

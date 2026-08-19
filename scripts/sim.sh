@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# sim.sh — load the local ShortLinks app in the iOS Simulator's Safari and
+# sim.sh — load the local Open Circuit SF app in the iOS Simulator's Safari and
 #           capture a screenshot for mobile-rendering verification.
 #
 # Requires:
@@ -13,7 +13,7 @@
 #
 #   URL          URL to open in Simulator Safari (default: http://localhost:8080)
 #   DEVICE_NAME  Simulator device name to use  (default: "iPhone 17")
-#   OUTPUT_PATH  Where to write the screenshot  (default: /tmp/shortlinks-sim.png)
+#   OUTPUT_PATH  Where to write the screenshot  (default: /tmp/opencircuit-sim.png)
 #
 # Examples:
 #   ./scripts/sim.sh
@@ -32,7 +32,7 @@ case "${1:-}" in -h|--help) sed -n '2,36p' "$0"; exit 0 ;; esac
 
 URL="${1:-http://localhost:8080}"
 DEVICE_NAME="${2:-iPhone 17}"
-OUT="${3:-/tmp/shortlinks-sim.png}"
+OUT="${3:-/tmp/opencircuit-sim.png}"
 
 step()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 ok()    { printf '    \033[32m✓\033[0m %s\n' "$*"; }

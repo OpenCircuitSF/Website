@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# dev.sh — start ShortLinks locally on macOS for fast UI iteration.
+# dev.sh — start Open Circuit SF locally on macOS for fast UI iteration.
 #
 # No PostgreSQL, no systemd, no migrations needed. Uses STORAGE=json (in-memory
-# dev store, #0057) and auto-login middleware (#0058) so the dashboard opens
-# immediately as the mock admin.
+# dev store, internal/devstore) and the dev auto-login middleware
+# (internal/middleware.DevAutoLogin) so the account view opens immediately as
+# the mock admin.
 #
 # Usage:
 #   ./scripts/dev.sh           # hot-reload: Go API on :8080 + Vite dev server on :5173
@@ -84,7 +85,7 @@ if [ "$MODE" = "built" ]; then
   step "Starting Go server (embedded SPA) on http://localhost:${PORT}"
   info "Press Ctrl-C to stop."
   printf '\n'
-  exec go run ./cmd/shortlinks serve
+  exec go run ./cmd/opencircuit serve
 fi
 
 # ── Hot-reload mode (default) ─────────────────────────────────────────────────
@@ -98,7 +99,7 @@ if [ ! -d web/node_modules ]; then
 fi
 
 # Start Go server in background; capture PID for cleanup.
-go run ./cmd/shortlinks serve &
+go run ./cmd/opencircuit serve &
 GO_PID=$!
 
 cleanup() {
@@ -121,7 +122,7 @@ fi
 ok "Go API server started (pid $GO_PID)"
 
 step "Starting Vite dev server on http://localhost:5173"
-info "Vite proxies /api /auth /account /admin /u → http://localhost:${PORT}"
+info "Vite proxies /api /auth /account /admin → http://localhost:${PORT}"
 printf '\n'
 printf '\033[1m  Open: http://localhost:5173\033[0m\n'
 printf '  (logs in automatically as %s)\n' "$ADMIN_EMAIL"
