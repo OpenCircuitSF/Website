@@ -11,6 +11,7 @@
   import RecoverVerify from './views/RecoverVerify.svelte';
   import Header from './lib/Header.svelte';
   import Footer from './lib/Footer.svelte';
+  import Home from './views/Home.svelte';
 
   let sessionChecked = $state(false);
 
@@ -68,14 +69,18 @@
   <RecoverVerify />
 {:else}
   <!-- Every other route is a public marketing page (PRD §5.1), and shares
-       the site header shell (#0017). The real Home/About/NotFound views land
-       in #0015, #0016, #0022; this placeholder covers the remaining public
-       routes (workshops, subscribe, confirm, preferences, unsubscribe) until
-       their own later-phase issues (#0029-0036, #0053-0054) build them. -->
+       the site header shell (#0017). About/NotFound land in #0016/#0022;
+       this placeholder covers the remaining public routes (workshops,
+       subscribe, confirm, preferences, unsubscribe) until their own
+       later-phase issues (#0029-0036, #0053-0054) build them. -->
   <Header />
-  <main id="main-content" class="app-shell">
-    <p class="text-muted">{$currentRoute.name} — this page is on the way.</p>
-  </main>
+  {#if $currentRoute.name === 'home'}
+    <Home />
+  {:else}
+    <main id="main-content" class="app-shell">
+      <p class="text-muted">{$currentRoute.name} — this page is on the way.</p>
+    </main>
+  {/if}
 {/if}
 
 <Footer />
