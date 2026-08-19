@@ -258,6 +258,30 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   name matches at any depth and silently excludes `cmd/opencircuit/` source.
   This already bit ShortLinks.
 
+## 8a. Destructive git operations
+
+**Never run `git checkout --`, `git restore`, `git stash`, `git reset --hard`,
+or `git clean` against a path you did not personally edit this session.**
+Uncommitted working-copy changes have no reflog and no recovery path — discarding
+them is irreversible in a way that discarding a commit is not.
+
+This nearly cost real work. A reviewer ran `git checkout -- issues/0068.md` to
+undo its own edit, destroyed the implementer's uncommitted resolution notes, and
+had to reconstruct them by hand from what it had read earlier. It disclosed this,
+which is the only reason it was caught. At that moment a second subagent had
+uncommitted edits in `web/` and `issues/0011.md`; a slightly broader path would
+have destroyed those too.
+
+Subagents frequently run concurrently on disjoint files. Assume any dirty file
+you did not create is someone else's in-flight work.
+
+To undo **your own** edit, prefer rewriting the file to the intended content, or
+`git diff -- <path>` first and reverse only your hunk. If you genuinely must
+discard, copy the file aside first (`cp <path> /tmp/…`) so the change is
+recoverable. Stage narrowly — `git add <specific-path>`, never `git add -A` or
+`git commit -a`, which sweep up other agents' work into a commit that does not
+describe it.
+
 ## 9. Restricted areas
 
 - **Never mark an issue `resolved`, `closed`, or `wontfix` by inference.** The
