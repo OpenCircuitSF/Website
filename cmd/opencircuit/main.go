@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
 	"github.com/brennanMKE/OpenCircuitSF/web"
 )
 
@@ -275,12 +277,28 @@ func mountAndServe(
 	// user's connected clients (campaign send progress, once mailing lands).
 	mux.Handle("GET /api/events", requireSession(http.HandlerFunc(eventsH.Stream)))
 
+	// SEO: server-injected per-route meta tags (#0019). indexHTML is the
+	// embedded, built dist/index.html carrying the %%OC_*%% placeholder
+	// markers (web/index.html) that seo.Site substitutes per request path --
+	// social crawlers fetch the raw HTML and never execute the SPA bundle, so
+	// the injected values have to already be correct in what this handler
+	// serves. The workshop source is nil until #0051 (workshops store) and
+	// #0054 (workshop detail view) land; until then /workshops/{slug} falls
+	// back to its documented default (seo.WorkshopSource's doc comment).
+	indexHTML, err := fs.ReadFile(web.DistFS(), "index.html")
+	if err != nil {
+		return fmt.Errorf("mountAndServe: read embedded index.html: %w", err)
+	}
+	site := seo.NewSite(indexHTML, cfg.BaseURL, nil)
+
 	// Svelte SPA — the catch-all served LAST. Under the Go 1.22 mux this
 	// "GET /" pattern is the least specific, so every explicit route above wins
 	// over it. It serves hashed assets from the embedded web/dist directly and
 	// falls back to index.html for any other path, so SPA deep links survive a
-	// hard refresh.
-	mux.Handle("GET /", handlers.NewSPAHandler(web.DistFS()))
+	// hard refresh. site.Middleware wraps it to rewrite index.html responses
+	// with the per-path meta tags, preserving whichever status code
+	// (200 known route / 404 miss, #0022) the SPA handler chose.
+	mux.Handle("GET /", site.Middleware(handlers.NewSPAHandler(web.DistFS())))
 
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
 	log.Printf("opencircuit %s listening on %s", version, addr)

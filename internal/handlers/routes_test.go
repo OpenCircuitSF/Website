@@ -1,6 +1,9 @@
 package handlers
 
-import "testing"
+import (
+	"sort"
+	"testing"
+)
 
 // TestIsKnownRoute_StaticRoutes covers every static path in PRD §5.1 plus the
 // Phase 1 auth routes, mirroring web/src/lib/router.test.ts's equivalent
@@ -86,5 +89,67 @@ func TestIsKnownRoute_Miss(t *testing.T) {
 func TestIsKnownRoute_WorkshopsIndexTrailingSlash(t *testing.T) {
 	if !isKnownRoute("/workshops/") {
 		t.Error(`isKnownRoute("/workshops/") = false, want true (normalizes to "/workshops")`)
+	}
+}
+
+// TestIsKnownRoute_ExportedWrapperAgrees confirms the #0019/#0020 exported
+// wrapper (IsKnownRoute) makes exactly the same decision as the unexported
+// isKnownRoute it delegates to, for both a hit and a miss.
+func TestIsKnownRoute_ExportedWrapperAgrees(t *testing.T) {
+	if !IsKnownRoute("/about") {
+		t.Error(`IsKnownRoute("/about") = false, want true`)
+	}
+	if IsKnownRoute("/aboot") {
+		t.Error(`IsKnownRoute("/aboot") = true, want false`)
+	}
+}
+
+// TestStaticRoutes_ContainsMarketingPaths confirms the #0019/#0020 exported
+// route list includes the four marketing paths those issues curate a sitemap
+// subset from, is sorted, and returns a fresh slice each call (so a caller
+// mutating the result can't corrupt the package-level table).
+func TestStaticRoutes_ContainsMarketingPaths(t *testing.T) {
+	routes := StaticRoutes()
+	want := []string{"/", "/about", "/subscribe", "/workshops"}
+	for _, w := range want {
+		found := false
+		for _, r := range routes {
+			if r == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("StaticRoutes() missing %q; got %v", w, routes)
+		}
+	}
+	if !sort.StringsAreSorted(routes) {
+		t.Errorf("StaticRoutes() not sorted: %v", routes)
+	}
+	routes[0] = "/mutated"
+	if StaticRoutes()[0] == "/mutated" {
+		t.Error("StaticRoutes() result aliases the package-level map; mutation leaked")
+	}
+}
+
+// TestWorkshopDetailSlug covers the slug extraction #0019's meta injector and
+// #0020's workshop lookup both need: a hit returns the decoded slug, a miss
+// (including the workshops index path itself) returns ok=false.
+func TestWorkshopDetailSlug(t *testing.T) {
+	slug, ok := WorkshopDetailSlug("/workshops/solder-101")
+	if !ok || slug != "solder-101" {
+		t.Errorf("WorkshopDetailSlug(/workshops/solder-101) = (%q, %v), want (solder-101, true)", slug, ok)
+	}
+
+	slug, ok = WorkshopDetailSlug("/workshops/solder-101/")
+	if !ok || slug != "solder-101" {
+		t.Errorf("WorkshopDetailSlug with trailing slash = (%q, %v), want (solder-101, true)", slug, ok)
+	}
+
+	if _, ok := WorkshopDetailSlug("/workshops"); ok {
+		t.Error("WorkshopDetailSlug(/workshops) = ok, want false (that's the index, not a detail slug)")
+	}
+	if _, ok := WorkshopDetailSlug("/about"); ok {
+		t.Error("WorkshopDetailSlug(/about) = ok, want false")
 	}
 }

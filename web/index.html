@@ -6,7 +6,25 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#0A0D0B" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#F4F6F3" media="(prefers-color-scheme: light)" />
-    <title>Open Circuit SF</title>
+    <title>%%OC_TITLE%%</title>
+    <!-- Per-route social preview tags. These %%OC_*%% tokens are placeholder
+         markers, not real content -- internal/seo (#0019) loads this built
+         file into memory at startup and substitutes them per request path
+         before serving, since social crawlers (Discord, Slack, iMessage, X,
+         Facebook, LinkedIn) fetch the raw HTML and never execute the SPA
+         bundle, so the values need to already be correct in the markup they
+         receive. Every substituted value is HTML-escaped by the injector. If
+         you're seeing a literal "%%OC_TITLE%%" in a browser tab, you're
+         looking at `vite`/`vite preview` output directly (dev mode) rather
+         than through the Go server that performs the substitution -- use
+         `./scripts/dev.sh --built` to see the real injected values. -->
+    <meta name="description" content="%%OC_DESCRIPTION%%" />
+    <meta property="og:title" content="%%OC_OG_TITLE%%" />
+    <meta property="og:description" content="%%OC_OG_DESCRIPTION%%" />
+    <meta property="og:image" content="%%OC_OG_IMAGE%%" />
+    <meta property="og:url" content="%%OC_OG_URL%%" />
+    <meta property="og:type" content="%%OC_OG_TYPE%%" />
+    <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
     <!-- SVG favicon first (currentColor-free, self-switches light/dark via its
          own internal prefers-color-scheme, so it works before app.css loads);
          favicon-32.png is the raster fallback for browsers that don't support

@@ -1,6 +1,10 @@
 package handlers
 
-import "regexp"
+import (
+	"regexp"
+	"sort"
+	"strings"
+)
 
 // knownStaticRoutes mirrors web/src/lib/router.ts's STATIC_ROUTES: every path
 // the SPA's client-side router recognizes as a real view rather than
@@ -46,4 +50,45 @@ func isKnownRoute(path string) bool {
 		return true
 	}
 	return workshopDetailPattern.MatchString(path)
+}
+
+// IsKnownRoute is the exported form of isKnownRoute, added for #0019/#0020
+// (internal/seo) so the meta-tag injector and the sitemap generator can ask
+// "is this path real" against the exact same table SPAHandler uses for its
+// 200-vs-404 decision, rather than re-deriving their own copy. Deliberately a
+// thin wrapper rather than exporting isKnownRoute itself, so the existing
+// in-package tests (routes_test.go, static_test.go) that already call the
+// unexported name keep working untouched.
+func IsKnownRoute(path string) bool {
+	return isKnownRoute(path)
+}
+
+// StaticRoutes returns a sorted copy of every static path in the SPA's route
+// table (knownStaticRoutes' keys). Exported for #0019/#0020 so
+// internal/seo builds its own curated subsets (e.g. the sitemap's indexable
+// routes, which deliberately excludes the auth/token paths present here) from
+// this single source rather than hand-copying the list a second time. Returns
+// a fresh slice on every call so callers can't mutate the package-level map
+// through the result.
+func StaticRoutes() []string {
+	out := make([]string, 0, len(knownStaticRoutes))
+	for p := range knownStaticRoutes {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// WorkshopDetailSlug reports whether path matches the /workshops/{slug}
+// dynamic pattern and, if so, returns the decoded slug. Mirrors the trailing
+// slash normalization isKnownRoute applies, so "/workshops/solder-101/" and
+// "/workshops/solder-101" agree.
+func WorkshopDetailSlug(path string) (slug string, ok bool) {
+	if len(path) > 1 && path[len(path)-1] == '/' {
+		path = path[:len(path)-1]
+	}
+	if !workshopDetailPattern.MatchString(path) {
+		return "", false
+	}
+	return strings.TrimPrefix(path, "/workshops/"), true
 }
