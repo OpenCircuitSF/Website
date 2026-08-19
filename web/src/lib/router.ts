@@ -15,6 +15,7 @@
 //    it is exercised by rendering (dev server / build), not by unit test.
 //  - No routing library, per PRD §7.2 -- this file is deliberately small.
 
+import { tick } from 'svelte';
 import { writable } from 'svelte/store';
 
 /** Every view the SPA can route to. Includes the Phase 1 auth views
@@ -171,22 +172,43 @@ interface NavigateOptions {
 /**
  * Navigate to `path` client-side: push (or replace) history state, update
  * currentRoute, and reset scroll to top. Not used for back/forward -- see
- * initRouter()'s popstate handler, which restores the browser's own saved
- * scroll position instead of resetting it, per the acceptance criteria.
+ * initRouter()'s popstate handler, which restores the scroll offset *we*
+ * saved for that entry (not the browser's own restoration, which is turned
+ * off in initRouter() -- see the comment there for why).
+ *
+ * Before leaving the current entry, its scroll offset is saved into its own
+ * history state via replaceState, so that a later Back lands exactly where
+ * the user left it. This mirrors the pagehide handler in initRouter(), which
+ * covers the case where the user leaves without calling navigate() at all
+ * (e.g. a same-tab full navigation away and back).
  */
 export function navigate(path: string, { replace = false }: NavigateOptions = {}): void {
   const url = new URL(path, window.location.origin);
   const route = parsePath(url.pathname, url.search);
   const target = url.pathname + url.search;
 
+  saveScrollToCurrentEntry();
+
   if (replace) {
-    window.history.replaceState({}, '', target);
+    window.history.replaceState({ scrollY: 0 }, '', target);
   } else {
-    window.history.pushState({}, '', target);
+    window.history.pushState({ scrollY: 0 }, '', target);
   }
 
   currentRoute.set(route);
   window.scrollTo(0, 0);
+}
+
+/** Stamp the *current* history entry's state with the current scroll offset,
+ * without navigating anywhere (same URL, replaceState). Called just before
+ * every push/replace in navigate() and on pagehide, so whichever entry the
+ * user eventually Backs into has an accurate offset to restore. */
+function saveScrollToCurrentEntry(): void {
+  window.history.replaceState(
+    { scrollY: window.scrollY },
+    '',
+    window.location.pathname + window.location.search,
+  );
 }
 
 let initialized = false;
@@ -194,14 +216,28 @@ let initialized = false;
 /**
  * Wire the router up against the live DOM: intercepts same-origin `<a>`
  * clicks (pushState navigation), and handles popstate (back/forward) by
- * restoring the route without resetting scroll -- the browser already
- * restores the scroll position it saved for that history entry. Call once,
- * from App.svelte's onMount. Idempotent: a second call is a no-op, since
- * Svelte's onMount can in principle re-run under HMR.
+ * restoring the route *and* the scroll offset we saved for that entry. Call
+ * once, from App.svelte's onMount. Idempotent: a second call is a no-op,
+ * since Svelte's onMount can in principle re-run under HMR.
+ *
+ * Scroll restoration is deliberately hand-rolled rather than left to the
+ * browser's default `history.scrollRestoration = 'auto'`: on popstate the
+ * browser restores scroll against the DOM as it exists at that instant,
+ * which is still the *outgoing* view -- Svelte has not yet swapped in the
+ * markup for the restored route, so the restore clamps to 0 against a
+ * document with no height yet and nothing moves it afterwards. Setting
+ * `scrollRestoration = 'manual'` stops the browser from doing that race at
+ * all; the popstate handler below does the restore itself, after `tick()`
+ * has let Svelte re-render the new view, so the page actually has the height
+ * to scroll to.
  */
 export function initRouter(): void {
   if (initialized) return;
   initialized = true;
+
+  if ('scrollRestoration' in window.history) {
+    window.history.scrollRestoration = 'manual';
+  }
 
   document.addEventListener('click', (event) => {
     if (event.defaultPrevented) return;
@@ -229,7 +265,24 @@ export function initRouter(): void {
     navigate(anchor.pathname + anchor.search);
   });
 
-  window.addEventListener('popstate', () => {
+  window.addEventListener('popstate', (event) => {
     currentRoute.set(parsePath(window.location.pathname, window.location.search));
+
+    const state = event.state as { scrollY?: number } | null;
+    const saved = state && typeof state.scrollY === 'number' ? state.scrollY : 0;
+
+    // Wait for Svelte to re-render the restored view before scrolling to it
+    // -- scrolling against the outgoing view's (possibly shorter) DOM is
+    // exactly the bug this function exists to fix. See the initRouter()
+    // doc comment above.
+    void tick().then(() => {
+      window.scrollTo(0, saved);
+    });
   });
+
+  // Covers leaving the SPA without going through navigate() at all (e.g. a
+  // same-tab navigation to an external page and back, or the tab closing) --
+  // navigate() only stamps the outgoing entry's scroll offset when it itself
+  // is the thing causing the navigation.
+  window.addEventListener('pagehide', saveScrollToCurrentEntry);
 }
