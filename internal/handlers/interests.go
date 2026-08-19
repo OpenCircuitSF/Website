@@ -343,8 +343,14 @@ func (h *AdminInterestsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	// unambiguous — Delete's own error already distinguishes them, this is
 	// just for the metadata.
 	current, err := h.store.GetByID(r.Context(), id)
-	if errors.Is(err, interests.ErrNotFound) {
+	switch {
+	case err == nil:
+		// fall through
+	case errors.Is(err, interests.ErrNotFound):
 		writeError(w, http.StatusNotFound, "interest not found")
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
