@@ -4,7 +4,12 @@
   admin data. It ties together three backend areas behind a single view with a
   tab bar:
 
-  - Settings   — GET/PATCH /admin/settings: a registrations_enabled toggle.
+  - Settings   — GET/PATCH /admin/settings: a registrations_enabled toggle and
+    a physical_address text field. physical_address is edited here as a
+    setting (not an env var) because #0045's send worker reads it fresh from
+    the settings table at send time and refuses to start a campaign while it
+    is empty (CAN-SPAM requires a physical postal address in every commercial
+    message).
   - Users      — GET /admin/users plus POST .../{id}/deactivate|reactivate:
     list with status, deactivate a non-admin (reason dropdown + note, note
     required for "other"), reactivate with an optional note.
@@ -54,6 +59,50 @@
   const regEnabled = $derived(
     registrationsEnabled(settings.find((s) => s.key === 'registrations_enabled')?.value),
   );
+
+  // ── Settings: physical mailing address ──────────────────────────────────
+  // Editable free text (CAN-SPAM requires a physical postal address in every
+  // commercial email; #0045's send worker refuses to start a campaign while
+  // this is empty). Tracks the last-saved value separately from the input's
+  // live value so "Save" is disabled once the two match and a failed save
+  // doesn't silently discard what the admin typed.
+  const savedAddress = $derived(settings.find((s) => s.key === 'physical_address')?.value ?? '');
+  let addressInput = $state('');
+  let addressInitialized = $state(false);
+  let savingAddress = $state(false);
+  let addressError = $state<string | null>(null);
+  let addressNotice = $state<string | null>(null);
+
+  $effect(() => {
+    // Seed the editable input from the loaded value exactly once (on first
+    // successful load), so a later re-render after saving doesn't clobber
+    // in-progress edits.
+    if (!addressInitialized && !settingsLoading && !settingsError) {
+      addressInput = savedAddress;
+      addressInitialized = true;
+    }
+  });
+
+  const addressDirty = $derived(addressInput !== savedAddress);
+
+  async function saveAddress() {
+    savingAddress = true;
+    addressError = null;
+    addressNotice = null;
+    try {
+      const res = (await updateSetting('physical_address', addressInput)) as {
+        settings: Setting[];
+      };
+      if (res && Array.isArray(res.settings)) settings = res.settings;
+      else await loadSettings();
+      addressNotice = 'Physical address saved.';
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      addressError = 'Could not save the physical address. Please try again.';
+    } finally {
+      savingAddress = false;
+    }
+  }
 
   async function loadSettings() {
     settingsLoading = true;
@@ -331,6 +380,46 @@
           {#if settingsNotice}
             <p class="text-notice" role="status">{settingsNotice}</p>
           {/if}
+
+          <div class="setting-row address-row">
+            <div class="setting-info">
+              <label class="setting-name" for="physical-address">Physical mailing address</label>
+              <p class="text-muted setting-desc">
+                Included in every campaign email. CAN-SPAM requires a physical postal address in
+                every commercial message — the send worker refuses to start a campaign while this
+                is empty.
+              </p>
+              <textarea
+                id="physical-address"
+                rows="3"
+                bind:value={addressInput}
+                disabled={savingAddress}
+                oninput={() => {
+                  addressError = null;
+                  addressNotice = null;
+                }}
+                placeholder="Open Circuit SF, PO Box 1234, San Francisco, CA 94104"
+              ></textarea>
+              {#if !addressInput.trim()}
+                <p class="text-error" role="alert">
+                  Empty — campaigns cannot be sent until this is set.
+                </p>
+              {/if}
+              {#if addressError}
+                <p class="text-error" role="alert">{addressError}</p>
+              {/if}
+              {#if addressNotice}
+                <p class="text-notice" role="status">{addressNotice}</p>
+              {/if}
+              <Button
+                variant="primary"
+                disabled={savingAddress || !addressDirty}
+                onclick={saveAddress}
+              >
+                {savingAddress ? 'Saving…' : 'Save address'}
+              </Button>
+            </div>
+          </div>
         {/if}
       </Panel>
     {/if}
@@ -634,11 +723,30 @@
     flex: 1;
   }
   .setting-name {
+    display: block;
     font-weight: 600;
+    color: var(--text);
+    font-size: var(--fs-base);
   }
   .setting-desc {
     margin: var(--space-1) 0 0;
     font-size: var(--fs-sm);
+  }
+  .address-row {
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: var(--border-w) solid var(--border);
+  }
+  .address-row textarea {
+    margin-top: var(--space-2);
+    resize: vertical;
+  }
+  .address-row .text-error,
+  .address-row .text-notice {
+    margin: var(--space-2) 0 0;
+  }
+  .address-row :global(button) {
+    margin-top: var(--space-3);
   }
   .toggle {
     flex-shrink: 0;

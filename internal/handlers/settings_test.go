@@ -52,15 +52,21 @@ func settingsTestPool(t *testing.T) *pgxpool.Pool {
 }
 
 // resetSettings restores the settings table to exactly the migration seed:
-// a single registrations_enabled=false row. This isolates each settings test
-// from values left by earlier tests (the auth suite flips this row) and leaves
-// the DB in the seeded state on teardown.
+// registrations_enabled=false (000004) and physical_address='' (000008). This
+// isolates each settings test from values left by earlier tests (the auth
+// suite flips the registrations_enabled row) and leaves the DB in the seeded
+// state on teardown.
 func resetSettings(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := pool.Exec(ctx, `DELETE FROM settings`); err != nil {
 		t.Fatalf("clear settings: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO settings (key, value, updated_at)
+		 VALUES ('physical_address', '', now())`); err != nil {
+		t.Fatalf("seed physical_address setting: %v", err)
 	}
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO settings (key, value, updated_at)
@@ -284,6 +290,68 @@ func TestAdminSettings_PatchUpdatesRow(t *testing.T) {
 	}
 	if after := settingUpdatedAt(t, pool, "registrations_enabled"); !after.After(before) {
 		t.Errorf("updated_at not advanced: before %v after %v", before, after)
+	}
+}
+
+// TestAdminSettings_PhysicalAddressRoundTrip is #0009's criterion that the
+// Settings screen can edit physical_address as a setting (not an env var, per
+// #0007's Notes — #0045's send worker reads it fresh from this table at send
+// time). Confirms: it is present (seeded empty by migration 000008), any
+// free-text value is accepted (no format validation, unlike
+// registrations_enabled), and it round-trips through both the response body
+// and a fresh DB read.
+func TestAdminSettings_PhysicalAddressRoundTrip(t *testing.T) {
+	pool := settingsTestPool(t)
+	store := auth.NewStore(pool)
+	srv := httptest.NewServer(adminMux(store))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin@example.com")
+	seedSession(t, pool, admin, "admin-token")
+
+	// Seeded empty.
+	if got := settingValue(t, pool, "physical_address"); got != "" {
+		t.Fatalf("seeded physical_address = %q, want empty", got)
+	}
+
+	const addr = "Open Circuit SF, PO Box 1234, San Francisco, CA 94104"
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/admin/settings",
+		jsonBody(`{"key":"physical_address","value":"`+addr+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(withCookie(req, "admin-token"))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	settings := decodeSettings(t, body)
+	if settings["physical_address"] != addr {
+		t.Errorf("response physical_address = %q, want %q", settings["physical_address"], addr)
+	}
+	if got := settingValue(t, pool, "physical_address"); got != addr {
+		t.Errorf("DB physical_address = %q, want %q", got, addr)
+	}
+
+	// A subsequent GET reflects the same value, proving the Settings tab reads
+	// it back through the same envelope it edits it through.
+	getReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/admin/settings", nil)
+	getResp, err := srv.Client().Do(withCookie(getReq, "admin-token"))
+	if err != nil {
+		t.Fatalf("GET request: %v", err)
+	}
+	defer getResp.Body.Close()
+	getBody, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("read GET body: %v", err)
+	}
+	if got := decodeSettings(t, getBody)["physical_address"]; got != addr {
+		t.Errorf("GET physical_address = %q, want %q", got, addr)
 	}
 }
 

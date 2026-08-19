@@ -84,9 +84,13 @@ func New(adminEmail string) *Store {
 		},
 	}
 
-	// Seed the registrations_enabled setting.
+	// Seed the settings the admin Settings tab edits: registrations_enabled
+	// and physical_address (migrations 000004 and 000008 respectively on the
+	// Postgres path). physical_address starts empty here too, matching the
+	// migration seed.
 	s.settings = []auth.Setting{
 		{Key: "registrations_enabled", Value: "true"},
+		{Key: "physical_address", Value: ""},
 	}
 
 	logger.Info("devstore: seeded in-memory store", "admin_email", adminEmail)
