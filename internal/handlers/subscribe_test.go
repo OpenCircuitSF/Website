@@ -125,12 +125,27 @@ func subscribeBody(email string, slugs []string, now time.Time) map[string]any {
 
 func doSubscribe(t *testing.T, mux http.Handler, body map[string]any) *http.Response {
 	t.Helper()
+	return doSubscribeFrom(t, mux, body, "", "")
+}
+
+// doSubscribeFrom is doSubscribe with control over RemoteAddr and
+// X-Forwarded-For, so #0077 regression tests can simulate a request arriving
+// via the trusted Apache hop (loopback RemoteAddr, matching
+// deploy/systemd/opencircuit.service) versus a direct/spoofed one.
+func doSubscribeFrom(t *testing.T, mux http.Handler, body map[string]any, remoteAddr, xff string) *http.Response {
+	t.Helper()
 	b, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/subscribe", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
+	if remoteAddr != "" {
+		req.RemoteAddr = remoteAddr
+	}
+	if xff != "" {
+		req.Header.Set("X-Forwarded-For", xff)
+	}
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec.Result()
@@ -189,6 +204,22 @@ func subscriberRow(t *testing.T, pool *pgxpool.Pool, email string) (id int64, st
 		t.Fatalf("read subscriber row for %s: %v", email, err)
 	}
 	return
+}
+
+// subscriberSignupIP reads back the stored signup_ip (host portion only,
+// stripping the /32 or /128 CIDR suffix pgx's inet mapping adds) for the
+// PRD §6.3 consent-evidence assertions.
+func subscriberSignupIP(t *testing.T, pool *pgxpool.Pool, email string) string {
+	t.Helper()
+	var ip *string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT host(signup_ip) FROM subscribers WHERE email = $1`, email).Scan(&ip); err != nil {
+		t.Fatalf("read signup_ip for %s: %v", email, err)
+	}
+	if ip == nil {
+		return ""
+	}
+	return *ip
 }
 
 func subscriberExists(t *testing.T, pool *pgxpool.Pool, email string) bool {
@@ -324,7 +355,7 @@ func TestSubscribe_HoneypotDiscardsSilently(t *testing.T) {
 	_, mux := subscribeMux(pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
-	resp := doSubscribe(t, mux, withHoneypot(subscribeBody(email, nil, time.Now())))
+	resp := doSubscribe(t, mux, withHoneypot(subscribeBody(email, []string{}, time.Now())))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -347,7 +378,7 @@ func TestSubscribe_TimingGateRejectsTooFastOrMissing(t *testing.T) {
 
 	t.Run("too-fast", func(t *testing.T) {
 		email := subscribeUniqueEmail(t) + "-fast"
-		resp := doSubscribe(t, mux, withTooFast(subscribeBody(email, nil, time.Now()), time.Now()))
+		resp := doSubscribe(t, mux, withTooFast(subscribeBody(email, []string{}, time.Now()), time.Now()))
 		if resp.StatusCode != http.StatusAccepted {
 			t.Fatalf("status = %d, want 202", resp.StatusCode)
 		}
@@ -358,7 +389,7 @@ func TestSubscribe_TimingGateRejectsTooFastOrMissing(t *testing.T) {
 
 	t.Run("missing", func(t *testing.T) {
 		email := subscribeUniqueEmail(t) + "-missing"
-		body := subscribeBody(email, nil, time.Now())
+		body := subscribeBody(email, []string{}, time.Now())
 		delete(body, "rendered_at")
 		resp := doSubscribe(t, mux, body)
 		if resp.StatusCode != http.StatusAccepted {
@@ -408,7 +439,7 @@ func TestSubscribe_SuppressedAddress_NoActionTaken(t *testing.T) {
 	suppression := fakeSuppressionChecker{suppressed: map[string]bool{email: true}}
 	_, mux := subscribeMux(pool, mailer, suppression)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, nil, time.Now()))
+	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -427,7 +458,7 @@ func TestSubscribe_SuppressionCheckError_FailsSafeToUniform202(t *testing.T) {
 	suppression := fakeSuppressionChecker{err: errors.New("suppression backend unavailable")}
 	_, mux := subscribeMux(pool, mailer, suppression)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, nil, time.Now()))
+	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202 even when the suppression check itself errors", resp.StatusCode)
 	}
@@ -491,6 +522,61 @@ func TestSubscribe_NewSignup_CreatesPendingSendsConfirmationAndAudits(t *testing
 
 	if n := auditSignupCount(t, pool, id); n != 1 {
 		t.Errorf("subscriber.signup audit rows for %d = %d, want 1", id, n)
+	}
+}
+
+// ============================================================================
+// #0077 — signup_ip is consent evidence (PRD §6.3) and must not be
+// attacker-chosen.
+// ============================================================================
+
+// TestSubscribe_SignupIPUsesRightmostTrustedProxyEntry confirms the real
+// end-to-end path: a request arriving via the trusted Apache hop (loopback
+// RemoteAddr, matching deploy/systemd/opencircuit.service) with a
+// mod_proxy_http-style X-Forwarded-For — attacker-claimed leftmost entry,
+// Apache-appended rightmost entry — stores the RIGHTMOST (real) entry as
+// signup_ip, not the client-supplied leftmost one.
+func TestSubscribe_SignupIPUsesRightmostTrustedProxyEntry(t *testing.T) {
+	pool := subscribeTestPool(t)
+	mailer := &mailing.RecordingMailer{}
+	_, mux := subscribeMux(pool, mailer, nil)
+
+	email := subscribeUniqueEmail(t)
+	const attackerClaimed = "172.16.0.7"
+	const realPeer = "198.51.100.9"
+	resp := doSubscribeFrom(t, mux, subscribeBody(email, []string{}, time.Now()),
+		"127.0.0.1:9999", attackerClaimed+", "+realPeer)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+
+	if got := subscriberSignupIP(t, pool, email); got != realPeer {
+		t.Errorf("signup_ip = %q, want %q (the Apache-appended real peer, not the attacker-claimed %q)", got, realPeer, attackerClaimed)
+	}
+}
+
+// TestSubscribe_SignupIPCannotBeSpoofedWithoutTrustedProxy is #0077's
+// consent-evidence proof: with no trusted proxy in front (RemoteAddr is not
+// the loopback hop — a direct connection), a spoofed X-Forwarded-For must
+// not determine signup_ip. The real RemoteAddr must be recorded instead,
+// exactly as PRD §6.3 and #0075's published privacy policy promise
+// subscribers.
+func TestSubscribe_SignupIPCannotBeSpoofedWithoutTrustedProxy(t *testing.T) {
+	pool := subscribeTestPool(t)
+	mailer := &mailing.RecordingMailer{}
+	_, mux := subscribeMux(pool, mailer, nil)
+
+	email := subscribeUniqueEmail(t)
+	const spoofed = "172.16.0.7"
+	const realPeer = "198.51.100.9"
+	resp := doSubscribeFrom(t, mux, subscribeBody(email, []string{}, time.Now()),
+		realPeer+":4242", spoofed)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+
+	if got := subscriberSignupIP(t, pool, email); got != realPeer {
+		t.Errorf("signup_ip = %q, want %q (the real RemoteAddr) — an attacker-chosen X-Forwarded-For value (%q) must never become consent evidence with no trusted proxy in front", got, realPeer, spoofed)
 	}
 }
 
@@ -615,7 +701,7 @@ func TestSubscribe_NonASCIIEmailRejected(t *testing.T) {
 	email := "café@example.com"
 	_, mux := subscribeMux(pool, mailer, nil)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, nil, time.Now()))
+	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for a non-ASCII local part", resp.StatusCode)
 	}
@@ -630,7 +716,7 @@ func TestSubscribe_DisposableDomainRejected(t *testing.T) {
 	_, mux := subscribeMux(pool, mailer, nil)
 
 	email := "zz-subtest@mailinator.com"
-	resp := doSubscribe(t, mux, subscribeBody(email, nil, time.Now()))
+	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
@@ -651,7 +737,7 @@ func TestSubscribe_ActiveSubscriber_SendsAlreadySubscribedEmail(t *testing.T) {
 	email := subscribeUniqueEmail(t)
 	id := seedSubscriberRow(t, pool, email, subscribers.StatusActive, nil, nil)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, nil, time.Now()))
+	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -769,7 +855,7 @@ func TestSubscribe_BouncedSubscriber_RestartsSameAsUnsubscribed(t *testing.T) {
 	email := subscribeUniqueEmail(t)
 	seedSubscriberRow(t, pool, email, subscribers.StatusBounced, nil, nil)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, nil, time.Now()))
+	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}

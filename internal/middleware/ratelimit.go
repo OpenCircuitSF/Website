@@ -1,9 +1,7 @@
 package middleware
 
 import (
-	"net"
 	"net/http"
-	"strings"
 	"sync"
 
 	"golang.org/x/time/rate"
@@ -65,37 +63,17 @@ func (rl *RateLimiter) limiterFor(ip string) *rate.Limiter {
 // with a {"error":"rate_limit_exceeded"} JSON body. Requests within the limit
 // are passed to next unchanged.
 //
-// The client IP is taken from the X-Forwarded-For header (set by the Apache
-// reverse proxy in production) with a fallback to RemoteAddr, matching the
-// extraction used by the redirect handler so all components bucket clients
-// identically.
+// The client IP is derived by ClientIP (this package, clientip.go) — the
+// single security-relevant X-Forwarded-For parse shared with
+// internal/handlers.clientIP, so every component buckets/attributes clients
+// identically. See ClientIP's doc comment for the trust model (#0077).
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
+		ip := ClientIP(r)
 		if !rl.limiterFor(ip).Allow() {
 			writeJSONError(w, http.StatusTooManyRequests, "rate_limit_exceeded")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// clientIP derives the originating client IP for rate-limiting buckets. Behind
-// Apache's reverse proxy the real client is the first hop in X-Forwarded-For;
-// otherwise fall back to the connection's RemoteAddr with the port stripped.
-// This mirrors the redirect handler's IP extraction so a single client is
-// bucketed consistently across the service.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// X-Forwarded-For is a comma-separated list; the first entry is the
-		// original client.
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
 }
