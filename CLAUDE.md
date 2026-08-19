@@ -73,13 +73,16 @@ correct regardless and is what `#0001` writes into `go.mod`.
 **Fable is not used in the per-issue pipeline.** Opus replaces it wherever
 `Issues.md` previously named the top model.
 
-**One exception, added 2026-08-19 at the user's explicit instruction:** the
-final whole-implementation review — run once, after every phase's issues are
-resolved — runs on **Fable**. Its job is to read the finished system rather than
-a single issue, write notes, and file new issues for concerns and recommended
-improvements. That is a different task from reviewing one diff, and it is the one
-place the extra capability is worth the cost. Do not read this as licence to use
-Fable anywhere in the plan → implement → review loop.
+**Fable is available for occasional, limited review tasks** (user's instruction,
+2026-08-19). The clear case is a **whole-implementation review**: reading the
+finished system rather than one diff, writing notes, and filing new issues for
+concerns and recommended improvements. That is a genuinely different task from
+reviewing a single change, and where the extra capability earns its cost.
+
+The boundary: Fable is for occasional standalone reviews, **not** a step in the
+plan → implement → review loop. Per-issue planning stays on Opus, implementation
+on Sonnet, per-issue review on Opus. Reach for Fable when the task is one review
+spanning many issues, not when it is one review of one issue.
 
 | Phase | Model | Runs as |
 |---|---|---|
