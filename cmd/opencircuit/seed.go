@@ -13,13 +13,16 @@ import (
 )
 
 // seed bootstraps a fresh install: it ensures the admin user (from ADMIN_EMAIL)
-// exists. Idempotent, so `opencircuit seed` is safe to re-run without creating
-// duplicate rows.
+// exists and is pre-authorized as admin. Idempotent, so `opencircuit seed` is
+// safe to re-run without creating duplicate rows or erroring (#0010).
 //
-// This is a minimal placeholder pending #0010 ("Add the seed command for the
-// bootstrap admin"), which extends this with the fuller bootstrap behavior the
-// PRD describes. The shortener's test-link seeding step (ensureTestLink) was
-// removed with internal/links in #0002 — this project has no links table.
+// The seeded admin has no passkey — first sign-in must use "Recover account"
+// on the login page, not "Register" (docs/deployment.md documents why).
+//
+// Deliberately narrower than ShortLinks' seed: the shortener's test-link
+// seeding step (ensureTestLink) was removed with internal/links in #0002 —
+// this project has no links table — and the interest taxonomy is seeded by
+// the migration (#0023), not here.
 func seed() error {
 	cfg, err := config.Load()
 	if err != nil {

@@ -88,6 +88,38 @@ retargeted at the `opencircuit` database). The subscriber list is the
 single most valuable and least reconstructible asset in the system —
 verify a restore before launch, not after the first incident.
 
+## Bootstrap admin (`opencircuit seed`)
+
+After the first `migrate up` on a fresh database, run:
+
+```bash
+opencircuit seed
+```
+
+This idempotently ensures the `ADMIN_EMAIL` user exists with `is_admin = true`
+and `active = true` — safe to re-run; a second run is a no-op that exits `0`
+and does not create a duplicate row. Unlike ShortLinks' version, it does not
+seed a test link — this project has no `links` table (`PRD.md` §3.2). The
+interest taxonomy is seeded by the migration (`#0023`), not by this command.
+
+**The seeded admin has no passkey.** `seed` only creates the user row; it
+cannot enroll a credential. First sign-in must use **"Recover account"** on
+the login page, not "Register" — Register rejects an email that already has a
+user row, so trying to register `ADMIN_EMAIL` after seeding silently does
+nothing. Recovery adds a passkey to an existing account without creating a
+new user and does not check the `registrations_enabled` gate, which is why it
+is the correct path for the seeded admin (mirrors ShortLinks
+`DEPLOYMENT.md` step 6). This is non-obvious and blocks first login if
+forgotten:
+
+1. Open the site and click **"Recover account / lost passkey"** on the login
+   page.
+2. Enter the `ADMIN_EMAIL` address and submit.
+3. Follow the magic link from the recovery email to complete the passkey
+   ceremony (`navigator.credentials.create()`).
+4. You are redirected in as the admin user; `is_admin` is preserved
+   throughout recovery.
+
 ## Open items blocking a real deploy (`CLAUDE.md` §10)
 
 Tracked so a phase doesn't stall silently on one of these — none are code:
