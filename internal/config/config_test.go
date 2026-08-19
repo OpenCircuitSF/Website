@@ -78,37 +78,54 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 	}
 }
 
-// TestLoad_BaseURLTrailingSlashNormalised proves BASE_URL with and without a
-// trailing slash load to the identical value (#0085). Production's value
+// TestLoad_BaseURLTrailingSlashNormalised proves BASE_URL with any number of
+// trailing slashes loads to the identical value (#0085). Production's value
 // happens to lack the slash, which is the only reason a doubled "//path" was
 // latent rather than live; a trailing slash is the single most common way an
-// operator writes a base URL in /etc/opencircuit/config.env.
+// operator writes a base URL in /etc/opencircuit/config.env. The doubled-
+// slash case ("https://example.com//") is the one the #0085 review bounce
+// was filed over: strings.TrimSuffix only removed one slash, so that input
+// still produced "//login" downstream. This test covers the whole boundary
+// table from the review, not just the single-slash case.
 //
-// Mutation proof: revert normalizeBaseURL to `return raw` (or remove the
-// TrimSuffix call in loadFromFile) and this test fails with
+// Mutation proof: revert normalizeBaseURL to strings.TrimSuffix(raw, "/")
+// and the "https://example.com//" case fails with
 // BaseURL = "https://example.com/", want "https://example.com" — see
 // issues/0085.md Verification for the observed output.
 func TestLoad_BaseURLTrailingSlashNormalised(t *testing.T) {
-	setRequired(t)
-	t.Setenv("BASE_URL", "https://example.com/")
-
-	cfg, err := loadFromFile(noEnvFile)
-	if err != nil {
-		t.Fatalf("loadFromFile returned error: %v", err)
-	}
-	if cfg.BaseURL != "https://example.com" {
-		t.Errorf("BaseURL = %q, want %q", cfg.BaseURL, "https://example.com")
-	}
-
-	setRequired(t)
-	t.Setenv("BASE_URL", "https://example.com")
-	cfgNoSlash, err := loadFromFile(noEnvFile)
-	if err != nil {
-		t.Fatalf("loadFromFile returned error: %v", err)
+	cases := []struct {
+		name string
+		env  string
+	}{
+		{"no slash", "https://example.com"},
+		{"one slash", "https://example.com/"},
+		{"two slashes", "https://example.com//"},
+		{"three slashes", "https://example.com///"},
+		{"path with one slash", "https://example.com/base/"},
+		{"path with two slashes", "https://example.com/base//"},
 	}
 
-	if cfg.BaseURL != cfgNoSlash.BaseURL {
-		t.Errorf("BaseURL differs by trailing slash: %q vs %q", cfg.BaseURL, cfgNoSlash.BaseURL)
+	const want = "https://example.com"
+	const wantPathBase = "https://example.com/base"
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequired(t)
+			t.Setenv("BASE_URL", tc.env)
+
+			cfg, err := loadFromFile(noEnvFile)
+			if err != nil {
+				t.Fatalf("loadFromFile returned error: %v", err)
+			}
+
+			wantVal := want
+			if strings.Contains(tc.env, "/base") {
+				wantVal = wantPathBase
+			}
+			if cfg.BaseURL != wantVal {
+				t.Errorf("BaseURL = %q, want %q", cfg.BaseURL, wantVal)
+			}
+		})
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,24 @@ var unresolvedTemplateToken = regexp.MustCompile(`\{\{[^{}]*\}\}`)
 
 // buildEmailFuncName matches the exported top-level Build*Email function
 // names this package defines — see TestAllMessagesEnumeratesEveryBuildEmailFunc.
+//
+// Naming-convention decision (#0085 review, 2026-08-19): kept scoped to the
+// "Build...Email" convention rather than widened to a bare "^Build". Every
+// exported top-level Build* function in this package today ends in "Email"
+// (checked: grep -n '^func Build' internal/mailing/*.go, five matches, all
+// five end in Email), and this package is specifically internal/mailing's
+// email templates — a bare "^Build" would also start matching any future
+// non-message helper named Build* (e.g. a BuildAddressBlock string helper)
+// that isn't a Message-returning builder allMessages() should enumerate,
+// which would make the guard noisier, not stronger. The known gap this
+// leaves: a future builder that returns a Message but is named without the
+// "Email" suffix — e.g. #0043's campaign builder if it lands as
+// BuildCampaignMessage, or a hypothetical BuildWorkshopReminder — is
+// invisible to this regex and therefore to
+// TestAllMessagesEnumeratesEveryBuildEmailFunc. Whoever adds such a builder
+// must either name it to match this convention or widen the regex (and
+// re-check the false-positive vectors documented on the test below) at that
+// time; this issue does not pre-emptively widen it.
 var buildEmailFuncName = regexp.MustCompile(`^Build[A-Za-z0-9]*Email$`)
 
 // updateGolden regenerates testdata/*.golden from the current renderer when
@@ -125,16 +144,29 @@ func allMessages() map[string]Message {
 //
 // What IS achievable, and what this test does, is turn "forgot to add it"
 // from a silent gap into a named failure: it parses every non-test .go file
-// in this package directory with go/parser, counts the exported top-level
-// Build*Email function declarations, and asserts that count equals
-// len(allMessages()). The day a sixth builder lands without a matching
-// allMessages() entry, this fails instead of the property tests quietly
-// covering only five of six.
+// in this package directory with go/parser, collects the set of exported
+// top-level Build*Email function declarations, then parses allMessages()'s
+// own function body and collects the set of Build*Email identifiers it
+// actually *calls*. Every declared builder must appear as a call inside
+// allMessages() — an identity check, not a count comparison.
 //
-// Mutation proof: add a stub Build*Email function to
+// This is deliberately not a count check (#0085 review, 2026-08-19): a
+// count only proves the two sets are the same *size*, not that they contain
+// the same names. A new builder plus an unrelated duplicate entry in
+// allMessages() (calling an existing builder a second time) would leave
+// counts equal while the new builder is genuinely uncovered — proven false
+// positive that a bare count comparison could not catch, see
+// issues/0085.md ## Verification for the observed mutation output.
+//
+// Mutation proof 1 (missing entry): add a stub Build*Email function to
 // transactional_templates.go without adding a corresponding entry to
-// allMessages() and this test fails, naming the mismatch and every
-// Build*Email function it found.
+// allMessages() and this test fails, naming the uncalled builder.
+//
+// Mutation proof 2 (count-preserving false positive): add a stub Build*Email
+// function AND a duplicate allMessages() entry that calls an *existing*
+// builder a second time (keeping len(found) == len(allMessages()) but the
+// new builder still uncalled) — this test still fails, where a count-only
+// check would not have.
 func TestAllMessagesEnumeratesEveryBuildEmailFunc(t *testing.T) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
@@ -144,7 +176,7 @@ func TestAllMessagesEnumeratesEveryBuildEmailFunc(t *testing.T) {
 		t.Fatalf("parsing package source: %v", err)
 	}
 
-	var found []string
+	found := map[string]bool{}
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Files {
 			for _, decl := range file.Decls {
@@ -153,14 +185,63 @@ func TestAllMessagesEnumeratesEveryBuildEmailFunc(t *testing.T) {
 					continue
 				}
 				if buildEmailFuncName.MatchString(fn.Name.Name) {
-					found = append(found, fn.Name.Name)
+					found[fn.Name.Name] = true
 				}
 			}
 		}
 	}
 
-	if want := len(allMessages()); len(found) != want {
-		t.Errorf("found %d Build*Email function(s) in package source %v, but allMessages() covers %d — add the missing builder to allMessages()", len(found), found, want)
+	// allMessages() itself lives in this _test.go file, so it's deliberately
+	// parsed separately (including test files this time) rather than folded
+	// into the ParseDir call above — that call's filter excludes _test.go
+	// files on purpose, so a Build*Email declared in a test file is not
+	// mistaken for a real builder (see the false-positive vectors recorded
+	// on this test's package doc / #0085 review notes).
+	allPkgs, err := parser.ParseDir(fset, ".", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing package source (including tests): %v", err)
+	}
+	var allMessagesDecl *ast.FuncDecl
+	for _, pkg := range allPkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "allMessages" {
+					allMessagesDecl = fn
+				}
+			}
+		}
+	}
+
+	if allMessagesDecl == nil {
+		t.Fatal("could not find an allMessages() function declaration in package source")
+	}
+
+	// Collect every Build*Email identifier actually called inside
+	// allMessages()'s body, regardless of how many times or under how many
+	// map keys — this is the identity check: a builder is "covered" only if
+	// allMessages() calls it, not merely if the counts happen to line up.
+	called := map[string]bool{}
+	ast.Inspect(allMessagesDecl.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if ident, ok := call.Fun.(*ast.Ident); ok && buildEmailFuncName.MatchString(ident.Name) {
+			called[ident.Name] = true
+		}
+		return true
+	})
+
+	var missing []string
+	for name := range found {
+		if !called[name] {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+
+	if len(missing) > 0 {
+		t.Errorf("allMessages() does not call %v (found %d Build*Email function(s) in package source, allMessages() calls %d distinct builder(s)) — add the missing builder(s) to allMessages()", missing, len(found), len(called))
 	}
 }
 

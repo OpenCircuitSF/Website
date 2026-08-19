@@ -153,20 +153,32 @@ func loadFromFile(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// normalizeBaseURL strips exactly one trailing slash from an operator-supplied
-// BASE_URL, so "https://www.opencircuitsf.com/" and
-// "https://www.opencircuitsf.com" load to the identical value (#0085).
+// normalizeBaseURL strips every trailing slash from an operator-supplied
+// BASE_URL, so "https://www.opencircuitsf.com/",
+// "https://www.opencircuitsf.com//", and
+// "https://www.opencircuitsf.com" all load to the identical value (#0085).
 //
 // This is the single normalisation point for BASE_URL. Every consumer —
-// the four transactional email builders (internal/mailing), internal/seo's
+// the five transactional email builders (internal/mailing), internal/seo's
 // canonical/og:url/og:image rendering, the sitemap's <loc> values, and
 // robots.txt's Sitemap: line — concatenates baseURL+"/path" directly and
 // trusts this value to already be clean, per #0072's argument that one place
 // should define BASE_URL and everything downstream should trust it rather
-// than re-guard at each call site. An empty input (caught separately by the
-// required-field check below) round-trips unchanged.
+// than re-guard at each call site.
+//
+// strings.TrimRight, not strings.TrimSuffix: TrimSuffix removes one instance
+// of the suffix, so "https://x.com//" would normalise to "https://x.com/"
+// and still produce a doubled-slash "//login" when a caller appends
+// "/login" — the exact defect this issue was filed about (#0085 review,
+// 2026-08-19). TrimRight removes the whole trailing run. An input of "/" or
+// "//" collapses to "" and is caught by the required-field check below (the
+// resulting error names BASE_URL as "missing" rather than "malformed",
+// which is acceptable — see issues/0085.md ## Gotchas). An empty input
+// round-trips unchanged. Whitespace is deliberately not handled here:
+// godotenv trims it on the .env load path and systemd's EnvironmentFile
+// does the same on the production path, so it never reaches this function.
 func normalizeBaseURL(raw string) string {
-	return strings.TrimSuffix(raw, "/")
+	return strings.TrimRight(raw, "/")
 }
 
 // getInt reads an integer environment variable, returning def when the variable
