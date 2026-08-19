@@ -27,6 +27,7 @@ var knownStaticRoutes = map[string]bool{
 	"/":                 true,
 	"/workshops":        true,
 	"/about":            true,
+	"/privacy":          true,
 	"/subscribe":        true,
 	"/subscribe/thanks": true,
 	"/confirm":          true,

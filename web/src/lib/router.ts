@@ -27,6 +27,7 @@ export type RouteName =
   | 'workshops'
   | 'workshop-detail'
   | 'about'
+  | 'privacy'
   | 'subscribe'
   | 'subscribe-thanks'
   | 'confirm'
@@ -59,6 +60,7 @@ const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
   '/': 'home',
   '/workshops': 'workshops',
   '/about': 'about',
+  '/privacy': 'privacy',
   '/subscribe': 'subscribe',
   '/subscribe/thanks': 'subscribe-thanks',
   '/confirm': 'confirm',

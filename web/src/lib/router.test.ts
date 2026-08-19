@@ -19,6 +19,7 @@ describe('parsePath', () => {
       ['/', 'home'],
       ['/workshops', 'workshops'],
       ['/about', 'about'],
+      ['/privacy', 'privacy'],
       ['/subscribe', 'subscribe'],
       ['/subscribe/thanks', 'subscribe-thanks'],
       ['/confirm', 'confirm'],

@@ -40,6 +40,7 @@ func TestSitemap_ContainsStaticRoutesWithLastmod(t *testing.T) {
 	want := map[string]bool{
 		testBaseURL + "/":          false,
 		testBaseURL + "/about":     false,
+		testBaseURL + "/privacy":   false,
 		testBaseURL + "/workshops": false,
 		testBaseURL + "/subscribe": false,
 	}

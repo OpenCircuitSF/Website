@@ -150,7 +150,9 @@ func NewRenderer(template []byte, baseURL string, source WorkshopSource) *Render
 
 // defaultStaticRouteMeta builds the compiled-in route table required by
 // #0019's acceptance criteria: distinct metadata for /, /about, /workshops,
-// and /subscribe.
+// and /subscribe. /privacy was added at #0070 for the same reason /about was
+// added at #0019: a route worth sharing gets its own title/description
+// rather than the generic fallback below.
 func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 	image := baseURL + "/og-default.png"
 	return map[string]RouteMeta{
@@ -171,6 +173,16 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGDescription: "What Open Circuit SF is, who runs it, and why it exists.",
 			OGImage:       image,
 			OGURL:         baseURL + "/about",
+			OGType:        "website",
+			TwitterCard:   "summary_large_image",
+		},
+		"/privacy": {
+			Title:         "Privacy Policy — Open Circuit SF",
+			Description:   "What Open Circuit SF collects when you subscribe (email, interests, signup IP, UTM source), why, how long it's kept, and how to unsubscribe or request erasure.",
+			OGTitle:       "Privacy Policy — Open Circuit SF",
+			OGDescription: "What Open Circuit SF collects, why, and how to leave.",
+			OGImage:       image,
+			OGURL:         baseURL + "/privacy",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
 		},

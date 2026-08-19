@@ -8,7 +8,8 @@ import (
 )
 
 // marketingRoutes is the sitemap's curated static-route portion (#0020's
-// acceptance criteria: "/", "/about", "/workshops", "/subscribe"). This is
+// acceptance criteria: "/", "/about", "/workshops", "/subscribe"; "/privacy"
+// added at #0070 for the same reason -- a real, indexable public page). This is
 // deliberately NOT handlers.StaticRoutes() -- that table also contains the
 // Phase 1 auth/account/token routes (/login, /account, /admin, /confirm,
 // /preferences, /unsubscribe, /register/verify, /recover/verify,
@@ -18,7 +19,7 @@ import (
 // is still asserted to be a handlers.IsKnownRoute member in sitemap_test.go,
 // so this curated list can never silently drift into advertising a URL the
 // client router would 404.
-var marketingRoutes = []string{"/", "/about", "/workshops", "/subscribe"}
+var marketingRoutes = []string{"/", "/about", "/privacy", "/workshops", "/subscribe"}
 
 // urlset / sitemapURL model the sitemaps.org XML schema (only the two
 // elements #0020 requires: loc and lastmod).

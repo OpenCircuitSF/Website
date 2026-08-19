@@ -136,6 +136,34 @@ func TestSPAKnownRouteFallsBackToIndexWith200(t *testing.T) {
 	}
 }
 
+// TestSPAPrivacyRouteReturns200 is #0070's acceptance criterion, named
+// explicitly rather than folded into TestSPAKnownRouteFallsBackToIndexWith200
+// because this is the exact route the parity guard's own doc comment
+// (routes_parity_test.go) uses as its running example of a route that can be
+// added to router.ts's STATIC_ROUTES alone and still 404 on the server if
+// knownStaticRoutes here is not updated to match -- this test is the check
+// that would have caught that.
+func TestSPAPrivacyRouteReturns200(t *testing.T) {
+	fsys := distFS(map[string]string{
+		"index.html": "<!doctype html><title>Open Circuit SF</title><div id=\"app\"></div>",
+	})
+
+	rec := serveSPA(fsys, "/privacy")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /privacy: status = %d, want 200", rec.Code)
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html", ct)
+	}
+
+	if !strings.Contains(rec.Body.String(), "<!doctype html>") {
+		t.Error("SPA fallback did not return index.html for /privacy")
+	}
+}
+
 // TestSPAWorkshopDetailFallsBackToIndexWith200 is the same check for the one
 // dynamic route the SPA supports (/workshops/:slug).
 func TestSPAWorkshopDetailFallsBackToIndexWith200(t *testing.T) {

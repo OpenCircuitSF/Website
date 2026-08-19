@@ -13,6 +13,7 @@
   import Footer from './lib/Footer.svelte';
   import Home from './views/Home.svelte';
   import About from './views/About.svelte';
+  import PrivacyPolicy from './views/PrivacyPolicy.svelte';
   import NotFound from './views/NotFound.svelte';
 
   let sessionChecked = $state(false);
@@ -80,6 +81,8 @@
     <Home />
   {:else if $currentRoute.name === 'about'}
     <About />
+  {:else if $currentRoute.name === 'privacy'}
+    <PrivacyPolicy />
   {:else if $currentRoute.name === 'not-found'}
     <NotFound />
   {:else}

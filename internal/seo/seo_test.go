@@ -38,7 +38,7 @@ func newTestRenderer(source WorkshopSource) *Renderer {
 // a test that only checked "some title is present".
 func TestRender_StaticRoutesGetDistinctTitles(t *testing.T) {
 	r := newTestRenderer(nil)
-	paths := []string{"/", "/about", "/workshops", "/subscribe"}
+	paths := []string{"/", "/about", "/privacy", "/workshops", "/subscribe"}
 	titles := make(map[string]bool)
 	for _, p := range paths {
 		body := string(r.Render(p))
@@ -178,7 +178,7 @@ func TestRender_AllTokensSubstituted(t *testing.T) {
 		tokenTitle, tokenDescription, tokenOGTitle, tokenOGDescription,
 		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard,
 	}
-	for _, path := range []string{"/", "/about", "/workshops", "/subscribe", "/nonexistent", "/workshops/some-slug"} {
+	for _, path := range []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/nonexistent", "/workshops/some-slug"} {
 		body := string(r.Render(path))
 		for _, tok := range tokens {
 			if strings.Contains(body, tok) {

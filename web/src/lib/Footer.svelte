@@ -7,12 +7,12 @@
   // reachable but unobtrusive, a footer link not primary nav") -- the one
   // path to /login that isn't in the header.
   //
-  // The privacy policy page itself does not exist yet; #0070 tracks building
-  // it (PRD §11 requires one -- the site collects email, interests, signup
-  // IP, and UTM source). The link below points at /privacy regardless: with
-  // no route registered for it yet, it resolves through the router to the
-  // terminal-styled 404 (#0022) rather than a blank/broken link, which is a
-  // more honest failure mode than omitting the link PRD §11 requires.
+  // The privacy policy page (#0070) now lives at /privacy -- PRD §11 requires
+  // one, since the site collects email, interests, signup IP, and UTM
+  // source. Before #0070 landed, this same link pointed at a route the
+  // router didn't recognize yet and resolved to the terminal-styled 404
+  // (#0022) -- a more honest failure mode than omitting the link PRD §11
+  // requires, but a 404 nonetheless.
   import { APP_NAME } from './branding';
 
   const DISCORD_URL = 'https://discord.gg/Fq9ug6QXV3';
