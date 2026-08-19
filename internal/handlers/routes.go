@@ -16,7 +16,13 @@ import (
 //
 // #0019 (server-injected per-route meta tags) is expected to reuse this same
 // table rather than duplicate it, so the two stay in sync by construction
-// rather than by convention.
+// rather than by convention -- that claim is true of #0019 reusing *this* Go
+// table from Go. It was previously (and wrongly) claimed of the relationship
+// to router.ts's STATIC_ROUTES too: two files in two languages cannot be in
+// sync "by construction" unless one is generated from the other, which is not
+// the case here. That TypeScript mirror is kept honest instead by
+// routes_parity_test.go (#0071), which fails `go test ./...` when this table
+// and STATIC_ROUTES disagree in either direction -- by convention, enforced.
 var knownStaticRoutes = map[string]bool{
 	"/":                 true,
 	"/workshops":        true,
