@@ -18,6 +18,7 @@ func setRequired(t *testing.T) {
 	t.Setenv("WEBAUTHN_RP_ORIGIN", "https://go.sstools.co")
 	t.Setenv("SESSION_SECRET", "deadbeef")
 	t.Setenv("ADMIN_EMAIL", "admin@example.com")
+	t.Setenv("BASE_URL", "https://go.sstools.co")
 }
 
 func TestLoad_AllRequiredPresent(t *testing.T) {
@@ -94,6 +95,7 @@ func TestLoad_MissingRequired(t *testing.T) {
 		unset     string // required var to leave empty
 		wantInErr string // substring expected in the error
 	}{
+		{"missing BASE_URL", "BASE_URL", "BASE_URL"},
 		{"missing DATABASE_URL", "DATABASE_URL", "DATABASE_URL"},
 		{"missing WEBAUTHN_RP_ID", "WEBAUTHN_RP_ID", "WEBAUTHN_RP_ID"},
 		{"missing WEBAUTHN_RP_ORIGIN", "WEBAUTHN_RP_ORIGIN", "WEBAUTHN_RP_ORIGIN"},
