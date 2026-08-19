@@ -13,6 +13,7 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
@@ -234,22 +235,38 @@ func TestNewAuthHandler_NilLoggerDoesNotPanic(t *testing.T) {
 	}
 }
 
+// failingMailer is a mailing.Mailer whose Send always fails with a fixed,
+// realistic SES-style error containing no recipient address. It is the seam
+// #0027 uses in place of the deleted auth.NewSESMailerWithAddr: that seam
+// pointed the old SMTP transport's dial at a closed local port to force a
+// deterministic, synchronous failure without touching the network. The SES
+// v2 API client has no dial step to fail the same way — there's no address
+// to point anywhere — so the seam moves to the mailing.Mailer interface
+// SESMailer sends through instead.
+type failingMailer struct{ err error }
+
+func (f failingMailer) Send(context.Context, mailing.Message) (string, error) {
+	return "", f.err
+}
+
 // TestAuthHandler_MailerErrorDoesNotLeakEmail is the guard the reviewer asked
-// for: a subtest whose injected error is not a synthetic string but the real
-// error *auth.SESMailer.send produces on a failed delivery. Before a review
-// fixup, that error was built with fmt.Errorf("... sending email to
-// %s: %w", toEmail, err) (internal/auth/ses_mailer.go), so a real SMTP outage
-// on the unauthenticated /auth/register/start and /auth/recover routes wrote
-// the recipient's full address into the server journal — a PII leak any
-// caller could trigger at will. The forbidden-substring list in the table
-// test above is synthetic (none of its fixture errors ever contained an
-// email), so it could not have caught this; this test exercises the actual
+// for: a subtest whose injected error is not a synthetic string handed
+// directly to the fake registrar/recoverer, but the real error
+// *auth.SESMailer.send produces on a failed delivery. Before a review fixup,
+// that error was built with fmt.Errorf("... sending email to %s: %w",
+// toEmail, err) (internal/auth/ses_mailer.go), so a failed send on the
+// unauthenticated /auth/register/start and /auth/recover routes wrote the
+// recipient's full address into the server journal — a PII leak any caller
+// could trigger at will. The forbidden-substring list in the table test
+// above is synthetic (none of its fixture errors ever contained an email),
+// so it could not have caught this; this test exercises the actual
 // production code path that leaked, and fails if ses_mailer.go's fix is
 // reverted.
 //
-// No database or network is needed: SESMailer.send dials out immediately, so
-// pointing it at a closed local port (127.0.0.1:1) yields the real
-// "dial tcp ...: connection refused" error synchronously.
+// No database or network is needed: failingMailer above never dials
+// anything; it is a fake mailing.Mailer injected via
+// auth.NewSESMailerWithSender, so *auth.SESMailer.send — the real production
+// method — still runs and still does the wrapping this test protects.
 //
 // Routing that real error through the fake registrar/recoverer below still
 // proves the production case: registration.go:111 and recovery.go:106 are
@@ -260,11 +277,13 @@ func TestNewAuthHandler_NilLoggerDoesNotPanic(t *testing.T) {
 func TestAuthHandler_MailerErrorDoesNotLeakEmail(t *testing.T) {
 	const victimEmail = "victim@example.com"
 
-	mailer := auth.NewSESMailerWithAddr("127.0.0.1", 1, &config.Config{
-		// nothing listens on 127.0.0.1:1; dial fails immediately.
-		EmailFrom: "Open Circuit SF <noreply@example.com>",
-		BaseURL:   "https://example.com",
-	})
+	mailer := auth.NewSESMailerWithSender(
+		failingMailer{err: errors.New("mailing: sending via SES: api error MessageRejected: Email address is not verified")},
+		&config.Config{
+			EmailFrom: "Open Circuit SF <noreply@example.com>",
+			BaseURL:   "https://example.com",
+		},
+	)
 
 	registerErr := mailer.SendVerification(context.Background(), victimEmail, "tok-register")
 	if registerErr == nil {
@@ -328,8 +347,8 @@ func TestAuthHandler_MailerErrorDoesNotLeakEmail(t *testing.T) {
 			}
 
 			logged := logBuf.String()
-			if !strings.Contains(logged, "connection refused") {
-				t.Errorf("log line missing the real dial-failure detail (test setup problem?): %s", logged)
+			if !strings.Contains(logged, "MessageRejected") {
+				t.Errorf("log line missing the real send-failure detail (test setup problem?): %s", logged)
 			}
 			if strings.Contains(logged, victimEmail) {
 				t.Errorf("log line leaked the recipient email address %q: %s", victimEmail, logged)

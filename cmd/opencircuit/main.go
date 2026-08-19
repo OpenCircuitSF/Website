@@ -83,12 +83,25 @@ func servePostgres(cfg *config.Config) error {
 		return err
 	}
 
-	// Mailer: stdout NoOpMailer for now. auth.SESMailer (SMTP-based) has no
-	// working credential source — this project has no static AWS credentials
-	// and no SES SMTP username/password in configuration (#0007) — so it
-	// cannot authenticate. #0027 replaces it with the SES v2 API mailer,
-	// authenticated via the EC2 instance role, and wires it up here.
-	var mailer auth.Mailer = auth.NoOpMailer{BaseURL: cfg.BaseURL}
+	// Mailer: the real SES v2 API mailer, authenticated via the EC2 instance
+	// role's default AWS credential chain (#0027) — replacing the SMTP-based
+	// auth.SESMailer, which could never authenticate (this project has no
+	// static AWS credentials and no SES SMTP username/password in
+	// configuration; see #0007). MAILER_NOOP=true swaps in the stdout
+	// NoOpMailer instead, for local development against Postgres before SES
+	// domain verification/DKIM/production access is done (CLAUDE.md §10 item
+	// 2) — NoOpMailer logs the full verification/recovery link, which is how
+	// #0008's manual passkey verification procedure reads the magic link.
+	var mailer auth.Mailer
+	if cfg.MailerNoOp {
+		mailer = auth.NoOpMailer{BaseURL: cfg.BaseURL}
+	} else {
+		sesMailer, err := auth.NewSESMailer(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("opencircuit: constructing SES mailer: %w", err)
+		}
+		mailer = sesMailer
+	}
 
 	// Append-only audit log writer, shared by every service/handler that
 	// records an action. Auth ceremonies write their entries inside their own

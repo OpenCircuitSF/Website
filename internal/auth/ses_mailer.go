@@ -2,76 +2,59 @@ package auth
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"net"
-	"net/smtp"
-	"strings"
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 )
 
-// sendMailFunc is the seam that decouples SESMailer from the network. It has
-// the same signature as smtp.SendMail, so the production default is
-// smtp.SendMail and tests can inject a recorder or point it at an in-process
-// listener without performing real TLS or DNS.
-type sendMailFunc func(addr string, a smtp.Auth, from string, to []string, msg []byte) error
-
-// defaultSESSMTPPort is the SES SMTP endpoint's STARTTLS port.
-const defaultSESSMTPPort = 587
-
-// SESMailer is a Mailer that delivers email through an SMTP server — in
-// production, an AWS SES SMTP endpoint on port 587 using STARTTLS and PLAIN
-// auth.
+// SESMailer is a Mailer that delivers the three transactional emails
+// (registration magic link, recovery magic link, "sessions revoked" notice)
+// through the AWS SES v2 API via internal/mailing.Mailer.
 //
-// NOTE (#0007): this project has no SES SMTP credentials in configuration —
-// there are no static AWS credentials anywhere; the EC2 instance role
-// supplies them for API calls, not SMTP AUTH, which needs its own derived
-// username/password. Until #0027 replaces this with the SES v2 API mailer,
-// NewSESMailer's username/password are always empty, so this mailer cannot
-// actually authenticate. main.go does not wire it up for that reason; it
-// remains here (and under test) only so #0027 has a known-working base to
-// replace piece by piece.
+// NOTE (#0027): this replaces the earlier SES-SMTP transport. That transport
+// could never authenticate in the first place — this project has no static
+// AWS credentials anywhere, and there was no SES SMTP username/password in
+// configuration for it to use (#0007) — so main.go never wired it up. The SES
+// v2 API mailer authenticates via the EC2 instance role's default AWS
+// credential chain instead, which is why the swap unblocks main.go actually
+// wiring a working mailer (see cmd/opencircuit/main.go).
 type SESMailer struct {
-	host     string
-	port     int
-	username string
-	password string
-	from     string // RFC 5322 From header value, e.g. "Open Circuit SF <noreply@opencircuitsf.com>"
-	baseURL  string
-
-	// sendMail is the transport. Defaults to starttlsSendMail; tests override
-	// it to capture the envelope and message without touching the network.
-	sendMail sendMailFunc
+	sender  mailing.Mailer
+	baseURL string
 }
 
-// NewSESMailer constructs a SESMailer from configuration. The host is derived
-// from cfg.AWSRegion (the SES SMTP endpoint naming convention); there is no
-// SES_SMTP_HOST/PORT/USERNAME/PASSWORD in configuration any more (#0007), so
-// username/password are always empty here — see the SESMailer doc comment.
-func NewSESMailer(cfg *config.Config) *SESMailer {
-	return &SESMailer{
-		host:     fmt.Sprintf("email-smtp.%s.amazonaws.com", cfg.AWSRegion),
-		port:     defaultSESSMTPPort,
-		username: "",
-		password: "",
-		from:     cfg.EmailFrom,
-		baseURL:  cfg.BaseURL,
-		sendMail: starttlsSendMail,
+// NewSESMailer constructs an SESMailer backed by a real AWS SES v2 client
+// (internal/mailing.NewSESMailer), resolving credentials via the default
+// chain. It fails clearly — returns an error — rather than constructing a
+// mailer that appears to work and then sends nothing; see
+// mailing.NewSESMailer's doc comment for exactly which configuration
+// (AWS_REGION, SES_CONFIGURATION_SET, EMAIL_FROM) it requires.
+func NewSESMailer(ctx context.Context, cfg *config.Config) (*SESMailer, error) {
+	sender, err := mailing.NewSESMailer(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("auth: constructing SES mailer: %w", err)
 	}
+	return NewSESMailerWithSender(sender, cfg), nil
 }
 
-// NewSESMailerWithAddr is NewSESMailer with an explicit host/port override,
-// bypassing the AWS_REGION-derived default. It exists for tests outside this
-// package (internal/handlers) that need to point the mailer at an
-// unreachable address to force a deterministic, synchronous dial failure
-// without touching the network for real.
-func NewSESMailerWithAddr(host string, port int, cfg *config.Config) *SESMailer {
-	m := NewSESMailer(cfg)
-	m.host = host
-	m.port = port
-	return m
+// NewSESMailerWithSender constructs an SESMailer around an explicit
+// mailing.Mailer, bypassing AWS client construction and credential
+// resolution entirely.
+//
+// This is the test seam #0027 introduced to replace NewSESMailerWithAddr,
+// deleted along with the SMTP transport it existed for (that seam pointed
+// SESMailer's SMTP dial at an unreachable host/port to force a deterministic,
+// synchronous failure without touching the network). An SES v2 API client has
+// no dial step to fail the same way, so the seam moves one level up: inject a
+// fake mailing.Mailer whose Send returns an error, and this constructor still
+// exercises the real production SESMailer.send composition and error-handling
+// path around it — see internal/handlers/logging_test.go's
+// TestAuthHandler_MailerErrorDoesNotLeakEmail, the test that depended on the
+// old seam.
+func NewSESMailerWithSender(sender mailing.Mailer, cfg *config.Config) *SESMailer {
+	return &SESMailer{sender: sender, baseURL: cfg.BaseURL}
 }
 
 // SendVerification sends the registration magic-link email.
@@ -120,26 +103,19 @@ func (m *SESMailer) SendSessionsRevoked(ctx context.Context, toEmail string, at 
 	return m.send(ctx, toEmail, subject, text)
 }
 
-// send composes an RFC 5322 message and hands it to the transport. The context
-// is honored before dispatch; the default transport does not itself accept a
-// context, so cancellation is checked up front.
+// send composes a plain-text message and hands it to the underlying
+// mailing.Mailer. The context is honored before dispatch.
 func (m *SESMailer) send(ctx context.Context, toEmail, subject, textBody string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if m.from == "" {
-		return fmt.Errorf("auth: SESMailer has no From address (EMAIL_FROM unset)")
-	}
 
-	msg := buildMessage(m.from, toEmail, subject, textBody)
-	addr := net.JoinHostPort(m.host, fmt.Sprintf("%d", m.port))
-	auth := smtp.PlainAuth("", m.username, m.password, m.host)
-
-	send := m.sendMail
-	if send == nil {
-		send = starttlsSendMail
-	}
-	if err := send(addr, auth, fromAddress(m.from), []string{toEmail}, msg); err != nil {
+	_, err := m.sender.Send(ctx, mailing.Message{
+		To:       toEmail,
+		Subject:  subject,
+		TextBody: textBody,
+	})
+	if err != nil {
 		// Recipient omitted deliberately: this error propagates to
 		// AuthHandler's unauthenticated RegisterStart/RecoverStart 500 branches,
 		// which log it verbatim, and both routes are unauthenticated so
@@ -157,85 +133,6 @@ func (m *SESMailer) send(ctx context.Context, toEmail, subject, textBody string)
 		return fmt.Errorf("auth: sending email: %w", err)
 	}
 	return nil
-}
-
-// buildMessage composes a single-part text/plain RFC 5322 message with CRLF
-// line endings. The From header carries the configured display-name form
-// (e.g. "Open Circuit SF <noreply@opencircuitsf.com>"), while the SMTP
-// envelope sender is the bare address (see fromAddress).
-func buildMessage(from, to, subject, textBody string) []byte {
-	var b strings.Builder
-	b.WriteString("From: " + from + "\r\n")
-	b.WriteString("To: " + to + "\r\n")
-	b.WriteString("Subject: " + subject + "\r\n")
-	b.WriteString("Date: " + time.Now().UTC().Format(time.RFC1123Z) + "\r\n")
-	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n")
-	b.WriteString("Content-Transfer-Encoding: 8bit\r\n")
-	b.WriteString("\r\n")
-	b.WriteString(textBody)
-	return []byte(b.String())
-}
-
-// fromAddress extracts the bare email address from a possibly display-name
-// formatted From value. "Open Circuit SF <noreply@opencircuitsf.com>" ->
-// "noreply@opencircuitsf.com". A plain address is returned unchanged.
-func fromAddress(from string) string {
-	if i := strings.LastIndex(from, "<"); i >= 0 {
-		if j := strings.LastIndex(from, ">"); j > i {
-			return strings.TrimSpace(from[i+1 : j])
-		}
-	}
-	return strings.TrimSpace(from)
-}
-
-// starttlsSendMail dials addr, upgrades the connection with STARTTLS, performs
-// PLAIN auth, and sends msg. It mirrors smtp.SendMail's signature but forces a
-// TLS upgrade, which the SES SMTP endpoint on port 587 requires. It is the
-// production default transport for SESMailer.
-func starttlsSendMail(addr string, a smtp.Auth, from string, to []string, msg []byte) error {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return err
-	}
-
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-
-	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
-			return err
-		}
-	}
-	if a != nil {
-		if ok, _ := c.Extension("AUTH"); ok {
-			if err := c.Auth(a); err != nil {
-				return err
-			}
-		}
-	}
-	if err := c.Mail(from); err != nil {
-		return err
-	}
-	for _, addr := range to {
-		if err := c.Rcpt(addr); err != nil {
-			return err
-		}
-	}
-	w, err := c.Data()
-	if err != nil {
-		return err
-	}
-	if _, err := w.Write(msg); err != nil {
-		return err
-	}
-	if err := w.Close(); err != nil {
-		return err
-	}
-	return c.Quit()
 }
 
 // Ensure the concrete types satisfy the interface at compile time.

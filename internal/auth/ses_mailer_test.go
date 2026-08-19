@@ -1,163 +1,125 @@
 package auth
 
 import (
-	"bufio"
 	"context"
-	"net"
-	"net/smtp"
-	"strconv"
+	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 )
 
-// newTestMailer returns a SESMailer wired with the given recording transport.
-func newTestMailer(send sendMailFunc) *SESMailer {
-	return &SESMailer{
-		host:     "smtp.example.com",
-		port:     587,
-		username: "AKIAEXAMPLE",
-		password: "smtp-secret",
-		from:     "Open Circuit SF <noreply@opencircuitsf.com>",
-		baseURL:  "https://opencircuitsf.com",
-		sendMail: send,
-	}
+// newTestMailer returns an SESMailer wired with a RecordingMailer sender, and
+// the recorder itself so a test can inspect what was sent.
+func newTestMailer() (*SESMailer, *mailing.RecordingMailer) {
+	rec := &mailing.RecordingMailer{}
+	cfg := &config.Config{BaseURL: "https://opencircuitsf.com"}
+	return NewSESMailerWithSender(rec, cfg), rec
 }
 
-// recorder captures the arguments passed to the transport.
-type recorder struct {
-	addr string
-	from string
-	to   []string
-	msg  []byte
-}
-
-func (r *recorder) capture(addr string, _ smtp.Auth, from string, to []string, msg []byte) error {
-	r.addr = addr
-	r.from = from
-	r.to = to
-	r.msg = msg
-	return nil
-}
-
-// TestSESMailer_SendVerification_InjectedTransport asserts the envelope and the
-// composed RFC 5322 message handed to the transport for a verification email.
-func TestSESMailer_SendVerification_InjectedTransport(t *testing.T) {
-	var rec recorder
-	m := newTestMailer(rec.capture)
+// TestSESMailer_SendVerification_InjectedSender asserts the composed message
+// handed to the underlying mailing.Mailer for a verification email.
+func TestSESMailer_SendVerification_InjectedSender(t *testing.T) {
+	m, rec := newTestMailer()
 
 	if err := m.SendVerification(context.Background(), "alice@example.com", "tok-123"); err != nil {
 		t.Fatalf("SendVerification: %v", err)
 	}
 
-	if rec.addr != "smtp.example.com:587" {
-		t.Errorf("addr = %q, want %q", rec.addr, "smtp.example.com:587")
+	sent := rec.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("messages sent = %d, want 1", len(sent))
 	}
-	// Envelope sender must be the bare address, stripped of the display name.
-	if rec.from != "noreply@opencircuitsf.com" {
-		t.Errorf("envelope from = %q, want %q", rec.from, "noreply@opencircuitsf.com")
-	}
-	if len(rec.to) != 1 || rec.to[0] != "alice@example.com" {
-		t.Errorf("envelope to = %v, want [alice@example.com]", rec.to)
-	}
+	msg := sent[0]
 
-	msg := string(rec.msg)
-	wantHeaders := []string{
-		"From: Open Circuit SF <noreply@opencircuitsf.com>\r\n",
-		"To: alice@example.com\r\n",
-		"Subject: Verify your Open Circuit SF account\r\n",
-		"MIME-Version: 1.0\r\n",
-		"Content-Type: text/plain; charset=\"UTF-8\"\r\n",
+	if msg.To != "alice@example.com" {
+		t.Errorf("To = %q, want %q", msg.To, "alice@example.com")
 	}
-	for _, h := range wantHeaders {
-		if !strings.Contains(msg, h) {
-			t.Errorf("message missing header %q\nfull message:\n%s", h, msg)
-		}
+	if msg.Subject != "Verify your Open Circuit SF account" {
+		t.Errorf("Subject = %q", msg.Subject)
 	}
-	// The email link now points at the SPA browser path (/register/verify), not
+	// The email link points at the SPA browser path (/register/verify), not
 	// the /auth/* JSON API endpoint. The SPA reads the token and calls
 	// GET /auth/register/verify to fetch creation options.
 	wantLink := "https://opencircuitsf.com/register/verify?token=tok-123"
-	if !strings.Contains(msg, wantLink) {
-		t.Errorf("message missing verification link %q\nfull message:\n%s", wantLink, msg)
+	if !strings.Contains(msg.TextBody, wantLink) {
+		t.Errorf("message missing verification link %q\nbody:\n%s", wantLink, msg.TextBody)
 	}
-	// Headers and body must be separated by a blank line.
-	if !strings.Contains(msg, "\r\n\r\n") {
-		t.Errorf("message missing header/body separator (blank line)")
+	if msg.HTMLBody != "" {
+		t.Errorf("HTMLBody = %q, want empty (auth transactional mail is text-only)", msg.HTMLBody)
 	}
 }
 
-// TestSESMailer_SendRecovery_InjectedTransport asserts the recovery email
-// envelope and link.
-func TestSESMailer_SendRecovery_InjectedTransport(t *testing.T) {
-	var rec recorder
-	m := newTestMailer(rec.capture)
+// TestSESMailer_SendRecovery_InjectedSender asserts the recovery email
+// recipient and link.
+func TestSESMailer_SendRecovery_InjectedSender(t *testing.T) {
+	m, rec := newTestMailer()
 
 	if err := m.SendRecovery(context.Background(), "bob@example.com", "rec-789"); err != nil {
 		t.Fatalf("SendRecovery: %v", err)
 	}
 
-	if len(rec.to) != 1 || rec.to[0] != "bob@example.com" {
-		t.Errorf("envelope to = %v, want [bob@example.com]", rec.to)
+	sent := rec.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("messages sent = %d, want 1", len(sent))
 	}
-	msg := string(rec.msg)
-	if !strings.Contains(msg, "Subject: Recover your Open Circuit SF account\r\n") {
-		t.Errorf("message missing recovery subject\nfull message:\n%s", msg)
+	msg := sent[0]
+	if msg.To != "bob@example.com" {
+		t.Errorf("To = %q, want %q", msg.To, "bob@example.com")
 	}
-	// The email link now points at the SPA browser path (/recover/verify), not
-	// the /auth/* JSON API endpoint.
+	if msg.Subject != "Recover your Open Circuit SF account" {
+		t.Errorf("Subject = %q", msg.Subject)
+	}
 	wantLink := "https://opencircuitsf.com/recover/verify?token=rec-789"
-	if !strings.Contains(msg, wantLink) {
-		t.Errorf("message missing recovery link %q\nfull message:\n%s", wantLink, msg)
+	if !strings.Contains(msg.TextBody, wantLink) {
+		t.Errorf("message missing recovery link %q\nbody:\n%s", wantLink, msg.TextBody)
 	}
 }
 
-// TestSESMailer_SendSessionsRevoked_InjectedTransport asserts the "sign out
-// everywhere" notification: no token/link-with-credentials, the
-// account's EXISTING passkey is what still works (never "a new passkey" — a
-// prior draft of this copy wrongly implied re-enrollment was required), and
-// the timestamp is included.
-func TestSESMailer_SendSessionsRevoked_InjectedTransport(t *testing.T) {
-	var rec recorder
-	m := newTestMailer(rec.capture)
+// TestSESMailer_SendSessionsRevoked_InjectedSender asserts the "sign out
+// everywhere" notification: no token/link-with-credentials, the account's
+// EXISTING passkey is what still works (never "a new passkey" — a prior
+// draft of this copy wrongly implied re-enrollment was required), and the
+// timestamp is included.
+func TestSESMailer_SendSessionsRevoked_InjectedSender(t *testing.T) {
+	m, rec := newTestMailer()
 
 	at := time.Date(2026, 8, 6, 15, 4, 5, 0, time.UTC)
 	if err := m.SendSessionsRevoked(context.Background(), "dana@example.com", at); err != nil {
 		t.Fatalf("SendSessionsRevoked: %v", err)
 	}
 
-	if len(rec.to) != 1 || rec.to[0] != "dana@example.com" {
-		t.Errorf("envelope to = %v, want [dana@example.com]", rec.to)
+	sent := rec.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("messages sent = %d, want 1", len(sent))
 	}
-	msg := string(rec.msg)
-	if !strings.Contains(msg, "Subject: All sessions signed out\r\n") {
-		t.Errorf("message missing subject\nfull message:\n%s", msg)
+	msg := sent[0]
+	if msg.To != "dana@example.com" {
+		t.Errorf("To = %q, want %q", msg.To, "dana@example.com")
 	}
-	if !strings.Contains(msg, "existing passkey") {
-		t.Errorf("message must tell the user their EXISTING passkey still works\nfull message:\n%s", msg)
+	if msg.Subject != "All sessions signed out" {
+		t.Errorf("Subject = %q", msg.Subject)
 	}
-	if strings.Contains(msg, "a new passkey") || strings.Contains(msg, "sign in with a new") {
-		t.Errorf("message must NOT instruct signing in with a new passkey\nfull message:\n%s", msg)
+	if !strings.Contains(msg.TextBody, "existing passkey") {
+		t.Errorf("message must tell the user their EXISTING passkey still works\nbody:\n%s", msg.TextBody)
 	}
-	if !strings.Contains(msg, "https://opencircuitsf.com") {
-		t.Errorf("message missing base URL\nfull message:\n%s", msg)
+	if strings.Contains(msg.TextBody, "a new passkey") || strings.Contains(msg.TextBody, "sign in with a new") {
+		t.Errorf("message must NOT instruct signing in with a new passkey\nbody:\n%s", msg.TextBody)
 	}
-	if !strings.Contains(msg, at.Format(time.RFC1123Z)) {
-		t.Errorf("message missing formatted timestamp\nfull message:\n%s", msg)
+	if !strings.Contains(msg.TextBody, "https://opencircuitsf.com") {
+		t.Errorf("message missing base URL\nbody:\n%s", msg.TextBody)
+	}
+	if !strings.Contains(msg.TextBody, at.Format(time.RFC1123Z)) {
+		t.Errorf("message missing formatted timestamp\nbody:\n%s", msg.TextBody)
 	}
 }
 
-// TestSESMailer_ContextCancelled verifies the context is honored before any
-// transport call is made.
+// TestSESMailer_ContextCancelled verifies the context is honored before the
+// underlying sender is ever called.
 func TestSESMailer_ContextCancelled(t *testing.T) {
-	called := false
-	m := newTestMailer(func(string, smtp.Auth, string, []string, []byte) error {
-		called = true
-		return nil
-	})
+	m, rec := newTestMailer()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -165,199 +127,62 @@ func TestSESMailer_ContextCancelled(t *testing.T) {
 	if err := m.SendVerification(ctx, "alice@example.com", "tok"); err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
-	if called {
-		t.Error("transport was called despite cancelled context")
+	if len(rec.Sent()) != 0 {
+		t.Error("sender was called despite cancelled context")
 	}
 }
 
-// TestNewSESMailer_FromConfig verifies construction derives the SES SMTP host
-// from AWS_REGION, maps EmailFrom/BaseURL, leaves username/password empty
-// (there are no SES SMTP credentials in configuration — #0007), and installs
-// the default transport.
-func TestNewSESMailer_FromConfig(t *testing.T) {
-	cfg := &config.Config{
-		AWSRegion: "us-east-1",
-		EmailFrom: "Open Circuit SF <noreply@opencircuitsf.com>",
-		BaseURL:   "https://opencircuitsf.com",
+// TestSESMailer_SendErrorIsWrappedWithoutRecipient guards the PII-leak fix
+// this file's tests protect (see internal/handlers/logging_test.go's
+// TestAuthHandler_MailerErrorDoesNotLeakEmail for the handler-layer version
+// of this same guard): SESMailer.send's error wrapping must never embed the
+// recipient's address, since RegisterStart/RecoverStart are unauthenticated
+// routes that log this error verbatim.
+func TestSESMailer_SendErrorIsWrappedWithoutRecipient(t *testing.T) {
+	m, rec := newTestMailer()
+	rec.SetError(errors.New("simulated SES failure"))
+
+	const victimEmail = "victim@example.com"
+	err := m.SendVerification(context.Background(), victimEmail, "tok")
+	if err == nil {
+		t.Fatal("expected an error, got nil")
 	}
-	m := NewSESMailer(cfg)
-	wantHost := "email-smtp.us-east-1.amazonaws.com"
-	if m.host != wantHost || m.port != defaultSESSMTPPort ||
-		m.username != "" || m.password != "" ||
-		m.from != cfg.EmailFrom || m.baseURL != cfg.BaseURL {
-		t.Errorf("NewSESMailer did not map config fields: %+v", m)
+	if strings.Contains(err.Error(), victimEmail) {
+		t.Errorf("wrapped error leaked the recipient address: %v", err)
 	}
-	if m.sendMail == nil {
-		t.Error("NewSESMailer left sendMail nil; default transport not installed")
+	if !strings.Contains(err.Error(), "simulated SES failure") {
+		t.Errorf("wrapped error lost the underlying cause: %v", err)
 	}
 }
 
-// TestNewSESMailerWithAddr verifies the host/port override used by
-// cross-package tests (internal/handlers) that need a deterministic dial
-// failure without touching the network.
-func TestNewSESMailerWithAddr(t *testing.T) {
-	cfg := &config.Config{
-		AWSRegion: "us-east-1",
-		EmailFrom: "Open Circuit SF <noreply@opencircuitsf.com>",
-		BaseURL:   "https://opencircuitsf.com",
+// TestNewSESMailerWithSender verifies the constructor maps BaseURL from
+// config and installs the given sender — the seam used both by tests in this
+// package and by internal/handlers (see NewSESMailerWithSender's doc comment
+// for why it replaced NewSESMailerWithAddr).
+func TestNewSESMailerWithSender(t *testing.T) {
+	rec := &mailing.RecordingMailer{}
+	cfg := &config.Config{BaseURL: "https://opencircuitsf.com"}
+	m := NewSESMailerWithSender(rec, cfg)
+
+	if m.baseURL != cfg.BaseURL {
+		t.Errorf("baseURL = %q, want %q", m.baseURL, cfg.BaseURL)
 	}
-	m := NewSESMailerWithAddr("127.0.0.1", 1, cfg)
-	if m.host != "127.0.0.1" || m.port != 1 {
-		t.Errorf("NewSESMailerWithAddr = host %q port %d, want 127.0.0.1:1", m.host, m.port)
-	}
-	if m.from != cfg.EmailFrom || m.baseURL != cfg.BaseURL {
-		t.Errorf("NewSESMailerWithAddr did not map config fields: %+v", m)
-	}
-}
-
-// fakeSMTPServer is a minimal in-process SMTP server: it accepts one connection,
-// speaks just enough of the protocol (no STARTTLS, no AUTH advertised), and
-// captures the DATA payload and the MAIL FROM / RCPT TO arguments. It exercises
-// the real starttlsSendMail transport over a loopback listener — no network,
-// no TLS, no SES.
-type fakeSMTPServer struct {
-	ln   net.Listener
-	mu   sync.Mutex
-	from string
-	to   []string
-	data string
-	done chan struct{}
-}
-
-func startFakeSMTPServer(t *testing.T) *fakeSMTPServer {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	s := &fakeSMTPServer{ln: ln, done: make(chan struct{})}
-	go s.serve()
-	return s
-}
-
-func (s *fakeSMTPServer) addr() string { return s.ln.Addr().String() }
-
-func (s *fakeSMTPServer) serve() {
-	defer close(s.done)
-	conn, err := s.ln.Accept()
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-
-	r := bufio.NewReader(conn)
-	w := bufio.NewWriter(conn)
-	write := func(line string) {
-		_, _ = w.WriteString(line + "\r\n")
-		_ = w.Flush()
-	}
-
-	write("220 fake ESMTP ready")
-	inData := false
-	var body strings.Builder
-	for {
-		line, err := r.ReadString('\n')
-		if err != nil {
-			return
-		}
-		if inData {
-			if strings.TrimRight(line, "\r\n") == "." {
-				inData = false
-				s.mu.Lock()
-				s.data = body.String()
-				s.mu.Unlock()
-				write("250 OK queued")
-				continue
-			}
-			body.WriteString(line)
-			continue
-		}
-
-		trimmed := strings.TrimRight(line, "\r\n")
-		upper := strings.ToUpper(trimmed)
-		switch {
-		case strings.HasPrefix(upper, "EHLO"), strings.HasPrefix(upper, "HELO"):
-			// Advertise no extensions (no STARTTLS, no AUTH) to keep the test
-			// transport on the plaintext path.
-			write("250 fake at your service")
-		case strings.HasPrefix(upper, "MAIL FROM:"):
-			s.mu.Lock()
-			s.from = extractAngleAddr(trimmed[len("MAIL FROM:"):])
-			s.mu.Unlock()
-			write("250 OK")
-		case strings.HasPrefix(upper, "RCPT TO:"):
-			s.mu.Lock()
-			s.to = append(s.to, extractAngleAddr(trimmed[len("RCPT TO:"):]))
-			s.mu.Unlock()
-			write("250 OK")
-		case upper == "DATA":
-			inData = true
-			write("354 start mail input; end with <CRLF>.<CRLF>")
-		case upper == "QUIT":
-			write("221 bye")
-			return
-		default:
-			write("250 OK")
-		}
+	if m.sender != mailing.Mailer(rec) {
+		t.Error("NewSESMailerWithSender did not install the given sender")
 	}
 }
 
-// extractAngleAddr pulls the address out of "<addr>" SMTP arguments.
-func extractAngleAddr(s string) string {
-	s = strings.TrimSpace(s)
-	s = strings.TrimPrefix(s, "<")
-	s = strings.TrimSuffix(s, ">")
-	return s
-}
-
-// TestSESMailer_RealTransport_AgainstFakeServer drives the real
-// starttlsSendMail transport against an in-process SMTP server and asserts the
-// captured envelope and DATA payload. This proves the production transport path
-// (dial, MAIL/RCPT/DATA) actually writes the composed message correctly,
-// without contacting SES.
-func TestSESMailer_RealTransport_AgainstFakeServer(t *testing.T) {
-	srv := startFakeSMTPServer(t)
-
-	host, portStr, err := net.SplitHostPort(srv.addr())
-	if err != nil {
-		t.Fatalf("split addr: %v", err)
+// TestNewSESMailer_PropagatesConstructionError verifies auth.NewSESMailer
+// fails clearly (rather than returning a half-built mailer) when the
+// underlying mailing.NewSESMailer construction fails — here, because
+// AWS_REGION/SES_CONFIGURATION_SET/EMAIL_FROM are all unset.
+func TestNewSESMailer_PropagatesConstructionError(t *testing.T) {
+	_, err := NewSESMailer(context.Background(), &config.Config{})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
 	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		t.Fatalf("parse port %q: %v", portStr, err)
-	}
-
-	m := &SESMailer{
-		host:     host,
-		port:     port,
-		username: "user",
-		password: "pass",
-		from:     "Open Circuit SF <noreply@opencircuitsf.com>",
-		baseURL:  "https://opencircuitsf.com",
-		sendMail: starttlsSendMail, // exercise the real transport
-	}
-
-	if err := m.SendVerification(context.Background(), "carol@example.com", "tok-real"); err != nil {
-		t.Fatalf("SendVerification via real transport: %v", err)
-	}
-
-	<-srv.done
-
-	srv.mu.Lock()
-	defer srv.mu.Unlock()
-
-	if srv.from != "noreply@opencircuitsf.com" {
-		t.Errorf("server MAIL FROM = %q, want %q", srv.from, "noreply@opencircuitsf.com")
-	}
-	if len(srv.to) != 1 || srv.to[0] != "carol@example.com" {
-		t.Errorf("server RCPT TO = %v, want [carol@example.com]", srv.to)
-	}
-	if !strings.Contains(srv.data, "Subject: Verify your Open Circuit SF account") {
-		t.Errorf("DATA missing subject\nfull DATA:\n%s", srv.data)
-	}
-	// SPA browser path.
-	if !strings.Contains(srv.data, "https://opencircuitsf.com/register/verify?token=tok-real") {
-		t.Errorf("DATA missing verification link\nfull DATA:\n%s", srv.data)
+	if !strings.Contains(err.Error(), "AWS_REGION") {
+		t.Errorf("error = %q, want it to name the missing configuration", err.Error())
 	}
 }
 

@@ -24,6 +24,7 @@ of problems in one pass.
 | `EMAIL_REPLY_TO` | no | — | Reply-To header for outbound mail |
 | `EMAIL_LIST_DOMAIN` | no | — | Subdomain used for inbound unsubscribe handling, e.g. `lists.opencircuitsf.com`. Never point the apex MX at SES — see `CLAUDE.md` §9. |
 | `SES_INBOUND_BUCKET` | no | — | S3 bucket SES writes inbound mail to |
+| `MAILER_NOOP` | no | `false` | `true` selects `auth.NoOpMailer` instead of the real SES v2 API mailer on the Postgres serve path (`#0027`). For local development against Postgres before SES is set up (`CLAUDE.md` §10 item 2) — `NoOpMailer` logs the full verification/recovery link to stdout, which is how `#0008`'s manual passkey verification procedure reads the magic link. Production leaves this unset. |
 | `MAX_SEND_RATE` | no | `10` | Messages/second ceiling; keep below the SES quota. This is the environment-level ceiling, not the operator dial — see below. |
 | `SEND_BATCH_SIZE` | no | `50` | Messages per send-worker batch |
 | `SEND_WORKER_ENABLED` | no | `true` | Set `false` on a second instance to avoid double-sending |

@@ -38,6 +38,7 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 	t.Setenv("EMAIL_REPLY_TO", "hello@opencircuitsf.com")
 	t.Setenv("EMAIL_LIST_DOMAIN", "lists.opencircuitsf.com")
 	t.Setenv("SES_INBOUND_BUCKET", "opencircuitsf-inbound")
+	t.Setenv("MAILER_NOOP", "true")
 	t.Setenv("MAX_SEND_RATE", "25")
 	t.Setenv("SEND_BATCH_SIZE", "100")
 	t.Setenv("SEND_WORKER_ENABLED", "false")
@@ -64,6 +65,7 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 		{"EmailReplyTo", cfg.EmailReplyTo, "hello@opencircuitsf.com"},
 		{"EmailListDomain", cfg.EmailListDomain, "lists.opencircuitsf.com"},
 		{"SESInboundBucket", cfg.SESInboundBucket, "opencircuitsf-inbound"},
+		{"MailerNoOp", cfg.MailerNoOp, true},
 		{"MaxSendRate", cfg.MaxSendRate, 25},
 		{"SendBatchSize", cfg.SendBatchSize, 100},
 		{"SendWorkerEnabled", cfg.SendWorkerEnabled, false},
@@ -96,6 +98,9 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	}
 	if cfg.SendWorkerEnabled != defaultSendWorkerEnabled {
 		t.Errorf("SendWorkerEnabled = %v, want default %v", cfg.SendWorkerEnabled, defaultSendWorkerEnabled)
+	}
+	if cfg.MailerNoOp != false {
+		t.Errorf("MailerNoOp = %v, want default false — production must default to the real SES mailer", cfg.MailerNoOp)
 	}
 }
 
@@ -180,6 +185,19 @@ func TestLoad_InvalidBoolean(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "SEND_WORKER_ENABLED") {
 		t.Errorf("error = %q, want substring %q", err.Error(), "SEND_WORKER_ENABLED")
+	}
+}
+
+func TestLoad_InvalidMailerNoOpBoolean(t *testing.T) {
+	setRequired(t)
+	t.Setenv("MAILER_NOOP", "not-a-bool")
+
+	_, err := loadFromFile(noEnvFile)
+	if err == nil {
+		t.Fatal("expected error for invalid MAILER_NOOP, got nil")
+	}
+	if !strings.Contains(err.Error(), "MAILER_NOOP") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "MAILER_NOOP")
 	}
 }
 

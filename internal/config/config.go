@@ -49,6 +49,14 @@ type Config struct {
 	EmailListDomain     string
 	SESInboundBucket    string
 
+	// MailerNoOp selects auth.NoOpMailer instead of the real SES v2 API mailer
+	// on the Postgres serve path (#0027). Default false: production always
+	// gets the real mailer. Set true for local development against Postgres
+	// before SES is set up (CLAUDE.md §10 item 2) — NoOpMailer logs the full
+	// verification/recovery link to stdout instead of sending it, which is how
+	// #0008's manual passkey verification procedure reads the magic link.
+	MailerNoOp bool
+
 	// Sending. These are the environment-level ceiling/toggles; the operator
 	// dial beneath MaxSendRate and the signup/registration toggles live in the
 	// settings table, not here.
@@ -107,6 +115,7 @@ func loadFromFile(path string) (*Config, error) {
 		EmailReplyTo:        os.Getenv("EMAIL_REPLY_TO"),
 		EmailListDomain:     os.Getenv("EMAIL_LIST_DOMAIN"),
 		SESInboundBucket:    os.Getenv("SES_INBOUND_BUCKET"),
+		MailerNoOp:          getBool("MAILER_NOOP", false, &errs),
 		MaxSendRate:         getInt("MAX_SEND_RATE", defaultMaxSendRate, &errs),
 		SendBatchSize:       getInt("SEND_BATCH_SIZE", defaultSendBatchSize, &errs),
 		SendWorkerEnabled:   getBool("SEND_WORKER_ENABLED", defaultSendWorkerEnabled, &errs),
