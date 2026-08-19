@@ -312,6 +312,24 @@ else's build.
 The same caution applies to any shared mutable resource — a database, a
 scratch directory, `web/dist/`. Namespace it or verify ownership.
 
+**Mutation testing that removes a guard must run against a private database.**
+Removing an authorization check is exactly what lets a destructive request reach
+real data. This happened: `#0024`'s guard-removal proof aimed a `DELETE` at a
+hardcoded `/admin/interests/1`, the guard was gone by design, and it permanently
+destroyed a seeded taxonomy row in the shared `opencircuit_test`. It was caught
+by a row-count check and restored by hand — but only because the agent looked.
+
+Two rules follow:
+
+- **Create your own database for any mutation that disables a guard**
+  (`CREATE DATABASE opencircuit_<issue>`, drop it after). The shared test
+  database is for reading and for ordinary suite runs.
+- **Never target a literal or seeded id in a test.** Seed a throwaway row and
+  target that. A hardcoded `/1` is a live object in every database it reaches.
+
+The general principle: a mutation test deliberately breaks a safety property, so
+assume during that window that *nothing* is protecting the data underneath it.
+
 ## 9. Restricted areas
 
 - **Never mark an issue `resolved`, `closed`, or `wontfix` by inference.** The
