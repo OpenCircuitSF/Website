@@ -121,11 +121,21 @@ Work issues in numeric order unless an issue's `## Relation` says otherwise.
 The one known exception already in the set: **`#0018` (logo assets) blocks
 `#0017` (site header)** despite the higher number.
 
-**Batching exception.** `#0001`–`#0006` are one mechanical operation split six
-ways (copy the skeleton, strip Go packages, strip frontend, renumber migrations,
-adapt the dev script, write docs). Dispatch them to a single implementation
-subagent as one batch with six code commits, then a single review pass. Every
-other issue is dispatched individually.
+**Batching.** Dispatch issues individually by default. Batch only when a run of
+issues is one operation split several ways *and* they are not chained by
+`Depends on` — a batch cannot resolve its own internal dependencies any faster
+than sequential dispatch, it just hides the ordering.
+
+- `#0001`–`#0006` were batched: one mechanical copy-and-strip, six code commits,
+  one review pass.
+- Phase 1 (`#0007`–`#0010`) is a strict chain — `#0007` → `#0008` → `#0009` —
+  and must go one at a time.
+- Phase 2 splits naturally into three coherent batches that share files:
+  design system (`#0011`, `#0012`, `#0013`, `#0018`), shell and views (`#0014`,
+  `#0017`, `#0015`, `#0016`, `#0022`), and SEO (`#0019`, `#0020`, `#0021`).
+  Respect `#0018` blocking `#0017` by ordering the batches, not by splitting.
+
+Each batch still gets exactly one review pass covering every issue in it.
 
 Phases are gates, not suggestions — each ends at a deployable state. Do not
 start Phase 3 with Phase 2 unreviewed.
@@ -147,6 +157,22 @@ npm run build 2>&1 | tail -20   # vite build; must precede go build embedding di
 ./scripts/dev.sh            # Vite :5173 + Go API :8080, hot reload, STORAGE=json
 ./scripts/dev.sh --built    # production embedding at :8080
 ```
+
+**`go test ./...` without `TEST_DATABASE_URL` is not verification.** The
+database-backed suites skip silently when it is unset, so the run exits green
+having proved nothing about them. This actually happened in `#0002`: it verified
+clean, and the broken `TRUNCATE` statements it left behind only surfaced two
+issues later when `#0004` stood up a real database. Export it before every
+backend verification run:
+
+```bash
+export TEST_DATABASE_URL='postgres://opencircuit:opencircuit@localhost:5432/opencircuit_test?sslmode=disable'
+```
+
+Then confirm the output shows **zero skips** and that the DB-backed packages
+(`internal/auth`, `internal/audit`, `internal/db`, `internal/handlers`,
+`internal/middleware`) actually reported `ok` rather than `[no test files]` or a
+skip notice. A package that reports `ok` in 0.00s did not talk to a database.
 
 **Always bound verification output.** A full `go test ./...` on a tree this size
 emits more tokens than the entire PRD, and the summary is the last few lines.
