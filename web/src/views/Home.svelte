@@ -15,6 +15,7 @@
   import CommandLine from '../lib/CommandLine.svelte';
   import TraceDivider from '../lib/TraceDivider.svelte';
   import Panel from '../lib/Panel.svelte';
+  import SubscribeForm from '../lib/SubscribeForm.svelte';
   import { APP_NAME } from '../lib/branding';
 
   // Static placeholder for "next up" until #0053 wires the real workshops
@@ -85,11 +86,9 @@
 
   <section class="subscribe-cta" aria-labelledby="subscribe-h">
     <h2 id="subscribe-h">Stay in the loop</h2>
-    <!-- SubscribeForm.svelte lands in #0029; this is a placeholder region so
-         the layout and section anchor exist ahead of that component. -->
     <Panel>
       <p>Get notified about new workshops. Pick the topics you care about — nothing else.</p>
-      <p class="text-muted">Sign-up form is on the way.</p>
+      <SubscribeForm />
     </Panel>
   </section>
 </main>

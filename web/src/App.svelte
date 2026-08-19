@@ -14,6 +14,8 @@
   import Home from './views/Home.svelte';
   import About from './views/About.svelte';
   import PrivacyPolicy from './views/PrivacyPolicy.svelte';
+  import Subscribe from './views/Subscribe.svelte';
+  import SubscribeThanks from './views/SubscribeThanks.svelte';
   import NotFound from './views/NotFound.svelte';
 
   let sessionChecked = $state(false);
@@ -73,9 +75,9 @@
 {:else}
   <!-- Every other route is a public marketing page (PRD §5.1), and shares
        the site header shell (#0017). This placeholder covers the remaining
-       public routes (workshops, subscribe, confirm, preferences,
-       unsubscribe) until their own later-phase issues (#0029-0036,
-       #0053-0054) build them; not-found is a real 404, not a placeholder. -->
+       public routes (workshops, confirm, preferences, unsubscribe) until
+       their own later-phase issues (#0030-0031, #0036, #0053-0054) build
+       them; not-found is a real 404, not a placeholder. -->
   <Header />
   {#if $currentRoute.name === 'home'}
     <Home />
@@ -83,6 +85,10 @@
     <About />
   {:else if $currentRoute.name === 'privacy'}
     <PrivacyPolicy />
+  {:else if $currentRoute.name === 'subscribe'}
+    <Subscribe />
+  {:else if $currentRoute.name === 'subscribe-thanks'}
+    <SubscribeThanks />
   {:else if $currentRoute.name === 'not-found'}
     <NotFound />
   {:else}

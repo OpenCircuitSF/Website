@@ -176,6 +176,12 @@ func servePostgres(cfg *config.Config) error {
 	// internal/handlers/admin_subscribers.go's package doc comment.
 	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, subscribeH, auditLogger)
 
+	// Public interests read (#0029, PRD §6.1/§7.3): GET /api/interests, the
+	// checkbox-grid source for SubscribeForm.svelte and PreferenceCenter.svelte.
+	// Deliberately calls ListActive (never ListAll, which is admin-only via
+	// adminInterestsH above) — see public_interests.go's package doc comment.
+	publicInterestsH := handlers.NewPublicInterestsHandler(interestsStore)
+
 	// SSE event broker: the in-memory pub/sub singleton reused for live
 	// campaign send progress once the mailing subsystem lands.
 	broker := events.NewBroker()
@@ -199,6 +205,7 @@ func servePostgres(cfg *config.Config) error {
 
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
+		publicInterestsH,
 		requireSession, requireAdmin, nil /* no outer middleware in production */)
 }
 
@@ -331,8 +338,18 @@ func serveDevMode(cfg *config.Config) error {
 	// when nil, mirroring adminInterestsH's own nil-guard.
 	var adminSubscribersH *handlers.AdminSubscribersHandler
 
+	// Public interests (#0029), confirm (#0030), and preferences (#0031) all
+	// have the same devstore gap as subscribeH/adminInterestsH above --
+	// internal/devstore has no interests/subscribers-table backing yet.
+	// Passing nil leaves every other route working in STORAGE=json mode;
+	// mountAndServe only registers GET /api/interests, POST
+	// /api/subscribe/confirm, and GET/PATCH /api/preferences when their
+	// handler is non-nil, mirroring subscribeH's own nil-guard.
+	var publicInterestsH *handlers.PublicInterestsHandler
+
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
+		publicInterestsH,
 		requireSession, requireAdmin, devAutoLogin)
 }
 
@@ -414,6 +431,7 @@ func mountAndServe(
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
 	subscribeH *handlers.SubscribeHandler,
+	publicInterestsH *handlers.PublicInterestsHandler,
 	requireSession func(http.Handler) http.Handler,
 	requireAdmin func(http.Handler) http.Handler,
 	outerMiddleware func(http.Handler) http.Handler,
@@ -498,6 +516,13 @@ func mountAndServe(
 	// serves everything else unaffected.
 	if subscribeH != nil {
 		mux.Handle("POST /api/subscribe", subscribeLimiter.Middleware(http.HandlerFunc(subscribeH.Subscribe)))
+	}
+
+	// Public interest taxonomy (#0029) — no auth, no rate limit: a read-only
+	// GET over a taxonomy capped at a handful of admin-created rows, the
+	// same trust level as GET /sitemap.xml below.
+	if publicInterestsH != nil {
+		mux.Handle("GET /api/interests", http.HandlerFunc(publicInterestsH.List))
 	}
 
 	// SEO: server-injected per-route meta tags (#0019) and generated

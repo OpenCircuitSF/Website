@@ -12,7 +12,9 @@ import type {
   Interest,
   Subscriber,
   SubscribersPage,
+  PublicInterest,
 } from './types';
+import type { SubscribeRequestBody } from './subscribe';
 import type {
   ServerCredentialAssertion,
   AssertionFinishPayload,
@@ -455,3 +457,31 @@ export function createSubscriber(
     note: note || undefined,
   });
 }
+
+// ── Public mailing-list journey: signup, confirm, preferences (#0029-#0031) ──
+
+/**
+ * GET /api/interests — the public, unauthenticated active interest taxonomy
+ * (#0029). Source for SubscribeForm's and PreferenceCenter's checkbox grids;
+ * NEVER the admin /admin/interests route, which requires a session and
+ * includes deactivated interests a public form must not offer (#0024's
+ * carried-in review finding).
+ */
+export function listPublicInterests(): Promise<{ interests: PublicInterest[] }> {
+  return apiGet<{ interests: PublicInterest[] }>('/api/interests');
+}
+
+/**
+ * POST /api/subscribe — double opt-in signup (#0026, #0029). The success body
+ * is deliberately NOT typed/read by callers beyond a bare 2xx check — see
+ * lib/subscribe.ts's onSubscribeSuccess and its doc comment for why: #0026's
+ * uniform 202 means every successful branch returns an identical body, and
+ * reading it here would be the one place this component could reintroduce a
+ * distinction the server just eliminated.
+ */
+export function subscribe(body: SubscribeRequestBody): Promise<unknown> {
+  return apiPost<unknown>('/api/subscribe', body);
+}
+
+// confirmSubscription (#0030) and getPreferences/patchPreferences (#0031)
+// land in their own commits later in this batch.

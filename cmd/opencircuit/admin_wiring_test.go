@@ -136,6 +136,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
 			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			nil, /* publicInterestsH: not exercised by this test */
 			requireSession, requireAdmin, nil)
 	}()
 

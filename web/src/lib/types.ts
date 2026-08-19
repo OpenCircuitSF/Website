@@ -126,3 +126,20 @@ export interface SubscribersPage {
   per_page: number;
   counts: SubscriberStatusCounts;
 }
+
+// ── Public mailing-list journey (#0029-#0031) ────────────────────────────────
+
+/**
+ * One interest as shown to an anonymous visitor (GET /api/interests item, and
+ * the active_interests list embedded in the confirm/preferences responses
+ * added in #0030/#0031). Matches
+ * internal/handlers/public_interests.go's publicInterestView -- deliberately
+ * narrower than Interest above: no id, active, or subscriber_count, which
+ * are admin-only fields from GET /admin/interests.
+ */
+export interface PublicInterest {
+  slug: string;
+  name: string;
+  description?: string;
+  sort_order: number;
+}
