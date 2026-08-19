@@ -285,11 +285,19 @@ consistent and is not re-implemented per page:
 
 | Component | Renders |
 |---|---|
-| `Prompt.svelte` | `> text` with `--accent` chevron in mono |
+| `Prompt.svelte` | `> text` with `--accent-dim` chevron in mono |
 | `StatusList.svelte` | Rows of `[ OK ] label` — takes a string array |
 | `CommandLine.svelte` | `$ command▮` with a CSS-animated block cursor |
 | `TerminalPanel.svelte` | Bordered panel with the three-dot title bar |
 | `TraceDivider.svelte` | Inline SVG PCB-trace horizontal rule |
+
+> **Correction (2026-08-18, from `#0013`'s review).** This table previously said
+> the `Prompt` chevron uses `--accent`, contradicting §4.2, which states verbatim
+> that `--accent-dim` is "decorative only (rules, dividers, the `>` chevron)" —
+> naming this exact glyph. §4.2 is authoritative; this table was the defect.
+> `#0013`'s acceptance criterion was written from the wrong row and has been
+> amended. Note `--accent-dim` measures 1.84–2.16:1 in light mode, which is fine
+> for decorative punctuation beside `--accent` prose but must never carry text.
 
 ### 4.5 Logo
 
