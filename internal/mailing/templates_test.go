@@ -46,6 +46,11 @@ const (
 	testAddress  = "Open Circuit SF, PO Box 1234, San Francisco, CA 94110"
 )
 
+// testRevokedAt is the fixed timestamp used by every SendSessionsRevoked
+// golden/property test, so the rendered output (and the golden fixture) is
+// stable across runs rather than depending on wall-clock time.
+var testRevokedAt = time.Date(2026, 8, 6, 15, 4, 5, 0, time.UTC)
+
 func TestBuildConfirmationEmail_Golden(t *testing.T) {
 	msg := BuildConfirmationEmail(testTo, testBaseURL, testConfirm, testManage, 7*24*time.Hour, testAddress)
 	goldenFile(t, "confirmation.html", msg.HTMLBody)
@@ -70,18 +75,30 @@ func TestBuildRecoveryEmail_Golden(t *testing.T) {
 	goldenFile(t, "recovery.txt", msg.TextBody)
 }
 
+// TestBuildSessionsRevokedEmail_Golden covers the fifth template (#0076):
+// SendSessionsRevoked, themed as an HTML+text pair consistent with the other
+// three internal/auth mails instead of the plain-text-only shape #0028 left
+// it in.
+func TestBuildSessionsRevokedEmail_Golden(t *testing.T) {
+	msg := BuildSessionsRevokedEmail(testTo, testBaseURL, testRevokedAt)
+	goldenFile(t, "sessions_revoked.html", msg.HTMLBody)
+	goldenFile(t, "sessions_revoked.txt", msg.TextBody)
+}
+
 // --- Property tests: the things that actually break in the wild ---
 // (per the brief: "contains the word Confirm" proves nothing.)
 
-// allFourMessages returns every one of #0028's four templates built with
+// allMessages returns every one of the five non-campaign templates
+// (#0028's original four, plus #0076's SendSessionsRevoked) built with
 // distinct, per-template tokens, for the property tests below that must hold
 // across all of them.
-func allFourMessages() map[string]Message {
+func allMessages() map[string]Message {
 	return map[string]Message{
 		"confirmation":       BuildConfirmationEmail(testTo, testBaseURL, testConfirm, testManage, 7*24*time.Hour, testAddress),
 		"already_subscribed": BuildAlreadySubscribedEmail(testTo, testBaseURL, testManage, testAddress),
 		"registration":       BuildRegistrationEmail(testTo, testBaseURL, testRegToken, 5*time.Minute),
 		"recovery":           BuildRecoveryEmail(testTo, testBaseURL, testRecToken, 15*time.Minute),
+		"sessions_revoked":   BuildSessionsRevokedEmail(testTo, testBaseURL, testRevokedAt),
 	}
 }
 
@@ -94,7 +111,7 @@ func allFourMessages() map[string]Message {
 // fails; see the Verification section in issues/0028.md for the observed
 // failure text.
 func TestAllTemplates_TextBodyNonEmpty(t *testing.T) {
-	for name, msg := range allFourMessages() {
+	for name, msg := range allMessages() {
 		if strings.TrimSpace(msg.TextBody) == "" {
 			t.Errorf("%s: TextBody is empty — no plain-text alternative", name)
 		}
@@ -109,7 +126,7 @@ func TestAllTemplates_TextBodyNonEmpty(t *testing.T) {
 // client that strips <head> content (many do) would silently break any
 // layout that relied on it. Inline styles/attributes only.
 func TestAllTemplates_NoStyleTag(t *testing.T) {
-	for name, msg := range allFourMessages() {
+	for name, msg := range allMessages() {
 		if strings.Contains(strings.ToLower(msg.HTMLBody), "<style") {
 			t.Errorf("%s: HTML contains a <style> tag; layout must use inline styles only", name)
 		}
@@ -120,7 +137,7 @@ func TestAllTemplates_NoStyleTag(t *testing.T) {
 // letter-of-the-law constraints in the same acceptance criterion: no
 // flexbox, no var(--...) custom properties anywhere in the markup.
 func TestAllTemplates_NoFlexboxOrCSSCustomProperties(t *testing.T) {
-	for name, msg := range allFourMessages() {
+	for name, msg := range allMessages() {
 		lower := strings.ToLower(msg.HTMLBody)
 		if strings.Contains(lower, "display:flex") || strings.Contains(lower, "display: flex") {
 			t.Errorf("%s: HTML uses flexbox", name)
@@ -139,7 +156,7 @@ func TestAllTemplates_NoFlexboxOrCSSCustomProperties(t *testing.T) {
 // attribute from the outer <table ...> line in templates.go and this test
 // fails — see issues/0028.md ## Verification for the observed failure.
 func TestAllTemplates_OuterTableHasExplicitBackgroundColor(t *testing.T) {
-	for name, msg := range allFourMessages() {
+	for name, msg := range allMessages() {
 		idx := strings.Index(msg.HTMLBody, "<table")
 		if idx == -1 {
 			t.Fatalf("%s: no <table> element found in HTML body", name)
@@ -163,7 +180,7 @@ func TestAllTemplates_OuterTableHasExplicitBackgroundColor(t *testing.T) {
 // baseURL from a link (e.g. "/confirm?token=..." instead of
 // baseURL+"/confirm?token=...") and this test fails.
 func TestAllTemplates_LinksAreAbsolute(t *testing.T) {
-	for name, msg := range allFourMessages() {
+	for name, msg := range allMessages() {
 		for _, href := range extractHrefs(msg.HTMLBody) {
 			if !strings.HasPrefix(href, "https://") && !strings.HasPrefix(href, "http://") {
 				t.Errorf("%s: href %q is not absolute", name, href)
@@ -221,7 +238,7 @@ func extractTextURLs(text string) []string {
 // BuildConfirmationEmail and this test fails on "manage link".
 func TestConfirmationAndAlreadySubscribed_CarryFooterLink(t *testing.T) {
 	for _, name := range []string{"confirmation", "already_subscribed"} {
-		msg := allFourMessages()[name]
+		msg := allMessages()[name]
 		if !strings.Contains(msg.HTMLBody, "Manage your interests") {
 			t.Errorf("%s: HTML missing 'Manage your interests' footer text", name)
 		}
@@ -246,7 +263,7 @@ func TestConfirmationAndAlreadySubscribed_CarryFooterLink(t *testing.T) {
 // synchronously from the subscribe handler, not campaign sends.
 func TestConfirmationAndAlreadySubscribed_NoCampaignHeaders(t *testing.T) {
 	for _, name := range []string{"confirmation", "already_subscribed"} {
-		msg := allFourMessages()[name]
+		msg := allMessages()[name]
 		if len(msg.Headers) != 0 {
 			t.Errorf("%s: message carries %d custom header(s), want 0 (no List-Unsubscribe on transactional mail): %+v", name, len(msg.Headers), msg.Headers)
 		}
@@ -259,7 +276,7 @@ func TestConfirmationAndAlreadySubscribed_NoCampaignHeaders(t *testing.T) {
 // address requirement is scoped to commercial/list mail.
 func TestRegistrationAndRecovery_NoListFooter(t *testing.T) {
 	for _, name := range []string{"registration", "recovery"} {
-		msg := allFourMessages()[name]
+		msg := allMessages()[name]
 		if strings.Contains(msg.HTMLBody, "Manage your interests") {
 			t.Errorf("%s: HTML unexpectedly carries the mailing-list footer", name)
 		}
@@ -378,7 +395,7 @@ func TestConfirmationEmail_CarriesConfirmLinkAndIfYouDidntRequestLine(t *testing
 // Mutation proof: change the button <a> style from colorButtonText to
 // colorHeading in templates.go and this test fails.
 func TestButtonTextIsNeverBrightGreen(t *testing.T) {
-	for name, msg := range allFourMessages() {
+	for name, msg := range allMessages() {
 		// The button's <a> tag must use colorButtonText, not colorHeading —
 		// bright green text is only safe on the guaranteed-dark card
 		// background, and the button's own background can plausibly get
@@ -398,6 +415,72 @@ func TestButtonTextIsNeverBrightGreen(t *testing.T) {
 			if !strings.Contains(aTag, "color:"+colorButtonText) {
 				t.Errorf("%s: button link text does not use the guaranteed-legible %s", name, colorButtonText)
 			}
+		}
+	}
+}
+
+// TestNoTextBodyContainsButton is #0076's regression guard for the exact
+// defect #0028's reviewer found by reading the golden files as a recipient
+// rather than diffing them: the shared renderer wrote "click the button
+// below" into the text part for the registration and recovery mails even
+// though the text part has no button, only a raw URL. renderHTML and
+// renderText now substitute different words for the shared {{cta}} token
+// (see templates.go's ctaToken/resolveCTA), so this asserts the outcome that
+// substitution exists to guarantee.
+//
+// Mutation proof: replace any use of resolveCTA(p, "link") in renderText
+// with resolveCTA(p, "button") (or just hard-code the literal word "button"
+// into a paragraph again, bypassing the token) and this test fails.
+func TestNoTextBodyContainsButton(t *testing.T) {
+	for name, msg := range allMessages() {
+		if strings.Contains(strings.ToLower(msg.TextBody), "button") {
+			t.Errorf("%s: TextBody contains the word 'button' — text readers have no button, only a link\nbody:\n%s", name, msg.TextBody)
+		}
+	}
+}
+
+// TestHTMLAndTextCTAWordingDiffer proves the HTML and text parts CAN differ
+// on the {{cta}} word — not merely that text avoids "button", but that HTML
+// positively uses it where a button actually exists and text positively uses
+// "link" where only a raw URL does. Without this, TestNoTextBodyContainsButton
+// alone would also pass for a renderer that dropped the CTA sentence from
+// text entirely, which is not the fix this issue asked for.
+func TestHTMLAndTextCTAWordingDiffer(t *testing.T) {
+	for _, name := range []string{"registration", "recovery", "sessions_revoked"} {
+		msg := allMessages()[name]
+		if !strings.Contains(strings.ToLower(msg.HTMLBody), "button") {
+			t.Errorf("%s: HTML body should say 'button' where the HTML button actually is", name)
+		}
+		if !strings.Contains(strings.ToLower(msg.TextBody), "link") {
+			t.Errorf("%s: text body should say 'link' since text readers only see a raw URL", name)
+		}
+	}
+}
+
+// TestAllTemplates_TextBodyUsesCRLF asserts the RFC 5322 \r\n line-ending
+// contract in Go, not only via the internal/mailing/testdata/*.txt -text
+// override in .gitattributes (see testdata/README.md and #0078). Before this
+// test, `grep -rn '\r' internal/mailing/*_test.go internal/auth/*_test.go`
+// returned nothing anywhere in the repo — those four (now five) golden .txt
+// files were the ONLY assertion of this contract, and ses_mailer.go hands
+// TextBody straight to SES's TextBody field without re-adding CR itself. So
+// the contract rested entirely on a git checkout attribute, not on any Go
+// code path actually checking it.
+//
+// Mutation proof: change renderText's `strings.Join(lines, "\r\n")` to
+// `strings.Join(lines, "\n")` in templates.go and this test fails — legibly,
+// in `go test` output, rather than only via a diff on someone else's machine
+// after a fresh checkout normalizes the fixture.
+func TestAllTemplates_TextBodyUsesCRLF(t *testing.T) {
+	for name, msg := range allMessages() {
+		if !strings.HasSuffix(msg.TextBody, "\r\n") {
+			t.Errorf("%s: TextBody does not end with \\r\\n", name)
+			continue
+		}
+		// Every line break must be \r\n, not a bare \n: strip every \r\n pair
+		// and confirm no \n remains.
+		if strings.Contains(strings.ReplaceAll(msg.TextBody, "\r\n", ""), "\n") {
+			t.Errorf("%s: TextBody contains a bare \\n not paired with \\r", name)
 		}
 	}
 }

@@ -4,7 +4,7 @@ Recover your account
 
 A recovery link was requested for your Open Circuit SF account.
 
-Click the button below to register a new passkey.
+Click the link below to register a new passkey.
 
 Recover account: https://www.opencircuitsf.com/recover/verify?token=RECOVER-TOKEN-DDD
 

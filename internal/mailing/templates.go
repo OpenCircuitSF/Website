@@ -55,6 +55,28 @@ const (
 	fontBody = "-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 )
 
+// ctaToken is a literal placeholder authors put in IntroParagraphs/
+// NoteParagraphs copy where the sentence needs to name how the reader
+// triggers the primary action. renderHTML and renderText each substitute
+// their own word for it — "button" in HTML, where one actually exists, and
+// "link" in text, where the reader only ever sees a raw URL.
+//
+// This exists because of #0076: before it, the four Build* functions wrote
+// the literal word "button" directly into paragraph copy shared verbatim by
+// both renderers, so the text part told readers to click a button that was
+// never there. A shared string constant guarantees renderHTML and renderText
+// can never independently drift on THIS word without an edit to this file —
+// but by construction they now say different things for the same paragraph,
+// which is the whole point: the two parts can differ, and default to doing
+// so for the one word that must differ.
+const ctaToken = "{{cta}}"
+
+// resolveCTA substitutes ctaToken in a paragraph with the noun that fits the
+// format currently rendering it.
+func resolveCTA(s, word string) string {
+	return strings.ReplaceAll(s, ctaToken, word)
+}
+
 // emailContent is the single data model every transactional template renders
 // from. Populate one value; call renderHTML and renderText on it.
 type emailContent struct {
@@ -140,6 +162,7 @@ func (c emailContent) renderHTML() string {
 		html.EscapeString(c.Heading) + `</h1>` + "\n")
 
 	for _, p := range c.IntroParagraphs {
+		p = resolveCTA(p, "button")
 		b.WriteString(`<p style="font-family:` + fontBody + `;font-size:15px;line-height:24px;color:` + colorBodyText + `;margin:0 0 16px;">` +
 			html.EscapeString(p) + `</p>` + "\n")
 	}
@@ -155,6 +178,7 @@ func (c emailContent) renderHTML() string {
 	}
 
 	for _, p := range c.NoteParagraphs {
+		p = resolveCTA(p, "button")
 		b.WriteString(`<p style="font-family:` + fontBody + `;font-size:13px;line-height:20px;color:` + colorMutedText + `;margin:0 0 12px;">` +
 			html.EscapeString(p) + `</p>` + "\n")
 	}
@@ -197,7 +221,7 @@ func (c emailContent) renderText() string {
 	lines = append(lines, c.Heading, "")
 
 	for _, p := range c.IntroParagraphs {
-		lines = append(lines, p, "")
+		lines = append(lines, resolveCTA(p, "link"), "")
 	}
 
 	if c.ButtonURL != "" {
@@ -205,7 +229,7 @@ func (c emailContent) renderText() string {
 	}
 
 	for _, p := range c.NoteParagraphs {
-		lines = append(lines, p)
+		lines = append(lines, resolveCTA(p, "link"))
 	}
 	if len(c.NoteParagraphs) > 0 {
 		lines = append(lines, "")

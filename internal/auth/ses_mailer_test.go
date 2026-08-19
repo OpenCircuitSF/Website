@@ -126,6 +126,16 @@ func TestSESMailer_SendSessionsRevoked_InjectedSender(t *testing.T) {
 	if !strings.Contains(msg.TextBody, at.Format(time.RFC1123Z)) {
 		t.Errorf("message missing formatted timestamp\nbody:\n%s", msg.TextBody)
 	}
+	// #0076: themed consistently with SendVerification/SendRecovery, which
+	// #0028 already re-themed — this was the one holdout left text-only and
+	// un-themed, so the same account holder no longer gets two
+	// differently-branded messages from the same system.
+	if msg.HTMLBody == "" {
+		t.Error("HTMLBody is empty — #0076 requires an HTML alternative, not text-only")
+	}
+	if !strings.Contains(msg.HTMLBody, "existing passkey") {
+		t.Errorf("HTML body must tell the user their EXISTING passkey still works\nbody:\n%s", msg.HTMLBody)
+	}
 }
 
 // TestSESMailer_ContextCancelled verifies the context is honored before the

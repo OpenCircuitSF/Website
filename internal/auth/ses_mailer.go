@@ -79,33 +79,17 @@ func (m *SESMailer) SendRecovery(ctx context.Context, toEmail, token string) err
 	return m.sendMessage(ctx, msg)
 }
 
-// SendSessionsRevoked sends the plain "sign out everywhere" notification.
-// Unlike SendVerification/SendRecovery it carries no link with
+// SendSessionsRevoked sends the "sign out everywhere" notification, rendered
+// as an HTML+text pair by mailing.BuildSessionsRevokedEmail (#0076 — #0028
+// left this one text-only and un-themed; see that Build function's doc
+// comment for why that stopped being defensible). It carries no link with
 // credentials and no token — nothing single-use, so no expiry is mentioned.
 // The copy deliberately says the account's EXISTING passkey still works
 // (revoking sessions never touches passkey_credentials) and only mentions
 // enrolling a replacement as a conditional follow-up for the lost-device case.
 func (m *SESMailer) SendSessionsRevoked(ctx context.Context, toEmail string, at time.Time) error {
-	subject := "All sessions signed out"
-	text := fmt.Sprintf(
-		"All sessions for %s were signed out on %s.\r\n\r\n"+
-			"To get back in, go to %s and sign in with your existing passkey — "+
-			"it still works and nothing about your account has changed.\r\n\r\n"+
-			"If you did this because a device was lost or is no longer yours, also open "+
-			"Account settings after signing in and revoke that device's passkey. You can "+
-			"enroll a replacement from the same screen.\r\n\r\n"+
-			"If you did not do this, sign in and revoke your passkeys immediately.\r\n",
-		toEmail, at.UTC().Format(time.RFC1123Z), m.baseURL,
-	)
-	return m.send(ctx, toEmail, subject, text)
-}
-
-// send composes a plain-text message and hands it to the underlying
-// mailing.Mailer. Used only by SendSessionsRevoked, which #0028 left
-// text-only — it is a plain notification, not one of the four templates that
-// issue re-themed. The context is honored before dispatch.
-func (m *SESMailer) send(ctx context.Context, toEmail, subject, textBody string) error {
-	return m.sendMessage(ctx, mailing.Message{To: toEmail, Subject: subject, TextBody: textBody})
+	msg := mailing.BuildSessionsRevokedEmail(toEmail, m.baseURL, at)
+	return m.sendMessage(ctx, msg)
 }
 
 // sendMessage hands an already-built mailing.Message to the underlying
