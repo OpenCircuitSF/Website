@@ -48,7 +48,7 @@ func truncate(t *testing.T, pool *pgxpool.Pool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := pool.Exec(ctx,
-		`TRUNCATE sessions, passkey_credentials, audit_log, clicks, links, users
+		`TRUNCATE sessions, passkey_credentials, audit_log, users
 		 RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

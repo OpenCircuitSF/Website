@@ -1,4 +1,4 @@
--- ShortLinks — one-time database initialisation
+-- Open Circuit SF — one-time database initialisation
 --
 -- Run once by a PostgreSQL superuser (e.g. the `postgres` role) BEFORE running
 -- migrations. This creates the application login role and the database it owns.
@@ -11,14 +11,14 @@
 -- IMPORTANT: Replace the placeholder password below with a real, strong secret
 -- before running this in any non-throwaway environment, and keep that secret out
 -- of source control. The DATABASE_URL in your .env must use the same role name
--- (shortlinks), database name (shortlinks), and the password you set here.
+-- (opencircuit), database name (opencircuit), and the password you set here.
 
 -- Create the application login role (idempotent: skip if it already exists).
 DO
 $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'shortlinks') THEN
-        CREATE ROLE shortlinks LOGIN PASSWORD 'CHANGE_ME_IN_PRODUCTION';
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'opencircuit') THEN
+        CREATE ROLE opencircuit LOGIN PASSWORD 'CHANGE_ME_IN_PRODUCTION';
     END IF;
 END
 $$;
@@ -28,7 +28,7 @@ $$;
 -- CREATE DATABASE cannot run inside a transaction/DO block. Re-running this
 -- statement against an existing database will raise "database already exists";
 -- that error is safe to ignore on a re-run.
-CREATE DATABASE shortlinks OWNER shortlinks;
+CREATE DATABASE opencircuit OWNER opencircuit;
 
 -- Ensure the role has full privileges on the database.
-GRANT ALL PRIVILEGES ON DATABASE shortlinks TO shortlinks;
+GRANT ALL PRIVILEGES ON DATABASE opencircuit TO opencircuit;

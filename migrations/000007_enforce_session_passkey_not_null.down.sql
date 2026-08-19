@@ -1,0 +1,37 @@
+-- Deliberate no-op. Read this before "fixing" it — the empty body is the
+-- correct reversal of 000007, and the obvious implementation is actively
+-- harmful.
+--
+-- What a down migration owes the caller is the state a fresh replay to the
+-- previous version produces. A fresh replay to 6 runs today's 000002
+-- (auth_credentials) and 000003 (sessions), which already create
+-- passkey_credentials.user_id, sessions.user_id, sessions.created_at (NOT
+-- NULL DEFAULT now()), sessions.expires_at and sessions.last_seen_at as NOT
+-- NULL. So on every database this project's migrations ever build, the
+-- 6 -> 7 step changes nothing, and its reversal must therefore also change
+-- nothing.
+--
+-- The tempting version of this file —
+--
+--     ALTER TABLE sessions
+--         ALTER COLUMN last_seen_at DROP NOT NULL,
+--         ALTER COLUMN expires_at   DROP NOT NULL,
+--         ALTER COLUMN created_at   DROP DEFAULT,
+--         ALTER COLUMN created_at   DROP NOT NULL,
+--         ALTER COLUMN user_id      DROP NOT NULL;
+--     ALTER TABLE passkey_credentials
+--         ALTER COLUMN user_id DROP NOT NULL;
+--
+-- was the ShortLinks source migration's actual down step, written to reverse
+-- a production schema-drift incident that does not apply to this project (no
+-- deployed database has ever run these tables in a permissive shape — see
+-- the up migration's header). An unconditional drop back to permissive
+-- columns would only ever *manufacture* drift here, never repair it, since
+-- there is no drifted database in this project's history to converge with.
+--
+-- If some future recovery genuinely needs the permissive shape back, the DDL
+-- is quoted above; run it by hand, knowingly. It is not something `migrate
+-- down` should do on your behalf.
+--
+-- (golang-migrate runs a comment-only body without error and records the
+-- version change, so `migrate down 1` still moves 7 -> 6 as expected.)

@@ -117,7 +117,7 @@ func truncateAuthTables(t *testing.T, pool *pgxpool.Pool) {
 	defer cancel()
 	_, err := pool.Exec(ctx,
 		`TRUNCATE webauthn_challenges, pending_registrations, sessions,
-		          passkey_credentials, audit_log, clicks, links, users
+		          passkey_credentials, audit_log, users
 		 RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate auth tables: %v", err)
