@@ -1,6 +1,7 @@
 package seo
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -258,6 +259,47 @@ func TestRender_InvalidateWorkshopsBypassesCacheImmediately(t *testing.T) {
 	}
 }
 
+// TestRender_UnknownPathsShareOneCacheEntry is #0073's headline fix: every
+// unknown path renders the byte-identical not-found body, so caching them
+// per raw path (the original defect -- 25,000 distinct unauthenticated
+// requests measured RSS growing from ~59 MB to ~212 MB) is pure waste on
+// top of being unbounded. After rendering many distinct unknown paths, the
+// cache must hold exactly one entry for all of them.
+func TestRender_UnknownPathsShareOneCacheEntry(t *testing.T) {
+	r := newTestRenderer(nil)
+	for i := 0; i < 5000; i++ {
+		r.Render(fmt.Sprintf("/does-not-exist-%d", i))
+	}
+	r.mu.RLock()
+	got := len(r.cache)
+	r.mu.RUnlock()
+	if got != 1 {
+		t.Errorf("cache has %d entries after 5000 distinct unknown paths, want 1 (all should collapse to the not-found bucket)", got)
+	}
+}
+
+// TestRender_CacheBoundedRegardlessOfKeying is the other half of #0073's
+// acceptance criteria: bucket-keying alone isn't the only thing preventing
+// unbounded growth -- maxCacheEntries must hold even if a future key scheme
+// re-derives one key per request (exactly what the original per-path keying
+// did). This drives Renderer.store directly with many distinct synthetic
+// keys -- simulating what a naive future re-keying would produce -- rather
+// than through Render/resolve, so it exercises the bound mechanism
+// independent of the bucket-collapsing behavior TestRender_UnknownPathsShare
+// OneCacheEntry already covers.
+func TestRender_CacheBoundedRegardlessOfKeying(t *testing.T) {
+	r := newTestRenderer(nil)
+	for i := 0; i < 5000; i++ {
+		r.store(fmt.Sprintf("synthetic-key-%d", i), []byte("body"))
+	}
+	r.mu.RLock()
+	got := len(r.cache)
+	r.mu.RUnlock()
+	if got > maxCacheEntries {
+		t.Errorf("cache has %d entries after 5000 distinct writes, want <= %d (maxCacheEntries)", got, maxCacheEntries)
+	}
+}
+
 // --- test helpers -------------------------------------------------------
 
 // extractTag returns the text content of the first <tag>...</tag> in html,
@@ -294,16 +336,19 @@ func (f fakeWorkshopSource) Workshops() ([]Workshop, error) {
 }
 
 // mutatingWorkshopSource always has exactly one published workshop
-// ("mutable"), whose title can be changed mid-test to prove cache behavior.
+// ("mutable"), whose title and UpdatedAt can be changed mid-test to prove
+// cache behavior -- title for the renderer's meta tags, updatedAt for the
+// sitemap's <lastmod>, since the sitemap doesn't surface Title at all.
 type mutatingWorkshopSource struct {
-	title string
+	title     string
+	updatedAt string
 }
 
 func (m *mutatingWorkshopSource) WorkshopBySlug(slug string) (Workshop, bool, error) {
 	if slug != "mutable" {
 		return Workshop{}, false, nil
 	}
-	return Workshop{Slug: "mutable", Title: m.title, Summary: "s", Status: WorkshopPublished}, true, nil
+	return Workshop{Slug: "mutable", Title: m.title, Summary: "s", Status: WorkshopPublished, UpdatedAt: m.updatedAt}, true, nil
 }
 
 func (m *mutatingWorkshopSource) Workshops() ([]Workshop, error) {

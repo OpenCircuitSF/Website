@@ -229,16 +229,41 @@ func extractMetaContent(t *testing.T, html, property string) string {
 // InvalidateWorkshops reaches BOTH the meta-tag renderer and the sitemap --
 // a partial wiring (only one of the two) would be easy to introduce and
 // hard to notice, since each half's own cache tests already pass.
+//
+// An earlier version of this test only ever exercised the renderer half:
+// it read site.renderer.Render but never site.sitemap.Render, so deleting
+// Site.InvalidateWorkshops' `s.sitemap.Invalidate()` call left the suite
+// green despite the guard's name and #0020's commit message both claiming
+// both halves were covered (#0073's review finding). This version drives
+// and asserts BOTH halves against the SAME mutation, so it can't pass while
+// either is unwired.
 func TestSite_InvalidateWorkshopsClearsBothCaches(t *testing.T) {
-	source := &mutatingWorkshopSource{title: "Original Title"}
+	source := &mutatingWorkshopSource{title: "Original Title", updatedAt: "2026-01-01"}
 	site := NewSite([]byte(testTemplate), testBaseURL, source)
 
 	_ = site.renderer.Render("/workshops/mutable")
-	source.title = "Changed Title"
-	site.InvalidateWorkshops()
-	after := string(site.renderer.Render("/workshops/mutable"))
+	firstSitemap, err := site.sitemap.Render()
+	if err != nil {
+		t.Fatalf("sitemap Render: %v", err)
+	}
+	if strings.Contains(string(firstSitemap), "2026-08-18") {
+		t.Fatal("test fixture bug: the pre-mutation sitemap render already shows the post-mutation lastmod")
+	}
 
-	if !strings.Contains(after, "Changed Title") {
+	source.title = "Changed Title"
+	source.updatedAt = "2026-08-18"
+	site.InvalidateWorkshops()
+
+	afterRenderer := string(site.renderer.Render("/workshops/mutable"))
+	afterSitemap, err := site.sitemap.Render()
+	if err != nil {
+		t.Fatalf("sitemap Render: %v", err)
+	}
+
+	if !strings.Contains(afterRenderer, "Changed Title") {
 		t.Error("Site.InvalidateWorkshops did not clear the renderer's cache")
+	}
+	if !strings.Contains(string(afterSitemap), "2026-08-18") {
+		t.Error("Site.InvalidateWorkshops did not clear the sitemap's cache")
 	}
 }

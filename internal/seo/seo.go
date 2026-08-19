@@ -17,8 +17,9 @@
 //     /workshops/{slug} (nil until #0051/#0054 land -- falls back to the
 //     generic default), and a distinct default for unknown paths (404).
 //  3. Substitute and serve. Every substituted value is HTML-escaped.
-//  4. Cache the rendered bytes per path with a short TTL; invalidate on
-//     workshop mutation (Site.InvalidateWorkshops).
+//  4. Cache the rendered bytes per resolved metadata bucket (not per raw
+//     path -- #0073) with a short TTL and a bounded entry count; invalidate
+//     on workshop mutation (Site.InvalidateWorkshops).
 //
 // internal/handlers/routes.go remains the single source of truth for "is
 // this path real" (IsKnownRoute) -- this package imports it rather than
@@ -55,6 +56,39 @@ const (
 // within a minute; long enough that a burst of crawler/bot traffic against
 // one path doesn't re-render on every request.
 const defaultCacheTTL = 60 * time.Second
+
+// maxCacheEntries bounds Renderer.cache regardless of what keying scheme
+// populates it -- defense in depth against a future re-keying reintroducing
+// unbounded growth, which is exactly the defect #0073 fixed: the cache used
+// to be keyed by raw request path, so 25,000 unauthenticated requests to
+// distinct unknown paths grew RSS from ~59 MB to ~212 MB (~6 KB retained per
+// distinct path, never pruned). Keying by resolved metadata bucket (below)
+// already collapses the actual attack surface -- every unknown path shares
+// one entry -- but this cap exists so that property is not the only thing
+// standing between the cache and unbounded growth.
+//
+// The realistic keyspace is tiny: the handful of static routes, one fallback
+// bucket, one not-found bucket, and one entry per distinct *published*
+// workshop slug actually requested (bounded by real catalog size, not by
+// how many distinct paths an attacker can invent). 512 is comfortable
+// headroom above that and should almost never be reached in practice.
+//
+// Eviction policy: a write that would grow the cache past the bound flushes
+// the entire cache first, then inserts the new entry. A full flush rather
+// than a partial (e.g. LRU) eviction mirrors InvalidateWorkshops' existing
+// reasoning below: re-rendering is cheap (a string substitution over an
+// in-memory template), so a hard cap that occasionally costs one wasted
+// generation is simpler to reason about than per-entry recency bookkeeping.
+const maxCacheEntries = 512
+
+// Cache keys for the two buckets that aren't an exact static-route path.
+// Prefixed with a NUL byte so they can never collide with a real URL path
+// (which always starts with "/"), and distinguished from a
+// "workshop:{slug}" key by construction.
+const (
+	cacheKeyFallback = "\x00fallback"
+	cacheKeyNotFound = "\x00notfound"
+)
 
 // RouteMeta is the set of substituted values for one route.
 type RouteMeta struct {
@@ -199,31 +233,42 @@ func defaultNotFoundMeta(baseURL string) RouteMeta {
 	}
 }
 
-// metaFor resolves the RouteMeta for a request path, in priority order:
-// (1) an exact static-route entry, (2) a workshop-detail match resolved
-// against the workshop source, (3) the known-but-uncataloged fallback, or
-// (4) the not-found default when handlers.IsKnownRoute rejects the path.
+// resolve determines both the RouteMeta for a request path AND the cache
+// bucket key its rendered bytes belong under, in priority order: (1) an
+// exact static-route entry, keyed by the path itself -- bounded to len(r.static)
+// entries, (2) a workshop-detail match resolved against the workshop source,
+// keyed by slug -- bounded by the number of distinct published workshops
+// actually requested, not by how many distinct paths a client can invent,
+// (3) the known-but-uncataloged fallback, which is byte-identical for every
+// route that reaches it and therefore shares ONE cache key regardless of
+// which such route was requested, or (4) the not-found default when
+// handlers.IsKnownRoute rejects the path -- also byte-identical across every
+// unknown path, so it too shares one cache key. This is the fix for #0073:
+// caching by raw request path let an unauthenticated client grow the cache
+// without bound by requesting distinct nonexistent paths, even though every
+// one of them renders the identical not-found body.
+//
 // normalizedPath is the path AFTER trailing-slash normalization, matching
 // handlers.IsKnownRoute's own normalization so the two never disagree about
 // which bucket a path falls into.
-func (r *Renderer) metaFor(normalizedPath string) RouteMeta {
+func (r *Renderer) resolve(normalizedPath string) (cacheKey string, meta RouteMeta) {
 	if m, ok := r.static[normalizedPath]; ok {
-		return m
+		return normalizedPath, m
 	}
 	if slug, ok := handlers.WorkshopDetailSlug(normalizedPath); ok {
 		if m, ok := r.workshopMeta(slug); ok {
-			return m
+			return "workshop:" + slug, m
 		}
 		// Matches the dynamic pattern but no published workshop found (not
 		// yet wired, wrong slug, or a draft/canceled workshop) -- still a
 		// "known" path per handlers.IsKnownRoute (SPAHandler serves 200), so
 		// it gets the generic fallback rather than the 404 default.
-		return r.fallback
+		return cacheKeyFallback, r.fallback
 	}
 	if handlers.IsKnownRoute(normalizedPath) {
-		return r.fallback
+		return cacheKeyFallback, r.fallback
 	}
-	return r.notFound
+	return cacheKeyNotFound, r.notFound
 }
 
 // workshopMeta looks up slug in the configured WorkshopSource and, if found
@@ -284,8 +329,18 @@ func normalizePath(path string) string {
 // when available. It does not decide the HTTP status code -- that remains
 // SPAHandler's job (via handlers.IsKnownRoute), preserving #0022's 404
 // behavior; Render only ever changes the body.
+//
+// The cache is keyed by resolve's bucket key, not the raw path (#0073) --
+// resolving that key requires the same work as resolving the meta itself
+// (including a WorkshopSource lookup for a /workshops/{slug} request), so
+// unlike the previous per-path cache, a repeat request for a workshop-detail
+// page no longer skips that lookup on a cache hit. That trades one bounded,
+// indexed store read per request for eliminating the unbounded per-path
+// memory growth; the substitution/escaping work itself is still cached and
+// skipped on a hit.
 func (r *Renderer) Render(path string) []byte {
-	key := normalizePath(path)
+	normalized := normalizePath(path)
+	key, meta := r.resolve(normalized)
 
 	r.mu.RLock()
 	entry, ok := r.cache[key]
@@ -294,14 +349,21 @@ func (r *Renderer) Render(path string) []byte {
 		return entry.body
 	}
 
-	meta := r.metaFor(key)
 	body := r.substitute(meta)
-
-	r.mu.Lock()
-	r.cache[key] = cacheEntry{body: body, expires: r.now().Add(r.ttl)}
-	r.mu.Unlock()
-
+	r.store(key, body)
 	return body
+}
+
+// store writes body into the cache under key, enforcing maxCacheEntries: a
+// write that would grow the cache past the bound flushes it entirely first.
+// See maxCacheEntries' doc comment for the eviction policy's rationale.
+func (r *Renderer) store(key string, body []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.cache[key]; !exists && len(r.cache) >= maxCacheEntries {
+		r.cache = make(map[string]cacheEntry)
+	}
+	r.cache[key] = cacheEntry{body: body, expires: r.now().Add(r.ttl)}
 }
 
 // substitute performs the actual token replacement. Every value is passed
