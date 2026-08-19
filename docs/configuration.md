@@ -17,7 +17,7 @@ of problems in one pass.
 | `STORAGE` | no | *(unset → Postgres)* | Only the literal value `json` selects the in-memory dev store. An empty/unset `DATABASE_URL` does **not** engage dev mode — production can never silently fall back to the in-memory store. |
 | `WEBAUTHN_RP_ID` | yes (non-dev) | — | WebAuthn relying-party ID — the apex domain, so a passkey stays valid across apex and www |
 | `WEBAUTHN_RP_ORIGIN` | yes (non-dev) | — | Must match the browser's real origin exactly — the **www** form in production; see the gotcha below |
-| `SESSION_SECRET` | yes (non-dev) | — | HMAC signing key (`openssl rand -hex 32`) |
+| `SESSION_SECRET` | yes (non-dev) | — | HMAC signing key for session cookies. Generate with `openssl rand -hex 32`. `.env.example` ships this **blank** rather than a placeholder string, so a copied template that's never had a real value set fails closed at startup (`config: missing required variable SESSION_SECRET`) instead of silently signing sessions with a key published in a public repository — see `#0067`. |
 | `AWS_REGION` | yes | — | SES region, e.g. `us-west-2`. No static credentials anywhere in configuration — the EC2 instance role supplies them via the AWS SDK's default credential chain; locally the chain falls back to `~/.aws/credentials`. |
 | `SES_CONFIGURATION_SET` | no | — | SES configuration set used for transactional/campaign sends |
 | `EMAIL_FROM` | yes | — | RFC 5322 From header, e.g. `Open Circuit SF <hello@opencircuitsf.com>` |
