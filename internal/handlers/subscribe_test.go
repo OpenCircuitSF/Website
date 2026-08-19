@@ -23,35 +23,22 @@ import (
 )
 
 // subscribeTestPool returns the package's single shared pool (opened once in
-// TestMain — #0091) or skips if TEST_DATABASE_URL was unset, truncating the
-// subscribers/subscriber_interests tables on entry only so each test starts
-// from a clean slate. Mirrors internal/subscribers' own testPool.
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset.
+//
+// #0091 round two: this used to TRUNCATE subscribers/subscriber_interests/
+// audit_log on every call. It no longer does — every test in this file
+// already seeds through subscribeUniqueEmail(t), and every audit_log
+// lookback (auditSignupCount) filters by the specific subscriber id a test
+// itself created rather than assuming ids restart at 1, so no two tests'
+// rows collide. The tables only need to start clean once — main_test.go's
+// TestMain — not before every test. Mirrors internal/subscribers' own
+// testPool.
 func subscribeTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	truncateSubscribeTables(t, testDBPool)
 	return testDBPool
-}
-
-// truncateSubscribeTables wipes subscribers/subscriber_interests (RESTART
-// IDENTITY, so ids are small and predictable within a test) and audit_log.
-// audit_log has to be included: subscribers' ids restart at 1 every time
-// this runs, so without also clearing audit_log, a later test's
-// auditSignupCount query for target_id=1 would pick up rows left behind by
-// an EARLIER test's own id-1 subscriber, matching internal/handlers'
-// existing credsTestPool convention (truncateCredsTables also clears
-// audit_log for the same id-reuse reason).
-func truncateSubscribeTables(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := pool.Exec(ctx,
-		`TRUNCATE subscriber_interests, subscribers, audit_log RESTART IDENTITY CASCADE`,
-	); err != nil {
-		t.Fatalf("truncate subscribe tables: %v", err)
-	}
 }
 
 func subscribeUniqueEmail(t *testing.T) string {

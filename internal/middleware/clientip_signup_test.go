@@ -11,30 +11,19 @@ import (
 )
 
 // signupTestPool returns the package's single shared pool (opened once in
-// TestMain — #0091) or skips if TEST_DATABASE_URL was unset, truncating the
-// subscribers tables on entry only so the test starts from a clean slate.
-// Mirrors the helper in internal/subscribers/store_test.go; this package
-// already serializes DB-backed test packages via testdb.Lock in
-// main_test.go, so truncating a table another concurrently-running package
-// also owns is safe — only one package holds the advisory lock at a time.
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset.
+//
+// #0091 round two: this used to TRUNCATE the subscribers tables on every
+// call. It no longer does: both tests here already seed through
+// uniqueSignupEmail(), so no two tests' rows collide, and the table only
+// needs to start clean once — done in main_test.go's TestMain — not before
+// every test.
 func signupTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	truncateSubscribers(t, testDBPool)
 	return testDBPool
-}
-
-func truncateSubscribers(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := pool.Exec(ctx,
-		`TRUNCATE subscriber_interests, subscribers RESTART IDENTITY CASCADE`,
-	); err != nil {
-		t.Fatalf("truncate subscriber tables: %v", err)
-	}
 }
 
 // TestSignupSurvivesUnparseableXFF is #0080's acceptance test. Before the

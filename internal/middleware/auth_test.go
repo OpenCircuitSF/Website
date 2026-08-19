@@ -13,28 +13,39 @@ import (
 )
 
 // testPool returns the package's single shared pool (opened once in
-// TestMain — #0091) or skips if TEST_DATABASE_URL was unset. It truncates
-// the users and sessions tables on entry only, so every test still starts
-// from a clean slate. Mirrors the helper in internal/auth.
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset.
+//
+// #0091 round two: this used to TRUNCATE the users/sessions tables on every
+// call. It no longer does — see main_test.go's entry truncate and
+// uniqueAuthEmail/uniqueSessionToken below, which now carry isolation the
+// same way internal/subscribers does: every test seeds rows under a value
+// unique to that test, so no two tests' rows can ever collide, and the
+// table only needs to start clean once (done in TestMain), not before every
+// test.
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	truncate(t, testDBPool)
 	return testDBPool
 }
 
-// truncate clears the tables this suite touches (sessions depends on users).
-func truncate(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := pool.Exec(ctx,
-		`TRUNCATE sessions, passkey_credentials, audit_log, users
-		 RESTART IDENTITY CASCADE`); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
+// uniqueAuthEmail returns an email unique to this test/call, prefixed with
+// label for readability in a failure message or a manual query. #0091 round
+// two: replaces the fixed literals ("valid@example.com" etc.) this file
+// used to insertUser with, which only worked because every test truncated
+// the users table first.
+func uniqueAuthEmail(label string) string {
+	return "zz-mw-" + label + "-" + time.Now().UTC().Format("20060102T150405.000000000") + "@example.com"
+}
+
+// uniqueSessionToken returns a session token unique to this test/call, for
+// the same reason as uniqueAuthEmail: sessions.token has no uniqueness
+// requirement in the schema, but two tests sharing a literal token value
+// would let one test's insertSession silently shadow another's row once the
+// table stopped being truncated between tests.
+func uniqueSessionToken(label string) string {
+	return "zz-mw-tok-" + label + "-" + time.Now().UTC().Format("20060102T150405.000000000")
 }
 
 // insertUser creates a users row and returns its id.
@@ -160,8 +171,9 @@ func TestRequireSession_ExpiredSession401AndReaped(t *testing.T) {
 	pool := testPool(t)
 	store := auth.NewStore(pool)
 
-	uid := insertUser(t, pool, "expired@example.com", false, true)
-	const token = "expired-session-token"
+	email := uniqueAuthEmail("expired")
+	uid := insertUser(t, pool, email, false, true)
+	token := uniqueSessionToken("expired")
 	insertSession(t, pool, uid, token, time.Now().Add(-time.Minute)) // already expired
 
 	next := &captureHandler{}
@@ -185,8 +197,9 @@ func TestRequireSession_ValidSessionAttachesUserAndSlides(t *testing.T) {
 	pool := testPool(t)
 	store := auth.NewStore(pool)
 
-	uid := insertUser(t, pool, "valid@example.com", false, true)
-	const token = "valid-session-token"
+	email := uniqueAuthEmail("valid")
+	uid := insertUser(t, pool, email, false, true)
+	token := uniqueSessionToken("valid")
 	originalExpiry := time.Now().Add(24 * time.Hour) // valid, but well short of 30d
 	insertSession(t, pool, uid, token, originalExpiry)
 	beforeSeen, beforeExp := sessionTimes(t, pool, token)
@@ -209,8 +222,8 @@ func TestRequireSession_ValidSessionAttachesUserAndSlides(t *testing.T) {
 	if next.user.ID != uid {
 		t.Errorf("context user id = %d, want %d", next.user.ID, uid)
 	}
-	if next.user.Email != "valid@example.com" {
-		t.Errorf("context user email = %q, want valid@example.com", next.user.Email)
+	if next.user.Email != email {
+		t.Errorf("context user email = %q, want %q", next.user.Email, email)
 	}
 	if next.user.IsAdmin {
 		t.Error("context user IsAdmin = true, want false")
@@ -234,8 +247,9 @@ func TestRequireSession_DeactivatedUser401(t *testing.T) {
 	pool := testPool(t)
 	store := auth.NewStore(pool)
 
-	uid := insertUser(t, pool, "deactivated@example.com", false, false) // active = false
-	const token = "deactivated-session-token"
+	email := uniqueAuthEmail("deactivated")
+	uid := insertUser(t, pool, email, false, false) // active = false
+	token := uniqueSessionToken("deactivated")
 	insertSession(t, pool, uid, token, time.Now().Add(24*time.Hour)) // session itself is valid
 
 	next := &captureHandler{}
@@ -256,12 +270,12 @@ func TestRequireAdmin_NonAdmin403_Admin200(t *testing.T) {
 	pool := testPool(t)
 	store := auth.NewStore(pool)
 
-	adminID := insertUser(t, pool, "admin@example.com", true, true)
-	const adminToken = "admin-session-token"
+	adminID := insertUser(t, pool, uniqueAuthEmail("admin"), true, true)
+	adminToken := uniqueSessionToken("admin")
 	insertSession(t, pool, adminID, adminToken, time.Now().Add(24*time.Hour))
 
-	userID := insertUser(t, pool, "regular@example.com", false, true)
-	const userToken = "regular-session-token"
+	userID := insertUser(t, pool, uniqueAuthEmail("regular"), false, true)
+	userToken := uniqueSessionToken("regular")
 	insertSession(t, pool, userID, userToken, time.Now().Add(24*time.Hour))
 
 	// Compose the real guard chain: RequireSession then RequireAdmin.

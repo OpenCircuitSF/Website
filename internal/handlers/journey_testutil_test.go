@@ -16,29 +16,21 @@ import (
 )
 
 // journeyTestPool returns the package's single shared pool (opened once in
-// TestMain — #0091) or skips if TEST_DATABASE_URL was unset, truncating
-// subscribers/subscriber_interests/audit_log on entry only (never
-// `interests` -- it carries the seeded taxonomy every test in this batch
-// resolves slugs against, mirroring subscribeTestPool/interestsTestPool's
-// shared convention).
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset.
+//
+// #0091 round two: this used to TRUNCATE subscribers/subscriber_interests/
+// audit_log on every call. It no longer does — every test in this batch
+// already seeds through journeyUniqueEmail(t), so no two tests' rows
+// collide, and the tables only need to start clean once (main_test.go's
+// TestMain), not before every test. `interests` was never truncated here to
+// begin with — it carries the seeded taxonomy every test in this batch
+// resolves slugs against.
 func journeyTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	truncateJourneyTables(t, testDBPool)
 	return testDBPool
-}
-
-func truncateJourneyTables(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := pool.Exec(ctx,
-		`TRUNCATE subscriber_interests, subscribers, audit_log RESTART IDENTITY CASCADE`,
-	); err != nil {
-		t.Fatalf("truncate journey tables: %v", err)
-	}
 }
 
 // journeySeededInterestID resolves a production taxonomy slug (seeded by

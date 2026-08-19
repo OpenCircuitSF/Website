@@ -14,30 +14,37 @@ import (
 
 // testPool returns the package's single shared pool (opened once in
 // TestMain, see main_test.go — #0091) or skips if TEST_DATABASE_URL was
-// unset. It truncates the subscribers/subscriber_interests tables (both
-// purely structural, unlike interests which carries seed data — safe to
-// wipe between tests) on entry only: every test truncates before it runs,
-// so the table is guaranteed clean at the start of every test including the
-// first, and a second truncate in cleanup would only ever re-clean a table
-// the next test's own entry-truncate is about to clean anyway.
+// unset.
+//
+// #0091 round two: this used to TRUNCATE subscriber_interests/subscribers
+// on every call (i.e. at the top of every test). Measured clean on an idle
+// machine, that truncate was the dominant remaining cost after the pool
+// became shared: ~1.4s/test, 71.9s for the package's 50 tests, because a
+// full-table TRUNCATE takes a heavy lock regardless of how little data is
+// in the table.
+//
+// The isolation property a per-test truncate buys — "no test sees another
+// test's rows" — doesn't actually require the table to be physically empty.
+// It only requires that no two tests' rows ever collide under a query one
+// of them runs. Every test in this file already seeds its subscribers
+// through uniqueEmail(t) (a nanosecond-timestamped local-part), and every
+// assertion that reads back rows either filters by the specific id/email a
+// test itself created (store.FindByEmail, store.GetByID, a WHERE
+// subscriber_id = created.ID query, …) or — where it lists by status or
+// interest — treats the result as "contains mine, does not contain the
+// other test's known-excluded row" rather than asserting an exact global
+// count. See TestIsolation_UniqueDataNeverCollides below for the collision
+// case made concrete and deliberately broken.
+//
+// So the table only needs to be clean once, before the first test — done
+// in TestMain — not before every test. testPool no longer truncates; it
+// just hands back the shared pool (or skips).
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	truncate(t, testDBPool)
 	return testDBPool
-}
-
-func truncate(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := pool.Exec(ctx,
-		`TRUNCATE subscriber_interests, subscribers RESTART IDENTITY CASCADE`,
-	); err != nil {
-		t.Fatalf("truncate subscriber tables: %v", err)
-	}
 }
 
 // seededInterestID resolves a production taxonomy slug (seeded by
@@ -60,12 +67,28 @@ func uniqueEmail(t *testing.T) string {
 	return fmt.Sprintf("zz-test-%d@example.com", time.Now().UnixNano())
 }
 
+// uniqueRawToken returns a manage_token/confirm_token-shaped value unique to
+// this call, for the raw-SQL UNIQUE-constraint tests below that need a
+// column other than the one they're deliberately duplicating to stay
+// collision-free across a `-count=2` repeat. label just keeps two calls in
+// the same test visually distinct in a failure message.
+func uniqueRawToken(t *testing.T, label string) string {
+	t.Helper()
+	return fmt.Sprintf("zz-test-raw-token-%s-%d", label, time.Now().UnixNano())
+}
+
 func TestCreate_NormalizesEmailAndGeneratesTokens(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	now := time.Now().UTC().Truncate(time.Second)
 
-	raw := "  Zz-Test-Mixed-Case+ABC@Example.COM  "
+	// #0091 round two: this package no longer truncates between tests (see
+	// testPool's doc comment), so the literal address this test used to
+	// hardcode would collide with its own row on a second `-count=2`
+	// iteration. suffix keeps the case/whitespace/+tag shape the test is
+	// actually exercising while making the address unique per call.
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	raw := "  Zz-Test-Mixed-Case+ABC-" + suffix + "@Example.COM  "
 	sub, err := store.Create(context.Background(), NewSignup{
 		Email:           raw,
 		SignupIP:        "203.0.113.7",
@@ -79,7 +102,7 @@ func TestCreate_NormalizesEmailAndGeneratesTokens(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	wantEmail := "zz-test-mixed-case+abc@example.com"
+	wantEmail := "zz-test-mixed-case+abc-" + suffix + "@example.com"
 	if sub.Email != wantEmail {
 		t.Errorf("Email = %q, want %q", sub.Email, wantEmail)
 	}
@@ -118,13 +141,19 @@ func TestCreate_PreservesGmailDotsAndPlusTags(t *testing.T) {
 	store := NewStore(pool)
 	now := time.Now()
 
+	// #0091 round two: this package no longer truncates between tests, so a
+	// literal address would collide with its own row on a second
+	// `-count=2` iteration. suffix keeps the dot/+tag/whitespace shape each
+	// case is actually exercising while making every address unique per
+	// call.
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	cases := []struct {
 		in   string
 		want string
 	}{
-		{"J.O.H.N.zztest@gmail.com", "j.o.h.n.zztest@gmail.com"}, // dots preserved, only case-folded
-		{"jane.zztest+workshops@gmail.com", "jane.zztest+workshops@gmail.com"},
-		{"  Spacey.Zztest@Example.com  ", "spacey.zztest@example.com"}, // only trim + lowercase
+		{"J.O.H.N.zztest-" + suffix + "@gmail.com", "j.o.h.n.zztest-" + suffix + "@gmail.com"}, // dots preserved, only case-folded
+		{"jane.zztest+workshops-" + suffix + "@gmail.com", "jane.zztest+workshops-" + suffix + "@gmail.com"},
+		{"  Spacey.Zztest-" + suffix + "@Example.com  ", "spacey.zztest-" + suffix + "@example.com"}, // only trim + lowercase
 	}
 	for _, c := range cases {
 		sub, err := store.Create(context.Background(), NewSignup{Email: c.in, ConfirmTTL: time.Hour}, now)
@@ -698,18 +727,28 @@ func TestDB_StatusCheckConstraint(t *testing.T) {
 	}
 }
 
+// #0091 round two: every field these three raw-INSERT tests don't
+// deliberately duplicate (the whole point of a UNIQUE-constraint test is
+// duplicating exactly one column) must itself be unique per call. This
+// package no longer truncates between tests, so a literal like
+// 'zz-test-raw-token-3' or 'zz-test-a@example.com' — fine when every test
+// started from an empty table — collides with its own prior row on a
+// second `-count=2` iteration and fails on the FIRST insert, before the
+// test ever reaches the duplicate-column assertion it's actually about.
+// uniqueEmail(t) and uniqueRawToken(t) below exist for exactly this.
+
 func TestDB_EmailUniqueConstraint(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 	email := uniqueEmail(t)
 
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO subscribers (email, manage_token) VALUES ($1, 'zz-test-raw-token-3')`, email,
+		`INSERT INTO subscribers (email, manage_token) VALUES ($1, $2)`, email, uniqueRawToken(t, "3"),
 	); err != nil {
 		t.Fatalf("first raw insert: %v", err)
 	}
 	_, err := pool.Exec(ctx,
-		`INSERT INTO subscribers (email, manage_token) VALUES ($1, 'zz-test-raw-token-4')`, email)
+		`INSERT INTO subscribers (email, manage_token) VALUES ($1, $2)`, email, uniqueRawToken(t, "4"))
 	if err == nil {
 		t.Fatal("second raw insert with duplicate email succeeded; want UNIQUE violation")
 	}
@@ -721,12 +760,12 @@ func TestDB_ManageTokenUniqueConstraint(t *testing.T) {
 	token := fmt.Sprintf("zz-test-shared-token-%d", time.Now().UnixNano())
 
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO subscribers (email, manage_token) VALUES ('zz-test-a@example.com', $1)`, token,
+		`INSERT INTO subscribers (email, manage_token) VALUES ($1, $2)`, uniqueEmail(t), token,
 	); err != nil {
 		t.Fatalf("first raw insert: %v", err)
 	}
 	_, err := pool.Exec(ctx,
-		`INSERT INTO subscribers (email, manage_token) VALUES ('zz-test-b@example.com', $1)`, token)
+		`INSERT INTO subscribers (email, manage_token) VALUES ($1, $2)`, uniqueEmail(t), token)
 	if err == nil {
 		t.Fatal("second raw insert with duplicate manage_token succeeded; want UNIQUE violation")
 	}
@@ -739,13 +778,13 @@ func TestDB_ConfirmTokenUniqueConstraint(t *testing.T) {
 
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO subscribers (email, manage_token, confirm_token)
-		 VALUES ('zz-test-c@example.com', 'zz-test-raw-token-5', $1)`, token,
+		 VALUES ($1, $2, $3)`, uniqueEmail(t), uniqueRawToken(t, "5"), token,
 	); err != nil {
 		t.Fatalf("first raw insert: %v", err)
 	}
 	_, err := pool.Exec(ctx,
 		`INSERT INTO subscribers (email, manage_token, confirm_token)
-		 VALUES ('zz-test-d@example.com', 'zz-test-raw-token-6', $1)`, token)
+		 VALUES ($1, $2, $3)`, uniqueEmail(t), uniqueRawToken(t, "6"), token)
 	if err == nil {
 		t.Fatal("second raw insert with duplicate confirm_token succeeded; want UNIQUE violation")
 	}
@@ -1469,38 +1508,52 @@ func TestStatusCounts_AllFiveStatusesPresentAndAccurate(t *testing.T) {
 	_ = pending
 }
 
-// TestIsolation_TruncateOnEntryLeavesExactlyOneRow is #0091's isolation
-// proof. The package moved from a fresh pgxpool.Pool truncated before and
-// after every test to a single pool (opened once in TestMain) truncated
-// once, on entry, per test. That change must not let one test see another
-// test's rows.
+// TestIsolation_UniqueDataNeverCollides is #0091 round two's isolation
+// proof. The package no longer truncates before every test (see testPool's
+// doc comment) — the table now accumulates rows across the whole binary
+// run (and across every prior run of the whole suite against this
+// database). Isolation instead rests entirely on every test seeding its
+// rows under a value from uniqueEmail(t), unique enough that no two tests',
+// or two -count repeats', rows ever share an email.
 //
-// This test seeds exactly one subscriber and asserts the table holds
-// exactly one row. If testPool's entry truncate were skipped, ran against
-// the wrong pool, or only worked for the first test in the binary, a row
-// left behind by whichever test ran before this one -- or, under
-// `-count=2`, by this same test's own prior iteration -- would make the
-// count wrong and fail the assertion.
+// This test seeds a subscriber under a fresh uniqueEmail(t) and asserts
+// exactly one row exists FOR THAT EMAIL — deliberately not a whole-table
+// count, which is no longer meaningful once the table isn't truncated per
+// test. If uniqueEmail stopped being unique (the actual mechanism holding
+// up isolation now), a second seed under the same email would either
+// collide with the table's UNIQUE(email) constraint (store.Create returns
+// an error) or, if that were somehow bypassed, this count would read 2
+// instead of 1.
 //
-// Run with `-count=2 -shuffle=on` (see #0091's work log for the exact
-// invocation and output) to prove this holds across repeats and across
-// test orderings, not just in single-run position-dependent luck.
-func TestIsolation_TruncateOnEntryLeavesExactlyOneRow(t *testing.T) {
+// That failure mode is demonstrated, not just asserted by construction: see
+// issues/0091.md's Work log for the output of deliberately hardcoding
+// uniqueEmail to return a fixed string and running the package with
+// -count=2 — the second iteration's own store.Create fails outright with a
+// duplicate-key error, proving uniqueness is load-bearing here rather than
+// incidental.
+//
+// Run with `-count=2 -shuffle=on` to prove the (correct) mechanism holds
+// across repeats and across test orderings, not just in single-run
+// position-dependent luck.
+func TestIsolation_UniqueDataNeverCollides(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	now := time.Now()
 
-	if _, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now); err != nil {
+	email := uniqueEmail(t)
+	if _, err := store.Create(context.Background(), NewSignup{Email: email, ConfirmTTL: time.Hour}, now); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	var count int
-	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM subscribers`).Scan(&count); err != nil {
-		t.Fatalf("count subscribers: %v", err)
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscribers WHERE email = $1`, email,
+	).Scan(&count); err != nil {
+		t.Fatalf("count subscribers for %s: %v", email, err)
 	}
 	if count != 1 {
-		t.Fatalf("subscribers table has %d rows after seeding exactly one, want 1 -- "+
-			"isolation broken: another test's row (or a prior -count iteration's row) "+
-			"survived into this test", count)
+		t.Fatalf("subscribers table has %d rows for the email this test just seeded, want 1 -- "+
+			"isolation broken: uniqueEmail collided with another test's (or a prior -count "+
+			"iteration's) row", count)
 	}
 }

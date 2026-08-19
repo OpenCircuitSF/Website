@@ -4,31 +4,36 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // auditTestPool returns the package's single shared pool (opened once in
-// TestMain — #0091) or skips if TEST_DATABASE_URL was unset. It truncates
-// audit_log (and the users it references) on entry only, so each test still
-// starts clean.
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset.
+//
+// #0091 round two: this used to TRUNCATE audit_log/users on every call. It
+// no longer does — seedUser now takes a per-test-unique email (see below),
+// so the tables only need to start clean once, done in TestMain.
 func auditTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	pool := testDBPool
-	if _, err := pool.Exec(context.Background(),
-		`TRUNCATE audit_log, users RESTART IDENTITY CASCADE`); err != nil {
-		t.Fatalf("truncate audit_log: %v", err)
-	}
-	return pool
+	return testDBPool
 }
 
 // seedUser inserts an active account and returns its id, so an entry's
-// actor_id/user_id can satisfy the FK constraint.
-func seedUser(t *testing.T, pool *pgxpool.Pool, email string) int64 {
+// actor_id/user_id can satisfy the FK constraint. label becomes a prefix of
+// a generated unique email, not the literal address: #0091 round two
+// stopped truncating users between tests, so a literal like
+// "actor@example.com" (fine when every test started from an empty table)
+// would collide with the same test's own row on a second `-count=2`
+// iteration, and no assertion in this file depends on the exact address,
+// only on the returned id.
+func seedUser(t *testing.T, pool *pgxpool.Pool, label string) int64 {
 	t.Helper()
+	email := "zz-audit-" + label + "-" + time.Now().UTC().Format("20060102T150405.000000000") + "@example.com"
 	var id int64
 	if err := pool.QueryRow(context.Background(),
 		`INSERT INTO users (email, is_admin, active, created_at)
@@ -46,7 +51,7 @@ func ptr(v int64) *int64 { return &v }
 // including the round-tripped metadata JSON.
 func TestWrite_FullEntryPersists(t *testing.T) {
 	pool := auditTestPool(t)
-	actor := seedUser(t, pool, "actor@example.com")
+	actor := seedUser(t, pool, "actor")
 	logger := New(pool)
 
 	target := int64(42)
@@ -159,8 +164,8 @@ func TestWrite_NilActorAndTargetStoreNull(t *testing.T) {
 // both are persisted independently.
 func TestWrite_PartialActorWithUser(t *testing.T) {
 	pool := auditTestPool(t)
-	admin := seedUser(t, pool, "admin@example.com")
-	victim := seedUser(t, pool, "victim@example.com")
+	admin := seedUser(t, pool, "admin")
+	victim := seedUser(t, pool, "victim")
 	logger := New(pool)
 
 	if err := logger.Write(context.Background(), Entry{
@@ -207,7 +212,7 @@ func TestWrite_PartialActorWithUser(t *testing.T) {
 // the commit side: a successful ceremony's audit rows are actually there.
 func TestWriteTx_RollsBackWithTransaction(t *testing.T) {
 	pool := auditTestPool(t)
-	actor := seedUser(t, pool, "rollback@example.com")
+	actor := seedUser(t, pool, "rollback")
 	logger := New(pool)
 	ctx := context.Background()
 

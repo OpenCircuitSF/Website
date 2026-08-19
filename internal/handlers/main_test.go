@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -32,6 +33,34 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	testDBPool = pool
+
+	// #0091 round two: subscribeTestPool (subscribe_test.go) and
+	// journeyTestPool (journey_testutil_test.go) used to TRUNCATE
+	// subscriber_interests/subscribers/audit_log on every call — the
+	// dominant remaining cost once the pool itself became shared (see
+	// issues/0091.md). Both groups now seed exclusively through
+	// subscribeUniqueEmail(t)/journeyUniqueEmail(t), so no two tests' rows
+	// collide and the tables only need to start clean once, here, before
+	// the first test.
+	//
+	// credsTestPool, settingsTestPool, interestsTestPool and
+	// adminSubscribersTestPool still truncate their own table sets per
+	// test (unchanged by #0091 round two — see issues/0091.md's Work log
+	// for why that group was left as-is), so this entry truncate only
+	// needs to cover the tables those groups don't already guarantee clean
+	// before their own first test.
+	if testDBPool != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, truncErr := testDBPool.Exec(ctx,
+			`TRUNCATE subscriber_interests, subscribers, audit_log RESTART IDENTITY CASCADE`)
+		cancel()
+		if truncErr != nil {
+			fmt.Fprintf(os.Stderr, "testdb: entry truncate failed: %v\n", truncErr)
+			testDBPool.Close()
+			release()
+			os.Exit(1)
+		}
+	}
 
 	code := m.Run()
 

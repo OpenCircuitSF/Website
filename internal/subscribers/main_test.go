@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -29,6 +30,28 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	testDBPool = pool
+
+	// #0091 round two: the per-test TRUNCATE that survived the first pass
+	// (see store_test.go's testPool) was itself the dominant remaining cost
+	// (~1.4s/test on an idle machine, 71.9s total for 50 tests). Every test
+	// in this package already seeds its own rows through uniqueEmail(t), so
+	// no two tests' rows ever collide — truncating once, here, before any
+	// test runs, is enough to guarantee a clean starting state without
+	// paying a TRUNCATE per test. See testPool's doc comment for the
+	// isolation argument in full, and TestIsolation_UniqueDataNeverCollides
+	// for the proof.
+	if testDBPool != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, truncErr := testDBPool.Exec(ctx,
+			`TRUNCATE subscriber_interests, subscribers RESTART IDENTITY CASCADE`)
+		cancel()
+		if truncErr != nil {
+			fmt.Fprintf(os.Stderr, "testdb: entry truncate failed: %v\n", truncErr)
+			testDBPool.Close()
+			release()
+			os.Exit(1)
+		}
+	}
 
 	code := m.Run()
 

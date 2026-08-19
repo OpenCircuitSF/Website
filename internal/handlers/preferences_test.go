@@ -62,7 +62,15 @@ func TestPreferencesHandler_Get_ValidToken_ReturnsMaskedEmailAndInterests(t *tes
 	now := time.Now()
 
 	pcbID := journeySeededInterestID(t, pool, "pcb-design")
-	created, err := subs.Create(ctx, subscribers.NewSignup{Email: "zz-journeytest-pref@example.com", ConfirmTTL: time.Hour}, now)
+	// #0091 round two: journeyUniqueEmail(t), not a fixed literal — this
+	// package no longer truncates between tests (see journeyTestPool), so a
+	// literal email would collide with this same test's own row on a second
+	// `-count=2` iteration. The masked form is computed from the generated
+	// email (first + last char of the local part, "email" package's masking
+	// rule — see the table-driven mask tests below) instead of being a fixed
+	// string, since the local part is no longer fixed either.
+	email := journeyUniqueEmail(t)
+	created, err := subs.Create(ctx, subscribers.NewSignup{Email: email, ConfirmTTL: time.Hour}, now)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -77,8 +85,10 @@ func TestPreferencesHandler_Get_ValidToken_ReturnsMaskedEmailAndInterests(t *tes
 		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
 	}
 	resp := decodePreferencesResponse(t, rr)
-	if resp.Email != "z•••••f@example.com" {
-		t.Errorf("Email = %q, want masked form", resp.Email)
+	local, domain, _ := strings.Cut(email, "@")
+	wantMasked := string(local[0]) + "•••••" + string(local[len(local)-1]) + "@" + domain
+	if resp.Email != wantMasked {
+		t.Errorf("Email = %q, want masked form %q", resp.Email, wantMasked)
 	}
 	if len(resp.Interests) != 1 || resp.Interests[0] != "pcb-design" {
 		t.Errorf("Interests = %v, want [\"pcb-design\"]", resp.Interests)

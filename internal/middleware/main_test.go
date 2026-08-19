@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -27,6 +28,26 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	testDBPool = pool
+
+	// #0091 round two: testPool (auth_test.go) and signupTestPool
+	// (clientip_signup_test.go) used to TRUNCATE their respective tables on
+	// every call. Both suites now seed rows under a per-test-unique value
+	// (uniqueAuthEmail/uniqueSessionToken, uniqueSignupEmail) instead, so the
+	// tables only need to start clean once, here, before any test runs.
+	if testDBPool != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, truncErr := testDBPool.Exec(ctx,
+			`TRUNCATE subscriber_interests, subscribers,
+			          sessions, passkey_credentials, audit_log, users
+			 RESTART IDENTITY CASCADE`)
+		cancel()
+		if truncErr != nil {
+			fmt.Fprintf(os.Stderr, "testdb: entry truncate failed: %v\n", truncErr)
+			testDBPool.Close()
+			release()
+			os.Exit(1)
+		}
+	}
 
 	code := m.Run()
 
