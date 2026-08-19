@@ -205,3 +205,82 @@ func TestWrite_PartialActorWithUser(t *testing.T) {
 		t.Errorf("actor=%d user=%d, want actor=%d user=%d", gotActor, gotUser, admin, victim)
 	}
 }
+
+// TestWriteTx_RollsBackWithTransaction proves the transactional property every
+// auth ceremony (registration.go, login.go, recovery.go, users.go in
+// internal/auth) relies on when it calls WriteTx against its own already-open
+// tx: the audit row is not an independent write that lands regardless of the
+// surrounding transaction's outcome — it lives or dies with tx, exactly like
+// every other statement run against it.
+//
+// This is the general mechanism behind the #0008 acceptance criterion "audit
+// rows are written inside the ceremony transaction": every ceremony's audit
+// write goes through this exact WriteTx(ctx, tx, entry) call (verified by
+// inspection — see the ## Verification note in issues/0008.md), so proving
+// the primitive itself rolls back with tx proves every ceremony's audit write
+// does too, without needing to force a genuine failure at the specific point
+// right after each ceremony's own audit write — which would require adding
+// fault-injection hooks to production registration/login/recovery code
+// (out of scope for a test-only pass; see the issue's Gotchas for why no
+// natural, non-flaky failure point exists after those audit writes). Pair
+// this with internal/auth's TestAudit_RegistrationAndLoginSeams, which proves
+// the commit side: a successful ceremony's audit rows are actually there.
+func TestWriteTx_RollsBackWithTransaction(t *testing.T) {
+	pool := auditTestPool(t)
+	actor := seedUser(t, pool, "rollback@example.com")
+	logger := New(pool)
+	ctx := context.Background()
+
+	countRows := func() int {
+		var n int
+		if err := pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM audit_log WHERE actor_id = $1 AND action = $2`,
+			actor, ActionAccountLogin,
+		).Scan(&n); err != nil {
+			t.Fatalf("count audit rows: %v", err)
+		}
+		return n
+	}
+
+	entry := Entry{
+		ActorID:    &actor,
+		UserID:     &actor,
+		Action:     ActionAccountLogin,
+		TargetType: TargetUser,
+		TargetID:   &actor,
+		IP:         "203.0.113.9",
+	}
+
+	// Rolled-back transaction: the row must never become visible.
+	txRolledBack, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx (rollback case): %v", err)
+	}
+	if err := logger.WriteTx(ctx, txRolledBack, entry); err != nil {
+		t.Fatalf("WriteTx (rollback case): %v", err)
+	}
+	if err := txRolledBack.Rollback(ctx); err != nil {
+		t.Fatalf("rollback tx: %v", err)
+	}
+	if n := countRows(); n != 0 {
+		t.Fatalf("audit rows after rollback = %d, want 0 — WriteTx did not honor the transaction it was given", n)
+	}
+
+	// Committed transaction: the same entry through the same call, but
+	// committed instead of rolled back — the row must now be visible. This is
+	// the paired positive control: it isolates the assertion above to
+	// "rollback discards it" rather than "WriteTx never writes anything."
+	txCommitted, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx (commit case): %v", err)
+	}
+	if err := logger.WriteTx(ctx, txCommitted, entry); err != nil {
+		t.Fatalf("WriteTx (commit case): %v", err)
+	}
+	if err := txCommitted.Commit(ctx); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+	if n := countRows(); n != 1 {
+		t.Fatalf("audit rows after commit = %d, want 1", n)
+	}
+}

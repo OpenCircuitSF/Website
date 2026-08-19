@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/descope/virtualwebauthn"
@@ -67,6 +69,18 @@ func newServiceForRP(t *testing.T, pool *pgxpool.Pool, mailer Mailer, rpID, rpOr
 // and it fails if the two literal constants above are transposed, since
 // prodRPID then carries a scheme and NewWebAuthn's config validation rejects
 // it outright (go-webauthn's ValidateRPID forbids a scheme component).
+//
+// It also carries the suffix assertion that pins the apex/www relationship
+// itself (the fix for the second review bounce): go-webauthn and
+// virtualwebauthn both accept any RPID/origin pair, so nothing upstream of
+// this test would ever fail if RPID and the origin host were entirely
+// unrelated strings. This assertion reads wa.Config.RPOrigins[0]'s host
+// directly off the constructed instance and requires it to equal RPID or be
+// a subdomain of it — the one property that actually encodes "one passkey
+// covers apex and www" (CLAUDE.md §7). It fails, for example, if
+// prodRPOrigin were "https://www.completely-different.test": the config
+// would still be well-formed and NewWebAuthn would still succeed, but the
+// origin host shares no suffix relationship with the RP ID.
 func TestNewWebAuthn_ConfiguredRPPinsProductionApexAndWWW(t *testing.T) {
 	cfg := &config.Config{WebAuthnRPID: prodRPID, WebAuthnRPOrigin: prodRPOrigin}
 	wa, err := NewWebAuthn(cfg)
@@ -85,6 +99,22 @@ func TestNewWebAuthn_ConfiguredRPPinsProductionApexAndWWW(t *testing.T) {
 	// entire reason RP_ID is set to the apex rather than to a specific host.
 	if wa.Config.RPID == wa.Config.RPOrigins[0] {
 		t.Fatalf("RPID must not equal the full RPOrigins[0] string; got both = %q", wa.Config.RPID)
+	}
+
+	// The suffix assertion itself: the configured origin's host must equal
+	// the RP ID or be a subdomain of it. Neither go-webauthn nor
+	// virtualwebauthn enforces this — the ceremony would succeed for any
+	// well-formed RPID/origin pair regardless — so this is the only check in
+	// the suite that actually pins the registrable-domain relationship
+	// rather than merely observing that the ceremony didn't reject it.
+	u, err := url.Parse(wa.Config.RPOrigins[0])
+	if err != nil {
+		t.Fatalf("parse RPOrigins[0] %q: %v", wa.Config.RPOrigins[0], err)
+	}
+	host := u.Hostname()
+	if host != wa.Config.RPID && !strings.HasSuffix(host, "."+wa.Config.RPID) {
+		t.Errorf("origin host %q is not the RP ID %q nor a subdomain of it; "+
+			"a passkey scoped to the RP ID would not be usable on this origin", host, wa.Config.RPID)
 	}
 }
 
@@ -173,19 +203,29 @@ func TestFinishLogin_RejectsOriginOutsideConfiguredScope(t *testing.T) {
 	}
 }
 
-// TestCredentialRegisteredUnderApexRPID_ValidForWWWOrigin is the pinning test
-// for the apex/www relationship itself: a credential registered with RP ID
-// set to the bare apex (prodRPID, "opencircuitsf.com") is used, end to end,
-// through both registration and login, against the www origin
-// (prodRPOrigin, "https://www.opencircuitsf.com") — exactly the ceremony a
-// real browser on www.opencircuitsf.com runs. RPID and RPOrigin are
-// deliberately different strings throughout; the ceremony succeeding anyway
-// is the entire reason RP_ID is configured as the apex rather than as a
-// specific host (CLAUDE.md §7: "apex — one passkey covers apex and www").
+// TestCeremonySucceedsWhenRPIDDiffersFromOriginHost drives a full
+// registration + login ceremony end to end with RP ID set to the bare apex
+// (prodRPID, "opencircuitsf.com") and origin set to the www host
+// (prodRPOrigin, "https://www.opencircuitsf.com") — the pair a real browser
+// on www.opencircuitsf.com would present.
+//
+// What this test proves — and, after the second review bounce, what it does
+// NOT prove: it demonstrates that a ceremony succeeds end-to-end when RPID
+// and the origin host are not byte-identical. It does NOT, on its own, pin
+// the apex/www *relationship* — neither go-webauthn nor virtualwebauthn
+// enforces "origin host must be RPID or a subdomain of it", so this exact
+// test body would pass unchanged if prodRPID/prodRPOrigin were replaced with
+// any other pair of unrelated, individually well-formed strings (e.g.
+// RPID="totally-unrelated.invalid", origin="https://nonsense.example.test").
+// That gap is exactly what the suffix assertion in
+// TestNewWebAuthn_ConfiguredRPPinsProductionApexAndWWW closes; this test is
+// still worth keeping because it proves the ceremony machinery itself (not
+// just config construction) tolerates RPID and origin host being different
+// strings, which the apex/www split fundamentally requires.
 //
 // This test uses prodRPID/prodRPOrigin, not testRPID/testRPOrigin, so it does
 // not move if the shared test constants are ever edited or transposed.
-func TestCredentialRegisteredUnderApexRPID_ValidForWWWOrigin(t *testing.T) {
+func TestCeremonySucceedsWhenRPIDDiffersFromOriginHost(t *testing.T) {
 	pool := testPool(t)
 	setRegistrationsEnabled(t, pool, true)
 	mailer := &recordingMailer{}
