@@ -1,0 +1,412 @@
+/* ── Design tokens ──────────────────────────────────────────────────────────── */
+:root {
+  /* Allow the browser to theme native controls to match */
+  color-scheme: light dark;
+
+  /* Color — neutrals */
+  --bg-page:    #f6f7f8;
+  --bg-panel:   #ffffff;
+  --bg-subtle:  #f0f1f3;
+  --bg-header:  #eceef0;
+
+  /* Color — text */
+  --text:        #1c1e21;
+  --text-muted:  #65676b;
+  --text-faint:  #8a8d91;
+
+  /* Color — borders */
+  --border:        #d3d6da;
+  --border-strong: #b7bbc0;
+
+  /* Color — accent (single) */
+  --accent:        #2d5fa3;
+  --accent-hover:  #244e87;
+  --accent-text:   #ffffff;
+  --accent-subtle: #e7eef7;
+
+  /*
+   * Chart series (categorical, #0104) — CampaignClicksChart's per-link
+   * lines/legend swatches. Six hand-picked hue slots (never generated/
+   * cycled — see docs/frontend.md and the dataviz skill's color-formula):
+   * fixed order.
+   *
+   * Contrast: each slot's ratio against this file's own --bg-panel surfaces
+   * (#ffffff light / #161b22 dark) was computed directly from the WCAG 2.1
+   * relative-luminance formula (no external tool or script — an earlier
+   * comment here cited a scripts/validate_palette.js that was never
+   * committed to this repo; #0104 review finding 5). Measured ratios:
+   *
+   *   slot      light    dark
+   *   1 #2a78d6  4.42    4.75
+   *   2 #eb6834  3.20    4.45
+   *   3 #1baf7a  2.82    5.08
+   *   4 #c98500  3.07    5.63   (raised from #eda100's 2.17 — below any
+   *                              applicable threshold; now shares the
+   *                              dark-mode value on both sides)
+   *   5 #e87ba4  2.69    4.38
+   *   6 #008300  4.95    3.50
+   *
+   * WCAG 1.4.11 (non-text contrast, the criterion that actually applies to a
+   * 2px chart stroke) wants 3:1. Slots 3 and 5 stay below that in light mode
+   * as a DOCUMENTED trade-off: distinguishing "which line is which" doesn't
+   * rely on raw line color alone even there — the "Other" series is dashed
+   * (not just a color), each series has its own dot markers, and the
+   * accessible data table (below, in every chart component) is the true
+   * fallback for reading exact values. The always-visible legend does NOT
+   * fix low line-color contrast the way an earlier version of this comment
+   * claimed: the legend swatch is the identical color at the identical
+   * contrast, so it tells you which label a already-visible line carries —
+   * it cannot make a hard-to-see line easier to see in the first place.
+   *
+   * --series-other is the synthetic "Other" fold (internal/clicks/stats.go
+   * seriesByLinkCap) and deliberately reuses --text-faint rather than a 7th
+   * hue, so a fold of many links reads as a muted aggregate — never mistaken
+   * for a named link's identity — the same "(none)" convention UTMBarChart
+   * already uses for an absent UTM value.
+   */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #c98500;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-other: var(--text-faint);
+
+  /* Status (use sparingly) */
+  --success: #2e7d32;
+  --danger:  #c62828;
+  --warning: #b26a00;
+
+  /* Status surface tints — used for badge backgrounds and notice boxes */
+  --success-subtle: #e8f5e9;
+  --danger-subtle:  #fdecea;
+  --danger-hover-bg: #fbeaea;
+
+  /* Spacing — 8px grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Typography */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+          Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-sm:   12px;
+  --fs-base: 13px;
+  --fs-md:   15px;
+  --fs-lg:   18px;
+  --fs-xl:   22px;
+  --lh:      1.45;
+
+  /* Shape */
+  --radius:   4px;
+  --border-w: 1px;
+}
+
+/* ── Reset ──────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg-page);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-base);
+  line-height: var(--lh);
+}
+
+/* ── Layout ─────────────────────────────────────────────────────────────────── */
+.app-shell {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4);
+}
+
+.app-header {
+  background: var(--bg-panel);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.app-title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  margin: 0;
+}
+
+/* Two-column portal layout (optional) */
+.app-columns {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: var(--space-4);
+}
+
+@media (max-width: 720px) {
+  .app-columns { grid-template-columns: 1fr; }
+}
+
+/* ── Form controls ───────────────────────────────────────────────────────────── */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="search"],
+input[type="number"],
+input[type="url"],
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"],
+select,
+textarea {
+  font-family: var(--font);
+  font-size: var(--fs-base);
+  color: var(--text);
+  background: var(--bg-panel);
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  width: 100%;
+  /* Explicit line-height + a token-derived min-height so EVERY control is the
+     same height — including an empty datetime-local, which (after
+     -webkit-appearance:none, #0053) has no content to give it height and would
+     otherwise render shorter than the text inputs. min-height (border-box) ==
+     one line of text + vertical padding + borders, i.e. a single-line input's
+     natural height, so the text inputs are unchanged and the date field grows
+     to match. */
+  line-height: var(--lh);
+  min-height: calc(var(--fs-base) * var(--lh) + var(--space-2) * 2 + var(--border-w) * 2);
+}
+
+/* iOS Safari renders date/time inputs as NATIVE controls that ignore width:100%
+   and render at their own intrinsic width, overflowing the panel (the Expires
+   field, #0053). Removing the native appearance makes them behave like a normal
+   styleable box that obeys width:100% / min-width:0, matching the text inputs.
+   min-width:0 alone was not enough; -webkit-appearance:none is the load-bearing
+   part. (box-sizing:border-box already comes from the universal * reset above.) */
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+label {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: var(--space-1);
+}
+
+.field { margin-bottom: var(--space-3); }
+
+/* ── Tables — dense and bordered ─────────────────────────────────────────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-base);
+}
+
+thead th {
+  text-align: left;
+  background: var(--bg-header);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-w) solid var(--border);
+}
+
+tbody td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-w) solid var(--border);
+  vertical-align: middle;
+}
+
+tbody tr:hover { background: var(--bg-subtle); }
+
+tbody tr:last-child td { border-bottom: none; }
+
+/* ── Utilities ───────────────────────────────────────────────────────────────── */
+.text-muted { color: var(--text-muted); }
+.text-faint { color: var(--text-faint); }
+
+.divider {
+  height: var(--border-w);
+  background: var(--border);
+  border: none;
+  margin: var(--space-3) 0;
+}
+
+.row { display: flex; gap: var(--space-2); align-items: center; }
+.spread { justify-content: space-between; }
+
+.badge {
+  display: inline-block;
+  font-size: var(--fs-sm);
+  padding: 1px var(--space-2);
+  border-radius: 10px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Status badge variants */
+.badge-success {
+  background: var(--success-subtle);
+  color: var(--success);
+}
+.badge-danger {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+.badge-muted {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+/* Screenreader-only */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Inline error / notice text */
+.text-error  { color: var(--danger); font-size: var(--fs-sm); margin: var(--space-1) 0 0; }
+.text-notice { color: var(--success); font-size: var(--fs-sm); margin: var(--space-1) 0 0; }
+.text-warn   { color: var(--warning); font-size: var(--fs-sm); margin: var(--space-1) 0 0; }
+
+/* ── Scroll container — wrap wide tables on mobile ──────────────────────────── */
+/*
+ * Apply .table-scroll around any <table> that must scroll horizontally on narrow
+ * screens instead of stacking.  The wrapper clips overflow and gives a stable
+ * column-layout context; -webkit-overflow-scrolling: touch provides momentum
+ * scrolling on iOS Safari.
+ */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── Mobile responsive — 480px and below ────────────────────────────────────── */
+/*
+ * Breakpoint covers iPhone SE (375px) through iPhone Pro Max (430px) and up to
+ * 480px.  All rules are additive — desktop layout is untouched above 480px.
+ * No hardcoded hex colours; all values use design tokens.
+ */
+@media (max-width: 480px) {
+  /* Tighten the shell gutter so cards don't clip the viewport edge */
+  .app-shell {
+    padding: var(--space-4) var(--space-3);
+  }
+
+  /*
+   * Stack the app-header so title / nav-tabs / sign-out don't fight for space.
+   * Consumers (Dashboard, Account, Admin) each define .nav-tabs and .nav-tab
+   * as scoped Svelte styles; the shared header layout change is done here.
+   */
+  .app-header {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-3);
+  }
+
+  /* Ensure the app title takes its natural width and doesn't grow */
+  .app-title {
+    flex: none;
+  }
+}
+
+/* ── Dark mode — OS-driven palette override ──────────────────────────────────
+ *
+ * Only the token VALUES change here; every component already uses the tokens
+ * so nothing else needs to change. Palette choices:
+ *
+ *   Backgrounds  — GitHub Primer dark scale: page #0d1117, panel #161b22,
+ *                  subtle #1c2128, header #21262d
+ *   Text         — near-white body, dimmed muted/faint
+ *   Borders      — slightly lighter than panels for subtle definition
+ *   Accent       — #4d8ef0 (brightened from #2d5fa3 for dark-bg contrast)
+ *   Status tints — darker, desaturated backgrounds that stay readable
+ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Neutrals */
+    --bg-page:    #0d1117;
+    --bg-panel:   #161b22;
+    --bg-subtle:  #1c2128;
+    --bg-header:  #21262d;
+
+    /* Text */
+    --text:        #e6edf3;
+    --text-muted:  #8b949e;
+    /* #0051 review: faint raised from #6e7681 (3.77:1) to clear WCAG AA 4.5:1
+       on panel — used for 10px chart axis labels (ClicksChart). */
+    --text-faint:  #8b949e;
+
+    /* Borders */
+    --border:        #30363d;
+    --border-strong: #484f58;
+
+    /* Accent — brightened for dark-bg legibility */
+    --accent:        #4d8ef0;
+    --accent-hover:  #6aa3f5;
+    --accent-text:   #0d1117;
+    --accent-subtle: #1a2a45;
+
+    /* Chart series (categorical, #0104) — dark-mode adjustments of the six
+       light-block slots above, brightened for legibility against
+       --bg-panel #161b22 (see the light block's comment for the measured
+       contrast ratios and how they were computed). TWO slots are identical
+       to their light values rather than "steps": --series-6 (#008300), which
+       already clears 3.50:1 against the dark panel unmodified, and
+       --series-4 (#c98500), which became identical when the light value was
+       raised from #eda100 to fix its 2.17:1 light contrast (#0104 review
+       finding 4) — its dark override is now a no-op, kept only so the block
+       lists all six slots in one place.
+       --series-other still resolves via var(--text-faint) above, no
+       separate override needed. */
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+
+    /* Status colours — brighter for dark backgrounds */
+    --success: #3fb950;
+    --danger:  #f85149;
+    --warning: #d29922;
+
+    /* Status surface tints — dark, desaturated fills */
+    --success-subtle: #122519;
+    --danger-subtle:  #2d1212;
+    --danger-hover-bg: #3d1515;
+  }
+}

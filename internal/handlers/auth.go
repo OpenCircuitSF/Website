@@ -1,0 +1,414 @@
+package handlers
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+
+	"github.com/go-webauthn/webauthn/protocol"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
+	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+)
+
+// maxAuthBodyBytes caps request bodies for the auth endpoints. The attestation
+// on finish is the largest payload and is comfortably under this limit.
+const maxAuthBodyBytes = 1 << 20 // 1 MiB
+
+// registrar is the behavior the auth handler needs from the registration
+// service. Depending on the interface (rather than the concrete
+// *auth.RegistrationService) keeps the handler unit-testable with a fake.
+type registrar interface {
+	StartRegistration(ctx context.Context, email, ip string) error
+	VerifyRegistration(ctx context.Context, token string) (*protocol.CredentialCreation, error)
+	FinishRegistration(ctx context.Context, token, deviceName, ip string, r *http.Request) (auth.FinishResult, error)
+}
+
+// authenticator is the behavior the auth handler needs from the login service.
+// As with registrar, depending on an interface keeps the handler unit-testable
+// with a fake.
+type authenticator interface {
+	StartLogin(ctx context.Context, email string) (*protocol.CredentialAssertion, error)
+	FinishLogin(ctx context.Context, ip string, r *http.Request) (auth.LoginResult, error)
+	Logout(ctx context.Context, token, ip string) error
+	// LogoutAll revokes every session for userID ("sign out everywhere",
+	// #0094) and returns the number of sessions revoked.
+	LogoutAll(ctx context.Context, userID int64, email, ip string) (int64, error)
+}
+
+// recoverer is the behavior the auth handler needs from the recovery service.
+// As with registrar/authenticator, depending on an interface keeps the handler
+// unit-testable with a fake.
+type recoverer interface {
+	StartRecovery(ctx context.Context, email, ip string) error
+	VerifyRecovery(ctx context.Context, token string) (*protocol.CredentialCreation, error)
+	FinishRecovery(ctx context.Context, token, deviceName, ip string, r *http.Request) (auth.RecoveryResult, error)
+}
+
+// AuthHandler serves the passkey registration, login, and recovery ceremony
+// routes:
+//
+//	POST /auth/register/start   — submit email, send magic link
+//	GET  /auth/register/verify  — validate token, return WebAuthn options
+//	POST /auth/register/finish  — submit attestation, create account + session
+//	GET  /auth/login/start      — issue an assertion challenge (optional ?email=)
+//	POST /auth/login/finish     — submit assertion, verify, create session
+//	POST /auth/logout           — delete the session, clear the cookie
+//	POST /auth/logout/all       — revoke EVERY session for the caller ("sign out
+//	                               everywhere", #0094), session-guarded
+//	POST /auth/recover          — submit email, send recovery link (generic 200)
+//	GET  /auth/recover/verify   — validate recovery token, return WebAuthn options
+//	POST /auth/recover/finish   — submit attestation, add credential + session
+type AuthHandler struct {
+	reg      registrar
+	login    authenticator
+	recovery recoverer
+	// log records the seven StatusInternalServerError branches below (#0097).
+	// Logging happens here, in the handler, rather than in the three services
+	// behind it: RegistrationService and RecoveryService hold no logger at all,
+	// and only LoginService does (for its own unrelated fire-and-forget mailer
+	// warning), so a service-side approach would have been inconsistent across
+	// the seven sites. The handler is also what decides the request failed, so
+	// one log line per branch lives next to that decision. Never nil after
+	// NewAuthHandler.
+	log *slog.Logger
+}
+
+// NewAuthHandler constructs an AuthHandler over the registration, login, and
+// recovery services. Any dependency may be nil where only a subset of routes is
+// exercised (e.g. existing registration handler tests pass nil for login and
+// recovery). A nil logger falls back to slog.Default(), matching the
+// nil-tolerance convention used by auth.NewLoginService.
+func NewAuthHandler(reg registrar, login authenticator, recovery recoverer, logger *slog.Logger) *AuthHandler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &AuthHandler{reg: reg, login: login, recovery: recovery, log: logger}
+}
+
+// startRequest is the POST /auth/register/start body.
+type startRequest struct {
+	Email string `json:"email"`
+}
+
+// RegisterStart handles POST /auth/register/start.
+func (h *AuthHandler) RegisterStart(w http.ResponseWriter, r *http.Request) {
+	var req startRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	err := h.reg.StartRegistration(r.Context(), req.Email, clientIP(r))
+	switch {
+	case err == nil:
+		// Success — always the same generic message.
+	case errors.Is(err, auth.ErrRegistrationsDisabled):
+		writeError(w, http.StatusForbidden, "Registration closed")
+		return
+	case errors.Is(err, auth.ErrInvalidEmail):
+		writeError(w, http.StatusBadRequest, "invalid email")
+		return
+	case errors.Is(err, auth.ErrEmailRegistered):
+		// Do not reveal whether the email is already registered: respond as if
+		// the email was sent. This avoids leaking account existence.
+	default:
+		h.log.Error("auth: register start failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Check your email"})
+}
+
+// RegisterVerify handles GET /auth/register/verify?token=...
+func (h *AuthHandler) RegisterVerify(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		writeError(w, http.StatusBadRequest, "missing token")
+		return
+	}
+
+	creation, err := h.reg.VerifyRegistration(r.Context(), token)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, creation)
+	case errors.Is(err, auth.ErrTokenInvalid):
+		writeError(w, http.StatusBadRequest, "token invalid or expired")
+	default:
+		h.log.Error("auth: register verify failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+	}
+}
+
+// RegisterFinish handles POST /auth/register/finish. The body is the WebAuthn
+// attestation; the magic-link token is taken from the query string so the
+// attestation JSON is passed to FinishRegistration untouched. An optional
+// device_name query parameter labels the credential.
+func (h *AuthHandler) RegisterFinish(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		writeError(w, http.StatusBadRequest, "missing token")
+		return
+	}
+	deviceName := r.URL.Query().Get("device_name")
+
+	// Cap and buffer the body so FinishRegistration can read the attestation
+	// from a fresh reader (the service re-parses r.Body internally).
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	result, err := h.reg.FinishRegistration(r.Context(), token, deviceName, clientIP(r), r)
+	switch {
+	case err == nil:
+		auth.SetSessionCookie(w, result.SessionToken, result.SessionExpires)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":       result.User.ID,
+			"email":    result.User.Email,
+			"is_admin": result.User.IsAdmin,
+		})
+	case errors.Is(err, auth.ErrTokenInvalid):
+		writeError(w, http.StatusBadRequest, "token invalid or expired")
+	default:
+		// A failed attestation verification or any other error: do not leak
+		// detail to the client.
+		writeError(w, http.StatusBadRequest, "registration failed")
+	}
+}
+
+// loginStartRequest is the optional POST /auth/login/start body. The email may
+// also arrive as a ?email= query parameter; either is optional.
+type loginStartRequest struct {
+	Email string `json:"email"`
+}
+
+// LoginStart handles GET (or POST) /auth/login/start. An optional email narrows
+// the prompt via allowCredentials; absent it, a discoverable (conditional-UI)
+// challenge is issued. The response is the PublicKeyCredentialRequestOptions
+// JSON and is identical regardless of whether the email is registered, so it
+// never leaks account existence.
+func (h *AuthHandler) LoginStart(w http.ResponseWriter, r *http.Request) {
+	email := r.URL.Query().Get("email")
+	// Accept an optional JSON body too, but only if one was actually sent.
+	if email == "" && r.Body != nil && r.ContentLength != 0 {
+		var req loginStartRequest
+		if err := decodeJSON(w, r, &req); err == nil {
+			email = req.Email
+		}
+	}
+
+	assertion, err := h.login.StartLogin(r.Context(), email)
+	if err != nil {
+		h.log.Error("auth: login start failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, assertion)
+}
+
+// LoginFinish handles POST /auth/login/finish. The body is the WebAuthn
+// assertion. On success it sets the session cookie and returns 200; a
+// deactivated account yields 403; any verification failure yields a generic 401.
+func (h *AuthHandler) LoginFinish(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+
+	result, err := h.login.FinishLogin(r.Context(), clientIP(r), r)
+	switch {
+	case err == nil:
+		auth.SetSessionCookie(w, result.SessionToken, result.SessionExpires)
+		writeJSON(w, http.StatusOK, map[string]any{"user_id": result.UserID})
+	case errors.Is(err, auth.ErrAccountDeactivated):
+		writeError(w, http.StatusForbidden, "Account deactivated")
+	default:
+		// Unknown credential, bad signature, consumed/expired challenge, ...:
+		// never reveal which case occurred.
+		writeError(w, http.StatusUnauthorized, "authentication failed")
+	}
+}
+
+// Logout handles POST /auth/logout. It deletes the session row for the cookie
+// (if present) and clears the cookie. It is idempotent and always returns 200.
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(auth.SessionCookieName); err == nil {
+		if derr := h.login.Logout(r.Context(), c.Value, clientIP(r)); derr != nil {
+			// No authenticated user_id is available here: this route runs ahead
+			// of middleware.RequireSession (a stale/unknown cookie must still
+			// clear cleanly), and authenticator.Logout's signature returns only
+			// an error, not the session's owning user, on failure. The repo has
+			// no request-logging middleware at all, so "ip" is included as the
+			// only correlating identifier this line can carry.
+			h.log.Error("auth: logout failed", "err", derr, "ip", clientIP(r))
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+	}
+	clearSessionCookie(w)
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Signed out"})
+}
+
+// LogoutAll handles POST /auth/logout/all — "sign out everywhere" (#0094). It
+// MUST be mounted behind middleware.RequireSession: it reads the authenticated
+// user from the request context (id + email, so the service needs no extra
+// lookup), revokes every session belonging to that account — including this
+// one — and clears the session cookie exactly as Logout does. Idempotent, like
+// Logout: a user with no other live sessions still gets 200 with
+// revoked_count including at least this request's own session.
+func (h *AuthHandler) LogoutAll(w http.ResponseWriter, r *http.Request) {
+	u, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
+	revoked, err := h.login.LogoutAll(r.Context(), u.ID, u.Email, clientIP(r))
+	if err != nil {
+		h.log.Error("auth: logout-all failed", "err", err, "user_id", u.ID)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	clearSessionCookie(w)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"message":       "Signed out everywhere",
+		"revoked_count": revoked,
+	})
+}
+
+// recoverRequest is the POST /auth/recover body.
+type recoverRequest struct {
+	Email string `json:"email"`
+}
+
+// recoverGenericMessage is the single response returned by RecoverStart in
+// every case (account exists or not) so the endpoint never leaks which emails
+// are registered.
+const recoverGenericMessage = "If that email is registered, a recovery link has been sent"
+
+// RecoverStart handles POST /auth/recover. It accepts an email and, only when
+// the account exists and is active, sends a single-use recovery link. The
+// response is always the same generic 200 to prevent account enumeration; only
+// a genuine infrastructure error yields a 500.
+func (h *AuthHandler) RecoverStart(w http.ResponseWriter, r *http.Request) {
+	var req recoverRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := h.recovery.StartRecovery(r.Context(), req.Email, clientIP(r)); err != nil {
+		// The service swallows unknown/inactive/invalid emails (returning nil);
+		// any error here is a real failure (token creation or mail delivery).
+		h.log.Error("auth: recover start failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": recoverGenericMessage})
+}
+
+// RecoverVerify handles GET /auth/recover/verify?token=... It validates the
+// recovery token and returns the WebAuthn options for adding a new credential
+// to the existing account.
+func (h *AuthHandler) RecoverVerify(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		writeError(w, http.StatusBadRequest, "missing token")
+		return
+	}
+
+	creation, err := h.recovery.VerifyRecovery(r.Context(), token)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, creation)
+	case errors.Is(err, auth.ErrTokenInvalid):
+		writeError(w, http.StatusBadRequest, "token invalid or expired")
+	default:
+		h.log.Error("auth: recover verify failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+	}
+}
+
+// RecoverFinish handles POST /auth/recover/finish. The body is the WebAuthn
+// attestation; the recovery token is taken from the query string so the
+// attestation JSON is passed to FinishRecovery untouched. An optional
+// device_name query parameter labels the new credential. On success it adds the
+// credential to the existing account, sets the session cookie, and returns 200.
+func (h *AuthHandler) RecoverFinish(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		writeError(w, http.StatusBadRequest, "missing token")
+		return
+	}
+	deviceName := r.URL.Query().Get("device_name")
+
+	// Cap and buffer the body so FinishRecovery can read the attestation from a
+	// fresh reader (the service re-parses r.Body internally).
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	result, err := h.recovery.FinishRecovery(r.Context(), token, deviceName, clientIP(r), r)
+	switch {
+	case err == nil:
+		auth.SetSessionCookie(w, result.SessionToken, result.SessionExpires)
+		writeJSON(w, http.StatusOK, map[string]any{"user_id": result.UserID})
+	case errors.Is(err, auth.ErrTokenInvalid):
+		writeError(w, http.StatusBadRequest, "token invalid or expired")
+	default:
+		// A failed attestation verification or any other error: do not leak detail.
+		writeError(w, http.StatusBadRequest, "recovery failed")
+	}
+}
+
+// clearSessionCookie expires the session cookie in the browser, mirroring the
+// attributes set by auth.SetSessionCookie so the deletion is accepted.
+func clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     auth.SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+// decodeJSON reads a JSON body into v with a size cap, rejecting unknown fields
+// and trailing data so malformed requests fail cleanly.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	return nil
+}
+
+// writeJSON writes v as a JSON response with the given status code. Encoding a
+// fixed-shape value cannot meaningfully fail; the error is ignored so a second
+// header write is never attempted.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// writeError writes a JSON error envelope: {"error":"<message>"}.
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}

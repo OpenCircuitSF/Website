@@ -1,0 +1,700 @@
+package auth
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/descope/virtualwebauthn"
+	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/config"
+)
+
+// registeredAccount bundles everything a login test needs after running the
+// real registration ceremony against a virtual authenticator: the created user,
+// the virtual relying party / authenticator / credential, and the raw user
+// handle the authenticator reports as the assertion's userHandle.
+type registeredAccount struct {
+	user          CreatedUser
+	rp            virtualwebauthn.RelyingParty
+	authenticator virtualwebauthn.Authenticator
+	cred          virtualwebauthn.Credential
+}
+
+// registerWithAuthenticator drives a full start→verify→finish registration so a
+// real credential is created and owned by a virtual authenticator the caller
+// keeps, enabling a subsequent genuine login assertion. The authenticator is
+// configured with a user handle and holds the credential, mimicking a synced
+// discoverable passkey.
+func registerWithAuthenticator(t *testing.T, svc *RegistrationService, pool *pgxpool.Pool, email string) registeredAccount {
+	t.Helper()
+	ctx := context.Background()
+
+	if err := svc.StartRegistration(ctx, email, ""); err != nil {
+		t.Fatalf("StartRegistration(%s): %v", email, err)
+	}
+	token := lastPendingToken(t, pool, email)
+	creation, err := svc.VerifyRegistration(ctx, token)
+	if err != nil {
+		t.Fatalf("VerifyRegistration(%s): %v", email, err)
+	}
+
+	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "ShortLinks", Origin: testRPOrigin}
+	// The user handle is the random 16-byte value the registration options carry;
+	// the authenticator reports it back on every assertion (discoverable login).
+	handle, ok := creation.Response.User.ID.(protocol.URLEncodedBase64)
+	if !ok {
+		t.Fatalf("user.id type = %T, want protocol.URLEncodedBase64", creation.Response.User.ID)
+	}
+	authenticator := virtualwebauthn.NewAuthenticatorWithOptions(virtualwebauthn.AuthenticatorOptions{
+		UserHandle: []byte(handle),
+	})
+	cred := virtualwebauthn.NewCredential(virtualwebauthn.KeyTypeEC2)
+
+	optionsJSON, err := json.Marshal(creation)
+	if err != nil {
+		t.Fatalf("marshal options: %v", err)
+	}
+	attOpts, err := virtualwebauthn.ParseAttestationOptions(string(optionsJSON))
+	if err != nil {
+		t.Fatalf("ParseAttestationOptions: %v", err)
+	}
+	attestationResponse := virtualwebauthn.CreateAttestationResponse(rp, authenticator, cred, *attOpts)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/finish?token="+token,
+		bytes.NewReader([]byte(attestationResponse)))
+	result, err := svc.FinishRegistration(ctx, token, "Synced Passkey", "", req)
+	if err != nil {
+		t.Fatalf("FinishRegistration(%s): %v", email, err)
+	}
+
+	authenticator.AddCredential(cred)
+	return registeredAccount{user: result.User, rp: rp, authenticator: authenticator, cred: cred}
+}
+
+// driveLogin runs StartLogin then produces a real assertion with the virtual
+// authenticator and runs FinishLogin, returning the result. email is passed to
+// StartLogin (empty exercises the discoverable path).
+func driveLogin(t *testing.T, loginSvc *LoginService, acct registeredAccount, email string) (LoginResult, error) {
+	t.Helper()
+	ctx := context.Background()
+
+	assertion, err := loginSvc.StartLogin(ctx, email)
+	if err != nil {
+		t.Fatalf("StartLogin: %v", err)
+	}
+	optionsJSON, err := json.Marshal(assertion)
+	if err != nil {
+		t.Fatalf("marshal assertion options: %v", err)
+	}
+	assertOpts, err := virtualwebauthn.ParseAssertionOptions(string(optionsJSON))
+	if err != nil {
+		t.Fatalf("ParseAssertionOptions: %v", err)
+	}
+	assertionResponse := virtualwebauthn.CreateAssertionResponse(acct.rp, acct.authenticator, acct.cred, *assertOpts)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login/finish",
+		bytes.NewReader([]byte(assertionResponse)))
+	return loginSvc.FinishLogin(ctx, "", req)
+}
+
+// newLoginService builds a LoginService over the same test pool and RP config as
+// the registration service. No auditor, and a plain recordingMailer that no
+// test in this file asserts on — tests that need to observe or fail the
+// mailer use newLoginServiceWithMailer instead.
+func newLoginService(t *testing.T, pool *pgxpool.Pool) *LoginService {
+	t.Helper()
+	return newLoginServiceWithMailer(t, pool, &recordingMailer{})
+}
+
+// newLoginServiceWithMailer is like newLoginService but takes an explicit
+// mailer, letting #0094 LogoutAll tests inject a recordingMailer they can
+// inspect (or stub to error) without an auditor getting in the way.
+func newLoginServiceWithMailer(t *testing.T, pool *pgxpool.Pool, mailer Mailer) *LoginService {
+	t.Helper()
+	cfg := &config.Config{WebAuthnRPID: testRPID, WebAuthnRPOrigin: testRPOrigin}
+	wa, err := NewWebAuthn(cfg)
+	if err != nil {
+		t.Fatalf("NewWebAuthn: %v", err)
+	}
+	return NewLoginService(NewStore(pool), wa, mailer, nil, nil)
+}
+
+// TestLogin_EndToEnd_DiscoverableCreatesSession is the key proof: a credential
+// is registered with a real virtual authenticator, then a real discoverable
+// login assertion (no email) is verified and a NEW session row is created.
+func TestLogin_EndToEnd_DiscoverableCreatesSession(t *testing.T) {
+	pool := testPool(t)
+	setRegistrationsEnabled(t, pool, true)
+	regSvc := newService(t, pool, &recordingMailer{}, "")
+	loginSvc := newLoginService(t, pool)
+
+	acct := registerWithAuthenticator(t, regSvc, pool, "login-disc@example.com")
+	sessionsBefore := countSessionsForUser(t, pool, acct.user.ID)
+
+	result, err := driveLogin(t, loginSvc, acct, "")
+	if err != nil {
+		t.Fatalf("FinishLogin (discoverable): %v", err)
+	}
+	if result.UserID != acct.user.ID {
+		t.Errorf("result UserID = %d, want %d", result.UserID, acct.user.ID)
+	}
+	if result.SessionToken == "" {
+		t.Fatal("session token is empty")
+	}
+	if n := countSessions(t, pool, result.SessionToken); n != 1 {
+		t.Errorf("sessions for new token = %d, want 1", n)
+	}
+	if after := countSessionsForUser(t, pool, acct.user.ID); after != sessionsBefore+1 {
+		t.Errorf("user sessions = %d, want %d (one new)", after, sessionsBefore+1)
+	}
+	// last_login_at must be set; the challenge must have been consumed.
+	if !lastLoginSet(t, pool, acct.user.ID) {
+		t.Error("users.last_login_at was not set")
+	}
+	if n := countAuthChallenges(t, pool); n != 0 {
+		t.Errorf("authentication challenges after finish = %d, want 0 (consumed)", n)
+	}
+}
+
+// TestLogin_EndToEnd_WithEmailAllowCredentials drives the non-discoverable path:
+// StartLogin is given the account email so allowCredentials is populated, and a
+// real assertion still verifies and issues a session.
+func TestLogin_EndToEnd_WithEmailAllowCredentials(t *testing.T) {
+	pool := testPool(t)
+	setRegistrationsEnabled(t, pool, true)
+	regSvc := newService(t, pool, &recordingMailer{}, "")
+	loginSvc := newLoginService(t, pool)
+
+	const email = "login-email@example.com"
+	acct := registerWithAuthenticator(t, regSvc, pool, email)
+
+	// Confirm StartLogin actually scopes allowCredentials to this account.
+	assertion, err := loginSvc.StartLogin(context.Background(), email)
+	if err != nil {
+		t.Fatalf("StartLogin: %v", err)
+	}
+	if len(assertion.Response.AllowedCredentials) != 1 {
+		t.Fatalf("allowCredentials = %d, want 1", len(assertion.Response.AllowedCredentials))
+	}
+	if !bytes.Equal(assertion.Response.AllowedCredentials[0].CredentialID, acct.cred.ID) {
+		t.Errorf("allowCredentials id mismatch")
+	}
+
+	result, err := driveLogin(t, loginSvc, acct, email)
+	if err != nil {
+		t.Fatalf("FinishLogin (email): %v", err)
+	}
+	if n := countSessions(t, pool, result.SessionToken); n != 1 {
+		t.Errorf("sessions for token = %d, want 1", n)
+	}
+}
+
+// TestLogin_DeactivatedReturns403NoSession asserts a deactivated account cannot
+// log in (403) and that no session is created even with a valid assertion.
+func TestLogin_DeactivatedReturns403NoSession(t *testing.T) {
+	pool := testPool(t)
+	setRegistrationsEnabled(t, pool, true)
+	regSvc := newService(t, pool, &recordingMailer{}, "")
+	loginSvc := newLoginService(t, pool)
+
+	acct := registerWithAuthenticator(t, regSvc, pool, "deactivated@example.com")
+	setUserActive(t, pool, acct.user.ID, false)
+
+	// Registration itself created one session; deactivated login must add none.
+	sessionsBefore := countSessionsForUser(t, pool, acct.user.ID)
+
+	_, err := driveLogin(t, loginSvc, acct, "")
+	if err != ErrAccountDeactivated {
+		t.Fatalf("FinishLogin error = %v, want ErrAccountDeactivated", err)
+	}
+	if after := countSessionsForUser(t, pool, acct.user.ID); after != sessionsBefore {
+		t.Errorf("sessions for deactivated user = %d, want %d (no new session)", after, sessionsBefore)
+	}
+}
+
+// TestLogin_SyncedZeroSignCountAcceptedSilently asserts the iCloud-Keychain
+// case: stored sign_count 0 and assertion sign_count 0 is accepted, the login
+// succeeds, and sign_count stays 0.
+func TestLogin_SyncedZeroSignCountAcceptedSilently(t *testing.T) {
+	pool := testPool(t)
+	setRegistrationsEnabled(t, pool, true)
+	regSvc := newService(t, pool, &recordingMailer{}, "")
+	loginSvc := newLoginService(t, pool)
+
+	acct := registerWithAuthenticator(t, regSvc, pool, "synced@example.com")
+	// Virtual EC2 credential starts at counter 0; registration stored 0.
+	if got := storedSignCount(t, pool, acct.cred.ID); got != 0 {
+		t.Fatalf("stored sign_count after registration = %d, want 0", got)
+	}
+
+	if _, err := driveLogin(t, loginSvc, acct, ""); err != nil {
+		t.Fatalf("FinishLogin: %v", err)
+	}
+	if got := storedSignCount(t, pool, acct.cred.ID); got != 0 {
+		t.Errorf("stored sign_count after synced login = %d, want 0 (unchanged)", got)
+	}
+}
+
+// TestLogin_CloneCaseStoredCounterPreserved asserts the clone rule: when the
+// stored sign_count is > 0 and the assertion returns a value <= stored, the
+// login is still accepted (warning logged) and the stored counter is left
+// unchanged rather than rolled backward.
+func TestLogin_CloneCaseStoredCounterPreserved(t *testing.T) {
+	pool := testPool(t)
+	setRegistrationsEnabled(t, pool, true)
+	regSvc := newService(t, pool, &recordingMailer{}, "")
+	loginSvc := newLoginService(t, pool)
+
+	acct := registerWithAuthenticator(t, regSvc, pool, "clone@example.com")
+	// Simulate a device-bound credential that has previously advanced its
+	// counter to 5. The virtual authenticator still asserts at counter 0, which
+	// is <= 5 → the clone path.
+	setStoredSignCount(t, pool, acct.cred.ID, 5)
+
+	if _, err := driveLogin(t, loginSvc, acct, ""); err != nil {
+		t.Fatalf("FinishLogin: %v", err)
+	}
+	if got := storedSignCount(t, pool, acct.cred.ID); got != 5 {
+		t.Errorf("stored sign_count after clone-case login = %d, want 5 (preserved, not rolled back)", got)
+	}
+}
+
+// TestLogout_DeletesSessionRow registers + logs in to create a session, then
+// confirms Logout removes exactly that row.
+func TestLogout_DeletesSessionRow(t *testing.T) {
+	pool := testPool(t)
+	setRegistrationsEnabled(t, pool, true)
+	regSvc := newService(t, pool, &recordingMailer{}, "")
+	loginSvc := newLoginService(t, pool)
+
+	acct := registerWithAuthenticator(t, regSvc, pool, "logout@example.com")
+	result, err := driveLogin(t, loginSvc, acct, "")
+	if err != nil {
+		t.Fatalf("FinishLogin: %v", err)
+	}
+	if n := countSessions(t, pool, result.SessionToken); n != 1 {
+		t.Fatalf("precondition: sessions = %d, want 1", n)
+	}
+
+	if err := loginSvc.Logout(context.Background(), result.SessionToken, ""); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	if n := countSessions(t, pool, result.SessionToken); n != 0 {
+		t.Errorf("sessions after logout = %d, want 0", n)
+	}
+
+	// Logout is idempotent: a second call (or unknown token) is not an error.
+	if err := loginSvc.Logout(context.Background(), result.SessionToken, ""); err != nil {
+		t.Errorf("idempotent Logout returned error: %v", err)
+	}
+	if err := loginSvc.Logout(context.Background(), "", ""); err != nil {
+		t.Errorf("Logout(empty) returned error: %v", err)
+	}
+}
+
+// --- helpers specific to login tests ---
+
+func setUserActive(t *testing.T, pool *pgxpool.Pool, userID int64, active bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := pool.Exec(ctx, `UPDATE users SET active = $1 WHERE id = $2`, active, userID); err != nil {
+		t.Fatalf("set user active: %v", err)
+	}
+}
+
+func storedSignCount(t *testing.T, pool *pgxpool.Pool, credID []byte) int64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var n int64
+	if err := pool.QueryRow(ctx,
+		`SELECT sign_count FROM passkey_credentials WHERE credential_id = $1`, credID).Scan(&n); err != nil {
+		t.Fatalf("read sign_count: %v", err)
+	}
+	return n
+}
+
+func setStoredSignCount(t *testing.T, pool *pgxpool.Pool, credID []byte, n int64) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := pool.Exec(ctx,
+		`UPDATE passkey_credentials SET sign_count = $1 WHERE credential_id = $2`, n, credID); err != nil {
+		t.Fatalf("set sign_count: %v", err)
+	}
+}
+
+func countSessionsForUser(t *testing.T, pool *pgxpool.Pool, userID int64) int {
+	return scanCount(t, pool, `SELECT COUNT(*) FROM sessions WHERE user_id = $1`, userID)
+}
+
+func countAuthChallenges(t *testing.T, pool *pgxpool.Pool) int {
+	return scanCount(t, pool, `SELECT COUNT(*) FROM webauthn_challenges WHERE purpose = 'authentication'`)
+}
+
+func lastLoginSet(t *testing.T, pool *pgxpool.Pool, userID int64) bool {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var set bool
+	if err := pool.QueryRow(ctx,
+		`SELECT last_login_at IS NOT NULL FROM users WHERE id = $1`, userID).Scan(&set); err != nil {
+		t.Fatalf("read last_login_at: %v", err)
+	}
+	return set
+}
+
+// storedBackupFlags reads the backup_eligible and backup_state columns for a
+// credential, asserting both columns exist (migration 000009 applied).
+func storedBackupFlags(t *testing.T, pool *pgxpool.Pool, credID []byte) (eligible, state bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := pool.QueryRow(ctx,
+		`SELECT backup_eligible, backup_state FROM passkey_credentials WHERE credential_id = $1`,
+		credID).Scan(&eligible, &state); err != nil {
+		t.Fatalf("read backup flags: %v", err)
+	}
+	return eligible, state
+}
+
+// registerWithBackupEligibleAuthenticator is like registerWithAuthenticator but
+// creates a virtualwebauthn.Authenticator with BackupEligible=true and
+// BackupState=true, mimicking an iCloud Keychain / synced passkey. This is the
+// exact scenario that was broken before the fix: registration succeeded but
+// every subsequent login failed with a BE flag inconsistency.
+func registerWithBackupEligibleAuthenticator(t *testing.T, svc *RegistrationService, pool *pgxpool.Pool, email string) registeredAccount {
+	t.Helper()
+	ctx := context.Background()
+
+	if err := svc.StartRegistration(ctx, email, ""); err != nil {
+		t.Fatalf("StartRegistration(%s): %v", email, err)
+	}
+	token := lastPendingToken(t, pool, email)
+	creation, err := svc.VerifyRegistration(ctx, token)
+	if err != nil {
+		t.Fatalf("VerifyRegistration(%s): %v", email, err)
+	}
+
+	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "ShortLinks", Origin: testRPOrigin}
+	handle, ok := creation.Response.User.ID.(protocol.URLEncodedBase64)
+	if !ok {
+		t.Fatalf("user.id type = %T, want protocol.URLEncodedBase64", creation.Response.User.ID)
+	}
+	// BackupEligible=true simulates an iCloud Keychain / synced multi-device passkey.
+	authenticator := virtualwebauthn.NewAuthenticatorWithOptions(virtualwebauthn.AuthenticatorOptions{
+		UserHandle:     []byte(handle),
+		BackupEligible: true,
+		BackupState:    true,
+	})
+	cred := virtualwebauthn.NewCredential(virtualwebauthn.KeyTypeEC2)
+
+	optionsJSON, err := json.Marshal(creation)
+	if err != nil {
+		t.Fatalf("marshal options: %v", err)
+	}
+	attOpts, err := virtualwebauthn.ParseAttestationOptions(string(optionsJSON))
+	if err != nil {
+		t.Fatalf("ParseAttestationOptions: %v", err)
+	}
+	attestationResponse := virtualwebauthn.CreateAttestationResponse(rp, authenticator, cred, *attOpts)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register/finish?token="+token,
+		bytes.NewReader([]byte(attestationResponse)))
+	result, err := svc.FinishRegistration(ctx, token, "iCloud Passkey", "", req)
+	if err != nil {
+		t.Fatalf("FinishRegistration(%s): %v", email, err)
+	}
+
+	authenticator.AddCredential(cred)
+	return registeredAccount{user: result.User, rp: rp, authenticator: authenticator, cred: cred}
+}
+
+// TestLogin_BackupEligibleCredentialSucceeds is the primary regression test for
+// issue #0047. Before the fix, go-webauthn's ValidateLogin would reject every
+// assertion from an iCloud Keychain passkey with "Backup Eligible flag
+// inconsistency detected during login validation" because the stored credential
+// was rehydrated with BE=false while the assertion carried BE=true.
+//
+// This test registers with a backup-eligible (BE=true) virtual authenticator,
+// confirms the flags are persisted, and confirms a subsequent login succeeds.
+func TestLogin_BackupEligibleCredentialSucceeds(t *testing.T) {
+	pool := testPool(t)
+	setRegistrationsEnabled(t, pool, true)
+	regSvc := newService(t, pool, &recordingMailer{}, "")
+	loginSvc := newLoginService(t, pool)
+
+	acct := registerWithBackupEligibleAuthenticator(t, regSvc, pool, "icloud@example.com")
+
+	// Confirm the flags were persisted at registration (not just left at DEFAULT FALSE).
+	eligible, state := storedBackupFlags(t, pool, acct.cred.ID)
+	if !eligible {
+		t.Error("backup_eligible = false after registration, want true")
+	}
+	if !state {
+		t.Error("backup_state = false after registration, want true")
+	}
+
+	// This login must succeed — it would have failed before the fix.
+	result, err := driveLogin(t, loginSvc, acct, "")
+	if err != nil {
+		t.Fatalf("FinishLogin with backup-eligible credential: %v", err)
+	}
+	if result.UserID != acct.user.ID {
+		t.Errorf("result UserID = %d, want %d", result.UserID, acct.user.ID)
+	}
+	if result.SessionToken == "" {
+		t.Fatal("session token is empty")
+	}
+	if n := countSessions(t, pool, result.SessionToken); n != 1 {
+		t.Errorf("sessions for new token = %d, want 1", n)
+	}
+}
+
+// TestLogin_BackupFlagsRoundTripStoreLoad verifies that backup_eligible and
+// backup_state survive a full store→load cycle through InsertCredential /
+// CredentialByID without corruption. This guards against any future regression
+// where the columns are present but not wired to the scan path.
+func TestLogin_BackupFlagsRoundTripStoreLoad(t *testing.T) {
+	pool := testPool(t)
+	setRegistrationsEnabled(t, pool, true)
+	regSvc := newService(t, pool, &recordingMailer{}, "")
+
+	acct := registerWithBackupEligibleAuthenticator(t, regSvc, pool, "roundtrip@example.com")
+
+	store := NewStore(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rec, _, err := store.CredentialByID(ctx, acct.cred.ID)
+	if err != nil {
+		t.Fatalf("CredentialByID: %v", err)
+	}
+	if !rec.BackupEligible {
+		t.Error("CredentialRecord.BackupEligible = false, want true")
+	}
+	if !rec.BackupState {
+		t.Error("CredentialRecord.BackupState = false, want true")
+	}
+
+	// Also verify the flags are returned via CredentialsForUser (used by
+	// allowCredentials + credentialsFromRecords during login start/finish).
+	recs, err := store.CredentialsForUser(ctx, acct.user.ID)
+	if err != nil {
+		t.Fatalf("CredentialsForUser: %v", err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("CredentialsForUser returned %d records, want 1", len(recs))
+	}
+	if !recs[0].BackupEligible {
+		t.Error("CredentialsForUser record BackupEligible = false, want true")
+	}
+	if !recs[0].BackupState {
+		t.Error("CredentialsForUser record BackupState = false, want true")
+	}
+}
+
+// registerWithUnverifiedAuthenticator registers a normal synced passkey but
+// returns an authenticator configured to report UV=false on every assertion,
+// simulating Safari over Screen Sharing where Touch ID is unreachable and macOS
+// performs no local verification. Registration itself still asserts UV=true —
+// only the later login assertions are unverified — which mirrors reality: the
+// passkey was enrolled while sitting at the Mac and is used remotely later.
+func registerWithUnverifiedAuthenticator(t *testing.T, svc *RegistrationService, pool *pgxpool.Pool, email string) registeredAccount {
+	t.Helper()
+	acct := registerWithAuthenticator(t, svc, pool, email)
+	acct.authenticator.Options.UserNotVerified = true
+	return acct
+}
+
+// TestStartLogin_RequestsUserVerificationRequired is the primary regression test
+// for issue #0092. StartLogin called BeginLogin / BeginDiscoverableLogin with no
+// options, so the emitted assertion options inherited the (unset) RP-level
+// AuthenticatorSelection and went out with UserVerification == "" — which the
+// browser interprets as the spec default "preferred". FinishLogin meanwhile
+// enforces VerificationRequired, so any client that legitimately answered a
+// "preferred" request with UV=false could never sign in.
+//
+// Both login paths must request "required": the allowCredentials path (email
+// resolves to an account with credentials, BeginLogin) and the discoverable
+// path (no or unknown email, BeginDiscoverableLogin).
+func TestStartLogin_RequestsUserVerificationRequired(t *testing.T) {
+	pool := testPool(t)
+	setRegistrationsEnabled(t, pool, true)
+	regSvc := newService(t, pool, &recordingMailer{}, "")
+	loginSvc := newLoginService(t, pool)
+
+	const email = "uv-required@example.com"
+	registerWithAuthenticator(t, regSvc, pool, email)
+
+	cases := []struct {
+		name  string
+		email string
+	}{
+		{name: "allowCredentials path (known email)", email: email},
+		{name: "discoverable path (no email)", email: ""},
+		{name: "discoverable path (unknown email)", email: "nobody@example.com"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertion, err := loginSvc.StartLogin(context.Background(), tc.email)
+			if err != nil {
+				t.Fatalf("StartLogin(%q): %v", tc.email, err)
+			}
+			if got := assertion.Response.UserVerification; got != protocol.VerificationRequired {
+				t.Errorf("UserVerification = %q, want %q", got, protocol.VerificationRequired)
+			}
+
+			// Assert the wire form too: the browser reads the JSON, not the Go
+			// struct, and an omitempty tag or rename would silently drop it.
+			optionsJSON, err := json.Marshal(assertion)
+			if err != nil {
+				t.Fatalf("marshal assertion options: %v", err)
+			}
+			if !bytes.Contains(optionsJSON, []byte(`"userVerification":"required"`)) {
+				t.Errorf("assertion options JSON missing userVerification=required: %s", optionsJSON)
+			}
+		})
+	}
+}
+
+// TestLogin_UnverifiedAssertionRejected is the enforcement half of #0092. The
+// fix aligns the request with what FinishLogin already enforced; it must not be
+// "fixed" in the other direction by relaxing enforcement to accept UV=false.
+// This is a passkey-only admin app with no second factor, so an assertion whose
+// User Verified flag is unset must never produce a session.
+func TestLogin_UnverifiedAssertionRejected(t *testing.T) {
+	pool := testPool(t)
+	setRegistrationsEnabled(t, pool, true)
+	regSvc := newService(t, pool, &recordingMailer{}, "")
+	loginSvc := newLoginService(t, pool)
+
+	acct := registerWithUnverifiedAuthenticator(t, regSvc, pool, "unverified@example.com")
+	sessionsBefore := countSessionsForUser(t, pool, acct.user.ID)
+
+	result, err := driveLogin(t, loginSvc, acct, "")
+	if !errors.Is(err, ErrLoginFailed) {
+		t.Fatalf("FinishLogin with UV=false assertion: err = %v, want ErrLoginFailed", err)
+	}
+	if result.SessionToken != "" {
+		t.Error("a session token was issued for an unverified assertion")
+	}
+	if after := countSessionsForUser(t, pool, acct.user.ID); after != sessionsBefore {
+		t.Errorf("user sessions = %d, want %d (no new session)", after, sessionsBefore)
+	}
+}
+
+// TestCeremonyWarnArgs covers the three shapes of error that reach a ceremony
+// warn site, per issue #0093: a *protocol.Error carrying DevInfo (the DevInfo
+// must be surfaced as a separate "info" attribute), a *protocol.Error with an
+// empty DevInfo, and an error that is not a *protocol.Error at all (both must
+// log exactly as before, with no empty attribute appended).
+func TestCeremonyWarnArgs(t *testing.T) {
+	withInfo := protocol.ErrVerification.WithInfo("User verification required but flag not set by authenticator")
+	noInfo := protocol.ErrVerification
+
+	cases := []struct {
+		name     string
+		err      error
+		wantLen  int
+		wantInfo string
+	}{
+		{
+			name:     "protocol.Error with DevInfo",
+			err:      withInfo,
+			wantLen:  4,
+			wantInfo: "User verification required but flag not set by authenticator",
+		},
+		{
+			name:    "protocol.Error with empty DevInfo",
+			err:     noInfo,
+			wantLen: 2,
+		},
+		{
+			name:    "wrapped protocol.Error with DevInfo",
+			err:     fmt.Errorf("auth: validating: %w", withInfo),
+			wantLen: 4,
+			// errors.As unwraps, so the DevInfo is still found.
+			wantInfo: "User verification required but flag not set by authenticator",
+		},
+		{
+			name:    "plain error",
+			err:     errors.New("boom"),
+			wantLen: 2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := ceremonyWarnArgs(tc.err)
+			if len(args) != tc.wantLen {
+				t.Fatalf("args = %v (len %d), want len %d", args, len(args), tc.wantLen)
+			}
+			if args[0] != "err" || args[1] != tc.err {
+				t.Errorf("args[0:2] = %v, want [err %v]", args[0:2], tc.err)
+			}
+			if tc.wantInfo == "" {
+				return
+			}
+			if args[2] != "info" {
+				t.Errorf("args[2] = %v, want \"info\"", args[2])
+			}
+			if args[3] != tc.wantInfo {
+				t.Errorf("args[3] = %v, want %q", args[3], tc.wantInfo)
+			}
+		})
+	}
+}
+
+// TestLogin_ValidationFailureLogsDevInfo is the end-to-end proof for #0093: a
+// real assertion that fails validation must produce a log record naming the
+// specific failing check, not just the generic category string.
+//
+// The failure is induced with an origin mismatch — the virtual authenticator
+// signs over a client-data origin the relying party does not accept — because
+// go-webauthn attaches the expected/received origins to that error's DevInfo.
+// Before the fix the record carried only err="Error validating origin".
+func TestLogin_ValidationFailureLogsDevInfo(t *testing.T) {
+	pool := testPool(t)
+	setRegistrationsEnabled(t, pool, true)
+	regSvc := newService(t, pool, &recordingMailer{}, "")
+	loginSvc := newLoginService(t, pool)
+
+	var buf bytes.Buffer
+	loginSvc.log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	acct := registerWithAuthenticator(t, regSvc, pool, "devinfo@example.com")
+
+	// Re-point the relying party at an origin the server does not accept, so the
+	// assertion is otherwise valid but fails origin verification.
+	acct.rp = virtualwebauthn.RelyingParty{ID: testRPID, Name: "ShortLinks", Origin: "https://attacker.example"}
+
+	if _, err := driveLogin(t, loginSvc, acct, ""); !errors.Is(err, ErrLoginFailed) {
+		t.Fatalf("FinishLogin with mismatched origin: err = %v, want ErrLoginFailed", err)
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "login: validating assertion") {
+		t.Fatalf("expected a validating-assertion warning, got: %s", logged)
+	}
+	if !strings.Contains(logged, "info=") {
+		t.Errorf("log record has no info attribute (DevInfo dropped): %s", logged)
+	}
+	// The DevInfo for an origin mismatch names the origin actually received.
+	if !strings.Contains(logged, "attacker.example") {
+		t.Errorf("log record does not name the received origin: %s", logged)
+	}
+}
