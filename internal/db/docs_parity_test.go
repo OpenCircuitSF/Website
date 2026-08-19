@@ -203,9 +203,26 @@ func verifyContiguous(t *testing.T, stems []migrationStem) {
 // forms it must reject and the forms (tight pipes, alignment colons, a
 // table nested in a list item, a table inside <details>) it must keep
 // accepting.
+//
+// #0089 closed two more residuals in the same two states, still without
+// taking on a parser:
+//
+//  1. The indent check below used to count only leading ' ' bytes
+//     (strings.TrimLeft(line, " ")), so a line indented with a leading tab
+//     measured indent 0 and fell straight through to the "|" check even
+//     though CommonMark counts a tab as advancing to the next 4-column tab
+//     stop -- four columns of indentation from a single leading tab.
+//     leadingIndentWidth expands tabs the same way.
+//  2. The fence-close check used a fixed 3-character prefix
+//     (strings.HasPrefix(trimmed, "```")), so a 4-backtick (or 4-tilde)
+//     fence was closed early by an inner 3-character run of the same
+//     character. CommonMark requires the closing fence be at least as long
+//     as the opener; fenceLen now records the opener's run length and the
+//     close check requires the same-or-longer run.
 func docTableRowLines(doc string) []string {
 	var rows []string
 	var fenceChar byte // 0 outside a fence; '`' or '~' while inside one
+	var fenceLen int   // the opening fence's run length; a closer must be >= this
 	inComment := false
 
 	for _, line := range strings.Split(doc, "\n") {
@@ -213,22 +230,25 @@ func docTableRowLines(doc string) []string {
 
 		// Fenced code blocks. CommonMark requires the closing fence use the
 		// same character as the opener (a ``` block isn't closed by ~~~ and
-		// vice versa), so track which one opened it rather than toggling a
-		// single boolean -- that's what let a ~~~ fence slip past a
-		// ```-only toggle before this fix.
+		// vice versa) and be at least as long as the opener (#0089: a
+		// 4-backtick opener isn't closed by a 3-backtick line), so track
+		// both which character opened it and how long that opening run was
+		// rather than toggling a single boolean.
 		if fenceChar == 0 {
 			switch {
-			case strings.HasPrefix(trimmed, "```"):
+			case leadingRunLength(trimmed, '`') >= 3:
 				fenceChar = '`'
+				fenceLen = leadingRunLength(trimmed, '`')
 				continue
-			case strings.HasPrefix(trimmed, "~~~"):
+			case leadingRunLength(trimmed, '~') >= 3:
 				fenceChar = '~'
+				fenceLen = leadingRunLength(trimmed, '~')
 				continue
 			}
 		} else {
-			if (fenceChar == '`' && strings.HasPrefix(trimmed, "```")) ||
-				(fenceChar == '~' && strings.HasPrefix(trimmed, "~~~")) {
+			if leadingRunLength(trimmed, fenceChar) >= fenceLen {
 				fenceChar = 0
+				fenceLen = 0
 			}
 			continue // every line while a fence is open is code, including its closer
 		}
@@ -249,12 +269,15 @@ func docTableRowLines(doc string) []string {
 			continue
 		}
 
-		// 4-space indented code block (CommonMark: 4+ leading spaces of raw,
-		// untrimmed indentation). A table nested inside a list item is
-		// indented by the marker's own width -- 2 spaces for "- ", 3 for
-		// "1. " -- not 4, so this does not reject that case; see
-		// TestDocTableRowLines's accept cases.
-		if indent := len(line) - len(strings.TrimLeft(line, " ")); indent >= 4 {
+		// Indented code block (CommonMark: 4+ columns of leading
+		// indentation). A table nested inside a list item is indented by
+		// the marker's own width -- 2 spaces for "- ", 3 for "1. " -- not 4
+		// columns, so this does not reject that case; see
+		// TestDocTableRowLines's accept cases. leadingIndentWidth expands a
+		// leading tab to the next 4-column tab stop (#0089) rather than
+		// counting only ' ' bytes, so a tab-indented row is caught the same
+		// way a 4-space-indented one already was.
+		if leadingIndentWidth(line) >= 4 {
 			continue
 		}
 
@@ -263,6 +286,38 @@ func docTableRowLines(doc string) []string {
 		}
 	}
 	return rows
+}
+
+// leadingRunLength returns how many bytes at the start of s equal ch --
+// docTableRowLines's way of measuring a fence marker's length (```` is 4,
+// ``` is 3) rather than only checking for a fixed-length prefix (#0089).
+func leadingRunLength(s string, ch byte) int {
+	n := 0
+	for n < len(s) && s[n] == ch {
+		n++
+	}
+	return n
+}
+
+// leadingIndentWidth returns a line's leading indentation in columns,
+// expanding a tab to the next 4-column tab stop the way CommonMark does
+// (#0089) rather than counting only leading ' ' bytes. Starting at column 0,
+// a single leading tab alone already reaches column 4 -- the same threshold
+// four leading spaces reaches -- so a tab-indented line is recognized as an
+// indented code block exactly like a space-indented one.
+func leadingIndentWidth(line string) int {
+	col := 0
+	for _, r := range line {
+		switch r {
+		case ' ':
+			col++
+		case '\t':
+			col += 4 - (col % 4)
+		default:
+			return col
+		}
+	}
+	return col
 }
 
 // docStemToken finds every backtick-wrapped "NNNNNN_name" token -- the exact
@@ -372,6 +427,30 @@ func TestDocTableRowLines(t *testing.T) {
 				// was never recognized as code in the first place.
 				name: "tilde fence",
 				doc:  "~~~\n| `000003_add_x` | stale |\n~~~\n",
+			},
+			{
+				// #0089 residual 1: a tab is 4 columns of CommonMark
+				// indentation, but strings.TrimLeft(line, " ") counts only
+				// ' ' bytes, so a tab-indented "|"-leading line measured
+				// indent 0 and satisfied the row check.
+				name: "tab-indented code block",
+				doc:  "Some paragraph.\n\n\t| `000003_add_x` | stale |\n\nMore prose.",
+			},
+			{
+				// #0089 residual 2: a 4-backtick opener must be closed by a
+				// run of 4+ backticks. The old check treated any 3-backtick
+				// line as a closer, so the inner 3-backtick line here closed
+				// the fence early and the row on the following line satisfied
+				// the row check.
+				name: "short closer does not end a longer backtick fence",
+				doc:  "````\n```\n| `000003_add_x` | stale |\n````\n",
+			},
+			{
+				// #0089 residual 2, tilde form: a 4-tilde opener must be
+				// closed by a run of 4+ tildes; a 3-tilde line inside it is
+				// fence content, not a closer.
+				name: "short closer does not end a longer tilde fence",
+				doc:  "~~~~\n~~~\n| `000003_add_x` | stale |\n~~~~\n",
 			},
 		}
 		for _, tc := range cases {
