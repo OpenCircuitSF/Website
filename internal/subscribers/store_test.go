@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -13,34 +12,21 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// testPool connects to TEST_DATABASE_URL or skips, then truncates the
-// subscribers/subscriber_interests tables (both purely structural, unlike
-// interests which carries seed data — safe to wipe between tests) so each
-// test starts from a clean slate.
+// testPool returns the package's single shared pool (opened once in
+// TestMain, see main_test.go — #0091) or skips if TEST_DATABASE_URL was
+// unset. It truncates the subscribers/subscriber_interests tables (both
+// purely structural, unlike interests which carries seed data — safe to
+// wipe between tests) on entry only: every test truncates before it runs,
+// so the table is guaranteed clean at the start of every test including the
+// first, and a second truncate in cleanup would only ever re-clean a table
+// the next test's own entry-truncate is about to clean anyway.
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
+	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test db: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Fatalf("ping test db: %v", err)
-	}
-
-	truncate(t, pool)
-	t.Cleanup(func() {
-		truncate(t, pool)
-		pool.Close()
-	})
-	return pool
+	truncate(t, testDBPool)
+	return testDBPool
 }
 
 func truncate(t *testing.T, pool *pgxpool.Pool) {
@@ -1481,4 +1467,40 @@ func TestStatusCounts_AllFiveStatusesPresentAndAccurate(t *testing.T) {
 		t.Errorf("pending count = %d, want %d", after[StatusPending], before[StatusPending]+1)
 	}
 	_ = pending
+}
+
+// TestIsolation_TruncateOnEntryLeavesExactlyOneRow is #0091's isolation
+// proof. The package moved from a fresh pgxpool.Pool truncated before and
+// after every test to a single pool (opened once in TestMain) truncated
+// once, on entry, per test. That change must not let one test see another
+// test's rows.
+//
+// This test seeds exactly one subscriber and asserts the table holds
+// exactly one row. If testPool's entry truncate were skipped, ran against
+// the wrong pool, or only worked for the first test in the binary, a row
+// left behind by whichever test ran before this one -- or, under
+// `-count=2`, by this same test's own prior iteration -- would make the
+// count wrong and fail the assertion.
+//
+// Run with `-count=2 -shuffle=on` (see #0091's work log for the exact
+// invocation and output) to prove this holds across repeats and across
+// test orderings, not just in single-run position-dependent luck.
+func TestIsolation_TruncateOnEntryLeavesExactlyOneRow(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+
+	if _, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM subscribers`).Scan(&count); err != nil {
+		t.Fatalf("count subscribers: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("subscribers table has %d rows after seeding exactly one, want 1 -- "+
+			"isolation broken: another test's row (or a prior -count iteration's row) "+
+			"survived into this test", count)
+	}
 }

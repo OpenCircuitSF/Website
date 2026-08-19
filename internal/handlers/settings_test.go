@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -17,38 +16,20 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
-// settingsTestPool connects to TEST_DATABASE_URL or skips. It truncates the auth
-// tables AND resets the settings table to its seeded state before and after the
-// test, so each run starts clean, the registrations_enabled gate begins
-// disabled (matching the migration seed), and the DB is left clean. The settings
-// table is not covered by the credentials suite's truncate, so it is reset
-// explicitly here.
+// settingsTestPool returns the package's single shared pool (opened once in
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset. It truncates the
+// auth tables AND resets the settings table to its seeded state on entry
+// only, so each run starts clean and the registrations_enabled gate begins
+// disabled (matching the migration seed). The settings table is not covered
+// by the credentials suite's truncate, so it is reset explicitly here.
 func settingsTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
+	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test db: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Fatalf("ping test db: %v", err)
-	}
-
-	truncateCredsTables(t, pool)
-	resetSettings(t, pool)
-	t.Cleanup(func() {
-		truncateCredsTables(t, pool)
-		resetSettings(t, pool)
-		pool.Close()
-	})
-	return pool
+	truncateCredsTables(t, testDBPool)
+	resetSettings(t, testDBPool)
+	return testDBPool
 }
 
 // resetSettings restores the settings table to exactly the migration seed:

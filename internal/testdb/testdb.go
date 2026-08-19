@@ -1,5 +1,7 @@
 // Package testdb provides cross-process serialization for integration tests
-// that share a single PostgreSQL test database (TEST_DATABASE_URL).
+// that share a single PostgreSQL test database (TEST_DATABASE_URL), and a
+// shared way to open the one connection pool a package's whole test binary
+// should use (see Connect).
 //
 // `go test` runs each package's test binary concurrently. Several packages
 // truncate the same shared tables in their setup, so concurrent runs corrupt
@@ -14,8 +16,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // advisoryLockKey is an arbitrary fixed key shared by every package that
@@ -51,4 +55,38 @@ func Lock() func() {
 		_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", advisoryLockKey)
 		_ = conn.Close(ctx)
 	}
+}
+
+// Connect opens the single pgxpool.Pool a DB-backed package's whole test
+// binary should share, rather than the pre-#0091 pattern of one fresh pool
+// per test.
+//
+// Call it once from TestMain, after Lock, and store the result in a
+// package-level variable that every test's own pool helper returns; do not
+// call it per test. `go test` runs each package as its own process, so "one
+// package-level pool" falls out naturally from "call this once in TestMain"
+// — no cross-process coordination is needed here, unlike Lock.
+//
+// Connect returns (nil, nil) when TEST_DATABASE_URL is unset. Callers must
+// treat a nil pool as the signal to skip DB-backed tests (t.Skip), matching
+// the pre-#0091 per-test behavior, rather than treating it as a connect
+// failure.
+func Connect(ctx context.Context) (*pgxpool.Pool, error) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		return nil, nil
+	}
+
+	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(connectCtx, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("testdb: connect test db: %w", err)
+	}
+	if err := pool.Ping(connectCtx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("testdb: ping test db: %w", err)
+	}
+	return pool, nil
 }

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -19,9 +18,10 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
-// interestsTestPool connects to TEST_DATABASE_URL or skips. It truncates the
-// auth tables (same set as credsTestPool/settingsTestPool) before and after
-// the test, but deliberately NEVER truncates `interests` or `subscribers` --
+// interestsTestPool returns the package's single shared pool (opened once in
+// TestMain — #0091) or skips if TEST_DATABASE_URL was unset. It truncates the
+// auth tables (same set as credsTestPool/settingsTestPool) on entry only,
+// but deliberately NEVER truncates `interests` or `subscribers` --
 // interests holds the twelve-row production taxonomy seeded by migration
 // 000009 that every other package's tests rely on staying present
 // (internal/interests/store_test.go's own doc comment explains why), and
@@ -32,28 +32,11 @@ import (
 // convention.
 func interestsTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
+	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test db: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Fatalf("ping test db: %v", err)
-	}
-
-	truncateCredsTables(t, pool)
-	t.Cleanup(func() {
-		truncateCredsTables(t, pool)
-		pool.Close()
-	})
-	return pool
+	truncateCredsTables(t, testDBPool)
+	return testDBPool
 }
 
 // testInterestSlug returns a slug scoped to this test run, never colliding
