@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-// Site wires the meta-tag injector (#0019) into the HTTP server. It is the
-// type cmd/opencircuit's mountAndServe constructs and mounts around the SPA
-// handler. #0020 (sitemap.xml / robots.txt) extends this same type rather
-// than introducing a parallel one, since both share the same workshop
-// source and the same InvalidateWorkshops trigger.
+// Site wires the meta-tag injector (#0019), sitemap.xml, and robots.txt
+// (#0020) into the HTTP server. It is the single type cmd/opencircuit's
+// mountAndServe constructs and mounts.
 type Site struct {
 	renderer *Renderer
+	sitemap  *Sitemap
+	robots   []byte
 }
 
 // NewSite constructs a Site from the built index.html template bytes
@@ -24,15 +24,18 @@ type Site struct {
 func NewSite(indexHTML []byte, baseURL string, source WorkshopSource) *Site {
 	return &Site{
 		renderer: NewRenderer(indexHTML, baseURL, source),
+		sitemap:  NewSitemap(baseURL, source),
+		robots:   BuildRobotsTxt(baseURL),
 	}
 }
 
-// InvalidateWorkshops clears the per-path meta cache. #0051's workshop
-// mutation handlers (create/update/publish/cancel) call this so a stale
-// title, summary, or cover image doesn't linger for up to the cache TTL
-// after an edit.
+// InvalidateWorkshops clears both the per-path meta cache and the sitemap
+// cache. #0051's workshop mutation handlers (create/update/publish/cancel)
+// call this so a stale title, summary, or cover image doesn't linger for up
+// to the cache TTL after an edit.
 func (s *Site) InvalidateWorkshops() {
 	s.renderer.InvalidateWorkshops()
+	s.sitemap.Invalidate()
 }
 
 // Middleware wraps next (in practice, handlers.NewSPAHandler's catch-all)
@@ -72,6 +75,29 @@ func (s *Site) Middleware(next http.Handler) http.Handler {
 			log.Printf("seo: write injected index.html for %s: %v", r.URL.Path, err)
 		}
 	})
+}
+
+// SitemapHandler serves GET /sitemap.xml (#0020).
+func (s *Site) SitemapHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := s.sitemap.Render()
+		if err != nil {
+			http.Error(w, "failed to build sitemap", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		_, _ = w.Write(body)
+	}
+}
+
+// RobotsHandler serves GET /robots.txt (#0020). robots.txt has no dynamic
+// content (it doesn't depend on workshop data), so it's computed once at
+// Site construction rather than cached-with-TTL like the sitemap.
+func (s *Site) RobotsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(s.robots)
+	}
 }
 
 // recorder is a minimal http.ResponseWriter that buffers a response so

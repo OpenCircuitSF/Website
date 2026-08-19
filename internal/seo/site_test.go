@@ -110,10 +110,46 @@ func TestMiddleware_NonHTMLPassesThroughUnchanged(t *testing.T) {
 	}
 }
 
-// TestSite_InvalidateWorkshopsClearsRendererCache confirms Site.
-// InvalidateWorkshops reaches the meta-tag renderer's cache. #0020 extends
-// this same test (renamed) to also cover the sitemap cache once that exists.
-func TestSite_InvalidateWorkshopsClearsRendererCache(t *testing.T) {
+// TestSitemapHandler_ContentType covers #0020's "served with correct content
+// types" criterion for sitemap.xml.
+func TestSitemapHandler_ContentType(t *testing.T) {
+	site := NewSite([]byte(testTemplate), testBaseURL, nil)
+	rec := httptest.NewRecorder()
+	site.SitemapHandler()(rec, httptest.NewRequest(http.MethodGet, "/sitemap.xml", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/xml") {
+		t.Errorf("Content-Type = %q, want application/xml", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "<urlset") {
+		t.Errorf("body does not look like a sitemap: %s", rec.Body.String())
+	}
+}
+
+// TestRobotsHandler_ContentType covers the same criterion for robots.txt.
+func TestRobotsHandler_ContentType(t *testing.T) {
+	site := NewSite([]byte(testTemplate), testBaseURL, nil)
+	rec := httptest.NewRecorder()
+	site.RobotsHandler()(rec, httptest.NewRequest(http.MethodGet, "/robots.txt", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("Content-Type = %q, want text/plain", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "User-agent: *") {
+		t.Errorf("body does not look like robots.txt: %s", rec.Body.String())
+	}
+}
+
+// TestSite_InvalidateWorkshopsClearsBothCaches confirms Site.
+// InvalidateWorkshops reaches BOTH the meta-tag renderer and the sitemap --
+// a partial wiring (only one of the two) would be easy to introduce and
+// hard to notice, since each half's own cache tests already pass.
+func TestSite_InvalidateWorkshopsClearsBothCaches(t *testing.T) {
 	source := &mutatingWorkshopSource{title: "Original Title"}
 	site := NewSite([]byte(testTemplate), testBaseURL, source)
 

@@ -277,19 +277,23 @@ func mountAndServe(
 	// user's connected clients (campaign send progress, once mailing lands).
 	mux.Handle("GET /api/events", requireSession(http.HandlerFunc(eventsH.Stream)))
 
-	// SEO: server-injected per-route meta tags (#0019). indexHTML is the
-	// embedded, built dist/index.html carrying the %%OC_*%% placeholder
-	// markers (web/index.html) that seo.Site substitutes per request path --
-	// social crawlers fetch the raw HTML and never execute the SPA bundle, so
-	// the injected values have to already be correct in what this handler
-	// serves. The workshop source is nil until #0051 (workshops store) and
-	// #0054 (workshop detail view) land; until then /workshops/{slug} falls
-	// back to its documented default (seo.WorkshopSource's doc comment).
+	// SEO: server-injected per-route meta tags (#0019) and generated
+	// sitemap.xml / robots.txt (#0020). indexHTML is the embedded, built
+	// dist/index.html carrying the %%OC_*%% placeholder markers (web/index.html)
+	// that seo.Site substitutes per request path -- social crawlers fetch the
+	// raw HTML and never execute the SPA bundle, so the injected values have to
+	// already be correct in what this handler serves. The workshop source is
+	// nil until #0051 (workshops store) and #0054 (workshop detail view) land;
+	// until then /workshops/{slug} and the sitemap's workshop portion both fall
+	// back to their documented defaults (seo.WorkshopSource's doc comment).
 	indexHTML, err := fs.ReadFile(web.DistFS(), "index.html")
 	if err != nil {
 		return fmt.Errorf("mountAndServe: read embedded index.html: %w", err)
 	}
 	site := seo.NewSite(indexHTML, cfg.BaseURL, nil)
+
+	mux.Handle("GET /sitemap.xml", site.SitemapHandler())
+	mux.Handle("GET /robots.txt", site.RobotsHandler())
 
 	// Svelte SPA — the catch-all served LAST. Under the Go 1.22 mux this
 	// "GET /" pattern is the least specific, so every explicit route above wins
