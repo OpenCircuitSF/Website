@@ -35,6 +35,40 @@
 // complaint landing between the two — cannot move a subscriber out of
 // complained. See RestartSignup's doc comment and this issue's Gotchas for
 // the #0025 review finding this closes.
+//
+// # The byte-identical body is not the only observable — #0026's review (bounced)
+//
+// A phase-3 review measured that even with a structurally byte-identical
+// 202, mailer.Send running synchronously inside the request made "was an
+// email sent" directly observable as latency: with a realistic ~80ms SES
+// call, every branch that sends mail (new signup, restart, resend, already-
+// subscribed) took ~80ms longer than every branch that doesn't (suppressed,
+// complained, honeypot, cooldown-blocked) — fully disjoint distributions.
+// Combined with the "already subscribed" mail having no cooldown at all,
+// that produced a two-probe test (submit twice, time the second response)
+// that classified list membership at 100% accuracy. The fix has two parts:
+//
+//  1. mailer.Send never runs on the request goroutine. sendConfirmation and
+//     sendAlreadySubscribed hand a built mailing.Message to an in-process
+//     queue (sendQueue) drained by a small fixed pool of worker goroutines
+//     started in NewSubscribeHandler; Subscribe returns as soon as the
+//     fast, non-network claim below succeeds, regardless of whether the
+//     send has even started. This removes the whole latency channel.
+//  2. Both outbound messages this endpoint can send are gated by an atomic
+//     claim in internal/subscribers (ClaimConfirmationSend /
+//     ClaimAlreadySubscribedSend) taken BEFORE the send is enqueued — one
+//     conditional UPDATE, not a read then a write — so concurrent requests
+//     for the same subscriber can't all observe "not in cooldown" and all
+//     claim. If the async send then fails, the worker releases the claim
+//     (ReleaseConfirmationClaim / ReleaseAlreadySubscribedClaim) so a later
+//     request can retry rather than being stuck behind a cooldown anchored
+//     to a message nobody received.
+//
+// A send failure is never silently swallowed: the worker logs it
+// (h.log.Error, with the subscriber id and which mail it was) and releases
+// the claim, which is itself observable and retryable — the next
+// legitimate request for that address attempts the send again. See this
+// issue's Gotchas for why no separate status column or metric was added.
 package handlers
 
 import (
@@ -44,6 +78,7 @@ import (
 	"net/http"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
@@ -68,6 +103,18 @@ const (
 	// hour").
 	subscribeResendCooldown = time.Hour
 
+	// subscribeAlreadySubscribedCooldown is how often the "you're already
+	// subscribed" email may be sent to the same address. PRD §6.3 doesn't
+	// name a value for this branch (only the confirmation resend is given
+	// one) — #0026's review (finding 1) required SOME cooldown to close the
+	// mail-amplification/timing-oracle finding, and reusing the resend
+	// value is a judgment call: it is the only cooldown PRD §6.3 defines
+	// for this endpoint, and the two emails share the same abuse shape
+	// (repeated submission of one address), so there is no principled
+	// reason for them to differ. Flagging for the reviewer in case a
+	// different value is wanted.
+	subscribeAlreadySubscribedCooldown = time.Hour
+
 	// subscribeTimingGateMinDwell is the minimum time PRD §6.3 requires
 	// between the signup form rendering and the submission arriving.
 	subscribeTimingGateMinDwell = 2 * time.Second
@@ -88,7 +135,10 @@ type subscriberStore interface {
 	Create(ctx context.Context, in subscribers.NewSignup, now time.Time) (subscribers.Subscriber, error)
 	FindByEmail(ctx context.Context, email string) (subscribers.Subscriber, error)
 	RestartSignup(ctx context.Context, id int64, in subscribers.RestartSignupInput, now time.Time) (subscribers.Subscriber, error)
-	MarkConfirmationSent(ctx context.Context, id int64, now time.Time) (subscribers.Subscriber, error)
+	ClaimConfirmationSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (bool, error)
+	ReleaseConfirmationClaim(ctx context.Context, id int64, now time.Time) error
+	ClaimAlreadySubscribedSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (bool, error)
+	ReleaseAlreadySubscribedClaim(ctx context.Context, id int64, now time.Time) error
 	SetInterests(ctx context.Context, subscriberID int64, interestIDs []int64) error
 }
 
@@ -148,10 +198,48 @@ type SubscribeHandler struct {
 	// to time.Now.
 	now func() time.Time
 	log *slog.Logger
+
+	// sendQueue and sendWG implement the "mailer.Send off the request path"
+	// fix from #0026's review (finding 1) — see the package doc comment.
+	// enqueueSend hands a built mailing.Message to this channel; a fixed
+	// pool of worker goroutines (started once, in NewSubscribeHandler)
+	// drains it and calls h.mailer.Send on a detached context, so no HTTP
+	// response ever waits on a network call. sendWG lets tests
+	// deterministically wait for in-flight async sends to finish
+	// (waitForSends) instead of sleeping.
+	sendQueue chan sendJob
+	sendWG    sync.WaitGroup
 }
 
-// NewSubscribeHandler constructs a SubscribeHandler. A nil suppression
-// checker defaults to NoSuppressions; a nil logger defaults to
+// sendQueueCapacity bounds the async send queue. Sized generously relative
+// to the per-IP rate limit this endpoint sits behind in production
+// (5/min, burst 3, cmd/opencircuit/main.go) — the queue existing at all is
+// a defense against a burst of legitimate concurrent signups outrunning the
+// worker pool for a moment, not a capacity this project expects to fill in
+// steady state.
+const sendQueueCapacity = 256
+
+// sendWorkerCount is the number of goroutines draining sendQueue. A small
+// fixed pool, not one goroutine per request: bounds how many concurrent SES
+// calls this process makes regardless of how many signups arrive at once,
+// which matters because #0026's own rate limit (5/min, burst 3 per IP) does
+// nothing to bound TOTAL concurrency across many different IPs.
+const sendWorkerCount = 4
+
+// sendJob is one outbound email queued by sendConfirmation or
+// sendAlreadySubscribed: the already-built message, plus the compensating
+// action to run if the send fails (releasing the atomic claim that was
+// taken before the job was enqueued, so a later request can retry).
+type sendJob struct {
+	subscriberID int64
+	label        string // "confirmation" | "already-subscribed" — for logs only
+	msg          mailing.Message
+	release      func(ctx context.Context) error
+}
+
+// NewSubscribeHandler constructs a SubscribeHandler and starts its async
+// send worker pool (see sendJob and the package doc comment). A nil
+// suppression checker defaults to NoSuppressions; a nil logger defaults to
 // slog.Default(), matching AuthHandler's nil-tolerance convention.
 func NewSubscribeHandler(
 	subs subscriberStore,
@@ -169,11 +257,91 @@ func NewSubscribeHandler(
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &SubscribeHandler{
+	h := &SubscribeHandler{
 		subs: subs, interests: il, mailer: mailer, suppression: suppression,
 		settings: settings, auditor: auditor, baseURL: baseURL,
 		now: time.Now, log: logger,
+		sendQueue: make(chan sendJob, sendQueueCapacity),
 	}
+	for i := 0; i < sendWorkerCount; i++ {
+		go h.runSendWorker()
+	}
+	return h
+}
+
+// sendJobTimeout bounds a single async send attempt so a hung network call
+// can't pin a worker goroutine forever.
+const sendJobTimeout = 30 * time.Second
+
+// runSendWorker drains h.sendQueue until it is closed (which #0026's scope
+// never does — this process's handler lives as long as the server does; see
+// this issue's Gotchas). One of sendWorkerCount goroutines started by
+// NewSubscribeHandler.
+func (h *SubscribeHandler) runSendWorker() {
+	for job := range h.sendQueue {
+		h.processSendJob(job)
+	}
+}
+
+// processSendJob performs one queued send on a context detached from any
+// HTTP request (the request that enqueued this job has already returned).
+// A failed send is logged — never silently dropped — and its claim
+// released so a subsequent legitimate request can retry.
+func (h *SubscribeHandler) processSendJob(job sendJob) {
+	defer h.sendWG.Done()
+
+	ctx, cancel := context.WithTimeout(context.Background(), sendJobTimeout)
+	defer cancel()
+
+	if _, err := h.mailer.Send(ctx, job.msg); err != nil {
+		h.log.Error("subscribe: async send failed", "subscriber_id", job.subscriberID, "kind", job.label, "err", err)
+		h.releaseSendClaim(job)
+		return
+	}
+}
+
+// releaseSendClaim runs job.release on its own short-lived, detached
+// context — never the (possibly already-expired) context the failed send
+// itself used — so a release attempt is not defeated by the same timeout
+// that may have doomed the send.
+func (h *SubscribeHandler) releaseSendClaim(job sendJob) {
+	if job.release == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := job.release(ctx); err != nil {
+		h.log.Error("subscribe: releasing send claim after failed send failed", "subscriber_id", job.subscriberID, "kind", job.label, "err", err)
+	}
+}
+
+// enqueueSend hands job to the async worker pool without blocking the HTTP
+// response. If the queue is saturated (sendQueueCapacity jobs already
+// waiting — see that constant's doc comment on why this is not expected in
+// steady state), it does NOT block: blocking here would silently reopen the
+// exact request-latency channel #0026's review closed. Instead it logs
+// loudly and releases the claim immediately, exactly as if the send itself
+// had failed, so the drop is both observable (in logs) and retryable (the
+// claim is released, so the next legitimate request tries again).
+func (h *SubscribeHandler) enqueueSend(job sendJob) {
+	h.sendWG.Add(1)
+	select {
+	case h.sendQueue <- job:
+	default:
+		h.log.Error("subscribe: send queue full, dropping send", "subscriber_id", job.subscriberID, "kind", job.label)
+		h.releaseSendClaim(job)
+		h.sendWG.Done()
+	}
+}
+
+// waitForSends blocks until every send job enqueued so far has been fully
+// processed (sent, failed-and-released, or dropped-and-released) by the
+// async workers. Test-only: internal/handlers/subscribe_test.go calls this
+// after doSubscribe so assertions on mailer state or subscriber rows are
+// deterministic, without an arbitrary sleep, despite #0026's review moving
+// the actual send off the request/response path.
+func (h *SubscribeHandler) waitForSends() {
+	h.sendWG.Wait()
 }
 
 // subscribeRequest is the POST /api/subscribe body. This is the wire
@@ -365,10 +533,14 @@ func (h *SubscribeHandler) newSignup(ctx context.Context, email string, interest
 func (h *SubscribeHandler) existingSignup(ctx context.Context, existing subscribers.Subscriber, interestIDs []int64, evidence subscribers.RestartSignupInput, now time.Time) {
 	switch existing.Status {
 	case subscribers.StatusActive:
-		h.sendAlreadySubscribed(ctx, existing)
+		h.sendAlreadySubscribed(ctx, existing, now)
 
 	case subscribers.StatusPending:
-		h.resendConfirmation(ctx, existing, now)
+		// Resend the existing confirm link, rate-limited to once per hour
+		// (PRD §6.3). sendConfirmation's atomic claim IS the rate limit —
+		// no separate cooldown check is needed here, unlike the pre-review
+		// version of this handler (see #0026's review, finding 3).
+		h.sendConfirmation(ctx, existing, now)
 
 	case subscribers.StatusUnsubscribed:
 		h.restartSignup(ctx, existing, interestIDs, evidence, now)
@@ -420,58 +592,76 @@ func (h *SubscribeHandler) restartSignup(ctx context.Context, existing subscribe
 	h.auditSignup(ctx, sub, evidence.SignupIP, "restarted")
 }
 
-// resendConfirmation handles the pending branch: resend the existing
-// confirm link, rate-limited to once per hour per PRD §6.3. It reuses the
-// existing confirm_token rather than minting a new one, so a
-// still-unopened earlier email keeps working.
-func (h *SubscribeHandler) resendConfirmation(ctx context.Context, existing subscribers.Subscriber, now time.Time) {
-	if existing.ConfirmSentAt != nil && now.Sub(*existing.ConfirmSentAt) < subscribeResendCooldown {
-		return // rate-limited; silently do nothing
-	}
-	if existing.ConfirmToken == nil {
-		// Should be unreachable for a genuinely pending row (Create and
-		// RestartSignup always populate it), but guard rather than
-		// dereference a nil pointer if data ever drifts.
-		h.log.Error("subscribe: pending subscriber has no confirm token", "subscriber_id", existing.ID)
-		return
-	}
-
-	msg := mailing.BuildConfirmationEmail(existing.Email, h.baseURL, *existing.ConfirmToken, existing.ManageToken, subscribeConfirmTTL, h.physicalAddress(ctx))
-	if _, err := h.mailer.Send(ctx, msg); err != nil {
-		h.log.Error("subscribe: resending confirmation email failed", "subscriber_id", existing.ID, "err", err)
-		return // do not stamp confirm_sent_at on a failed send
-	}
-	if _, err := h.subs.MarkConfirmationSent(ctx, existing.ID, now); err != nil {
-		h.log.Error("subscribe: marking confirmation sent failed", "subscriber_id", existing.ID, "err", err)
-	}
-}
-
-// sendConfirmation builds and sends the double opt-in confirmation email
-// for a subscriber that now has a live confirm_token — a new signup or a
-// restarted one — and stamps confirm_sent_at only after the send succeeds.
+// sendConfirmation builds and enqueues the double opt-in confirmation email
+// for a subscriber with a live confirm_token — a brand-new signup, a
+// restarted one, or a resend to an already-pending one; all three call
+// sites are identical from this point on, which is deliberate: #0026's
+// review (finding 3) traced a duplicate-send bug to the resend branch
+// having its OWN, separately-timed cooldown check instead of sharing this
+// one atomic claim.
+//
+// The claim (internal/subscribers.ClaimConfirmationSend) is synchronous,
+// fast, and non-network — it is what enforces PRD §6.3's once-per-hour
+// resend limit AND what makes concurrent double-submits of the same
+// address send at most once. Only a successful claim enqueues an actual
+// send; losing the claim (cooldown active, or a concurrent request claimed
+// first) is not an error, just this request declining to send. The mailer
+// call itself happens later, off this goroutine — see enqueueSend and the
+// package doc comment.
 func (h *SubscribeHandler) sendConfirmation(ctx context.Context, sub subscribers.Subscriber, now time.Time) {
 	if sub.ConfirmToken == nil {
 		h.log.Error("subscribe: subscriber has no confirm token", "subscriber_id", sub.ID)
 		return
 	}
+	claimed, err := h.subs.ClaimConfirmationSend(ctx, sub.ID, now, subscribeResendCooldown)
+	if err != nil {
+		h.log.Error("subscribe: claiming confirmation send failed", "subscriber_id", sub.ID, "err", err)
+		return
+	}
+	if !claimed {
+		return // cooldown active, or a concurrent request already claimed this send
+	}
+
 	msg := mailing.BuildConfirmationEmail(sub.Email, h.baseURL, *sub.ConfirmToken, sub.ManageToken, subscribeConfirmTTL, h.physicalAddress(ctx))
-	if _, err := h.mailer.Send(ctx, msg); err != nil {
-		h.log.Error("subscribe: sending confirmation email failed", "subscriber_id", sub.ID, "err", err)
-		return // do not stamp confirm_sent_at on a failed send
-	}
-	if _, err := h.subs.MarkConfirmationSent(ctx, sub.ID, now); err != nil {
-		h.log.Error("subscribe: marking confirmation sent failed", "subscriber_id", sub.ID, "err", err)
-	}
+	h.enqueueSend(sendJob{
+		subscriberID: sub.ID,
+		label:        "confirmation",
+		msg:          msg,
+		release: func(ctx context.Context) error {
+			return h.subs.ReleaseConfirmationClaim(ctx, sub.ID, h.now())
+		},
+	})
 }
 
 // sendAlreadySubscribed handles the active branch: notify the submitter the
 // address is already on the list, with the preference-center link. No
-// store mutation — nothing about the subscriber's own state changes.
-func (h *SubscribeHandler) sendAlreadySubscribed(ctx context.Context, existing subscribers.Subscriber) {
-	msg := mailing.BuildAlreadySubscribedEmail(existing.Email, h.baseURL, existing.ManageToken, h.physicalAddress(ctx))
-	if _, err := h.mailer.Send(ctx, msg); err != nil {
-		h.log.Error("subscribe: sending already-subscribed email failed", "subscriber_id", existing.ID, "err", err)
+// status mutation — nothing about the subscriber's own state changes — but
+// the send itself is claimed exactly like sendConfirmation, gated by its
+// own cooldown column (already_subscribed_sent_at). #0026's review (finding
+// 1) measured 20 sequential submits of one active subscriber's address
+// producing 20 emails to that person before this claim existed: an
+// unauthenticated mail-amplification vector, and half of a two-probe
+// enumeration oracle once mailer.Send was also off the request path but
+// this branch still sent unconditionally.
+func (h *SubscribeHandler) sendAlreadySubscribed(ctx context.Context, existing subscribers.Subscriber, now time.Time) {
+	claimed, err := h.subs.ClaimAlreadySubscribedSend(ctx, existing.ID, now, subscribeAlreadySubscribedCooldown)
+	if err != nil {
+		h.log.Error("subscribe: claiming already-subscribed send failed", "subscriber_id", existing.ID, "err", err)
+		return
 	}
+	if !claimed {
+		return
+	}
+
+	msg := mailing.BuildAlreadySubscribedEmail(existing.Email, h.baseURL, existing.ManageToken, h.physicalAddress(ctx))
+	h.enqueueSend(sendJob{
+		subscriberID: existing.ID,
+		label:        "already-subscribed",
+		msg:          msg,
+		release: func(ctx context.Context) error {
+			return h.subs.ReleaseAlreadySubscribedClaim(ctx, existing.ID, h.now())
+		},
+	})
 }
 
 // physicalAddress reads settings.physical_address for the email footer. A
@@ -561,27 +751,29 @@ func passesTimingGate(renderedAtMS int64, now time.Time) bool {
 }
 
 // validEmailSyntax reports whether email is a syntactically valid, single,
-// undecorated address (no display name, no comments) using only ASCII
-// characters.
+// undecorated address (no display name, no comments).
 //
-// The ASCII-only restriction is deliberate, not an accidental
-// simplification: #0026's review carried in the observation that
-// normalizeEmail (Go's strings.ToLower, full Unicode case folding) and the
-// subscribers_email_normalized CHECK constraint (Postgres's lower(),
-// locale-dependent) can disagree on how to lowercase a non-ASCII rune. For
-// pure ASCII input the two case-fold identically, so an address that
-// passes this check can never trip that CHECK constraint and turn into a
-// 500 from an endpoint that must always answer 202. Rejecting here is
-// indistinguishable to the caller from any other syntax error — same
-// generic "invalid email" message — so it adds no new oracle.
+// An earlier version of this function rejected any non-ASCII byte outright,
+// to sidestep a real disagreement between Go's strings.ToLower (full
+// Unicode case folding) and Postgres's lower() (locale-dependent) on how to
+// lowercase certain runes — normalizeEmail used to run in Go, so an address
+// that passed this check but disagreed with the database's own lower()
+// could trip the subscribers_email_normalized CHECK and turn into a 500
+// from an endpoint that must always answer 202. #0026's review found that
+// restriction too broad: the actual disagreement was narrow (one
+// titlecase-digraph codepoint class, ǅ U+01C5, across a wide battery of
+// case-folding hazards), while RFC 6531 (SMTPUTF8) local parts and
+// internationalized domains are legitimate addresses a San Francisco
+// community group's subscribers can plausibly have. The narrower fix,
+// applied in internal/subscribers (Create/RestartSignup/FindByEmail), is to
+// stop normalizing in Go at all — SQL's lower(trim($1)) is now the only
+// place normalization happens, so this function no longer needs to predict
+// it and the ASCII restriction is gone. net/mail.ParseAddress already
+// accepts UTF-8 local parts and domains (verified: RFC 6532 aware), so
+// removing the byte-range check is the entire change.
 func validEmailSyntax(email string) bool {
 	if email == "" || len(email) > 254 {
 		return false
-	}
-	for i := 0; i < len(email); i++ {
-		if email[i] > 127 {
-			return false
-		}
 	}
 
 	addr, err := mail.ParseAddress(email)
@@ -635,9 +827,12 @@ var disposableEmailDomains = map[string]bool{
 
 // isDisposableDomain reports whether email's domain is on
 // disposableEmailDomains. Only meaningful after validEmailSyntax has
-// confirmed exactly one "@" and an ASCII-only address; strings.ToLower is
-// therefore safe (see validEmailSyntax's doc comment on the ASCII/Unicode
-// case-folding hazard this sidesteps entirely).
+// confirmed exactly one "@". strings.ToLower's Unicode case-folding hazard
+// (see internal/subscribers' package doc comment) doesn't apply here: every
+// key in disposableEmailDomains is a plain ASCII hostname, so a non-ASCII
+// domain simply never matches — a false negative (misses a hypothetical
+// IDN disposable provider), never a false positive, and not a bypass of
+// anything this blocklist is relied on to enforce.
 func isDisposableDomain(email string) bool {
 	at := strings.LastIndexByte(email, '@')
 	if at < 0 {

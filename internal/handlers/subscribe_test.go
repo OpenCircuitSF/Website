@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -123,16 +124,23 @@ func subscribeBody(email string, slugs []string, now time.Time) map[string]any {
 	}
 }
 
-func doSubscribe(t *testing.T, mux http.Handler, body map[string]any) *http.Response {
+// doSubscribe issues the request AND waits for h's async send workers to
+// drain (h.waitForSends) before returning, so a test can assert on mailer
+// state or subscriber rows immediately afterward without an arbitrary
+// sleep. This is deterministic-but-real: #0026's review moved mailer.Send
+// off the request/response path (finding 1), so the response itself no
+// longer indicates whether a queued send has finished — waitForSends is
+// what makes these tests trustworthy under that change.
+func doSubscribe(t *testing.T, h *SubscribeHandler, mux http.Handler, body map[string]any) *http.Response {
 	t.Helper()
-	return doSubscribeFrom(t, mux, body, "", "")
+	return doSubscribeFrom(t, h, mux, body, "", "")
 }
 
 // doSubscribeFrom is doSubscribe with control over RemoteAddr and
 // X-Forwarded-For, so #0077 regression tests can simulate a request arriving
 // via the trusted Apache hop (loopback RemoteAddr, matching
 // deploy/systemd/opencircuit.service) versus a direct/spoofed one.
-func doSubscribeFrom(t *testing.T, mux http.Handler, body map[string]any, remoteAddr, xff string) *http.Response {
+func doSubscribeFrom(t *testing.T, h *SubscribeHandler, mux http.Handler, body map[string]any, remoteAddr, xff string) *http.Response {
 	t.Helper()
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -148,7 +156,11 @@ func doSubscribeFrom(t *testing.T, mux http.Handler, body map[string]any, remote
 	}
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	return rec.Result()
+	resp := rec.Result()
+	if h != nil {
+		h.waitForSends()
+	}
+	return resp
 }
 
 func readBody(t *testing.T, resp *http.Response) []byte {
@@ -285,7 +297,7 @@ func TestSubscribe_UniformResponseAcrossBranches(t *testing.T) {
 	suppressedEmail := subscribeUniqueEmail(t) + "-suppressed"
 	suppression := fakeSuppressionChecker{suppressed: map[string]bool{suppressedEmail: true}}
 
-	_, mux := subscribeMux(pool, mailer, suppression)
+	h, mux := subscribeMux(pool, mailer, suppression)
 
 	cases := []struct {
 		name string
@@ -303,26 +315,62 @@ func TestSubscribe_UniformResponseAcrossBranches(t *testing.T) {
 	}
 
 	var firstBody []byte
-	var firstContentType string
+	var firstHeaders http.Header
 	for _, c := range cases {
-		resp := doSubscribe(t, mux, c.body)
+		resp := doSubscribe(t, h, mux, c.body)
 		body := readBody(t, resp)
 
 		if resp.StatusCode != http.StatusAccepted {
 			t.Fatalf("%s: status = %d, want %d; body=%s", c.name, resp.StatusCode, http.StatusAccepted, body)
 		}
+		headers := headersIgnoringDate(resp.Header)
 		if firstBody == nil {
 			firstBody = body
-			firstContentType = resp.Header.Get("Content-Type")
+			firstHeaders = headers
 			continue
 		}
 		if !bytes.Equal(body, firstBody) {
 			t.Errorf("%s: body = %q, want byte-identical to the first branch's %q", c.name, body, firstBody)
 		}
-		if ct := resp.Header.Get("Content-Type"); ct != firstContentType {
-			t.Errorf("%s: Content-Type = %q, want %q", c.name, ct, firstContentType)
+		// Full header set (minus Date), not just Content-Type: #0026's
+		// review found TestSubscribe_UniformResponseAcrossBranches's
+		// previous Content-Type-only comparison let a mutation adding
+		// w.Header().Set("X-Suppressed", "1") before the shared write
+		// pass — a genuine per-branch oracle the test claimed to rule
+		// out. See this file's mutation-proof notes.
+		if !headersEqual(headers, firstHeaders) {
+			t.Errorf("%s: headers = %v, want byte-identical (minus Date) to the first branch's %v", c.name, headers, firstHeaders)
 		}
 	}
+}
+
+// headersIgnoringDate returns a copy of h with any Date header removed —
+// the one header this test permits to vary, since #0026's endpoint doesn't
+// set it itself but a real net/http.Server would stamp it per-response.
+func headersIgnoringDate(h http.Header) http.Header {
+	clone := h.Clone()
+	clone.Del("Date")
+	return clone
+}
+
+// headersEqual reports whether a and b have exactly the same set of header
+// names, each with exactly the same (ordered) slice of values.
+func headersEqual(a, b http.Header) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, av := range a {
+		bv, ok := b[name]
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if av[i] != bv[i] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // activeEmailFor seeds a fresh active subscriber and returns its email — a
@@ -352,10 +400,10 @@ func withTooFast(body map[string]any, now time.Time) map[string]any {
 func TestSubscribe_HoneypotDiscardsSilently(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
-	resp := doSubscribe(t, mux, withHoneypot(subscribeBody(email, []string{}, time.Now())))
+	resp := doSubscribe(t, h, mux, withHoneypot(subscribeBody(email, []string{}, time.Now())))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -374,11 +422,11 @@ func TestSubscribe_HoneypotDiscardsSilently(t *testing.T) {
 func TestSubscribe_TimingGateRejectsTooFastOrMissing(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	t.Run("too-fast", func(t *testing.T) {
 		email := subscribeUniqueEmail(t) + "-fast"
-		resp := doSubscribe(t, mux, withTooFast(subscribeBody(email, []string{}, time.Now()), time.Now()))
+		resp := doSubscribe(t, h, mux, withTooFast(subscribeBody(email, []string{}, time.Now()), time.Now()))
 		if resp.StatusCode != http.StatusAccepted {
 			t.Fatalf("status = %d, want 202", resp.StatusCode)
 		}
@@ -391,7 +439,7 @@ func TestSubscribe_TimingGateRejectsTooFastOrMissing(t *testing.T) {
 		email := subscribeUniqueEmail(t) + "-missing"
 		body := subscribeBody(email, []string{}, time.Now())
 		delete(body, "rendered_at")
-		resp := doSubscribe(t, mux, body)
+		resp := doSubscribe(t, h, mux, body)
 		if resp.StatusCode != http.StatusAccepted {
 			t.Fatalf("status = %d, want 202", resp.StatusCode)
 		}
@@ -437,9 +485,9 @@ func TestSubscribe_SuppressedAddress_NoActionTaken(t *testing.T) {
 	mailer := &mailing.RecordingMailer{}
 	email := subscribeUniqueEmail(t)
 	suppression := fakeSuppressionChecker{suppressed: map[string]bool{email: true}}
-	_, mux := subscribeMux(pool, mailer, suppression)
+	h, mux := subscribeMux(pool, mailer, suppression)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -456,9 +504,9 @@ func TestSubscribe_SuppressionCheckError_FailsSafeToUniform202(t *testing.T) {
 	mailer := &mailing.RecordingMailer{}
 	email := subscribeUniqueEmail(t)
 	suppression := fakeSuppressionChecker{err: errors.New("suppression backend unavailable")}
-	_, mux := subscribeMux(pool, mailer, suppression)
+	h, mux := subscribeMux(pool, mailer, suppression)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202 even when the suppression check itself errors", resp.StatusCode)
 	}
@@ -477,10 +525,10 @@ func TestSubscribe_SuppressionCheckError_FailsSafeToUniform202(t *testing.T) {
 func TestSubscribe_NewSignup_CreatesPendingSendsConfirmationAndAudits(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
-	resp := doSubscribe(t, mux, subscribeBody(email, []string{"beginner", "microcontrollers"}, time.Now()))
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{"beginner", "microcontrollers"}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -539,12 +587,12 @@ func TestSubscribe_NewSignup_CreatesPendingSendsConfirmationAndAudits(t *testing
 func TestSubscribe_SignupIPUsesRightmostTrustedProxyEntry(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	const attackerClaimed = "172.16.0.7"
 	const realPeer = "198.51.100.9"
-	resp := doSubscribeFrom(t, mux, subscribeBody(email, []string{}, time.Now()),
+	resp := doSubscribeFrom(t, h, mux, subscribeBody(email, []string{}, time.Now()),
 		"127.0.0.1:9999", attackerClaimed+", "+realPeer)
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
@@ -564,12 +612,12 @@ func TestSubscribe_SignupIPUsesRightmostTrustedProxyEntry(t *testing.T) {
 func TestSubscribe_SignupIPCannotBeSpoofedWithoutTrustedProxy(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	const spoofed = "172.16.0.7"
 	const realPeer = "198.51.100.9"
-	resp := doSubscribeFrom(t, mux, subscribeBody(email, []string{}, time.Now()),
+	resp := doSubscribeFrom(t, h, mux, subscribeBody(email, []string{}, time.Now()),
 		realPeer+":4242", spoofed)
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
@@ -583,10 +631,10 @@ func TestSubscribe_SignupIPCannotBeSpoofedWithoutTrustedProxy(t *testing.T) {
 func TestSubscribe_EmptyInterestsAccepted(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
-	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -607,10 +655,10 @@ func TestSubscribe_EmptyInterestsAccepted(t *testing.T) {
 func TestSubscribe_UnknownInterestSlugRejected(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
-	resp := doSubscribe(t, mux, subscribeBody(email, []string{"not-a-real-slug"}, time.Now()))
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{"not-a-real-slug"}, time.Now()))
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
@@ -655,8 +703,15 @@ func TestValidEmailSyntax(t *testing.T) {
 		{"two@@example.com", false},
 		{"person@no-tld", false},
 		{"Display Name <person@example.com>", false}, // decorated form rejected
-		{"café@example.com", false},                  // non-ASCII local part
-		{"person@exämple.com", false},                // non-ASCII domain
+		// #0026's review (narrowing the non-ASCII rejection): non-ASCII
+		// local parts and domains are now accepted. Normalization moved
+		// into SQL (lower(trim($1)) in internal/subscribers), so the
+		// Go/Postgres lower() disagreement that used to justify rejecting
+		// these outright no longer exists — see that package's doc
+		// comment.
+		{"café@example.com", true},
+		{"person@exämple.com", true},
+		{"ǅ@example.com", true}, // the exact titlecase-digraph codepoint the review named
 	}
 	for _, c := range cases {
 		t.Run(c.email, func(t *testing.T) {
@@ -682,41 +737,66 @@ func TestIsDisposableDomain(t *testing.T) {
 func TestSubscribe_InvalidEmailSyntaxRejected(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
-	resp := doSubscribe(t, mux, subscribeBody("not-an-email", nil, time.Now()))
+	resp := doSubscribe(t, h, mux, subscribeBody("not-an-email", nil, time.Now()))
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 }
 
-func TestSubscribe_NonASCIIEmailRejected(t *testing.T) {
-	// #0026's carried-in criterion: normalizeEmail's Go strings.ToLower and
-	// the DB CHECK's Postgres lower() can disagree on a non-ASCII local
-	// part, which — if this were allowed through — would surface as a 500
-	// from an endpoint that must always answer 202. Closed off in syntax
-	// validation instead, so it never reaches the store at all.
+// TestSubscribe_NonASCIIEmailAccepted is #0026's review, "narrow the
+// non-ASCII rejection": a non-ASCII local part is now a legitimate signup
+// (RFC 6531), not a 400. This end-to-end request exercises the SQL-side
+// normalization path (internal/subscribers' Create uses lower(trim($1)))
+// all the way through — a 500 here would mean the Go/Postgres lower()
+// disagreement the review found still exists somewhere.
+func TestSubscribe_NonASCIIEmailAccepted(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	email := "café@example.com"
-	_, mux := subscribeMux(pool, mailer, nil)
+	email := fmt.Sprintf("café-%d@example.com", time.Now().UnixNano())
+	h, mux := subscribeMux(pool, mailer, nil)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 for a non-ASCII local part", resp.StatusCode)
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 for a non-ASCII local part", resp.StatusCode)
 	}
-	if subscriberExists(t, pool, email) {
-		t.Error("a subscriber row was created for a non-ASCII address")
+	if !subscriberExists(t, pool, email) {
+		t.Error("no subscriber row was created for a non-ASCII address")
+	}
+	if len(mailer.Sent()) != 1 {
+		t.Fatalf("mailer.Sent() = %d messages, want 1", len(mailer.Sent()))
+	}
+}
+
+// TestSubscribe_TitlecaseDigraphEmailAccepted is the end-to-end regression
+// test for the exact codepoint #0026's review named (ǅ U+01C5): Go's
+// strings.ToLower folds it to ǆ U+01C6, Postgres's lower() leaves it
+// unchanged. Under the old Go-side normalizeEmail + ASCII-only rejection,
+// this address was simply refused; under SQL-side normalization it must
+// succeed with no CHECK-constraint 500.
+func TestSubscribe_TitlecaseDigraphEmailAccepted(t *testing.T) {
+	pool := subscribeTestPool(t)
+	mailer := &mailing.RecordingMailer{}
+	email := fmt.Sprintf("ǅ-%d@example.com", time.Now().UnixNano())
+	h, mux := subscribeMux(pool, mailer, nil)
+
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if !subscriberExists(t, pool, email) {
+		t.Error("no subscriber row was created")
 	}
 }
 
 func TestSubscribe_DisposableDomainRejected(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	email := "zz-subtest@mailinator.com"
-	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
@@ -732,12 +812,12 @@ func TestSubscribe_DisposableDomainRejected(t *testing.T) {
 func TestSubscribe_ActiveSubscriber_SendsAlreadySubscribedEmail(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	id := seedSubscriberRow(t, pool, email, subscribers.StatusActive, nil, nil)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -755,6 +835,33 @@ func TestSubscribe_ActiveSubscriber_SendsAlreadySubscribedEmail(t *testing.T) {
 	}
 }
 
+// TestSubscribe_ActiveSubscriber_AlreadySubscribedEmailCooldown is #0026's
+// review finding 1's amplification fix, reproduced end to end: 20
+// sequential submits of one active subscriber's address used to produce 20
+// "already subscribed" emails to that person — an unauthenticated mail-
+// amplification vector against any confirmed subscriber. It must now
+// produce exactly one, with the rest silently claimed-out.
+func TestSubscribe_ActiveSubscriber_AlreadySubscribedEmailCooldown(t *testing.T) {
+	pool := subscribeTestPool(t)
+	mailer := &mailing.RecordingMailer{}
+	h, mux := subscribeMux(pool, mailer, nil)
+
+	email := subscribeUniqueEmail(t)
+	seedSubscriberRow(t, pool, email, subscribers.StatusActive, nil, nil)
+
+	const submits = 20
+	for i := 0; i < submits; i++ {
+		resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("submit %d: status = %d, want 202", i, resp.StatusCode)
+		}
+	}
+
+	if sent := len(mailer.Sent()); sent != 1 {
+		t.Fatalf("mailer.Sent() = %d messages after %d sequential submits, want exactly 1 (PRD §6.3 amplification fix)", sent, submits)
+	}
+}
+
 func TestSubscribe_PendingSubscriber_ResendRateLimitedToOncePerHour(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
@@ -769,7 +876,7 @@ func TestSubscribe_PendingSubscriber_ResendRateLimitedToOncePerHour(t *testing.T
 	id := seedSubscriberRow(t, pool, email, subscribers.StatusPending, &token, &recentlySent)
 
 	// Within the cooldown: no email sent, confirm_sent_at untouched.
-	resp := doSubscribe(t, mux, subscribeBody(email, nil, fixedNow))
+	resp := doSubscribe(t, h, mux, subscribeBody(email, nil, fixedNow))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -790,7 +897,7 @@ func TestSubscribe_PendingSubscriber_ResendRateLimitedToOncePerHour(t *testing.T
 		t.Fatalf("resetting confirm_sent_at: %v", err)
 	}
 
-	resp2 := doSubscribe(t, mux, subscribeBody(email, nil, fixedNow))
+	resp2 := doSubscribe(t, h, mux, subscribeBody(email, nil, fixedNow))
 	if resp2.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp2.StatusCode)
 	}
@@ -803,15 +910,99 @@ func TestSubscribe_PendingSubscriber_ResendRateLimitedToOncePerHour(t *testing.T
 	}
 }
 
+// ============================================================================
+// #0026's review, finding 3 — concurrent submits must send at most one
+// confirmation, end to end over the real HTTP handler (not just the store's
+// own ClaimConfirmationSend test). Reproduces the review's exact numbers:
+// "8 simultaneous submits of a BRAND-NEW address -> 3 confirmation emails
+// sent" and "8 simultaneous submits of a PENDING address, confirm_sent_at
+// NULL -> 7 confirmation emails sent" against the pre-fix handler. Both
+// must now be exactly 1.
+// ============================================================================
+
+// concurrentSubscribe fires n simultaneous POST /api/subscribe requests for
+// the same body and blocks until every one has both returned AND had its
+// async send (if any) processed, so the caller can count sent mail
+// deterministically.
+func concurrentSubscribe(t *testing.T, h *SubscribeHandler, mux http.Handler, body map[string]any, n int) {
+	t.Helper()
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			b, err := json.Marshal(body)
+			if err != nil {
+				t.Errorf("marshal: %v", err)
+				return
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/subscribe", bytes.NewReader(b))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusAccepted {
+				t.Errorf("concurrent request: status = %d, want 202", rec.Code)
+			}
+		}()
+	}
+	close(start) // release every goroutine at once, maximizing the race window
+	wg.Wait()
+	h.waitForSends()
+}
+
+// TestSubscribe_ConcurrentNewSignups_SendsExactlyOneConfirmation is the
+// "8 simultaneous submits of a BRAND-NEW address" case from #0026's review.
+// Before the fix (a read-then-write MarkConfirmationSent, with FindByEmail
+// racing Create), interleaved requests could observe a just-created pending
+// row with confirm_sent_at still NULL and independently resend — 3 of 8 in
+// the review's own measurement. The atomic ClaimConfirmationSend closes
+// that window: exactly one request may ever claim a cold row.
+func TestSubscribe_ConcurrentNewSignups_SendsExactlyOneConfirmation(t *testing.T) {
+	pool := subscribeTestPool(t)
+	mailer := &mailing.RecordingMailer{}
+	h, mux := subscribeMux(pool, mailer, nil)
+
+	email := subscribeUniqueEmail(t) + "-concurrent-new"
+	concurrentSubscribe(t, h, mux, subscribeBody(email, nil, time.Now()), 8)
+
+	if sent := len(mailer.Sent()); sent != 1 {
+		t.Fatalf("mailer.Sent() = %d messages after 8 simultaneous submits of a brand-new address, want exactly 1", sent)
+	}
+	if !subscriberExists(t, pool, email) {
+		t.Error("no subscriber row was created")
+	}
+}
+
+// TestSubscribe_ConcurrentPendingResends_SendsExactlyOneConfirmation is the
+// "8 simultaneous submits of a PENDING address, confirm_sent_at NULL" case
+// from #0026's review (7 of 8 sent, pre-fix).
+func TestSubscribe_ConcurrentPendingResends_SendsExactlyOneConfirmation(t *testing.T) {
+	pool := subscribeTestPool(t)
+	mailer := &mailing.RecordingMailer{}
+	h, mux := subscribeMux(pool, mailer, nil)
+
+	email := subscribeUniqueEmail(t) + "-concurrent-pending"
+	token := "tok-" + email
+	seedSubscriberRow(t, pool, email, subscribers.StatusPending, &token, nil) // confirm_sent_at NULL
+
+	concurrentSubscribe(t, h, mux, subscribeBody(email, nil, time.Now()), 8)
+
+	if sent := len(mailer.Sent()); sent != 1 {
+		t.Fatalf("mailer.Sent() = %d messages after 8 simultaneous submits of a pending address with confirm_sent_at NULL, want exactly 1", sent)
+	}
+}
+
 func TestSubscribe_UnsubscribedSubscriber_RestartsWithFreshTokenAndSendsConfirmation(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	id := seedSubscriberRow(t, pool, email, subscribers.StatusUnsubscribed, nil, nil)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, []string{"homelab"}, time.Now()))
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{"homelab"}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -850,12 +1041,12 @@ func TestSubscribe_UnsubscribedSubscriber_RestartsWithFreshTokenAndSendsConfirma
 func TestSubscribe_BouncedSubscriber_RestartsSameAsUnsubscribed(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	seedSubscriberRow(t, pool, email, subscribers.StatusBounced, nil, nil)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, []string{}, time.Now()))
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
@@ -880,12 +1071,12 @@ func TestSubscribe_BouncedSubscriber_RestartsSameAsUnsubscribed(t *testing.T) {
 func TestSubscribe_ComplainedSubscriber_NoActionTaken(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	_, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	id := seedSubscriberRow(t, pool, email, subscribers.StatusComplained, nil, nil)
 
-	resp := doSubscribe(t, mux, subscribeBody(email, []string{"beginner"}, time.Now()))
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{"beginner"}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}

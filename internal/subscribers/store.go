@@ -3,13 +3,22 @@
 // user account, plus the consent evidence that makes the list defensible)
 // and the subscriber_interests join table.
 //
-// Email normalization: every write path lowercases and trims the address
-// before it reaches SQL (normalizeEmail), and the database backstops that
-// with the subscribers_email_normalized CHECK constraint added in
-// migrations/000010_create_subscribers.up.sql. Per the issue's notes, Gmail
-// dots and "+tag" suffixes are never stripped — they are distinct addresses
-// per RFC 5321/5322 and people use them deliberately to segment their own
-// mail.
+// Email normalization: every write path normalizes the address in SQL —
+// lower(trim($1)) — rather than in Go, per #0026's review (finding, "narrow
+// the non-ASCII rejection"). An earlier version lowercased in Go
+// (strings.ToLower) before handing the result to the database, which
+// disagrees with Postgres's lower() on at least one titlecase-digraph
+// codepoint (ǅ U+01C5): Go folds it to ǆ, Postgres leaves it unchanged, so
+// a value the Go layer had already "normalized" could still trip the
+// subscribers_email_normalized CHECK below. Normalizing in SQL means the
+// same engine that enforces the CHECK also computes the value stored, so
+// the two can never disagree — the CHECK is satisfied by construction, for
+// every codepoint, not just ASCII. This is also why the #0026 handler no
+// longer rejects non-ASCII email syntax: RFC 6531 (SMTPUTF8) addresses are
+// legitimate and the divergence that justified the restriction no longer
+// exists. Per the issue's notes, Gmail dots and "+tag" suffixes are never
+// stripped — they are distinct addresses per RFC 5321/5322 and people use
+// them deliberately to segment their own mail.
 //
 // Tokens: confirm_token and manage_token are 32 random bytes from
 // crypto/rand, base64url-encoded (tokens.go) — not an HMAC of the email
@@ -33,7 +42,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -90,23 +98,28 @@ const statusLockedFromNonAdmin = StatusComplained
 
 // Subscriber is a single row of the subscribers table.
 type Subscriber struct {
-	ID                int64
-	Email             string
-	Status            string
-	ConfirmToken      *string
-	ConfirmSentAt     *time.Time
-	ConfirmExpiresAt  *time.Time
-	ConfirmedAt       *time.Time
-	ManageToken       string
-	SignupIP          *string
-	SignupUserAgent   *string
-	UTMSource         *string
-	UTMMedium         *string
-	UTMCampaign       *string
-	UnsubscribedAt    *time.Time
-	UnsubscribeSource *string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID               int64
+	Email            string
+	Status           string
+	ConfirmToken     *string
+	ConfirmSentAt    *time.Time
+	ConfirmExpiresAt *time.Time
+	ConfirmedAt      *time.Time
+	// AlreadySubscribedSentAt is the claim column for the "you're already
+	// subscribed" email (#0026 review finding 1): mirrors ConfirmSentAt's
+	// role for the confirmation email, gating the same once-per-cooldown
+	// send via ClaimAlreadySubscribedSend / ReleaseAlreadySubscribedClaim.
+	AlreadySubscribedSentAt *time.Time
+	ManageToken             string
+	SignupIP                *string
+	SignupUserAgent         *string
+	UTMSource               *string
+	UTMMedium               *string
+	UTMCampaign             *string
+	UnsubscribedAt          *time.Time
+	UnsubscribeSource       *string
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 // NewSignup is the input to Create: everything captured at the moment a
@@ -134,24 +147,17 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// normalizeEmail lowercases and trims an address the same way every write
-// path and the database CHECK constraint expect. It deliberately does NOT
-// strip Gmail dots or "+tag" suffixes — see the package doc comment.
-func normalizeEmail(email string) string {
-	return strings.ToLower(strings.TrimSpace(email))
-}
-
 const subscriberColumns = `id, email, status, confirm_token, confirm_sent_at,
-	confirm_expires_at, confirmed_at, manage_token, host(signup_ip),
-	signup_user_agent, utm_source, utm_medium, utm_campaign,
+	confirm_expires_at, confirmed_at, already_subscribed_sent_at, manage_token,
+	host(signup_ip), signup_user_agent, utm_source, utm_medium, utm_campaign,
 	unsubscribed_at, unsubscribe_source, created_at, updated_at`
 
 func scanSubscriber(row pgx.Row) (Subscriber, error) {
 	var sub Subscriber
 	err := row.Scan(
 		&sub.ID, &sub.Email, &sub.Status, &sub.ConfirmToken, &sub.ConfirmSentAt,
-		&sub.ConfirmExpiresAt, &sub.ConfirmedAt, &sub.ManageToken, &sub.SignupIP,
-		&sub.SignupUserAgent, &sub.UTMSource, &sub.UTMMedium, &sub.UTMCampaign,
+		&sub.ConfirmExpiresAt, &sub.ConfirmedAt, &sub.AlreadySubscribedSentAt, &sub.ManageToken,
+		&sub.SignupIP, &sub.SignupUserAgent, &sub.UTMSource, &sub.UTMMedium, &sub.UTMCampaign,
 		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.CreatedAt, &sub.UpdatedAt,
 	)
 	if err != nil {
@@ -186,8 +192,6 @@ func nullIfEmpty(s string) any {
 // actually succeeds, so the resend cooldown is anchored to a real delivery
 // attempt, not a delivery attempt that may never have left the process.
 func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscriber, error) {
-	email := normalizeEmail(in.Email)
-
 	confirmToken, err := newToken()
 	if err != nil {
 		return Subscriber{}, err
@@ -198,15 +202,18 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 	}
 	confirmExpiresAt := now.Add(in.ConfirmTTL)
 
+	// email is normalized in SQL (lower(trim($1))), not in Go — see the
+	// package doc comment on why: one engine defines normalization, so it
+	// can never disagree with the subscribers_email_normalized CHECK below.
 	row := s.pool.QueryRow(ctx,
 		`INSERT INTO subscribers
 		     (email, status, confirm_token, confirm_sent_at, confirm_expires_at,
 		      manage_token, signup_ip, signup_user_agent,
 		      utm_source, utm_medium, utm_campaign, created_at, updated_at)
 		 VALUES
-		     ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+		     (lower(trim($1)), $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11, $11)
 		 RETURNING `+subscriberColumns,
-		email, StatusPending, confirmToken, confirmExpiresAt,
+		in.Email, StatusPending, confirmToken, confirmExpiresAt,
 		manageToken, nullIfEmpty(in.SignupIP), nullIfEmpty(in.SignupUserAgent),
 		nullIfEmpty(in.UTMSource), nullIfEmpty(in.UTMMedium), nullIfEmpty(in.UTMCampaign), now,
 	)
@@ -215,48 +222,117 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 		if isUniqueViolation(err) {
 			return Subscriber{}, ErrEmailExists
 		}
-		return Subscriber{}, fmt.Errorf("subscribers: creating %q: %w", email, err)
+		return Subscriber{}, fmt.Errorf("subscribers: creating %q: %w", in.Email, err)
 	}
 	return sub, nil
 }
 
-// MarkConfirmationSent stamps confirm_sent_at = now. It is the compensating
-// action for the confirm_sent_at decision documented on Create: nothing
-// stamps this column at signup time, so the #0026 handler calls this method
-// exactly once, immediately after a confirmation-email send actually
-// succeeds — for a brand-new signup (Create), a restarted signup
-// (RestartSignup), or a resend to an already-pending subscriber. If the send
-// fails, the handler never calls this method, so confirm_sent_at (and
-// therefore the once-per-hour resend cooldown the handler computes from it)
-// stays exactly where it was and the caller can retry immediately.
+// ClaimConfirmationSend atomically claims the right to send a confirmation
+// email to subscriber id: it stamps confirm_sent_at = now in the same
+// UPDATE that checks the once-per-hour cooldown (PRD §6.3), so the check
+// and the claim can never be split by a race the way a separate read-then-
+// write would be.
 //
-// Deliberately does NOT consult statusLockedFromNonAdmin: this method never
-// writes status, so there is nothing for the guard to protect against — a
-// complained subscriber's confirm_sent_at is not part of the vocabulary
-// CLAUDE.md §9 locks.
-func (s *Store) MarkConfirmationSent(ctx context.Context, id int64, now time.Time) (Subscriber, error) {
-	row := s.pool.QueryRow(ctx,
+// Returns claimed=true (and stamps the row) only if confirm_sent_at is
+// currently NULL or older than now-cooldown; otherwise it changes nothing
+// and returns claimed=false — either because the cooldown is genuinely
+// active, or because a concurrent request already won the claim a moment
+// ago. The caller cannot tell those two cases apart from this return value
+// alone, and does not need to: either way, this request must not send.
+//
+// #0026's review (finding 3) found the earlier MarkConfirmationSent — an
+// unconditional stamp, called only after a successful send, with the
+// cooldown decision made by a separate, earlier read of the row — left a
+// window between that read and the eventual write where multiple
+// concurrent requests could all observe "not in cooldown" and all send.
+// Folding the check into the UPDATE's WHERE clause closes that window: at
+// most one concurrent caller can ever see claimed=true for a given
+// cooldown period. See ReleaseConfirmationClaim for what happens if the
+// send this claim was for then fails.
+func (s *Store) ClaimConfirmationSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (claimed bool, err error) {
+	cutoff := now.Add(-cooldown)
+	tag, err := s.pool.Exec(ctx,
 		`UPDATE subscribers
 		    SET confirm_sent_at = $2, updated_at = $2
-		  WHERE id = $1
-		 RETURNING `+subscriberColumns,
-		id, now,
+		  WHERE id = $1 AND (confirm_sent_at IS NULL OR confirm_sent_at < $3)`,
+		id, now, cutoff,
 	)
-	sub, err := scanSubscriber(row)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return Subscriber{}, ErrNotFound
-	case err != nil:
-		return Subscriber{}, fmt.Errorf("subscribers: marking confirmation sent for %d: %w", id, err)
+	if err != nil {
+		return false, fmt.Errorf("subscribers: claiming confirmation send for %d: %w", id, err)
 	}
-	return sub, nil
+	return tag.RowsAffected() == 1, nil
 }
 
-// FindByEmail looks up a subscriber by (normalized) email.
+// ReleaseConfirmationClaim reverts a ClaimConfirmationSend claim whose send
+// then failed, so a later request can retry immediately rather than being
+// blocked by a cooldown anchored to a message that was never delivered —
+// the same "don't get stuck for an hour" property #0025's review required
+// of the original stamp-after-send design, preserved here despite the
+// stamp now happening before the send.
+//
+// Sets confirm_sent_at back to NULL unconditionally, not to whatever value
+// preceded the claim. That is provably equivalent for this column's only
+// purpose (gating the cooldown): ClaimConfirmationSend's WHERE clause
+// guarantees the prior value was either already NULL or already more than
+// cooldown old, and both of those states permit an immediate resend, which
+// is exactly what NULL also permits. No caller of this method needs to
+// distinguish those two "already permits a resend" states from each other.
+//
+// Deliberately does NOT consult statusLockedFromNonAdmin, for the same
+// reason MarkConfirmationSent didn't: this method never writes status.
+func (s *Store) ReleaseConfirmationClaim(ctx context.Context, id int64, now time.Time) error {
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE subscribers SET confirm_sent_at = NULL, updated_at = $2 WHERE id = $1`,
+		id, now,
+	); err != nil {
+		return fmt.Errorf("subscribers: releasing confirmation claim for %d: %w", id, err)
+	}
+	return nil
+}
+
+// ClaimAlreadySubscribedSend is ClaimConfirmationSend's counterpart for the
+// "you're already subscribed" email (PRD §6.3's active branch). #0026's
+// review (finding 1) measured 20 sequential submits of one active
+// subscriber's address producing 20 emails to that person — this path had
+// no cooldown of any kind, unlike the confirmation email — which is both an
+// unauthenticated mail-amplification vector and half of a two-probe
+// enumeration oracle (see internal/handlers/subscribe.go's package doc
+// comment). Same atomic claim-in-the-WHERE-clause shape, same reasoning,
+// a separate column (already_subscribed_sent_at) because the two emails
+// have independent cooldowns.
+func (s *Store) ClaimAlreadySubscribedSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (claimed bool, err error) {
+	cutoff := now.Add(-cooldown)
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE subscribers
+		    SET already_subscribed_sent_at = $2, updated_at = $2
+		  WHERE id = $1 AND (already_subscribed_sent_at IS NULL OR already_subscribed_sent_at < $3)`,
+		id, now, cutoff,
+	)
+	if err != nil {
+		return false, fmt.Errorf("subscribers: claiming already-subscribed send for %d: %w", id, err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ReleaseAlreadySubscribedClaim is ReleaseConfirmationClaim's counterpart
+// for already_subscribed_sent_at; see that method's doc comment for why
+// reverting to NULL (rather than the pre-claim value) is correct.
+func (s *Store) ReleaseAlreadySubscribedClaim(ctx context.Context, id int64, now time.Time) error {
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE subscribers SET already_subscribed_sent_at = NULL, updated_at = $2 WHERE id = $1`,
+		id, now,
+	); err != nil {
+		return fmt.Errorf("subscribers: releasing already-subscribed claim for %d: %w", id, err)
+	}
+	return nil
+}
+
+// FindByEmail looks up a subscriber by (normalized) email. Normalizes in
+// SQL (lower(trim($1))), matching Create — see the package doc comment.
 func (s *Store) FindByEmail(ctx context.Context, email string) (Subscriber, error) {
 	row := s.pool.QueryRow(ctx,
-		`SELECT `+subscriberColumns+` FROM subscribers WHERE email = $1`,
-		normalizeEmail(email))
+		`SELECT `+subscriberColumns+` FROM subscribers WHERE email = lower(trim($1))`,
+		email)
 	sub, err := scanSubscriber(row)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
