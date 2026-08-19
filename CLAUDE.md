@@ -174,6 +174,20 @@ Then confirm the output shows **zero skips** and that the DB-backed packages
 `internal/middleware`) actually reported `ok` rather than `[no test files]` or a
 skip notice. A package that reports `ok` in 0.00s did not talk to a database.
 
+**Never scan the filesystem to locate a dependency.** A subagent once ran
+`find / -type d -name 'go-webauthn'` and it was still going 28 minutes later.
+Ask the toolchain instead — it answers in milliseconds:
+
+```bash
+go list -m -f '{{.Dir}}' github.com/go-webauthn/webauthn   # a module's source
+go env GOMODCACHE                                          # the module cache root
+go doc github.com/go-webauthn/webauthn.Config              # an API without reading files
+npm ls --parseable <pkg>                                   # a node package
+```
+
+Scope every `find` to the repo (`find . -name …`). A bare `find /` is never the
+right tool here.
+
 **Always bound verification output.** A full `go test ./...` on a tree this size
 emits more tokens than the entire PRD, and the summary is the last few lines.
 Pipe through `tail -40` by default; re-run a single failing package unbounded
