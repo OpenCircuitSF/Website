@@ -212,7 +212,23 @@ export function navigate(path: string, { replace = false }: NavigateOptions = {}
  * without navigating anywhere (same URL, replaceState). Called just before
  * every push/replace in navigate(), from the throttled scroll listener, and on
  * pagehide, so whichever entry the user eventually Backs (or Forwards) into
- * has an accurate offset to restore. */
+ * has an accurate offset to restore.
+ *
+ * #0074: while a restore is (or just was) in flight, `window.scrollY` reads
+ * whatever it is currently clamped to against the not-yet-tall-enough
+ * document -- typically 0 -- not where the user actually left this entry.
+ * Stamping that would overwrite the entry's own good saved offset with the
+ * clamp. `pendingRestoreTarget`, set by restoreScroll(), is exactly that good
+ * offset (it is what was just read back off this same entry's state to start
+ * the restore), so it is used in place of window.scrollY whenever it is set.
+ *
+ * This covers both exits the issue calls out: the pagehide listener calls
+ * this function directly while restoringScroll is still true, and navigate()
+ * calls cancelRestore() (which clears restoringScroll) immediately before
+ * calling this function -- so a naive `if (restoringScroll)` guard here would
+ * miss the navigate() path. pendingRestoreTarget is deliberately left alone by
+ * cancelRestore() so it survives that reordering; it is consumed (and only
+ * then cleared) right here. */
 function saveScrollToCurrentEntry(): void {
   // Any explicit save supersedes a pending throttled one, and re-arms the
   // throttle window -- otherwise the pending trailing timer would fire *after*
@@ -220,9 +236,13 @@ function saveScrollToCurrentEntry(): void {
   // offset.
   cancelPendingScrollSave();
   lastScrollSaveAt = Date.now();
+
+  const scrollY = pendingRestoreTarget !== null ? pendingRestoreTarget : window.scrollY;
+  pendingRestoreTarget = null;
+
   try {
     window.history.replaceState(
-      { scrollY: window.scrollY },
+      { scrollY },
       '',
       window.location.pathname + window.location.search,
     );
@@ -272,6 +292,15 @@ let lastScrollSaveAt = 0;
  * importantly, so a mid-traversal clamp of the outgoing document's height
  * cannot stamp the incoming entry with a bogus offset). */
 let restoringScroll = false;
+/** The offset restoreScroll() is currently trying to reach -- i.e. the good
+ * offset already saved on the current entry -- or null when no restore is in
+ * flight. Read (and cleared) by saveScrollToCurrentEntry() in place of
+ * window.scrollY so a save triggered mid-restore cannot stamp a clamped read
+ * over it (#0074). Deliberately NOT cleared by cancelRestore(): navigate()
+ * calls cancelRestore() immediately before saveScrollToCurrentEntry(), and
+ * this value has to survive that call to still be there when the save reads
+ * it. */
+let pendingRestoreTarget: number | null = null;
 
 function cancelPendingScrollSave(): void {
   if (scrollSaveTimer !== null) {
@@ -315,11 +344,13 @@ let restoreToken = 0;
 function restoreScroll(saved: number): void {
   const token = ++restoreToken;
   restoringScroll = true;
+  pendingRestoreTarget = saved;
   cancelPendingScrollSave();
 
   const finish = (): void => {
     if (token !== restoreToken) return;
     restoringScroll = false;
+    pendingRestoreTarget = null;
     lastScrollSaveAt = Date.now();
   };
 
@@ -370,6 +401,12 @@ function restoreScroll(saved: number): void {
  * next frame; restoringScroll must be cleared here rather than left to that
  * loop's own finish(), which is token-guarded and will refuse to clear it once
  * it has been superseded (leaving scroll stamping suppressed for good).
+ *
+ * Deliberately leaves pendingRestoreTarget alone (#0074): navigate() calls
+ * this immediately before saveScrollToCurrentEntry(), which still needs that
+ * value to correctly save the entry being left rather than stamping it with
+ * whatever the now-abandoned restore had clamped window.scrollY to.
+ * saveScrollToCurrentEntry() is the one that clears it, once it has been read.
  */
 function cancelRestore(): void {
   restoreToken++;
