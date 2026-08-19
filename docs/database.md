@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000008`). No ORM — every
+(`migrations/`, numbered `000001`–`000010`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -37,14 +37,23 @@ contiguous range — ShortLinks' `links`, `clicks`, `campaigns`,
 `url_filter_rules`, and UTM migrations were deleted outright in `#0004`
 (they served a URL shortener this project doesn't have).
 
-## Planned schema (Phase 3+, per `PRD.md` §6.2)
+## Mailing list schema (Phase 3, per `PRD.md` §6.2)
+
+| Migration | Tables / change |
+|---|---|
+| `000009_create_interests` | `interests` — the workshop interest taxonomy (`#0023`). Rows, not a Go enum: new themes appear constantly and adding one must not require a deploy. `slug` is CHECK-constrained to lowercase-hyphenated and UNIQUE. Seeds the twelve PRD §6.1 slugs via `ON CONFLICT (slug) DO NOTHING`, so `up` stays idempotent against an already-seeded database. Numbered ahead of `subscribers` because `subscriber_interests` (below) carries a foreign key to it |
+| `000010_create_subscribers` | `subscribers` — list membership independent of any user account, plus the consent evidence (`signup_ip`, `signup_user_agent`, `created_at`, `confirmed_at`) a deliverability complaint needs answering (`#0025`, `#0075`'s privacy policy). `status` is CHECK-constrained to `pending \| active \| unsubscribed \| bounced \| complained`; nothing in `internal/subscribers` ever moves a subscriber out of `complained` (CLAUDE.md §9 — only a future admin path can). `confirm_token` and `manage_token` are both `UNIQUE`, 32 random bytes from `crypto/rand` (not an HMAC of the email, per PRD §6.4). `email` is CHECK-constrained to `lower(trim(email))` — Gmail dots and `+tag` suffixes are deliberately never stripped. Also creates `subscriber_interests` (composite PK, `ON DELETE CASCADE` both ways) — a subscriber with zero rows here is valid and expected (general announcements only, PRD §6.1) |
+
+`internal/interests` and `internal/subscribers` are the corresponding
+Go store packages; see their package doc comments for the store-layer
+normalization and transition rules layered on top of the constraints above.
+
+## Planned schema (Phase 3+ continued, per `PRD.md` §6.2)
 
 Not yet implemented. `PRD.md` §6.2 is the authoritative source for exact
 column definitions; the tables it describes, roughly in build order:
 
-- `interests` — the interest taxonomy (`#0023`)
-- `subscribers`, `subscriber_interests`, plus the confirmation-token and
-  suppression-list machinery the double opt-in flow needs (`#0025`)
+- `suppressions` — the global suppression list checked before every send (`#0033`)
 - `email_campaigns` and its send-tracking tables (`#0040`) — an unrelated
   concept from ShortLinks' `campaigns` table (link grouping), which this
   project never ported; the word is coincidental
