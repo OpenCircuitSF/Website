@@ -11,6 +11,16 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png?v=3" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=3" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3" />
+    <script>
+      // Applied before first paint so the correct theme is never repainted.
+      // Cycles auto -> light -> dark (theme-toggle script, #0011); "auto"
+      // removes the attribute entirely rather than pinning the current OS
+      // value, so prefers-color-scheme keeps driving the page.
+      try {
+        var t = localStorage.getItem('theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="app"></div>

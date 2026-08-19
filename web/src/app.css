@@ -1,65 +1,71 @@
-/* ── Design tokens ──────────────────────────────────────────────────────────── */
+/* ── Design tokens ──────────────────────────────────────────────────────────
+   Open Circuit SF terminal palette (PRD §4.2). Light is the bare :root
+   definition — designed as a printed listing (paper-white panels, near-black
+   text, deep green accent), not an inverted dark theme. Dark is restated
+   twice: once under prefers-color-scheme guarded against an explicit light
+   override, and once under [data-theme="dark"] so the in-page toggle wins in
+   both directions. The chosen theme is applied before first paint by the
+   blocking inline script in index.html's <head>.
+
+   Ported from placeholder/index.html, the validated reference implementation
+   (CLAUDE.md §6). Do not add hex literals outside this block — ShortLinks
+   accumulated stray hex in components that had to be hunted down later; every
+   color anywhere else in the app must come from one of these custom
+   properties.
+   ------------------------------------------------------------------------ */
 :root {
-  /* Allow the browser to theme native controls to match */
+  /* Allow the browser to theme native controls (scrollbars, form controls) */
   color-scheme: light dark;
 
   /* Color — neutrals */
-  --bg-page:    #f6f7f8;
-  --bg-panel:   #ffffff;
-  --bg-subtle:  #f0f1f3;
-  --bg-header:  #eceef0;
+  --bg-page:       #F4F6F3;
+  --bg-panel:      #FFFFFF;
+  --bg-subtle:     #E9EEE6;
+  --bg-header:     #E1E8DE;
 
   /* Color — text */
-  --text:        #1c1e21;
-  --text-muted:  #65676b;
-  --text-faint:  #8a8d91;
+  --text:          #10140F;
+  --text-muted:    #4C574A;
+  --text-faint:    #5F6A5C;
 
   /* Color — borders */
-  --border:        #d3d6da;
-  --border-strong: #b7bbc0;
+  --border:        #CFD8CA;
+  --border-strong: #87977F;
 
-  /* Color — accent (single) */
-  --accent:        #2d5fa3;
-  --accent-hover:  #244e87;
-  --accent-text:   #ffffff;
-  --accent-subtle: #e7eef7;
+  /* Color — accent. This IS the logo green (§4.5): dark --accent is the
+   * brand green #68FF23 straight off the mark; light --accent (#2F7D0C) is
+   * the same hue/saturation with value lowered to clear 4.5:1 on white —
+   * the identical relationship the two logo tints (logo-green / logo-light)
+   * use. Never used for body copy — see the rule below.
+   */
+  --accent:        #2F7D0C;
+  --accent-hover:  #245F09;
+  --accent-text:   #FFFFFF;
+  --accent-subtle: #E4F1DB;
+  /* Decorative only (rules, dividers, the "> " prompt chevron) — deliberately
+   * low-contrast; must never carry text or state. */
+  --accent-dim:    #79C34A;
+
+  /* Status (use sparingly, never as the only signal of state) */
+  --warning: #8A5A00;
+  --danger:  #B4231B;
+  /* "Success" reuses --accent rather than a second green: the [ OK ] status
+   * motif already IS the accent color, so a distinct success hue would just
+   * compete with it. */
+  --success: var(--accent);
+
+  /* Status surface tints — badge backgrounds and notice boxes */
+  --success-subtle:  var(--accent-subtle);
+  --danger-subtle:   #FBE7E4;
+  --danger-hover-bg: #F5D6D2;
 
   /*
    * Chart series (categorical) — reserved for a future categorical chart's
-   * per-series lines/legend swatches. Six hand-picked hue slots (never
-   * generated/cycled — see docs/frontend.md and the dataviz skill's
-   * color-formula): fixed order.
-   *
-   * Contrast: each slot's ratio against this file's own --bg-panel surfaces
-   * (#ffffff light / #161b22 dark) was computed directly from the WCAG 2.1
-   * relative-luminance formula (no external tool or script). Measured ratios:
-   *
-   *   slot      light    dark
-   *   1 #2a78d6  4.42    4.75
-   *   2 #eb6834  3.20    4.45
-   *   3 #1baf7a  2.82    5.08
-   *   4 #c98500  3.07    5.63   (raised from #eda100's 2.17 — below any
-   *                              applicable threshold; now shares the
-   *                              dark-mode value on both sides)
-   *   5 #e87ba4  2.69    4.38
-   *   6 #008300  4.95    3.50
-   *
-   * WCAG 1.4.11 (non-text contrast, the criterion that actually applies to a
-   * 2px chart stroke) wants 3:1. Slots 3 and 5 stay below that in light mode
-   * as a DOCUMENTED trade-off: distinguishing "which line is which" doesn't
-   * rely on raw line color alone even there — the "Other" series is dashed
-   * (not just a color), each series has its own dot markers, and the
-   * accessible data table (below, in every chart component) is the true
-   * fallback for reading exact values. The always-visible legend does NOT
-   * fix low line-color contrast the way an earlier version of this comment
-   * claimed: the legend swatch is the identical color at the identical
-   * contrast, so it tells you which label a already-visible line carries —
-   * it cannot make a hard-to-see line easier to see in the first place.
-   *
-   * --series-other is the synthetic "Other" fold for any series-capping
-   * chart and deliberately reuses --text-faint rather than a 7th hue, so a
-   * fold of many series reads as a muted aggregate — never mistaken for a
-   * named series' identity.
+   * per-series lines/legend swatches. Not part of the terminal rebrand
+   * (PRD §4.2 has no chart palette) and unused anywhere in the app yet;
+   * carried forward unchanged from ShortLinks pending real dataviz work —
+   * see docs/frontend.md and the dataviz skill's color-formula for how to
+   * pick a real set when that work starts.
    */
   --series-1: #2a78d6;
   --series-2: #eb6834;
@@ -69,16 +75,6 @@
   --series-6: #008300;
   --series-other: var(--text-faint);
 
-  /* Status (use sparingly) */
-  --success: #2e7d32;
-  --danger:  #c62828;
-  --warning: #b26a00;
-
-  /* Status surface tints — used for badge backgrounds and notice boxes */
-  --success-subtle: #e8f5e9;
-  --danger-subtle:  #fdecea;
-  --danger-hover-bg: #fbeaea;
-
   /* Spacing — 8px grid */
   --space-1: 4px;
   --space-2: 8px;
@@ -87,20 +83,95 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  /* Typography */
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
-          Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Typography — families point at the self-hosted webfonts (#0012); the
+   * @font-face rules that make these names resolve to real files (rather
+   * than falling back) live below. */
+  --font:      'Archivo', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --fs-sm:   12px;
   --fs-base: 13px;
   --fs-md:   15px;
   --fs-lg:   18px;
   --fs-xl:   22px;
   --lh:      1.45;
+  /* Prose measure for long-form copy (lede paragraphs, terminal panel body) */
+  --measure: 62ch;
 
   /* Shape */
   --radius:   4px;
   --border-w: 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-page:       #0A0D0B;
+    --bg-panel:      #121712;
+    --bg-subtle:     #182018;
+    --bg-header:     #1B231C;
+
+    --text:          #E8F0E8;
+    --text-muted:    #9AA79E;
+    --text-faint:    #7E8D82;
+
+    --border:        #243028;
+    --border-strong: #4E6553;
+
+    --accent:        #68FF23;
+    --accent-hover:  #8AFF55;
+    --accent-text:   #0A0D0B;
+    --accent-subtle: #142B0C;
+    --accent-dim:    #3C9E0F;
+
+    --warning: #E5B22C;
+    --danger:  #FF5F56;
+    --success: var(--accent);
+
+    --success-subtle:  var(--accent-subtle);
+    --danger-subtle:   #2A1512;
+    --danger-hover-bg: #3A1B17;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg-page:       #0A0D0B;
+  --bg-panel:      #121712;
+  --bg-subtle:     #182018;
+  --bg-header:     #1B231C;
+
+  --text:          #E8F0E8;
+  --text-muted:    #9AA79E;
+  --text-faint:    #7E8D82;
+
+  --border:        #243028;
+  --border-strong: #4E6553;
+
+  --accent:        #68FF23;
+  --accent-hover:  #8AFF55;
+  --accent-text:   #0A0D0B;
+  --accent-subtle: #142B0C;
+  --accent-dim:    #3C9E0F;
+
+  --warning: #E5B22C;
+  --danger:  #FF5F56;
+  --success: var(--accent);
+
+  --success-subtle:  var(--accent-subtle);
+  --danger-subtle:   #2A1512;
+  --danger-hover-bg: #3A1B17;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
 }
 
 /* ── Reset ──────────────────────────────────────────────────────────────────── */
@@ -113,6 +184,26 @@ body {
   font-family: var(--font);
   font-size: var(--fs-base);
   line-height: var(--lh);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Body copy uses --text, never --accent. Green is for prompts, [ OK ] rows,
+ * links, labels, and short status lines — long runs of saturated green are
+ * tiring to read in dark mode and lose contrast in light mode. */
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+a:hover { color: var(--accent-hover); }
+
+/* Focus rings use --accent, never --border-strong: the latter measures
+ * under 3:1 against the page in both themes (fine for a decorative edge,
+ * insufficient for a focus indicator); --accent clears 3:1 in both. */
+:where(a, button):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 /* ── Layout ─────────────────────────────────────────────────────────────────── */
@@ -337,73 +428,5 @@ tbody tr:last-child td { border-bottom: none; }
   /* Ensure the app title takes its natural width and doesn't grow */
   .app-title {
     flex: none;
-  }
-}
-
-/* ── Dark mode — OS-driven palette override ──────────────────────────────────
- *
- * Only the token VALUES change here; every component already uses the tokens
- * so nothing else needs to change. Palette choices:
- *
- *   Backgrounds  — GitHub Primer dark scale: page #0d1117, panel #161b22,
- *                  subtle #1c2128, header #21262d
- *   Text         — near-white body, dimmed muted/faint
- *   Borders      — slightly lighter than panels for subtle definition
- *   Accent       — #4d8ef0 (brightened from #2d5fa3 for dark-bg contrast)
- *   Status tints — darker, desaturated backgrounds that stay readable
- */
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Neutrals */
-    --bg-page:    #0d1117;
-    --bg-panel:   #161b22;
-    --bg-subtle:  #1c2128;
-    --bg-header:  #21262d;
-
-    /* Text */
-    --text:        #e6edf3;
-    --text-muted:  #8b949e;
-    /* Faint raised from #6e7681 (3.77:1) to clear WCAG AA 4.5:1
-       on panel — used for small chart axis labels. */
-    --text-faint:  #8b949e;
-
-    /* Borders */
-    --border:        #30363d;
-    --border-strong: #484f58;
-
-    /* Accent — brightened for dark-bg legibility */
-    --accent:        #4d8ef0;
-    --accent-hover:  #6aa3f5;
-    --accent-text:   #0d1117;
-    --accent-subtle: #1a2a45;
-
-    /* Chart series (categorical) — dark-mode adjustments of the six
-       light-block slots above, brightened for legibility against
-       --bg-panel #161b22 (see the light block's comment for the measured
-       contrast ratios and how they were computed). TWO slots are identical
-       to their light values rather than "steps": --series-6 (#008300), which
-       already clears 3.50:1 against the dark panel unmodified, and
-       --series-4 (#c98500), which became identical when the light value was
-       raised from #eda100 to fix its 2.17:1 light contrast — its dark
-       override is now a no-op, kept only so the block lists all six slots
-       in one place.
-       --series-other still resolves via var(--text-faint) above, no
-       separate override needed. */
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --series-3: #199e70;
-    --series-4: #c98500;
-    --series-5: #d55181;
-    --series-6: #008300;
-
-    /* Status colours — brighter for dark backgrounds */
-    --success: #3fb950;
-    --danger:  #f85149;
-    --warning: #d29922;
-
-    /* Status surface tints — dark, desaturated fills */
-    --success-subtle: #122519;
-    --danger-subtle:  #2d1212;
-    --danger-hover-bg: #3d1515;
   }
 }
