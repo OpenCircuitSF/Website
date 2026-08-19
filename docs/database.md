@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000007` as of Phase 0). No ORM — every
+(`migrations/`, numbered `000001`–`000008`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -30,6 +30,7 @@ variable set to exercise every DB-backed test rather than skip it.
 | `000005_create_audit_log` | `audit_log` — append-only record of every significant action |
 | `000006_passkey_backup_flags` | Adds `backup_eligible`/`backup_state` to `passkey_credentials` (go-webauthn's Backup Eligible flag is immutable per credential; must match at registration and every assertion) |
 | `000007_enforce_session_passkey_not_null` | Enforces `NOT NULL` on `passkey_credentials.user_id` and four `sessions` columns — see the migration's own comments for the defensive existence-check-then-`ALTER` pattern and why its `down.sql` is a deliberate no-op |
+| `000008_add_physical_address_setting` | Seeds `settings.physical_address` with an empty string. Empty means "not set": `#0045`'s send worker refuses to start a campaign until an admin fills it in, because CAN-SPAM §7704 requires a physical postal address in every commercial message. `ON CONFLICT DO NOTHING` keeps `up` idempotent |
 
 This is a straight port of ShortLinks' auth schema, renumbered to a
 contiguous range — ShortLinks' `links`, `clicks`, `campaigns`,
