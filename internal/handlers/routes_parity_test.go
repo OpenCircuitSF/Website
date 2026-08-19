@@ -65,24 +65,59 @@ func readRouterTS(t *testing.T) string {
 // away than the entries themselves.
 var staticRoutesBlockRe = regexp.MustCompile(`(?s)const STATIC_ROUTES:[^=]*=\s*\{(.*?)\n\};`)
 
-// staticRoutesEntryRe pulls each 'path': 'RouteName' entry's key out of the
-// block staticRoutesBlockRe captures.
-var staticRoutesEntryRe = regexp.MustCompile(`'([^']+)':\s*'[^']*',?`)
+// staticRoutesEntryRe matches one whole, trimmed 'path': 'RouteName' entry
+// line from the block staticRoutesBlockRe captures. Anchored (^...$) on
+// purpose: parseStaticRoutesFromRouterTS applies it per line, not as a scan
+// over the whole block, precisely so a line that *doesn't* match -- rather
+// than being silently skipped -- is treated as a parse failure. See the
+// per-line walk below and issues/0071.md's "Review notes" for why a
+// scan-and-skip parse (the pre-fix behaviour) is unsafe: it can parse
+// "successfully" with one or more routes silently missing.
+var staticRoutesEntryRe = regexp.MustCompile(`^'([^']+)':\s*'[^']*',?$`)
+
+// isBraceOnlyLine reports whether a trimmed line is nothing but a stray
+// brace -- defensive, since staticRoutesBlockRe's capture group is the
+// interior of the literal and should not itself contain a bare "{" or "}",
+// but a future reformat could change that.
+func isBraceOnlyLine(line string) bool {
+	return line == "{" || line == "}"
+}
 
 // parseStaticRoutesFromRouterTS extracts the path set from router.ts's
 // STATIC_ROUTES literal -- the TypeScript-side twin of knownStaticRoutes.
+//
+// It walks the captured block line by line and requires every non-blank,
+// non-comment, non-brace line to match staticRoutesEntryRe, t.Fatal-ing (via
+// a routerTSParseError) on the first line that doesn't. This is the
+// structural fix #0071's review asked for: the original version scanned the
+// block for entry-shaped substrings and only errored when it found *zero*
+// entries, so a single divergent line -- a double-quoted entry among
+// single-quoted neighbours, or a route composed in via `...EXTRA_ROUTES,`
+// spread -- was silently skipped rather than failing, and the resulting
+// missing route looked exactly like agreement. Erroring on any unrecognized
+// line closes that gap for the two demonstrated cases and for any future
+// syntax this parser doesn't understand, because the failure mode becomes "I
+// do not understand this line" rather than "I found nothing here".
 func parseStaticRoutesFromRouterTS(src string) (map[string]bool, error) {
 	block := staticRoutesBlockRe.FindStringSubmatch(src)
 	if block == nil {
 		return nil, &routerTSParseError{what: "the STATIC_ROUTES literal"}
 	}
-	entries := staticRoutesEntryRe.FindAllStringSubmatch(block[1], -1)
-	if len(entries) == 0 {
-		return nil, &routerTSParseError{what: "any STATIC_ROUTES entries"}
+
+	out := make(map[string]bool)
+	for _, rawLine := range strings.Split(block[1], "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "//") || isBraceOnlyLine(line) {
+			continue
+		}
+		m := staticRoutesEntryRe.FindStringSubmatch(line)
+		if m == nil {
+			return nil, &routerTSParseError{what: fmt.Sprintf("STATIC_ROUTES entry: `%s`", line)}
+		}
+		out[m[1]] = true
 	}
-	out := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		out[e[1]] = true
+	if len(out) == 0 {
+		return nil, &routerTSParseError{what: "any STATIC_ROUTES entries"}
 	}
 	return out, nil
 }
