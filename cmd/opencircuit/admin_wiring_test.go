@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,25 +26,35 @@ import (
 // TestMountAndServe_AdminRoutesRequireSessionAndAdmin closes the same kind of
 // gap TestMountAndServe_RateLimitsAuthLoginStart closes for the rate limiter
 // (#0008's review): the internal/handlers admin suites (settings_test.go,
-// users_test.go, audit_test.go) each build their OWN small mux wrapping
-// requireAdmin the same way main.go does, which proves the middleware
-// COMPOSES correctly but not that main.go's mountAndServe — the exact
-// function servePostgres calls in production — actually WIRES every admin
-// route through it. If a future edit to mountAndServe ever added a new
+// users_test.go, audit_test.go, interests_test.go) each build their OWN small
+// mux wrapping requireAdmin the same way main.go does, which proves the
+// middleware COMPOSES correctly but not that main.go's mountAndServe — the
+// exact function servePostgres calls in production — actually WIRES every
+// admin route through it. If a future edit to mountAndServe ever added a new
 // /admin/* route and forgot requireAdmin, none of those per-handler suites
 // would catch it; this test would.
 //
-// It drives GET /admin/settings over a real HTTP listener via mountAndServe
-// itself, for three sessions: none (401), a non-admin (403), and an admin
-// (200) — #0009's acceptance criterion "Admin routes are gated on
-// RequireSession + RequireAdmin; a non-admin session gets 403".
+// #0024's review bounced an earlier version of this test for covering only
+// GET: three of the four /admin/interests verbs — including DELETE, the
+// destructive one — had no proof at the real-mux level, and a guard-removal
+// mutation on any of them shipped a green suite. This version drives EVERY
+// {method, path} pair in adminRoutes (cmd/opencircuit/main.go) — the exact
+// function mountAndServe itself loops over to register the routes — over a
+// real HTTP listener, for three sessions: none (want 401), a non-admin (want
+// 403), and an admin (want anything except 401/403, i.e. the request reached
+// the handler rather than being turned away by the guard). Because the test
+// enumerates adminRoutes instead of hand-listing paths, a route added to that
+// list is covered automatically — no edit to this test is required, which is
+// the point: the failure mode this closes is a new route shipping with no
+// guard and no test noticing.
 //
-// Guard-removal proof (see #0009's Verification for the transcript): with
-// `requireAdmin(http.HandlerFunc(settingsH.List))` in mountAndServe
-// temporarily replaced by `requireSession(http.HandlerFunc(settingsH.List))`
-// (RequireAdmin dropped), this test's non-admin case failed — got 200, want
-// 403 — exactly as expected, then passed again once RequireAdmin was
-// restored.
+// Guard-removal proof (see #0009's Verification for the original GET
+// transcript, and #0024's Verification for all four verbs): with
+// `requireAdmin(...)` in mountAndServe's adminRoutes loop temporarily
+// replaced by `requireSession(...)` for one verb at a time (GET, POST,
+// PATCH, DELETE), this test's non-admin case for that route failed — got
+// 200 (or whatever the ungated handler returned), want 403 — for every one
+// of the four, then passed again once RequireAdmin was restored.
 func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -99,10 +110,11 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	settingsH := handlers.NewSettingsHandler(store, auditLogger)
 	adminUsersH := handlers.NewAdminUsersHandler(store, auditLogger)
 	adminAuditH := handlers.NewAdminAuditHandler(audit.NewReader(pool))
+	interestsStore := interests.NewStore(pool)
 	// #0024: exercised the same way as adminUsersH/adminAuditH above, so this
 	// test's gap-closing argument (main.go's REAL mountAndServe, not a
 	// per-handler suite's own small mux) covers /admin/interests too.
-	adminInterestsH := handlers.NewAdminInterestsHandler(interests.NewStore(pool), auditLogger)
+	adminInterestsH := handlers.NewAdminInterestsHandler(interestsStore, auditLogger)
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 	meH := handlers.NewMeHandler()
@@ -126,39 +138,78 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	seedAdminWiringSession(t, pool, nonAdminID, "wiring-nonadmin-token")
 	seedAdminWiringSession(t, pool, adminID, "wiring-admin-token")
 
-	// /admin/settings is representative — every /admin/* route in main.go is
-	// wired through the same requireAdmin composition, and the per-handler
-	// suites (settings_test.go, users_test.go, audit_test.go) each prove that
-	// composition again for their own routes. /admin/interests (#0024) is
-	// checked explicitly rather than left to "representative" — the PATCH
-	// and DELETE routes newly introduced here didn't exist when that
-	// argument was written, and this test is exactly the one #0024 was told
-	// to keep true for its own routes too.
+	// A dedicated target for the /admin/users/{id} family — distinct from
+	// nonAdminID/adminID above, which identify the SESSION making the
+	// request, not the id in the path. The admin-session case below reaches
+	// the real handler, so a route like POST .../deactivate genuinely flips
+	// this account's active flag; it is never used to authenticate, so that
+	// has no bearing on the auth assertions themselves.
+	targetUserID := seedAdminWiringUser(t, pool, "wiring-target@example.com", false)
+
+	// A dedicated throwaway interest for the /admin/interests/{id} family,
+	// seeded through the real store rather than a literal id. CLAUDE.md §8b
+	// exists because of exactly this test: #0024's first pass targeted a
+	// hardcoded /admin/interests/1 — the real seeded "microcontrollers"
+	// taxonomy row — and a guard-removal mutation against DELETE permanently
+	// destroyed it. This target is created fresh per run and swept up below
+	// by its zz-wiring- prefix, so it stays safe even while the guard under
+	// test is deliberately gone.
+	targetSlug := fmt.Sprintf("zz-wiring-%d", time.Now().UnixNano())
+	targetInterest, err := interestsStore.Create(context.Background(), targetSlug, "Wiring guard target", nil, 0)
+	if err != nil {
+		t.Fatalf("seed target interest: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		// Sweeps the target above plus anything an admin-session
+		// POST /admin/interests actually persisted (see the "admin session"
+		// case below) — scoped by the zz-wiring- prefix so the seeded
+		// taxonomy (migrations/000009) is never touched.
+		_, _ = pool.Exec(ctx, `DELETE FROM interests WHERE slug LIKE 'zz-wiring-%'`)
+	})
+
+	// adminRoutes (cmd/opencircuit/main.go) is the single list mountAndServe
+	// itself loops over to register every admin route behind requireAdmin.
+	// Enumerating it here, rather than hand-listing paths, is what closes
+	// #0024's review finding: a route added to that list is exercised by
+	// this test automatically, with no edit to the test required, and every
+	// verb the route uses (not just GET) is proven independently below.
 	cases := []struct {
 		name   string
 		cookie string // "" means no cookie at all
-		want   int
+		want   func(status int) bool
 	}{
-		{"no session", "", http.StatusUnauthorized},
-		{"non-admin session", "wiring-nonadmin-token", http.StatusForbidden},
-		{"admin session", "wiring-admin-token", http.StatusOK},
+		{"no session", "", func(status int) bool { return status == http.StatusUnauthorized }},
+		{"non-admin session", "wiring-nonadmin-token", func(status int) bool { return status == http.StatusForbidden }},
+		// The admin session must reach the real handler — i.e. neither guard
+		// response — not necessarily succeed outright. Several routes below
+		// need a request body this test does not construct (a well-formed
+		// PATCH /admin/settings payload, a valid POST /admin/interests
+		// payload); a 400 from the real handler is exactly as strong a proof
+		// that RequireAdmin let the request through as a 200 is, and avoids
+		// this test needing to know every handler's request shape.
+		{"admin session", "wiring-admin-token", func(status int) bool {
+			return status != http.StatusUnauthorized && status != http.StatusForbidden
+		}},
 	}
-	for _, path := range []string{"/admin/settings", "/admin/interests"} {
+	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH) {
+		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID)
 		for _, c := range cases {
-			req, err := http.NewRequest(http.MethodGet, baseURL+path, nil)
+			req, err := http.NewRequest(route.method, baseURL+path, nil)
 			if err != nil {
-				t.Fatalf("%s %s: build request: %v", c.name, path, err)
+				t.Fatalf("%s %s %s: build request: %v", c.name, route.method, path, err)
 			}
 			if c.cookie != "" {
 				req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: c.cookie})
 			}
 			resp, err := client.Do(req)
 			if err != nil {
-				t.Fatalf("%s %s: request: %v", c.name, path, err)
+				t.Fatalf("%s %s %s: request: %v", c.name, route.method, path, err)
 			}
 			resp.Body.Close()
-			if resp.StatusCode != c.want {
-				t.Errorf("%s: GET %s status = %d, want %d", c.name, path, resp.StatusCode, c.want)
+			if !c.want(resp.StatusCode) {
+				t.Errorf("%s: %s %s status = %d, unexpected for this case", c.name, route.method, path, resp.StatusCode)
 			}
 		}
 	}
@@ -167,6 +218,23 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	case err := <-errCh:
 		t.Fatalf("mountAndServe exited unexpectedly: %v", err)
 	default:
+	}
+}
+
+// resolveAdminRoutePath substitutes an adminRoute's {id} path parameter, if
+// present, with an id this test seeded itself — never a literal or seeded
+// one (CLAUDE.md §8b: "Never target a literal or seeded id in a test").
+// /admin/users/... routes take a user id; /admin/interests/... routes take
+// an interest id. Routes with no {id} (e.g. /admin/settings, /admin/audit)
+// pass through unchanged.
+func resolveAdminRoutePath(path string, userID, interestID int64) string {
+	switch {
+	case strings.HasPrefix(path, "/admin/users/"):
+		return strings.Replace(path, "{id}", fmt.Sprint(userID), 1)
+	case strings.HasPrefix(path, "/admin/interests/"):
+		return strings.Replace(path, "{id}", fmt.Sprint(interestID), 1)
+	default:
+		return path
 	}
 }
 

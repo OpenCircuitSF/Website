@@ -318,6 +318,54 @@ func serveDevMode(cfg *config.Config) error {
 		requireSession, requireAdmin, devAutoLogin)
 }
 
+// adminRoute pairs an HTTP method and a Go 1.22 mux path pattern with the
+// handler that serves it.
+type adminRoute struct {
+	method  string
+	path    string
+	handler http.Handler
+}
+
+// adminRoutes is the single, authoritative list of every admin-only route
+// (session + is_admin required, PRD §5.2) that mountAndServe registers.
+// Both mountAndServe (production wiring) and
+// TestMountAndServe_AdminRoutesRequireSessionAndAdmin
+// (cmd/opencircuit/admin_wiring_test.go, the real-mux authorization proof)
+// call this exact function, so the test enumerates the routes actually
+// registered rather than keeping its own hand-written list that could drift
+// out of sync with what mountAndServe wires up. A route added here is
+// automatically exercised — and its guard automatically proven — by that
+// test with no edit to the test itself required.
+//
+// adminInterestsH may be nil (dev mode / STORAGE=json has no interests-table
+// backing yet — see mountAndServe's comment on the call site); its four
+// routes are simply omitted, mirroring mountAndServe's own former nil guard.
+func adminRoutes(
+	settingsH *handlers.SettingsHandler,
+	adminUsersH *handlers.AdminUsersHandler,
+	adminAuditH *handlers.AdminAuditHandler,
+	adminInterestsH *handlers.AdminInterestsHandler,
+) []adminRoute {
+	routes := []adminRoute{
+		{http.MethodGet, "/admin/settings", http.HandlerFunc(settingsH.List)},
+		{http.MethodPatch, "/admin/settings", http.HandlerFunc(settingsH.Patch)},
+		{http.MethodGet, "/admin/users", http.HandlerFunc(adminUsersH.List)},
+		{http.MethodGet, "/admin/users/{id}", http.HandlerFunc(adminUsersH.Get)},
+		{http.MethodPost, "/admin/users/{id}/deactivate", http.HandlerFunc(adminUsersH.Deactivate)},
+		{http.MethodPost, "/admin/users/{id}/reactivate", http.HandlerFunc(adminUsersH.Reactivate)},
+		{http.MethodGet, "/admin/audit", http.HandlerFunc(adminAuditH.List)},
+	}
+	if adminInterestsH != nil {
+		routes = append(routes,
+			adminRoute{http.MethodGet, "/admin/interests", http.HandlerFunc(adminInterestsH.List)},
+			adminRoute{http.MethodPost, "/admin/interests", http.HandlerFunc(adminInterestsH.Create)},
+			adminRoute{http.MethodPatch, "/admin/interests/{id}", http.HandlerFunc(adminInterestsH.Patch)},
+			adminRoute{http.MethodDelete, "/admin/interests/{id}", http.HandlerFunc(adminInterestsH.Delete)},
+		)
+	}
+	return routes
+}
+
 // mountAndServe registers all routes on a new ServeMux and starts listening.
 // This is shared between the Postgres and dev paths to avoid code duplication.
 // The `db` parameter satisfies handlers.Pinger for GET /health.
@@ -375,43 +423,32 @@ func mountAndServe(
 	mux.Handle("PATCH /account/credentials/{id}", requireSession(http.HandlerFunc(credsH.Rename)))
 	mux.Handle("DELETE /account/credentials/{id}", requireSession(http.HandlerFunc(credsH.Revoke)))
 
-	// Admin-only runtime settings: read all settings and update one. Both
-	// behind RequireSession + RequireAdmin. The registration gate
-	// (registrations_enabled) is read fresh from the DB on each
-	// POST /auth/register/start, so a PATCH here takes effect immediately.
-	mux.Handle("GET /admin/settings", requireAdmin(http.HandlerFunc(settingsH.List)))
-	mux.Handle("PATCH /admin/settings", requireAdmin(http.HandlerFunc(settingsH.Patch)))
-
-	// Admin-only user management: list users (status + last login), user
-	// detail (+ passkey counts), deactivate a non-admin user (sets
-	// active=false, deletes all their sessions, audits account.deactivated), and
-	// reactivate (sets active=true, audits account.reactivated). All behind
-	// RequireSession + RequireAdmin.
-	mux.Handle("GET /admin/users", requireAdmin(http.HandlerFunc(adminUsersH.List)))
-	mux.Handle("GET /admin/users/{id}", requireAdmin(http.HandlerFunc(adminUsersH.Get)))
-	mux.Handle("POST /admin/users/{id}/deactivate", requireAdmin(http.HandlerFunc(adminUsersH.Deactivate)))
-	mux.Handle("POST /admin/users/{id}/reactivate", requireAdmin(http.HandlerFunc(adminUsersH.Reactivate)))
-
-	// Admin-only audit log: GET /admin/audit returns the append-only
-	// audit_log newest-first, paginated via ?page=&per_page= (default 50, capped
-	// at 200), with an optional ?user_id= filter scoped to one user's rows. Behind
-	// RequireSession + RequireAdmin.
-	mux.Handle("GET /admin/audit", requireAdmin(http.HandlerFunc(adminAuditH.List)))
-
-	// Admin-only interest taxonomy CRUD (#0024, PRD §5.2/§6.1): list (with a
-	// per-interest subscriber count), create, update (name/description/
-	// sort_order/active — slug is immutable through this route), and a
-	// hard-delete refused whenever any subscriber is associated. All behind
-	// RequireSession + RequireAdmin. adminInterestsH is nil in dev mode
-	// (STORAGE=json — see serveDevMode's comment) since internal/devstore
-	// has no interests-table backing yet; the routes are only registered
-	// when a real handler is wired, so dev mode boots and serves everything
-	// else unaffected.
-	if adminInterestsH != nil {
-		mux.Handle("GET /admin/interests", requireAdmin(http.HandlerFunc(adminInterestsH.List)))
-		mux.Handle("POST /admin/interests", requireAdmin(http.HandlerFunc(adminInterestsH.Create)))
-		mux.Handle("PATCH /admin/interests/{id}", requireAdmin(http.HandlerFunc(adminInterestsH.Patch)))
-		mux.Handle("DELETE /admin/interests/{id}", requireAdmin(http.HandlerFunc(adminInterestsH.Delete)))
+	// Admin-only routes: runtime settings (read all / update one — the
+	// registration gate `registrations_enabled` is read fresh from the DB on
+	// each POST /auth/register/start, so a PATCH here takes effect
+	// immediately), user management (list, detail + passkey counts,
+	// deactivate/reactivate — audits account.deactivated/reactivated), the
+	// append-only audit log (paginated via ?page=&per_page=, optional
+	// ?user_id= filter), and the interest taxonomy CRUD (#0024, PRD
+	// §5.2/§6.1: list with a per-interest subscriber count, create, update —
+	// slug is immutable through this route — and a hard-delete refused
+	// whenever any subscriber is associated).
+	//
+	// #0024's review bounced a version of this code that registered these
+	// one `mux.Handle` call at a time: the wiring test that proves every
+	// admin route is actually behind RequireAdmin only drove GET requests,
+	// so a POST/PATCH/DELETE route missing the guard would ship with a green
+	// suite. adminRoutes below is now the single source of truth for which
+	// admin routes exist and what method each uses — this loop registers
+	// every one of them behind requireAdmin, and
+	// TestMountAndServe_AdminRoutesRequireSessionAndAdmin
+	// (admin_wiring_test.go) calls this exact function to enumerate the same
+	// list for its authorization proof. A route added to adminRoutes is
+	// therefore covered by that test automatically; a route added by editing
+	// mountAndServe directly (bypassing adminRoutes) is the mistake this
+	// structure is meant to make hard to make.
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH) {
+		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 
 	// Current user profile — behind RequireSession; returns the caller's
