@@ -20,6 +20,14 @@
   // appropriate at 128px and above (e.g. a footer or hero placement, not the
   // header nav bar). #0017 (site header) is the first real consumer of this
   // component.
+  //
+  // Raster selection (retina-blur fix carried in from #0018's review, #0017):
+  // hardcoding /mark-mask-64.png at every size rendered visibly soft on a
+  // 2x/3x display once the mark grew past ~21 CSS px. selectMarkRaster picks
+  // between the 64px and 256px mark assets based on the requested size; see
+  // logo.ts (and logo.test.ts) for the selection logic and its tests.
+  import { selectMarkRaster, FULL_RASTER } from './logo';
+
   interface Props {
     variant?: 'mark' | 'full';
     /** Square size in pixels. */
@@ -28,7 +36,7 @@
 
   let { variant = 'mark', size = 34 }: Props = $props();
 
-  const maskUrl = $derived(variant === 'full' ? '/logo-mask-512.png' : '/mark-mask-64.png');
+  const maskUrl = $derived(variant === 'full' ? FULL_RASTER : selectMarkRaster(size));
 </script>
 
 <span

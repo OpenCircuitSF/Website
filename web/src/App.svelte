@@ -9,6 +9,7 @@
   import Admin from './views/Admin.svelte';
   import RegisterVerify from './views/RegisterVerify.svelte';
   import RecoverVerify from './views/RecoverVerify.svelte';
+  import Header from './lib/Header.svelte';
   import Footer from './lib/Footer.svelte';
 
   let sessionChecked = $state(false);
@@ -66,12 +67,13 @@
 {:else if $currentRoute.name === 'recover-verify'}
   <RecoverVerify />
 {:else}
-  <!-- Every other route is a public marketing page (PRD §5.1). The site
-       header/footer shell and the real Home/About/NotFound views land in
-       #0017, #0015, #0016, #0022 respectively; this placeholder exists so
-       the router itself (#0014) is independently buildable and testable
-       before those views exist. -->
-  <main class="app-shell">
+  <!-- Every other route is a public marketing page (PRD §5.1), and shares
+       the site header shell (#0017). The real Home/About/NotFound views land
+       in #0015, #0016, #0022; this placeholder covers the remaining public
+       routes (workshops, subscribe, confirm, preferences, unsubscribe) until
+       their own later-phase issues (#0029-0036, #0053-0054) build them. -->
+  <Header />
+  <main id="main-content" class="app-shell">
     <p class="text-muted">{$currentRoute.name} — this page is on the way.</p>
   </main>
 {/if}
