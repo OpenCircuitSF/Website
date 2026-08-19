@@ -178,9 +178,10 @@ interface NavigateOptions {
  *
  * Before leaving the current entry, its scroll offset is saved into its own
  * history state via replaceState, so that a later Back lands exactly where
- * the user left it. This mirrors the pagehide handler in initRouter(), which
- * covers the case where the user leaves without calling navigate() at all
- * (e.g. a same-tab full navigation away and back).
+ * the user left it. That is belt-and-braces on top of the throttled scroll
+ * listener in initRouter() (which has usually already stamped it): the
+ * listener is what covers an entry left by a history *traversal*, where
+ * navigate() never runs at all.
  */
 export function navigate(path: string, { replace = false }: NavigateOptions = {}): void {
   const url = new URL(path, window.location.origin);
@@ -201,24 +202,168 @@ export function navigate(path: string, { replace = false }: NavigateOptions = {}
 
 /** Stamp the *current* history entry's state with the current scroll offset,
  * without navigating anywhere (same URL, replaceState). Called just before
- * every push/replace in navigate() and on pagehide, so whichever entry the
- * user eventually Backs into has an accurate offset to restore. */
+ * every push/replace in navigate(), from the throttled scroll listener, and on
+ * pagehide, so whichever entry the user eventually Backs (or Forwards) into
+ * has an accurate offset to restore. */
 function saveScrollToCurrentEntry(): void {
-  window.history.replaceState(
-    { scrollY: window.scrollY },
-    '',
-    window.location.pathname + window.location.search,
-  );
+  // Any explicit save supersedes a pending throttled one, and re-arms the
+  // throttle window -- otherwise the pending trailing timer would fire *after*
+  // a pushState and stamp the freshly-pushed entry with the outgoing page's
+  // offset.
+  cancelPendingScrollSave();
+  lastScrollSaveAt = Date.now();
+  try {
+    window.history.replaceState(
+      { scrollY: window.scrollY },
+      '',
+      window.location.pathname + window.location.search,
+    );
+  } catch {
+    // Safari rate-limits history.replaceState (historically ~100 calls per 30
+    // seconds) and throws a SecurityError past the limit. The throttle below
+    // is sized to stay under it, but a page that also replaceState'd from
+    // somewhere else could still trip it; losing one scroll stamp is a far
+    // better outcome than an uncaught exception out of a scroll handler.
+  }
+}
+
+// --- Scroll stamping -------------------------------------------------------
+//
+// navigate() and pagehide are not enough on their own: neither fires when the
+// user leaves an entry by a *history traversal*. An entry entered via
+// pushState keeps the `{ scrollY: 0 }` it was stamped with at push time for as
+// long as the user only ever leaves it with Back/Forward, so scrolling it and
+// then coming back Forward replays that stale 0. Stamping from inside the
+// popstate handler cannot fix that -- by the time popstate fires the traversal
+// has already committed, and replaceState would write the *incoming* entry.
+//
+// So the current entry is stamped continuously while the user scrolls, which
+// means whatever the user is looking at is already recorded before any
+// traversal begins.
+//
+// Throttling strategy: a wall-clock leading+trailing throttle, NOT
+// requestAnimationFrame coalescing. rAF coalescing still yields one
+// replaceState per animation frame -- ~60 per second -- which blows straight
+// through Safari's historical limit of ~100 replaceState calls per 30 seconds
+// (a SecurityError, thrown out of a scroll handler) and needlessly hammers the
+// history API in every browser. At 400 ms the ceiling is 2.5 writes/second,
+// i.e. 75 per 30 seconds of continuous scrolling -- measured at exactly that
+// in a real Chromium, comfortably under the limit. The leading edge stamps
+// immediately when a scroll starts after an idle period; the trailing edge
+// guarantees the final resting offset is recorded once scrolling stops, which
+// is the value that actually matters. The cost of the interval is that an
+// offset can be up to 400 ms stale if the user scrolls and hits Back in the
+// same breath -- a traversal cannot stamp the entry it is leaving (see above),
+// so that window is inherent to the approach, not to its tuning.
+const SCROLL_SAVE_INTERVAL_MS = 400;
+
+let scrollSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let lastScrollSaveAt = 0;
+/** Set while a restore is in flight, so the programmatic window.scrollTo()
+ * that performs the restore does not immediately re-stamp the entry (and, more
+ * importantly, so a mid-traversal clamp of the outgoing document's height
+ * cannot stamp the incoming entry with a bogus offset). */
+let restoringScroll = false;
+
+function cancelPendingScrollSave(): void {
+  if (scrollSaveTimer !== null) {
+    clearTimeout(scrollSaveTimer);
+    scrollSaveTimer = null;
+  }
+}
+
+function onScroll(): void {
+  if (restoringScroll) return;
+
+  const elapsed = Date.now() - lastScrollSaveAt;
+  if (elapsed >= SCROLL_SAVE_INTERVAL_MS) {
+    saveScrollToCurrentEntry();
+    return;
+  }
+  if (scrollSaveTimer !== null) return;
+  scrollSaveTimer = setTimeout(() => {
+    scrollSaveTimer = null;
+    if (!restoringScroll) saveScrollToCurrentEntry();
+  }, SCROLL_SAVE_INTERVAL_MS - elapsed);
+}
+
+/** How long restoreScroll() keeps re-applying an offset while it waits for the
+ * document to grow tall enough to accept it. One `await tick()` is enough for a
+ * view that renders synchronously, but not for one gated on a fetch -- notably
+ * App.svelte, which renders a zero-height "Loading…" placeholder until
+ * `GET /api/me` settles, so the very first restore after a document load would
+ * otherwise clamp to 0 against a page with no height yet. */
+const RESTORE_DEADLINE_MS = 1000;
+
+/** Bumped by every restoreScroll() call so a superseded one stops re-applying. */
+let restoreToken = 0;
+
+/**
+ * Apply a saved scroll offset to the document, after giving Svelte a chance to
+ * render the view that offset belongs to. Shared by the popstate handler
+ * (same-document Back/Forward) and by initRouter() (a *cross-document*
+ * traversal or reload, where popstate never fires -- see initRouter()).
+ */
+function restoreScroll(saved: number): void {
+  const token = ++restoreToken;
+  restoringScroll = true;
+  cancelPendingScrollSave();
+
+  const finish = (): void => {
+    if (token !== restoreToken) return;
+    restoringScroll = false;
+    lastScrollSaveAt = Date.now();
+  };
+
+  // Wait for Svelte to re-render the restored view before scrolling to it --
+  // scrolling against the outgoing view's (possibly shorter) DOM is exactly
+  // the bug this machinery exists to fix. See the initRouter() doc comment.
+  void tick().then(() => {
+    if (token !== restoreToken) return;
+
+    const deadline = Date.now() + RESTORE_DEADLINE_MS;
+    // The offset we last wrote, so a change we did not cause can be told apart
+    // from a clamp. -1 means "nothing applied yet".
+    let applied = -1;
+
+    const attempt = (): void => {
+      if (token !== restoreToken) return;
+
+      // The scroll moved and it was not us: the user is scrolling. Stop
+      // fighting them.
+      if (applied >= 0 && window.scrollY !== applied) {
+        finish();
+        return;
+      }
+
+      window.scrollTo(0, saved);
+      applied = window.scrollY;
+
+      // Reached it, or the document is genuinely too short to ever reach it.
+      // Either way stop; the deadline bounds the "too short" case, since the
+      // page may still be growing.
+      if (applied >= saved || Date.now() > deadline) {
+        finish();
+        return;
+      }
+      window.requestAnimationFrame(attempt);
+    };
+
+    attempt();
+  });
 }
 
 let initialized = false;
 
 /**
  * Wire the router up against the live DOM: intercepts same-origin `<a>`
- * clicks (pushState navigation), and handles popstate (back/forward) by
- * restoring the route *and* the scroll offset we saved for that entry. Call
- * once, from App.svelte's onMount. Idempotent: a second call is a no-op,
- * since Svelte's onMount can in principle re-run under HMR.
+ * clicks (pushState navigation), handles popstate (back/forward) by restoring
+ * the route *and* the scroll offset saved for that entry, keeps the current
+ * entry's offset up to date with a throttled `scroll` listener, and applies
+ * any offset already on the entry at load time (the cross-document traversal
+ * case, where popstate never fires). Call once, from App.svelte's onMount.
+ * Idempotent: a second call is a no-op, since Svelte's onMount can in
+ * principle re-run under HMR.
  *
  * Scroll restoration is deliberately hand-rolled rather than left to the
  * browser's default `history.scrollRestoration = 'auto'`: on popstate the
@@ -237,6 +382,25 @@ export function initRouter(): void {
 
   if ('scrollRestoration' in window.history) {
     window.history.scrollRestoration = 'manual';
+  }
+
+  // Cross-document restore. Setting scrollRestoration = 'manual' above turns
+  // off the browser's native restoration for *every* history traversal, not
+  // just the same-document ones popstate covers -- including leaving the site
+  // and pressing Back, and a plain reload. popstate does not fire on a fresh
+  // document load, so without this the offset saved by the pagehide/scroll
+  // stamps would be written and never read, and the user would land at the top
+  // of a page they had scrolled halfway down. (Real Chrome and Safari usually
+  // mask this via bfcache, which preserves scroll independently of
+  // scrollRestoration -- but bfcache is not guaranteed, and headless CDP
+  // disables it.) history.state survives both a reload and a cross-document
+  // traversal, so the offset stamped before we left is still there now.
+  //
+  // Only a positive offset is applied: forcing scrollTo(0, 0) would fight a
+  // browser that *did* restore scroll natively (bfcache) on this same load.
+  const entryState = window.history.state as { scrollY?: number } | null;
+  if (entryState && typeof entryState.scrollY === 'number' && entryState.scrollY > 0) {
+    restoreScroll(entryState.scrollY);
   }
 
   document.addEventListener('click', (event) => {
@@ -266,23 +430,29 @@ export function initRouter(): void {
   });
 
   window.addEventListener('popstate', (event) => {
+    // A throttled save queued against the *outgoing* entry must not land now:
+    // the traversal has already committed, so replaceState would write it to
+    // the incoming entry.
+    cancelPendingScrollSave();
+
     currentRoute.set(parsePath(window.location.pathname, window.location.search));
 
     const state = event.state as { scrollY?: number } | null;
     const saved = state && typeof state.scrollY === 'number' ? state.scrollY : 0;
-
-    // Wait for Svelte to re-render the restored view before scrolling to it
-    // -- scrolling against the outgoing view's (possibly shorter) DOM is
-    // exactly the bug this function exists to fix. See the initRouter()
-    // doc comment above.
-    void tick().then(() => {
-      window.scrollTo(0, saved);
-    });
+    restoreScroll(saved);
   });
 
+  // Keeps the current entry's offset current while the user scrolls, so an
+  // entry left by Back/Forward (which never runs navigate()) still carries
+  // where the user actually was. Passive: this handler never calls
+  // preventDefault, and marking it so keeps it off the scrolling critical
+  // path.
+  window.addEventListener('scroll', onScroll, { passive: true });
+
   // Covers leaving the SPA without going through navigate() at all (e.g. a
-  // same-tab navigation to an external page and back, or the tab closing) --
-  // navigate() only stamps the outgoing entry's scroll offset when it itself
-  // is the thing causing the navigation.
+  // same-tab navigation to an external page and back, or the tab closing).
+  // The scroll listener above covers most of this, but not the last
+  // SCROLL_SAVE_INTERVAL_MS of it; pagehide closes that gap on the one path
+  // where it is cheap to do so.
   window.addEventListener('pagehide', saveScrollToCurrentEntry);
 }
