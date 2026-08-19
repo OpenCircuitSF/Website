@@ -24,16 +24,19 @@ ExecStart=/usr/local/bin/opencircuit serve
 Restart=on-failure
 RestartSec=5
 
-# Graceful shutdown (#0081): `opencircuit serve` now catches SIGTERM itself
-# (cmd/opencircuit/main.go's mountAndServe — signal.Notify + http.Server.Shutdown
-# + SubscribeHandler.Close) and drains in-flight work — including the async
-# confirmation-email send queue #0026 introduced — instead of the whole
-# process disappearing mid-send. KillSignal=SIGTERM is systemd's default
-# already; set explicitly so the pairing with the process's own handler is
-# obvious from this file alone. TimeoutStopSec must exceed
-# cmd/opencircuit/main.go's shutdownTimeout constant (20s) or systemd
+# Graceful shutdown (#0081, budget split in #0087): `opencircuit serve` now
+# catches SIGTERM itself (cmd/opencircuit/main.go's mountAndServe —
+# signal.Notify + http.Server.Shutdown + SubscribeHandler.Close) and drains
+# in-flight work — including the async confirmation-email send queue #0026
+# introduced — instead of the whole process disappearing mid-send.
+# KillSignal=SIGTERM is systemd's default already; set explicitly so the
+# pairing with the process's own handler is obvious from this file alone.
+# TimeoutStopSec must exceed the SUM of cmd/opencircuit/main.go's
+# shutdownServerTimeout (5s) and subscribeCloseTimeout (15s) — two
+# independent budgets since #0087, not one shared 20s deadline, so systemd
+# still needs to cover both back-to-back in the worst case — or systemd
 # SIGKILLs the process before that sequence can finish on its own; 30s
-# leaves 10s of slack.
+# leaves 10s of slack over their 20s combined.
 KillSignal=SIGTERM
 TimeoutStopSec=30
 

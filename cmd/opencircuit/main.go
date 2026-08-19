@@ -667,44 +667,61 @@ func mountAndServe(
 	case sig := <-sigCh:
 		log.Printf("opencircuit: received %s, shutting down gracefully", sig)
 
-		// shutdownTimeout bounds BOTH steps below combined (one shared
-		// deadline, not one each): srv.Shutdown stops accepting new
-		// connections and waits for in-flight handlers to return — fast in
-		// practice, since Subscribe (and every other handler) never blocks
-		// on a network call — and subscribeH.Close then drains/interrupts
-		// the async send queue so any claim that hasn't actually been sent
-		// yet is released rather than lost. deploy/systemd/opencircuit.service's
-		// TimeoutStopSec must exceed shutdownTimeout, or systemd SIGKILLs
-		// the process before this sequence gets the chance to finish.
-		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
+		// shutdownServerTimeout and subscribeCloseTimeout each bound ONE
+		// step below, on their OWN independent context — not one shared
+		// budget for both (#0087; before this they shared a single ctx,
+		// see git history for the previous shape). http.Server.Shutdown
+		// does not cancel in-flight request contexts, and GET /api/events
+		// (internal/handlers/events.go, mounted above at "GET /api/events")
+		// returns only on client disconnect — so a single open SSE stream
+		// (one admin dashboard tab) can hold srv.Shutdown open for its
+		// ENTIRE budget. Under the old shared-context shape that meant
+		// subscribeH.Close received whatever was left, which could be
+		// nothing: reproduced with a 2s shared budget, Shutdown returned
+		// after 2.00s with context.DeadlineExceeded, leaving Close 0s — its
+		// claim-release work was started (sendCancel/close(sendQueue) run
+		// unconditionally, before any ctx is even consulted) but Close
+		// itself returned immediately without waiting for it to finish,
+		// which matters because that work can still be running when the
+		// process exits (see subscribeCloseTimeout's own doc comment on the
+		// detached-release-context risk that follows from this). Splitting
+		// the budget means an open SSE stream can still cost Shutdown its
+		// own budget — the same, lesser consequence #0081's review already
+		// accepted for the OLD Close-first ordering (a dropped SSE
+		// connection, which EventSource reconnects automatically) — but it
+		// can no longer reach into Close's.
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownServerTimeout)
+		defer shutdownCancel()
 
 		// srv.Shutdown runs FIRST, matching Close's own doc comment
-		// (subscribe.go): only after Shutdown has stopped accepting new
-		// connections and drained every in-flight handler is it guaranteed
-		// that no request goroutine can still be inside enqueueSend. Calling
-		// Close first (the order this file used before #0081's review) does
-		// not itself corrupt anything — enqueueSend's closeMu-guarded check
-		// still refuses a send after closed flips true — but it maximises
-		// the window in which a request goroutine can be concurrently
-		// inside enqueueSend while Close is concurrently closing sendQueue
-		// and waiting on sendWG, which is exactly the race #0081's review
-		// reproduced (sendWG.Add racing sendWG.Wait, now fixed by holding
-		// closeMu across the Add too — see enqueueSend). Shutdown-then-Close
-		// makes that race structurally unreachable instead of merely
-		// unlikely.
-		//
-		// A non-nil Shutdown error (its own ctx bound exceeded with a
-		// handler still running) is captured, not returned immediately:
-		// subscribeH.Close still runs below on whatever remains of the
-		// shared ctx, so a slow/stuck handler doesn't also strand every
-		// queued send claim.
-		shutdownErr := srv.Shutdown(ctx)
+		// (subscribe.go): once Shutdown returns nil, it is guaranteed that
+		// no request goroutine can still be inside enqueueSend — every
+		// in-flight handler, including Subscribe, has already returned. If
+		// Shutdown instead returns DeadlineExceeded (its own ctx bound hit
+		// with a handler — e.g. an open SSE stream — still running), that
+		// guarantee does NOT hold: a handler may still be executing
+		// concurrently with the Close call below. This is harmless only
+		// because enqueueSend's closeMu-guarded check still refuses a send
+		// after closed flips true, and Close holds that same lock while
+		// setting closed=true — the two can safely overlap. Calling Close
+		// first (the order this file used before #0081's review) merely
+		// widened that already-safe overlap window; it did not introduce a
+		// new one. See enqueueSend's own comment for why the ordering
+		// between closeMu.Lock and sendWG.Add/Wait, not the ordering of
+		// these two top-level calls, is what actually makes the WaitGroup
+		// misuse #0081 reproduced impossible.
+		shutdownErr := srv.Shutdown(shutdownCtx)
 
 		// subscribeH may be nil in dev mode (STORAGE=json — see
-		// serveDevMode's comment on the call site).
+		// serveDevMode's comment on the call site). Its own, independent
+		// context (see shutdownServerTimeout's doc comment above for why)
+		// means a Shutdown that consumed its entire budget above — e.g. the
+		// open-SSE-stream scenario — has no effect on how much time Close
+		// gets here.
 		if subscribeH != nil {
-			if err := subscribeH.Close(ctx); err != nil {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), subscribeCloseTimeout)
+			defer closeCancel()
+			if err := subscribeH.Close(closeCtx); err != nil {
 				log.Printf("opencircuit: subscribe handler close: %v", err)
 			}
 		}
@@ -713,13 +730,49 @@ func mountAndServe(
 	}
 }
 
-// shutdownTimeout bounds mountAndServe's graceful shutdown sequence
-// (srv.Shutdown + subscribeH.Close combined, on one shared context) after a
-// SIGTERM/SIGINT (#0081). In steady state this should return in well under
-// a second — subscribeH.Close cancels its send workers' shared context,
-// which interrupts any in-flight or queued mailer.Send almost immediately
-// rather than letting it run out sendJobTimeout (30s) — so 20s is a
-// generous ceiling, not an expected wait. Keep this comfortably below
-// deploy/systemd/opencircuit.service's TimeoutStopSec (30s), or systemd
-// SIGKILLs the process before this sequence can complete on its own.
-const shutdownTimeout = 20 * time.Second
+// shutdownServerTimeout bounds srv.Shutdown ALONE (#0087 — it used to share
+// a single budget with subscribeCloseTimeout below; see the shutdown
+// sequence's own comment for why that was wrong and what it cost). Ordinary
+// requests never block on a network call, so in steady state this returns
+// in well under a second; the only thing that can hold it open for its full
+// budget is a long-lived GET /api/events stream, since Shutdown does not
+// cancel in-flight request contexts. That is exactly the scenario this
+// bound exists to cap, rather than let it also eat into
+// subscribeCloseTimeout's budget.
+//
+// var, not const: cmd/opencircuit's shutdown-budget wiring test overrides
+// this (and subscribeCloseTimeout) to exercise both the short-Shutdown-
+// budget and the split-vs-shared-context behavior deterministically,
+// without waiting out the real production value.
+var shutdownServerTimeout = 5 * time.Second
+
+// subscribeCloseTimeout bounds subscribeH.Close ALONE (#0087), independent
+// of shutdownServerTimeout above. Sized larger than shutdownServerTimeout
+// deliberately: Close's job — cancelling sendCtx and waiting for every
+// queued/in-flight send's claim to actually finish being released — is the
+// step whose starvation has the worse consequence (issues/0087.md's "Why
+// starving Close is worse than starving Shutdown": a stranded confirmation
+// claim silences a visitor's retry for up to subscribeResendCooldown, an
+// hour, versus a dropped SSE connection EventSource reconnects
+// automatically), so it gets the majority of the 20s the two constants
+// summed to under the old shared design.
+//
+// This also has to comfortably cover releaseSendClaim's own detached 5s
+// context (subscribe.go) — the one piece of this sequence Close's own Wait
+// does NOT bound (see releaseSendClaim's doc comment): a job that fails
+// (including one cancelled by Close's own sendCtx cancellation) releases
+// its claim on a context timed from when THAT release began, not from when
+// Close was called, so in the worst case Close's Wait needs to cover very
+// nearly the full 5s of a release that started right at the end of its own
+// budget. 15s leaves 3x headroom over that 5s figure — a splitting-the-
+// budget fix alone is judged sufficient (no separate tracking of the
+// detached release context is added) PROVIDED this constant is kept
+// meaningfully above 5s; do not shrink it without re-deriving that margin.
+//
+// deploy/systemd/opencircuit.service's TimeoutStopSec must exceed
+// shutdownServerTimeout + subscribeCloseTimeout (currently 20s combined),
+// or systemd SIGKILLs the process before this sequence gets the chance to
+// finish on its own.
+//
+// var, not const: see shutdownServerTimeout's doc comment above.
+var subscribeCloseTimeout = 15 * time.Second

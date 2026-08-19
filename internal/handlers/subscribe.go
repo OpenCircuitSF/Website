@@ -443,13 +443,21 @@ func (h *SubscribeHandler) waitForSends() {
 // immediately rather than running out its full timeout.
 //
 // cmd/opencircuit/main.go's mountAndServe calls this from its
-// SIGTERM/SIGINT handler, after http.Server.Shutdown has stopped accepting
-// new connections and drained in-flight ones — Subscribe itself never
-// blocks on a send, so that step is fast and by the time it returns no
-// request goroutine can still be inside enqueueSend. #0045's campaign send
-// worker needs the same close-then-bounded-wait shape; reuse this pattern
-// (a cancellable shared context plus a closed work queue plus a WaitGroup)
-// rather than inventing a second one.
+// SIGTERM/SIGINT handler, after http.Server.Shutdown — that ordering
+// guarantees no request goroutine can still be inside enqueueSend ONLY when
+// Shutdown returns nil (every in-flight handler, including Subscribe,
+// genuinely returned before Close is called). If Shutdown instead returns
+// context.DeadlineExceeded (its own budget consumed by a still-running
+// handler — e.g. a long-lived SSE stream, which does not block on a send
+// but does keep Shutdown from returning early — see #0087), that guarantee
+// does not hold: a request goroutine may still be executing concurrently
+// with this call. That is harmless, not incidental: enqueueSend's
+// closeMu-guarded check still refuses a send after closed flips true, and
+// Close (below) holds that same lock while setting closed=true, so the two
+// can safely overlap regardless of whether Shutdown finished draining
+// first. #0045's campaign send worker needs the same close-then-bounded-
+// wait shape; reuse this pattern (a cancellable shared context plus a
+// closed work queue plus a WaitGroup) rather than inventing a second one.
 func (h *SubscribeHandler) Close(ctx context.Context) error {
 	h.closeMu.Lock()
 	if h.closed {

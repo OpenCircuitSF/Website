@@ -177,8 +177,10 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 		t.Fatalf("kill self: %v", err)
 	}
 
-	// mountAndServe should return promptly, well under shutdownTimeout:
-	// srv.Shutdown is fast (no handler blocks on a network call), and
+	// mountAndServe should return promptly, well under
+	// shutdownServerTimeout+subscribeCloseTimeout (#0087 split what used to
+	// be one shutdownTimeout): srv.Shutdown is fast (no handler blocks on a
+	// network call), and
 	// subscribeH.Close's sendCtx cancellation interrupts blocked.Send
 	// almost immediately rather than waiting the full sendJobTimeout or
 	// for release (which this test never closes).
