@@ -26,6 +26,12 @@
   //    live yet, the intro panel carries one explicit line that signup is not
   //    open -- present tense elsewhere is forward-looking policy, not a claim
   //    about today (see #0070's Gotchas for the full reasoning).
+  //  - Do not close either collection list with an absolute ("that is the
+  //    complete list", "we collect nothing else"). Two review passes bounced
+  //    exactly that sentence: signup also stores `confirmed_at` and mints
+  //    `manage_token`/`confirm_token`, and §6.2's table is not in code yet
+  //    (#0025 open, migrations stop at 000008), so any completeness claim
+  //    drifts the moment the schema lands. Enumerate; don't claim closure.
   //  - The Consent section names only what §6.2 actually has two of:
   //    `signup_ip` + `confirmed_at`. There is no confirm-time IP column --
   //    don't reintroduce "the confirming click's IP" here.
@@ -54,7 +60,7 @@
   import { APP_NAME } from '../lib/branding';
 
   const CONTACT_EMAIL = 'hello@opencircuitsf.com';
-  const LAST_UPDATED = '2026-08-18';
+  const LAST_UPDATED = '2026-08-19';
 </script>
 
 <main id="main-content" class="app-shell privacy-shell">
@@ -90,10 +96,14 @@
           'the UTM parameters (source, medium, campaign) of the link you signed up from, if any (e.g. which social post or page sent you)',
         ]}
       />
+      <p>
+        Signing up also records the time you confirm your subscription (see "Consent"
+        below), and generates the tokens that make your unsubscribe and
+        preference-center links work.
+      </p>
       <p class="text-muted">
-        That is the complete list of what signing up for the list collects. This site
-        does not run third-party analytics, ad trackers, external CDNs, or email
-        open-tracking pixels — nothing on this site phones home to anyone but us.
+        This site does not run third-party analytics, ad trackers, external CDNs, or
+        email open-tracking pixels — nothing on this site phones home to anyone but us.
       </p>
     </Panel>
   </section>
@@ -106,7 +116,7 @@
       <StatusList
         items={[
           'email — to send you workshop announcements and the occasional list update',
-          'interests — so we only send you workshops you actually asked to hear about',
+          'interests — so a workshop announcement can go to the people who asked about that topic instead of the whole list',
           'signup IP, user agent, and timestamp — documented proof of opt-in consent (GDPR/CCPA) and abuse prevention',
           'UTM parameters — to understand which channels bring people to the list',
         ]}
@@ -122,9 +132,9 @@
       <p>
         We keep your subscriber data for as long as you remain subscribed, plus
         <strong>[PLACEHOLDER: exact retention window after unsubscribe/erasure — e.g.
-        "30 days" — not yet decided]</strong>, after which it is deleted. If you
-        unsubscribe or request erasure, see "How to leave" below for what happens to
-        your record.
+        "30 days" — not yet decided]</strong>, after which your subscriber record is
+        deleted. A few records outlive it by design — see "How to leave" below for
+        which ones and why.
       </p>
     </Panel>
   </section>
@@ -136,7 +146,9 @@
     <Panel>
       <p>
         Signup uses double opt-in: you submit the form, then confirm via a link we
-        email you. Nothing is added to the list until you confirm. The IP address and
+        email you. Submitting the form stores your details with a pending status; the
+        only email an unconfirmed signup receives is that confirmation, because every
+        campaign's audience is drawn from confirmed subscribers. The IP address and
         timestamp of your original signup (see "What we collect" above) are recorded as
         evidence of consent, and the confirming click separately records its own
         timestamp — not a second IP address. Together, those records are what
