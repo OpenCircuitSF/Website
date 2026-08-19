@@ -7,7 +7,7 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { currentView, currentUser, links } from '../lib/stores';
+  import { currentView, currentUser } from '../lib/stores';
   import {
     listCredentials,
     renameCredential,
@@ -126,7 +126,7 @@
     }
   }
 
-  function go(view: 'dashboard' | 'campaigns' | 'admin') {
+  function go(view: 'admin') {
     currentView.set(view);
   }
 
@@ -137,7 +137,6 @@
       // Drop local state regardless of server result.
     }
     currentUser.set(null);
-    links.set([]);
     currentView.set('login');
   }
 
@@ -177,7 +176,6 @@
       signingOutAll = false;
     }
     currentUser.set(null);
-    links.set([]);
     currentView.set('login');
   }
 
@@ -188,8 +186,6 @@
   <header class="app-header">
     <h1 class="app-title">{APP_NAME}</h1>
     <nav class="nav-tabs" aria-label="Primary">
-      <button type="button" class="nav-tab" onclick={() => go('dashboard')}>Dashboard</button>
-      <button type="button" class="nav-tab" onclick={() => go('campaigns')}>Campaigns</button>
       <button type="button" class="nav-tab active" aria-current="page">Account</button>
       {#if $currentUser?.is_admin}
         <button type="button" class="nav-tab" onclick={() => go('admin')}>Admin</button>

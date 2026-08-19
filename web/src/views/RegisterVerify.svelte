@@ -11,7 +11,7 @@
     2. Call navigator.credentials.create() with the decoded options.
     3. POST the serialized attestation to /auth/register/finish?token=….
     4. On success: call GET /api/me to confirm the session, set currentUser,
-       clear pendingVerifyToken, and navigate to "dashboard".
+       clear pendingVerifyToken, and navigate to "account".
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -117,7 +117,7 @@
       currentUser.set(user);
       pendingVerifyToken.set(null);
       history.replaceState({}, '', '/');
-      currentView.set('dashboard');
+      currentView.set('account');
     } catch {
       status = 'error';
       errorMessage =

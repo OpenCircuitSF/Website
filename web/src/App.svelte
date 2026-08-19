@@ -3,10 +3,6 @@
   import { currentView, currentUser, pendingVerifyToken } from './lib/stores';
   import { getMe, ApiError } from './lib/api';
   import Login from './views/Login.svelte';
-  import Dashboard from './views/Dashboard.svelte';
-  import LinkDetail from './views/LinkDetail.svelte';
-  import CampaignsList from './views/CampaignsList.svelte';
-  import CampaignDetail from './views/CampaignDetail.svelte';
   import Account from './views/Account.svelte';
   import Admin from './views/Admin.svelte';
   import RegisterVerify from './views/RegisterVerify.svelte';
@@ -21,11 +17,15 @@
   // via the SPA catch-all in the Go mux ("GET /" serves index.html for every
   // unmatched non-API path). We detect them before calling /api/me so that a
   // user who follows an email link without an active session is routed to the
-  // correct verification view rather than bounced straight to login (#0041).
+  // correct verification view rather than bounced straight to login.
   //
   // For all other paths, GET /api/me decides the initial view: a valid session
-  // lands on the dashboard, a 401 falls back to login. The profile also gates
-  // the admin tab (currentUser.is_admin), per the PRD.
+  // lands on the account view, a 401 falls back to login. The profile also
+  // gates the admin tab (currentUser.is_admin), per the PRD.
+  //
+  // This is a minimal, working placeholder navigation (login/account/admin only)
+  // pending #0014, which replaces it wholesale with a History API path router
+  // once the marketing/mailing-list views land in later phases.
   onMount(async () => {
     const path = window.location.pathname;
 
@@ -58,7 +58,7 @@
     try {
       const user = await getMe();
       currentUser.set(user);
-      currentView.set('dashboard');
+      currentView.set('account');
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         currentUser.set(null);
@@ -81,14 +81,6 @@
   </div>
 {:else if $currentView === 'login'}
   <Login />
-{:else if $currentView === 'dashboard'}
-  <Dashboard />
-{:else if $currentView === 'link-detail'}
-  <LinkDetail />
-{:else if $currentView === 'campaigns'}
-  <CampaignsList />
-{:else if $currentView === 'campaign-detail'}
-  <CampaignDetail />
 {:else if $currentView === 'account'}
   <Account />
 {:else if $currentView === 'admin'}

@@ -1,22 +1,14 @@
-// Typed fetch wrapper for the ShortLinks API. All requests are same-origin (the
-// Vite dev server proxies /api, /auth, /u to the Go service; in production the Go
-// binary serves the SPA itself), send the session cookie via
-// `credentials: 'include'`, and throw a typed ApiError on a non-2xx response.
+// Typed fetch wrapper for the Open Circuit SF API. All requests are same-origin
+// (the Vite dev server proxies /api, /auth, /account, /admin to the Go service;
+// in production the Go binary serves the SPA itself), send the session cookie
+// via `credentials: 'include'`, and throw a typed ApiError on a non-2xx response.
 
 import type {
   User,
-  Link,
-  LinkList,
-  LinkDetail,
   Credential,
   AuditEntry,
-  FilterRule,
   AdminUser,
   Setting,
-  Campaign,
-  CampaignWithCounts,
-  CampaignDetail,
-  CampaignRollup,
 } from './types';
 import type {
   ServerCredentialAssertion,
@@ -107,226 +99,11 @@ export function apiDelete<T>(path: string): Promise<T> {
 }
 
 // ── Endpoint helpers ────────────────────────────────────────────────────────
-// Thin, typed wrappers over the routes the views call. Views in #0032–#0037 use
-// these rather than building paths by hand.
+// Thin, typed wrappers over the routes the views call.
 
 /** GET /api/me — current user profile; throws ApiError(401) when unauthenticated. */
 export function getMe(): Promise<User> {
   return apiGet<User>('/api/me');
-}
-
-/** GET /api/links — the caller's links (paginated, most-recent-first). */
-export function listLinks(page = 1, perPage = 20): Promise<LinkList> {
-  return apiGet<LinkList>(`/api/links?page=${page}&per_page=${perPage}`);
-}
-
-/** GET /api/links/{key} — link detail plus UTM click stats. */
-export function getLink(key: string): Promise<LinkDetail> {
-  return apiGet<LinkDetail>(`/api/links/${encodeURIComponent(key)}`);
-}
-
-/**
- * Body accepted by POST /api/links. campaign_id/campaign_slug (#0099) are an
- * optional, mutually-alternative way to assign the link to one of the
- * caller's own campaigns at create time (campaign_id wins if both are sent).
- * The five utm_* fields and placement are the discrete columns; they are
- * expected to describe the SAME values already baked into destination_url
- * (see composeUtmUrl in lib/utm.ts) — the backend stores exactly what it is
- * given rather than re-deriving one from the other.
- */
-export interface CreateLinkInput {
-  destination_url: string;
-  title?: string;
-  key?: string;
-  expires_at?: string | null;
-  campaign_id?: number;
-  campaign_slug?: string;
-  utm_source?: string;
-  utm_medium?: string;
-  utm_campaign?: string;
-  utm_term?: string;
-  utm_content?: string;
-  placement?: string;
-}
-
-/** POST /api/links — create (or dedup-reactivate) a short link. */
-export function createLink(input: CreateLinkInput): Promise<Link> {
-  return apiPost<Link>('/api/links', input);
-}
-
-/**
- * Fields PATCH /api/links/{key} can update. The five utm_* fields and
- * placement (#0099) let the edit form save a builder repopulated via
- * utmParamsFromLink (lib/utm.ts) back in lockstep with a changed
- * destination_url. Campaign membership is NOT patchable here — it only
- * changes via the dedicated assign/unassign campaign-links endpoints below.
- */
-export interface UpdateLinkInput {
-  title?: string;
-  destination_url?: string;
-  expires_at?: string | null;
-  utm_source?: string;
-  utm_medium?: string;
-  utm_campaign?: string;
-  utm_term?: string;
-  utm_content?: string;
-  placement?: string;
-}
-
-/** PATCH /api/links/{key} — update title, destination, expiry, or UTM/placement. */
-export function updateLink(key: string, input: UpdateLinkInput): Promise<Link> {
-  return apiPatch<Link>(`/api/links/${encodeURIComponent(key)}`, input);
-}
-
-/** DELETE /api/links/{key} — deactivate (soft delete) a link. */
-export function deactivateLink(key: string): Promise<{ message: string }> {
-  return apiDelete<{ message: string }>(`/api/links/${encodeURIComponent(key)}`);
-}
-
-// ── Campaigns (#0098, #0099, #0102, #0103) ──────────────────────────────────
-
-/**
- * GET /api/campaigns — the caller's campaigns (archived included; #0103's
- * CampaignsList filters those client-side by default). Each item carries its
- * real, ALL-TIME link_count/total_clicks (#0102).
- */
-export function listCampaigns(): Promise<{ campaigns: CampaignWithCounts[] }> {
-  return apiGet('/api/campaigns');
-}
-
-/** Body accepted by POST /api/campaigns. Only name is required — see internal/handlers/campaigns.go createCampaignRequest. */
-export interface CreateCampaignInput {
-  name: string;
-  description?: string;
-  starts_at?: string | null;
-  ends_at?: string | null;
-  default_utm_source?: string;
-  default_utm_medium?: string;
-  default_utm_campaign?: string;
-  default_utm_term?: string;
-  default_utm_content?: string;
-}
-
-/** POST /api/campaigns — create a campaign; returns 201 with the full campaign object. */
-export function createCampaign(input: CreateCampaignInput): Promise<Campaign> {
-  return apiPost<Campaign>('/api/campaigns', input);
-}
-
-/**
- * Fields PATCH /api/campaigns/{slug} can update — every field optional so the
- * handler can distinguish "absent" from "present" (mirrors
- * patchCampaignRequest). The slug itself is never patchable — it is fixed at
- * creation (#0098 downstream constraint 4).
- */
-export interface UpdateCampaignInput {
-  name?: string;
-  description?: string;
-  starts_at?: string | null;
-  ends_at?: string | null;
-  archived?: boolean;
-  default_utm_source?: string;
-  default_utm_medium?: string;
-  default_utm_campaign?: string;
-  default_utm_term?: string;
-  default_utm_content?: string;
-}
-
-/** PATCH /api/campaigns/{slug} — update name/description/dates/archived/UTM defaults. */
-export function updateCampaign(slug: string, input: UpdateCampaignInput): Promise<Campaign> {
-  return apiPatch<Campaign>(`/api/campaigns/${encodeURIComponent(slug)}`, input);
-}
-
-/**
- * GET /api/campaigns/{slug} — campaign metadata, its links, and (when a
- * stats provider is wired) its windowed CampaignStats + clicks-over-time
- * series. See types.ts's CampaignDetail doc comment for the all-time-vs-
- * windowed numbers this response mixes.
- */
-export function getCampaign(slug: string): Promise<CampaignDetail> {
-  return apiGet<CampaignDetail>(`/api/campaigns/${encodeURIComponent(slug)}`);
-}
-
-/**
- * GET /api/campaigns/{slug}/stats — the full campaign rollup (CampaignStats,
- * timeseries, by_link, series_by_link), all read from one snapshot. `from`/
- * `to` are optional "YYYY-MM-DD" dates; omitting both applies the server's
- * default window (the campaign's own starts_at/ends_at when both are set,
- * otherwise the trailing 30 days). #0103 calls this with no window to get
- * `by_link` for the links table's "clicks in window"/"share" columns, on the
- * SAME default window GET /api/campaigns/{slug} already used for its stats.
- */
-export function getCampaignStats(slug: string, from?: string, to?: string): Promise<CampaignRollup> {
-  const params = new URLSearchParams();
-  if (from) params.set('from', from);
-  if (to) params.set('to', to);
-  const qs = params.toString();
-  return apiGet<CampaignRollup>(
-    `/api/campaigns/${encodeURIComponent(slug)}/stats${qs ? `?${qs}` : ''}`,
-  );
-}
-
-/**
- * POST /api/campaigns/{slug}/links — assign existing links (by key) to the
- * campaign. Capped at 50 keys per request and NOT atomic across keys (see
- * internal/handlers/campaigns.go AssignLinks' doc comment) — #0103's
- * CampaignDetail chunks larger requests via lib/campaigns.ts's chunkKeys and
- * surfaces a partial-success message rather than assuming all-or-nothing.
- */
-export function assignLinksToCampaign(slug: string, keys: string[]): Promise<{ links: Link[] }> {
-  return apiPost<{ links: Link[] }>(`/api/campaigns/${encodeURIComponent(slug)}/links`, { keys });
-}
-
-/** DELETE /api/campaigns/{slug}/links/{key} — unassign one link from the campaign. */
-export function unassignLinkFromCampaign(slug: string, key: string): Promise<{ message: string }> {
-  return apiDelete<{ message: string }>(
-    `/api/campaigns/${encodeURIComponent(slug)}/links/${encodeURIComponent(key)}`,
-  );
-}
-
-/**
- * One row of POST /api/campaigns/{slug}/links/batch's body (#0105). Mirrors
- * internal/handlers/campaigns.go's batchCreateLinkRow: destination_url is
- * the row's FULLY COMPOSED URL — the client bakes each row's UTM values into
- * it via lib/campaigns.ts's composeBatchRowDestinationUrl (the SAME
- * composeUtmUrl helper single-create uses), so the server does not
- * recompose it. Structurally identical to lib/campaigns.ts's
- * BatchCreateLinkRowPayload; kept as a separate declaration here rather than
- * imported, matching this file's existing convention of defining its own
- * *Input shapes independently of lib/ (e.g. CreateLinkInput above).
- */
-export interface BatchCreateLinkRowInput {
-  destination_url: string;
-  title?: string;
-  utm_source?: string;
-  utm_medium?: string;
-  utm_campaign?: string;
-  utm_term?: string;
-  utm_content?: string;
-  placement?: string;
-}
-
-/**
- * POST /api/campaigns/{slug}/links/batch — create one new short link per row
- * (already filtered to non-blank rows by the caller — see
- * lib/campaigns.ts's buildBatchCreateRows), all assigned to this campaign,
- * in ONE atomic server call (#0105: "prefer one server call — a partial
- * failure halfway through a client-side loop leaves the campaign in a state
- * the user did not ask for and cannot easily undo"). The whole request
- * either creates every row or (400/422/500) creates nothing — see
- * internal/handlers/campaigns.go's BatchCreateLinks doc comment.
- * skipped_blank_rows always comes back 0 here since the caller already
- * dropped blank rows before composing the request; the field exists on the
- * response type because the SERVER also defends against a blank row arriving
- * (e.g. a future caller that does not pre-filter).
- */
-export function batchCreateLinksForCampaign(
-  slug: string,
-  rows: BatchCreateLinkRowInput[],
-): Promise<{ links: Link[]; skipped_blank_rows: number }> {
-  return apiPost<{ links: Link[]; skipped_blank_rows: number }>(
-    `/api/campaigns/${encodeURIComponent(slug)}/links/batch`,
-    { rows },
-  );
 }
 
 /** POST /auth/logout — invalidate the current session. */
@@ -335,10 +112,10 @@ export function logout(): Promise<void> {
 }
 
 /**
- * POST /auth/logout/all — "sign out everywhere" (#0094): revokes every
- * session for the caller's account, including this one, on every device and
- * client (browser, iPhone app). It never touches enrolled passkeys — those
- * are what the next sign-in uses. Returns the number of sessions revoked.
+ * POST /auth/logout/all — "sign out everywhere": revokes every session for the
+ * caller's account, including this one, on every device and client (browser,
+ * iPhone app). It never touches enrolled passkeys — those are what the next
+ * sign-in uses. Returns the number of sessions revoked.
  */
 export function logoutAll(): Promise<{ message: string; revoked_count: number }> {
   return apiPost<{ message: string; revoked_count: number }>('/auth/logout/all');
@@ -385,8 +162,8 @@ export function registerStart(email: string): Promise<{ message: string }> {
 /**
  * GET /auth/register/verify?token=… — exchange the magic-link token for
  * WebAuthn `PublicKeyCredentialCreationOptions`. Called by the register-verify
- * landing view after the SPA loads (#0041). Returns ApiError(400/401/410) for
- * invalid or expired tokens; ApiError(404) if the session challenge has expired.
+ * landing view after the SPA loads. Returns ApiError(400/401/410) for invalid
+ * or expired tokens; ApiError(404) if the session challenge has expired.
  */
 export function registerVerify(token: string): Promise<ServerCredentialCreation> {
   return apiGet<ServerCredentialCreation>(
@@ -513,57 +290,6 @@ export function getSettings(): Promise<{ settings: Setting[] }> {
 /** PATCH /admin/settings — update a runtime setting (admin only). */
 export function updateSetting(key: string, value: string): Promise<unknown> {
   return apiPatch<unknown>('/admin/settings', { key, value });
-}
-
-/** GET /admin/url-filters — all URL filter rules (admin only). */
-export function listFilterRules(): Promise<{ rules: FilterRule[] }> {
-  return apiGet<{ rules: FilterRule[] }>('/admin/url-filters');
-}
-
-/** Body accepted by POST /admin/url-filters. */
-export interface CreateFilterRuleInput {
-  pattern: string;
-  reason_code: number;
-  description: string;
-}
-
-/** POST /admin/url-filters — create a URL filter rule (admin only); returns 201 with the new rule. */
-export function createFilterRule(input: CreateFilterRuleInput): Promise<FilterRule> {
-  return apiPost<FilterRule>('/admin/url-filters', input);
-}
-
-/** Fields PATCH /admin/url-filters/{id} can update (all optional). */
-export interface UpdateFilterRuleInput {
-  pattern?: string;
-  reason_code?: number;
-  description?: string;
-  active?: boolean;
-}
-
-/** PATCH /admin/url-filters/{id} — partial update of a rule (admin only). */
-export function updateFilterRule(id: number, input: UpdateFilterRuleInput): Promise<FilterRule> {
-  return apiPatch<FilterRule>(`/admin/url-filters/${id}`, input);
-}
-
-/** DELETE /admin/url-filters/{id} — remove a rule (admin only). */
-export function deleteFilterRule(id: number): Promise<{ message: string }> {
-  return apiDelete<{ message: string }>(`/admin/url-filters/${id}`);
-}
-
-/** Result of POST /admin/url-filters/test. */
-export interface FilterTestResult {
-  matched: boolean;
-  reason_code?: number;
-  rule_id?: number;
-}
-
-/**
- * POST /admin/url-filters/test — evaluate a URL against the active rules (admin
- * only). A dry run; never inserts a link. Returns whether it matched and, when
- * it did, the matched rule id and reason code.
- */
-export function testFilterRule(url: string): Promise<FilterTestResult> {
-  return apiPost<FilterTestResult>('/admin/url-filters/test', { url });
 }
 
 /** Envelope returned by GET /admin/audit. */

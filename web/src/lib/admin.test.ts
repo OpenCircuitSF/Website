@@ -1,20 +1,17 @@
-// Unit tests for the Admin pure logic (#0037): the reason-code/value ↔ label
-// maps, the deactivation `other`-requires-note validation, the URL-filter
-// test-result mapping, audit actor/target/metadata rendering, the user-id filter
-// parser, and the pagination math. No DOM or network — only the data shaping the
-// Admin view delegates to lib/admin.ts.
+// Unit tests for the Admin pure logic: the deactivation reason value ↔ label
+// map, the deactivation `other`-requires-note validation, audit
+// actor/target/metadata rendering, the user-id filter parser, and the
+// pagination math. No DOM or network — only the data shaping the Admin view
+// delegates to lib/admin.ts.
 
 import { describe, it, expect } from 'vitest';
 import type { AdminUser, AuditEntry } from './types';
 import {
-  REASON_OPTIONS,
-  reasonLabel,
   DEACTIVATION_REASONS,
   deactivationReasonLabel,
   isValidDeactivationReason,
   validateDeactivation,
   canDeactivate,
-  filterTestNotice,
   actorLabel,
   targetLabel,
   formatMetadata,
@@ -49,26 +46,6 @@ function auditEntry(overrides: Partial<AuditEntry> = {}): AuditEntry {
     ...overrides,
   };
 }
-
-describe('reason codes', () => {
-  it('offers exactly the six 1..6 codes in order', () => {
-    expect(REASON_OPTIONS.map((o) => o.code)).toEqual([1, 2, 3, 4, 5, 6]);
-  });
-
-  it('maps each code to its PRD label', () => {
-    expect(reasonLabel(1)).toBe('Malware or ransomware');
-    expect(reasonLabel(2)).toBe('Phishing');
-    expect(reasonLabel(3)).toBe('Spam');
-    expect(reasonLabel(4)).toBe('Adult content');
-    expect(reasonLabel(5)).toBe('Policy violation');
-    expect(reasonLabel(6)).toBe('Other');
-  });
-
-  it('maps 0 to "Not denied" and an unknown code to "Other"', () => {
-    expect(reasonLabel(0)).toBe('Not denied');
-    expect(reasonLabel(99)).toBe('Other');
-  });
-});
 
 describe('deactivation reasons', () => {
   it('offers exactly the six PRD reason values in order', () => {
@@ -129,29 +106,6 @@ describe('canDeactivate', () => {
     expect(canDeactivate(adminUser({ id: 2, is_admin: true }), 1)).toBe(false);
     expect(canDeactivate(adminUser({ id: 1 }), 1)).toBe(false);
     expect(canDeactivate(adminUser({ id: 2, active: false }), 1)).toBe(false);
-  });
-});
-
-describe('filterTestNotice', () => {
-  it('reports a match with rule id, code, and label', () => {
-    const notice = filterTestNotice({ matched: true, reason_code: 2, rule_id: 5 });
-    expect(notice).toEqual({
-      kind: 'match',
-      ruleId: 5,
-      reasonCode: 2,
-      label: 'Phishing',
-      message: 'Blocked by rule #5 — Phishing',
-    });
-  });
-
-  it('reports no match', () => {
-    const notice = filterTestNotice({ matched: false });
-    expect(notice.kind).toBe('no-match');
-    expect(notice.message).toContain('allowed');
-  });
-
-  it('treats a malformed match (missing fields) as no-match', () => {
-    expect(filterTestNotice({ matched: true }).kind).toBe('no-match');
   });
 });
 

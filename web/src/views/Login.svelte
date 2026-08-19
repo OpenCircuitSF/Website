@@ -14,7 +14,7 @@
      assertion to /auth/login/finish.
 
   On success we confirm the session via getMe(), set currentUser, and switch the
-  currentView store to "dashboard" (no router — navigation is a store write).
+  currentView store to "account" (no router yet — navigation is a store write).
 
   The "Register" affordance opens a sub-form that POSTs the email to
   /auth/register/start and shows a generic "check your email" confirmation
@@ -86,7 +86,7 @@
     await loginFinish(serializeAssertion(credential));
     const user = await getMe();
     currentUser.set(user);
-    currentView.set('dashboard');
+    currentView.set('account');
     return true;
   }
 

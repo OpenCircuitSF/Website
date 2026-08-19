@@ -1,44 +1,10 @@
-// Pure, framework-free helpers backing the Admin view (#0037): the four admin
-// sub-sections (settings, URL filters, users, audit log). Keeping the
-// reason-code/value ↔ label maps, the deactivation `other`-requires-note
-// validation, the URL-filter test-result message, the audit metadata/actor
-// rendering, and the pagination math here (rather than inline in the .svelte
-// file) makes them unit-testable without a DOM — see admin.test.ts.
+// Pure, framework-free helpers backing the Admin view: the three admin
+// sub-sections (settings, users, audit log). Keeping the deactivation
+// `other`-requires-note validation, the audit metadata/actor rendering, and
+// the pagination math here (rather than inline in the .svelte file) makes
+// them unit-testable without a DOM — see admin.test.ts.
 
 import type { AdminUser, AuditEntry } from './types';
-import type { FilterTestResult } from './api';
-
-// ── Denial reason codes (URL filter rules) ──────────────────────────────────
-// The six denial reason codes (1..6) from the PRD "Denial Reason Codes" table.
-// Code 0 ("not denied") is never assigned to a rule, so it is not offered in the
-// create/edit dropdown.
-
-/** One option in the URL-filter reason-code dropdown: numeric code + label. */
-export interface ReasonOption {
-  code: number;
-  label: string;
-}
-
-/** The denial reason codes 1..6 with their labels, in dropdown order. */
-export const REASON_OPTIONS: readonly ReasonOption[] = [
-  { code: 1, label: 'Malware or ransomware' },
-  { code: 2, label: 'Phishing' },
-  { code: 3, label: 'Spam' },
-  { code: 4, label: 'Adult content' },
-  { code: 5, label: 'Policy violation' },
-  { code: 6, label: 'Other' },
-] as const;
-
-/**
- * Human-readable label for a denial `reason_code`. Mirrors the backend's
- * `filters.ReasonLabel`: 0 is "Not denied", 1..6 map to their labels, and any
- * unknown code falls back to "Other" so a label is always non-empty.
- */
-export function reasonLabel(code: number): string {
-  if (code === 0) return 'Not denied';
-  const opt = REASON_OPTIONS.find((o) => o.code === code);
-  return opt ? opt.label : 'Other';
-}
 
 // ── Deactivation reasons (user management) ───────────────────────────────────
 // The six account.deactivated reason values from the PRD "Deactivation reasons"
@@ -104,32 +70,6 @@ export function validateDeactivation(
  */
 export function canDeactivate(user: AdminUser, currentUserId: number): boolean {
   return user.active && !user.is_admin && user.id !== currentUserId;
-}
-
-// ── URL-filter test tool ─────────────────────────────────────────────────────
-
-/** The display state of a /admin/url-filters/test result. */
-export type FilterTestNotice =
-  | { kind: 'match'; ruleId: number; reasonCode: number; label: string; message: string }
-  | { kind: 'no-match'; message: string };
-
-/**
- * Map a POST /admin/url-filters/test response to the notice to display. A match
- * carries the matched rule id, reason code, and its label; no match yields the
- * "allowed" copy.
- */
-export function filterTestNotice(result: FilterTestResult): FilterTestNotice {
-  if (result.matched && result.reason_code !== undefined && result.rule_id !== undefined) {
-    const label = reasonLabel(result.reason_code);
-    return {
-      kind: 'match',
-      ruleId: result.rule_id,
-      reasonCode: result.reason_code,
-      label,
-      message: `Blocked by rule #${result.rule_id} — ${label}`,
-    };
-  }
-  return { kind: 'no-match', message: 'No matching rule — this URL would be allowed.' };
 }
 
 // ── Audit log rendering ──────────────────────────────────────────────────────
