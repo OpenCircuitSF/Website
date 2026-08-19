@@ -120,3 +120,74 @@ func TestClientIP_EmptyXFFEntryFallsBackToPeer(t *testing.T) {
 		t.Errorf("ClientIP = %q, want %q (fallback to peer when the trusted rightmost entry is empty)", got, want)
 	}
 }
+
+// TestClientIP_UnparseableRightmostEntryFallsBackToPeer is #0080's core
+// fix: the old code trusted the rightmost entry with no validation that it
+// was even an IP address, which — because signup_ip is an INET column —
+// silently dropped the signup entirely (#0026's handler still returns its
+// uniform 202 regardless). "not-an-ip" must fall back to the peer, not be
+// returned verbatim.
+func TestClientIP_UnparseableRightmostEntryFallsBackToPeer(t *testing.T) {
+	got := ClientIP(req("127.0.0.1:9999", "1.1.1.1, not-an-ip"))
+	if want := "127.0.0.1"; got != want {
+		t.Errorf("ClientIP = %q, want %q (fallback to peer for an unparseable rightmost entry)", got, want)
+	}
+}
+
+// TestClientIP_PortOnRightmostEntryIsStripped is #0080's second acceptance
+// criterion: a port on the rightmost entry ("203.0.113.5:4444") is not
+// itself a valid inet literal and must not be stored/bucketed verbatim —
+// the port is stripped and the bare IP trusted.
+func TestClientIP_PortOnRightmostEntryIsStripped(t *testing.T) {
+	got := ClientIP(req("127.0.0.1:9999", "198.51.100.9, 203.0.113.5:4444"))
+	if want := "203.0.113.5"; got != want {
+		t.Errorf("ClientIP = %q, want %q (port stripped, not stored verbatim)", got, want)
+	}
+}
+
+// TestClientIP_BracketedIPv6RightmostEntryFallsBackToPeer covers the
+// bracketed-IPv6-without-port shape ("[::ffff:127.0.0.1]"): net.ParseIP
+// rejects the brackets and net.SplitHostPort requires a port, so this must
+// fall back to the peer rather than being returned verbatim or panicking.
+func TestClientIP_BracketedIPv6RightmostEntryFallsBackToPeer(t *testing.T) {
+	got := ClientIP(req("127.0.0.1:9999", "[::ffff:127.0.0.1]"))
+	if want := "127.0.0.1"; got != want {
+		t.Errorf("ClientIP = %q, want %q (fallback to peer for a bracketed IPv6 entry with no port)", got, want)
+	}
+}
+
+// TestClientIP_BareIPv6RightmostEntryIsTrusted confirms an unbracketed,
+// valid IPv6 literal in the rightmost entry (no port, so no ambiguity with
+// the colon-separated port syntax) is trusted as-is — this is a real IP,
+// not a case that should fall back.
+func TestClientIP_BareIPv6RightmostEntryIsTrusted(t *testing.T) {
+	got := ClientIP(req("127.0.0.1:9999", "2001:db8::1"))
+	if want := "2001:db8::1"; got != want {
+		t.Errorf("ClientIP = %q, want %q (a bare IPv6 literal is a valid entry)", got, want)
+	}
+}
+
+// TestClientIP_WhitespaceOnlyHeaderFallsBackToPeer and the two tests below
+// re-confirm #0077's reviewer's other edge cases still fall back cleanly
+// now that ClientIP also validates the entry is an IP: whitespace-only,
+// all-commas, and tab-separated headers must not panic or return garbage.
+func TestClientIP_WhitespaceOnlyHeaderFallsBackToPeer(t *testing.T) {
+	got := ClientIP(req("127.0.0.1:9999", "   "))
+	if want := "127.0.0.1"; got != want {
+		t.Errorf("ClientIP = %q, want %q (whitespace-only header falls back to peer)", got, want)
+	}
+}
+
+func TestClientIP_AllCommasHeaderFallsBackToPeer(t *testing.T) {
+	got := ClientIP(req("127.0.0.1:9999", ",,,"))
+	if want := "127.0.0.1"; got != want {
+		t.Errorf("ClientIP = %q, want %q (all-commas header falls back to peer)", got, want)
+	}
+}
+
+func TestClientIP_TabSeparatedHeaderFallsBackToPeer(t *testing.T) {
+	got := ClientIP(req("127.0.0.1:9999", "203.0.113.9,\t"))
+	if want := "127.0.0.1"; got != want {
+		t.Errorf("ClientIP = %q, want %q (trailing-tab-only rightmost entry falls back to peer)", got, want)
+	}
+}

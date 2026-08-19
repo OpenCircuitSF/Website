@@ -67,8 +67,10 @@ func ClientIP(r *http.Request) string {
 
 	if isTrustedProxyPeer(peer) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			if ip := rightmostXFFEntry(xff); ip != "" {
-				return ip
+			if entry := rightmostXFFEntry(xff); entry != "" {
+				if ip := parseXFFIP(entry); ip != "" {
+					return ip
+				}
 			}
 		}
 	}
@@ -103,4 +105,33 @@ func isTrustedProxyPeer(peer string) bool {
 func rightmostXFFEntry(xff string) string {
 	parts := strings.Split(xff, ",")
 	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+// parseXFFIP validates that entry (already trimmed by rightmostXFFEntry) is
+// an IP address, returning "" if it cannot be resolved to one at all. #0080:
+// the caller previously trusted this entry verbatim with no validation. A
+// value that is neither an IP nor a stripped-port host:port pair must never
+// reach a caller: signup_ip is an INET column (an unparseable value fails
+// the INSERT outright — #0026's handler still returns its uniform 202
+// regardless, so the signup silently vanishes with no error surfaced
+// anywhere), and this same value keys the rate-limit bucket map
+// (RateLimiter.Middleware, ratelimit.go), where an unparseable token would
+// otherwise let every malformed value share one bucket instead of being
+// rejected.
+//
+// A bare IP ("203.0.113.5") is trusted as-is. An IP:port pair
+// ("203.0.113.5:4444") — not itself a valid inet literal, and not something
+// mod_proxy_http produces, but conceivably injected by whatever sits to the
+// left of the trusted hop — has its port stripped rather than being stored
+// or bucketed verbatim, per the issue's second acceptance criterion.
+// Anything else (e.g. "not-an-ip") returns "", and ClientIP falls back to
+// the peer address.
+func parseXFFIP(entry string) string {
+	if net.ParseIP(entry) != nil {
+		return entry
+	}
+	if host, _, err := net.SplitHostPort(entry); err == nil && net.ParseIP(host) != nil {
+		return host
+	}
+	return ""
 }
