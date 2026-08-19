@@ -309,14 +309,20 @@ func TestLogoutAll_MailerErrorDoesNotFailOperation(t *testing.T) {
 // notification is sent only after the transaction commits. The test injects a
 // commit function that always fails (the `commit` seam exists solely for this
 // test — see the field's doc comment in login.go) and asserts LogoutAll
-// returns an error, no mail was sent, and — because the whole transaction
-// rolled back — the session the account had before the call is still there.
+// returns an error, no mail was sent, the session the account had before the
+// call is still there, and (#0069) the session.revoked_all audit row written
+// by auditor.WriteTx earlier in the same transaction (login.go, before the
+// commit) is also gone — because it shares the transaction with the session
+// delete, a failed commit must roll both back together. Uses
+// newLoginServiceAudited (a real audit.Logger over the test pool), not
+// newLoginServiceWithMailer's nil auditor, specifically so this WriteTx call
+// actually executes and has something to roll back.
 func TestLogoutAll_NoMailWhenCommitFails(t *testing.T) {
 	pool := testPool(t)
 	setRegistrationsEnabled(t, pool, true)
 	regSvc := newService(t, pool, &recordingMailer{}, "")
 	mailer := &recordingMailer{}
-	loginSvc := newLoginServiceWithMailer(t, pool, mailer)
+	loginSvc := newLoginServiceAudited(t, pool, mailer)
 	loginSvc.commit = func(_ context.Context, _ pgx.Tx) error {
 		return errors.New("simulated commit failure")
 	}
@@ -338,5 +344,11 @@ func TestLogoutAll_NoMailWhenCommitFails(t *testing.T) {
 	// The delete was rolled back along with everything else in the tx.
 	if got := countSessionsForUser(t, pool, acct.user.ID); got != sessionsBefore {
 		t.Errorf("sessions after failed commit = %d, want %d (rolled back)", got, sessionsBefore)
+	}
+	// The session.revoked_all audit row written by auditor.WriteTx (login.go,
+	// before s.commit) must not survive a failed commit either — it shares the
+	// same transaction as the session delete above.
+	if n := auditCount(t, pool, audit.ActionSessionsRevokedAll); n != 0 {
+		t.Errorf("session.revoked_all rows after failed commit = %d, want 0 (rolled back)", n)
 	}
 }
