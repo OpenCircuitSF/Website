@@ -43,20 +43,18 @@ const (
 
 	// Settings.
 	ActionSettingsUpdated = "settings.updated"
-
-	// Campaign lifecycle.
-	ActionCampaignCreated = "campaign.created"
-	ActionCampaignUpdated = "campaign.updated"
-	ActionCampaignDeleted = "campaign.deleted"
-
-	// Campaign link membership. Written by campaigns.Store's
-	// AssignLinkToCampaign/UnassignLinkFromCampaign, in the same
-	// WriteTx-in-transaction convention as the other campaign.* actions above
-	// — see the doc comment on those methods for why assign/unassign follow
-	// campaigns' convention rather than links' fire-and-forget Record.
-	ActionCampaignLinkAssigned   = "campaign.link_assigned"
-	ActionCampaignLinkUnassigned = "campaign.link_unassigned"
 )
+
+// Deleted (#0068): ActionCampaignCreated/Updated/Deleted and
+// ActionCampaignLinkAssigned/Unassigned, plus the TargetCampaign target-type
+// constant below. These were ShortLinks' campaign.* actions for its
+// campaigns.Store (grouping short links) — that package was deleted in #0002
+// and nothing in this codebase referenced these constants. They are NOT this
+// project's email_campaigns concept (a message sent to a mailing-list
+// segment, PRD §6.6) and must not be reused for it — CLAUDE.md §6 and PRD
+// §3.2 both warn the two share only a word. If Phase 5 (#0044-#0048) needs
+// campaign-lifecycle audit actions for email_campaigns, define new
+// email_campaign.* constants; do not resurrect these.
 
 // Target-type constants are the canonical values written to
 // audit_log.target_type. They mirror the PRD's enumerated entity kinds.
@@ -66,5 +64,4 @@ const (
 	TargetCredential = "credential"
 	TargetSettings   = "settings"
 	TargetURLFilter  = "url_filter"
-	TargetCampaign   = "campaign"
 )

@@ -3,7 +3,7 @@
 // assets into dist/; this package embeds that directory at compile time.
 //
 // //go:embed paths are relative to this source file and cannot use "..", which
-// is why the embed lives here in web/ rather than in cmd/shortlinks/. A minimal
+// is why the embed lives here in web/ rather than in cmd/opencircuit/. A minimal
 // dist/index.html placeholder is committed so `go build ./...` compiles from a
 // clean checkout before any npm build has run; the real npm build overwrites it
 // and emits the hashed dist/assets/* (which stay gitignored).

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# db-status.sh — read-only snapshot of the ShortLinks auth/registration state.
+# db-status.sh — read-only snapshot of the opencircuit auth/registration state.
 # Run directly on the EC2 instance:
 #
 #     bash scripts/db-status.sh                     # focus on $ADMIN_EMAIL from .env
@@ -21,14 +21,14 @@ if [ -z "${ADMIN_EMAIL:-}" ] && [ -f "$ENV_FILE" ]; then
   ADMIN_EMAIL="$(grep -E '^ADMIN_EMAIL=' "$ENV_FILE" | tail -n1 | cut -d= -f2- | tr -d "\"'")"
 fi
 
-DB="${SHORTLINKS_DB:-shortlinks}"
+DB="${OPENCIRCUIT_DB:-opencircuit}"
 EMAIL="${1:-${ADMIN_EMAIL:-}}"
 cd /tmp
 
 psql() { sudo -u postgres /usr/bin/psql -d "$DB" -X -P pager=off "$@"; }
 
 echo "============================================================"
-echo " ShortLinks DB status — database: $DB"
+echo " opencircuit DB status — database: $DB"
 [ -n "$EMAIL" ] && echo " filtered to: $EMAIL"
 echo "============================================================"
 
@@ -71,8 +71,7 @@ psql -c "SELECT
            (SELECT count(*) FROM users)                  AS users,
            (SELECT count(*) FROM pending_registrations)  AS pending,
            (SELECT count(*) FROM passkey_credentials)    AS passkeys,
-           (SELECT count(*) FROM sessions WHERE expires_at > now()) AS active_sessions,
-           (SELECT count(*) FROM links)                  AS links;"
+           (SELECT count(*) FROM sessions WHERE expires_at > now()) AS active_sessions;"
 
 echo
 echo "Done."

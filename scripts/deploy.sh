@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# deploy.sh — build, verify, and (after a Y/n gate) restart the ShortLinks service.
+# deploy.sh — build, verify, and (after a Y/n gate) restart the opencircuit service.
 #
 # Run on the production host as your normal user (it sudo's only for the install
 # + restart steps). Pull latest first, then run from the repo root:
@@ -22,14 +22,14 @@
 #      "Apache serves a stale static dir / a proxy is caching" case).
 #
 # Override defaults with env vars:
-#   SERVICE=shortlinks  PUBLIC_URL=https://go.sstools.co  BIN=/path/to/binary
+#   SERVICE=opencircuit  PUBLIC_URL=https://www.opencircuitsf.com  BIN=/path/to/binary
 #
 set -euo pipefail
 
 case "${1:-}" in -h|--help) sed -n '2,30p' "$0"; exit 0 ;; esac
 
-SERVICE="${SERVICE:-shortlinks}"
-PUBLIC_URL="${PUBLIC_URL:-https://go.sstools.co}"
+SERVICE="${SERVICE:-opencircuit}"
+PUBLIC_URL="${PUBLIC_URL:-https://www.opencircuitsf.com}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
@@ -79,7 +79,7 @@ ok "SPA built: $BUILT_JS, $BUILT_CSS"
 # self-contained diagnosis and stop — before the service is ever touched.
 step "Building the Go binary (embeds web/dist/)"
 TMPBIN="$(mktemp)"; trap 'rm -f "$TMPBIN"' EXIT
-go build -o "$TMPBIN" ./cmd/shortlinks
+go build -o "$TMPBIN" ./cmd/opencircuit
 if ! grep -aq "$BUILT_JS" "$TMPBIN"; then
   printf '\n    DIAGNOSIS (copy/paste this whole block — no other commands needed):\n'
   printf '      bundle npm just built : %s\n' "$BUILT_JS"
