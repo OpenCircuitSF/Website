@@ -7,7 +7,8 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { currentView, currentUser } from '../lib/stores';
+  import { currentUser } from '../lib/stores';
+  import { navigate } from '../lib/router';
   import {
     listCredentials,
     renameCredential,
@@ -58,7 +59,7 @@
   function handleAuthError(err: unknown): boolean {
     if (err instanceof ApiError && err.status === 401) {
       currentUser.set(null);
-      currentView.set('login');
+      navigate('/login');
       return true;
     }
     return false;
@@ -127,7 +128,7 @@
   }
 
   function go(view: 'admin') {
-    currentView.set(view);
+    navigate(`/${view}`);
   }
 
   async function handleSignOut() {
@@ -137,7 +138,7 @@
       // Drop local state regardless of server result.
     }
     currentUser.set(null);
-    currentView.set('login');
+    navigate('/login');
   }
 
   let signingOutAll = $state(false);
@@ -176,7 +177,7 @@
       signingOutAll = false;
     }
     currentUser.set(null);
-    currentView.set('login');
+    navigate('/login');
   }
 
   onMount(load);

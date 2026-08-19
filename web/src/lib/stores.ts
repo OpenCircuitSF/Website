@@ -1,23 +1,13 @@
-// Shared application state. The SPA has no client-side router yet: navigation
-// is a write to the `currentView` store, and App.svelte renders the matching
-// view. #0014 replaces this wholesale with a History API path router.
+// Shared application state that is NOT navigation. Navigation is now a
+// History API path router (web/src/lib/router.ts, #0014) -- `currentRoute`
+// there is what App.svelte and every view read to know what's on screen.
+// This file used to also hold a `currentView` store that App.svelte wrote to
+// as its navigation mechanism; #0014 retired it (PRD §3.4, §7.2: real URLs
+// are a hard requirement for pages that get shared and indexed). What
+// remains here is genuinely transient UI state that outlives any one route.
 
 import { writable } from 'svelte/store';
 import type { User } from './types';
-
-/** The set of top-level views App.svelte can render. */
-export type View =
-  | 'login'
-  | 'account'
-  | 'admin'
-  | 'register-verify'  // magic-link registration landing
-  | 'recover-verify';  // magic-link recovery landing
-
-/**
- * The active view. Default is "login"; App.svelte flips it to "account" once
- * GET /api/me confirms a session. Navigation between sections is a store write.
- */
-export const currentView = writable<View>('login');
 
 /** The authenticated user (from GET /api/me), or null when signed out. */
 export const currentUser = writable<User | null>(null);

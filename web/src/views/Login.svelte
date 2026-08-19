@@ -13,8 +13,8 @@
      return a scoped allowCredentials list, then a modal get(), then post the
      assertion to /auth/login/finish.
 
-  On success we confirm the session via getMe(), set currentUser, and switch the
-  currentView store to "account" (no router yet — navigation is a store write).
+  On success we confirm the session via getMe(), set currentUser, and navigate
+  to /account via the History API router (#0014).
 
   The "Register" affordance opens a sub-form that POSTs the email to
   /auth/register/start and shows a generic "check your email" confirmation
@@ -22,7 +22,8 @@
 -->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { currentView, currentUser } from '../lib/stores';
+  import { currentUser } from '../lib/stores';
+  import { currentRoute, navigate } from '../lib/router';
   import {
     getMe,
     loginStart,
@@ -86,7 +87,7 @@
     await loginFinish(serializeAssertion(credential));
     const user = await getMe();
     currentUser.set(user);
-    currentView.set('account');
+    navigate('/account');
     return true;
   }
 
@@ -123,7 +124,7 @@
       if (msg) loginError = msg;
     } finally {
       signingIn = false;
-      if ($currentView === 'login') startConditional();
+      if ($currentRoute.name === 'login') startConditional();
     }
   }
 

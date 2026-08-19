@@ -15,7 +15,8 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { pendingVerifyToken, currentView, currentUser } from '../lib/stores';
+  import { pendingVerifyToken, currentUser } from '../lib/stores';
+  import { navigate } from '../lib/router';
   import { registerVerify, registerFinish, getMe, ApiError } from '../lib/api';
   import {
     toPublicKeyCreationOptions,
@@ -116,8 +117,7 @@
       const user = await getMe();
       currentUser.set(user);
       pendingVerifyToken.set(null);
-      history.replaceState({}, '', '/');
-      currentView.set('account');
+      navigate('/account');
     } catch {
       status = 'error';
       errorMessage =
@@ -127,7 +127,7 @@
 
   function goToLogin() {
     pendingVerifyToken.set(null);
-    currentView.set('login');
+    navigate('/login');
   }
 </script>
 
