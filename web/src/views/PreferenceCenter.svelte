@@ -33,6 +33,7 @@
     toggleSlug,
     inactiveStatusMessage,
     showSubscribeAgainAffordance,
+    COMPLAINED_CONTACT_EMAIL,
   } from '../lib/subscribe';
   import type { PublicInterest } from '../lib/types';
   import Panel from '../lib/Panel.svelte';
@@ -233,13 +234,26 @@
        existingSignup's StatusComplained branch never sends a confirmation
        email. showSubscribeAgainAffordance suppresses the button for that
        one status; the other three (pending, unsubscribed, bounced) can
-       genuinely leave their status this way and keep it. -->
+       genuinely leave their status this way and keep it.
+
+       Bounced 2026-08-19: suppressing the button correctly leaves
+       `complained` with no in-app path at all, and COMPLAINED_NO_RESUBSCRIBE_
+       MESSAGE's "Contact us" names no address -- an inert dead end shaped
+       exactly like the one this issue exists to close. Deliberately NOT
+       fixed by baking the address into that constant (it's a word-for-word
+       mirror of preferences.go's no-op message and must stay one); instead
+       the mailto link renders here, beside the message, in the same slot
+       the button used to fill. -->
   <div class="pref-content">
     {#if showHeading}<h1>Manage your preferences</h1>{/if}
     <Panel>
       <p role="status">{inactiveStatusMessage(status)}</p>
       {#if showSubscribeAgainAffordance(status)}
         <button type="button" class="link-button" onclick={goToSubscribe}>Subscribe again</button>
+      {:else}
+        <p class="text-muted">
+          Reach us at <a href="mailto:{COMPLAINED_CONTACT_EMAIL}">{COMPLAINED_CONTACT_EMAIL}</a>.
+        </p>
       {/if}
     </Panel>
   </div>

@@ -61,6 +61,15 @@ import (
 // against a pathological payload before any per-slug lookup runs.
 const maxPreferencesInterests = 64
 
+// complainedContactEmail is named inline in the no-op message below (#0090
+// bounce fix) so the "Contact us" sentence actually says how, not just
+// that. Same address Footer.svelte, About.svelte and PrivacyPolicy.svelte
+// carry as their CONTACT_EMAIL constant (#0075 published it for exactly
+// this class of request); this response is plain-text JSON with nowhere to
+// put a clickable link, so the address is spelled out in the sentence
+// itself instead.
+const complainedContactEmail = "hello@opencircuitsf.com"
+
 // preferencesSubscriberStore is the behavior PreferencesHandler needs from
 // internal/subscribers.
 type preferencesSubscriberStore interface {
@@ -247,7 +256,9 @@ func (h *PreferencesHandler) patchUnsubscribe(w http.ResponseWriter, r *http.Req
 
 	message := "You've been unsubscribed from everything."
 	if noOp {
-		message = "No change: this address is marked as having complained about a previous email, and complained addresses can't be unsubscribed or resubscribed from this page. Contact us if you believe this is a mistake."
+		// #0090 bounce fix: says how to reach a human, not just that one
+		// exists — see complainedContactEmail's doc comment above.
+		message = "No change: this address is marked as having complained about a previous email, and complained addresses can't be unsubscribed or resubscribed from this page. Contact us at " + complainedContactEmail + " if you believe this is a mistake."
 	}
 
 	writeJSON(w, http.StatusOK, preferencesResponse{

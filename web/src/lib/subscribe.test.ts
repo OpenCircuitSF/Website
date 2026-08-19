@@ -19,6 +19,7 @@ import {
   inactiveStatusMessage,
   showSubscribeAgainAffordance,
   COMPLAINED_NO_RESUBSCRIBE_MESSAGE,
+  COMPLAINED_CONTACT_EMAIL,
   type UtmStorage,
 } from './subscribe';
 
@@ -232,5 +233,38 @@ describe('showSubscribeAgainAffordance (#0090 — the dead end)', () => {
     for (const status of ['pending', 'unsubscribed', 'bounced', 'active', 'some-future-status']) {
       expect(showSubscribeAgainAffordance(status)).toBe(true);
     }
+  });
+});
+
+// #0090 bounce fix: review found that once showSubscribeAgainAffordance
+// correctly hides the button for `complained`, COMPLAINED_NO_RESUBSCRIBE_MESSAGE's
+// "Contact us" was the only path left on the panel -- and it named no
+// address, so it was inert. The fix keeps the message itself address-free
+// (it's a mirror of internal/handlers/preferences.go's no-op message, which
+// does inline the address, but that's a deliberate, documented divergence --
+// see COMPLAINED_CONTACT_EMAIL's doc comment) and instead exports the
+// address as its own constant, which PreferenceCenter.svelte renders as a
+// real mailto: link beside the message. These tests exist to catch the
+// two ways that split could silently break: the constant being wrong, and
+// the message accidentally trying to duplicate it inline.
+describe('COMPLAINED_CONTACT_EMAIL (#0090 bounce fix)', () => {
+  it('is the published house contact address (#0075)', () => {
+    expect(COMPLAINED_CONTACT_EMAIL).toBe('hello@opencircuitsf.com');
+  });
+
+  it('is a plausible mailto target', () => {
+    expect(COMPLAINED_CONTACT_EMAIL).toMatch(/^[^\s@]+@[^\s@]+\.[^\s@]+$/);
+  });
+
+  // COMPLAINED_NO_RESUBSCRIBE_MESSAGE is deliberately NOT byte-for-byte
+  // identical to preferences.go's no-op message (that message inlines the
+  // address; this one relies on PreferenceCenter.svelte rendering the
+  // address as a sibling link instead). Guard the boundary explicitly: the
+  // address must not sneak into the message string, or the two ways of
+  // reaching a human (the mirrored sentence and the mailto link) would say
+  // it twice, and a future edit to one address constant would leave the
+  // other copy of it stale inside the message.
+  it('does not appear inside COMPLAINED_NO_RESUBSCRIBE_MESSAGE', () => {
+    expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE).not.toContain(COMPLAINED_CONTACT_EMAIL);
   });
 });

@@ -374,6 +374,54 @@ func TestPreferencesHandler_Patch_UnsubscribeEverything_ComplainedIsNoOpNoAudit(
 	}
 }
 
+// TestPreferencesHandler_Patch_UnsubscribeEverything_ComplainedNoOpMessageNamesContactAddress
+// is #0090's bounce fix regression test: review found that the no-op
+// message told a complained visitor "Contact us" without saying how, making
+// it the sole (and inert) path offered once the "Subscribe again" affordance
+// is correctly suppressed for this status. The fix inlines
+// complainedContactEmail into the message (preferences.go can't render a
+// mailto: link — this is plain-text JSON). Assert the address is actually
+// present in the message a real request receives, not just that the
+// constant exists.
+func TestPreferencesHandler_Patch_UnsubscribeEverything_ComplainedNoOpMessageNamesContactAddress(t *testing.T) {
+	pool := journeyTestPool(t)
+	subs := subscribers.NewStore(pool)
+	ints := interests.NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := subs.Create(ctx, subscribers.NewSignup{Email: journeyUniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if _, err := subs.MarkComplained(ctx, created.ID, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("MarkComplained (seeding complained row): %v", err)
+	}
+
+	_, mux := journeyPreferencesMux(subs, ints, audit.New(pool))
+
+	rr := doPatchPreferences(t, mux, map[string]any{
+		"token":       created.ManageToken,
+		"unsubscribe": true,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	resp := decodePreferencesResponse(t, rr)
+	if !resp.NoOp {
+		t.Fatalf("NoOp = false, want true (complained row, this test only makes sense for the no-op branch)")
+	}
+	if !strings.Contains(resp.Message, "hello@opencircuitsf.com") {
+		t.Errorf("Message = %q, want it to contain the contact address (#0090 bounce fix: naming that a human exists isn't enough, the message must say how to reach one)", resp.Message)
+	}
+	if !strings.Contains(resp.Message, "Contact us at hello@opencircuitsf.com") {
+		t.Errorf("Message = %q, want the address inline in the \"Contact us at …\" clause, not merely present somewhere in the string", resp.Message)
+	}
+}
+
 func TestPreferencesHandler_Patch_UnsubscribeEverything(t *testing.T) {
 	pool := journeyTestPool(t)
 	subs := subscribers.NewStore(pool)
