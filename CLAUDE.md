@@ -28,6 +28,34 @@ The link shortener at `go.opencircuitsf.com` is a **separate deploy of
 ShortLinks**. No shortener code belongs in this repo, and its issues do not
 belong in this tracker.
 
+### Repository layout
+
+| Path | Contains |
+|---|---|
+| `cmd/opencircuit/` | Binary entry point — `serve` and `seed` subcommands, the route table |
+| `internal/` | `config`, `db`, `auth`, `audit`, `events`, `devstore`, `handlers`, `middleware`, `testdb` — per-package roles in [`docs/architecture.md`](docs/architecture.md) |
+| `migrations/` | `golang-migrate` up/down SQL pairs, contiguous `000001`–`000007` |
+| `web/` | Svelte 5 SPA; built to `web/dist/` and embedded via `//go:embed all:dist` |
+| `scripts/` | `dev.sh`, `sim.sh`, `deploy.sh`, `db-status.sh`, `db/`, `list-issues-by-phase` |
+| `deploy/` | Apache vhost and systemd unit assets |
+| `docs/` | Per-subsystem documentation, indexed by [`docs/README.md`](docs/README.md) |
+| `assets/`, `placeholder/` | Logo and brand assets; the static site currently in production |
+| `issues/` | The tracker — `NNNN.md` files plus `Issues.md` |
+
+### Code conventions
+
+- Standard-library `net/http` with Go 1.22+ pattern routing. No web framework.
+- Handlers depend on **narrow store interfaces**, never a concrete store — that
+  is what lets `internal/devstore` stand in for Postgres under `STORAGE=json`.
+- SQL lives in the store package that owns the table, not in handlers.
+- **Migrations are append-only.** Never edit an applied migration; add a new
+  one. `migrations/000007` exists because ShortLinks broke this rule once.
+- Tests sit beside the code as `_test.go`. DB-backed tests gate on
+  `TEST_DATABASE_URL` and skip when it is unset — so a green `go test ./...`
+  with that variable unset proves less than it looks like it does.
+- SPA logic goes in plain TypeScript modules under `web/src/lib/` so it is
+  unit-testable without a DOM; Svelte components stay thin.
+
 ## 2. Identity — decided, do not re-litigate
 
 ```
