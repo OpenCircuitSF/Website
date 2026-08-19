@@ -96,6 +96,65 @@ func (m *blockingMailer) Send(ctx context.Context, _ mailing.Message) (string, e
 	}
 }
 
+// blockingSubscriberStore wraps a real subscriberStore, delegating every
+// method to inner except Create, which blocks until either release is
+// closed (by the test) or ctx is cancelled — whichever happens first — and
+// closes entered the instant Create is called, before it starts waiting.
+// Mirrors blockingMailer's shape and contract exactly (see above), for the
+// same reason: #0088's deferral half — Subscribe handing the
+// branch-dependent writes to processMutateJob on a worker goroutine instead
+// of running them inline, per the package doc comment ("The elapsed-time
+// channel — #0088") — has no other deterministic, non-timing way to prove
+// out. entered is closed at most once per instance — construct a fresh
+// blockingSubscriberStore per expected Create call.
+type blockingSubscriberStore struct {
+	inner   subscriberStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newBlockingSubscriberStore(inner subscriberStore) *blockingSubscriberStore {
+	return &blockingSubscriberStore{inner: inner, entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (b *blockingSubscriberStore) Create(ctx context.Context, in subscribers.NewSignup, now time.Time) (subscribers.Subscriber, error) {
+	close(b.entered)
+	select {
+	case <-b.release:
+		return b.inner.Create(ctx, in, now)
+	case <-ctx.Done():
+		return subscribers.Subscriber{}, ctx.Err()
+	}
+}
+
+func (b *blockingSubscriberStore) FindByEmail(ctx context.Context, email string) (subscribers.Subscriber, error) {
+	return b.inner.FindByEmail(ctx, email)
+}
+
+func (b *blockingSubscriberStore) RestartSignup(ctx context.Context, id int64, in subscribers.RestartSignupInput, now time.Time) (subscribers.Subscriber, error) {
+	return b.inner.RestartSignup(ctx, id, in, now)
+}
+
+func (b *blockingSubscriberStore) ClaimConfirmationSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (bool, error) {
+	return b.inner.ClaimConfirmationSend(ctx, id, now, cooldown)
+}
+
+func (b *blockingSubscriberStore) ReleaseConfirmationClaim(ctx context.Context, id int64, now time.Time) error {
+	return b.inner.ReleaseConfirmationClaim(ctx, id, now)
+}
+
+func (b *blockingSubscriberStore) ClaimAlreadySubscribedSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (bool, error) {
+	return b.inner.ClaimAlreadySubscribedSend(ctx, id, now, cooldown)
+}
+
+func (b *blockingSubscriberStore) ReleaseAlreadySubscribedClaim(ctx context.Context, id int64, now time.Time) error {
+	return b.inner.ReleaseAlreadySubscribedClaim(ctx, id, now)
+}
+
+func (b *blockingSubscriberStore) SetInterests(ctx context.Context, subscriberID int64, interestIDs []int64) error {
+	return b.inner.SetInterests(ctx, subscriberID, interestIDs)
+}
+
 // subscribeMux wires the real *SubscribeHandler over the real
 // *subscribers.Store and *interests.Store (both #0025/#0023, approved),
 // with an injected mailer and suppression checker so tests never touch the
@@ -1309,7 +1368,7 @@ func TestNewSubscribeHandler_NoGoroutineLeakAcrossConstruction(t *testing.T) {
 	t.Logf("goroutines before=%d after=%d across %d constructions (each starting %d workers, %d total if leaked)",
 		before, after, rounds, sendWorkerCount, rounds*sendWorkerCount)
 	if after > before+2 {
-		t.Fatalf("goroutine count grew from %d to %d after constructing and closing %d handlers — sendWorkerCount workers are leaking", before, after, rounds)
+		t.Fatalf("goroutine count grew from %d to %d after constructing and closing %d handlers — sendWorkerCount and/or mutateWorkerCount workers are leaking", before, after, rounds)
 	}
 }
 
@@ -1554,5 +1613,88 @@ func TestSubscribe_SyncQueryCountEqualAcrossBranches(t *testing.T) {
 					c.name, gotMutation, c.wantMutationCall, snap.create, snap.restartSignup, snap.claimConfirmationSend, snap.claimAlreadySubscribedSend)
 			}
 		})
+	}
+}
+
+// TestSubscribe_MutationDeferredDoesNotBlockResponse is #0088's regression
+// test for the deferral half of the fix — the half the review found
+// completely unguarded. TestSubscribe_SyncQueryCountEqualAcrossBranches
+// snapshots its counters AFTER h.waitForSends() has already drained the
+// queue (via doSubscribe), so it cannot distinguish a store call made on
+// the request goroutine from one deferred to a worker: the totals it
+// checks are identical either way. The review proved this is not
+// theoretical — reverting Subscribe to call processMutateJob synchronously
+// on the request goroutine (Create/RestartSignup/SetInterests/Claim*/audit,
+// all inline, exactly as before #0088) left every test in this file green,
+// including that one.
+//
+// This closes the hole the same deterministic, non-timing way
+// TestSubscribe_AsyncSendDoesNotBlockResponse (#0081, above) closes the
+// equivalent gap for mailer.Send: a subscriberStore whose Create call
+// blocks until released, driven directly over ServeHTTP for a brand-new
+// signup (the branch whose synchronous Create/SetInterests/audit-log writes
+// produced #0088's P(active > new) = 0.000 clusters). Subscribe's response
+// must be written while Create is PROVABLY still blocked — blocked.release
+// is never closed anywhere in this test, only Close's sendCtx cancellation
+// (via t.Cleanup) can ever unblock it, and that cancellation does not fire
+// within this test's own 2s bound. If processMutateJob ever ran
+// synchronously on the request goroutine again, ServeHTTP would not return
+// until Close's cancellation interrupts it — i.e. this test would hang past
+// the bound and fail, not merely report a wrong count. The 2s figure is a
+// hang guard, not a race window: Create should return in well under a
+// millisecond when the property holds, the same allowance
+// TestSubscribe_AsyncSendDoesNotBlockResponse already makes.
+func TestSubscribe_MutationDeferredDoesNotBlockResponse(t *testing.T) {
+	pool := subscribeTestPool(t)
+
+	blocked := newBlockingSubscriberStore(subscribers.NewStore(pool))
+	h := NewSubscribeHandler(
+		blocked, interests.NewStore(pool), &mailing.RecordingMailer{},
+		NoSuppressions{}, fakePhysicalAddress{value: "123 Main St, San Francisco, CA"},
+		audit.New(pool), "https://example.test", nil,
+	)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.Close(ctx); err != nil {
+			t.Errorf("cleanup: h.Close: %v", err)
+		}
+	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/subscribe", h.Subscribe)
+
+	email := subscribeUniqueEmail(t)
+	body, err := json.Marshal(subscribeBody(email, nil, time.Now()))
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/subscribe", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		mux.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Good: Subscribe returned even though blocked.release has not
+		// been (and, within this test, will not be) closed.
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe did not return within 2s while Create is still blocked — processMutateJob appears to be running on the request goroutine, which would reopen #0088's timing oracle")
+	}
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
+	}
+
+	// Confirm the mutation really was queued for this signup — otherwise a
+	// fast response would prove nothing (no Create ever attempted).
+	select {
+	case <-blocked.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Create was never entered — no mutation was queued for this signup; the fast response above proves nothing")
 	}
 }
