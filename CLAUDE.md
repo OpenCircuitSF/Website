@@ -70,8 +70,16 @@ correct regardless and is what `#0001` writes into `go.mod`.
 
 ## 3. Model policy — cost is a first-class constraint
 
-**Fable is not used on this project.** Opus replaces it wherever `Issues.md`
-previously named the top model.
+**Fable is not used in the per-issue pipeline.** Opus replaces it wherever
+`Issues.md` previously named the top model.
+
+**One exception, added 2026-08-19 at the user's explicit instruction:** the
+final whole-implementation review — run once, after every phase's issues are
+resolved — runs on **Fable**. Its job is to read the finished system rather than
+a single issue, write notes, and file new issues for concerns and recommended
+improvements. That is a different task from reviewing one diff, and it is the one
+place the extra capability is worth the cost. Do not read this as licence to use
+Fable anywhere in the plan → implement → review loop.
 
 | Phase | Model | Runs as |
 |---|---|---|
