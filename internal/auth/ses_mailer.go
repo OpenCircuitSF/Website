@@ -58,28 +58,25 @@ func NewSESMailerWithSender(sender mailing.Mailer, cfg *config.Config) *SESMaile
 }
 
 // SendVerification sends the registration magic-link email.
+//
+// #0028 re-themed this from a plain-text-only body (ShortLinks' original
+// shape) into the terminal HTML/text pair built by
+// mailing.BuildRegistrationEmail — same copy and same link
+// (verificationURL), now rendered both ways from one source. registrationTTL
+// is the same constant Store.BeginRegistration actually stamps the token's
+// expiry with (store.go), so the "expires in" line in the email can't drift
+// from the TTL that's actually enforced.
 func (m *SESMailer) SendVerification(ctx context.Context, toEmail, token string) error {
-	link := verificationURL(m.baseURL, token)
-	subject := "Verify your Open Circuit SF account"
-	text := "Welcome to Open Circuit SF.\r\n\r\n" +
-		"Click the link below to verify your email and add a passkey. " +
-		"This link expires in 5 minutes.\r\n\r\n" +
-		link + "\r\n\r\n" +
-		"If you did not request this, you can ignore this email.\r\n"
-	return m.send(ctx, toEmail, subject, text)
+	msg := mailing.BuildRegistrationEmail(toEmail, m.baseURL, token, registrationTTL)
+	return m.sendMessage(ctx, msg)
 }
 
-// SendRecovery sends the single-use account-recovery email.
+// SendRecovery sends the single-use account-recovery email, re-themed the
+// same way as SendVerification. recoveryTTL is the constant
+// Store.BeginRecovery stamps the token's expiry with.
 func (m *SESMailer) SendRecovery(ctx context.Context, toEmail, token string) error {
-	link := recoveryURL(m.baseURL, token)
-	subject := "Recover your Open Circuit SF account"
-	text := "A recovery link was requested for your Open Circuit SF account.\r\n\r\n" +
-		"Click the link below to register a new passkey. " +
-		"This link expires in 15 minutes.\r\n\r\n" +
-		link + "\r\n\r\n" +
-		"If you did not request this, you can ignore this email; " +
-		"your existing passkeys remain valid.\r\n"
-	return m.send(ctx, toEmail, subject, text)
+	msg := mailing.BuildRecoveryEmail(toEmail, m.baseURL, token, recoveryTTL)
+	return m.sendMessage(ctx, msg)
 }
 
 // SendSessionsRevoked sends the plain "sign out everywhere" notification.
@@ -104,17 +101,22 @@ func (m *SESMailer) SendSessionsRevoked(ctx context.Context, toEmail string, at 
 }
 
 // send composes a plain-text message and hands it to the underlying
-// mailing.Mailer. The context is honored before dispatch.
+// mailing.Mailer. Used only by SendSessionsRevoked, which #0028 left
+// text-only — it is a plain notification, not one of the four templates that
+// issue re-themed. The context is honored before dispatch.
 func (m *SESMailer) send(ctx context.Context, toEmail, subject, textBody string) error {
+	return m.sendMessage(ctx, mailing.Message{To: toEmail, Subject: subject, TextBody: textBody})
+}
+
+// sendMessage hands an already-built mailing.Message to the underlying
+// mailing.Mailer, honoring ctx before dispatch and wrapping a failure
+// without leaking the recipient address into the error string.
+func (m *SESMailer) sendMessage(ctx context.Context, msg mailing.Message) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	_, err := m.sender.Send(ctx, mailing.Message{
-		To:       toEmail,
-		Subject:  subject,
-		TextBody: textBody,
-	})
+	_, err := m.sender.Send(ctx, msg)
 	if err != nil {
 		// Recipient omitted deliberately: this error propagates to
 		// AuthHandler's unauthenticated RegisterStart/RecoverStart 500 branches,

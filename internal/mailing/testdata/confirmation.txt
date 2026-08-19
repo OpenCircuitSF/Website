@@ -1,0 +1,16 @@
+$ opencircuit/confirm
+
+Confirm your subscription
+
+Thanks for signing up for Open Circuit SF updates. Confirm your email address below to start receiving them.
+
+Confirm subscription: https://www.opencircuitsf.com/confirm?token=CONFIRM-TOKEN-AAA
+
+This link expires in 7 days.
+If you didn't request this, you can safely ignore this email — no subscription will be created.
+
+--
+Manage your interests: https://www.opencircuitsf.com/preferences?token=MANAGE-TOKEN-BBB
+Unsubscribe from everything: https://www.opencircuitsf.com/unsubscribe?token=MANAGE-TOKEN-BBB
+Open Circuit SF, PO Box 1234, San Francisco, CA 94110
+Open Circuit SF - opencircuitsf.com

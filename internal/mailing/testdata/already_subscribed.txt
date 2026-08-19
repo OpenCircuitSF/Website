@@ -1,0 +1,17 @@
+$ opencircuit/subscribe
+
+You're already on the list
+
+This email address is already subscribed to Open Circuit SF updates — no action is needed.
+
+Want to change what you get, or leave the list? Use the link below.
+
+Manage your preferences: https://www.opencircuitsf.com/preferences?token=MANAGE-TOKEN-BBB
+
+If you didn't just try to sign up, you can safely ignore this email.
+
+--
+Manage your interests: https://www.opencircuitsf.com/preferences?token=MANAGE-TOKEN-BBB
+Unsubscribe from everything: https://www.opencircuitsf.com/unsubscribe?token=MANAGE-TOKEN-BBB
+Open Circuit SF, PO Box 1234, San Francisco, CA 94110
+Open Circuit SF - opencircuitsf.com

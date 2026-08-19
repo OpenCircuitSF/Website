@@ -47,8 +47,14 @@ func TestSESMailer_SendVerification_InjectedSender(t *testing.T) {
 	if !strings.Contains(msg.TextBody, wantLink) {
 		t.Errorf("message missing verification link %q\nbody:\n%s", wantLink, msg.TextBody)
 	}
-	if msg.HTMLBody != "" {
-		t.Errorf("HTMLBody = %q, want empty (auth transactional mail is text-only)", msg.HTMLBody)
+	// #0028 re-themed this from text-only to HTML+text, rendered from one
+	// source (mailing.BuildRegistrationEmail) — both bodies must carry the
+	// same link now.
+	if msg.HTMLBody == "" {
+		t.Error("HTMLBody is empty — #0028 requires an HTML alternative, not text-only")
+	}
+	if !strings.Contains(msg.HTMLBody, wantLink) {
+		t.Errorf("HTML body missing verification link %q\nbody:\n%s", wantLink, msg.HTMLBody)
 	}
 }
 
@@ -75,6 +81,12 @@ func TestSESMailer_SendRecovery_InjectedSender(t *testing.T) {
 	wantLink := "https://opencircuitsf.com/recover/verify?token=rec-789"
 	if !strings.Contains(msg.TextBody, wantLink) {
 		t.Errorf("message missing recovery link %q\nbody:\n%s", wantLink, msg.TextBody)
+	}
+	if msg.HTMLBody == "" {
+		t.Error("HTMLBody is empty — #0028 requires an HTML alternative, not text-only")
+	}
+	if !strings.Contains(msg.HTMLBody, wantLink) {
+		t.Errorf("HTML body missing recovery link %q\nbody:\n%s", wantLink, msg.HTMLBody)
 	}
 }
 

@@ -1,0 +1,15 @@
+$ opencircuit/recover
+
+Recover your account
+
+A recovery link was requested for your Open Circuit SF account.
+
+Click the button below to register a new passkey.
+
+Recover account: https://www.opencircuitsf.com/recover/verify?token=RECOVER-TOKEN-DDD
+
+This link expires in 15 minutes.
+If you did not request this, you can ignore this email; your existing passkeys remain valid.
+
+--
+Open Circuit SF - opencircuitsf.com
