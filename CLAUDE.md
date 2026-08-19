@@ -339,7 +339,7 @@ stall silently on one.
 | 1 | Rename the GitHub repo to `OpenCircuitSF` | `#0001` housekeeping | not done |
 | 2 | SES: verify domain in `us-west-2`, Easy DKIM, custom MAIL FROM, DMARC at `p=none`, request production access | real sends from Phase 3; sandbox is enough to develop against | not started |
 | 3 | Physical mailing address (PO box) | `#0045` refuses to start a campaign without it — Phase 5 | not started |
-| 4 | Sending identity (`hello@` vs `workshops@`) and who reads the reply-to inbox | Phase 3 | undecided; PRD §14 Q2 defaults to `hello@` |
+| 4 | Sending identity (`hello@` vs `workshops@`) and **who reads that inbox** | Phase 3 — **but load-bearing now** | undecided. `#0075` published a privacy policy routing erasure and data-export requests to `hello@opencircuitsf.com`. The page is honest either way, but the commitment only works if someone reads that mailbox from the day it ships |
 | 5 | Whether the domain needs human mailboxes — determines apex MX | Phase 0 DNS | undecided; PRD §14 Q3 |
 | 6 | Server-side details: instance ID/size/region, SSH access, `DocumentRoot`, vhost file, certbot renewal schedule, whether the existing Postgres is the target | `#0064` | undocumented — capture as encountered |
 
