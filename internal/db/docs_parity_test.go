@@ -52,22 +52,36 @@ import (
 // lives — internal/handlers is unrelated to migrations and, as of this
 // writing, has another issue's work in flight.
 //
-// Placement note (#0083): internal/db's TestMain acquires testdb's shared
-// advisory lock for the package's whole run, so when TEST_DATABASE_URL is
-// set this filesystem-only test queues behind every database-backed test in
-// this package even though it touches no database itself. That is a real,
-// measurable cost. It is not fixed here: every other package that could host
-// it without paying the same tax (internal/audit, internal/middleware,
-// internal/interests, internal/subscribers) is *also* gated by that same
-// lock via its own TestMain, and the packages that plausibly hold no lock at
-// all -- internal/handlers, internal/mailing, internal/auth -- are exactly
-// the packages #0083's concurrency instructions place off limits for this
-// change (other subagents have in-flight, uncommitted work there right now).
-// Standing up a brand-new, lock-free package purely to hold this test is a
-// bigger structural move than "make the existing guard bidirectional" calls
-// for, and would itself be a mid-flight collision risk. Keeping it in
-// internal/db is the correct call *for this change*; revisit if a future
-// issue frees up a natural, lock-free home.
+// Placement note (#0083, corrected by #0086): internal/db's TestMain
+// acquires testdb's shared advisory lock for the package's whole run, so
+// when TEST_DATABASE_URL is set this filesystem-only test queues behind
+// every database-backed test in this package even though it touches no
+// database itself. That is a real, measurable cost, and it is still not
+// fixed here.
+//
+// #0083 originally justified staying in internal/db by claiming every
+// viable target was off limits -- the other lock-gated packages paying the
+// same tax (internal/audit, internal/middleware, internal/interests,
+// internal/subscribers) for the same reason, and the lock-free ones
+// (internal/handlers, internal/mailing, internal/auth) for being other
+// subagents' in-flight work. #0086's reviewer found that overstated: a new
+// internal/db/docsparity subpackage would hold no advisory lock of its own
+// (it would define no TestMain, so testdb.Lock is never called) and
+// was squarely in lane the whole time -- internal/db is the package that
+// owns migrations, per its own doc comment, and nobody else's work was
+// touching it.
+//
+// The real tradeoff, stated accurately: a lock-free internal/db/docsparity
+// subpackage trades away the queueing cost in exchange for a new directory
+// and package boundary that exists to hold one test file, a relative path
+// one level deeper to migrations/ and docs/ ("../../../..." instead of
+// "../../..."), and a second place (beyond internal/db itself) a reader has
+// to know about when looking for "the migrations guard." For a
+// filesystem-only test whose actual runtime is milliseconds -- the cost is
+// queueing behind the DB suite, not the test's own execution -- that
+// package-proliferation overhead was judged not worth paying in #0083, and
+// still isn't here. internal/db remains the correct call on the merits; the
+// alternative was available, considered, and traded off, not absent.
 const (
 	migrationsDir = "../../migrations"
 	docsPath      = "../../docs/database.md"
@@ -169,26 +183,81 @@ func verifyContiguous(t *testing.T, stems []migrationStem) {
 }
 
 // docTableRowLines returns every line of doc that is (a) a markdown table
-// row -- its trimmed form starts with "|" -- and (b) not inside a ``` fenced
-// code block. This is drift mode 4 (#0083): the original check was
-// strings.Contains over the *entire file*, so a migration's token sitting in
-// a fenced code sample, or in ordinary prose, satisfied it exactly as well
-// as a real table row naming that migration. Both the forward check (every
-// disk migration has a doc row) and the reverse check (every doc row names a
-// real migration) below search only these lines, so neither a fence nor
-// prose can stand in for a row.
+// row -- its trimmed form starts with "|" -- and (b) not inside a fenced or
+// indented code block or an HTML comment. This is drift mode 4 (#0083): the
+// original check was strings.Contains over the *entire file*, so a
+// migration's token sitting in a fenced code sample, or in ordinary prose,
+// satisfied it exactly as well as a real table row naming that migration.
+// Both the forward check (every disk migration has a doc row) and the
+// reverse check (every doc row names a real migration) below search only
+// these lines, so none of fence, indent, comment, or prose can stand in for
+// a row.
+//
+// #0083 closed the ``` fence case only. Its reviewer proved three more forms
+// still satisfied the row check unguarded, each by a probe, not by
+// inference: a "|"-leading line inside a 4-space indented code block, inside
+// a multi-line HTML comment, and inside a "~~~" tilde fence (#0086). This is
+// a small state machine over those four states -- fence (``` or ~~~,
+// matched to the character that opened it), HTML comment, and indented code
+// -- deliberately not a markdown parser: see TestDocTableRowLines for the
+// forms it must reject and the forms (tight pipes, alignment colons, a
+// table nested in a list item, a table inside <details>) it must keep
+// accepting.
 func docTableRowLines(doc string) []string {
 	var rows []string
-	inFence := false
+	var fenceChar byte // 0 outside a fence; '`' or '~' while inside one
+	inComment := false
+
 	for _, line := range strings.Split(doc, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") {
-			inFence = !inFence
+
+		// Fenced code blocks. CommonMark requires the closing fence use the
+		// same character as the opener (a ``` block isn't closed by ~~~ and
+		// vice versa), so track which one opened it rather than toggling a
+		// single boolean -- that's what let a ~~~ fence slip past a
+		// ```-only toggle before this fix.
+		if fenceChar == 0 {
+			switch {
+			case strings.HasPrefix(trimmed, "```"):
+				fenceChar = '`'
+				continue
+			case strings.HasPrefix(trimmed, "~~~"):
+				fenceChar = '~'
+				continue
+			}
+		} else {
+			if (fenceChar == '`' && strings.HasPrefix(trimmed, "```")) ||
+				(fenceChar == '~' && strings.HasPrefix(trimmed, "~~~")) {
+				fenceChar = 0
+			}
+			continue // every line while a fence is open is code, including its closer
+		}
+
+		// Multi-line HTML comments (<!-- ... --> spanning one or more
+		// lines). A single-line comment wrapping a row on one line, e.g.
+		// "<!-- | 000003 | stale | -->", needs no state here: its trimmed
+		// form starts with "<!--", not "|", so the final prefix check below
+		// already rejects it without ever seeing this branch.
+		if inComment {
+			if strings.Contains(line, "-->") {
+				inComment = false
+			}
 			continue
 		}
-		if inFence {
+		if strings.HasPrefix(trimmed, "<!--") && !strings.Contains(trimmed, "-->") {
+			inComment = true
 			continue
 		}
+
+		// 4-space indented code block (CommonMark: 4+ leading spaces of raw,
+		// untrimmed indentation). A table nested inside a list item is
+		// indented by the marker's own width -- 2 spaces for "- ", 3 for
+		// "1. " -- not 4, so this does not reject that case; see
+		// TestDocTableRowLines's accept cases.
+		if indent := len(line) - len(strings.TrimLeft(line, " ")); indent >= 4 {
+			continue
+		}
+
 		if strings.HasPrefix(trimmed, "|") {
 			rows = append(rows, line)
 		}
@@ -253,6 +322,118 @@ type docParityCase struct {
 	checkRows bool
 }
 
+// TestDocTableRowLines exercises docTableRowLines directly against markdown
+// forms that don't occur in the real docs today (#0086's reviewer proved
+// each by probe against synthetic input, not against docs/database.md or
+// CLAUDE.md). "rejects" is every form that must NOT satisfy the row check
+// even though it contains a "|"-leading line somewhere; "accepts" is every
+// form docTableRowLines correctly handled before this fix and must keep
+// handling afterward.
+func TestDocTableRowLines(t *testing.T) {
+	t.Run("rejects", func(t *testing.T) {
+		cases := []struct {
+			name string
+			doc  string
+		}{
+			{
+				name: "ordinary prose",
+				doc:  "This sentence mentions `000003_add_x` in passing, not as a table row.",
+			},
+			{
+				name: "bullet list",
+				doc:  "- `000003_add_x` -- stale bullet, not a table row",
+			},
+			{
+				name: "blockquoted row",
+				doc:  "> | `000003_add_x` | stale |",
+			},
+			{
+				name: "single-line HTML comment",
+				doc:  "<!-- | `000003_add_x` | stale | -->",
+			},
+			{
+				// #0086 drift mode: a "|"-leading line indented 4+ raw
+				// spaces is a CommonMark indented code block, not a table
+				// row, even though the old check's only state was "inside a
+				// ``` fence or not".
+				name: "4-space indented code block",
+				doc:  "Some paragraph.\n\n    | `000003_add_x` | stale |\n\nMore prose.",
+			},
+			{
+				// #0086 drift mode: the row line itself starts with "|"
+				// after trimming, so the old fence-only check counted it —
+				// it never tracked HTML comment state at all.
+				name: "multi-line HTML comment",
+				doc:  "<!--\n| `000003_add_x` | stale |\n-->\n",
+			},
+			{
+				// #0086 drift mode: the old check toggled on any line
+				// starting with "```", so a "~~~"-fenced block's content
+				// was never recognized as code in the first place.
+				name: "tilde fence",
+				doc:  "~~~\n| `000003_add_x` | stale |\n~~~\n",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				if got := docTableRowLines(tc.doc); len(got) != 0 {
+					t.Errorf("docTableRowLines(%q) = %v, want no rows", tc.doc, got)
+				}
+			})
+		}
+	})
+
+	t.Run("accepts", func(t *testing.T) {
+		cases := []struct {
+			name     string
+			doc      string
+			wantRows int
+		}{
+			{
+				name:     "tight pipes",
+				doc:      "|`000003_add_x`|stale|",
+				wantRows: 1,
+			},
+			{
+				name: "alignment colons",
+				doc: "| Migration | Description |\n" +
+					"|:----------|------------:|\n" +
+					"| `000003_add_x` | stale |",
+				wantRows: 3,
+			},
+			{
+				// Indented 2 spaces, matching a "- " bullet's content
+				// indent -- not the 4+ spaces that would make it an
+				// indented code block.
+				name: "nested table in a list item",
+				doc: "- Some list item describing migrations:\n" +
+					"  | `000003_add_x` | stale |\n" +
+					"  |---|---|",
+				wantRows: 2,
+			},
+			{
+				name: "table inside <details>",
+				doc: "<details>\n" +
+					"<summary>Migrations</summary>\n" +
+					"\n" +
+					"| `000003_add_x` | stale |\n" +
+					"|---|---|\n" +
+					"\n" +
+					"</details>",
+				wantRows: 2,
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				got := docTableRowLines(tc.doc)
+				if len(got) != tc.wantRows {
+					t.Errorf("docTableRowLines(%q) returned %d row(s) %v, want %d", tc.doc, len(got), got, tc.wantRows)
+				}
+			})
+		}
+	})
+}
+
 // TestDatabaseDocMigrationParity is #0082's guard, extended by #0083 to be
 // bidirectional, contiguity-aware, down-file-aware, and row-structure-aware,
 // and to cover CLAUDE.md's migration-range sentence in the same table as
@@ -267,6 +448,7 @@ func TestDatabaseDocMigrationParity(t *testing.T) {
 	verifyDownPairs(t, stems)
 	verifyContiguous(t, stems)
 
+	lowest := stems[0].version
 	highest := stems[len(stems)-1].version
 
 	cases := []docParityCase{
@@ -324,6 +506,26 @@ func TestDatabaseDocMigrationParity(t *testing.T) {
 					tc.path,
 				)
 			}
+			// #0086 drift mode: only the upper bound was ever compared.
+			// rangeMatch[1] was captured and echoed in messages but never
+			// asserted, so a stale lower bound (e.g. a leftover "`000003`"
+			// left behind after 000001/000002 were renumbered or restored)
+			// passed green in both files -- the same class of unenforced
+			// documented claim this guard exists to catch, sitting inside
+			// the guard itself.
+			statedLow, err := strconv.Atoi(rangeMatch[1])
+			if err != nil {
+				t.Fatalf("%s: range sentence's lower bound %q is not a plain integer: %v", tc.path, rangeMatch[1], err)
+			}
+			if statedLow != lowest {
+				t.Errorf(
+					"%s's migration range says `%06d`-`%s` but the lowest migration on "+
+						"disk is %06d (%s)\n"+
+						"Edit %s and correct the \"`NNNNNN`-`NNNNNN`\" range sentence — see #0086.",
+					tc.path, statedLow, rangeMatch[2], lowest, stems[0].stem, tc.path,
+				)
+			}
+
 			statedHigh, err := strconv.Atoi(rangeMatch[2])
 			if err != nil {
 				t.Fatalf("%s: range sentence's upper bound %q is not a plain integer: %v", tc.path, rangeMatch[2], err)
