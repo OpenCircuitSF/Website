@@ -112,6 +112,7 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 	passthrough := func(next http.Handler) http.Handler { return next }
 
 	errCh := make(chan error, 1)
+	ready := make(chan struct{})
 	go func() {
 		// mountAndServe now returns once its SIGTERM-driven graceful
 		// shutdown completes, rather than blocking forever — this test is
@@ -128,11 +129,11 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 			nil, /* adminSubscribersH: not exercised */
 			nil, nil, subscribeH,
 			nil, nil, nil, /* publicInterestsH, preferencesH, confirmH: not exercised by this test */
-			passthrough, passthrough, nil)
+			passthrough, passthrough, nil, ready)
 	}()
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	waitForHealthy(t, client, baseURL, errCh)
+	client := &http.Client{Timeout: wiringHTTPTimeout}
+	waitForHealthy(t, client, baseURL, errCh, ready)
 
 	email := fmt.Sprintf("zz-sigterm-%d@example.com", time.Now().UnixNano())
 	body, err := json.Marshal(map[string]any{

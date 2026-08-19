@@ -133,15 +133,16 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	}
 
 	errCh := make(chan error, 1)
+	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
 			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			nil, nil, nil, /* publicInterestsH, preferencesH, confirmH: not exercised by this test */
-			requireSession, requireAdmin, nil)
+			requireSession, requireAdmin, nil, ready)
 	}()
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	waitForHealthy(t, client, baseURL, errCh)
+	client := &http.Client{Timeout: wiringHTTPTimeout}
+	waitForHealthy(t, client, baseURL, errCh, ready)
 
 	nonAdminID := seedAdminWiringUser(t, pool, "wiring-nonadmin@example.com", false)
 	adminID := seedAdminWiringUser(t, pool, "wiring-admin@example.com", true)
@@ -170,7 +171,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		t.Fatalf("seed target interest: %v", err)
 	}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), wiringDBOpTimeout)
 		defer cancel()
 		// Sweeps the target above plus anything an admin-session
 		// POST /admin/interests actually persisted (see the "admin session"
@@ -194,7 +195,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		t.Fatalf("seed target subscriber: %v", err)
 	}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), wiringDBOpTimeout)
 		defer cancel()
 		_, _ = pool.Exec(ctx, `DELETE FROM subscribers WHERE email LIKE 'zz-wiring-%'`)
 	})
@@ -277,7 +278,7 @@ func resolveAdminRoutePath(path string, userID, interestID, subscriberID int64) 
 // this keeps the cleanup symmetric with the handlers-package convention.
 func truncateAdminWiringTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), wiringDBOpTimeout)
 	defer cancel()
 	if _, err := pool.Exec(ctx,
 		`TRUNCATE sessions, passkey_credentials, audit_log, users RESTART IDENTITY CASCADE`,

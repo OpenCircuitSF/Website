@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -217,7 +218,8 @@ func servePostgres(cfg *config.Config) error {
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH,
-		requireSession, requireAdmin, nil /* no outer middleware in production */)
+		requireSession, requireAdmin, nil, /* no outer middleware in production */
+		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
 
 // mailerNoOpAllowed reports whether MAILER_NOOP=true is permitted for the
@@ -363,7 +365,8 @@ func serveDevMode(cfg *config.Config) error {
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH,
-		requireSession, requireAdmin, devAutoLogin)
+		requireSession, requireAdmin, devAutoLogin,
+		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
 
 // adminRoute pairs an HTTP method and a Go 1.22 mux path pattern with the
@@ -431,6 +434,17 @@ func adminRoutes(
 // outerMiddleware, when non-nil, wraps the entire mux as the outermost handler.
 // It is used in dev mode only (serveDevMode) to apply the auto-login middleware;
 // the production path always passes nil.
+// ready, when non-nil, is closed the instant the TCP listener is bound and
+// accepting connections — before srv.Serve is even called (#0084). It exists
+// for the wiring tests (admin_wiring_test.go and its siblings): they used to
+// detect "the server is up" by polling GET /health against a fixed deadline,
+// which is a real network+DB round trip and, under heavy concurrent load,
+// could itself take longer than that deadline — producing a
+// "context deadline exceeded" failure that had nothing to do with what the
+// test was actually checking (see issues/0084.md). Closing ready needs no
+// network round trip and is not sensitive to machine load, so it removes
+// that timing dependency instead of just giving it a bigger number. The
+// production path (servePostgres/serveDevMode) always passes nil.
 func mountAndServe(
 	cfg *config.Config,
 	pinger handlers.Pinger,
@@ -450,6 +464,7 @@ func mountAndServe(
 	requireSession func(http.Handler) http.Handler,
 	requireAdmin func(http.Handler) http.Handler,
 	outerMiddleware func(http.Handler) http.Handler,
+	ready chan<- struct{},
 ) error {
 	// Per-IP rate limiters for the abuse-prone public auth endpoints.
 	// Burst equals the per-window allowance so a fresh IP gets its full
@@ -585,7 +600,6 @@ func mountAndServe(
 	mux.Handle("GET /", site.Middleware(handlers.NewSPAHandler(web.DistFS())))
 
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
-	log.Printf("opencircuit %s listening on %s", version, addr)
 
 	// Apply the outer middleware (dev auto-login) when provided. This must never
 	// be non-nil on the production path — servePostgres always passes nil.
@@ -595,6 +609,21 @@ func mountAndServe(
 	}
 
 	srv := &http.Server{Addr: addr, Handler: handler}
+
+	// #0084: bind the listener synchronously (net.Listen) instead of letting
+	// http.ListenAndServe do it inside the goroutine below. This gives a bind
+	// failure (e.g. the port already in use) a direct return instead of a
+	// goroutine hop through errCh, and lets `ready` (see mountAndServe's doc
+	// comment above) be closed the instant the socket is bound and able to
+	// accept connections — before srv.Serve is even called.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	log.Printf("opencircuit %s listening on %s", version, addr)
+	if ready != nil {
+		close(ready)
+	}
 
 	// Graceful shutdown (#0081): before this, mountAndServe ended in a bare
 	// http.ListenAndServe with no signal.Notify anywhere in the repo, so an
@@ -624,7 +653,7 @@ func mountAndServe(
 	defer signal.Stop(sigCh)
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- srv.Serve(ln) }()
 
 	select {
 	case err := <-errCh:

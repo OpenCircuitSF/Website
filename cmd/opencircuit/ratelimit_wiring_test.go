@@ -90,6 +90,7 @@ func TestMountAndServe_RateLimitsAuthLoginStart(t *testing.T) {
 	}
 
 	errCh := make(chan error, 1)
+	ready := make(chan struct{})
 	go func() {
 		// mountAndServe blocks in http.ListenAndServe for the life of the
 		// process; the test never calls it again, so the goroutine and its
@@ -99,11 +100,11 @@ func TestMountAndServe_RateLimitsAuthLoginStart(t *testing.T) {
 			nil, /* adminSubscribersH: not exercised by this test */
 			eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			nil, nil, nil, /* publicInterestsH, preferencesH, confirmH: not exercised by this test */
-			requireSession, requireAdmin, nil)
+			requireSession, requireAdmin, nil, ready)
 	}()
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	waitForHealthy(t, client, baseURL, errCh)
+	client := &http.Client{Timeout: wiringHTTPTimeout}
+	waitForHealthy(t, client, baseURL, errCh, ready)
 
 	const clientIP = "198.51.100.42" // TEST-NET-2 (RFC 5737); unused elsewhere here
 
@@ -148,24 +149,70 @@ func doLoginStart(client *http.Client, baseURL, clientIP string) (*http.Response
 	return client.Do(req)
 }
 
-// waitForHealthy polls GET /health until it responds or the deadline passes,
-// so the test's first real request isn't racing mountAndServe's listener
-// coming up. It also fails fast if mountAndServe has already exited.
-func waitForHealthy(t *testing.T, client *http.Client, baseURL string, errCh chan error) {
+// wiringHTTPTimeout bounds every real HTTP round trip the wiring tests in
+// this package make against their own mountAndServe-driven listener
+// (#0084). It used to be a flat 5s, which — unlike the readiness wait below
+// — has no polling or signal-based substitute: a single request either
+// completes or it doesn't, so the only lever is the ceiling itself. Under
+// heavy concurrent load (reproduced with `pgbench -c 40` plus dozens of
+// competing CPU-bound processes; see issues/0084.md's Verification) a real
+// handler round trip — CPU-scheduled, then a real Postgres query — occasionally
+// exceeded 5s and failed with "context deadline exceeded", even though
+// nothing was actually broken. 20s is generous relative to the sub-second
+// steady-state cost of every request these tests make (a handful of
+// single-row reads/writes), not an expected wait.
+const wiringHTTPTimeout = 20 * time.Second
+
+// wiringDBOpTimeout bounds a single, ordinary DB statement (a TRUNCATE, a
+// cleanup DELETE) issued by a wiring test's setup/cleanup — same reasoning
+// and same load-tested bound as wiringHTTPTimeout above: a single statement
+// has no polling substitute, so under load the ceiling is the only lever,
+// and 20s is generous relative to the millisecond-scale cost of these
+// specific statements against a handful of rows.
+const wiringDBOpTimeout = 20 * time.Second
+
+// wiringReadinessDeadline bounds how long a wiring test waits for
+// mountAndServe's `ready` channel to close (#0084). Unlike
+// wiringHTTPTimeout/wiringDBOpTimeout above, this genuinely is NOT
+// network/DB-load-sensitive — `ready` closes the instant the TCP listener
+// is bound (see mountAndServe's doc comment in main.go), before any request
+// is made — so exceeding even a modest bound here means goroutine
+// scheduling itself is pathologically starved, i.e. something is genuinely
+// stuck, not just slow. Kept well below wiringHTTPTimeout deliberately: a
+// test that's actually broken should fail fast rather than wait 20s to
+// discover the listener never bound.
+const wiringReadinessDeadline = 10 * time.Second
+
+// waitForHealthy waits for mountAndServe's listener to signal readiness
+// (see mountAndServe's `ready` parameter, main.go), then makes exactly one
+// GET /health request to confirm the full handler stack — including the DB
+// ping — actually answers, so the test's first real request isn't racing
+// anything. It fails fast if mountAndServe has already exited.
+//
+// Before #0084 this polled GET /health in a loop against a fixed wall-clock
+// deadline — a real network+DB round trip repeated until it succeeded or
+// the deadline passed. Under heavy concurrent load that deadline could be
+// exceeded before the listener ever came up, which is what produced the
+// "context deadline exceeded" flake issues/0084.md describes: the failure
+// had nothing to do with what the test was checking. Waiting on `ready`
+// instead needs no network round trip and isn't sensitive to how loaded the
+// machine is, so it removes the timing dependency rather than enlarging it.
+func waitForHealthy(t *testing.T, client *http.Client, baseURL string, errCh chan error, ready <-chan struct{}) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case err := <-errCh:
-			t.Fatalf("mountAndServe exited before becoming healthy: %v", err)
-		default:
-		}
-		resp, err := client.Get(baseURL + "/health")
-		if err == nil {
-			resp.Body.Close()
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	select {
+	case <-ready:
+		// Listener is bound; confirmed below with one real request.
+	case err := <-errCh:
+		t.Fatalf("mountAndServe exited before becoming healthy: %v", err)
+	case <-time.After(wiringReadinessDeadline):
+		t.Fatalf("mountAndServe did not signal readiness within %s — this does not depend on network/DB load "+
+			"(ready closes the instant the listener is bound), so exceeding it means something is genuinely stuck",
+			wiringReadinessDeadline)
 	}
-	t.Fatalf("server at %s did not become healthy within the deadline", baseURL)
+
+	resp, err := client.Get(baseURL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health after readiness signal: %v", err)
+	}
+	resp.Body.Close()
 }

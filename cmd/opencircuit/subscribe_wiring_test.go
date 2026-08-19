@@ -81,6 +81,7 @@ func TestMountAndServe_RateLimitsSubscribe(t *testing.T) {
 	passthrough := func(next http.Handler) http.Handler { return next }
 
 	errCh := make(chan error, 1)
+	ready := make(chan struct{})
 	go func() {
 		// mountAndServe blocks in http.ListenAndServe for the life of the
 		// process; the test never calls it again, so the goroutine and its
@@ -90,11 +91,11 @@ func TestMountAndServe_RateLimitsSubscribe(t *testing.T) {
 			nil, /* adminSubscribersH: not exercised by this test */
 			nil, nil, subscribeH,
 			nil, nil, nil, /* publicInterestsH, preferencesH, confirmH: not exercised by this test */
-			passthrough, passthrough, nil)
+			passthrough, passthrough, nil, ready)
 	}()
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	waitForHealthy(t, client, baseURL, errCh)
+	client := &http.Client{Timeout: wiringHTTPTimeout}
+	waitForHealthy(t, client, baseURL, errCh, ready)
 
 	const clientIP = "198.51.100.77" // TEST-NET-2 (RFC 5737)
 
