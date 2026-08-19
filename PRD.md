@@ -971,7 +971,12 @@ All of `/auth/*`, `/account/credentials*`, `/admin/users*`, `/admin/settings`,
 ```env
 # ── Server ─────────────────────────────────────────────────────────────────
 PORT=8080
-BASE_URL=https://opencircuitsf.com
+BASE_URL=https://www.opencircuitsf.com   # canonical host — drives og:url, og:image,
+                                         # sitemap <loc> and robots.txt's Sitemap: line.
+                                         # Corrected 2026-08-18 (#0072): this block
+                                         # previously showed the apex, which production
+                                         # 301s to www, so the documented deploy would
+                                         # publish canonicals contradicting the redirect.
 
 # ── Database ───────────────────────────────────────────────────────────────
 DATABASE_URL=postgres://opencircuit:CHANGE_ME@localhost:5432/opencircuit?sslmode=disable
