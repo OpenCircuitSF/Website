@@ -11,14 +11,22 @@ const noEnvFile = "testdata/does-not-exist.env"
 
 // setRequired sets every required variable to a valid value via t.Setenv so a
 // test can start from a known-good state and then mutate individual vars.
+//
+// This must be kept in sync with the `required` table in loadFromFile
+// (config.go) — #0065 fixed a bug where this helper omitted a variable that
+// Load had already made required, silently passing TestLoad_MissingRequired
+// subtests that should have failed. #0007 changed the required set, so this
+// list and the MissingRequired table below were both updated together.
 func setRequired(t *testing.T) {
 	t.Helper()
+	t.Setenv("BASE_URL", "https://opencircuitsf.com")
 	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/db?sslmode=disable")
-	t.Setenv("WEBAUTHN_RP_ID", "go.sstools.co")
-	t.Setenv("WEBAUTHN_RP_ORIGIN", "https://go.sstools.co")
+	t.Setenv("WEBAUTHN_RP_ID", "opencircuitsf.com")
+	t.Setenv("WEBAUTHN_RP_ORIGIN", "https://www.opencircuitsf.com")
 	t.Setenv("SESSION_SECRET", "deadbeef")
 	t.Setenv("ADMIN_EMAIL", "admin@example.com")
-	t.Setenv("BASE_URL", "https://go.sstools.co")
+	t.Setenv("AWS_REGION", "us-west-2")
+	t.Setenv("EMAIL_FROM", "Open Circuit SF <hello@opencircuitsf.com>")
 }
 
 func TestLoad_AllRequiredPresent(t *testing.T) {
@@ -26,13 +34,13 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 	// Set every optional/typed field explicitly to verify parsing.
 	t.Setenv("PORT", "9090")
 	t.Setenv("BASE_URL", "https://example.com")
-	t.Setenv("SES_SMTP_HOST", "smtp.example.com")
-	t.Setenv("SES_SMTP_PORT", "2525")
-	t.Setenv("SES_SMTP_USERNAME", "user")
-	t.Setenv("SES_SMTP_PASSWORD", "secret")
-	t.Setenv("EMAIL_FROM", "ShortLinks <noreply@example.com>")
-	t.Setenv("CACHE_MAX_COST", "50000")
-	t.Setenv("CACHE_TTL_SECONDS", "600")
+	t.Setenv("SES_CONFIGURATION_SET", "opencircuit-transactional")
+	t.Setenv("EMAIL_REPLY_TO", "hello@opencircuitsf.com")
+	t.Setenv("EMAIL_LIST_DOMAIN", "lists.opencircuitsf.com")
+	t.Setenv("SES_INBOUND_BUCKET", "opencircuitsf-inbound")
+	t.Setenv("MAX_SEND_RATE", "25")
+	t.Setenv("SEND_BATCH_SIZE", "100")
+	t.Setenv("SEND_WORKER_ENABLED", "false")
 
 	cfg, err := loadFromFile(noEnvFile)
 	if err != nil {
@@ -47,16 +55,18 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 		{"Port", cfg.Port, 9090},
 		{"BaseURL", cfg.BaseURL, "https://example.com"},
 		{"DatabaseURL", cfg.DatabaseURL, "postgres://u:p@localhost:5432/db?sslmode=disable"},
-		{"WebAuthnRPID", cfg.WebAuthnRPID, "go.sstools.co"},
-		{"WebAuthnRPOrigin", cfg.WebAuthnRPOrigin, "https://go.sstools.co"},
+		{"WebAuthnRPID", cfg.WebAuthnRPID, "opencircuitsf.com"},
+		{"WebAuthnRPOrigin", cfg.WebAuthnRPOrigin, "https://www.opencircuitsf.com"},
 		{"SessionSecret", cfg.SessionSecret, "deadbeef"},
-		{"SESSmtpHost", cfg.SESSmtpHost, "smtp.example.com"},
-		{"SESSmtpPort", cfg.SESSmtpPort, 2525},
-		{"SESSmtpUsername", cfg.SESSmtpUsername, "user"},
-		{"SESSmtpPassword", cfg.SESSmtpPassword, "secret"},
-		{"EmailFrom", cfg.EmailFrom, "ShortLinks <noreply@example.com>"},
-		{"CacheMaxCost", cfg.CacheMaxCost, 50000},
-		{"CacheTTLSeconds", cfg.CacheTTLSeconds, 600},
+		{"AWSRegion", cfg.AWSRegion, "us-west-2"},
+		{"SESConfigurationSet", cfg.SESConfigurationSet, "opencircuit-transactional"},
+		{"EmailFrom", cfg.EmailFrom, "Open Circuit SF <hello@opencircuitsf.com>"},
+		{"EmailReplyTo", cfg.EmailReplyTo, "hello@opencircuitsf.com"},
+		{"EmailListDomain", cfg.EmailListDomain, "lists.opencircuitsf.com"},
+		{"SESInboundBucket", cfg.SESInboundBucket, "opencircuitsf-inbound"},
+		{"MaxSendRate", cfg.MaxSendRate, 25},
+		{"SendBatchSize", cfg.SendBatchSize, 100},
+		{"SendWorkerEnabled", cfg.SendWorkerEnabled, false},
 		{"AdminEmail", cfg.AdminEmail, "admin@example.com"},
 	}
 	for _, c := range checks {
@@ -68,7 +78,7 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 
 func TestLoad_DefaultsApplied(t *testing.T) {
 	setRequired(t)
-	// Leave PORT, SES_SMTP_PORT, CACHE_MAX_COST, CACHE_TTL_SECONDS unset.
+	// Leave PORT, MAX_SEND_RATE, SEND_BATCH_SIZE, SEND_WORKER_ENABLED unset.
 
 	cfg, err := loadFromFile(noEnvFile)
 	if err != nil {
@@ -78,14 +88,14 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	if cfg.Port != defaultPort {
 		t.Errorf("Port = %d, want default %d", cfg.Port, defaultPort)
 	}
-	if cfg.SESSmtpPort != defaultSESSmtpPort {
-		t.Errorf("SESSmtpPort = %d, want default %d", cfg.SESSmtpPort, defaultSESSmtpPort)
+	if cfg.MaxSendRate != defaultMaxSendRate {
+		t.Errorf("MaxSendRate = %d, want default %d", cfg.MaxSendRate, defaultMaxSendRate)
 	}
-	if cfg.CacheMaxCost != defaultCacheMaxCost {
-		t.Errorf("CacheMaxCost = %d, want default %d", cfg.CacheMaxCost, defaultCacheMaxCost)
+	if cfg.SendBatchSize != defaultSendBatchSize {
+		t.Errorf("SendBatchSize = %d, want default %d", cfg.SendBatchSize, defaultSendBatchSize)
 	}
-	if cfg.CacheTTLSeconds != defaultCacheTTLSeconds {
-		t.Errorf("CacheTTLSeconds = %d, want default %d", cfg.CacheTTLSeconds, defaultCacheTTLSeconds)
+	if cfg.SendWorkerEnabled != defaultSendWorkerEnabled {
+		t.Errorf("SendWorkerEnabled = %v, want default %v", cfg.SendWorkerEnabled, defaultSendWorkerEnabled)
 	}
 }
 
@@ -101,6 +111,8 @@ func TestLoad_MissingRequired(t *testing.T) {
 		{"missing WEBAUTHN_RP_ORIGIN", "WEBAUTHN_RP_ORIGIN", "WEBAUTHN_RP_ORIGIN"},
 		{"missing SESSION_SECRET", "SESSION_SECRET", "SESSION_SECRET"},
 		{"missing ADMIN_EMAIL", "ADMIN_EMAIL", "ADMIN_EMAIL"},
+		{"missing AWS_REGION", "AWS_REGION", "AWS_REGION"},
+		{"missing EMAIL_FROM", "EMAIL_FROM", "EMAIL_FROM"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -139,9 +151,8 @@ func TestLoad_InvalidInteger(t *testing.T) {
 		envK string
 	}{
 		{"invalid PORT", "PORT"},
-		{"invalid SES_SMTP_PORT", "SES_SMTP_PORT"},
-		{"invalid CACHE_MAX_COST", "CACHE_MAX_COST"},
-		{"invalid CACHE_TTL_SECONDS", "CACHE_TTL_SECONDS"},
+		{"invalid MAX_SEND_RATE", "MAX_SEND_RATE"},
+		{"invalid SEND_BATCH_SIZE", "SEND_BATCH_SIZE"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -157,4 +168,40 @@ func TestLoad_InvalidInteger(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoad_InvalidBoolean(t *testing.T) {
+	setRequired(t)
+	t.Setenv("SEND_WORKER_ENABLED", "not-a-bool")
+
+	_, err := loadFromFile(noEnvFile)
+	if err == nil {
+		t.Fatal("expected error for invalid SEND_WORKER_ENABLED, got nil")
+	}
+	if !strings.Contains(err.Error(), "SEND_WORKER_ENABLED") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "SEND_WORKER_ENABLED")
+	}
+}
+
+// TestLoad_RemovedVariablesIgnored guards against #0007 regressing: the
+// ShortLinks-era SMTP and cache variables must have no effect on Config even
+// if still present in the environment (e.g. a stale systemd EnvironmentFile).
+func TestLoad_RemovedVariablesIgnored(t *testing.T) {
+	setRequired(t)
+	t.Setenv("SES_SMTP_HOST", "smtp.example.com")
+	t.Setenv("SES_SMTP_PORT", "2525")
+	t.Setenv("SES_SMTP_USERNAME", "user")
+	t.Setenv("SES_SMTP_PASSWORD", "secret")
+	t.Setenv("CACHE_MAX_COST", "50000")
+	t.Setenv("CACHE_TTL_SECONDS", "600")
+
+	cfg, err := loadFromFile(noEnvFile)
+	if err != nil {
+		t.Fatalf("loadFromFile returned error: %v", err)
+	}
+	// The struct simply has no fields for these any more; if this compiles
+	// and cfg loaded without error, the removed variables are inert. This
+	// also fails to compile if the fields are ever reintroduced without
+	// updating this test.
+	_ = cfg
 }

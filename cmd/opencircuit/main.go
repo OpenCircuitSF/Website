@@ -81,12 +81,12 @@ func servePostgres(cfg *config.Config) error {
 		return err
 	}
 
-	// Choose the mailer: real SES transport when SMTP credentials are present,
-	// otherwise a stdout NoOpMailer for local development.
+	// Mailer: stdout NoOpMailer for now. auth.SESMailer (SMTP-based) has no
+	// working credential source — this project has no static AWS credentials
+	// and no SES SMTP username/password in configuration (#0007) — so it
+	// cannot authenticate. #0027 replaces it with the SES v2 API mailer,
+	// authenticated via the EC2 instance role, and wires it up here.
 	var mailer auth.Mailer = auth.NoOpMailer{BaseURL: cfg.BaseURL}
-	if cfg.SESSmtpUsername != "" && cfg.SESSmtpPassword != "" {
-		mailer = auth.NewSESMailer(cfg)
-	}
 
 	// Append-only audit log writer, shared by every service/handler that
 	// records an action. Auth ceremonies write their entries inside their own

@@ -11,10 +11,10 @@ import (
 
 // Default values applied when an optional variable is unset.
 const (
-	defaultPort            = 8080
-	defaultSESSmtpPort     = 587
-	defaultCacheMaxCost    = 10000
-	defaultCacheTTLSeconds = 300
+	defaultPort              = 8080
+	defaultMaxSendRate       = 10
+	defaultSendBatchSize     = 50
+	defaultSendWorkerEnabled = true
 )
 
 // Config holds all runtime configuration loaded from the environment.
@@ -39,16 +39,22 @@ type Config struct {
 	// Sessions
 	SessionSecret string
 
-	// Email (AWS SES SMTP)
-	SESSmtpHost     string
-	SESSmtpPort     int
-	SESSmtpUsername string
-	SESSmtpPassword string
-	EmailFrom       string
+	// AWS / SES. There are no static credentials here: the EC2 instance role
+	// supplies them and the AWS SDK's default credential chain finds them.
+	// Locally the chain falls back to ~/.aws/credentials.
+	AWSRegion           string
+	SESConfigurationSet string
+	EmailFrom           string
+	EmailReplyTo        string
+	EmailListDomain     string
+	SESInboundBucket    string
 
-	// Cache
-	CacheMaxCost    int
-	CacheTTLSeconds int
+	// Sending. These are the environment-level ceiling/toggles; the operator
+	// dial beneath MaxSendRate and the signup/registration toggles live in the
+	// settings table, not here.
+	MaxSendRate       int
+	SendBatchSize     int
+	SendWorkerEnabled bool
 
 	// Bootstrap
 	AdminEmail string
@@ -66,10 +72,10 @@ func (c *Config) DevMode() bool {
 // directory; a missing .env file is not an error, since the variables may
 // already be set in the process environment (e.g. by systemd in production).
 //
-// Defaults are applied for unset optional variables, integer fields are parsed,
-// and required fields are validated. If any required field is missing or any
-// integer field fails to parse, Load returns an error describing every problem
-// it found rather than just the first.
+// Defaults are applied for unset optional variables, integer/bool fields are
+// parsed, and required fields are validated. If any required field is missing
+// or any typed field fails to parse, Load returns an error describing every
+// problem it found rather than just the first.
 func Load() (*Config, error) {
 	return loadFromFile(".env")
 }
@@ -88,21 +94,23 @@ func loadFromFile(path string) (*Config, error) {
 	var errs []string
 
 	cfg := &Config{
-		Port:             getInt("PORT", defaultPort, &errs),
-		BaseURL:          os.Getenv("BASE_URL"),
-		DatabaseURL:      os.Getenv("DATABASE_URL"),
-		Storage:          os.Getenv("STORAGE"),
-		WebAuthnRPID:     os.Getenv("WEBAUTHN_RP_ID"),
-		WebAuthnRPOrigin: os.Getenv("WEBAUTHN_RP_ORIGIN"),
-		SessionSecret:    os.Getenv("SESSION_SECRET"),
-		SESSmtpHost:      os.Getenv("SES_SMTP_HOST"),
-		SESSmtpPort:      getInt("SES_SMTP_PORT", defaultSESSmtpPort, &errs),
-		SESSmtpUsername:  os.Getenv("SES_SMTP_USERNAME"),
-		SESSmtpPassword:  os.Getenv("SES_SMTP_PASSWORD"),
-		EmailFrom:        os.Getenv("EMAIL_FROM"),
-		CacheMaxCost:     getInt("CACHE_MAX_COST", defaultCacheMaxCost, &errs),
-		CacheTTLSeconds:  getInt("CACHE_TTL_SECONDS", defaultCacheTTLSeconds, &errs),
-		AdminEmail:       os.Getenv("ADMIN_EMAIL"),
+		Port:                getInt("PORT", defaultPort, &errs),
+		BaseURL:             os.Getenv("BASE_URL"),
+		DatabaseURL:         os.Getenv("DATABASE_URL"),
+		Storage:             os.Getenv("STORAGE"),
+		WebAuthnRPID:        os.Getenv("WEBAUTHN_RP_ID"),
+		WebAuthnRPOrigin:    os.Getenv("WEBAUTHN_RP_ORIGIN"),
+		SessionSecret:       os.Getenv("SESSION_SECRET"),
+		AWSRegion:           os.Getenv("AWS_REGION"),
+		SESConfigurationSet: os.Getenv("SES_CONFIGURATION_SET"),
+		EmailFrom:           os.Getenv("EMAIL_FROM"),
+		EmailReplyTo:        os.Getenv("EMAIL_REPLY_TO"),
+		EmailListDomain:     os.Getenv("EMAIL_LIST_DOMAIN"),
+		SESInboundBucket:    os.Getenv("SES_INBOUND_BUCKET"),
+		MaxSendRate:         getInt("MAX_SEND_RATE", defaultMaxSendRate, &errs),
+		SendBatchSize:       getInt("SEND_BATCH_SIZE", defaultSendBatchSize, &errs),
+		SendWorkerEnabled:   getBool("SEND_WORKER_ENABLED", defaultSendWorkerEnabled, &errs),
+		AdminEmail:          os.Getenv("ADMIN_EMAIL"),
 	}
 
 	// Validate required fields. When STORAGE=json (dev mode) DATABASE_URL is
@@ -120,6 +128,8 @@ func loadFromFile(path string) (*Config, error) {
 		{"WEBAUTHN_RP_ORIGIN", cfg.WebAuthnRPOrigin, false},
 		{"SESSION_SECRET", cfg.SessionSecret, false},
 		{"ADMIN_EMAIL", cfg.AdminEmail, false},
+		{"AWS_REGION", cfg.AWSRegion, false},
+		{"EMAIL_FROM", cfg.EmailFrom, false},
 	}
 	for _, r := range required {
 		if r.value == "" && !(r.skipInDev && devMode) {
@@ -145,6 +155,24 @@ func getInt(name string, def int, errs *[]string) int {
 	v, err := strconv.Atoi(raw)
 	if err != nil {
 		*errs = append(*errs, fmt.Sprintf("invalid integer for %s: %q", name, raw))
+		return def
+	}
+	return v
+}
+
+// getBool reads a boolean environment variable, returning def when the variable
+// is unset or empty. If the variable is set but cannot be parsed as a boolean
+// (per strconv.ParseBool: "1", "t", "T", "TRUE", "true", "True", "0", "f", "F",
+// "FALSE", "false", "False"), an error message is appended to errs and def is
+// returned.
+func getBool(name string, def bool, errs *[]string) bool {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		*errs = append(*errs, fmt.Sprintf("invalid boolean for %s: %q", name, raw))
 		return def
 	}
 	return v

@@ -259,11 +259,10 @@ func TestNewAuthHandler_NilLoggerDoesNotPanic(t *testing.T) {
 func TestAuthHandler_MailerErrorDoesNotLeakEmail(t *testing.T) {
 	const victimEmail = "victim@example.com"
 
-	mailer := auth.NewSESMailer(&config.Config{
-		SESSmtpHost: "127.0.0.1",
-		SESSmtpPort: 1, // nothing listens here; dial fails immediately.
-		EmailFrom:   "ShortLinks <noreply@example.com>",
-		BaseURL:     "https://example.com",
+	mailer := auth.NewSESMailerWithAddr("127.0.0.1", 1, &config.Config{
+		// nothing listens on 127.0.0.1:1; dial fails immediately.
+		EmailFrom: "ShortLinks <noreply@example.com>",
+		BaseURL:   "https://example.com",
 	})
 
 	registerErr := mailer.SendVerification(context.Background(), victimEmail, "tok-register")

@@ -18,9 +18,21 @@ import (
 // listener without performing real TLS or DNS.
 type sendMailFunc func(addr string, a smtp.Auth, from string, to []string, msg []byte) error
 
+// defaultSESSMTPPort is the SES SMTP endpoint's STARTTLS port.
+const defaultSESSMTPPort = 587
+
 // SESMailer is a Mailer that delivers email through an SMTP server — in
 // production, an AWS SES SMTP endpoint on port 587 using STARTTLS and PLAIN
-// auth with IAM-derived SMTP credentials.
+// auth.
+//
+// NOTE (#0007): this project has no SES SMTP credentials in configuration —
+// there are no static AWS credentials anywhere; the EC2 instance role
+// supplies them for API calls, not SMTP AUTH, which needs its own derived
+// username/password. Until #0027 replaces this with the SES v2 API mailer,
+// NewSESMailer's username/password are always empty, so this mailer cannot
+// actually authenticate. main.go does not wire it up for that reason; it
+// remains here (and under test) only so #0027 has a known-working base to
+// replace piece by piece.
 type SESMailer struct {
 	host     string
 	port     int
@@ -34,18 +46,32 @@ type SESMailer struct {
 	sendMail sendMailFunc
 }
 
-// NewSESMailer constructs a SESMailer from configuration. The default transport
-// performs STARTTLS + PLAIN auth, matching the SES SMTP endpoint on port 587.
+// NewSESMailer constructs a SESMailer from configuration. The host is derived
+// from cfg.AWSRegion (the SES SMTP endpoint naming convention); there is no
+// SES_SMTP_HOST/PORT/USERNAME/PASSWORD in configuration any more (#0007), so
+// username/password are always empty here — see the SESMailer doc comment.
 func NewSESMailer(cfg *config.Config) *SESMailer {
 	return &SESMailer{
-		host:     cfg.SESSmtpHost,
-		port:     cfg.SESSmtpPort,
-		username: cfg.SESSmtpUsername,
-		password: cfg.SESSmtpPassword,
+		host:     fmt.Sprintf("email-smtp.%s.amazonaws.com", cfg.AWSRegion),
+		port:     defaultSESSMTPPort,
+		username: "",
+		password: "",
 		from:     cfg.EmailFrom,
 		baseURL:  cfg.BaseURL,
 		sendMail: starttlsSendMail,
 	}
+}
+
+// NewSESMailerWithAddr is NewSESMailer with an explicit host/port override,
+// bypassing the AWS_REGION-derived default. It exists for tests outside this
+// package (internal/handlers) that need to point the mailer at an
+// unreachable address to force a deterministic, synchronous dial failure
+// without touching the network for real.
+func NewSESMailerWithAddr(host string, port int, cfg *config.Config) *SESMailer {
+	m := NewSESMailer(cfg)
+	m.host = host
+	m.port = port
+	return m
 }
 
 // SendVerification sends the registration magic-link email.

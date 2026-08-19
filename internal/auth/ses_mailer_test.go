@@ -169,25 +169,43 @@ func TestSESMailer_ContextCancelled(t *testing.T) {
 	}
 }
 
-// TestNewSESMailer_FromConfig verifies construction maps config fields and that
-// the default transport is installed.
+// TestNewSESMailer_FromConfig verifies construction derives the SES SMTP host
+// from AWS_REGION, maps EmailFrom/BaseURL, leaves username/password empty
+// (there are no SES SMTP credentials in configuration — #0007), and installs
+// the default transport.
 func TestNewSESMailer_FromConfig(t *testing.T) {
 	cfg := &config.Config{
-		SESSmtpHost:     "email-smtp.us-east-1.amazonaws.com",
-		SESSmtpPort:     587,
-		SESSmtpUsername: "user",
-		SESSmtpPassword: "pass",
-		EmailFrom:       "ShortLinks <noreply@sstools.co>",
-		BaseURL:         "https://go.sstools.co",
+		AWSRegion: "us-east-1",
+		EmailFrom: "ShortLinks <noreply@sstools.co>",
+		BaseURL:   "https://go.sstools.co",
 	}
 	m := NewSESMailer(cfg)
-	if m.host != cfg.SESSmtpHost || m.port != cfg.SESSmtpPort ||
-		m.username != cfg.SESSmtpUsername || m.password != cfg.SESSmtpPassword ||
+	wantHost := "email-smtp.us-east-1.amazonaws.com"
+	if m.host != wantHost || m.port != defaultSESSMTPPort ||
+		m.username != "" || m.password != "" ||
 		m.from != cfg.EmailFrom || m.baseURL != cfg.BaseURL {
 		t.Errorf("NewSESMailer did not map config fields: %+v", m)
 	}
 	if m.sendMail == nil {
 		t.Error("NewSESMailer left sendMail nil; default transport not installed")
+	}
+}
+
+// TestNewSESMailerWithAddr verifies the host/port override used by
+// cross-package tests (internal/handlers) that need a deterministic dial
+// failure without touching the network.
+func TestNewSESMailerWithAddr(t *testing.T) {
+	cfg := &config.Config{
+		AWSRegion: "us-east-1",
+		EmailFrom: "ShortLinks <noreply@sstools.co>",
+		BaseURL:   "https://go.sstools.co",
+	}
+	m := NewSESMailerWithAddr("127.0.0.1", 1, cfg)
+	if m.host != "127.0.0.1" || m.port != 1 {
+		t.Errorf("NewSESMailerWithAddr = host %q port %d, want 127.0.0.1:1", m.host, m.port)
+	}
+	if m.from != cfg.EmailFrom || m.baseURL != cfg.BaseURL {
+		t.Errorf("NewSESMailerWithAddr did not map config fields: %+v", m)
 	}
 }
 
