@@ -113,6 +113,12 @@ type preferencesResponse struct {
 	Interests       []string             `json:"interests"`
 	ActiveInterests []publicInterestView `json:"active_interests"`
 	Unsubscribed    bool                 `json:"unsubscribed"`
+	// NoOp is true only on a PATCH {unsubscribe: true} against an already-
+	// complained row: Store.Unsubscribe silently no-ops there (see its doc
+	// comment), so Unsubscribed above is false and Message explains why
+	// nothing changed instead of implying success (#0031 review finding 2 —
+	// mirrors AdminSubscribersHandler.Suppress's no_op field, #0032).
+	NoOp bool `json:"no_op,omitempty"`
 }
 
 // Get handles GET /api/preferences?token=. Invalid/unknown/rotated tokens
@@ -198,13 +204,30 @@ func (h *PreferencesHandler) Patch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PreferencesHandler) patchUnsubscribe(w http.ResponseWriter, r *http.Request, sub subscribers.Subscriber) {
+	// Captured before the call: Store.Unsubscribe's only no-op case is a
+	// row that was ALREADY complained (its doc comment), so the pre-call
+	// status alone tells us whether this request is about to be a no-op —
+	// same before/after comparison AdminSubscribersHandler.Suppress uses
+	// for the identical shape (#0032).
+	before := sub.Status
+
 	updated, err := h.subs.Unsubscribe(r.Context(), sub.ID, subscribers.SourcePreferences, h.now())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+	noOp := before == subscribers.StatusComplained
 
-	if h.auditor != nil {
+	// Skip the audit write entirely on a no-op (#0031 review finding 2):
+	// the audit log is the consent-evidence record PRD §6.3 promises and
+	// #0038/#0060 will read, so a subscriber.unsubscribed row for someone
+	// who in fact complained and was never unsubscribed would corrupt it —
+	// worse than the misleading message alone. Unlike Suppress (which
+	// still records the admin's action attempt with no_op:true in its
+	// metadata), there is no analogous "action someone took" worth
+	// recording here: this route no-ops on the subscriber's own request,
+	// not an admin's, and nothing happened to log.
+	if !noOp && h.auditor != nil {
 		targetID := updated.ID
 		h.auditor.Record(r.Context(), audit.Entry{
 			ActorID:    nil,
@@ -222,13 +245,19 @@ func (h *PreferencesHandler) patchUnsubscribe(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	message := "You've been unsubscribed from everything."
+	if noOp {
+		message = "No change: this address is marked as having complained about a previous email, and complained addresses can't be unsubscribed or resubscribed from this page. Contact us if you believe this is a mistake."
+	}
+
 	writeJSON(w, http.StatusOK, preferencesResponse{
-		Message:         "You've been unsubscribed from everything.",
+		Message:         message,
 		Email:           maskEmail(updated.Email),
 		Status:          updated.Status,
 		Interests:       slugs,
 		ActiveInterests: activeViews,
-		Unsubscribed:    true,
+		Unsubscribed:    !noOp,
+		NoOp:            noOp,
 	})
 }
 
@@ -276,10 +305,7 @@ func (h *PreferencesHandler) patchInterests(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	message := "Preferences saved."
-	if len(respSlugs) == 0 {
-		message = "Preferences saved. You're subscribed to general announcements only."
-	}
+	message := preferencesSaveMessage(sub.Status, respSlugs)
 
 	writeJSON(w, http.StatusOK, preferencesResponse{
 		Message:         message,
@@ -319,12 +345,40 @@ func (h *PreferencesHandler) loadInterestState(ctx context.Context, subscriberID
 	return slugs, views, nil
 }
 
+// preferencesSaveMessage composes the honest confirmation message for a
+// successful interests PATCH (#0031 review finding 1). SetInterests itself
+// has no status guard and always writes (deliberately — see this package's
+// preferencesInterestStore doc comment and CLAUDE.md §9's "complained never
+// auto-resubscribes": the interest edit is real and takes effect the moment
+// status becomes active again), so this is never about whether the save
+// happened. It is about not asserting an active subscription that does not
+// exist: the previous unconditional "You're subscribed to general
+// announcements only." told a non-active subscriber (unsubscribed,
+// complained, bounced, or — the one truly-in-progress case — still pending)
+// they were receiving mail. Only an active subscriber gets that claim.
+func preferencesSaveMessage(status string, respSlugs []string) string {
+	if status != subscribers.StatusActive {
+		return "Your interests were saved, but you're not currently subscribed (status: " + status + "), so no emails will be sent. Resubscribe to start receiving them again."
+	}
+	if len(respSlugs) == 0 {
+		return "Preferences saved. You're subscribed to general announcements only."
+	}
+	return "Preferences saved."
+}
+
 // maskEmail renders an address as "b•••••n@gmail.com" (PRD §6.4): first and
 // last character of the local part kept, everything between replaced with a
 // run of five bullets regardless of the original length (so the mask itself
 // never leaks the local part's length), domain untouched. A local part of
 // zero or one characters is masked outright (a single "•") rather than
 // risking a degenerate reveal of the entire local part.
+//
+// Operates on runes, not bytes (#0031 review, minor finding): #0026
+// deliberately accepts RFC 6531 non-ASCII local parts and SubscribeForm.svelte
+// deliberately does not filter them, so a byte slice on local[:1]/local[len-1:]
+// could land mid-codepoint and mask to invalid UTF-8 (renders as U+FFFD after
+// JSON encoding). '@' itself is always a single ASCII byte, so splitting the
+// domain off by byte index is still safe — only the local part needs runes.
 func maskEmail(email string) string {
 	at := strings.LastIndexByte(email, '@')
 	if at <= 0 {
@@ -332,12 +386,12 @@ func maskEmail(email string) string {
 		// never happen for a stored subscriber), mask everything to be safe.
 		return "•••••"
 	}
-	local := email[:at]
+	localRunes := []rune(email[:at])
 	domain := email[at:]
-	if len(local) <= 1 {
+	if len(localRunes) <= 1 {
 		return "•" + domain
 	}
-	first := local[:1]
-	last := local[len(local)-1:]
+	first := string(localRunes[0])
+	last := string(localRunes[len(localRunes)-1])
 	return first + "•••••" + last + domain
 }

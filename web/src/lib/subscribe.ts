@@ -167,3 +167,31 @@ export function buildSaveInterestsPatch(token: string, selected: Iterable<string
 export function buildUnsubscribeEverythingPatch(token: string): PreferencesPatchBody {
   return { token, unsubscribe: true };
 }
+
+/**
+ * Copy for PreferenceCenter.svelte's non-active panel (#0031 review finding
+ * 1): shown in place of the interest editor whenever GET /api/preferences
+ * (or a stale in-session status after a PATCH) reports anything other than
+ * `active`, so the page never implies someone is receiving mail they are
+ * not. Matches the status strings internal/subscribers/store.go's Status*
+ * constants produce on the wire (pending | active | unsubscribed | bounced |
+ * complained) — `active` itself is never passed in (the caller checks
+ * `status === 'active'` first and renders the normal editor instead), kept
+ * here anyway as a safe fallback rather than an unreachable-branch throw.
+ */
+export function inactiveStatusMessage(status: string): string {
+  switch (status) {
+    case 'unsubscribed':
+      return "You're not currently subscribed. You can resubscribe anytime.";
+    case 'complained':
+      return "This address isn't currently subscribed.";
+    case 'bounced':
+      return "We haven't been able to deliver to this address, so it's not currently subscribed.";
+    case 'pending':
+      return 'Your subscription is still waiting on email confirmation. Check your inbox for the confirmation link, or subscribe again below.';
+    case 'active':
+      return "You're subscribed.";
+    default:
+      return "You're not currently subscribed.";
+  }
+}

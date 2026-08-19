@@ -160,7 +160,11 @@ export interface ConfirmResponse {
  * ("b•••••n@gmail.com") except when the SPA already holds the unmasked
  * address from a fresh ConfirmResponse (see PreferenceCenter.svelte).
  * unsubscribed is true only on a successful "Unsubscribe from everything"
- * PATCH. Matches internal/handlers/preferences.go's preferencesResponse. */
+ * PATCH; no_op is true only when that same PATCH found the row already
+ * complained (Store.Unsubscribe's documented no-op case) — unsubscribed is
+ * false in that case, and PreferenceCenter.svelte must not treat it as a
+ * success (#0031 review finding 2). Matches
+ * internal/handlers/preferences.go's preferencesResponse. */
 export interface PreferencesResponse {
   message?: string;
   email: string;
@@ -168,4 +172,5 @@ export interface PreferencesResponse {
   interests: string[];
   active_interests: PublicInterest[];
   unsubscribed: boolean;
+  no_op?: boolean;
 }

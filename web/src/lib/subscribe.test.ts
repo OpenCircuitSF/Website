@@ -16,6 +16,7 @@ import {
   toggleSlug,
   buildSaveInterestsPatch,
   buildUnsubscribeEverythingPatch,
+  inactiveStatusMessage,
   type UtmStorage,
 } from './subscribe';
 
@@ -175,5 +176,22 @@ describe('buildSaveInterestsPatch / buildUnsubscribeEverythingPatch', () => {
     const patch = buildUnsubscribeEverythingPatch('tok123');
     expect(patch).toEqual({ token: 'tok123', unsubscribe: true });
     expect(patch.interests).toBeUndefined();
+  });
+});
+
+describe('inactiveStatusMessage (#0031 review finding 1)', () => {
+  it('never claims an active subscription for a non-active status', () => {
+    for (const status of ['unsubscribed', 'complained', 'bounced', 'pending', 'something-unexpected']) {
+      expect(inactiveStatusMessage(status)).not.toMatch(/you're subscribed/i);
+    }
+  });
+
+  it('gives distinct, status-specific copy for the known non-active statuses', () => {
+    const messages = ['unsubscribed', 'complained', 'bounced', 'pending'].map(inactiveStatusMessage);
+    expect(new Set(messages).size).toBe(messages.length);
+  });
+
+  it('falls back to a generic not-subscribed statement for an unrecognized status', () => {
+    expect(inactiveStatusMessage('some-future-status')).toBe("You're not currently subscribed.");
   });
 });

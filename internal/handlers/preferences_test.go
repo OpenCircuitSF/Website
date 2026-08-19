@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
@@ -209,6 +211,169 @@ func TestPreferencesHandler_Patch_EmptyInterests_StaysActiveGeneralAnnouncements
 	}
 }
 
+// TestPreferencesHandler_Patch_EmptyInterests_UnsubscribedStaysUnsubscribedAndSaysSo
+// guards #0031's headline security claim on the concrete path the review
+// reproduced: TestPreferencesHandler_Patch_EmptyInterests_StaysActiveGeneralAnnouncementsOnly
+// above only ever exercises an active subscriber, where after.Status ==
+// StatusActive passes whether or not the handler forces the status — it
+// would not fail if a future change auto-reactivated on save. This one
+// starts from an unsubscribed row and fails if status changes OR if the
+// response falsely claims an active subscription.
+func TestPreferencesHandler_Patch_EmptyInterests_UnsubscribedStaysUnsubscribedAndSaysSo(t *testing.T) {
+	pool := journeyTestPool(t)
+	subs := subscribers.NewStore(pool)
+	ints := interests.NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := subs.Create(ctx, subscribers.NewSignup{Email: journeyUniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if _, err := subs.Unsubscribe(ctx, created.ID, subscribers.SourcePreferences, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("Unsubscribe (seeding unsubscribed row): %v", err)
+	}
+
+	_, mux := journeyPreferencesMux(subs, ints, audit.New(pool))
+
+	rr := doPatchPreferences(t, mux, map[string]any{
+		"token":     created.ManageToken,
+		"interests": []string{},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	resp := decodePreferencesResponse(t, rr)
+	if resp.Status != subscribers.StatusUnsubscribed {
+		t.Errorf("response Status = %q, want %q", resp.Status, subscribers.StatusUnsubscribed)
+	}
+	if strings.Contains(resp.Message, "You're subscribed") {
+		t.Errorf("Message = %q, falsely claims an active subscription for an unsubscribed row", resp.Message)
+	}
+
+	after, err := subs.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if after.Status != subscribers.StatusUnsubscribed {
+		t.Errorf("Status = %q, want %q — an empty interest PATCH must not resurrect an unsubscribed row", after.Status, subscribers.StatusUnsubscribed)
+	}
+}
+
+// TestPreferencesHandler_Patch_EmptyInterests_ComplainedStaysComplainedAndSaysSo
+// is the same guard for the CLAUDE.md §9 case specifically: "complained
+// never auto-resubscribes" is the loophole this whole issue exists to keep
+// closed, and it had no non-active-subscriber test at all before this pass.
+func TestPreferencesHandler_Patch_EmptyInterests_ComplainedStaysComplainedAndSaysSo(t *testing.T) {
+	pool := journeyTestPool(t)
+	subs := subscribers.NewStore(pool)
+	ints := interests.NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := subs.Create(ctx, subscribers.NewSignup{Email: journeyUniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if _, err := subs.MarkComplained(ctx, created.ID, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("MarkComplained (seeding complained row): %v", err)
+	}
+
+	_, mux := journeyPreferencesMux(subs, ints, audit.New(pool))
+
+	rr := doPatchPreferences(t, mux, map[string]any{
+		"token":     created.ManageToken,
+		"interests": []string{},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	resp := decodePreferencesResponse(t, rr)
+	if resp.Status != subscribers.StatusComplained {
+		t.Errorf("response Status = %q, want %q", resp.Status, subscribers.StatusComplained)
+	}
+	if strings.Contains(resp.Message, "You're subscribed") {
+		t.Errorf("Message = %q, falsely claims an active subscription for a complained row", resp.Message)
+	}
+
+	after, err := subs.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if after.Status != subscribers.StatusComplained {
+		t.Errorf("Status = %q, want %q — an empty interest PATCH must not clear a complaint (CLAUDE.md §9)", after.Status, subscribers.StatusComplained)
+	}
+}
+
+// TestPreferencesHandler_Patch_UnsubscribeEverything_ComplainedIsNoOpNoAudit
+// is #0031 review finding 2's own regression test: {unsubscribe: true}
+// against a complained row must leave status unchanged AND must not write
+// audit.ActionSubscriberUnsubscribed. Before the fix this test fails on the
+// audit assertion — a spurious "subscriber.unsubscribed" row for someone who
+// in fact complained and was never unsubscribed, which #0038/#0060 would
+// have read as real.
+func TestPreferencesHandler_Patch_UnsubscribeEverything_ComplainedIsNoOpNoAudit(t *testing.T) {
+	pool := journeyTestPool(t)
+	subs := subscribers.NewStore(pool)
+	ints := interests.NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := subs.Create(ctx, subscribers.NewSignup{Email: journeyUniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if _, err := subs.MarkComplained(ctx, created.ID, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("MarkComplained (seeding complained row): %v", err)
+	}
+
+	auditor := audit.New(pool)
+	_, mux := journeyPreferencesMux(subs, ints, auditor)
+
+	rr := doPatchPreferences(t, mux, map[string]any{
+		"token":       created.ManageToken,
+		"unsubscribe": true,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	resp := decodePreferencesResponse(t, rr)
+	if resp.Unsubscribed {
+		t.Error("Unsubscribed = true, want false — the store no-op'd, nothing happened")
+	}
+	if !resp.NoOp {
+		t.Error("NoOp = false, want true")
+	}
+
+	after, err := subs.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if after.Status != subscribers.StatusComplained {
+		t.Errorf("Status = %q, want %q — unsubscribe must not touch a complained row", after.Status, subscribers.StatusComplained)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE action = $1 AND target_id = $2`,
+		audit.ActionSubscriberUnsubscribed, created.ID,
+	).Scan(&count); err != nil {
+		t.Fatalf("query audit_log: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("audit_log rows for subscriber.unsubscribed = %d, want 0 (no-op must not write a spurious audit row)", count)
+	}
+}
+
 func TestPreferencesHandler_Patch_UnsubscribeEverything(t *testing.T) {
 	pool := journeyTestPool(t)
 	subs := subscribers.NewStore(pool)
@@ -357,10 +522,19 @@ func TestMaskEmail(t *testing.T) {
 		{"bob@gmail.com", "b•••••b@gmail.com"},
 		{"a@example.com", "•@example.com"},
 		{"ab@example.com", "a•••••b@example.com"},
+		// RFC 6531 non-ASCII local part (#0026 accepts these, SubscribeForm.svelte
+		// doesn't filter them) — #0031 review's minor finding: byte-slicing the
+		// local part here used to cut mid-codepoint and mask to invalid UTF-8.
+		{"björn@example.com", "b•••••n@example.com"},
+		{"日本語@example.com", "日•••••語@example.com"},
 	}
 	for _, tc := range cases {
-		if got := maskEmail(tc.email); got != tc.want {
+		got := maskEmail(tc.email)
+		if got != tc.want {
 			t.Errorf("maskEmail(%q) = %q, want %q", tc.email, got, tc.want)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("maskEmail(%q) = %q, not valid UTF-8", tc.email, got)
 		}
 	}
 }

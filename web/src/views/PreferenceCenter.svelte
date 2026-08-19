@@ -27,7 +27,12 @@
   import { onMount } from 'svelte';
   import { currentRoute, navigate } from '../lib/router';
   import { getPreferences, patchPreferences, ApiError } from '../lib/api';
-  import { buildSaveInterestsPatch, buildUnsubscribeEverythingPatch, toggleSlug } from '../lib/subscribe';
+  import {
+    buildSaveInterestsPatch,
+    buildUnsubscribeEverythingPatch,
+    toggleSlug,
+    inactiveStatusMessage,
+  } from '../lib/subscribe';
   import type { PublicInterest } from '../lib/types';
   import Panel from '../lib/Panel.svelte';
   import Button from '../lib/Button.svelte';
@@ -67,11 +72,28 @@
   let token = $state(initialToken ?? '');
   // svelte-ignore state_referenced_locally -- see the note above `embedded`.
   let email = $state(initialEmail ?? '');
-  let status = $state('');
+  // Embedded mode always follows a successful POST /api/subscribe/confirm,
+  // which only returns 200 after subscribers.Store.Confirm has transitioned
+  // the row to active (it 400s on an expired token and refuses a complained
+  // one via ErrComplainedLocked -- see that method's doc comment) -- so
+  // 'active' here is a fact about how this component got embedded, not a
+  // guess. Standalone mode starts '' and is set from GET's real status on
+  // load (see onMount below); '' fails the `status === 'active'` check
+  // everywhere it's used, matching loadState 'loading' rendering nothing yet.
+  // svelte-ignore state_referenced_locally -- see the note above `embedded`.
+  let status = $state(embedded ? 'active' : '');
   // svelte-ignore state_referenced_locally -- see the note above `embedded`.
   let selected = $state<Set<string>>(new Set(initialInterests ?? []));
   // svelte-ignore state_referenced_locally -- see the note above `embedded`.
   let activeInterests = $state<PublicInterest[]>(initialActiveInterests ?? []);
+
+  // #0031 review finding 1: the editor + Save are only meaningful for an
+  // active subscriber -- editing interests for a pending/unsubscribed/
+  // bounced/complained row can't be honestly reported as "you're receiving
+  // X emails" because they aren't receiving any. See the non-active Panel
+  // branch below, which replaces the editor with a status explanation and a
+  // resubscribe path instead of a Save button that can't do anything.
+  let isActive = $derived(status === 'active');
 
   let saving = $state(false);
   let saveMessage = $state<string | null>(null);
@@ -80,6 +102,13 @@
   let unsubscribing = $state(false);
   let unsubscribed = $state(false);
   let unsubscribeError = $state<string | null>(null);
+  // #0031 review finding 2: Store.Unsubscribe silently no-ops on an
+  // already-complained row. This is distinct from `unsubscribed` (a real
+  // state change) -- shown as its own terminal panel rather than folded
+  // into `unsubscribed` or lost when `status` flips away from 'active' and
+  // the editor branch that held `unsubscribeError` unmounts.
+  let unsubscribeNoOp = $state(false);
+  let unsubscribeNoOpMessage = $state('');
 
   onMount(() => {
     if (embedded) return;
@@ -136,8 +165,16 @@
     try {
       const res = await patchPreferences(buildUnsubscribeEverythingPatch(token));
       status = res.status;
-      unsubscribed = true;
-      saveMessage = null;
+      if (res.unsubscribed) {
+        unsubscribed = true;
+        saveMessage = null;
+      } else {
+        // #0031 review finding 2: the store no-op'd (already complained) --
+        // report that honestly instead of the "you've been unsubscribed"
+        // success panel, which would be a false statement.
+        unsubscribeNoOp = true;
+        unsubscribeNoOpMessage = res.message ?? "This address couldn't be unsubscribed.";
+      }
     } catch (err) {
       unsubscribeError =
         err instanceof ApiError ? err.message : 'Could not reach the server. Please try again.';
@@ -173,6 +210,25 @@
     {#if showHeading}<h1>Manage your preferences</h1>{/if}
     <Panel>
       <p role="status">You've been unsubscribed from everything. You can resubscribe anytime.</p>
+      <button type="button" class="link-button" onclick={goToSubscribe}>Subscribe again</button>
+    </Panel>
+  </div>
+{:else if unsubscribeNoOp}
+  <div class="pref-content">
+    {#if showHeading}<h1>Manage your preferences</h1>{/if}
+    <Panel>
+      <p role="status">{unsubscribeNoOpMessage}</p>
+    </Panel>
+  </div>
+{:else if !isActive}
+  <!-- #0031 review finding 1: not currently active (pending, unsubscribed,
+       bounced, or complained) -- the interest editor and Save button can't
+       honestly do anything useful here, so offer the resubscribe path
+       instead of a Save button that can't do anything. -->
+  <div class="pref-content">
+    {#if showHeading}<h1>Manage your preferences</h1>{/if}
+    <Panel>
+      <p role="status">{inactiveStatusMessage(status)}</p>
       <button type="button" class="link-button" onclick={goToSubscribe}>Subscribe again</button>
     </Panel>
   </div>
