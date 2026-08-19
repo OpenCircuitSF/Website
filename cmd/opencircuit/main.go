@@ -555,6 +555,16 @@ func mountAndServe(
 	// arriving before the select below is ready is never dropped.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	// signal.Stop releases sigCh's registration on every return path
+	// (including the errCh branch below). Without this, a test binary that
+	// calls mountAndServe and never receives a signal (the three existing
+	// mountAndServe-based wiring tests) leaves a permanent SIGINT/SIGTERM
+	// registration on a channel nobody ever reads again, which makes the
+	// process SWALLOW both signals from then on — a Ctrl-C on a hung
+	// `go test ./cmd/opencircuit/...` orphans the test binary still holding
+	// testdb's advisory lock, blocking every other package's DB tests until
+	// it's killed by hand.
+	defer signal.Stop(sigCh)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
@@ -583,24 +593,37 @@ func mountAndServe(
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 
+		// srv.Shutdown runs FIRST, matching Close's own doc comment
+		// (subscribe.go): only after Shutdown has stopped accepting new
+		// connections and drained every in-flight handler is it guaranteed
+		// that no request goroutine can still be inside enqueueSend. Calling
+		// Close first (the order this file used before #0081's review) does
+		// not itself corrupt anything — enqueueSend's closeMu-guarded check
+		// still refuses a send after closed flips true — but it maximises
+		// the window in which a request goroutine can be concurrently
+		// inside enqueueSend while Close is concurrently closing sendQueue
+		// and waiting on sendWG, which is exactly the race #0081's review
+		// reproduced (sendWG.Add racing sendWG.Wait, now fixed by holding
+		// closeMu across the Add too — see enqueueSend). Shutdown-then-Close
+		// makes that race structurally unreachable instead of merely
+		// unlikely.
+		//
+		// A non-nil Shutdown error (its own ctx bound exceeded with a
+		// handler still running) is captured, not returned immediately:
+		// subscribeH.Close still runs below on whatever remains of the
+		// shared ctx, so a slow/stuck handler doesn't also strand every
+		// queued send claim.
+		shutdownErr := srv.Shutdown(ctx)
+
 		// subscribeH may be nil in dev mode (STORAGE=json — see
-		// serveDevMode's comment on the call site). Closed BEFORE
-		// srv.Shutdown so that even if srv.Shutdown's own bound is
-		// exceeded and a handler goroutine is still technically running,
-		// enqueueSend's closeMu-guarded check (subscribe.go) already
-		// refuses new sends rather than racing sendQueue's close — Close
-		// is safe to call concurrently with in-flight Subscribe requests
-		// by design (see its doc comment).
+		// serveDevMode's comment on the call site).
 		if subscribeH != nil {
 			if err := subscribeH.Close(ctx); err != nil {
 				log.Printf("opencircuit: subscribe handler close: %v", err)
 			}
 		}
 
-		if err := srv.Shutdown(ctx); err != nil {
-			return err
-		}
-		return nil
+		return shutdownErr
 	}
 }
 

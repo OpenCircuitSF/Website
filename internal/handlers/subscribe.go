@@ -354,21 +354,47 @@ func (h *SubscribeHandler) releaseSendClaim(job sendJob) {
 // logs) and retryable (the claim is released, so the next legitimate
 // request tries again — immediately, not after subscribeResendCooldown).
 //
-// closeMu is held across the select so this can never race Close's own
-// close(h.sendQueue): either this runs first and the job is safely queued
-// before Close closes the channel, or Close's closed=true is already
-// visible here and the send-on-closed-channel path is never taken.
+// closeMu is held from the closed check through sendWG.Add(1) and the
+// select, and Add is only ever called AFTER that check has observed
+// closed==false, so this can never race Close's own
+// sendWG.Wait()/close(h.sendQueue). sync.WaitGroup's documented misuse is
+// "calls with a positive delta that start when the counter is zero must
+// happen before a Wait" — it is not enough for an Add to merely be gated by
+// some condition; it must be sequenced (happens-before, via a shared lock or
+// similar) ahead of the Wait that could observe the counter reaching zero.
+// Here that ordering is real: Close's critical section sets closed=true
+// while holding closeMu, and only spawns its sendWG.Wait() goroutine after
+// releasing closeMu. So either this call's closeMu.Lock() happens entirely
+// before Close's (closed is still false, Add is called, and that Add
+// happens-before Close's own Lock()/closed=true/Unlock()/go-statement/Wait()
+// via the mutex handoff plus the go statement's own happens-before edge —
+// i.e. strictly before Close ever calls Wait), or entirely after (closed is
+// already true, and Add is never called at all — the drop-and-release path
+// below runs without ever touching sendWG, since a job that was never
+// queued was never "in flight" from Close's point of view and needs no
+// WaitGroup accounting). #0081's review reproduced a panic at ~5,500 rounds
+// against an earlier version of this function that called Add(1)
+// unconditionally at entry, before taking closeMu at all: that Add had no
+// happens-before relationship to Close's Wait whatsoever. A version that
+// gated the closed-check's Add/Done pair under closeMu but still called Add
+// before checking closed also failed at ~5,000 rounds, for a subtler
+// reason: the intermediate Add(1)+Done() pair on the closed-drop path still
+// raced Close's Wait() call itself, since Wait() is not called while
+// closeMu is held — only the DECISION to add needs to happen-before Wait,
+// which requires Add to happen only in the branch that runs strictly before
+// Close's critical section, not merely "under the same mutex at some
+// point". This version's Add is called only in the branch that provably
+// precedes Close, so no drop path (closed or queue-full) ever calls
+// Add/Done for a job Close could already be waiting on.
 func (h *SubscribeHandler) enqueueSend(job sendJob) {
-	h.sendWG.Add(1)
-
 	h.closeMu.Lock()
 	if h.closed {
 		h.closeMu.Unlock()
 		h.log.Error("subscribe: handler is shutting down, dropping send", "subscriber_id", job.subscriberID, "kind", job.label)
 		h.releaseSendClaim(job)
-		h.sendWG.Done()
 		return
 	}
+	h.sendWG.Add(1)
 	select {
 	case h.sendQueue <- job:
 		h.closeMu.Unlock()
