@@ -1,4 +1,4 @@
-// Pure, framework-free helpers backing the Account view (#0036): passkey
+// Pure, framework-free helpers backing the Account view: passkey
 // management. Keeping the date formatting, the rename validation, the
 // last-credential guard, and — most importantly — the mapping of a revoke
 // failure (notably the backend's 409 `cannot_revoke_last_credential`) to a

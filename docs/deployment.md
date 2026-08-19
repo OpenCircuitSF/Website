@@ -52,14 +52,12 @@ deploy, behind one Apache instance with two vhosts. `opencircuit` and
 `shortlinks` are independent systemd units and independent PostgreSQL
 databases — a redeploy of one must never touch the other.
 
-## `deploy/` (currently ShortLinks' own assets, unadapted)
+## `deploy/`
 
-`deploy/systemd/shortlinks.service` and `deploy/apache/go.sstools.co.conf`
-were copied wholesale from ShortLinks in `#0001` and describe *that*
-service's deploy, not this one — they are reference material for the
-pattern, not yet this project's own deploy config. Writing
-`opencircuit.service` and this project's own Apache vhost is tracked as an
-open item (see below) rather than done here.
+`deploy/systemd/opencircuit.service` and `deploy/apache/opencircuitsf.com.conf`
+are this project's own deploy config (`#0066` renamed and retargeted the
+ShortLinks assets `#0001` copied wholesale). The Apache vhost redirects the
+apex to the canonical `www` host per the DNS table below.
 
 ## DNS (Route 53) — see [`email-setup.md`](email-setup.md) for the mail-specific records
 
@@ -111,7 +109,7 @@ Tracked so a phase doesn't stall silently on one of these — none are code:
 
 | Concern | File |
 |---|---|
-| systemd unit (ShortLinks' own, reference only) | `deploy/systemd/shortlinks.service` |
-| Apache vhost (ShortLinks' own, reference only) | `deploy/apache/go.sstools.co.conf` |
+| systemd unit | `deploy/systemd/opencircuit.service` |
+| Apache vhost | `deploy/apache/opencircuitsf.com.conf` |
 | DB backup/restore scripts | `scripts/db/{backup,restore,pull-backups}.sh` |
 | DB create/drop | `scripts/db/{create,drop}.sql` |

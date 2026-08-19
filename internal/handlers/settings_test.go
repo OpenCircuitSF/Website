@@ -361,8 +361,8 @@ func TestAdminSettings_PatchOpensRegistrationGate(t *testing.T) {
 	// Wire the real registration service into the real AuthHandler so
 	// /auth/register/start runs the genuine RegistrationsEnabled DB read.
 	cfg := &config.Config{
-		WebAuthnRPID:     "go.sstools.co",
-		WebAuthnRPOrigin: "https://go.sstools.co",
+		WebAuthnRPID:     "opencircuitsf.com",
+		WebAuthnRPOrigin: "https://www.opencircuitsf.com",
 	}
 	wa, err := auth.NewWebAuthn(cfg)
 	if err != nil {

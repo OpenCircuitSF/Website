@@ -17,10 +17,11 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
-// logoutAllRecordingMailer is a minimal Mailer fake for the HTTP-level #0094
-// tests: it records SendSessionsRevoked calls and can be stubbed to error, so
-// a test can assert the handler still returns 200 even when mail delivery
-// fails. The other two Mailer methods are unused by LogoutAll and are no-ops.
+// logoutAllRecordingMailer is a minimal Mailer fake for the HTTP-level
+// LogoutAll tests: it records SendSessionsRevoked calls and can be stubbed to
+// error, so a test can assert the handler still returns 200 even when mail
+// delivery fails. The other two Mailer methods are unused by LogoutAll and
+// are no-ops.
 type logoutAllRecordingMailer struct {
 	calls int
 	to    string
@@ -70,8 +71,9 @@ func countSessionsForUser(t *testing.T, pool *pgxpool.Pool, userID int64) int {
 }
 
 // TestLogoutAll_HTTP_RevokesAllSessionsAndClearsCookie is the primary
-// end-to-end proof at the HTTP layer for #0094. Alice has two live sessions
-// (two devices); a single POST /auth/logout/all with one of her cookies must:
+// end-to-end proof at the HTTP layer that "sign out everywhere" works. Alice
+// has two live sessions (two devices); a single POST /auth/logout/all with
+// one of her cookies must:
 //   - return 200 with a revoked_count of (at least) 2,
 //   - clear the session cookie in the response,
 //   - leave zero sessions for alice in the DB,
@@ -174,7 +176,7 @@ func TestLogoutAll_HTTP_RevokesAllSessionsAndClearsCookie(t *testing.T) {
 }
 
 // transport identifies how a request in TestLogoutAll_HTTP_Transports
-// authenticates: via the shortlinks_session cookie or via an
+// authenticates: via the session cookie or via an
 // "Authorization: Bearer <token>" header. middleware.sessionToken
 // (internal/middleware/auth.go) accepts either and both carry the same opaque
 // session token, so a transport value only changes how the request is built,
@@ -194,10 +196,10 @@ func (tr transport) String() string {
 }
 
 // authenticateVia attaches token to req using the given transport: as the
-// shortlinks_session cookie (reusing the existing withCookie helper) or as an
-// Authorization: Bearer header. It is the header-swap the issue calls for —
-// no new request-building scaffolding beyond picking which credential the
-// request carries.
+// session cookie (reusing the existing withCookie helper) or as an
+// Authorization: Bearer header. It is the minimal header-swap needed for
+// TestLogoutAll_HTTP_Transports — no new request-building scaffolding beyond
+// picking which credential the request carries.
 func authenticateVia(req *http.Request, tr transport, token string) *http.Request {
 	if tr == viaBearer {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -207,9 +209,9 @@ func authenticateVia(req *http.Request, tr transport, token string) *http.Reques
 }
 
 // TestLogoutAll_HTTP_Transports is the Bearer-transport counterpart to
-// TestLogoutAll_HTTP_RevokesAllSessionsAndClearsCookie (#0096). It pins the
+// TestLogoutAll_HTTP_RevokesAllSessionsAndClearsCookie. It pins the
 // fact that middleware.sessionToken's two transports (Authorization: Bearer
-// and the shortlinks_session cookie) and auth.Store.DeleteSessionsForUser's
+// and the session cookie) and auth.Store.DeleteSessionsForUser's
 // transport-agnostic bulk delete really do add up to "sign out everywhere":
 // a session revoked by a request authenticated over ONE transport is rejected
 // on its very next use over EITHER transport — including the OTHER one. That

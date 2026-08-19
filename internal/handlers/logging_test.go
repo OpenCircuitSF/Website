@@ -17,8 +17,8 @@ import (
 )
 
 // wantInternalErrorBody is the exact, byte-for-byte response every one of the
-// seven StatusInternalServerError branches in auth.go must keep producing
-// (#0097 must not change what the client receives).
+// seven StatusInternalServerError branches in auth.go must keep producing —
+// adding server-side logging must never change what the client receives.
 const wantInternalErrorBody = `{"error":"internal server error"}` + "\n"
 
 // fixedSessionResolver is a middleware.SessionResolver stub that resolves any
@@ -47,12 +47,13 @@ func countLogLines(buf *bytes.Buffer) int {
 }
 
 // TestAuthHandler_InternalErrorBranches_LogOnceAndResponseUnchanged is the
-// #0097 acceptance test: it drives every one of the seven
-// StatusInternalServerError branches in internal/handlers/auth.go to a
-// genuine service-layer failure and asserts, per branch:
-//   - the HTTP response (status + body) is byte-identical to what the
-//     handler produced before #0097 — this issue adds a server-side log
-//     record only, and must not touch the client-facing contract;
+// acceptance test for AuthHandler's server-side error logging: it drives
+// every one of the seven StatusInternalServerError branches in
+// internal/handlers/auth.go to a genuine service-layer failure and asserts,
+// per branch:
+//   - the HTTP response (status + body) is byte-identical regardless of
+//     logging — adding a server-side log record must never touch the
+//     client-facing contract;
 //   - exactly one Error-level log line is emitted, carrying "err";
 //   - the LogoutAll branch's line additionally carries "user_id" for the
 //     authenticated caller (the one branch, alongside Logout, where a user is
@@ -63,7 +64,7 @@ func countLogLines(buf *bytes.Buffer) int {
 // This is the harness internal/auth/logout_all_test.go's
 // TestLogoutAll_MailerErrorDoesNotFailOperation established for asserting log
 // output — an slog buffer handler — reused here at the handler layer since
-// #0097's logging lives in AuthHandler rather than the services behind it
+// this logging lives in AuthHandler rather than the services behind it
 // (see the AuthHandler.log field doc comment in auth.go for why).
 func TestAuthHandler_InternalErrorBranches_LogOnceAndResponseUnchanged(t *testing.T) {
 	wantErr := errors.New("simulated infrastructure failure")
@@ -177,7 +178,7 @@ func TestAuthHandler_InternalErrorBranches_LogOnceAndResponseUnchanged(t *testin
 				t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusInternalServerError, rr.Body.String())
 			}
 			if got := rr.Body.String(); got != wantInternalErrorBody {
-				t.Errorf("body = %q, want %q (byte-identical response is #0097's hard requirement)", got, wantInternalErrorBody)
+				t.Errorf("body = %q, want %q (the response must stay byte-identical regardless of logging)", got, wantInternalErrorBody)
 			}
 
 			if n := countLogLines(&logBuf); n != 1 {
@@ -235,8 +236,8 @@ func TestNewAuthHandler_NilLoggerDoesNotPanic(t *testing.T) {
 
 // TestAuthHandler_MailerErrorDoesNotLeakEmail is the guard the reviewer asked
 // for: a subtest whose injected error is not a synthetic string but the real
-// error *auth.SESMailer.send produces on a failed delivery. Before #0097's
-// review fixup, that error was built with fmt.Errorf("... sending email to
+// error *auth.SESMailer.send produces on a failed delivery. Before a review
+// fixup, that error was built with fmt.Errorf("... sending email to
 // %s: %w", toEmail, err) (internal/auth/ses_mailer.go), so a real SMTP outage
 // on the unauthenticated /auth/register/start and /auth/recover routes wrote
 // the recipient's full address into the server journal — a PII leak any
@@ -261,7 +262,7 @@ func TestAuthHandler_MailerErrorDoesNotLeakEmail(t *testing.T) {
 
 	mailer := auth.NewSESMailerWithAddr("127.0.0.1", 1, &config.Config{
 		// nothing listens on 127.0.0.1:1; dial fails immediately.
-		EmailFrom: "ShortLinks <noreply@example.com>",
+		EmailFrom: "Open Circuit SF <noreply@example.com>",
 		BaseURL:   "https://example.com",
 	})
 

@@ -9,7 +9,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 )
 
-// These tests exercise the #0077 bearer-token path of RequireSession. They use
+// These tests exercise the bearer-token path of RequireSession. They use
 // the in-memory fakeDevStore (which satisfies SessionResolver) so they run
 // without a database — they verify token *extraction* and precedence, not the
 // DB-backed resolution already covered by the live tests in auth_test.go.

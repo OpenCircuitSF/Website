@@ -26,22 +26,18 @@
 //     transaction (poisoning the pgx connection state), WriteTx returns its error
 //     and the caller treats it like any other step of the ceremony.
 //
-//     internal/campaigns.Store (#0098-#0099) follows the same rule for a
-//     different reason: every mutation it performs (CreateCampaign,
-//     UpdateCampaign, ArchiveCampaign, DeleteCampaign, AssignLinkToCampaign,
-//     UnassignLinkFromCampaign) writes its audit row via WriteTx inside the
-//     same transaction as the mutation — not because campaign management is a
-//     "ceremony", but because the same atomicity argument applies uniformly to
-//     every write that store performs. That is a cleaner line to draw than
-//     splitting by whether a given caller happens to look like an auth
-//     ceremony.
+//     Any future store whose mutations must stay atomic with their audit row
+//     should follow the same rule — not because it resembles an auth
+//     ceremony, but because the same atomicity argument applies uniformly to
+//     every write a store performs. That is a cleaner line to draw than
+//     splitting by whether a given caller happens to look like a ceremony.
 //
 // In short: request-path code whose action has already committed by the time
 // it logs uses Record (log-and-continue) — this covers most API/admin
-// handlers, including link creation and campaign batch-create. Code that owns
-// the transaction for the mutation it's recording uses WriteTx so the audit
-// row commits or rolls back atomically with the action — this covers the auth
-// ceremonies and every campaigns.Store mutation.
+// handlers. Code that owns the transaction for the mutation it's recording
+// uses WriteTx so the audit row commits or rolls back atomically with the
+// action — this currently covers the auth ceremonies (registration, login,
+// recovery).
 package audit
 
 import (

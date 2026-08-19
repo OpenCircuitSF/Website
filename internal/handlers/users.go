@@ -45,14 +45,14 @@ type userStore interface {
 //	POST /admin/users/{id}/reactivate  — reactivate a user
 //
 // All routes MUST be mounted behind middleware.RequireSession then
-// middleware.RequireAdmin (#0017): RequireSession attaches the AuthUser and
+// middleware.RequireAdmin: RequireSession attaches the AuthUser and
 // answers 401 for an absent/invalid session, RequireAdmin answers 403 for a
 // non-admin. The handler re-reads the user from the context only to attribute the
 // audit entry (actor = acting admin) and to refuse self-deactivation; it does not
 // re-check admin.
 type AdminUsersHandler struct {
 	store userStore
-	// auditor records account.deactivated / account.reactivated entries (#0025).
+	// auditor records account.deactivated / account.reactivated entries.
 	// Passed through to the store so the row is written inside its transaction.
 	// May be nil in unit tests that do not assert audit rows.
 	auditor *audit.Logger
@@ -182,7 +182,7 @@ func (h *AdminUsersHandler) Deactivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// #0025 audit: account.deactivated attributed to the acting admin (actor_id),
+	// Audit: account.deactivated attributed to the acting admin (actor_id),
 	// affecting the target (user_id / target_id), with {reason, note} metadata. The
 	// store writes this in-band (WriteTx) so it commits with the change.
 	actorID := actor.ID

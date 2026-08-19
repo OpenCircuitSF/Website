@@ -175,8 +175,8 @@ func TestWrite_NilActorAndTargetStoreNull(t *testing.T) {
 }
 
 // TestWrite_PartialActorWithUser confirms the admin-on-other-user shape (actor
-// set, user different) the #0028 user-management seams will use: both are
-// persisted independently.
+// set, user different) that future admin user-management actions will use:
+// both are persisted independently.
 func TestWrite_PartialActorWithUser(t *testing.T) {
 	pool := auditTestPool(t)
 	admin := seedUser(t, pool, "admin@example.com")

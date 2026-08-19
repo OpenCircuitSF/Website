@@ -46,9 +46,9 @@ type querier interface {
 }
 
 // Store is the data-access layer for the auth ceremonies. It wraps the shared
-// pgx pool and is reused across registration, authentication (#0016), and
-// recovery (#0017). Methods take an explicit querier where they may run inside
-// a transaction; the rest use the pool directly.
+// pgx pool and is reused across registration, authentication, and recovery.
+// Methods take an explicit querier where they may run inside a transaction;
+// the rest use the pool directly.
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -58,8 +58,8 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Pool exposes the underlying pool for callers (e.g. session middleware in
-// #0016) that need transaction control beyond the Store's methods.
+// Pool exposes the underlying pool for callers (e.g. session middleware)
+// that need transaction control beyond the Store's methods.
 func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 
 // RegistrationsEnabled reads the registrations_enabled setting fresh from the
@@ -621,7 +621,7 @@ func (s *Store) DeleteSession(ctx context.Context, token string) (int64, error) 
 
 // DeleteSessionsForUser removes every sessions row belonging to userID inside
 // the caller's transaction, returning the number of rows deleted. This is the
-// bulk counterpart to DeleteSession, backing "sign out everywhere" (#0094): it
+// bulk counterpart to DeleteSession, backing "sign out everywhere": it
 // revokes every live session for one account — including, when called from the
 // session guard's own request, the caller's current session — in a single
 // statement. Like DeleteSession it is idempotent: a user with no live sessions
@@ -656,7 +656,7 @@ type SessionUser struct {
 // ResolveSession validates a raw session cookie value and, on success, applies
 // the 30-day sliding window in the same statement before returning the
 // authenticated user. It is the single per-request entry point for the session
-// auth middleware (#0017).
+// auth middleware.
 //
 // The session token is the raw random value stored directly in the cookie (see
 // NewSessionToken / SetSessionCookie), so this is a direct lookup by token. In
@@ -732,7 +732,7 @@ func (s *Store) ResolveSession(ctx context.Context, token string, now time.Time)
 }
 
 // CreateSession inserts a sessions row with the given token and a 30-day expiry
-// and returns the expiry. Reused by the login ceremony in #0016.
+// and returns the expiry. Reused by the login ceremony.
 func (s *Store) CreateSession(ctx context.Context, q querier, userID int64, token string, now time.Time) (time.Time, error) {
 	expiresAt := now.Add(sessionTTL)
 	if _, err := q.Exec(ctx,

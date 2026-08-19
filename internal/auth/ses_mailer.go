@@ -38,7 +38,7 @@ type SESMailer struct {
 	port     int
 	username string
 	password string
-	from     string // RFC 5322 From header value, e.g. "ShortLinks <noreply@sstools.co>"
+	from     string // RFC 5322 From header value, e.g. "Open Circuit SF <noreply@opencircuitsf.com>"
 	baseURL  string
 
 	// sendMail is the transport. Defaults to starttlsSendMail; tests override
@@ -77,8 +77,8 @@ func NewSESMailerWithAddr(host string, port int, cfg *config.Config) *SESMailer 
 // SendVerification sends the registration magic-link email.
 func (m *SESMailer) SendVerification(ctx context.Context, toEmail, token string) error {
 	link := verificationURL(m.baseURL, token)
-	subject := "Verify your ShortLinks account"
-	text := "Welcome to ShortLinks.\r\n\r\n" +
+	subject := "Verify your Open Circuit SF account"
+	text := "Welcome to Open Circuit SF.\r\n\r\n" +
 		"Click the link below to verify your email and add a passkey. " +
 		"This link expires in 5 minutes.\r\n\r\n" +
 		link + "\r\n\r\n" +
@@ -89,8 +89,8 @@ func (m *SESMailer) SendVerification(ctx context.Context, toEmail, token string)
 // SendRecovery sends the single-use account-recovery email.
 func (m *SESMailer) SendRecovery(ctx context.Context, toEmail, token string) error {
 	link := recoveryURL(m.baseURL, token)
-	subject := "Recover your ShortLinks account"
-	text := "A recovery link was requested for your ShortLinks account.\r\n\r\n" +
+	subject := "Recover your Open Circuit SF account"
+	text := "A recovery link was requested for your Open Circuit SF account.\r\n\r\n" +
 		"Click the link below to register a new passkey. " +
 		"This link expires in 15 minutes.\r\n\r\n" +
 		link + "\r\n\r\n" +
@@ -99,8 +99,8 @@ func (m *SESMailer) SendRecovery(ctx context.Context, toEmail, token string) err
 	return m.send(ctx, toEmail, subject, text)
 }
 
-// SendSessionsRevoked sends the plain "sign out everywhere" notification
-// (#0094). Unlike SendVerification/SendRecovery it carries no link with
+// SendSessionsRevoked sends the plain "sign out everywhere" notification.
+// Unlike SendVerification/SendRecovery it carries no link with
 // credentials and no token — nothing single-use, so no expiry is mentioned.
 // The copy deliberately says the account's EXISTING passkey still works
 // (revoking sessions never touches passkey_credentials) and only mentions
@@ -141,8 +141,8 @@ func (m *SESMailer) send(ctx context.Context, toEmail, subject, textBody string)
 	}
 	if err := send(addr, auth, fromAddress(m.from), []string{toEmail}, msg); err != nil {
 		// Recipient omitted deliberately: this error propagates to
-		// AuthHandler's unauthenticated RegisterStart/RecoverStart 500 branches
-		// (#0097), which log it verbatim, and both routes are unauthenticated so
+		// AuthHandler's unauthenticated RegisterStart/RecoverStart 500 branches,
+		// which log it verbatim, and both routes are unauthenticated so
 		// any caller could otherwise write an arbitrary address into the journal.
 		// Nothing diagnostic is lost, but the two callers recover it differently:
 		// on recovery, account.recovery_started's audit row carries user_id and
@@ -161,8 +161,8 @@ func (m *SESMailer) send(ctx context.Context, toEmail, subject, textBody string)
 
 // buildMessage composes a single-part text/plain RFC 5322 message with CRLF
 // line endings. The From header carries the configured display-name form
-// (e.g. "ShortLinks <noreply@sstools.co>"), while the SMTP envelope sender is
-// the bare address (see fromAddress).
+// (e.g. "Open Circuit SF <noreply@opencircuitsf.com>"), while the SMTP
+// envelope sender is the bare address (see fromAddress).
 func buildMessage(from, to, subject, textBody string) []byte {
 	var b strings.Builder
 	b.WriteString("From: " + from + "\r\n")
@@ -178,8 +178,8 @@ func buildMessage(from, to, subject, textBody string) []byte {
 }
 
 // fromAddress extracts the bare email address from a possibly display-name
-// formatted From value. "ShortLinks <noreply@sstools.co>" -> "noreply@sstools.co".
-// A plain address is returned unchanged.
+// formatted From value. "Open Circuit SF <noreply@opencircuitsf.com>" ->
+// "noreply@opencircuitsf.com". A plain address is returned unchanged.
 func fromAddress(from string) string {
 	if i := strings.LastIndex(from, "<"); i >= 0 {
 		if j := strings.LastIndex(from, ">"); j > i {

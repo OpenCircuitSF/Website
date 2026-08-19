@@ -1,5 +1,5 @@
 <!--
-  Account view (#0036). Manages the signed-in user's registered passkeys: it
+  Account view. Manages the signed-in user's registered passkeys: it
   lists every credential, lets the user rename one inline, and revoke one — with
   the PRD guard that the LAST passkey cannot be revoked without adding a
   replacement first (the backend refuses that with 409
@@ -143,7 +143,7 @@
   let signingOutAll = $state(false);
   let signOutAllError = $state<string | null>(null);
 
-  // "Sign out everywhere" (#0094): revokes every session for this account —
+  // "Sign out everywhere": revokes every session for this account —
   // this browser, any other browser, and the iPhone app — but never touches
   // enrolled passkeys. Destructive and not undoable, so it goes through a
   // confirmation step first, same as revoking a passkey.

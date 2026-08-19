@@ -12,8 +12,8 @@ import (
 )
 
 // newAuditedServices builds a registration + login service over the test pool,
-// both wired to a real audit.Logger, so the #0025 auth-ceremony seams write rows
-// against the live DB.
+// both wired to a real audit.Logger, so the auth-ceremony audit seams write
+// rows against the live DB.
 func newAuditedServices(t *testing.T, pool *pgxpool.Pool) (*RegistrationService, *LoginService) {
 	t.Helper()
 	cfg := &config.Config{WebAuthnRPID: testRPID, WebAuthnRPOrigin: testRPOrigin}
@@ -58,7 +58,7 @@ func lastAuditMeta(t *testing.T, pool *pgxpool.Pool, action string) (actor *int6
 }
 
 // TestAudit_RegistrationAndLoginSeams drives a full registration ceremony then a
-// real login against a virtual authenticator and proves the #0025 auth seams
+// real login against a virtual authenticator and proves the auth audit seams
 // fired: account.registered + credential.added (in the registration tx) and
 // account.login (in the login tx).
 func TestAudit_RegistrationAndLoginSeams(t *testing.T) {

@@ -1,6 +1,6 @@
 [Unit]
-Description=ShortLinks URL shortener service
-Documentation=https://github.com/brennanMKE/ShortLinks
+Description=Open Circuit SF service
+Documentation=https://github.com/brennanMKE/OpenCircuitSF
 # The service binds a TCP socket and talks to a local PostgreSQL instance, so it
 # must come up after the network and after the database it depends on.
 After=network.target postgresql.service
@@ -8,17 +8,17 @@ Wants=postgresql.service
 
 [Service]
 Type=simple
-User=shortlinks
-Group=shortlinks
+User=opencircuit
+Group=opencircuit
 
 # Runtime configuration (DB DSN, port, SES credentials, secrets) is supplied by
 # the operator-managed env file, not committed to source control.
-EnvironmentFile=/etc/shortlinks/config.env
+EnvironmentFile=/etc/opencircuit/config.env
 
 # Installed binary location (see DEPLOYMENT.md step 4: `sudo install -m 0755
-# shortlinks /usr/local/bin/shortlinks`). The `serve` subcommand starts the
+# opencircuit /usr/local/bin/opencircuit`). The `serve` subcommand starts the
 # HTTP server; it listens on 127.0.0.1:8080 behind the Apache reverse proxy.
-ExecStart=/usr/local/bin/shortlinks serve
+ExecStart=/usr/local/bin/opencircuit serve
 
 # Always bring the service back if it crashes; wait 5s between restarts.
 Restart=on-failure

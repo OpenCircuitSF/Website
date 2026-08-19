@@ -30,18 +30,17 @@ var ErrLoginFailed = errors.New("auth: login failed")
 
 // LoginService orchestrates the WebAuthn authentication ceremony (start,
 // finish). It sits alongside RegistrationService sharing the same Store and
-// *webauthn.WebAuthn, per the #0015 foundation. The handler is a thin shell over
-// its two methods.
+// *webauthn.WebAuthn. The handler is a thin shell over its two methods.
 type LoginService struct {
 	store *Store
 	wa    *webauthn.WebAuthn
 	log   *slog.Logger
 	// auditor records the account.login, account.logout, and
-	// session.revoked_all audit entries (#0025, #0094). May be nil in unit
+	// session.revoked_all audit entries. May be nil in unit
 	// tests that do not assert audit rows.
 	auditor *audit.Logger
-	// mailer sends the SendSessionsRevoked notification from LogoutAll
-	// (#0094). Logout/FinishLogin have no mail dependency; only the bulk
+	// mailer sends the SendSessionsRevoked notification from LogoutAll.
+	// Logout/FinishLogin have no mail dependency; only the bulk
 	// revoke needs one. May be nil, in which case LogoutAll skips the send
 	// entirely (unit tests that only care about session/audit behavior).
 	mailer Mailer
@@ -322,10 +321,10 @@ func (s *LoginService) Logout(ctx context.Context, token, ip string) error {
 // caller is the session guard's own request, the current session — in one
 // transaction, and writes the session.revoked_all audit entry recording the
 // revoked count in the same transaction. It is the "sign out everywhere"
-// action (#0094): the session-lifetime complement to RevokeCredential
-// (#0019), which it never touches — nor the users row. A user with zero live
-// sessions (or a second call) revokes zero rows and is not an error, the same
-// idempotency contract as Logout.
+// action: the session-lifetime complement to RevokeCredential, which it
+// never touches — nor the users row. A user with zero live sessions (or a
+// second call) revokes zero rows and is not an error, the same idempotency
+// contract as Logout.
 //
 // email addresses the best-effort notification email, sent only AFTER the
 // transaction commits and never allowed to fail the operation: a send failure
@@ -394,8 +393,8 @@ func (s *LoginService) LogoutAll(ctx context.Context, userID int64, email, ip st
 // AuthenticatorData.Verify failure (RP ID hash mismatch, User Present unset,
 // User Verified unset) reports the identical "Error validating the
 // authenticator response". DevInfo is the only field that names which check
-// actually failed, and dropping it made #0092 diagnosable only by reading
-// library source. See #0093.
+// actually failed, and dropping it made a failure diagnosable only by reading
+// library source, which is why it is logged separately below.
 //
 // DevInfo goes to the server journal exclusively: the handler still maps every
 // failure to a generic 401, so nothing here reaches the client. An error that

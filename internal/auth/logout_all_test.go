@@ -16,8 +16,8 @@ import (
 )
 
 // newLoginServiceAudited is like newLoginServiceWithMailer but also wires a
-// real audit.Logger over the same test pool, for the #0094 tests that assert
-// the session.revoked_all row.
+// real audit.Logger over the same test pool, for the "sign out everywhere"
+// tests below that assert the session.revoked_all row.
 func newLoginServiceAudited(t *testing.T, pool *pgxpool.Pool, mailer Mailer) *LoginService {
 	t.Helper()
 	svc := newLoginServiceWithMailer(t, pool, mailer)
@@ -52,8 +52,9 @@ func userAndCredentialCounts(t *testing.T, pool *pgxpool.Pool, userID int64) (us
 }
 
 // TestDeleteSessionsForUser_RemovesAllAndIsIdempotent is the store-level proof
-// for #0094: a user with several live sessions ends with zero after one call,
-// and a second call is a clean no-op returning 0 (no error).
+// that "sign out everywhere" works: a user with several live sessions ends
+// with zero after one call, and a second call is a clean no-op returning 0
+// (no error).
 func TestDeleteSessionsForUser_RemovesAllAndIsIdempotent(t *testing.T) {
 	pool := testPool(t)
 	insertUser(t, pool, "bulk@example.com", false)
@@ -92,10 +93,11 @@ func TestDeleteSessionsForUser_RemovesAllAndIsIdempotent(t *testing.T) {
 }
 
 // TestLogoutAll_RevokesAllSessionsUsersAndCredentialsUntouched is the primary
-// end-to-end proof for #0094: a registered+logged-in account with multiple
-// live sessions ends with zero sessions after LogoutAll, its users and
-// passkey_credentials rows are untouched, and a normal passkey login succeeds
-// immediately afterward (proving the account is still fully enrolled).
+// end-to-end proof that "sign out everywhere" works: a registered+logged-in
+// account with multiple live sessions ends with zero sessions after
+// LogoutAll, its users and passkey_credentials rows are untouched, and a
+// normal passkey login succeeds immediately afterward (proving the account
+// is still fully enrolled).
 func TestLogoutAll_RevokesAllSessionsUsersAndCredentialsUntouched(t *testing.T) {
 	pool := testPool(t)
 	setRegistrationsEnabled(t, pool, true)

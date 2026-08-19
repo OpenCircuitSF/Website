@@ -32,14 +32,14 @@ var ErrInvalidEmail = errors.New("auth: invalid email")
 // (start, verify, finish). It is the reusable auth foundation: it owns the
 // WebAuthn relying party, the Store, the Mailer, and the admin-promotion config,
 // and exposes pure-ish methods the HTTP handler is a thin shell over. The login
-// (#0016) and recovery (#0017) services will sit alongside it sharing the same
-// Store and *webauthn.WebAuthn.
+// and recovery services sit alongside it sharing the same Store and
+// *webauthn.WebAuthn.
 type RegistrationService struct {
 	store  *Store
 	wa     *webauthn.WebAuthn
 	mailer Mailer
 	// auditor records the account.registration_started, account.registered, and
-	// credential.added audit entries (#0025). May be nil in unit tests that do
+	// credential.added audit entries. May be nil in unit tests that do
 	// not assert audit rows; nil-checks guard every write.
 	auditor *audit.Logger
 	// adminEmail is ADMIN_EMAIL, lowercased once at construction. A registrant

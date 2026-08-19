@@ -25,16 +25,14 @@
   --accent-subtle: #e7eef7;
 
   /*
-   * Chart series (categorical, #0104) — CampaignClicksChart's per-link
-   * lines/legend swatches. Six hand-picked hue slots (never generated/
-   * cycled — see docs/frontend.md and the dataviz skill's color-formula):
-   * fixed order.
+   * Chart series (categorical) — reserved for a future categorical chart's
+   * per-series lines/legend swatches. Six hand-picked hue slots (never
+   * generated/cycled — see docs/frontend.md and the dataviz skill's
+   * color-formula): fixed order.
    *
    * Contrast: each slot's ratio against this file's own --bg-panel surfaces
    * (#ffffff light / #161b22 dark) was computed directly from the WCAG 2.1
-   * relative-luminance formula (no external tool or script — an earlier
-   * comment here cited a scripts/validate_palette.js that was never
-   * committed to this repo; #0104 review finding 5). Measured ratios:
+   * relative-luminance formula (no external tool or script). Measured ratios:
    *
    *   slot      light    dark
    *   1 #2a78d6  4.42    4.75
@@ -58,11 +56,10 @@
    * contrast, so it tells you which label a already-visible line carries —
    * it cannot make a hard-to-see line easier to see in the first place.
    *
-   * --series-other is the synthetic "Other" fold (internal/clicks/stats.go
-   * seriesByLinkCap) and deliberately reuses --text-faint rather than a 7th
-   * hue, so a fold of many links reads as a muted aggregate — never mistaken
-   * for a named link's identity — the same "(none)" convention UTMBarChart
-   * already uses for an absent UTM value.
+   * --series-other is the synthetic "Other" fold for any series-capping
+   * chart and deliberately reuses --text-faint rather than a 7th hue, so a
+   * fold of many series reads as a muted aggregate — never mistaken for a
+   * named series' identity.
    */
   --series-1: #2a78d6;
   --series-2: #eb6834;
@@ -175,7 +172,7 @@ textarea {
   width: 100%;
   /* Explicit line-height + a token-derived min-height so EVERY control is the
      same height — including an empty datetime-local, which (after
-     -webkit-appearance:none, #0053) has no content to give it height and would
+     -webkit-appearance:none, below) has no content to give it height and would
      otherwise render shorter than the text inputs. min-height (border-box) ==
      one line of text + vertical padding + borders, i.e. a single-line input's
      natural height, so the text inputs are unchanged and the date field grows
@@ -185,8 +182,8 @@ textarea {
 }
 
 /* iOS Safari renders date/time inputs as NATIVE controls that ignore width:100%
-   and render at their own intrinsic width, overflowing the panel (the Expires
-   field, #0053). Removing the native appearance makes them behave like a normal
+   and render at their own intrinsic width, overflowing the panel. Removing
+   the native appearance makes them behave like a normal
    styleable box that obeys width:100% / min-width:0, matching the text inputs.
    min-width:0 alone was not enough; -webkit-appearance:none is the load-bearing
    part. (box-sizing:border-box already comes from the universal * reset above.) */
@@ -366,8 +363,8 @@ tbody tr:last-child td { border-bottom: none; }
     /* Text */
     --text:        #e6edf3;
     --text-muted:  #8b949e;
-    /* #0051 review: faint raised from #6e7681 (3.77:1) to clear WCAG AA 4.5:1
-       on panel — used for 10px chart axis labels (ClicksChart). */
+    /* Faint raised from #6e7681 (3.77:1) to clear WCAG AA 4.5:1
+       on panel — used for small chart axis labels. */
     --text-faint:  #8b949e;
 
     /* Borders */
@@ -380,16 +377,16 @@ tbody tr:last-child td { border-bottom: none; }
     --accent-text:   #0d1117;
     --accent-subtle: #1a2a45;
 
-    /* Chart series (categorical, #0104) — dark-mode adjustments of the six
+    /* Chart series (categorical) — dark-mode adjustments of the six
        light-block slots above, brightened for legibility against
        --bg-panel #161b22 (see the light block's comment for the measured
        contrast ratios and how they were computed). TWO slots are identical
        to their light values rather than "steps": --series-6 (#008300), which
        already clears 3.50:1 against the dark panel unmodified, and
        --series-4 (#c98500), which became identical when the light value was
-       raised from #eda100 to fix its 2.17:1 light contrast (#0104 review
-       finding 4) — its dark override is now a no-op, kept only so the block
-       lists all six slots in one place.
+       raised from #eda100 to fix its 2.17:1 light contrast — its dark
+       override is now a no-op, kept only so the block lists all six slots
+       in one place.
        --series-other still resolves via var(--text-faint) above, no
        separate override needed. */
     --series-1: #3987e5;

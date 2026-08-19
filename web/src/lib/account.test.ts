@@ -1,4 +1,4 @@
-// Unit tests for the Account pure logic (#0036): the revoke-failure → friendly
+// Unit tests for the Account pure logic: the revoke-failure → friendly
 // message mapping (notably the backend's 409 last-credential refusal), the
 // last-credential guard, rename validation, and date / last-used formatting. No
 // DOM or network — only the data shaping the Account view delegates to

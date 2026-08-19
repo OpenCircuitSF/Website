@@ -5,7 +5,7 @@
 <footer class="app-footer">
   <p class="footer-text">
     <a
-      href="https://github.com/brennanMKE/ShortLinks"
+      href="https://github.com/brennanMKE/OpenCircuitSF"
       target="_blank"
       rel="noopener noreferrer"
       class="footer-link"

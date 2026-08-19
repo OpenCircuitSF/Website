@@ -22,8 +22,8 @@ import (
 // testRPID / testRPOrigin are the relying-party values used across the auth
 // integration tests. They match the virtual authenticator's relying party.
 const (
-	testRPID     = "go.sstools.co"
-	testRPOrigin = "https://go.sstools.co"
+	testRPID     = "opencircuitsf.com"
+	testRPOrigin = "https://www.opencircuitsf.com"
 )
 
 // recordingMailer captures the verification calls so a test can assert the
@@ -35,7 +35,7 @@ type recordingMailer struct {
 	lastTo string
 	token  string
 
-	// sessionsRevoked* track SendSessionsRevoked calls for the #0094 "sign out
+	// sessionsRevoked* track SendSessionsRevoked calls for the "sign out
 	// everywhere" tests. sessionsRevokedErr lets a test simulate a mailer
 	// failure to prove LogoutAll swallows it (fire-and-forget, like the
 	// Logout audit write).
@@ -339,7 +339,7 @@ func TestFullCeremony_EndToEnd(t *testing.T) {
 	}
 
 	// Build a virtual authenticator + credential and produce a real attestation.
-	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "ShortLinks", Origin: testRPOrigin}
+	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "Open Circuit SF", Origin: testRPOrigin}
 	authenticator := virtualwebauthn.NewAuthenticator()
 	cred := virtualwebauthn.NewCredential(virtualwebauthn.KeyTypeEC2)
 
@@ -438,7 +438,7 @@ func runCeremony(t *testing.T, svc *RegistrationService, pool *pgxpool.Pool, ema
 		t.Fatalf("VerifyRegistration(%s): %v", email, err)
 	}
 
-	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "ShortLinks", Origin: testRPOrigin}
+	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "Open Circuit SF", Origin: testRPOrigin}
 	authenticator := virtualwebauthn.NewAuthenticator()
 	cred := virtualwebauthn.NewCredential(virtualwebauthn.KeyTypeEC2)
 	optionsJSON, err := json.Marshal(creation)
@@ -538,12 +538,12 @@ func credentialDeviceName(t *testing.T, pool *pgxpool.Pool, userID int64) string
 }
 
 // TestRegistrationOptions_UserVerificationAndResidentKeyRequired pins the
-// registration ceremony's authenticator selection. #0092 set
-// AuthenticatorSelection on the RP-level webauthn.Config so the login ceremony
-// would stop defaulting to "preferred"; registration overrides that config
-// wholesale via registrationOptions(), so this guards that enrollment still
-// demands a discoverable credential AND user verification, independent of
-// whatever the RP-level default happens to be.
+// registration ceremony's authenticator selection. AuthenticatorSelection is
+// set on the RP-level webauthn.Config so the login ceremony doesn't default
+// to "preferred"; registration overrides that config wholesale via
+// registrationOptions(), so this guards that enrollment still demands a
+// discoverable credential AND user verification, independent of whatever the
+// RP-level default happens to be.
 func TestRegistrationOptions_UserVerificationAndResidentKeyRequired(t *testing.T) {
 	cfg := &config.Config{WebAuthnRPID: testRPID, WebAuthnRPOrigin: testRPOrigin}
 	wa, err := NewWebAuthn(cfg)

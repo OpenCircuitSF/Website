@@ -35,8 +35,8 @@ type authenticator interface {
 	StartLogin(ctx context.Context, email string) (*protocol.CredentialAssertion, error)
 	FinishLogin(ctx context.Context, ip string, r *http.Request) (auth.LoginResult, error)
 	Logout(ctx context.Context, token, ip string) error
-	// LogoutAll revokes every session for userID ("sign out everywhere",
-	// #0094) and returns the number of sessions revoked.
+	// LogoutAll revokes every session for userID ("sign out everywhere")
+	// and returns the number of sessions revoked.
 	LogoutAll(ctx context.Context, userID int64, email, ip string) (int64, error)
 }
 
@@ -59,7 +59,7 @@ type recoverer interface {
 //	POST /auth/login/finish     — submit assertion, verify, create session
 //	POST /auth/logout           — delete the session, clear the cookie
 //	POST /auth/logout/all       — revoke EVERY session for the caller ("sign out
-//	                               everywhere", #0094), session-guarded
+//	                               everywhere"), session-guarded
 //	POST /auth/recover          — submit email, send recovery link (generic 200)
 //	GET  /auth/recover/verify   — validate recovery token, return WebAuthn options
 //	POST /auth/recover/finish   — submit attestation, add credential + session
@@ -67,7 +67,7 @@ type AuthHandler struct {
 	reg      registrar
 	login    authenticator
 	recovery recoverer
-	// log records the seven StatusInternalServerError branches below (#0097).
+	// log records the seven StatusInternalServerError branches below.
 	// Logging happens here, in the handler, rather than in the three services
 	// behind it: RegistrationService and RecoveryService hold no logger at all,
 	// and only LoginService does (for its own unrelated fire-and-forget mailer
@@ -255,7 +255,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Signed out"})
 }
 
-// LogoutAll handles POST /auth/logout/all — "sign out everywhere" (#0094). It
+// LogoutAll handles POST /auth/logout/all — "sign out everywhere". It
 // MUST be mounted behind middleware.RequireSession: it reads the authenticated
 // user from the request context (id + email, so the service needs no extra
 // lookup), revokes every session belonging to that account — including this

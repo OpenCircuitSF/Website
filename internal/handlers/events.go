@@ -18,10 +18,11 @@ type eventSubscriber interface {
 }
 
 // EventsHandler serves GET /api/events: a long-lived Server-Sent Events stream
-// that pushes link.* events to the authenticated user's connected dashboard
-// clients. It is mounted behind middleware.RequireSession (#0017) and reads the
-// authenticated user from the request context so each stream only receives that
-// user's events.
+// that pushes application events to the authenticated user's connected
+// dashboard clients. The event payload is deliberately generic (see
+// internal/events); it is mounted behind middleware.RequireSession and reads
+// the authenticated user from the request context so each stream only
+// receives that user's events.
 type EventsHandler struct {
 	broker eventSubscriber
 }
@@ -55,7 +56,9 @@ func (h *EventsHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// SSE headers. X-Accel-Buffering disables proxy buffering (nginx); the Apache
-	// ProxyPass uses flushpackets=on (PRD/#0003). Set these before the first write.
+	// vhost's ProxyPass uses flushpackets=on so the reverse proxy forwards each
+	// write immediately instead of buffering the long-lived stream. Set these
+	// before the first write.
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")

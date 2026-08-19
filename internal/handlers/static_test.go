@@ -30,12 +30,11 @@ func serveSPA(fsys fs.FS, path string) *httptest.ResponseRecorder {
 
 // TestSPAFaviconServedFromDist confirms that /favicon.png is served as
 // image/png (from the embedded dist root) and NOT intercepted by the SPA
-// catch-all that returns index.html.  This is the core acceptance criterion
-// for issue #0061.
+// catch-all that returns index.html.
 func TestSPAFaviconServedFromDist(t *testing.T) {
 	pngMagic := "\x89PNG\r\n\x1a\n" // first 8 bytes of any PNG file
 	fsys := distFS(map[string]string{
-		"index.html":       "<!doctype html><title>Short Links</title><div id=\"app\"></div>",
+		"index.html":       "<!doctype html><title>Open Circuit SF</title><div id=\"app\"></div>",
 		"favicon.png":      pngMagic + "fake-favicon-body",
 		"apple-touch-icon.png": pngMagic + "fake-apple-touch-icon-body",
 	})
@@ -65,11 +64,11 @@ func TestSPAFaviconServedFromDist(t *testing.T) {
 }
 
 // TestSPAAppleTouchIconServedFromDist is the same check for the 180×180 iOS
-// bookmark icon also added in #0061.
+// bookmark icon.
 func TestSPAAppleTouchIconServedFromDist(t *testing.T) {
 	pngMagic := "\x89PNG\r\n\x1a\n"
 	fsys := distFS(map[string]string{
-		"index.html":           "<!doctype html><title>Short Links</title><div id=\"app\"></div>",
+		"index.html":           "<!doctype html><title>Open Circuit SF</title><div id=\"app\"></div>",
 		"apple-touch-icon.png": pngMagic + "fake-apple-touch-icon-body",
 	})
 
@@ -97,7 +96,7 @@ func TestSPAAppleTouchIconServedFromDist(t *testing.T) {
 // let browsers cache an HTML document as a broken icon.
 func TestSPAMissingAssetReturns404(t *testing.T) {
 	fsys := distFS(map[string]string{
-		"index.html":  "<!doctype html><title>Short Links</title><div id=\"app\"></div>",
+		"index.html":  "<!doctype html><title>Open Circuit SF</title><div id=\"app\"></div>",
 		"favicon.png": "\x89PNG\r\n\x1a\nfake",
 	})
 
@@ -116,7 +115,7 @@ func TestSPAMissingAssetReturns404(t *testing.T) {
 // works: a path that has no matching file in the dist FS returns index.html.
 func TestSPAUnknownPathFallsBackToIndex(t *testing.T) {
 	fsys := distFS(map[string]string{
-		"index.html": "<!doctype html><title>Short Links</title><div id=\"app\"></div>",
+		"index.html": "<!doctype html><title>Open Circuit SF</title><div id=\"app\"></div>",
 	})
 
 	rec := serveSPA(fsys, "/dashboard")

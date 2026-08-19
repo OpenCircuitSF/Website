@@ -21,20 +21,20 @@ const userHandleLen = 16
 // service is portable to any domain without a code change.
 //
 // This is the single construction point reused by the registration,
-// authentication (#0016), and recovery (#0017) ceremonies; build it once at
+// authentication, and recovery ceremonies; build it once at
 // startup and inject it into the auth service.
 //
 // AuthenticatorSelection.UserVerification is set at the RP level so the login
 // ceremony inherits it: BeginLogin / BeginDiscoverableLogin take their
 // UserVerification from this config, and leaving it unset made the browser fall
 // back to the spec default of "preferred" while FinishLogin still enforced
-// "required" — locking out any client that legitimately returned UV=false
-// (#0092). Registration overrides AuthenticatorSelection wholesale via
+// "required" — locking out any client that legitimately returned UV=false.
+// Registration overrides AuthenticatorSelection wholesale via
 // registrationOptions(), which repeats the same value.
 func NewWebAuthn(cfg *config.Config) (*webauthn.WebAuthn, error) {
 	wa, err := webauthn.New(&webauthn.Config{
 		RPID:          cfg.WebAuthnRPID,
-		RPDisplayName: "ShortLinks",
+		RPDisplayName: "Open Circuit SF",
 		RPOrigins:     []string{cfg.WebAuthnRPOrigin},
 		AuthenticatorSelection: protocol.AuthenticatorSelection{
 			UserVerification: protocol.VerificationRequired,
@@ -52,7 +52,7 @@ func NewWebAuthn(cfg *config.Config) (*webauthn.WebAuthn, error) {
 // account has no passkeys yet).
 //
 // A separate type backed by stored credentials is introduced for the
-// authentication ceremony in #0016; both satisfy webauthn.User so they can be
+// authentication ceremony; both satisfy webauthn.User so they can be
 // passed interchangeably to the go-webauthn Begin*/Finish* calls.
 type RegistrationUser struct {
 	handle []byte

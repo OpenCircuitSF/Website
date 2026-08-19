@@ -6,11 +6,11 @@ import (
 )
 
 // SessionCookieName is the name of the session cookie set on a successful auth.
-const SessionCookieName = "shortlinks_session"
+const SessionCookieName = "opencircuit_session"
 
 // NewSessionToken returns a fresh URL-safe session token over 32 random bytes.
-// It is exported so the login (#0016) and recovery (#0017) ceremonies mint
-// tokens the same way as registration.
+// It is exported so the login and recovery ceremonies mint tokens the same
+// way as registration.
 func NewSessionToken() (string, error) {
 	return randomURLToken(sessionTokenLen)
 }

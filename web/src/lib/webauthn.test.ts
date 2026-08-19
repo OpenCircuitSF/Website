@@ -66,7 +66,7 @@ describe('toPublicKeyRequestOptions', () => {
       // base64url of [1,2,3,4] and [0xaa,0xbb] respectively.
       challenge: bufferToBase64url(bytes(1, 2, 3, 4)),
       timeout: 60000,
-      rpId: 'go.sstools.co',
+      rpId: 'opencircuitsf.com',
       userVerification: 'required',
       allowCredentials: [
         {
@@ -81,7 +81,7 @@ describe('toPublicKeyRequestOptions', () => {
 
     expect(Array.from(new Uint8Array(opts.challenge as ArrayBuffer))).toEqual([1, 2, 3, 4]);
     expect(opts.timeout).toBe(60000);
-    expect(opts.rpId).toBe('go.sstools.co');
+    expect(opts.rpId).toBe('opencircuitsf.com');
     expect(opts.userVerification).toBe('required');
     expect(opts.allowCredentials).toHaveLength(1);
     const cred = opts.allowCredentials![0];
@@ -199,7 +199,7 @@ describe('toPublicKeyCreationOptions', () => {
 
     const server: ServerCreationOptions = {
       challenge: bufferToBase64url(challengeBytes),
-      rp: { id: 'go.sstools.co', name: 'ShortLinks' },
+      rp: { id: 'opencircuitsf.com', name: 'Open Circuit SF' },
       user: {
         id: bufferToBase64url(userIdBytes),
         name: 'user@example.com',
@@ -217,7 +217,7 @@ describe('toPublicKeyCreationOptions', () => {
     expect(Array.from(new Uint8Array(opts.user.id as ArrayBuffer))).toEqual([0xaa, 0xbb, 0xcc]);
     expect(opts.user.name).toBe('user@example.com');
     expect(opts.user.displayName).toBe('user@example.com');
-    expect(opts.rp).toEqual({ id: 'go.sstools.co', name: 'ShortLinks' });
+    expect(opts.rp).toEqual({ id: 'opencircuitsf.com', name: 'Open Circuit SF' });
     expect(opts.timeout).toBe(60000);
     expect(opts.pubKeyCredParams).toEqual([{ type: 'public-key', alg: -7 }]);
   });
@@ -226,7 +226,7 @@ describe('toPublicKeyCreationOptions', () => {
     const excludedId = bytes(0xde, 0xad, 0xbe, 0xef);
     const server: ServerCreationOptions = {
       challenge: bufferToBase64url(bytes(1, 2, 3)),
-      rp: { id: 'go.sstools.co', name: 'ShortLinks' },
+      rp: { id: 'opencircuitsf.com', name: 'Open Circuit SF' },
       user: { id: bufferToBase64url(bytes(9)), name: 'u', displayName: 'u' },
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       excludeCredentials: [
@@ -246,7 +246,7 @@ describe('toPublicKeyCreationOptions', () => {
   it('omits excludeCredentials when the list is empty', () => {
     const opts = toPublicKeyCreationOptions({
       challenge: bufferToBase64url(bytes(1)),
-      rp: { id: 'go.sstools.co', name: 'ShortLinks' },
+      rp: { id: 'opencircuitsf.com', name: 'Open Circuit SF' },
       user: { id: bufferToBase64url(bytes(2)), name: 'u', displayName: 'u' },
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       excludeCredentials: [],
@@ -257,7 +257,7 @@ describe('toPublicKeyCreationOptions', () => {
   it('passes through authenticatorSelection and attestation', () => {
     const opts = toPublicKeyCreationOptions({
       challenge: bufferToBase64url(bytes(5)),
-      rp: { id: 'go.sstools.co', name: 'ShortLinks' },
+      rp: { id: 'opencircuitsf.com', name: 'Open Circuit SF' },
       user: { id: bufferToBase64url(bytes(6)), name: 'u', displayName: 'u' },
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       authenticatorSelection: {

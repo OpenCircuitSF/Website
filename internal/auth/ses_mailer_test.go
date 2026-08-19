@@ -21,8 +21,8 @@ func newTestMailer(send sendMailFunc) *SESMailer {
 		port:     587,
 		username: "AKIAEXAMPLE",
 		password: "smtp-secret",
-		from:     "ShortLinks <noreply@sstools.co>",
-		baseURL:  "https://go.sstools.co",
+		from:     "Open Circuit SF <noreply@opencircuitsf.com>",
+		baseURL:  "https://opencircuitsf.com",
 		sendMail: send,
 	}
 }
@@ -57,8 +57,8 @@ func TestSESMailer_SendVerification_InjectedTransport(t *testing.T) {
 		t.Errorf("addr = %q, want %q", rec.addr, "smtp.example.com:587")
 	}
 	// Envelope sender must be the bare address, stripped of the display name.
-	if rec.from != "noreply@sstools.co" {
-		t.Errorf("envelope from = %q, want %q", rec.from, "noreply@sstools.co")
+	if rec.from != "noreply@opencircuitsf.com" {
+		t.Errorf("envelope from = %q, want %q", rec.from, "noreply@opencircuitsf.com")
 	}
 	if len(rec.to) != 1 || rec.to[0] != "alice@example.com" {
 		t.Errorf("envelope to = %v, want [alice@example.com]", rec.to)
@@ -66,9 +66,9 @@ func TestSESMailer_SendVerification_InjectedTransport(t *testing.T) {
 
 	msg := string(rec.msg)
 	wantHeaders := []string{
-		"From: ShortLinks <noreply@sstools.co>\r\n",
+		"From: Open Circuit SF <noreply@opencircuitsf.com>\r\n",
 		"To: alice@example.com\r\n",
-		"Subject: Verify your ShortLinks account\r\n",
+		"Subject: Verify your Open Circuit SF account\r\n",
 		"MIME-Version: 1.0\r\n",
 		"Content-Type: text/plain; charset=\"UTF-8\"\r\n",
 	}
@@ -79,8 +79,8 @@ func TestSESMailer_SendVerification_InjectedTransport(t *testing.T) {
 	}
 	// The email link now points at the SPA browser path (/register/verify), not
 	// the /auth/* JSON API endpoint. The SPA reads the token and calls
-	// GET /auth/register/verify to fetch creation options (#0041).
-	wantLink := "https://go.sstools.co/register/verify?token=tok-123"
+	// GET /auth/register/verify to fetch creation options.
+	wantLink := "https://opencircuitsf.com/register/verify?token=tok-123"
 	if !strings.Contains(msg, wantLink) {
 		t.Errorf("message missing verification link %q\nfull message:\n%s", wantLink, msg)
 	}
@@ -104,21 +104,22 @@ func TestSESMailer_SendRecovery_InjectedTransport(t *testing.T) {
 		t.Errorf("envelope to = %v, want [bob@example.com]", rec.to)
 	}
 	msg := string(rec.msg)
-	if !strings.Contains(msg, "Subject: Recover your ShortLinks account\r\n") {
+	if !strings.Contains(msg, "Subject: Recover your Open Circuit SF account\r\n") {
 		t.Errorf("message missing recovery subject\nfull message:\n%s", msg)
 	}
 	// The email link now points at the SPA browser path (/recover/verify), not
-	// the /auth/* JSON API endpoint (#0041).
-	wantLink := "https://go.sstools.co/recover/verify?token=rec-789"
+	// the /auth/* JSON API endpoint.
+	wantLink := "https://opencircuitsf.com/recover/verify?token=rec-789"
 	if !strings.Contains(msg, wantLink) {
 		t.Errorf("message missing recovery link %q\nfull message:\n%s", wantLink, msg)
 	}
 }
 
 // TestSESMailer_SendSessionsRevoked_InjectedTransport asserts the "sign out
-// everywhere" notification (#0094): no token/link-with-credentials, the
-// account's EXISTING passkey is what still works (never "a new passkey" — see
-// the issue's copy-correction rationale), and the timestamp is included.
+// everywhere" notification: no token/link-with-credentials, the
+// account's EXISTING passkey is what still works (never "a new passkey" — a
+// prior draft of this copy wrongly implied re-enrollment was required), and
+// the timestamp is included.
 func TestSESMailer_SendSessionsRevoked_InjectedTransport(t *testing.T) {
 	var rec recorder
 	m := newTestMailer(rec.capture)
@@ -139,9 +140,9 @@ func TestSESMailer_SendSessionsRevoked_InjectedTransport(t *testing.T) {
 		t.Errorf("message must tell the user their EXISTING passkey still works\nfull message:\n%s", msg)
 	}
 	if strings.Contains(msg, "a new passkey") || strings.Contains(msg, "sign in with a new") {
-		t.Errorf("message must NOT instruct signing in with a new passkey (see #0094 rationale)\nfull message:\n%s", msg)
+		t.Errorf("message must NOT instruct signing in with a new passkey\nfull message:\n%s", msg)
 	}
-	if !strings.Contains(msg, "https://go.sstools.co") {
+	if !strings.Contains(msg, "https://opencircuitsf.com") {
 		t.Errorf("message missing base URL\nfull message:\n%s", msg)
 	}
 	if !strings.Contains(msg, at.Format(time.RFC1123Z)) {
@@ -176,8 +177,8 @@ func TestSESMailer_ContextCancelled(t *testing.T) {
 func TestNewSESMailer_FromConfig(t *testing.T) {
 	cfg := &config.Config{
 		AWSRegion: "us-east-1",
-		EmailFrom: "ShortLinks <noreply@sstools.co>",
-		BaseURL:   "https://go.sstools.co",
+		EmailFrom: "Open Circuit SF <noreply@opencircuitsf.com>",
+		BaseURL:   "https://opencircuitsf.com",
 	}
 	m := NewSESMailer(cfg)
 	wantHost := "email-smtp.us-east-1.amazonaws.com"
@@ -197,8 +198,8 @@ func TestNewSESMailer_FromConfig(t *testing.T) {
 func TestNewSESMailerWithAddr(t *testing.T) {
 	cfg := &config.Config{
 		AWSRegion: "us-east-1",
-		EmailFrom: "ShortLinks <noreply@sstools.co>",
-		BaseURL:   "https://go.sstools.co",
+		EmailFrom: "Open Circuit SF <noreply@opencircuitsf.com>",
+		BaseURL:   "https://opencircuitsf.com",
 	}
 	m := NewSESMailerWithAddr("127.0.0.1", 1, cfg)
 	if m.host != "127.0.0.1" || m.port != 1 {
@@ -331,8 +332,8 @@ func TestSESMailer_RealTransport_AgainstFakeServer(t *testing.T) {
 		port:     port,
 		username: "user",
 		password: "pass",
-		from:     "ShortLinks <noreply@sstools.co>",
-		baseURL:  "https://go.sstools.co",
+		from:     "Open Circuit SF <noreply@opencircuitsf.com>",
+		baseURL:  "https://opencircuitsf.com",
 		sendMail: starttlsSendMail, // exercise the real transport
 	}
 
@@ -345,24 +346,24 @@ func TestSESMailer_RealTransport_AgainstFakeServer(t *testing.T) {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 
-	if srv.from != "noreply@sstools.co" {
-		t.Errorf("server MAIL FROM = %q, want %q", srv.from, "noreply@sstools.co")
+	if srv.from != "noreply@opencircuitsf.com" {
+		t.Errorf("server MAIL FROM = %q, want %q", srv.from, "noreply@opencircuitsf.com")
 	}
 	if len(srv.to) != 1 || srv.to[0] != "carol@example.com" {
 		t.Errorf("server RCPT TO = %v, want [carol@example.com]", srv.to)
 	}
-	if !strings.Contains(srv.data, "Subject: Verify your ShortLinks account") {
+	if !strings.Contains(srv.data, "Subject: Verify your Open Circuit SF account") {
 		t.Errorf("DATA missing subject\nfull DATA:\n%s", srv.data)
 	}
-	// SPA browser path (#0041).
-	if !strings.Contains(srv.data, "https://go.sstools.co/register/verify?token=tok-real") {
+	// SPA browser path.
+	if !strings.Contains(srv.data, "https://opencircuitsf.com/register/verify?token=tok-real") {
 		t.Errorf("DATA missing verification link\nfull DATA:\n%s", srv.data)
 	}
 }
 
 // TestNoOpMailer verifies the stub satisfies Mailer and never errors.
 func TestNoOpMailer(t *testing.T) {
-	var m Mailer = NoOpMailer{BaseURL: "https://go.sstools.co"}
+	var m Mailer = NoOpMailer{BaseURL: "https://opencircuitsf.com"}
 	if err := m.SendVerification(context.Background(), "a@example.com", "t"); err != nil {
 		t.Errorf("NoOpMailer.SendVerification: %v", err)
 	}

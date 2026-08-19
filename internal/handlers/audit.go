@@ -30,7 +30,7 @@ type auditReader interface {
 //	GET /admin/audit  — paginated audit log, newest-first, optional ?user_id=
 //
 // It MUST be mounted behind middleware.RequireSession then
-// middleware.RequireAdmin (#0017): RequireSession answers 401 for an
+// middleware.RequireAdmin: RequireSession answers 401 for an
 // absent/invalid session, RequireAdmin answers 403 for a non-admin. The handler
 // itself does not re-check auth.
 type AdminAuditHandler struct {

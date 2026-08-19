@@ -49,7 +49,7 @@ func registerWithAuthenticator(t *testing.T, svc *RegistrationService, pool *pgx
 		t.Fatalf("VerifyRegistration(%s): %v", email, err)
 	}
 
-	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "ShortLinks", Origin: testRPOrigin}
+	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "Open Circuit SF", Origin: testRPOrigin}
 	// The user handle is the random 16-byte value the registration options carry;
 	// the authenticator reports it back on every assertion (discoverable login).
 	handle, ok := creation.Response.User.ID.(protocol.URLEncodedBase64)
@@ -118,7 +118,7 @@ func newLoginService(t *testing.T, pool *pgxpool.Pool) *LoginService {
 }
 
 // newLoginServiceWithMailer is like newLoginService but takes an explicit
-// mailer, letting #0094 LogoutAll tests inject a recordingMailer they can
+// mailer, letting the LogoutAll tests inject a recordingMailer they can
 // inspect (or stub to error) without an auditor getting in the way.
 func newLoginServiceWithMailer(t *testing.T, pool *pgxpool.Pool, mailer Mailer) *LoginService {
 	t.Helper()
@@ -388,7 +388,7 @@ func registerWithBackupEligibleAuthenticator(t *testing.T, svc *RegistrationServ
 		t.Fatalf("VerifyRegistration(%s): %v", email, err)
 	}
 
-	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "ShortLinks", Origin: testRPOrigin}
+	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "Open Circuit SF", Origin: testRPOrigin}
 	handle, ok := creation.Response.User.ID.(protocol.URLEncodedBase64)
 	if !ok {
 		t.Fatalf("user.id type = %T, want protocol.URLEncodedBase64", creation.Response.User.ID)
@@ -422,11 +422,11 @@ func registerWithBackupEligibleAuthenticator(t *testing.T, svc *RegistrationServ
 	return registeredAccount{user: result.User, rp: rp, authenticator: authenticator, cred: cred}
 }
 
-// TestLogin_BackupEligibleCredentialSucceeds is the primary regression test for
-// issue #0047. Before the fix, go-webauthn's ValidateLogin would reject every
-// assertion from an iCloud Keychain passkey with "Backup Eligible flag
-// inconsistency detected during login validation" because the stored credential
-// was rehydrated with BE=false while the assertion carried BE=true.
+// TestLogin_BackupEligibleCredentialSucceeds is the primary regression test
+// for a bug where go-webauthn's ValidateLogin would reject every assertion
+// from an iCloud Keychain passkey with "Backup Eligible flag inconsistency
+// detected during login validation" because the stored credential was
+// rehydrated with BE=false while the assertion carried BE=true.
 //
 // This test registers with a backup-eligible (BE=true) virtual authenticator,
 // confirms the flags are persisted, and confirms a subsequent login succeeds.
@@ -520,7 +520,7 @@ func registerWithUnverifiedAuthenticator(t *testing.T, svc *RegistrationService,
 }
 
 // TestStartLogin_RequestsUserVerificationRequired is the primary regression test
-// for issue #0092. StartLogin called BeginLogin / BeginDiscoverableLogin with no
+// for a bug where StartLogin called BeginLogin / BeginDiscoverableLogin with no
 // options, so the emitted assertion options inherited the (unset) RP-level
 // AuthenticatorSelection and went out with UserVerification == "" — which the
 // browser interprets as the spec default "preferred". FinishLogin meanwhile
@@ -571,9 +571,10 @@ func TestStartLogin_RequestsUserVerificationRequired(t *testing.T) {
 	}
 }
 
-// TestLogin_UnverifiedAssertionRejected is the enforcement half of #0092. The
-// fix aligns the request with what FinishLogin already enforced; it must not be
-// "fixed" in the other direction by relaxing enforcement to accept UV=false.
+// TestLogin_UnverifiedAssertionRejected is the enforcement half of the
+// user-verification fix above: the request now aligns with what FinishLogin
+// already enforced, and it must not be "fixed" in the other direction by
+// relaxing enforcement to accept UV=false.
 // This is a passkey-only admin app with no second factor, so an assertion whose
 // User Verified flag is unset must never produce a session.
 func TestLogin_UnverifiedAssertionRejected(t *testing.T) {
@@ -598,7 +599,7 @@ func TestLogin_UnverifiedAssertionRejected(t *testing.T) {
 }
 
 // TestCeremonyWarnArgs covers the three shapes of error that reach a ceremony
-// warn site, per issue #0093: a *protocol.Error carrying DevInfo (the DevInfo
+// warn site: a *protocol.Error carrying DevInfo (the DevInfo
 // must be surfaced as a separate "info" attribute), a *protocol.Error with an
 // empty DevInfo, and an error that is not a *protocol.Error at all (both must
 // log exactly as before, with no empty attribute appended).
@@ -659,7 +660,7 @@ func TestCeremonyWarnArgs(t *testing.T) {
 	}
 }
 
-// TestLogin_ValidationFailureLogsDevInfo is the end-to-end proof for #0093: a
+// TestLogin_ValidationFailureLogsDevInfo is the end-to-end proof that a
 // real assertion that fails validation must produce a log record naming the
 // specific failing check, not just the generic category string.
 //
@@ -680,7 +681,7 @@ func TestLogin_ValidationFailureLogsDevInfo(t *testing.T) {
 
 	// Re-point the relying party at an origin the server does not accept, so the
 	// assertion is otherwise valid but fails origin verification.
-	acct.rp = virtualwebauthn.RelyingParty{ID: testRPID, Name: "ShortLinks", Origin: "https://attacker.example"}
+	acct.rp = virtualwebauthn.RelyingParty{ID: testRPID, Name: "Open Circuit SF", Origin: "https://attacker.example"}
 
 	if _, err := driveLogin(t, loginSvc, acct, ""); !errors.Is(err, ErrLoginFailed) {
 		t.Fatalf("FinishLogin with mismatched origin: err = %v, want ErrLoginFailed", err)

@@ -18,7 +18,7 @@ import (
 // RecoveryService orchestrates the account-recovery ceremony (start, verify,
 // finish) for users who have lost access to all their registered passkeys. It
 // sits alongside RegistrationService and LoginService, sharing the same Store
-// and *webauthn.WebAuthn per the #0015 foundation.
+// and *webauthn.WebAuthn.
 //
 // Recovery closely mirrors registration: it issues the same WebAuthn
 // registration challenge (residentKey/userVerification required, ES256+RS256,
@@ -32,7 +32,7 @@ type RecoveryService struct {
 	wa     *webauthn.WebAuthn
 	mailer Mailer
 	// auditor records the account.recovery_started, account.recovered, and
-	// credential.added audit entries (#0025). May be nil in unit tests.
+	// credential.added audit entries. May be nil in unit tests.
 	auditor *audit.Logger
 	// now is injectable so TTLs are deterministic in tests; defaults to
 	// time.Now.

@@ -14,11 +14,11 @@ import (
 const bearerPrefix = "bearer "
 
 // sessionToken extracts the raw session token from the request, preferring an
-// "Authorization: Bearer <token>" header (used by native/API clients, e.g. the
-// iPhone app — #0077) over the shortlinks_session cookie (used by the browser
-// SPA). The two transports carry the SAME opaque token; this only changes how
-// it's read. A present-but-malformed Authorization header (wrong scheme, empty
-// token) falls through to the cookie so the browser SPA is never affected.
+// "Authorization: Bearer <token>" header (used by native/API clients, e.g. an
+// iPhone app) over the session cookie (used by the browser SPA). The two
+// transports carry the SAME opaque token; this only changes how it's read. A
+// present-but-malformed Authorization header (wrong scheme, empty token)
+// falls through to the cookie so the browser SPA is never affected.
 // Returns "" when neither source carries a token.
 func sessionToken(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); len(h) > len(bearerPrefix) &&
@@ -85,8 +85,8 @@ func withUser(ctx context.Context, u *AuthUser) context.Context {
 
 // RequireSession returns middleware that guards protected routes. On each
 // request it reads the session token — from an "Authorization: Bearer <token>"
-// header (native/API clients, #0077) or the shortlinks_session cookie (the
-// browser SPA), see sessionToken — validates it against the database, and—on
+// header (native/API clients) or the session cookie (the browser SPA), see
+// sessionToken — validates it against the database, and—on
 // success—attaches the authenticated AuthUser to the request context before
 // calling next. The validation also applies the 30-day sliding window (bumps
 // last_seen_at and extends expires_at) per the PRD's Session Security rules.

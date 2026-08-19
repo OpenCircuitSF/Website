@@ -184,8 +184,9 @@ func TestLoad_InvalidBoolean(t *testing.T) {
 }
 
 // TestLoad_RemovedVariablesIgnored guards against #0007 regressing: the
-// ShortLinks-era SMTP and cache variables must have no effect on Config even
-// if still present in the environment (e.g. a stale systemd EnvironmentFile).
+// removed SMTP and cache variables from the source skeleton must have no
+// effect on Config even if still present in the environment (e.g. a stale
+// systemd EnvironmentFile).
 func TestLoad_RemovedVariablesIgnored(t *testing.T) {
 	setRequired(t)
 	t.Setenv("SES_SMTP_HOST", "smtp.example.com")

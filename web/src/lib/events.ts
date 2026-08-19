@@ -1,12 +1,13 @@
 // Generic SSE client for the app's `/api/events` stream. The server pushes
 // `event: <name>\ndata: <JSON>\n\n` frames scoped to the authenticated user;
 // this module opens that stream and dispatches parsed frames of a given event
-// name to a callback. It is deliberately payload-agnostic — ShortLinks' original
-// version of this file was hardwired to a `link.created` frame carrying a Link
-// (deleted in #0003 along with Dashboard.svelte, the SPA's only user of it at
-// the time). This project's #0048 (live campaign send progress) is the next
-// consumer, over its own event name and payload shape, so the parsing/cleanup
-// plumbing is kept generic rather than re-specialized prematurely.
+// name to a callback. It is deliberately payload-agnostic — the source
+// skeleton's original version of this file was hardwired to a `link.created`
+// frame carrying a Link (deleted in #0003 along with Dashboard.svelte, the
+// SPA's only user of it at the time). This project's #0048 (live campaign
+// send progress) is the next consumer, over its own event name and payload
+// shape, so the parsing/cleanup plumbing is kept generic rather than
+// re-specialized prematurely.
 
 /** The endpoint the SPA subscribes to for live server-pushed events. */
 export const EVENTS_URL = '/api/events';

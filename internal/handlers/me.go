@@ -10,7 +10,7 @@ import (
 //
 //	GET /api/me — return the caller's {id, email, is_admin}
 //
-// The route MUST be mounted behind middleware.RequireSession (#0017): the guard
+// The route MUST be mounted behind middleware.RequireSession: the guard
 // validates the session cookie, answers 401 for an absent/invalid session, and
 // attaches the AuthUser to the request context. This handler then reads that
 // user straight off the context — no DB round-trip — because AuthUser already

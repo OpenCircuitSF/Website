@@ -39,7 +39,7 @@ type credentialStore interface {
 // own credentials.
 type CredentialsHandler struct {
 	store credentialStore
-	// auditor records the credential.revoked audit entry (#0025). May be nil in
+	// auditor records the credential.revoked audit entry. May be nil in
 	// unit tests that do not assert audit rows.
 	auditor *audit.Logger
 }

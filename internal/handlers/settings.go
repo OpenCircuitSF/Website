@@ -26,13 +26,13 @@ type settingStore interface {
 //	PATCH /admin/settings  — update one existing setting key
 //
 // Both routes MUST be mounted behind middleware.RequireSession then
-// middleware.RequireAdmin (#0017): RequireSession attaches the AuthUser and
+// middleware.RequireAdmin: RequireSession attaches the AuthUser and
 // answers 401 for an absent/invalid session, and RequireAdmin answers 403 for a
 // non-admin. The handler itself re-reads the user from the context only so it
-// can attribute the (future #0025) audit entry; it does not re-check admin.
+// can attribute the settings.updated audit entry; it does not re-check admin.
 type SettingsHandler struct {
 	store settingStore
-	// auditor records the settings.updated audit entry (#0025). May be nil in
+	// auditor records the settings.updated audit entry. May be nil in
 	// unit tests that do not assert audit rows.
 	auditor *audit.Logger
 	// now is injectable so updated_at and the audit timestamp are deterministic
@@ -119,7 +119,7 @@ func (h *SettingsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// #0025 audit: settings.updated attributed to the admin (actor_id = u.ID)
+	// Audit: settings.updated attributed to the admin (actor_id = u.ID)
 	// with {key, old_value, new_value}. target_type is "settings"; settings rows
 	// are keyed by a TEXT primary key, not a bigint, so target_id is left NULL.
 	// The setting is already updated, so this is fire-and-forget.

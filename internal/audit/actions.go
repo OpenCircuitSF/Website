@@ -13,8 +13,9 @@ const (
 	ActionAccountRecoveryStarted     = "account.recovery_started" // actor NULL (pre-auth)
 	ActionAccountRecovered           = "account.recovered"
 	// account.deactivated / account.reactivated are admin-on-other-user actions
-	// that belong to admin user management (#0028). They have no call site yet;
-	// the constants are defined here so #0028 can use the same API trivially.
+	// that belong to admin user management. They have no call site yet;
+	// the constants are defined here so that feature can use the same API
+	// trivially when it lands.
 	ActionAccountDeactivated = "account.deactivated"
 	ActionAccountReactivated = "account.reactivated"
 
@@ -24,7 +25,7 @@ const (
 
 	// Session lifecycle. account.logout (above) revokes exactly one session by
 	// its cookie token; session.revoked_all is the bulk "sign out everywhere"
-	// action (#0094) that revokes every session for the account in one call. It
+	// action that revokes every session for the account in one call. It
 	// is deliberately not named account.* — it never touches the users row or
 	// any passkey_credentials row, only sessions.
 	ActionSessionsRevokedAll = "session.revoked_all"
@@ -43,12 +44,12 @@ const (
 	// Settings.
 	ActionSettingsUpdated = "settings.updated"
 
-	// Campaign lifecycle (#0098).
+	// Campaign lifecycle.
 	ActionCampaignCreated = "campaign.created"
 	ActionCampaignUpdated = "campaign.updated"
 	ActionCampaignDeleted = "campaign.deleted"
 
-	// Campaign link membership (#0099). Written by campaigns.Store's
+	// Campaign link membership. Written by campaigns.Store's
 	// AssignLinkToCampaign/UnassignLinkFromCampaign, in the same
 	// WriteTx-in-transaction convention as the other campaign.* actions above
 	// — see the doc comment on those methods for why assign/unassign follow

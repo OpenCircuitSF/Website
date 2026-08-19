@@ -45,7 +45,7 @@ func (m *recoveryRecordingMailer) SendRecovery(_ context.Context, toEmail, token
 }
 
 // SendSessionsRevoked is a no-op stub so recoveryRecordingMailer keeps
-// satisfying the Mailer interface (#0094); the recovery-flow tests do not
+// satisfying the Mailer interface; the recovery-flow tests do not
 // assert on it.
 func (m *recoveryRecordingMailer) SendSessionsRevoked(_ context.Context, _ string, _ time.Time) error {
 	return nil
@@ -189,7 +189,7 @@ func TestRecoveryEndToEnd_AddsCredentialToExistingUser(t *testing.T) {
 
 	const email = "recover-me@example.com"
 
-	// --- Build an existing account with one credential via #0015's ceremony. ---
+	// --- Build an existing account with one credential via the registration ceremony. ---
 	regSvc := newService(t, pool, &recordingMailer{}, "")
 	if err := regSvc.StartRegistration(ctx, email, ""); err != nil {
 		t.Fatalf("StartRegistration: %v", err)
@@ -200,7 +200,7 @@ func TestRecoveryEndToEnd_AddsCredentialToExistingUser(t *testing.T) {
 		t.Fatalf("VerifyRegistration: %v", err)
 	}
 
-	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "ShortLinks", Origin: testRPOrigin}
+	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "Open Circuit SF", Origin: testRPOrigin}
 	oldAuth := virtualwebauthn.NewAuthenticator()
 	oldCred := virtualwebauthn.NewCredential(virtualwebauthn.KeyTypeEC2)
 
@@ -375,8 +375,8 @@ func userIDForEmail(t *testing.T, pool *pgxpool.Pool, email string) int64 {
 //     true, and a session was created — without creating a second users row.
 //
 // This verifies that FinishRecovery adds a credential to a ZERO-credential account and
-// does NOT alter is_admin, satisfying the #0044 acceptance criteria for the recovery
-// bootstrap model.
+// does NOT alter is_admin, per the recovery bootstrap model: recovery enrolls a new
+// passkey without ever granting admin on its own.
 func TestRecoveryEndToEnd_AdminBootstrap_ZeroCredentials(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -417,7 +417,7 @@ func TestRecoveryEndToEnd_AdminBootstrap_ZeroCredentials(t *testing.T) {
 	}
 
 	// Step 3: finish — produce a real attestation with a virtual authenticator.
-	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "ShortLinks", Origin: testRPOrigin}
+	rp := virtualwebauthn.RelyingParty{ID: testRPID, Name: "Open Circuit SF", Origin: testRPOrigin}
 	auth := virtualwebauthn.NewAuthenticator()
 	cred := virtualwebauthn.NewCredential(virtualwebauthn.KeyTypeEC2)
 
