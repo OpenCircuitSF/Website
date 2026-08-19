@@ -1,8 +1,8 @@
 # Open Circuit SF — Product Requirements Document
 
 **Domain:** `opencircuitsf.com`
-**Repository:** `github.com/brennanMKE/Website` (recommend renaming to `OpenCircuitSF`)
-**Go module:** `github.com/brennanMKE/Website`
+**Repository:** `github.com/brennanMKE/OpenCircuitSF`
+**Go module:** `github.com/brennanMKE/OpenCircuitSF`
 **Binary / service name:** `opencircuit`
 **Status:** Draft — v1 scope agreed, ready to break into issues
 **Last updated:** 2026-08-18
