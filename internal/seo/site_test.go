@@ -1,6 +1,7 @@
 package seo
 
 import (
+	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -143,6 +144,85 @@ func TestRobotsHandler_ContentType(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "User-agent: *") {
 		t.Errorf("body does not look like robots.txt: %s", rec.Body.String())
 	}
+}
+
+// TestSite_EmittedURLsShareConfiguredHost is #0072's guard: og:url, og:image,
+// and every sitemap.xml <loc> -- plus, for good measure, robots.txt's
+// Sitemap: line -- must all be built from the SAME configured base URL. The
+// underlying defect was in .env.example (an apex BASE_URL against a www 301),
+// not in this package -- internal/seo is correct to trust whatever baseURL it
+// is constructed with -- but nothing previously asserted that all four
+// emission points actually agree with each other. A deliberately distinctive
+// host (never used by any other test in this package) makes a coincidental
+// pass against a hardcoded value impossible.
+func TestSite_EmittedURLsShareConfiguredHost(t *testing.T) {
+	const configuredBaseURL = "https://configured-host.example.test"
+
+	source := fakeWorkshopSource{
+		"solder-101": {
+			Slug: "solder-101", Title: "Intro to Soldering", Summary: "s",
+			CoverImage: "/cover.jpg", Status: WorkshopPublished, UpdatedAt: "2026-08-01",
+		},
+	}
+	site := NewSite([]byte(testTemplate), configuredBaseURL, source)
+
+	// og:url and og:image, for both a static route and a workshop-detail route.
+	for _, path := range []string{"/", "/about", "/workshops/solder-101"} {
+		body := string(site.renderer.Render(path))
+		ogURL := extractMetaContent(t, body, "og:url")
+		ogImage := extractMetaContent(t, body, "og:image")
+		if !strings.HasPrefix(ogURL, configuredBaseURL) {
+			t.Errorf("path %q: og:url = %q, want it to start with configured host %q", path, ogURL, configuredBaseURL)
+		}
+		if !strings.HasPrefix(ogImage, configuredBaseURL) {
+			t.Errorf("path %q: og:image = %q, want it to start with configured host %q", path, ogImage, configuredBaseURL)
+		}
+	}
+
+	// Every sitemap <loc>, static and workshop-derived alike.
+	sitemapBody, err := site.sitemap.Render()
+	if err != nil {
+		t.Fatalf("sitemap Render: %v", err)
+	}
+	var parsed urlset
+	if err := xml.Unmarshal(sitemapBody, &parsed); err != nil {
+		t.Fatalf("sitemap is not valid XML: %v\nbody:\n%s", err, sitemapBody)
+	}
+	if len(parsed.URLs) == 0 {
+		t.Fatal("sitemap produced no <url> entries")
+	}
+	for _, u := range parsed.URLs {
+		if !strings.HasPrefix(u.Loc, configuredBaseURL) {
+			t.Errorf("sitemap <loc>%s</loc> does not start with configured host %q", u.Loc, configuredBaseURL)
+		}
+	}
+
+	// robots.txt's Sitemap: line.
+	if !strings.Contains(string(site.robots), "Sitemap: "+configuredBaseURL+"/sitemap.xml") {
+		t.Errorf("robots.txt does not reference the configured host: %s", site.robots)
+	}
+}
+
+// extractMetaContent returns the content="..." value of the first
+// <meta property="{property}" content="..."> (or name="{property}") tag in
+// html, failing the test if it isn't found.
+func extractMetaContent(t *testing.T, html, property string) string {
+	t.Helper()
+	for _, attr := range []string{"property", "name"} {
+		marker := attr + `="` + property + `" content="`
+		start := strings.Index(html, marker)
+		if start == -1 {
+			continue
+		}
+		start += len(marker)
+		end := strings.Index(html[start:], `"`)
+		if end == -1 {
+			t.Fatalf("meta %q content attribute not closed in: %s", property, html)
+		}
+		return html[start : start+end]
+	}
+	t.Fatalf("no meta tag for %q found in: %s", property, html)
+	return ""
 }
 
 // TestSite_InvalidateWorkshopsClearsBothCaches confirms Site.

@@ -12,7 +12,7 @@ of problems in one pass.
 | Variable | Required | Default | Notes |
 |---|---|---|---|
 | `PORT` | no | `8080` | |
-| `BASE_URL` | yes (non-dev) | — | Public base URL |
+| `BASE_URL` | yes (non-dev) | — | Public base URL. Drives every canonical URL: `og:url`, `og:image`, `sitemap.xml` `<loc>`, and the `Sitemap:` line in `robots.txt`. Must match the host the browser is actually on — the **www** form in production, since the apex 301s to www; see the gotcha below |
 | `DATABASE_URL` | yes, unless `STORAGE=json` | — | Postgres connection string |
 | `STORAGE` | no | *(unset → Postgres)* | Only the literal value `json` selects the in-memory dev store. An empty/unset `DATABASE_URL` does **not** engage dev mode — production can never silently fall back to the in-memory store. |
 | `WEBAUTHN_RP_ID` | yes (non-dev) | — | WebAuthn relying-party ID — the apex domain, so a passkey stays valid across apex and www |
@@ -33,6 +33,14 @@ of problems in one pass.
 mismatch between `RP_ORIGIN` and the browser's actual origin fails every
 passkey ceremony with an opaque error — check this first if a Phase 1
 ceremony fails (`CLAUDE.md` §7).
+
+**`BASE_URL` must be the www form, not the apex.** Production 301s the apex
+to `https://www.opencircuitsf.com` (`CLAUDE.md` §7). `internal/seo` trusts
+`BASE_URL` verbatim for every `og:url`, `og:image`, and sitemap `<loc>` it
+emits, so an apex `BASE_URL` publishes canonical URLs that immediately
+redirect — diluting the canonical signal social crawlers and search engines
+rely on. `#0072` found `.env.example` shipping the apex form despite
+`WEBAUTHN_RP_ORIGIN` two lines below already getting this right.
 
 ## Removed from the ShortLinks skeleton (`#0007`)
 
