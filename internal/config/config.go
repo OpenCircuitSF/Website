@@ -103,7 +103,7 @@ func loadFromFile(path string) (*Config, error) {
 
 	cfg := &Config{
 		Port:                getInt("PORT", defaultPort, &errs),
-		BaseURL:             os.Getenv("BASE_URL"),
+		BaseURL:             normalizeBaseURL(os.Getenv("BASE_URL")),
 		DatabaseURL:         os.Getenv("DATABASE_URL"),
 		Storage:             os.Getenv("STORAGE"),
 		WebAuthnRPID:        os.Getenv("WEBAUTHN_RP_ID"),
@@ -151,6 +151,22 @@ func loadFromFile(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// normalizeBaseURL strips exactly one trailing slash from an operator-supplied
+// BASE_URL, so "https://www.opencircuitsf.com/" and
+// "https://www.opencircuitsf.com" load to the identical value (#0085).
+//
+// This is the single normalisation point for BASE_URL. Every consumer —
+// the four transactional email builders (internal/mailing), internal/seo's
+// canonical/og:url/og:image rendering, the sitemap's <loc> values, and
+// robots.txt's Sitemap: line — concatenates baseURL+"/path" directly and
+// trusts this value to already be clean, per #0072's argument that one place
+// should define BASE_URL and everything downstream should trust it rather
+// than re-guard at each call site. An empty input (caught separately by the
+// required-field check below) round-trips unchanged.
+func normalizeBaseURL(raw string) string {
+	return strings.TrimSuffix(raw, "/")
 }
 
 // getInt reads an integer environment variable, returning def when the variable

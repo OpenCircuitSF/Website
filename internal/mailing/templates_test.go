@@ -1,11 +1,24 @@
 package mailing
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
+
+// unresolvedTemplateToken matches any {{...}} placeholder, not just the
+// literal {{cta}} — see TestNoRenderedBodyContainsCTAToken (#0085).
+var unresolvedTemplateToken = regexp.MustCompile(`\{\{[^{}]*\}\}`)
+
+// buildEmailFuncName matches the exported top-level Build*Email function
+// names this package defines — see TestAllMessagesEnumeratesEveryBuildEmailFunc.
+var buildEmailFuncName = regexp.MustCompile(`^Build[A-Za-z0-9]*Email$`)
 
 // updateGolden regenerates testdata/*.golden from the current renderer when
 // UPDATE_GOLDEN=1 is set in the environment. Run once by hand after a
@@ -99,6 +112,55 @@ func allMessages() map[string]Message {
 		"registration":       BuildRegistrationEmail(testTo, testBaseURL, testRegToken, 5*time.Minute),
 		"recovery":           BuildRecoveryEmail(testTo, testBaseURL, testRecToken, 15*time.Minute),
 		"sessions_revoked":   BuildSessionsRevokedEmail(testTo, testBaseURL, testRevokedAt),
+	}
+}
+
+// TestAllMessagesEnumeratesEveryBuildEmailFunc is #0085's recorded decision
+// on whether allMessages() can enumerate builders automatically rather than
+// by hand: Go has no runtime reflection over a package's own top-level
+// function declarations, so there is no way to have allMessages() *call*
+// a newly added Build*Email function without someone editing this file —
+// short of code generation, which is more machinery than a list of five
+// (now covered, occasionally six) functions justifies.
+//
+// What IS achievable, and what this test does, is turn "forgot to add it"
+// from a silent gap into a named failure: it parses every non-test .go file
+// in this package directory with go/parser, counts the exported top-level
+// Build*Email function declarations, and asserts that count equals
+// len(allMessages()). The day a sixth builder lands without a matching
+// allMessages() entry, this fails instead of the property tests quietly
+// covering only five of six.
+//
+// Mutation proof: add a stub Build*Email function to
+// transactional_templates.go without adding a corresponding entry to
+// allMessages() and this test fails, naming the mismatch and every
+// Build*Email function it found.
+func TestAllMessagesEnumeratesEveryBuildEmailFunc(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parsing package source: %v", err)
+	}
+
+	var found []string
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil { // skip methods
+					continue
+				}
+				if buildEmailFuncName.MatchString(fn.Name.Name) {
+					found = append(found, fn.Name.Name)
+				}
+			}
+		}
+	}
+
+	if want := len(allMessages()); len(found) != want {
+		t.Errorf("found %d Build*Email function(s) in package source %v, but allMessages() covers %d — add the missing builder to allMessages()", len(found), found, want)
 	}
 }
 
@@ -489,18 +551,26 @@ func TestHTMLAndTextCTAWordingDiffer(t *testing.T) {
 // field is added to allMessages()'s inputs, but it does prove none of the
 // five current templates leak the token anywhere in their rendered output.
 //
-// Mutation proof: add "{{cta}}" to any Build*Email's Subject or ButtonText
-// and this test fails, naming the field and the leaked token.
+// #0085 widened the check from the literal "{{cta}}" to any {{...}}
+// placeholder (unresolvedTemplateToken): matching only the one token this
+// codebase happens to define today meant a typo'd or future token —
+// {{nope}}, {{button}}, a copy-pasted {{cta }} with a stray space — would
+// ship silently, which is exactly the class of defect this test exists to
+// catch. A generic pattern covers the class instead of the instance.
+//
+// Mutation proof: add "{{cta}}" (or any other "{{...}}" token, e.g.
+// "{{nope}}") to any Build*Email's Subject or ButtonText and this test
+// fails, naming the field and the leaked token.
 func TestNoRenderedBodyContainsCTAToken(t *testing.T) {
 	for name, msg := range allMessages() {
-		if strings.Contains(msg.HTMLBody, ctaToken) {
-			t.Errorf("%s: HTMLBody contains unresolved %q", name, ctaToken)
+		if tok := unresolvedTemplateToken.FindString(msg.HTMLBody); tok != "" {
+			t.Errorf("%s: HTMLBody contains unresolved %q", name, tok)
 		}
-		if strings.Contains(msg.TextBody, ctaToken) {
-			t.Errorf("%s: TextBody contains unresolved %q", name, ctaToken)
+		if tok := unresolvedTemplateToken.FindString(msg.TextBody); tok != "" {
+			t.Errorf("%s: TextBody contains unresolved %q", name, tok)
 		}
-		if strings.Contains(msg.Subject, ctaToken) {
-			t.Errorf("%s: Subject contains unresolved %q", name, ctaToken)
+		if tok := unresolvedTemplateToken.FindString(msg.Subject); tok != "" {
+			t.Errorf("%s: Subject contains unresolved %q", name, tok)
 		}
 	}
 }

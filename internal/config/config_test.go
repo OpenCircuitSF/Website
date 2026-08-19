@@ -78,6 +78,40 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 	}
 }
 
+// TestLoad_BaseURLTrailingSlashNormalised proves BASE_URL with and without a
+// trailing slash load to the identical value (#0085). Production's value
+// happens to lack the slash, which is the only reason a doubled "//path" was
+// latent rather than live; a trailing slash is the single most common way an
+// operator writes a base URL in /etc/opencircuit/config.env.
+//
+// Mutation proof: revert normalizeBaseURL to `return raw` (or remove the
+// TrimSuffix call in loadFromFile) and this test fails with
+// BaseURL = "https://example.com/", want "https://example.com" — see
+// issues/0085.md Verification for the observed output.
+func TestLoad_BaseURLTrailingSlashNormalised(t *testing.T) {
+	setRequired(t)
+	t.Setenv("BASE_URL", "https://example.com/")
+
+	cfg, err := loadFromFile(noEnvFile)
+	if err != nil {
+		t.Fatalf("loadFromFile returned error: %v", err)
+	}
+	if cfg.BaseURL != "https://example.com" {
+		t.Errorf("BaseURL = %q, want %q", cfg.BaseURL, "https://example.com")
+	}
+
+	setRequired(t)
+	t.Setenv("BASE_URL", "https://example.com")
+	cfgNoSlash, err := loadFromFile(noEnvFile)
+	if err != nil {
+		t.Fatalf("loadFromFile returned error: %v", err)
+	}
+
+	if cfg.BaseURL != cfgNoSlash.BaseURL {
+		t.Errorf("BaseURL differs by trailing slash: %q vs %q", cfg.BaseURL, cfgNoSlash.BaseURL)
+	}
+}
+
 func TestLoad_DefaultsApplied(t *testing.T) {
 	setRequired(t)
 	// Leave PORT, MAX_SEND_RATE, SEND_BATCH_SIZE, SEND_WORKER_ENABLED unset.
