@@ -29,3 +29,11 @@
 *.woff2 binary
 *.ttf binary
 *.eot binary
+
+# Mailing golden fixtures — genuinely CRLF-sensitive, not accidentally so.
+# The plain-text alternative parts these compare against are built with
+# literal "\r\n" (see internal/mailing/templates.go's renderText, RFC 5322
+# mail body line endings), so the fixture bytes ARE the thing under test.
+# Overrides the `* text=auto eol=lf` rule above, which was silently rewriting
+# these on checkout — see internal/mailing/testdata/README.md and #0078.
+internal/mailing/testdata/*.txt -text
