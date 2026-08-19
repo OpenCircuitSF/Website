@@ -188,6 +188,12 @@ export function navigate(path: string, { replace = false }: NavigateOptions = {}
   const route = parsePath(url.pathname, url.search);
   const target = url.pathname + url.search;
 
+  // A restore still re-applying would scroll the page we are about to push:
+  // its loop keeps calling scrollTo(0, previousOffset) for up to
+  // RESTORE_DEADLINE_MS, and the scrollTo(0, 0) below does not stop it (both
+  // land on 0 while the new view is still short, so the loop's "the user
+  // scrolled" bail-out never trips). See cancelRestore().
+  cancelRestore();
   saveScrollToCurrentEntry();
 
   if (replace) {
@@ -351,6 +357,21 @@ function restoreScroll(saved: number): void {
 
     attempt();
   });
+}
+
+/**
+ * Abandon any in-flight restoreScroll() loop. Called at the top of navigate():
+ * a restore left running across a navigation re-applies the *previous* entry's
+ * offset to the page that was just pushed, and the throttled scroll listener
+ * then stamps that bogus offset into the new entry's state, so the damage
+ * outlives the moment. Bumping restoreToken makes the live loop return on its
+ * next frame; restoringScroll must be cleared here rather than left to that
+ * loop's own finish(), which is token-guarded and will refuse to clear it once
+ * it has been superseded (leaving scroll stamping suppressed for good).
+ */
+function cancelRestore(): void {
+  restoreToken++;
+  restoringScroll = false;
 }
 
 let initialized = false;
