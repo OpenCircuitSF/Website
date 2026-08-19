@@ -69,6 +69,74 @@
 // the claim, which is itself observable and retryable — the next
 // legitimate request for that address attempts the send again. See this
 // issue's Gotchas for why no separate status column or metric was added.
+//
+// # The elapsed-time channel — #0088
+//
+// #0026's review characterised the residual synchronous INSERT ("brand-new
+// signup still does a synchronous write") as weaker than the 80ms mail-send
+// channel it had just closed, on the theory that probing a given address
+// creates the row, so an attacker only gets one clean observation per
+// target. #0088 measured that residual directly and found it total, not
+// weaker: with mailer.Send already off the request path, elapsed time alone
+// still split every branch into four non-overlapping clusters (honeypot
+// fastest, then active, then pending, then a brand-new signup slowest,
+// separated by sub-millisecond but statistically total gaps — see
+// issues/0088.md). A single observation classified branch membership at
+// 100% accuracy, and the honeypot branch was the fastest of all, meaning a
+// bot could learn from timing alone that its fill had been detected — the
+// one thing a honeypot must never reveal.
+//
+// The fix generalizes #0026's own remedy one step further: every branch
+// that reaches the shared 202 now performs exactly the same *synchronous*
+// store work — one SuppressionChecker.IsSuppressed call and one
+// subscriberStore.FindByEmail call, always, in that order, regardless of
+// whether the honeypot fired, the timing gate failed, or the address is
+// new/active/pending/unsubscribed/bounced/complained/suppressed — and every
+// branch-dependent WRITE (Create, RestartSignup, SetInterests,
+// ClaimConfirmationSend/ClaimAlreadySubscribedSend, the mail enqueue itself,
+// and the audit record) moves onto a second async queue (mutateQueue,
+// mirroring sendQueue) drained after Subscribe has already written the
+// response. Two fixed reads plus a channel send is now the entire
+// request-path cost for every branch; the honeypot and timing-gate checks
+// no longer short-circuit before those reads, they only change what the
+// deferred job does once it runs. See processMutateJob.
+//
+// Options considered and rejected:
+//
+//   - A sleep-to-pad constant-time floor (delay every response to the
+//     slowest branch's worst case). Rejected: it adds real, unconditional
+//     latency to every legitimate signup — including the currently-fastest
+//     branches — forever, in exchange for hiding a gap that can instead be
+//     closed structurally; it also has to be re-tuned by hand as the
+//     slowest branch's cost drifts (a new query added to newSignup silently
+//     raises the floor everyone else must now pad to), where the
+//     equalize-and-defer fix keeps the fixed cost fixed by construction.
+//     Under load it also does the opposite of what padding is meant to
+//     buy: sleeping ties up the response goroutine (and, if implemented via
+//     a worker-limited path, a semaphore slot) for the padding duration on
+//     every request, multiplying concurrent in-flight goroutines directly
+//     with traffic rather than draining as fast as the backend allows.
+//   - Equalizing work alone (same query count, everything still
+//     synchronous). Rejected as insufficient on its own: it would still
+//     leave the *value* of "how much work restartSignup/newSignup do"
+//     coupled to response latency for anyone willing to pad their own
+//     query mix to match, and it does nothing to shrink the request-path
+//     cost the way deferring the writes does.
+//
+// What this costs: a client that gets the 202 no longer has any timing or
+// status signal for whether its specific submission was accepted, retried,
+// or silently dropped by the async worker (queue-full, shutdown-in-flight)
+// — but the endpoint already promised nothing about that (CLAUDE.md §9);
+// this removes a side channel that was never a supported guarantee. The
+// classification (new/active/pending/complained/suppressed/bot) itself is
+// still decided synchronously (the two fixed reads), so it does not
+// introduce a new race between "decide what to do" and "the state the
+// decision was made against" beyond what already existed (a concurrent
+// write between FindByEmail and the deferred job's Create/RestartSignup is
+// exactly the same race #0026's atomic claims and Create's ErrEmailExists
+// handling already covered when that work ran synchronously — moving it a
+// few dozen microseconds later onto a different goroutine does not widen
+// that window in any way a client can observe or exploit).
 package handlers
 
 import (
@@ -211,21 +279,38 @@ type SubscribeHandler struct {
 	sendQueue chan sendJob
 	sendWG    sync.WaitGroup
 
+	// mutateQueue and mutateWG are #0088's equivalent of sendQueue/sendWG,
+	// one layer up: enqueueMutation hands a mutateJob (everything Subscribe
+	// learned synchronously — the honeypot/timing-gate verdict, the two
+	// fixed reads' results, the validated email/interests/evidence) to this
+	// channel; a fixed pool of worker goroutines (started once, in
+	// NewSubscribeHandler) drains it and runs processMutateJob, which is
+	// where newSignup/existingSignup/restartSignup — and therefore every
+	// Create/RestartSignup/SetInterests/Claim*/audit call and the mail
+	// enqueue itself — actually happen. See the package doc comment,
+	// "The elapsed-time channel — #0088".
+	mutateQueue chan mutateJob
+	mutateWG    sync.WaitGroup
+
 	// sendCtx is the parent context every worker derives its per-job
 	// timeout from (processSendJob: context.WithTimeout(h.sendCtx, ...)),
 	// instead of context.Background(). sendCancel cancels it, which Close
 	// (#0081) uses to interrupt any send that is queued-but-not-yet-started
 	// or actively in flight at shutdown time, rather than letting it run to
 	// completion or timing out on its own. Set once in NewSubscribeHandler.
+	// processMutateJob (#0088) shares this same context and the same
+	// cancel, for the same reason: a subscription-mutation job that is
+	// queued-but-not-started or in flight at shutdown must be interruptible
+	// too, not just the mail send it may go on to enqueue.
 	sendCtx    context.Context
 	sendCancel context.CancelFunc
 
-	// closeMu/closed guard Close against a concurrent enqueueSend: once
-	// closed is true, enqueueSend must not attempt to send on sendQueue
-	// (which Close has by then closed — sending on a closed channel
-	// panics) and instead releases the claim immediately, the same
-	// observable outcome as every other drop path in this file. See
-	// Close's doc comment.
+	// closeMu/closed guard Close against a concurrent enqueueSend OR
+	// enqueueMutation: once closed is true, neither may attempt to send on
+	// its respective queue (both of which Close has by then closed —
+	// sending on a closed channel panics) and instead falls back to its own
+	// drop-and-release path, the same observable outcome as every other
+	// drop path in this file. See Close's doc comment.
 	closeMu sync.Mutex
 	closed  bool
 }
@@ -256,6 +341,45 @@ type sendJob struct {
 	release      func(ctx context.Context) error
 }
 
+// mutateQueueCapacity bounds the async subscription-mutation queue. Same
+// sizing rationale as sendQueueCapacity: generous relative to the per-IP
+// rate limit this endpoint sits behind (5/min, burst 3), a defense against
+// a burst of legitimate concurrent signups outrunning the worker pool for a
+// moment, not a capacity expected to fill in steady state. Distinct from
+// sendQueueCapacity because a mutateJob is enqueued for EVERY accepted
+// request (bot traffic included, per #0088), not only the subset that ends
+// up sending mail.
+const mutateQueueCapacity = 256
+
+// mutateWorkerCount is the number of goroutines draining mutateQueue. Kept
+// equal to sendWorkerCount: both bound concurrent DB round trips, and there
+// is no reason for this project's traffic shape to weight one pool over the
+// other differently from how it already weights sendWorkerCount.
+const mutateWorkerCount = 4
+
+// mutateJob carries everything Subscribe learned synchronously — before
+// #0088, this same information drove newSignup/existingSignup inline, on
+// the request goroutine. Now it is handed to processMutateJob instead,
+// which reproduces that exact same dispatch (see existingSignup's switch)
+// from a worker goroutine. suppressed/suppErr and existing/findErr are the
+// two fixed reads' *raw results*, not yet interpreted — interpretation
+// (what suppressed=true means, what findErr wrapping ErrNotFound means)
+// happens in processMutateJob, unchanged from how Subscribe used to
+// interpret them inline, so moving this off the request path could not
+// silently change what any branch decides to do, only when.
+type mutateJob struct {
+	isBot       bool
+	email       string
+	interestIDs []int64
+	evidence    subscribers.RestartSignupInput
+	now         time.Time
+
+	suppressed bool
+	suppErr    error
+	existing   subscribers.Subscriber
+	findErr    error
+}
+
 // NewSubscribeHandler constructs a SubscribeHandler and starts its async
 // send worker pool (see sendJob and the package doc comment). A nil
 // suppression checker defaults to NoSuppressions; a nil logger defaults to
@@ -281,12 +405,16 @@ func NewSubscribeHandler(
 		subs: subs, interests: il, mailer: mailer, suppression: suppression,
 		settings: settings, auditor: auditor, baseURL: baseURL,
 		now: time.Now, log: logger,
-		sendQueue:  make(chan sendJob, sendQueueCapacity),
-		sendCtx:    sendCtx,
-		sendCancel: sendCancel,
+		sendQueue:   make(chan sendJob, sendQueueCapacity),
+		mutateQueue: make(chan mutateJob, mutateQueueCapacity),
+		sendCtx:     sendCtx,
+		sendCancel:  sendCancel,
 	}
 	for i := 0; i < sendWorkerCount; i++ {
 		go h.runSendWorker()
+	}
+	for i := 0; i < mutateWorkerCount; i++ {
+		go h.runMutateWorker()
 	}
 	return h
 }
@@ -406,13 +534,116 @@ func (h *SubscribeHandler) enqueueSend(job sendJob) {
 	}
 }
 
-// waitForSends blocks until every send job enqueued so far has been fully
-// processed (sent, failed-and-released, or dropped-and-released) by the
-// async workers. Test-only: internal/handlers/subscribe_test.go calls this
-// after doSubscribe so assertions on mailer state or subscriber rows are
-// deterministic, without an arbitrary sleep, despite #0026's review moving
-// the actual send off the request/response path.
+// runMutateWorker drains h.mutateQueue until Close closes it, mirroring
+// runSendWorker exactly (see that function and mutateWorkerCount).
+func (h *SubscribeHandler) runMutateWorker() {
+	for job := range h.mutateQueue {
+		h.processMutateJob(job)
+	}
+}
+
+// mutateJobTimeout bounds a single async mutation job's DB work so a hung
+// connection can't pin a worker goroutine forever. Generous relative to
+// ordinary local query latency (sub-millisecond, per #0088's own
+// measurements) but well short of sendJobTimeout, since this job's own
+// slowest step is a handful of local Postgres round trips, not a network
+// call to a third party like SES.
+const mutateJobTimeout = 10 * time.Second
+
+// processMutateJob is where #0088 moved every branch-dependent write:
+// Create, RestartSignup, SetInterests, ClaimConfirmationSend/
+// ClaimAlreadySubscribedSend, the mail enqueue, and the audit record. It
+// reproduces exactly the dispatch Subscribe used to run inline — suppressed
+// check, then FindByEmail's ErrNotFound/error/found three-way switch — the
+// only difference is it interprets job's ALREADY-CAPTURED suppressed/
+// suppErr/existing/findErr fields (the two fixed reads Subscribe performed
+// synchronously) instead of calling IsSuppressed/FindByEmail itself, and it
+// checks job.isBot first so a honeypot-caught or timing-gate-failed
+// submission takes no action at all — same as before #0088, just decided
+// here instead of by not reaching this code in the first place.
+//
+// ctx is derived from h.sendCtx, not the (already-returned) HTTP request's
+// context, for the same reason sendConfirmation/processSendJob already are:
+// see the package doc comment and Close.
+func (h *SubscribeHandler) processMutateJob(job mutateJob) {
+	defer h.mutateWG.Done()
+
+	ctx, cancel := context.WithTimeout(h.sendCtx, mutateJobTimeout)
+	defer cancel()
+
+	if job.isBot {
+		// Honeypot or timing gate. Deliberately no action and no log line
+		// distinguishing this from any other silently-dropped branch below
+		// — logging it differently would just move the oracle from
+		// response timing into log volume/timing, which is exactly the
+		// leak #0088 exists to close.
+		return
+	}
+
+	if job.suppErr != nil {
+		h.log.Error("subscribe: suppression check failed", "err", job.suppErr)
+		return
+	}
+	if job.suppressed {
+		return
+	}
+
+	switch {
+	case errors.Is(job.findErr, subscribers.ErrNotFound):
+		h.newSignup(ctx, job.email, job.interestIDs, job.evidence, job.now)
+	case job.findErr != nil:
+		h.log.Error("subscribe: lookup failed", "err", job.findErr)
+	default:
+		h.existingSignup(ctx, job.existing, job.interestIDs, job.evidence, job.now)
+	}
+}
+
+// enqueueMutation hands job to the async mutation worker pool without
+// blocking the HTTP response — the #0088 fix's other half of "two fixed
+// reads plus a channel send is the entire request-path cost". Structurally
+// identical to enqueueSend, including its concurrency-safety argument
+// against Close: closeMu is held from the closed check through
+// mutateWG.Add(1) and the select, Add is only ever called after that check
+// has observed closed==false, so this can never race Close's own
+// mutateWG.Wait()/close(h.mutateQueue). See enqueueSend's doc comment for
+// the full happens-before argument, which applies here verbatim with
+// mutateWG/mutateQueue in place of sendWG/sendQueue.
+func (h *SubscribeHandler) enqueueMutation(job mutateJob) {
+	h.closeMu.Lock()
+	if h.closed {
+		h.closeMu.Unlock()
+		h.log.Error("subscribe: handler is shutting down, dropping subscription mutation")
+		return
+	}
+	h.mutateWG.Add(1)
+	select {
+	case h.mutateQueue <- job:
+		h.closeMu.Unlock()
+	default:
+		h.closeMu.Unlock()
+		h.log.Error("subscribe: mutation queue full, dropping subscription mutation")
+		h.mutateWG.Done()
+	}
+}
+
+// waitForSends blocks until every mutation job AND every send job enqueued
+// so far has been fully processed by the async workers. Test-only:
+// internal/handlers/subscribe_test.go calls this after doSubscribe so
+// assertions on mailer state or subscriber rows are deterministic, without
+// an arbitrary sleep, despite #0026's and #0088's reviews having moved the
+// actual send, and then the actual account mutation, off the request/
+// response path. Waiting mutateWG BEFORE sendWG is required, not
+// incidental: a mutate job's own goroutine calls enqueueSend (sendWG.Add(1))
+// strictly before that same goroutine's processMutateJob returns
+// (mutateWG.Done(), deferred at the top) — ordinary program order within
+// one goroutine is itself a happens-before edge — so by the time
+// mutateWG.Wait() has observed every in-flight mutation job finish, every
+// sendWG.Add(1) any of them was ever going to make has already happened,
+// and the subsequent sendWG.Wait() call is guaranteed to account for it.
+// Waiting in the other order could observe sendWG at zero before a
+// still-running mutate job has even called enqueueSend yet.
 func (h *SubscribeHandler) waitForSends() {
+	h.mutateWG.Wait()
 	h.sendWG.Wait()
 }
 
@@ -458,6 +689,21 @@ func (h *SubscribeHandler) waitForSends() {
 // first. #0045's campaign send worker needs the same close-then-bounded-
 // wait shape; reuse this pattern (a cancellable shared context plus a
 // closed work queue plus a WaitGroup) rather than inventing a second one.
+//
+// #0088 added a second queue/WaitGroup pair (mutateQueue/mutateWG) one
+// layer above sendQueue/sendWG, closed and cancelled together with it here
+// under the same closeMu/closed guard. Closing both channels together
+// before waiting on either WaitGroup is safe for the same reason closing
+// sendQueue alone always was: enqueueMutation and enqueueSend both check
+// h.closed under closeMu before ever sending on their respective channel,
+// so once this critical section has set closed=true, neither can reach a
+// closed channel — a still-running mutate job that goes on to call
+// enqueueSend after sendQueue is already closed takes enqueueSend's
+// drop-and-release path instead, never a send on the closed channel. The
+// two WaitGroups are then waited in the same mutateWG-before-sendWG order
+// waitForSends uses, for the same happens-before reason documented there:
+// waiting mutateWG first guarantees every enqueueSend call any mutate job
+// was going to make has already happened before sendWG.Wait() looks.
 func (h *SubscribeHandler) Close(ctx context.Context) error {
 	h.closeMu.Lock()
 	if h.closed {
@@ -466,11 +712,13 @@ func (h *SubscribeHandler) Close(ctx context.Context) error {
 	}
 	h.closed = true
 	h.sendCancel()
+	close(h.mutateQueue)
 	close(h.sendQueue)
 	h.closeMu.Unlock()
 
 	done := make(chan struct{})
 	go func() {
+		h.mutateWG.Wait()
 		h.sendWG.Wait()
 		close(done)
 	}()
@@ -533,7 +781,10 @@ func writeSubscribeUniform202(w http.ResponseWriter) {
 var errUnknownInterest = errors.New("handlers: unknown interest slug")
 
 // Subscribe handles POST /api/subscribe. See the package doc comment above
-// for the uniform-202 security property this handler exists to preserve.
+// for the uniform-202 security property this handler exists to preserve,
+// and "The elapsed-time channel — #0088" specifically for why this function
+// no longer branches on the honeypot or timing gate before doing the same
+// work every other request does.
 func (h *SubscribeHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 	var req subscribeRequest
 	if err := decodeJSON(w, r, &req); err != nil {
@@ -541,25 +792,28 @@ func (h *SubscribeHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Honeypot: a real visitor never sees or fills this field. Bots fill
-	// every input. Discard silently behind the same uniform response used
-	// for success, so a bot probing the endpoint can't tell "caught" from
-	// "accepted".
-	if req.Website != "" {
-		writeSubscribeUniform202(w)
-		return
-	}
-
 	now := h.now()
 
-	// Timing gate: reject a submission that arrived faster than a human
-	// could plausibly have read the form and clicked submit. Also silent —
-	// same reasoning as the honeypot.
-	if !passesTimingGate(req.RenderedAt, now) {
-		writeSubscribeUniform202(w)
-		return
-	}
+	// #0088: isBot records the honeypot/timing-gate verdict but does NOT
+	// return early. Before #0088, a honeypot fill or a failed timing gate
+	// short-circuited straight to the uniform 202 without doing any of the
+	// validation or store work every other branch does — which made this
+	// the cheapest, fastest, and therefore most timing-distinguishable
+	// branch of all four measured, precisely the property a honeypot must
+	// never reveal. isBot is consulted only inside processMutateJob, which
+	// decides to do nothing at all for a bot-caught submission — same
+	// externally-observable outcome as before, just decided after the same
+	// fixed-cost synchronous work every other branch also pays for.
+	isBot := req.Website != "" || !passesTimingGate(req.RenderedAt, now)
 
+	// Structural request-shape validation. Per the package doc comment,
+	// none of this depends on whether the submitted email is already on
+	// the list, so answering 400 here (unlike everything below) cannot
+	// leak account state — and #0088 runs it unconditionally, honeypot or
+	// not, so that a bot's synchronous cost matches a human's regardless
+	// of how many interest slugs either one submits (resolveInterestIDs is
+	// the one validation step whose cost scales with the request rather
+	// than being O(1), so it must not be skippable by isBot).
 	email := strings.TrimSpace(req.Email)
 	if !validEmailSyntax(email) {
 		writeError(w, http.StatusBadRequest, "invalid email")
@@ -591,22 +845,14 @@ func (h *SubscribeHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 	// becomes an email-enumeration oracle.
 	ctx := r.Context()
 
-	suppressed, err := h.suppression.IsSuppressed(ctx, email)
-	if err != nil {
-		// An infra failure here must not leak into a different response.
-		// Treating it as "proceed as if suppressed" (send nothing) is the
-		// safe default: worst case a legitimate signup doesn't get an
-		// email this one time and the visitor can simply try again, which
-		// is far cheaper than the alternative of possibly mailing a
-		// suppressed address because the check couldn't run.
-		h.log.Error("subscribe: suppression check failed", "err", err)
-		writeSubscribeUniform202(w)
-		return
-	}
-	if suppressed {
-		writeSubscribeUniform202(w)
-		return
-	}
+	// #0088's fixed cost: exactly these two reads, always, for every
+	// accepted request regardless of branch — see the package doc comment.
+	// Their results are not interpreted here; that happens in
+	// processMutateJob, unchanged from how this function used to interpret
+	// them inline before #0088 moved the interpretation off the request
+	// path along with everything it used to drive.
+	suppressed, suppErr := h.suppression.IsSuppressed(ctx, email)
+	existing, findErr := h.subs.FindByEmail(ctx, email)
 
 	evidence := subscribers.RestartSignupInput{
 		SignupIP:        clientIP(r),
@@ -617,15 +863,17 @@ func (h *SubscribeHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		ConfirmTTL:      subscribeConfirmTTL,
 	}
 
-	existing, err := h.subs.FindByEmail(ctx, email)
-	switch {
-	case errors.Is(err, subscribers.ErrNotFound):
-		h.newSignup(ctx, email, interestIDs, evidence, now)
-	case err != nil:
-		h.log.Error("subscribe: lookup failed", "err", err)
-	default:
-		h.existingSignup(ctx, existing, interestIDs, evidence, now)
-	}
+	h.enqueueMutation(mutateJob{
+		isBot:       isBot,
+		email:       email,
+		interestIDs: interestIDs,
+		evidence:    evidence,
+		now:         now,
+		suppressed:  suppressed,
+		suppErr:     suppErr,
+		existing:    existing,
+		findErr:     findErr,
+	})
 
 	writeSubscribeUniform202(w)
 }

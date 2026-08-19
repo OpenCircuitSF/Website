@@ -1312,3 +1312,247 @@ func TestNewSubscribeHandler_NoGoroutineLeakAcrossConstruction(t *testing.T) {
 		t.Fatalf("goroutine count grew from %d to %d after constructing and closing %d handlers — sendWorkerCount workers are leaking", before, after, rounds)
 	}
 }
+
+// ============================================================================
+// #0088 — equal query counts per branch.
+//
+// #0026's review found that leaving a synchronous SES call (~80ms) on the
+// request goroutine made "did this branch send mail" observable as latency,
+// with fully disjoint distributions across branches. Moving mailer.Send off
+// the request path closed that channel, but #0088 measured a smaller,
+// still-total residual: even with the mail send gone, honeypot/timing-gate/
+// active/pending/new-signup each did a DIFFERENT number of synchronous store
+// calls (0 for honeypot and timing-gate, 2-3 for active/pending, 5+ for a
+// brand-new signup), and that alone was enough to classify branch membership
+// from a single observation of elapsed time (see issues/0088.md's measured
+// clusters).
+//
+// A test that asserts elapsed time directly would be flaky — #0084 exists
+// because load-sensitive tests train people to re-run instead of
+// investigate. The structural property that actually has to hold, and can
+// be asserted without any clock, is this: every branch does EXACTLY the
+// same synchronous store/suppression-checker call count (one IsSuppressed,
+// one FindByEmail, zero of everything else) before the response is
+// written — with all of the calls that legitimately differ by branch
+// (Create, RestartSignup, SetInterests, the two Claim* calls) deferred onto
+// the async mutation queue #0088 added, so they can never contribute to
+// request-path latency regardless of how many of them a given branch ends
+// up making.
+// ============================================================================
+
+// countingSubscriberStore wraps a real subscriberStore, counting calls to
+// each method so a test can assert on call counts instead of timing.
+// Delegates every call to inner (subscribers.NewStore(pool) in these
+// tests), so behavior is identical to the real store — only the counts are
+// new.
+type countingSubscriberStore struct {
+	inner subscriberStore
+
+	mu                                 sync.Mutex
+	createCalls                        int
+	findByEmailCalls                   int
+	restartSignupCalls                 int
+	claimConfirmationSendCalls         int
+	releaseConfirmationClaimCalls      int
+	claimAlreadySubscribedSendCalls    int
+	releaseAlreadySubscribedClaimCalls int
+	setInterestsCalls                  int
+}
+
+func (c *countingSubscriberStore) Create(ctx context.Context, in subscribers.NewSignup, now time.Time) (subscribers.Subscriber, error) {
+	c.mu.Lock()
+	c.createCalls++
+	c.mu.Unlock()
+	return c.inner.Create(ctx, in, now)
+}
+
+func (c *countingSubscriberStore) FindByEmail(ctx context.Context, email string) (subscribers.Subscriber, error) {
+	c.mu.Lock()
+	c.findByEmailCalls++
+	c.mu.Unlock()
+	return c.inner.FindByEmail(ctx, email)
+}
+
+func (c *countingSubscriberStore) RestartSignup(ctx context.Context, id int64, in subscribers.RestartSignupInput, now time.Time) (subscribers.Subscriber, error) {
+	c.mu.Lock()
+	c.restartSignupCalls++
+	c.mu.Unlock()
+	return c.inner.RestartSignup(ctx, id, in, now)
+}
+
+func (c *countingSubscriberStore) ClaimConfirmationSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (bool, error) {
+	c.mu.Lock()
+	c.claimConfirmationSendCalls++
+	c.mu.Unlock()
+	return c.inner.ClaimConfirmationSend(ctx, id, now, cooldown)
+}
+
+func (c *countingSubscriberStore) ReleaseConfirmationClaim(ctx context.Context, id int64, now time.Time) error {
+	c.mu.Lock()
+	c.releaseConfirmationClaimCalls++
+	c.mu.Unlock()
+	return c.inner.ReleaseConfirmationClaim(ctx, id, now)
+}
+
+func (c *countingSubscriberStore) ClaimAlreadySubscribedSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (bool, error) {
+	c.mu.Lock()
+	c.claimAlreadySubscribedSendCalls++
+	c.mu.Unlock()
+	return c.inner.ClaimAlreadySubscribedSend(ctx, id, now, cooldown)
+}
+
+func (c *countingSubscriberStore) ReleaseAlreadySubscribedClaim(ctx context.Context, id int64, now time.Time) error {
+	c.mu.Lock()
+	c.releaseAlreadySubscribedClaimCalls++
+	c.mu.Unlock()
+	return c.inner.ReleaseAlreadySubscribedClaim(ctx, id, now)
+}
+
+func (c *countingSubscriberStore) SetInterests(ctx context.Context, subscriberID int64, interestIDs []int64) error {
+	c.mu.Lock()
+	c.setInterestsCalls++
+	c.mu.Unlock()
+	return c.inner.SetInterests(ctx, subscriberID, interestIDs)
+}
+
+// snapshot returns a race-safe copy of every counter, for comparison after
+// the async queues have fully drained.
+type subscriberStoreCallCounts struct {
+	create, findByEmail, restartSignup                                      int
+	claimConfirmationSend, releaseConfirmationClaim                         int
+	claimAlreadySubscribedSend, releaseAlreadySubscribedClaim, setInterests int
+}
+
+func (c *countingSubscriberStore) snapshot() subscriberStoreCallCounts {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return subscriberStoreCallCounts{
+		create:                        c.createCalls,
+		findByEmail:                   c.findByEmailCalls,
+		restartSignup:                 c.restartSignupCalls,
+		claimConfirmationSend:         c.claimConfirmationSendCalls,
+		releaseConfirmationClaim:      c.releaseConfirmationClaimCalls,
+		claimAlreadySubscribedSend:    c.claimAlreadySubscribedSendCalls,
+		releaseAlreadySubscribedClaim: c.releaseAlreadySubscribedClaimCalls,
+		setInterests:                  c.setInterestsCalls,
+	}
+}
+
+// countingSuppressionChecker wraps a SuppressionChecker, counting calls to
+// IsSuppressed.
+type countingSuppressionChecker struct {
+	inner SuppressionChecker
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *countingSuppressionChecker) IsSuppressed(ctx context.Context, email string) (bool, error) {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	if c.inner == nil {
+		return NoSuppressions{}.IsSuppressed(ctx, email)
+	}
+	return c.inner.IsSuppressed(ctx, email)
+}
+
+func (c *countingSuppressionChecker) callCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+// subscribeCountingMux is subscribeMux but with the subscriberStore and
+// SuppressionChecker wrapped in call counters, returning the counters
+// alongside the usual handler/mux pair.
+func subscribeCountingMux(t *testing.T, pool *pgxpool.Pool, mailer mailing.Mailer, suppression SuppressionChecker) (*SubscribeHandler, http.Handler, *countingSubscriberStore, *countingSuppressionChecker) {
+	t.Helper()
+	subs := &countingSubscriberStore{inner: subscribers.NewStore(pool)}
+	supp := &countingSuppressionChecker{inner: suppression}
+	h := NewSubscribeHandler(
+		subs, interests.NewStore(pool), mailer,
+		supp, fakePhysicalAddress{value: "123 Main St, San Francisco, CA"},
+		audit.New(pool), "https://example.test", nil,
+	)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.Close(ctx); err != nil {
+			t.Errorf("subscribeCountingMux cleanup: h.Close: %v", err)
+		}
+	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/subscribe", h.Subscribe)
+	return h, mux, subs, supp
+}
+
+// TestSubscribe_SyncQueryCountEqualAcrossBranches is #0088's structural
+// proof, replacing a direct timing assertion (which would flake — #0084).
+// It drives every branch through a FRESH handler/counter pair (so counts
+// never accumulate across branches) and asserts that IsSuppressed and
+// FindByEmail are each called exactly once, no matter which branch ran —
+// the fixed synchronous cost the package doc comment ("The elapsed-time
+// channel — #0088") describes — while every branch-dependent mutation call
+// (Create, RestartSignup, SetInterests, either Claim*) only ever happens
+// for the branches that legitimately need it, confirming those calls truly
+// moved off anything that could be the request-path cost.
+func TestSubscribe_SyncQueryCountEqualAcrossBranches(t *testing.T) {
+	pool := subscribeTestPool(t)
+
+	pendingEmail := subscribeUniqueEmail(t) + "-qc-pending"
+	pendingToken := "tok-" + pendingEmail
+	seedSubscriberRow(t, pool, pendingEmail, subscribers.StatusPending, &pendingToken, nil)
+	unsubEmail := subscribeUniqueEmail(t) + "-qc-unsub"
+	seedSubscriberRow(t, pool, unsubEmail, subscribers.StatusUnsubscribed, nil, nil)
+	complainedEmail := subscribeUniqueEmail(t) + "-qc-complained"
+	seedSubscriberRow(t, pool, complainedEmail, subscribers.StatusComplained, nil, nil)
+	activeEmail := subscribeUniqueEmail(t) + "-qc-active"
+	seedSubscriberRow(t, pool, activeEmail, subscribers.StatusActive, nil, nil)
+
+	suppressedEmail := subscribeUniqueEmail(t) + "-qc-suppressed"
+	now := time.Now()
+
+	cases := []struct {
+		name             string
+		body             map[string]any
+		suppression      SuppressionChecker
+		wantMutationCall bool // whether ANY of create/restart/claim* should fire
+	}{
+		{"honeypot", withHoneypot(subscribeBody(subscribeUniqueEmail(t)+"-qc-bot", nil, now)), nil, false},
+		{"timing-gate", withTooFast(subscribeBody(subscribeUniqueEmail(t)+"-qc-fast", nil, now), now), nil, false},
+		{"suppressed", subscribeBody(suppressedEmail, nil, now), fakeSuppressionChecker{suppressed: map[string]bool{suppressedEmail: true}}, false},
+		{"complained", subscribeBody(complainedEmail, nil, now), nil, false},
+		{"active", subscribeBody(activeEmail, nil, now), nil, true},
+		{"pending", subscribeBody(pendingEmail, nil, now), nil, true},
+		{"unsubscribed", subscribeBody(unsubEmail, nil, now), nil, true},
+		{"new-signup", subscribeBody(subscribeUniqueEmail(t)+"-qc-new", nil, now), nil, true},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mailer := &mailing.RecordingMailer{}
+			h, mux, subs, supp := subscribeCountingMux(t, pool, mailer, c.suppression)
+
+			resp := doSubscribe(t, h, mux, c.body)
+			if resp.StatusCode != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", resp.StatusCode)
+			}
+
+			if got := supp.callCount(); got != 1 {
+				t.Errorf("IsSuppressed calls = %d, want exactly 1 (the fixed cost every branch must pay)", got)
+			}
+			snap := subs.snapshot()
+			if snap.findByEmail != 1 {
+				t.Errorf("FindByEmail calls = %d, want exactly 1 (the fixed cost every branch must pay)", snap.findByEmail)
+			}
+
+			gotMutation := snap.create > 0 || snap.restartSignup > 0 ||
+				snap.claimConfirmationSend > 0 || snap.claimAlreadySubscribedSend > 0
+			if gotMutation != c.wantMutationCall {
+				t.Errorf("branch %q: a mutation store call happened = %v, want %v (create=%d restart=%d claimConfirm=%d claimAlready=%d)",
+					c.name, gotMutation, c.wantMutationCall, snap.create, snap.restartSignup, snap.claimConfirmationSend, snap.claimAlreadySubscribedSend)
+			}
+		})
+	}
+}
