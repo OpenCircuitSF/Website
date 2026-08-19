@@ -1,8 +1,8 @@
 # Database setup scripts
 
-One-time PostgreSQL bootstrap for ShortLinks. These scripts create (and tear
-down) the application **login role** and **database**. They do **not** create
-any tables — the schema is owned by [golang-migrate](https://github.com/golang-migrate/migrate)
+One-time PostgreSQL bootstrap for Open Circuit SF. These scripts create (and
+tear down) the application **login role** and **database**. They do **not**
+create any tables — the schema is owned by [golang-migrate](https://github.com/golang-migrate/migrate)
 and lives in `migrations/`.
 
 ## Backups
@@ -14,8 +14,8 @@ Ongoing backup/restore tooling lives alongside these setup scripts:
 - `pull-backups.sh` — `rsync` the backup root offsite (run on the Mac mini)
 - `restore.sh` — restore a dump into a target database / run restore drills
 
-See [docs/backups.md](../../docs/backups.md) for the full setup, cron entries,
-and restore procedure.
+See [docs/deployment.md](../../docs/deployment.md)'s Backups section for the
+full setup, cron entries, and restore procedure.
 
 Run order on a fresh server:
 
@@ -37,10 +37,10 @@ Run order on a fresh server:
 secret out of source control.
 
 The same value must be reflected in your `.env` `DATABASE_URL`, which uses the
-role name `shortlinks` and database name `shortlinks`:
+role name `opencircuit` and database name `opencircuit`:
 
 ```
-DATABASE_URL=postgres://shortlinks:<your-password>@localhost:5432/shortlinks?sslmode=disable
+DATABASE_URL=postgres://opencircuit:<your-password>@localhost:5432/opencircuit?sslmode=disable
 ```
 
 ## Create the database and role
@@ -62,5 +62,5 @@ psql -U postgres -f scripts/db/drop.sql
 
 Both statements use `IF EXISTS`, so this is safe to run repeatedly.
 
-> **Warning:** `drop.sql` permanently destroys all data in the `shortlinks`
+> **Warning:** `drop.sql` permanently destroys all data in the `opencircuit`
 > database. Use it only for local development resets — never in production.
