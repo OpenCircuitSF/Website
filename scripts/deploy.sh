@@ -13,12 +13,15 @@
 # service onto a stale binary. It asks for a Y/n confirmation before restarting.
 #
 # Gates, in order:
-#   1. SPA build produced hashed assets (not the committed placeholder).
-#   2. The freshly built Go binary actually EMBEDS that fresh SPA bundle.
-#   3. [Y/n] you confirm — only then is the binary installed + the service
+#   1. No `[PLACEHOLDER: ...]` marker survives anywhere in web/src/ — those are
+#      facts nobody but the user may supply (tracked in #0075), and shipping
+#      one to production is a legal-copy defect, not a build defect.
+#   2. SPA build produced hashed assets (not the committed placeholder).
+#   3. The freshly built Go binary actually EMBEDS that fresh SPA bundle.
+#   4. [Y/n] you confirm — only then is the binary installed + the service
 #      restarted.
-#   4. The service is active after restart.
-#   5. The LIVE site is serving the exact bundle we just built (catches the
+#   5. The service is active after restart.
+#   6. The LIVE site is serving the exact bundle we just built (catches the
 #      "Apache serves a stale static dir / a proxy is caching" case).
 #
 # Override defaults with env vars:
@@ -62,7 +65,14 @@ LIVE_BEFORE="$(curl -fsS --max-time 15 "$PUBLIC_URL/" 2>/dev/null \
                | grep -oE 'index-[A-Za-z0-9_-]+\.js' | head -1 || true)"
 info "live now: ${LIVE_BEFORE:-<unreachable>}"
 
-# ---- gate 1: build the SPA, confirm it produced hashed assets --------------
+# ---- gate 1: no [PLACEHOLDER: ...] copy left in the SPA source -------------
+step "Checking for unresolved [PLACEHOLDER: ...] copy"
+if grep -rn '\[PLACEHOLDER:' web/src/ 2>/dev/null; then
+  die "unresolved [PLACEHOLDER: ...] copy found in web/src/ (shown above) — these are facts only the user can supply, tracked in issues/0075.md. Resolve #0075 and remove every [PLACEHOLDER: ...] marker before deploying."
+fi
+ok "no [PLACEHOLDER: ...] markers in web/src/"
+
+# ---- gate 2: build the SPA, confirm it produced hashed assets --------------
 step "Building the Svelte SPA (web/)"
 ( cd web && { [ -f package-lock.json ] && npm ci || npm install; } && npm run build )
 BUILT_JS="$(grep -oE 'index-[A-Za-z0-9_-]+\.js'  web/dist/index.html | head -1 || true)"
@@ -72,7 +82,7 @@ BUILT_CSS="$(grep -oE 'index-[A-Za-z0-9_-]+\.css' web/dist/index.html | head -1 
 [ -f "web/dist/assets/$BUILT_JS" ] || die "expected built asset web/dist/assets/$BUILT_JS is missing after build."
 ok "SPA built: $BUILT_JS, $BUILT_CSS"
 
-# ---- gate 2: build the binary, confirm it EMBEDS this fresh bundle ----------
+# ---- gate 3: build the binary, confirm it EMBEDS this fresh bundle ----------
 # web/embed.go does `//go:embed all:dist`. Verify the freshly built binary actually
 # CONTAINS the bundle we just built. We use `grep -a` (scans the whole file) rather
 # than `strings`, which can give false negatives. If the bundle is missing, print a
@@ -91,7 +101,7 @@ if ! grep -aq "$BUILT_JS" "$TMPBIN"; then
 fi
 ok "binary verified to embed $BUILT_JS"
 
-# ---- gate 3: confirmation before restart -----------------------------------
+# ---- gate 4: confirmation before restart -----------------------------------
 step "Ready to deploy — review before restarting"
 info "commit:        $HEAD_SHA"
 info "binary target: $BIN"
@@ -106,7 +116,7 @@ case "${ans:-}" in
   *) trap - EXIT; info "Aborted before restart. The verified fresh binary is left at: $TMPBIN"; exit 0 ;;
 esac
 
-# ---- install + restart -----------------------------------------------------
+# ---- gate 5: install + restart, confirm the service comes back active ------
 step "Installing binary and restarting '$SERVICE'"
 sudo install -m 0755 "$TMPBIN" "$BIN"
 ok "installed $BIN"
@@ -116,7 +126,7 @@ systemctl is-active --quiet "$SERVICE" \
   || die "'$SERVICE' is not active after restart — inspect: journalctl -u $SERVICE -n 50"
 ok "'$SERVICE' restarted and active"
 
-# ---- gate 5: confirm the LIVE site serves the fresh bundle ------------------
+# ---- gate 6: confirm the LIVE site serves the fresh bundle ------------------
 step "Verifying the live site serves the fresh bundle"
 LIVE_AFTER=""
 for _ in $(seq 1 10); do

@@ -9,8 +9,11 @@
   // acceptance criteria.
   //
   // Copy notes:
-  //  - "What we collect" (email, interests, signup IP, UTM source) and "why"
-  //    are taken directly from PRD §11's Compliance section, not invented.
+  //  - "What we collect" and "why" are checked against PRD §6.2's actual
+  //    `subscribers` schema, not just §11's four-item prose summary -- the
+  //    schema also stores `signup_user_agent` and the full UTM triple
+  //    (source/medium/campaign), so both lists name all of them. §11's
+  //    four items are a fair *summary*; this page enumerates the schema.
   //  - The GDPR/CCPA posture (double opt-in with IP + timestamp; erasure as
   //    hard delete plus a permanent suppression entry) and the CAN-SPAM
   //    commitments (physical mailing address in every commercial message;
@@ -19,16 +22,30 @@
   //    #0033-#0039 (unsubscribe/hygiene), and #0060 (erasure) are all still
   //    open at the time this page was written. The policy describes the
   //    documented commitment; if the shipped mechanics ever differ, this page
-  //    needs a follow-up pass (see #0070's Notes).
+  //    needs a follow-up pass (see #0070's Notes). Because none of this is
+  //    live yet, the intro panel carries one explicit line that signup is not
+  //    open -- present tense elsewhere is forward-looking policy, not a claim
+  //    about today (see #0070's Gotchas for the full reasoning).
+  //  - The Consent section names only what §6.2 actually has two of:
+  //    `signup_ip` + `confirmed_at`. There is no confirm-time IP column --
+  //    don't reintroduce "the confirming click's IP" here.
+  //  - The erasure paragraph under "How to leave" must keep naming all three
+  //    things #0060 retains after a hard delete (suppression entry,
+  //    anonymized `email_sends` rows, raw `email_events` payloads) -- #0060's
+  //    own acceptance criteria require this page to document that, and a
+  //    bare "we delete your data entirely" is false against that design.
   //  - "No third-party analytics, ad trackers, external CDNs, or email
   //    open-tracking pixels" is CLAUDE.md §9's binding restriction, stated
   //    here as a fact about how the site is built, not a promise.
-  //  - Four facts are placeholders because they are not this page's author's
+  //  - Five facts are placeholders because they are not this page's author's
   //    to invent: the exact data-retention window, the erasure turnaround
-  //    time, the contact address for privacy requests specifically, and the
-  //    legal entity name/type behind "Open Circuit SF". Each is marked
-  //    in-line as [PLACEHOLDER: ...] and called out in the issue's
-  //    resolution notes for the user to fill in with a real value.
+  //    time, the contact address for privacy requests specifically, the
+  //    legal entity name/type behind "Open Circuit SF", and the physical
+  //    mailing address for CAN-SPAM. Each is marked in-line with a bracketed
+  //    "PLACEHOLDER" marker (see the literal text below) and tracked in
+  //    #0075 (blocked on the user, not implementable by an agent).
+  //    `scripts/deploy.sh` gate 1 greps for that marker and refuses to
+  //    deploy while any survive in web/src/.
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
   import StatusList from '../lib/StatusList.svelte';
@@ -50,6 +67,11 @@
       it. It applies to the workshop mailing list and this website; it does not cover
       third-party services like Discord, which has its own privacy policy.
     </p>
+    <p class="text-muted">
+      Mailing-list signup is not open yet. This policy documents the commitment we are
+      making about it in advance, so it is accurate from the moment signup does open —
+      nothing below describes something already happening to you today.
+    </p>
     <p class="text-muted">Last updated: {LAST_UPDATED}</p>
   </TerminalPanel>
 
@@ -64,13 +86,14 @@
           'your email address',
           'the workshop interests/topics you select at signup',
           'the IP address and timestamp of your signup — evidence of consent, not a tracking measure',
-          'the UTM source of the link you signed up from, if any (e.g. which social post or page sent you)',
+          'the browser/device user agent string your browser sends at signup',
+          'the UTM parameters (source, medium, campaign) of the link you signed up from, if any (e.g. which social post or page sent you)',
         ]}
       />
       <p class="text-muted">
-        We do not collect anything beyond this at signup, and this site does not run
-        third-party analytics, ad trackers, external CDNs, or email open-tracking
-        pixels — nothing on this site phones home to anyone but us.
+        That is the complete list of what signing up for the list collects. This site
+        does not run third-party analytics, ad trackers, external CDNs, or email
+        open-tracking pixels — nothing on this site phones home to anyone but us.
       </p>
     </Panel>
   </section>
@@ -84,8 +107,8 @@
         items={[
           'email — to send you workshop announcements and the occasional list update',
           'interests — so we only send you workshops you actually asked to hear about',
-          'signup IP + timestamp — documented proof of opt-in consent (GDPR/CCPA)',
-          'UTM source — to understand which channels bring people to the list',
+          'signup IP, user agent, and timestamp — documented proof of opt-in consent (GDPR/CCPA) and abuse prevention',
+          'UTM parameters — to understand which channels bring people to the list',
         ]}
       />
     </Panel>
@@ -113,9 +136,11 @@
     <Panel>
       <p>
         Signup uses double opt-in: you submit the form, then confirm via a link we
-        email you. Nothing is added to the list until you confirm, and the confirming
-        click's IP address and timestamp are recorded alongside it — that record is
-        what "evidenced consent" (the GDPR/CCPA standard) means in practice.
+        email you. Nothing is added to the list until you confirm. The IP address and
+        timestamp of your original signup (see "What we collect" above) are recorded as
+        evidence of consent, and the confirming click separately records its own
+        timestamp — not a second IP address. Together, those records are what
+        "evidenced consent" (the GDPR/CCPA standard) means in practice.
       </p>
     </Panel>
   </section>
@@ -131,11 +156,20 @@
         CAN-SPAM requires.
       </p>
       <p>
-        <strong>Erasure.</strong> You can request that we delete your data entirely
-        rather than just unsubscribing. An erasure request results in a hard delete of
-        your subscriber record plus a permanent suppression entry, so the address
-        can't be re-added by a future import or signup. We aim to complete erasure
-        requests within
+        <strong>Erasure.</strong> You can request that we delete your personal data
+        rather than just unsubscribing. An erasure request hard-deletes your
+        subscriber record — your email, interests, and signup details — but three
+        things are deliberately retained rather than deleted:
+      </p>
+      <StatusList
+        items={[
+          'a permanent suppression entry, so the address cannot be silently re-added by a future import or signup',
+          'anonymized rows in our send history, so historical campaign counts (how many people a given email actually reached) do not silently change',
+          'the raw deliverability events (bounces, complaints, deliveries) already logged against your address, kept without the link back to your identity, for spam/abuse forensics',
+        ]}
+      />
+      <p>
+        We aim to complete erasure requests within
         <strong>[PLACEHOLDER: erasure turnaround time — not yet decided]</strong>.
       </p>
       <p>
