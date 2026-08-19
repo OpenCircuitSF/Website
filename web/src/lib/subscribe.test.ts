@@ -17,6 +17,8 @@ import {
   buildSaveInterestsPatch,
   buildUnsubscribeEverythingPatch,
   inactiveStatusMessage,
+  showSubscribeAgainAffordance,
+  COMPLAINED_NO_RESUBSCRIBE_MESSAGE,
   type UtmStorage,
 } from './subscribe';
 
@@ -193,5 +195,42 @@ describe('inactiveStatusMessage (#0031 review finding 1)', () => {
 
   it('falls back to a generic not-subscribed statement for an unrecognized status', () => {
     expect(inactiveStatusMessage('some-future-status')).toBe("You're not currently subscribed.");
+  });
+
+  // #0090: `complained` used to get the same vague "isn't currently
+  // subscribed" text every other non-active status got, even though the
+  // page's own unsubscribe path already has honest copy for exactly this
+  // case (internal/handlers/preferences.go's patchUnsubscribe no-op
+  // message). Reusing that copy, rather than writing a second version of
+  // it, is what keeps the two from drifting apart the next time either is
+  // edited -- assert on the shared constant, not a duplicated literal.
+  it('gives complained the same honest copy the unsubscribe path already returns, not the vague default', () => {
+    expect(inactiveStatusMessage('complained')).toBe(COMPLAINED_NO_RESUBSCRIBE_MESSAGE);
+    expect(inactiveStatusMessage('complained')).not.toBe("This address isn't currently subscribed.");
+  });
+
+  it("complained's copy names how to reach a human", () => {
+    expect(inactiveStatusMessage('complained')).toMatch(/contact us/i);
+  });
+});
+
+describe('showSubscribeAgainAffordance (#0090 — the dead end)', () => {
+  // complained can never leave that status from this page: goToSubscribe is
+  // a client-side navigate with no mutation, and the public form's #0026
+  // uniform 202 masks that existingSignup's StatusComplained branch sends
+  // no confirmation email. Offering the button walks someone into that dead
+  // end from a page that already knows their status.
+  it('is suppressed for complained', () => {
+    expect(showSubscribeAgainAffordance('complained')).toBe(false);
+  });
+
+  // pending, unsubscribed and bounced can all legitimately resubscribe by
+  // submitting the public form again; active never reaches this panel
+  // (isActive routes to the editor instead), but the function is still
+  // asked to behave safely if it ever did.
+  it('is present for every other status the panel can show', () => {
+    for (const status of ['pending', 'unsubscribed', 'bounced', 'active', 'some-future-status']) {
+      expect(showSubscribeAgainAffordance(status)).toBe(true);
+    }
   });
 });

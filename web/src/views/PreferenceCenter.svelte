@@ -32,6 +32,7 @@
     buildUnsubscribeEverythingPatch,
     toggleSlug,
     inactiveStatusMessage,
+    showSubscribeAgainAffordance,
   } from '../lib/subscribe';
   import type { PublicInterest } from '../lib/types';
   import Panel from '../lib/Panel.svelte';
@@ -224,12 +225,22 @@
   <!-- #0031 review finding 1: not currently active (pending, unsubscribed,
        bounced, or complained) -- the interest editor and Save button can't
        honestly do anything useful here, so offer the resubscribe path
-       instead of a Save button that can't do anything. -->
+       instead of a Save button that can't do anything.
+
+       #0090: the resubscribe path is a dead end for `complained` --
+       goToSubscribe performs no mutation (the guard stays correctly in
+       place) and the public form's uniform 202 (#0026) gives no sign that
+       existingSignup's StatusComplained branch never sends a confirmation
+       email. showSubscribeAgainAffordance suppresses the button for that
+       one status; the other three (pending, unsubscribed, bounced) can
+       genuinely leave their status this way and keep it. -->
   <div class="pref-content">
     {#if showHeading}<h1>Manage your preferences</h1>{/if}
     <Panel>
       <p role="status">{inactiveStatusMessage(status)}</p>
-      <button type="button" class="link-button" onclick={goToSubscribe}>Subscribe again</button>
+      {#if showSubscribeAgainAffordance(status)}
+        <button type="button" class="link-button" onclick={goToSubscribe}>Subscribe again</button>
+      {/if}
     </Panel>
   </div>
 {:else}

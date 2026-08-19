@@ -178,13 +178,23 @@ export function buildUnsubscribeEverythingPatch(token: string): PreferencesPatch
  * complained) — `active` itself is never passed in (the caller checks
  * `status === 'active'` first and renders the normal editor instead), kept
  * here anyway as a safe fallback rather than an unreachable-branch throw.
+ *
+ * #0090: `complained` reuses the same honest copy
+ * internal/handlers/preferences.go's patchUnsubscribe already returns for a
+ * complained row's no-op PATCH (see COMPLAINED_UNSUBSCRIBE_NO_OP_MESSAGE
+ * below) rather than the vague "isn't currently subscribed" text every
+ * other non-active status gets. The vague text used to invite exactly the
+ * dead end #0090 closes: "Subscribe again" led to the public form, which
+ * gives #0026's uniform 202 for a confirmation email existingSignup's
+ * StatusComplained branch never sends. The honest copy explains why and
+ * names the only real path (contact us) instead.
  */
 export function inactiveStatusMessage(status: string): string {
   switch (status) {
     case 'unsubscribed':
       return "You're not currently subscribed. You can resubscribe anytime.";
     case 'complained':
-      return "This address isn't currently subscribed.";
+      return COMPLAINED_NO_RESUBSCRIBE_MESSAGE;
     case 'bounced':
       return "We haven't been able to deliver to this address, so it's not currently subscribed.";
     case 'pending':
@@ -194,4 +204,34 @@ export function inactiveStatusMessage(status: string): string {
     default:
       return "You're not currently subscribed.";
   }
+}
+
+/**
+ * The honest copy for a `complained` subscriber, shared by
+ * inactiveStatusMessage above (#0090) and matching, word for word, the
+ * no-op message internal/handlers/preferences.go's patchUnsubscribe already
+ * returns for a PATCH {unsubscribe: true} against an already-complained row
+ * (see that file's `message` assignment in patchUnsubscribe). Keeping one
+ * exported constant rather than two independently-written strings is what
+ * keeps the "same copy" guarantee mechanical rather than a thing that
+ * quietly drifts the next time either string is edited.
+ */
+export const COMPLAINED_NO_RESUBSCRIBE_MESSAGE =
+  "This address is marked as having complained about a previous email, and complained addresses " +
+  "can't be unsubscribed or resubscribed from this page. Contact us if you believe this is a mistake.";
+
+/**
+ * Statuses for which PreferenceCenter.svelte's non-active panel offers the
+ * "Subscribe again" affordance (#0090). `pending`, `unsubscribed` and
+ * `bounced` can all legitimately leave that status by submitting the public
+ * form again — `active` never reaches this panel at all (isActive routes it
+ * to the editor instead). `complained` is deliberately excluded: per
+ * CLAUDE.md §9, "complained subscribers never auto-resubscribe" — only an
+ * admin clears that state — and the public POST /api/subscribe form cannot
+ * do it either (existingSignup's StatusComplained branch sends no
+ * confirmation email), so the button would offer a path that goes nowhere
+ * while #0026's uniform 202 keeps that failure invisible to the visitor.
+ */
+export function showSubscribeAgainAffordance(status: string): boolean {
+  return status !== 'complained';
 }
