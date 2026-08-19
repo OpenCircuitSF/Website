@@ -182,6 +182,12 @@ func servePostgres(cfg *config.Config) error {
 	// adminInterestsH above) — see public_interests.go's package doc comment.
 	publicInterestsH := handlers.NewPublicInterestsHandler(interestsStore)
 
+	// Preference center (#0031, PRD §6.4): GET/PATCH /api/preferences,
+	// token-authenticated by manage_token. See preferences.go's package doc
+	// comment for why "Unsubscribe from everything" rides the same PATCH
+	// route instead of a new one.
+	preferencesH := handlers.NewPreferencesHandler(subscribersStore, interestsStore, auditLogger, nil)
+
 	// SSE event broker: the in-memory pub/sub singleton reused for live
 	// campaign send progress once the mailing subsystem lands.
 	broker := events.NewBroker()
@@ -205,7 +211,7 @@ func servePostgres(cfg *config.Config) error {
 
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
-		publicInterestsH,
+		publicInterestsH, preferencesH,
 		requireSession, requireAdmin, nil /* no outer middleware in production */)
 }
 
@@ -346,10 +352,11 @@ func serveDevMode(cfg *config.Config) error {
 	// /api/subscribe/confirm, and GET/PATCH /api/preferences when their
 	// handler is non-nil, mirroring subscribeH's own nil-guard.
 	var publicInterestsH *handlers.PublicInterestsHandler
+	var preferencesH *handlers.PreferencesHandler
 
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
-		publicInterestsH,
+		publicInterestsH, preferencesH,
 		requireSession, requireAdmin, devAutoLogin)
 }
 
@@ -432,6 +439,7 @@ func mountAndServe(
 	meH *handlers.MeHandler,
 	subscribeH *handlers.SubscribeHandler,
 	publicInterestsH *handlers.PublicInterestsHandler,
+	preferencesH *handlers.PreferencesHandler,
 	requireSession func(http.Handler) http.Handler,
 	requireAdmin func(http.Handler) http.Handler,
 	outerMiddleware func(http.Handler) http.Handler,
@@ -523,6 +531,19 @@ func mountAndServe(
 	// same trust level as GET /sitemap.xml below.
 	if publicInterestsH != nil {
 		mux.Handle("GET /api/interests", http.HandlerFunc(publicInterestsH.List))
+	}
+
+	// Preference center (#0031) — public, unauthenticated, token-gated by
+	// the secret in the request itself rather than a session. Rate-limited
+	// at the same scale as subscribeLimiter above: this accepts a
+	// caller-supplied token and, while a 32-byte random value isn't
+	// brute-forceable at any rate this limiter would need to stop, matching
+	// the existing public-endpoint convention costs nothing and blunts
+	// naive scripted retries.
+	preferencesLimiter := middleware.NewRateLimiter(rate.Every(time.Minute/10), 5)
+	if preferencesH != nil {
+		mux.Handle("GET /api/preferences", preferencesLimiter.Middleware(http.HandlerFunc(preferencesH.Get)))
+		mux.Handle("PATCH /api/preferences", preferencesLimiter.Middleware(http.HandlerFunc(preferencesH.Patch)))
 	}
 
 	// SEO: server-injected per-route meta tags (#0019) and generated

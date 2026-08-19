@@ -143,3 +143,17 @@ export interface PublicInterest {
   description?: string;
   sort_order: number;
 }
+
+/** GET/PATCH /api/preferences body (#0031). email is masked
+ * ("b•••••n@gmail.com") except when the SPA already holds the unmasked
+ * address from a fresh confirm response (#0030; see PreferenceCenter.svelte).
+ * unsubscribed is true only on a successful "Unsubscribe from everything"
+ * PATCH. Matches internal/handlers/preferences.go's preferencesResponse. */
+export interface PreferencesResponse {
+  message?: string;
+  email: string;
+  status: string;
+  interests: string[];
+  active_interests: PublicInterest[];
+  unsubscribed: boolean;
+}

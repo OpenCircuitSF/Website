@@ -13,8 +13,9 @@ import type {
   Subscriber,
   SubscribersPage,
   PublicInterest,
+  PreferencesResponse,
 } from './types';
-import type { SubscribeRequestBody } from './subscribe';
+import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
 import type {
   ServerCredentialAssertion,
   AssertionFinishPayload,
@@ -483,5 +484,26 @@ export function subscribe(body: SubscribeRequestBody): Promise<unknown> {
   return apiPost<unknown>('/api/subscribe', body);
 }
 
-// confirmSubscription (#0030) and getPreferences/patchPreferences (#0031)
-// land in their own commits later in this batch.
+/**
+ * GET /api/preferences?token=... — the preference center's read (#0031).
+ * Email always comes back masked; throws ApiError(404) for an invalid,
+ * unknown, or rotated token, which PreferenceCenter.svelte renders as a
+ * neutral "this link doesn't work, subscribe again" state rather than the
+ * generic NotFound view.
+ */
+export function getPreferences(token: string): Promise<PreferencesResponse> {
+  return apiGet<PreferencesResponse>(`/api/preferences?token=${encodeURIComponent(token)}`);
+}
+
+/**
+ * PATCH /api/preferences — replaces the interest set, OR (when the body
+ * carries `unsubscribe: true`) performs the separate, explicitly-labelled
+ * "Unsubscribe from everything" action (#0031). See lib/subscribe.ts's
+ * buildSaveInterestsPatch / buildUnsubscribeEverythingPatch for the two
+ * request shapes this accepts.
+ */
+export function patchPreferences(body: PreferencesPatchBody): Promise<PreferencesResponse> {
+  return apiPatch<PreferencesResponse>('/api/preferences', body);
+}
+
+// confirmSubscription (#0030) lands in its own commit later in this batch.

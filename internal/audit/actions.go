@@ -47,10 +47,28 @@ const (
 	// Subscriber lifecycle (PRD §6.3). ActionSubscriberSignup covers both a
 	// brand-new signup and the "unsubscribed → treat as new signup" restart
 	// path (#0026) — actor NULL (pre-auth, the visitor is anonymous), same
-	// convention as ActionAccountRegistrationStarted above. Later phases
-	// (#0030's subscriber.confirmed, #0034's subscriber.unsubscribed, per
-	// PRD §6.3/§6.5) add their own constants here when they land.
+	// convention as ActionAccountRegistrationStarted above.
 	ActionSubscriberSignup = "subscriber.signup"
+	// ActionSubscriberPreferencesUpdated is written by PATCH
+	// /api/preferences (#0031) whenever a subscriber's interest selection is
+	// replaced. Actor NULL — the caller is authenticated only by possessing
+	// manage_token, not a real account.
+	ActionSubscriberPreferencesUpdated = "subscriber.preferences_updated"
+	// ActionSubscriberUnsubscribed is the general "a subscriber left the
+	// list" action, shared across every path that can produce it: the
+	// preference center's explicit "Unsubscribe from everything" action
+	// (#0031, source=preferences) and #0034's one-click email-footer link
+	// (source=one_click, once it lands) both write this SAME action —
+	// distinguished by metadata.source, exactly like
+	// subscribers.Store.Unsubscribe's own unsubscribe_source column
+	// (SourceOneClick/SourcePreferences/SourceMailto/SourceAdmin). This is
+	// the constant this file's own doc comment previously earmarked for
+	// #0034; #0031 defines it first since it needed a real "unsubscribe from
+	// everything" action before #0034 existed, and #0034 should reuse it
+	// rather than mint a second name for the same event.
+	ActionSubscriberUnsubscribed = "subscriber.unsubscribed"
+	// Later phases (#0030's subscriber.confirmed, per PRD §6.3) add their
+	// own constant here when it lands.
 
 	// Subscriber admin actions (PRD §5.2, §6.5; #0032's admin screen).
 	// Actor is always the acting admin, unlike ActionSubscriberSignup above.
