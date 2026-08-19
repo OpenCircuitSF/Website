@@ -18,6 +18,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
@@ -98,6 +99,10 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	settingsH := handlers.NewSettingsHandler(store, auditLogger)
 	adminUsersH := handlers.NewAdminUsersHandler(store, auditLogger)
 	adminAuditH := handlers.NewAdminAuditHandler(audit.NewReader(pool))
+	// #0024: exercised the same way as adminUsersH/adminAuditH above, so this
+	// test's gap-closing argument (main.go's REAL mountAndServe, not a
+	// per-handler suite's own small mux) covers /admin/interests too.
+	adminInterestsH := handlers.NewAdminInterestsHandler(interests.NewStore(pool), auditLogger)
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 	meH := handlers.NewMeHandler()
@@ -109,7 +114,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			requireSession, requireAdmin, nil)
 	}()
 
@@ -124,7 +129,11 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// /admin/settings is representative — every /admin/* route in main.go is
 	// wired through the same requireAdmin composition, and the per-handler
 	// suites (settings_test.go, users_test.go, audit_test.go) each prove that
-	// composition again for their own routes.
+	// composition again for their own routes. /admin/interests (#0024) is
+	// checked explicitly rather than left to "representative" — the PATCH
+	// and DELETE routes newly introduced here didn't exist when that
+	// argument was written, and this test is exactly the one #0024 was told
+	// to keep true for its own routes too.
 	cases := []struct {
 		name   string
 		cookie string // "" means no cookie at all
@@ -134,21 +143,23 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		{"non-admin session", "wiring-nonadmin-token", http.StatusForbidden},
 		{"admin session", "wiring-admin-token", http.StatusOK},
 	}
-	for _, c := range cases {
-		req, err := http.NewRequest(http.MethodGet, baseURL+"/admin/settings", nil)
-		if err != nil {
-			t.Fatalf("%s: build request: %v", c.name, err)
-		}
-		if c.cookie != "" {
-			req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: c.cookie})
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatalf("%s: request: %v", c.name, err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != c.want {
-			t.Errorf("%s: GET /admin/settings status = %d, want %d", c.name, resp.StatusCode, c.want)
+	for _, path := range []string{"/admin/settings", "/admin/interests"} {
+		for _, c := range cases {
+			req, err := http.NewRequest(http.MethodGet, baseURL+path, nil)
+			if err != nil {
+				t.Fatalf("%s %s: build request: %v", c.name, path, err)
+			}
+			if c.cookie != "" {
+				req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: c.cookie})
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("%s %s: request: %v", c.name, path, err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != c.want {
+				t.Errorf("%s: GET %s status = %d, want %d", c.name, path, resp.StatusCode, c.want)
+			}
 		}
 	}
 

@@ -254,6 +254,158 @@ func TestGetByIDs_IgnoresUnknownIDs(t *testing.T) {
 	}
 }
 
+func TestGetByID_ResolvesRegardlessOfActive(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	slug := testSlug(t, pool)
+
+	created, err := store.Create(context.Background(), slug, "For GetByID", nil, 0)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := store.GetByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ID != created.ID || got.Slug != slug {
+		t.Fatalf("GetByID = %+v, want id=%d slug=%q", got, created.ID, slug)
+	}
+
+	if err := store.Deactivate(context.Background(), created.ID); err != nil {
+		t.Fatalf("Deactivate: %v", err)
+	}
+	got, err = store.GetByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetByID after deactivate: %v", err)
+	}
+	if got.Active {
+		t.Fatalf("GetByID after deactivate: Active = true, want false")
+	}
+}
+
+func TestGetByID_NotFound(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+
+	_, err := store.GetByID(context.Background(), 99999999)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got err=%v, want ErrNotFound", err)
+	}
+}
+
+// seedSubscriberWithInterest inserts a minimal subscribers row and links it to
+// interestID via subscriber_interests, registering cleanup that deletes the
+// subscriber (subscriber_interests rows cascade via ON DELETE CASCADE, per
+// migrations/000010). Returns the subscriber's id.
+func seedSubscriberWithInterest(t *testing.T, pool *pgxpool.Pool, interestID int64) int64 {
+	t.Helper()
+	ctx := context.Background()
+	email := fmt.Sprintf("zz-test-sub-%d@example.com", time.Now().UnixNano())
+	var subID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO subscribers (email, manage_token) VALUES ($1, $2) RETURNING id`,
+		email, fmt.Sprintf("zz-token-%d", time.Now().UnixNano()),
+	).Scan(&subID); err != nil {
+		t.Fatalf("seed subscriber: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, subID)
+	})
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO subscriber_interests (subscriber_id, interest_id) VALUES ($1, $2)`,
+		subID, interestID,
+	); err != nil {
+		t.Fatalf("link subscriber to interest: %v", err)
+	}
+	return subID
+}
+
+func TestSubscriberCounts_CountsLinkedAndOmitsZero(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	slugWith := testSlug(t, pool)
+	slugWithout := testSlug(t, pool)
+
+	withSubs, err := store.Create(context.Background(), slugWith, "Has subscribers", nil, 0)
+	if err != nil {
+		t.Fatalf("Create withSubs: %v", err)
+	}
+	without, err := store.Create(context.Background(), slugWithout, "No subscribers", nil, 0)
+	if err != nil {
+		t.Fatalf("Create without: %v", err)
+	}
+	seedSubscriberWithInterest(t, pool, withSubs.ID)
+	seedSubscriberWithInterest(t, pool, withSubs.ID)
+
+	counts, err := store.SubscriberCounts(context.Background())
+	if err != nil {
+		t.Fatalf("SubscriberCounts: %v", err)
+	}
+	if counts[withSubs.ID] != 2 {
+		t.Errorf("counts[%d] = %d, want 2", withSubs.ID, counts[withSubs.ID])
+	}
+	if _, ok := counts[without.ID]; ok {
+		t.Errorf("counts contains id %d with zero subscribers, want omitted", without.ID)
+	}
+}
+
+func TestDelete_RemovesRowWithNoSubscribers(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	slug := testSlug(t, pool)
+
+	created, err := store.Create(context.Background(), slug, "Deletable", nil, 0)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := store.Delete(context.Background(), created.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	_, err = store.GetByID(context.Background(), created.ID)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetByID after Delete: got err=%v, want ErrNotFound", err)
+	}
+}
+
+func TestDelete_RefusedWhenSubscribersExist(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	slug := testSlug(t, pool)
+
+	created, err := store.Create(context.Background(), slug, "Has a subscriber", nil, 0)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	seedSubscriberWithInterest(t, pool, created.ID)
+
+	err = store.Delete(context.Background(), created.ID)
+	if !errors.Is(err, ErrHasSubscribers) {
+		t.Fatalf("Delete: got err=%v, want ErrHasSubscribers", err)
+	}
+
+	// The row must still exist -- refusal must not have deleted it anyway.
+	got, err := store.GetByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetByID after refused Delete: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Fatalf("GetByID after refused Delete = %+v, want id=%d", got, created.ID)
+	}
+}
+
+func TestDelete_NotFound(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+
+	err := store.Delete(context.Background(), 99999999)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got err=%v, want ErrNotFound", err)
+	}
+}
+
 // --- Database-constraint tests (exercised via raw SQL, bypassing the store's
 // own Go-level validation) so the migration's CHECK/UNIQUE constraints are
 // what's actually under test, not just the Go layer in front of them. See

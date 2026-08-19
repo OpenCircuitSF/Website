@@ -51,6 +51,22 @@ const (
 	// (#0030's subscriber.confirmed, #0034's subscriber.unsubscribed, per
 	// PRD §6.3/§6.5) add their own constants here when they land.
 	ActionSubscriberSignup = "subscriber.signup"
+
+	// Interest taxonomy lifecycle (PRD §6.1, §5.2 — the admin CRUD, #0024).
+	// ActionInterestUpdated covers any field change other than the active
+	// flag's transition; that transition gets its own two actions (mirroring
+	// account.deactivated/reactivated above) because "an interest just
+	// disappeared from the signup form" is exactly the kind of change an
+	// operator needs to spot in the log without decoding metadata.
+	ActionInterestCreated     = "interest.created"
+	ActionInterestUpdated     = "interest.updated"
+	ActionInterestDeactivated = "interest.deactivated"
+	ActionInterestReactivated = "interest.reactivated"
+	// ActionInterestDeleted is only ever written for the narrow hard-delete
+	// path (interests.Store.Delete) that succeeds solely when zero
+	// subscribers ever selected the interest — never for the common case of
+	// retiring one with history, which is ActionInterestDeactivated.
+	ActionInterestDeleted = "interest.deleted"
 )
 
 // Deleted (#0068): ActionCampaignCreated/Updated/Deleted and
@@ -73,4 +89,5 @@ const (
 	TargetSettings   = "settings"
 	TargetURLFilter  = "url_filter"
 	TargetSubscriber = "subscriber"
+	TargetInterest   = "interest"
 )

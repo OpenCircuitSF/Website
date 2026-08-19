@@ -9,6 +9,7 @@ import type {
   AuditEntry,
   AdminUser,
   Setting,
+  Interest,
 } from './types';
 import type {
   ServerCredentialAssertion,
@@ -310,4 +311,55 @@ export function listAudit(page = 1, perPage = 50, userId?: number): Promise<Audi
     path += `&user_id=${userId}`;
   }
   return apiGet<AuditPage>(path);
+}
+
+// ── Admin: interests taxonomy (#0024) ────────────────────────────────────────
+
+/** GET /admin/interests — every interest, active and inactive, with a per-interest subscriber_count (admin only). */
+export function listInterests(): Promise<{ interests: Interest[] }> {
+  return apiGet<{ interests: Interest[] }>('/admin/interests');
+}
+
+/**
+ * POST /admin/interests — create a new interest (admin only). `slug` must be
+ * lowercase and hyphenated and is immutable once created; `sortOrder`
+ * defaults to 0 when omitted.
+ */
+export function createInterest(
+  slug: string,
+  name: string,
+  description: string,
+  sortOrder?: number,
+): Promise<Interest> {
+  return apiPost<Interest>('/admin/interests', {
+    slug,
+    name,
+    description: description || undefined,
+    sort_order: sortOrder,
+  });
+}
+
+/**
+ * PATCH /admin/interests/{id} — update an existing interest's name,
+ * description, sort_order, and/or active flag (admin only). Only the fields
+ * present in `fields` are changed; there is deliberately no `slug` field —
+ * the server rejects a body that carries one. Setting `active: false` is how
+ * the admin screen deactivates an interest (hides it from the signup form
+ * while preserving subscriber_interests history); `active: true` reactivates
+ * it.
+ */
+export function updateInterest(
+  id: number,
+  fields: { name?: string; description?: string; sort_order?: number; active?: boolean },
+): Promise<Interest> {
+  return apiPatch<Interest>(`/admin/interests/${id}`, fields);
+}
+
+/**
+ * DELETE /admin/interests/{id} — permanently remove an interest (admin
+ * only). The server refuses with a 409 ApiError when any subscriber is
+ * associated; the caller should catch that and suggest deactivating instead.
+ */
+export function deleteInterest(id: number): Promise<{ message: string }> {
+  return apiDelete<{ message: string }>(`/admin/interests/${id}`);
 }

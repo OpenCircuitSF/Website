@@ -1,7 +1,7 @@
 <!--
   Admin view. Admin-only — rendered only when currentUser.is_admin; a
   non-admin who somehow reaches it sees an access-denied notice rather than any
-  admin data. It ties together three backend areas behind a single view with a
+  admin data. It ties together four backend areas behind a single view with a
   tab bar:
 
   - Settings   — GET/PATCH /admin/settings: a registrations_enabled toggle and
@@ -15,6 +15,19 @@
     required for "other"), reactivate with an optional note.
   - Audit log  — GET /admin/audit?page=&per_page=&user_id=: a paginated,
     newest-first table with a per-user filter.
+  - Interests  — GET/POST/PATCH/DELETE /admin/interests[/{id}] (#0024): the
+    workshop interest taxonomy, editable without a deploy (PRD §6.1). Each
+    row shows its subscriber_count — the number that tells the operator
+    whether a segment is worth a campaign. Deactivating (PATCH active:false)
+    hides an interest from the public signup form (#0026 validates new
+    signups' interest slugs against active ones only) while preserving every
+    subscriber_interests row that already references it; the edit modal
+    says so inline before an admin flips the toggle. Delete is a hard
+    removal the server refuses with 409 whenever any subscriber is
+    associated — the Delete button is disabled with an explanation in that
+    case rather than letting the admin discover the refusal after a failed
+    request. Slugs are immutable once created (no field for it anywhere in
+    this section) — see #0024's Gotchas for why.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -27,6 +40,10 @@
     deactivateUser,
     reactivateUser,
     listAudit,
+    listInterests,
+    createInterest,
+    updateInterest,
+    deleteInterest,
     logout,
     ApiError,
   } from '../lib/api';
@@ -42,13 +59,18 @@
     pageInfo,
     parseUserIdFilter,
     registrationsEnabled,
+    isValidInterestSlug,
+    validateNewInterest,
+    sortedInterests,
+    reorderSwap,
+    hasSubscribers,
   } from '../lib/admin';
-  import type { Setting, AdminUser, AuditEntry } from '../lib/types';
+  import type { Setting, AdminUser, AuditEntry, Interest } from '../lib/types';
   import Button from '../lib/Button.svelte';
   import Panel from '../lib/Panel.svelte';
   import { APP_NAME } from '../lib/branding';
 
-  type Section = 'settings' | 'users' | 'audit';
+  type Section = 'settings' | 'users' | 'audit' | 'interests';
   let section = $state<Section>('settings');
 
   // ── Settings ──────────────────────────────────────────────────────────────
@@ -280,6 +302,182 @@
     void loadAudit();
   }
 
+  // ── Interests ─────────────────────────────────────────────────────────────
+  let interests = $state<Interest[]>([]);
+  let interestsLoading = $state(true);
+  let interestsError = $state<string | null>(null);
+  const interestsSorted = $derived(sortedInterests(interests));
+
+  async function loadInterests() {
+    interestsLoading = true;
+    interestsError = null;
+    try {
+      interests = (await listInterests()).interests;
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      interestsError = 'Could not load interests. Please try again.';
+    } finally {
+      interestsLoading = false;
+    }
+  }
+
+  // Create form. There is deliberately no sort_order field here — a new
+  // interest is always appended after the current highest sort_order, and
+  // the operator uses the ↑/↓ controls to place it. Slug is immutable once
+  // created (#0024's Gotchas), so there is no rename path either.
+  let newSlug = $state('');
+  let newName = $state('');
+  let newDescription = $state('');
+  let createError = $state<string | null>(null);
+  let creating = $state(false);
+  const newSlugInvalid = $derived(newSlug.trim() !== '' && !isValidInterestSlug(newSlug.trim()));
+
+  async function submitCreateInterest(e: SubmitEvent) {
+    e.preventDefault();
+    const result = validateNewInterest(newSlug, newName);
+    if ('error' in result) {
+      createError = result.error;
+      return;
+    }
+    creating = true;
+    createError = null;
+    try {
+      const sortOrder =
+        interests.length === 0 ? 0 : Math.max(...interests.map((i) => i.sort_order)) + 10;
+      const created = await createInterest(result.slug, result.name, newDescription, sortOrder);
+      interests = [...interests, created];
+      newSlug = '';
+      newName = '';
+      newDescription = '';
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      createError =
+        err instanceof ApiError && err.message
+          ? err.message
+          : 'Could not create the interest. Please try again.';
+    } finally {
+      creating = false;
+    }
+  }
+
+  // Edit modal: name, description, and the active toggle. Deactivating warns
+  // inline (#0026 validates a new signup's interest slugs against ACTIVE
+  // interests only, so this is the moment that consequence is visible)
+  // before the admin confirms; reactivating has no such warning.
+  let editingInterest = $state<Interest | null>(null);
+  let editName = $state('');
+  let editDescription = $state('');
+  let editActive = $state(true);
+  let editError = $state<string | null>(null);
+  let editSubmitting = $state(false);
+  const editDeactivating = $derived(editingInterest !== null && editingInterest.active && !editActive);
+
+  function openEditInterest(it: Interest) {
+    editingInterest = it;
+    editName = it.name;
+    editDescription = it.description ?? '';
+    editActive = it.active;
+    editError = null;
+  }
+
+  function closeEditInterest() {
+    editingInterest = null;
+  }
+
+  async function submitEditInterest(e: SubmitEvent) {
+    e.preventDefault();
+    if (!editingInterest) return;
+    const trimmedName = editName.trim();
+    if (trimmedName === '') {
+      editError = 'Name is required.';
+      return;
+    }
+    editSubmitting = true;
+    editError = null;
+    const targetId = editingInterest.id;
+    try {
+      const updated = await updateInterest(targetId, {
+        name: trimmedName,
+        description: editDescription.trim(),
+        active: editActive,
+      });
+      interests = interests.map((i) => (i.id === updated.id ? updated : i));
+      editingInterest = null;
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      editError =
+        err instanceof ApiError && err.message
+          ? err.message
+          : 'Could not save the interest. Please try again.';
+    } finally {
+      editSubmitting = false;
+    }
+  }
+
+  // Reordering: swap sort_order with the adjacent interest in display order
+  // via two PATCH calls (reorderSwap computes which two ids/values).
+  let reorderingId = $state<number | null>(null);
+
+  async function moveInterest(it: Interest, direction: 'up' | 'down') {
+    const swap = reorderSwap(interestsSorted, it.id, direction);
+    if (!swap) return;
+    reorderingId = it.id;
+    interestsError = null;
+    try {
+      const [a, b] = await Promise.all([
+        updateInterest(swap.moved.id, { sort_order: swap.moved.sortOrder }),
+        updateInterest(swap.other.id, { sort_order: swap.other.sortOrder }),
+      ]);
+      interests = interests.map((i) => {
+        if (i.id === a.id) return a;
+        if (i.id === b.id) return b;
+        return i;
+      });
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      interestsError = 'Could not reorder interests. Please try again.';
+    } finally {
+      reorderingId = null;
+    }
+  }
+
+  // Delete: a hard removal the server refuses (409) whenever any subscriber
+  // is associated. hasSubscribers() disables the control and shows why
+  // BEFORE the admin clicks, rather than surfacing the refusal only after a
+  // failed request; the row error below is the belt-and-suspenders path for
+  // the (racy) case a subscriber is added between page load and the click.
+  let deletingId = $state<number | null>(null);
+  let deleteRowError = $state<Record<number, string>>({});
+
+  function clearDeleteRowError(id: number) {
+    if (id in deleteRowError) {
+      const { [id]: _removed, ...rest } = deleteRowError;
+      deleteRowError = rest;
+    }
+  }
+
+  async function handleDeleteInterest(it: Interest) {
+    if (hasSubscribers(it)) return;
+    if (!confirm(`Delete "${it.name}"? This cannot be undone.`)) return;
+    deletingId = it.id;
+    clearDeleteRowError(it.id);
+    try {
+      await deleteInterest(it.id);
+      interests = interests.filter((i) => i.id !== it.id);
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      deleteRowError = {
+        ...deleteRowError,
+        [it.id]:
+          err instanceof ApiError && err.message
+            ? err.message
+            : 'Could not delete the interest. Please try again.',
+      };
+    } finally {
+      deletingId = null;
+    }
+  }
+
   // ── Shared ──────────────────────────────────────────────────────────────────
   function handleAuthError(err: unknown): boolean {
     if (err instanceof ApiError && err.status === 401) {
@@ -308,6 +506,7 @@
     void loadSettings();
     void loadUsers();
     void loadAudit();
+    void loadInterests();
   });
 </script>
 
@@ -348,6 +547,13 @@
         aria-current={section === 'audit' ? 'page' : undefined}
         onclick={() => (section = 'audit')}
       >Audit log</button>
+      <button
+        type="button"
+        class="subtab"
+        class:active={section === 'interests'}
+        aria-current={section === 'interests' ? 'page' : undefined}
+        onclick={() => (section = 'interests')}
+      >Interests</button>
     </nav>
 
     {#if section === 'settings'}
@@ -623,6 +829,208 @@
         {/if}
       </Panel>
     {/if}
+
+    {#if section === 'interests'}
+      <Panel title="Add an interest">
+        <form class="interest-create-form" onsubmit={submitCreateInterest}>
+          <div class="field">
+            <label for="new-interest-slug">Slug</label>
+            <input
+              id="new-interest-slug"
+              type="text"
+              bind:value={newSlug}
+              disabled={creating}
+              placeholder="home-automation"
+              oninput={() => (createError = null)}
+            />
+            {#if newSlugInvalid}
+              <p class="text-warn" role="status">
+                Lowercase letters, numbers, and single hyphens only (e.g. "home-automation").
+              </p>
+            {/if}
+          </div>
+          <div class="field">
+            <label for="new-interest-name">Name</label>
+            <input
+              id="new-interest-name"
+              type="text"
+              bind:value={newName}
+              disabled={creating}
+              placeholder="Home Automation"
+              oninput={() => (createError = null)}
+            />
+          </div>
+          <div class="field">
+            <label for="new-interest-description">Description (optional)</label>
+            <input
+              id="new-interest-description"
+              type="text"
+              bind:value={newDescription}
+              disabled={creating}
+            />
+          </div>
+          {#if createError}
+            <p class="text-error" role="alert">{createError}</p>
+          {/if}
+          <Button type="submit" variant="primary" disabled={creating}>
+            {creating ? 'Adding…' : 'Add interest'}
+          </Button>
+        </form>
+      </Panel>
+
+      <Panel
+        title="Interests"
+        noPadding={interestsSorted.length > 0 && !interestsLoading && !interestsError}
+      >
+        {#if interestsLoading}
+          <p class="text-muted" role="status">Loading interests…</p>
+        {:else if interestsError}
+          <p class="text-error" role="alert">{interestsError}</p>
+          <Button variant="primary" onclick={loadInterests}>Retry</Button>
+        {:else if interestsSorted.length === 0}
+          <p class="text-muted">No interests yet.</p>
+        {:else}
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th class="actions-col">Order</th>
+                  <th>Slug</th>
+                  <th>Name</th>
+                  <th>Subscribers</th>
+                  <th>Status</th>
+                  <th class="actions-col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each interestsSorted as it, i (it.id)}
+                  <tr>
+                    <td class="actions-col">
+                      <button
+                        type="button"
+                        class="order-btn"
+                        disabled={i === 0 || reorderingId !== null}
+                        onclick={() => moveInterest(it, 'up')}
+                        aria-label={`Move ${it.name} up`}
+                      >↑</button>
+                      <button
+                        type="button"
+                        class="order-btn"
+                        disabled={i === interestsSorted.length - 1 || reorderingId !== null}
+                        onclick={() => moveInterest(it, 'down')}
+                        aria-label={`Move ${it.name} down`}
+                      >↓</button>
+                    </td>
+                    <td class="mono">{it.slug}</td>
+                    <td>{it.name}</td>
+                    <td>{it.subscriber_count}</td>
+                    <td>
+                      <span
+                        class="badge"
+                        class:badge-success={it.active}
+                        class:badge-danger={!it.active}
+                      >
+                        {it.active ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td class="actions-col">
+                      <Button onclick={() => openEditInterest(it)}>Edit</Button>
+                      <Button
+                        variant="danger"
+                        disabled={hasSubscribers(it) || deletingId === it.id}
+                        onclick={() => handleDeleteInterest(it)}
+                      >
+                        {deletingId === it.id ? 'Deleting…' : 'Delete'}
+                      </Button>
+                      {#if hasSubscribers(it)}
+                        <p class="text-muted interest-delete-hint">
+                          {it.subscriber_count} subscriber{it.subscriber_count === 1 ? '' : 's'} —
+                          deactivate instead
+                        </p>
+                      {/if}
+                    </td>
+                  </tr>
+                  {#if deleteRowError[it.id]}
+                    <tr>
+                      <td colspan="6">
+                        <p class="text-error" role="alert">{deleteRowError[it.id]}</p>
+                      </td>
+                    </tr>
+                  {/if}
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </Panel>
+
+      {#if editingInterest}
+        <div
+          class="modal-backdrop"
+          role="presentation"
+          onclick={closeEditInterest}
+          onkeydown={(e) => {
+            if (e.key === 'Escape') closeEditInterest();
+          }}
+        >
+          <div
+            class="modal"
+            role="dialog"
+            tabindex="-1"
+            aria-modal="true"
+            aria-label="Edit interest"
+            onclick={(e) => e.stopPropagation()}
+            onkeydown={(e) => e.stopPropagation()}
+          >
+            <h2 class="modal-title">Edit {editingInterest.name}</h2>
+            <p class="text-muted mono">slug: {editingInterest.slug} (fixed — cannot be renamed)</p>
+            <form onsubmit={submitEditInterest}>
+              <div class="field">
+                <label for="edit-interest-name">Name</label>
+                <input
+                  id="edit-interest-name"
+                  type="text"
+                  bind:value={editName}
+                  disabled={editSubmitting}
+                  oninput={() => (editError = null)}
+                />
+              </div>
+              <div class="field">
+                <label for="edit-interest-description">Description</label>
+                <textarea
+                  id="edit-interest-description"
+                  rows="2"
+                  bind:value={editDescription}
+                  disabled={editSubmitting}
+                  oninput={() => (editError = null)}
+                ></textarea>
+              </div>
+              <div class="field">
+                <label class="checkbox-label">
+                  <input type="checkbox" bind:checked={editActive} disabled={editSubmitting} />
+                  Active (visible on the public signup form)
+                </label>
+              </div>
+              {#if editDeactivating}
+                <p class="text-warn" role="status">
+                  Deactivating removes this interest from the public signup form. Subscribers who
+                  already selected it keep their selection and history.
+                </p>
+              {/if}
+              {#if editError}
+                <p class="text-error" role="alert">{editError}</p>
+              {/if}
+              <div class="row" style="margin-top: var(--space-3);">
+                <Button type="submit" variant="primary" disabled={editSubmitting}>
+                  {editSubmitting ? 'Saving…' : 'Save'}
+                </Button>
+                <Button disabled={editSubmitting} onclick={closeEditInterest}>Cancel</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      {/if}
+    {/if}
   {/if}
 </div>
 
@@ -820,5 +1228,33 @@
     font-weight: 600;
     margin: 0 0 var(--space-4);
     overflow-wrap: anywhere;
+  }
+  .interest-create-form {
+    max-width: 32rem;
+  }
+  .order-btn {
+    background: var(--bg-subtle);
+    border: var(--border-w) solid var(--border-strong);
+    border-radius: var(--radius);
+    padding: 0 var(--space-2);
+    cursor: pointer;
+    font-family: var(--font);
+    line-height: 1.8;
+    color: var(--text);
+  }
+  .order-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .interest-delete-hint {
+    margin: var(--space-1) 0 0;
+    font-size: var(--fs-sm);
+    white-space: nowrap;
+  }
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
   }
 </style>

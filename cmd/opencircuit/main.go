@@ -160,6 +160,12 @@ func servePostgres(cfg *config.Config) error {
 		handlers.NoSuppressions{}, store, auditLogger, cfg.BaseURL, slog.Default(),
 	)
 
+	// Admin-only interest taxonomy CRUD (#0024, PRD §5.2/§6.1): reuses the
+	// same interestsStore constructed just above for the subscribe endpoint —
+	// interests.Store is a stateless wrapper over the shared pool, so one
+	// instance safely backs both call sites.
+	adminInterestsH := handlers.NewAdminInterestsHandler(interestsStore, auditLogger)
+
 	// SSE event broker: the in-memory pub/sub singleton reused for live
 	// campaign send progress once the mailing subsystem lands.
 	broker := events.NewBroker()
@@ -182,7 +188,7 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, eventsH, meH, subscribeH,
 		requireSession, requireAdmin, nil /* no outer middleware in production */)
 }
 
@@ -301,8 +307,14 @@ func serveDevMode(cfg *config.Config) error {
 	// backing lands.
 	var subscribeH *handlers.SubscribeHandler
 
+	// Admin interests CRUD (#0024) has the same devstore gap as subscribeH
+	// above — internal/devstore has no interests-table backing yet. Passing
+	// nil here (mountAndServe only registers /admin/interests* when
+	// non-nil) leaves every other admin route working in STORAGE=json mode.
+	var adminInterestsH *handlers.AdminInterestsHandler
+
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, eventsH, meH, subscribeH,
 		requireSession, requireAdmin, devAutoLogin)
 }
 
@@ -320,6 +332,7 @@ func mountAndServe(
 	settingsH *handlers.SettingsHandler,
 	adminUsersH *handlers.AdminUsersHandler,
 	adminAuditH *handlers.AdminAuditHandler,
+	adminInterestsH *handlers.AdminInterestsHandler,
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
 	subscribeH *handlers.SubscribeHandler,
@@ -384,6 +397,22 @@ func mountAndServe(
 	// at 200), with an optional ?user_id= filter scoped to one user's rows. Behind
 	// RequireSession + RequireAdmin.
 	mux.Handle("GET /admin/audit", requireAdmin(http.HandlerFunc(adminAuditH.List)))
+
+	// Admin-only interest taxonomy CRUD (#0024, PRD §5.2/§6.1): list (with a
+	// per-interest subscriber count), create, update (name/description/
+	// sort_order/active — slug is immutable through this route), and a
+	// hard-delete refused whenever any subscriber is associated. All behind
+	// RequireSession + RequireAdmin. adminInterestsH is nil in dev mode
+	// (STORAGE=json — see serveDevMode's comment) since internal/devstore
+	// has no interests-table backing yet; the routes are only registered
+	// when a real handler is wired, so dev mode boots and serves everything
+	// else unaffected.
+	if adminInterestsH != nil {
+		mux.Handle("GET /admin/interests", requireAdmin(http.HandlerFunc(adminInterestsH.List)))
+		mux.Handle("POST /admin/interests", requireAdmin(http.HandlerFunc(adminInterestsH.Create)))
+		mux.Handle("PATCH /admin/interests/{id}", requireAdmin(http.HandlerFunc(adminInterestsH.Patch)))
+		mux.Handle("DELETE /admin/interests/{id}", requireAdmin(http.HandlerFunc(adminInterestsH.Delete)))
+	}
 
 	// Current user profile — behind RequireSession; returns the caller's
 	// {id, email, is_admin} for the SPA to gate the admin view.

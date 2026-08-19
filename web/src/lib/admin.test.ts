@@ -5,7 +5,7 @@
 // delegates to lib/admin.ts.
 
 import { describe, it, expect } from 'vitest';
-import type { AdminUser, AuditEntry } from './types';
+import type { AdminUser, AuditEntry, Interest } from './types';
 import {
   DEACTIVATION_REASONS,
   deactivationReasonLabel,
@@ -19,6 +19,11 @@ import {
   pageInfo,
   parseUserIdFilter,
   registrationsEnabled,
+  isValidInterestSlug,
+  validateNewInterest,
+  sortedInterests,
+  reorderSwap,
+  hasSubscribers,
 } from './admin';
 
 function adminUser(overrides: Partial<AdminUser> = {}): AdminUser {
@@ -198,5 +203,103 @@ describe('registrationsEnabled', () => {
     expect(registrationsEnabled('false')).toBe(false);
     expect(registrationsEnabled(undefined)).toBe(false);
     expect(registrationsEnabled('TRUE')).toBe(false);
+  });
+});
+
+function interest(overrides: Partial<Interest> = {}): Interest {
+  return {
+    id: 1,
+    slug: 'home-automation',
+    name: 'Home Automation',
+    sort_order: 40,
+    active: true,
+    subscriber_count: 0,
+    created_at: '2026-05-25T12:00:00Z',
+    ...overrides,
+  };
+}
+
+describe('isValidInterestSlug', () => {
+  it('accepts lowercase hyphenated slugs', () => {
+    expect(isValidInterestSlug('home-automation')).toBe(true);
+    expect(isValidInterestSlug('3d-printing')).toBe(true);
+    expect(isValidInterestSlug('beginner')).toBe(true);
+  });
+
+  it('rejects uppercase, underscores, and leading/trailing/doubled hyphens', () => {
+    expect(isValidInterestSlug('Upper-Case')).toBe(false);
+    expect(isValidInterestSlug('has_underscore')).toBe(false);
+    expect(isValidInterestSlug('-leading')).toBe(false);
+    expect(isValidInterestSlug('trailing-')).toBe(false);
+    expect(isValidInterestSlug('double--hyphen')).toBe(false);
+    expect(isValidInterestSlug('')).toBe(false);
+  });
+});
+
+describe('validateNewInterest', () => {
+  it('rejects an invalid slug', () => {
+    expect(validateNewInterest('Bad Slug', 'Name')).toEqual({
+      error: 'Slug must be lowercase letters, numbers, and single hyphens (e.g. "home-automation").',
+    });
+  });
+
+  it('rejects an empty name', () => {
+    expect(validateNewInterest('valid-slug', '  ')).toEqual({ error: 'Name is required.' });
+  });
+
+  it('trims and accepts a valid slug and name', () => {
+    expect(validateNewInterest('  valid-slug  ', '  Valid Name  ')).toEqual({
+      slug: 'valid-slug',
+      name: 'Valid Name',
+    });
+  });
+});
+
+describe('sortedInterests', () => {
+  it('orders by sort_order then name, without mutating the input', () => {
+    const list = [
+      interest({ id: 3, name: 'C', sort_order: 20 }),
+      interest({ id: 1, name: 'B', sort_order: 10 }),
+      interest({ id: 2, name: 'A', sort_order: 10 }),
+    ];
+    const original = [...list];
+    const sorted = sortedInterests(list);
+    expect(sorted.map((i) => i.id)).toEqual([2, 1, 3]);
+    expect(list).toEqual(original);
+  });
+});
+
+describe('reorderSwap', () => {
+  const list = [
+    interest({ id: 1, name: 'First', sort_order: 10 }),
+    interest({ id: 2, name: 'Second', sort_order: 20 }),
+    interest({ id: 3, name: 'Third', sort_order: 30 }),
+  ];
+
+  it('swaps sort_order with the previous item when moving up', () => {
+    expect(reorderSwap(list, 2, 'up')).toEqual({
+      moved: { id: 2, sortOrder: 10 },
+      other: { id: 1, sortOrder: 20 },
+    });
+  });
+
+  it('swaps sort_order with the next item when moving down', () => {
+    expect(reorderSwap(list, 2, 'down')).toEqual({
+      moved: { id: 2, sortOrder: 30 },
+      other: { id: 3, sortOrder: 20 },
+    });
+  });
+
+  it('returns null at the top/bottom edge or for an unknown id', () => {
+    expect(reorderSwap(list, 1, 'up')).toBeNull();
+    expect(reorderSwap(list, 3, 'down')).toBeNull();
+    expect(reorderSwap(list, 999, 'up')).toBeNull();
+  });
+});
+
+describe('hasSubscribers', () => {
+  it('is true only when subscriber_count is greater than zero', () => {
+    expect(hasSubscribers(interest({ subscriber_count: 0 }))).toBe(false);
+    expect(hasSubscribers(interest({ subscriber_count: 3 }))).toBe(true);
   });
 });

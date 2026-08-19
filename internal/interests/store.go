@@ -2,11 +2,15 @@
 // taxonomy (PRD §6.1, §6.2). Interests are rows, not a Go enum — new workshop
 // themes appear constantly and adding one must not require a deploy.
 //
-// There is deliberately no hard-delete method. Deactivating an interest
-// (Deactivate) must not remove it: existing subscriber_interests rows
-// reference it and the historical record matters. `active = false` hides it
-// from the signup form (via ListActive) while preserving associations. The
-// slug format and uniqueness constraints are enforced both here and by the
+// Deactivating an interest (Deactivate) must not remove it: existing
+// subscriber_interests rows reference it and the historical record matters.
+// `active = false` hides it from the signup form (via ListActive) while
+// preserving associations. Delete (added by #0024, the admin CRUD) is
+// deliberately narrower than its name suggests: it hard-removes a row only
+// when zero subscriber_interests rows reference it, and refuses
+// (ErrHasSubscribers) otherwise -- the moment any subscriber has ever
+// selected an interest, Deactivate is the only way to retire it. The slug
+// format and uniqueness constraints are enforced both here and by the
 // `interests_slug_format` CHECK and UNIQUE index added in
 // migrations/000009_create_interests.up.sql, so a future direct INSERT can't
 // slip past them either.
@@ -34,6 +38,12 @@ var ErrInvalidSlug = errors.New("interests: slug must be lowercase and hyphenate
 // ErrDuplicateSlug is returned when a Create or rename would collide with an
 // existing slug.
 var ErrDuplicateSlug = errors.New("interests: slug already exists")
+
+// ErrHasSubscribers is returned by Delete when one or more subscriber_interests
+// rows still reference the interest. It is distinct from ErrNotFound so the
+// admin handler (#0024) can tell "no such interest" apart from "that interest
+// has history and must be deactivated instead of deleted".
+var ErrHasSubscribers = errors.New("interests: has subscribers; deactivate instead of deleting")
 
 // slugPattern matches the same format enforced by the database CHECK
 // constraint: lowercase alphanumerics separated by single hyphens, no leading,
@@ -135,6 +145,23 @@ func (s *Store) GetBySlug(ctx context.Context, slug string) (Interest, error) {
 	return it, nil
 }
 
+// GetByID looks up a single interest by its primary key. Returns ErrNotFound
+// when no row matches, regardless of the active flag -- mirrors GetBySlug's
+// contract. Used by the admin PATCH handler (#0024) to read the current row
+// before merging a partial patch onto it, since Update takes every field.
+func (s *Store) GetByID(ctx context.Context, id int64) (Interest, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT `+interestColumns+` FROM interests WHERE id = $1`, id)
+	it, err := scanInterest(row)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return Interest{}, ErrNotFound
+	case err != nil:
+		return Interest{}, fmt.Errorf("interests: getting id %d: %w", id, err)
+	}
+	return it, nil
+}
+
 // GetByIDs resolves a set of interest ids, ignoring any that don't exist. Used
 // by the subscribers store to validate a signup form's selected interest ids
 // before writing subscriber_interests rows.
@@ -210,6 +237,75 @@ func (s *Store) Deactivate(ctx context.Context, id int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SubscriberCounts returns, for every interest that has at least one
+// subscriber_interests row, the number of subscribers currently associated
+// with it. Interests are only present in the map when their count is greater
+// than zero -- ListAll/ListActive supply the interests with zero. This is
+// the count the admin CRUD screen (#0024) shows per interest: it tells the
+// operator whether a segment is worth a campaign. Deactivated interests are
+// included (a subscriber's history with a since-deactivated interest still
+// counts), matching GetBySlug's "resolve regardless of active" convention.
+func (s *Store) SubscriberCounts(ctx context.Context) (map[int64]int64, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT interest_id, count(*) FROM subscriber_interests GROUP BY interest_id`)
+	if err != nil {
+		return nil, fmt.Errorf("interests: counting subscribers: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[int64]int64)
+	for rows.Next() {
+		var id, count int64
+		if err := rows.Scan(&id, &count); err != nil {
+			return nil, fmt.Errorf("interests: scanning subscriber count: %w", err)
+		}
+		out[id] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("interests: iterating subscriber counts: %w", err)
+	}
+	return out, nil
+}
+
+// Delete permanently removes an interest row, but ONLY when no
+// subscriber_interests rows reference it. This does not weaken the "no
+// hard-delete" design documented at the top of this file: an interest that
+// any subscriber has ever selected can still only be hidden via Deactivate,
+// which preserves the historical association. Delete exists for the case
+// Deactivate does not cover -- an interest created in error (a typo, a
+// duplicate) that nobody has selected yet, where deactivating it would leave
+// permanent clutter in the admin list for no reason.
+//
+// The refusal is enforced by the DELETE statement's own WHERE clause (a
+// single atomic query, not a check-then-delete race), so a subscriber
+// selecting the interest concurrently with this call cannot result in a
+// referenced row being deleted. When the statement affects no rows, a
+// follow-up existence check distinguishes ErrNotFound (no such id) from
+// ErrHasSubscribers (exists, but is referenced) for the caller's error
+// message; that follow-up has no effect on which outcome actually occurred.
+func (s *Store) Delete(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM interests
+		  WHERE id = $1
+		    AND NOT EXISTS (SELECT 1 FROM subscriber_interests WHERE interest_id = $1)`,
+		id)
+	if err != nil {
+		return fmt.Errorf("interests: deleting id %d: %w", id, err)
+	}
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+	var exists bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM interests WHERE id = $1)`, id,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("interests: checking existence after refused delete id %d: %w", id, err)
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	return ErrHasSubscribers
 }
 
 // isUniqueViolation reports whether err is a Postgres unique_violation

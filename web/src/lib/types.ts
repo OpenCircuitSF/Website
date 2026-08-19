@@ -55,3 +55,22 @@ export interface Setting {
   value: string;
   updated_at?: string;
 }
+
+/**
+ * A workshop interest-taxonomy row (GET /admin/interests item). Matches
+ * internal/handlers/interests.go `interestView`. subscriber_count is the
+ * number the admin screen exists to show: how many subscribers currently
+ * have this interest selected, whether or not the interest is still active
+ * (a subscriber's history with a deactivated interest still counts). slug is
+ * immutable once created — the PATCH endpoint rejects a body carrying it.
+ */
+export interface Interest {
+  id: number;
+  slug: string;
+  name: string;
+  description?: string;
+  sort_order: number;
+  active: boolean;
+  subscriber_count: number;
+  created_at: string;
+}

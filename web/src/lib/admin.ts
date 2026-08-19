@@ -1,10 +1,11 @@
-// Pure, framework-free helpers backing the Admin view: the three admin
-// sub-sections (settings, users, audit log). Keeping the deactivation
-// `other`-requires-note validation, the audit metadata/actor rendering, and
-// the pagination math here (rather than inline in the .svelte file) makes
-// them unit-testable without a DOM — see admin.test.ts.
+// Pure, framework-free helpers backing the Admin view: the four admin
+// sub-sections (settings, users, audit log, interests). Keeping the
+// deactivation `other`-requires-note validation, the audit metadata/actor
+// rendering, the pagination math, and the interest-form/reorder logic here
+// (rather than inline in the .svelte file) makes them unit-testable without
+// a DOM — see admin.test.ts.
 
-import type { AdminUser, AuditEntry } from './types';
+import type { AdminUser, AuditEntry, Interest } from './types';
 
 // ── Deactivation reasons (user management) ───────────────────────────────────
 // The six account.deactivated reason values from the PRD "Deactivation reasons"
@@ -199,4 +200,96 @@ export function parseUserIdFilter(raw: string): { userId: number | null } | { er
 /** Whether the `registrations_enabled` setting value string is the truthy "true". */
 export function registrationsEnabled(value: string | undefined): boolean {
   return value === 'true';
+}
+
+// ── Interests taxonomy (#0024) ───────────────────────────────────────────────
+
+// Mirrors interests.ValidSlug / the interests_slug_format CHECK constraint
+// (internal/interests/store.go): lowercase alphanumerics separated by single
+// hyphens, no leading, trailing, or doubled hyphens. Validating here lets the
+// create form reject an obviously bad slug before a round trip; the server
+// remains the source of truth (and the sole enforcer of uniqueness).
+const INTEREST_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** Whether a string is a valid interest slug per interests.ValidSlug's rule. */
+export function isValidInterestSlug(slug: string): boolean {
+  return INTEREST_SLUG_PATTERN.test(slug);
+}
+
+/**
+ * Validate a new-interest form (slug + name) before submitting. Trims both;
+ * an invalid slug or empty name yields an `error` message, otherwise the
+ * trimmed values to submit. The server independently enforces slug
+ * uniqueness (409 on a duplicate) — this only catches what can be checked
+ * client-side.
+ */
+export function validateNewInterest(
+  slug: string,
+  name: string,
+): { slug: string; name: string } | { error: string } {
+  const trimmedSlug = slug.trim();
+  const trimmedName = name.trim();
+  if (!isValidInterestSlug(trimmedSlug)) {
+    return {
+      error: 'Slug must be lowercase letters, numbers, and single hyphens (e.g. "home-automation").',
+    };
+  }
+  if (trimmedName === '') {
+    return { error: 'Name is required.' };
+  }
+  return { slug: trimmedSlug, name: trimmedName };
+}
+
+/** Interests ordered by sort_order then name, matching the server's ListAll ordering. */
+export function sortedInterests(list: Interest[]): Interest[] {
+  return [...list].sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
+}
+
+/** One interest's id + the sort_order to write it to, half of a reorder swap. */
+export interface SortOrderTarget {
+  id: number;
+  sortOrder: number;
+}
+
+/** A pair of sort_order writes that swaps two adjacent interests' positions. */
+export interface SortOrderSwap {
+  moved: SortOrderTarget;
+  other: SortOrderTarget;
+}
+
+/**
+ * Compute the sort_order swap for moving the interest with `id` one position
+ * `direction` within `sorted` (already in display order — pass the result of
+ * sortedInterests). Returns null when `id` isn't found or is already at that
+ * end of the list (nothing to swap with). The caller PATCHes both `moved`
+ * and `other` with each other's current sort_order; a duplicate sort_order
+ * between two rows is not itself an error (there's no uniqueness constraint
+ * on it), it would just make their relative order ambiguous, which this
+ * swap avoids by construction.
+ */
+export function reorderSwap(
+  sorted: Interest[],
+  id: number,
+  direction: 'up' | 'down',
+): SortOrderSwap | null {
+  const idx = sorted.findIndex((it) => it.id === id);
+  if (idx === -1) return null;
+  const otherIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (otherIdx < 0 || otherIdx >= sorted.length) return null;
+  const moved = sorted[idx];
+  const other = sorted[otherIdx];
+  return {
+    moved: { id: moved.id, sortOrder: other.sort_order },
+    other: { id: other.id, sortOrder: moved.sort_order },
+  };
+}
+
+/**
+ * Whether an interest should show a "has subscribers" hint next to its
+ * Delete control -- the UI surfaces the consequence (server will refuse,
+ * suggest deactivating) before the admin clicks, not just after a failed
+ * request.
+ */
+export function hasSubscribers(interest: Interest): boolean {
+  return interest.subscriber_count > 0;
 }
