@@ -437,6 +437,196 @@ func TestSetInterests_ReplacesFully(t *testing.T) {
 	}
 }
 
+// TestUnsubscribe_ComplainedNeverAutoResubscribes is the direct guard test
+// for Unsubscribe, analogous to TestConfirm_ComplainedNeverAutoResubscribes.
+// Before the #0025 fix, Unsubscribe wrote status unconditionally and this
+// overwrote a recorded complaint with "unsubscribed" — see this issue's
+// Review notes for the reproduced laundering chain.
+func TestUnsubscribe_ComplainedNeverAutoResubscribes(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+
+	created, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.MarkComplained(context.Background(), created.ID, now.Add(time.Minute)); err != nil {
+		t.Fatalf("MarkComplained: %v", err)
+	}
+
+	// PRD §6.5 requires the one-click unsubscribe endpoint to answer a
+	// neutral 200 for every token state, so Unsubscribe on a complained
+	// subscriber must succeed (no error) while leaving status untouched.
+	got, err := store.Unsubscribe(context.Background(), created.ID, SourceOneClick, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("Unsubscribe on complained subscriber: got err=%v, want nil (must be a silent no-op)", err)
+	}
+	if got.Status != StatusComplained {
+		t.Fatalf("Status after Unsubscribe on complained subscriber = %q, want unchanged %q", got.Status, StatusComplained)
+	}
+	if got.UnsubscribedAt != nil {
+		t.Errorf("UnsubscribedAt = %v, want nil (unsubscribe must not be recorded over a complaint)", got.UnsubscribedAt)
+	}
+
+	// Confirm the row genuinely wasn't touched, not just the returned value.
+	reread, err := store.FindByEmail(context.Background(), created.Email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+	if reread.Status != StatusComplained {
+		t.Fatalf("Status on reread = %q, want %q", reread.Status, StatusComplained)
+	}
+}
+
+// TestMarkBounced_ComplainedStaysComplained is the direct guard test for
+// MarkBounced/setStatus: a bounce notification arriving for an
+// already-complained address must not erase the complaint.
+func TestMarkBounced_ComplainedStaysComplained(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+
+	created, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.MarkComplained(context.Background(), created.ID, now.Add(time.Minute)); err != nil {
+		t.Fatalf("MarkComplained: %v", err)
+	}
+
+	got, err := store.MarkBounced(context.Background(), created.ID, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("MarkBounced on complained subscriber: got err=%v, want nil (must be a silent no-op)", err)
+	}
+	if got.Status != StatusComplained {
+		t.Fatalf("Status after MarkBounced on complained subscriber = %q, want unchanged %q", got.Status, StatusComplained)
+	}
+}
+
+// TestComplainedLaundering_ChainBroken is the end-to-end regression test for
+// the #0025 review bounce: MarkComplained -> Unsubscribe -> Confirm must
+// never reach active. Before the fix this chain reached "active" via
+// "unsubscribed" in between (reproduced and recorded in this issue's Review
+// notes and Verification).
+func TestComplainedLaundering_ChainBroken(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+	ctx := context.Background()
+
+	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if _, err := store.MarkComplained(ctx, created.ID, now.Add(time.Minute)); err != nil {
+		t.Fatalf("MarkComplained: %v", err)
+	}
+
+	unsub, err := store.Unsubscribe(ctx, created.ID, SourceOneClick, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+	if unsub.Status != StatusComplained {
+		t.Fatalf("status after MarkComplained then Unsubscribe = %q, want %q (complaint must not be launderable)", unsub.Status, StatusComplained)
+	}
+
+	// Simulate a fresh confirm token being minted for this address (what
+	// #0026's subscribe handler would do for what it believes is a plain
+	// unsubscribed->new-signup case) and attempt to confirm it.
+	freshToken, err := newToken()
+	if err != nil {
+		t.Fatalf("newToken: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE subscribers SET confirm_token = $2, confirm_expires_at = $3 WHERE id = $1`,
+		created.ID, freshToken, now.Add(7*24*time.Hour),
+	); err != nil {
+		t.Fatalf("minting fresh confirm token: %v", err)
+	}
+
+	_, err = store.Confirm(ctx, freshToken, now.Add(3*time.Minute))
+	if !errors.Is(err, ErrComplainedLocked) {
+		t.Fatalf("Confirm after MarkComplained->Unsubscribe: got err=%v, want ErrComplainedLocked", err)
+	}
+
+	final, err := store.FindByEmail(ctx, created.Email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+	if final.Status != StatusComplained {
+		t.Fatalf("final status = %q, want %q (chain must never reach active)", final.Status, StatusComplained)
+	}
+}
+
+// TestAdminClearComplaint_Success is the deliberate, tested admin-only path
+// out of complained that CLAUDE.md §9 requires to exist somewhere.
+func TestAdminClearComplaint_Success(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+	ctx := context.Background()
+
+	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.MarkComplained(ctx, created.ID, now.Add(time.Minute)); err != nil {
+		t.Fatalf("MarkComplained: %v", err)
+	}
+
+	cleared, err := store.AdminClearComplaint(ctx, created.ID, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("AdminClearComplaint: %v", err)
+	}
+	if cleared.Status != StatusUnsubscribed {
+		t.Errorf("Status after AdminClearComplaint = %q, want %q", cleared.Status, StatusUnsubscribed)
+	}
+	if cleared.UnsubscribeSource == nil || *cleared.UnsubscribeSource != SourceAdmin {
+		t.Errorf("UnsubscribeSource = %v, want %q", cleared.UnsubscribeSource, SourceAdmin)
+	}
+
+	// Now that status is no longer complained, the ordinary guarded methods
+	// must be able to act on the row normally again (proves the admin path
+	// is a real, functioning exit from the lock, not just a status flip that
+	// leaves the row otherwise stuck).
+	unsub, err := store.Unsubscribe(ctx, created.ID, SourceOneClick, now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("Unsubscribe after AdminClearComplaint: %v", err)
+	}
+	if unsub.UnsubscribeSource == nil || *unsub.UnsubscribeSource != SourceOneClick {
+		t.Errorf("UnsubscribeSource after post-clear Unsubscribe = %v, want %q (must no longer be locked)", unsub.UnsubscribeSource, SourceOneClick)
+	}
+}
+
+func TestAdminClearComplaint_NotComplained(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+	ctx := context.Background()
+
+	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	_, err = store.AdminClearComplaint(ctx, created.ID, now)
+	if !errors.Is(err, ErrNotComplained) {
+		t.Fatalf("got err=%v, want ErrNotComplained", err)
+	}
+}
+
+func TestAdminClearComplaint_NotFound(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+
+	_, err := store.AdminClearComplaint(context.Background(), 99999999, time.Now())
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got err=%v, want ErrNotFound", err)
+	}
+}
+
 func TestMarkBouncedAndMarkComplained(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)

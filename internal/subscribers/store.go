@@ -17,10 +17,15 @@
 // column and leak nothing if a URL ends up in a referrer header or a
 // screenshot.
 //
-// complained never auto-resubscribes (CLAUDE.md §9): Confirm refuses to
-// move a complained subscriber to active. No method in this package moves a
-// subscriber out of the complained status — that is an admin-only action
-// reserved for a future issue (#0032), deliberately not built here.
+// complained never auto-resubscribes (CLAUDE.md §9): every status mutator in
+// this package — Confirm, Unsubscribe, MarkBounced, MarkComplained (via the
+// shared setStatus) — refuses to move a subscriber out of the complained
+// status. The check lives in one place (statusLockedFromNonAdmin, used by
+// setStatus and by Unsubscribe's own UPDATE) so a future mutator can't add a
+// new unguarded status write the way an earlier version of this file did.
+// AdminClearComplaint is the sole exception: it is the admin-only path
+// (#0032) allowed to move a subscriber out of complained, and it is the only
+// method that does not consult the guard.
 package subscribers
 
 import (
@@ -69,6 +74,18 @@ var ErrTokenInvalid = errors.New("subscribers: confirm token invalid or expired"
 // already in the complained status. Only an admin can clear that state
 // (CLAUDE.md §9); a confirmation click can never do it.
 var ErrComplainedLocked = errors.New("subscribers: subscriber has complained and cannot be reactivated by confirmation")
+
+// ErrNotComplained is returned by AdminClearComplaint when the target
+// subscriber is not currently in the complained status — there is nothing
+// to clear. Distinguished from ErrNotFound so the admin screen (#0032) can
+// tell "no such subscriber" apart from "that subscriber never complained".
+var ErrNotComplained = errors.New("subscribers: subscriber is not complained; nothing to clear")
+
+// statusLockedFromNonAdmin is the status that no non-admin mutator in this
+// package may move a subscriber out of (CLAUDE.md §9). Every status write
+// except AdminClearComplaint must consult this constant rather than writing
+// status unconditionally — see the package doc comment.
+const statusLockedFromNonAdmin = StatusComplained
 
 // Subscriber is a single row of the subscribers table.
 type Subscriber struct {
@@ -291,16 +308,31 @@ func (s *Store) Confirm(ctx context.Context, token string, now time.Time) (Subsc
 
 // Unsubscribe transitions a subscriber to unsubscribed, stamping
 // unsubscribed_at and recording source (one of the Source* constants). Safe
-// to call on an already-unsubscribed, bounced, or complained row — it only
-// ever moves a subscriber further from "active", never back toward it, so it
-// can't be used to circumvent the complained lock in Confirm.
+// to call on an already-unsubscribed or bounced row (idempotent, no error).
+//
+// If the subscriber is currently complained, this is a silent no-op: the
+// row is returned unchanged (still complained) and no error is returned.
+// That is deliberate, not an oversight. PRD §6.5 requires the one-click
+// unsubscribe endpoint (#0034) to answer a neutral 200 for every token
+// state, including one belonging to a complained subscriber — so this
+// method cannot surface an error here the way Confirm surfaces
+// ErrComplainedLocked; the caller (an unauthenticated POST from a mail
+// provider, per RFC 8058) has no way to act on an error and PRD §6.5
+// forbids failing the request. An earlier version of this method wrote
+// status unconditionally, which overwrote a recorded complaint with
+// "unsubscribed" and let a subsequent Confirm reach active — see this
+// issue's Review notes for the reproduced chain. AdminClearComplaint is the
+// only path that may move a subscriber out of complained.
 func (s *Store) Unsubscribe(ctx context.Context, id int64, source string, now time.Time) (Subscriber, error) {
 	row := s.pool.QueryRow(ctx,
 		`UPDATE subscribers
-		    SET status = $2, unsubscribed_at = $3, unsubscribe_source = $4, updated_at = $3
+		    SET status             = CASE WHEN status = $5 THEN status             ELSE $2 END,
+		        unsubscribed_at    = CASE WHEN status = $5 THEN unsubscribed_at    ELSE $3 END,
+		        unsubscribe_source = CASE WHEN status = $5 THEN unsubscribe_source ELSE $4 END,
+		        updated_at         = CASE WHEN status = $5 THEN updated_at         ELSE $3 END
 		  WHERE id = $1
 		 RETURNING `+subscriberColumns,
-		id, StatusUnsubscribed, now, source,
+		id, StatusUnsubscribed, now, source, statusLockedFromNonAdmin,
 	)
 	sub, err := scanSubscriber(row)
 	switch {
@@ -377,24 +409,41 @@ func (s *Store) InterestIDs(ctx context.Context, subscriberID int64) ([]int64, e
 // MarkBounced transitions a subscriber to bounced. Intended for the SES
 // bounce-notification handling landing in a later issue; included here so
 // the status vocabulary in this package is complete from the start.
+//
+// If the subscriber is currently complained, this is a silent no-op (see
+// setStatus): a bounce notification arriving for an already-complained
+// address must not erase the complaint, and — like Unsubscribe — the SES
+// notification handler calling this has a webhook contract to satisfy
+// (acknowledge promptly) rather than a user it can show an error to.
 func (s *Store) MarkBounced(ctx context.Context, id int64, now time.Time) (Subscriber, error) {
 	return s.setStatus(ctx, id, StatusBounced, now)
 }
 
-// MarkComplained transitions a subscriber to complained. Nothing in this
-// package ever transitions a subscriber back out of complained — per
-// CLAUDE.md §9, only an admin (a future issue's admin-only code path) clears
-// that state.
+// MarkComplained transitions a subscriber to complained. Calling it again on
+// an already-complained subscriber is a harmless no-op (setStatus's guard
+// only ever preserves complained, and complained is what it's already
+// setting). Nothing in this package other than AdminClearComplaint ever
+// transitions a subscriber back out of complained — per CLAUDE.md §9, only
+// an admin clears that state.
 func (s *Store) MarkComplained(ctx context.Context, id int64, now time.Time) (Subscriber, error) {
 	return s.setStatus(ctx, id, StatusComplained, now)
 }
 
+// setStatus is the shared implementation behind MarkBounced and
+// MarkComplained. It guards statusLockedFromNonAdmin the same way
+// Unsubscribe does: if the subscriber is currently complained, the UPDATE
+// preserves status and updated_at rather than overwriting them, and no
+// error is returned — this method's two callers are both webhook-driven
+// (SES bounce/complaint notifications), not code with a user to report an
+// error to. AdminClearComplaint is the only exception to this guard.
 func (s *Store) setStatus(ctx context.Context, id int64, status string, now time.Time) (Subscriber, error) {
 	row := s.pool.QueryRow(ctx,
-		`UPDATE subscribers SET status = $2, updated_at = $3
+		`UPDATE subscribers
+		    SET status     = CASE WHEN status = $4 THEN status     ELSE $2 END,
+		        updated_at = CASE WHEN status = $4 THEN updated_at ELSE $3 END
 		  WHERE id = $1
 		 RETURNING `+subscriberColumns,
-		id, status, now,
+		id, status, now, statusLockedFromNonAdmin,
 	)
 	sub, err := scanSubscriber(row)
 	switch {
@@ -402,6 +451,72 @@ func (s *Store) setStatus(ctx context.Context, id int64, status string, now time
 		return Subscriber{}, ErrNotFound
 	case err != nil:
 		return Subscriber{}, fmt.Errorf("subscribers: setting status of %d to %q: %w", id, status, err)
+	}
+	return sub, nil
+}
+
+// findByID looks up a subscriber by primary key. Unexported: it exists to
+// let AdminClearComplaint distinguish "no such subscriber" from "subscriber
+// exists but isn't complained" without a second exported lookup method that
+// nothing else needs yet.
+func (s *Store) findByID(ctx context.Context, id int64) (Subscriber, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT `+subscriberColumns+` FROM subscribers WHERE id = $1`, id)
+	sub, err := scanSubscriber(row)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return Subscriber{}, ErrNotFound
+	case err != nil:
+		return Subscriber{}, fmt.Errorf("subscribers: finding by id: %w", err)
+	}
+	return sub, nil
+}
+
+// AdminClearComplaint is the one method in this package allowed to move a
+// subscriber out of the complained status (CLAUDE.md §9: "only an admin
+// clears that state"). It is deliberately the single exception to
+// statusLockedFromNonAdmin rather than a parameter on an existing method,
+// so every other call site stays impossible to abuse into an
+// auto-resubscribe: nothing about Unsubscribe or MarkBounced's signature
+// offers a way to bypass the guard, and the only method that can is named
+// for exactly what it does and lives here, next to the guard it deliberately
+// skips.
+//
+// It requires the subscriber to currently be complained (ErrNotComplained
+// otherwise) — this is an operator-driven action from #0032's admin screen,
+// which only offers the action when the row is complained, so a caller
+// hitting this in the wrong state is a bug worth surfacing as an error, not
+// a protocol the store must paper over.
+//
+// The resulting status is unsubscribed, not active: clearing a complaint
+// removes the block on the address ever resubscribing, but it does not by
+// itself re-establish the double opt-in consent PRD §6.3 requires before
+// mail resumes. Records the action the same way a manual unsubscribe would
+// (unsubscribed_at, unsubscribe_source=admin) since the schema has no
+// separate "complaint cleared" column and this reuses an existing,
+// already-audited pair of fields rather than adding one. #0032 can choose a
+// different resulting status later; this is the conservative default.
+func (s *Store) AdminClearComplaint(ctx context.Context, id int64, now time.Time) (Subscriber, error) {
+	row := s.pool.QueryRow(ctx,
+		`UPDATE subscribers
+		    SET status = $2, unsubscribed_at = $3, unsubscribe_source = $4, updated_at = $3
+		  WHERE id = $1 AND status = $5
+		 RETURNING `+subscriberColumns,
+		id, StatusUnsubscribed, now, SourceAdmin, StatusComplained,
+	)
+	sub, err := scanSubscriber(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_, ferr := s.findByID(ctx, id)
+		if errors.Is(ferr, ErrNotFound) {
+			return Subscriber{}, ErrNotFound
+		}
+		if ferr != nil {
+			return Subscriber{}, ferr
+		}
+		return Subscriber{}, ErrNotComplained
+	}
+	if err != nil {
+		return Subscriber{}, fmt.Errorf("subscribers: admin clearing complaint for %d: %w", id, err)
 	}
 	return sub, nil
 }
