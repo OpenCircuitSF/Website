@@ -19,6 +19,8 @@ import {
   inactiveStatusMessage,
   showSubscribeAgainAffordance,
   COMPLAINED_NO_RESUBSCRIBE_MESSAGE,
+  COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD,
+  COMPLAINED_NO_RESUBSCRIBE_MESSAGE_TAIL,
   COMPLAINED_CONTACT_EMAIL,
   type UtmStorage,
 } from './subscribe';
@@ -212,6 +214,7 @@ describe('inactiveStatusMessage (#0031 review finding 1)', () => {
 
   it("complained's copy names how to reach a human", () => {
     expect(inactiveStatusMessage('complained')).toMatch(/contact us/i);
+    expect(inactiveStatusMessage('complained')).toContain(COMPLAINED_CONTACT_EMAIL);
   });
 });
 
@@ -236,17 +239,28 @@ describe('showSubscribeAgainAffordance (#0090 — the dead end)', () => {
   });
 });
 
-// #0090 bounce fix: review found that once showSubscribeAgainAffordance
-// correctly hides the button for `complained`, COMPLAINED_NO_RESUBSCRIBE_MESSAGE's
-// "Contact us" was the only path left on the panel -- and it named no
-// address, so it was inert. The fix keeps the message itself address-free
-// (it's a mirror of internal/handlers/preferences.go's no-op message, which
-// does inline the address, but that's a deliberate, documented divergence --
-// see COMPLAINED_CONTACT_EMAIL's doc comment) and instead exports the
-// address as its own constant, which PreferenceCenter.svelte renders as a
-// real mailto: link beside the message. These tests exist to catch the
-// two ways that split could silently break: the constant being wrong, and
-// the message accidentally trying to duplicate it inline.
+// #0090 (bounce fix, second pass): once showSubscribeAgainAffordance
+// correctly hides the button for `complained`, the copy's "Contact us" was
+// the only path left on the panel -- and it named no address, so it was
+// inert. The first bounce fix put the address on the panel as a separate
+// trailing sentence, which left the panel saying "contact us" twice in two
+// verbs and left the client string one revision behind the server's.
+//
+// The shape now: one sentence, split at the clause boundary either side of
+// the address, so preferences.go can spell the address out inline (plain
+// text) and PreferenceCenter.svelte can render the very same sentence with
+// a real mailto: anchor where the address falls. These tests guard the two
+// ways that split can break -- a wrong address, and the parts drifting out
+// of composition with the whole that inactiveStatusMessage returns.
+// The whole sentence, written out once here so the assertions below have
+// something independent to compare the composed parts against. Keep it in
+// step with internal/handlers/preferences.go's no-op message minus its
+// leading "No change: " clause (#0095 tracks making that mechanical).
+const EXPECTED_COMPLAINED_SENTENCE =
+  'This address is marked as having complained about a previous email, and complained addresses ' +
+  "can't be unsubscribed or resubscribed from this page. Contact us at " +
+  'hello@opencircuitsf.com if you believe this is a mistake.';
+
 describe('COMPLAINED_CONTACT_EMAIL (#0090 bounce fix)', () => {
   it('is the published house contact address (#0075)', () => {
     expect(COMPLAINED_CONTACT_EMAIL).toBe('hello@opencircuitsf.com');
@@ -256,15 +270,51 @@ describe('COMPLAINED_CONTACT_EMAIL (#0090 bounce fix)', () => {
     expect(COMPLAINED_CONTACT_EMAIL).toMatch(/^[^\s@]+@[^\s@]+\.[^\s@]+$/);
   });
 
-  // COMPLAINED_NO_RESUBSCRIBE_MESSAGE is deliberately NOT byte-for-byte
-  // identical to preferences.go's no-op message (that message inlines the
-  // address; this one relies on PreferenceCenter.svelte rendering the
-  // address as a sibling link instead). Guard the boundary explicitly: the
-  // address must not sneak into the message string, or the two ways of
-  // reaching a human (the mirrored sentence and the mailto link) would say
-  // it twice, and a future edit to one address constant would leave the
-  // other copy of it stale inside the message.
-  it('does not appear inside COMPLAINED_NO_RESUBSCRIBE_MESSAGE', () => {
-    expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE).not.toContain(COMPLAINED_CONTACT_EMAIL);
+  // The composition assertion, replacing the second pass's inverse of it
+  // ("the address does not appear inside the message"), which froze the
+  // client one revision behind the server and forbade it from catching up.
+  // PreferenceCenter.svelte renders LEAD + <a>address</a> + TAIL; anything
+  // that makes those three parts stop composing to the sentence
+  // inactiveStatusMessage returns would put two different sentences on the
+  // same panel depending on which surface a reader hits.
+  //
+  // Asserted against the sentence spelled out here rather than against
+  // COMPLAINED_NO_RESUBSCRIBE_MESSAGE alone: that constant is *defined* as
+  // LEAD + address + TAIL, so comparing the parts to it can never fail and
+  // would assert nothing. The literal below is the second, independent copy
+  // that makes an edit to any part visible -- it is the client half of the
+  // sentence preferences.go's patchUnsubscribe returns after "No change: ".
+  it('composes with the LEAD/TAIL parts into exactly the whole message', () => {
+    const composed =
+      COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD +
+      COMPLAINED_CONTACT_EMAIL +
+      COMPLAINED_NO_RESUBSCRIBE_MESSAGE_TAIL;
+    expect(composed).toBe(EXPECTED_COMPLAINED_SENTENCE);
+    expect(composed).toBe(COMPLAINED_NO_RESUBSCRIBE_MESSAGE);
+    expect(composed).toBe(inactiveStatusMessage('complained'));
+  });
+
+  // The split has to fall either side of the address and nowhere else: the
+  // anchor the component renders sits exactly at the seam, so a LEAD that
+  // stops short of "Contact us at " (or a TAIL that repeats the address)
+  // would render the link in the wrong place in an otherwise-passing
+  // composition.
+  it('splits the sentence at the clause boundary around the address', () => {
+    expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD).toMatch(/contact us at $/i);
+    expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE_TAIL).toBe(' if you believe this is a mistake.');
+    expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD).not.toContain(COMPLAINED_CONTACT_EMAIL);
+    expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE_TAIL).not.toContain(COMPLAINED_CONTACT_EMAIL);
+  });
+
+  // The one divergence from internal/handlers/preferences.go's no-op
+  // message the doc comment on COMPLAINED_NO_RESUBSCRIBE_MESSAGE claims:
+  // the server's leading "No change: " clause and the recapitalisation
+  // dropping it entails. This asserts the client half of that claim -- that
+  // the message is a standalone sentence starting with a capital and does
+  // not carry the server's PATCH-context lead-in. It cannot see the Go
+  // string; #0095 tracks the guard that reads both files.
+  it('drops the server no-op message\'s "No change: " lead-in and recapitalises', () => {
+    expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE).not.toContain('No change:');
+    expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE.startsWith('This address is marked')).toBe(true);
   });
 });

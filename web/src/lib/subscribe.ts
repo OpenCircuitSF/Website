@@ -186,10 +186,11 @@ export function buildUnsubscribeEverythingPatch(token: string): PreferencesPatch
  * other non-active status gets. The vague text used to invite exactly the
  * dead end #0090 closes: "Subscribe again" led to the public form, which
  * gives #0026's uniform 202 for a confirmation email existingSignup's
- * StatusComplained branch never sends. The honest copy explains why, and
- * PreferenceCenter.svelte renders the actual contact-us affordance (a
- * mailto: link, per #0090's review) beside it -- see that component's
- * `!isActive` branch.
+ * StatusComplained branch never sends. The honest copy explains why and
+ * names the address to write to; PreferenceCenter.svelte renders that same
+ * sentence from its LEAD/TAIL parts so the address inside it is a real
+ * mailto: anchor rather than plain text -- see that component's `!isActive`
+ * branch.
  */
 export function inactiveStatusMessage(status: string): string {
   switch (status) {
@@ -209,49 +210,60 @@ export function inactiveStatusMessage(status: string): string {
 }
 
 /**
- * The honest copy for a `complained` subscriber, shared by
- * inactiveStatusMessage above (#0090). This is NOT a byte-for-byte mirror of
- * internal/handlers/preferences.go's patchUnsubscribe no-op message, and
- * deliberately so — it differs from the server string in two places, not
- * one: the server's leading "No change: " clause (dropped below -- see the
- * Gotchas in 0090.md, not applicable when this copy is shown on page load
- * before any PATCH is attempted) AND the server's inline
- * "at hello@opencircuitsf.com" (also dropped below -- see
- * COMPLAINED_CONTACT_EMAIL's doc comment just below for why: this page
- * renders the address as a real mailto: link beside the message instead of
- * folding it into the mirrored sentence). Apart from those two deliberate
- * drops the substantive sentence matches what patchUnsubscribe returns (see
- * that file's `message` assignment). Keeping one exported constant rather
- * than two independently-written strings is what keeps that reduced "same
- * copy" guarantee mechanical rather than a thing that quietly drifts the
- * next time either string is edited.
- *
- * #0090 (bounce fix): deliberately does NOT name hello@opencircuitsf.com
- * inline -- doing so here would silently break the mirror above the next
- * time either string is next edited by someone reading only one side. The
- * server embeds the address inline in its own plain-text/JSON message
- * (there's no HTML there to link), but this constant renders inside
- * PreferenceCenter.svelte, which can and does put a real `<a
- * href="mailto:...">` next to it instead -- see that component's
- * `!isActive` branch. Same fact (a human is reachable, here's how), two
- * media, two presentations; the wording that CAN stay identical, does.
- */
-export const COMPLAINED_NO_RESUBSCRIBE_MESSAGE =
-  "This address is marked as having complained about a previous email, and complained addresses " +
-  "can't be unsubscribed or resubscribed from this page. Contact us if you believe this is a mistake.";
-
-/**
- * The address PreferenceCenter.svelte renders as a `<a href="mailto:...">`
- * link beside COMPLAINED_NO_RESUBSCRIBE_MESSAGE (#0090 bounce fix) — kept
- * as its own exported constant rather than folded into that string, so the
- * message above stays a faithful mirror of preferences.go's no-op message
- * and this stays unit-testable without a DOM (CLAUDE.md §1: "SPA logic goes
- * in plain TypeScript modules … so it is unit-testable without a DOM").
- * Same address as Footer.svelte's, About.svelte's and PrivacyPolicy.svelte's
+ * The address the `complained` copy below names, and the one
+ * PreferenceCenter.svelte renders as a real `<a href="mailto:...">` anchor
+ * inside that sentence (#0090). It is its own exported constant so the
+ * sentence can be composed around it -- LEAD + COMPLAINED_CONTACT_EMAIL +
+ * TAIL -- which is what lets the component put the anchor where the address
+ * falls without either surface owning a second copy of the wording. Same
+ * address as Footer.svelte's, About.svelte's and PrivacyPolicy.svelte's
  * `CONTACT_EMAIL` constants and preferences.go's `complainedContactEmail`
  * (#0075 published it for exactly this class of request).
  */
 export const COMPLAINED_CONTACT_EMAIL = 'hello@opencircuitsf.com';
+
+/**
+ * The honest copy for a `complained` subscriber, used by
+ * inactiveStatusMessage above (#0090) and split at the clause boundary
+ * either side of the contact address.
+ *
+ * Split rather than written as one literal because the two surfaces that
+ * render this sentence have different capabilities: preferences.go's
+ * patchUnsubscribe writes a plain-text JSON message and spells the address
+ * out inline, while PreferenceCenter.svelte renders the same sentence with a
+ * real mailto: anchor where the address falls. Composing LEAD +
+ * COMPLAINED_CONTACT_EMAIL + TAIL gives the component that seam without a
+ * second copy of the wording, and leaves every part a pure, DOM-free,
+ * unit-testable value (CLAUDE.md §1).
+ *
+ * COMPLAINED_NO_RESUBSCRIBE_MESSAGE is the composed whole and is what
+ * inactiveStatusMessage returns. Against internal/handlers/preferences.go's
+ * no-op message it has exactly one divergence: that string's leading
+ * "No change: " clause, dropped here because it describes a PATCH that was
+ * just attempted and this copy is shown on page load before anyone has
+ * clicked anything (see 0090.md's Gotchas), together with the
+ * recapitalisation dropping it entails ("this address" -> "This address").
+ * Character for character:
+ *
+ *   server === "No change: " + lowerFirst(COMPLAINED_NO_RESUBSCRIBE_MESSAGE)
+ *
+ * Nothing mechanical enforces that today: this comment is a promise, and an
+ * earlier edit to the server string broke the promise an earlier version of
+ * this comment made. #0095 tracks replacing it with a test that reads both
+ * files. Until that lands, edit the two strings in the same change.
+ */
+export const COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD =
+  'This address is marked as having complained about a previous email, and complained addresses ' +
+  "can't be unsubscribed or resubscribed from this page. Contact us at ";
+
+/** The clause following the address -- see COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD. */
+export const COMPLAINED_NO_RESUBSCRIBE_MESSAGE_TAIL = ' if you believe this is a mistake.';
+
+/** LEAD + address + TAIL -- see COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD. */
+export const COMPLAINED_NO_RESUBSCRIBE_MESSAGE =
+  COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD +
+  COMPLAINED_CONTACT_EMAIL +
+  COMPLAINED_NO_RESUBSCRIBE_MESSAGE_TAIL;
 
 /**
  * Statuses for which PreferenceCenter.svelte's non-active panel offers the

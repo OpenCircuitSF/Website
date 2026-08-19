@@ -34,6 +34,8 @@
     inactiveStatusMessage,
     showSubscribeAgainAffordance,
     COMPLAINED_CONTACT_EMAIL,
+    COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD,
+    COMPLAINED_NO_RESUBSCRIBE_MESSAGE_TAIL,
   } from '../lib/subscribe';
   import type { PublicInterest } from '../lib/types';
   import Panel from '../lib/Panel.svelte';
@@ -237,22 +239,34 @@
        genuinely leave their status this way and keep it.
 
        Bounced 2026-08-19: suppressing the button correctly leaves
-       `complained` with no in-app path at all, and COMPLAINED_NO_RESUBSCRIBE_
-       MESSAGE's "Contact us" names no address -- an inert dead end shaped
-       exactly like the one this issue exists to close. Deliberately NOT
-       fixed by baking the address into that constant (it's a word-for-word
-       mirror of preferences.go's no-op message and must stay one); instead
-       the mailto link renders here, beside the message, in the same slot
-       the button used to fill. -->
+       `complained` with no in-app path at all, and the copy's "Contact us"
+       named no address -- an inert dead end shaped exactly like the one
+       this issue exists to close. The address now lives inside that
+       sentence on both surfaces: preferences.go spells it out inline
+       (plain-text JSON, nowhere to put a link), and this branch composes
+       the same sentence from COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD + the
+       address + _TAIL so the address is a real mailto: anchor in the middle
+       of it rather than a second, quieter sentence repeating the ask.
+
+       The anchor sits inside the `role="status"` element on purpose: it is
+       the only actionable thing left on this panel, so a screen reader must
+       announce it with the problem it answers, not leave it outside the
+       live region. It is also styled as an ordinary link, not `text-muted`
+       -- it occupies the slot the "Subscribe again" button used to fill.
+
+       Both surfaces render the same words, but nothing mechanical keeps
+       them equal; #0095 tracks the parity guard. -->
   <div class="pref-content">
     {#if showHeading}<h1>Manage your preferences</h1>{/if}
     <Panel>
-      <p role="status">{inactiveStatusMessage(status)}</p>
       {#if showSubscribeAgainAffordance(status)}
+        <p role="status">{inactiveStatusMessage(status)}</p>
         <button type="button" class="link-button" onclick={goToSubscribe}>Subscribe again</button>
       {:else}
-        <p class="text-muted">
-          Reach us at <a href="mailto:{COMPLAINED_CONTACT_EMAIL}">{COMPLAINED_CONTACT_EMAIL}</a>.
+        <p role="status">
+          {COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD}<a
+            href="mailto:{COMPLAINED_CONTACT_EMAIL}">{COMPLAINED_CONTACT_EMAIL}</a
+          >{COMPLAINED_NO_RESUBSCRIBE_MESSAGE_TAIL}
         </p>
       {/if}
     </Panel>
