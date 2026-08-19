@@ -16,9 +16,13 @@ import (
 //   - A request whose path maps to a real embedded file (e.g. the hashed
 //     /assets/index-*.js or /assets/index-*.css) is served directly with the
 //     correct Content-Type via http.FileServerFS.
-//   - Any other path (the root "/", or SPA deep links like /dashboard and
-//     /account that have no client-side router) falls back to index.html so a
-//     hard refresh on a deep link still loads the app.
+//   - A path with no matching embedded file and no extension falls back to
+//     index.html so a hard refresh on a client-side route still loads the
+//     app. The status code depends on whether the path is in the SPA's own
+//     known-route table (routes.go, #0022): a real route (e.g. /about) gets
+//     200; anything else gets 404 while still serving the same index.html,
+//     so the client-side router's NotFound view renders instead of a bare
+//     404 or (worse) an indexable soft-404 that returns 200 for every typo.
 type SPAHandler struct {
 	dist    fs.FS
 	fileSrv http.Handler
@@ -35,8 +39,9 @@ func NewSPAHandler(dist fs.FS) *SPAHandler {
 }
 
 // ServeHTTP implements http.Handler. It serves the requested embedded file when
-// it exists, otherwise it serves index.html so the SPA's client-side view
-// routing works on a hard refresh of a deep link.
+// it exists, otherwise it serves index.html (200 for a known route, 404 for a
+// miss -- see isKnownRoute) so the SPA's client-side view routing works on a
+// hard refresh of a deep link.
 func (h *SPAHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// fs paths are relative and never start with a slash; the root request maps
 	// to index.html, handled below.
@@ -52,13 +57,18 @@ func (h *SPAHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// fall back to the HTML shell. Returning index.html for /favicon.ico made
 	// browsers receive an HTML document for an icon URL, which they can cache as
 	// a broken/garbage icon. Such paths get a clean 404 instead. SPA deep links
-	// (/dashboard, /account — no extension) still fall through to index.html.
+	// with no extension (e.g. /about, or a typo'd /aboot) still fall through to
+	// index.html below -- isKnownRoute decides which status code they get.
 	if path.Ext(name) != "" {
 		http.NotFound(w, r)
 		return
 	}
 
-	h.serveIndex(w, r)
+	status := http.StatusOK
+	if !isKnownRoute(r.URL.Path) {
+		status = http.StatusNotFound
+	}
+	h.serveIndex(w, status)
 }
 
 // fileExists reports whether name resolves to a regular file in the embedded
@@ -72,14 +82,17 @@ func (h *SPAHandler) fileExists(name string) bool {
 	return !info.IsDir()
 }
 
-// serveIndex writes dist/index.html as the SPA shell. Used for the root path and
-// every unmatched deep link.
-func (h *SPAHandler) serveIndex(w http.ResponseWriter, r *http.Request) {
+// serveIndex writes dist/index.html as the SPA shell at the given status code.
+// Used for the root path and every unmatched deep link -- status is 200 for a
+// path in the known-route table (routes.go) and 404 for everything else, per
+// #0022.
+func (h *SPAHandler) serveIndex(w http.ResponseWriter, status int) {
 	data, err := fs.ReadFile(h.dist, "index.html")
 	if err != nil {
 		http.Error(w, "SPA index.html not found in embedded assets", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
 	_, _ = w.Write(data)
 }
