@@ -43,15 +43,25 @@
   //  - "No third-party analytics, ad trackers, external CDNs, or email
   //    open-tracking pixels" is CLAUDE.md §9's binding restriction, stated
   //    here as a fact about how the site is built, not a promise.
-  //  - Five facts are placeholders because they are not this page's author's
-  //    to invent: the exact data-retention window, the erasure turnaround
-  //    time, the contact address for privacy requests specifically, the
-  //    legal entity name/type behind "Open Circuit SF", and the physical
-  //    mailing address for CAN-SPAM. Each is marked in-line with a bracketed
-  //    "PLACEHOLDER" marker (see the literal text below) and tracked in
-  //    #0075 (blocked on the user, not implementable by an agent).
-  //    `scripts/deploy.sh` gate 1 greps for that marker and refuses to
-  //    deploy while any survive in web/src/.
+  //  - #0075 answered the five facts that were bracketed "PLACEHOLDER" markers here:
+  //    retention after unsubscribe (kept indefinitely, marked `unsubscribed`, no
+  //    purge job -- matches the schema as designed), erasure turnaround (30 days),
+  //    the privacy-request contact address (hello@opencircuitsf.com, not a
+  //    dedicated alias), and the legal entity ("Open Circuit SF" is an
+  //    unincorporated community group, San Francisco -- named as the data
+  //    controller; do not imply incorporation anywhere on this page).
+  //  - The fifth placeholder -- a physical mailing address -- was removed rather
+  //    than answered. PRD §11's privacy-policy bullet requires only what's
+  //    collected, why, retention, and how to leave; it does not list a postal
+  //    address. #0060's acceptance criteria likewise only require this page to
+  //    document post-erasure retention, not an address. CAN-SPAM §7704's postal-
+  //    address obligation is scoped to commercial *email* (PRD §11's Compliance
+  //    bullet: "physical mailing address in every message") and is enforced by
+  //    #0045's send-worker gate (`physical_address` setting), not by this page.
+  //    CLAUDE.md §10 open item 3 (PO box, "not started") still tracks getting
+  //    that address for #0045 -- unrelated to this page now. `scripts/deploy.sh`
+  //    gate 1 greps web/src/ for that bracketed marker and, with none left, no
+  //    longer blocks this page.
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
   import StatusList from '../lib/StatusList.svelte';
@@ -130,11 +140,12 @@
     <h2 id="retention-h">How long we keep it</h2>
     <Panel>
       <p>
-        We keep your subscriber data for as long as you remain subscribed, plus
-        <strong>[PLACEHOLDER: exact retention window after unsubscribe/erasure — e.g.
-        "30 days" — not yet decided]</strong>, after which your subscriber record is
-        deleted. A few records outlive it by design — see "How to leave" below for
-        which ones and why.
+        We keep your subscriber data for as long as you remain subscribed. If you
+        unsubscribe, we keep your record marked unsubscribed so we do not
+        accidentally add you back — it is not automatically deleted. You can ask us
+        to erase it entirely at any time; see "How to leave" below for how, and for
+        the handful of records that outlive even an erasure request by design, and
+        why.
       </p>
     </Panel>
   </section>
@@ -163,9 +174,9 @@
     <h2 id="leave-h">How to leave</h2>
     <Panel>
       <p>
-        <strong>Unsubscribe.</strong> Every email we send carries a one-click
-        unsubscribe link. We honor it immediately — not just within the 10 days
-        CAN-SPAM requires.
+        <strong>Unsubscribe.</strong> Every campaign email we send carries a
+        one-click unsubscribe link. We honor it immediately — not just within the
+        10 days CAN-SPAM requires.
       </p>
       <p>
         <strong>Erasure.</strong> You can request that we delete your personal data
@@ -181,8 +192,8 @@
         ]}
       />
       <p>
-        We aim to complete erasure requests within
-        <strong>[PLACEHOLDER: erasure turnaround time — not yet decided]</strong>.
+        We will erase your data within 30 days of your request, and usually much
+        sooner.
       </p>
       <p>
         <strong>Export.</strong> You can also request a copy of the data we hold about
@@ -202,11 +213,11 @@
     <Panel>
       <p>
         Every commercial email we send carries an accurate "From" address, a
-        non-deceptive subject line, and a physical mailing address:
-        <strong
-          >[PLACEHOLDER: physical mailing address (a PO box is fine) — not yet
-          established, see CLAUDE.md open item #3]</strong
-        >.
+        non-deceptive subject line, and a physical mailing address, printed in the
+        email itself as CAN-SPAM requires. That address does not need to appear on
+        this page — CAN-SPAM's postal-address requirement applies to the emails, not
+        to this policy — so if you want to reach us in the meantime, use the contact
+        address below.
       </p>
     </Panel>
   </section>
@@ -219,16 +230,11 @@
       <p>
         For questions about this policy, or to request export or erasure of your data,
         reach us at
-        <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>
-        <span class="text-muted"
-          >[PLACEHOLDER: confirm this is the right address for privacy requests
-          specifically, vs. a dedicated address]</span
-        >.
+        <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>.
       </p>
       <p class="text-muted">
-        {APP_NAME} is
-        <strong>[PLACEHOLDER: legal entity name/type — unincorporated group, LLC,
-        nonprofit, etc. — not established in the project's source material]</strong>.
+        {APP_NAME} is an unincorporated community group based in San Francisco. We
+        are the data controller for the information described here.
       </p>
     </Panel>
   </section>
