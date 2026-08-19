@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -96,18 +97,60 @@ func (f fakePhysicalAddress) GetSetting(context.Context, string) (string, error)
 	return f.value, nil
 }
 
+// blockingMailer is a Mailer whose Send blocks until either release is
+// closed (by the test) or ctx is cancelled — whichever happens first — and
+// closes entered the instant Send is called, before it starts waiting.
+// #0081 uses this to prove two things deterministically, with no timing
+// dependency: that a response can be written while a send is still
+// provably stuck inside the mailer (the async-send regression test), and
+// that Close's context cancellation interrupts an in-flight send rather
+// than waiting for it to finish on its own (the shutdown-releases-claims
+// test). entered is closed at most once per instance — construct a fresh
+// blockingMailer per expected Send call.
+type blockingMailer struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newBlockingMailer() *blockingMailer {
+	return &blockingMailer{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (m *blockingMailer) Send(ctx context.Context, _ mailing.Message) (string, error) {
+	close(m.entered)
+	select {
+	case <-m.release:
+		return "blocked-then-sent", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
 // subscribeMux wires the real *SubscribeHandler over the real
 // *subscribers.Store and *interests.Store (both #0025/#0023, approved),
 // with an injected mailer and suppression checker so tests never touch the
 // network and can control every branch precisely. Returns the handler
 // itself too, so a test can override h.now for deterministic timestamps
 // (e.g. the resend-cooldown test).
-func subscribeMux(pool *pgxpool.Pool, mailer mailing.Mailer, suppression SuppressionChecker) (*SubscribeHandler, http.Handler) {
+//
+// Registers t.Cleanup(...) to call h.Close, bounded, so this package's ~20
+// call sites stop leaking sendWorkerCount goroutines per construction
+// (#0081) — before Close existed there was no way to stop them at all, and
+// they accumulated for the life of the test binary.
+func subscribeMux(t *testing.T, pool *pgxpool.Pool, mailer mailing.Mailer, suppression SuppressionChecker) (*SubscribeHandler, http.Handler) {
+	t.Helper()
 	h := NewSubscribeHandler(
 		subscribers.NewStore(pool), interests.NewStore(pool), mailer,
 		suppression, fakePhysicalAddress{value: "123 Main St, San Francisco, CA"},
 		audit.New(pool), "https://example.test", nil,
 	)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.Close(ctx); err != nil {
+			t.Errorf("subscribeMux cleanup: h.Close: %v", err)
+		}
+	})
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/subscribe", h.Subscribe)
 	return h, mux
@@ -297,7 +340,7 @@ func TestSubscribe_UniformResponseAcrossBranches(t *testing.T) {
 	suppressedEmail := subscribeUniqueEmail(t) + "-suppressed"
 	suppression := fakeSuppressionChecker{suppressed: map[string]bool{suppressedEmail: true}}
 
-	h, mux := subscribeMux(pool, mailer, suppression)
+	h, mux := subscribeMux(t, pool, mailer, suppression)
 
 	cases := []struct {
 		name string
@@ -400,7 +443,7 @@ func withTooFast(body map[string]any, now time.Time) map[string]any {
 func TestSubscribe_HoneypotDiscardsSilently(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	resp := doSubscribe(t, h, mux, withHoneypot(subscribeBody(email, []string{}, time.Now())))
@@ -422,7 +465,7 @@ func TestSubscribe_HoneypotDiscardsSilently(t *testing.T) {
 func TestSubscribe_TimingGateRejectsTooFastOrMissing(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	t.Run("too-fast", func(t *testing.T) {
 		email := subscribeUniqueEmail(t) + "-fast"
@@ -485,7 +528,7 @@ func TestSubscribe_SuppressedAddress_NoActionTaken(t *testing.T) {
 	mailer := &mailing.RecordingMailer{}
 	email := subscribeUniqueEmail(t)
 	suppression := fakeSuppressionChecker{suppressed: map[string]bool{email: true}}
-	h, mux := subscribeMux(pool, mailer, suppression)
+	h, mux := subscribeMux(t, pool, mailer, suppression)
 
 	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
@@ -504,7 +547,7 @@ func TestSubscribe_SuppressionCheckError_FailsSafeToUniform202(t *testing.T) {
 	mailer := &mailing.RecordingMailer{}
 	email := subscribeUniqueEmail(t)
 	suppression := fakeSuppressionChecker{err: errors.New("suppression backend unavailable")}
-	h, mux := subscribeMux(pool, mailer, suppression)
+	h, mux := subscribeMux(t, pool, mailer, suppression)
 
 	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
@@ -525,7 +568,7 @@ func TestSubscribe_SuppressionCheckError_FailsSafeToUniform202(t *testing.T) {
 func TestSubscribe_NewSignup_CreatesPendingSendsConfirmationAndAudits(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{"beginner", "microcontrollers"}, time.Now()))
@@ -587,7 +630,7 @@ func TestSubscribe_NewSignup_CreatesPendingSendsConfirmationAndAudits(t *testing
 func TestSubscribe_SignupIPUsesRightmostTrustedProxyEntry(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	const attackerClaimed = "172.16.0.7"
@@ -612,7 +655,7 @@ func TestSubscribe_SignupIPUsesRightmostTrustedProxyEntry(t *testing.T) {
 func TestSubscribe_SignupIPCannotBeSpoofedWithoutTrustedProxy(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	const spoofed = "172.16.0.7"
@@ -631,7 +674,7 @@ func TestSubscribe_SignupIPCannotBeSpoofedWithoutTrustedProxy(t *testing.T) {
 func TestSubscribe_EmptyInterestsAccepted(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
@@ -655,7 +698,7 @@ func TestSubscribe_EmptyInterestsAccepted(t *testing.T) {
 func TestSubscribe_UnknownInterestSlugRejected(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{"not-a-real-slug"}, time.Now()))
@@ -737,7 +780,7 @@ func TestIsDisposableDomain(t *testing.T) {
 func TestSubscribe_InvalidEmailSyntaxRejected(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	resp := doSubscribe(t, h, mux, subscribeBody("not-an-email", nil, time.Now()))
 	if resp.StatusCode != http.StatusBadRequest {
@@ -755,7 +798,7 @@ func TestSubscribe_NonASCIIEmailAccepted(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
 	email := fmt.Sprintf("café-%d@example.com", time.Now().UnixNano())
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
@@ -779,7 +822,7 @@ func TestSubscribe_TitlecaseDigraphEmailAccepted(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
 	email := fmt.Sprintf("ǅ-%d@example.com", time.Now().UnixNano())
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
@@ -793,7 +836,7 @@ func TestSubscribe_TitlecaseDigraphEmailAccepted(t *testing.T) {
 func TestSubscribe_DisposableDomainRejected(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := "zz-subtest@mailinator.com"
 	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
@@ -812,7 +855,7 @@ func TestSubscribe_DisposableDomainRejected(t *testing.T) {
 func TestSubscribe_ActiveSubscriber_SendsAlreadySubscribedEmail(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	id := seedSubscriberRow(t, pool, email, subscribers.StatusActive, nil, nil)
@@ -844,7 +887,7 @@ func TestSubscribe_ActiveSubscriber_SendsAlreadySubscribedEmail(t *testing.T) {
 func TestSubscribe_ActiveSubscriber_AlreadySubscribedEmailCooldown(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	seedSubscriberRow(t, pool, email, subscribers.StatusActive, nil, nil)
@@ -865,7 +908,7 @@ func TestSubscribe_ActiveSubscriber_AlreadySubscribedEmailCooldown(t *testing.T)
 func TestSubscribe_PendingSubscriber_ResendRateLimitedToOncePerHour(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	fixedNow := time.Now().UTC().Truncate(time.Second)
 	h.now = func() time.Time { return fixedNow }
@@ -962,7 +1005,7 @@ func concurrentSubscribe(t *testing.T, h *SubscribeHandler, mux http.Handler, bo
 func TestSubscribe_ConcurrentNewSignups_SendsExactlyOneConfirmation(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t) + "-concurrent-new"
 	concurrentSubscribe(t, h, mux, subscribeBody(email, nil, time.Now()), 8)
@@ -981,7 +1024,7 @@ func TestSubscribe_ConcurrentNewSignups_SendsExactlyOneConfirmation(t *testing.T
 func TestSubscribe_ConcurrentPendingResends_SendsExactlyOneConfirmation(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t) + "-concurrent-pending"
 	token := "tok-" + email
@@ -997,7 +1040,7 @@ func TestSubscribe_ConcurrentPendingResends_SendsExactlyOneConfirmation(t *testi
 func TestSubscribe_UnsubscribedSubscriber_RestartsWithFreshTokenAndSendsConfirmation(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	id := seedSubscriberRow(t, pool, email, subscribers.StatusUnsubscribed, nil, nil)
@@ -1041,7 +1084,7 @@ func TestSubscribe_UnsubscribedSubscriber_RestartsWithFreshTokenAndSendsConfirma
 func TestSubscribe_BouncedSubscriber_RestartsSameAsUnsubscribed(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	seedSubscriberRow(t, pool, email, subscribers.StatusBounced, nil, nil)
@@ -1071,7 +1114,7 @@ func TestSubscribe_BouncedSubscriber_RestartsSameAsUnsubscribed(t *testing.T) {
 func TestSubscribe_ComplainedSubscriber_NoActionTaken(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	h, mux := subscribeMux(pool, mailer, nil)
+	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	email := subscribeUniqueEmail(t)
 	id := seedSubscriberRow(t, pool, email, subscribers.StatusComplained, nil, nil)
@@ -1113,5 +1156,189 @@ func TestSubscribe_ComplainedSubscriber_NoActionTaken(t *testing.T) {
 	}
 	if len(ids) != 0 {
 		t.Errorf("InterestIDs = %v, want empty — the submitted interests must never be applied", ids)
+	}
+}
+
+// TestSubscribe_AsyncSendDoesNotBlockResponse is #0081's regression test for
+// the async-send property #0026's review closed a 100%-accurate
+// enumeration oracle by establishing (see subscribe.go's package doc
+// comment, "The byte-identical body is not the only observable"). It was
+// completely unguarded: #0081's own mutation proof found that putting
+// mailer.Send back on the request goroutine left the entire suite green.
+//
+// Deterministic and non-timing, per the reviewer's suggested shape: a
+// mailer that blocks until the test lets it go, driven directly over
+// ServeHTTP (not through doSubscribe/waitForSends, which would defeat the
+// point). Subscribe's response must be written while the mailer is
+// PROVABLY still blocked — blocked.release is never closed anywhere in
+// this test, only by subscribeMux's own t.Cleanup(...)-registered Close at
+// teardown, which runs after every assertion below. If mailer.Send were
+// ever run synchronously on the request goroutine, ServeHTTP would not
+// return until Close's shutdown cancellation interrupts it — which,
+// crucially, never happens on the request goroutine's own timeout budget
+// here (the 2s bound below is a hang guard, not a race window: a fixed,
+// generous ceiling on a call that should return in well under a
+// millisecond when the property holds).
+func TestSubscribe_AsyncSendDoesNotBlockResponse(t *testing.T) {
+	pool := subscribeTestPool(t)
+
+	blocked := newBlockingMailer()
+	_, mux := subscribeMux(t, pool, blocked, nil)
+
+	email := subscribeUniqueEmail(t)
+	body, err := json.Marshal(subscribeBody(email, nil, time.Now()))
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/subscribe", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		mux.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Good: Subscribe returned even though blocked.release has not
+		// been (and, within this test, will not be) closed.
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe did not return within 2s while the mailer is blocked — mailer.Send appears to be running on the request goroutine, which would reopen #0026's timing oracle")
+	}
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
+	}
+
+	// Confirm a send really was attempted for this signup — otherwise a
+	// fast response would prove nothing (no send queued at all).
+	select {
+	case <-blocked.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("mailer.Send was never entered — no send was queued for this signup; the fast response above proves nothing")
+	}
+}
+
+// TestSubscribeHandler_Close_ReleasesInFlightClaimAndRetrySendsImmediately
+// is #0081's proof for defect 1 (SIGTERM loses the email and silences the
+// retry) and the acceptance criterion "on shutdown, queued and in-flight
+// claims are released". It reproduces the same "send stuck forever" shape
+// as the throwaway BEFORE reproduction captured in issues/0081.md's
+// ## Root cause, except this time Close is called explicitly (standing in
+// for cmd/opencircuit/main.go's SIGTERM handler) instead of being left
+// unexercised — and shows the claim gets released, promptly, and an
+// immediate retry (no cooldown wait) sends for real.
+func TestSubscribeHandler_Close_ReleasesInFlightClaimAndRetrySendsImmediately(t *testing.T) {
+	pool := subscribeTestPool(t)
+
+	blocked := newBlockingMailer() // release is never closed — Close's context cancellation is the only thing that can end this send
+	h1, mux1 := subscribeMux(t, pool, blocked, nil)
+
+	email := subscribeUniqueEmail(t)
+	resp := doSubscribeFrom(t, nil, mux1, subscribeBody(email, nil, time.Now()), "", "")
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+
+	select {
+	case <-blocked.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("mailer.Send was never entered — nothing for Close to interrupt")
+	}
+
+	_, status, _, confirmSentAt := subscriberRow(t, pool, email)
+	if status != subscribers.StatusPending || confirmSentAt == nil {
+		t.Fatalf("before Close: status=%q confirm_sent_at=%v, want pending with the claim stamped", status, confirmSentAt)
+	}
+
+	// Graceful shutdown, bounded generously — should return in well under
+	// the bound because sendCtx cancellation interrupts blocked.Send
+	// directly, rather than this depending on release ever being closed
+	// (it never is).
+	closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := h1.Close(closeCtx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Close took %v to return the send was interrupted, not waited out — want well under the 3s bound", elapsed)
+	}
+
+	_, status, _, confirmSentAt = subscriberRow(t, pool, email)
+	if status != subscribers.StatusPending {
+		t.Fatalf("after Close: status = %q, want still pending", status)
+	}
+	if confirmSentAt != nil {
+		t.Fatalf("after Close: confirm_sent_at = %v, want nil — the claim must be released so a retry is not silenced for subscribeResendCooldown", confirmSentAt)
+	}
+
+	// A second call must be a no-op, not a panic (double-close of
+	// sendQueue) or a second cancel.
+	if err := h1.Close(closeCtx); err != nil {
+		t.Fatalf("second Close call: %v, want nil (idempotent)", err)
+	}
+
+	// Retry, immediately, no cooldown wait: must send for real now.
+	after := &mailing.RecordingMailer{}
+	h2, mux2 := subscribeMux(t, pool, after, nil)
+	resp2 := doSubscribe(t, h2, mux2, subscribeBody(email, nil, time.Now()))
+	if resp2.StatusCode != http.StatusAccepted {
+		t.Fatalf("retry status = %d, want 202", resp2.StatusCode)
+	}
+	if got := len(after.Sent()); got != 1 {
+		t.Fatalf("retry sent %d emails, want exactly 1 — the released claim must allow an immediate real send", got)
+	}
+}
+
+// TestNewSubscribeHandler_NoGoroutineLeakAcrossConstruction is #0081's proof
+// that Close actually stops sendWorkerCount goroutines per construction
+// from accumulating forever — before Close existed, there was no way to
+// stop them at all (#0026's review residual #1: "~120 of them accumulate in
+// the test binary").
+func TestNewSubscribeHandler_NoGoroutineLeakAcrossConstruction(t *testing.T) {
+	pool := subscribeTestPool(t)
+
+	runtime.GC()
+	before := runtime.NumGoroutine()
+
+	const rounds = 50
+	for i := 0; i < rounds; i++ {
+		h := NewSubscribeHandler(
+			subscribers.NewStore(pool), interests.NewStore(pool), &mailing.RecordingMailer{},
+			NoSuppressions{}, nil, nil, "https://example.test", nil,
+		)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := h.Close(ctx); err != nil {
+				t.Fatalf("round %d: Close: %v", i, err)
+			}
+		}()
+	}
+
+	// A worker's final loop iteration — receiving the closed, drained
+	// channel's zero value and returning — happens a moment after Close's
+	// sendWG.Wait() unblocks, not synchronously with it. Poll with a
+	// bounded settle window instead of asserting the instant Close returns,
+	// the same allowance the standard library's own goroutine-leak checks
+	// make for scheduler tail latency.
+	var after int
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		runtime.GC()
+		after = runtime.NumGoroutine()
+		if after <= before+2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Logf("goroutines before=%d after=%d across %d constructions (each starting %d workers, %d total if leaked)",
+		before, after, rounds, sendWorkerCount, rounds*sendWorkerCount)
+	if after > before+2 {
+		t.Fatalf("goroutine count grew from %d to %d after constructing and closing %d handlers — sendWorkerCount workers are leaking", before, after, rounds)
 	}
 }

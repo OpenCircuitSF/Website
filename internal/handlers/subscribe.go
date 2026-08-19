@@ -203,12 +203,31 @@ type SubscribeHandler struct {
 	// fix from #0026's review (finding 1) — see the package doc comment.
 	// enqueueSend hands a built mailing.Message to this channel; a fixed
 	// pool of worker goroutines (started once, in NewSubscribeHandler)
-	// drains it and calls h.mailer.Send on a detached context, so no HTTP
+	// drains it and calls h.mailer.Send on sendCtx (see below), so no HTTP
 	// response ever waits on a network call. sendWG lets tests
 	// deterministically wait for in-flight async sends to finish
-	// (waitForSends) instead of sleeping.
+	// (waitForSends) instead of sleeping, and lets Close (#0081) wait for
+	// every queued/in-flight job to finish being processed.
 	sendQueue chan sendJob
 	sendWG    sync.WaitGroup
+
+	// sendCtx is the parent context every worker derives its per-job
+	// timeout from (processSendJob: context.WithTimeout(h.sendCtx, ...)),
+	// instead of context.Background(). sendCancel cancels it, which Close
+	// (#0081) uses to interrupt any send that is queued-but-not-yet-started
+	// or actively in flight at shutdown time, rather than letting it run to
+	// completion or timing out on its own. Set once in NewSubscribeHandler.
+	sendCtx    context.Context
+	sendCancel context.CancelFunc
+
+	// closeMu/closed guard Close against a concurrent enqueueSend: once
+	// closed is true, enqueueSend must not attempt to send on sendQueue
+	// (which Close has by then closed — sending on a closed channel
+	// panics) and instead releases the claim immediately, the same
+	// observable outcome as every other drop path in this file. See
+	// Close's doc comment.
+	closeMu sync.Mutex
+	closed  bool
 }
 
 // sendQueueCapacity bounds the async send queue. Sized generously relative
@@ -257,11 +276,14 @@ func NewSubscribeHandler(
 	if logger == nil {
 		logger = slog.Default()
 	}
+	sendCtx, sendCancel := context.WithCancel(context.Background())
 	h := &SubscribeHandler{
 		subs: subs, interests: il, mailer: mailer, suppression: suppression,
 		settings: settings, auditor: auditor, baseURL: baseURL,
 		now: time.Now, log: logger,
-		sendQueue: make(chan sendJob, sendQueueCapacity),
+		sendQueue:  make(chan sendJob, sendQueueCapacity),
+		sendCtx:    sendCtx,
+		sendCancel: sendCancel,
 	}
 	for i := 0; i < sendWorkerCount; i++ {
 		go h.runSendWorker()
@@ -273,10 +295,11 @@ func NewSubscribeHandler(
 // can't pin a worker goroutine forever.
 const sendJobTimeout = 30 * time.Second
 
-// runSendWorker drains h.sendQueue until it is closed (which #0026's scope
-// never does — this process's handler lives as long as the server does; see
-// this issue's Gotchas). One of sendWorkerCount goroutines started by
-// NewSubscribeHandler.
+// runSendWorker drains h.sendQueue until Close (#0081) closes it, at which
+// point the loop exits and this goroutine returns — one of sendWorkerCount
+// goroutines started by NewSubscribeHandler, and the mechanism that makes
+// repeated handler construction (every test in this package, every
+// #0045-shaped future caller) not leak them forever.
 func (h *SubscribeHandler) runSendWorker() {
 	for job := range h.sendQueue {
 		h.processSendJob(job)
@@ -284,13 +307,17 @@ func (h *SubscribeHandler) runSendWorker() {
 }
 
 // processSendJob performs one queued send on a context detached from any
-// HTTP request (the request that enqueued this job has already returned).
-// A failed send is logged — never silently dropped — and its claim
-// released so a subsequent legitimate request can retry.
+// HTTP request (the request that enqueued this job has already returned)
+// but derived from h.sendCtx, not context.Background() — so Close (#0081)
+// cancelling h.sendCtx interrupts this call rather than letting it run for
+// the full sendJobTimeout, or to completion, during shutdown. A failed send
+// — including one that failed because sendCtx was cancelled — is logged,
+// never silently dropped, and its claim released so a subsequent legitimate
+// request can retry.
 func (h *SubscribeHandler) processSendJob(job sendJob) {
 	defer h.sendWG.Done()
 
-	ctx, cancel := context.WithTimeout(context.Background(), sendJobTimeout)
+	ctx, cancel := context.WithTimeout(h.sendCtx, sendJobTimeout)
 	defer cancel()
 
 	if _, err := h.mailer.Send(ctx, job.msg); err != nil {
@@ -318,16 +345,35 @@ func (h *SubscribeHandler) releaseSendClaim(job sendJob) {
 // enqueueSend hands job to the async worker pool without blocking the HTTP
 // response. If the queue is saturated (sendQueueCapacity jobs already
 // waiting — see that constant's doc comment on why this is not expected in
-// steady state), it does NOT block: blocking here would silently reopen the
-// exact request-latency channel #0026's review closed. Instead it logs
-// loudly and releases the claim immediately, exactly as if the send itself
-// had failed, so the drop is both observable (in logs) and retryable (the
-// claim is released, so the next legitimate request tries again).
+// steady state) OR the handler is shutting down (#0081's Close has already
+// been called), it does NOT block and does NOT send on sendQueue: blocking
+// here would silently reopen the exact request-latency channel #0026's
+// review closed, and sending on sendQueue after Close has closed it would
+// panic. Instead it logs loudly and releases the claim immediately, exactly
+// as if the send itself had failed, so the drop is both observable (in
+// logs) and retryable (the claim is released, so the next legitimate
+// request tries again — immediately, not after subscribeResendCooldown).
+//
+// closeMu is held across the select so this can never race Close's own
+// close(h.sendQueue): either this runs first and the job is safely queued
+// before Close closes the channel, or Close's closed=true is already
+// visible here and the send-on-closed-channel path is never taken.
 func (h *SubscribeHandler) enqueueSend(job sendJob) {
 	h.sendWG.Add(1)
+
+	h.closeMu.Lock()
+	if h.closed {
+		h.closeMu.Unlock()
+		h.log.Error("subscribe: handler is shutting down, dropping send", "subscriber_id", job.subscriberID, "kind", job.label)
+		h.releaseSendClaim(job)
+		h.sendWG.Done()
+		return
+	}
 	select {
 	case h.sendQueue <- job:
+		h.closeMu.Unlock()
 	default:
+		h.closeMu.Unlock()
 		h.log.Error("subscribe: send queue full, dropping send", "subscriber_id", job.subscriberID, "kind", job.label)
 		h.releaseSendClaim(job)
 		h.sendWG.Done()
@@ -342,6 +388,65 @@ func (h *SubscribeHandler) enqueueSend(job sendJob) {
 // the actual send off the request/response path.
 func (h *SubscribeHandler) waitForSends() {
 	h.sendWG.Wait()
+}
+
+// Close implements #0081's graceful-shutdown fix: no new send is ever
+// attempted after this is called (enqueueSend's closeMu-guarded check), the
+// shared send context is cancelled so a job that is queued-but-not-yet-
+// started or actively in flight is interrupted rather than left to run to
+// completion or its own sendJobTimeout, and h.sendQueue is closed so every
+// runSendWorker goroutine exits once it has drained (fixing the goroutine
+// leak: before Close existed, NewSubscribeHandler's sendWorkerCount
+// goroutines per construction had no way to ever stop).
+//
+// Every interrupted send takes processSendJob's ordinary failed-send path —
+// logged, claim released via releaseSendClaim's own short-lived, detached
+// 5s context (deliberately NOT derived from sendCtx, so a release attempt
+// is never itself defeated by the same cancellation that doomed the send it
+// is compensating for). That is the actual fix for defect 1: a visitor who
+// saw the 202 can retry immediately after a SIGTERM-driven shutdown,
+// instead of being silenced for subscribeResendCooldown by a claim nobody
+// ever released.
+//
+// Close is bounded by ctx and idempotent (a second call is a no-op) and
+// safe to call concurrently with in-flight Subscribe requests still calling
+// enqueueSend. It returns ctx.Err() if the bound is exceeded before every
+// queued/in-flight job finishes being processed — expected only if the
+// mailer itself ignores context cancellation, since sendCtx's cancellation
+// otherwise makes every remaining job fail (and release) almost
+// immediately rather than running out its full timeout.
+//
+// cmd/opencircuit/main.go's mountAndServe calls this from its
+// SIGTERM/SIGINT handler, after http.Server.Shutdown has stopped accepting
+// new connections and drained in-flight ones — Subscribe itself never
+// blocks on a send, so that step is fast and by the time it returns no
+// request goroutine can still be inside enqueueSend. #0045's campaign send
+// worker needs the same close-then-bounded-wait shape; reuse this pattern
+// (a cancellable shared context plus a closed work queue plus a WaitGroup)
+// rather than inventing a second one.
+func (h *SubscribeHandler) Close(ctx context.Context) error {
+	h.closeMu.Lock()
+	if h.closed {
+		h.closeMu.Unlock()
+		return nil
+	}
+	h.closed = true
+	h.sendCancel()
+	close(h.sendQueue)
+	h.closeMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		h.sendWG.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // subscribeRequest is the POST /api/subscribe body. This is the wire

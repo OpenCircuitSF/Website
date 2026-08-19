@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -9,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -506,5 +509,81 @@ func mountAndServe(
 	if outerMiddleware != nil {
 		handler = outerMiddleware(mux)
 	}
-	return http.ListenAndServe(addr, handler)
+
+	srv := &http.Server{Addr: addr, Handler: handler}
+
+	// Graceful shutdown (#0081): before this, mountAndServe ended in a bare
+	// http.ListenAndServe with no signal.Notify anywhere in the repo, so an
+	// unhandled SIGTERM (every deploy, every systemd restart) terminated the
+	// process mid-request and mid-send with no chance for any cleanup to
+	// run. Reproduced consequence: a subscribe request's confirmation email
+	// send, queued on subscribeH's async worker pool (#0026), could be
+	// interrupted after its cooldown claim was taken but before the send
+	// (or its compensating release) ever completed — stamping
+	// confirm_sent_at, sending nothing, and silencing that visitor's retry
+	// for subscribeResendCooldown (1 hour). See issues/0081.md's
+	// ## Root cause for the reproduced before/after state.
+	//
+	// sigCh is buffered (size 1, standard signal.Notify idiom) so a signal
+	// arriving before the select below is ready is never dropped.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+
+	select {
+	case err := <-errCh:
+		// The listener failed to start (e.g. the port is already in use) —
+		// nothing was ever serving, so there is nothing to shut down.
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+
+	case sig := <-sigCh:
+		log.Printf("opencircuit: received %s, shutting down gracefully", sig)
+
+		// shutdownTimeout bounds BOTH steps below combined (one shared
+		// deadline, not one each): srv.Shutdown stops accepting new
+		// connections and waits for in-flight handlers to return — fast in
+		// practice, since Subscribe (and every other handler) never blocks
+		// on a network call — and subscribeH.Close then drains/interrupts
+		// the async send queue so any claim that hasn't actually been sent
+		// yet is released rather than lost. deploy/systemd/opencircuit.service's
+		// TimeoutStopSec must exceed shutdownTimeout, or systemd SIGKILLs
+		// the process before this sequence gets the chance to finish.
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+
+		// subscribeH may be nil in dev mode (STORAGE=json — see
+		// serveDevMode's comment on the call site). Closed BEFORE
+		// srv.Shutdown so that even if srv.Shutdown's own bound is
+		// exceeded and a handler goroutine is still technically running,
+		// enqueueSend's closeMu-guarded check (subscribe.go) already
+		// refuses new sends rather than racing sendQueue's close — Close
+		// is safe to call concurrently with in-flight Subscribe requests
+		// by design (see its doc comment).
+		if subscribeH != nil {
+			if err := subscribeH.Close(ctx); err != nil {
+				log.Printf("opencircuit: subscribe handler close: %v", err)
+			}
+		}
+
+		if err := srv.Shutdown(ctx); err != nil {
+			return err
+		}
+		return nil
+	}
 }
+
+// shutdownTimeout bounds mountAndServe's graceful shutdown sequence
+// (srv.Shutdown + subscribeH.Close combined, on one shared context) after a
+// SIGTERM/SIGINT (#0081). In steady state this should return in well under
+// a second — subscribeH.Close cancels its send workers' shared context,
+// which interrupts any in-flight or queued mailer.Send almost immediately
+// rather than letting it run out sendJobTimeout (30s) — so 20s is a
+// generous ceiling, not an expected wait. Keep this comfortably below
+// deploy/systemd/opencircuit.service's TimeoutStopSec (30s), or systemd
+// SIGKILLs the process before this sequence can complete on its own.
+const shutdownTimeout = 20 * time.Second
