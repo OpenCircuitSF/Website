@@ -109,7 +109,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, eventsH, meH,
+			authH, credsH, settingsH, adminUsersH, adminAuditH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			requireSession, requireAdmin, nil)
 	}()
 

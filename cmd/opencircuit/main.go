@@ -7,6 +7,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -19,8 +20,11 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/devstore"
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
+	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/web"
 )
 
@@ -83,24 +87,43 @@ func servePostgres(cfg *config.Config) error {
 		return err
 	}
 
+	// MAILER_NOOP guard (carried into #0026 from #0027's review): refuse to
+	// start with outbound email silently disabled anywhere but a local dev
+	// box. Without this, #0026's uniform 202 makes a no-op'd mailer
+	// completely invisible — the caller always sees the same success
+	// response, and the operator sees no error, while every confirmation
+	// and already-subscribed email simply stops arriving.
+	if err := checkMailerNoOp(cfg, slog.Default()); err != nil {
+		return err
+	}
+
 	// Mailer: the real SES v2 API mailer, authenticated via the EC2 instance
 	// role's default AWS credential chain (#0027) — replacing the SMTP-based
 	// auth.SESMailer, which could never authenticate (this project has no
 	// static AWS credentials and no SES SMTP username/password in
-	// configuration; see #0007). MAILER_NOOP=true swaps in the stdout
-	// NoOpMailer instead, for local development against Postgres before SES
-	// domain verification/DKIM/production access is done (CLAUDE.md §10 item
-	// 2) — NoOpMailer logs the full verification/recovery link, which is how
-	// #0008's manual passkey verification procedure reads the magic link.
+	// configuration; see #0007). MAILER_NOOP=true swaps in a stdout no-op
+	// instead, for local development against Postgres before SES domain
+	// verification/DKIM/production access is done (CLAUDE.md §10 item 2).
+	//
+	// sesSender is the shared internal/mailing.Mailer primitive: constructed
+	// once here and used two ways below — wrapped by auth.NewSESMailerWithSender
+	// for the three transactional auth emails, and passed directly to
+	// handlers.NewSubscribeHandler (#0026) for the double opt-in
+	// confirmation and already-subscribed emails. Building it once avoids
+	// two separate SES v2 API clients (and two separate credential
+	// resolutions) for what is the same underlying send primitive.
+	var sesSender mailing.Mailer
 	var mailer auth.Mailer
 	if cfg.MailerNoOp {
+		sesSender = noOpMailingMailer{}
 		mailer = auth.NoOpMailer{BaseURL: cfg.BaseURL}
 	} else {
-		sesMailer, err := auth.NewSESMailer(ctx, cfg)
+		sender, err := mailing.NewSESMailer(ctx, cfg)
 		if err != nil {
 			return fmt.Errorf("opencircuit: constructing SES mailer: %w", err)
 		}
-		mailer = sesMailer
+		sesSender = sender
+		mailer = auth.NewSESMailerWithSender(sender, cfg)
 	}
 
 	// Append-only audit log writer, shared by every service/handler that
@@ -125,6 +148,18 @@ func servePostgres(cfg *config.Config) error {
 	// filter. Reads through audit.Reader over the same shared pool as the writer.
 	adminAuditH := handlers.NewAdminAuditHandler(audit.NewReader(pool))
 
+	// Subscribe endpoint (#0026): double opt-in signup with anti-abuse
+	// controls. subscribers.Store and interests.Store are both #0025/#0023's
+	// approved data layers; NoSuppressions is the seam #0033's suppressions
+	// table (not yet built — a separate, later-numbered issue) will replace
+	// with a real check — see handlers.SuppressionChecker's doc comment.
+	subscribersStore := subscribers.NewStore(pool)
+	interestsStore := interests.NewStore(pool)
+	subscribeH := handlers.NewSubscribeHandler(
+		subscribersStore, interestsStore, sesSender,
+		handlers.NoSuppressions{}, store, auditLogger, cfg.BaseURL, slog.Default(),
+	)
+
 	// SSE event broker: the in-memory pub/sub singleton reused for live
 	// campaign send progress once the mailing subsystem lands.
 	broker := events.NewBroker()
@@ -147,8 +182,62 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, eventsH, meH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, eventsH, meH, subscribeH,
 		requireSession, requireAdmin, nil /* no outer middleware in production */)
+}
+
+// mailerNoOpAllowed reports whether MAILER_NOOP=true is permitted for the
+// given BASE_URL: only when its host is exactly "localhost" or "127.0.0.1".
+// Carried into #0026 from #0027's review — MAILER_NOOP previously had none
+// of the three guards STORAGE=json already uses (explicit opt-in, a loud
+// startup warning, a hard refusal on the wrong path); this supplies the
+// last two. An unparseable BASE_URL is treated as disallowed rather than
+// erroring here, so the caller gets one uniform "not permitted" outcome
+// regardless of why.
+func mailerNoOpAllowed(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1"
+}
+
+// checkMailerNoOp enforces mailerNoOpAllowed at startup. When MAILER_NOOP is
+// unset it is a no-op. When set and disallowed, it returns an error so
+// serve() fails clearly instead of silently disabling every outbound email
+// the service sends — including #0026's confirmation and
+// already-subscribed emails, which the endpoint's uniform 202 makes
+// otherwise invisible to any caller. When set and allowed, it logs a single
+// slog.Warn so the operator has a durable record that email is disabled,
+// even though nothing about the request path can surface it.
+func checkMailerNoOp(cfg *config.Config, logger *slog.Logger) error {
+	if !cfg.MailerNoOp {
+		return nil
+	}
+	if !mailerNoOpAllowed(cfg.BaseURL) {
+		return fmt.Errorf("opencircuit: MAILER_NOOP=true is only permitted when BASE_URL's host is localhost or 127.0.0.1 (got %q)", cfg.BaseURL)
+	}
+	logger.Warn("opencircuit: MAILER_NOOP=true — outbound email is disabled; messages are logged instead of sent (refused outside localhost/127.0.0.1)")
+	return nil
+}
+
+// noOpMailingMailer implements mailing.Mailer by logging the message instead
+// of sending it, mirroring auth.NoOpMailer's approach but at the
+// internal/mailing.Message level #0026's subscribe handler depends on
+// directly. internal/mailing has no no-op implementation of its own to
+// reuse here (RecordingMailer exists for tests, not for a "log to stdout in
+// dev" mode), and adding one there is out of #0026's scope — this endpoint
+// only calls internal/mailing, it does not modify it. Only ever constructed
+// when checkMailerNoOp has already confirmed MAILER_NOOP=true is permitted.
+type noOpMailingMailer struct{}
+
+// Send logs the message instead of delivering it, returning a fake message
+// ID (never "", so callers can't mistake it for a zero value indicating
+// failure).
+func (noOpMailingMailer) Send(_ context.Context, msg mailing.Message) (string, error) {
+	log.Printf("MAILER_NOOP: email to %s: %s", msg.To, msg.Subject)
+	return "noop", nil
 }
 
 // serveDevMode boots the app without PostgreSQL using the in-memory dev store.
@@ -201,8 +290,19 @@ func serveDevMode(cfg *config.Config) error {
 	// The hard guardrail (cfg.DevMode() check) is enforced inside DevAutoLogin.
 	devAutoLogin := middleware.DevAutoLogin(ds, cfg.DevMode())
 
+	// Subscribe (#0026) has no dev-store backing yet: internal/devstore's own
+	// doc comment says subscriber/interest fakes are "added incrementally as
+	// those later phases land", and this pass's lane is
+	// internal/subscribers, internal/handlers, internal/interests, and this
+	// file — not internal/devstore. Passing nil here (mountAndServe only
+	// registers POST /api/subscribe when non-nil) means STORAGE=json keeps
+	// booting and serving every other route exactly as before; only the
+	// subscribe endpoint is unavailable in dev mode until a devstore
+	// backing lands.
+	var subscribeH *handlers.SubscribeHandler
+
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, eventsH, meH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, eventsH, meH, subscribeH,
 		requireSession, requireAdmin, devAutoLogin)
 }
 
@@ -222,6 +322,7 @@ func mountAndServe(
 	adminAuditH *handlers.AdminAuditHandler,
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
+	subscribeH *handlers.SubscribeHandler,
 	requireSession func(http.Handler) http.Handler,
 	requireAdmin func(http.Handler) http.Handler,
 	outerMiddleware func(http.Handler) http.Handler,
@@ -232,6 +333,8 @@ func mountAndServe(
 	registerLimiter := middleware.NewRateLimiter(rate.Every(time.Hour/3), 3)  // 3 / hour / IP
 	loginLimiter := middleware.NewRateLimiter(rate.Every(time.Minute/10), 10) // 10 / minute / IP
 	recoverLimiter := middleware.NewRateLimiter(rate.Every(time.Hour/3), 3)   // 3 / hour / IP
+	// #0026: "Per-IP token-bucket rate limit (5/min, burst 3)" verbatim.
+	subscribeLimiter := middleware.NewRateLimiter(rate.Every(time.Minute/5), 3)
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", handlers.NewHealthHandler(pinger))
@@ -289,6 +392,17 @@ func mountAndServe(
 	// SSE stream — behind RequireSession; pushes events to the authenticated
 	// user's connected clients (campaign send progress, once mailing lands).
 	mux.Handle("GET /api/events", requireSession(http.HandlerFunc(eventsH.Stream)))
+
+	// Mailing-list signup (#0026) — public, unauthenticated, double opt-in.
+	// Rate-limited per PRD §6.3's stated 5/min-burst-3, matching every other
+	// public rate-limited endpoint's construction above. subscribeH is nil
+	// in dev mode (STORAGE=json — see serveDevMode's comment) since
+	// internal/devstore has no subscriber/interest backing yet; the route is
+	// only registered when a real handler is wired, so dev mode boots and
+	// serves everything else unaffected.
+	if subscribeH != nil {
+		mux.Handle("POST /api/subscribe", subscribeLimiter.Middleware(http.HandlerFunc(subscribeH.Subscribe)))
+	}
 
 	// SEO: server-injected per-route meta tags (#0019) and generated
 	// sitemap.xml / robots.txt (#0020). indexHTML is the embedded, built

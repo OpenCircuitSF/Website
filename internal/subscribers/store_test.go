@@ -778,3 +778,188 @@ func TestDB_SubscriberInterestsCascadeDelete(t *testing.T) {
 		t.Fatalf("subscriber_interests row survived subscriber delete; ON DELETE CASCADE not in effect (got %d rows)", after)
 	}
 }
+
+// TestCreate_LeavesConfirmSentAtNil is the store-layer half of #0026's
+// carried-in "Create stamps confirm_sent_at before the SES call" fix: Create
+// must NOT stamp confirm_sent_at at INSERT time, so a subsequent send
+// failure (handled entirely in the #0026 handler, which never calls
+// MarkConfirmationSent unless mailer.Send actually succeeds) cannot consume
+// the once-per-hour resend window for an email that was never delivered.
+func TestCreate_LeavesConfirmSentAtNil(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+
+	sub, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sub.ConfirmSentAt != nil {
+		t.Fatalf("ConfirmSentAt = %v immediately after Create, want nil (see #0026's confirm_sent_at decision)", *sub.ConfirmSentAt)
+	}
+}
+
+func TestMarkConfirmationSent_StampsConfirmSentAt(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	sentAt := time.Now().Add(time.Minute).UTC().Truncate(time.Second)
+	updated, err := store.MarkConfirmationSent(ctx, created.ID, sentAt)
+	if err != nil {
+		t.Fatalf("MarkConfirmationSent: %v", err)
+	}
+	if updated.ConfirmSentAt == nil || !updated.ConfirmSentAt.Equal(sentAt) {
+		t.Fatalf("ConfirmSentAt = %v, want %v", updated.ConfirmSentAt, sentAt)
+	}
+
+	// The token/status themselves must be untouched — this method stamps
+	// exactly one column.
+	if updated.Status != StatusPending {
+		t.Errorf("Status = %q, want unchanged %q", updated.Status, StatusPending)
+	}
+	if updated.ConfirmToken == nil || *updated.ConfirmToken != *created.ConfirmToken {
+		t.Errorf("ConfirmToken changed by MarkConfirmationSent, want unchanged")
+	}
+}
+
+func TestMarkConfirmationSent_NotFound(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+
+	_, err := store.MarkConfirmationSent(context.Background(), -1, time.Now())
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got err=%v, want ErrNotFound", err)
+	}
+}
+
+// TestRestartSignup_UnsubscribedGetsFreshTokenAndPending is PRD §6.3's
+// "unsubscribed → treat as new signup; fresh confirm token" branch, proved
+// at the store layer: a fresh (different) confirm token, status back to
+// pending, confirmed_at/confirm_sent_at cleared, and the consent evidence
+// (signup_ip/user_agent/utm_*) refreshed to the new signup event rather
+// than left pointing at the original, possibly long-stale, signup.
+func TestRestartSignup_UnsubscribedGetsFreshTokenAndPending(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := store.Create(ctx, NewSignup{
+		Email:      uniqueEmail(t),
+		SignupIP:   "203.0.113.1",
+		ConfirmTTL: time.Hour,
+	}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	oldConfirmToken := *created.ConfirmToken
+
+	if _, err := store.Unsubscribe(ctx, created.ID, SourceOneClick, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+
+	restarted, err := store.RestartSignup(ctx, created.ID, RestartSignupInput{
+		SignupIP:        "198.51.100.9",
+		SignupUserAgent: "restart-agent/2.0",
+		UTMSource:       "restart-source",
+		ConfirmTTL:      2 * time.Hour,
+	}, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("RestartSignup: %v", err)
+	}
+
+	if restarted.Status != StatusPending {
+		t.Errorf("Status = %q, want %q", restarted.Status, StatusPending)
+	}
+	if restarted.ConfirmToken == nil || *restarted.ConfirmToken == "" {
+		t.Fatal("ConfirmToken is nil/empty after RestartSignup")
+	}
+	if *restarted.ConfirmToken == oldConfirmToken {
+		t.Error("ConfirmToken unchanged by RestartSignup, want a fresh value")
+	}
+	if restarted.ManageToken != created.ManageToken {
+		t.Error("ManageToken changed by RestartSignup, want unchanged (long-lived)")
+	}
+	if restarted.ConfirmedAt != nil {
+		t.Error("ConfirmedAt should be nil after RestartSignup")
+	}
+	if restarted.ConfirmSentAt != nil {
+		t.Error("ConfirmSentAt should be nil after RestartSignup, matching Create's decision")
+	}
+	if restarted.ConfirmExpiresAt == nil || !restarted.ConfirmExpiresAt.After(now.Add(2*time.Minute)) {
+		t.Errorf("ConfirmExpiresAt = %v, want in the future", restarted.ConfirmExpiresAt)
+	}
+	if restarted.SignupIP == nil || *restarted.SignupIP != "198.51.100.9" {
+		t.Errorf("SignupIP = %v, want refreshed to 198.51.100.9", restarted.SignupIP)
+	}
+	if restarted.UTMSource == nil || *restarted.UTMSource != "restart-source" {
+		t.Errorf("UTMSource = %v, want refreshed to restart-source", restarted.UTMSource)
+	}
+}
+
+func TestRestartSignup_NotFound(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+
+	_, err := store.RestartSignup(context.Background(), -1, RestartSignupInput{ConfirmTTL: time.Hour}, time.Now())
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got err=%v, want ErrNotFound", err)
+	}
+}
+
+// TestRestartSignup_ComplainedStaysComplained is the store-layer proof
+// #0025's review explicitly predicted this method would need: RestartSignup
+// must consult statusLockedFromNonAdmin exactly like every other status
+// mutator in this package, so a complained subscriber can never be
+// laundered back to pending (and eventually active) through the "treat as
+// new signup" restart path. This is the defense-in-depth backstop for the
+// TOCTOU window between the #0026 handler's own status read and this
+// UPDATE — see internal/handlers/subscribe_test.go for the end-to-end HTTP
+// path proof that the handler itself never calls this method at all when
+// it already knows the subscriber is complained.
+func TestRestartSignup_ComplainedStaysComplained(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if _, err := store.MarkComplained(ctx, created.ID, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("MarkComplained: %v", err)
+	}
+
+	result, err := store.RestartSignup(ctx, created.ID, RestartSignupInput{
+		SignupIP:   "203.0.113.99",
+		ConfirmTTL: time.Hour,
+	}, now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("RestartSignup: %v", err)
+	}
+	if result.Status != StatusComplained {
+		t.Fatalf("Status = %q after RestartSignup on a complained subscriber, want unchanged %q (laundering path must stay closed)", result.Status, StatusComplained)
+	}
+	if result.ConfirmToken != nil {
+		t.Errorf("ConfirmToken = %v, want unchanged nil — RestartSignup must not mint a fresh token for a complained subscriber", result.ConfirmToken)
+	}
+
+	// Re-read independently to make sure the guard's effect is durable, not
+	// just an artifact of the RETURNING clause.
+	final, err := store.FindByEmail(ctx, created.Email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+	if final.Status != StatusComplained {
+		t.Fatalf("final Status = %q, want %q", final.Status, StatusComplained)
+	}
+}

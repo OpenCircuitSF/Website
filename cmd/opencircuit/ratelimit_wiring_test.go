@@ -95,7 +95,7 @@ func TestMountAndServe_RateLimitsAuthLoginStart(t *testing.T) {
 		// process; the test never calls it again, so the goroutine and its
 		// listener simply outlive this test within the test binary.
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, eventsH, meH,
+			authH, credsH, settingsH, adminUsersH, adminAuditH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			requireSession, requireAdmin, nil)
 	}()
 

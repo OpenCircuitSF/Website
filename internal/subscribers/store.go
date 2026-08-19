@@ -19,10 +19,11 @@
 //
 // complained never auto-resubscribes (CLAUDE.md §9): every status mutator in
 // this package — Confirm, Unsubscribe, MarkBounced, MarkComplained (via the
-// shared setStatus) — refuses to move a subscriber out of the complained
-// status. The check lives in one place (statusLockedFromNonAdmin, used by
-// setStatus and by Unsubscribe's own UPDATE) so a future mutator can't add a
-// new unguarded status write the way an earlier version of this file did.
+// shared setStatus), and RestartSignup — refuses to move a subscriber out of
+// the complained status. The check lives in one place
+// (statusLockedFromNonAdmin, used by setStatus and by Unsubscribe's and
+// RestartSignup's own UPDATEs) so a future mutator can't add a new unguarded
+// status write the way an earlier version of this file did.
 // AdminClearComplaint is the sole exception: it is the admin-only path
 // (#0032) allowed to move a subscriber out of complained, and it is the only
 // method that does not consult the guard.
@@ -175,6 +176,15 @@ func nullIfEmpty(s string) any {
 // subscribe handler) is responsible for mapping that to the same uniform 202
 // response as a brand-new signup, so the endpoint never becomes an
 // email-enumeration oracle (CLAUDE.md §9).
+//
+// confirm_sent_at is deliberately left NULL here rather than stamped with
+// now: #0026's review carried in the observation that stamping it at INSERT
+// time — before the caller has even attempted the SES send — lets a send
+// failure silently consume the once-per-hour resend window, leaving the
+// person unable to retry for an hour despite never receiving a first email.
+// The #0026 handler calls MarkConfirmationSent only after mailer.Send
+// actually succeeds, so the resend cooldown is anchored to a real delivery
+// attempt, not a delivery attempt that may never have left the process.
 func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscriber, error) {
 	email := normalizeEmail(in.Email)
 
@@ -194,9 +204,9 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 		      manage_token, signup_ip, signup_user_agent,
 		      utm_source, utm_medium, utm_campaign, created_at, updated_at)
 		 VALUES
-		     ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
+		     ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11, $11)
 		 RETURNING `+subscriberColumns,
-		email, StatusPending, confirmToken, now, confirmExpiresAt,
+		email, StatusPending, confirmToken, confirmExpiresAt,
 		manageToken, nullIfEmpty(in.SignupIP), nullIfEmpty(in.SignupUserAgent),
 		nullIfEmpty(in.UTMSource), nullIfEmpty(in.UTMMedium), nullIfEmpty(in.UTMCampaign), now,
 	)
@@ -206,6 +216,38 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 			return Subscriber{}, ErrEmailExists
 		}
 		return Subscriber{}, fmt.Errorf("subscribers: creating %q: %w", email, err)
+	}
+	return sub, nil
+}
+
+// MarkConfirmationSent stamps confirm_sent_at = now. It is the compensating
+// action for the confirm_sent_at decision documented on Create: nothing
+// stamps this column at signup time, so the #0026 handler calls this method
+// exactly once, immediately after a confirmation-email send actually
+// succeeds — for a brand-new signup (Create), a restarted signup
+// (RestartSignup), or a resend to an already-pending subscriber. If the send
+// fails, the handler never calls this method, so confirm_sent_at (and
+// therefore the once-per-hour resend cooldown the handler computes from it)
+// stays exactly where it was and the caller can retry immediately.
+//
+// Deliberately does NOT consult statusLockedFromNonAdmin: this method never
+// writes status, so there is nothing for the guard to protect against — a
+// complained subscriber's confirm_sent_at is not part of the vocabulary
+// CLAUDE.md §9 locks.
+func (s *Store) MarkConfirmationSent(ctx context.Context, id int64, now time.Time) (Subscriber, error) {
+	row := s.pool.QueryRow(ctx,
+		`UPDATE subscribers
+		    SET confirm_sent_at = $2, updated_at = $2
+		  WHERE id = $1
+		 RETURNING `+subscriberColumns,
+		id, now,
+	)
+	sub, err := scanSubscriber(row)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return Subscriber{}, ErrNotFound
+	case err != nil:
+		return Subscriber{}, fmt.Errorf("subscribers: marking confirmation sent for %d: %w", id, err)
 	}
 	return sub, nil
 }
@@ -340,6 +382,79 @@ func (s *Store) Unsubscribe(ctx context.Context, id int64, source string, now ti
 		return Subscriber{}, ErrNotFound
 	case err != nil:
 		return Subscriber{}, fmt.Errorf("subscribers: unsubscribing %d: %w", id, err)
+	}
+	return sub, nil
+}
+
+// RestartSignupInput is the input to RestartSignup: the consent evidence
+// captured at the moment someone whose prior signup ended in unsubscribed (or
+// bounced — see the #0026 handler's Gotchas for why that status is routed
+// here too) submits the signup form again. Mirrors NewSignup's non-email
+// fields; there is no Email field because RestartSignup operates on an
+// existing row by id, not by address.
+type RestartSignupInput struct {
+	SignupIP        string // empty maps to SQL NULL; never fabricate a value
+	SignupUserAgent string
+	UTMSource       string
+	UTMMedium       string
+	UTMCampaign     string
+	ConfirmTTL      time.Duration
+}
+
+// RestartSignup is the "unsubscribed → treat as a new signup; fresh confirm
+// token" branch PRD §6.3 requires (the #0026 subscribe handler's Create
+// returns ErrEmailExists for this case, and Create cannot itself transition
+// an existing row). It generates a fresh confirm token, resets
+// confirm_expires_at to now+ttl, clears confirmed_at and confirm_sent_at
+// (mirroring Create — see MarkConfirmationSent), refreshes the consent
+// evidence (signup_ip/user_agent/utm_*) to this new signup event, and moves
+// status to pending.
+//
+// It guards statusLockedFromNonAdmin exactly like every other status mutator
+// in this package (see the package doc comment): if the subscriber is
+// currently complained, EVERY column this method would otherwise touch —
+// including status — is left unchanged and no error is returned. This is
+// the store-layer half of closing the laundering path #0025's review
+// predicted for this exact method: even if a caller's own status check
+// races with a concurrent complaint (SES notification landing between the
+// handler's read and this write), the UPDATE itself cannot move a
+// complained row to pending. The #0026 handler additionally never calls this
+// method at all when its own read of status was complained (it answers 202
+// with nothing sent instead) — this guard is the defense-in-depth backstop
+// for the TOCTOU window, not the only line of defense.
+func (s *Store) RestartSignup(ctx context.Context, id int64, in RestartSignupInput, now time.Time) (Subscriber, error) {
+	confirmToken, err := newToken()
+	if err != nil {
+		return Subscriber{}, err
+	}
+	confirmExpiresAt := now.Add(in.ConfirmTTL)
+
+	row := s.pool.QueryRow(ctx,
+		`UPDATE subscribers
+		    SET status             = CASE WHEN status = $11 THEN status             ELSE $2    END,
+		        confirm_token      = CASE WHEN status = $11 THEN confirm_token      ELSE $3    END,
+		        confirm_sent_at    = CASE WHEN status = $11 THEN confirm_sent_at    ELSE NULL  END,
+		        confirm_expires_at = CASE WHEN status = $11 THEN confirm_expires_at ELSE $4    END,
+		        confirmed_at       = CASE WHEN status = $11 THEN confirmed_at       ELSE NULL  END,
+		        signup_ip          = CASE WHEN status = $11 THEN signup_ip          ELSE $5    END,
+		        signup_user_agent  = CASE WHEN status = $11 THEN signup_user_agent  ELSE $6    END,
+		        utm_source         = CASE WHEN status = $11 THEN utm_source         ELSE $7    END,
+		        utm_medium         = CASE WHEN status = $11 THEN utm_medium         ELSE $8    END,
+		        utm_campaign       = CASE WHEN status = $11 THEN utm_campaign       ELSE $9    END,
+		        updated_at         = CASE WHEN status = $11 THEN updated_at         ELSE $10   END
+		  WHERE id = $1
+		 RETURNING `+subscriberColumns,
+		id, StatusPending, confirmToken, confirmExpiresAt,
+		nullIfEmpty(in.SignupIP), nullIfEmpty(in.SignupUserAgent),
+		nullIfEmpty(in.UTMSource), nullIfEmpty(in.UTMMedium), nullIfEmpty(in.UTMCampaign),
+		now, statusLockedFromNonAdmin,
+	)
+	sub, err := scanSubscriber(row)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return Subscriber{}, ErrNotFound
+	case err != nil:
+		return Subscriber{}, fmt.Errorf("subscribers: restarting signup for %d: %w", id, err)
 	}
 	return sub, nil
 }

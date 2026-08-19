@@ -43,6 +43,14 @@ const (
 
 	// Settings.
 	ActionSettingsUpdated = "settings.updated"
+
+	// Subscriber lifecycle (PRD §6.3). ActionSubscriberSignup covers both a
+	// brand-new signup and the "unsubscribed → treat as new signup" restart
+	// path (#0026) — actor NULL (pre-auth, the visitor is anonymous), same
+	// convention as ActionAccountRegistrationStarted above. Later phases
+	// (#0030's subscriber.confirmed, #0034's subscriber.unsubscribed, per
+	// PRD §6.3/§6.5) add their own constants here when they land.
+	ActionSubscriberSignup = "subscriber.signup"
 )
 
 // Deleted (#0068): ActionCampaignCreated/Updated/Deleted and
@@ -64,4 +72,5 @@ const (
 	TargetCredential = "credential"
 	TargetSettings   = "settings"
 	TargetURLFilter  = "url_filter"
+	TargetSubscriber = "subscriber"
 )
