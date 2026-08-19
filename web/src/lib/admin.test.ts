@@ -5,7 +5,7 @@
 // delegates to lib/admin.ts.
 
 import { describe, it, expect } from 'vitest';
-import type { AdminUser, AuditEntry, Interest } from './types';
+import type { AdminUser, AuditEntry, Interest, Subscriber } from './types';
 import {
   DEACTIVATION_REASONS,
   deactivationReasonLabel,
@@ -24,6 +24,13 @@ import {
   sortedInterests,
   reorderSwap,
   hasSubscribers,
+  subscriberStatusLabel,
+  subscriberStatusBadgeClass,
+  canClearComplaint,
+  isPlausibleEmail,
+  validateManualAddEmail,
+  validateSuppressNote,
+  signupEvidenceSummary,
 } from './admin';
 
 function adminUser(overrides: Partial<AdminUser> = {}): AdminUser {
@@ -301,5 +308,110 @@ describe('hasSubscribers', () => {
   it('is true only when subscriber_count is greater than zero', () => {
     expect(hasSubscribers(interest({ subscriber_count: 0 }))).toBe(false);
     expect(hasSubscribers(interest({ subscriber_count: 3 }))).toBe(true);
+  });
+});
+
+// ── Subscribers screen (#0032) ────────────────────────────────────────────────
+
+function subscriber(overrides: Partial<Subscriber> = {}): Subscriber {
+  return {
+    id: 1,
+    email: 'person@example.com',
+    status: 'active',
+    created_at: '2026-05-25T12:00:00Z',
+    email_events: [],
+    ...overrides,
+  };
+}
+
+describe('subscriberStatusLabel', () => {
+  it('capitalizes every known status', () => {
+    expect(subscriberStatusLabel('pending')).toBe('Pending');
+    expect(subscriberStatusLabel('active')).toBe('Active');
+    expect(subscriberStatusLabel('unsubscribed')).toBe('Unsubscribed');
+    expect(subscriberStatusLabel('bounced')).toBe('Bounced');
+    expect(subscriberStatusLabel('complained')).toBe('Complained');
+  });
+
+  it('returns an unknown value as-is', () => {
+    expect(subscriberStatusLabel('mystery')).toBe('mystery');
+  });
+});
+
+describe('subscriberStatusBadgeClass', () => {
+  it('is badge-success only for active', () => {
+    expect(subscriberStatusBadgeClass('active')).toBe('badge-success');
+  });
+
+  it('is badge-danger for bounced and complained', () => {
+    expect(subscriberStatusBadgeClass('bounced')).toBe('badge-danger');
+    expect(subscriberStatusBadgeClass('complained')).toBe('badge-danger');
+  });
+
+  it('is badge-muted for pending and unsubscribed', () => {
+    expect(subscriberStatusBadgeClass('pending')).toBe('badge-muted');
+    expect(subscriberStatusBadgeClass('unsubscribed')).toBe('badge-muted');
+  });
+});
+
+describe('canClearComplaint', () => {
+  it('is true only for complained — the server refuses (409) on every other status', () => {
+    expect(canClearComplaint('complained')).toBe(true);
+    expect(canClearComplaint('active')).toBe(false);
+    expect(canClearComplaint('pending')).toBe(false);
+    expect(canClearComplaint('unsubscribed')).toBe(false);
+    expect(canClearComplaint('bounced')).toBe(false);
+  });
+});
+
+describe('isPlausibleEmail', () => {
+  it('accepts an ordinary address', () => {
+    expect(isPlausibleEmail('person@example.com')).toBe(true);
+  });
+
+  it('rejects a string with no @ or no domain dot', () => {
+    expect(isPlausibleEmail('not-an-email')).toBe(false);
+    expect(isPlausibleEmail('person@localhost')).toBe(false);
+  });
+});
+
+describe('validateManualAddEmail', () => {
+  it('trims and accepts a valid address', () => {
+    expect(validateManualAddEmail('  person@example.com  ')).toEqual({
+      email: 'person@example.com',
+    });
+  });
+
+  it('rejects an invalid address with an error message', () => {
+    const result = validateManualAddEmail('nope');
+    expect('error' in result).toBe(true);
+  });
+});
+
+describe('validateSuppressNote', () => {
+  it('rejects a blank or whitespace-only note', () => {
+    expect('error' in validateSuppressNote('')).toBe(true);
+    expect('error' in validateSuppressNote('   ')).toBe(true);
+  });
+
+  it('trims and accepts a non-empty note', () => {
+    expect(validateSuppressNote('  requested by phone  ')).toEqual({
+      note: 'requested by phone',
+    });
+  });
+});
+
+describe('signupEvidenceSummary', () => {
+  it('includes IP and user agent when present', () => {
+    const summary = signupEvidenceSummary(
+      subscriber({ signup_ip: '203.0.113.5', signup_user_agent: 'Mozilla/5.0' }),
+    );
+    expect(summary).toContain('203.0.113.5');
+    expect(summary).toContain('Mozilla/5.0');
+  });
+
+  it('notes the absence of browser evidence for a manually-added subscriber', () => {
+    const summary = signupEvidenceSummary(subscriber({ signup_ip: undefined, signup_user_agent: undefined }));
+    expect(summary).toContain('no browser signup evidence');
   });
 });

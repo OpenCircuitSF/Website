@@ -44,6 +44,11 @@
     createInterest,
     updateInterest,
     deleteInterest,
+    listSubscribers,
+    getSubscriber,
+    suppressSubscriber,
+    clearSubscriberComplaint,
+    createSubscriber,
     logout,
     ApiError,
   } from '../lib/api';
@@ -64,13 +69,20 @@
     sortedInterests,
     reorderSwap,
     hasSubscribers,
+    SUBSCRIBER_STATUSES,
+    subscriberStatusLabel,
+    subscriberStatusBadgeClass,
+    canClearComplaint,
+    validateManualAddEmail,
+    validateSuppressNote,
+    signupEvidenceSummary,
   } from '../lib/admin';
-  import type { Setting, AdminUser, AuditEntry, Interest } from '../lib/types';
+  import type { Setting, AdminUser, AuditEntry, Interest, Subscriber, SubscriberStatusCounts } from '../lib/types';
   import Button from '../lib/Button.svelte';
   import Panel from '../lib/Panel.svelte';
   import { APP_NAME } from '../lib/branding';
 
-  type Section = 'settings' | 'users' | 'audit' | 'interests';
+  type Section = 'settings' | 'users' | 'audit' | 'interests' | 'subscribers';
   let section = $state<Section>('settings');
 
   // ── Settings ──────────────────────────────────────────────────────────────
@@ -478,6 +490,231 @@
     }
   }
 
+  // ── Subscribers (#0032) ──────────────────────────────────────────────────────
+  const SUBS_PER_PAGE = 25;
+  let subs = $state<Subscriber[]>([]);
+  let subsTotal = $state(0);
+  let subsPage = $state(1);
+  let subsCounts = $state<SubscriberStatusCounts>({
+    pending: 0,
+    active: 0,
+    unsubscribed: 0,
+    bounced: 0,
+    complained: 0,
+  });
+  let subsLoading = $state(true);
+  let subsError = $state<string | null>(null);
+  let subsStatusFilter = $state('');
+  let subsInterestFilter = $state('');
+  let subsQueryRaw = $state('');
+  let subsQueryApplied = $state('');
+  const subsPaging = $derived(pageInfo(subsTotal, subsPage, SUBS_PER_PAGE));
+
+  async function loadSubscribers() {
+    subsLoading = true;
+    subsError = null;
+    try {
+      const res = await listSubscribers({
+        status: subsStatusFilter || undefined,
+        interestId: subsInterestFilter ? Number(subsInterestFilter) : undefined,
+        q: subsQueryApplied || undefined,
+        page: subsPage,
+        perPage: SUBS_PER_PAGE,
+      });
+      subs = res.subscribers;
+      subsTotal = res.total;
+      subsPage = res.page;
+      subsCounts = res.counts;
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      subsError = 'Could not load subscribers. Please try again.';
+    } finally {
+      subsLoading = false;
+    }
+  }
+
+  function applySubsFilters(e?: SubmitEvent) {
+    e?.preventDefault();
+    subsQueryApplied = subsQueryRaw.trim();
+    subsPage = 1;
+    void loadSubscribers();
+  }
+
+  function clearSubsFilters() {
+    subsStatusFilter = '';
+    subsInterestFilter = '';
+    subsQueryRaw = '';
+    subsQueryApplied = '';
+    subsPage = 1;
+    void loadSubscribers();
+  }
+
+  function subsGoTo(page: number) {
+    subsPage = page;
+    void loadSubscribers();
+  }
+
+  // Detail drawer.
+  let viewingSubscriber = $state<Subscriber | null>(null);
+  let viewingLoading = $state(false);
+  let viewingError = $state<string | null>(null);
+
+  async function openSubscriberDetail(id: number) {
+    viewingSubscriber = null;
+    viewingLoading = true;
+    viewingError = null;
+    try {
+      viewingSubscriber = await getSubscriber(id);
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      viewingError = 'Could not load this subscriber. Please try again.';
+    } finally {
+      viewingLoading = false;
+    }
+  }
+
+  function closeSubscriberDetail() {
+    viewingSubscriber = null;
+    viewingError = null;
+  }
+
+  function replaceSubInList(updated: Subscriber) {
+    subs = subs.map((s) => (s.id === updated.id ? { ...s, ...updated } : s));
+    if (viewingSubscriber?.id === updated.id) {
+      viewingSubscriber = { ...viewingSubscriber, ...updated };
+    }
+  }
+
+  // Suppress modal — note is required (server 400s on a blank one).
+  let suppressingSubscriber = $state<Subscriber | null>(null);
+  let suppressNote = $state('');
+  let suppressError = $state<string | null>(null);
+  let suppressNotice = $state<string | null>(null);
+  let suppressSubmitting = $state(false);
+
+  function openSuppress(sub: Subscriber) {
+    suppressingSubscriber = sub;
+    suppressNote = '';
+    suppressError = null;
+    suppressNotice = null;
+  }
+
+  function closeSuppress() {
+    suppressingSubscriber = null;
+  }
+
+  async function submitSuppress(e: SubmitEvent) {
+    e.preventDefault();
+    if (!suppressingSubscriber) return;
+    const result = validateSuppressNote(suppressNote);
+    if ('error' in result) {
+      suppressError = result.error;
+      return;
+    }
+    suppressSubmitting = true;
+    suppressError = null;
+    const target = suppressingSubscriber;
+    try {
+      const res = await suppressSubscriber(target.id, result.note);
+      replaceSubInList(res.subscriber);
+      if (res.no_op) {
+        // Leave the modal open with the server's own explanation — the
+        // carried-in review finding requires surfacing this rather than
+        // implying the action took effect (Unsubscribe silently no-ops on
+        // an already-complained row, CLAUDE.md §9).
+        suppressError = res.message;
+      } else {
+        suppressingSubscriber = null;
+      }
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      suppressError =
+        err instanceof ApiError && err.message
+          ? err.message
+          : 'Could not suppress this subscriber. Please try again.';
+    } finally {
+      suppressSubmitting = false;
+    }
+  }
+
+  // Clear complaint — only offered on complained rows (canClearComplaint);
+  // the server 409s otherwise.
+  let clearingComplaintId = $state<number | null>(null);
+  let clearComplaintRowError = $state<Record<number, string>>({});
+
+  async function handleClearComplaint(sub: Subscriber) {
+    if (
+      !confirm(
+        `Clear the complaint for ${sub.email}? This unsubscribes them (not re-activates) and does not yet clear any suppression-list block (#0033 is not built).`,
+      )
+    ) {
+      return;
+    }
+    clearingComplaintId = sub.id;
+    const { [sub.id]: _removed, ...rest } = clearComplaintRowError;
+    clearComplaintRowError = rest;
+    try {
+      const res = await clearSubscriberComplaint(sub.id);
+      replaceSubInList(res.subscriber);
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      clearComplaintRowError = {
+        ...clearComplaintRowError,
+        [sub.id]:
+          err instanceof ApiError && err.message
+            ? err.message
+            : 'Could not clear the complaint. Please try again.',
+      };
+    } finally {
+      clearingComplaintId = null;
+    }
+  }
+
+  // Manual add — still requires double opt-in; see createSubscriber's doc
+  // comment. Interests are offered as checkboxes over the same taxonomy the
+  // Interests tab manages.
+  let newSubEmail = $state('');
+  let newSubInterestSlugs = $state<string[]>([]);
+  let newSubNote = $state('');
+  let createSubError = $state<string | null>(null);
+  let createSubNotice = $state<string | null>(null);
+  let creatingSub = $state(false);
+
+  function toggleNewSubInterest(slug: string) {
+    newSubInterestSlugs = newSubInterestSlugs.includes(slug)
+      ? newSubInterestSlugs.filter((s) => s !== slug)
+      : [...newSubInterestSlugs, slug];
+  }
+
+  async function submitCreateSubscriber(e: SubmitEvent) {
+    e.preventDefault();
+    const result = validateManualAddEmail(newSubEmail);
+    if ('error' in result) {
+      createSubError = result.error;
+      return;
+    }
+    creatingSub = true;
+    createSubError = null;
+    createSubNotice = null;
+    try {
+      const res = await createSubscriber(result.email, newSubInterestSlugs, newSubNote);
+      createSubNotice = res.message;
+      newSubEmail = '';
+      newSubInterestSlugs = [];
+      newSubNote = '';
+      subsPage = 1;
+      void loadSubscribers();
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      createSubError =
+        err instanceof ApiError && err.message
+          ? err.message
+          : 'Could not add this subscriber. Please try again.';
+    } finally {
+      creatingSub = false;
+    }
+  }
+
   // ── Shared ──────────────────────────────────────────────────────────────────
   function handleAuthError(err: unknown): boolean {
     if (err instanceof ApiError && err.status === 401) {
@@ -507,6 +744,7 @@
     void loadUsers();
     void loadAudit();
     void loadInterests();
+    void loadSubscribers();
   });
 </script>
 
@@ -554,6 +792,13 @@
         aria-current={section === 'interests' ? 'page' : undefined}
         onclick={() => (section = 'interests')}
       >Interests</button>
+      <button
+        type="button"
+        class="subtab"
+        class:active={section === 'subscribers'}
+        aria-current={section === 'subscribers' ? 'page' : undefined}
+        onclick={() => (section = 'subscribers')}
+      >Subscribers</button>
     </nav>
 
     {#if section === 'settings'}
@@ -1031,6 +1276,302 @@
         </div>
       {/if}
     {/if}
+
+    {#if section === 'subscribers'}
+      <Panel title="Subscribers by status">
+        <div class="status-counts">
+          {#each SUBSCRIBER_STATUSES as st (st)}
+            <div class="status-count">
+              <span class="badge {subscriberStatusBadgeClass(st)}">{subscriberStatusLabel(st)}</span>
+              <span class="status-count-num">{subsCounts[st as keyof SubscriberStatusCounts]}</span>
+            </div>
+          {/each}
+        </div>
+      </Panel>
+
+      <Panel title="Add a subscriber">
+        <p class="text-muted">
+          Still requires double opt-in — a brand-new address is added as
+          <strong>pending</strong> with a confirmation email queued, never active directly.
+        </p>
+        <form class="interest-create-form" onsubmit={submitCreateSubscriber}>
+          <div class="field">
+            <label for="new-sub-email">Email</label>
+            <input
+              id="new-sub-email"
+              type="text"
+              bind:value={newSubEmail}
+              disabled={creatingSub}
+              placeholder="person@example.com"
+              oninput={() => (createSubError = null)}
+            />
+          </div>
+          {#if interests.length > 0}
+            <div class="field">
+              <span class="setting-name">Interests (optional)</span>
+              <div class="checkbox-group">
+                {#each sortedInterests(interests).filter((i) => i.active) as it (it.id)}
+                  <label class="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={newSubInterestSlugs.includes(it.slug)}
+                      disabled={creatingSub}
+                      onchange={() => toggleNewSubInterest(it.slug)}
+                    />
+                    {it.name}
+                  </label>
+                {/each}
+              </div>
+            </div>
+          {/if}
+          <div class="field">
+            <label for="new-sub-note">Note (optional, recorded in the audit log)</label>
+            <input id="new-sub-note" type="text" bind:value={newSubNote} disabled={creatingSub} />
+          </div>
+          {#if createSubError}
+            <p class="text-error" role="alert">{createSubError}</p>
+          {/if}
+          {#if createSubNotice}
+            <p class="text-notice" role="status">{createSubNotice}</p>
+          {/if}
+          <Button type="submit" variant="primary" disabled={creatingSub}>
+            {creatingSub ? 'Adding…' : 'Add subscriber'}
+          </Button>
+        </form>
+      </Panel>
+
+      <Panel title="Search &amp; filter">
+        <form class="inline-form" onsubmit={applySubsFilters}>
+          <label for="subs-status">Status</label>
+          <select id="subs-status" bind:value={subsStatusFilter}>
+            <option value="">Any</option>
+            {#each SUBSCRIBER_STATUSES as st (st)}
+              <option value={st}>{subscriberStatusLabel(st)}</option>
+            {/each}
+          </select>
+          <label for="subs-interest">Interest</label>
+          <select id="subs-interest" bind:value={subsInterestFilter}>
+            <option value="">Any</option>
+            {#each sortedInterests(interests) as it (it.id)}
+              <option value={String(it.id)}>{it.name}</option>
+            {/each}
+          </select>
+          <label for="subs-q">Email contains</label>
+          <input id="subs-q" type="text" bind:value={subsQueryRaw} placeholder="e.g. example.com" />
+          <Button type="submit" variant="primary">Apply</Button>
+          {#if subsStatusFilter || subsInterestFilter || subsQueryApplied}
+            <Button onclick={clearSubsFilters}>Clear</Button>
+          {/if}
+        </form>
+      </Panel>
+
+      <Panel title="Subscribers" noPadding={subs.length > 0 && !subsLoading && !subsError}>
+        {#if subsLoading}
+          <p class="text-muted" role="status">Loading subscribers…</p>
+        {:else if subsError}
+          <p class="text-error" role="alert">{subsError}</p>
+          <Button variant="primary" onclick={loadSubscribers}>Retry</Button>
+        {:else if subs.length === 0}
+          <p class="text-muted">No subscribers match this filter.</p>
+        {:else}
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Status</th>
+                  <th>Signed up</th>
+                  <th class="actions-col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each subs as sub (sub.id)}
+                  <tr>
+                    <td class="mono">{sub.email}</td>
+                    <td>
+                      <span class="badge {subscriberStatusBadgeClass(sub.status)}">
+                        {subscriberStatusLabel(sub.status)}
+                      </span>
+                    </td>
+                    <td>{formatDateTime(sub.created_at)}</td>
+                    <td class="actions-col">
+                      <Button onclick={() => openSubscriberDetail(sub.id)}>View</Button>
+                      <Button onclick={() => openSuppress(sub)}>Suppress</Button>
+                      {#if canClearComplaint(sub.status)}
+                        <Button
+                          variant="danger"
+                          disabled={clearingComplaintId === sub.id}
+                          onclick={() => handleClearComplaint(sub)}
+                        >
+                          {clearingComplaintId === sub.id ? 'Clearing…' : 'Clear complaint'}
+                        </Button>
+                      {/if}
+                    </td>
+                  </tr>
+                  {#if clearComplaintRowError[sub.id]}
+                    <tr>
+                      <td colspan="4">
+                        <p class="text-error" role="alert">{clearComplaintRowError[sub.id]}</p>
+                      </td>
+                    </tr>
+                  {/if}
+                {/each}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="pager">
+            <Button disabled={!subsPaging.hasPrev} onclick={() => subsGoTo(subsPaging.page - 1)}>Previous</Button>
+            <span class="text-muted">
+              {subsPaging.firstItem}–{subsPaging.lastItem} of {subsPaging.total} · page
+              {subsPaging.page} of {subsPaging.totalPages}
+            </span>
+            <Button disabled={!subsPaging.hasNext} onclick={() => subsGoTo(subsPaging.page + 1)}>Next</Button>
+          </div>
+        {/if}
+      </Panel>
+
+      {#if viewingSubscriber || viewingLoading || viewingError}
+        <div
+          class="modal-backdrop"
+          role="presentation"
+          onclick={closeSubscriberDetail}
+          onkeydown={(e) => {
+            if (e.key === 'Escape') closeSubscriberDetail();
+          }}
+        >
+          <div
+            class="modal modal-wide"
+            role="dialog"
+            tabindex="-1"
+            aria-modal="true"
+            aria-label="Subscriber detail"
+            onclick={(e) => e.stopPropagation()}
+            onkeydown={(e) => e.stopPropagation()}
+          >
+            {#if viewingLoading}
+              <p class="text-muted" role="status">Loading…</p>
+            {:else if viewingError}
+              <p class="text-error" role="alert">{viewingError}</p>
+            {:else if viewingSubscriber}
+              <h2 class="modal-title">{viewingSubscriber.email}</h2>
+              <p>
+                <span class="badge {subscriberStatusBadgeClass(viewingSubscriber.status)}">
+                  {subscriberStatusLabel(viewingSubscriber.status)}
+                </span>
+              </p>
+
+              <h3 class="detail-heading">Consent evidence</h3>
+              <p class="mono">{signupEvidenceSummary(viewingSubscriber)}</p>
+              {#if viewingSubscriber.confirmed_at}
+                <p>Confirmed: {formatDateTime(viewingSubscriber.confirmed_at)}</p>
+              {:else}
+                <p class="text-muted">Not yet confirmed.</p>
+              {/if}
+              {#if viewingSubscriber.utm_source || viewingSubscriber.utm_medium || viewingSubscriber.utm_campaign}
+                <p class="text-muted">
+                  UTM: {viewingSubscriber.utm_source ?? '—'} / {viewingSubscriber.utm_medium ?? '—'} /
+                  {viewingSubscriber.utm_campaign ?? '—'}
+                </p>
+              {/if}
+              {#if viewingSubscriber.unsubscribed_at}
+                <p class="text-muted">
+                  Unsubscribed {formatDateTime(viewingSubscriber.unsubscribed_at)}
+                  (source: {viewingSubscriber.unsubscribe_source ?? 'unknown'})
+                  {#if viewingSubscriber.status === 'complained'}
+                    <br />
+                    Note: a later "clear complaint" action overwrites this evidence with
+                    admin/now (subscribers.Store.AdminClearComplaint) — the original
+                    unsubscribe evidence above is discarded when that happens.
+                  {/if}
+                </p>
+              {/if}
+
+              <h3 class="detail-heading">Interests</h3>
+              {#if viewingSubscriber.interests && viewingSubscriber.interests.length > 0}
+                <ul class="detail-interest-list">
+                  {#each viewingSubscriber.interests as it (it.id)}
+                    <li>{it.name}</li>
+                  {/each}
+                </ul>
+              {:else}
+                <p class="text-muted">No interests selected — general announcements only.</p>
+              {/if}
+
+              <h3 class="detail-heading">Email event history</h3>
+              {#if viewingSubscriber.email_events.length === 0}
+                <p class="text-muted">
+                  No events recorded yet. SES bounce/complaint ingestion (#0038) fills this
+                  section in once it lands.
+                </p>
+              {:else}
+                <ul class="detail-interest-list">
+                  {#each viewingSubscriber.email_events as _event, i (i)}
+                    <li>{JSON.stringify(_event)}</li>
+                  {/each}
+                </ul>
+              {/if}
+
+              <div class="row" style="margin-top: var(--space-4);">
+                <Button onclick={closeSubscriberDetail}>Close</Button>
+              </div>
+            {/if}
+          </div>
+        </div>
+      {/if}
+
+      {#if suppressingSubscriber}
+        <div
+          class="modal-backdrop"
+          role="presentation"
+          onclick={closeSuppress}
+          onkeydown={(e) => {
+            if (e.key === 'Escape') closeSuppress();
+          }}
+        >
+          <div
+            class="modal"
+            role="dialog"
+            tabindex="-1"
+            aria-modal="true"
+            aria-label="Suppress subscriber"
+            onclick={(e) => e.stopPropagation()}
+            onkeydown={(e) => e.stopPropagation()}
+          >
+            <h2 class="modal-title">Suppress {suppressingSubscriber.email}</h2>
+            <p class="text-muted">
+              Unsubscribes this address (source: admin). This is not yet a real
+              suppressions-list entry — #0033 has not landed — so a future resignup by this
+              address is not blocked by this action alone.
+            </p>
+            <form onsubmit={submitSuppress}>
+              <div class="field">
+                <label for="suppress-note">Note (required)</label>
+                <textarea
+                  id="suppress-note"
+                  rows="3"
+                  bind:value={suppressNote}
+                  disabled={suppressSubmitting}
+                  oninput={() => (suppressError = null)}
+                ></textarea>
+              </div>
+              {#if suppressError}
+                <p class="text-error" role="alert">{suppressError}</p>
+              {/if}
+              {#if suppressNotice}
+                <p class="text-notice" role="status">{suppressNotice}</p>
+              {/if}
+              <div class="row" style="margin-top: var(--space-3);">
+                <Button type="submit" variant="danger" disabled={suppressSubmitting}>
+                  {suppressSubmitting ? 'Suppressing…' : 'Suppress'}
+                </Button>
+                <Button disabled={suppressSubmitting} onclick={closeSuppress}>Cancel</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      {/if}
+    {/if}
   {/if}
 </div>
 
@@ -1256,5 +1797,41 @@
     align-items: center;
     gap: var(--space-2);
     cursor: pointer;
+  }
+
+  /* ── Subscribers (#0032) ──────────────────────────────────────────────────── */
+  .status-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+  }
+  .status-count {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .status-count-num {
+    font-weight: 600;
+    font-size: var(--fs-lg);
+  }
+  .checkbox-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+    margin-top: var(--space-1);
+  }
+  .modal-wide {
+    max-width: 640px;
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+  .detail-heading {
+    font-size: var(--fs-base);
+    font-weight: 600;
+    margin: var(--space-4) 0 var(--space-1);
+  }
+  .detail-interest-list {
+    margin: 0;
+    padding-left: var(--space-4);
   }
 </style>

@@ -10,6 +10,8 @@ import type {
   AdminUser,
   Setting,
   Interest,
+  Subscriber,
+  SubscribersPage,
 } from './types';
 import type {
   ServerCredentialAssertion,
@@ -362,4 +364,94 @@ export function updateInterest(
  */
 export function deleteInterest(id: number): Promise<{ message: string }> {
   return apiDelete<{ message: string }>(`/admin/interests/${id}`);
+}
+
+// ── Admin: subscribers screen (#0032) ────────────────────────────────────────
+
+/** Filters/paging accepted by GET /admin/subscribers. */
+export interface ListSubscribersParams {
+  status?: string;
+  interestId?: number;
+  q?: string;
+  page?: number;
+  perPage?: number;
+}
+
+/**
+ * GET /admin/subscribers — paginated, filterable, searchable (admin only).
+ * `counts` in the response reflects the WHOLE table, not just the current
+ * filter/page, so the header block stays stable while an admin filters.
+ */
+export function listSubscribers(params: ListSubscribersParams = {}): Promise<SubscribersPage> {
+  const sp = new URLSearchParams();
+  if (params.status) sp.set('status', params.status);
+  if (params.interestId) sp.set('interest_id', String(params.interestId));
+  if (params.q) sp.set('q', params.q);
+  sp.set('page', String(params.page ?? 1));
+  sp.set('per_page', String(params.perPage ?? 25));
+  return apiGet<SubscribersPage>(`/admin/subscribers?${sp.toString()}`);
+}
+
+/**
+ * GET /admin/subscribers/{id} — detail view: consent evidence (signup IP,
+ * user agent, both timestamps), selected interests, and email event history
+ * (admin only). `email_events` is always `[]` until #0038 lands.
+ */
+export function getSubscriber(id: number): Promise<Subscriber> {
+  return apiGet<Subscriber>(`/admin/subscribers/${id}`);
+}
+
+/** Response shape shared by suppress and clear-complaint. */
+export interface SubscriberActionResult {
+  subscriber: Subscriber;
+  message: string;
+}
+
+/**
+ * POST /admin/subscribers/{id}/suppress — manual suppress with a required
+ * note (admin only). Today this calls the store's Unsubscribe (source:
+ * admin), NOT a real suppressions-table write (#0033 is not built yet — see
+ * the server's package doc comment); `no_op` is true when the target had
+ * already complained, since Unsubscribe is a guaranteed no-op on a
+ * complained row (CLAUDE.md §9) — the caller must show that rather than
+ * imply the action took effect.
+ */
+export function suppressSubscriber(
+  id: number,
+  note: string,
+): Promise<SubscriberActionResult & { no_op: boolean }> {
+  return apiPost<SubscriberActionResult & { no_op: boolean }>(`/admin/subscribers/${id}/suppress`, {
+    note,
+  });
+}
+
+/**
+ * POST /admin/subscribers/{id}/clear-complaint — the sole sanctioned exit
+ * from `complained` (admin only). The server answers 409 (ApiError) if the
+ * target isn't currently complained; the caller should only offer this
+ * action on complained rows in the first place. Resulting status is
+ * `unsubscribed`, not `active` — clearing a complaint does not by itself
+ * re-establish double opt-in consent.
+ */
+export function clearSubscriberComplaint(id: number): Promise<SubscriberActionResult> {
+  return apiPost<SubscriberActionResult>(`/admin/subscribers/${id}/clear-complaint`);
+}
+
+/**
+ * POST /admin/subscribers — manual add (admin only). Still requires double
+ * opt-in: a brand-new address lands `pending` with a confirmation email
+ * queued, never `active` directly. `interests` are slugs, matching the
+ * public signup form; `note` is optional operator context recorded in the
+ * audit log.
+ */
+export function createSubscriber(
+  email: string,
+  interests: string[],
+  note: string,
+): Promise<SubscriberActionResult> {
+  return apiPost<SubscriberActionResult>('/admin/subscribers', {
+    email,
+    interests,
+    note: note || undefined,
+  });
 }

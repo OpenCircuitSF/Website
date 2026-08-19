@@ -21,6 +21,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
 // TestMountAndServe_AdminRoutesRequireSessionAndAdmin closes the same kind of
@@ -115,6 +116,14 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// test's gap-closing argument (main.go's REAL mountAndServe, not a
 	// per-handler suite's own small mux) covers /admin/interests too.
 	adminInterestsH := handlers.NewAdminInterestsHandler(interestsStore, auditLogger)
+	subscribersStore := subscribers.NewStore(pool)
+	// #0032: exercised the same way as adminInterestsH above. manualAdd is
+	// nil (matching this test's own "subscribeH: not exercised by this test"
+	// choice below) — POST /admin/subscribers therefore answers 503 rather
+	// than actually dispatching a signup, which is still proof enough that
+	// RequireAdmin let the request through (neither 401 nor 403); see the
+	// "admin session" case's comment.
+	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, nil, auditLogger)
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 	meH := handlers.NewMeHandler()
@@ -126,7 +135,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			requireSession, requireAdmin, nil)
 	}()
 
@@ -169,6 +178,26 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM interests WHERE slug LIKE 'zz-wiring-%'`)
 	})
 
+	// A dedicated throwaway subscriber for the /admin/subscribers/{id} family,
+	// seeded through the real store — never a literal id, same CLAUDE.md §8b
+	// reasoning as targetInterest above. The admin-session case for
+	// GET/POST .../{id} routes below reaches the real handler and may act on
+	// this row for real (POST .../clear-complaint 409s since it's never
+	// complained; POST .../suppress 400s since this test sends no body) —
+	// neither mutates it, but the cleanup below is unconditional regardless.
+	targetSubscriber, err := subscribersStore.Create(context.Background(), subscribers.NewSignup{
+		Email:      fmt.Sprintf("zz-wiring-%d@example.com", time.Now().UnixNano()),
+		ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("seed target subscriber: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = pool.Exec(ctx, `DELETE FROM subscribers WHERE email LIKE 'zz-wiring-%'`)
+	})
+
 	// adminRoutes (cmd/opencircuit/main.go) is the single list mountAndServe
 	// itself loops over to register every admin route behind requireAdmin.
 	// Enumerating it here, rather than hand-listing paths, is what closes
@@ -193,8 +222,8 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			return status != http.StatusUnauthorized && status != http.StatusForbidden
 		}},
 	}
-	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH) {
-		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID)
+	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH) {
+		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID)
 		for _, c := range cases {
 			req, err := http.NewRequest(route.method, baseURL+path, nil)
 			if err != nil {
@@ -225,14 +254,17 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 // present, with an id this test seeded itself — never a literal or seeded
 // one (CLAUDE.md §8b: "Never target a literal or seeded id in a test").
 // /admin/users/... routes take a user id; /admin/interests/... routes take
-// an interest id. Routes with no {id} (e.g. /admin/settings, /admin/audit)
-// pass through unchanged.
-func resolveAdminRoutePath(path string, userID, interestID int64) string {
+// an interest id; /admin/subscribers/... routes (#0032) take a subscriber
+// id. Routes with no {id} (e.g. /admin/settings, /admin/audit,
+// /admin/subscribers itself) pass through unchanged.
+func resolveAdminRoutePath(path string, userID, interestID, subscriberID int64) string {
 	switch {
 	case strings.HasPrefix(path, "/admin/users/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(userID), 1)
 	case strings.HasPrefix(path, "/admin/interests/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(interestID), 1)
+	case strings.HasPrefix(path, "/admin/subscribers/"):
+		return strings.Replace(path, "{id}", fmt.Sprint(subscriberID), 1)
 	default:
 		return path
 	}

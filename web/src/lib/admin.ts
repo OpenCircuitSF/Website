@@ -5,7 +5,7 @@
 // (rather than inline in the .svelte file) makes them unit-testable without
 // a DOM — see admin.test.ts.
 
-import type { AdminUser, AuditEntry, Interest } from './types';
+import type { AdminUser, AuditEntry, Interest, Subscriber } from './types';
 
 // ── Deactivation reasons (user management) ───────────────────────────────────
 // The six account.deactivated reason values from the PRD "Deactivation reasons"
@@ -292,4 +292,111 @@ export function reorderSwap(
  */
 export function hasSubscribers(interest: Interest): boolean {
   return interest.subscriber_count > 0;
+}
+
+// ── Subscribers screen (#0032) ────────────────────────────────────────────────
+
+/** The five subscribers.Status* values, in the order the header counts show them. */
+export const SUBSCRIBER_STATUSES: readonly string[] = [
+  'pending',
+  'active',
+  'unsubscribed',
+  'bounced',
+  'complained',
+] as const;
+
+/** Human-readable label for a subscriber status value. An unknown value is returned as-is. */
+export function subscriberStatusLabel(status: string): string {
+  switch (status) {
+    case 'pending':
+      return 'Pending';
+    case 'active':
+      return 'Active';
+    case 'unsubscribed':
+      return 'Unsubscribed';
+    case 'bounced':
+      return 'Bounced';
+    case 'complained':
+      return 'Complained';
+    default:
+      return status;
+  }
+}
+
+/**
+ * Badge CSS class for a subscriber status: green for the healthy state,
+ * red for the two states that mean mail stopped reaching someone
+ * unexpectedly (bounced/complained), muted for the other two (pending is
+ * normal-in-progress; unsubscribed is a deliberate, expected end state).
+ */
+export function subscriberStatusBadgeClass(status: string): string {
+  switch (status) {
+    case 'active':
+      return 'badge-success';
+    case 'bounced':
+    case 'complained':
+      return 'badge-danger';
+    default:
+      return 'badge-muted';
+  }
+}
+
+/**
+ * Whether the "Clear complaint" action should be offered for a subscriber.
+ * Mirrors the server's own guard (subscribers.Store.AdminClearComplaint
+ * returns ErrNotComplained otherwise) — #0032's carried-in review finding
+ * requires the screen to only offer this action on complained rows, not
+ * let an admin discover the refusal after clicking.
+ */
+export function canClearComplaint(status: string): boolean {
+  return status === 'complained';
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** A permissive client-side email syntax check — the server remains the source of truth. */
+export function isPlausibleEmail(email: string): boolean {
+  return EMAIL_PATTERN.test(email.trim());
+}
+
+/**
+ * Validate the manual-add form's email field before submitting. Trims and
+ * checks syntax only; the server independently checks disposable domains
+ * are not restricted for admin adds and enforces the real double opt-in
+ * dispatch.
+ */
+export function validateManualAddEmail(email: string): { email: string } | { error: string } {
+  const trimmed = email.trim();
+  if (!isPlausibleEmail(trimmed)) {
+    return { error: 'Enter a valid email address.' };
+  }
+  return { email: trimmed };
+}
+
+/**
+ * Validate the suppress-note form field: required, non-empty after
+ * trimming, matching the server's own 400 on a blank note.
+ */
+export function validateSuppressNote(note: string): { note: string } | { error: string } {
+  const trimmed = note.trim();
+  if (trimmed === '') {
+    return { error: 'A note is required.' };
+  }
+  return { note: trimmed };
+}
+
+/**
+ * Render a subscriber's consent-evidence "signup" line for the detail view:
+ * the signup timestamp, plus IP/user agent when present (both are nullable —
+ * a manually-added subscriber, #0032's own Create endpoint, has neither).
+ */
+export function signupEvidenceSummary(sub: Subscriber): string {
+  const when = formatDateTime(sub.created_at);
+  if (!sub.signup_ip && !sub.signup_user_agent) {
+    return `${when} — no browser signup evidence recorded (added by an admin)`;
+  }
+  const parts = [when];
+  if (sub.signup_ip) parts.push(`from ${sub.signup_ip}`);
+  if (sub.signup_user_agent) parts.push(`(${sub.signup_user_agent})`);
+  return parts.join(' ');
 }

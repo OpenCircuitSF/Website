@@ -96,6 +96,7 @@ func TestMountAndServe_RateLimitsAuthLoginStart(t *testing.T) {
 		// listener simply outlive this test within the test binary.
 		errCh <- mountAndServe(cfg, pool,
 			authH, credsH, settingsH, adminUsersH, adminAuditH, nil, /* adminInterestsH: not exercised by this test */
+			nil, /* adminSubscribersH: not exercised by this test */
 			eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			requireSession, requireAdmin, nil)
 	}()

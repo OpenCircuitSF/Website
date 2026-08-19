@@ -42,6 +42,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -646,11 +647,15 @@ func (s *Store) setStatus(ctx context.Context, id int64, status string, now time
 	return sub, nil
 }
 
-// findByID looks up a subscriber by primary key. Unexported: it exists to
-// let AdminClearComplaint distinguish "no such subscriber" from "subscriber
-// exists but isn't complained" without a second exported lookup method that
-// nothing else needs yet.
-func (s *Store) findByID(ctx context.Context, id int64) (Subscriber, error) {
+// GetByID looks up a subscriber by primary key. Exported for #0032's admin
+// screen (subscriber detail view, and the before/after reads Suppress and
+// ClearComplaint need to tell an admin whether their action actually took
+// effect — see internal/handlers/admin_subscribers.go). Originally
+// unexported (findByID) and used only by AdminClearComplaint to distinguish
+// "no such subscriber" from "subscriber exists but isn't complained"; #0032
+// needed the same lookup from outside this package, so it was promoted
+// rather than duplicated.
+func (s *Store) GetByID(ctx context.Context, id int64) (Subscriber, error) {
 	row := s.pool.QueryRow(ctx,
 		`SELECT `+subscriberColumns+` FROM subscribers WHERE id = $1`, id)
 	sub, err := scanSubscriber(row)
@@ -697,7 +702,7 @@ func (s *Store) AdminClearComplaint(ctx context.Context, id int64, now time.Time
 	)
 	sub, err := scanSubscriber(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		_, ferr := s.findByID(ctx, id)
+		_, ferr := s.GetByID(ctx, id)
 		if errors.Is(ferr, ErrNotFound) {
 			return Subscriber{}, ErrNotFound
 		}
@@ -710,6 +715,165 @@ func (s *Store) AdminClearComplaint(ctx context.Context, id int64, now time.Time
 		return Subscriber{}, fmt.Errorf("subscribers: admin clearing complaint for %d: %w", id, err)
 	}
 	return sub, nil
+}
+
+// ── Admin list/search (#0032) ────────────────────────────────────────────────
+
+// subscribersListDefaultPerPage and subscribersListMaxPerPage bound List's
+// page size: a caller-supplied PerPage <1 falls back to the default, and
+// anything above the max is clamped down to it, so a malformed or hostile
+// ?per_page= query parameter can never force an unbounded scan.
+const (
+	subscribersListDefaultPerPage = 25
+	subscribersListMaxPerPage     = 200
+)
+
+// ListFilter narrows List's result set. Every field is optional: the zero
+// value (empty Status/Query, InterestID 0, Page/PerPage <1) matches every
+// subscriber, defaults the page size, and starts at page 1.
+type ListFilter struct {
+	Status     string // one of the Status* constants; "" matches any status
+	InterestID int64  // 0 matches any; otherwise restricts to subscribers with this interest selected
+	Query      string // substring match against email, case-insensitive; "" matches any
+	Page       int    // 1-based; <1 is treated as 1
+	PerPage    int    // <1 falls back to subscribersListDefaultPerPage; clamped to subscribersListMaxPerPage
+}
+
+// escapeLikeSpecials backslash-escapes the two ILIKE wildcard characters (%
+// and _) and the escape character itself in a user-supplied search string, so
+// a search for e.g. "50%off@example.com" or "j_doe@example.com" matches that
+// literal substring rather than being interpreted as a pattern. Paired with
+// `ESCAPE '\'` in List's query.
+func escapeLikeSpecials(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
+
+// List returns subscribers matching filter, newest-first, alongside the
+// total number of rows the filter matches (ignoring Page/PerPage) so the
+// caller (the #0032 admin screen) can render pagination controls. Every
+// selected column is qualified with the subscribers. table prefix because
+// filtering by InterestID joins subscriber_interests, whose own created_at
+// column would otherwise collide with subscribers.created_at in an
+// unqualified SELECT.
+//
+// The InterestID join can never multiply a subscriber's row: subscriber_
+// interests' primary key is (subscriber_id, interest_id), so filtering to
+// one specific interest_id matches at most one join row per subscriber.
+func (s *Store) List(ctx context.Context, filter ListFilter) ([]Subscriber, int64, error) {
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	perPage := filter.PerPage
+	if perPage < 1 {
+		perPage = subscribersListDefaultPerPage
+	}
+	if perPage > subscribersListMaxPerPage {
+		perPage = subscribersListMaxPerPage
+	}
+
+	var (
+		joins []string
+		where []string
+		args  []any
+	)
+	if filter.InterestID != 0 {
+		joins = append(joins, `JOIN subscriber_interests si ON si.subscriber_id = subscribers.id`)
+		args = append(args, filter.InterestID)
+		where = append(where, fmt.Sprintf(`si.interest_id = $%d`, len(args)))
+	}
+	if filter.Status != "" {
+		args = append(args, filter.Status)
+		where = append(where, fmt.Sprintf(`subscribers.status = $%d`, len(args)))
+	}
+	if q := strings.TrimSpace(filter.Query); q != "" {
+		args = append(args, "%"+escapeLikeSpecials(q)+"%")
+		where = append(where, fmt.Sprintf(`subscribers.email ILIKE $%d ESCAPE '\'`, len(args)))
+	}
+
+	joinSQL := strings.Join(joins, " ")
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = "WHERE " + strings.Join(where, " AND ")
+	}
+
+	var total int64
+	countSQL := fmt.Sprintf(`SELECT count(*) FROM subscribers %s %s`, joinSQL, whereSQL)
+	if err := s.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("subscribers: counting list: %w", err)
+	}
+	if total == 0 {
+		return []Subscriber{}, 0, nil
+	}
+
+	listArgs := append(append([]any{}, args...), perPage, (page-1)*perPage)
+	listSQL := fmt.Sprintf(
+		`SELECT %s FROM subscribers %s %s ORDER BY subscribers.created_at DESC, subscribers.id DESC LIMIT $%d OFFSET $%d`,
+		qualifiedSubscriberColumns, joinSQL, whereSQL, len(listArgs)-1, len(listArgs),
+	)
+	rows, err := s.pool.Query(ctx, listSQL, listArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("subscribers: listing: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]Subscriber, 0, perPage)
+	for rows.Next() {
+		sub, err := scanSubscriber(rows)
+		if err != nil {
+			return nil, 0, fmt.Errorf("subscribers: scanning list row: %w", err)
+		}
+		out = append(out, sub)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("subscribers: iterating list: %w", err)
+	}
+	return out, total, nil
+}
+
+// qualifiedSubscriberColumns is subscriberColumns with every column prefixed
+// by the subscribers. table name, for queries (List) that JOIN another
+// table and would otherwise risk an ambiguous or wrongly-resolved unqualified
+// column reference (subscriber_interests.created_at vs
+// subscribers.created_at).
+const qualifiedSubscriberColumns = `subscribers.id, subscribers.email, subscribers.status,
+	subscribers.confirm_token, subscribers.confirm_sent_at, subscribers.confirm_expires_at,
+	subscribers.confirmed_at, subscribers.already_subscribed_sent_at, subscribers.manage_token,
+	host(subscribers.signup_ip), subscribers.signup_user_agent, subscribers.utm_source,
+	subscribers.utm_medium, subscribers.utm_campaign, subscribers.unsubscribed_at,
+	subscribers.unsubscribe_source, subscribers.created_at, subscribers.updated_at`
+
+// StatusCounts returns the number of subscribers in each status, keyed by
+// the Status* constants. Every known status is present in the result even
+// when its count is zero, so the #0032 admin screen's "counts by status"
+// header always shows all five rather than silently omitting one with no
+// members yet.
+func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
+	counts := map[string]int64{
+		StatusPending:      0,
+		StatusActive:       0,
+		StatusUnsubscribed: 0,
+		StatusBounced:      0,
+		StatusComplained:   0,
+	}
+	rows, err := s.pool.Query(ctx, `SELECT status, count(*) FROM subscribers GROUP BY status`)
+	if err != nil {
+		return nil, fmt.Errorf("subscribers: counting by status: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var n int64
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, fmt.Errorf("subscribers: scanning status count: %w", err)
+		}
+		counts[status] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("subscribers: iterating status counts: %w", err)
+	}
+	return counts, nil
 }
 
 // isUniqueViolation reports whether err is a Postgres unique_violation

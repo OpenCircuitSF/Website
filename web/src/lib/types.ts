@@ -74,3 +74,55 @@ export interface Interest {
   subscriber_count: number;
   created_at: string;
 }
+
+/** A subscriber's selected interest, as embedded in a Subscriber detail (GET /admin/subscribers/{id} item). */
+export interface SubscriberInterestRef {
+  id: number;
+  slug: string;
+  name: string;
+}
+
+/**
+ * A mailing-list subscriber (GET /admin/subscribers[/{id}] item). Matches
+ * internal/handlers/admin_subscribers.go `subscriberView` (#0032) — the field
+ * set is deliberately limited to what #0075's published privacy policy
+ * discloses subscribers their data includes, plus the status/unsubscribe
+ * record the same policy already describes. `interests` is only populated by
+ * the detail endpoint (GET .../{id}); the list endpoint omits it to avoid an
+ * N+1 query per row. `email_events` is always present but empty until #0038
+ * (SES bounce/complaint ingestion) lands.
+ */
+export interface Subscriber {
+  id: number;
+  email: string;
+  status: string; // pending | active | unsubscribed | bounced | complained
+  signup_ip?: string;
+  signup_user_agent?: string;
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  created_at: string; // signup timestamp
+  confirmed_at?: string;
+  unsubscribed_at?: string;
+  unsubscribe_source?: string;
+  interests?: SubscriberInterestRef[];
+  email_events: unknown[];
+}
+
+/** The {pending, active, unsubscribed, bounced, complained} header block atop the subscribers list. */
+export interface SubscriberStatusCounts {
+  pending: number;
+  active: number;
+  unsubscribed: number;
+  bounced: number;
+  complained: number;
+}
+
+/** Envelope returned by GET /admin/subscribers. */
+export interface SubscribersPage {
+  subscribers: Subscriber[];
+  total: number;
+  page: number;
+  per_page: number;
+  counts: SubscriberStatusCounts;
+}

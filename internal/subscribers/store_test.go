@@ -1223,3 +1223,262 @@ func TestRestartSignup_ComplainedStaysComplained(t *testing.T) {
 		t.Fatalf("final Status = %q, want %q", final.Status, StatusComplained)
 	}
 }
+
+// ── List / StatusCounts / GetByID (#0032's admin screen) ────────────────────
+
+func TestGetByID_Success(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := store.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Email != created.Email {
+		t.Errorf("Email = %q, want %q", got.Email, created.Email)
+	}
+}
+
+func TestGetByID_NotFound(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+
+	_, err := store.GetByID(context.Background(), -1)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got err=%v, want ErrNotFound", err)
+	}
+}
+
+func TestList_FiltersByStatus(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	pending, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create pending: %v", err)
+	}
+	activeSeed, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create active seed: %v", err)
+	}
+	active, err := store.Confirm(ctx, *activeSeed.ConfirmToken, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	results, total, err := store.List(ctx, ListFilter{Status: StatusActive})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	foundActive := false
+	for _, r := range results {
+		if r.ID == pending.ID {
+			t.Fatalf("List(status=active) returned the pending subscriber %d", pending.ID)
+		}
+		if r.ID == active.ID {
+			foundActive = true
+		}
+		if r.Status != StatusActive {
+			t.Errorf("row %d has status %q, want %q", r.ID, r.Status, StatusActive)
+		}
+	}
+	if !foundActive {
+		t.Errorf("List(status=active) did not include the active subscriber %d", active.ID)
+	}
+	if total < 1 {
+		t.Errorf("total = %d, want >= 1", total)
+	}
+}
+
+func TestList_FiltersByInterest(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	iotaID := seededInterestID(t, pool, "microcontrollers")
+	other := seededInterestID(t, pool, "3d-printing")
+
+	withInterest, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.SetInterests(ctx, withInterest.ID, []int64{iotaID}); err != nil {
+		t.Fatalf("SetInterests: %v", err)
+	}
+	without, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.SetInterests(ctx, without.ID, []int64{other}); err != nil {
+		t.Fatalf("SetInterests: %v", err)
+	}
+
+	results, _, err := store.List(ctx, ListFilter{InterestID: iotaID})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	found := false
+	for _, r := range results {
+		if r.ID == without.ID {
+			t.Fatalf("List(interest_id=%d) returned a subscriber %d that was never linked to it", iotaID, without.ID)
+		}
+		if r.ID == withInterest.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("List(interest_id=%d) did not include subscriber %d", iotaID, withInterest.ID)
+	}
+}
+
+func TestList_SearchesByEmailSubstringCaseInsensitive(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	unique := fmt.Sprintf("zz-search-%d", time.Now().UnixNano())
+	email := unique + "@Example.COM"
+	created, err := store.Create(ctx, NewSignup{Email: email, ConfirmTTL: time.Hour}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	results, total, err := store.List(ctx, ListFilter{Query: strings.ToUpper(unique)})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 || len(results) != 1 || results[0].ID != created.ID {
+		t.Fatalf("List(q=%q) = %+v (total=%d), want exactly subscriber %d", unique, results, total, created.ID)
+	}
+}
+
+func TestList_SearchEscapesLikeWildcards(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	// "axb" contains no literal underscore. If List's search treated "_" as
+	// the ILIKE single-character wildcard instead of escaping it, a query
+	// for "a_b" would still match "axb" (any one character in place of the
+	// wildcard) — a false positive that leaks membership information ("is
+	// there a subscriber matching this shape") beyond an exact substring
+	// search. Escaping "_" (and "%") means only a literal underscore can
+	// ever match one.
+	unique := fmt.Sprintf("zz-under-%d", time.Now().UnixNano())
+	email := unique + "-axb@example.com"
+	if _, err := store.Create(ctx, NewSignup{Email: email, ConfirmTTL: time.Hour}, time.Now()); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	_, total, err := store.List(ctx, ListFilter{Query: unique + "-a_b"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 0 {
+		t.Errorf("total = %d for a query containing a literal \"_\" that does not appear in the seeded email, want 0 (wildcard not escaped?)", total)
+	}
+
+	// Sanity check: an exact-substring query for the real email DOES match,
+	// so the zero result above is proof of escaping, not of List being
+	// broken outright.
+	_, total, err = store.List(ctx, ListFilter{Query: unique + "-axb"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("total = %d for the real seeded email's exact substring, want 1", total)
+	}
+}
+
+func TestList_PaginationBoundsAndOrdering(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	var ids []int64
+	for i := 0; i < 3; i++ {
+		sub, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		ids = append(ids, sub.ID)
+		time.Sleep(2 * time.Millisecond) // ensure distinct created_at ordering
+	}
+
+	page1, total, err := store.List(ctx, ListFilter{Page: 1, PerPage: 2})
+	if err != nil {
+		t.Fatalf("List page 1: %v", err)
+	}
+	if len(page1) != 2 {
+		t.Fatalf("len(page1) = %d, want 2", len(page1))
+	}
+	if total < 3 {
+		t.Fatalf("total = %d, want >= 3", total)
+	}
+	// Newest-first: the most recently created of our three rows should lead.
+	if page1[0].ID != ids[2] {
+		t.Errorf("page1[0].ID = %d, want %d (newest-first ordering)", page1[0].ID, ids[2])
+	}
+
+	page2, _, err := store.List(ctx, ListFilter{Page: 2, PerPage: 2})
+	if err != nil {
+		t.Fatalf("List page 2: %v", err)
+	}
+	for _, r := range page2 {
+		for _, r1 := range page1 {
+			if r.ID == r1.ID {
+				t.Fatalf("subscriber %d appeared on both page 1 and page 2", r.ID)
+			}
+		}
+	}
+}
+
+func TestList_PerPageClampedToMax(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+
+	// A huge per_page must not error and must not panic; List clamps it.
+	_, _, err := store.List(context.Background(), ListFilter{PerPage: 1_000_000})
+	if err != nil {
+		t.Fatalf("List with oversized PerPage: %v", err)
+	}
+}
+
+func TestStatusCounts_AllFiveStatusesPresentAndAccurate(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	before, err := store.StatusCounts(ctx)
+	if err != nil {
+		t.Fatalf("StatusCounts (before): %v", err)
+	}
+	for _, status := range []string{StatusPending, StatusActive, StatusUnsubscribed, StatusBounced, StatusComplained} {
+		if _, ok := before[status]; !ok {
+			t.Errorf("StatusCounts missing key %q even before any row exists", status)
+		}
+	}
+
+	pending, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	after, err := store.StatusCounts(ctx)
+	if err != nil {
+		t.Fatalf("StatusCounts (after): %v", err)
+	}
+	if after[StatusPending] != before[StatusPending]+1 {
+		t.Errorf("pending count = %d, want %d", after[StatusPending], before[StatusPending]+1)
+	}
+	_ = pending
+}

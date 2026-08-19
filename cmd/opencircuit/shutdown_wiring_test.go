@@ -125,6 +125,7 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 		// shuts down its own listener/handler.
 		errCh <- mountAndServe(cfg, pool,
 			nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised */
+			nil, /* adminSubscribersH: not exercised */
 			nil, nil, subscribeH,
 			passthrough, passthrough, nil)
 	}()

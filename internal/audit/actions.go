@@ -52,6 +52,35 @@ const (
 	// PRD §6.3/§6.5) add their own constants here when they land.
 	ActionSubscriberSignup = "subscriber.signup"
 
+	// Subscriber admin actions (PRD §5.2, §6.5; #0032's admin screen).
+	// Actor is always the acting admin, unlike ActionSubscriberSignup above.
+	//
+	// ActionSubscriberSuppressed is written by POST
+	// /admin/subscribers/{id}/suppress. It calls subscribers.Store.Unsubscribe
+	// (source=admin) — the only sanctioned status-mutating action available
+	// today — NOT a write to the `suppressions` table PRD §6.2 describes,
+	// because that table and its store (#0033) do not exist yet. The metadata
+	// records which one happened via `no_op` (true when the target was
+	// already complained, per CLAUDE.md §9 — Unsubscribe changes nothing in
+	// that case) so the log itself carries the caveat, not just this comment.
+	ActionSubscriberSuppressed = "subscriber.suppressed"
+	// ActionSubscriberComplaintCleared is written by POST
+	// /admin/subscribers/{id}/clear-complaint, the sole sanctioned exit from
+	// `complained` (subscribers.Store.AdminClearComplaint). Metadata notes
+	// that the resulting status is `unsubscribed`, not `active` — clearing a
+	// complaint does not re-establish double opt-in consent — and that
+	// #0033's suppressions table, once it exists, still needs a matching
+	// removal for this action to actually unblock the address at #0026's
+	// suppressed send gate.
+	ActionSubscriberComplaintCleared = "subscriber.complaint_cleared"
+	// ActionSubscriberManualAdd is written by POST /admin/subscribers, the
+	// admin manual-add flow. It never creates an `active` subscriber
+	// directly (PRD §5.2's notes) — it drives the same
+	// newSignup/existingSignup dispatch #0026's public endpoint uses, so a
+	// brand-new address lands `pending` with a confirmation email queued,
+	// exactly as if the person had submitted the public form themselves.
+	ActionSubscriberManualAdd = "subscriber.manual_add"
+
 	// Interest taxonomy lifecycle (PRD §6.1, §5.2 — the admin CRUD, #0024).
 	// ActionInterestUpdated covers any field change other than the active
 	// flag's transition; that transition gets its own two actions (mirroring
