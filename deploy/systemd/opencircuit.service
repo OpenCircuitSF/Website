@@ -36,7 +36,15 @@ RestartSec=5
 # independent budgets since #0087, not one shared 20s deadline, so systemd
 # still needs to cover both back-to-back in the worst case — or systemd
 # SIGKILLs the process before that sequence can finish on its own; 30s
-# leaves 10s of slack over their 20s combined.
+# leaves 10s of slack over their 20s combined. That 20s is not the WHOLE
+# worst case, though: servePostgres's `defer pool.Close()` runs AFTER
+# mountAndServe returns and has no timeout of its own, so the true bound is
+# 20s plus however long an in-flight DB statement takes to return its
+# connection to the pool. In practice that is sub-second (pgx checks
+# connections out per-statement, not for the duration of a mailer send) and
+# is absorbed by the 10s slack — but it is a real, unbounded addition to the
+# 20s, not covered by it. If this line's math is ever revisited, remember
+# the 10s slack is covering pool.Close() too, not just scheduling jitter.
 KillSignal=SIGTERM
 TimeoutStopSec=30
 

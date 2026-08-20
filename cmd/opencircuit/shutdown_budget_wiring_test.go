@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -33,15 +34,43 @@ import (
 // test can confirm the send has genuinely started (been dequeued by a worker)
 // before proceeding — the same synchronization idiom shutdown_wiring_test.go's
 // blockingTestMailer uses.
+//
+// trueStart records the wall-clock instant Send itself begins, on the worker
+// goroutine, BEFORE entered is closed. This is deliberately not the same
+// moment the test goroutine observes via <-entered: the test goroutine only
+// runs after the scheduler gets around to it, which under load can lag the
+// real Send entry by hundreds of ms (measured directly during #0087's review:
+// lags of 177-327ms were routine). Using the test's own receive time as the
+// send-start reference systematically UNDERcounts elapsed time by that lag,
+// which is what made the old version of this test false-fail on healthy code
+// — see issues/0087.md's review notes. Reading trueStart instead measures
+// from where the work actually starts, not from where a different goroutine
+// happens to notice it did.
 type delayedMailer struct {
 	delay   time.Duration
 	entered chan struct{}
+
+	mu        sync.Mutex
+	trueStart time.Time
 }
 
 func (m *delayedMailer) Send(_ context.Context, _ mailing.Message) (string, error) {
+	m.mu.Lock()
+	m.trueStart = time.Now()
+	m.mu.Unlock()
 	close(m.entered)
 	time.Sleep(m.delay)
 	return "delayed-sent", nil
+}
+
+// SendStart returns the instant Send began, valid only after entered has
+// been observed closed (the mu guards the write in Send against this read
+// racing it before that happens; callers are expected to synchronize via
+// entered first, exactly as this test does).
+func (m *delayedMailer) SendStart() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.trueStart
 }
 
 // TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets is #0087's
@@ -224,13 +253,22 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 	// before SIGTERM is sent, not after Close is called), so measuring from
 	// here is what makes the "total ≈ sendDelay" math in this test's doc
 	// comment hold.
-	var sendStart time.Time
+	//
+	// This reads mailer.SendStart() — the timestamp Send recorded on its own
+	// goroutine — rather than time.Now() taken here after the receive. The
+	// two are NOT interchangeable: this goroutine only gets to run this line
+	// after the scheduler wakes it up following <-mailer.entered, which lags
+	// the real Send entry by an amount that grows with machine load (measured
+	// up to ~330ms during #0087's review). That lag was subtracted straight
+	// out of the elapsed measurement below, which is exactly what made the
+	// old version of this test false-fail on healthy code under load. See
+	// delayedMailer's doc comment and issues/0087.md's review notes.
 	select {
 	case <-mailer.entered:
-		sendStart = time.Now()
 	case <-time.After(2 * time.Second):
 		t.Fatal("delayedMailer.Send was never entered — nothing in flight; test invalid")
 	}
+	sendStart := mailer.SendStart()
 
 	// wantMinElapsed sits strictly between the two possible totals described
 	// in this test's doc comment: the "starved Close" total is close to just
