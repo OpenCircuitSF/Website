@@ -1365,8 +1365,9 @@ func TestNewSubscribeHandler_NoGoroutineLeakAcrossConstruction(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	t.Logf("goroutines before=%d after=%d across %d constructions (each starting %d workers, %d total if leaked)",
-		before, after, rounds, sendWorkerCount, rounds*sendWorkerCount)
+	perHandler := sendWorkerCount + mutateWorkerCount
+	t.Logf("goroutines before=%d after=%d across %d constructions (each starting %d workers, %d total if both pools leaked)",
+		before, after, rounds, perHandler, rounds*perHandler)
 	if after > before+2 {
 		t.Fatalf("goroutine count grew from %d to %d after constructing and closing %d handlers — sendWorkerCount and/or mutateWorkerCount workers are leaking", before, after, rounds)
 	}
