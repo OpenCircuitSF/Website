@@ -157,7 +157,7 @@ start Phase 3 with Phase 2 unreviewed.
 # Backend
 go build ./... 2>&1 | tail -40
 go vet ./...   2>&1 | tail -40
-go test ./...  2>&1 | tail -40
+go test ./... -p 2 2>&1 | tail -40   # -p 2 is mandatory; see §5a
 
 # Frontend (from web/)
 npm run check 2>&1 | tail -40   # svelte-check
@@ -168,6 +168,24 @@ npm run build 2>&1 | tail -20   # vite build; must precede go build embedding di
 ./scripts/dev.sh            # Vite :5173 + Go API :8080, hot reload, STORAGE=json
 ./scripts/dev.sh --built    # production embedding at :8080
 ```
+
+**Check the machine before you blame the code.** Run `uptime` first. On this
+laptop an idle load average is under ~4. If it is above ~8, something else is
+running — another agent, another suite — and *any* timing failure you see is
+that, not a defect. Wait for it to drain or stop the other work. Do not
+"reproduce under load," do not record a load average as an ambient baseline,
+and above all do not widen a deadline to accommodate it.
+
+This is not hypothetical. `#0084`, `#0087`, `#0091`, `#0096`, and `#0099` were
+all filed against timing failures produced by ~200 concurrent agent test runs
+peaking at load average 320. A day went into widening test deadlines from 5s to
+20s so that `TRUNCATE` on a *local* database would stop timing out. The
+statements were never slow. The machine was saturated. All five are closed;
+`#0096` and `#0099` as `wontfix`.
+
+**There is no performance requirement in this project and no load test.** It is
+a marketing site with a mailing list. If you catch yourself sizing a constant
+against measured machine load, stop — you are solving the wrong problem.
 
 **`go test ./...` without `TEST_DATABASE_URL` is not verification.** The
 database-backed suites skip silently when it is unset, so the run exits green
@@ -209,6 +227,32 @@ The same applies to `git log`, `git diff`, and `find` — bound them or scope th
 and their output must be read. Issues touching the SPA require `npm run check`
 and `npm test` in addition to the Go suite. Issues touching email rendering or
 the send worker must name the specific tests that ran in `## Verification`.
+
+## 5a. Concurrency — a hard cap, not a suggestion
+
+One orchestrator session spawned **197 subagents over 25 hours**, several in
+separate git worktrees, each recompiling the tree and running DB-backed suites
+against the same Postgres. It spent its own time killing orphaned `go test`
+processes and polling `pgrep` to keep its children from starving each other. The
+user killed the session by hand. This must not recur.
+
+- **At most two subagents may run at once**, and only one of them may be running
+  tests. The queue in §4 already says dispatch one issue at a time — that is a
+  ceiling on *concurrency*, not just on issue order.
+- **Never run tests in a worktree.** Worktrees do not share the build cache, so
+  each one recompiles the whole tree; the cache reached 4.5 GB. Use a worktree
+  only for genuinely conflicting edits, and run the suite in the main checkout.
+- **Scope the run to what you changed.** `go test ./internal/handlers/... -p 2`
+  is the default. A full `go test ./...` is for a batch's single review pass, not
+  for every implementer, and never with `-race -count=N` layered on top.
+- **`-count=2` and higher are banned for flake-hunting.** A test that fails only
+  under concurrent agent load is not flaky; the machine is busy. Re-running it
+  N times just multiplies the load that caused it.
+- **Kill what you start.** Before finishing, `pgrep -f 'go test|\.test '` and
+  clean up your own processes. Drop any scratch database you created (§8b).
+
+If a verification genuinely needs the whole suite under `-race`, say so and ask
+first — on this tree that is a ~5 minute fully-loaded run, and it is not free.
 
 ## 6. Source material
 
