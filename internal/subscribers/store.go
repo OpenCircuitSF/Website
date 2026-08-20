@@ -360,9 +360,18 @@ func (s *Store) FindByConfirmToken(ctx context.Context, token string) (Subscribe
 	return sub, nil
 }
 
-// FindByManageToken looks up a subscriber by its manage_token (long-lived;
-// no expiry). Backs the preference center (#0031) and one-click unsubscribe
-// (#0034).
+// FindByManageToken looks up a subscriber by its manage_token. The token
+// carries no expiry timestamp of its own, but it is not immutable either:
+// #0034's one-click unsubscribe handler calls RotateManageToken after a
+// real (non-no-op) unsubscribe, so a replay of an already-consumed footer
+// link stops resolving here. (An earlier version of this comment asserted
+// "long-lived; no expiry" as if that meant the value never changes — #0025's
+// review named exactly this pattern, a doc comment asserting an untrue
+// invariant, as what let a laundering bug survive review; #0034 carried the
+// same finding forward against this line specifically.) Backs the
+// preference center (#0031, which deliberately never rotates — see
+// RotateManageToken's doc comment for why the two differ) and one-click
+// unsubscribe (#0034).
 func (s *Store) FindByManageToken(ctx context.Context, token string) (Subscriber, error) {
 	row := s.pool.QueryRow(ctx,
 		`SELECT `+subscriberColumns+` FROM subscribers WHERE manage_token = $1`, token)
@@ -459,6 +468,53 @@ func (s *Store) Unsubscribe(ctx context.Context, id int64, source string, now ti
 		return Subscriber{}, ErrNotFound
 	case err != nil:
 		return Subscriber{}, fmt.Errorf("subscribers: unsubscribing %d: %w", id, err)
+	}
+	return sub, nil
+}
+
+// RotateManageToken generates a fresh manage_token for subscriber id and
+// stores it, invalidating every link (preference-center or one-click footer)
+// that carried the previous value. #0034's one-click unsubscribe handler is
+// the one call site: it rotates after a REAL (non-no-op) unsubscribe, so a
+// replayed POST of the same already-consumed footer link no longer resolves
+// via FindByManageToken and gets the endpoint's neutral "unknown token"
+// response instead of re-running any mutation. The preference center
+// (#0031) deliberately never calls this — see FindByManageToken's doc
+// comment for why the two paths differ.
+//
+// Guards statusLockedFromNonAdmin the same way every other mutator in this
+// package does (see the package doc comment): on a currently-complained row
+// this is a silent no-op — manage_token and updated_at are left unchanged,
+// no error is returned. This is deliberate, not incidental: rotation's
+// actual purpose is stopping replay of a CONSUMED unsubscribe link, and that
+// has no target on a row that is already terminal and refused by every
+// other mutator — rotating there would instead churn the token on every
+// unattended hit from a mail provider's automated retry/prefetch
+// infrastructure, invalidating every live footer link the person holds as
+// the price of an action that changed nothing. UnsubscribeHandler (#0034)
+// already checks the pre-call status itself (mirroring
+// PreferencesHandler.patchUnsubscribe's `before := sub.Status`) and skips
+// calling this method at all in that case; this guard is a second,
+// independent line of defense for any future call site, not the only one.
+func (s *Store) RotateManageToken(ctx context.Context, id int64, now time.Time) (Subscriber, error) {
+	token, err := newToken()
+	if err != nil {
+		return Subscriber{}, err
+	}
+	row := s.pool.QueryRow(ctx,
+		`UPDATE subscribers
+		    SET manage_token = CASE WHEN status = $4 THEN manage_token ELSE $2 END,
+		        updated_at   = CASE WHEN status = $4 THEN updated_at   ELSE $3 END
+		  WHERE id = $1
+		 RETURNING `+subscriberColumns,
+		id, token, now, statusLockedFromNonAdmin,
+	)
+	sub, err := scanSubscriber(row)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return Subscriber{}, ErrNotFound
+	case err != nil:
+		return Subscriber{}, fmt.Errorf("subscribers: rotating manage token for %d: %w", id, err)
 	}
 	return sub, nil
 }

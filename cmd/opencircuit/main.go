@@ -197,6 +197,13 @@ func servePostgres(cfg *config.Config) error {
 	// subscribe.go — see confirm.go's package doc comment.
 	confirmH := handlers.NewConfirmHandler(subscribersStore, interestsStore, auditLogger, slog.Default())
 
+	// One-click unsubscribe (#0034, PRD §6.5 path 1, RFC 8058): GET/POST
+	// /api/unsubscribe. Reuses subscribersStore (its FindByManageToken,
+	// Unsubscribe, and RotateManageToken) — no new store construction
+	// needed. See unsubscribe.go's package doc comment for why this route
+	// carries no session/CSRF guard and why GET/POST behave so differently.
+	unsubscribeH := handlers.NewUnsubscribeHandler(subscribersStore, auditLogger, nil, slog.Default())
+
 	// SSE event broker: the in-memory pub/sub singleton reused for live
 	// campaign send progress once the mailing subsystem lands.
 	broker := events.NewBroker()
@@ -220,7 +227,7 @@ func servePostgres(cfg *config.Config) error {
 
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -354,20 +361,22 @@ func serveDevMode(cfg *config.Config) error {
 	// when nil, mirroring adminInterestsH's own nil-guard.
 	var adminSubscribersH *handlers.AdminSubscribersHandler
 
-	// Public interests (#0029), confirm (#0030), and preferences (#0031) all
-	// have the same devstore gap as subscribeH/adminInterestsH above --
-	// internal/devstore has no interests/subscribers-table backing yet.
-	// Passing nil leaves every other route working in STORAGE=json mode;
-	// mountAndServe only registers GET /api/interests, POST
-	// /api/subscribe/confirm, and GET/PATCH /api/preferences when their
-	// handler is non-nil, mirroring subscribeH's own nil-guard.
+	// Public interests (#0029), confirm (#0030), preferences (#0031), and
+	// one-click unsubscribe (#0034) all have the same devstore gap as
+	// subscribeH/adminInterestsH above -- internal/devstore has no
+	// interests/subscribers-table backing yet. Passing nil leaves every
+	// other route working in STORAGE=json mode; mountAndServe only
+	// registers GET /api/interests, POST /api/subscribe/confirm, GET/PATCH
+	// /api/preferences, and GET/POST /api/unsubscribe when their handler is
+	// non-nil, mirroring subscribeH's own nil-guard.
 	var publicInterestsH *handlers.PublicInterestsHandler
 	var preferencesH *handlers.PreferencesHandler
 	var confirmH *handlers.ConfirmHandler
+	var unsubscribeH *handlers.UnsubscribeHandler
 
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -464,6 +473,7 @@ func mountAndServe(
 	publicInterestsH *handlers.PublicInterestsHandler,
 	preferencesH *handlers.PreferencesHandler,
 	confirmH *handlers.ConfirmHandler,
+	unsubscribeH *handlers.UnsubscribeHandler,
 	requireSession func(http.Handler) http.Handler,
 	requireAdmin func(http.Handler) http.Handler,
 	outerMiddleware func(http.Handler) http.Handler,
@@ -573,6 +583,22 @@ func mountAndServe(
 	confirmLimiter := middleware.NewRateLimiter(rate.Every(time.Minute/5), 3)
 	if confirmH != nil {
 		mux.Handle("POST /api/subscribe/confirm", confirmLimiter.Middleware(http.HandlerFunc(confirmH.Confirm)))
+	}
+
+	// One-click unsubscribe (#0034, PRD §6.5 path 1, RFC 8058) — public,
+	// unauthenticated, no CSRF (see unsubscribe.go's package doc comment for
+	// why). Rate-limited at the same scale as preferencesLimiter above: a
+	// mail provider's automated POST is not brute-forcing a 32-byte token,
+	// but matching the existing public-endpoint convention costs nothing.
+	// Deliberately its OWN limiter rather than reusing preferencesLimiter —
+	// the two limiters share a rate but a shared bucket would let a burst of
+	// legitimate preference-center PATCHes from one IP starve a genuine
+	// one-click POST arriving moments later from a mail provider's shared
+	// egress IP, or vice versa.
+	unsubscribeLimiter := middleware.NewRateLimiter(rate.Every(time.Minute/10), 5)
+	if unsubscribeH != nil {
+		mux.Handle("GET /api/unsubscribe", unsubscribeLimiter.Middleware(http.HandlerFunc(unsubscribeH.Get)))
+		mux.Handle("POST /api/unsubscribe", unsubscribeLimiter.Middleware(http.HandlerFunc(unsubscribeH.Post)))
 	}
 
 	// SEO: server-injected per-route meta tags (#0019) and generated

@@ -409,6 +409,78 @@ func TestUnsubscribe_NotFound(t *testing.T) {
 	}
 }
 
+// TestRotateManageToken_Success is #0034's store-level proof that rotation
+// actually changes the token (and only the token — status is untouched) on
+// an ordinary, non-complained row.
+func TestRotateManageToken_Success(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+
+	created, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	rotated, err := store.RotateManageToken(context.Background(), created.ID, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("RotateManageToken: %v", err)
+	}
+	if rotated.ManageToken == created.ManageToken {
+		t.Error("ManageToken unchanged, want a fresh value")
+	}
+	if rotated.Status != created.Status {
+		t.Errorf("Status = %q, want unchanged %q — rotation must not touch status", rotated.Status, created.Status)
+	}
+
+	// The OLD token must no longer resolve.
+	if _, err := store.FindByManageToken(context.Background(), created.ManageToken); !errors.Is(err, ErrNotFound) {
+		t.Errorf("FindByManageToken(old token) err=%v, want ErrNotFound", err)
+	}
+	// The NEW token must resolve to the same subscriber.
+	found, err := store.FindByManageToken(context.Background(), rotated.ManageToken)
+	if err != nil {
+		t.Fatalf("FindByManageToken(new token): %v", err)
+	}
+	if found.ID != created.ID {
+		t.Errorf("FindByManageToken(new token) resolved id %d, want %d", found.ID, created.ID)
+	}
+}
+
+// TestRotateManageToken_ComplainedIsNoOp is #0034's carried-in review
+// finding: rotating a complained row's token would churn the value on every
+// unattended one-click hit against an already-terminal row, invalidating
+// every live footer link the person holds for an action that changed
+// nothing. RotateManageToken guards statusLockedFromNonAdmin the same way
+// every other mutator in this package does.
+func TestRotateManageToken_ComplainedIsNoOp(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+
+	created, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Confirm(context.Background(), *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if _, err := store.MarkComplained(context.Background(), created.ID, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("MarkComplained: %v", err)
+	}
+
+	rotated, err := store.RotateManageToken(context.Background(), created.ID, now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("RotateManageToken: %v", err)
+	}
+	if rotated.ManageToken != created.ManageToken {
+		t.Error("ManageToken changed on a complained row, want unchanged (no-op)")
+	}
+	if rotated.Status != StatusComplained {
+		t.Errorf("Status = %q, want %q", rotated.Status, StatusComplained)
+	}
+}
+
 // TestSetInterests_ZeroInterestsIsValid directly exercises PRD §6.1's rule
 // that a subscriber with zero interests is valid and expected (general
 // announcements only), not an error condition.
