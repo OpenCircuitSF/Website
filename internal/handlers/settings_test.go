@@ -39,7 +39,7 @@ func settingsTestPool(t *testing.T) *pgxpool.Pool {
 // state on teardown.
 func resetSettings(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
 	defer cancel()
 	if _, err := pool.Exec(ctx, `DELETE FROM settings`); err != nil {
 		t.Fatalf("clear settings: %v", err)

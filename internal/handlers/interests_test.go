@@ -47,7 +47,7 @@ func testInterestSlug(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	slug := fmt.Sprintf("zz-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
 		defer cancel()
 		_, _ = pool.Exec(ctx, `DELETE FROM interests WHERE slug = $1`, slug)
 	})

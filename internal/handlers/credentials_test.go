@@ -33,9 +33,44 @@ func credsTestPool(t *testing.T) *pgxpool.Pool {
 	return testDBPool
 }
 
+// handlersDBOpTimeout bounds a single, ordinary DB statement issued by this
+// package's test setup/cleanup (a TRUNCATE, a scoped DELETE, a small
+// INSERT) — #0084. It replaces a scattered set of flat 5s (and one 10s)
+// literals across this file, admin_subscribers_test.go, settings_test.go,
+// interests_test.go and main_test.go, all of which shared the same defect:
+// a fixed wall-clock bound on an operation whose real duration depends on
+// contention, not on what the statement itself does.
+//
+// #0084 reproduced this directly, not hypothetically: truncateCredsTables
+// (below) was the exact site named in three separate real failures —
+// TestAdminSettings_NonAdminForbidden and others — under concurrent agent
+// load (see issues/0084.md's Work log, "#0090's third pass" evidence,
+// load average 307). It was also reproduced deliberately here: on
+// 2026-08-19, with this repo's own ambient load at ~290-320 (other agent
+// sessions running builds/tests concurrently — ordinary conditions for this
+// project, not synthetic), fifteen consecutive truncateCredsTables-style
+// TRUNCATE calls against an otherwise-idle, isolated database took
+// 1.3s-3.9s each (one outlier at 9ms). That is already uncomfortably close
+// to the old 5s bound — explaining the observed failures — while nowhere
+// close to a genuine hang.
+//
+// 20s (not a larger round number) is chosen to match, not exceed without
+// reason, the identical bound cmd/opencircuit/ratelimit_wiring_test.go
+// established for the same class of operation (wiringDBOpTimeout, also
+// #0084) — one documented justification shared by both packages rather
+// than two different numbers for the same kind of statement. Note this is
+// deliberately NOT sized against multiple test binaries truncating the
+// SAME tables concurrently: internal/testdb.Lock's advisory lock (shared
+// across every package that calls it, including this one via TestMain)
+// already serializes that case system-wide, so same-table lock contention
+// across processes should not occur here — only ambient CPU/IO scheduling
+// contention within one already-serialized run, which is what was
+// measured.
+const handlersDBOpTimeout = 20 * time.Second
+
 func truncateCredsTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
 	defer cancel()
 	_, err := pool.Exec(ctx,
 		`TRUNCATE webauthn_challenges, pending_registrations, sessions,

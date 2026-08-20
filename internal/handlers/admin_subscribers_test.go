@@ -34,7 +34,7 @@ func adminSubscribersTestPool(t *testing.T) *pgxpool.Pool {
 	}
 	truncateCredsTables(t, testDBPool)
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
 		defer cancel()
 		_, _ = testDBPool.Exec(ctx, `DELETE FROM subscribers WHERE email LIKE 'zz-subtest-%'`)
 	})
@@ -164,7 +164,7 @@ func seedTestSubscriber(t *testing.T, pool *pgxpool.Pool, status string) int64 {
 		t.Fatalf("seed subscriber at status %q: %v", status, err)
 	}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
 		defer cancel()
 		_, _ = pool.Exec(ctx, `DELETE FROM subscribers WHERE id = $1`, id)
 	})
@@ -501,7 +501,7 @@ func TestAdminSubscribers_Create_NewAddressEndsUpPendingNeverActive(t *testing.T
 
 	email := testSubscriberEmail(t)
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
 		defer cancel()
 		_, _ = pool.Exec(ctx, `DELETE FROM subscribers WHERE email = lower(trim($1))`, email)
 	})

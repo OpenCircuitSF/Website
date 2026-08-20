@@ -36,7 +36,7 @@ func TestMountAndServe_RateLimitsSubscribe(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), wiringDBConnectTimeout)
 	defer cancel()
 
 	pool, err := db.Connect(ctx, dsn)

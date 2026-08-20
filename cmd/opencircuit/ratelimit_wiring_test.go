@@ -36,7 +36,7 @@ func TestMountAndServe_RateLimitsAuthLoginStart(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), wiringDBConnectTimeout)
 	defer cancel()
 
 	pool, err := db.Connect(ctx, dsn)
@@ -182,6 +182,22 @@ const wiringDBOpTimeout = 20 * time.Second
 // test that's actually broken should fail fast rather than wait 20s to
 // discover the listener never bound.
 const wiringReadinessDeadline = 10 * time.Second
+
+// wiringDBConnectTimeout bounds each wiring test's own db.Connect(ctx, dsn)
+// call (#0084/#0087 review — five identical, previously-uncommented 30s
+// literals: this file, subscribe_wiring_test.go, admin_wiring_test.go,
+// shutdown_wiring_test.go, shutdown_budget_wiring_test.go). Unlike
+// wiringHTTPTimeout/wiringDBOpTimeout above, this is NOT sized against an
+// observed load-induced failure — none of the failures #0084 reproduced was
+// a connect timeout. It is a generous, mostly-decorative ceiling: measured
+// directly against this project's own db.Connect (pgxpool.NewWithConfig +
+// Ping) on 2026-08-19 under genuine ambient load (load average ~290-315,
+// from other concurrent agent sessions — see issues/0084.md's Work log),
+// eight consecutive calls took 7-161ms, none over 200ms. 30s is ~180x that
+// worst observation; it exists to fail a genuinely unreachable/misconfigured
+// database eventually, not to survive scheduling contention the way
+// wiringHTTPTimeout/wiringDBOpTimeout do.
+const wiringDBConnectTimeout = 30 * time.Second
 
 // waitForHealthy waits for mountAndServe's listener to signal readiness
 // (see mountAndServe's `ready` parameter, main.go), then makes exactly one

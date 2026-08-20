@@ -68,7 +68,7 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), wiringDBConnectTimeout)
 	defer cancel()
 
 	pool, err := db.Connect(ctx, dsn)
@@ -211,7 +211,12 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 		handlers.NoSuppressions{}, nil, nil, cfg.BaseURL, slog.Default(),
 	)
 	defer func() {
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// wiringDBOpTimeout (#0084): Close's own work here is a fast DB
+		// UPDATE releasing the confirmation claim — the same class of
+		// single-statement operation the other wiring tests bound with this
+		// constant, not a long-running send (no mailer.Send blocks this
+		// handler's Close).
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), wiringDBOpTimeout)
 		defer closeCancel()
 		if err := retryH.Close(closeCtx); err != nil {
 			t.Errorf("retryH.Close: %v", err)

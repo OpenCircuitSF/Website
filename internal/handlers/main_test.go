@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -50,7 +49,17 @@ func TestMain(m *testing.M) {
 	// needs to cover the tables those groups don't already guarantee clean
 	// before their own first test.
 	if testDBPool != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// handlersDBOpTimeout (credentials_test.go, #0084): this used to be
+		// a separately-valued flat 10s, a second arbitrary bound alongside
+		// truncateCredsTables' flat 5s (#0097 item 2) for what is the same
+		// class of operation — a single TRUNCATE whose duration depends on
+		// contention, not on what it does. Unified onto the one documented
+		// constant instead of carrying two different numbers for the same
+		// kind of statement. A failure here calls os.Exit(1) for the whole
+		// test binary (see below), so getting this bound right matters more
+		// than most: a false failure here fails every test in the package,
+		// not just one.
+		ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
 		_, truncErr := testDBPool.Exec(ctx,
 			`TRUNCATE subscriber_interests, subscribers, audit_log RESTART IDENTITY CASCADE`)
 		cancel()
