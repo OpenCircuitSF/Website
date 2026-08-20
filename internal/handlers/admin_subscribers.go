@@ -21,19 +21,21 @@
 // no-op-on-complained behavior specifically shape Suppress and ClearComplaint
 // below.
 //
-// # What "suppress" means before #0033 lands
+// # What "suppress" means, since #0033
 //
 // PRD §6.2 describes a dedicated `suppressions` table — keyed by email,
-// surviving resubscribe, checked before every send — built by #0033, which
-// has not landed (no migration exists yet; internal/db is out of this
-// issue's lane regardless). POST /admin/subscribers/{id}/suppress therefore
-// does the closest sanctioned thing available today: calls
-// subscribers.Store.Unsubscribe with source=admin, which is idempotent and
-// already hardened against complained-laundering (#0025's review). It is
-// NOT a suppressions-table write, and does not yet block a future resubscribe
-// the way real suppression would. See ActionSubscriberSuppressed's doc
-// comment (internal/audit/actions.go) and this issue's Carried-in criteria
-// for the dependency #0033 will need to close.
+// surviving resubscribe, checked before every send. #0033 built it
+// (subscribers.SuppressionStore). POST /admin/subscribers/{id}/suppress now
+// does both sanctioned things: calls subscribers.Store.Unsubscribe with
+// source=admin (idempotent, already hardened against complained-laundering
+// per #0025's review) AND writes a real subscribers.NewSuppression row
+// (reason=manual) via the suppressions field below — so a future resignup by
+// this address is blocked at #0026's suppressed send gate, not just marked
+// unsubscribed. POST /admin/subscribers/{id}/clear-complaint is the inverse:
+// it removes any matching suppressions row alongside
+// subscribers.Store.AdminClearComplaint. See ActionSubscriberSuppressed's and
+// ActionSubscriberComplaintCleared's doc comments (internal/audit/actions.go)
+// for how the audit trail records this.
 package handlers
 
 import (
@@ -72,12 +74,21 @@ type adminInterestByIDReader interface {
 	GetByIDs(ctx context.Context, ids []int64) ([]interests.Interest, error)
 }
 
+// adminSuppressionWriter is the behavior AdminSubscribersHandler needs from
+// subscribers.SuppressionStore (#0033): writing a real suppression row on
+// Suppress and removing it on ClearComplaint. *subscribers.SuppressionStore
+// satisfies it directly.
+type adminSuppressionWriter interface {
+	Add(ctx context.Context, in subscribers.NewSuppression, now time.Time) (subscribers.Suppression, error)
+	Remove(ctx context.Context, email string) error
+}
+
 // AdminSubscribersHandler serves the admin-only subscriber routes (PRD
 // §5.2; #0032):
 //
 //	GET  /admin/subscribers                        — paginated, filterable, searchable list + status counts
 //	GET  /admin/subscribers/{id}                    — detail: consent evidence, interests, email event history (empty until #0038)
-//	POST /admin/subscribers/{id}/suppress            — manual suppress (required note); see the package doc comment on what this does today
+//	POST /admin/subscribers/{id}/suppress            — manual suppress (required note); see the package doc comment on what this does
 //	POST /admin/subscribers/{id}/clear-complaint     — the sole sanctioned exit from `complained` (subscribers.Store.AdminClearComplaint)
 //	POST /admin/subscribers                          — manual add; still requires double opt-in confirmation
 //
@@ -93,6 +104,12 @@ type AdminSubscribersHandler struct {
 	// subscriber-table backing, matching subscribeH's own nil-guard in
 	// mountAndServe); Create returns 503 rather than nil-dereferencing.
 	manualAdd *SubscribeHandler
+	// suppressions is subscribers.SuppressionStore (#0033), used by Suppress
+	// (Add) and ClearComplaint (Remove) — see the package doc comment. May be
+	// nil (same STORAGE=json gap as manualAdd); both callers skip the
+	// suppressions-table write/removal when nil rather than dereferencing it,
+	// matching the rest of this handler's nil-tolerance.
+	suppressions adminSuppressionWriter
 	// auditor records subscriber.suppressed / .complaint_cleared /
 	// .manual_add. May be nil in tests that don't assert audit rows.
 	auditor *audit.Logger
@@ -103,9 +120,11 @@ type AdminSubscribersHandler struct {
 
 // NewAdminSubscribersHandler constructs an AdminSubscribersHandler. A nil
 // manualAdd disables POST /admin/subscribers (Create returns 503); a nil
+// suppressions skips the suppressions-table write/removal in Suppress/
+// ClearComplaint (they still perform their subscribers-table effect); a nil
 // auditor disables audit writes.
-func NewAdminSubscribersHandler(store adminSubscriberStore, il adminInterestByIDReader, manualAdd *SubscribeHandler, auditor *audit.Logger) *AdminSubscribersHandler {
-	return &AdminSubscribersHandler{store: store, interests: il, manualAdd: manualAdd, auditor: auditor, now: time.Now}
+func NewAdminSubscribersHandler(store adminSubscriberStore, il adminInterestByIDReader, manualAdd *SubscribeHandler, suppressions adminSuppressionWriter, auditor *audit.Logger) *AdminSubscribersHandler {
+	return &AdminSubscribersHandler{store: store, interests: il, manualAdd: manualAdd, suppressions: suppressions, auditor: auditor, now: time.Now}
 }
 
 // ── Response shapes ──────────────────────────────────────────────────────────
@@ -362,16 +381,24 @@ type suppressResponse struct {
 	// NoOp is true when the target was already `complained`: Unsubscribe is
 	// a guaranteed no-op on a complained row (CLAUDE.md §9 —
 	// subscribers.Store's package doc comment), so the request "succeeded"
-	// (200, no error) without changing anything. #0032's carried-in review
-	// finding requires the screen to surface this rather than let an admin
-	// believe the action took effect. See suppressResponse's Message.
-	NoOp    bool   `json:"no_op"`
-	Message string `json:"message"`
+	// (200, no error) without changing the subscribers-table status. #0032's
+	// carried-in review finding requires the screen to surface this rather
+	// than let an admin believe the status changed. See suppressResponse's
+	// Message. Independent of SuppressionAdded — the noOp status case and
+	// the suppressions-table write are two different effects.
+	NoOp bool `json:"no_op"`
+	// SuppressionAdded is true when a real subscribers.suppressions row
+	// (#0033) was written for this address. False only when this handler
+	// was constructed with a nil suppressions store (STORAGE=json dev
+	// mode) — never because the write failed, since a failed write is a
+	// 500, not a 200 with this field false.
+	SuppressionAdded bool   `json:"suppression_added"`
+	Message          string `json:"message"`
 }
 
 // Suppress handles POST /admin/subscribers/{id}/suppress. note is required
 // (400 if empty after trimming). See the package doc comment for what this
-// endpoint does and does not do today, ahead of #0033.
+// endpoint does.
 func (h *AdminSubscribersHandler) Suppress(w http.ResponseWriter, r *http.Request) {
 	actor, ok := middleware.UserFromContext(r.Context())
 	if !ok {
@@ -415,6 +442,26 @@ func (h *AdminSubscribersHandler) Suppress(w http.ResponseWriter, r *http.Reques
 	// finding is honored — inspect the returned Status, don't assume success.
 	noOp := before.Status == subscribers.StatusComplained
 
+	// Real suppressions-table write (#0033): Add is idempotent, so a repeat
+	// Suppress on an already-suppressed address is safe — it returns the
+	// original row rather than erroring or overwriting an earlier
+	// reason/note. A write failure here is surfaced as a 500 rather than
+	// swallowed: this endpoint's whole point, since #0033 landed, is that
+	// suppression is a real, durable block, so silently proceeding without
+	// it would recreate the exact gap #0032's review flagged.
+	var suppressionAdded bool
+	if h.suppressions != nil {
+		if _, err := h.suppressions.Add(r.Context(), subscribers.NewSuppression{
+			Email:  after.Email,
+			Reason: subscribers.SuppressionReasonManual,
+			Note:   note,
+		}, now); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		suppressionAdded = true
+	}
+
 	if h.auditor != nil {
 		actorID := actor.ID
 		targetID := id
@@ -424,24 +471,30 @@ func (h *AdminSubscribersHandler) Suppress(w http.ResponseWriter, r *http.Reques
 			TargetType: audit.TargetSubscriber,
 			TargetID:   &targetID,
 			Metadata: map[string]any{
-				"note":                    note,
-				"previous_status":         before.Status,
-				"resulting_status":        after.Status,
-				"no_op":                   noOp,
-				"suppressions_table_note": "no #0033 suppressions row written; see ActionSubscriberSuppressed doc comment",
+				"note":              note,
+				"previous_status":   before.Status,
+				"resulting_status":  after.Status,
+				"no_op":             noOp,
+				"suppression_added": suppressionAdded,
 			},
 			IP: clientIP(r),
 		})
 	}
 
-	message := "Subscriber unsubscribed (source: admin)."
+	message := "Subscriber unsubscribed (source: admin) and added to the permanent suppression list."
 	if noOp {
-		message = "No change: this subscriber has complained, and CLAUDE.md §9 refuses to let unsubscribe touch a complained row. Use \"Clear complaint\" first if the complaint should be cleared."
+		message = "This subscriber has complained, and CLAUDE.md §9 refuses to let unsubscribe touch a complained row — no status change."
+		if suppressionAdded {
+			message += " The address was still added to the permanent suppression list."
+		} else {
+			message += " Use \"Clear complaint\" first if the complaint should be cleared."
+		}
 	}
 	writeJSON(w, http.StatusOK, suppressResponse{
-		Subscriber: toSubscriberView(after, nil),
-		NoOp:       noOp,
-		Message:    message,
+		Subscriber:       toSubscriberView(after, nil),
+		NoOp:             noOp,
+		SuppressionAdded: suppressionAdded,
+		Message:          message,
 	})
 }
 
@@ -469,6 +522,20 @@ func (h *AdminSubscribersHandler) ClearComplaint(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// #0033's carried-in review finding (from #0032): capture the
+	// evidence AdminClearComplaint is about to overwrite BEFORE calling it,
+	// so the audit row records what was discarded rather than losing that
+	// provenance — mirroring how Suppress already records previous_status.
+	before, err := h.store.GetByID(r.Context(), id)
+	switch {
+	case errors.Is(err, subscribers.ErrNotFound):
+		writeError(w, http.StatusNotFound, "subscriber not found")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
 	now := h.now()
 	after, err := h.store.AdminClearComplaint(r.Context(), id, now)
 	switch {
@@ -483,6 +550,25 @@ func (h *AdminSubscribersHandler) ClearComplaint(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// Real suppressions-table removal (#0033): clearing a complaint no
+	// longer leaves a stale suppressions row blocking the address at
+	// #0026's send gate. ErrSuppressionNotFound (no suppression row
+	// existed — e.g. this complaint predates #0033, or the address was
+	// never suppressed at the table level even though it was complained)
+	// is not an error worth failing the request over; any other failure is.
+	var suppressionRemoved bool
+	if h.suppressions != nil {
+		switch err := h.suppressions.Remove(r.Context(), after.Email); {
+		case err == nil:
+			suppressionRemoved = true
+		case errors.Is(err, subscribers.ErrSuppressionNotFound):
+			// nothing to remove
+		default:
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+	}
+
 	if h.auditor != nil {
 		actorID := actor.ID
 		targetID := id
@@ -492,18 +578,23 @@ func (h *AdminSubscribersHandler) ClearComplaint(w http.ResponseWriter, r *http.
 			TargetType: audit.TargetSubscriber,
 			TargetID:   &targetID,
 			Metadata: map[string]any{
-				"resulting_status": after.Status,
-				"overwrites_note":  "unsubscribed_at/unsubscribe_source were overwritten with admin/now by AdminClearComplaint, discarding any earlier unsubscribe evidence",
-				"suppression_gap":  "no matching suppressions row cleared — #0033 has not landed; the address may still be blocked at #0026's suppressed send gate",
+				"resulting_status":            after.Status,
+				"overwrites_note":             "unsubscribed_at/unsubscribe_source were overwritten with admin/now by AdminClearComplaint, discarding the earlier unsubscribe evidence recorded below",
+				"previous_unsubscribed_at":    before.UnsubscribedAt,
+				"previous_unsubscribe_source": before.UnsubscribeSource,
+				"suppression_removed":         suppressionRemoved,
 			},
 			IP: clientIP(r),
 		})
 	}
 
+	message := "Complaint cleared. Resulting status is \"unsubscribed\", not \"active\" — this does not re-establish double opt-in consent."
+	if suppressionRemoved {
+		message += " The matching suppression-list entry was also removed, so a future resignup is no longer blocked at the send gate."
+	}
 	writeJSON(w, http.StatusOK, clearComplaintResponse{
 		Subscriber: toSubscriberView(after, nil),
-		Message: "Complaint cleared. Resulting status is \"unsubscribed\", not \"active\" — this does not re-establish double opt-in consent, " +
-			"and it does not yet clear any suppressions-table entry (#0033 is not built). The address may still be blocked at the send gate.",
+		Message:    message,
 	})
 }
 

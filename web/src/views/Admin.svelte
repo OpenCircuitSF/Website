@@ -645,7 +645,8 @@
   async function handleClearComplaint(sub: Subscriber) {
     if (
       !confirm(
-        `Clear the complaint for ${sub.email}? This unsubscribes them (not re-activates) and does not yet clear any suppression-list block (#0033 is not built).`,
+        `Clear the complaint for ${sub.email}? This unsubscribes them (not re-activates) and removes any matching suppression-list entry. ` +
+          'It also overwrites their unsubscribe evidence (timestamp and source) with this action — the original unsubscribe evidence, if any, will be discarded.',
       )
     ) {
       return;
@@ -1478,12 +1479,6 @@
                 <p class="text-muted">
                   Unsubscribed {formatDateTime(viewingSubscriber.unsubscribed_at)}
                   (source: {viewingSubscriber.unsubscribe_source ?? 'unknown'})
-                  {#if viewingSubscriber.status === 'complained'}
-                    <br />
-                    Note: a later "clear complaint" action overwrites this evidence with
-                    admin/now (subscribers.Store.AdminClearComplaint) — the original
-                    unsubscribe evidence above is discarded when that happens.
-                  {/if}
                 </p>
               {/if}
 
@@ -1539,10 +1534,11 @@
             onkeydown={(e) => e.stopPropagation()}
           >
             <h2 class="modal-title">Suppress {suppressingSubscriber.email}</h2>
-            <p class="text-muted">
-              Unsubscribes this address (source: admin). This is not yet a real
-              suppressions-list entry — #0033 has not landed — so a future resignup by this
-              address is not blocked by this action alone.
+            <p>
+              Unsubscribes this address and permanently adds it to the suppression list. A
+              future resignup by this address will not be delivered mail — this is a
+              stronger action than a plain unsubscribe, and removing it requires a separate
+              admin action.
             </p>
             <form onsubmit={submitSuppress}>
               <div class="field">

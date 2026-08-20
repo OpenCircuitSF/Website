@@ -154,14 +154,17 @@ func servePostgres(cfg *config.Config) error {
 
 	// Subscribe endpoint (#0026): double opt-in signup with anti-abuse
 	// controls. subscribers.Store and interests.Store are both #0025/#0023's
-	// approved data layers; NoSuppressions is the seam #0033's suppressions
-	// table (not yet built — a separate, later-numbered issue) will replace
-	// with a real check — see handlers.SuppressionChecker's doc comment.
+	// approved data layers. suppressionsStore (#0033) is the real
+	// implementation of handlers.SuppressionChecker — it replaces the
+	// handlers.NoSuppressions placeholder every branch used before this
+	// table existed; see internal/subscribers/suppressions.go's package doc
+	// comment and handlers.SuppressionChecker's doc comment.
 	subscribersStore := subscribers.NewStore(pool)
 	interestsStore := interests.NewStore(pool)
+	suppressionsStore := subscribers.NewSuppressionStore(pool)
 	subscribeH := handlers.NewSubscribeHandler(
 		subscribersStore, interestsStore, sesSender,
-		handlers.NoSuppressions{}, store, auditLogger, cfg.BaseURL, slog.Default(),
+		suppressionsStore, store, auditLogger, cfg.BaseURL, slog.Default(),
 	)
 
 	// Admin-only interest taxonomy CRUD (#0024, PRD §5.2/§6.1): reuses the
@@ -175,7 +178,7 @@ func servePostgres(cfg *config.Config) error {
 	// lets its Create dispatch through the exact same newSignup/existingSignup
 	// path #0026's public endpoint uses — see
 	// internal/handlers/admin_subscribers.go's package doc comment.
-	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, subscribeH, auditLogger)
+	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, subscribeH, suppressionsStore, auditLogger)
 
 	// Public interests read (#0029, PRD §6.1/§7.3): GET /api/interests, the
 	// checkbox-grid source for SubscribeForm.svelte and PreferenceCenter.svelte.

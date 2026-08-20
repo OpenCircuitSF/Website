@@ -413,20 +413,23 @@ export interface SubscriberActionResult {
 
 /**
  * POST /admin/subscribers/{id}/suppress — manual suppress with a required
- * note (admin only). Today this calls the store's Unsubscribe (source:
- * admin), NOT a real suppressions-table write (#0033 is not built yet — see
- * the server's package doc comment); `no_op` is true when the target had
- * already complained, since Unsubscribe is a guaranteed no-op on a
- * complained row (CLAUDE.md §9) — the caller must show that rather than
- * imply the action took effect.
+ * note (admin only). Calls the store's Unsubscribe (source: admin) AND, as
+ * of #0033, writes a real suppressions-table row (reason: manual) — a future
+ * resignup by this address is blocked at #0026's send gate, not just marked
+ * unsubscribed. `no_op` is true when the target had already complained,
+ * since Unsubscribe is a guaranteed no-op on a complained row (CLAUDE.md
+ * §9) — the caller must show that rather than imply the subscriber's status
+ * changed; it is independent of `suppression_added` (the suppressions-table
+ * write still happens even when `no_op` is true).
  */
 export function suppressSubscriber(
   id: number,
   note: string,
-): Promise<SubscriberActionResult & { no_op: boolean }> {
-  return apiPost<SubscriberActionResult & { no_op: boolean }>(`/admin/subscribers/${id}/suppress`, {
-    note,
-  });
+): Promise<SubscriberActionResult & { no_op: boolean; suppression_added: boolean }> {
+  return apiPost<SubscriberActionResult & { no_op: boolean; suppression_added: boolean }>(
+    `/admin/subscribers/${id}/suppress`,
+    { note },
+  );
 }
 
 /**
@@ -435,7 +438,9 @@ export function suppressSubscriber(
  * target isn't currently complained; the caller should only offer this
  * action on complained rows in the first place. Resulting status is
  * `unsubscribed`, not `active` — clearing a complaint does not by itself
- * re-establish double opt-in consent.
+ * re-establish double opt-in consent. As of #0033, also removes any
+ * matching suppressions-table row so a future resignup is no longer blocked
+ * at #0026's send gate — `message` notes whether one was found and removed.
  */
 export function clearSubscriberComplaint(id: number): Promise<SubscriberActionResult> {
   return apiPost<SubscriberActionResult>(`/admin/subscribers/${id}/clear-complaint`);

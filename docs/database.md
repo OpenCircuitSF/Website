@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000011`). No ORM — every
+(`migrations/`, numbered `000001`–`000012`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -44,6 +44,7 @@ contiguous range — ShortLinks' `links`, `clicks`, `campaigns`,
 | `000009_create_interests` | `interests` — the workshop interest taxonomy (`#0023`). Rows, not a Go enum: new themes appear constantly and adding one must not require a deploy. `slug` is CHECK-constrained to lowercase-hyphenated and UNIQUE. Seeds the twelve PRD §6.1 slugs via `ON CONFLICT (slug) DO NOTHING`, so `up` stays idempotent against an already-seeded database. Numbered ahead of `subscribers` because `subscriber_interests` (below) carries a foreign key to it |
 | `000010_create_subscribers` | `subscribers` — list membership independent of any user account, plus the consent evidence (`signup_ip`, `signup_user_agent`, `created_at`, `confirmed_at`) a deliverability complaint needs answering (`#0025`, `#0075`'s privacy policy). `status` is CHECK-constrained to `pending \| active \| unsubscribed \| bounced \| complained`; nothing in `internal/subscribers` ever moves a subscriber out of `complained` (CLAUDE.md §9 — only a future admin path can). `confirm_token` and `manage_token` are both `UNIQUE`, 32 random bytes from `crypto/rand` (not an HMAC of the email, per PRD §6.4). `email` is CHECK-constrained to `lower(trim(email))` — Gmail dots and `+tag` suffixes are deliberately never stripped. Also creates `subscriber_interests` (composite PK, `ON DELETE CASCADE` both ways) — a subscriber with zero rows here is valid and expected (general announcements only, PRD §6.1) |
 | `000011_add_subscribers_already_subscribed_sent_at` | Adds `subscribers.already_subscribed_sent_at`, a `TIMESTAMPTZ` claim column for the "you're already subscribed" email (`#0026` review finding 1). Tracks the last successful send the same way `confirm_sent_at` does, so `ClaimAlreadySubscribedSend`/`ReleaseAlreadySubscribedClaim` (`internal/subscribers`) apply the identical atomic claim-before-send cooldown to both outbound messages the signup endpoint can send |
+| `000012_create_suppressions` | `suppressions` — a global send-block list, keyed by normalized email address rather than subscriber id so it survives both resubscribe attempts and hard deletion of the subscriber row (`#0060`); no foreign key to `subscribers` (`#0033`, PRD §6.2). `reason` is CHECK-constrained to `hard_bounce \| complaint \| manual \| repeated_soft_bounce`. `email` carries the identical `lower(trim(email))` CHECK as `subscribers.email` (carried in from `#0025`'s review) so a differently-cased row can never silently fail to match at the send gate |
 
 `internal/interests` and `internal/subscribers` are the corresponding
 Go store packages; see their package doc comments for the store-layer

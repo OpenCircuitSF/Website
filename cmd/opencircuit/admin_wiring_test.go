@@ -123,7 +123,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// than actually dispatching a signup, which is still proof enough that
 	// RequireAdmin let the request through (neither 401 nor 403); see the
 	// "admin session" case's comment.
-	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, nil, auditLogger)
+	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, nil, nil, auditLogger)
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 	meH := handlers.NewMeHandler()

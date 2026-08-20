@@ -37,6 +37,11 @@ func adminSubscribersTestPool(t *testing.T) *pgxpool.Pool {
 		ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
 		defer cancel()
 		_, _ = testDBPool.Exec(ctx, `DELETE FROM subscribers WHERE email LIKE 'zz-subtest-%'`)
+		// #0033: Suppress/ClearComplaint now also write/remove real
+		// suppressions rows for the same scoped emails; clean those up too
+		// so a suppressions row never outlives the subscribers row a later
+		// test run's testSubscriberEmail(t) could coincidentally reuse.
+		_, _ = testDBPool.Exec(ctx, `DELETE FROM suppressions WHERE email LIKE 'zz-subtest-%'`)
 	})
 	return testDBPool
 }
@@ -66,7 +71,8 @@ func adminSubscribersMux(pool *pgxpool.Pool, manualAdd *SubscribeHandler) http.H
 	authStore := auth.NewStore(pool)
 	subStore := subscribers.NewStore(pool)
 	interestsStore := interests.NewStore(pool)
-	h := NewAdminSubscribersHandler(subStore, interestsStore, manualAdd, audit.New(pool))
+	suppressionsStore := subscribers.NewSuppressionStore(pool)
+	h := NewAdminSubscribersHandler(subStore, interestsStore, manualAdd, suppressionsStore, audit.New(pool))
 	requireSession := middleware.RequireSession(authStore)
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
@@ -482,6 +488,98 @@ func TestAdminSubscribers_ClearComplaint_Success(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("audit actions for subscriber %d = %v, want to include %q", id, actions, audit.ActionSubscriberComplaintCleared)
+	}
+}
+
+// subscriberEmailByID reads back the email a seedTestSubscriber call
+// generated, so a test can check the suppressions table (keyed by email, not
+// subscriber id) for the same address.
+func subscriberEmailByID(t *testing.T, pool *pgxpool.Pool, id int64) string {
+	t.Helper()
+	var email string
+	if err := pool.QueryRow(context.Background(), `SELECT email FROM subscribers WHERE id = $1`, id).Scan(&email); err != nil {
+		t.Fatalf("read back subscriber %d email: %v", id, err)
+	}
+	return email
+}
+
+// TestAdminSubscribers_Suppress_WritesRealSuppressionRow is #0033's carried-in
+// review finding (from #0032): Suppress must write a real suppressions-table
+// row, not just flip the subscriber's status, so a future resignup by this
+// address is actually blocked at #0026's suppressed send gate.
+func TestAdminSubscribers_Suppress_WritesRealSuppressionRow(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-subs-suppress-real@example.com")
+	seedSession(t, pool, admin, "admin-token-suppress-real")
+	id := seedTestSubscriber(t, pool, subscribers.StatusActive)
+	email := subscriberEmailByID(t, pool, id)
+
+	client := srv.Client()
+	resp := doJSON(t, client, "POST", fmt.Sprintf("%s/admin/subscribers/%d/suppress", srv.URL, id),
+		"admin-token-suppress-real", `{"note":"real suppression row check"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out struct {
+		SuppressionAdded bool `json:"suppression_added"`
+	}
+	if err := json.Unmarshal(readBody(t, resp), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.SuppressionAdded {
+		t.Error("suppression_added = false, want true")
+	}
+
+	suppressionsStore := subscribers.NewSuppressionStore(pool)
+	suppressed, err := suppressionsStore.IsSuppressed(context.Background(), email)
+	if err != nil {
+		t.Fatalf("IsSuppressed: %v", err)
+	}
+	if !suppressed {
+		t.Errorf("IsSuppressed(%q) = false after Suppress, want true — no real suppressions row was written", email)
+	}
+}
+
+// TestAdminSubscribers_ClearComplaint_RemovesSuppressionRow is #0033's
+// carried-in review finding's other half: clearing a complaint must remove
+// any matching suppressions row, or the address stays permanently blocked at
+// the send gate despite the admin's clear-complaint action.
+func TestAdminSubscribers_ClearComplaint_RemovesSuppressionRow(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-subs-clear-suppression@example.com")
+	seedSession(t, pool, admin, "admin-token-clear-suppression")
+	id := seedTestSubscriber(t, pool, subscribers.StatusComplained)
+	email := subscriberEmailByID(t, pool, id)
+
+	suppressionsStore := subscribers.NewSuppressionStore(pool)
+	// Simulate what #0038's SES complaint ingestion will eventually do
+	// itself: a real suppressions row alongside the complained status.
+	if _, err := suppressionsStore.Add(context.Background(), subscribers.NewSuppression{
+		Email:  email,
+		Reason: subscribers.SuppressionReasonComplaint,
+	}, time.Now()); err != nil {
+		t.Fatalf("seed suppression: %v", err)
+	}
+
+	client := srv.Client()
+	resp := doJSON(t, client, "POST", fmt.Sprintf("%s/admin/subscribers/%d/clear-complaint", srv.URL, id),
+		"admin-token-clear-suppression", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	suppressed, err := suppressionsStore.IsSuppressed(context.Background(), email)
+	if err != nil {
+		t.Fatalf("IsSuppressed: %v", err)
+	}
+	if suppressed {
+		t.Errorf("IsSuppressed(%q) = true after ClearComplaint, want false — the suppression row should have been removed", email)
 	}
 }
 

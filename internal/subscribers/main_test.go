@@ -42,8 +42,13 @@ func TestMain(m *testing.M) {
 	// for the proof.
 	if testDBPool != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// suppressions (#0033) is included even though it carries no foreign
+		// key to subscribers (deliberately — see suppressions.go's package
+		// doc comment): it is a table this package's tests write to, so it
+		// needs the same clean-once-before-any-test guarantee as the other
+		// two.
 		_, truncErr := testDBPool.Exec(ctx,
-			`TRUNCATE subscriber_interests, subscribers RESTART IDENTITY CASCADE`)
+			`TRUNCATE subscriber_interests, subscribers, suppressions RESTART IDENTITY CASCADE`)
 		cancel()
 		if truncErr != nil {
 			fmt.Fprintf(os.Stderr, "testdb: entry truncate failed: %v\n", truncErr)

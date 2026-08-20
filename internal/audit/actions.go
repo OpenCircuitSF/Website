@@ -78,21 +78,34 @@ const (
 	//
 	// ActionSubscriberSuppressed is written by POST
 	// /admin/subscribers/{id}/suppress. It calls subscribers.Store.Unsubscribe
-	// (source=admin) — the only sanctioned status-mutating action available
-	// today — NOT a write to the `suppressions` table PRD §6.2 describes,
-	// because that table and its store (#0033) do not exist yet. The metadata
-	// records which one happened via `no_op` (true when the target was
-	// already complained, per CLAUDE.md §9 — Unsubscribe changes nothing in
-	// that case) so the log itself carries the caveat, not just this comment.
+	// (source=admin) AND, as of #0033, subscribers.SuppressionStore.Add
+	// (reason=manual) — a real `suppressions` table row, not just a status
+	// change. The metadata records `no_op` (true when the target was already
+	// complained, per CLAUDE.md §9 — Unsubscribe changes nothing in that
+	// case) and `suppression_added` (whether the real suppressions-table
+	// write happened).
+	//
+	// Disambiguating historical rows (#0033's carried-in review finding from
+	// #0032): rows written BEFORE #0033 landed carry a
+	// `suppressions_table_note` metadata key and mean "admin unsubscribe
+	// only" — no suppressions-table row exists for them. Rows written AFTER
+	// carry `suppression_added` instead and mean what the action name says.
+	// The action name itself is deliberately NOT renamed: every such row,
+	// old or new, is still "an admin suppressed this address", and renaming
+	// would fragment one event type across two action strings in the log for
+	// no offsetting clarity — the metadata key is what changed, and it is
+	// enough to tell the two eras apart.
 	ActionSubscriberSuppressed = "subscriber.suppressed"
 	// ActionSubscriberComplaintCleared is written by POST
 	// /admin/subscribers/{id}/clear-complaint, the sole sanctioned exit from
 	// `complained` (subscribers.Store.AdminClearComplaint). Metadata notes
 	// that the resulting status is `unsubscribed`, not `active` — clearing a
-	// complaint does not re-establish double opt-in consent — and that
-	// #0033's suppressions table, once it exists, still needs a matching
-	// removal for this action to actually unblock the address at #0026's
-	// suppressed send gate.
+	// complaint does not re-establish double opt-in consent — and, as of
+	// #0033, records the discarded `previous_unsubscribed_at`/
+	// `previous_unsubscribe_source` values (AdminClearComplaint overwrites
+	// them) plus `suppression_removed`: whether a matching suppressions row
+	// existed and was removed, unblocking the address at #0026's suppressed
+	// send gate.
 	ActionSubscriberComplaintCleared = "subscriber.complaint_cleared"
 	// ActionSubscriberManualAdd is written by POST /admin/subscribers, the
 	// admin manual-add flow. It never creates an `active` subscriber
