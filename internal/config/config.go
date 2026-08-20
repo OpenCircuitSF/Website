@@ -49,6 +49,16 @@ type Config struct {
 	EmailListDomain     string
 	SESInboundBucket    string
 
+	// SESEventsTopicARN is the single SNS topic ARN internal/sesnotify (#0037)
+	// will accept SES bounce/complaint notifications from. A valid SNS
+	// signature only proves SNS sent a message, not that it came through our
+	// topic — any AWS account can subscribe our public endpoint to a topic of
+	// their own. This is deliberately NOT in the `required` table below: the
+	// topic does not exist yet (CLAUDE.md §10 item 2), and until it is
+	// provisioned an empty value means sesnotify rejects every message rather
+	// than failing to boot.
+	SESEventsTopicARN string
+
 	// MailerNoOp selects auth.NoOpMailer instead of the real SES v2 API mailer
 	// on the Postgres serve path (#0027). Default false: production always
 	// gets the real mailer. Set true for local development against Postgres
@@ -115,6 +125,7 @@ func loadFromFile(path string) (*Config, error) {
 		EmailReplyTo:        os.Getenv("EMAIL_REPLY_TO"),
 		EmailListDomain:     os.Getenv("EMAIL_LIST_DOMAIN"),
 		SESInboundBucket:    os.Getenv("SES_INBOUND_BUCKET"),
+		SESEventsTopicARN:   os.Getenv("SES_EVENTS_TOPIC_ARN"),
 		MailerNoOp:          getBool("MAILER_NOOP", false, &errs),
 		MaxSendRate:         getInt("MAX_SEND_RATE", defaultMaxSendRate, &errs),
 		SendBatchSize:       getInt("SEND_BATCH_SIZE", defaultSendBatchSize, &errs),

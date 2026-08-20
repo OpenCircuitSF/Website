@@ -38,6 +38,7 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 	t.Setenv("EMAIL_REPLY_TO", "hello@opencircuitsf.com")
 	t.Setenv("EMAIL_LIST_DOMAIN", "lists.opencircuitsf.com")
 	t.Setenv("SES_INBOUND_BUCKET", "opencircuitsf-inbound")
+	t.Setenv("SES_EVENTS_TOPIC_ARN", "arn:aws:sns:us-west-2:123456789012:opencircuit-ses-events")
 	t.Setenv("MAILER_NOOP", "true")
 	t.Setenv("MAX_SEND_RATE", "25")
 	t.Setenv("SEND_BATCH_SIZE", "100")
@@ -65,6 +66,7 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 		{"EmailReplyTo", cfg.EmailReplyTo, "hello@opencircuitsf.com"},
 		{"EmailListDomain", cfg.EmailListDomain, "lists.opencircuitsf.com"},
 		{"SESInboundBucket", cfg.SESInboundBucket, "opencircuitsf-inbound"},
+		{"SESEventsTopicARN", cfg.SESEventsTopicARN, "arn:aws:sns:us-west-2:123456789012:opencircuit-ses-events"},
 		{"MailerNoOp", cfg.MailerNoOp, true},
 		{"MaxSendRate", cfg.MaxSendRate, 25},
 		{"SendBatchSize", cfg.SendBatchSize, 100},
@@ -152,6 +154,25 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	}
 	if cfg.MailerNoOp != false {
 		t.Errorf("MailerNoOp = %v, want default false — production must default to the real SES mailer", cfg.MailerNoOp)
+	}
+}
+
+// TestLoad_SESEventsTopicARNOptional proves SES_EVENTS_TOPIC_ARN is NOT a
+// required variable (#0037): the topic is not provisioned yet (CLAUDE.md §10
+// item 2), so the binary must still boot with it unset, loading to "". A
+// verifier that treats an empty configured topic ARN as "reject everything"
+// (rather than "check nothing") is what keeps this safe — see
+// internal/sesnotify.Verifier.
+func TestLoad_SESEventsTopicARNOptional(t *testing.T) {
+	setRequired(t)
+	t.Setenv("SES_EVENTS_TOPIC_ARN", "")
+
+	cfg, err := loadFromFile(noEnvFile)
+	if err != nil {
+		t.Fatalf("loadFromFile returned error with SES_EVENTS_TOPIC_ARN unset: %v", err)
+	}
+	if cfg.SESEventsTopicARN != "" {
+		t.Errorf("SESEventsTopicARN = %q, want empty", cfg.SESEventsTopicARN)
 	}
 }
 
