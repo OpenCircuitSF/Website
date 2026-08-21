@@ -93,11 +93,13 @@ export interface SubscriberInterestRef {
  * (SES bounce/complaint ingestion) lands.
  *
  * `soft_bounce_count`/`soft_bounce_threshold`/`soft_bounce_window_days`
- * (#0039) are likewise populated by the detail endpoint only: the count of
- * Transient-bounce `email_events` rows within the currently configured
- * window, plus the threshold/window themselves so the screen can render
- * "N of THRESHOLD in the last WINDOW days" rather than a bare number. All
- * three are present together or absent together.
+ * (#0039, widened by #0109) are likewise populated by the detail endpoint
+ * only: the count of Transient- and Undetermined-bounce `email_events` rows
+ * within the currently configured window, excluding the sender-fault
+ * Transient subtypes (MessageTooLarge, ContentRejected, AttachmentRejected),
+ * plus the threshold/window themselves so the screen can render "N of
+ * THRESHOLD in the last WINDOW days" rather than a bare number. All three
+ * are present together or absent together.
  */
 export interface Subscriber {
   id: number;
