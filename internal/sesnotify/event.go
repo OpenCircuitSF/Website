@@ -44,6 +44,21 @@ const (
 	BounceTypeUndetermined = "Undetermined"
 )
 
+// Sender-fault Transient bounceSubType values (#0109): SES's Transient
+// classification also covers faults in OUR message rather than evidence
+// that the recipient's address is bad. Store.CountRecentSoftBounces
+// excludes rows carrying any of these three from the repeated-soft-bounce
+// count — a too-large or rejected message must not suppress a live
+// subscriber. Not referenced by production code (the exclusion lives in
+// SQL, matching migrations/000016's partial index verbatim); exported so
+// tests and callers building fixtures don't have to duplicate the literal
+// strings.
+const (
+	BounceSubTypeMessageTooLarge    = "MessageTooLarge"
+	BounceSubTypeContentRejected    = "ContentRejected"
+	BounceSubTypeAttachmentRejected = "AttachmentRejected"
+)
+
 // ComplaintFeedbackTypeNotSpam marks a complaint event that is actually a
 // feedback-loop report that a message was moved OUT of a spam folder — the
 // opposite of a complaint. #0038 §4: suppressing on this would unsubscribe

@@ -430,7 +430,7 @@ describe('softBounceSummary', () => {
     const summary = softBounceSummary(
       subscriber({ soft_bounce_count: 2, soft_bounce_threshold: 5, soft_bounce_window_days: 30 }),
     );
-    expect(summary).toContain('2 transient bounces');
+    expect(summary).toContain('2 soft bounces');
     expect(summary).toContain('last 30 days');
     expect(summary).toContain('threshold: 5');
     expect(summary).not.toContain('should already be suppressed');
@@ -440,7 +440,7 @@ describe('softBounceSummary', () => {
     const summary = softBounceSummary(
       subscriber({ soft_bounce_count: 1, soft_bounce_threshold: 5, soft_bounce_window_days: 30 }),
     );
-    expect(summary).toContain('1 transient bounce ');
+    expect(summary).toContain('1 soft bounce ');
     expect(summary).not.toContain('bounces');
   });
 

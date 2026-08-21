@@ -91,12 +91,14 @@ type adminSuppressionWriter interface {
 
 // softBounceCounter is the narrow read dependency #0039's "admin can see the
 // current soft-bounce count on the subscriber detail screen" criterion
-// needs. *sesnotify.Store satisfies it via CountRecentTransientBouncesPool —
-// see that method's doc comment for why it, not the querier-taking
-// CountRecentTransientBounces ses_notifications.go's transaction uses, is
-// the one usable behind a genuine narrow interface here.
+// needs. *sesnotify.Store satisfies it via CountRecentSoftBouncesPool (#0109
+// renamed this from CountRecentTransientBouncesPool when the count widened
+// to include Undetermined bounces) — see that method's doc comment for why
+// it, not the querier-taking CountRecentSoftBounces
+// ses_notifications.go's transaction uses, is the one usable behind a
+// genuine narrow interface here.
 type softBounceCounter interface {
-	CountRecentTransientBouncesPool(ctx context.Context, recipient string, since time.Time) (int, error)
+	CountRecentSoftBouncesPool(ctx context.Context, recipient string, since time.Time) (int, error)
 }
 
 // AdminSubscribersHandler serves the admin-only subscriber routes (PRD
@@ -420,7 +422,7 @@ func (h *AdminSubscribersHandler) Get(w http.ResponseWriter, r *http.Request) {
 	// STORAGE=json dev mode (manualAdd, suppressions).
 	if h.bounces != nil && h.settings != nil {
 		threshold, window := softBounceThreshold(r.Context(), h.settings, nil)
-		count, err := h.bounces.CountRecentTransientBouncesPool(r.Context(), sub.Email, h.now().Add(-window))
+		count, err := h.bounces.CountRecentSoftBouncesPool(r.Context(), sub.Email, h.now().Add(-window))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return

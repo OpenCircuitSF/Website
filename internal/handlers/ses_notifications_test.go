@@ -339,21 +339,30 @@ func TestSESNotifications_TransientBounce_RecordsOnlyNoSuppression(t *testing.T)
 // row's cleanup is registered individually via sesCleanupEvents.
 func sesSeedPriorTransientBounces(t *testing.T, pool *pgxpool.Pool, recipient string, n int, receivedAt time.Time) {
 	t.Helper()
+	sesSeedPriorBounces(t, pool, recipient, n, receivedAt, sesnotify.BounceTypeTransient, "")
+}
+
+// sesSeedPriorBounces is sesSeedPriorTransientBounces's general form
+// (#0109): it takes bounceType/bounceSubtype directly, so a test can seed n
+// prior Undetermined bounces, or n prior sender-fault-subtype Transient
+// bounces, at a controlled receivedAt.
+func sesSeedPriorBounces(t *testing.T, pool *pgxpool.Pool, recipient string, n int, receivedAt time.Time, bounceType, bounceSubtype string) {
+	t.Helper()
 	store := sesnotify.NewStore(pool)
 	ctx := context.Background()
 	for i := 0; i < n; i++ {
 		snsID := sesUniqueID(t, fmt.Sprintf("prior%d", i))
 		if _, _, err := store.InsertTx(ctx, pool, sesnotify.NewEmailEvent{
-			SNSMessageID: snsID, EventType: sesnotify.EventTypeBounce, BounceType: sesnotify.BounceTypeTransient,
+			SNSMessageID: snsID, EventType: sesnotify.EventTypeBounce, BounceType: bounceType, BounceSubtype: bounceSubtype,
 			Recipient: recipient, Payload: []byte(`{}`),
 		}); err != nil {
-			t.Fatalf("seed prior transient bounce %d: %v", i, err)
+			t.Fatalf("seed prior bounce %d: %v", i, err)
 		}
 		if _, err := pool.Exec(ctx,
 			`UPDATE email_events SET received_at = $1 WHERE sns_message_id = $2 AND recipient = lower(trim($3))`,
 			receivedAt, snsID, recipient,
 		); err != nil {
-			t.Fatalf("backdate prior transient bounce %d: %v", i, err)
+			t.Fatalf("backdate prior bounce %d: %v", i, err)
 		}
 		sesCleanupEvents(t, pool, snsID)
 	}
@@ -387,11 +396,20 @@ func sesSetSoftBounceSettings(t *testing.T, pool *pgxpool.Pool, count, windowDay
 // only the bounce itself (not permanent/complaint framing) matters.
 func sesPostTransientBounce(t *testing.T, h *SESNotificationsHandler, key *rsa.PrivateKey, pool *pgxpool.Pool, email, label string) *httptest.ResponseRecorder {
 	t.Helper()
+	return sesPostBounce(t, h, key, pool, email, label, "Transient", "General")
+}
+
+// sesPostBounce is sesPostTransientBounce's general form (#0109): it takes
+// bounceType/bounceSubType directly, so a test can post an Undetermined
+// bounce or a sender-fault-subtype Transient bounce as "the bounce under
+// test" for the repeated-soft-bounce suite below.
+func sesPostBounce(t *testing.T, h *SESNotificationsHandler, key *rsa.PrivateKey, pool *pgxpool.Pool, email, label, bounceType, bounceSubType string) *httptest.ResponseRecorder {
+	t.Helper()
 	inner := sesEncodeSESEvent(t, map[string]any{
 		"eventType": "Bounce",
 		"mail":      map[string]any{"timestamp": time.Now().Add(time.Hour).UTC().Format(time.RFC3339), "messageId": "ses-" + label},
 		"bounce": map[string]any{
-			"bounceType": "Transient", "bounceSubType": "General",
+			"bounceType": bounceType, "bounceSubType": bounceSubType,
 			"bouncedRecipients": []map[string]string{{"emailAddress": email}},
 		},
 	})
@@ -616,6 +634,99 @@ func TestSESNotifications_RepeatedTransientBounce_ComplainedStaysComplained(t *t
 	}
 	if !sawReason {
 		t.Errorf("suppressions for %s = %+v, want a repeated_soft_bounce row even though status stayed complained", email, list)
+	}
+}
+
+// TestSESNotifications_RepeatedUndeterminedBounce_SuppressesAtThreshold is
+// #0109's Q1 end to end: an address whose bounces are all classified
+// Undetermined (never Transient) must still be suppressed once it crosses
+// the threshold — the exact "sending into a hole forever" gap #0109 exists
+// to close. Mirrors the Transient off-by-one test's 4-then-5 shape but with
+// Undetermined bounces throughout.
+func TestSESNotifications_RepeatedUndeterminedBounce_SuppressesAtThreshold(t *testing.T) {
+	pool := sesNotificationsTestPool(t)
+	h := sesTestHandler(t, pool)
+	key, _ := sesTestFixture(t)
+
+	subID := seedTestSubscriber(t, pool, subscribers.StatusActive)
+	email := subscriberEmailByID(t, pool, subID)
+	sesCleanupSuppression(t, pool, email)
+	suppressions := subscribers.NewSuppressionStore(pool)
+
+	// 4 prior Undetermined bounces, well inside the window.
+	sesSeedPriorBounces(t, pool, email, 4, time.Now().Add(-time.Hour), sesnotify.BounceTypeUndetermined, "")
+
+	// The 5th Undetermined bounce: must cross the default threshold of 5.
+	resp := sesPostBounce(t, h, key, pool, email, "undetermined-5th", "Undetermined", "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.Code, resp.Body.String())
+	}
+
+	suppressed, err := suppressions.IsSuppressed(context.Background(), email)
+	if err != nil {
+		t.Fatalf("IsSuppressed: %v", err)
+	}
+	if !suppressed {
+		t.Fatal("IsSuppressed = false, want true — 5 Undetermined bounces should cross the default threshold of 5 (#0109 Q1)")
+	}
+	list, err := suppressions.ListByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("ListByEmail: %v", err)
+	}
+	var sawReason bool
+	for _, s := range list {
+		if s.Reason == subscribers.SuppressionReasonRepeatedSoftBounce {
+			sawReason = true
+		}
+	}
+	if !sawReason {
+		t.Errorf("suppressions for %s = %+v, want a repeated_soft_bounce row", email, list)
+	}
+	sub, err := subscribers.NewStore(pool).GetByID(context.Background(), subID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if sub.Status != subscribers.StatusBounced {
+		t.Errorf("status = %q, want %q", sub.Status, subscribers.StatusBounced)
+	}
+}
+
+// TestSESNotifications_RepeatedSenderFaultBounce_NeverSuppresses is #0109's
+// Q2 end to end: MessageTooLarge/ContentRejected/AttachmentRejected are
+// faults in OUR message, not evidence the recipient's address is bad, and
+// must never suppress a live subscriber — even well past the default
+// threshold and window. 10 prior bounces (twice the default threshold of 5)
+// plus one more posted now, all carrying a sender-fault subtype, must
+// produce no suppression at all.
+func TestSESNotifications_RepeatedSenderFaultBounce_NeverSuppresses(t *testing.T) {
+	pool := sesNotificationsTestPool(t)
+	h := sesTestHandler(t, pool)
+	key, _ := sesTestFixture(t)
+
+	subID := seedTestSubscriber(t, pool, subscribers.StatusActive)
+	email := subscriberEmailByID(t, pool, subID)
+	sesCleanupSuppression(t, pool, email)
+
+	sesSeedPriorBounces(t, pool, email, 10, time.Now().Add(-time.Hour), sesnotify.BounceTypeTransient, sesnotify.BounceSubTypeMessageTooLarge)
+
+	resp := sesPostBounce(t, h, key, pool, email, "senderfault-11th", "Transient", sesnotify.BounceSubTypeMessageTooLarge)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.Code, resp.Body.String())
+	}
+
+	suppressed, err := subscribers.NewSuppressionStore(pool).IsSuppressed(context.Background(), email)
+	if err != nil {
+		t.Fatalf("IsSuppressed: %v", err)
+	}
+	if suppressed {
+		t.Error("IsSuppressed = true, want false — MessageTooLarge is a fault in our own message, not the recipient's address (#0109 Q2)")
+	}
+	sub, err := subscribers.NewStore(pool).GetByID(context.Background(), subID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if sub.Status != subscribers.StatusActive {
+		t.Errorf("status = %q, want unchanged %q", sub.Status, subscribers.StatusActive)
 	}
 }
 

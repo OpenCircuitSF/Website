@@ -408,6 +408,11 @@ export function signupEvidenceSummary(sub: Subscriber): string {
  * either the backend hasn't computed it (dev mode / a nil dependency) rather
  * than "zero bounces", so that case gets its own message instead of "0 of
  * undefined".
+ *
+ * Worded "soft bounce", not "transient bounce": #0109 widened the backend
+ * count to include Undetermined bounces (excluding the sender-fault
+ * Transient subtypes), so "transient" would misdescribe what is actually
+ * being counted.
  */
 export function softBounceSummary(sub: Subscriber): string {
   if (sub.soft_bounce_count == null || sub.soft_bounce_threshold == null || sub.soft_bounce_window_days == null) {
@@ -415,7 +420,7 @@ export function softBounceSummary(sub: Subscriber): string {
   }
   const { soft_bounce_count: count, soft_bounce_threshold: threshold, soft_bounce_window_days: days } = sub;
   const suffix = count === 1 ? '' : 's';
-  const base = `${count} transient bounce${suffix} in the last ${days} days (threshold: ${threshold}).`;
+  const base = `${count} soft bounce${suffix} in the last ${days} days (threshold: ${threshold}).`;
   if (count >= threshold) {
     return `${base} This address should already be suppressed.`;
   }

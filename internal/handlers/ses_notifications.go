@@ -354,8 +354,9 @@ func (h *SESNotificationsHandler) handleNotification(w http.ResponseWriter, r *h
 }
 
 // applyRecipient is #0038's entire state-mapping surface for one recipient
-// of one event, run inside tx. #0039 (repeated soft-bounce suppression)
-// hangs its one addition off applyBounce's "Transient" arm below — see that
+// of one event, run inside tx. #0039 (repeated soft-bounce suppression),
+// widened by #0109 to also count Undetermined bounces, hangs its addition
+// off applyBounce's combined "Transient, Undetermined" arm below — see that
 // function's comment.
 func (h *SESNotificationsHandler) applyRecipient(ctx context.Context, tx pgx.Tx, ev sesnotify.SESEvent, recipient string, now time.Time) error {
 	if recipient == "" {
@@ -406,8 +407,10 @@ func (h *SESNotificationsHandler) applyRecipient(ctx context.Context, tx pgx.Tx,
 	}
 }
 
-// applyBounce is #0038 §4's Bounce mapping, extended by #0039's
-// BounceTypeTransient arm below.
+// applyBounce is #0038 §4's Bounce mapping, extended by #0039's repeated-
+// soft-bounce threshold (the combined Transient/Undetermined arm below),
+// itself widened by #0109 to count Undetermined bounces and exclude the
+// sender-fault Transient subtypes.
 func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev sesnotify.SESEvent, recipient string, hasSub bool, sub subscribers.Subscriber, now time.Time) error {
 	switch ev.BounceType() {
 	case sesnotify.BounceTypePermanent:
@@ -450,21 +453,31 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 			}
 		}
 		return nil
-	case sesnotify.BounceTypeTransient:
-		// #0039: this Transient bounce's own email_events row is already
-		// recorded above, in this same transaction — so the count below
-		// includes it, and evaluating the threshold is therefore never one
-		// bounce stale (see CountRecentTransientBounces' doc comment).
+	case sesnotify.BounceTypeTransient, sesnotify.BounceTypeUndetermined:
+		// #0039, widened by #0109: this bounce's own email_events row is
+		// already recorded above, in this same transaction — so the count
+		// below includes it, and evaluating the threshold is therefore never
+		// one bounce stale (see CountRecentSoftBounces' doc comment).
+		//
+		// #0109 decided Undetermined counts alongside Transient (PRD §6.5
+		// says "5 soft bounces", not "5 transient bounces" — see
+		// issues/0109.md), so both bounce types share this arm. The count
+		// query itself excludes the sender-fault Transient subtypes
+		// (MessageTooLarge, ContentRejected, AttachmentRejected) — a fault in
+		// OUR message is not evidence this address is bad, so a bounce of
+		// one of those subtypes is still recorded but never contributes to
+		// or crosses the threshold, even when this call happens to be
+		// triggered by one.
 		threshold, window := softBounceThreshold(ctx, h.settings, h.log)
-		count, err := h.events.CountRecentTransientBounces(ctx, tx, recipient, now.Add(-window))
+		count, err := h.events.CountRecentSoftBounces(ctx, tx, recipient, now.Add(-window))
 		if err != nil {
-			return fmt.Errorf("counting recent transient bounces for %q: %w", recipient, err)
+			return fmt.Errorf("counting recent soft bounces for %q: %w", recipient, err)
 		}
 		if count < threshold {
 			return nil
 		}
 
-		note := fmt.Sprintf("SES repeated transient bounce (%d in the last %d days, threshold %d)",
+		note := fmt.Sprintf("SES repeated soft bounce (%d in the last %d days, threshold %d)",
 			count, int(window.Hours()/24), threshold)
 		// AddTx runs unconditionally once the threshold is crossed, exactly
 		// like the Permanent case above: suppressions are reason-scoped
@@ -494,10 +507,10 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 				Metadata: map[string]any{
 					"email": recipient, "source": "ses",
 					"bounce_type": ev.BounceType(), "bounce_subtype": ev.BounceSubType(),
-					"reason":                       subscribers.SuppressionReasonRepeatedSoftBounce,
-					"transient_bounce_count":       count,
-					"transient_bounce_window_days": int(window.Hours() / 24),
-					"transient_bounce_threshold":   threshold,
+					"reason":                  subscribers.SuppressionReasonRepeatedSoftBounce,
+					"soft_bounce_count":       count,
+					"soft_bounce_window_days": int(window.Hours() / 24),
+					"soft_bounce_threshold":   threshold,
 				},
 			}); err != nil {
 				return fmt.Errorf("writing repeated-soft-bounce audit row for %q: %w", recipient, err)
@@ -505,18 +518,16 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 		}
 		return nil
 	default:
-		// "Undetermined", or anything else SES might report — recorded
-		// above, unhandled here. #0038 §8 left counting Undetermined toward
-		// #0039's threshold as this issue's call; decided NOT to: the
-		// partial index this query needs (migrations/000014's
-		// idx_email_events_soft_bounce) is scoped to
-		// `bounce_type = 'Transient'` only, and PRD §6.5's own criterion
-		// reads "5 transient bounces" — widening the count to include
-		// Undetermined would mean either an unindexed scan or a second,
-		// separately-indexed query for a bounce subtype SES documents as
-		// rare. If Undetermined proves common enough in practice to need
-		// counting, that is a follow-up issue's index change, not a
-		// silent scope change here.
+		// Empty string (no bounce classification present) or a bounce_type
+		// SES adds in the future beyond Permanent/Transient/Undetermined —
+		// recorded above, unhandled here. PRD §6.5 says "5 soft bounces in
+		// 30 days" (not "5 transient bounces" — that narrower wording was
+		// only #0039's own acceptance criterion, and this comment used to
+		// attribute it to the PRD in error). #0109 settled the open question
+		// #0038 §8 and #0039 left behind: Undetermined bounces now share the
+		// case above and count toward the threshold, via a widened partial
+		// index (migrations/000016) — so nothing reaches this arm except a
+		// classification SES hasn't documented yet.
 		return nil
 	}
 }

@@ -171,8 +171,10 @@ func servePostgres(cfg *config.Config) error {
 	// sesEventsStore (internal/sesnotify, #0038) is constructed here, ahead of
 	// sesNotifyH below, because adminSubscribersH (#0039) also needs it — the
 	// admin subscriber detail view's soft-bounce count reads through the same
-	// pool-only CountRecentTransientBouncesPool method the SES ingestion
-	// handler's transaction-scoped CountRecentTransientBounces mirrors.
+	// pool-only CountRecentSoftBouncesPool method the SES ingestion
+	// handler's transaction-scoped CountRecentSoftBounces mirrors (renamed
+	// from …TransientBounces by #0109, which widened the count to include
+	// Undetermined bounces).
 	sesEventsStore := sesnotify.NewStore(pool)
 
 	// Admin-only interest taxonomy CRUD (#0024, PRD §5.2/§6.1): reuses the

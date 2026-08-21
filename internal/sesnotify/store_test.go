@@ -238,9 +238,18 @@ func TestStore_InsertTx_CommitsWithTransaction(t *testing.T) {
 // production code path.
 func seedTransientBounce(t *testing.T, pool *pgxpool.Pool, store *Store, snsID, recipient string, receivedAt time.Time) {
 	t.Helper()
+	seedBounceEvent(t, pool, store, snsID, recipient, BounceTypeTransient, "", receivedAt)
+}
+
+// seedBounceEvent is seedTransientBounce's general form (#0109): it takes the
+// bounce_type and bounce_subtype directly, so a test can seed an Undetermined
+// bounce or a sender-fault-subtype Transient bounce without hand-rolling
+// InsertTx + a backdate UPDATE itself.
+func seedBounceEvent(t *testing.T, pool *pgxpool.Pool, store *Store, snsID, recipient, bounceType, bounceSubtype string, receivedAt time.Time) {
+	t.Helper()
 	ctx := context.Background()
 	if _, _, err := store.InsertTx(ctx, pool, NewEmailEvent{
-		SNSMessageID: snsID, EventType: EventTypeBounce, BounceType: BounceTypeTransient,
+		SNSMessageID: snsID, EventType: EventTypeBounce, BounceType: bounceType, BounceSubtype: bounceSubtype,
 		Recipient: recipient, Payload: []byte(`{}`),
 	}); err != nil {
 		t.Fatalf("seed InsertTx: %v", err)
@@ -253,7 +262,7 @@ func seedTransientBounce(t *testing.T, pool *pgxpool.Pool, store *Store, snsID, 
 	}
 }
 
-func TestStore_CountRecentTransientBounces_CountsOnlyMatchingTypeAndRecipient(t *testing.T) {
+func TestStore_CountRecentSoftBounces_CountsOnlyMatchingTypeAndRecipient(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
@@ -283,21 +292,77 @@ func TestStore_CountRecentTransientBounces_CountsOnlyMatchingTypeAndRecipient(t 
 	otherRecipient := fmt.Sprintf("zz-0039-count-other-%d@example.com", time.Now().UnixNano())
 	seedTransientBounce(t, pool, store, uniqueSNSMessageID(t), otherRecipient, now.Add(-time.Hour))
 
-	count, err := store.CountRecentTransientBounces(ctx, pool, recipient, now.Add(-30*24*time.Hour))
+	count, err := store.CountRecentSoftBounces(ctx, pool, recipient, now.Add(-30*24*time.Hour))
 	if err != nil {
-		t.Fatalf("CountRecentTransientBounces: %v", err)
+		t.Fatalf("CountRecentSoftBounces: %v", err)
 	}
 	if count != 2 {
 		t.Errorf("count = %d, want 2 (only the two Transient bounces for this recipient)", count)
 	}
 }
 
-// TestStore_CountRecentTransientBounces_WindowSlides_ExcludesOlderEvents is
+// TestStore_CountRecentSoftBounces_CountsUndetermined is #0109's Q1: an
+// Undetermined bounce must count toward the threshold exactly like a
+// Transient one. Before #0109 this recipient's count would have been 1 (only
+// the Transient row); a mutation that reverted the predicate to
+// `bounce_type = 'Transient'` alone turns this test red.
+func TestStore_CountRecentSoftBounces_CountsUndetermined(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	recipient := fmt.Sprintf("zz-0109-undetermined-%d@example.com", time.Now().UnixNano())
+	now := time.Now()
+
+	seedBounceEvent(t, pool, store, uniqueSNSMessageID(t), recipient, BounceTypeTransient, "", now.Add(-time.Hour))
+	seedBounceEvent(t, pool, store, uniqueSNSMessageID(t), recipient, BounceTypeUndetermined, "", now.Add(-2*time.Hour))
+
+	count, err := store.CountRecentSoftBounces(ctx, pool, recipient, now.Add(-30*24*time.Hour))
+	if err != nil {
+		t.Fatalf("CountRecentSoftBounces: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2 — one Transient and one Undetermined bounce should both count (#0109 Q1)", count)
+	}
+}
+
+// TestStore_CountRecentSoftBounces_ExcludesSenderFaultSubtypes is #0109's
+// Q2: MessageTooLarge, ContentRejected, and AttachmentRejected are faults in
+// OUR message, not evidence the recipient's address is bad, and must never
+// contribute to the threshold even though their bounce_type is Transient. A
+// mutation that dropped the bounce_subtype filter would count all four rows
+// below (4) instead of just the General one (1), turning this test red.
+func TestStore_CountRecentSoftBounces_ExcludesSenderFaultSubtypes(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	recipient := fmt.Sprintf("zz-0109-senderfault-%d@example.com", time.Now().UnixNano())
+	now := time.Now()
+
+	// Counts: an ordinary Transient bounce with a ordinary subtype.
+	seedBounceEvent(t, pool, store, uniqueSNSMessageID(t), recipient, BounceTypeTransient, "General", now.Add(-time.Hour))
+	// Must NOT count: the three sender-fault subtypes.
+	for _, subtype := range []string{
+		BounceSubTypeMessageTooLarge, BounceSubTypeContentRejected, BounceSubTypeAttachmentRejected,
+	} {
+		seedBounceEvent(t, pool, store, uniqueSNSMessageID(t), recipient, BounceTypeTransient, subtype, now.Add(-time.Hour))
+	}
+
+	count, err := store.CountRecentSoftBounces(ctx, pool, recipient, now.Add(-30*24*time.Hour))
+	if err != nil {
+		t.Fatalf("CountRecentSoftBounces: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1 — only the General-subtype bounce should count; "+
+			"MessageTooLarge/ContentRejected/AttachmentRejected are faults in our own message (#0109 Q2)", count)
+	}
+}
+
+// TestStore_CountRecentSoftBounces_WindowSlides_ExcludesOlderEvents is
 // #0039's "the count window slides; older events age out" acceptance
 // criterion, and doubles as the mutation check for the window bound: an
 // event received exactly outside a 30-day window must not count, while one
 // just inside it must.
-func TestStore_CountRecentTransientBounces_WindowSlides_ExcludesOlderEvents(t *testing.T) {
+func TestStore_CountRecentSoftBounces_WindowSlides_ExcludesOlderEvents(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
@@ -314,22 +379,22 @@ func TestStore_CountRecentTransientBounces_WindowSlides_ExcludesOlderEvents(t *t
 	// Far outside the window: must NOT count.
 	seedTransientBounce(t, pool, store, uniqueSNSMessageID(t), recipient, now.Add(-60*24*time.Hour))
 
-	count, err := store.CountRecentTransientBounces(ctx, pool, recipient, since)
+	count, err := store.CountRecentSoftBounces(ctx, pool, recipient, since)
 	if err != nil {
-		t.Fatalf("CountRecentTransientBounces: %v", err)
+		t.Fatalf("CountRecentSoftBounces: %v", err)
 	}
 	if count != 1 {
 		t.Errorf("count = %d, want 1 — only the event just inside the window should count", count)
 	}
 }
 
-// TestStore_CountRecentTransientBounces_WindowBoundaryIsInclusive is the
+// TestStore_CountRecentSoftBounces_WindowBoundaryIsInclusive is the
 // mutation check for `>=` vs `>` specifically: an event received at exactly
 // the window's cutoff instant (received_at == since) must still count. The
 // "just inside"/"just outside" cases above are both a full minute away from
 // the boundary and would pass under either operator; only an event AT the
 // boundary distinguishes them.
-func TestStore_CountRecentTransientBounces_WindowBoundaryIsInclusive(t *testing.T) {
+func TestStore_CountRecentSoftBounces_WindowBoundaryIsInclusive(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
@@ -338,16 +403,16 @@ func TestStore_CountRecentTransientBounces_WindowBoundaryIsInclusive(t *testing.
 
 	seedTransientBounce(t, pool, store, uniqueSNSMessageID(t), recipient, since)
 
-	count, err := store.CountRecentTransientBounces(ctx, pool, recipient, since)
+	count, err := store.CountRecentSoftBounces(ctx, pool, recipient, since)
 	if err != nil {
-		t.Fatalf("CountRecentTransientBounces: %v", err)
+		t.Fatalf("CountRecentSoftBounces: %v", err)
 	}
 	if count != 1 {
 		t.Errorf("count = %d, want 1 — an event received exactly at the window boundary must count", count)
 	}
 }
 
-func TestStore_CountRecentTransientBouncesPool_MatchesTxVersion(t *testing.T) {
+func TestStore_CountRecentSoftBouncesPool_MatchesTxVersion(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
@@ -358,16 +423,16 @@ func TestStore_CountRecentTransientBouncesPool_MatchesTxVersion(t *testing.T) {
 	seedTransientBounce(t, pool, store, uniqueSNSMessageID(t), recipient, now.Add(-2*time.Hour))
 
 	since := now.Add(-30 * 24 * time.Hour)
-	want, err := store.CountRecentTransientBounces(ctx, pool, recipient, since)
+	want, err := store.CountRecentSoftBounces(ctx, pool, recipient, since)
 	if err != nil {
-		t.Fatalf("CountRecentTransientBounces: %v", err)
+		t.Fatalf("CountRecentSoftBounces: %v", err)
 	}
-	got, err := store.CountRecentTransientBouncesPool(ctx, recipient, since)
+	got, err := store.CountRecentSoftBouncesPool(ctx, recipient, since)
 	if err != nil {
-		t.Fatalf("CountRecentTransientBouncesPool: %v", err)
+		t.Fatalf("CountRecentSoftBouncesPool: %v", err)
 	}
 	if got != want {
-		t.Errorf("CountRecentTransientBouncesPool = %d, want %d (matching CountRecentTransientBounces over the pool)", got, want)
+		t.Errorf("CountRecentSoftBouncesPool = %d, want %d (matching CountRecentSoftBounces over the pool)", got, want)
 	}
 	if got != 2 {
 		t.Errorf("count = %d, want 2", got)
