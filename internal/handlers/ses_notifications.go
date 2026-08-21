@@ -459,15 +459,15 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 		// below includes it, and evaluating the threshold is therefore never
 		// one bounce stale (see CountRecentSoftBounces' doc comment).
 		//
-		// #0109 decided Undetermined counts alongside Transient (PRD §6.5
-		// says "5 soft bounces", not "5 transient bounces" — see
-		// issues/0109.md), so both bounce types share this arm. The count
-		// query itself excludes the sender-fault Transient subtypes
-		// (MessageTooLarge, ContentRejected, AttachmentRejected) — a fault in
-		// OUR message is not evidence this address is bad, so a bounce of
-		// one of those subtypes is still recorded but never contributes to
-		// or crosses the threshold, even when this call happens to be
-		// triggered by one.
+		// #0109 decided Undetermined counts alongside Transient, and #0112
+		// amended PRD §6.7 step 4 to define a soft bounce that way (see
+		// issues/0109.md, issues/0112.md), so both bounce types share this
+		// arm. The count query itself excludes the sender-fault Transient
+		// subtypes (MessageTooLarge, ContentRejected, AttachmentRejected) —
+		// a fault in OUR message is not evidence this address is bad, so a
+		// bounce of one of those subtypes is still recorded but never
+		// contributes to or crosses the threshold, even when this call
+		// happens to be triggered by one.
 		threshold, window := softBounceThreshold(ctx, h.settings, h.log)
 		count, err := h.events.CountRecentSoftBounces(ctx, tx, recipient, now.Add(-window))
 		if err != nil {
@@ -520,13 +520,14 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 	default:
 		// Empty string (no bounce classification present) or a bounce_type
 		// SES adds in the future beyond Permanent/Transient/Undetermined —
-		// recorded above, unhandled here. PRD §6.5 says "5 soft bounces in
-		// 30 days" (not "5 transient bounces" — that narrower wording was
-		// only #0039's own acceptance criterion, and this comment used to
-		// attribute it to the PRD in error). #0109 settled the open question
-		// #0038 §8 and #0039 left behind: Undetermined bounces now share the
-		// case above and count toward the threshold, via a widened partial
-		// index (migrations/000016) — so nothing reaches this arm except a
+		// recorded above, unhandled here. PRD §6.7 step 4 (amended by #0112
+		// to match #0109's shipped predicate) now defines a soft bounce as
+		// Transient or Undetermined, excluding the sender-fault Transient
+		// subtypes — that wording lives in the PRD, not just in this
+		// comment. #0109 settled the open question #0038 §8 and #0039 left
+		// behind: Undetermined bounces now share the case above and count
+		// toward the threshold, via a widened partial index
+		// (migrations/000016) — so nothing reaches this arm except a
 		// classification SES hasn't documented yet.
 		return nil
 	}

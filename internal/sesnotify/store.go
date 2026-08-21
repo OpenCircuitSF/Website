@@ -151,15 +151,14 @@ func (s *Store) InsertTx(ctx context.Context, q querier, in NewEmailEvent) (id i
 // internal/subscribers/store.go for the identical precedent this copies).
 //
 // Named CountRecentSoftBounces, not …TransientBounces (its #0039 name),
-// because #0109 widened what counts: PRD §6.5 says "5 soft bounces in 30
-// days", not "5 transient bounces", so an address that only ever produces
-// Undetermined bounces must not go forever unsuppressed. The predicate
-// below therefore matches Transient and Undetermined bounce_types — but
-// excludes the sender-fault Transient subtypes (MessageTooLarge,
-// ContentRejected, AttachmentRejected), which describe a fault in OUR
-// message, not evidence the recipient's address is bad, and must never
-// suppress a live subscriber. See issues/0109.md for the reasoning behind
-// both decisions.
+// because #0109 widened what counts and #0112 amended PRD §6.7 step 4 to
+// define it: a soft bounce is bounce_type Transient or Undetermined,
+// except a Transient bounce whose bounce_subtype is one of the
+// sender-fault subtypes (MessageTooLarge, ContentRejected,
+// AttachmentRejected) — those describe a fault in OUR message, not
+// evidence the recipient's address is bad, and must never suppress a live
+// subscriber. See issues/0109.md and issues/0112.md for the reasoning
+// behind both decisions.
 //
 // Windowed on received_at (NOT the nullable event_at) and its WHERE clause
 // is written to match migrations/000016's idx_email_events_soft_bounce

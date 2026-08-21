@@ -822,7 +822,14 @@ Handler (`internal/sesnotify`) requirements:
    it. Handle `UnsubscribeConfirmation` by alerting, never by acting.
 3. Insert the raw payload into `email_events` before interpreting it.
 4. Apply the state machine from §6.5. Match `Bounce.bounceType == "Permanent"`
-   as a hard bounce; `Transient` counts toward the soft-bounce threshold.
+   as a hard bounce. A soft bounce is `bounceType == "Transient"` **or**
+   `"Undetermined"` — an address that only ever produces an unclassifiable
+   bounce is operationally as dead as one producing `Transient` ones, so
+   silence on `Undetermined` is not license to ignore it. **Except:** a
+   `Transient` bounce whose `bounceSubType` is `MessageTooLarge`,
+   `ContentRejected`, or `AttachmentRejected` never counts — those describe a
+   fault in our own message, not evidence the recipient's address is bad, and
+   must not suppress a live subscriber.
 5. Return `200` even for payloads that cannot be interpreted — SNS retries
    aggressively on non-2xx and a parse bug should not become a retry storm.
    Log and move on.
