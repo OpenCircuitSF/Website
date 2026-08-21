@@ -112,6 +112,10 @@ type SESNotificationsHandler struct {
 	events *sesnotify.Store
 	subs   *subscribers.Store
 	suppr  *subscribers.SuppressionStore
+	// settings is #0039's soft-bounce threshold/window source — a genuine
+	// narrow interface (see soft_bounce.go's doc comment on why this
+	// dependency, unlike events/subs/suppr, can be one).
+	settings softBounceSettingsReader
 
 	auditor *audit.Logger
 	now     func() time.Time
@@ -122,13 +126,15 @@ type SESNotificationsHandler struct {
 // auditor disables audit writes for the SubscriptionConfirmation/
 // UnsubscribeConfirmation/state-change paths; a nil logger falls back to
 // slog.Default(), matching this package's existing nil-tolerance
-// convention (ConfirmHandler, SubscribeHandler).
+// convention (ConfirmHandler, SubscribeHandler). settings backs #0039's
+// repeated-soft-bounce threshold; *auth.Store satisfies it via GetSetting.
 func NewSESNotificationsHandler(
 	verify sesVerifier,
 	begin sesTxBeginner,
 	events *sesnotify.Store,
 	subs *subscribers.Store,
 	suppr *subscribers.SuppressionStore,
+	settings softBounceSettingsReader,
 	auditor *audit.Logger,
 	logger *slog.Logger,
 ) *SESNotificationsHandler {
@@ -136,7 +142,7 @@ func NewSESNotificationsHandler(
 		logger = slog.Default()
 	}
 	return &SESNotificationsHandler{
-		verify: verify, begin: begin, events: events, subs: subs, suppr: suppr,
+		verify: verify, begin: begin, events: events, subs: subs, suppr: suppr, settings: settings,
 		auditor: auditor, now: time.Now, log: logger,
 	}
 }
@@ -400,7 +406,8 @@ func (h *SESNotificationsHandler) applyRecipient(ctx context.Context, tx pgx.Tx,
 	}
 }
 
-// applyBounce is #0038 §4's Bounce mapping.
+// applyBounce is #0038 §4's Bounce mapping, extended by #0039's
+// BounceTypeTransient arm below.
 func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev sesnotify.SESEvent, recipient string, hasSub bool, sub subscribers.Subscriber, now time.Time) error {
 	switch ev.BounceType() {
 	case sesnotify.BounceTypePermanent:
@@ -444,20 +451,72 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 		}
 		return nil
 	case sesnotify.BounceTypeTransient:
-		// #0039 owns counting these toward the soft-bounce threshold. #0038
-		// does no counting whatsoever: the row is already recorded above
-		// (with bounce_type='Transient' and bounce_subtype faithfully
-		// carried), and nothing else changes here. #0039 adds, inside this
-		// same transaction, a CountRecentTransientBounces(ctx, tx,
-		// recipient, window) call against email_events (the partial index
-		// migrations/000014 already provides for it) and, on threshold, the
-		// same AddTx(ReasonRepeatedSoftBounce) + MarkBouncedTx pair the
-		// Permanent case above already uses.
+		// #0039: this Transient bounce's own email_events row is already
+		// recorded above, in this same transaction — so the count below
+		// includes it, and evaluating the threshold is therefore never one
+		// bounce stale (see CountRecentTransientBounces' doc comment).
+		threshold, window := softBounceThreshold(ctx, h.settings, h.log)
+		count, err := h.events.CountRecentTransientBounces(ctx, tx, recipient, now.Add(-window))
+		if err != nil {
+			return fmt.Errorf("counting recent transient bounces for %q: %w", recipient, err)
+		}
+		if count < threshold {
+			return nil
+		}
+
+		note := fmt.Sprintf("SES repeated transient bounce (%d in the last %d days, threshold %d)",
+			count, int(window.Hours()/24), threshold)
+		// AddTx runs unconditionally once the threshold is crossed, exactly
+		// like the Permanent case above: suppressions are reason-scoped
+		// (#0100), so a coexisting hard_bounce or complaint row is never at
+		// risk here, and re-crossing the threshold on a later bounce must
+		// stay a no-op rather than an error.
+		if _, err := h.suppr.AddTx(ctx, tx, subscribers.NewSuppression{
+			Email: recipient, Reason: subscribers.SuppressionReasonRepeatedSoftBounce, Note: note,
+		}, now); err != nil {
+			return fmt.Errorf("adding repeated_soft_bounce suppression for %q: %w", recipient, err)
+		}
+		if !hasSub {
+			return nil
+		}
+		// setStatusTx (via MarkBouncedTx) preserves complained against every
+		// non-admin write (CLAUDE.md §9) — the same guarantee the Permanent
+		// case above relies on, not reimplemented here.
+		if _, err := h.subs.MarkBouncedTx(ctx, tx, sub.ID, now); err != nil {
+			return fmt.Errorf("marking %q bounced (repeated soft bounce): %w", recipient, err)
+		}
+		if h.auditor != nil {
+			targetID := sub.ID
+			if err := h.auditor.WriteTx(ctx, tx, audit.Entry{
+				Action:     audit.ActionSubscriberBounced,
+				TargetType: audit.TargetSubscriber,
+				TargetID:   &targetID,
+				Metadata: map[string]any{
+					"email": recipient, "source": "ses",
+					"bounce_type": ev.BounceType(), "bounce_subtype": ev.BounceSubType(),
+					"reason":                       subscribers.SuppressionReasonRepeatedSoftBounce,
+					"transient_bounce_count":       count,
+					"transient_bounce_window_days": int(window.Hours() / 24),
+					"transient_bounce_threshold":   threshold,
+				},
+			}); err != nil {
+				return fmt.Errorf("writing repeated-soft-bounce audit row for %q: %w", recipient, err)
+			}
+		}
 		return nil
 	default:
-		// "Undetermined", or anything else SES might report — recorded,
-		// unhandled. Whether Undetermined should count toward #0039's
-		// threshold is explicitly left to that issue (#0038 §8).
+		// "Undetermined", or anything else SES might report — recorded
+		// above, unhandled here. #0038 §8 left counting Undetermined toward
+		// #0039's threshold as this issue's call; decided NOT to: the
+		// partial index this query needs (migrations/000014's
+		// idx_email_events_soft_bounce) is scoped to
+		// `bounce_type = 'Transient'` only, and PRD §6.5's own criterion
+		// reads "5 transient bounces" — widening the count to include
+		// Undetermined would mean either an unindexed scan or a second,
+		// separately-indexed query for a bounce subtype SES documents as
+		// rare. If Undetermined proves common enough in practice to need
+		// counting, that is a follow-up issue's index change, not a
+		// silent scope change here.
 		return nil
 	}
 }

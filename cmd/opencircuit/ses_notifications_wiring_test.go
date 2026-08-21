@@ -121,7 +121,7 @@ func newSESNotificationsWiringHandler(t *testing.T, pool *pgxpool.Pool) *handler
 		func(ctx context.Context, certURL string) (*x509.Certificate, error) { return cert, nil })
 	return handlers.NewSESNotificationsHandler(
 		verifier, pool, sesnotify.NewStore(pool), subscribers.NewStore(pool), subscribers.NewSuppressionStore(pool),
-		audit.New(pool), nil,
+		auth.NewStore(pool), audit.New(pool), nil,
 	)
 }
 

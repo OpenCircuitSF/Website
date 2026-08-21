@@ -91,6 +91,13 @@ export interface SubscriberInterestRef {
  * the detail endpoint (GET .../{id}); the list endpoint omits it to avoid an
  * N+1 query per row. `email_events` is always present but empty until #0038
  * (SES bounce/complaint ingestion) lands.
+ *
+ * `soft_bounce_count`/`soft_bounce_threshold`/`soft_bounce_window_days`
+ * (#0039) are likewise populated by the detail endpoint only: the count of
+ * Transient-bounce `email_events` rows within the currently configured
+ * window, plus the threshold/window themselves so the screen can render
+ * "N of THRESHOLD in the last WINDOW days" rather than a bare number. All
+ * three are present together or absent together.
  */
 export interface Subscriber {
   id: number;
@@ -107,6 +114,9 @@ export interface Subscriber {
   unsubscribe_source?: string;
   interests?: SubscriberInterestRef[];
   email_events: unknown[];
+  soft_bounce_count?: number;
+  soft_bounce_threshold?: number;
+  soft_bounce_window_days?: number;
 }
 
 /** The {pending, active, unsubscribed, bounced, complained} header block atop the subscribers list. */

@@ -18,6 +18,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
@@ -73,7 +74,8 @@ func adminSubscribersMux(pool *pgxpool.Pool, manualAdd *SubscribeHandler) http.H
 	subStore := subscribers.NewStore(pool)
 	interestsStore := interests.NewStore(pool)
 	suppressionsStore := subscribers.NewSuppressionStore(pool)
-	h := NewAdminSubscribersHandler(subStore, interestsStore, manualAdd, suppressionsStore, audit.New(pool))
+	sesEventsStore := sesnotify.NewStore(pool)
+	h := NewAdminSubscribersHandler(subStore, interestsStore, manualAdd, suppressionsStore, sesEventsStore, authStore, audit.New(pool))
 	requireSession := middleware.RequireSession(authStore)
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
@@ -310,6 +312,65 @@ func TestAdminSubscribers_Get_ReturnsConsentEvidenceAndInterests(t *testing.T) {
 	}
 	if view.EmailEvents == nil {
 		t.Error("EmailEvents = nil, want [] (present, empty — #0038 fills it in later)")
+	}
+}
+
+// TestAdminSubscribers_Get_IncludesSoftBounceCount is #0039's "admin can
+// see the current soft-bounce count on the subscriber detail screen"
+// acceptance criterion. It seeds two Transient-bounce email_events rows
+// directly (rather than through the SES handler — that path is covered by
+// internal/handlers/ses_notifications_test.go) and asserts the detail
+// response's soft_bounce_count/threshold/window_days match the current
+// count and the migrations/000015 defaults.
+func TestAdminSubscribers_Get_IncludesSoftBounceCount(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-subs-softbounce@example.com")
+	seedSession(t, pool, admin, "admin-token-softbounce")
+
+	id := seedTestSubscriber(t, pool, subscribers.StatusActive)
+	email := subscriberEmailByID(t, pool, id)
+
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		snsID := fmt.Sprintf("zz-0039-detail-%d-%d", i, time.Now().UnixNano())
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO email_events (sns_message_id, event_type, bounce_type, recipient, payload)
+			 VALUES ($1, 'Bounce', 'Transient', lower(trim($2)), '{}'::jsonb)`,
+			snsID, email,
+		); err != nil {
+			t.Fatalf("seed email_events row %d: %v", i, err)
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
+			defer cancel()
+			_, _ = pool.Exec(ctx, `DELETE FROM email_events WHERE sns_message_id = $1`, snsID)
+		})
+	}
+
+	client := srv.Client()
+	resp := doJSON(t, client, "GET", fmt.Sprintf("%s/admin/subscribers/%d", srv.URL, id), "admin-token-softbounce", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var view struct {
+		SoftBounceCount      *int `json:"soft_bounce_count"`
+		SoftBounceThreshold  *int `json:"soft_bounce_threshold"`
+		SoftBounceWindowDays *int `json:"soft_bounce_window_days"`
+	}
+	if err := json.Unmarshal(readBody(t, resp), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view.SoftBounceCount == nil || *view.SoftBounceCount != 2 {
+		t.Errorf("SoftBounceCount = %v, want 2", view.SoftBounceCount)
+	}
+	if view.SoftBounceThreshold == nil || *view.SoftBounceThreshold != 5 {
+		t.Errorf("SoftBounceThreshold = %v, want 5 (migrations/000015 default)", view.SoftBounceThreshold)
+	}
+	if view.SoftBounceWindowDays == nil || *view.SoftBounceWindowDays != 30 {
+		t.Errorf("SoftBounceWindowDays = %v, want 30 (migrations/000015 default)", view.SoftBounceWindowDays)
 	}
 }
 

@@ -168,6 +168,13 @@ func servePostgres(cfg *config.Config) error {
 		suppressionsStore, store, auditLogger, cfg.BaseURL, slog.Default(),
 	)
 
+	// sesEventsStore (internal/sesnotify, #0038) is constructed here, ahead of
+	// sesNotifyH below, because adminSubscribersH (#0039) also needs it — the
+	// admin subscriber detail view's soft-bounce count reads through the same
+	// pool-only CountRecentTransientBouncesPool method the SES ingestion
+	// handler's transaction-scoped CountRecentTransientBounces mirrors.
+	sesEventsStore := sesnotify.NewStore(pool)
+
 	// Admin-only interest taxonomy CRUD (#0024, PRD §5.2/§6.1): reuses the
 	// same interestsStore constructed just above for the subscribe endpoint —
 	// interests.Store is a stateless wrapper over the shared pool, so one
@@ -179,7 +186,7 @@ func servePostgres(cfg *config.Config) error {
 	// lets its Create dispatch through the exact same newSignup/existingSignup
 	// path #0026's public endpoint uses — see
 	// internal/handlers/admin_subscribers.go's package doc comment.
-	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, subscribeH, suppressionsStore, auditLogger)
+	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, subscribeH, suppressionsStore, sesEventsStore, store, auditLogger)
 
 	// Admin suppression-list screen (#0100, PRD §5.2/§6.2): the admin
 	// surface over suppressionsStore that #0033 built but never gave a
@@ -218,17 +225,19 @@ func servePostgres(cfg *config.Config) error {
 	// /api/ses/notifications, an SNS HTTPS subscription endpoint.
 	// sesVerifier (internal/sesnotify, #0037) is the trust boundary —
 	// signature + TopicArn allowlist — checked before anything in the body
-	// is acted on. sesEventsStore backs the raw email_events log; the
-	// handler also reuses subscribersStore/suppressionsStore constructed
-	// above so its per-message transaction (pool.Begin, passed directly:
-	// see ses_notifications.go's package doc comment for why these three
+	// is acted on. sesEventsStore (constructed above, alongside
+	// adminSubscribersH) backs the raw email_events log; the handler also
+	// reuses subscribersStore/suppressionsStore constructed above so its
+	// per-message transaction (pool.Begin, passed directly: see
+	// ses_notifications.go's package doc comment for why these three
 	// stores are held concretely rather than behind narrow interfaces)
 	// writes the event row, the suppression row, and the subscriber status
-	// change atomically — #0033's hard block.
-	sesEventsStore := sesnotify.NewStore(pool)
+	// change atomically — #0033's hard block. store (internal/auth) backs
+	// #0039's soft-bounce threshold/window settings — a genuine narrow
+	// interface, unlike the three stores above (see soft_bounce.go).
 	sesVerifier := sesnotify.NewVerifier(cfg.AWSRegion, cfg.SESEventsTopicARN, slog.Default())
 	sesNotifyH := handlers.NewSESNotificationsHandler(
-		sesVerifier, pool, sesEventsStore, subscribersStore, suppressionsStore, auditLogger, slog.Default(),
+		sesVerifier, pool, sesEventsStore, subscribersStore, suppressionsStore, store, auditLogger, slog.Default(),
 	)
 
 	// SSE event broker: the in-memory pub/sub singleton reused for live

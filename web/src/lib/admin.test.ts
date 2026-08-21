@@ -31,6 +31,7 @@ import {
   validateManualAddEmail,
   validateSuppressNote,
   signupEvidenceSummary,
+  softBounceSummary,
   SUPPRESSION_REASONS,
   suppressionReasonLabel,
   validateSuppressionNote,
@@ -417,6 +418,37 @@ describe('signupEvidenceSummary', () => {
   it('notes the absence of browser evidence for a manually-added subscriber', () => {
     const summary = signupEvidenceSummary(subscriber({ signup_ip: undefined, signup_user_agent: undefined }));
     expect(summary).toContain('no browser signup evidence');
+  });
+});
+
+describe('softBounceSummary', () => {
+  it('reports "Not available." when the detail endpoint has not populated the count', () => {
+    expect(softBounceSummary(subscriber())).toBe('Not available.');
+  });
+
+  it('reports the count, threshold, and window when under threshold', () => {
+    const summary = softBounceSummary(
+      subscriber({ soft_bounce_count: 2, soft_bounce_threshold: 5, soft_bounce_window_days: 30 }),
+    );
+    expect(summary).toContain('2 transient bounces');
+    expect(summary).toContain('last 30 days');
+    expect(summary).toContain('threshold: 5');
+    expect(summary).not.toContain('should already be suppressed');
+  });
+
+  it('uses the singular "bounce" for a count of exactly 1', () => {
+    const summary = softBounceSummary(
+      subscriber({ soft_bounce_count: 1, soft_bounce_threshold: 5, soft_bounce_window_days: 30 }),
+    );
+    expect(summary).toContain('1 transient bounce ');
+    expect(summary).not.toContain('bounces');
+  });
+
+  it('flags the address as already suppressed once the count reaches the threshold', () => {
+    const summary = softBounceSummary(
+      subscriber({ soft_bounce_count: 5, soft_bounce_threshold: 5, soft_bounce_window_days: 30 }),
+    );
+    expect(summary).toContain('should already be suppressed');
   });
 });
 

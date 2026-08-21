@@ -401,6 +401,27 @@ export function signupEvidenceSummary(sub: Subscriber): string {
   return parts.join(' ');
 }
 
+/**
+ * Render the #0039 soft-bounce summary line for the subscriber detail view.
+ * `soft_bounce_count`/`threshold`/`window_days` are populated by the detail
+ * endpoint only (see the Subscriber type's doc comment) — a nil count means
+ * either the backend hasn't computed it (dev mode / a nil dependency) rather
+ * than "zero bounces", so that case gets its own message instead of "0 of
+ * undefined".
+ */
+export function softBounceSummary(sub: Subscriber): string {
+  if (sub.soft_bounce_count == null || sub.soft_bounce_threshold == null || sub.soft_bounce_window_days == null) {
+    return 'Not available.';
+  }
+  const { soft_bounce_count: count, soft_bounce_threshold: threshold, soft_bounce_window_days: days } = sub;
+  const suffix = count === 1 ? '' : 's';
+  const base = `${count} transient bounce${suffix} in the last ${days} days (threshold: ${threshold}).`;
+  if (count >= threshold) {
+    return `${base} This address should already be suppressed.`;
+  }
+  return base;
+}
+
 // ── Admin suppression-list screen (#0100) ────────────────────────────────────
 
 /** The four subscribers.SuppressionReason* values, matching the server's CHECK constraint. */

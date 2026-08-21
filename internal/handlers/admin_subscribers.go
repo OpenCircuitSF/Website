@@ -89,6 +89,16 @@ type adminSuppressionWriter interface {
 	ListByEmail(ctx context.Context, email string) ([]subscribers.Suppression, error)
 }
 
+// softBounceCounter is the narrow read dependency #0039's "admin can see the
+// current soft-bounce count on the subscriber detail screen" criterion
+// needs. *sesnotify.Store satisfies it via CountRecentTransientBouncesPool —
+// see that method's doc comment for why it, not the querier-taking
+// CountRecentTransientBounces ses_notifications.go's transaction uses, is
+// the one usable behind a genuine narrow interface here.
+type softBounceCounter interface {
+	CountRecentTransientBouncesPool(ctx context.Context, recipient string, since time.Time) (int, error)
+}
+
 // AdminSubscribersHandler serves the admin-only subscriber routes (PRD
 // §5.2; #0032):
 //
@@ -116,6 +126,14 @@ type AdminSubscribersHandler struct {
 	// suppressions-table write/removal when nil rather than dereferencing it,
 	// matching the rest of this handler's nil-tolerance.
 	suppressions adminSuppressionWriter
+	// bounces backs #0039's soft-bounce count on the detail view. May be
+	// nil (same STORAGE=json gap as manualAdd/suppressions); Get skips the
+	// count computation when nil rather than dereferencing it.
+	bounces softBounceCounter
+	// settings resolves #0039's threshold/window pair for the count above.
+	// May be nil; treated the same as a nil bounces (both must be present
+	// to compute the count, since the window comes from settings).
+	settings softBounceSettingsReader
 	// auditor records subscriber.suppressed / .complaint_cleared /
 	// .manual_add. May be nil in tests that don't assert audit rows.
 	auditor *audit.Logger
@@ -128,9 +146,13 @@ type AdminSubscribersHandler struct {
 // manualAdd disables POST /admin/subscribers (Create returns 503); a nil
 // suppressions skips the suppressions-table write/removal in Suppress/
 // ClearComplaint (they still perform their subscribers-table effect); a nil
-// auditor disables audit writes.
-func NewAdminSubscribersHandler(store adminSubscriberStore, il adminInterestByIDReader, manualAdd *SubscribeHandler, suppressions adminSuppressionWriter, auditor *audit.Logger) *AdminSubscribersHandler {
-	return &AdminSubscribersHandler{store: store, interests: il, manualAdd: manualAdd, suppressions: suppressions, auditor: auditor, now: time.Now}
+// bounces or settings disables #0039's soft-bounce count on the detail view
+// (the JSON fields are simply omitted); a nil auditor disables audit writes.
+func NewAdminSubscribersHandler(store adminSubscriberStore, il adminInterestByIDReader, manualAdd *SubscribeHandler, suppressions adminSuppressionWriter, bounces softBounceCounter, settings softBounceSettingsReader, auditor *audit.Logger) *AdminSubscribersHandler {
+	return &AdminSubscribersHandler{
+		store: store, interests: il, manualAdd: manualAdd, suppressions: suppressions,
+		bounces: bounces, settings: settings, auditor: auditor, now: time.Now,
+	}
 }
 
 // ── Response shapes ──────────────────────────────────────────────────────────
@@ -162,21 +184,33 @@ type interestRef struct {
 // EmailEvents is always present but empty until #0038 (SES bounce/complaint
 // ingestion into email_events) lands — see this issue's Notes: "build the
 // section now and let it fill in."
+//
+// SoftBounceCount/SoftBounceThreshold/SoftBounceWindowDays are #0039's
+// "admin can see the current soft-bounce count" criterion: the count of
+// Transient-bounce email_events rows for this address within the currently
+// configured window, plus the threshold/window themselves so the admin
+// screen can show "N of THRESHOLD in the last WINDOW days" rather than a
+// bare number. Like Interests, populated by Get only (List omits them to
+// avoid a query per row); all three are nil together when the handler was
+// constructed with a nil bounces/settings dependency (STORAGE=json dev mode).
 type subscriberView struct {
-	ID                int64         `json:"id"`
-	Email             string        `json:"email"`
-	Status            string        `json:"status"`
-	SignupIP          *string       `json:"signup_ip,omitempty"`
-	SignupUserAgent   *string       `json:"signup_user_agent,omitempty"`
-	UTMSource         *string       `json:"utm_source,omitempty"`
-	UTMMedium         *string       `json:"utm_medium,omitempty"`
-	UTMCampaign       *string       `json:"utm_campaign,omitempty"`
-	CreatedAt         string        `json:"created_at"` // signup timestamp
-	ConfirmedAt       *string       `json:"confirmed_at,omitempty"`
-	UnsubscribedAt    *string       `json:"unsubscribed_at,omitempty"`
-	UnsubscribeSource *string       `json:"unsubscribe_source,omitempty"`
-	Interests         []interestRef `json:"interests,omitempty"` // populated by Get only
-	EmailEvents       []any         `json:"email_events"`        // always [] until #0038
+	ID                   int64         `json:"id"`
+	Email                string        `json:"email"`
+	Status               string        `json:"status"`
+	SignupIP             *string       `json:"signup_ip,omitempty"`
+	SignupUserAgent      *string       `json:"signup_user_agent,omitempty"`
+	UTMSource            *string       `json:"utm_source,omitempty"`
+	UTMMedium            *string       `json:"utm_medium,omitempty"`
+	UTMCampaign          *string       `json:"utm_campaign,omitempty"`
+	CreatedAt            string        `json:"created_at"` // signup timestamp
+	ConfirmedAt          *string       `json:"confirmed_at,omitempty"`
+	UnsubscribedAt       *string       `json:"unsubscribed_at,omitempty"`
+	UnsubscribeSource    *string       `json:"unsubscribe_source,omitempty"`
+	Interests            []interestRef `json:"interests,omitempty"`               // populated by Get only
+	EmailEvents          []any         `json:"email_events"`                      // always [] until #0038
+	SoftBounceCount      *int          `json:"soft_bounce_count,omitempty"`       // populated by Get only
+	SoftBounceThreshold  *int          `json:"soft_bounce_threshold,omitempty"`   // populated by Get only
+	SoftBounceWindowDays *int          `json:"soft_bounce_window_days,omitempty"` // populated by Get only
 }
 
 func formatTimePtr(t *time.Time) *string {
@@ -205,6 +239,10 @@ func toSubscriberView(sub subscribers.Subscriber, refs []interestRef) subscriber
 		EmailEvents:       []any{},
 	}
 }
+
+// intPtr is a small helper so Get can set SoftBounceCount/Threshold/
+// WindowDays from local ints without a named variable per field.
+func intPtr(n int) *int { return &n }
 
 // statusCountsView is the {pending, active, unsubscribed, bounced,
 // complained} header block #0032's acceptance criteria requires at the top
@@ -373,7 +411,26 @@ func (h *AdminSubscribersHandler) Get(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, toSubscriberView(sub, refs))
+	view := toSubscriberView(sub, refs)
+
+	// #0039: the current soft-bounce count, alongside the threshold/window it
+	// is being measured against. Both dependencies must be present — the
+	// window comes from settings, so a nil settings reader would make the
+	// count meaningless — matching this handler's existing nil-tolerance for
+	// STORAGE=json dev mode (manualAdd, suppressions).
+	if h.bounces != nil && h.settings != nil {
+		threshold, window := softBounceThreshold(r.Context(), h.settings, nil)
+		count, err := h.bounces.CountRecentTransientBouncesPool(r.Context(), sub.Email, h.now().Add(-window))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		view.SoftBounceCount = intPtr(count)
+		view.SoftBounceThreshold = intPtr(threshold)
+		view.SoftBounceWindowDays = intPtr(int(window.Hours() / 24))
+	}
+
+	writeJSON(w, http.StatusOK, view)
 }
 
 // ── POST /admin/subscribers/{id}/suppress ───────────────────────────────────

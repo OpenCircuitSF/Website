@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
@@ -171,6 +172,13 @@ func validSettingValue(key, value string) bool {
 	switch key {
 	case "registrations_enabled":
 		return value == "true" || value == "false"
+	case settingSoftBounceThresholdCount, settingSoftBounceThresholdWindowDays:
+		// #0039: both the repeated-soft-bounce count and its window (days)
+		// must be positive integers — soft_bounce.go's fallback exists for a
+		// row that's missing or already-invalid, not as license to let a
+		// fresh PATCH write garbage through this endpoint.
+		n, err := strconv.Atoi(value)
+		return err == nil && n > 0
 	default:
 		return true
 	}

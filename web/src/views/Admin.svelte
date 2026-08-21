@@ -78,6 +78,7 @@
     validateManualAddEmail,
     validateSuppressNote,
     signupEvidenceSummary,
+    softBounceSummary,
     SUPPRESSION_REASONS,
     suppressionReasonLabel,
     validateSuppressionNote,
@@ -1579,6 +1580,9 @@
               {:else}
                 <p class="text-muted">No interests selected — general announcements only.</p>
               {/if}
+
+              <h3 class="detail-heading">Soft bounces</h3>
+              <p class="text-muted">{softBounceSummary(viewingSubscriber)}</p>
 
               <h3 class="detail-heading">Email event history</h3>
               {#if viewingSubscriber.email_events.length === 0}

@@ -140,6 +140,49 @@ func (s *Store) InsertTx(ctx context.Context, q querier, in NewEmailEvent) (id i
 	return id, true, nil
 }
 
+// CountRecentTransientBounces counts Transient-bounce email_events rows for
+// recipient with received_at >= since, run inside q. #0039's
+// applyBounce (internal/handlers/ses_notifications.go) calls this INSIDE the
+// same transaction that just inserted the current bounce's own row, so that
+// row is already counted — evaluating this from the pool instead would be
+// one bounce stale, since the pool cannot see the transaction's own
+// uncommitted insert (see FindByEmailTx's doc comment in
+// internal/subscribers/store.go for the identical precedent this copies).
+//
+// Windowed on received_at (NOT the nullable event_at) and filtered to
+// event_type='Bounce' AND bounce_type='Transient' so the query is served by
+// migrations/000014's idx_email_events_soft_bounce partial index — that
+// index does not cover 'Undetermined' bounces, which is one reason #0039
+// does not count them toward the threshold (see applyBounce's doc comment).
+func (s *Store) CountRecentTransientBounces(ctx context.Context, q querier, recipient string, since time.Time) (int, error) {
+	var count int
+	err := q.QueryRow(ctx,
+		`SELECT COUNT(*) FROM email_events
+		 WHERE event_type = 'Bounce' AND bounce_type = 'Transient'
+		   AND recipient = lower(trim($1))
+		   AND received_at >= $2`,
+		recipient, since,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("sesnotify: counting recent transient bounces for %q: %w", recipient, err)
+	}
+	return count, nil
+}
+
+// CountRecentTransientBouncesPool is CountRecentTransientBounces's pool-only
+// twin, for a read-only caller with no open transaction to join — the admin
+// subscriber detail view (internal/handlers/admin_subscribers.go, #0039's
+// "admin can see the current soft-bounce count" criterion), which has no
+// staleness concern to guard against (it's a point-in-time read, not part of
+// a write's atomicity). Taking no querier parameter makes it usable behind a
+// genuine narrow interface in another package (mirrors ByMessageID below) —
+// unlike CountRecentTransientBounces itself, whose querier parameter is this
+// package's unexported type (see ses_notifications.go's package doc comment
+// on why the Tx-taking stores are held concretely instead).
+func (s *Store) CountRecentTransientBouncesPool(ctx context.Context, recipient string, since time.Time) (int, error) {
+	return s.CountRecentTransientBounces(ctx, s.pool, recipient, since)
+}
+
 // ByMessageID returns every row recorded for one SNS MessageId, newest
 // first. Used by tests to assert "exactly one row per recipient" (the
 // redelivery and multi-recipient properties) without hand-writing SQL in
