@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -299,9 +300,23 @@ func TestValidateCertURL_NoRegionPinSkipsRegionCheck(t *testing.T) {
 // exercised here (the httptest URL's host is 127.0.0.1:port, which the SNS
 // host allowlist would reject on unrelated grounds) — this test targets the
 // CheckRedirect wiring specifically, calling fetchCertReal directly.
+//
+// final serves a *valid* PEM certificate and counts how many times it is
+// hit. That matters for two reasons: it means the test can never again pass
+// by accident on an unrelated body-parsing failure (#0102), and it lets the
+// test assert the direct property — the redirect target must never be
+// reached — rather than merely "some error occurred", which is satisfied
+// just as well by pem.Decode failing on a followed redirect's body. This is
+// the same fetcher-was-never-invoked idiom TestVerify_HostileSigningCertURL
+// uses for the same reason.
 func TestFetchCertReal_RefusesRedirect(t *testing.T) {
+	_, cert := testFixture(t)
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+
+	var finalHits int32
 	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("should never be reached"))
+		atomic.AddInt32(&finalHits, 1)
+		w.Write(pemBytes)
 	}))
 	defer final.Close()
 
@@ -313,6 +328,9 @@ func TestFetchCertReal_RefusesRedirect(t *testing.T) {
 	v := NewVerifier("us-west-2", "irrelevant", discardLogger())
 	if _, err := v.fetchCertReal(context.Background(), redirecting.URL); err == nil {
 		t.Fatal("fetchCertReal followed a redirect instead of refusing it")
+	}
+	if hits := atomic.LoadInt32(&finalHits); hits != 0 {
+		t.Errorf("fetchCertReal reached the redirect target %d time(s), want 0 — it followed the redirect instead of refusing it", hits)
 	}
 }
 
