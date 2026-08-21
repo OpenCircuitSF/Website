@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000016`). No ORM — every
+(`migrations/`, numbered `000001`–`000017`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -54,15 +54,21 @@ contiguous range — ShortLinks' `links`, `clicks`, `campaigns`,
 Go store packages; see their package doc comments for the store-layer
 normalization and transition rules layered on top of the constraints above.
 
-## Planned schema (Phase 3+ continued, per `PRD.md` §6.2)
+## Campaign schema (Phase 5, per `PRD.md` §6.2)
+
+| Migration | Tables / change |
+|---|---|
+| `000017_create_campaigns` | `email_campaigns`, `campaign_interests`, `email_sends` (`#0040`). `email_campaigns.status` is CHECK-constrained to `draft \| scheduled \| sending \| sent \| canceled \| failed`; `audience_mode` to `all \| any_of \| all_of \| none_selected` (default `any_of`, per PRD §6.2). `workshop_id` is a plain nullable `BIGINT` with no `REFERENCES` clause — `workshops` doesn't exist until Phase 6, and PRD §6.2's migration-ordering note says to keep Phase 5 independently deployable and attach the FK with a later `ALTER TABLE` (`#0050`) rather than reorder the phases. `campaign_interests` is a join table with `ON DELETE CASCADE` on both `campaign_id` and `interest_id`. `email_sends` is one row per `(campaign, subscriber)`, materialized when a send starts (`#0044`); `UNIQUE (campaign_id, subscriber_id)` is the idempotency guarantee that makes re-materializing after a crash safe under `ON CONFLICT ... DO NOTHING` (never `DO UPDATE`, which would be a documented path from `sent` back to `queued`). `status` is CHECK-constrained to `queued \| sent \| failed \| bounced \| complained \| skipped` — `skipped` was carried in from `#0044`'s planning pass so that issue's send-time re-check (a recipient who was eligible at materialization but has since unsubscribed or been suppressed) doesn't need its own `ALTER TABLE`. `idx_email_sends_queued` is a partial index on `(campaign_id, id) WHERE status = 'queued'` for the send worker's `FOR UPDATE SKIP LOCKED` claim query; `idx_email_sends_message_id` on `ses_message_id` serves `#0049`'s SES-event reconciliation |
+
+`internal/interests` and `internal/subscribers` are the corresponding Go
+store packages for the tables above them; `internal/mailing` has no store
+code against `email_campaigns` yet (`#0041`, `#0044`, `#0045` build it).
+
+## Planned schema (Phase 5+ continued, per `PRD.md` §6.2)
 
 Not yet implemented. `PRD.md` §6.2 is the authoritative source for exact
 column definitions; the tables it describes, roughly in build order:
 
-- `suppressions` — the global suppression list checked before every send (`#0033`)
-- `email_campaigns` and its send-tracking tables (`#0040`) — an unrelated
-  concept from ShortLinks' `campaigns` table (link grouping), which this
-  project never ported; the word is coincidental
 - `workshops`
 
 ## Conventions
