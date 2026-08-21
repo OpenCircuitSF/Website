@@ -35,10 +35,17 @@ This is purely a local-preview artifact — over HTTP or HTTPS it works everywhe
 
 ## Before it goes live
 
-Nothing — the page is ready to deploy. The Discord invite
-(`https://discord.gg/Fq9ug6QXV3`) is live and is the page's only call to action,
-so **check it still resolves before each deploy**. Discord invites can be set to
-expire or be revoked, and a dead invite leaves the page with nothing to click.
+Nothing — the page is ready to deploy. The page now has two calls to action in
+`.cta`, and **both should be checked before each deploy**:
+
+- The Discord invite (`https://discord.gg/Fq9ug6QXV3`). Discord invites can be
+  set to expire or be revoked, and a dead invite leaves that button with
+  nothing to click.
+- The Luma calendar link (`https://luma.com/opencircuitsf`), where upcoming
+  sessions are listed. This URL is hand-copied here — see the HTML comment
+  above `.cta` in `index.html` — because this standalone file can't import
+  `web/src/lib/links.ts`, which is the source of truth for the SPA's copy of
+  the same links (`#0101`).
 
 **There is deliberately no email address on the page.** A `mailto:` on a public
 page gets harvested by scrapers within days and the address is then permanently
