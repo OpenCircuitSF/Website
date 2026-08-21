@@ -397,16 +397,21 @@ func TestConfirmationAndAlreadySubscribed_CarryFooterLink(t *testing.T) {
 	}
 }
 
-// TestConfirmationAndAlreadySubscribed_NoCampaignHeaders proves neither
-// mailing-list template attaches List-Unsubscribe / List-Unsubscribe-Post /
-// List-Id — those are RFC 8058 one-click headers for CAMPAIGN mail (#0035,
-// #0043) only. The privacy policy (#0075) deliberately narrows its one-click
-// commitment to "every campaign email" for exactly this reason: the
-// confirmation and already-subscribed mails are transactional, sent
-// synchronously from the subscribe handler, not campaign sends.
-func TestConfirmationAndAlreadySubscribed_NoCampaignHeaders(t *testing.T) {
-	for _, name := range []string{"confirmation", "already_subscribed"} {
-		msg := allMessages()[name]
+// TestNoTransactionalMessageCarriesCampaignHeaders proves that NONE of the
+// five transactional templates attaches List-Unsubscribe /
+// List-Unsubscribe-Post / List-Id — those are RFC 8058 one-click headers
+// for CAMPAIGN mail (#0035, #0043) only. This is #0035's own acceptance
+// criterion ("headers applied to campaign mail only — not to transactional
+// confirmation or auth mail"), so it covers all five: confirmation and
+// already-subscribed (mailing-list transactional mail) plus registration,
+// recovery, and sessions_revoked (auth mail) — not just the first two, which
+// is all the predecessor version of this test (renamed from
+// TestConfirmationAndAlreadySubscribed_NoCampaignHeaders) checked. The
+// privacy policy (#0075) deliberately narrows its one-click commitment to
+// "every campaign email" for exactly this reason: none of these five is a
+// campaign send.
+func TestNoTransactionalMessageCarriesCampaignHeaders(t *testing.T) {
+	for name, msg := range allMessages() {
 		if len(msg.Headers) != 0 {
 			t.Errorf("%s: message carries %d custom header(s), want 0 (no List-Unsubscribe on transactional mail): %+v", name, len(msg.Headers), msg.Headers)
 		}
