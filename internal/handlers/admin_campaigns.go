@@ -36,22 +36,27 @@
 // compose UI branches on which one it got, so their body shapes must never
 // collide: a failed advisory preflight check responds
 // {"unmet":[{code,message}]} (unmetPreflightResponse); every other 409 —
-// an illegal status transition, a bad audience state, a future confirm_count
+// an illegal status transition, a bad audience state, a confirm_count
 // mismatch — goes through writeError's {"error":"..."} envelope. Do not
 // route a preflight failure through writeError or vice versa.
 //
-// # The typed send confirmation (carried in from #0047's plan, 2026-08-21)
+// # The typed send confirmation (wired in by #0044, 2026-08-21)
 //
 // The compose UI makes the operator type the recipient count before it will
 // POST .../send; sendCampaignRequest.ConfirmCount carries that value and
-// Send requires it to be present, but #0041 lands before #0044 (the
-// audience count), so there is nothing yet to verify it against — see the
-// TODO in Send for exactly where #0044 must wire in the real comparison.
+// Send requires it to be present. Since #0044 landed, Send also verifies it:
+// campaignAudienceCounter.Preview computes the authoritative count from the
+// campaign's own audience_mode/interest_ids (already loaded via
+// h.store.GetByID — no second round trip), and a mismatch is a 409 through
+// writeError, never the preflight {"unmet":[...]} shape. A nil h.audience
+// (test-only) reverts to the pre-#0044 behavior of accepting confirm_count
+// unverified.
 package handlers
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -116,6 +121,20 @@ type campaignPreflightChecker interface {
 	Check(ctx context.Context, campaignID int64) ([]campaignPreflightFailure, error)
 }
 
+// campaignAudienceCounter is the narrow seam Send uses to compute the
+// authoritative recipient count #0044 wires in (carried in from #0041's
+// implementation, 2026-08-21 — see this issue's "Carried in from #0041's
+// implementation" section). *mailing.AudienceStore satisfies it, sharing
+// the exact method AdminCampaignAudienceHandler's campaignAudiencePreviewer
+// (admin_campaign_audience.go) uses for the same purpose. Send builds the
+// mailing.Audience it passes in directly from the campaign row it already
+// loaded via h.store.GetByID (AudienceMode/InterestIDs), so it needs only
+// Preview here — not LoadAudience, which would be a second, redundant
+// round trip for data Send already has.
+type campaignAudienceCounter interface {
+	Preview(ctx context.Context, aud mailing.Audience, sampleLimit int) (mailing.AudiencePreview, error)
+}
+
 // AdminCampaignsHandler serves the admin-only campaign CRUD routes (PRD
 // §5.2/§6.6/§8; #0041):
 //
@@ -132,15 +151,21 @@ type campaignPreflightChecker interface {
 type AdminCampaignsHandler struct {
 	store     campaignStore
 	preflight campaignPreflightChecker // nil until #0045 wires one in — see that type's doc comment
+	audience  campaignAudienceCounter  // nil disables confirm_count enforcement — see Send
 	auditor   *audit.Logger
 }
 
 // NewAdminCampaignsHandler constructs an AdminCampaignsHandler. A nil
 // auditor disables audit writes (matching every other admin handler's
 // nil-tolerance); a nil preflight disables the advisory pre-send check (see
-// campaignPreflightChecker's doc comment).
-func NewAdminCampaignsHandler(store campaignStore, preflight campaignPreflightChecker, auditor *audit.Logger) *AdminCampaignsHandler {
-	return &AdminCampaignsHandler{store: store, preflight: preflight, auditor: auditor}
+// campaignPreflightChecker's doc comment). A nil audience disables the
+// confirm_count comparison (see Send) — confirm_count is still required and
+// shape-validated, but a nil audience means it is accepted unverified, the
+// pre-#0044 behavior. Every production call site (cmd/opencircuit/main.go)
+// passes a real *mailing.AudienceStore; nil exists only for tests that don't
+// exercise Send's confirm_count path.
+func NewAdminCampaignsHandler(store campaignStore, preflight campaignPreflightChecker, audience campaignAudienceCounter, auditor *audit.Logger) *AdminCampaignsHandler {
+	return &AdminCampaignsHandler{store: store, preflight: preflight, audience: audience, auditor: auditor}
 }
 
 // ── Response shapes ──────────────────────────────────────────────────────────
@@ -538,13 +563,6 @@ func (h *AdminCampaignsHandler) Send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "confirm_count must not be negative")
 		return
 	}
-	// TODO(#0044): once an authoritative audience count is available
-	// (mailing.AudienceStore.Preview or equivalent), compute it here and
-	// 409 when it disagrees with *req.ConfirmCount — #0047's plan is
-	// explicit that a typed confirmation enforced only in the browser is
-	// theatre. Until #0044 lands there is nothing to compare against, so
-	// confirm_count is accepted and shape-validated only, per this
-	// issue's brief ("accept and validate the field's presence/shape now").
 
 	scheduledAt := time.Now()
 	if req.ScheduledAt != nil && strings.TrimSpace(*req.ScheduledAt) != "" {
@@ -565,6 +583,39 @@ func (h *AdminCampaignsHandler) Send(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
+	}
+
+	// The typed send confirmation (#0047's plan, wired in by #0044): compare
+	// the operator's confirm_count against the authoritative audience count,
+	// computed from the campaign row already loaded above rather than a
+	// second LoadAudience round trip. A mismatch is a plain {"error":"..."}
+	// 409 — deliberately NOT the {"unmet":[...]} preflight shape below,
+	// which #0047 branches on to distinguish "the count you typed is stale"
+	// from "this campaign isn't ready to send". h.audience == nil (test-only
+	// — see NewAdminCampaignsHandler's doc comment) skips this check
+	// entirely, leaving confirm_count accepted-but-unverified, the
+	// pre-#0044 behavior.
+	if h.audience != nil {
+		aud := mailing.Audience{Mode: current.AudienceMode, InterestIDs: current.InterestIDs}
+		preview, aerr := h.audience.Preview(r.Context(), aud, 0)
+		switch {
+		case aerr == nil:
+			if preview.Count != *req.ConfirmCount {
+				writeError(w, http.StatusConflict, fmt.Sprintf(
+					"confirm_count does not match the current audience count (%d); reload and try again", preview.Count))
+				return
+			}
+		case errors.Is(aerr, mailing.ErrUnknownAudienceMode), errors.Is(aerr, mailing.ErrAudienceInterestsRequired):
+			// The campaign's own audience targeting is invalid. Don't
+			// duplicate that error mapping here — h.store.Send below runs
+			// the identical defensive normalizeAudience check and reports
+			// it the usual way (ErrUnknownAudienceMode/
+			// ErrCampaignInterestsRequired -> 409 via
+			// campaignAudienceErrorMessage).
+		default:
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
 	}
 
 	// Only run the advisory gate when the campaign is actually a legal

@@ -37,14 +37,15 @@ func TestMain(m *testing.M) {
 	}
 	testDBPool = pool
 
-	// Only the three campaign tables this issue's tests touch. #0044 will
-	// extend this to include subscriber_interests, subscribers, and
-	// suppressions once its AudienceStore tests need them (its plan already
-	// names the exact five-table list).
+	// Extended by #0044 (AudienceStore) to the full five-table list its plan
+	// names: subscriber_interests, subscribers, and suppressions join the
+	// original three campaign tables, since audience_test.go seeds and reads
+	// across all of them. Still a single TestMain per this package's own
+	// "extend, don't add a second one" rule above.
 	if testDBPool != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		_, truncErr := testDBPool.Exec(ctx,
-			`TRUNCATE email_sends, campaign_interests, email_campaigns RESTART IDENTITY CASCADE`)
+			`TRUNCATE email_sends, campaign_interests, email_campaigns, subscriber_interests, subscribers, suppressions RESTART IDENTITY CASCADE`)
 		cancel()
 		if truncErr != nil {
 			fmt.Fprintf(os.Stderr, "testdb: entry truncate failed: %v\n", truncErr)

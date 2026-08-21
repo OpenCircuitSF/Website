@@ -25,7 +25,8 @@ import (
 func adminCampaignsMux(pool *pgxpool.Pool, preflight campaignPreflightChecker) http.Handler {
 	authStore := auth.NewStore(pool)
 	store := mailing.NewCampaignStore(pool)
-	h := NewAdminCampaignsHandler(store, preflight, audit.New(pool))
+	audienceStore := mailing.NewAudienceStore(pool)
+	h := NewAdminCampaignsHandler(store, preflight, audienceStore, audit.New(pool))
 	requireSession := middleware.RequireSession(authStore)
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
@@ -523,6 +524,57 @@ func TestAdminCampaigns_Send_PreflightFailureReturns409UnmetShape(t *testing.T) 
 		if a == audit.ActionEmailCampaignScheduled {
 			t.Errorf("audit actions = %v, must not include %s when preflight refused", actions, audit.ActionEmailCampaignScheduled)
 		}
+	}
+}
+
+// TestAdminCampaigns_Send_ConfirmCountMismatchRejected is #0044's carried-in
+// acceptance criterion: confirm_count is now compared against the
+// authoritative audience count (mailing.AudienceStore.Preview), not merely
+// shape-validated. A stale/wrong count must be refused with the plain
+// {"error":"..."} envelope — never the {"unmet":[...]} preflight shape
+// #0047 branches on — and must never let the campaign transition.
+func TestAdminCampaigns_Send_ConfirmCountMismatchRejected(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-countmismatch@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-countmismatch")
+
+	store := mailing.NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "s", BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, c.ID)
+
+	// The real audience count for a fresh mode='all' campaign in this
+	// test's isolated fixture is 0; typing anything else must be refused.
+	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/campaigns/%d/send", srv.URL, c.ID), "admin-token-campaigns-countmismatch", `{"confirm_count":5}`)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+
+	body := readBody(t, resp)
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(body, &shape); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, hasUnmet := shape["unmet"]; hasUnmet {
+		t.Errorf("confirm_count mismatch body carries an \"unmet\" key (body=%s); must use the plain error envelope, not the preflight shape", body)
+	}
+	if _, hasError := shape["error"]; !hasError {
+		t.Errorf("confirm_count mismatch body has no \"error\" key (body=%s)", body)
+	}
+
+	got, err := store.GetByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != mailing.CampaignStatusDraft {
+		t.Errorf("status after confirm_count mismatch = %q, want unchanged %q", got.Status, mailing.CampaignStatusDraft)
 	}
 }
 
