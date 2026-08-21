@@ -451,6 +451,18 @@ func (s *Store) Confirm(ctx context.Context, token string, now time.Time) (Subsc
 // "unsubscribed" and let a subsequent Confirm reach active — see this
 // issue's Review notes for the reproduced chain. AdminClearComplaint is the
 // only path that may move a subscriber out of complained.
+//
+// The returned row is the authoritative answer to "did this actually
+// change anything": it reflects what the guarded UPDATE above did,
+// atomically, not what the caller believed going in. A caller that instead
+// compares a status it read before calling Unsubscribe can be wrong if a
+// complaint lands between that read and this call — #0104, found in both
+// callers this package had at the time (UnsubscribeHandler.Post,
+// PreferencesHandler.patchUnsubscribe), which both derived their no-op
+// decision from a pre-call read until that issue fixed them to use
+// updated.Status here instead. Compare the returned Subscriber's Status
+// against StatusComplained (or whatever else matters) rather than reaching
+// for a value read earlier in the request.
 func (s *Store) Unsubscribe(ctx context.Context, id int64, source string, now time.Time) (Subscriber, error) {
 	row := s.pool.QueryRow(ctx,
 		`UPDATE subscribers

@@ -571,6 +571,111 @@ func TestPreferencesHandler_Patch_PreservesInactiveInterestOnUnrelatedSave(t *te
 	}
 }
 
+// raceComplainingPreferencesStore wraps a real *subscribers.Store and marks
+// the target row complained the moment Unsubscribe is called — i.e. AFTER
+// patchUnsubscribe's earlier FindByManageToken lookup already returned an
+// "active" row but BEFORE the guarded UPDATE runs. Mirrors
+// raceComplainingUnsubscribeStore in unsubscribe_test.go for the
+// preference-center path #0104 also fixed.
+type raceComplainingPreferencesStore struct {
+	subs         *subscribers.Store
+	now          func() time.Time
+	complainedID int64
+	complained   bool
+}
+
+func (s *raceComplainingPreferencesStore) FindByManageToken(ctx context.Context, token string) (subscribers.Subscriber, error) {
+	return s.subs.FindByManageToken(ctx, token)
+}
+
+func (s *raceComplainingPreferencesStore) InterestIDs(ctx context.Context, subscriberID int64) ([]int64, error) {
+	return s.subs.InterestIDs(ctx, subscriberID)
+}
+
+func (s *raceComplainingPreferencesStore) SetInterests(ctx context.Context, subscriberID int64, interestIDs []int64) error {
+	return s.subs.SetInterests(ctx, subscriberID, interestIDs)
+}
+
+func (s *raceComplainingPreferencesStore) Unsubscribe(ctx context.Context, id int64, source string, now time.Time) (subscribers.Subscriber, error) {
+	if !s.complained && id == s.complainedID {
+		s.complained = true
+		if _, err := s.subs.MarkComplained(ctx, id, s.now()); err != nil {
+			return subscribers.Subscriber{}, err
+		}
+	}
+	return s.subs.Unsubscribe(ctx, id, source, now)
+}
+
+// TestPreferencesHandler_Patch_ComplainedBetweenLookupAndUnsubscribe_IsNoOp
+// (#0104) proves patchUnsubscribe decides noOp from the row
+// Store.Unsubscribe returns, not from a status read before the call.
+// Without that fix, the stale pre-call read would see "active", take the
+// real-unsubscribe branch, and write a subscriber.unsubscribed audit row
+// for an unsubscribe the guarded UPDATE actually refused — corrupting the
+// consent-evidence record #0038/#0060 read as fact. Seeds a throwaway
+// subscriber (CLAUDE.md §8b) rather than targeting any literal or seeded id.
+func TestPreferencesHandler_Patch_ComplainedBetweenLookupAndUnsubscribe_IsNoOp(t *testing.T) {
+	pool := journeyTestPool(t)
+	realStore := subscribers.NewStore(pool)
+	ints := interests.NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := realStore.Create(ctx, subscribers.NewSignup{Email: journeyUniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := realStore.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	racingNow := now.Add(2 * time.Minute)
+	subs := &raceComplainingPreferencesStore{
+		subs:         realStore,
+		now:          func() time.Time { return racingNow },
+		complainedID: created.ID,
+	}
+	auditor := audit.New(pool)
+	_, mux := journeyPreferencesMux(subs, ints, auditor)
+
+	rr := doPatchPreferences(t, mux, map[string]any{
+		"token":       created.ManageToken,
+		"unsubscribe": true,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	resp := decodePreferencesResponse(t, rr)
+	if resp.Unsubscribed {
+		t.Error("Unsubscribed = true, want false — the row was complained by the time Unsubscribe's UPDATE ran")
+	}
+	if !resp.NoOp {
+		t.Error("NoOp = false, want true")
+	}
+
+	after, err := realStore.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if after.Status != subscribers.StatusComplained {
+		t.Errorf("Status = %q, want %q", after.Status, subscribers.StatusComplained)
+	}
+	if after.ManageToken != created.ManageToken {
+		t.Error("ManageToken changed, want unchanged")
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE action = $1 AND target_id = $2`,
+		audit.ActionSubscriberUnsubscribed, created.ID,
+	).Scan(&count); err != nil {
+		t.Fatalf("query audit_log: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("audit_log rows for subscriber.unsubscribed = %d, want 0 — a stale pre-call read would have written one for an unsubscribe that never happened", count)
+	}
+}
+
 func TestMaskEmail(t *testing.T) {
 	cases := []struct {
 		email string

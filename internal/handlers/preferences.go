@@ -213,19 +213,22 @@ func (h *PreferencesHandler) Patch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PreferencesHandler) patchUnsubscribe(w http.ResponseWriter, r *http.Request, sub subscribers.Subscriber) {
-	// Captured before the call: Store.Unsubscribe's only no-op case is a
-	// row that was ALREADY complained (its doc comment), so the pre-call
-	// status alone tells us whether this request is about to be a no-op —
-	// same before/after comparison AdminSubscribersHandler.Suppress uses
-	// for the identical shape (#0032).
-	before := sub.Status
-
 	updated, err := h.subs.Unsubscribe(r.Context(), sub.ID, subscribers.SourcePreferences, h.now())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	noOp := before == subscribers.StatusComplained
+
+	// Decided from the row Store.Unsubscribe actually returned, not a
+	// status read before the call (#0104). Store.Unsubscribe's only no-op
+	// case is a row that was ALREADY complained (its doc comment, which is
+	// the authoritative answer to "did this change anything") — deriving
+	// noOp from updated.Status rather than sub.Status closes the narrow
+	// window where a complaint lands between the FindByManageToken read
+	// above and this call, which would otherwise make the pre-call read
+	// stale and let the audit-write/response logic below believe a real
+	// unsubscribe happened when the guarded UPDATE actually refused it.
+	noOp := updated.Status == subscribers.StatusComplained
 
 	// Skip the audit write entirely on a no-op (#0031 review finding 2):
 	// the audit log is the consent-evidence record PRD §6.3 promises and

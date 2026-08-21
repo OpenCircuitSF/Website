@@ -334,3 +334,97 @@ func TestUnsubscribeHandler_Post_Complained_IsSilentNoOp(t *testing.T) {
 		t.Errorf("audit_log rows for subscriber.unsubscribed = %d, want 0 (complained no-op must not write an audit row)", count)
 	}
 }
+
+// raceComplainingUnsubscribeStore wraps a real *subscribers.Store and marks
+// the target row complained the moment Unsubscribe is called — i.e. AFTER
+// the handler's FindByManageToken lookup already returned an "active" row
+// but BEFORE the guarded UPDATE runs. This reproduces the exact window
+// #0104 is about: a status read before the mutating call is stale by the
+// time the call lands, but the row Unsubscribe itself returns is not.
+type raceComplainingUnsubscribeStore struct {
+	subs         *subscribers.Store
+	now          func() time.Time
+	complainedID int64
+	complained   bool
+}
+
+func (s *raceComplainingUnsubscribeStore) FindByManageToken(ctx context.Context, token string) (subscribers.Subscriber, error) {
+	return s.subs.FindByManageToken(ctx, token)
+}
+
+func (s *raceComplainingUnsubscribeStore) Unsubscribe(ctx context.Context, id int64, source string, now time.Time) (subscribers.Subscriber, error) {
+	if !s.complained && id == s.complainedID {
+		s.complained = true
+		if _, err := s.subs.MarkComplained(ctx, id, s.now()); err != nil {
+			return subscribers.Subscriber{}, err
+		}
+	}
+	return s.subs.Unsubscribe(ctx, id, source, now)
+}
+
+func (s *raceComplainingUnsubscribeStore) RotateManageToken(ctx context.Context, id int64, now time.Time) (subscribers.Subscriber, error) {
+	return s.subs.RotateManageToken(ctx, id, now)
+}
+
+// TestUnsubscribeHandler_Post_ComplainedBetweenLookupAndUnsubscribe_IsNoOp
+// (#0104) proves noOp is decided from the row Store.Unsubscribe returns,
+// not from a status read before the call. Without that fix, the handler's
+// stale pre-call read would see "active", take the real-unsubscribe branch,
+// rotate manage_token, and write a subscriber.unsubscribed audit row for an
+// unsubscribe that the guarded UPDATE actually refused — corrupting the
+// consent-evidence record #0038/#0060 read as fact. Seeds a throwaway
+// subscriber (CLAUDE.md §8b) rather than targeting any literal or seeded id.
+func TestUnsubscribeHandler_Post_ComplainedBetweenLookupAndUnsubscribe_IsNoOp(t *testing.T) {
+	pool := journeyTestPool(t)
+	realStore := subscribers.NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := realStore.Create(ctx, subscribers.NewSignup{Email: journeyUniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := realStore.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	racingNow := now.Add(2 * time.Minute)
+	subs := &raceComplainingUnsubscribeStore{
+		subs:         realStore,
+		now:          func() time.Time { return racingNow },
+		complainedID: created.ID,
+	}
+	auditor := audit.New(pool)
+	_, mux := journeyUnsubscribeMux(subs, auditor)
+
+	rr := doPostUnsubscribe(t, mux, created.ManageToken)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	resp := decodeUnsubscribeResponse(t, rr)
+	if !resp.NoOp {
+		t.Error("NoOp = false, want true — the row was complained by the time Unsubscribe's UPDATE ran")
+	}
+
+	after, err := realStore.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if after.Status != subscribers.StatusComplained {
+		t.Errorf("Status = %q, want %q", after.Status, subscribers.StatusComplained)
+	}
+	if after.ManageToken != created.ManageToken {
+		t.Error("ManageToken changed, want unchanged — a stale pre-call read would have rotated it")
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE action = $1 AND target_id = $2`,
+		audit.ActionSubscriberUnsubscribed, created.ID,
+	).Scan(&count); err != nil {
+		t.Fatalf("query audit_log: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("audit_log rows for subscriber.unsubscribed = %d, want 0 — a stale pre-call read would have written one for an unsubscribe that never happened", count)
+	}
+}

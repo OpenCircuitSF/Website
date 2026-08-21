@@ -43,11 +43,14 @@
 //
 // subscribers.Store.Unsubscribe already no-ops on a currently-complained
 // row (status, unsubscribed_at, unsubscribe_source all left unchanged — see
-// its own doc comment). This handler captures the subscriber's status
-// BEFORE calling Unsubscribe (mirroring
-// PreferencesHandler.patchUnsubscribe's `before := sub.Status`, the pattern
-// #0031 established for the identical decision) and uses that to decide,
-// deliberately in this order:
+// its own doc comment, which is the authoritative answer to "did this
+// change anything"). This handler derives noOp from the ROW Unsubscribe
+// RETURNS, not a status read before the call (#0104; an earlier version
+// read sub.Status before calling Unsubscribe, mirroring
+// PreferencesHandler.patchUnsubscribe's original `before := sub.Status` —
+// both had a narrow read-then-act window if a complaint landed between the
+// SELECT and the UPDATE), and uses that to decide, deliberately in this
+// order:
 //
 //  1. Skip RotateManageToken entirely when the row was already complained.
 //     Rotation's purpose is stopping replay of a CONSUMED unsubscribe link;
@@ -196,19 +199,21 @@ func (h *UnsubscribeHandler) Post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Captured before the mutating call, mirroring
-	// PreferencesHandler.patchUnsubscribe's identical `before := sub.Status`
-	// — see the package doc comment's "complained no-op" section for why
-	// this must be decided before, not after, calling Unsubscribe.
-	before := sub.Status
-	noOp := before == subscribers.StatusComplained
-
 	updated, err := h.subs.Unsubscribe(r.Context(), sub.ID, subscribers.SourceOneClick, h.now())
 	if err != nil {
 		h.log.Error("unsubscribe: Store.Unsubscribe failed", "subscriber_id", sub.ID, "err", err)
 		h.writeNeutral(w, true, "If this address was on our list, it has been unsubscribed.")
 		return
 	}
+
+	// Decided from the row Store.Unsubscribe actually returned, not a
+	// status read before the call (#0104) — that row is the guarded
+	// UPDATE's own atomic answer to "did this change anything", so it can't
+	// go stale the way a pre-call read can if a complaint lands between the
+	// SELECT above and this UPDATE. See the package doc comment's
+	// "complained no-op" section for why the rotation and audit decisions
+	// below must still happen after this check and before either write.
+	noOp := updated.Status == subscribers.StatusComplained
 
 	if noOp {
 		// Do nothing further at all: no rotation, no audit row. See the

@@ -587,18 +587,41 @@ func mountAndServe(
 
 	// One-click unsubscribe (#0034, PRD §6.5 path 1, RFC 8058) — public,
 	// unauthenticated, no CSRF (see unsubscribe.go's package doc comment for
-	// why). Rate-limited at the same scale as preferencesLimiter above: a
-	// mail provider's automated POST is not brute-forcing a 32-byte token,
-	// but matching the existing public-endpoint convention costs nothing.
-	// Deliberately its OWN limiter rather than reusing preferencesLimiter —
-	// the two limiters share a rate but a shared bucket would let a burst of
-	// legitimate preference-center PATCHes from one IP starve a genuine
-	// one-click POST arriving moments later from a mail provider's shared
-	// egress IP, or vice versa.
+	// why).
+	//
+	// #0103: POST /api/unsubscribe carries NO rate limiter at all — this is
+	// the one status code PRD §6.5 says is worse than useless here ("a
+	// provider seeing errors on the unsubscribe endpoint downgrades sender
+	// reputation"), and RateLimiter.Middleware's refusal path answers 429,
+	// not the handler's neutral 200. Gmail's and Yahoo's one-click infra
+	// buckets essentially all of a domain's unsubscribe traffic onto a small
+	// set of shared egress IPs (per #0077's X-Forwarded-For trust model), so
+	// a per-IP limiter here doesn't throttle one abusive caller — it
+	// eventually 429s a real subscriber's unsubscribe request because OTHER
+	// people's one-click hits already spent that IP's bucket. Between "drop
+	// the limiter" and "make the refusal path answer the same neutral 200
+	// instead," dropping it is simpler and the same neutral response is
+	// already every OTHER path's guarantee, not a new invariant to maintain
+	// here.
+	//
+	// Is unlimited POST /api/unsubscribe a real DoS surface? No case is
+	// made: Post does exactly one indexed SELECT on a random 32-byte token
+	// (subscribers.Store.FindByManageToken, a btree lookup on manage_token,
+	// which is UNIQUE per migrations/000010) and, on a miss — the outcome
+	// for any request that isn't a legitimate footer/header link — nothing
+	// else at all. That is cheaper than GET /api/interests or GET
+	// /sitemap.xml below, neither of which is rate-limited either.
+	//
+	// GET /api/unsubscribe keeps unsubscribeLimiter (an ordinary,
+	// 429-capable per-IP limiter). That is a deliberate, different choice
+	// from POST: GET never touches the store (see unsubscribe.go) and
+	// exists only to redirect a click or a scanner's prefetch to the SPA's
+	// /unsubscribe view, so a 429 there just means the prefetch doesn't
+	// happen — harmless, unlike a 429 on the actual RFC 8058 action.
 	unsubscribeLimiter := middleware.NewRateLimiter(rate.Every(time.Minute/10), 5)
 	if unsubscribeH != nil {
 		mux.Handle("GET /api/unsubscribe", unsubscribeLimiter.Middleware(http.HandlerFunc(unsubscribeH.Get)))
-		mux.Handle("POST /api/unsubscribe", unsubscribeLimiter.Middleware(http.HandlerFunc(unsubscribeH.Post)))
+		mux.Handle("POST /api/unsubscribe", http.HandlerFunc(unsubscribeH.Post))
 	}
 
 	// SEO: server-injected per-route meta tags (#0019) and generated
