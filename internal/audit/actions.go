@@ -179,6 +179,33 @@ const (
 	// subscribers ever selected the interest — never for the common case of
 	// retiring one with history, which is ActionInterestDeactivated.
 	ActionInterestDeleted = "interest.deleted"
+
+	// Email campaign lifecycle (PRD §5.2/§6.6/§8; #0041's campaign CRUD
+	// API). Named email_campaign.* per the deleted-constants note just
+	// below — this is a distinct concept from ShortLinks' campaigns
+	// (grouping short links), which never reused these strings.
+	//
+	// ActionEmailCampaignCreated is written by POST /admin/campaigns.
+	// ActionEmailCampaignUpdated is written by PATCH /admin/campaigns/{id}
+	// for a content-only edit (name/subject/preheader/body_md/audience_mode/
+	// interest_ids) — PATCH never changes status; see admin_campaigns.go.
+	ActionEmailCampaignCreated = "email_campaign.created"
+	ActionEmailCampaignUpdated = "email_campaign.updated"
+	// ActionEmailCampaignScheduled is written by POST
+	// /admin/campaigns/{id}/send — the operator-initiated transition into
+	// the send pipeline (draft or failed -> scheduled; PRD §8's "Requires
+	// typed confirmation of the count" note belongs to #0044/#0047, once
+	// the audience-count endpoint exists — see #0041's ## Fix). Metadata
+	// records whether the source status was draft or failed (a retry),
+	// since #0045's plan treats "resuming a failed campaign" as a distinct,
+	// nameable event from a first send.
+	ActionEmailCampaignScheduled = "email_campaign.scheduled"
+	// ActionEmailCampaignCanceled is written by POST
+	// /admin/campaigns/{id}/cancel. Metadata records the source status
+	// (scheduled or sending) since cancelling a 'sending' campaign has a
+	// materially different consequence — it stops further batches, it does
+	// not recall anything already sent (PRD §8's note).
+	ActionEmailCampaignCanceled = "email_campaign.canceled"
 )
 
 // Deleted (#0068): ActionCampaignCreated/Updated/Deleted and
@@ -202,6 +229,9 @@ const (
 	TargetURLFilter  = "url_filter"
 	TargetSubscriber = "subscriber"
 	TargetInterest   = "interest"
+	// TargetEmailCampaign is the target type for the email_campaign.*
+	// actions above (#0041).
+	TargetEmailCampaign = "email_campaign"
 	// TargetSNSTopic is the target type for ActionSESSubscriptionConfirmed
 	// and ActionSESUnsubscribeConfirmation (#0038) — the target is the SNS
 	// topic/subscription relationship itself, not any one subscriber.

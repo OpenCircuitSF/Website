@@ -20,6 +20,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
@@ -129,6 +130,16 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// #0100: exercised the same way as adminSubscribersH above.
 	suppressionsStore := subscribers.NewSuppressionStore(pool)
 	adminSuppressionsH := handlers.NewAdminSuppressionsHandler(suppressionsStore, subscribersStore, auditLogger)
+	// #0041: exercised the same way as adminSuppressionsH above. preflight is
+	// nil (matching this test's own "not exercised" convention for
+	// not-yet-built seams). The admin-session case sends every route with no
+	// body, so POST .../send answers 400 (confirm_count is required, #0047's
+	// plan) rather than reaching the preflight seam or the state transition
+	// — still proof enough that RequireAdmin let the request through, the
+	// same standard this test already applies to POST /admin/subscribers
+	// above.
+	campaignsStore := mailing.NewCampaignStore(pool)
+	adminCampaignsH := handlers.NewAdminCampaignsHandler(campaignsStore, nil, auditLogger)
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 	meH := handlers.NewMeHandler()
@@ -141,7 +152,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			requireSession, requireAdmin, nil, ready)
@@ -206,6 +217,30 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM subscribers WHERE email LIKE 'zz-wiring-%'`)
 	})
 
+	// A dedicated throwaway campaign for the /admin/campaigns/{id} family,
+	// seeded through the real store — never a literal id, same CLAUDE.md §8b
+	// reasoning as targetInterest/targetSubscriber above. The admin-session
+	// case reaches the real handler for every verb (GET, PATCH, POST
+	// .../send, POST .../cancel); this test sends no body on any route, so
+	// POST .../send 400s on the missing confirm_count (#0047's plan) and
+	// POST .../cancel 409s (the campaign never left draft) — neither
+	// mutates the row, but the cleanup below is unconditional regardless,
+	// matching targetSubscriber's own comment above.
+	targetCampaign, err := campaignsStore.Create(context.Background(), mailing.CampaignInput{
+		Name:         fmt.Sprintf("zz-wiring-%d", time.Now().UnixNano()),
+		Subject:      "Wiring guard target",
+		BodyMD:       "wiring guard target body",
+		AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed target campaign: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), wiringDBOpTimeout)
+		defer cancel()
+		_, _ = pool.Exec(ctx, `DELETE FROM email_campaigns WHERE name LIKE 'zz-wiring-%'`)
+	})
+
 	// adminRoutes (cmd/opencircuit/main.go) is the single list mountAndServe
 	// itself loops over to register every admin route behind requireAdmin.
 	// Enumerating it here, rather than hand-listing paths, is what closes
@@ -230,8 +265,8 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			return status != http.StatusUnauthorized && status != http.StatusForbidden
 		}},
 	}
-	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH) {
-		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID)
+	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH) {
+		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID, targetCampaign.ID)
 		for _, c := range cases {
 			req, err := http.NewRequest(route.method, baseURL+path, nil)
 			if err != nil {
@@ -263,9 +298,10 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 // one (CLAUDE.md §8b: "Never target a literal or seeded id in a test").
 // /admin/users/... routes take a user id; /admin/interests/... routes take
 // an interest id; /admin/subscribers/... routes (#0032) take a subscriber
-// id. Routes with no {id} (e.g. /admin/settings, /admin/audit,
-// /admin/subscribers itself) pass through unchanged.
-func resolveAdminRoutePath(path string, userID, interestID, subscriberID int64) string {
+// id; /admin/campaigns/... routes (#0041) take a campaign id, including its
+// /send and /cancel sub-routes. Routes with no {id} (e.g. /admin/settings,
+// /admin/audit, /admin/subscribers itself) pass through unchanged.
+func resolveAdminRoutePath(path string, userID, interestID, subscriberID, campaignID int64) string {
 	switch {
 	case strings.HasPrefix(path, "/admin/users/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(userID), 1)
@@ -273,6 +309,8 @@ func resolveAdminRoutePath(path string, userID, interestID, subscriberID int64) 
 		return strings.Replace(path, "{id}", fmt.Sprint(interestID), 1)
 	case strings.HasPrefix(path, "/admin/subscribers/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(subscriberID), 1)
+	case strings.HasPrefix(path, "/admin/campaigns/"):
+		return strings.Replace(path, "{id}", fmt.Sprint(campaignID), 1)
 	default:
 		return path
 	}
