@@ -1,0 +1,907 @@
+// worker.go is the send worker itself (#0045, PRD §6.6): the loop that
+// turns queued email_sends rows into delivered mail, and the only place a
+// campaign moves scheduled -> sending -> sent/failed. One in-process
+// goroutine, started by `serve` behind SEND_WORKER_ENABLED — see NewWorker's
+// doc comment for why this is not a separate binary or a systemd timer.
+//
+// # Shutdown is a signal, not a context cancellation
+//
+// Cancelling a context that a 'sent'-status UPDATE is riding on turns "SES
+// accepted, we recorded it" into "SES accepted, we recorded nothing" — a
+// guaranteed duplicate on every deploy. So Stop closes an internal channel
+// and Run checks it between messages and between batches, never during one;
+// the SES call and the status write that immediately follows it each run on
+// their own detached context (context.WithTimeout(context.Background(),
+// …)), the same precedent internal/handlers/subscribe.go's
+// releaseSendClaim already set, so a SIGTERM arriving mid-message cannot
+// leave a message accepted by SES and unrecorded in Postgres.
+//
+// # At-least-once, honestly (§6 of this issue's plan)
+//
+// attempts is incremented and committed in the SAME statement that claims a
+// row to 'sending' (SendStore.ClaimRow), before the SES call; the 'sent'
+// update commits after. The window between SES accepting a message and that
+// update committing is real and cannot be closed — SES's SendEmail is not
+// enlisted in our Postgres transaction and offers no client-supplied
+// idempotency key. If the process dies in that window, the orphan sweep
+// returns the row to 'queued' on the next start and the message sends a
+// second time. Because sends are sequential (one message in flight per
+// worker, §7), at most one message can be in that window at any instant —
+// the duplicate is one message, not a batch. Marking 'sent' BEFORE the SES
+// call would instead risk losing a message entirely on the same crash,
+// which is strictly worse for a mailing list: a duplicate is a harmless
+// annoyance; a silent drop is a broken promise nothing surfaces. This system
+// deliberately does not achieve exactly-once.
+package mailing
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/sesv2/types"
+	"golang.org/x/time/rate"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+)
+
+const (
+	defaultPollInterval = 2 * time.Second
+	defaultBatchSize    = 50
+	defaultMaxSendRate  = 10
+
+	// sendMessageTimeout and writeStatusTimeout bound the two detached-context
+	// operations that must survive a SIGTERM arriving mid-message (see this
+	// file's package doc comment). Neither is sized against measured machine
+	// load (CLAUDE.md §5) — sendMessageTimeout covers one SES round trip
+	// (including SESMailer's own internal throttling retries), and
+	// writeStatusTimeout covers one single-row UPDATE.
+	sendMessageTimeout = 30 * time.Second
+	writeStatusTimeout = 5 * time.Second
+
+	// backoffCap bounds the campaign-level exponential backoff (§7) SES
+	// throttling triggers: 1s, 2s, 4s, 8s, 16s, capped at 30s, reset to 1s on
+	// the next successful send.
+	backoffCap = 30 * time.Second
+)
+
+// CampaignProgress is one snapshot of a campaign's send progress — the seam
+// #0048 publishes over SSE. Total is fixed at materialization (#0044's plan
+// requires a fixed denominator); Remaining is queued+sending; Skipped is its
+// own bucket, never folded into Failed.
+type CampaignProgress struct {
+	CampaignID                              int64
+	Total, Sent, Failed, Skipped, Remaining int64
+}
+
+// ProgressPublisher is the seam #0048 supplies a broker-backed
+// implementation of. nil until then; every call site in this file is
+// nil-guarded.
+type ProgressPublisher interface {
+	PublishCampaignProgress(ctx context.Context, p CampaignProgress)
+}
+
+// Worker drains queued campaign sends at a throttled rate, refusing to run
+// (or continue running) a campaign whose pre-send requirements are unmet.
+// See NewWorker for construction and this file's package doc comment for
+// its shutdown and idempotency guarantees.
+type Worker struct {
+	store    *SendStore
+	audience *AudienceStore
+	auditor  *audit.Logger
+	mailer   Mailer
+	render   CampaignRenderer
+	settings SettingsReader
+	progress ProgressPublisher
+
+	baseURL, listDomain, fromAddr, replyTo string
+	envMaxSendRate, batchSize              int
+
+	pollInterval time.Duration
+	now          func() time.Time
+	sleep        func(context.Context, time.Duration) error
+	log          *slog.Logger
+
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	stopOnce sync.Once
+}
+
+// WorkerDeps is NewWorker's construction argument.
+type WorkerDeps struct {
+	Store    *SendStore
+	Audience *AudienceStore
+	Audit    *audit.Logger // nil disables audit writes, matching every other handler's nil-tolerance
+	Mailer   Mailer
+	Render   CampaignRenderer // nil defaults to MarkdownCampaignRenderer{}
+	Settings SettingsReader
+	Progress ProgressPublisher // nil until #0048; every call site nil-guarded
+
+	BaseURL, ListDomain, FromAddr, ReplyTo string
+	// EnvMaxSendRate is MAX_SEND_RATE — the deploy-level ceiling. BatchSize
+	// is SEND_BATCH_SIZE.
+	EnvMaxSendRate, BatchSize int
+
+	// PollInterval defaults to 2s (PRD §6.6). Overridable so tests never
+	// wait out a real poll tick.
+	PollInterval time.Duration
+	Log          *slog.Logger
+}
+
+// NewWorker constructs a Worker. It does not start it — call Run.
+//
+// # Why an in-process goroutine, not a separate binary
+//
+// #0048 publishes send progress over the SAME process's SSE broker
+// (internal/events.Broker, an in-memory fan-out) — a separate worker process
+// would have to reach that broker over the network, inventing an internal
+// transport for a single-box deployment. The deploy target is one EC2
+// instance with one systemd unit (CLAUDE.md §7); a second unit is a second
+// thing to install, monitor, and forget to restart, and SEND_WORKER_ENABLED
+// already exists precisely so that if the site is ever scaled to two
+// instances, exactly one of them runs the worker — that is the scaling
+// story, a separate binary is not needed to tell it. A systemd-timer/cron
+// drain was also rejected: poll-per-minute latency on an operator-initiated
+// action, and no place to hold the rate limiter's state.
+//
+// # STORAGE=json and MAILER_NOOP=true never reach this constructor
+//
+// internal/devstore has no subscribers/suppressions/campaigns backing at
+// all, so cmd/opencircuit never calls NewWorker in dev mode — nil-guarded at
+// the call site exactly like sesNotifyH. MAILER_NOOP=true similarly refuses
+// to construct the worker at the cmd/opencircuit call site (logging one
+// slog.Warn) rather than here: noOpMailingMailer.Send returns the literal
+// message id "noop", and writing that into email_sends.ses_message_id would
+// poison #0038's bounce/complaint join key and #0049's stats with rows that
+// claim to have been delivered.
+func NewWorker(deps WorkerDeps) (*Worker, error) {
+	if deps.Store == nil {
+		return nil, errors.New("mailing: worker requires a SendStore")
+	}
+	if deps.Audience == nil {
+		return nil, errors.New("mailing: worker requires an AudienceStore")
+	}
+	if deps.Mailer == nil {
+		return nil, errors.New("mailing: worker requires a Mailer")
+	}
+	if deps.Settings == nil {
+		return nil, errors.New("mailing: worker requires a SettingsReader")
+	}
+
+	render := deps.Render
+	if render == nil {
+		render = MarkdownCampaignRenderer{}
+	}
+	pollInterval := deps.PollInterval
+	if pollInterval <= 0 {
+		pollInterval = defaultPollInterval
+	}
+	batchSize := deps.BatchSize
+	if batchSize <= 0 {
+		batchSize = defaultBatchSize
+	}
+	envMaxSendRate := deps.EnvMaxSendRate
+	if envMaxSendRate <= 0 {
+		envMaxSendRate = defaultMaxSendRate
+	}
+	log := deps.Log
+	if log == nil {
+		log = slog.Default()
+	}
+
+	return &Worker{
+		store:          deps.Store,
+		audience:       deps.Audience,
+		auditor:        deps.Audit,
+		mailer:         deps.Mailer,
+		render:         render,
+		settings:       deps.Settings,
+		progress:       deps.Progress,
+		baseURL:        deps.BaseURL,
+		listDomain:     deps.ListDomain,
+		fromAddr:       deps.FromAddr,
+		replyTo:        deps.ReplyTo,
+		envMaxSendRate: envMaxSendRate,
+		batchSize:      batchSize,
+		pollInterval:   pollInterval,
+		now:            time.Now,
+		sleep:          sleepWithContext,
+		log:            log,
+		stopCh:         make(chan struct{}),
+		doneCh:         make(chan struct{}),
+	}, nil
+}
+
+// Run blocks, polling every pollInterval, until Stop is called or ctx is
+// done. Each pass claims at most one campaign (a resume takes priority over
+// a fresh start) and drains it to completion before returning to the
+// ticker — there is no concurrency across campaigns within one Worker.
+func (w *Worker) Run(ctx context.Context) {
+	defer close(w.doneCh)
+	for {
+		select {
+		case <-w.stopCh:
+			return
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		processed, err := w.claimAndDrain(ctx)
+		if err != nil {
+			w.log.Error("mailing: send worker pass failed", "err", err)
+		}
+		if processed {
+			continue
+		}
+
+		select {
+		case <-w.stopCh:
+			return
+		case <-ctx.Done():
+			return
+		case <-time.After(w.pollInterval):
+		}
+	}
+}
+
+// Stop signals Run to stop claiming new work and blocks until Run has
+// returned or ctx's deadline elapses, whichever comes first — see this
+// file's package doc comment for why this is a signal, not a context
+// cancellation. Safe to call more than once.
+func (w *Worker) Stop(ctx context.Context) error {
+	w.stopOnce.Do(func() { close(w.stopCh) })
+	select {
+	case <-w.doneCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// claimAndDrain performs one poll pass: resume a campaign already 'sending'
+// if one exists, else evaluate the next due 'scheduled' campaign against the
+// gate and either demote it or claim and drain it. Returns processed=true
+// when this pass did something (claimed, drained, or demoted a campaign) so
+// Run can poll again immediately instead of waiting a full tick.
+func (w *Worker) claimAndDrain(ctx context.Context) (bool, error) {
+	resumed, err := w.store.ClaimResume(ctx)
+	if err != nil {
+		return false, err
+	}
+	if resumed != nil {
+		return true, w.drainCampaign(ctx, resumed)
+	}
+
+	candidateID, ok, err := w.store.PeekScheduledCandidate(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+
+	pre, err := w.store.GatherPreflight(ctx, candidateID)
+	if err != nil {
+		if errors.Is(err, ErrCampaignNotFound) {
+			// Deleted or otherwise vanished between the peek and this read
+			// (not possible via any route this codebase exposes today, but
+			// not worth crashing the worker over).
+			return false, nil
+		}
+		return false, err
+	}
+
+	result := Preflight(pre)
+	if !result.OK() {
+		demoted, derr := w.store.DemoteToDraft(ctx, candidateID)
+		if derr != nil {
+			return false, derr
+		}
+		if demoted {
+			// The authoritative gate refusing the campaign: CLAUDE.md §9's
+			// "not bypassable from the UI" property. Written only by
+			// whichever worker actually performed the demotion — a
+			// concurrent second worker that lost the DemoteToDraft race
+			// (demoted=false) must not write a duplicate audit row.
+			w.auditSendRefused(ctx, candidateID, result)
+		}
+		return demoted, nil
+	}
+
+	started, err := w.store.ClaimStart(ctx, candidateID)
+	if err != nil {
+		return false, err
+	}
+	if started == nil {
+		// A concurrent worker already claimed or demoted this campaign
+		// between our gate evaluation and this UPDATE.
+		return false, nil
+	}
+	return true, w.drainCampaign(ctx, started)
+}
+
+// drainCampaign runs the orphan sweep, materializes the audience exactly
+// once, and drains every queued row to completion. c.MaterializedAt nil
+// means this is the first claim (fresh start or a resume of a crash that
+// happened before materialization finished); non-nil means either a normal
+// resume or a fresh start whose materialization already completed in an
+// earlier attempt.
+func (w *Worker) drainCampaign(ctx context.Context, c *claimedCampaign) error {
+	if _, err := w.store.OrphanSweep(ctx, c.ID); err != nil {
+		return err
+	}
+
+	if c.MaterializedAt == nil {
+		aud := Audience{Mode: c.AudienceMode, InterestIDs: c.InterestIDs}
+		res, err := w.audience.Materialize(ctx, c.ID, aud)
+		if err != nil {
+			return err
+		}
+		didStamp, err := w.store.SetMaterializedAt(ctx, c.ID)
+		if err != nil {
+			return err
+		}
+
+		total, _, _, _, _, _, err := w.store.CountEmailSends(ctx, c.ID)
+		if err != nil {
+			return err
+		}
+
+		if didStamp {
+			// campaign.send_started is written ONLY on the start claim,
+			// never on a resume — the worker that wins SetMaterializedAt's
+			// race is the one that gets to write it, so a campaign
+			// restarted five times still has exactly one row.
+			w.auditSendStarted(ctx, c, res, total)
+		}
+
+		if total == 0 {
+			// Preview said non-zero seconds earlier; zero rows here is
+			// genuinely anomalous (§4 of this issue's plan).
+			return w.failCampaign(ctx, c.ID, "empty_audience")
+		}
+	}
+
+	return w.drainLoop(ctx, c)
+}
+
+// drainLoop re-reads physical_address and reply-to fresh for this campaign
+// (never cached at boot — CLAUDE.md §9) and processes batches until nothing
+// remains queued, the drain is stopped by Stop, or a terminalCampaign-class
+// error halts it.
+func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) error {
+	physicalAddress, settingsErr := w.settings.GetSetting(ctx, settingPhysicalAddress)
+	if settingsErr != nil || strings.TrimSpace(physicalAddress) == "" {
+		// Refusing is always correct (CLAUDE.md §9) — this branch is what
+		// makes a resume whose address went blank after the original start
+		// claim stop rather than send non-compliant mail.
+		return w.failCampaign(ctx, c.ID, "physical_address_missing")
+	}
+	if strings.TrimSpace(w.replyTo) == "" {
+		return w.failCampaign(ctx, c.ID, "reply_to_missing")
+	}
+
+	fromHeader := w.resolveFromHeader(ctx)
+	backoff := time.Second
+
+	for {
+		select {
+		case <-w.stopCh:
+			return nil
+		default:
+		}
+
+		sendRate := w.effectiveSendRate(ctx)
+		limiter := rate.NewLimiter(rate.Limit(sendRate), 1)
+
+		recipients, err := w.store.ClaimBatch(ctx, c.ID, w.batchSize)
+		if err != nil {
+			return err
+		}
+
+		if len(recipients) == 0 {
+			done, err := w.store.CompleteIfDone(ctx, c.ID)
+			if err != nil {
+				return err
+			}
+			if done {
+				w.auditSendCompleted(ctx, c.ID)
+				w.publishProgress(ctx, c.ID)
+			}
+			return nil
+		}
+
+		for _, r := range recipients {
+			select {
+			case <-w.stopCh:
+				return nil
+			default:
+			}
+			if err := limiter.Wait(ctx); err != nil {
+				return err
+			}
+
+			outcome, sendErr := w.sendOne(ctx, c, r, physicalAddress, fromHeader)
+			switch outcome {
+			case sendOutcomeSent:
+				backoff = time.Second
+			case sendOutcomeThrottled:
+				if serr := w.sleep(ctx, backoff); serr != nil {
+					return serr
+				}
+				backoff *= 2
+				if backoff > backoffCap {
+					backoff = backoffCap
+				}
+			case sendOutcomeTerminalCampaign:
+				if _, rerr := w.store.ReleaseRow(ctx, r.SendID); rerr != nil {
+					w.log.Error("mailing: releasing row after terminal campaign error", "send_id", r.SendID, "err", rerr)
+				}
+				return w.failCampaignSES(ctx, c.ID, sendErr)
+			case sendOutcomeAborted:
+				// A test fault-injection hook simulated the process dying at
+				// a specific instruction boundary (see sendPreCrashHook /
+				// sendPostCrashHook's doc comments) — return immediately, as
+				// a real crash would, leaving whatever state the row is
+				// already in. Never set outside a test.
+				return sendErr
+			}
+		}
+
+		w.publishProgress(ctx, c.ID)
+	}
+}
+
+// sendOutcome classifies what happened to one recipient's send attempt, for
+// drainLoop's dispatch.
+type sendOutcome int
+
+const (
+	// sendOutcomeSkipped covers every case where nothing was sent and the
+	// row is already in its correct resting state: the per-row claim lost
+	// a race, or a retryable failure updated the row itself
+	// (queued-for-retry or failed-at-3-attempts).
+	sendOutcomeSkipped sendOutcome = iota
+	sendOutcomeSent
+	sendOutcomeTerminalRow
+	sendOutcomeThrottled
+	sendOutcomeTerminalCampaign
+	// sendOutcomeAborted is produced only by the test fault-injection hooks
+	// below; production code never returns it.
+	sendOutcomeAborted
+)
+
+// errAbortedForTest is the sentinel drainLoop returns when a test hook
+// simulates the process dying mid-send. Package-private and referenced only
+// by the two hooks and their tests.
+var errAbortedForTest = errors.New("mailing: simulated crash for test")
+
+// sendPreCrashHook and sendPostCrashHook are deliberate fault-injection
+// seams for TestWorker_AbortBeforeSESCall_ResumesWithNoDuplicate and
+// TestWorker_AbortBetweenSESAcceptAndStatusWrite_ResumesWithOneDuplicate
+// (this issue's plan §11, criterion 4). Both are nil in production.
+//
+// sendPreCrashHook, when non-nil, is called immediately after a row is
+// claimed (attempts already incremented and committed) but BEFORE any SES
+// call — simulating a crash that never reaches the network. The row stays
+// 'sending'; a resume's orphan sweep returns it to 'queued' and it is sent
+// exactly once, overall.
+//
+// sendPostCrashHook, when non-nil, is called immediately AFTER a successful
+// SES call but BEFORE the 'sent' status write — the exact instruction
+// boundary a SIGKILL would hit that this file's package doc comment
+// describes as the one unavoidable duplicate-delivery window. The message
+// is already recorded as delivered (the test's Mailer has it in hand); the
+// row still shows 'sending' until a resume's orphan sweep and a second send
+// attempt duplicate it.
+//
+// A deliberate deviation from the acceptance criterion's literal "verified
+// by killing the process mid-send in a test" — an in-process abort at the
+// exact commit boundary tests the same invariant deterministically, where a
+// real SIGKILL only adds timing nondeterminism about WHERE the process
+// died (CLAUDE.md §5 warns against exactly that class of flaky test). See
+// this issue's plan §11, criterion 4, for the two-worker concurrent test
+// that additionally exercises a genuinely concurrent second claimant.
+var (
+	sendPreCrashHook  func(sendID int64) bool
+	sendPostCrashHook func(sendID int64) bool
+)
+
+// sendOne claims one row and, if the claim succeeds, sends it. It always
+// leaves the row in a terminal-or-requeued state (or, for
+// sendOutcomeTerminalCampaign, leaves it 'sending' for the caller to
+// release) — never returns with the row silently stuck.
+func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, physicalAddress, fromHeader string) (sendOutcome, error) {
+	_, claimed, err := w.store.ClaimRow(ctx, r.SendID)
+	if err != nil {
+		w.log.Error("mailing: claiming send row", "send_id", r.SendID, "err", err)
+		return sendOutcomeSkipped, nil
+	}
+	if !claimed {
+		// Another worker claimed this row first — see #0044's
+		// "increment attempts before the SES call" requirement and this
+		// issue's plan §4 for why this statement IS the mutual exclusion.
+		return sendOutcomeSkipped, nil
+	}
+
+	if sendPreCrashHook != nil && sendPreCrashHook(r.SendID) {
+		return sendOutcomeAborted, errAbortedForTest
+	}
+
+	if strings.TrimSpace(r.ManageToken) == "" {
+		// A message with a dead unsubscribe link is a compliance failure
+		// (§8 of this issue's plan) — fail loudly, no SES call.
+		if _, err := w.store.MarkFailedRow(ctx, r.SendID, "empty manage token from eligibility recheck"); err != nil {
+			w.log.Error("mailing: marking empty-token row failed", "send_id", r.SendID, "err", err)
+		}
+		return sendOutcomeTerminalRow, nil
+	}
+
+	html, text, rerr := w.render.Campaign(CampaignRenderInput{
+		Subject:         c.Subject,
+		Preheader:       derefOrEmpty(c.Preheader),
+		BodyMarkdown:    c.BodyMD,
+		BaseURL:         w.baseURL,
+		ManageToken:     r.ManageToken,
+		PhysicalAddress: physicalAddress,
+	})
+	if rerr != nil {
+		if _, err := w.store.MarkFailedRow(ctx, r.SendID, rerr.Error()); err != nil {
+			w.log.Error("mailing: marking render-failed row failed", "send_id", r.SendID, "err", err)
+		}
+		return sendOutcomeTerminalRow, nil
+	}
+
+	msg := Message{
+		To:       r.Email,
+		From:     fromHeader,
+		Subject:  c.Subject,
+		HTMLBody: html,
+		TextBody: text,
+		// Built fresh, per recipient, from THIS recipient's own token — see
+		// CampaignHeaders' own doc comment for why hoisting this above the
+		// loop (or reusing one recipient's token) is a compliance bug, not
+		// a style choice.
+		Headers: CampaignHeaders(w.baseURL, w.listDomain, r.ManageToken),
+	}
+
+	// The SES call itself runs on a detached context — see this file's
+	// package doc comment.
+	sendCtx, cancel := context.WithTimeout(context.Background(), sendMessageTimeout)
+	messageID, sendErr := w.mailer.Send(sendCtx, msg)
+	cancel()
+
+	if sendErr == nil {
+		if sendPostCrashHook != nil && sendPostCrashHook(r.SendID) {
+			// The message is already recorded as delivered (the mailer has
+			// it), but the 'sent' write below never runs — the exact crash
+			// window this file's package doc comment describes.
+			return sendOutcomeAborted, errAbortedForTest
+		}
+		writeCtx, wcancel := context.WithTimeout(context.Background(), writeStatusTimeout)
+		_, werr := w.store.MarkSent(writeCtx, r.SendID, messageID)
+		wcancel()
+		if werr != nil {
+			w.log.Error("mailing: marking sent row", "send_id", r.SendID, "err", werr)
+		}
+		return sendOutcomeSent, nil
+	}
+
+	switch classifySendError(sendErr) {
+	case sendClassTerminalCampaign:
+		// Row release is the caller's job — it happens AFTER
+		// failCampaignSES's own read of the current counts, so "remaining"
+		// in that audit row still counts this recipient as not-yet-sent
+		// however the caller chooses to release it.
+		return sendOutcomeTerminalCampaign, sendErr
+	case sendClassTerminalRow:
+		if _, err := w.store.MarkFailedRow(ctx, r.SendID, sendErr.Error()); err != nil {
+			w.log.Error("mailing: marking rejected row failed", "send_id", r.SendID, "err", err)
+		}
+		return sendOutcomeTerminalRow, nil
+	default: // retryable
+		if _, err := w.store.MarkRetryOrFailed(ctx, r.SendID, sendErr.Error()); err != nil {
+			w.log.Error("mailing: retry-or-fail on send row", "send_id", r.SendID, "err", err)
+		}
+		if isThrottlingError(sendErr) {
+			return sendOutcomeThrottled, nil
+		}
+		return sendOutcomeSkipped, nil
+	}
+}
+
+// sendClass is classifySendError's result vocabulary (§8 of this issue's
+// plan).
+type sendClass int
+
+const (
+	sendClassRetryable sendClass = iota
+	sendClassTerminalRow
+	sendClassTerminalCampaign
+)
+
+// classifySendError maps an error from Mailer.Send to §8's table, using
+// errors.As against sesv2/types exclusively — never string matching, so a
+// wrapped error (fmt.Errorf("...: %w", sesErr)) still classifies correctly.
+// Anything this function does not recognize (context deadline, a network
+// error, a future SES exception type) is treated as retryable: unknown
+// means assume transient, per §8.
+func classifySendError(err error) sendClass {
+	var tooMany *types.TooManyRequestsException
+	if errors.As(err, &tooMany) {
+		return sendClassRetryable
+	}
+	var limitExceeded *types.LimitExceededException
+	if errors.As(err, &limitExceeded) {
+		return sendClassRetryable
+	}
+	var sendingPaused *types.SendingPausedException
+	if errors.As(err, &sendingPaused) {
+		return sendClassTerminalCampaign
+	}
+	var acctSuspended *types.AccountSuspendedException
+	if errors.As(err, &acctSuspended) {
+		return sendClassTerminalCampaign
+	}
+	var mailFromNotVerified *types.MailFromDomainNotVerifiedException
+	if errors.As(err, &mailFromNotVerified) {
+		return sendClassTerminalCampaign
+	}
+	var notFound *types.NotFoundException
+	if errors.As(err, &notFound) {
+		return sendClassTerminalCampaign
+	}
+	var badRequest *types.BadRequestException
+	if errors.As(err, &badRequest) {
+		return sendClassTerminalCampaign
+	}
+	var rejected *types.MessageRejected
+	if errors.As(err, &rejected) {
+		return sendClassTerminalRow
+	}
+	if errors.Is(err, ErrNoMessageID) {
+		return sendClassTerminalRow
+	}
+	return sendClassRetryable
+}
+
+// isThrottlingError reports whether err is specifically SES's throttling
+// exception — the one class that triggers §7's campaign-level backoff, as
+// opposed to LimitExceededException (a daily quota that "may pass
+// tomorrow", not something an in-process backoff fixes).
+func isThrottlingError(err error) bool {
+	var tooMany *types.TooManyRequestsException
+	return errors.As(err, &tooMany)
+}
+
+// sesFailureReason names a terminalCampaign-class error for
+// campaign.send_failed's metadata — a short, stable string, not the raw AWS
+// error text.
+func sesFailureReason(err error) string {
+	var sendingPaused *types.SendingPausedException
+	if errors.As(err, &sendingPaused) {
+		return "sending_paused"
+	}
+	var acctSuspended *types.AccountSuspendedException
+	if errors.As(err, &acctSuspended) {
+		return "account_suspended"
+	}
+	var mailFromNotVerified *types.MailFromDomainNotVerifiedException
+	if errors.As(err, &mailFromNotVerified) {
+		return "mail_from_domain_not_verified"
+	}
+	var notFound *types.NotFoundException
+	if errors.As(err, &notFound) {
+		return "configuration_set_not_found"
+	}
+	var badRequest *types.BadRequestException
+	if errors.As(err, &badRequest) {
+		return "bad_request"
+	}
+	return "ses_error"
+}
+
+// failCampaign stops the drain and moves the campaign to 'failed' for a
+// worker-detected reason (not an SES error) — an anomalous empty audience
+// post-materialization, or physical_address/reply-to going blank. Guarded so
+// only the worker that actually performs the transition writes the audit
+// row.
+func (w *Worker) failCampaign(ctx context.Context, campaignID int64, reason string) error {
+	_, sent, failed, _, queued, sending, cerr := w.store.CountEmailSends(ctx, campaignID)
+	if cerr != nil {
+		w.log.Error("mailing: counting sends before failing campaign", "campaign_id", campaignID, "err", cerr)
+	}
+	did, err := w.store.MarkFailedCampaign(ctx, campaignID)
+	if err != nil {
+		return err
+	}
+	if did {
+		w.auditSendFailed(ctx, campaignID, reason, sent, failed, queued+sending)
+	}
+	return nil
+}
+
+// failCampaignSES is failCampaign's twin for a terminalCampaign-class SES
+// error (§8): stop the drain immediately, leave the remaining rows queued
+// (the per-row release already happened in the caller), and record the
+// terminal SES error class rather than the raw AWS error text.
+func (w *Worker) failCampaignSES(ctx context.Context, campaignID int64, sesErr error) error {
+	return w.failCampaign(ctx, campaignID, sesFailureReason(sesErr))
+}
+
+// resolveFromHeader implements §5.2's Message.From composition from the
+// default_from_name setting: blank stays blank (the mailer's own EMAIL_FROM
+// default applies); a name containing anything other than printable ASCII,
+// or a `"`, `\`, CR, or LF, falls back to blank rather than risk header
+// injection through an operator-editable setting — refusing is cheaper than
+// RFC 2047-encoding a value nobody has asked to internationalise.
+func (w *Worker) resolveFromHeader(ctx context.Context) string {
+	name, err := w.settings.GetSetting(ctx, settingDefaultFromName)
+	if err != nil {
+		return ""
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || !isSafeFromDisplayName(name) {
+		return ""
+	}
+	return fmt.Sprintf("%q <%s>", name, w.fromAddr)
+}
+
+// isSafeFromDisplayName reports whether name is safe to interpolate into a
+// From header display name: printable ASCII only (0x20-0x7e), which also
+// excludes CR/LF (both below 0x20), plus an explicit refusal of `"` and `\`
+// so the quoted form %q produces cannot be broken out of.
+func isSafeFromDisplayName(name string) bool {
+	for _, r := range name {
+		if r < 0x20 || r > 0x7e {
+			return false
+		}
+		if r == '"' || r == '\\' {
+			return false
+		}
+	}
+	return true
+}
+
+// effectiveSendRate resolves min(cfg.MaxSendRate, settings.max_send_rate)
+// (§7 of this issue's plan): the env var is the deploy-level ceiling, the
+// settings row is the operator's dial. A missing, blank, non-numeric, or
+// non-positive settings value falls back to the env ceiling — never to
+// unbounded. Read once per batch so an operator can throttle a running send
+// without a restart.
+func (w *Worker) effectiveSendRate(ctx context.Context) int {
+	raw, err := w.settings.GetSetting(ctx, settingMaxSendRate)
+	if err != nil {
+		return w.envMaxSendRate
+	}
+	n, perr := strconv.Atoi(strings.TrimSpace(raw))
+	if perr != nil || n <= 0 {
+		return w.envMaxSendRate
+	}
+	if n > w.envMaxSendRate {
+		return w.envMaxSendRate
+	}
+	return n
+}
+
+// publishProgress reports the current batch/completion snapshot to #0048's
+// seam, nil-guarded. Total/Sent/Failed/Skipped/Remaining are always
+// recomputed from email_sends rather than tracked incrementally, so a
+// publish after a resume is correct even though this Worker instance never
+// saw the earlier batches.
+func (w *Worker) publishProgress(ctx context.Context, campaignID int64) {
+	if w.progress == nil {
+		return
+	}
+	total, sent, failed, skipped, queued, sending, err := w.store.CountEmailSends(ctx, campaignID)
+	if err != nil {
+		w.log.Error("mailing: counting sends for progress publish", "campaign_id", campaignID, "err", err)
+		return
+	}
+	w.progress.PublishCampaignProgress(ctx, CampaignProgress{
+		CampaignID: campaignID,
+		Total:      total,
+		Sent:       sent,
+		Failed:     failed,
+		Skipped:    skipped,
+		Remaining:  queued + sending,
+	})
+}
+
+// ── audit ─────────────────────────────────────────────────────────────────
+
+func (w *Worker) auditSendRefused(ctx context.Context, campaignID int64, result PreflightResult) {
+	if w.auditor == nil {
+		return
+	}
+	messages := make([]string, len(result.Failures))
+	for i, f := range result.Failures {
+		messages[i] = f.Message
+	}
+	id := campaignID
+	w.auditor.Record(ctx, audit.Entry{
+		Action:     audit.ActionEmailCampaignSendRefused,
+		TargetType: audit.TargetEmailCampaign,
+		TargetID:   &id,
+		Metadata: map[string]any{
+			"codes":    result.Codes(),
+			"messages": messages,
+			"source":   "send_worker",
+		},
+	})
+}
+
+func (w *Worker) auditSendStarted(ctx context.Context, c *claimedCampaign, res MaterializeResult, recipients int64) {
+	if w.auditor == nil {
+		return
+	}
+	id := c.ID
+	w.auditor.Record(ctx, audit.Entry{
+		Action:     audit.ActionEmailCampaignSendStarted,
+		TargetType: audit.TargetEmailCampaign,
+		TargetID:   &id,
+		Metadata: map[string]any{
+			"recipients":    recipients,
+			"audience_mode": c.AudienceMode,
+			"interest_ids":  c.InterestIDs,
+			"inserted":      res.Inserted,
+			"chunks":        res.Chunks,
+			"created_by":    c.CreatedBy,
+			"source":        "send_worker",
+		},
+	})
+}
+
+func (w *Worker) auditSendCompleted(ctx context.Context, campaignID int64) {
+	if w.auditor == nil {
+		return
+	}
+	_, sent, failed, skipped, _, _, err := w.store.CountEmailSends(ctx, campaignID)
+	if err != nil {
+		w.log.Error("mailing: counting sends for completion audit", "campaign_id", campaignID, "err", err)
+	}
+	id := campaignID
+	w.auditor.Record(ctx, audit.Entry{
+		Action:     audit.ActionEmailCampaignSendCompleted,
+		TargetType: audit.TargetEmailCampaign,
+		TargetID:   &id,
+		Metadata: map[string]any{
+			"sent":    sent,
+			"failed":  failed,
+			"skipped": skipped,
+			"source":  "send_worker",
+		},
+	})
+}
+
+func (w *Worker) auditSendFailed(ctx context.Context, campaignID int64, reason string, sent, failed, remaining int64) {
+	if w.auditor == nil {
+		return
+	}
+	id := campaignID
+	w.auditor.Record(ctx, audit.Entry{
+		Action:     audit.ActionEmailCampaignSendFailed,
+		TargetType: audit.TargetEmailCampaign,
+		TargetID:   &id,
+		Metadata: map[string]any{
+			"reason":    reason,
+			"sent":      sent,
+			"failed":    failed,
+			"remaining": remaining,
+			"source":    "send_worker",
+		},
+	})
+}
+
+func derefOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}

@@ -408,17 +408,18 @@ func (s *CampaignStore) Create(ctx context.Context, in CampaignInput) (Campaign,
 // transition (a second admin's edit, or #0045's worker claiming the campaign)
 // can't race a stale "it was draft when I loaded it" decision.
 //
-// # test_sent_at (not yet implemented — flagged for #0045's migration 000018)
+// # test_sent_at is cleared on a content edit (landed by #0045, migration 000018)
 //
 // #0045's plan (issues/0045.md §13) requires that editing subject or body_md
 // clear email_campaigns.test_sent_at to NULL, so a content edit after a test
-// send correctly re-arms the "no_test_send" preflight failure. That column
-// does not exist in migration 000017 (confirmed: `\d email_campaigns` has no
-// test_sent_at) — it is added by #0045's own migration 000018. Per this
-// issue's brief, that migration is not this issue's to add. Whoever lands
-// 000018 must add `SET test_sent_at = CASE WHEN subject IS DISTINCT FROM $2
-// OR body_md IS DISTINCT FROM $5 THEN NULL ELSE test_sent_at END` (or
-// equivalent) to the UPDATE statement below.
+// send correctly re-arms the "no_test_send" preflight failure — otherwise an
+// operator could send a materially different body than the one #0046's test
+// send actually delivered and reviewed. Preheader is deliberately NOT part
+// of this comparison: it never reaches #0046's rendered preview body (only
+// the HTML document's hidden preview-text div), so editing it alone would
+// re-arm a gate over a change the test send never exercised. The comparison
+// is IS DISTINCT FROM, not <>, so a NULL-to-NULL "change" (impossible for
+// these NOT NULL columns, but a safe default) never misfires.
 func (s *CampaignStore) Update(ctx context.Context, id int64, in CampaignUpdate) (Campaign, error) {
 	if err := normalizeAudience(in.AudienceMode, in.InterestIDs); err != nil {
 		return Campaign{}, err
@@ -444,12 +445,15 @@ func (s *CampaignStore) Update(ctx context.Context, id int64, in CampaignUpdate)
 		return Campaign{}, ErrCampaignNotEditable
 	}
 
-	// See the "test_sent_at" doc comment above: whoever adds migration 000018
-	// must extend this statement to clear it when subject/body_md change.
+	// See the "test_sent_at" doc comment above: a subject or body_md change
+	// clears test_sent_at back to NULL so the no_test_send gate re-arms.
 	row := tx.QueryRow(ctx,
 		`UPDATE email_campaigns
 		    SET name = $2, subject = $3, preheader = $4, body_md = $5,
-		        audience_mode = $6, updated_at = now()
+		        audience_mode = $6, updated_at = now(),
+		        test_sent_at = CASE
+		            WHEN subject IS DISTINCT FROM $3 OR body_md IS DISTINCT FROM $5
+		            THEN NULL ELSE test_sent_at END
 		  WHERE id = $1
 		  RETURNING `+campaignColumns,
 		id, in.Name, in.Subject, in.Preheader, in.BodyMD, in.AudienceMode,

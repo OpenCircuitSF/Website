@@ -179,6 +179,19 @@ func validSettingValue(key, value string) bool {
 		// fresh PATCH write garbage through this endpoint.
 		n, err := strconv.Atoi(value)
 		return err == nil && n > 0
+	case "max_send_rate":
+		// #0045: the send worker's rate limiter reads this fresh every
+		// batch and falls back to MAX_SEND_RATE's env-level ceiling on
+		// anything unparseable — but that fallback exists for a row that's
+		// missing or already invalid, not as license to let a fresh PATCH
+		// write garbage through this endpoint (this file's own history:
+		// only registrations_enabled was validated before #0039, which is
+		// exactly how a whitespace physical_address became possible).
+		// Bounded to 1..1000: unbounded would defeat the "never fall back
+		// to unbounded" guarantee the worker's own doc comment promises,
+		// and SES has no legitimate reason to send faster than that.
+		n, err := strconv.Atoi(value)
+		return err == nil && n >= 1 && n <= 1000
 	default:
 		return true
 	}

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/time/rate"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
@@ -215,7 +216,23 @@ func servePostgres(cfg *config.Config) error {
 	// (#0041's carried-in TODO) instead of accepting it unverified.
 	campaignsStore := mailing.NewCampaignStore(pool)
 	audienceStore := mailing.NewAudienceStore(pool)
-	adminCampaignsH := handlers.NewAdminCampaignsHandler(campaignsStore, nil, audienceStore, auditLogger)
+
+	// Send worker (#0045, PRD §6.6): the loop that turns queued email_sends
+	// rows into delivered mail, and the authoritative copy of the pre-send
+	// gate. sendWorker is nil when MAILER_NOOP=true (see
+	// newSendWorkerIfEnabled's doc comment) — worker_wiring_test.go proves
+	// every branch of that decision. sendStore is non-nil whenever
+	// sendWorker would be constructible even if SEND_WORKER_ENABLED=false,
+	// so the advisory preflight adapter below still works on an instance
+	// that deliberately doesn't run the worker itself (CLAUDE.md §10 item
+	// 4's "exactly one instance runs the worker" scaling story).
+	sendStore := newSendStoreIfEnabled(cfg, pool, audienceStore, store)
+	sendWorker, err := newSendWorkerIfEnabled(cfg, sendStore, audienceStore, auditLogger, sesSender, store, slog.Default())
+	if err != nil {
+		return fmt.Errorf("opencircuit: constructing send worker: %w", err)
+	}
+
+	adminCampaignsH := handlers.NewAdminCampaignsHandler(campaignsStore, handlers.NewCampaignPreflightChecker(sendStore), audienceStore, auditLogger)
 	adminCampaignAudienceH := handlers.NewAdminCampaignAudienceHandler(audienceStore)
 
 	// Public interests read (#0029, PRD §6.1/§7.3): GET /api/interests, the
@@ -284,7 +301,7 @@ func servePostgres(cfg *config.Config) error {
 
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH, sendWorker,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -341,6 +358,75 @@ type noOpMailingMailer struct{}
 func (noOpMailingMailer) Send(_ context.Context, msg mailing.Message) (string, error) {
 	log.Printf("MAILER_NOOP: email to %s: %s", msg.To, msg.Subject)
 	return "noop", nil
+}
+
+// newSendStoreIfEnabled constructs the send worker's own data-access layer
+// (#0045) whenever outbound email is genuinely configured. It exists as its
+// own function — rather than inlined in servePostgres — so
+// worker_wiring_test.go can exercise this decision directly, and so
+// adminCampaignsH's preflight adapter (handlers.NewCampaignPreflightChecker)
+// can be wired from the same *mailing.SendStore the worker itself uses,
+// which is what makes the advisory HTTP check and the worker's own
+// authoritative check gather PreflightInput identically.
+//
+// Returns nil under MAILER_NOOP=true, matching mailing.NewWorker's own
+// refusal — see newSendWorkerIfEnabled below for why: nothing about
+// SEND_WORKER_ENABLED affects this decision, because the advisory preflight
+// checker is useful even on an instance that (per CLAUDE.md §10 item 4's
+// scaling story) does not itself run the worker.
+func newSendStoreIfEnabled(cfg *config.Config, pool *pgxpool.Pool, audienceStore *mailing.AudienceStore, settings mailing.SettingsReader) *mailing.SendStore {
+	if cfg.MailerNoOp {
+		return nil
+	}
+	return mailing.NewSendStore(pool, audienceStore, settings, mailing.MarkdownCampaignRenderer{}, cfg.BaseURL, cfg.EmailListDomain, cfg.EmailReplyTo)
+}
+
+// newSendWorkerIfEnabled constructs the send worker, or returns (nil, nil)
+// when it must not run on THIS instance:
+//
+//   - MAILER_NOOP=true: refused, matching mailing.NewWorker's own doc
+//     comment — noOpMailingMailer.Send returns the literal message id
+//     "noop", and writing that into email_sends.ses_message_id would poison
+//     #0038's bounce/complaint join key and #0049's stats with rows that
+//     claim to have been delivered.
+//   - SEND_WORKER_ENABLED=false: the scaling knob #0045's plan §1
+//     describes — if the site is ever scaled to two instances, exactly one
+//     of them sets this true.
+//
+// A single slog.Warn records either refusal, since nothing about the
+// request path can otherwise surface "campaigns will not send" to an
+// operator.
+func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, audienceStore *mailing.AudienceStore, auditLogger *audit.Logger, mailer mailing.Mailer, settings mailing.SettingsReader, log *slog.Logger) (*mailing.Worker, error) {
+	if cfg.MailerNoOp {
+		log.Warn("opencircuit: MAILER_NOOP=true — the send worker will not start; scheduled campaigns will not send")
+		return nil, nil
+	}
+	if !cfg.SendWorkerEnabled {
+		log.Info("opencircuit: SEND_WORKER_ENABLED=false — this instance will not run the send worker")
+		return nil, nil
+	}
+	if sendStore == nil {
+		// Unreachable in production (sendStore is nil only under
+		// MAILER_NOOP, already handled above) — defensive rather than a
+		// nil-pointer panic inside mailing.NewWorker.
+		return nil, fmt.Errorf("opencircuit: send worker enabled but SendStore was not constructed")
+	}
+	return mailing.NewWorker(mailing.WorkerDeps{
+		Store:          sendStore,
+		Audience:       audienceStore,
+		Audit:          auditLogger,
+		Mailer:         mailer,
+		Render:         mailing.MarkdownCampaignRenderer{},
+		Settings:       settings,
+		Progress:       nil, // #0048 supplies the broker-backed implementation
+		BaseURL:        cfg.BaseURL,
+		ListDomain:     cfg.EmailListDomain,
+		FromAddr:       cfg.EmailFrom,
+		ReplyTo:        cfg.EmailReplyTo,
+		EnvMaxSendRate: cfg.MaxSendRate,
+		BatchSize:      cfg.SendBatchSize,
+		Log:            log,
+	})
 }
 
 // serveDevMode boots the app without PostgreSQL using the in-memory dev store.
@@ -457,9 +543,17 @@ func serveDevMode(cfg *config.Config) error {
 	// /api/ses/notifications when non-nil.
 	var sesNotifyH *handlers.SESNotificationsHandler
 
+	// Send worker (#0045) has the same devstore gap as sesNotifyH above —
+	// internal/devstore has no email_campaigns/email_sends backing, and the
+	// worker is Postgres-only by design (mailing.NewWorker's own doc
+	// comment). nil here means mountAndServe's shutdown sequence simply
+	// skips the worker-stop step, mirroring every other nil-guarded
+	// dev-mode gap.
+	var sendWorker *mailing.Worker
+
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH, sendWorker,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -586,6 +680,7 @@ func mountAndServe(
 	confirmH *handlers.ConfirmHandler,
 	unsubscribeH *handlers.UnsubscribeHandler,
 	sesNotifyH *handlers.SESNotificationsHandler,
+	sendWorker *mailing.Worker,
 	requireSession func(http.Handler) http.Handler,
 	requireAdmin func(http.Handler) http.Handler,
 	outerMiddleware func(http.Handler) http.Handler,
@@ -817,6 +912,15 @@ func mountAndServe(
 		close(ready)
 	}
 
+	// Start the send worker (#0045), if one was constructed. Its own ctx is
+	// deliberately NOT the shutdown context below (see worker.go's package
+	// doc comment) — SIGTERM reaches it only through sendWorker.Stop, the
+	// first step of the shutdown sequence, never through cancelling this
+	// context.
+	if sendWorker != nil {
+		go sendWorker.Run(context.Background())
+	}
+
 	// Graceful shutdown (#0081): before this, mountAndServe ended in a bare
 	// http.ListenAndServe with no signal.Notify anywhere in the repo, so an
 	// unhandled SIGTERM (every deploy, every systemd restart) terminated the
@@ -858,6 +962,25 @@ func mountAndServe(
 
 	case sig := <-sigCh:
 		log.Printf("opencircuit: received %s, shutting down gracefully", sig)
+
+		// worker.Stop runs FIRST, on its own independent budget
+		// (workerCloseTimeout), per #0087's rule that these shutdown
+		// budgets are never shared and #0045's plan §1: it is the only
+		// step whose work is unbounded in principle (a large campaign's
+		// drain) and the only one that can be told to stop cheaply —
+		// Stop closes an internal channel that Run checks BETWEEN
+		// messages and between batches, never during one, so a SIGTERM
+		// here cannot leave a message accepted by SES and unrecorded in
+		// Postgres (see worker.go's package doc comment). sendWorker is
+		// nil under STORAGE=json, MAILER_NOOP=true, or
+		// SEND_WORKER_ENABLED=false.
+		if sendWorker != nil {
+			workerStopCtx, workerStopCancel := context.WithTimeout(context.Background(), workerCloseTimeout)
+			if err := sendWorker.Stop(workerStopCtx); err != nil {
+				log.Printf("opencircuit: send worker stop: %v", err)
+			}
+			workerStopCancel()
+		}
 
 		// shutdownServerTimeout and subscribeCloseTimeout each bound ONE
 		// step below, on their OWN independent context — not one shared
@@ -968,3 +1091,16 @@ var shutdownServerTimeout = 5 * time.Second
 //
 // var, not const: see shutdownServerTimeout's doc comment above.
 var subscribeCloseTimeout = 15 * time.Second
+
+// workerCloseTimeout bounds sendWorker.Stop ALONE, on its own independent
+// budget per #0087's rule — sized to cover one in-flight message's SES call
+// (sendMessageTimeout, internal/mailing/worker.go) plus its status write
+// (writeStatusTimeout), not against any measured machine load (CLAUDE.md
+// §5). If this budget is exceeded, Stop returns context.DeadlineExceeded
+// and the process exits anyway; the consequence is exactly the §6 crash
+// window worker.go's package doc comment already documents as the designed
+// worst case, not a new failure mode this timeout introduces.
+//
+// var, not const: see shutdownServerTimeout's doc comment above — the
+// wiring test shrinks this to exercise the budget deterministically.
+var workerCloseTimeout = 10 * time.Second

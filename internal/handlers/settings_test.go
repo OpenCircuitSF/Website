@@ -16,6 +16,37 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
+// TestValidSettingValue_MaxSendRate is #0045's carried-in obligation: only
+// registrations_enabled was validated before this issue, which is exactly
+// how a whitespace physical_address became possible (CLAUDE.md's own Notes
+// on #0045). max_send_rate must be a positive integer in 1..1000 — an admin
+// saving "fast" must get a 400, not a worker that silently falls back to
+// MAX_SEND_RATE.
+func TestValidSettingValue_MaxSendRate(t *testing.T) {
+	cases := []struct {
+		value string
+		want  bool
+	}{
+		{"10", true},
+		{"1", true},
+		{"1000", true},
+		{"0", false},
+		{"-5", false},
+		{"1001", false},
+		{"fast", false},
+		{"", false},
+		{" 10", false},
+		{"10.5", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.value, func(t *testing.T) {
+			if got := validSettingValue("max_send_rate", tc.value); got != tc.want {
+				t.Errorf("validSettingValue(%q, %q) = %v, want %v", "max_send_rate", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
 // settingsTestPool returns the package's single shared pool (opened once in
 // TestMain — #0091) or skips if TEST_DATABASE_URL was unset. It truncates the
 // auth tables AND resets the settings table to its seeded state on entry

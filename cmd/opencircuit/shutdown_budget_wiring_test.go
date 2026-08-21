@@ -198,6 +198,7 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 			eventsH, nil, subscribeH,
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised */
 			nil, /* sesNotifyH: not exercised */
+			nil, /* sendWorker: not exercised */
 			requireSession, passthroughAdmin, nil, ready)
 	}()
 

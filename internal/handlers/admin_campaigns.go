@@ -121,6 +121,61 @@ type campaignPreflightChecker interface {
 	Check(ctx context.Context, campaignID int64) ([]campaignPreflightFailure, error)
 }
 
+// campaignPreflightStore is the narrow seam campaignPreflightAdapter needs
+// from #0045's own data layer: GatherPreflight assembles the
+// mailing.PreflightInput this handler hands to mailing.Preflight.
+// *mailing.SendStore satisfies it.
+type campaignPreflightStore interface {
+	GatherPreflight(ctx context.Context, campaignID int64) (mailing.PreflightInput, error)
+}
+
+// campaignPreflightAdapter satisfies campaignPreflightChecker by calling
+// #0045's own mailing.Preflight over a mailing.SendStore.GatherPreflight
+// read, and mapping mailing.PreflightResult.Failures to
+// []campaignPreflightFailure — the adapter campaignPreflightChecker's own
+// doc comment asked #0045 to build. This is NOT a second implementation of
+// the gate: it calls the exact same pure function the worker's authoritative
+// check calls, over the exact same GatherPreflight read; the worker's own
+// evaluation (immediately before a campaign leaves 'scheduled') remains the
+// sole authoritative enforcement point regardless of whether this advisory
+// one is wired in (CLAUDE.md §9).
+type campaignPreflightAdapter struct {
+	store campaignPreflightStore
+}
+
+// NewCampaignPreflightChecker adapts *mailing.SendStore (#0045) to
+// campaignPreflightChecker for cmd/opencircuit/main.go's call site. Takes
+// the CONCRETE *mailing.SendStore, not the local campaignPreflightStore
+// interface, specifically so a nil store produces a genuinely nil
+// campaignPreflightChecker return value rather than a non-nil interface
+// wrapping a nil pointer — the exact typed-nil trap this type's own doc
+// comment warns about: `(*campaignPreflightAdapter)(nil)` would be non-nil
+// to Send's `h.preflight != nil` guard and panic inside Check the first
+// time it's called. A plain `if store == nil` on a concrete pointer
+// parameter has no such trap.
+func NewCampaignPreflightChecker(store *mailing.SendStore) campaignPreflightChecker {
+	if store == nil {
+		return nil
+	}
+	return &campaignPreflightAdapter{store: store}
+}
+
+func (a *campaignPreflightAdapter) Check(ctx context.Context, campaignID int64) ([]campaignPreflightFailure, error) {
+	in, err := a.store.GatherPreflight(ctx, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	result := mailing.Preflight(in)
+	if result.OK() {
+		return nil, nil
+	}
+	failures := make([]campaignPreflightFailure, len(result.Failures))
+	for i, f := range result.Failures {
+		failures[i] = campaignPreflightFailure{Code: f.Code, Message: f.Message}
+	}
+	return failures, nil
+}
+
 // campaignAudienceCounter is the narrow seam Send uses to compute the
 // authoritative recipient count #0044 wires in (carried in from #0041's
 // implementation, 2026-08-21 — see this issue's "Carried in from #0041's

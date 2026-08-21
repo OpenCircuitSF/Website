@@ -206,6 +206,44 @@ const (
 	// materially different consequence — it stops further batches, it does
 	// not recall anything already sent (PRD §8's note).
 	ActionEmailCampaignCanceled = "email_campaign.canceled"
+
+	// Send-worker actions (#0045, PRD §6.6). Named email_campaign.* per the
+	// namespace #0041 established just above — NOT campaign.*, which was
+	// retired by #0068 (see the "Deleted" comment below): a
+	// campaign.send_refused row would resurrect that prefix and split the
+	// campaign audit trail across two namespaces, breaking #0114's planned
+	// target_type/target_id filter. All four are written with actor NULL
+	// and metadata.source="send_worker" — the worker has no session and is
+	// not acting on behalf of an operator at the moment it writes these,
+	// matching the convention ActionSubscriberBounced and the ses.* actions
+	// already use for system-originated events.
+	//
+	// ActionEmailCampaignSendStarted is written exactly once per campaign,
+	// after materialization completes on the worker's first (start) claim —
+	// never on a resume, so a campaign restarted five times still has
+	// exactly one row. Metadata carries the materialized recipient count
+	// (the required field), audience_mode, interest_ids, inserted, chunks,
+	// and created_by.
+	ActionEmailCampaignSendStarted = "email_campaign.send_started"
+	// ActionEmailCampaignSendRefused is written when the worker's own copy
+	// of mailing.Preflight demotes a 'scheduled' campaign back to 'draft'
+	// because an unmet requirement reached the worker despite #0041's
+	// advisory check (the address was cleared after scheduling, or
+	// something bypassed the API). Metadata carries the failing Preflight
+	// codes and messages.
+	ActionEmailCampaignSendRefused = "email_campaign.send_refused"
+	// ActionEmailCampaignSendCompleted is written when a campaign reaches
+	// 'sent' — no queued or sending rows remain. Metadata carries the
+	// final sent/failed/skipped counts and the drain's duration.
+	ActionEmailCampaignSendCompleted = "email_campaign.send_completed"
+	// ActionEmailCampaignSendFailed is written when the worker stops a
+	// drain and moves a campaign to 'failed': an anomalous empty audience
+	// post-materialization, physical_address (or reply-to) becoming blank
+	// mid-resume, or a terminal-campaign-class SES error (account
+	// suspended, sending paused, domain not verified, ...). Metadata
+	// carries the reason plus how many rows sent before the stop and how
+	// many remain queued.
+	ActionEmailCampaignSendFailed = "email_campaign.send_failed"
 )
 
 // Deleted (#0068): ActionCampaignCreated/Updated/Deleted and

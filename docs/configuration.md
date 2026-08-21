@@ -24,10 +24,10 @@ of problems in one pass.
 | `EMAIL_REPLY_TO` | no | — | Reply-To header for outbound mail |
 | `EMAIL_LIST_DOMAIN` | yes | — | Subdomain used for inbound unsubscribe handling, e.g. `lists.opencircuitsf.com`. Interpolated into the `mailto:` form of every campaign's `List-Unsubscribe` header (`mailing.CampaignHeaders`, `#0035`); required with no default (`#0105`) so a misconfigured deploy fails loud at boot instead of emitting a malformed `mailto:unsubscribe@?subject=…` header. Never point the apex MX at SES — see `CLAUDE.md` §9. |
 | `SES_INBOUND_BUCKET` | no | — | S3 bucket SES writes inbound mail to |
-| `MAILER_NOOP` | no | `false` | `true` selects `auth.NoOpMailer` instead of the real SES v2 API mailer on the Postgres serve path (`#0027`). For local development against Postgres before SES is set up (`CLAUDE.md` §10 item 2) — `NoOpMailer` logs the full verification/recovery link to stdout, which is how `#0008`'s manual passkey verification procedure reads the magic link. Production leaves this unset. |
+| `MAILER_NOOP` | no | `false` | `true` selects `auth.NoOpMailer` instead of the real SES v2 API mailer on the Postgres serve path (`#0027`). For local development against Postgres before SES is set up (`CLAUDE.md` §10 item 2) — `NoOpMailer` logs the full verification/recovery link to stdout, which is how `#0008`'s manual passkey verification procedure reads the magic link. Production leaves this unset. As of `#0045`, this also refuses to start the send worker at all: `noOpMailingMailer.Send` returns the literal message id `"noop"`, which would poison `#0038`'s bounce/complaint join key and `#0049`'s stats if it ever reached `email_sends.ses_message_id`. |
 | `MAX_SEND_RATE` | no | `10` | Messages/second ceiling; keep below the SES quota. This is the environment-level ceiling, not the operator dial — see below. |
 | `SEND_BATCH_SIZE` | no | `50` | Messages per send-worker batch |
-| `SEND_WORKER_ENABLED` | no | `true` | Set `false` on a second instance to avoid double-sending |
+| `SEND_WORKER_ENABLED` | no | `true` | Set `false` on a second instance to avoid double-sending. Has no effect when `MAILER_NOOP=true` — the worker never starts regardless (see above). |
 | `ADMIN_EMAIL` | yes | — | Pre-authorized as admin on first registration when no users exist yet |
 
 **`WEBAUTHN_RP_ID` and `WEBAUTHN_RP_ORIGIN` are not interchangeable.** A
@@ -69,7 +69,22 @@ Values an admin can change without a restart or redeploy live in the
 `settings` table, not the environment: `registrations_enabled`,
 `physical_address`, `max_send_rate`, `signup_enabled`, `default_from_name`.
 `MAX_SEND_RATE` in the environment is the hard ceiling; the `settings` table's
-value is the operator dial beneath it.
+`max_send_rate` value is the operator dial beneath it — the send worker
+(`#0045`) computes `min(MAX_SEND_RATE, settings.max_send_rate)` fresh once
+per batch, so an operator can throttle a running send without a restart. A
+missing, blank, non-numeric, or non-positive `max_send_rate` row falls back
+to `MAX_SEND_RATE`, never to unbounded; `PATCH /admin/settings` also rejects
+a non-integer or out-of-range (`1..1000`) value for this key at write time
+(`internal/handlers/settings.go`'s `validSettingValue`).
+
+**Developing against the SES sandbox.** Before SES production access is
+requested (`CLAUDE.md` §10 item 2), the account is capped at 1 message/second
+and 200/day, and can only send to verified addresses. The default
+`MAX_SEND_RATE=10` exceeds that 1/s cap, so set `MAX_SEND_RATE=1` (and
+correspondingly keep the `max_send_rate` setting at `1` or below) while
+developing against the sandbox — the worker does not detect which mode the
+account is in; it simply obeys the configured rate and backs off on the
+`ThrottlingException` the sandbox produces when exceeded.
 
 See `PRD.md` §9 for the source PRD listing and `issues/0007.md` for the issue
 that landed this variable set.

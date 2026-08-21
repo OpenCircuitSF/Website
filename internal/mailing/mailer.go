@@ -20,8 +20,17 @@ type Header struct {
 // content builds that MIME structure automatically from the two Content
 // parts, so callers never hand-roll MIME.
 type Message struct {
-	To       string
-	Subject  string
+	To      string
+	Subject string
+	// From, when non-empty, overrides the mailer's configured sender
+	// address for this one message. #0045's send worker sets it from the
+	// default_from_name setting (a display name wrapped around
+	// EMAIL_FROM, e.g. `"Open Circuit SF" <hello@opencircuitsf.com>`);
+	// every other caller leaves it empty and gets the mailer's default
+	// (SESMailer.from). Carried in from #0027's review (2026-08-19): a
+	// struct addition, not an interface break, so every existing caller
+	// compiles unchanged.
+	From     string
 	HTMLBody string
 	TextBody string
 	Headers  []Header

@@ -23,6 +23,14 @@ type sesAPI interface {
 	SendEmail(ctx context.Context, params *sesv2.SendEmailInput, optFns ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error)
 }
 
+// ErrNoMessageID is returned by Send when SES reports success but the
+// response carries no MessageId — never a locally generated placeholder, so
+// classifySendError (worker.go, #0045) can distinguish "SES accepted this
+// but we have no join key" (terminalRow: the id is #0038's join key and a
+// row with no id is unreconcilable) from every other outcome via errors.Is,
+// not string matching.
+var ErrNoMessageID = errors.New("mailing: SES accepted the send but returned no MessageId")
+
 const (
 	// maxSendAttempts bounds retries on SES throttling. 4 attempts with the
 	// backoff schedule below (200ms, 400ms, 800ms) spans a bit over a second
@@ -119,8 +127,13 @@ func (m *SESMailer) Send(ctx context.Context, msg Message) (string, error) {
 		headers = append(headers, types.MessageHeader{Name: aws.String(h.Name), Value: aws.String(h.Value)})
 	}
 
+	from := m.from
+	if msg.From != "" {
+		from = msg.From
+	}
+
 	input := &sesv2.SendEmailInput{
-		FromEmailAddress:     aws.String(m.from),
+		FromEmailAddress:     aws.String(from),
 		ConfigurationSetName: aws.String(m.configurationSet),
 		Destination:          &types.Destination{ToAddresses: []string{msg.To}},
 		Content: &types.EmailContent{
@@ -146,7 +159,7 @@ func (m *SESMailer) Send(ctx context.Context, msg Message) (string, error) {
 		out, err := m.client.SendEmail(ctx, input)
 		if err == nil {
 			if out == nil || out.MessageId == nil || *out.MessageId == "" {
-				return "", errors.New("mailing: SES accepted the send but returned no MessageId")
+				return "", ErrNoMessageID
 			}
 			return *out.MessageId, nil
 		}

@@ -158,6 +158,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
+			nil, /* sendWorker: not exercised by this test */
 			requireSession, requireAdmin, nil, ready)
 	}()
 

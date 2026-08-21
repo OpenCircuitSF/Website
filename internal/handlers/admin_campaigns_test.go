@@ -15,6 +15,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
 // adminCampaignsMux wires the real admin campaigns routes guarded by
@@ -524,6 +525,93 @@ func TestAdminCampaigns_Send_PreflightFailureReturns409UnmetShape(t *testing.T) 
 		if a == audit.ActionEmailCampaignScheduled {
 			t.Errorf("audit actions = %v, must not include %s when preflight refused", actions, audit.ActionEmailCampaignScheduled)
 		}
+	}
+}
+
+// TestAdminCampaigns_Send_RealPreflightAdapter_Returns409UnmetShape proves
+// #0045's own NewCampaignPreflightChecker adapter — a real
+// *mailing.SendStore backed by this pool, not stubPreflightChecker — wires
+// into Send correctly: a campaign missing physical_address and a test send
+// is refused with the same {"unmet":[...]} shape, using mailing.Preflight's
+// real stable codes (§2 of that issue's plan), never transitioning the
+// campaign to scheduled. This is the seam #0041 left as a documented TODO
+// (campaignPreflightChecker's own doc comment) — this test proves it is no
+// longer nil in real wiring.
+func TestAdminCampaigns_Send_RealPreflightAdapter_Returns409UnmetShape(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+
+	// physical_address is seeded '' by migration 000008; leave it that way.
+	// EMAIL_LIST_DOMAIN/EMAIL_REPLY_TO have no settings-table equivalent —
+	// this test's SendStore is constructed with real, non-blank values for
+	// both so the ONLY unmet requirements are the two this test names.
+	audienceStore := mailing.NewAudienceStore(pool)
+	authStore := auth.NewStore(pool)
+	sendStore := mailing.NewSendStore(pool, audienceStore, authStore, nil,
+		"https://www.example-oc-test.com", "lists.example-oc-test.com", "hello@example-oc-test.com")
+	checker := NewCampaignPreflightChecker(sendStore)
+
+	srv := httptest.NewServer(adminCampaignsMux(pool, checker))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-real-preflight@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-real-preflight")
+
+	store := mailing.NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "s", BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, c.ID)
+	// Seed one active subscriber so empty_audience does not also fire —
+	// this test isolates physical_address_missing and no_test_send.
+	seedSubscriberRow(t, pool, fmt.Sprintf("zz-realpreflight-%d@example.com", time.Now().UnixNano()), subscribers.StatusActive, nil, nil)
+
+	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/campaigns/%d/send", srv.URL, c.ID), "admin-token-campaigns-real-preflight", `{"confirm_count":1}`)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+	var out struct {
+		Unmet []campaignPreflightFailure `json:"unmet"`
+	}
+	if err := json.Unmarshal(readBody(t, resp), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	codes := map[string]bool{}
+	for _, f := range out.Unmet {
+		codes[f.Code] = true
+	}
+	if !codes["physical_address_missing"] {
+		t.Errorf("Unmet = %+v, want physical_address_missing", out.Unmet)
+	}
+	if !codes["no_test_send"] {
+		t.Errorf("Unmet = %+v, want no_test_send", out.Unmet)
+	}
+	if codes["empty_audience"] {
+		t.Errorf("Unmet = %+v, must not include empty_audience — a subscriber was seeded", out.Unmet)
+	}
+
+	got, err := store.GetByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != mailing.CampaignStatusDraft {
+		t.Errorf("status after real-preflight-refused Send = %q, want unchanged %q", got.Status, mailing.CampaignStatusDraft)
+	}
+}
+
+// TestNewCampaignPreflightChecker_NilStore_ReturnsGenuinelyNilInterface
+// proves the typed-nil trap CLAUDE.md §9 and this issue's plan both warn
+// about cannot happen through this constructor: passing a nil
+// *mailing.SendStore must produce an untyped nil campaignPreflightChecker,
+// not a non-nil interface wrapping a nil pointer (which would defeat Send's
+// `h.preflight != nil` guard and panic inside Check the first time it's
+// called).
+func TestNewCampaignPreflightChecker_NilStore_ReturnsGenuinelyNilInterface(t *testing.T) {
+	checker := NewCampaignPreflightChecker(nil)
+	if checker != nil {
+		t.Fatalf("NewCampaignPreflightChecker(nil) = %#v, want a genuinely nil interface", checker)
 	}
 }
 
