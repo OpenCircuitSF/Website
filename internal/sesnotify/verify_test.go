@@ -220,15 +220,22 @@ func TestVerify_TamperedDroppedSubject(t *testing.T) {
 
 func TestVerify_TopicArnMismatch(t *testing.T) {
 	key, cert := testFixture(t)
-	v, _ := newTestVerifier(t, cert)
+	v, calls := newTestVerifier(t, cert)
 
 	m := baseNotification()
 	m.TopicArn = "arn:aws:sns:us-west-2:123456789012:some-other-topic"
 	signMessage(t, key, m, "2") // genuinely signed, but for the wrong topic
 
+	// #0107: the allowlist check runs before the certificate fetch, so a
+	// message for a topic we do not accept must never trigger an outbound
+	// fetch — the same fetcher-was-never-invoked idiom
+	// TestVerify_HostileSigningCertURL uses.
 	err := v.Verify(context.Background(), m)
 	if err == nil {
 		t.Fatal("expected error for a TopicArn outside the allowlist, got nil")
+	}
+	if *calls != 0 {
+		t.Errorf("fetcher called %d times, want 0 (the topic-ARN allowlist check runs before the certificate fetch — see #0107)", *calls)
 	}
 }
 
@@ -246,17 +253,11 @@ func TestVerify_EmptyConfiguredTopicArnRejectsEverything(t *testing.T) {
 
 	// This message is otherwise entirely valid — genuinely signed, and its
 	// TopicArn equals the one string this Verifier would accept were
-	// topicARN configured. Verify's certificate fetch runs unconditionally
-	// before the topicARN=="" check (confirmed by reading verify.go), so the
-	// fetch always happens regardless of whether that check exists; the
-	// `calls` counter above cannot distinguish "the guard ran" from "the
-	// guard is gone", so it is not the assertion that proves this test.
-	// What *does* distinguish it: with the explicit `topicARN == ""` guard
-	// removed, the general `m.TopicArn != v.topicARN` mismatch check below
-	// it still fires (a real ARN is never equal to ""), but with a different
-	// error message ("does not match the configured topic" rather than "no
-	// topic ARN configured"). Assert the specific text so that fallback
-	// rejection cannot masquerade as this guard.
+	// topicARN configured. #0107 hoisted the topicARN=="" check to before the
+	// certificate fetch, so the fetcher must never be invoked for this case —
+	// the same fetcher-was-never-invoked idiom TestVerify_HostileSigningCertURL
+	// uses. Also assert the specific error text so a different guard (e.g.
+	// the general mismatch check) cannot masquerade as this one.
 	err := v.Verify(context.Background(), m)
 	if err == nil {
 		t.Fatal("expected error when no topic ARN is configured, got nil")
@@ -264,8 +265,8 @@ func TestVerify_EmptyConfiguredTopicArnRejectsEverything(t *testing.T) {
 	if !strings.Contains(err.Error(), "no topic ARN configured") {
 		t.Errorf(`Verify error = %v, want it to identify the missing topic-ARN configuration specifically ("no topic ARN configured")`, err)
 	}
-	if calls != 1 {
-		t.Errorf("fetcher called %d times, want exactly 1 (the fetch happens before this guard runs)", calls)
+	if calls != 0 {
+		t.Errorf("fetcher called %d times, want 0 (the topic-ARN pre-filter runs before the certificate fetch — see #0107)", calls)
 	}
 }
 

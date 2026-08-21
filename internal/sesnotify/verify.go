@@ -133,6 +133,27 @@ func (v *Verifier) Verify(ctx context.Context, m *Message) error {
 		return fmt.Errorf("sesnotify: SigningCertURL: %w", err)
 	}
 
+	// The topic-ARN pre-filter runs here — after the SSRF host check above,
+	// but before the certificate fetch (#0107). A valid SNS signature only
+	// proves SNS sent the message, not that our topic did (see doc.go), so
+	// this check can only ever *reject*, never accept, and m is never
+	// mutated by Verify, so it sees exactly the same bytes the equivalent
+	// post-signature check used to. Running it before the fetch means a
+	// message for an unconfigured or non-allowlisted topic never triggers an
+	// outbound HTTPS round trip for a message that will be rejected
+	// regardless, and it is rejected on its own terms — never misclassified
+	// as ErrCertUnavailable (retryable) just because its cert happened to be
+	// unreachable.
+	if v.topicARN == "" {
+		v.log.Error("sesnotify: SES events topic ARN not configured; rejecting all SNS deliveries")
+		return errors.New("sesnotify: no topic ARN configured")
+	}
+	if m.TopicArn != v.topicARN {
+		v.log.Warn("sesnotify: rejected message for unconfigured topic",
+			"message_id", m.MessageId, "topic_arn", m.TopicArn)
+		return fmt.Errorf("sesnotify: TopicArn %q does not match the configured topic", m.TopicArn)
+	}
+
 	cert, err := v.getCert(ctx, certURL)
 	if err != nil {
 		return err // already wraps ErrCertUnavailable
@@ -174,19 +195,10 @@ func (v *Verifier) Verify(ctx context.Context, m *Message) error {
 		return fmt.Errorf("sesnotify: signature verification failed: %w", err)
 	}
 
-	// A valid signature proves SNS sent this message, not that it came
-	// through our topic — see doc.go. This check is fail-closed: an empty
-	// topicARN (topic not yet configured) matches nothing.
-	if v.topicARN == "" {
-		v.log.Error("sesnotify: SES events topic ARN not configured; rejecting all SNS deliveries")
-		return errors.New("sesnotify: no topic ARN configured")
-	}
-	if m.TopicArn != v.topicARN {
-		v.log.Warn("sesnotify: rejected message for unconfigured topic",
-			"message_id", m.MessageId, "topic_arn", m.TopicArn)
-		return fmt.Errorf("sesnotify: TopicArn %q does not match the configured topic", m.TopicArn)
-	}
-
+	// The topic-ARN checks already ran above, before the fetch — see #0107.
+	// They are not repeated here: m is never mutated between there and here,
+	// so a duplicate check on the same v.topicARN/m.TopicArn values would be
+	// unreachable dead code, not defense in depth.
 	return nil
 }
 
