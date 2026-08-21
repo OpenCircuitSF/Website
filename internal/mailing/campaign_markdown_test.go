@@ -1,6 +1,8 @@
 package mailing
 
 import (
+	"html"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -271,6 +273,87 @@ func TestRenderMarkdownText_Deterministic(t *testing.T) {
 	}
 	if a != b {
 		t.Fatalf("non-deterministic output:\n--- a ---\n%q\n--- b ---\n%q", a, b)
+	}
+}
+
+// hrefAttrRE extracts a link's href attribute value from a fragment of
+// goldmark-rendered HTML; textLinkRE extracts the "<url>" a text-part link
+// or autolink renders as (see writeTextInline). Both regexes assume the
+// fixture markdown carries exactly one link, which every case below does.
+var (
+	hrefAttrRE = regexp.MustCompile(`href="([^"]*)"`)
+	textLinkRE = regexp.MustCompile(`<([^<>]*)>`)
+)
+
+// TestLinkDestinationNormalization_HTMLAndTextAgree pins the #0042 review's
+// bounce directly: RenderMarkdownHTML and RenderMarkdownText must compute
+// the dangerous-URL check and the emitted destination from the *same*
+// normalized bytes for every link and autolink, so the two parts can never
+// disagree about which links are live or where an ordinary link points.
+//
+// html.UnescapeString undoes only the HTML-attribute-value escaping
+// goldmark's html.Renderer applies when it writes the href attribute (e.g.
+// turning a literal "&" back into "&amp;" is correct HTML syntax, not part
+// of the destination-normalization bug) — the comparison is otherwise a
+// direct byte comparison of the destination each part settled on.
+//
+// Mutation check (recorded in issues/0042.md's Verification): reverting the
+// *ast.Link and *ast.AutoLink cases in writeTextInline to call
+// isDangerousLinkURL and emit string(v.Destination) / string(v.URL(source))
+// — the raw, un-normalized bytes from before this pass — makes the
+// entity-encoded and backslash-escaped rows below fail, since the raw bytes
+// read as safe while goldmark's HTML renderer (which normalizes first)
+// classifies the same destination as dangerous.
+func TestLinkDestinationNormalization_HTMLAndTextAgree(t *testing.T) {
+	cases := []struct {
+		name string
+		md   string
+	}{
+		{"entity-encoded dangerous scheme", `[x](javascript&#58;alert(1))`},
+		{"backslash-escaped dangerous scheme", `[x](javascript\:alert(1))`},
+		{"backslash-escaped punctuation in path", `[x](https://ok.example/a\_b)`},
+		{"already percent-encoded", `[x](https://ok.example/a%20b)`},
+		{"protocol-relative", `[x](//evil.example/p)`},
+		{"case-varied scheme", `[x](JAVASCRIPT:alert(1))`},
+		{"literal space via bracketed destination", `[x](<https://ok.example/a b>)`},
+		{"benign URL with entity-shaped query", `[docs](https://ok.example/s?a=1&amp;b=2)`},
+		{"bare autolink, dangerous scheme", `<javascript:alert(1)>`},
+		{"bare autolink, safe URL", `<https://ok.example/x>`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			htmlOut, err := RenderMarkdownHTML(tc.md)
+			if err != nil {
+				t.Fatalf("RenderMarkdownHTML(%q): %v", tc.md, err)
+			}
+			textOut, err := RenderMarkdownText(tc.md)
+			if err != nil {
+				t.Fatalf("RenderMarkdownText(%q): %v", tc.md, err)
+			}
+
+			hrefMatch := hrefAttrRE.FindStringSubmatch(htmlOut)
+			if hrefMatch == nil {
+				t.Fatalf("no href attribute found in HTML output: %s", htmlOut)
+			}
+			href := html.UnescapeString(hrefMatch[1])
+			textMatch := textLinkRE.FindStringSubmatch(textOut)
+
+			if href == "" {
+				// The HTML part classified this destination as dangerous
+				// and dropped it — the text part must drop it too.
+				if textMatch != nil {
+					t.Fatalf("HTML dropped the destination as dangerous but the text part kept it:\n  html: %s\n  text: %q", htmlOut, textOut)
+				}
+				return
+			}
+			if textMatch == nil {
+				t.Fatalf("HTML kept the destination (href=%q) but the text part dropped it: %q", href, textOut)
+			}
+			if href != textMatch[1] {
+				t.Fatalf("HTML and text parts disagree about the link destination:\n  html href = %q\n  text url  = %q", href, textMatch[1])
+			}
+		})
 	}
 }
 

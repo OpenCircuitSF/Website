@@ -65,13 +65,38 @@ import (
 // isDangerousLinkURL reports whether dest is a scheme goldmark's own HTML
 // renderer refuses to emit as an href in safe mode (javascript:, vbscript:,
 // file:, and data: other than a handful of inline image types — see
-// html.IsDangerousURL). The plain-text renderer below applies the exact
-// same check to Link and AutoLink destinations so the two parts can never
-// disagree about which links are live: a scheme the HTML part neutralizes
-// (empty href, RenderMarkdownHTML) must not survive as a working "<url>" in
-// the text part.
+// html.IsDangerousURL). dest must already be normalized by
+// normalizedLinkDestination below — see that function's doc for why passing
+// raw, un-normalized bytes here is exactly the bug #0042's review bounced.
 func isDangerousLinkURL(dest string) bool {
 	return ghtml.IsDangerousURL([]byte(dest))
+}
+
+// normalizedLinkDestination is the single place this package normalizes a
+// link/autolink destination, so the same normalized bytes feed both the
+// dangerous-URL check and the text that gets written out — the two can
+// never see different bytes because there is only one call site producing
+// them.
+//
+// This mirrors, byte for byte, what goldmark's own HTML renderer computes
+// for the same node (renderer/html/html.go): renderLink does
+// `util.URLEscape(n.Destination, true)` and renderAutoLink does
+// `util.URLEscape(n.URL(source), false)` — in each case computing the
+// normalized destination exactly once and reusing it for both the
+// IsDangerousURL check and the emitted href. resolveReference must match
+// which of those two call sites this is standing in for: true for a
+// *ast.Link's Destination, false for an *ast.AutoLink's URL(source).
+//
+// util.URLEscape(v, true) runs UnescapePunctuations, then
+// ResolveNumericReferences, then ResolveEntityNames, then percent-escapes
+// the result — so a backslash-escaped or entity-encoded scheme
+// (`javascript\:alert(1)`, `javascript&#58;alert(1)`) normalizes to the
+// same bytes the HTML part's danger check sees, and an ordinary query
+// string's `&amp;` normalizes to a literal `&` the same way it does in the
+// href, rather than surviving as literal HTML-entity text in the mail body
+// a recipient reads.
+func normalizedLinkDestination(raw []byte, resolveReference bool) string {
+	return string(util.URLEscape(raw, resolveReference))
 }
 
 // campaignMarkdown is the single goldmark instance every campaign body
@@ -353,7 +378,7 @@ func writeTextInline(sb *strings.Builder, n ast.Node, source []byte) {
 			writeTextInline(sb, v, source)
 			sb.WriteString(marker)
 		case *ast.AutoLink:
-			dest := string(v.URL(source))
+			dest := normalizedLinkDestination(v.URL(source), false)
 			if !isDangerousLinkURL(dest) {
 				sb.WriteString("<" + dest + ">")
 			}
@@ -364,7 +389,7 @@ func writeTextInline(sb *strings.Builder, n ast.Node, source []byte) {
 			var inner strings.Builder
 			writeTextInline(&inner, v, source)
 			text := inner.String()
-			dest := string(v.Destination)
+			dest := normalizedLinkDestination(v.Destination, true)
 			switch {
 			case isDangerousLinkURL(dest):
 				// RenderMarkdownHTML renders this <a> with an empty href
