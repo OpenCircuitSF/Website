@@ -13,9 +13,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
@@ -69,7 +71,17 @@ func TestMountAndServe_UnsubscribePost_NeverRateLimited(t *testing.T) {
 	}
 
 	unsubscribeH := newUnsubscribeWiringHandler(pool)
-	passthrough := func(next http.Handler) http.Handler { return next }
+	// #0103 review (bounce of b8abe93): a stub `passthrough` here made this
+	// test vacuous for anything requireSession would guard, because
+	// mountAndServe takes requireSession as a parameter — wrapping the route
+	// in it would have been invisible to a no-op stand-in. Use the real
+	// middleware, exactly as admin_wiring_test.go and
+	// ratelimit_wiring_test.go already do, so a future edit that wraps
+	// POST /api/unsubscribe in requireSession makes this test fail on an
+	// unauthenticated request the way it should. requireAdmin is not
+	// exercised by this route, so it stays a no-op stand-in.
+	requireSession := middleware.RequireSession(auth.NewStore(pool))
+	requireAdmin := func(next http.Handler) http.Handler { return next }
 
 	errCh := make(chan error, 1)
 	ready := make(chan struct{})
@@ -80,7 +92,7 @@ func TestMountAndServe_UnsubscribePost_NeverRateLimited(t *testing.T) {
 			nil, nil, nil,
 			nil, nil, nil, /* publicInterestsH, preferencesH, confirmH: not exercised by this test */
 			unsubscribeH,
-			passthrough, passthrough, nil, ready)
+			requireSession, requireAdmin, nil, ready)
 	}()
 
 	client := &http.Client{Timeout: wiringHTTPTimeout}
@@ -156,7 +168,20 @@ func TestMountAndServe_UnsubscribePost_NoSessionNoCSRF(t *testing.T) {
 	}
 
 	unsubscribeH := newUnsubscribeWiringHandler(pool)
-	passthrough := func(next http.Handler) http.Handler { return next }
+	// #0103 review (bounce of b8abe93): this is the test the bounce is
+	// actually about — a stub `passthrough` for requireSession made it
+	// impossible for this test to detect a future edit wrapping the route
+	// in requireSession, since the guard under test was replaced by a no-op
+	// inside the test itself. Use the real middleware, exactly as
+	// admin_wiring_test.go and ratelimit_wiring_test.go already do:
+	// middleware.RequireSession answers 401 on an empty token
+	// (internal/middleware/auth.go), so with this test's cookie-less
+	// request, wrapping POST /api/unsubscribe in requireSession now fails
+	// this test at "status = 401, want 200" instead of passing silently.
+	// requireAdmin is not exercised by this route, so it stays a no-op
+	// stand-in.
+	requireSession := middleware.RequireSession(auth.NewStore(pool))
+	requireAdmin := func(next http.Handler) http.Handler { return next }
 
 	errCh := make(chan error, 1)
 	ready := make(chan struct{})
@@ -167,7 +192,7 @@ func TestMountAndServe_UnsubscribePost_NoSessionNoCSRF(t *testing.T) {
 			nil, nil, nil,
 			nil, nil, nil,
 			unsubscribeH,
-			passthrough, passthrough, nil, ready)
+			requireSession, requireAdmin, nil, ready)
 	}()
 
 	client := &http.Client{Timeout: wiringHTTPTimeout}
