@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -148,8 +149,20 @@ func TestVerify_UnsupportedSignatureVersion(t *testing.T) {
 	signMessage(t, key, m, "2")
 	m.SignatureVersion = "3"
 
-	if err := v.Verify(context.Background(), m); err == nil {
+	// SignatureVersion is not part of canonicalString (see message.go), so
+	// relabeling it after signing does not disturb the signature itself.
+	// That means only the SignatureVersion allowlist switch in Verify can
+	// reject this message; if that switch's default case were removed, hash
+	// and digest would stay at their zero values and rsa.VerifyPKCS1v15
+	// would fail for an unrelated reason ("signature verification failed",
+	// not "unsupported SignatureVersion"). Assert the specific error text so
+	// that alternate failure mode does not satisfy this test.
+	err := v.Verify(context.Background(), m)
+	if err == nil {
 		t.Fatal("expected error for unsupported SignatureVersion, got nil")
+	}
+	if !strings.Contains(err.Error(), `unsupported SignatureVersion "3"`) {
+		t.Errorf(`Verify error = %v, want it to identify the unsupported SignatureVersion "3" specifically`, err)
 	}
 }
 
@@ -171,11 +184,23 @@ func TestVerify_TamperedTopicArn(t *testing.T) {
 	v, _ := newTestVerifier(t, cert)
 
 	m := baseNotification()
+	// Sign under a TopicArn outside the allowlist, then tamper it to the one
+	// value the allowlist *does* accept. That keeps the post-tamper TopicArn
+	// inside the allowlist, so the allowlist check alone cannot reject this
+	// message — only the fact that TopicArn is covered by canonicalString
+	// (and so the tamper invalidates the signature) can. This isolates the
+	// signature-integrity property from the separate allowlist property that
+	// TestVerify_TopicArnMismatch already covers.
+	m.TopicArn = "arn:aws:sns:us-west-2:123456789012:some-other-topic"
 	signMessage(t, key, m, "2")
-	m.TopicArn = "arn:aws:sns:us-west-2:123456789012:attacker-topic" // mutated after signing
+	m.TopicArn = "arn:aws:sns:us-west-2:123456789012:opencircuit-ses-events" // tampered to the allowlisted value after signing
 
-	if err := v.Verify(context.Background(), m); err == nil {
+	err := v.Verify(context.Background(), m)
+	if err == nil {
 		t.Fatal("expected error for tampered TopicArn, got nil")
+	}
+	if !strings.Contains(err.Error(), "signature verification failed") {
+		t.Errorf("Verify error = %v, want a signature verification failure (TopicArn was tampered to a value inside the allowlist, so only the signature check can catch this)", err)
 	}
 }
 
@@ -219,8 +244,28 @@ func TestVerify_EmptyConfiguredTopicArnRejectsEverything(t *testing.T) {
 	m := baseNotification()
 	signMessage(t, key, m, "2")
 
-	if err := v.Verify(context.Background(), m); err == nil {
+	// This message is otherwise entirely valid — genuinely signed, and its
+	// TopicArn equals the one string this Verifier would accept were
+	// topicARN configured. Verify's certificate fetch runs unconditionally
+	// before the topicARN=="" check (confirmed by reading verify.go), so the
+	// fetch always happens regardless of whether that check exists; the
+	// `calls` counter above cannot distinguish "the guard ran" from "the
+	// guard is gone", so it is not the assertion that proves this test.
+	// What *does* distinguish it: with the explicit `topicARN == ""` guard
+	// removed, the general `m.TopicArn != v.topicARN` mismatch check below
+	// it still fires (a real ARN is never equal to ""), but with a different
+	// error message ("does not match the configured topic" rather than "no
+	// topic ARN configured"). Assert the specific text so that fallback
+	// rejection cannot masquerade as this guard.
+	err := v.Verify(context.Background(), m)
+	if err == nil {
 		t.Fatal("expected error when no topic ARN is configured, got nil")
+	}
+	if !strings.Contains(err.Error(), "no topic ARN configured") {
+		t.Errorf(`Verify error = %v, want it to identify the missing topic-ARN configuration specifically ("no topic ARN configured")`, err)
+	}
+	if calls != 1 {
+		t.Errorf("fetcher called %d times, want exactly 1 (the fetch happens before this guard runs)", calls)
 	}
 }
 
@@ -357,14 +402,28 @@ func TestFetchCertReal_FetchesAndParses(t *testing.T) {
 }
 
 func TestFetchCertReal_NonOKStatusIsError(t *testing.T) {
+	_, cert := testFixture(t)
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+
+	// The 404 response body is a genuine, parseable PEM certificate — the
+	// same fixture the happy-path tests use. That makes the status check the
+	// only thing that can reject this response; if it were deleted, the
+	// fetch would proceed to pem.Decode and x509.ParseCertificate and
+	// succeed outright, rather than failing incidentally on an empty body
+	// (the defect #0106 identified by mutation).
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
+		w.Write(pemBytes)
 	}))
 	defer srv.Close()
 
 	v := NewVerifier("us-west-2", "irrelevant", discardLogger())
-	if _, err := v.fetchCertReal(context.Background(), srv.URL); err == nil {
+	_, err := v.fetchCertReal(context.Background(), srv.URL)
+	if err == nil {
 		t.Fatal("expected error for a non-200 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("fetchCertReal error = %v, want it to identify status 404", err)
 	}
 }
 
