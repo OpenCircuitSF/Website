@@ -331,10 +331,35 @@ func (s *Store) ReleaseAlreadySubscribedClaim(ctx context.Context, id int64, now
 	return nil
 }
 
-// FindByEmail looks up a subscriber by (normalized) email. Normalizes in
-// SQL (lower(trim($1))), matching Create — see the package doc comment.
+// FindByEmail looks up a subscriber by (normalized) email through the
+// shared pool. Normalizes in SQL (lower(trim($1))), matching Create — see
+// the package doc comment. See FindByEmailTx for the transaction-scoped
+// twin.
 func (s *Store) FindByEmail(ctx context.Context, email string) (Subscriber, error) {
-	row := s.pool.QueryRow(ctx,
+	return s.findByEmail(ctx, s.pool, email)
+}
+
+// FindByEmailTx is FindByEmail's transaction-scoped twin: it runs the
+// identical SELECT against q instead of the pool, so a caller that already
+// holds an open pgx.Tx can look a recipient up on the SAME checked-out
+// connection instead of asking the pool for a second one while the first is
+// still held open by that transaction. #0038's handler
+// (internal/handlers/ses_notifications.go, applyRecipient) is the first
+// caller: /api/ses/notifications deliberately carries no rate limiter (a
+// campaign produces thousands of events in a burst from many source IPs),
+// so under a burst every request holding a transaction open would
+// previously also compete with every other one for a second pooled
+// connection just to run this lookup — every connection could end up held
+// by an open transaction with every request blocked waiting for one more,
+// with nothing recovering until contexts cancel. Reading through q also
+// makes the lookup see the transaction's own uncommitted writes, which
+// #0039 will want.
+func (s *Store) FindByEmailTx(ctx context.Context, q querier, email string) (Subscriber, error) {
+	return s.findByEmail(ctx, q, email)
+}
+
+func (s *Store) findByEmail(ctx context.Context, q querier, email string) (Subscriber, error) {
+	row := q.QueryRow(ctx,
 		`SELECT `+subscriberColumns+` FROM subscribers WHERE email = lower(trim($1))`,
 		email)
 	sub, err := scanSubscriber(row)

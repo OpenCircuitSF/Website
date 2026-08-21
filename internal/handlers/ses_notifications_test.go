@@ -568,6 +568,160 @@ func TestSESNotifications_StorageFailure_Returns500(t *testing.T) {
 	}
 }
 
+// commitFailingTx wraps a REAL pgx.Tx so every write in it — the
+// email_events insert, suppressions.AddTx, subscribers.MarkBouncedTx —
+// executes for real against the live database, and only Commit is made to
+// fail. This models a crash or a serialization failure landing in the
+// window between the last write and COMMIT: the exact window #0033 shipped
+// AddTx to close, and the one plan §12 test 9 requires a test for. Every
+// other pgx.Tx method (including Rollback, which handleNotification's own
+// deferred cleanup calls) delegates to the embedded real transaction.
+type commitFailingTx struct {
+	pgx.Tx
+}
+
+func (t commitFailingTx) Commit(ctx context.Context) error {
+	return fmt.Errorf("simulated: commit failed (crash window between last write and COMMIT)")
+}
+
+// commitFailingBeginner begins a real transaction against pool — so the
+// SQL that runs inside it is the genuine production statements, not a
+// stand-in — and wraps the first failN of them in commitFailingTx. Once
+// calls exceeds failN, Begin returns the real, unwrapped Tx, so a retry
+// (the identical signed envelope re-posted, exactly as SNS would) commits
+// normally. That is what lets one test prove both halves of plan §12 test
+// 9: the crash-window rollback, and that the retry lands all three writes.
+type commitFailingBeginner struct {
+	pool  *pgxpool.Pool
+	failN int
+	calls int
+}
+
+func (b *commitFailingBeginner) Begin(ctx context.Context) (pgx.Tx, error) {
+	tx, err := b.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	b.calls++
+	if b.calls <= b.failN {
+		return commitFailingTx{Tx: tx}, nil
+	}
+	return tx, nil
+}
+
+// TestSESNotifications_CrashWindowEquivalence_RetryLandsAllWrites is plan
+// §12 test 9 — the case the first pass's review found entirely untested.
+// The review proved the gap by mutation: moving AddTx/MarkBouncedTx/
+// MarkComplainedTx off the shared transaction and onto the pool left every
+// other test green, because nothing exercised a failure landing INSIDE the
+// window the transaction exists to close (issues/0038.md, "Blocker 1").
+//
+// This test forces exactly that failure — every write for one SNS message
+// runs for real, then COMMIT itself fails — and asserts all three writes
+// (email_events, the suppression row, the subscriber status change) are
+// atomically absent afterward, not merely that one of them is. That last
+// part is what actually catches the mutation: under it, the suppression
+// row and the status change commit independently, on the pool, before the
+// wrapped transaction's own (failing) Commit is ever reached, so they
+// would survive this rollback even though email_events did not.
+//
+// It then re-posts the identical signed envelope and asserts all three
+// land — proving the retry the mutation would otherwise silently defeat
+// (a hard-bounced address kept receiving mail with nothing to show why).
+func TestSESNotifications_CrashWindowEquivalence_RetryLandsAllWrites(t *testing.T) {
+	pool := sesNotificationsTestPool(t)
+	key, _ := sesTestFixture(t)
+	_, cert := sesTestFixture(t)
+
+	verifier := sesnotify.NewVerifierForTesting("us-west-2", sesTestTopicArn, nil, func(ctx context.Context, certURL string) (*x509.Certificate, error) {
+		return cert, nil
+	})
+	beginner := &commitFailingBeginner{pool: pool, failN: 1}
+	h := NewSESNotificationsHandler(
+		verifier, beginner, sesnotify.NewStore(pool), subscribers.NewStore(pool), subscribers.NewSuppressionStore(pool),
+		nil, nil,
+	)
+
+	subID := seedTestSubscriber(t, pool, subscribers.StatusActive)
+	email := subscriberEmailByID(t, pool, subID)
+	sesCleanupSuppression(t, pool, email)
+
+	inner := sesEncodeSESEvent(t, map[string]any{
+		"eventType": "Bounce",
+		"mail":      map[string]any{"timestamp": time.Now().Add(time.Hour).UTC().Format(time.RFC3339), "messageId": "ses-crashwindow-1"},
+		"bounce": map[string]any{
+			"bounceType": "Permanent", "bounceSubType": "General",
+			"bouncedRecipients": []map[string]string{{"emailAddress": email}},
+		},
+	})
+	m := sesBaseNotification(t, inner)
+	sesSignMessage(t, key, m)
+	sesCleanupEvents(t, pool, m.MessageId)
+
+	// First delivery: the real writes happen inside the transaction, then
+	// COMMIT fails — modeling a crash in the window between the last write
+	// and commit. The handler must answer 500 (criterion 7's "storage
+	// failure -> 500" exception), not pretend the message was recorded.
+	first := sesPost(h, m)
+	if first.Code != http.StatusInternalServerError {
+		t.Fatalf("first (commit-failing) delivery status = %d, want 500", first.Code)
+	}
+
+	rows, err := sesnotify.NewStore(pool).ByMessageID(context.Background(), m.MessageId)
+	if err != nil {
+		t.Fatalf("ByMessageID: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("email_events rows after commit failure = %d, want 0 — the insert must have rolled back with everything else", len(rows))
+	}
+	suppressed, err := subscribers.NewSuppressionStore(pool).IsSuppressed(context.Background(), email)
+	if err != nil {
+		t.Fatalf("IsSuppressed: %v", err)
+	}
+	if suppressed {
+		t.Error("IsSuppressed = true after a rolled-back commit, want false — the suppression write must not have survived independently of email_events")
+	}
+	sub, err := subscribers.NewStore(pool).GetByID(context.Background(), subID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if sub.Status != subscribers.StatusActive {
+		t.Errorf("subscriber status after rolled-back commit = %q, want unchanged %q", sub.Status, subscribers.StatusActive)
+	}
+
+	// Retry: SNS resends the identical signed envelope. Because
+	// email_events truly rolled back, (sns_message_id, recipient) is free
+	// again — this is NOT deduped away as a pure redelivery, it is
+	// processed in full — and this time Begin returns a normal, unwrapped
+	// Tx, so COMMIT succeeds for real.
+	second := sesPost(h, m)
+	if second.Code != http.StatusOK {
+		t.Fatalf("retry status = %d, want 200 (body=%s)", second.Code, second.Body.String())
+	}
+
+	rows, err = sesnotify.NewStore(pool).ByMessageID(context.Background(), m.MessageId)
+	if err != nil {
+		t.Fatalf("ByMessageID after retry: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("email_events rows after retry = %d, want exactly 1", len(rows))
+	}
+	suppressed, err = subscribers.NewSuppressionStore(pool).IsSuppressed(context.Background(), email)
+	if err != nil {
+		t.Fatalf("IsSuppressed after retry: %v", err)
+	}
+	if !suppressed {
+		t.Error("IsSuppressed = false after retry, want true — the retry must land the suppression this time")
+	}
+	sub, err = subscribers.NewStore(pool).GetByID(context.Background(), subID)
+	if err != nil {
+		t.Fatalf("GetByID after retry: %v", err)
+	}
+	if sub.Status != subscribers.StatusBounced {
+		t.Errorf("subscriber status after retry = %q, want %q", sub.Status, subscribers.StatusBounced)
+	}
+}
+
 func TestSESNotifications_Redelivery_ExactlyOneRowAndOneSuppression(t *testing.T) {
 	pool := sesNotificationsTestPool(t)
 	h := sesTestHandler(t, pool)

@@ -58,8 +58,9 @@
 // package could never structurally match a method whose parameter type is
 // unexported in another package. internal/auth's RegistrationService and
 // LoginService hold *audit.Logger concretely for the identical reason (they
-// call WriteTx). subscriberLookup below stays a real interface because
-// FindByEmail takes no querier — nothing stops that one from being narrow.
+// call WriteTx). subs's FindByEmailTx call in applyRecipient below takes
+// the same unexported querier for the identical reason — see that method's
+// doc comment for why it exists instead of the pool-backed FindByEmail.
 package handlers
 
 import (
@@ -357,7 +358,12 @@ func (h *SESNotificationsHandler) applyRecipient(ctx context.Context, tx pgx.Tx,
 		return nil
 	}
 
-	sub, err := h.subs.FindByEmail(ctx, recipient)
+	// FindByEmailTx, not FindByEmail: this handler already holds tx checked
+	// out of the pool for the whole request, so the lookup runs on the same
+	// connection instead of contending the pool for a second one — see the
+	// package doc comment's note on this, and FindByEmailTx's own doc
+	// comment in internal/subscribers/store.go.
+	sub, err := h.subs.FindByEmailTx(ctx, tx, recipient)
 	hasSub := true
 	switch {
 	case errors.Is(err, subscribers.ErrNotFound):
