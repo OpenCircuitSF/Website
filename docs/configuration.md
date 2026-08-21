@@ -22,7 +22,7 @@ of problems in one pass.
 | `SES_CONFIGURATION_SET` | no | — | SES configuration set used for transactional/campaign sends |
 | `EMAIL_FROM` | yes | — | RFC 5322 From header, e.g. `Open Circuit SF <hello@opencircuitsf.com>` |
 | `EMAIL_REPLY_TO` | no | — | Reply-To header for outbound mail |
-| `EMAIL_LIST_DOMAIN` | no | — | Subdomain used for inbound unsubscribe handling, e.g. `lists.opencircuitsf.com`. Never point the apex MX at SES — see `CLAUDE.md` §9. |
+| `EMAIL_LIST_DOMAIN` | yes | — | Subdomain used for inbound unsubscribe handling, e.g. `lists.opencircuitsf.com`. Interpolated into the `mailto:` form of every campaign's `List-Unsubscribe` header (`mailing.CampaignHeaders`, `#0035`); required with no default (`#0105`) so a misconfigured deploy fails loud at boot instead of emitting a malformed `mailto:unsubscribe@?subject=…` header. Never point the apex MX at SES — see `CLAUDE.md` §9. |
 | `SES_INBOUND_BUCKET` | no | — | S3 bucket SES writes inbound mail to |
 | `MAILER_NOOP` | no | `false` | `true` selects `auth.NoOpMailer` instead of the real SES v2 API mailer on the Postgres serve path (`#0027`). For local development against Postgres before SES is set up (`CLAUDE.md` §10 item 2) — `NoOpMailer` logs the full verification/recovery link to stdout, which is how `#0008`'s manual passkey verification procedure reads the magic link. Production leaves this unset. |
 | `MAX_SEND_RATE` | no | `10` | Messages/second ceiling; keep below the SES quota. This is the environment-level ceiling, not the operator dial — see below. |

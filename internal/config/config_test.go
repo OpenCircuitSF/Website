@@ -27,6 +27,7 @@ func setRequired(t *testing.T) {
 	t.Setenv("ADMIN_EMAIL", "admin@example.com")
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("EMAIL_FROM", "Open Circuit SF <hello@opencircuitsf.com>")
+	t.Setenv("EMAIL_LIST_DOMAIN", "lists.opencircuitsf.com")
 }
 
 func TestLoad_AllRequiredPresent(t *testing.T) {
@@ -36,7 +37,6 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 	t.Setenv("BASE_URL", "https://example.com")
 	t.Setenv("SES_CONFIGURATION_SET", "opencircuit-transactional")
 	t.Setenv("EMAIL_REPLY_TO", "hello@opencircuitsf.com")
-	t.Setenv("EMAIL_LIST_DOMAIN", "lists.opencircuitsf.com")
 	t.Setenv("SES_INBOUND_BUCKET", "opencircuitsf-inbound")
 	t.Setenv("SES_EVENTS_TOPIC_ARN", "arn:aws:sns:us-west-2:123456789012:opencircuit-ses-events")
 	t.Setenv("MAILER_NOOP", "true")
@@ -190,6 +190,7 @@ func TestLoad_MissingRequired(t *testing.T) {
 		{"missing ADMIN_EMAIL", "ADMIN_EMAIL", "ADMIN_EMAIL"},
 		{"missing AWS_REGION", "AWS_REGION", "AWS_REGION"},
 		{"missing EMAIL_FROM", "EMAIL_FROM", "EMAIL_FROM"},
+		{"missing EMAIL_LIST_DOMAIN", "EMAIL_LIST_DOMAIN", "EMAIL_LIST_DOMAIN"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

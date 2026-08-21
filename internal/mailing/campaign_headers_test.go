@@ -162,6 +162,45 @@ func TestCampaignHeaders_MultiRecipientBatch_TokensDoNotCrossContaminate(t *test
 	}
 }
 
+// TestCampaignHeaders_BlankListDomain_OmitsMailtoFormRatherThanEmitMalformedURI
+// is the regression test for #0105: config.Load requires EMAIL_LIST_DOMAIN
+// and #0045's Preflight gate independently refuses to send with it unset
+// (list_domain_unset), but CampaignHeaders is a pure function that does not
+// trust either guard. Before this issue, a blank listDomain interpolated
+// directly into "mailto:unsubscribe@?subject=..." — a syntactically invalid
+// URI. RFC 8058 permits an HTTPS-only List-Unsubscribe, so the correct
+// degrade is to drop the mailto: form entirely, not emit a broken one.
+//
+// Mutation proof: remove the `if strings.TrimSpace(listDomain) != ""` guard
+// in CampaignHeaders (campaign_headers.go) so it always builds the mailto:
+// form, and this test fails — got List-Unsubscribe contains
+// "mailto:unsubscribe@?subject=", the exact malformed URI this issue
+// reports.
+func TestCampaignHeaders_BlankListDomain_OmitsMailtoFormRatherThanEmitMalformedURI(t *testing.T) {
+	for _, listDomain := range []string{"", "   "} {
+		headers := CampaignHeaders(testBaseURL, listDomain, testManage)
+		got := headerValue(t, headers, "List-Unsubscribe")
+
+		if strings.Contains(got, "mailto:") {
+			t.Errorf("listDomain %q: List-Unsubscribe should omit the mailto: form, got %q", listDomain, got)
+		}
+		if strings.Contains(got, "unsubscribe@?") {
+			t.Errorf("listDomain %q: List-Unsubscribe carries the malformed mailto URI this issue (#0105) reports: %q", listDomain, got)
+		}
+		want := "<https://www.opencircuitsf.com/api/unsubscribe?token=" + testManage + ">"
+		if got != want {
+			t.Errorf("listDomain %q: List-Unsubscribe = %q, want exactly the HTTPS-only form %q", listDomain, got, want)
+		}
+		// List-Unsubscribe-Post and List-Id are unaffected by listDomain.
+		if got := headerValue(t, headers, "List-Unsubscribe-Post"); got != "List-Unsubscribe=One-Click" {
+			t.Errorf("listDomain %q: List-Unsubscribe-Post = %q, want List-Unsubscribe=One-Click", listDomain, got)
+		}
+		if got := headerValue(t, headers, "List-Id"); got != campaignListID {
+			t.Errorf("listDomain %q: List-Id = %q, want %q", listDomain, got, campaignListID)
+		}
+	}
+}
+
 func TestCampaignHeaders_DifferentTokens_ProduceDifferentListUnsubscribeValues(t *testing.T) {
 	a := CampaignHeaders(testBaseURL, testListDomain, "TOKEN-A")
 	b := CampaignHeaders(testBaseURL, testListDomain, "TOKEN-B")

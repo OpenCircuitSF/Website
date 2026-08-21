@@ -46,8 +46,20 @@ type Config struct {
 	SESConfigurationSet string
 	EmailFrom           string
 	EmailReplyTo        string
-	EmailListDomain     string
-	SESInboundBucket    string
+
+	// EmailListDomain is the subdomain mailing.CampaignHeaders (#0035)
+	// interpolates into the mailto: form of every campaign's List-Unsubscribe
+	// header (RFC 8058). Required, with no default (#0105): the value is a
+	// domain identity, not an operational knob, so it follows the same
+	// convention as WEBAUTHN_RP_ID and EMAIL_FROM below rather than being
+	// silently defaulted to "lists.opencircuitsf.com" — a misconfigured
+	// deploy should fail loud at boot, not send a header advertising an
+	// unsubscribe address that may not route. Must never be the bare apex
+	// opencircuitsf.com: #0057 points this subdomain's MX at SES for inbound
+	// Path-3 handling, and pointing the apex's own MX at SES would hijack
+	// all mail to the domain (CLAUDE.md §9).
+	EmailListDomain  string
+	SESInboundBucket string
 
 	// SESEventsTopicARN is the single SNS topic ARN internal/sesnotify (#0037)
 	// will accept SES bounce/complaint notifications from. A valid SNS
@@ -150,6 +162,7 @@ func loadFromFile(path string) (*Config, error) {
 		{"ADMIN_EMAIL", cfg.AdminEmail, false},
 		{"AWS_REGION", cfg.AWSRegion, false},
 		{"EMAIL_FROM", cfg.EmailFrom, false},
+		{"EMAIL_LIST_DOMAIN", cfg.EmailListDomain, false},
 	}
 	for _, r := range required {
 		if r.value == "" && !(r.skipInDev && devMode) {

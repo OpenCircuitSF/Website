@@ -54,7 +54,16 @@ const campaignListID = "Open Circuit SF <list.opencircuitsf.com>"
 //     ("lists.opencircuitsf.com"). It must never be the bare apex
 //     opencircuitsf.com: #0057 points this subdomain's MX at SES for
 //     inbound Path-3 handling, and pointing the apex's own MX at SES
-//     would hijack all mail to the domain (CLAUDE.md §9).
+//     would hijack all mail to the domain (CLAUDE.md §9). config.Load
+//     requires EMAIL_LIST_DOMAIN and #0045's Preflight gate independently
+//     refuses to start a send with it unset (list_domain_unset) — but this
+//     function does not trust either caller. A blank or all-whitespace
+//     listDomain drops the mailto: form entirely rather than emit the
+//     syntactically invalid "mailto:unsubscribe@?subject=..." this issue
+//     (#0105) was filed over; List-Unsubscribe still validates with only
+//     the HTTPS form present (RFC 8058 permits either or both), and
+//     List-Unsubscribe-Post still applies, so one-click unsubscribe keeps
+//     working.
 //   - manageToken is the recipient's own subscribers.manage_token — the
 //     exact value #0034's endpoint accepts as its ?token= query
 //     parameter. Callers (the send worker, #0045) MUST build one Message
@@ -64,10 +73,23 @@ const campaignListID = "Open Circuit SF <list.opencircuitsf.com>"
 //     TestCampaignHeaders_MultiRecipientBatch_TokensDoNotCrossContaminate.
 func CampaignHeaders(baseURL, listDomain, manageToken string) []Header {
 	httpsURL := baseURL + "/api/unsubscribe?token=" + url.QueryEscape(manageToken)
-	mailtoURI := "mailto:unsubscribe@" + listDomain + "?subject=" + mailtoQueryEscape("unsubscribe:"+manageToken)
+	listUnsubscribe := "<" + httpsURL + ">"
+
+	// A blank (or whitespace-only) listDomain would otherwise interpolate
+	// into "mailto:unsubscribe@?subject=..." — a syntactically invalid URI
+	// (#0105). config.Load requires EMAIL_LIST_DOMAIN and #0045's Preflight
+	// gate refuses to start a send without it, but this function is a pure
+	// seam any caller (including a future test or #0045 wiring bug) could
+	// still invoke with an empty string, so it does not trust either guard.
+	// RFC 8058 permits an HTTPS-only List-Unsubscribe, so dropping the
+	// mailto: form here is a strictly valid degrade, not a broken one.
+	if strings.TrimSpace(listDomain) != "" {
+		mailtoURI := "mailto:unsubscribe@" + listDomain + "?subject=" + mailtoQueryEscape("unsubscribe:"+manageToken)
+		listUnsubscribe = "<" + httpsURL + ">, <" + mailtoURI + ">"
+	}
 
 	return []Header{
-		{Name: "List-Unsubscribe", Value: "<" + httpsURL + ">, <" + mailtoURI + ">"},
+		{Name: "List-Unsubscribe", Value: listUnsubscribe},
 		{Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click"},
 		{Name: "List-Id", Value: campaignListID},
 	}
