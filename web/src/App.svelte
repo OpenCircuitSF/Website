@@ -18,6 +18,7 @@
   import SubscribeThanks from './views/SubscribeThanks.svelte';
   import ConfirmSubscription from './views/ConfirmSubscription.svelte';
   import PreferenceCenter from './views/PreferenceCenter.svelte';
+  import Unsubscribe from './views/Unsubscribe.svelte';
   import NotFound from './views/NotFound.svelte';
 
   let sessionChecked = $state(false);
@@ -77,9 +78,8 @@
 {:else}
   <!-- Every other route is a public marketing page (PRD §5.1), and shares
        the site header shell (#0017). This placeholder covers the remaining
-       public routes (workshops, unsubscribe) until their own later-phase
-       issues (#0036, #0053-0054) build them; not-found is a real 404, not a
-       placeholder. -->
+       public routes (workshops) until their own later-phase issues
+       (#0053-0054) build them; not-found is a real 404, not a placeholder. -->
   <Header />
   {#if $currentRoute.name === 'home'}
     <Home />
@@ -97,6 +97,8 @@
     <main id="main-content" class="app-shell">
       <PreferenceCenter />
     </main>
+  {:else if $currentRoute.name === 'unsubscribe'}
+    <Unsubscribe />
   {:else if $currentRoute.name === 'not-found'}
     <NotFound />
   {:else}

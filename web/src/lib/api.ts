@@ -17,6 +17,7 @@ import type {
   PreferencesResponse,
 } from './types';
 import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
+import type { UnsubscribeResult } from './unsubscribe';
 import type {
   ServerCredentialAssertion,
   AssertionFinishPayload,
@@ -522,4 +523,23 @@ export function getPreferences(token: string): Promise<PreferencesResponse> {
  */
 export function patchPreferences(body: PreferencesPatchBody): Promise<PreferencesResponse> {
   return apiPatch<PreferencesResponse>('/api/preferences', body);
+}
+
+/**
+ * POST /api/unsubscribe?token=... — the browser-driven confirm click on
+ * /unsubscribe (#0034, #0036, PRD §6.5 path 1). This is the SAME route the
+ * List-Unsubscribe header points a mail provider's automated POST at; a
+ * person clicking the confirm button on the SPA's /unsubscribe view is the
+ * other caller. Always resolves at 200 -- the server never distinguishes a
+ * valid, unknown, expired, replayed, or already-complained token by status
+ * code, only by the `message`/`no_op` fields in the body (see
+ * internal/handlers/unsubscribe.go's package doc comment) -- so there is no
+ * ApiError branch for a caller to catch here beyond an actual network
+ * failure. `token` is passed through even when null/absent: the server's
+ * missing-token branch answers the same neutral 200, so this view has
+ * nothing to validate client-side (see lib/unsubscribe.ts's extractToken).
+ */
+export function unsubscribeOneClick(token: string | null): Promise<UnsubscribeResult> {
+  const path = token ? `/api/unsubscribe?token=${encodeURIComponent(token)}` : '/api/unsubscribe';
+  return apiPost<UnsubscribeResult>(path);
 }
