@@ -10,6 +10,7 @@ require (
 	github.com/go-webauthn/webauthn v0.17.4
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/joho/godotenv v1.5.1
+	github.com/yuin/goldmark v1.8.5
 	golang.org/x/time v0.15.0
 )
 
