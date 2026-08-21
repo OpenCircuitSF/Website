@@ -1,10 +1,11 @@
 // soft_bounce.go is #0039's shared threshold logic: the settings keys, their
 // PRD-specified defaults, and the code that resolves them, used by both
-// ses_notifications.go (to decide whether a Transient bounce crosses the
-// threshold) and admin_subscribers.go (to show the current count on the
-// subscriber detail screen, #0039's admin-visibility criterion). Keeping it
-// in one file means the two call sites can never silently disagree on what
-// "the threshold" means.
+// ses_notifications.go (to decide whether a Transient or Undetermined
+// bounce — #0109 widened the covered types — crosses the threshold) and
+// admin_subscribers.go (to show the current count on the subscriber detail
+// screen, #0039's admin-visibility criterion). Keeping it in one file means
+// the two call sites can never silently disagree on what "the threshold"
+// means.
 package handlers
 
 import (

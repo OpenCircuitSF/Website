@@ -188,9 +188,11 @@ type interestRef struct {
 // section now and let it fill in."
 //
 // SoftBounceCount/SoftBounceThreshold/SoftBounceWindowDays are #0039's
-// "admin can see the current soft-bounce count" criterion: the count of
-// Transient-bounce email_events rows for this address within the currently
-// configured window, plus the threshold/window themselves so the admin
+// "admin can see the current soft-bounce count" criterion (widened by
+// #0109): the count of Transient- and Undetermined-bounce email_events rows
+// for this address within the currently configured window, excluding the
+// sender-fault Transient subtypes (MessageTooLarge, ContentRejected,
+// AttachmentRejected), plus the threshold/window themselves so the admin
 // screen can show "N of THRESHOLD in the last WINDOW days" rather than a
 // bare number. Like Interests, populated by Get only (List omits them to
 // avoid a query per row); all three are nil together when the handler was
