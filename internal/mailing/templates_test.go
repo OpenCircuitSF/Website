@@ -17,27 +17,38 @@ import (
 // literal {{cta}} — see TestNoRenderedBodyContainsCTAToken (#0085).
 var unresolvedTemplateToken = regexp.MustCompile(`\{\{[^{}]*\}\}`)
 
-// buildEmailFuncName matches the exported top-level Build*Email function
-// names this package defines — see TestAllMessagesEnumeratesEveryBuildEmailFunc.
+// isMessageBuilderFuncDecl reports whether fn is an exported, top-level
+// (non-method) function declaration with at least one result of type
+// Message — see TestAllMessagesEnumeratesEveryBuildEmailFunc.
 //
-// Naming-convention decision (#0085 review, 2026-08-19): kept scoped to the
-// "Build...Email" convention rather than widened to a bare "^Build". Every
-// exported top-level Build* function in this package today ends in "Email"
-// (checked: grep -n '^func Build' internal/mailing/*.go, five matches, all
-// five end in Email), and this package is specifically internal/mailing's
-// email templates — a bare "^Build" would also start matching any future
-// non-message helper named Build* (e.g. a BuildAddressBlock string helper)
-// that isn't a Message-returning builder allMessages() should enumerate,
-// which would make the guard noisier, not stronger. The known gap this
-// leaves: a future builder that returns a Message but is named without the
-// "Email" suffix — e.g. #0043's campaign builder if it lands as
-// BuildCampaignMessage, or a hypothetical BuildWorkshopReminder — is
-// invisible to this regex and therefore to
-// TestAllMessagesEnumeratesEveryBuildEmailFunc. Whoever adds such a builder
-// must either name it to match this convention or widen the regex (and
-// re-check the false-positive vectors documented on the test below) at that
-// time; this issue does not pre-emptively widen it.
-var buildEmailFuncName = regexp.MustCompile(`^Build[A-Za-z0-9]*Email$`)
+// Naming-convention decision superseded (#0043, resolving #0085's carried-in
+// review note, 2026-08-21): the guard originally matched builder functions by
+// NAME (a `^Build[A-Za-z0-9]*Email$` regex, kept scoped to avoid false
+// positives from non-message helpers like a hypothetical BuildAddressBlock
+// string helper). #0085's review flagged the known gap that decision left:
+// a future builder returning Message but not named with the "Email" suffix
+// — exactly what happened when #0043 landed BuildCampaignMessage — would be
+// invisible to the regex and therefore to this test. A return-type check is
+// strictly more precise on both axes the original regex was balancing: it
+// still excludes BuildAddressBlock (returns string, not Message) and now
+// also catches BuildCampaignMessage (returns Message) without needing an
+// "Email"-suffixed name. Extended one step past #0085's literal "single
+// result is Message" phrasing: a builder that can fail (BuildCampaignMessage
+// wraps RenderCampaign, which returns an error) idiomatically returns
+// (Message, error), so this checks "any result is Message" rather than
+// "the only result is Message" — still rejects a string-only or
+// error-only helper, still accepts every existing builder unchanged.
+func isMessageBuilderFuncDecl(fn *ast.FuncDecl) bool {
+	if fn.Recv != nil || !fn.Name.IsExported() || fn.Type.Results == nil {
+		return false
+	}
+	for _, field := range fn.Type.Results.List {
+		if ident, ok := field.Type.(*ast.Ident); ok && ident.Name == "Message" {
+			return true
+		}
+	}
+	return false
+}
 
 // updateGolden regenerates testdata/*.golden from the current renderer when
 // UPDATE_GOLDEN=1 is set in the environment. Run once by hand after a
@@ -120,10 +131,27 @@ func TestBuildSessionsRevokedEmail_Golden(t *testing.T) {
 // --- Property tests: the things that actually break in the wild ---
 // (per the brief: "contains the word Confirm" proves nothing.)
 
-// allMessages returns every one of the five non-campaign templates
-// (#0028's original four, plus #0076's SendSessionsRevoked) built with
-// distinct, per-template tokens, for the property tests below that must hold
-// across all of them.
+// mustBuildCampaignMessage adapts BuildCampaignMessage's (Message, error)
+// signature to allMessages()'s single-value map-literal slot. testCampaignInput()
+// (campaign_render_test.go) is a fixed, known-good fixture — non-empty
+// ManageToken and BaseURL — so RenderCampaign underneath it cannot fail here;
+// panicking on an error is the same "this fixture must never fail" contract
+// goldenFile's os.ReadFile error path uses elsewhere in this file.
+func mustBuildCampaignMessage() Message {
+	msg, err := BuildCampaignMessage(testTo, testCampaignInput(), testListDomain)
+	if err != nil {
+		panic("mustBuildCampaignMessage: " + err.Error())
+	}
+	return msg
+}
+
+// allMessages returns every message this package builds: #0028's original
+// four transactional templates, #0076's SendSessionsRevoked, and (since
+// #0043) the campaign builder — six total. Every property test below that
+// loops over allMessages() therefore also exercises campaign mail, unless a
+// test specifically opts a name out (see, e.g.,
+// TestNoTransactionalMessageCarriesCampaignHeaders, which asserts the
+// OPPOSITE property for "campaign": that it DOES carry headers).
 func allMessages() map[string]Message {
 	return map[string]Message{
 		"confirmation":       BuildConfirmationEmail(testTo, testBaseURL, testConfirm, testManage, 7*24*time.Hour, testAddress),
@@ -131,6 +159,7 @@ func allMessages() map[string]Message {
 		"registration":       BuildRegistrationEmail(testTo, testBaseURL, testRegToken, 5*time.Minute),
 		"recovery":           BuildRecoveryEmail(testTo, testBaseURL, testRecToken, 15*time.Minute),
 		"sessions_revoked":   BuildSessionsRevokedEmail(testTo, testBaseURL, testRevokedAt),
+		"campaign":           mustBuildCampaignMessage(),
 	}
 }
 
@@ -184,7 +213,7 @@ func TestAllMessagesEnumeratesEveryBuildEmailFunc(t *testing.T) {
 				if !ok || fn.Recv != nil { // skip methods
 					continue
 				}
-				if buildEmailFuncName.MatchString(fn.Name.Name) {
+				if isMessageBuilderFuncDecl(fn) {
 					found[fn.Name.Name] = true
 				}
 			}
@@ -216,21 +245,56 @@ func TestAllMessagesEnumeratesEveryBuildEmailFunc(t *testing.T) {
 		t.Fatal("could not find an allMessages() function declaration in package source")
 	}
 
-	// Collect every Build*Email identifier actually called inside
-	// allMessages()'s body, regardless of how many times or under how many
-	// map keys — this is the identity check: a builder is "covered" only if
-	// allMessages() calls it, not merely if the counts happen to line up.
+	// Index every top-level, non-method function declaration in the package
+	// (test files included) by name, so a call inside allMessages() to a
+	// local helper (e.g. mustBuildCampaignMessage, adapting
+	// BuildCampaignMessage's (Message, error) signature to the map
+	// literal's single-value slot) can be followed to that helper's own
+	// body — but ONLY from allMessages() outward. This must not become "is
+	// this builder called ANYWHERE in the package" (several golden tests
+	// call BuildConfirmationEmail directly, which would trivially and
+	// wrongly satisfy coverage for every existing builder regardless of
+	// whether allMessages() itself calls it — exactly the identity check
+	// this test exists to enforce, see mutation proof 2 above).
+	declByName := map[string]*ast.FuncDecl{}
+	for _, pkg := range allPkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Body != nil {
+					declByName[fn.Name.Name] = fn
+				}
+			}
+		}
+	}
+
+	// Walk outward from allMessages() only: a call to a found builder marks
+	// it covered; a call to any other locally-declared helper is followed
+	// into that helper's own body (visited, so a cycle can't loop forever).
 	called := map[string]bool{}
-	ast.Inspect(allMessagesDecl.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
+	visited := map[string]bool{}
+	var walk func(*ast.FuncDecl)
+	walk = func(fn *ast.FuncDecl) {
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if found[ident.Name] {
+				called[ident.Name] = true
+				return true
+			}
+			if helper, ok := declByName[ident.Name]; ok && !visited[ident.Name] {
+				visited[ident.Name] = true
+				walk(helper)
+			}
 			return true
-		}
-		if ident, ok := call.Fun.(*ast.Ident); ok && buildEmailFuncName.MatchString(ident.Name) {
-			called[ident.Name] = true
-		}
-		return true
-	})
+		})
+	}
+	walk(allMessagesDecl)
 
 	var missing []string
 	for name := range found {
@@ -241,7 +305,7 @@ func TestAllMessagesEnumeratesEveryBuildEmailFunc(t *testing.T) {
 	sort.Strings(missing)
 
 	if len(missing) > 0 {
-		t.Errorf("allMessages() does not call %v (found %d Build*Email function(s) in package source, allMessages() calls %d distinct builder(s)) — add the missing builder(s) to allMessages()", missing, len(found), len(called))
+		t.Errorf("allMessages() does not (transitively) call %v (found %d Message-returning builder(s) in package source, %d distinct builder(s) reached) — add the missing builder(s) to allMessages()", missing, len(found), len(called))
 	}
 }
 
@@ -410,11 +474,39 @@ func TestConfirmationAndAlreadySubscribed_CarryFooterLink(t *testing.T) {
 // privacy policy (#0075) deliberately narrows its one-click commitment to
 // "every campaign email" for exactly this reason: none of these five is a
 // campaign send.
+//
+// Since #0043 added "campaign" to allMessages(), this test now asserts BOTH
+// directions in one place: the five transactional entries carry zero custom
+// headers (as always), and "campaign" — the one entry that IS a campaign
+// send — positively carries the RFC 8058 set. Before this, #0035's headers
+// landing on campaign mail was proven only by campaign_headers_test.go's
+// direct calls to CampaignHeaders; this is the same property proven again at
+// the point a real campaign Message is assembled (BuildCampaignMessage),
+// which is what a mutation dropping the `Headers:` field from that
+// assembly — as opposed to a mutation inside CampaignHeaders itself — would
+// actually miss without this. Mutation proof: comment out `Headers:
+// CampaignHeaders(...)` in BuildCampaignMessage (campaign_render.go) and
+// this test's "campaign" case fails on "want List-Unsubscribe header,
+// campaign message carries 0 header(s)".
 func TestNoTransactionalMessageCarriesCampaignHeaders(t *testing.T) {
 	for name, msg := range allMessages() {
+		if name == "campaign" {
+			continue
+		}
 		if len(msg.Headers) != 0 {
 			t.Errorf("%s: message carries %d custom header(s), want 0 (no List-Unsubscribe on transactional mail): %+v", name, len(msg.Headers), msg.Headers)
 		}
+	}
+
+	campaign := allMessages()["campaign"]
+	hasListUnsubscribe := false
+	for _, h := range campaign.Headers {
+		if h.Name == "List-Unsubscribe" {
+			hasListUnsubscribe = true
+		}
+	}
+	if !hasListUnsubscribe {
+		t.Errorf("campaign: want a List-Unsubscribe header, campaign message carries %d header(s): %+v", len(campaign.Headers), campaign.Headers)
 	}
 }
 

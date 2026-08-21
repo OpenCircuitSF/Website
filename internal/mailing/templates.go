@@ -150,9 +150,17 @@ func (c emailContent) renderHTML() string {
 	b.WriteString(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="` + colorPageBG + `" style="background-color:` + colorPageBG + `;">` + "\n")
 	b.WriteString(`<tr><td align="center" style="padding:32px 16px;">` + "\n")
 
-	// Card.
+	// Card. The card <td> carries an explicit color (colorBodyText), not just
+	// bgcolor — #0028's review measured this exact gap: every <p>/<h1> below
+	// sets its own inline color, so the card container's own color was never
+	// exercised by the five transactional templates. #0043's campaign wrapper
+	// (campaign_render.go) drops an unstyled Markdown-shaped HTML fragment
+	// into an equivalent card <td>, which — without this — would inherit the
+	// document default (black) onto colorCardBG and render near-invisible.
+	// Harmless here: every child element below sets its own color and
+	// overrides this one by CSS specificity/inheritance rules either way.
 	b.WriteString(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;">` + "\n")
-	b.WriteString(`<tr><td bgcolor="` + colorCardBG + `" style="background-color:` + colorCardBG + `;border:1px solid ` + colorCardBorder + `;border-radius:6px;padding:32px 28px;font-family:` + fontBody + `;">` + "\n")
+	b.WriteString(`<tr><td bgcolor="` + colorCardBG + `" style="background-color:` + colorCardBG + `;color:` + colorBodyText + `;border:1px solid ` + colorCardBorder + `;border-radius:6px;padding:32px 28px;font-family:` + fontBody + `;">` + "\n")
 
 	if c.Eyebrow != "" {
 		b.WriteString(`<div style="font-family:` + fontMono + `;font-size:12px;letter-spacing:0.04em;color:` + colorMutedText + `;margin:0 0 12px;">` +
@@ -192,14 +200,8 @@ func (c emailContent) renderHTML() string {
 	b.WriteString(`<tr><td style="padding:20px 12px 0;font-family:` + fontBody + `;font-size:12px;line-height:18px;color:` + colorMutedText + `;text-align:center;">` + "\n")
 
 	if c.ShowListFooter {
-		b.WriteString(`<p style="margin:0 0 8px;">` +
-			`<a href="` + html.EscapeString(c.ManageURL) + `" style="color:` + colorMutedText + `;text-decoration:underline;">Manage your interests</a>` +
-			` &middot; ` +
-			`<a href="` + html.EscapeString(c.UnsubscribeURL) + `" style="color:` + colorMutedText + `;text-decoration:underline;">Unsubscribe from everything</a>` +
-			`</p>` + "\n")
-		if c.PhysicalAddress != "" {
-			b.WriteString(`<p style="margin:0;">` + html.EscapeString(c.PhysicalAddress) + `</p>` + "\n")
-		}
+		// colorMutedText matches this footer's original inline styling.
+		b.WriteString(listFooterHTML(c.ManageURL, c.UnsubscribeURL, c.PhysicalAddress, colorMutedText))
 	}
 	b.WriteString(`<p style="margin:8px 0 0;">Open Circuit SF &middot; opencircuitsf.com</p>` + "\n")
 	b.WriteString("</td></tr></table>\n")
@@ -207,6 +209,53 @@ func (c emailContent) renderHTML() string {
 	b.WriteString("</td></tr></table>\n")
 	b.WriteString("</body></html>\n")
 	return b.String()
+}
+
+// listFooterHTML renders the mailing-list footer block PRD §6.5 Path 2
+// requires in every list-related email: the "Manage your interests ·
+// Unsubscribe from everything" link pair (the exact literal labels, per
+// #0043's carried-in criterion from #0035's review) and, when present, the
+// physical mailing address paragraph.
+//
+// This is the ONE place that markup is written. Before #0043, campaign mail
+// (campaign_render.go's wrapCampaignHTML) had grown its own second copy of
+// this exact block with the same two labels and the same URL construction —
+// #0042's reviewer flagged the duplication as a drift risk. #0043 resolves
+// it by extracting this function: emailContent.renderHTML's ShowListFooter
+// branch and wrapCampaignHTML both call it, so there is exactly one place
+// that can drift, not two that have to be kept manually in sync.
+//
+// linkColor lets a caller with a different page background than the
+// transactional templates' (colorMutedText, tuned for the dark card/page
+// combination) pass its own — but the wording, structure, and URL
+// construction stay identical either way.
+func listFooterHTML(manageURL, unsubscribeURL, physicalAddress, linkColor string) string {
+	var b strings.Builder
+	b.WriteString(`<p style="margin:0 0 8px;">` +
+		`<a href="` + html.EscapeString(manageURL) + `" style="color:` + linkColor + `;text-decoration:underline;">Manage your interests</a>` +
+		` &middot; ` +
+		`<a href="` + html.EscapeString(unsubscribeURL) + `" style="color:` + linkColor + `;text-decoration:underline;">Unsubscribe from everything</a>` +
+		`</p>` + "\n")
+	if physicalAddress != "" {
+		b.WriteString(`<p style="margin:0;">` + html.EscapeString(physicalAddress) + `</p>` + "\n")
+	}
+	return b.String()
+}
+
+// listFooterText is listFooterHTML's plain-text equivalent: the same two
+// PRD §6.5 Path 2 labels (as "Label: URL" lines, matching this project's
+// other plain-text link convention) and the physical address when present.
+// Shared by emailContent.renderText and wrapCampaignText for the identical
+// reason listFooterHTML is shared on the HTML side.
+func listFooterText(manageURL, unsubscribeURL, physicalAddress string) []string {
+	lines := []string{
+		"Manage your interests: " + manageURL,
+		"Unsubscribe from everything: " + unsubscribeURL,
+	}
+	if physicalAddress != "" {
+		lines = append(lines, physicalAddress)
+	}
+	return lines
 }
 
 // renderText builds the plain-text alternative from the same emailContent
@@ -237,11 +286,7 @@ func (c emailContent) renderText() string {
 
 	lines = append(lines, "--")
 	if c.ShowListFooter {
-		lines = append(lines, "Manage your interests: "+c.ManageURL)
-		lines = append(lines, "Unsubscribe from everything: "+c.UnsubscribeURL)
-		if c.PhysicalAddress != "" {
-			lines = append(lines, c.PhysicalAddress)
-		}
+		lines = append(lines, listFooterText(c.ManageURL, c.UnsubscribeURL, c.PhysicalAddress)...)
 	}
 	lines = append(lines, "Open Circuit SF - opencircuitsf.com")
 
