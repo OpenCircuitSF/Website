@@ -32,8 +32,11 @@
 // (reason=manual) via the suppressions field below — so a future resignup by
 // this address is blocked at #0026's suppressed send gate, not just marked
 // unsubscribed. POST /admin/subscribers/{id}/clear-complaint is the inverse:
-// it removes any matching suppressions row alongside
-// subscribers.Store.AdminClearComplaint. See ActionSubscriberSuppressed's and
+// it removes the `complaint` suppression row only; any other reason (for
+// example a hard bounce) survives (#0100) — a single address can carry more
+// than one independent suppression row since #0100's reason-scoped model,
+// and clearing one must not silently discard another. See
+// ActionSubscriberSuppressed's and
 // ActionSubscriberComplaintCleared's doc comments (internal/audit/actions.go)
 // for how the audit trail records this.
 package handlers
@@ -75,12 +78,15 @@ type adminInterestByIDReader interface {
 }
 
 // adminSuppressionWriter is the behavior AdminSubscribersHandler needs from
-// subscribers.SuppressionStore (#0033): writing a real suppression row on
-// Suppress and removing it on ClearComplaint. *subscribers.SuppressionStore
-// satisfies it directly.
+// subscribers.SuppressionStore (#0033, widened by #0100): writing a real
+// suppression row on Suppress, removing the `complaint` row (and only that
+// row) on ClearComplaint, and listing the survivors so ClearComplaint's
+// response/audit can say which reasons still block the address.
+// *subscribers.SuppressionStore satisfies it directly.
 type adminSuppressionWriter interface {
 	Add(ctx context.Context, in subscribers.NewSuppression, now time.Time) (subscribers.Suppression, error)
-	Remove(ctx context.Context, email string) error
+	Remove(ctx context.Context, email, reason string) (subscribers.Suppression, error)
+	ListByEmail(ctx context.Context, email string) ([]subscribers.Suppression, error)
 }
 
 // AdminSubscribersHandler serves the admin-only subscriber routes (PRD
@@ -550,47 +556,83 @@ func (h *AdminSubscribersHandler) ClearComplaint(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Real suppressions-table removal (#0033): clearing a complaint no
-	// longer leaves a stale suppressions row blocking the address at
-	// #0026's send gate. ErrSuppressionNotFound (no suppression row
-	// existed — e.g. this complaint predates #0033, or the address was
-	// never suppressed at the table level even though it was complained)
-	// is not an error worth failing the request over; any other failure is.
+	// Real suppressions-table removal, SCOPED TO reason=complaint (#0100):
+	// clearing a complaint must remove only the complaint suppression, never
+	// a hard_bounce or manual row that happens to share this address — a
+	// reason-blind DELETE (the pre-#0100 behavior) could silently discard a
+	// second, independent reason to block the address. ErrSuppressionNotFound
+	// (no complaint suppression row existed — e.g. this complaint predates
+	// #0033, or the address was never suppressed at the table level even
+	// though it was complained) is not an error worth failing the request
+	// over; any other failure is.
 	var suppressionRemoved bool
+	var removed subscribers.Suppression
+	var remaining []subscribers.Suppression
 	if h.suppressions != nil {
-		switch err := h.suppressions.Remove(r.Context(), after.Email); {
+		switch rem, err := h.suppressions.Remove(r.Context(), after.Email, subscribers.SuppressionReasonComplaint); {
 		case err == nil:
 			suppressionRemoved = true
+			removed = rem
 		case errors.Is(err, subscribers.ErrSuppressionNotFound):
 			// nothing to remove
 		default:
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
+		// ListByEmail regardless of whether a row was removed: the caller
+		// needs to know what (if anything) still blocks this address either
+		// way, and building the survivor list from the store — never
+		// hardcoding a reason — is what keeps this correct as new reasons
+		// are added.
+		remaining, err = h.suppressions.ListByEmail(r.Context(), after.Email)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+	}
+	remainingReasons := make([]string, 0, len(remaining))
+	for _, sup := range remaining {
+		remainingReasons = append(remainingReasons, sup.Reason)
 	}
 
 	if h.auditor != nil {
 		actorID := actor.ID
 		targetID := id
+		metadata := map[string]any{
+			"resulting_status":            after.Status,
+			"overwrites_note":             "unsubscribed_at/unsubscribe_source were overwritten with admin/now by AdminClearComplaint, discarding the earlier unsubscribe evidence recorded below",
+			"previous_unsubscribed_at":    before.UnsubscribedAt,
+			"previous_unsubscribe_source": before.UnsubscribeSource,
+			"suppression_removed":         suppressionRemoved,
+			"suppression_removed_reason":  subscribers.SuppressionReasonComplaint,
+			"suppressions_remaining":      remainingReasons,
+		}
+		if suppressionRemoved {
+			metadata["suppression_removed_note"] = removed.Note
+			metadata["suppression_removed_created_at"] = removed.CreatedAt
+		}
 		h.auditor.Record(r.Context(), audit.Entry{
 			ActorID:    &actorID,
 			Action:     audit.ActionSubscriberComplaintCleared,
 			TargetType: audit.TargetSubscriber,
 			TargetID:   &targetID,
-			Metadata: map[string]any{
-				"resulting_status":            after.Status,
-				"overwrites_note":             "unsubscribed_at/unsubscribe_source were overwritten with admin/now by AdminClearComplaint, discarding the earlier unsubscribe evidence recorded below",
-				"previous_unsubscribed_at":    before.UnsubscribedAt,
-				"previous_unsubscribe_source": before.UnsubscribeSource,
-				"suppression_removed":         suppressionRemoved,
-			},
-			IP: clientIP(r),
+			Metadata:   metadata,
+			IP:         clientIP(r),
 		})
 	}
 
 	message := "Complaint cleared. Resulting status is \"unsubscribed\", not \"active\" — this does not re-establish double opt-in consent."
-	if suppressionRemoved {
-		message += " The matching suppression-list entry was also removed, so a future resignup is no longer blocked at the send gate."
+	switch {
+	case suppressionRemoved && len(remainingReasons) == 0:
+		message += " The \"complaint\" suppression-list entry was removed, and no other suppression remains for this address."
+	case suppressionRemoved:
+		message += " The \"complaint\" suppression-list entry was removed, but this address is still suppressed for: " +
+			strings.Join(remainingReasons, ", ") + ". It remains blocked at the send gate."
+	case !suppressionRemoved && len(remainingReasons) == 0:
+		message += " No \"complaint\" suppression-list entry existed for this address."
+	default:
+		message += " No \"complaint\" suppression-list entry existed. This address is still suppressed for: " +
+			strings.Join(remainingReasons, ", ") + "."
 	}
 	writeJSON(w, http.StatusOK, clearComplaintResponse{
 		Subscriber: toSubscriberView(after, nil),

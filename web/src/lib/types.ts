@@ -127,6 +127,24 @@ export interface SubscribersPage {
   counts: SubscriberStatusCounts;
 }
 
+/**
+ * One row of the suppression list (GET /admin/suppressions item). Matches
+ * internal/handlers/admin_suppressions.go `suppressionView` (#0100).
+ * `subscriber_status` is null when no subscribers row exists for this
+ * address (an orphan — hard deletion, #0060, or a suppression added before
+ * any signup) — the field the two-layer picture ("blocked at the
+ * suppression list, the subscriber row, or both?") is built on, and what
+ * lets the client pre-disable a `complaint` removal before the server
+ * 409s.
+ */
+export interface Suppression {
+  email: string;
+  reason: string; // hard_bounce | complaint | manual | repeated_soft_bounce
+  note?: string;
+  created_at: string;
+  subscriber_status: string | null;
+}
+
 // ── Public mailing-list journey (#0029-#0031) ────────────────────────────────
 
 /**

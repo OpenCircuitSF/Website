@@ -226,21 +226,26 @@ type physicalAddressReader interface {
 }
 
 // SuppressionChecker reports whether an address is on the global
-// suppression list PRD §6.2 describes — the `suppressions` table added by
-// #0033, which has not landed yet (#0026 depends on #0025/#0027, not
-// #0033; the two issues are independent branches of the tracker). Subscribe
-// consults this seam so the "suppressed addresses get 202 and nothing
-// sent" acceptance criterion is real and tested now, via a fake in tests,
-// and #0033 only has to provide a real implementation — swapped in at the
-// single call site in cmd/opencircuit/main.go — for production enforcement
-// to switch on. See this issue's Gotchas for the reasoning.
+// suppression list PRD §6.2 describes — the `suppressions` table
+// (migrations/000012, widened to key on (email, reason) by migrations/000013,
+// #0100). Subscribe consults this seam (an interface, not the concrete
+// *subscribers.SuppressionStore) so the "suppressed addresses get 202 and
+// nothing sent" acceptance criterion is testable via a fake without this
+// package importing internal/subscribers; production wires the real
+// *subscribers.SuppressionStore at the single call site in
+// cmd/opencircuit/main.go. Deliberately reason-blind (#0100 §3): any
+// suppressions row of any reason blocks, since "may we mail this address"
+// does not depend on why it was suppressed.
 type SuppressionChecker interface {
 	IsSuppressed(ctx context.Context, email string) (bool, error)
 }
 
-// NoSuppressions is the SuppressionChecker wired in cmd/opencircuit/main.go
-// until #0033 lands: every address reports as not suppressed. Exported so
-// main.go (outside this package) can construct it.
+// NoSuppressions is the nil-default SuppressionChecker NewSubscribeHandler
+// substitutes when its suppression argument is nil, and the stand-in tests
+// use directly: every address reports as not suppressed. Production wires
+// the real *subscribers.SuppressionStore instead — see
+// cmd/opencircuit/main.go. Exported so main.go (outside this package) can
+// construct it.
 type NoSuppressions struct{}
 
 // IsSuppressed always reports false, nil.

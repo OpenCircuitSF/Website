@@ -34,7 +34,7 @@ belong in this tracker.
 |---|---|
 | `cmd/opencircuit/` | Binary entry point — `serve` and `seed` subcommands, the route table |
 | `internal/` | `config`, `db`, `auth`, `audit`, `events`, `devstore`, `handlers`, `middleware`, `testdb` — per-package roles in [`docs/architecture.md`](docs/architecture.md) |
-| `migrations/` | `golang-migrate` up/down SQL pairs, contiguous `000001`–`000012` |
+| `migrations/` | `golang-migrate` up/down SQL pairs, contiguous `000001`–`000013` |
 | `web/` | Svelte 5 SPA; built to `web/dist/` and embedded via `//go:embed all:dist` |
 | `scripts/` | `dev.sh`, `sim.sh`, `deploy.sh`, `db-status.sh`, `db/`, `list-issues-by-phase` |
 | `deploy/` | Apache vhost and systemd unit assets |

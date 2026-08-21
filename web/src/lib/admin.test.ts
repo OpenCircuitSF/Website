@@ -31,6 +31,10 @@ import {
   validateManualAddEmail,
   validateSuppressNote,
   signupEvidenceSummary,
+  SUPPRESSION_REASONS,
+  suppressionReasonLabel,
+  validateSuppressionNote,
+  suppressionRemovalBlocked,
 } from './admin';
 
 function adminUser(overrides: Partial<AdminUser> = {}): AdminUser {
@@ -413,5 +417,51 @@ describe('signupEvidenceSummary', () => {
   it('notes the absence of browser evidence for a manually-added subscriber', () => {
     const summary = signupEvidenceSummary(subscriber({ signup_ip: undefined, signup_user_agent: undefined }));
     expect(summary).toContain('no browser signup evidence');
+  });
+});
+
+describe('suppressionReasonLabel', () => {
+  it('labels all four known reasons', () => {
+    for (const reason of SUPPRESSION_REASONS) {
+      expect(suppressionReasonLabel(reason).length).toBeGreaterThan(0);
+    }
+    expect(suppressionReasonLabel('hard_bounce')).toBe('Hard bounce');
+    expect(suppressionReasonLabel('complaint')).toBe('Complaint');
+    expect(suppressionReasonLabel('manual')).toBe('Manual');
+    expect(suppressionReasonLabel('repeated_soft_bounce')).toBe('Repeated soft bounce');
+  });
+
+  it('returns an unknown value as-is', () => {
+    expect(suppressionReasonLabel('made_up_reason')).toBe('made_up_reason');
+  });
+});
+
+describe('validateSuppressionNote', () => {
+  it('rejects a blank or whitespace-only note', () => {
+    expect('error' in validateSuppressionNote('')).toBe(true);
+    expect('error' in validateSuppressionNote('   ')).toBe(true);
+  });
+
+  it('trims and accepts a non-empty note', () => {
+    expect(validateSuppressionNote('  confirmed with the subscriber  ')).toEqual({
+      note: 'confirmed with the subscriber',
+    });
+  });
+});
+
+describe('suppressionRemovalBlocked', () => {
+  it('blocks a complaint removal when a subscriber record exists', () => {
+    expect(suppressionRemovalBlocked('complaint', true)).not.toBeNull();
+  });
+
+  it('allows a complaint removal when the suppression is orphaned', () => {
+    expect(suppressionRemovalBlocked('complaint', false)).toBeNull();
+  });
+
+  it('never blocks a non-complaint reason, with or without a subscriber', () => {
+    for (const reason of ['hard_bounce', 'manual', 'repeated_soft_bounce']) {
+      expect(suppressionRemovalBlocked(reason, true)).toBeNull();
+      expect(suppressionRemovalBlocked(reason, false)).toBeNull();
+    }
   });
 });

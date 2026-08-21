@@ -103,10 +103,33 @@ const (
 	// complaint does not re-establish double opt-in consent — and, as of
 	// #0033, records the discarded `previous_unsubscribed_at`/
 	// `previous_unsubscribe_source` values (AdminClearComplaint overwrites
-	// them) plus `suppression_removed`: whether a matching suppressions row
-	// existed and was removed, unblocking the address at #0026's suppressed
-	// send gate.
+	// them) plus, as of #0100, `suppression_removed` (whether the `complaint`
+	// suppressions row existed and was removed — scoped to that one reason,
+	// never any other), `suppression_removed_reason` ("complaint"),
+	// `suppression_removed_note`/`suppression_removed_created_at` (present
+	// only when a row was actually removed), and `suppressions_remaining`
+	// (the surviving reasons, e.g. ["hard_bounce"], so a later reader can
+	// tell the address is still blocked without re-deriving it).
 	ActionSubscriberComplaintCleared = "subscriber.complaint_cleared"
+	// ActionSuppressionRemoved is written by POST /admin/suppressions/remove
+	// (#0100), the admin suppression-list screen's removal action — the
+	// general case, as opposed to ActionSubscriberComplaintCleared's
+	// specific complaint-clearing flow. TargetID is the subscriber id when a
+	// subscribers row exists for the address, nil when the suppression is
+	// orphaned (no subscribers row — hard deletion, #0060, or the
+	// suppression predates any signup). Metadata: `email`, `reason`, `note`
+	// (the admin's justification for this removal), `removed_note`,
+	// `removed_created_at` (the destroyed row's own provenance — the only
+	// remaining record of it once the row is gone), `suppressions_remaining`
+	// (surviving reasons for this address), `subscriber_status` (or null for
+	// an orphan), and `subscriber_status_unchanged: true` — reversing a
+	// suppression never flips a subscriber's status; the address is still
+	// not a subscriber and must return through double opt-in (§6 of
+	// issues/0100.md's plan; CLAUDE.md §9's `complained` guard is what makes
+	// this true for a complaint-reason removal specifically, since the
+	// handler refuses to remove a `complaint` row while a subscribers row
+	// still exists — see admin_suppressions.go).
+	ActionSuppressionRemoved = "subscriber.suppression_removed"
 	// ActionSubscriberManualAdd is written by POST /admin/subscribers, the
 	// admin manual-add flow. It never creates an `active` subscriber
 	// directly (PRD §5.2's notes) — it drives the same

@@ -89,6 +89,7 @@ func TestMountAndServe_RateLimitsSubscribe(t *testing.T) {
 		errCh <- mountAndServe(cfg, pool,
 			nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
 			nil, /* adminSubscribersH: not exercised by this test */
+			nil, /* adminSuppressionsH: not exercised by this test */
 			nil, nil, subscribeH,
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
 			passthrough, passthrough, nil, ready)

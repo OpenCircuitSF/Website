@@ -44,11 +44,14 @@ func TestSuppressionStore_Add_NormalizesEmailAndPersistsFields(t *testing.T) {
 	}
 }
 
-// TestSuppressionStore_Add_IdempotentKeepsOriginalRow proves Add's documented
-// idempotency contract: a second Add for an already-suppressed address does
-// not overwrite the first row's reason/note/created_at, and returns no
-// error.
-func TestSuppressionStore_Add_IdempotentKeepsOriginalRow(t *testing.T) {
+// TestSuppressionStore_Add_IdempotentPerReason proves Add's documented
+// idempotency contract post-#0100: a second Add for the SAME (email, reason)
+// pair does not overwrite the first row's note/created_at and returns no
+// error, and adds no additional row. (The old contract — idempotent per
+// email alone, so a different reason no-opped — is exactly what #0100
+// closes; see TestSuppressionStore_Add_TwoReasonsForOneEmailCoexist for the
+// replacement behavior on a DIFFERENT reason.)
+func TestSuppressionStore_Add_IdempotentPerReason(t *testing.T) {
 	pool := testPool(t)
 	store := NewSuppressionStore(pool)
 	email := uniqueSuppressionEmail(t)
@@ -65,8 +68,8 @@ func TestSuppressionStore_Add_IdempotentKeepsOriginalRow(t *testing.T) {
 
 	second, err := store.Add(context.Background(), NewSuppression{
 		Email:  email,
-		Reason: SuppressionReasonManual,
-		Note:   "a later admin suppress must not replace the complaint record",
+		Reason: SuppressionReasonComplaint,
+		Note:   "a repeat of the same reason must not replace the original note",
 	}, firstNow.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("second Add (idempotent case): %v", err)
@@ -80,6 +83,60 @@ func TestSuppressionStore_Add_IdempotentKeepsOriginalRow(t *testing.T) {
 	}
 	if !second.CreatedAt.Equal(first.CreatedAt) {
 		t.Errorf("second Add's CreatedAt = %v, want original %v", second.CreatedAt, first.CreatedAt)
+	}
+
+	rows, err := store.ListByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("ListByEmail: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("ListByEmail returned %d rows, want 1 — a repeat Add for the same reason must not insert a second row", len(rows))
+	}
+}
+
+// TestSuppressionStore_Add_TwoReasonsForOneEmailCoexist is #0100's central
+// behavior change: Add's idempotency key is (email, reason), not email
+// alone, so a second, DIFFERENT reason for an already-suppressed address
+// inserts a second row rather than no-opping. This is exactly what lets an
+// address that both hard-bounced and complained retain both facts.
+func TestSuppressionStore_Add_TwoReasonsForOneEmailCoexist(t *testing.T) {
+	pool := testPool(t)
+	store := NewSuppressionStore(pool)
+	ctx := context.Background()
+	email := uniqueSuppressionEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	if _, err := store.Add(ctx, NewSuppression{
+		Email:  email,
+		Reason: SuppressionReasonHardBounce,
+	}, now); err != nil {
+		t.Fatalf("Add hard_bounce: %v", err)
+	}
+	if _, err := store.Add(ctx, NewSuppression{
+		Email:  email,
+		Reason: SuppressionReasonComplaint,
+	}, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Add complaint: %v", err)
+	}
+
+	rows, err := store.ListByEmail(ctx, email)
+	if err != nil {
+		t.Fatalf("ListByEmail: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("ListByEmail returned %d rows, want 2 (hard_bounce and complaint coexisting)", len(rows))
+	}
+	var sawHardBounce, sawComplaint bool
+	for _, row := range rows {
+		switch row.Reason {
+		case SuppressionReasonHardBounce:
+			sawHardBounce = true
+		case SuppressionReasonComplaint:
+			sawComplaint = true
+		}
+	}
+	if !sawHardBounce || !sawComplaint {
+		t.Errorf("rows = %+v, want both hard_bounce and complaint present", rows)
 	}
 }
 
@@ -172,6 +229,37 @@ func TestSuppressionStore_IsSuppressed_FalseWhenNeverAdded(t *testing.T) {
 	}
 	if suppressed {
 		t.Errorf("IsSuppressed = true for an address never added, want false")
+	}
+}
+
+// TestSuppressionStore_IsSuppressed_TrueForEveryReason proves IsSuppressed
+// stays reason-blind (#0100 §3): a row of ANY one of the four reasons blocks
+// the address, independently, each on its own throwaway address.
+func TestSuppressionStore_IsSuppressed_TrueForEveryReason(t *testing.T) {
+	pool := testPool(t)
+	store := NewSuppressionStore(pool)
+	ctx := context.Background()
+
+	reasons := []string{
+		SuppressionReasonHardBounce,
+		SuppressionReasonComplaint,
+		SuppressionReasonManual,
+		SuppressionReasonRepeatedSoftBounce,
+	}
+	for _, reason := range reasons {
+		t.Run(reason, func(t *testing.T) {
+			email := uniqueSuppressionEmail(t)
+			if _, err := store.Add(ctx, NewSuppression{Email: email, Reason: reason}, time.Now()); err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+			suppressed, err := store.IsSuppressed(ctx, email)
+			if err != nil {
+				t.Fatalf("IsSuppressed: %v", err)
+			}
+			if !suppressed {
+				t.Errorf("IsSuppressed = false for a row with reason %q, want true", reason)
+			}
+		})
 	}
 }
 
@@ -283,21 +371,38 @@ func TestSuppressionStore_SurvivesSubscriberHardDeletion(t *testing.T) {
 	}
 }
 
-func TestSuppressionStore_List_ReturnsNewestFirst(t *testing.T) {
+// TestSuppressionStore_List_JoinsSubscriberStatus is #0100 §4/§5: one
+// suppressed address with a live subscribers row (SubscriberStatus
+// non-nil, equal to that row's status) and one orphaned suppression with no
+// subscribers row at all (SubscriberStatus nil) — the LEFT JOIN's two
+// branches. Also proves the ORDER BY email ASC grouping: a second reason for
+// the WITH-subscriber address sorts adjacent to its first.
+func TestSuppressionStore_List_JoinsSubscriberStatus(t *testing.T) {
 	pool := testPool(t)
 	store := NewSuppressionStore(pool)
+	subs := NewStore(pool)
 	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
 
-	older := uniqueSuppressionEmail(t)
-	time.Sleep(2 * time.Millisecond) // guarantee distinct created_at ordering
-	newer := uniqueSuppressionEmail(t)
+	withSub := uniqueSuppressionEmail(t)
+	orphan := uniqueSuppressionEmail(t)
 
-	base := time.Now().UTC().Truncate(time.Second)
-	if _, err := store.Add(ctx, NewSuppression{Email: older, Reason: SuppressionReasonManual}, base); err != nil {
-		t.Fatalf("Add older: %v", err)
+	sub, err := subs.Create(ctx, NewSignup{Email: withSub, ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("seed subscriber: %v", err)
 	}
-	if _, err := store.Add(ctx, NewSuppression{Email: newer, Reason: SuppressionReasonManual}, base.Add(time.Minute)); err != nil {
-		t.Fatalf("Add newer: %v", err)
+	if _, err := pool.Exec(ctx, `UPDATE subscribers SET status = $2 WHERE id = $1`, sub.ID, StatusUnsubscribed); err != nil {
+		t.Fatalf("seed status: %v", err)
+	}
+
+	if _, err := store.Add(ctx, NewSuppression{Email: withSub, Reason: SuppressionReasonManual}, now); err != nil {
+		t.Fatalf("Add manual for withSub: %v", err)
+	}
+	if _, err := store.Add(ctx, NewSuppression{Email: withSub, Reason: SuppressionReasonHardBounce}, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Add hard_bounce for withSub: %v", err)
+	}
+	if _, err := store.Add(ctx, NewSuppression{Email: orphan, Reason: SuppressionReasonManual}, now); err != nil {
+		t.Fatalf("Add manual for orphan: %v", err)
 	}
 
 	list, err := store.List(ctx)
@@ -305,20 +410,215 @@ func TestSuppressionStore_List_ReturnsNewestFirst(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 
-	idxOlder, idxNewer := -1, -1
-	for i, sup := range list {
-		if sup.Email == older {
-			idxOlder = i
-		}
-		if sup.Email == newer {
-			idxNewer = i
+	var withSubRows, orphanRows []SuppressionListItem
+	withSubIndices := map[int]bool{}
+	for i, item := range list {
+		switch item.Email {
+		case withSub:
+			withSubRows = append(withSubRows, item)
+			withSubIndices[i] = true
+		case orphan:
+			orphanRows = append(orphanRows, item)
 		}
 	}
-	if idxOlder == -1 || idxNewer == -1 {
-		t.Fatalf("List did not contain both seeded rows: older found=%v newer found=%v", idxOlder != -1, idxNewer != -1)
+
+	if len(withSubRows) != 2 {
+		t.Fatalf("withSub rows = %d, want 2", len(withSubRows))
 	}
-	if idxNewer >= idxOlder {
-		t.Errorf("List order: newer row at index %d, older at %d — want newer first (ORDER BY created_at DESC)", idxNewer, idxOlder)
+	for _, item := range withSubRows {
+		if item.SubscriberStatus == nil || *item.SubscriberStatus != StatusUnsubscribed {
+			t.Errorf("withSub row SubscriberStatus = %v, want %q", item.SubscriberStatus, StatusUnsubscribed)
+		}
+	}
+	if len(orphanRows) != 1 {
+		t.Fatalf("orphan rows = %d, want 1", len(orphanRows))
+	}
+	if orphanRows[0].SubscriberStatus != nil {
+		t.Errorf("orphan row SubscriberStatus = %v, want nil", *orphanRows[0].SubscriberStatus)
+	}
+
+	// email ASC grouping: withSub's two rows must be adjacent in the result.
+	var indices []int
+	for i := range withSubIndices {
+		indices = append(indices, i)
+	}
+	if len(indices) == 2 {
+		diff := indices[0] - indices[1]
+		if diff != 1 && diff != -1 {
+			t.Errorf("withSub's two rows are not adjacent (indices %v) — ORDER BY email ASC grouping broken", indices)
+		}
+	}
+}
+
+// TestSuppressionStore_ListByEmail_NormalizesEmail proves ListByEmail
+// normalizes its argument the same way every other lookup in this package
+// does — a differently-cased/whitespaced call must still find rows added via
+// Add's own normalized form.
+func TestSuppressionStore_ListByEmail_NormalizesEmail(t *testing.T) {
+	pool := testPool(t)
+	store := NewSuppressionStore(pool)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	normalized := fmt.Sprintf("zz-suppress-listbyemail-%s@example.com", suffix)
+	decorated := fmt.Sprintf("  ZZ-Suppress-ListByEmail-%s@Example.com  ", suffix)
+
+	if _, err := store.Add(ctx, NewSuppression{Email: normalized, Reason: SuppressionReasonManual}, time.Now()); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	rows, err := store.ListByEmail(ctx, decorated)
+	if err != nil {
+		t.Fatalf("ListByEmail with decorated email: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListByEmail returned %d rows, want 1", len(rows))
+	}
+	if rows[0].Email != normalized {
+		t.Errorf("row Email = %q, want normalized %q", rows[0].Email, normalized)
+	}
+}
+
+// TestSuppressionStore_Remove_ScopedByReason_LeavesHardBounceInForce is
+// #0100's central correctness case: an address suppressed for BOTH
+// hard_bounce and complaint must survive a complaint-only removal with the
+// hard_bounce suppression still in force. Run in both insertion orders — the
+// old single-row model only failed in one of them (complaint-then-hard_bounce,
+// where the bounce Add no-opped and Remove("complaint") deleted the only
+// row) — so a test that happens to pick the lucky order proves nothing.
+func TestSuppressionStore_Remove_ScopedByReason_LeavesHardBounceInForce(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	run := func(t *testing.T, hardBounceFirst bool) {
+		store := NewSuppressionStore(pool)
+		email := uniqueSuppressionEmail(t)
+		now := time.Now()
+
+		if hardBounceFirst {
+			if _, err := store.Add(ctx, NewSuppression{Email: email, Reason: SuppressionReasonHardBounce}, now); err != nil {
+				t.Fatalf("Add hard_bounce: %v", err)
+			}
+			if _, err := store.Add(ctx, NewSuppression{Email: email, Reason: SuppressionReasonComplaint}, now.Add(time.Minute)); err != nil {
+				t.Fatalf("Add complaint: %v", err)
+			}
+		} else {
+			if _, err := store.Add(ctx, NewSuppression{Email: email, Reason: SuppressionReasonComplaint}, now); err != nil {
+				t.Fatalf("Add complaint: %v", err)
+			}
+			if _, err := store.Add(ctx, NewSuppression{Email: email, Reason: SuppressionReasonHardBounce}, now.Add(time.Minute)); err != nil {
+				t.Fatalf("Add hard_bounce: %v", err)
+			}
+		}
+
+		if _, err := store.Remove(ctx, email, SuppressionReasonComplaint); err != nil {
+			t.Fatalf("Remove(complaint): %v", err)
+		}
+
+		suppressed, err := store.IsSuppressed(ctx, email)
+		if err != nil {
+			t.Fatalf("IsSuppressed: %v", err)
+		}
+		if !suppressed {
+			t.Fatalf("IsSuppressed = false after removing only the complaint reason, want true — the hard_bounce suppression must survive")
+		}
+
+		rows, err := store.ListByEmail(ctx, email)
+		if err != nil {
+			t.Fatalf("ListByEmail: %v", err)
+		}
+		if len(rows) != 1 || rows[0].Reason != SuppressionReasonHardBounce {
+			t.Errorf("ListByEmail = %+v, want exactly one hard_bounce row", rows)
+		}
+	}
+
+	t.Run("hard_bounce_then_complaint", func(t *testing.T) { run(t, true) })
+	t.Run("complaint_then_hard_bounce", func(t *testing.T) { run(t, false) })
+}
+
+// TestSuppressionStore_Remove_NotFoundWhenReasonDoesNotMatch proves Remove
+// is scoped by reason, not just email: removing a reason that was never
+// recorded for this address returns ErrSuppressionNotFound and leaves the
+// existing row untouched.
+func TestSuppressionStore_Remove_NotFoundWhenReasonDoesNotMatch(t *testing.T) {
+	pool := testPool(t)
+	store := NewSuppressionStore(pool)
+	ctx := context.Background()
+	email := uniqueSuppressionEmail(t)
+
+	if _, err := store.Add(ctx, NewSuppression{Email: email, Reason: SuppressionReasonHardBounce}, time.Now()); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	if _, err := store.Remove(ctx, email, SuppressionReasonComplaint); !errors.Is(err, ErrSuppressionNotFound) {
+		t.Errorf("Remove(complaint) err = %v, want ErrSuppressionNotFound", err)
+	}
+
+	suppressed, err := store.IsSuppressed(ctx, email)
+	if err != nil {
+		t.Fatalf("IsSuppressed: %v", err)
+	}
+	if !suppressed {
+		t.Errorf("IsSuppressed = false, want true — the hard_bounce row must survive a mismatched-reason Remove")
+	}
+}
+
+// TestSuppressionStore_Remove_InvalidReasonRejected proves Remove validates
+// its reason argument the same way Add does, and deletes nothing on a bad
+// value.
+func TestSuppressionStore_Remove_InvalidReasonRejected(t *testing.T) {
+	pool := testPool(t)
+	store := NewSuppressionStore(pool)
+	ctx := context.Background()
+	email := uniqueSuppressionEmail(t)
+
+	if _, err := store.Add(ctx, NewSuppression{Email: email, Reason: SuppressionReasonManual}, time.Now()); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	if _, err := store.Remove(ctx, email, "not_a_real_reason"); !errors.Is(err, ErrInvalidSuppressionReason) {
+		t.Errorf("Remove err = %v, want ErrInvalidSuppressionReason", err)
+	}
+
+	suppressed, err := store.IsSuppressed(ctx, email)
+	if err != nil {
+		t.Fatalf("IsSuppressed: %v", err)
+	}
+	if !suppressed {
+		t.Errorf("IsSuppressed = false after a rejected Remove, want true — nothing should have been deleted")
+	}
+}
+
+// TestSuppressionStore_Remove_ReturnsDeletedRow proves Remove returns the
+// deleted row's note/created_at, since the row is destroyed and a caller's
+// audit entry is the only remaining record of that provenance.
+func TestSuppressionStore_Remove_ReturnsDeletedRow(t *testing.T) {
+	pool := testPool(t)
+	store := NewSuppressionStore(pool)
+	ctx := context.Background()
+	email := uniqueSuppressionEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	if _, err := store.Add(ctx, NewSuppression{
+		Email:  email,
+		Reason: SuppressionReasonManual,
+		Note:   "requested by phone",
+	}, now); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	deleted, err := store.Remove(ctx, email, SuppressionReasonManual)
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if deleted.Note == nil || *deleted.Note != "requested by phone" {
+		t.Errorf("deleted.Note = %v, want %q", deleted.Note, "requested by phone")
+	}
+	if !deleted.CreatedAt.Equal(now) {
+		t.Errorf("deleted.CreatedAt = %v, want %v", deleted.CreatedAt, now)
+	}
+	if deleted.Reason != SuppressionReasonManual {
+		t.Errorf("deleted.Reason = %q, want %q", deleted.Reason, SuppressionReasonManual)
 	}
 }
 
@@ -332,7 +632,7 @@ func TestSuppressionStore_Remove_DeletesAndIsNotFoundOnSecondCall(t *testing.T) 
 		t.Fatalf("Add: %v", err)
 	}
 
-	if err := store.Remove(ctx, email); err != nil {
+	if _, err := store.Remove(ctx, email, SuppressionReasonManual); err != nil {
 		t.Fatalf("first Remove: %v", err)
 	}
 
@@ -344,7 +644,7 @@ func TestSuppressionStore_Remove_DeletesAndIsNotFoundOnSecondCall(t *testing.T) 
 		t.Errorf("IsSuppressed = true after Remove, want false")
 	}
 
-	if err := store.Remove(ctx, email); !errors.Is(err, ErrSuppressionNotFound) {
+	if _, err := store.Remove(ctx, email, SuppressionReasonManual); !errors.Is(err, ErrSuppressionNotFound) {
 		t.Errorf("second Remove err = %v, want ErrSuppressionNotFound", err)
 	}
 }
@@ -365,7 +665,7 @@ func TestSuppressionStore_Remove_NormalizesEmail(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	if err := store.Remove(ctx, decorated); err != nil {
+	if _, err := store.Remove(ctx, decorated, SuppressionReasonManual); err != nil {
 		t.Fatalf("Remove with decorated email: %v", err)
 	}
 

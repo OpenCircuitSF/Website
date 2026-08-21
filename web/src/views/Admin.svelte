@@ -49,6 +49,8 @@
     suppressSubscriber,
     clearSubscriberComplaint,
     createSubscriber,
+    listSuppressions,
+    removeSuppression,
     logout,
     ApiError,
   } from '../lib/api';
@@ -76,13 +78,25 @@
     validateManualAddEmail,
     validateSuppressNote,
     signupEvidenceSummary,
+    SUPPRESSION_REASONS,
+    suppressionReasonLabel,
+    validateSuppressionNote,
+    suppressionRemovalBlocked,
   } from '../lib/admin';
-  import type { Setting, AdminUser, AuditEntry, Interest, Subscriber, SubscriberStatusCounts } from '../lib/types';
+  import type {
+    Setting,
+    AdminUser,
+    AuditEntry,
+    Interest,
+    Subscriber,
+    SubscriberStatusCounts,
+    Suppression,
+  } from '../lib/types';
   import Button from '../lib/Button.svelte';
   import Panel from '../lib/Panel.svelte';
   import { APP_NAME } from '../lib/branding';
 
-  type Section = 'settings' | 'users' | 'audit' | 'interests' | 'subscribers';
+  type Section = 'settings' | 'users' | 'audit' | 'interests' | 'subscribers' | 'suppressions';
   let section = $state<Section>('settings');
 
   // ── Settings ──────────────────────────────────────────────────────────────
@@ -645,7 +659,9 @@
   async function handleClearComplaint(sub: Subscriber) {
     if (
       !confirm(
-        `Clear the complaint for ${sub.email}? This unsubscribes them (not re-activates) and removes any matching suppression-list entry. ` +
+        `Clear the complaint for ${sub.email}? This unsubscribes them (not re-activates) and ` +
+          'removes only the `complaint` suppression-list entry; any other suppression (for example a ' +
+          'hard bounce) stays in force. ' +
           'It also overwrites their unsubscribe evidence (timestamp and source) with this action — the original unsubscribe evidence, if any, will be discarded.',
       )
     ) {
@@ -716,6 +732,69 @@
     }
   }
 
+  // ── Suppressions (#0100) ─────────────────────────────────────────────────────
+  let suppressions = $state<Suppression[]>([]);
+  let suppressionsLoading = $state(true);
+  let suppressionsError = $state<string | null>(null);
+
+  async function loadSuppressions() {
+    suppressionsLoading = true;
+    suppressionsError = null;
+    try {
+      const res = await listSuppressions();
+      suppressions = res.suppressions;
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      suppressionsError = 'Could not load the suppression list. Please try again.';
+    } finally {
+      suppressionsLoading = false;
+    }
+  }
+
+  // Remove modal — note required, mirroring the Suppress modal.
+  let removingSuppression = $state<Suppression | null>(null);
+  let removeSuppressionNote = $state('');
+  let removeSuppressionError = $state<string | null>(null);
+  let removeSuppressionSubmitting = $state(false);
+
+  function openRemoveSuppression(sup: Suppression) {
+    removingSuppression = sup;
+    removeSuppressionNote = '';
+    removeSuppressionError = null;
+  }
+
+  function closeRemoveSuppression() {
+    removingSuppression = null;
+  }
+
+  async function submitRemoveSuppression(e: SubmitEvent) {
+    e.preventDefault();
+    if (!removingSuppression) return;
+    const result = validateSuppressionNote(removeSuppressionNote);
+    if ('error' in result) {
+      removeSuppressionError = result.error;
+      return;
+    }
+    const target = removingSuppression;
+    removeSuppressionSubmitting = true;
+    removeSuppressionError = null;
+    try {
+      await removeSuppression(target.email, target.reason, result.note);
+      suppressions = suppressions.filter(
+        (s) => !(s.email === target.email && s.reason === target.reason),
+      );
+      removingSuppression = null;
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      removeSuppressionError =
+        err instanceof ApiError && err.message
+          ? err.message
+          : 'Could not remove this suppression. Please try again.';
+    } finally {
+      removeSuppressionSubmitting = false;
+    }
+  }
+
   // ── Shared ──────────────────────────────────────────────────────────────────
   function handleAuthError(err: unknown): boolean {
     if (err instanceof ApiError && err.status === 401) {
@@ -746,6 +825,7 @@
     void loadAudit();
     void loadInterests();
     void loadSubscribers();
+    void loadSuppressions();
   });
 </script>
 
@@ -800,6 +880,13 @@
         aria-current={section === 'subscribers' ? 'page' : undefined}
         onclick={() => (section = 'subscribers')}
       >Subscribers</button>
+      <button
+        type="button"
+        class="subtab"
+        class:active={section === 'suppressions'}
+        aria-current={section === 'suppressions' ? 'page' : undefined}
+        onclick={() => (section = 'suppressions')}
+      >Suppressions</button>
     </nav>
 
     {#if section === 'settings'}
@@ -1537,8 +1624,8 @@
             <p>
               Unsubscribes this address and permanently adds it to the suppression list. A
               future resignup by this address will not be delivered mail — this is a
-              stronger action than a plain unsubscribe, and removing it requires a separate
-              admin action.
+              stronger action than a plain unsubscribe, and can be removed later from
+              Admin → Suppressions.
             </p>
             <form onsubmit={submitSuppress}>
               <div class="field">
@@ -1562,6 +1649,114 @@
                   {suppressSubmitting ? 'Suppressing…' : 'Suppress'}
                 </Button>
                 <Button disabled={suppressSubmitting} onclick={closeSuppress}>Cancel</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      {/if}
+    {/if}
+
+    {#if section === 'suppressions'}
+      <Panel title="Suppressions" noPadding={suppressions.length > 0 && !suppressionsLoading && !suppressionsError}>
+        {#if suppressionsLoading}
+          <p class="text-muted" role="status">Loading suppressions…</p>
+        {:else if suppressionsError}
+          <p class="text-error" role="alert">{suppressionsError}</p>
+          <Button variant="primary" onclick={loadSuppressions}>Retry</Button>
+        {:else if suppressions.length === 0}
+          <p class="text-muted">No addresses are suppressed.</p>
+        {:else}
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Reason</th>
+                  <th>Note</th>
+                  <th>Added</th>
+                  <th>Subscriber status</th>
+                  <th class="actions-col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each suppressions as sup (`${sup.email}:${sup.reason}`)}
+                  <tr>
+                    <td class="mono">{sup.email}</td>
+                    <td><span class="badge">{suppressionReasonLabel(sup.reason)}</span></td>
+                    <td>{sup.note ?? '—'}</td>
+                    <td>{formatDateTime(sup.created_at)}</td>
+                    <td>
+                      {#if sup.subscriber_status}
+                        <span class="badge {subscriberStatusBadgeClass(sup.subscriber_status)}">
+                          {subscriberStatusLabel(sup.subscriber_status)}
+                        </span>
+                      {:else}
+                        <span class="text-muted">No subscriber record</span>
+                      {/if}
+                    </td>
+                    <td class="actions-col">
+                      {#if suppressionRemovalBlocked(sup.reason, sup.subscriber_status !== null)}
+                        <Button variant="danger" disabled>Remove</Button>
+                        <p class="text-muted interest-delete-hint">
+                          {suppressionRemovalBlocked(sup.reason, sup.subscriber_status !== null)}
+                        </p>
+                      {:else}
+                        <Button variant="danger" onclick={() => openRemoveSuppression(sup)}>Remove</Button>
+                      {/if}
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </Panel>
+
+      {#if removingSuppression}
+        <div
+          class="modal-backdrop"
+          role="presentation"
+          onclick={closeRemoveSuppression}
+          onkeydown={(e) => {
+            if (e.key === 'Escape') closeRemoveSuppression();
+          }}
+        >
+          <div
+            class="modal"
+            role="dialog"
+            tabindex="-1"
+            aria-modal="true"
+            aria-label="Remove suppression"
+            onclick={(e) => e.stopPropagation()}
+            onkeydown={(e) => e.stopPropagation()}
+          >
+            <h2 class="modal-title">
+              Remove {suppressionReasonLabel(removingSuppression.reason)} suppression for {removingSuppression.email}
+            </h2>
+            <p>
+              This does not resubscribe the address; it must opt in again. It only removes this one
+              reason — any other suppression for the same address (for example a hard bounce) stays in
+              force.
+            </p>
+            <form onsubmit={submitRemoveSuppression}>
+              <div class="field">
+                <label for="remove-suppression-note">Note (required)</label>
+                <textarea
+                  id="remove-suppression-note"
+                  rows="3"
+                  bind:value={removeSuppressionNote}
+                  disabled={removeSuppressionSubmitting}
+                  oninput={() => (removeSuppressionError = null)}
+                ></textarea>
+              </div>
+              {#if removeSuppressionError}
+                <p class="text-error" role="alert">{removeSuppressionError}</p>
+              {/if}
+              <div class="row" style="margin-top: var(--space-3);">
+                <Button type="submit" variant="danger" disabled={removeSuppressionSubmitting}>
+                  {removeSuppressionSubmitting ? 'Removing…' : 'Remove'}
+                </Button>
+                <Button disabled={removeSuppressionSubmitting} onclick={closeRemoveSuppression}>Cancel</Button>
               </div>
             </form>
           </div>

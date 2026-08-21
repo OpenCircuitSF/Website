@@ -180,6 +180,15 @@ func servePostgres(cfg *config.Config) error {
 	// internal/handlers/admin_subscribers.go's package doc comment.
 	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, subscribeH, suppressionsStore, auditLogger)
 
+	// Admin suppression-list screen (#0100, PRD §5.2/§6.2): the admin
+	// surface over suppressionsStore that #0033 built but never gave a
+	// caller — list every row (joined to subscriber status), and reverse
+	// one with a required note. A separate handler from adminSubscribersH:
+	// a suppression can exist with no subscribers row at all (#0060), so it
+	// is not a subscriber sub-resource — see
+	// internal/handlers/admin_suppressions.go's package doc comment.
+	adminSuppressionsH := handlers.NewAdminSuppressionsHandler(suppressionsStore, subscribersStore, auditLogger)
+
 	// Public interests read (#0029, PRD §6.1/§7.3): GET /api/interests, the
 	// checkbox-grid source for SubscribeForm.svelte and PreferenceCenter.svelte.
 	// Deliberately calls ListActive (never ListAll, which is admin-only via
@@ -226,7 +235,7 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -361,6 +370,12 @@ func serveDevMode(cfg *config.Config) error {
 	// when nil, mirroring adminInterestsH's own nil-guard.
 	var adminSubscribersH *handlers.AdminSubscribersHandler
 
+	// Admin suppressions screen (#0100) has the same devstore gap as
+	// adminSubscribersH above. Passing nil leaves every other admin route
+	// working in STORAGE=json mode; adminRoutes omits its two routes when
+	// nil, mirroring adminSubscribersH's own nil-guard.
+	var adminSuppressionsH *handlers.AdminSuppressionsHandler
+
 	// Public interests (#0029), confirm (#0030), preferences (#0031), and
 	// one-click unsubscribe (#0034) all have the same devstore gap as
 	// subscribeH/adminInterestsH above -- internal/devstore has no
@@ -375,7 +390,7 @@ func serveDevMode(cfg *config.Config) error {
 	var unsubscribeH *handlers.UnsubscribeHandler
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -400,16 +415,17 @@ type adminRoute struct {
 // automatically exercised — and its guard automatically proven — by that
 // test with no edit to the test itself required.
 //
-// adminInterestsH and adminSubscribersH may be nil (dev mode / STORAGE=json
-// has no interests/subscribers-table backing yet — see mountAndServe's
-// comment on the call site); their routes are simply omitted, mirroring
-// mountAndServe's own former nil guard.
+// adminInterestsH, adminSubscribersH, and adminSuppressionsH may be nil (dev
+// mode / STORAGE=json has no interests/subscribers-table backing yet — see
+// mountAndServe's comment on the call site); their routes are simply
+// omitted, mirroring mountAndServe's own former nil guard.
 func adminRoutes(
 	settingsH *handlers.SettingsHandler,
 	adminUsersH *handlers.AdminUsersHandler,
 	adminAuditH *handlers.AdminAuditHandler,
 	adminInterestsH *handlers.AdminInterestsHandler,
 	adminSubscribersH *handlers.AdminSubscribersHandler,
+	adminSuppressionsH *handlers.AdminSuppressionsHandler,
 ) []adminRoute {
 	routes := []adminRoute{
 		{http.MethodGet, "/admin/settings", http.HandlerFunc(settingsH.List)},
@@ -435,6 +451,12 @@ func adminRoutes(
 			adminRoute{http.MethodGet, "/admin/subscribers/{id}", http.HandlerFunc(adminSubscribersH.Get)},
 			adminRoute{http.MethodPost, "/admin/subscribers/{id}/suppress", http.HandlerFunc(adminSubscribersH.Suppress)},
 			adminRoute{http.MethodPost, "/admin/subscribers/{id}/clear-complaint", http.HandlerFunc(adminSubscribersH.ClearComplaint)},
+		)
+	}
+	if adminSuppressionsH != nil {
+		routes = append(routes,
+			adminRoute{http.MethodGet, "/admin/suppressions", http.HandlerFunc(adminSuppressionsH.List)},
+			adminRoute{http.MethodPost, "/admin/suppressions/remove", http.HandlerFunc(adminSuppressionsH.Remove)},
 		)
 	}
 	return routes
@@ -467,6 +489,7 @@ func mountAndServe(
 	adminAuditH *handlers.AdminAuditHandler,
 	adminInterestsH *handlers.AdminInterestsHandler,
 	adminSubscribersH *handlers.AdminSubscribersHandler,
+	adminSuppressionsH *handlers.AdminSuppressionsHandler,
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
 	subscribeH *handlers.SubscribeHandler,
@@ -538,7 +561,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 

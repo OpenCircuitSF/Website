@@ -110,15 +110,16 @@ func scanSuppression(row pgx.Row) (Suppression, error) {
 	return sup, nil
 }
 
-// Add idempotently adds an address to the suppression list through the
-// shared pool. "Idempotent" here means: if the address is already
-// suppressed, Add returns the EXISTING row unchanged (its original reason,
-// note, and created_at) rather than erroring or overwriting it — the first
-// reason recorded for an address is the one that persists, so a later
-// "manual" admin suppress can't silently replace an earlier "complaint"
-// record's provenance. Use AddTx instead when the caller already owns an
-// open transaction the write must commit or roll back atomically with — see
-// the package doc comment.
+// Add idempotently adds an (email, reason) pair to the suppression list
+// through the shared pool. "Idempotent" here means: a repeat Add for a
+// reason already recorded for this address returns the EXISTING row
+// unchanged (its original note and created_at) rather than erroring or
+// overwriting it. A DIFFERENT reason for the same address is not a repeat —
+// it inserts a second, independent row (#0100): an address that both
+// hard-bounced and complained must be representable as two rows, or clearing
+// one reason later would have no way to avoid destroying the other. Use
+// AddTx instead when the caller already owns an open transaction the write
+// must commit or roll back atomically with — see the package doc comment.
 func (s *SuppressionStore) Add(ctx context.Context, in NewSuppression, now time.Time) (Suppression, error) {
 	return addSuppression(ctx, s.pool, in, now)
 }
@@ -133,13 +134,15 @@ func (s *SuppressionStore) AddTx(ctx context.Context, q querier, in NewSuppressi
 }
 
 // addSuppression is the shared implementation behind Add/AddTx. The
-// "ON CONFLICT DO UPDATE SET email = suppressions.email" is a deliberate
-// no-op update: a plain "DO NOTHING" would make RETURNING produce no row at
-// all on a conflict, and this call's whole idempotency contract is that it
-// always returns the (possibly pre-existing) row. Assigning the column to
-// itself changes no data but keeps RETURNING active, so a repeat Add for an
-// already-suppressed address returns the ORIGINAL reason/note/created_at,
-// never the newly-submitted ones.
+// "ON CONFLICT (email, reason) DO UPDATE SET email = suppressions.email" is a
+// deliberate no-op update: a plain "DO NOTHING" would make RETURNING produce
+// no row at all on a conflict, and this call's whole idempotency contract is
+// that it always returns the (possibly pre-existing) row. Assigning the
+// column to itself changes no data but keeps RETURNING active, so a repeat
+// Add for the SAME (email, reason) pair returns the ORIGINAL note/created_at,
+// never the newly-submitted ones. The conflict target is (email, reason), not
+// email alone (#0100, migrations/000013) — a different reason for the same
+// address is a distinct row, not a conflict.
 func addSuppression(ctx context.Context, q querier, in NewSuppression, now time.Time) (Suppression, error) {
 	if !suppressionReasons[in.Reason] {
 		return Suppression{}, ErrInvalidSuppressionReason
@@ -147,7 +150,7 @@ func addSuppression(ctx context.Context, q querier, in NewSuppression, now time.
 	row := q.QueryRow(ctx,
 		`INSERT INTO suppressions (email, reason, note, created_at)
 		 VALUES (lower(trim($1)), $2, $3, $4)
-		 ON CONFLICT (email) DO UPDATE SET email = suppressions.email
+		 ON CONFLICT (email, reason) DO UPDATE SET email = suppressions.email
 		 RETURNING `+suppressionColumns,
 		in.Email, in.Reason, nullIfEmpty(in.Note), now,
 	)
@@ -171,6 +174,12 @@ func addSuppression(ctx context.Context, q querier, in NewSuppression, now time.
 // here (the way the placeholder NoSuppressions did, and the way this method
 // must NOT) would reopen the timing channel #0088 closed by making the
 // suppressed branch cheaper than its peers again.
+//
+// Deliberately reason-blind (#0100): any suppressions row of any reason
+// blocks. The send gate's question — "may we mail this address" — does not
+// depend on WHY the address was suppressed, so this stays a single
+// EXISTS(...) with no reason predicate even after the primary key widened to
+// (email, reason).
 func (s *SuppressionStore) IsSuppressed(ctx context.Context, email string) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
@@ -183,14 +192,66 @@ func (s *SuppressionStore) IsSuppressed(ctx context.Context, email string) (bool
 	return exists, nil
 }
 
-// List returns every suppression row, newest first. No pagination or
-// filtering — #0033's acceptance criteria ask only for "list"; a future
-// admin screen (not part of this issue) can add those against this same
-// query if the table grows large enough to need them.
-func (s *SuppressionStore) List(ctx context.Context) ([]Suppression, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+suppressionColumns+` FROM suppressions ORDER BY created_at DESC`)
+// SuppressionListItem is one row of SuppressionStore.List's admin-facing
+// view: the four suppressions columns plus the subscriber_status a LEFT JOIN
+// against subscribers resolves for the same email, or nil when no
+// subscribers row exists for that address (an orphan — hard deletion,
+// #0060, or a suppression added before any signup). #0100's admin
+// suppressions screen needs this to answer "is this address blocked at the
+// suppression list, the subscriber row, or both?" without an N+1 query per
+// row, and to let the client pre-disable a `complaint` removal on a row that
+// still has a live subscriber (see admin_suppressions.go).
+type SuppressionListItem struct {
+	Suppression
+	SubscriberStatus *string
+}
+
+// List returns every suppression row joined to its subscriber's status (nil
+// when orphaned), ordered by email then newest-first within an email
+// (#0100). The per-email grouping is deliberate: since the primary key
+// widened to (email, reason), one address can appear more than once, and
+// ordering by email keeps that address's rows adjacent so an admin can see
+// every reason it is blocked for at a glance — the whole point of this
+// issue. No pagination or filtering — #0033's acceptance criteria ask only
+// for "list"; a future screen can add those against this same query if the
+// table grows large enough to need them.
+func (s *SuppressionStore) List(ctx context.Context) ([]SuppressionListItem, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT s.email, s.reason, s.note, s.created_at, sub.status
+		   FROM suppressions s
+		   LEFT JOIN subscribers sub ON sub.email = s.email
+		  ORDER BY s.email ASC, s.created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("subscribers: listing suppressions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SuppressionListItem
+	for rows.Next() {
+		var item SuppressionListItem
+		if err := rows.Scan(&item.Email, &item.Reason, &item.Note, &item.CreatedAt, &item.SubscriberStatus); err != nil {
+			return nil, fmt.Errorf("subscribers: scanning suppression row: %w", err)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("subscribers: listing suppressions: %w", err)
+	}
+	return out, nil
+}
+
+// ListByEmail returns every suppression row for one normalized address,
+// newest first. #0100: an address can now carry more than one row (one per
+// reason), so callers that need to know "what else is this address
+// suppressed for" — ClearComplaint reporting survivors, and the admin
+// removal handler — call this instead of a single-row lookup.
+func (s *SuppressionStore) ListByEmail(ctx context.Context, email string) ([]Suppression, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+suppressionColumns+` FROM suppressions WHERE email = lower(trim($1)) ORDER BY created_at DESC`,
+		email,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("subscribers: listing suppressions for %q: %w", email, err)
 	}
 	defer rows.Close()
 
@@ -203,27 +264,42 @@ func (s *SuppressionStore) List(ctx context.Context) ([]Suppression, error) {
 		out = append(out, sup)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("subscribers: listing suppressions: %w", err)
+		return nil, fmt.Errorf("subscribers: listing suppressions for %q: %w", email, err)
 	}
 	return out, nil
 }
 
-// Remove deletes the suppressions row for email. Removing a suppression must
-// always be an explicit, audited admin action (PRD §6.2, CLAUDE.md §9's
-// spirit for `complained` applies equally here) — this method itself does
-// not check "is the caller an admin" or write an audit row; that is the
-// caller's responsibility (see internal/handlers/admin_subscribers.go's
-// ClearComplaint, the one production call site). Returns
-// ErrSuppressionNotFound if no row matched, so a caller can distinguish
-// "there was nothing to remove" (not an error worth failing a request over)
-// from a genuine failure.
-func (s *SuppressionStore) Remove(ctx context.Context, email string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM suppressions WHERE email = lower(trim($1))`, email)
-	if err != nil {
-		return fmt.Errorf("subscribers: removing suppression for %q: %w", email, err)
+// Remove deletes the suppressions row matching BOTH email and reason
+// (#0100) — there is deliberately no reason-less removal, because a
+// reason-blind DELETE is exactly the defect this issue exists to close: an
+// address suppressed for both hard_bounce and complaint must be able to have
+// one reason cleared while the other stays in force. reason must be one of
+// the four SuppressionReason* constants (ErrInvalidSuppressionReason
+// otherwise). Removing a suppression must always be an explicit, audited
+// admin action (PRD §6.2, CLAUDE.md §9's spirit for `complained` applies
+// equally here) — this method itself does not check "is the caller an
+// admin" or write an audit row; that is the caller's responsibility (see
+// internal/handlers/admin_subscribers.go's ClearComplaint and
+// admin_suppressions.go's removal handler, the two production call sites).
+// Returns the deleted row (not just an error) because the row is about to be
+// destroyed and the caller's audit entry is the only remaining record of its
+// note/created_at. Returns ErrSuppressionNotFound if no row matched email
+// AND reason together, so a caller can distinguish "there was nothing to
+// remove" from a genuine failure.
+func (s *SuppressionStore) Remove(ctx context.Context, email, reason string) (Suppression, error) {
+	if !suppressionReasons[reason] {
+		return Suppression{}, ErrInvalidSuppressionReason
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrSuppressionNotFound
+	row := s.pool.QueryRow(ctx,
+		`DELETE FROM suppressions WHERE email = lower(trim($1)) AND reason = $2 RETURNING `+suppressionColumns,
+		email, reason,
+	)
+	sup, err := scanSuppression(row)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return Suppression{}, ErrSuppressionNotFound
+	case err != nil:
+		return Suppression{}, fmt.Errorf("subscribers: removing suppression for %q reason %q: %w", email, reason, err)
 	}
-	return nil
+	return sup, nil
 }

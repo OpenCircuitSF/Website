@@ -12,6 +12,7 @@ import type {
   Interest,
   Subscriber,
   SubscribersPage,
+  Suppression,
   PublicInterest,
   ConfirmResponse,
   PreferencesResponse,
@@ -439,9 +440,10 @@ export function suppressSubscriber(
  * target isn't currently complained; the caller should only offer this
  * action on complained rows in the first place. Resulting status is
  * `unsubscribed`, not `active` — clearing a complaint does not by itself
- * re-establish double opt-in consent. As of #0033, also removes any
- * matching suppressions-table row so a future resignup is no longer blocked
- * at #0026's send gate — `message` notes whether one was found and removed.
+ * re-establish double opt-in consent. Removes the `complaint`
+ * suppressions-table row ONLY (#0100) — any other reason (for example a
+ * hard bounce) survives and keeps the address blocked at #0026's send gate;
+ * `message` names any surviving reason.
  */
 export function clearSubscriberComplaint(id: number): Promise<SubscriberActionResult> {
   return apiPost<SubscriberActionResult>(`/admin/subscribers/${id}/clear-complaint`);
@@ -464,6 +466,45 @@ export function createSubscriber(
     interests,
     note: note || undefined,
   });
+}
+
+// ── Admin suppression-list screen (#0100) ────────────────────────────────────
+
+/**
+ * GET /admin/suppressions — every suppression row, joined to the
+ * subscriber's status when one exists (`subscriber_status: null` for an
+ * orphaned row — hard deletion, #0060, or a suppression added before any
+ * signup). No pagination or filtering; see the server's own doc comment for
+ * why.
+ */
+export function listSuppressions(): Promise<{ suppressions: Suppression[]; count: number }> {
+  return apiGet<{ suppressions: Suppression[]; count: number }>('/admin/suppressions');
+}
+
+/** Response shape for POST /admin/suppressions/remove. */
+export interface RemoveSuppressionResult {
+  removed: Suppression;
+  remaining: string[];
+  message: string;
+}
+
+/**
+ * POST /admin/suppressions/remove — reverse one (email, reason) suppression
+ * with a required justification note (admin only, #0100). Removal NEVER
+ * changes a subscriber's status — an address that was `unsubscribed` stays
+ * `unsubscribed`; it returns only through double opt-in. The server answers
+ * 409 (ApiError) when `reason` is `"complaint"` and a subscribers row still
+ * exists for the address — use `clearSubscriberComplaint` instead in that
+ * case (`suppressionRemovalBlocked` in lib/admin.ts pre-disables the button
+ * so the UI never has to discover this after a failed request), and 404 when
+ * no matching (email, reason) row exists.
+ */
+export function removeSuppression(
+  email: string,
+  reason: string,
+  note: string,
+): Promise<RemoveSuppressionResult> {
+  return apiPost<RemoveSuppressionResult>('/admin/suppressions/remove', { email, reason, note });
 }
 
 // ── Public mailing-list journey: signup, confirm, preferences (#0029-#0031) ──

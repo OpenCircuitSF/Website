@@ -192,6 +192,7 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 		errCh <- mountAndServe(cfg, pool,
 			nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised */
 			nil, /* adminSubscribersH: not exercised */
+			nil, /* adminSuppressionsH: not exercised */
 			eventsH, nil, subscribeH,
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised */
 			requireSession, passthroughAdmin, nil, ready)

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -580,6 +581,145 @@ func TestAdminSubscribers_ClearComplaint_RemovesSuppressionRow(t *testing.T) {
 	}
 	if suppressed {
 		t.Errorf("IsSuppressed(%q) = true after ClearComplaint, want false — the suppression row should have been removed", email)
+	}
+}
+
+// TestAdminSubscribers_ClearComplaint_RemovesOnlyComplaintSuppression is
+// #0100's central end-to-end case: an address suppressed for BOTH
+// hard_bounce and complaint must have ONLY the complaint row removed by
+// ClearComplaint, with the response message and audit metadata both naming
+// the surviving hard_bounce reason.
+func TestAdminSubscribers_ClearComplaint_RemovesOnlyComplaintSuppression(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-subs-clear-scoped@example.com")
+	seedSession(t, pool, admin, "admin-token-clear-scoped")
+	id := seedTestSubscriber(t, pool, subscribers.StatusComplained)
+	email := subscriberEmailByID(t, pool, id)
+
+	suppressionsStore := subscribers.NewSuppressionStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := suppressionsStore.Add(ctx, subscribers.NewSuppression{
+		Email:  email,
+		Reason: subscribers.SuppressionReasonHardBounce,
+	}, now); err != nil {
+		t.Fatalf("seed hard_bounce suppression: %v", err)
+	}
+	if _, err := suppressionsStore.Add(ctx, subscribers.NewSuppression{
+		Email:  email,
+		Reason: subscribers.SuppressionReasonComplaint,
+	}, now.Add(time.Minute)); err != nil {
+		t.Fatalf("seed complaint suppression: %v", err)
+	}
+
+	client := srv.Client()
+	resp := doJSON(t, client, "POST", fmt.Sprintf("%s/admin/subscribers/%d/clear-complaint", srv.URL, id),
+		"admin-token-clear-scoped", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(readBody(t, resp), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(out.Message, "hard_bounce") {
+		t.Errorf("message = %q, want it to name the surviving hard_bounce reason", out.Message)
+	}
+
+	// The complaint row is gone, but the hard_bounce row must survive — the
+	// address must STILL be suppressed at the send gate.
+	rows, err := suppressionsStore.ListByEmail(ctx, email)
+	if err != nil {
+		t.Fatalf("ListByEmail: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Reason != subscribers.SuppressionReasonHardBounce {
+		t.Fatalf("ListByEmail = %+v, want exactly one hard_bounce row", rows)
+	}
+	suppressed, err := suppressionsStore.IsSuppressed(ctx, email)
+	if err != nil {
+		t.Fatalf("IsSuppressed: %v", err)
+	}
+	if !suppressed {
+		t.Error("IsSuppressed = false, want true — the hard_bounce suppression must still block this address")
+	}
+
+	var found map[string]any
+	rowsAudit, err := pool.Query(ctx,
+		`SELECT metadata FROM audit_log WHERE target_type = 'subscriber' AND target_id = $1 AND action = $2 ORDER BY id DESC LIMIT 1`,
+		id, audit.ActionSubscriberComplaintCleared)
+	if err != nil {
+		t.Fatalf("query audit metadata: %v", err)
+	}
+	defer rowsAudit.Close()
+	if rowsAudit.Next() {
+		if err := rowsAudit.Scan(&found); err != nil {
+			t.Fatalf("scan audit metadata: %v", err)
+		}
+	} else {
+		t.Fatal("no audit row found for ActionSubscriberComplaintCleared")
+	}
+	remaining, ok := found["suppressions_remaining"].([]any)
+	if !ok || len(remaining) != 1 || remaining[0] != subscribers.SuppressionReasonHardBounce {
+		t.Errorf("audit suppressions_remaining = %v, want [%q]", found["suppressions_remaining"], subscribers.SuppressionReasonHardBounce)
+	}
+	if found["suppression_removed_reason"] != subscribers.SuppressionReasonComplaint {
+		t.Errorf("audit suppression_removed_reason = %v, want %q", found["suppression_removed_reason"], subscribers.SuppressionReasonComplaint)
+	}
+}
+
+// TestAdminSubscribers_ClearComplaint_MessageWhenNothingRemains proves the
+// other branch of §5a's four-case message table: when the complaint row is
+// removed and nothing else is suppressed, the message says so instead of the
+// old "removed any matching entry" over-claim.
+func TestAdminSubscribers_ClearComplaint_MessageWhenNothingRemains(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-subs-clear-nothing-left@example.com")
+	seedSession(t, pool, admin, "admin-token-clear-nothing-left")
+	id := seedTestSubscriber(t, pool, subscribers.StatusComplained)
+	email := subscriberEmailByID(t, pool, id)
+
+	suppressionsStore := subscribers.NewSuppressionStore(pool)
+	ctx := context.Background()
+	if _, err := suppressionsStore.Add(ctx, subscribers.NewSuppression{
+		Email:  email,
+		Reason: subscribers.SuppressionReasonComplaint,
+	}, time.Now()); err != nil {
+		t.Fatalf("seed complaint suppression: %v", err)
+	}
+
+	client := srv.Client()
+	resp := doJSON(t, client, "POST", fmt.Sprintf("%s/admin/subscribers/%d/clear-complaint", srv.URL, id),
+		"admin-token-clear-nothing-left", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(readBody(t, resp), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(out.Message, "no other suppression remains") {
+		t.Errorf("message = %q, want it to say no other suppression remains", out.Message)
+	}
+	if strings.Contains(out.Message, "resignup is no longer blocked") {
+		t.Errorf("message = %q, still carries the old over-claiming phrasing #0100 removed", out.Message)
+	}
+
+	suppressed, err := suppressionsStore.IsSuppressed(ctx, email)
+	if err != nil {
+		t.Fatalf("IsSuppressed: %v", err)
+	}
+	if suppressed {
+		t.Error("IsSuppressed = true, want false — nothing should remain blocking this address")
 	}
 }
 

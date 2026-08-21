@@ -400,3 +400,62 @@ export function signupEvidenceSummary(sub: Subscriber): string {
   if (sub.signup_user_agent) parts.push(`(${sub.signup_user_agent})`);
   return parts.join(' ');
 }
+
+// ── Admin suppression-list screen (#0100) ────────────────────────────────────
+
+/** The four subscribers.SuppressionReason* values, matching the server's CHECK constraint. */
+export const SUPPRESSION_REASONS: readonly string[] = [
+  'hard_bounce',
+  'complaint',
+  'manual',
+  'repeated_soft_bounce',
+] as const;
+
+/** Human-readable label for a suppression reason value. An unknown value is returned as-is. */
+export function suppressionReasonLabel(reason: string): string {
+  switch (reason) {
+    case 'hard_bounce':
+      return 'Hard bounce';
+    case 'complaint':
+      return 'Complaint';
+    case 'manual':
+      return 'Manual';
+    case 'repeated_soft_bounce':
+      return 'Repeated soft bounce';
+    default:
+      return reason;
+  }
+}
+
+/**
+ * Validate the suppression-removal form's note field: required, non-empty
+ * after trimming, matching the server's own 400 on a blank note. Mirrors
+ * validateSuppressNote above (same rule, different form) — kept as a
+ * separate function rather than a shared alias so each screen's error
+ * copy can diverge if the two forms' needs ever do.
+ */
+export function validateSuppressionNote(note: string): { note: string } | { error: string } {
+  const trimmed = note.trim();
+  if (trimmed === '') {
+    return { error: 'A note is required.' };
+  }
+  return { note: trimmed };
+}
+
+/**
+ * Whether removing a suppression row should be blocked client-side before
+ * the request is even sent, and if so, why. Mirrors the server's one
+ * refusal (internal/handlers/admin_suppressions.go's Remove): a
+ * reason="complaint" row is removable directly ONLY when no subscribers row
+ * exists for the address (an orphan, #0060) — while a subscriber record
+ * exists, Subscribers → Clear complaint is the sole sanctioned, audited path
+ * (CLAUDE.md §9). Pre-disabling the button here, the same pattern the
+ * Interests section's disabled Delete already uses, means the admin never
+ * discovers this as a failed request.
+ */
+export function suppressionRemovalBlocked(reason: string, hasSubscriber: boolean): string | null {
+  if (reason === 'complaint' && hasSubscriber) {
+    return 'Use Subscribers → Clear complaint to remove a complaint suppression while a subscriber record exists.';
+  }
+  return null;
+}

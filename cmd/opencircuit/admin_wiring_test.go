@@ -124,6 +124,9 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// RequireAdmin let the request through (neither 401 nor 403); see the
 	// "admin session" case's comment.
 	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, nil, nil, auditLogger)
+	// #0100: exercised the same way as adminSubscribersH above.
+	suppressionsStore := subscribers.NewSuppressionStore(pool)
+	adminSuppressionsH := handlers.NewAdminSuppressionsHandler(suppressionsStore, subscribersStore, auditLogger)
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 	meH := handlers.NewMeHandler()
@@ -136,7 +139,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
 			requireSession, requireAdmin, nil, ready)
 	}()
@@ -224,7 +227,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			return status != http.StatusUnauthorized && status != http.StatusForbidden
 		}},
 	}
-	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH) {
+	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH) {
 		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID)
 		for _, c := range cases {
 			req, err := http.NewRequest(route.method, baseURL+path, nil)
