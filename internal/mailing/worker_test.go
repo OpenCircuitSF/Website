@@ -99,9 +99,13 @@ func TestWorker_RefusesCampaignWhenPhysicalAddressBlank(t *testing.T) {
 // TestWorker_RefusesCampaignForcedToScheduledBySQL inserts a campaign
 // straight into 'scheduled' with a blank physical_address via raw SQL —
 // bypassing every handler, exactly like a direct psql UPDATE — and proves
-// the worker still refuses it. Mutation: skip the gate and go straight to
-// ClaimStart in claimAndDrain — must fail (this test would then see a sent
-// message and a 'sending'/'sent' campaign).
+// the worker still refuses it: nothing is sent and the campaign never
+// reaches 'sending' or 'sent'. This asserts the property, not one specific
+// guard: physical_address is checked in two independent places — the
+// Preflight/DemoteToDraft gate in claimAndDrain, and drainLoop's own re-read
+// before any batch — so deleting the gate alone does not turn this test red;
+// drainLoop's check still refuses. Only deleting both layers (as the
+// physical_address mutation proof in ## Verification does) does.
 func TestWorker_RefusesCampaignForcedToScheduledBySQL(t *testing.T) {
 	pool := testPool(t)
 	workerTestFixture(t, pool)

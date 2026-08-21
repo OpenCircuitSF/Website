@@ -234,7 +234,11 @@ const (
 	ActionEmailCampaignSendRefused = "email_campaign.send_refused"
 	// ActionEmailCampaignSendCompleted is written when a campaign reaches
 	// 'sent' — no queued or sending rows remain. Metadata carries the
-	// final sent/failed/skipped counts and the drain's duration.
+	// final sent/failed/skipped counts. It does not carry a duration:
+	// nothing consumes one (#0049 doesn't reference it), so the field was
+	// never written. The duration is still derivable after the fact from
+	// email_campaigns.started_at and completed_at, both persisted columns
+	// — it just wasn't worth an extra read to store it redundantly here.
 	ActionEmailCampaignSendCompleted = "email_campaign.send_completed"
 	// ActionEmailCampaignSendFailed is written when the worker stops a
 	// drain and moves a campaign to 'failed': an anomalous empty audience

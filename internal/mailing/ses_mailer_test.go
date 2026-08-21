@@ -161,6 +161,52 @@ func TestSESMailer_Send_MultipartWithCustomHeaders(t *testing.T) {
 	}
 }
 
+// TestSESMailer_Send_SetsReplyToWhenConfigured proves the configured
+// Reply-To address actually reaches the SES request, not just that a blank
+// one is refused upstream (that's the worker's reply_to_missing gate,
+// #0045's preflight). #0043's review bounced #0045 for claiming this was
+// covered by TestSESMailer_Send_MultipartWithCustomHeaders, which asserts
+// only the bodies and the three List-* headers and says nothing about
+// Reply-To — grep for ReplyToAddresses across every *_test.go in the repo
+// returned zero hits before this test existed. Deleting the
+// `if m.replyTo != "" { input.ReplyToAddresses = ... }` block in Send must
+// turn this red.
+func TestSESMailer_Send_SetsReplyToWhenConfigured(t *testing.T) {
+	api := &fakeSESAPI{
+		responses: []fakeSESResponse{{output: &sesv2.SendEmailOutput{MessageId: aws.String("id-1")}}},
+	}
+	m := newTestSESMailer(api) // replyTo: "hello@opencircuitsf.com"
+
+	if _, err := m.Send(context.Background(), Message{To: "alice@example.com", Subject: "Hi", TextBody: "body"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	got := api.calls[0].ReplyToAddresses
+	want := []string{"hello@opencircuitsf.com"}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("ReplyToAddresses = %v, want %v", got, want)
+	}
+}
+
+// TestSESMailer_Send_OmitsReplyToAddressesWhenMailerReplyToIsBlank is the
+// other half of the same property: a mailer constructed with no Reply-To
+// (the worker's own preflight gate refuses to send in that case, but
+// SESMailer itself must not fabricate a header) must not set
+// ReplyToAddresses at all.
+func TestSESMailer_Send_OmitsReplyToAddressesWhenMailerReplyToIsBlank(t *testing.T) {
+	api := &fakeSESAPI{
+		responses: []fakeSESResponse{{output: &sesv2.SendEmailOutput{MessageId: aws.String("id-1")}}},
+	}
+	m := newTestSESMailer(api)
+	m.replyTo = ""
+
+	if _, err := m.Send(context.Background(), Message{To: "alice@example.com", Subject: "Hi", TextBody: "body"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got := api.calls[0].ReplyToAddresses; got != nil {
+		t.Errorf("ReplyToAddresses = %v, want nil (blank replyTo must not set the header)", got)
+	}
+}
+
 // TestSESMailer_Send_RetriesThrottlingWithBackoff proves the retry path: a
 // TooManyRequestsException (SES v2's throttling error) on the first attempt
 // is retried and the eventual success is returned, with the backoff delay
