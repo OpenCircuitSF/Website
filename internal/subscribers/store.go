@@ -27,12 +27,15 @@
 // screenshot.
 //
 // complained never auto-resubscribes (CLAUDE.md §9): every status mutator in
-// this package — Confirm, Unsubscribe, MarkBounced, MarkComplained (via the
-// shared setStatus), and RestartSignup — refuses to move a subscriber out of
-// the complained status. The check lives in one place
-// (statusLockedFromNonAdmin, used by setStatus and by Unsubscribe's and
+// this package — Confirm, Unsubscribe, MarkBounced(Tx), MarkComplained(Tx)
+// (via the shared setStatusTx), and RestartSignup — refuses to move a
+// subscriber out of the complained status. The check lives in one place
+// (statusLockedFromNonAdmin, used by setStatusTx and by Unsubscribe's and
 // RestartSignup's own UPDATEs) so a future mutator can't add a new unguarded
-// status write the way an earlier version of this file did.
+// status write the way an earlier version of this file did. MarkBouncedTx
+// and MarkComplainedTx (#0038, SES event ingestion) run the identical
+// guarded UPDATE against a caller-supplied querier instead of the pool, so
+// even a transaction-scoped caller can't bypass it.
 // AdminClearComplaint is the sole exception: it is the admin-only path
 // (#0032) allowed to move a subscriber out of complained, and it is the only
 // method that does not consult the guard.
@@ -666,38 +669,57 @@ func (s *Store) InterestIDs(ctx context.Context, subscriberID int64) ([]int64, e
 	return out, nil
 }
 
-// MarkBounced transitions a subscriber to bounced. Intended for the SES
-// bounce-notification handling landing in a later issue; included here so
-// the status vocabulary in this package is complete from the start.
-//
-// If the subscriber is currently complained, this is a silent no-op (see
-// setStatus): a bounce notification arriving for an already-complained
-// address must not erase the complaint, and — like Unsubscribe — the SES
-// notification handler calling this has a webhook contract to satisfy
-// (acknowledge promptly) rather than a user it can show an error to.
+// MarkBounced transitions a subscriber to bounced through the shared pool.
+// See setStatusTx for the guard this and every sibling below shares.
 func (s *Store) MarkBounced(ctx context.Context, id int64, now time.Time) (Subscriber, error) {
-	return s.setStatus(ctx, id, StatusBounced, now)
+	return s.setStatusTx(ctx, s.pool, id, StatusBounced, now)
 }
 
-// MarkComplained transitions a subscriber to complained. Calling it again on
-// an already-complained subscriber is a harmless no-op (setStatus's guard
-// only ever preserves complained, and complained is what it's already
-// setting). Nothing in this package other than AdminClearComplaint ever
-// transitions a subscriber back out of complained — per CLAUDE.md §9, only
-// an admin clears that state.
+// MarkBouncedTx is MarkBounced's transaction-scoped twin: it runs the
+// identical UPDATE against q instead of the pool, so #0038 (SES event
+// ingestion) can commit or roll back this status change atomically with its
+// own email_events insert and suppressions.AddTx call for the same incoming
+// SNS message — see internal/subscribers/suppressions.go's package doc
+// comment for why that atomicity matters, and
+// internal/handlers/ses_notifications.go for the caller.
+func (s *Store) MarkBouncedTx(ctx context.Context, q querier, id int64, now time.Time) (Subscriber, error) {
+	return s.setStatusTx(ctx, q, id, StatusBounced, now)
+}
+
+// MarkComplained transitions a subscriber to complained through the shared
+// pool. Calling it again on an already-complained subscriber is a harmless
+// no-op (setStatusTx's guard only ever preserves complained, and complained
+// is what it's already setting). Nothing in this package other than
+// AdminClearComplaint ever transitions a subscriber back out of complained —
+// per CLAUDE.md §9, only an admin clears that state.
 func (s *Store) MarkComplained(ctx context.Context, id int64, now time.Time) (Subscriber, error) {
-	return s.setStatus(ctx, id, StatusComplained, now)
+	return s.setStatusTx(ctx, s.pool, id, StatusComplained, now)
 }
 
-// setStatus is the shared implementation behind MarkBounced and
-// MarkComplained. It guards statusLockedFromNonAdmin the same way
-// Unsubscribe does: if the subscriber is currently complained, the UPDATE
-// preserves status and updated_at rather than overwriting them, and no
-// error is returned — this method's two callers are both webhook-driven
-// (SES bounce/complaint notifications), not code with a user to report an
-// error to. AdminClearComplaint is the only exception to this guard.
-func (s *Store) setStatus(ctx context.Context, id int64, status string, now time.Time) (Subscriber, error) {
-	row := s.pool.QueryRow(ctx,
+// MarkComplainedTx is MarkComplained's transaction-scoped twin — see
+// MarkBouncedTx's doc comment; the same #0038 atomicity requirement applies
+// identically to a complaint as to a bounce.
+func (s *Store) MarkComplainedTx(ctx context.Context, q querier, id int64, now time.Time) (Subscriber, error) {
+	return s.setStatusTx(ctx, q, id, StatusComplained, now)
+}
+
+// setStatusTx is the shared implementation behind MarkBounced(Tx) and
+// MarkComplained(Tx), run against q so a caller that already owns an open
+// pgx.Tx (#0038) can make this status change atomic with the rest of its
+// work — the same querier/…Tx split internal/audit's WriteTx and this
+// package's own SuppressionStore.AddTx already establish, for the identical
+// reason (see suppressions.go's package doc comment). It guards
+// statusLockedFromNonAdmin the same way Unsubscribe does: if the subscriber
+// is currently complained, the UPDATE preserves status and updated_at
+// rather than overwriting them, and no error is returned — every caller of
+// this method is webhook-driven (SES bounce/complaint notifications), not
+// code with a user it can show an error to. The guard lives here, in the
+// ONE shared implementation, rather than being duplicated across
+// MarkBounced/MarkBouncedTx/MarkComplained/MarkComplainedTx, so a Tx-taking
+// caller can never bypass it by construction. AdminClearComplaint is the
+// only exception to this guard anywhere in the package.
+func (s *Store) setStatusTx(ctx context.Context, q querier, id int64, status string, now time.Time) (Subscriber, error) {
+	row := q.QueryRow(ctx,
 		`UPDATE subscribers
 		    SET status     = CASE WHEN status = $4 THEN status     ELSE $2 END,
 		        updated_at = CASE WHEN status = $4 THEN updated_at ELSE $3 END

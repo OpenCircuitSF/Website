@@ -54,9 +54,48 @@ sending-engine section for why the v2 API (not SMTP) is used here.
 
 A configuration set (`opencircuit-transactional`) publishes delivery/bounce/
 complaint/reject/rendering-failure events to an SNS topic, which POSTs to
-`POST /api/ses/notifications` (`internal/sesnotify`, not yet built). Every
-inbound message's SNS signature must be verified before it's trusted — see
-[`mailing-list.md`](mailing-list.md#ses-event-ingestion).
+`POST /api/ses/notifications` (`internal/sesnotify` + `internal/handlers`,
+`#0037`/`#0038`). Every inbound message's SNS signature and `TopicArn` are
+verified before anything in the body is trusted — see
+[`mailing-list.md`](mailing-list.md#ses-event-ingestion). The SNS topic
+itself, the configuration set, and the event destination are not provisioned
+yet (`CLAUDE.md` §10 item 2) — until then the code correctly rejects every
+delivery, since `SES_EVENTS_TOPIC_ARN` is unset.
+
+### Account-level suppression list — the second layer (`#0038` criterion 8)
+
+PRD §6.7: enable SES's own account-level suppression list as belt-and-
+suspenders alongside this project's `suppressions` table. Our table is
+authoritative for OUR sending decisions (it's what `#0026`'s subscribe flow
+and the future send worker check); SES's own list protects the AWS account's
+sending reputation if ours ever has a bug and lets a permanently-failing
+address through.
+
+This is an AWS account setting, not code — it can't be verified by
+`go test` and isn't claimed as done by any commit. Enable it once the SES
+account exists (`CLAUDE.md` §10 item 2), from the EC2 instance role or an
+operator's AWS CLI session:
+
+```bash
+aws sesv2 put-account-suppression-attributes \
+    --suppressed-reasons BOUNCE COMPLAINT \
+    --region us-west-2
+```
+
+What this does and does not cover:
+
+- SES silently drops a send to any address on its account-level list —
+  before the message ever reaches the recipient's mail server. This is a
+  send-time guard, symmetrical with (but independent of) our own
+  `suppressions` table check in the subscribe/send path.
+- It does **not** replace `internal/sesnotify`'s event ingestion. SES's own
+  list has no visibility into our `subscribers` table, can't drive our
+  status transitions (`bounced`/`complained`) or audit trail, and PRD
+  §6.5's state machine still needs the real bounce/complaint events this
+  project's own webhook records.
+- Verify it's active with
+  `aws sesv2 get-account-suppression-attributes --region us-west-2`, which
+  should echo back `{"SuppressedReasons": ["BOUNCE", "COMPLAINT"]}`.
 
 ## Open items (tracked in `CLAUDE.md` §10)
 

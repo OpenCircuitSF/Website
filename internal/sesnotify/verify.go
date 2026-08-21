@@ -114,6 +114,21 @@ func NewVerifier(region, topicARN string, log *slog.Logger) *Verifier {
 	return v
 }
 
+// NewVerifierForTesting builds a Verifier exactly like NewVerifier, except
+// fetch replaces the real network fetcher. It exists so OTHER packages'
+// tests (#0038's internal/handlers/ses_notifications_test.go) can exercise
+// the real Verify — real validateCertURL, real canonicalString, real
+// rsa.VerifyPKCS1v15, real TopicArn pin — against a synthesised, signed SNS
+// envelope with no network access, the same property verify_test.go's own
+// newTestVerifier gives this package's tests by setting the unexported
+// fetchCert field directly. Not used by production code (main.go always
+// calls NewVerifier).
+func NewVerifierForTesting(region, topicARN string, log *slog.Logger, fetch func(ctx context.Context, certURL string) (*x509.Certificate, error)) *Verifier {
+	v := NewVerifier(region, topicARN, log)
+	v.fetchCert = fetch
+	return v
+}
+
 // Verify checks m's signature against SNS's signing certificate and confirms
 // m.TopicArn matches the configured allowlist. A nil return means the
 // message may be trusted; any non-nil error means it must not be acted on.
@@ -308,4 +323,54 @@ func (v *Verifier) fetchCertReal(ctx context.Context, certURL string) (*x509.Cer
 	}
 
 	return cert, nil
+}
+
+// FetchSubscribeURL validates subscribeURL against the SAME SSRF host
+// allowlist as SigningCertURL — validateCertURL — and, only if it passes,
+// fetches it via fetchSubscribeURLReal. #0038's handler calls this to
+// auto-confirm an SNS SubscriptionConfirmation, after Verify has already
+// proven the message's signature and TopicArn: SubscribeURL is
+// attacker-influenced in exactly the same way SigningCertURL is (both are
+// URLs inside a message whose signature only proves SNS relayed it, not
+// that the URL itself is safe to fetch), so it gets the identical
+// validate-before-fetch treatment, the same client, the same no-redirect
+// policy, and the same timeout — deliberately living here rather than being
+// re-implemented in internal/handlers, which cannot reach validateCertURL
+// (unexported, this package only). Split into a validating wrapper plus an
+// unexported fetch step, mirroring Verify/getCert's split over
+// fetchCertReal, so this package's own tests can drive the fetch mechanics
+// against a local httptest server without a real AWS host to satisfy
+// validateCertURL's allowlist.
+func (v *Verifier) FetchSubscribeURL(ctx context.Context, subscribeURL string) error {
+	u, err := v.validateCertURL(subscribeURL)
+	if err != nil {
+		return fmt.Errorf("sesnotify: SubscribeURL: %w", err)
+	}
+	return v.fetchSubscribeURLReal(ctx, u)
+}
+
+// fetchSubscribeURLReal issues a single GET and discards the body, using
+// the same client, no-redirect policy, and timeout as fetchCertReal.
+// subscribeURL MUST already have passed validateCertURL — this method does
+// no validation of its own, exactly like fetchCertReal.
+func (v *Verifier) fetchSubscribeURLReal(ctx context.Context, subscribeURL string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, subscribeURL, nil)
+	if err != nil {
+		return fmt.Errorf("sesnotify: SubscribeURL: %w", err)
+	}
+
+	resp, err := v.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sesnotify: SubscribeURL: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxCertBodyBytes))
+
+	// As in fetchCertReal, CheckRedirect returning http.ErrUseLastResponse
+	// makes Do return the redirect response itself rather than an error, so
+	// this status check is what actually refuses a redirect.
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("sesnotify: SubscribeURL: unexpected status %d", resp.StatusCode)
+	}
+	return nil
 }

@@ -34,7 +34,7 @@ belong in this tracker.
 |---|---|
 | `cmd/opencircuit/` | Binary entry point — `serve` and `seed` subcommands, the route table |
 | `internal/` | `config`, `db`, `auth`, `audit`, `events`, `devstore`, `handlers`, `middleware`, `testdb` — per-package roles in [`docs/architecture.md`](docs/architecture.md) |
-| `migrations/` | `golang-migrate` up/down SQL pairs, contiguous `000001`–`000013` |
+| `migrations/` | `golang-migrate` up/down SQL pairs, contiguous `000001`–`000014` |
 | `web/` | Svelte 5 SPA; built to `web/dist/` and embedded via `//go:embed all:dist` |
 | `scripts/` | `dev.sh`, `sim.sh`, `deploy.sh`, `db-status.sh`, `db/`, `list-issues-by-phase` |
 | `deploy/` | Apache vhost and systemd unit assets |
@@ -407,6 +407,7 @@ stall silently on one.
 | 4 | Sending identity (`hello@` vs `workshops@`) and **who reads that inbox** | Phase 3 — **but load-bearing now** | undecided. `#0075` published a privacy policy routing erasure and data-export requests to `hello@opencircuitsf.com`. The page is honest either way, but the commitment only works if someone reads that mailbox from the day it ships |
 | 5 | Whether the domain needs human mailboxes — determines apex MX | Phase 0 DNS | undecided; PRD §14 Q3 |
 | 6 | Server-side details: instance ID/size/region, SSH access, `DocumentRoot`, vhost file, certbot renewal schedule, whether the existing Postgres is the target | `#0064` | undocumented — capture as encountered |
+| 7 | SES account-level suppression list (`aws sesv2 put-account-suppression-attributes --suppressed-reasons BOUNCE COMPLAINT`) — the second layer alongside `suppressions`, PRD §6.7 | `#0038` criterion 8; belt-and-suspenders once the SES account exists | not started — runbook step in `docs/email-setup.md`, gated on item 2 (the SES account doesn't exist yet) |
 
 `issues/model-pricing.json` does not exist yet. Create it on the first dispatch
 that needs cost accounting; refresh once per day.

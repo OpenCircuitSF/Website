@@ -73,6 +73,32 @@ const (
 	// rather than mint a second name for the same event.
 	ActionSubscriberUnsubscribed = "subscriber.unsubscribed"
 
+	// SES-driven subscriber status changes (PRD §6.5, §6.7; #0038's
+	// internal/sesnotify event ingestion, POST /api/ses/notifications).
+	// Actor NULL — the caller is SES/SNS, not a human — same convention as
+	// ActionSubscriberSignup. Written only when a subscribers row exists for
+	// the recipient (metadata.source is always "ses"); an event for an
+	// address with no matching subscriber still records to email_events and
+	// still writes a suppressions row, but has no subscriber to attribute an
+	// audit row to. ActionSubscriberBounced covers a Permanent bounce only —
+	// #0039's repeated-soft-bounce suppression, when it lands, reuses this
+	// same action with a distinguishing metadata field rather than minting a
+	// second one, since both mean "this subscriber moved to bounced".
+	ActionSubscriberBounced    = "subscriber.bounced"
+	ActionSubscriberComplained = "subscriber.complained"
+
+	// SNS subscription-lifecycle events (PRD §6.7; #0038, carrying forward
+	// #0037's plan §5). Actor NULL — pre-auth, the caller is SNS.
+	// ActionSESSubscriptionConfirmed is written after auto-confirming a
+	// SubscriptionConfirmation (only reachable once sesnotify.Verifier's
+	// TopicArn pin has already passed — see internal/sesnotify/verify.go).
+	// ActionSESUnsubscribeConfirmation is written when SNS reports this
+	// endpoint has been unsubscribed from the events topic — an alert, not
+	// an action: nothing else in the system notices bounces/complaints
+	// silently stopping, so this audit row is the only record.
+	ActionSESSubscriptionConfirmed   = "ses.subscription_confirmed"
+	ActionSESUnsubscribeConfirmation = "ses.unsubscribe_confirmation"
+
 	// Subscriber admin actions (PRD §5.2, §6.5; #0032's admin screen).
 	// Actor is always the acting admin, unlike ActionSubscriberSignup above.
 	//
@@ -176,4 +202,11 @@ const (
 	TargetURLFilter  = "url_filter"
 	TargetSubscriber = "subscriber"
 	TargetInterest   = "interest"
+	// TargetSNSTopic is the target type for ActionSESSubscriptionConfirmed
+	// and ActionSESUnsubscribeConfirmation (#0038) — the target is the SNS
+	// topic/subscription relationship itself, not any one subscriber.
+	// TargetID is left nil for both actions; the topic ARN is recorded in
+	// metadata instead, since target_id is a BIGINT foreign-key-shaped
+	// column and an ARN is a string.
+	TargetSNSTopic = "sns_topic"
 )

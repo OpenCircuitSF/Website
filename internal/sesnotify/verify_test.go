@@ -512,3 +512,83 @@ func TestVerify_SignatureFailureNotClassifiedAsRetryable(t *testing.T) {
 		t.Errorf("a tampered-signature error must not be classified as ErrCertUnavailable: %v", err)
 	}
 }
+
+// ── FetchSubscribeURL (#0038) ───────────────────────────────────────────────
+//
+// fetchSubscribeURLReal is tested directly against a local httptest server,
+// bypassing validateCertURL, exactly like TestFetchCertReal_FetchesAndParses
+// does for fetchCertReal — validateCertURL's host allowlist admits only
+// sns.<region>.amazonaws.com, so there is no way to drive the validating
+// wrapper end-to-end against anything but a real AWS host.
+
+func TestFetchSubscribeURLReal_FetchesAndDiscardsBody(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Write([]byte("<html>you have subscribed</html>"))
+	}))
+	defer srv.Close()
+
+	v := NewVerifier("us-west-2", "irrelevant", discardLogger())
+	if err := v.fetchSubscribeURLReal(context.Background(), srv.URL); err != nil {
+		t.Fatalf("fetchSubscribeURLReal: %v", err)
+	}
+	if atomic.LoadInt32(&hits) != 1 {
+		t.Errorf("server hit %d times, want 1", hits)
+	}
+}
+
+func TestFetchSubscribeURLReal_NonOKStatusIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	v := NewVerifier("us-west-2", "irrelevant", discardLogger())
+	if err := v.fetchSubscribeURLReal(context.Background(), srv.URL); err == nil {
+		t.Fatal("expected error for a non-200 response, got nil")
+	}
+}
+
+func TestFetchSubscribeURLReal_RefusesRedirect(t *testing.T) {
+	var finalHits int32
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&finalHits, 1)
+	}))
+	defer final.Close()
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL, http.StatusFound)
+	}))
+	defer redirecting.Close()
+
+	v := NewVerifier("us-west-2", "irrelevant", discardLogger())
+	if err := v.fetchSubscribeURLReal(context.Background(), redirecting.URL); err == nil {
+		t.Fatal("fetchSubscribeURLReal followed a redirect instead of refusing it")
+	}
+	if hits := atomic.LoadInt32(&finalHits); hits != 0 {
+		t.Errorf("fetchSubscribeURLReal reached the redirect target %d time(s), want 0", hits)
+	}
+}
+
+func TestVerifier_FetchSubscribeURL_HostileURLRejectedBeforeFetch(t *testing.T) {
+	v := NewVerifier("us-west-2", "irrelevant", discardLogger())
+	for _, hostile := range []string{
+		"http://sns.us-west-2.amazonaws.com/x",             // not https
+		"https://my-bucket.s3.amazonaws.com/x",              // shared-tenancy host
+		"https://evil.example.com/steal-me",                 // unrelated host entirely
+		"https://sns.us-west-2.amazonaws.com.evil.com/x",    // suffix trick
+	} {
+		if err := v.FetchSubscribeURL(context.Background(), hostile); err == nil {
+			t.Errorf("FetchSubscribeURL(%q) = nil error, want rejection by the same host allowlist validateCertURL enforces", hostile)
+		}
+	}
+}
+
+// A positive control for FetchSubscribeURL's validation step specifically —
+// "a validly-hosted URL clears validateCertURL" — is deliberately not
+// exercised here with a real network fetch: validateCertURL's allowlist
+// accepts only sns.<region>.amazonaws.com, so there is no local server to
+// point it at, and TestValidateCertURL_PositiveControls already proves a
+// valid host clears the identical check this method calls. Adding a real
+// outbound HTTPS attempt here would make this suite network-dependent for
+// no additional coverage.

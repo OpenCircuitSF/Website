@@ -28,6 +28,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
+	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/web"
 )
@@ -213,6 +214,23 @@ func servePostgres(cfg *config.Config) error {
 	// carries no session/CSRF guard and why GET/POST behave so differently.
 	unsubscribeH := handlers.NewUnsubscribeHandler(subscribersStore, auditLogger, nil, slog.Default())
 
+	// SES bounce/complaint event ingestion (#0038, PRD §6.7): POST
+	// /api/ses/notifications, an SNS HTTPS subscription endpoint.
+	// sesVerifier (internal/sesnotify, #0037) is the trust boundary —
+	// signature + TopicArn allowlist — checked before anything in the body
+	// is acted on. sesEventsStore backs the raw email_events log; the
+	// handler also reuses subscribersStore/suppressionsStore constructed
+	// above so its per-message transaction (pool.Begin, passed directly:
+	// see ses_notifications.go's package doc comment for why these three
+	// stores are held concretely rather than behind narrow interfaces)
+	// writes the event row, the suppression row, and the subscriber status
+	// change atomically — #0033's hard block.
+	sesEventsStore := sesnotify.NewStore(pool)
+	sesVerifier := sesnotify.NewVerifier(cfg.AWSRegion, cfg.SESEventsTopicARN, slog.Default())
+	sesNotifyH := handlers.NewSESNotificationsHandler(
+		sesVerifier, pool, sesEventsStore, subscribersStore, suppressionsStore, auditLogger, slog.Default(),
+	)
+
 	// SSE event broker: the in-memory pub/sub singleton reused for live
 	// campaign send progress once the mailing subsystem lands.
 	broker := events.NewBroker()
@@ -236,7 +254,7 @@ func servePostgres(cfg *config.Config) error {
 
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -389,9 +407,16 @@ func serveDevMode(cfg *config.Config) error {
 	var confirmH *handlers.ConfirmHandler
 	var unsubscribeH *handlers.UnsubscribeHandler
 
+	// SES event ingestion (#0038) has the same devstore gap as the handlers
+	// above -- internal/devstore has no email_events/subscribers/
+	// suppressions backing. Passing nil leaves every other route working in
+	// STORAGE=json mode; mountAndServe only registers POST
+	// /api/ses/notifications when non-nil.
+	var sesNotifyH *handlers.SESNotificationsHandler
+
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -497,6 +522,7 @@ func mountAndServe(
 	preferencesH *handlers.PreferencesHandler,
 	confirmH *handlers.ConfirmHandler,
 	unsubscribeH *handlers.UnsubscribeHandler,
+	sesNotifyH *handlers.SESNotificationsHandler,
 	requireSession func(http.Handler) http.Handler,
 	requireAdmin func(http.Handler) http.Handler,
 	outerMiddleware func(http.Handler) http.Handler,
@@ -645,6 +671,34 @@ func mountAndServe(
 	if unsubscribeH != nil {
 		mux.Handle("GET /api/unsubscribe", unsubscribeLimiter.Middleware(http.HandlerFunc(unsubscribeH.Get)))
 		mux.Handle("POST /api/unsubscribe", http.HandlerFunc(unsubscribeH.Post))
+	}
+
+	// SES bounce/complaint event ingestion (#0038, PRD §6.7) — an SNS HTTPS
+	// subscription endpoint, public by design. It carries NEITHER
+	// requireSession/requireAdmin NOR a rate limiter, both deliberately:
+	//
+	//   - No session guard: SNS posts with no bearer credential of any
+	//     kind — the signature internal/sesnotify.Verifier checks (plus its
+	//     TopicArn allowlist) IS the authentication. Wrapping this in
+	//     requireSession/requireAdmin would 403 every legitimate SNS
+	//     delivery, and SNS backs off and eventually disables the
+	//     subscription after enough failures — bounces and complaints stop
+	//     arriving and nothing surfaces an error.
+	//   - No rate limiter: every other public route above has one, but a
+	//     single campaign send can produce thousands of bounce/complaint/
+	//     delivery events in a burst, from many different SNS source IPs. A
+	//     per-IP token bucket here would reject exactly the traffic this
+	//     endpoint exists to receive. Cost is bounded instead by
+	//     http.MaxBytesReader (512 KiB, ses_notifications.go) and by
+	//     sesnotify.Verifier's certificate cache — the absence of a limiter
+	//     here is deliberate, not an oversight.
+	//
+	// sesNotifyH is nil in dev mode (STORAGE=json — internal/devstore has no
+	// email_events/subscribers/suppressions backing); the route is only
+	// registered when a real handler is wired, matching every other
+	// nil-guarded route above.
+	if sesNotifyH != nil {
+		mux.Handle("POST /api/ses/notifications", http.HandlerFunc(sesNotifyH.Notify))
 	}
 
 	// SEO: server-injected per-route meta tags (#0019) and generated
