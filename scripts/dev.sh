@@ -35,6 +35,20 @@ export WEBAUTHN_RP_ORIGIN="${WEBAUTHN_RP_ORIGIN:-http://localhost:8080}"
 export SESSION_SECRET="${SESSION_SECRET:-dev-session-secret-not-for-production}"
 export ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
 export PORT="${PORT:-8080}"
+# AWS_REGION, EMAIL_FROM, and EMAIL_LIST_DOMAIN are unconditionally required by
+# config.Load (#0116) even though STORAGE=json's serveDevMode never reads them
+# for anything but that validation — dev mode never constructs the SES mailer
+# or the send worker. The values below are placeholders that satisfy the
+# check without looking like production config: EMAIL_FROM uses a "dev@"
+# local part (production is "hello@…") and EMAIL_LIST_DOMAIN uses
+# "lists.localhost" rather than the real "lists.opencircuitsf.com" (CLAUDE.md
+# §9), so nobody mistakes a dev run for a production one. AWS_REGION is inert
+# under STORAGE=json (no AWS SDK call is ever made on this path), so it is
+# left at the real SES region for anyone who overrides STORAGE to exercise
+# the Postgres path locally.
+export AWS_REGION="${AWS_REGION:-us-west-2}"
+export EMAIL_FROM="${EMAIL_FROM:-Open Circuit SF <dev@localhost>}"
+export EMAIL_LIST_DOMAIN="${EMAIL_LIST_DOMAIN:-lists.localhost}"
 
 step() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 ok()   { printf '    \033[32m✓\033[0m %s\n' "$*"; }
