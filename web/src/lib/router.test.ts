@@ -139,6 +139,10 @@ describe('shouldIntercept', () => {
     expect(shouldIntercept(candidate({ href: 'https://discord.gg/Fq9ug6QXV3' }))).toBe(false);
   });
 
+  it('does not intercept the Luma calendar link', () => {
+    expect(shouldIntercept(candidate({ href: 'https://luma.com/opencircuitsf' }))).toBe(false);
+  });
+
   it('does not intercept a mailto: link', () => {
     expect(shouldIntercept(candidate({ href: 'mailto:hello@opencircuitsf.com' }))).toBe(false);
   });

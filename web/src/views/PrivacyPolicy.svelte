@@ -81,7 +81,7 @@
       {APP_NAME} runs a mailing list so people can hear about upcoming workshops. This
       page explains what that list collects, why, how long it's kept, and how to leave
       it. It applies to the workshop mailing list and this website; it does not cover
-      third-party services like Discord, which has its own privacy policy.
+      third-party services like Discord or Luma, which have their own privacy policies.
     </p>
     <p class="text-muted">
       Mailing-list signup is not open yet. This policy documents the commitment we are

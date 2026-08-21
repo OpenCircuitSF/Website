@@ -14,8 +14,8 @@
   // (#0022) -- a more honest failure mode than omitting the link PRD §11
   // requires, but a 404 nonetheless.
   import { APP_NAME } from './branding';
+  import { DISCORD_URL, LUMA_URL } from './links';
 
-  const DISCORD_URL = 'https://discord.gg/Fq9ug6QXV3';
   const CONTACT_EMAIL = 'hello@opencircuitsf.com';
   const year = new Date().getFullYear();
 </script>
@@ -24,6 +24,8 @@
   <div class="footer-inner">
     <nav class="footer-links" aria-label="Footer">
       <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer">Discord</a>
+      <span class="sep" aria-hidden="true">·</span>
+      <a href={LUMA_URL} target="_blank" rel="noopener noreferrer">Calendar</a>
       <span class="sep" aria-hidden="true">·</span>
       <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>
       <span class="sep" aria-hidden="true">·</span>

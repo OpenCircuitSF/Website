@@ -20,8 +20,8 @@
   import Panel from '../lib/Panel.svelte';
   import TraceDivider from '../lib/TraceDivider.svelte';
   import { APP_NAME } from '../lib/branding';
+  import { DISCORD_URL, LUMA_URL } from '../lib/links';
 
-  const DISCORD_URL = 'https://discord.gg/Fq9ug6QXV3';
   const CONTACT_EMAIL = 'hello@opencircuitsf.com';
 </script>
 
@@ -47,7 +47,7 @@
           'roughly monthly, beginner-friendly by default',
           'tools and parts provided — bring curiosity, not a kit',
           'already know the material? bring your own project and build alongside everyone else',
-          'announced through Discord and the mailing list',
+          'announced through Discord, the Luma calendar, and the mailing list',
         ]}
       />
     </Panel>
@@ -73,11 +73,14 @@
     <h2 id="involved-h">Get involved</h2>
     <Panel>
       <p>
-        The easiest way in is Discord — that's where workshops get announced,
-        locations get shared, and people organize builds between sessions.
+        The easiest way in is Discord — that's where locations get shared and
+        people organize builds between sessions. Upcoming sessions are listed
+        on the Luma calendar, where you can RSVP directly.
       </p>
       <p>
         <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer">Join the Discord</a>
+        &middot;
+        <a href={LUMA_URL} target="_blank" rel="noopener noreferrer">View the calendar</a>
       </p>
       <p class="text-muted">
         An interest-based workshop mailing list is on the way, for anyone who'd rather
