@@ -239,14 +239,28 @@ func (s *SendStore) ClaimResume(ctx context.Context) (*claimedCampaign, error) {
 	return c, nil
 }
 
-// OrphanSweep resets any rows stuck in 'sending' for campaignID back to
-// 'queued' — rows a previous process was mid-send on when it died. Run once
-// per claim (start or resume), before draining. Returns the number of rows
-// reset (0 in the ordinary case where nothing crashed).
-func (s *SendStore) OrphanSweep(ctx context.Context, campaignID int64) (int64, error) {
+// OrphanSweep resets rows stuck in 'sending' for campaignID back to
+// 'queued' — but ONLY rows whose claim is stale: claimed_at IS NULL (a
+// 'sending' row that never went through ClaimRow) or claimed_at is older
+// than staleBefore. Run once per claim (start or resume), before draining.
+//
+// staleBefore is the caller's job, not this method's (#0122) — worker.go
+// computes it as w.now().Add(-orphanStaleAfter), where orphanStaleAfter is
+// derived from the two hard timeouts (sendMessageTimeout,
+// writeStatusTimeout) that already bound how long a LIVE claim can
+// legitimately sit in 'sending'. Before #0122 this statement had no
+// staleness check at all, so it could not tell a crashed worker's abandoned
+// row from a live worker's in-flight one — a second worker's resume could
+// un-claim a row the first worker was still holding and mail it twice
+// (TestWorker_TwoWorkersOneCampaign_OrphanSweepDuringLiveClaim_NoDuplicate).
+// Returns the number of rows reset (0 in the ordinary case where nothing
+// crashed).
+func (s *SendStore) OrphanSweep(ctx context.Context, campaignID int64, staleBefore time.Time) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE email_sends SET status = 'queued' WHERE campaign_id = $1 AND status = 'sending'`,
-		campaignID,
+		`UPDATE email_sends SET status = 'queued'
+		  WHERE campaign_id = $1 AND status = 'sending'
+		    AND (claimed_at IS NULL OR claimed_at < $2)`,
+		campaignID, staleBefore,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("mailing: sweeping orphaned sends for campaign %d: %w", campaignID, err)
@@ -369,14 +383,16 @@ func (s *SendStore) ClaimBatch(ctx context.Context, campaignID int64, limit int)
 
 // ClaimRow performs the per-row atomic claim (§4 of this issue's plan): the
 // same statement that increments attempts, satisfying #0044's "increment
-// before the SES call" requirement in one round trip. Returns claimed=false
-// when the row is no longer 'queued' — a concurrent worker already has it
-// (or it was skipped between ClaimBatch's recheck and this call, which
-// cannot happen within one worker's own sequential loop but can across two
+// before the SES call" requirement in one round trip. It also stamps
+// claimed_at = now() (#0122) — the timestamp OrphanSweep uses to tell this
+// row apart from one a crashed worker abandoned. Returns claimed=false when
+// the row is no longer 'queued' — a concurrent worker already has it (or it
+// was skipped between ClaimBatch's recheck and this call, which cannot
+// happen within one worker's own sequential loop but can across two
 // workers) — the caller must send nothing in that case.
 func (s *SendStore) ClaimRow(ctx context.Context, sendID int64) (attempts int, claimed bool, err error) {
 	row := s.pool.QueryRow(ctx,
-		`UPDATE email_sends SET status = 'sending', attempts = attempts + 1
+		`UPDATE email_sends SET status = 'sending', attempts = attempts + 1, claimed_at = now()
 		  WHERE id = $1 AND status = 'queued'
 		RETURNING attempts`, sendID,
 	)

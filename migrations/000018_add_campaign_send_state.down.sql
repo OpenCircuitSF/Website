@@ -5,6 +5,8 @@
 -- migration is rolled back.
 UPDATE email_sends SET status = 'queued' WHERE status = 'sending';
 
+ALTER TABLE email_sends DROP COLUMN claimed_at;
+
 ALTER TABLE email_sends DROP CONSTRAINT email_sends_status_check;
 ALTER TABLE email_sends
     ADD CONSTRAINT email_sends_status_check

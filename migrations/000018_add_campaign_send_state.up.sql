@@ -29,6 +29,20 @@ ALTER TABLE email_sends
     ADD CONSTRAINT email_sends_status_check
     CHECK (status IN ('queued', 'sending', 'sent', 'failed', 'bounced', 'complained', 'skipped'));
 
+-- claimed_at: stamped by SendStore.ClaimRow in the same statement that
+-- flips a row to 'sending' and increments attempts (#0122). Without it,
+-- OrphanSweep cannot tell a crashed worker's abandoned 'sending' row from a
+-- live worker's in-flight one, and resets both — the row worker.go's
+-- ClaimRow just claimed a moment ago gets un-claimed by another worker's
+-- OrphanSweep pass and mailed twice. OrphanSweep only resets a row whose
+-- claimed_at is older than worker.go's orphanStaleAfter (derived from
+-- sendMessageTimeout + writeStatusTimeout — the two hard bounds a live
+-- claim can legitimately take, not a constant sized against measured
+-- machine load, CLAUDE.md §5). NULL claimed_at (a 'sending' row that
+-- reached that status by some path other than ClaimRow, e.g. a test fixture
+-- or a pre-#0122 row) is always treated as orphaned.
+ALTER TABLE email_sends ADD COLUMN claimed_at TIMESTAMPTZ;
+
 -- Seed the two settings rows this issue's gate and rate limiter read,
 -- matching 000008's ON CONFLICT DO NOTHING idiom so a re-run (or a deploy
 -- that already has the key) is a no-op rather than an error.

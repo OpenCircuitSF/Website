@@ -200,6 +200,75 @@ func TestWorker_TwoWorkersOneCampaign_EachRecipientSentExactlyOnce(t *testing.T)
 	}
 }
 
+// TestWorker_TwoWorkersOneCampaign_OrphanSweepDuringLiveClaim_NoDuplicate is
+// #0122's deterministic reproduction — no timing luck, no `-count=N`. It
+// injects worker 2's REAL resume (a genuine ClaimResume + drainCampaign, not
+// a fake) at the exact instruction boundary sendPreCrashHook already exposes
+// for worker 1: after ClaimRow claims a row (attempts incremented, status
+// 'sending') but before the SES call. Before the fix, worker 2's
+// unconditional OrphanSweep reset worker 1's just-claimed row back to
+// 'queued', worker 2's own ClaimBatch picked it up and sent it, and worker 1
+// — which never re-checks the row after its own hook returns — sent it a
+// second time: mailer.Sent() = 25, want 24. The fix must make OrphanSweep
+// leave a freshly-claimed row alone.
+func TestWorker_TwoWorkersOneCampaign_OrphanSweepDuringLiveClaim_NoDuplicate(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	forceSending(t, pool, campaignID)
+
+	const n = 24
+	var emails []string
+	for i := 0; i < n; i++ {
+		_, _, email := seedQueuedSend(t, pool, campaignID)
+		emails = append(emails, email)
+	}
+
+	mailer := &RecordingMailer{}
+	w1 := newTestWorker(t, pool, mailer)
+	w2 := newTestWorker(t, pool, mailer)
+
+	var fired bool
+	sendPreCrashHook = func(sendID int64) bool {
+		if !fired {
+			fired = true
+			c2, err := w2.store.ClaimResume(context.Background())
+			if err != nil || c2 == nil {
+				t.Errorf("probe ClaimResume: %+v %v", c2, err)
+				return false
+			}
+			if err := w2.drainCampaign(context.Background(), c2); err != nil {
+				t.Errorf("probe drainCampaign: %v", err)
+			}
+		}
+		return false
+	}
+	t.Cleanup(func() { sendPreCrashHook = nil })
+
+	c1, err := w1.store.ClaimResume(context.Background())
+	if err != nil || c1 == nil {
+		t.Fatalf("ClaimResume: c=%+v err=%v", c1, err)
+	}
+	if err := w1.drainCampaign(context.Background(), c1); err != nil {
+		t.Errorf("drainLoop: %v", err)
+	}
+
+	sent := mailer.Sent()
+	if len(sent) != n {
+		t.Fatalf("mailer.Sent() = %d messages, want %d", len(sent), n)
+	}
+	for _, email := range emails {
+		if got := countMessagesTo(sent, email); got != 1 {
+			t.Errorf("countMessagesTo(%q) = %d, want exactly 1", email, got)
+		}
+	}
+	counts := countSendStatuses(t, pool, campaignID)
+	if counts["sent"] != n {
+		t.Errorf("email_sends sent count = %d, want %d (statuses: %v)", counts["sent"], n, counts)
+	}
+}
+
 // ── 4. No double-send across a crash ────────────────────────────────────────
 
 // TestWorker_AbortBetweenSESAcceptAndStatusWrite_ResumesWithOneDuplicate
@@ -249,6 +318,15 @@ func TestWorker_AbortBetweenSESAcceptAndStatusWrite_ResumesWithOneDuplicate(t *t
 	sendPostCrashHook = nil // second worker resumes for real, no further crashes
 
 	w2 := newTestWorker(t, pool, mailer)
+	// #0122: OrphanSweep now only recovers a row whose claim predates
+	// orphanStaleAfter's window, so a resume within that window (as this
+	// test's immediate, real-time resume is) would otherwise leave
+	// recipient #4's row stuck 'sending' forever — the exact bug this fix
+	// closes, applied to a genuine crash instead of a live worker. Shifting
+	// w2's own clock forward simulates the real-world case this test
+	// stands in for: a restart that happens well after the crash, not one
+	// that happens in the same millisecond a unit test runs in.
+	w2.now = func() time.Time { return time.Now().Add(orphanStaleAfter + time.Minute) }
 	c2, err := w2.store.ClaimResume(context.Background())
 	if err != nil || c2 == nil {
 		t.Fatalf("second ClaimResume: c=%+v err=%v", c2, err)
@@ -321,6 +399,12 @@ func TestWorker_AbortBeforeSESCall_ResumesWithNoDuplicate(t *testing.T) {
 
 	sendPreCrashHook = nil
 	w2 := newTestWorker(t, pool, mailer)
+	// See the identical comment in
+	// TestWorker_AbortBetweenSESAcceptAndStatusWrite_ResumesWithOneDuplicate
+	// — #0122's fix makes OrphanSweep time-gated, so this test's immediate
+	// real-time resume needs w2's clock shifted forward to simulate a
+	// restart that happens after orphanStaleAfter's window has elapsed.
+	w2.now = func() time.Time { return time.Now().Add(orphanStaleAfter + time.Minute) }
 	c2, err := w2.store.ClaimResume(context.Background())
 	if err != nil || c2 == nil {
 		t.Fatalf("second ClaimResume: c=%+v err=%v", c2, err)

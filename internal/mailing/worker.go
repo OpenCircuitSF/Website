@@ -24,14 +24,32 @@
 // update committing is real and cannot be closed — SES's SendEmail is not
 // enlisted in our Postgres transaction and offers no client-supplied
 // idempotency key. If the process dies in that window, the orphan sweep
-// returns the row to 'queued' on the next start and the message sends a
-// second time. Because sends are sequential (one message in flight per
-// worker, §7), at most one message can be in that window at any instant —
-// the duplicate is one message, not a batch. Marking 'sent' BEFORE the SES
-// call would instead risk losing a message entirely on the same crash,
-// which is strictly worse for a mailing list: a duplicate is a harmless
-// annoyance; a silent drop is a broken promise nothing surfaces. This system
-// deliberately does not achieve exactly-once.
+// returns the row to 'queued' once claimed_at is older than orphanStaleAfter
+// (below) and the message sends a second time. Because sends are sequential
+// (one message in flight per worker, §7), at most one message can be in
+// that window at any instant per worker — the duplicate is one message, not
+// a batch. Marking 'sent' BEFORE the SES call would instead risk losing a
+// message entirely on the same crash, which is strictly worse for a mailing
+// list: a duplicate is a harmless annoyance; a silent drop is a broken
+// promise nothing surfaces. This system deliberately does not achieve
+// exactly-once.
+//
+// # The orphan sweep must not un-claim a live worker's row (#0122)
+//
+// The paragraph above describes ONE worker recovering from its OWN crash.
+// Two Worker values can legitimately drain the same 'sending' campaign at
+// once (ClaimResume takes no lock — see its own doc comment), and each
+// independently runs the orphan sweep before draining. An unconditional
+// sweep cannot tell "this row was abandoned by a process that already died"
+// from "this row was claimed by the other worker a moment ago and is still
+// in flight" — resetting the latter to 'queued' lets it be claimed and
+// mailed a second time by the worker that swept it, while the original
+// claimant, which never re-checks a row's status after its own claim
+// succeeds, sends its own copy too. SendStore.OrphanSweep now only resets a
+// row whose claimed_at predates orphanStaleAfter's window, which is sized
+// to exceed how long a LIVE claim can possibly take (sendMessageTimeout +
+// writeStatusTimeout), so a row claimed moments ago is never mistaken for
+// one abandoned by a crash.
 package mailing
 
 import (
@@ -69,6 +87,21 @@ const (
 	// the next successful send.
 	backoffCap = 30 * time.Second
 )
+
+// orphanStaleAfter bounds how long a row may legitimately sit in 'sending'
+// before OrphanSweep treats it as abandoned by a crashed worker rather than
+// held by a live one (#0122). A live worker can hold a row in 'sending' for
+// at most sendMessageTimeout (the SES call's own detached-context bound)
+// plus writeStatusTimeout (the status write immediately after it) before
+// something — success, a retryable failure, or a terminal failure — moves
+// the row back out of 'sending'. orphanStaleAfter doubles that legitimate
+// window rather than adding a flat margin, so ordinary scheduling jitter
+// right at the boundary can never be mistaken for a crash. A var, not a
+// const, so a test can shrink it; NOT sized against measured machine load
+// (CLAUDE.md §5) — it is sized against the two hard timeouts that already
+// bound one send attempt, the same way workerCloseTimeout is sized against
+// one in-flight message rather than a benchmark.
+var orphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 
 // CampaignProgress is one snapshot of a campaign's send progress — the seam
 // #0048 publishes over SSE. Total is fixed at materialization (#0044's plan
@@ -341,7 +374,12 @@ func (w *Worker) claimAndDrain(ctx context.Context) (bool, error) {
 // resume or a fresh start whose materialization already completed in an
 // earlier attempt.
 func (w *Worker) drainCampaign(ctx context.Context, c *claimedCampaign) error {
-	if _, err := w.store.OrphanSweep(ctx, c.ID); err != nil {
+	// staleBefore is computed from THIS worker's own clock (w.now, injectable
+	// in tests) — see orphanStaleAfter's doc comment (#0122). Only a row
+	// claimed before staleBefore is treated as abandoned; a row a live
+	// worker claimed a moment ago is left alone.
+	staleBefore := w.now().Add(-orphanStaleAfter)
+	if _, err := w.store.OrphanSweep(ctx, c.ID, staleBefore); err != nil {
 		return err
 	}
 
@@ -534,7 +572,16 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 	if !claimed {
 		// Another worker claimed this row first — see #0044's
 		// "increment attempts before the SES call" requirement and this
-		// issue's plan §4 for why this statement IS the mutual exclusion.
+		// issue's plan §4 for why this statement IS the mutual exclusion
+		// among ClaimRow calls. That claim held only so long as nothing
+		// else could move a row back to 'queued' out from under a live
+		// claimant — #0122 found that OrphanSweep did exactly that,
+		// unconditionally, defeating this statement's exclusion the moment
+		// a second worker's resume raced a first worker's in-flight send.
+		// OrphanSweep now only resets rows stale enough that no live
+		// worker could still hold them (worker_store.go's OrphanSweep,
+		// orphanStaleAfter above), which is what makes this statement true
+		// again rather than merely locally true.
 		return sendOutcomeSkipped, nil
 	}
 

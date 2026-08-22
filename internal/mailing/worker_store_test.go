@@ -3,6 +3,7 @@ package mailing
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
@@ -80,6 +81,11 @@ func TestSendStore_DemoteToDraft_OnlyOnce(t *testing.T) {
 	}
 }
 
+// TestSendStore_OrphanSweep_ResetsOnlySendingRows forces a row to 'sending'
+// via raw SQL — bypassing ClaimRow, so claimed_at stays NULL — and proves
+// OrphanSweep still recovers it regardless of the staleBefore cutoff passed
+// in: a 'sending' row with no claimed_at is always treated as orphaned
+// (#0122's migration comment).
 func TestSendStore_OrphanSweep_ResetsOnlySendingRows(t *testing.T) {
 	pool := testPool(t)
 	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
@@ -96,7 +102,9 @@ func TestSendStore_OrphanSweep_ResetsOnlySendingRows(t *testing.T) {
 		t.Fatalf("force row to sent: %v", err)
 	}
 
-	n, err := store.OrphanSweep(context.Background(), campaignID)
+	// staleBefore is now() itself (the tightest possible cutoff) — even so,
+	// the NULL-claimed_at row must still be swept.
+	n, err := store.OrphanSweep(context.Background(), campaignID, time.Now())
 	if err != nil {
 		t.Fatalf("OrphanSweep: %v", err)
 	}
@@ -111,6 +119,51 @@ func TestSendStore_OrphanSweep_ResetsOnlySendingRows(t *testing.T) {
 	}
 	if got := sendRowStatus(t, pool, sentID); got != "sent" {
 		t.Errorf("sent row status = %q, want sent (untouched)", got)
+	}
+}
+
+// TestSendStore_OrphanSweep_LeavesFreshlyClaimedRowAlone is the store-level
+// half of #0122's proof: a row claimed through ClaimRow (so claimed_at is
+// stamped) must NOT be reset while staleBefore is still before claimed_at —
+// the exact condition a live worker's in-flight row satisfies — but MUST be
+// reset once staleBefore has moved past claimed_at, exactly as it would once
+// orphanStaleAfter's window has elapsed for a genuinely abandoned row.
+func TestSendStore_OrphanSweep_LeavesFreshlyClaimedRowAlone(t *testing.T) {
+	pool := testPool(t)
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	forceSending(t, pool, campaignID)
+	store := NewSendStore(pool, NewAudienceStore(pool), dbSettings{pool: pool}, nil, testWorkerBaseURL, testWorkerListDomain, testWorkerReplyTo)
+
+	sendID, _, _ := seedQueuedSend(t, pool, campaignID)
+	_, claimed, err := store.ClaimRow(context.Background(), sendID)
+	if err != nil || !claimed {
+		t.Fatalf("ClaimRow: claimed=%v err=%v", claimed, err)
+	}
+
+	// A cutoff safely before this claim: the row must survive.
+	n, err := store.OrphanSweep(context.Background(), campaignID, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("OrphanSweep (live claim): %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("OrphanSweep() = %d, want 0 — must not un-claim a fresh row", n)
+	}
+	if got := sendRowStatus(t, pool, sendID); got != "sending" {
+		t.Fatalf("row status = %q, want sending (untouched)", got)
+	}
+
+	// A cutoff safely after this claim: the row must now be recovered,
+	// simulating orphanStaleAfter's window having elapsed for a row a
+	// crashed worker really did abandon.
+	n, err = store.OrphanSweep(context.Background(), campaignID, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("OrphanSweep (stale claim): %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("OrphanSweep() = %d, want 1 — a stale claim must be recovered", n)
+	}
+	if got := sendRowStatus(t, pool, sendID); got != "queued" {
+		t.Fatalf("row status = %q, want queued", got)
 	}
 }
 
