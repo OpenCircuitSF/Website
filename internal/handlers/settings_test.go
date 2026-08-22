@@ -49,10 +49,14 @@ func TestValidSettingValue_MaxSendRate(t *testing.T) {
 
 // settingsTestPool returns the package's single shared pool (opened once in
 // TestMain — #0091) or skips if TEST_DATABASE_URL was unset. It truncates the
-// auth tables AND resets the settings table to its seeded state on entry
-// only, so each run starts clean and the registrations_enabled gate begins
+// auth tables AND resets the settings table to its seeded state on entry,
+// so each run starts clean and the registrations_enabled gate begins
 // disabled (matching the migration seed). The settings table is not covered
-// by the credentials suite's truncate, so it is reset explicitly here.
+// by the credentials suite's truncate, so it is reset explicitly here. It
+// also registers a t.Cleanup that resets settings again on teardown, so a
+// test that mutates settings (e.g. TestAdminSettings_PhysicalAddressRoundTrip,
+// or #0039's threshold tests) cannot leak that state into whichever test
+// runs next under -shuffle=on (#0121).
 func settingsTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	if testDBPool == nil {
@@ -60,6 +64,7 @@ func settingsTestPool(t *testing.T) *pgxpool.Pool {
 	}
 	truncateCredsTables(t, testDBPool)
 	resetSettings(t, testDBPool)
+	t.Cleanup(func() { resetSettings(t, testDBPool) })
 	return testDBPool
 }
 
@@ -68,8 +73,10 @@ func settingsTestPool(t *testing.T) *pgxpool.Pool {
 // #0039's soft_bounce_threshold_count=5 / soft_bounce_threshold_window_days=30
 // (000015). This isolates each settings test from values left by earlier
 // tests (the auth suite flips the registrations_enabled row; #0039's own
-// tests may flip the threshold rows to exercise configurability) and leaves
-// the DB in the seeded state on teardown.
+// tests may flip the threshold rows to exercise configurability). Callers
+// that want the DB left in the seeded state on teardown, not just on entry,
+// must register their own t.Cleanup(func() { resetSettings(t, pool) }) —
+// settingsTestPool does this already.
 func resetSettings(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)

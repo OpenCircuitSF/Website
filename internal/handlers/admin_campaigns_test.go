@@ -541,10 +541,15 @@ func TestAdminCampaigns_Send_PreflightFailureReturns409UnmetShape(t *testing.T) 
 func TestAdminCampaigns_Send_RealPreflightAdapter_Returns409UnmetShape(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
 
-	// physical_address is seeded '' by migration 000008; leave it that way.
-	// EMAIL_LIST_DOMAIN/EMAIL_REPLY_TO have no settings-table equivalent —
-	// this test's SendStore is constructed with real, non-blank values for
-	// both so the ONLY unmet requirements are the two this test names.
+	// Set physical_address to '' explicitly rather than relying on the
+	// migration 000008 seed still being in place — settingsTestPool's own
+	// tests mutate this row and, absent an explicit t.Cleanup on their
+	// part, could leave it non-empty for whichever test runs next under
+	// -shuffle=on (#0121). EMAIL_LIST_DOMAIN/EMAIL_REPLY_TO have no
+	// settings-table equivalent — this test's SendStore is constructed with
+	// real, non-blank values for both so the ONLY unmet requirements are
+	// the two this test names.
+	setPhysicalAddressForTest(t, pool, "")
 	audienceStore := mailing.NewAudienceStore(pool)
 	authStore := auth.NewStore(pool)
 	sendStore := mailing.NewSendStore(pool, audienceStore, authStore, nil,

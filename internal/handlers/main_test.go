@@ -74,6 +74,24 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	if testDBPool != nil {
+		// #0121: subscribeTestPool's design (above) deliberately does not
+		// truncate subscribers per test, but several of its tests exercise
+		// the handler's real POST /api/subscribe path — new-signup,
+		// non-ASCII-email, concurrency, and query-count coverage — which
+		// creates rows (some asynchronously, after the response already
+		// returned) that no per-test t.Cleanup captures the id of. Rather
+		// than reintroduce per-test truncation (the exact cost #0091 round
+		// two removed) or thread synchronization into async-by-design
+		// tests just to capture an id, truncate once more here on
+		// teardown, mirroring the entry truncate above, so the shared
+		// opencircuit_test database is left exactly as TestMain found it
+		// regardless of which tests ran.
+		ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
+		if _, truncErr := testDBPool.Exec(ctx,
+			`TRUNCATE subscriber_interests, subscribers, audit_log RESTART IDENTITY CASCADE`); truncErr != nil {
+			fmt.Fprintf(os.Stderr, "testdb: teardown truncate failed: %v\n", truncErr)
+		}
+		cancel()
 		testDBPool.Close()
 	}
 	release()

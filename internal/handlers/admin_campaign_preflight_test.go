@@ -54,9 +54,13 @@ type decodedPreflight struct {
 func TestAdminCampaignPreflight_UnmetCodesInPinnedOrder(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
 
-	// physical_address is seeded '' by migration 000008; leave it that way.
-	// Real, non-blank EMAIL_LIST_DOMAIN/EMAIL_REPLY_TO so the only unmet
-	// requirements are the two this test names.
+	// Set physical_address to '' explicitly rather than relying on the
+	// migration 000008 seed still being in place — settingsTestPool's own
+	// tests mutate this row and, absent an explicit t.Cleanup on their
+	// part, could leave it non-empty for whichever test runs next under
+	// -shuffle=on (#0121). Real, non-blank EMAIL_LIST_DOMAIN/EMAIL_REPLY_TO
+	// so the only unmet requirements are the two this test names.
+	setPhysicalAddressForTest(t, pool, "")
 	srv := httptest.NewServer(adminCampaignPreflightMux(pool,
 		"lists.example-oc-test.com", "hello@example-oc-test.com", "hello@example-oc-test.com"))
 	defer srv.Close()
