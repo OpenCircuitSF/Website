@@ -590,6 +590,53 @@ func TestSubscribe_SuppressionCheckError_FailsSafeToUniform202(t *testing.T) {
 	}
 }
 
+// TestSubscribe_ReservedTestDomain_NoActionTaken is #0046's review finding B,
+// closed: the public endpoint must never attempt to mail an address at
+// subscribers.ReservedTestEmailDomain, since that domain is RFC
+// 2606-reserved (guaranteed to never resolve — any real send would be a
+// hard bounce) and #0046's admin test-send recipient format
+// (campaign-test+admin-<id>@...) makes such an address trivially
+// enumerable via small admin ids. Covers both the brand-new-address branch
+// (no row exists yet) and the existing-row branch (an admin already ran a
+// test send, so a synthetic row is sitting there) — the guard must fire
+// either way, since the enumeration risk lives in the domain, not in
+// whether a row happens to exist.
+func TestSubscribe_ReservedTestDomain_NoActionTaken(t *testing.T) {
+	pool := subscribeTestPool(t)
+	mailer := &mailing.RecordingMailer{}
+	h, mux := subscribeMux(t, pool, mailer, nil)
+
+	email := fmt.Sprintf("campaign-test+admin-%d@%s", time.Now().UnixNano(), subscribers.ReservedTestEmailDomain)
+
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (must not vary from any other branch)", resp.StatusCode)
+	}
+	if subscriberExists(t, pool, email) {
+		t.Error("a subscriber row was created for an address at the reserved test domain")
+	}
+	if len(mailer.Sent()) != 0 {
+		t.Errorf("mailer.Sent() = %d messages, want 0 — a send to this domain is a guaranteed hard bounce", len(mailer.Sent()))
+	}
+
+	// Now the existing-row branch: seed a synthetic row at the same address
+	// first (mirroring what ensureTestRecipient does), then submit again.
+	store := subscribers.NewStore(pool)
+	sub, err := store.Create(context.Background(), subscribers.NewSignup{Email: email, ConfirmTTL: time.Hour, Synthetic: true}, time.Now())
+	if err != nil {
+		t.Fatalf("seed synthetic row: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, sub.ID) })
+
+	resp2 := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
+	if resp2.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp2.StatusCode)
+	}
+	if len(mailer.Sent()) != 0 {
+		t.Errorf("mailer.Sent() = %d messages, want 0 even once a synthetic row already exists at this address", len(mailer.Sent()))
+	}
+}
+
 // ============================================================================
 // New signup
 // ============================================================================

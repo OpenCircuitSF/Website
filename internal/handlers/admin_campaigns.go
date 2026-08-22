@@ -246,8 +246,8 @@ type campaignView struct {
 	// edit cleared it (CampaignStore.Update's own CASE clause).
 	TestSentAt *string `json:"test_sent_at,omitempty"`
 	CreatedBy  *int64  `json:"created_by,omitempty"`
-	CreatedAt    string  `json:"created_at"`
-	UpdatedAt    string  `json:"updated_at"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
 }
 
 // formatTimePtr is defined in admin_subscribers.go and reused here.

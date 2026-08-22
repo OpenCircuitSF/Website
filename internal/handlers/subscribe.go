@@ -585,6 +585,23 @@ func (h *SubscribeHandler) processMutateJob(job mutateJob) {
 		return
 	}
 
+	if subscribers.IsReservedTestEmail(job.email) {
+		// #0046's review, finding B: campaign-test+admin-<id>@
+		// internal.opencircuitsf.test is the deterministic, now-public
+		// test-send recipient anchor admin_campaign_preview.go creates.
+		// Its domain is RFC 2606-reserved and guaranteed to never resolve,
+		// so mailing ANY address there is a certain hard bounce, and small
+		// enumerable admin ids make it trivially probeable. Silently
+		// no-op, exactly like isBot/suppressed above — Subscribe already
+		// wrote the uniform 202 to the (long-since-returned) HTTP response
+		// before this async job ever ran, so this check cannot introduce
+		// any observable branch in the endpoint's behavior. Checked
+		// regardless of whether a subscribers row already exists at this
+		// address (findErr/existing below), since the enumeration risk is
+		// in the domain itself, not in any particular row's state.
+		return
+	}
+
 	if job.suppErr != nil {
 		h.log.Error("subscribe: suppression check failed", "err", job.suppErr)
 		return

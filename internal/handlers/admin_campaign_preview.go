@@ -17,8 +17,8 @@
 // never call decodeJSON at all — there is no field in either request this
 // handler ever reads, so "an unsaved-body override" is not a validation
 // rule that could be forgotten later, it is a code path that does not
-// exist. See TestPreview_IgnoresRequestBody_RendersStoredRowOnly and
-// TestTest_IgnoresRequestBody_SendsStoredRowOnly, and this file's own
+// exist. See TestAdminCampaignPreview_Preview_IgnoresRequestBody and
+// TestAdminCampaignPreview_Test_IgnoresRequestBody, and this file's own
 // mutation-tested proof in admin_campaign_preview_test.go.
 //
 // # Test send recipient: always the requesting admin's own address
@@ -30,7 +30,7 @@
 // they can also edit the campaign. The recipient is always
 // middleware.AuthUser.Email, read from the session the same RequireAdmin
 // guard already authenticated — never a request field. See
-// TestTest_SendsToRequestingAdminOnly_NeverAnAttackerSuppliedAddress.
+// TestAdminCampaignPreview_Test_SendsToRequestingAdminOnly.
 //
 // # Why the message is addressed to a DEDICATED subscriber row, not the admin's real one
 //
@@ -60,7 +60,40 @@
 // inbox; only the manage_token — the thing an unsubscribe click acts on —
 // is anchored to this disposable row. Clicking it can only ever unsubscribe
 // the synthetic row, which is not, and was never, a real list member. See
-// TestTest_ClickingUnsubscribeInTestMessage_NeverAffectsARealSubscriberRow.
+// TestAdminCampaignPreview_Test_UsesDedicatedRecipientRow_NotARealSubscriber.
+//
+// # The synthetic row must be invisible to the admin subscribers screen — #0046's review, finding A
+//
+// status='pending' keeps the row out of every AUDIENCE (above), but it does
+// NOT keep it off #0032's admin subscribers screen: that screen's
+// StatusCounts and List (internal/subscribers/store.go) had no exclusion of
+// any kind, so every test send permanently inflated the "pending" bucket by
+// one and listed the fixture in the subscriber table — proven empirically
+// on a private database by the review that bounced this issue's first
+// pass. Fixed at the schema layer: migration 000019 adds
+// subscribers.synthetic (NOT NULL DEFAULT false); ensureTestRecipient's
+// Create call below sets NewSignup.Synthetic: true; StatusCounts and List
+// both exclude synthetic=true unconditionally. audienceWhere is untouched —
+// it already excluded this row correctly and does not need the flag.
+//
+// # The address must also be unmailable by the public subscribe endpoint — #0046's review, finding B
+//
+// testRecipientEmail's format (campaign-test+admin-<id>@...) is
+// deterministic and public in this file's own source; admin ids are small,
+// enumerable integers. Before this fix, POSTing that address to
+// /api/subscribe reached subscribe.go's pending branch and attempted a real
+// SES send to a domain that can never resolve — a guaranteed hard bounce,
+// on demand, from an unauthenticated caller. subscribers.
+// ReservedTestEmailDomain / IsReservedTestEmail (internal/subscribers/
+// store.go) is the single source of truth for that domain string;
+// SubscribeHandler.processMutateJob (subscribe.go) checks it and silently
+// no-ops, exactly like its existing isBot/suppressed checks, for ANY
+// address at that domain — not only ones a synthetic row already exists
+// for, since the enumeration risk exists whether or not this admin has
+// ever run a test send. That check runs strictly after Subscribe has
+// already written the uniform 202 to the (long-since-returned) response, so
+// it cannot introduce an observable branch in that endpoint's behavior
+// (CLAUDE.md §9).
 //
 // # What Preflight subset a test send requires, and why
 //
@@ -102,7 +135,7 @@
 // at all. That is not a Preflight code; it is the same operational
 // precondition #0027's MAILER_NOOP guard already enforces at process
 // startup for every other outbound path in this project. See
-// TestTest_NilMailer_Returns503_NeverPanics.
+// TestAdminCampaignPreview_Test_NilMailer_Returns503.
 package handlers
 
 import (
@@ -138,23 +171,17 @@ const settingPhysicalAddress = "physical_address"
 // database row per keystroke-triggered autosave.
 const previewManageToken = "PREVIEW-DRY-RUN"
 
-// testRecipientEmailDomain is the RFC 2606-reserved TLD used for every
-// dedicated test-recipient row this file creates — see the package doc
-// comment's "dedicated subscriber row" section. .test is reserved
-// specifically for non-production use and is guaranteed to never resolve,
-// so even if this address somehow leaked into an outbound envelope (it
-// never does — Message.To is always the admin's real address, never this
-// one), it could not deliver anywhere.
-const testRecipientEmailDomain = "internal.opencircuitsf.test"
-
 // testRecipientEmail returns the deterministic, per-admin synthetic address
-// ensureTestRecipient finds-or-creates a subscribers row for. Deterministic
-// (not random) so a second test send by the same admin reuses the same
-// row — see the package doc comment for why a SEPARATE row per admin (not
-// one global row) avoids a token-rotation race between two admins testing
-// concurrently.
+// ensureTestRecipient finds-or-creates a subscribers row for, at
+// subscribers.ReservedTestEmailDomain — the single source of truth for that
+// domain string, also consulted by subscribe.go's reserved-domain guard (see
+// this file's package doc comment's "dedicated subscriber row" section and
+// #0046's review finding B). Deterministic (not random) so a second test
+// send by the same admin reuses the same row — see the package doc comment
+// for why a SEPARATE row per admin (not one global row) avoids a
+// token-rotation race between two admins testing concurrently.
 func testRecipientEmail(adminID int64) string {
-	return fmt.Sprintf("campaign-test+admin-%d@%s", adminID, testRecipientEmailDomain)
+	return fmt.Sprintf("campaign-test+admin-%d@%s", adminID, subscribers.ReservedTestEmailDomain)
 }
 
 // campaignPreviewStore is the campaign-data behavior this file needs.
@@ -430,7 +457,7 @@ func (h *AdminCampaignPreviewHandler) ensureTestRecipient(ctx context.Context, a
 	case err == nil:
 		// fall through to the unconditional rotation below
 	case errors.Is(err, subscribers.ErrNotFound):
-		created, cerr := h.subs.Create(ctx, subscribers.NewSignup{Email: email, ConfirmTTL: time.Hour}, now)
+		created, cerr := h.subs.Create(ctx, subscribers.NewSignup{Email: email, ConfirmTTL: time.Hour, Synthetic: true}, now)
 		switch {
 		case cerr == nil:
 			sub = created

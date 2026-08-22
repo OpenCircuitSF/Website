@@ -307,6 +307,121 @@ func TestAdminCampaignPreview_Test_SendsToRequestingAdminOnly(t *testing.T) {
 	}
 }
 
+// TestAdminCampaignPreview_Test_IgnoresRequestBody is Test's counterpart to
+// TestAdminCampaignPreview_Preview_IgnoresRequestBody — #0046's review
+// finding E, a genuine coverage gap: TestAdminCampaignPreview_Test_
+// SendsToRequestingAdminOnly already sends a body claiming an attacker
+// recipient, but only asserts on Message.To, never on whether a body-
+// supplied subject/body_md leaked into the rendered content. This proves
+// the STORED row, not the request body, is what a test send actually
+// mails — the same "no unsaved-body override" structural guarantee as
+// Preview (neither handler ever calls decodeJSON).
+func TestAdminCampaignPreview_Test_IgnoresRequestBody(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	mailer := &recordingCampaignMailer{}
+	srv := httptest.NewServer(adminCampaignPreviewMux(pool, mailer, nil))
+	defer srv.Close()
+	cleanupTestRecipientRows(t, pool)
+
+	admin := seedAdmin(t, pool, "admin-test-nooverride@example.com")
+	seedSession(t, pool, admin, "admin-token-test-nooverride")
+
+	c := seedPreviewCampaign(t, pool, "Stored test subject", "Stored test body content")
+
+	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/campaigns/%d/test", srv.URL, c.ID),
+		"admin-token-test-nooverride",
+		`{"subject":"ATTACKER SUBJECT","body_md":"<script>alert(1)</script> attacker body"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+
+	sent := mailer.messages()
+	if len(sent) != 1 {
+		t.Fatalf("mailer recorded %d messages, want 1", len(sent))
+	}
+	if sent[0].Subject != "Stored test subject" {
+		t.Errorf("Subject = %q, want the STORED subject %q (request body must be ignored)", sent[0].Subject, "Stored test subject")
+	}
+	if strings.Contains(sent[0].HTMLBody, "ATTACKER") || strings.Contains(sent[0].HTMLBody, "attacker body") {
+		t.Errorf("test message HTML reflects the request body's override, want only the stored row: %s", sent[0].HTMLBody)
+	}
+}
+
+// TestAdminCampaignPreview_Test_SyntheticRecipientInvisibleOnAdminScreens is
+// #0046's review finding A, closed: the dedicated synthetic test-recipient
+// row ensureTestRecipient creates must never appear on the #0032 admin
+// subscribers screen — neither in StatusCounts' counts-by-status header nor
+// in List's table/pagination total (internal/subscribers/store.go), even
+// though (proven elsewhere in this file and untouched by this test) it
+// never reaches a real audience. Fails without migration 000019's synthetic
+// column and its exclusion in StatusCounts/List.
+func TestAdminCampaignPreview_Test_SyntheticRecipientInvisibleOnAdminScreens(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	mailer := &recordingCampaignMailer{}
+	srv := httptest.NewServer(adminCampaignPreviewMux(pool, mailer, nil))
+	defer srv.Close()
+	cleanupTestRecipientRows(t, pool)
+
+	admin := seedAdmin(t, pool, "admin-test-invisible@example.com")
+	seedSession(t, pool, admin, "admin-token-test-invisible")
+
+	c := seedPreviewCampaign(t, pool, "Invisible subject", "Invisible body")
+
+	subsStore := subscribers.NewStore(pool)
+	before, err := subsStore.StatusCounts(context.Background())
+	if err != nil {
+		t.Fatalf("StatusCounts before: %v", err)
+	}
+	_, totalBefore, err := subsStore.List(context.Background(), subscribers.ListFilter{})
+	if err != nil {
+		t.Fatalf("List before: %v", err)
+	}
+
+	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/campaigns/%d/test", srv.URL, c.ID), "admin-token-test-invisible", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+
+	// The synthetic row genuinely exists and is marked as such — this is
+	// not a test that nothing happened.
+	testRecipient, err := subsStore.FindByEmail(context.Background(), testRecipientEmail(admin))
+	if err != nil {
+		t.Fatalf("FindByEmail dedicated test recipient: %v", err)
+	}
+	if !testRecipient.Synthetic {
+		t.Error("dedicated test-recipient row is not marked synthetic")
+	}
+
+	after, err := subsStore.StatusCounts(context.Background())
+	if err != nil {
+		t.Fatalf("StatusCounts after: %v", err)
+	}
+	for status, n := range after {
+		if n != before[status] {
+			t.Errorf("StatusCounts[%q] = %d, want unchanged %d — the synthetic row must not inflate the admin screen's counts", status, n, before[status])
+		}
+	}
+
+	_, totalAfter, err := subsStore.List(context.Background(), subscribers.ListFilter{})
+	if err != nil {
+		t.Fatalf("List after: %v", err)
+	}
+	if totalAfter != totalBefore {
+		t.Errorf("List total = %d, want unchanged %d — the synthetic row must not appear in the admin subscriber table", totalAfter, totalBefore)
+	}
+
+	// Direct proof the row itself is unreachable through List, independent
+	// of any total-count race against concurrently running test packages:
+	// search for the exact address and confirm nothing comes back.
+	rows, matchTotal, err := subsStore.List(context.Background(), subscribers.ListFilter{Query: testRecipientEmail(admin)})
+	if err != nil {
+		t.Fatalf("List (filtered) after: %v", err)
+	}
+	if matchTotal != 0 || len(rows) != 0 {
+		t.Errorf("List filtered to the synthetic recipient's own address returned %d row(s), want 0", matchTotal)
+	}
+}
+
 func TestAdminCampaignPreview_Test_MarksTestSentAndAudits(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
 	mailer := &recordingCampaignMailer{}

@@ -39,6 +39,21 @@
 // AdminClearComplaint is the sole exception: it is the admin-only path
 // (#0032) allowed to move a subscriber out of complained, and it is the only
 // method that does not consult the guard.
+//
+// synthetic (added by migration 000019, #0046's review): true only for the
+// per-admin test-send recipient rows ensureTestRecipient
+// (internal/handlers/admin_campaign_preview.go) finds-or-creates. It is
+// consulted in exactly two places — StatusCounts and List, both of which
+// unconditionally exclude synthetic=true so a QA fixture can never inflate
+// the #0032 admin screen's counts or appear in its subscriber table — and
+// nowhere else. In particular it is NOT consulted by audienceWhere
+// (internal/mailing), which already excludes every non-'active' row by its
+// own status equality, nor by FindByManageToken/Unsubscribe, since a test
+// message's unsubscribe link must keep working exactly like a real one
+// (this package's whole reason for anchoring the token to a real row at
+// all). See IsReservedTestEmail below for the companion guard that keeps
+// the public subscribe endpoint from ever mailing a synthetic address's
+// deterministic, publicly-known domain in the first place.
 package subscribers
 
 import (
@@ -70,6 +85,32 @@ const (
 	SourceMailto      = "mailto"
 	SourceAdmin       = "admin"
 )
+
+// ReservedTestEmailDomain is the RFC 2606-reserved domain
+// #0046's ensureTestRecipient anchors every synthetic test-send recipient
+// row to (internal/handlers/admin_campaign_preview.go): guaranteed to never
+// resolve, so any attempt to actually deliver mail to an address at this
+// domain is a certain hard bounce. The single source of truth for that
+// domain string — see IsReservedTestEmail.
+const ReservedTestEmailDomain = "internal.opencircuitsf.test"
+
+// IsReservedTestEmail reports whether email's domain is
+// ReservedTestEmailDomain, matched case-insensitively and after trimming
+// surrounding whitespace to mirror this package's own lower(trim($1))
+// normalization (see the package doc comment). #0046's review (finding B):
+// the deterministic address format
+// (campaign-test+admin-<id>@internal.opencircuitsf.test) is public in this
+// package's own source, and admin ids are small, trivially enumerable
+// integers, so the public subscribe endpoint (internal/handlers/
+// subscribe.go) must refuse to mail ANY address at this domain — not only
+// ones a synthetic row already exists for — or an unauthenticated caller
+// could walk admin ids and trigger a guaranteed hard bounce against SES's
+// sender reputation on demand.
+func IsReservedTestEmail(email string) bool {
+	email = strings.ToLower(strings.TrimSpace(email))
+	suffix := "@" + ReservedTestEmailDomain
+	return strings.HasSuffix(email, suffix) && len(email) > len(suffix)
+}
 
 // ErrNotFound is returned when no subscribers row matches a lookup.
 var ErrNotFound = errors.New("subscribers: not found")
@@ -124,6 +165,9 @@ type Subscriber struct {
 	UnsubscribeSource       *string
 	CreatedAt               time.Time
 	UpdatedAt               time.Time
+	// Synthetic is migration 000019's flag — see the package doc comment.
+	// True only for #0046's per-admin test-send recipient rows.
+	Synthetic bool
 }
 
 // NewSignup is the input to Create: everything captured at the moment a
@@ -138,6 +182,11 @@ type NewSignup struct {
 	UTMMedium       string
 	UTMCampaign     string
 	ConfirmTTL      time.Duration
+	// Synthetic marks the created row migration 000019's synthetic column
+	// (see the package doc comment). Every real caller — the public
+	// subscribe endpoint (#0026) and the admin manual-add flow (#0032) —
+	// leaves this false; only #0046's ensureTestRecipient sets it true.
+	Synthetic bool
 }
 
 // Store is the data-access layer over the subscribers and
@@ -154,7 +203,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 const subscriberColumns = `id, email, status, confirm_token, confirm_sent_at,
 	confirm_expires_at, confirmed_at, already_subscribed_sent_at, manage_token,
 	host(signup_ip), signup_user_agent, utm_source, utm_medium, utm_campaign,
-	unsubscribed_at, unsubscribe_source, created_at, updated_at`
+	unsubscribed_at, unsubscribe_source, created_at, updated_at, synthetic`
 
 func scanSubscriber(row pgx.Row) (Subscriber, error) {
 	var sub Subscriber
@@ -162,7 +211,7 @@ func scanSubscriber(row pgx.Row) (Subscriber, error) {
 		&sub.ID, &sub.Email, &sub.Status, &sub.ConfirmToken, &sub.ConfirmSentAt,
 		&sub.ConfirmExpiresAt, &sub.ConfirmedAt, &sub.AlreadySubscribedSentAt, &sub.ManageToken,
 		&sub.SignupIP, &sub.SignupUserAgent, &sub.UTMSource, &sub.UTMMedium, &sub.UTMCampaign,
-		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.CreatedAt, &sub.UpdatedAt,
+		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.CreatedAt, &sub.UpdatedAt, &sub.Synthetic,
 	)
 	if err != nil {
 		return Subscriber{}, err
@@ -213,13 +262,14 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 		`INSERT INTO subscribers
 		     (email, status, confirm_token, confirm_sent_at, confirm_expires_at,
 		      manage_token, signup_ip, signup_user_agent,
-		      utm_source, utm_medium, utm_campaign, created_at, updated_at)
+		      utm_source, utm_medium, utm_campaign, created_at, updated_at, synthetic)
 		 VALUES
-		     (lower(trim($1)), $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+		     (lower(trim($1)), $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12)
 		 RETURNING `+subscriberColumns,
 		in.Email, StatusPending, confirmToken, confirmExpiresAt,
 		manageToken, nullIfEmpty(in.SignupIP), nullIfEmpty(in.SignupUserAgent),
 		nullIfEmpty(in.UTMSource), nullIfEmpty(in.UTMMedium), nullIfEmpty(in.UTMCampaign), now,
+		in.Synthetic,
 	)
 	sub, err := scanSubscriber(row)
 	if err != nil {
@@ -890,7 +940,14 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]Subscriber, int6
 
 	var (
 		joins []string
-		where []string
+		// synthetic = false is unconditional, not part of ListFilter: the
+		// #0032 admin screen this method serves must never show a #0046
+		// test-send fixture regardless of what status/interest/query the
+		// caller filters by — see the package doc comment on the synthetic
+		// column. Individual-row lookups (FindByEmail, FindByManageToken,
+		// GetByID) deliberately do NOT apply this exclusion; only the
+		// aggregate views (List, StatusCounts) do.
+		where = []string{`subscribers.synthetic = false`}
 		args  []any
 	)
 	if filter.InterestID != 0 {
@@ -957,13 +1014,20 @@ const qualifiedSubscriberColumns = `subscribers.id, subscribers.email, subscribe
 	subscribers.confirmed_at, subscribers.already_subscribed_sent_at, subscribers.manage_token,
 	host(subscribers.signup_ip), subscribers.signup_user_agent, subscribers.utm_source,
 	subscribers.utm_medium, subscribers.utm_campaign, subscribers.unsubscribed_at,
-	subscribers.unsubscribe_source, subscribers.created_at, subscribers.updated_at`
+	subscribers.unsubscribe_source, subscribers.created_at, subscribers.updated_at,
+	subscribers.synthetic`
 
 // StatusCounts returns the number of subscribers in each status, keyed by
 // the Status* constants. Every known status is present in the result even
 // when its count is zero, so the #0032 admin screen's "counts by status"
 // header always shows all five rather than silently omitting one with no
 // members yet.
+//
+// Excludes synthetic=true rows unconditionally, same as List — see the
+// package doc comment. Without this, #0046's review found every admin who
+// has ever run a campaign test send permanently inflates the "pending"
+// bucket by one, telling the operator someone is mid-double-opt-in who is
+// actually a QA fixture.
 func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 	counts := map[string]int64{
 		StatusPending:      0,
@@ -972,7 +1036,7 @@ func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 		StatusBounced:      0,
 		StatusComplained:   0,
 	}
-	rows, err := s.pool.Query(ctx, `SELECT status, count(*) FROM subscribers GROUP BY status`)
+	rows, err := s.pool.Query(ctx, `SELECT status, count(*) FROM subscribers WHERE synthetic = false GROUP BY status`)
 	if err != nil {
 		return nil, fmt.Errorf("subscribers: counting by status: %w", err)
 	}

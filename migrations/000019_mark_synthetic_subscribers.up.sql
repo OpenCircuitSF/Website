@@ -1,0 +1,16 @@
+-- #0046's review (phase 3, bounced): the per-admin test-send recipient row
+-- ensureTestRecipient creates (internal/handlers/admin_campaign_preview.go)
+-- must never appear on the admin subscribers screen — StatusCounts' counts
+-- header and List's table/pagination (#0032, web/src/views/Admin.svelte) —
+-- even though it also must never count toward a real audience.
+-- status='pending' alone did not distinguish that from a real signup
+-- mid-double-opt-in; a dedicated flag does, explicitly and greppably.
+--
+-- Does NOT touch audienceWhere (internal/mailing) — that predicate is
+-- already correct (status = 'active' equality) and must stay untouched;
+-- this column is consulted only by the admin-facing aggregate views and by
+-- the public subscribe endpoint's reserved-domain guard.
+--
+-- migrations/000018 is already applied and must not be edited (CLAUDE.md
+-- §1 — migrations are append-only).
+ALTER TABLE subscribers ADD COLUMN synthetic boolean NOT NULL DEFAULT false;
