@@ -742,7 +742,21 @@ func (w *Worker) failCampaignSES(ctx context.Context, campaignID int64, sesErr e
 // injection through an operator-editable setting — refusing is cheaper than
 // RFC 2047-encoding a value nobody has asked to internationalise.
 func (w *Worker) resolveFromHeader(ctx context.Context) string {
-	name, err := w.settings.GetSetting(ctx, settingDefaultFromName)
+	return ResolveFromHeader(ctx, w.settings, w.fromAddr)
+}
+
+// ResolveFromHeader implements the default_from_name -> Message.From
+// composition (see resolveFromHeader's own doc comment above for the exact
+// rules) as a standalone, exported function rather than only a Worker
+// method, so #0046's test-send handler
+// (internal/handlers/admin_campaign_preview.go) can build the identical
+// From header a real send would produce — without either duplicating the
+// safety checks (the printable-ASCII/quote/backslash refusal) or
+// constructing a full Worker just to reach them. resolveFromHeader itself
+// is kept as a thin wrapper so every existing worker_test.go call site
+// keeps compiling unchanged.
+func ResolveFromHeader(ctx context.Context, settings SettingsReader, fromAddr string) string {
+	name, err := settings.GetSetting(ctx, settingDefaultFromName)
 	if err != nil {
 		return ""
 	}
@@ -750,7 +764,7 @@ func (w *Worker) resolveFromHeader(ctx context.Context) string {
 	if name == "" || !isSafeFromDisplayName(name) {
 		return ""
 	}
-	return fmt.Sprintf("%q <%s>", name, w.fromAddr)
+	return fmt.Sprintf("%q <%s>", name, fromAddr)
 }
 
 // isSafeFromDisplayName reports whether name is safe to interpolate into a

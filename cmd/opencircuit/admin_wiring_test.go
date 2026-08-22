@@ -143,6 +143,18 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	adminCampaignsH := handlers.NewAdminCampaignsHandler(campaignsStore, nil, audienceStore, auditLogger)
 	// #0044: exercised the same way as adminCampaignsH above.
 	adminCampaignAudienceH := handlers.NewAdminCampaignAudienceHandler(audienceStore)
+	// #0046: exercised the same way as adminCampaignsH above, EXCEPT the
+	// mailer is deliberately nil (matching this test's own "not exercised"
+	// convention for real outbound sends) — POST .../test therefore answers
+	// 503 rather than attempting a real network call, which is still proof
+	// enough that RequireAdmin let the request through, the same standard
+	// this test already applies to POST /admin/subscribers's 503 above.
+	// POST .../preview needs no mailer at all and reaches the real handler
+	// (200, rendering targetCampaign below).
+	adminCampaignPreviewH := handlers.NewAdminCampaignPreviewHandler(
+		campaignsStore, subscribersStore, store, mailing.MarkdownCampaignRenderer{}, nil, auditLogger,
+		cfg.BaseURL, "lists.example.com", "hello@example.com",
+	)
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 	meH := handlers.NewMeHandler()
@@ -155,7 +167,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
@@ -269,7 +281,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			return status != http.StatusUnauthorized && status != http.StatusForbidden
 		}},
 	}
-	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH) {
+	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH) {
 		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID, targetCampaign.ID)
 		for _, c := range cases {
 			req, err := http.NewRequest(route.method, baseURL+path, nil)

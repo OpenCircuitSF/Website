@@ -133,9 +133,20 @@ type Campaign struct {
 	ScheduledAt  *time.Time
 	StartedAt    *time.Time
 	CompletedAt  *time.Time
-	CreatedBy    *int64
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// TestSentAt is email_campaigns.test_sent_at (migration 000018). nil
+	// means no test send has ever been delivered. #0046's
+	// AdminCampaignPreviewHandler.Test is the sole writer (MarkTestSent
+	// below); #0045's SendStore.GatherPreflight reads it directly with its
+	// own query rather than through scanCampaign, so it stays the single
+	// place both preflight call sites gather this fact from. Exposed here,
+	// on the Campaign struct itself, purely for the admin API's own
+	// visibility (campaignView in internal/handlers) — Update's own
+	// clearing logic (below) already writes this column without needing to
+	// read it back through this struct.
+	TestSentAt *time.Time
+	CreatedBy  *int64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // CampaignInput is the payload for Create.
@@ -176,13 +187,13 @@ func NewCampaignStore(pool *pgxpool.Pool) *CampaignStore {
 }
 
 const campaignColumns = `id, name, subject, preheader, body_md, status, audience_mode,
-	workshop_id, scheduled_at, started_at, completed_at, created_by, created_at, updated_at`
+	workshop_id, scheduled_at, started_at, completed_at, test_sent_at, created_by, created_at, updated_at`
 
 func scanCampaign(row pgx.Row) (Campaign, error) {
 	var c Campaign
 	if err := row.Scan(
 		&c.ID, &c.Name, &c.Subject, &c.Preheader, &c.BodyMD, &c.Status, &c.AudienceMode,
-		&c.WorkshopID, &c.ScheduledAt, &c.StartedAt, &c.CompletedAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&c.WorkshopID, &c.ScheduledAt, &c.StartedAt, &c.CompletedAt, &c.TestSentAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	); err != nil {
 		return Campaign{}, err
 	}
@@ -568,6 +579,44 @@ func (s *CampaignStore) Cancel(ctx context.Context, id int64) (Campaign, error) 
 		}
 	case err != nil:
 		return Campaign{}, fmt.Errorf("mailing: cancelling campaign %d: %w", id, err)
+	}
+	ids, err := s.interestIDs(ctx, id)
+	if err != nil {
+		return Campaign{}, err
+	}
+	updated.InterestIDs = ids
+	return updated, nil
+}
+
+// MarkTestSent stamps email_campaigns.test_sent_at = at, after a real test
+// send has actually been delivered (#0046,
+// internal/handlers/admin_campaign_preview.go's Test). This is the ONLY
+// write path for this column — #0045's send worker (worker_store.go's
+// GatherPreflight) only ever reads it, gating the no_test_send preflight
+// failure on it being non-nil. See CampaignUpdate's clearing logic (above,
+// in Update) for the only other place this column changes: a subsequent
+// subject/body_md edit clears it back to NULL so the gate re-arms.
+//
+// Deliberately does NOT require any particular status and does NOT bump
+// updated_at: a test send is not a content edit, and #0041's review already
+// established that test_sent_at must be compared for nilness only, never
+// against updated_at (a bare status bump would otherwise deadlock the
+// operator into re-testing forever — see worker_store.go's package doc
+// comment). An operator may re-verify a campaign's rendering at any time,
+// including after it has already sent, so this is never refused on status.
+func (s *CampaignStore) MarkTestSent(ctx context.Context, id int64, at time.Time) (Campaign, error) {
+	row := s.pool.QueryRow(ctx,
+		`UPDATE email_campaigns SET test_sent_at = $2
+		  WHERE id = $1
+		  RETURNING `+campaignColumns,
+		id, at,
+	)
+	updated, err := scanCampaign(row)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return Campaign{}, ErrCampaignNotFound
+	case err != nil:
+		return Campaign{}, fmt.Errorf("mailing: marking campaign %d test-sent: %w", id, err)
 	}
 	ids, err := s.interestIDs(ctx, id)
 	if err != nil {

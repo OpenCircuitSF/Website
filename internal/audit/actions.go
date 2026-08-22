@@ -206,6 +206,14 @@ const (
 	// materially different consequence — it stops further batches, it does
 	// not recall anything already sent (PRD §8's note).
 	ActionEmailCampaignCanceled = "email_campaign.canceled"
+	// ActionEmailCampaignTestSent is written by POST
+	// /admin/campaigns/{id}/test (#0046) after a real test message actually
+	// reached the mailer — never on a render/validation failure that stops
+	// the send before it happens. Metadata records the recipient address
+	// (always the requesting admin's own — see
+	// internal/handlers/admin_campaign_preview.go's doc comment on why an
+	// arbitrary address is never accepted) and the provider message id.
+	ActionEmailCampaignTestSent = "email_campaign.test_sent"
 
 	// Send-worker actions (#0045, PRD §6.6). Named email_campaign.* per the
 	// namespace #0041 established just above — NOT campaign.*, which was

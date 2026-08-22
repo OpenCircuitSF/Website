@@ -114,6 +114,7 @@ type decodedCampaign struct {
 	AudienceMode string  `json:"audience_mode"`
 	InterestIDs  []int64 `json:"interest_ids"`
 	ScheduledAt  *string `json:"scheduled_at"`
+	TestSentAt   *string `json:"test_sent_at"`
 }
 
 func decodeCampaign(t *testing.T, body []byte) decodedCampaign {

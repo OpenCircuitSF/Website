@@ -238,7 +238,14 @@ type campaignView struct {
 	ScheduledAt  *string `json:"scheduled_at,omitempty"`
 	StartedAt    *string `json:"started_at,omitempty"`
 	CompletedAt  *string `json:"completed_at,omitempty"`
-	CreatedBy    *int64  `json:"created_by,omitempty"`
+	// TestSentAt is email_campaigns.test_sent_at (migration 000018),
+	// surfaced starting with #0046 (the first issue to write it — #0041
+	// predates the column and left it out for that reason; see this
+	// field's absence noted in #0041's own carried-in review). nil means
+	// no test send has ever been delivered, or a subsequent subject/body_md
+	// edit cleared it (CampaignStore.Update's own CASE clause).
+	TestSentAt *string `json:"test_sent_at,omitempty"`
+	CreatedBy  *int64  `json:"created_by,omitempty"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
 }
@@ -263,6 +270,7 @@ func toCampaignView(c mailing.Campaign) campaignView {
 		ScheduledAt:  formatTimePtr(c.ScheduledAt),
 		StartedAt:    formatTimePtr(c.StartedAt),
 		CompletedAt:  formatTimePtr(c.CompletedAt),
+		TestSentAt:   formatTimePtr(c.TestSentAt),
 		CreatedBy:    c.CreatedBy,
 		CreatedAt:    c.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:    c.UpdatedAt.UTC().Format(time.RFC3339),

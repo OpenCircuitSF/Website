@@ -235,6 +235,23 @@ func servePostgres(cfg *config.Config) error {
 	adminCampaignsH := handlers.NewAdminCampaignsHandler(campaignsStore, handlers.NewCampaignPreflightChecker(sendStore), audienceStore, auditLogger)
 	adminCampaignAudienceH := handlers.NewAdminCampaignAudienceHandler(audienceStore)
 
+	// Admin campaign preview and test send (#0046, PRD §5.2/§6.6): POST
+	// .../preview (render without sending) and POST .../test (a real send
+	// to the requesting admin's own address, through a dedicated synthetic
+	// subscriber row — see internal/handlers/admin_campaign_preview.go's
+	// package doc comment). subscribersStore, store (mailing.SettingsReader
+	// for physical_address), and sesSender are all already constructed
+	// above for the subscribe/send-worker paths; reused here rather than
+	// building a second copy of any of them. sesSender is the SAME
+	// mailing.Mailer the send worker uses (including under MAILER_NOOP=true,
+	// where it is the log-only noOpMailingMailer) — never nil in
+	// production, so a test send behaves exactly like every other outbound
+	// path in this project under MAILER_NOOP.
+	adminCampaignPreviewH := handlers.NewAdminCampaignPreviewHandler(
+		campaignsStore, subscribersStore, store, mailing.MarkdownCampaignRenderer{}, sesSender, auditLogger,
+		cfg.BaseURL, cfg.EmailListDomain, cfg.EmailFrom,
+	)
+
 	// Public interests read (#0029, PRD §6.1/§7.3): GET /api/interests, the
 	// checkbox-grid source for SubscribeForm.svelte and PreferenceCenter.svelte.
 	// Deliberately calls ListActive (never ListAll, which is admin-only via
@@ -300,7 +317,7 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH, sendWorker,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -523,6 +540,13 @@ func serveDevMode(cfg *config.Config) error {
 	// route when nil, mirroring adminCampaignsH's own nil-guard.
 	var adminCampaignAudienceH *handlers.AdminCampaignAudienceHandler
 
+	// Admin campaign preview and test send (#0046) has the same devstore
+	// gap as adminCampaignAudienceH above — internal/devstore has no
+	// subscribers/email_campaigns backing. Passing nil leaves every other
+	// admin route working in STORAGE=json mode; adminRoutes omits its two
+	// routes when nil, mirroring adminCampaignAudienceH's own nil-guard.
+	var adminCampaignPreviewH *handlers.AdminCampaignPreviewHandler
+
 	// Public interests (#0029), confirm (#0030), preferences (#0031), and
 	// one-click unsubscribe (#0034) all have the same devstore gap as
 	// subscribeH/adminInterestsH above -- internal/devstore has no
@@ -552,7 +576,7 @@ func serveDevMode(cfg *config.Config) error {
 	var sendWorker *mailing.Worker
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH, sendWorker,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -578,7 +602,7 @@ type adminRoute struct {
 // test with no edit to the test itself required.
 //
 // adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH,
-// and adminCampaignAudienceH may be nil (dev mode / STORAGE=json has no
+// adminCampaignAudienceH, and adminCampaignPreviewH may be nil (dev mode / STORAGE=json has no
 // interests/subscribers-table backing yet — see mountAndServe's comment on
 // the call site); their routes are simply omitted, mirroring mountAndServe's
 // own former nil guard.
@@ -591,6 +615,7 @@ func adminRoutes(
 	adminSuppressionsH *handlers.AdminSuppressionsHandler,
 	adminCampaignsH *handlers.AdminCampaignsHandler,
 	adminCampaignAudienceH *handlers.AdminCampaignAudienceHandler,
+	adminCampaignPreviewH *handlers.AdminCampaignPreviewHandler,
 ) []adminRoute {
 	routes := []adminRoute{
 		{http.MethodGet, "/admin/settings", http.HandlerFunc(settingsH.List)},
@@ -639,6 +664,12 @@ func adminRoutes(
 			adminRoute{http.MethodGet, "/admin/campaigns/{id}/audience", http.HandlerFunc(adminCampaignAudienceH.Preview)},
 		)
 	}
+	if adminCampaignPreviewH != nil {
+		routes = append(routes,
+			adminRoute{http.MethodPost, "/admin/campaigns/{id}/preview", http.HandlerFunc(adminCampaignPreviewH.Preview)},
+			adminRoute{http.MethodPost, "/admin/campaigns/{id}/test", http.HandlerFunc(adminCampaignPreviewH.Test)},
+		)
+	}
 	return routes
 }
 
@@ -672,6 +703,7 @@ func mountAndServe(
 	adminSuppressionsH *handlers.AdminSuppressionsHandler,
 	adminCampaignsH *handlers.AdminCampaignsHandler,
 	adminCampaignAudienceH *handlers.AdminCampaignAudienceHandler,
+	adminCampaignPreviewH *handlers.AdminCampaignPreviewHandler,
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
 	subscribeH *handlers.SubscribeHandler,
@@ -745,7 +777,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 
