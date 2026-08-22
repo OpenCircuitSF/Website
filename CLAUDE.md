@@ -36,7 +36,7 @@ belong in this tracker.
 | `internal/` | `config`, `db`, `auth`, `audit`, `events`, `devstore`, `handlers`, `middleware`, `testdb` — per-package roles in [`docs/architecture.md`](docs/architecture.md) |
 | `migrations/` | `golang-migrate` up/down SQL pairs, contiguous `000001`–`000019` |
 | `web/` | Svelte 5 SPA; built to `web/dist/` and embedded via `//go:embed all:dist` |
-| `scripts/` | `dev.sh`, `sim.sh`, `deploy.sh`, `db-status.sh`, `db/`, `list-issues-by-phase` |
+| `scripts/` | `list-issues-by-phase` (the queue), `check.sh` (canonical verification), `testdb.sh` (per-agent test databases), `db-reset.sh` (rebuild a local DB), `dev.sh`, `sim.sh`, `deploy.sh`, `db-status.sh`, `db/` |
 | `deploy/` | Apache vhost and systemd unit assets |
 | `docs/` | Per-subsystem documentation, indexed by [`docs/README.md`](docs/README.md) |
 | `assets/`, `placeholder/` | Logo and brand assets; the static site currently in production |
@@ -133,14 +133,41 @@ run builds, or debug — that is what the subagents are for. Concretely:
   (`PRD §6.3`); read that section with `sed -n`.
 - Do not read `issues/Issues.md` in the orchestrator once the queue is running;
   each subagent loads it itself.
-- Dispatch one issue at a time unless the batching rule in §4 applies.
+- **Never enumerate the tracker by reading issue files.** Run
+  `scripts/list-issues-by-phase --open --no-color` — the whole queue in ~35
+  lines, grouped by phase, in phase order. Then read **only** the handful of
+  candidate issues you are choosing between, for their `## Relation` blocks.
+  Reading a hundred issue files to find the next one is the most expensive
+  mistake available to the orchestrator.
 - Never re-dispatch a phase to "double check" a passing result.
 
 ## 4. Working the queue
 
-Work issues in numeric order unless an issue's `## Relation` says otherwise.
-The one known exception already in the set: **`#0018` (logo assets) blocks
-`#0017` (site header)** despite the higher number.
+**Start with the script, every time:**
+
+```bash
+scripts/list-issues-by-phase --open --no-color    # the queue
+scripts/list-issues-by-phase --phase 6 --no-color # one phase
+```
+
+Candidates are rows marked `open` **or `in-progress`**. `wontfix` rows appear
+under `--open` too — skip them.
+
+**`in-progress` with nobody working it is abandoned work, and it comes first.**
+A subagent that bailed, was interrupted, or died after committing code but
+before review leaves the issue there, and nothing surfaces it except this
+script. It is closer to done than anything `open`, so pick it up and re-enter
+the pipeline at the phase it stopped at — usually review, not implementation.
+
+**Order by dependency, not by number.** The issue number is a filing order.
+Phases run in order and the script groups by phase; within a phase, read the
+candidates' `## Relation` blocks and pick the one whose dependencies are
+satisfied. The known exceptions already in the set: **`#0018` (logo assets)
+blocks `#0017` (site header)** despite the higher number, and in Phase 8
+**`#0126` blocks four of the other six**.
+
+Re-run the script after every resolution — reviewers file new issues, and the
+queue you listed ten minutes ago is stale.
 
 **Batching.** Dispatch issues individually by default. Batch only when a run of
 issues is one operation split several ways *and* they are not chained by
@@ -163,20 +190,44 @@ start Phase 3 with Phase 2 unreviewed.
 
 ## 5. Build and verify
 
+**Use `scripts/check.sh`.** It encodes every rule below so they cannot be
+forgotten: exports `TEST_DATABASE_URL`, forces `-p 2`, refuses `-count=N` for
+N>1, bounds output, prints `uptime` first, and audits the run for packages that
+reported no tests.
+
 ```bash
-# Backend
+ISSUE=0123 scripts/check.sh go ./internal/handlers/...  # scoped, own database
+ISSUE=0123 scripts/check.sh                             # Go + web, own database
+scripts/check.sh web                                    # npm run check + npm test
+scripts/check.sh all                                    # whole suite — batch review pass only
+
+scripts/testdb.sh template   # rebuild the test template after a migration change
+scripts/testdb.sh gc         # drop leftover per-agent databases
+scripts/db-reset.sh          # rebuild the local dev DB from migrations + seed admin
+
+./scripts/dev.sh             # Vite :5173 + Go API :8080, hot reload, STORAGE=json
+./scripts/dev.sh --built     # production embedding at :8080
+```
+
+**Always set `ISSUE=NNNN`** — it gives the run its own database and is what
+lets two agents test concurrently (§5a).
+
+> **`STORAGE=json` has no mailing list.** `internal/devstore` implements none
+> of interests, subscribers, campaigns, or suppressions, so `dev.sh`'s default
+> mode 404s `/api/interests`, returns 405 from `POST /api/subscribe`, and omits
+> the mailing admin routes from the route table. Fine for auth, settings,
+> audit, and marketing pages. Anything touching the mailing subsystem must run
+> against Postgres.
+
+The underlying commands, when you need one directly:
+
+```bash
 go build ./... 2>&1 | tail -40
 go vet ./...   2>&1 | tail -40
-go test ./... -p 2 2>&1 | tail -40   # -p 2 is mandatory; see §5a
-
-# Frontend (from web/)
-npm run check 2>&1 | tail -40   # svelte-check
-npm test      2>&1 | tail -40   # vitest run
-npm run build 2>&1 | tail -20   # vite build; must precede go build embedding dist/
-
-# Full local run
-./scripts/dev.sh            # Vite :5173 + Go API :8080, hot reload, STORAGE=json
-./scripts/dev.sh --built    # production embedding at :8080
+go test ./internal/handlers/... -p 2 2>&1 | tail -40
+(cd web && npm run check 2>&1 | tail -40)
+(cd web && npm test 2>&1 | tail -40)
+(cd web && npm run build 2>&1 | tail -20)   # must precede a go build that embeds dist/
 ```
 
 **Check the machine before you blame the code.** Run `uptime` first. On this
@@ -238,31 +289,92 @@ and their output must be read. Issues touching the SPA require `npm run check`
 and `npm test` in addition to the Go suite. Issues touching email rendering or
 the send worker must name the specific tests that ran in `## Verification`.
 
-## 5a. Concurrency — a hard cap, not a suggestion
+## 5a. Concurrency — bounded, and now genuinely parallel
 
 One orchestrator session spawned **197 subagents over 25 hours**, several in
 separate git worktrees, each recompiling the tree and running DB-backed suites
 against the same Postgres. It spent its own time killing orphaned `go test`
 processes and polling `pgrep` to keep its children from starving each other. The
-user killed the session by hand. This must not recur.
+user killed the session by hand. That must not recur — but the cap it produced
+was blunter than the actual constraint, and the actual constraint has been
+fixed.
 
-- **At most two subagents may run at once**, and only one of them may be running
-  tests. The queue in §4 already says dispatch one issue at a time — that is a
-  ceiling on *concurrency*, not just on issue order.
-- **Never run tests in a worktree.** Worktrees do not share the build cache, so
-  each one recompiles the whole tree; the cache reached 4.5 GB. Use a worktree
-  only for genuinely conflicting edits, and run the suite in the main checkout.
-- **Scope the run to what you changed.** `go test ./internal/handlers/... -p 2`
-  is the default. A full `go test ./...` is for a batch's single review pass, not
-  for every implementer, and never with `-race -count=N` layered on top.
+**What was really serialising the work.** `internal/testdb.Lock()` takes a
+session-level advisory lock on one fixed key (`0x53484F52544C4B`), and every
+DB-backed package's `TestMain` calls it. That lock is scoped to whatever
+database `TEST_DATABASE_URL` names. Two agents pointed at the *same* database
+queue behind each other; two agents pointed at *different* databases never
+contend at all. `scripts/testdb.sh` clones a fully-migrated template database in
+**~0.2s**, so every agent can cheaply have its own.
+
+- **At most three subagents at once.** Each must have its own test database
+  (`ISSUE=NNNN scripts/check.sh`, or `scripts/testdb.sh create NNNN`). An agent
+  that cannot get one shares the default and must then be the only one testing.
+- **Two of the three should be a pipelined pair**: while issue N is in review
+  (Opus), issue N+1's implementation (Sonnet) may start — *provided the two
+  touch disjoint files*. Check that before dispatching, not after.
+- **Do not exceed three**, and do not dispatch a fourth "while you wait". The
+  ceiling is about the machine and about your own ability to follow what is
+  happening, not just about the database.
+- **Worktrees share the Go build cache.** `go env GOCACHE` is one user-level
+  directory (`~/Library/Caches/go-build`), keyed by content, so a worktree does
+  *not* recompile from scratch — the earlier 4.5 GB figure was the cache growing
+  across many distinct builds, not evidence of non-sharing. Use a worktree when
+  two agents would otherwise edit the same files; it is not the expensive thing
+  the old rule assumed. Still prefer the main checkout when the work is
+  disjoint, because a worktree is one more place for a stray build artifact to
+  hide.
+- **Scope the run to what you changed.** `ISSUE=NNNN scripts/check.sh go
+  ./internal/handlers/...` is the default. A full suite run is for a batch's
+  single review pass, not for every implementer, and never with `-race -count=N`
+  layered on top.
 - **`-count=2` and higher are banned for flake-hunting.** A test that fails only
   under concurrent agent load is not flaky; the machine is busy. Re-running it
   N times just multiplies the load that caused it.
 - **Kill what you start.** Before finishing, `pgrep -f 'go test|\.test '` and
-  clean up your own processes. Drop any scratch database you created (§8b).
+  clean up your own processes. Drop any scratch database you created (§8b) —
+  `scripts/check.sh` does this for you on exit; `scripts/testdb.sh gc` sweeps
+  whatever leaked.
 
 If a verification genuinely needs the whole suite under `-race`, say so and ask
 first — on this tree that is a ~5 minute fully-loaded run, and it is not free.
+
+## 5b. Obstacles and permissions — clear them before dispatching
+
+Most time lost on this project has gone to obstacles rather than to the work: a
+role without `CREATEDB`, a stale template database, a port already bound, a
+credential that does not exist yet. They share a shape — **knowable in advance,
+cheap to clear then, expensive once an agent is halfway through a change.**
+
+**The orchestrator clears obstacles before dispatch. The planning subagent
+finds them.** A phase-1 pass writes `## Obstacles` next to `## Plan`: what each
+one is, whether it can be avoided, and the exact command or request that clears
+it. When no planning pass runs (§3 skips most issues), the orchestrator does the
+scan itself — it is a couple of `command -v` checks, not an investigation.
+
+What to check:
+
+| Class | Check | Not this |
+|---|---|---|
+| Database privileges | `psql -tAc "select rolcreatedb from pg_roles where rolname=current_user"` | falling back to a superuser connection |
+| Tool availability | `command -v migrate psql npm` | `find / -name …` (§5) |
+| Missing credentials | is SES configured? (§10 item 2) | discovering it at the verification step |
+| Shared resources | which ports, which database, `web/dist` (§8b) | assuming you are alone |
+| Approval-gated steps | anything destructive or outward-facing | stalling mid-change waiting for a human |
+
+**Never paper over a missing permission.** This already happened: an implementer
+needed a scratch database, found `opencircuit` lacked `CREATEDB`, and used a
+superuser connection to finish. The work completed and the missing grant stayed
+missing, so the next agent hit it too. Surface it, clear it once, record it.
+
+Grants this project needs locally, already applied:
+
+| Grant | Why | Undo |
+|---|---|---|
+| `ALTER ROLE opencircuit CREATEDB` | per-agent test databases (§5a) and scratch databases for guard-removal tests (§8b) | `ALTER ROLE opencircuit NOCREATEDB` |
+
+If an obstacle turns up mid-work and clearing it is outside the issue's scope,
+**file it**. One that cost you an hour will cost the next agent an hour.
 
 ## 6. Source material
 

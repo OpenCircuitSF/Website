@@ -177,15 +177,110 @@ Fresh context per phase is deliberate: each subagent reloads this guide and `CLA
 
 **Fable is not used on this project.** Planning runs on Opus. See `CLAUDE.md` §Model policy for which issues get a planning pass at all — most of this tracker's issues already carry acceptance criteria and skip phase 1.
 
+### Obstacles come first, in every phase
+
+Most of the time lost on this project has gone to obstacles, not to the work:
+a role without `CREATEDB`, a missing tool, a shared port already bound, a stale
+template database, a permission prompt nobody was there to answer. They share a
+shape — **they are knowable before the work starts and cheap to clear then,
+and expensive once an agent is halfway through a change.**
+
+**The planning subagent's first job is an obstacle scan**, written into the
+issue as `## Obstacles` alongside `## Plan`. For each one: what it is, whether
+it can be avoided, and if not, the exact command or request that clears it.
+Look for:
+
+- **Permissions and privileges** — a database role that cannot `CREATEDB`, a
+  file the agent cannot write, a keychain or credential prompt, an `sudo` step.
+- **Tool availability** — `migrate`, `psql`, `npm`, a linter. Ask the toolchain
+  (`command -v`), never scan the filesystem (`CLAUDE.md` §5).
+- **Credentials that do not exist yet** — SES is the standing example; an issue
+  that needs a real send cannot be verified today and must say so up front
+  rather than discovering it at the verification step.
+- **Shared mutable resources** — ports, the test database, `web/dist`. Name
+  which ones the work will touch and how it will avoid colliding (`CLAUDE.md`
+  §8b).
+- **Approval-gated actions** — anything destructive or outward-facing that will
+  stop and wait for a human. If a step needs approval, say so in the plan so
+  the orchestrator can request it **before** dispatching, not mid-change.
+
+**Request every needed permission up front.** An agent that discovers a missing
+grant halfway through has two bad options: stop with the work half-done, or
+work around it — and the workaround is usually worse than the obstacle. This
+actually happened: an implementer needed a scratch database, found the
+`opencircuit` role lacked `CREATEDB`, and fell back to a superuser connection
+to finish. That worked, and it hid the missing grant from the next agent, who
+hit it again. **Do not paper over a missing permission. Surface it, clear it
+once, and record that it is cleared.**
+
+Known grants this project needs locally, already applied:
+
+| Grant | Why | Undo |
+|---|---|---|
+| `ALTER ROLE opencircuit CREATEDB` | per-agent test databases (`scripts/testdb.sh`) and scratch databases for guard-removal tests (`CLAUDE.md` §8b) | `ALTER ROLE opencircuit NOCREATEDB` |
+
+**When an obstacle is hit anyway**, the rule is: clear it properly, or bail and
+say so. Never route around it in a way that leaves the next agent to rediscover
+it. If clearing it is outside the issue's scope, file it — an obstacle that
+cost you an hour will cost the next agent an hour too.
+
 ### Orchestrator: pick and dispatch
 
+**Never enumerate the tracker by reading issue files.** There are over a
+hundred and reading them to find the next one is the single most expensive
+mistake the orchestrator can make. Use the script:
+
+```bash
+scripts/list-issues-by-phase --open --no-color   # the queue, ~35 lines
+scripts/list-issues-by-phase --phase 6 --no-color
+```
+
+Piped or redirected it degrades to plain aligned columns — `number  status
+phase  title` — so it stays greppable. It groups by phase and phases run in
+order, which is the order that matters.
+
 1. **Refresh the pricing cache if stale.** If `issues/model-pricing.json` is missing or its `fetched` date isn't today, fetch current model prices and rewrite it (once per day). See "Token usage and cost tracking" below.
-2. List `issues/*.md` (skip `Issues.md`). Pick the lowest-numbered file whose status is `open` — it should already carry a `## Plan` from phase 1.
-3. **Dispatch a fresh Sonnet subagent** (phase 2) with the issue id and instructions to follow the implementation steps below.
-4. **When it returns, record its usage** and dispatch a fresh **Opus reviewer** (phase 3) for the same issue. Record the reviewer's usage when it returns.
-5. If the reviewer bounced the issue back to `open`, re-dispatch phase 2. Otherwise move on to the next open issue (or stop if only one was requested).
+2. **Run the script** to get the candidate set. Candidates are issues marked
+   `open` **or `in-progress`**. Note that `--open` also lists `wontfix` rows —
+   skip those; they are never going to be worked.
+3. **Pick up `in-progress` strays first.** An `in-progress` issue with no
+   subagent currently working it is abandoned work — a subagent bailed, was
+   interrupted, or died after committing code but before review. It is closer
+   to done than anything `open` and it is invisible to everyone until someone
+   resumes it. Read its `## Review notes` / `## Verification` to find out where
+   it stopped, then re-enter the pipeline at the right phase — usually phase 3,
+   not phase 2.
+4. **Then choose among the `open` candidates by the order of operations, not by
+   number.** The issue number is a filing order, not a dependency order. Read
+   **only the candidate issues' files** — their `## Relation` blocks name what
+   they depend on and block — and pick the one whose dependencies are already
+   satisfied. Reading the whole tracker to make this decision is exactly the
+   bloat this step exists to avoid.
+5. **Dispatch a fresh Sonnet subagent** (phase 2) with the issue id and instructions to follow the implementation steps below.
+6. **When it returns, record its usage** and dispatch a fresh **Opus reviewer** (phase 3) for the same issue. Record the reviewer's usage when it returns.
+7. If the reviewer bounced the issue, re-dispatch phase 2. Otherwise return to step 2 — **re-run the script**, since the queue has changed and a review may have filed new issues.
 
 Usage is recorded per phase — locate the subagent's transcript, sum token counts (deduped by `requestId`), note the model, compute cost, and append a `## Work log` row. Bails and bounces get a row too. If the user names a specific issue ("fix 0046"), dispatch phase 2 to that id directly.
+
+> **Recording usage is not optional, and it is the step most often skipped.**
+> One session dispatched twenty subagents across seven issues (~2.5M tokens)
+> and recorded a `## Work log` on exactly one of them, while every issue before
+> `#0013` carried full usage and cost rows. A work log that exists for the
+> early, cheap issues and stops at the expensive ones is worse than none — it
+> makes the project look cheaper than it was. Write the row when the subagent
+> returns, before dispatching the next one.
+
+### Reporting progress to the user
+
+- **`resolved` does not mean done.** It means work is finished and awaiting the
+  user's confirmation. Only the user sets `closed`.
+- **Never announce a phase as complete.** Say what is true: "N issues are
+  `resolved` and awaiting your confirmation; M are still open." A phase whose
+  issues are all `resolved` is not finished, and a review that files a new
+  issue into that phase has just made it less finished, not more.
+- Re-run `scripts/list-issues-by-phase` before reporting. It carries the
+  per-phase completion percentage, so there is no reason to compute one by
+  hand or from memory.
 
 ### Phase 2 — Implementation subagent (Sonnet): claim → fix → build → commit
 
@@ -246,30 +341,57 @@ Status flow: `open` (with `## Plan`) → `in-progress` → review → `resolved`
 
 ### Build / verify command for this project
 
-Backend:
+**Use `scripts/check.sh`.** It exists so every agent verifies the same way and
+so the things that are easy to forget cannot be forgotten — it exports
+`TEST_DATABASE_URL` (without it the DB-backed suites skip silently and a green
+run proves nothing), forces `-p 2`, refuses `-count=N` for N>1, bounds output,
+prints `uptime` first, and audits the run for packages that reported no tests.
 
 ```bash
-go build ./... 2>&1 | tail -40
-go vet ./...   2>&1 | tail -40
-go test ./...  2>&1 | tail -40
+ISSUE=0123 scripts/check.sh go ./internal/handlers/...   # scoped, own database
+ISSUE=0123 scripts/check.sh                              # Go + web, own database
+scripts/check.sh web                                     # npm run check + npm test
+scripts/check.sh all                                     # whole suite — a batch's review pass only
 ```
 
-Frontend (from `web/`):
+**Always set `ISSUE=NNNN`.** It gives the run its own PostgreSQL database,
+cloned from a template in about 0.2s and dropped afterwards. That is what lets
+two agents test at the same time — see `CLAUDE.md` §5a.
+
+Database management:
 
 ```bash
-npm run check 2>&1 | tail -40   # svelte-check — type errors
-npm test      2>&1 | tail -40   # vitest run
-npm run build 2>&1 | tail -20   # vite build; must precede `go build` embedding dist/
+scripts/testdb.sh template      # (re)build the template after a migration change
+scripts/testdb.sh list | gc     # see / drop leftover per-agent databases
+scripts/db-reset.sh             # rebuild the local dev DB from migrations + seed admin
 ```
 
 Full local run:
 
 ```bash
-./scripts/dev.sh            # Vite :5173 + Go API :8080, hot reload
+./scripts/dev.sh            # Vite :5173 + Go API :8080, hot reload — STORAGE=json
 ./scripts/dev.sh --built    # production embedding at :8080
 ```
 
-Bound the output — `tail -40` keeps the summary and drops the noise; re-run a single failing package unbounded when you need the detail. See `CLAUDE.md` §5.
+> **`STORAGE=json` has no mailing list.** The devstore has no implementation for
+> interests, subscribers, campaigns, or suppressions, so in that mode
+> `/api/interests` 404s, `POST /api/subscribe` returns 405, and the mailing
+> admin routes are absent from the route table entirely. It is fine for auth,
+> settings, audit, and the marketing pages. **Any issue touching the mailing
+> subsystem must be exercised against Postgres**, not `dev.sh`'s default.
+
+The underlying commands, when you need one directly — bound the output, and
+re-run a single failing package unbounded only when you need the detail:
+
+```bash
+go build ./... 2>&1 | tail -40
+go vet ./...   2>&1 | tail -40
+go test ./internal/handlers/... -p 2 2>&1 | tail -40
+(cd web && npm run check 2>&1 | tail -40)
+(cd web && npm test 2>&1 | tail -40)
+```
+
+See `CLAUDE.md` §5.
 
 **`go build ./...` passing is not verification.** Tests must actually execute and their output must be read. Issues touching the SPA require `npm run check` and `npm test` in addition to the Go suite. Issues touching email rendering or the send worker require the relevant unit tests to run and be named in `## Verification`.
 
