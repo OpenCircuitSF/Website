@@ -79,6 +79,12 @@ func TestAudit_SettingsUpdated(t *testing.T) {
 		 ON CONFLICT (key) DO UPDATE SET value = 'false'`); err != nil {
 		t.Fatalf("seed setting: %v", err)
 	}
+	// #0130: credsTestPool (unlike settingsTestPool) does not reset the
+	// settings table, and this test's PATCH flips registrations_enabled to
+	// "true" and leaves it there. Restore the full migration seed on
+	// cleanup so that value cannot leak into whichever test runs next
+	// under -shuffle=on (#0121's defect class, one table over).
+	t.Cleanup(func() { resetSettings(t, pool) })
 
 	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/admin/settings",
 		jsonBody(`{"key":"registrations_enabled","value":"true"}`))

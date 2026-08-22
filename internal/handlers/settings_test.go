@@ -69,14 +69,25 @@ func settingsTestPool(t *testing.T) *pgxpool.Pool {
 }
 
 // resetSettings restores the settings table to exactly the migration seed:
-// registrations_enabled=false (000004), physical_address=empty string (000008), and
+// registrations_enabled=false (000004), physical_address=empty string (000008),
 // #0039's soft_bounce_threshold_count=5 / soft_bounce_threshold_window_days=30
-// (000015). This isolates each settings test from values left by earlier
+// (000015), and #0045's max_send_rate=10 / default_from_name=empty string
+// (000018). This isolates each settings test from values left by earlier
 // tests (the auth suite flips the registrations_enabled row; #0039's own
 // tests may flip the threshold rows to exercise configurability). Callers
 // that want the DB left in the seeded state on teardown, not just on entry,
 // must register their own t.Cleanup(func() { resetSettings(t, pool) }) —
 // settingsTestPool does this already.
+//
+// #0130: this used to re-insert only four of the six migration-seeded rows,
+// so a DELETE FROM settings followed by this re-seed silently dropped
+// max_send_rate and default_from_name from opencircuit_test for good — the
+// next internal/handlers run left the table missing two rows migration
+// 000018 seeded. Nothing in this package failed because effectiveSendRate
+// falls back when max_send_rate is absent, but internal/mailing's own
+// tests (worker_test_helpers_test.go) assume those two rows are present as
+// GLOBAL rows seeded by migration. All six keys are re-inserted now so a
+// reset always leaves the table matching the migration seed exactly.
 func resetSettings(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
@@ -103,6 +114,16 @@ func resetSettings(t *testing.T, pool *pgxpool.Pool) {
 		`INSERT INTO settings (key, value, updated_at)
 		 VALUES ('soft_bounce_threshold_window_days', '30', now())`); err != nil {
 		t.Fatalf("seed soft_bounce_threshold_window_days setting: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO settings (key, value, updated_at)
+		 VALUES ('max_send_rate', '10', now())`); err != nil {
+		t.Fatalf("seed max_send_rate setting: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO settings (key, value, updated_at)
+		 VALUES ('default_from_name', '', now())`); err != nil {
+		t.Fatalf("seed default_from_name setting: %v", err)
 	}
 }
 
