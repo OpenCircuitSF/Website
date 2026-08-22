@@ -274,6 +274,47 @@ export interface CampaignPreviewResponse {
   text: string;
 }
 
+/**
+ * GET /admin/campaigns/{id}/stats response (#0049, PRD §11). Matches
+ * internal/handlers/admin_campaign_stats.go `campaignStatsResponse`.
+ *
+ * `counts` is the raw email_sends.status breakdown — all seven values from
+ * migration 000018's CHECK, `bounced`/`complained` included. `reconciled`
+ * is the SEPARATE, actually-meaningful bounce/complaint count, joined
+ * server-side from email_events by ses_message_id — see
+ * internal/mailing/campaign_stats.go's package doc comment for why
+ * `counts.bounced`/`counts.complained` read zero in practice (nothing in
+ * this codebase ever writes those two email_sends.status values) and
+ * lib/campaignStats.ts's `buildStatBuckets` for why the presentation layer
+ * substitutes `reconciled` in their place.
+ */
+export interface CampaignStatsResponse {
+  campaign_id: number;
+  status: string;
+  counts: {
+    queued: number;
+    sending: number;
+    sent: number;
+    failed: number;
+    bounced: number;
+    complained: number;
+    skipped: number;
+  };
+  reconciled: {
+    bounced: number;
+    complained: number;
+  };
+  failed_sends: CampaignFailedSend[];
+}
+
+/** One failed email_sends row, as listed by CampaignStatsResponse.failed_sends. */
+export interface CampaignFailedSend {
+  id: number;
+  email: string;
+  error?: string;
+  attempts: number;
+}
+
 /** GET/PATCH /api/preferences body (#0031). email is masked
  * ("b•••••n@gmail.com") except when the SPA already holds the unmasked
  * address from a fresh ConfirmResponse (see PreferenceCenter.svelte).

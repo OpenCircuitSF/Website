@@ -132,6 +132,7 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 			nil, /* adminCampaignAudienceH: not exercised */
 			nil, /* adminCampaignPreviewH: not exercised */
 			nil, /* adminCampaignPreflightH: not exercised */
+			nil, /* adminCampaignStatsH: not exercised */
 			nil, nil, subscribeH,
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */

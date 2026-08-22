@@ -13,11 +13,13 @@
     validateCampaignDraft,
     wasDemotedAfterScheduling,
   } from '../../lib/campaigns';
+  import { canViewCampaignStats } from '../../lib/campaignStats';
   import { formatDateTime } from '../../lib/admin';
   import type { Campaign } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
   import CampaignEditor from './CampaignEditor.svelte';
+  import CampaignStats from './CampaignStats.svelte';
 
   interface Props {
     onGoToSettings: () => void;
@@ -29,7 +31,15 @@
   let campaigns = $state<Campaign[]>([]);
   let loading = $state(true);
   let loadError = $state<string | null>(null);
-  let selectedId = $state<number | null>(null);
+
+  // Third arm on what was a binary list/editor swap (#0049's carried-in
+  // review finding): 'list' | 'editor' | 'stats'. activeCampaignId is
+  // meaningless in 'list' mode and always set alongside a transition into
+  // either of the other two — never read without checking mode first (see
+  // hasEditorSelection/hasStatsSelection below).
+  type CampaignsViewMode = 'list' | 'editor' | 'stats';
+  let mode = $state<CampaignsViewMode>('list');
+  let activeCampaignId = $state<number | null>(null);
 
   let creating = $state(false);
   let newName = $state('');
@@ -47,12 +57,16 @@
       statusBadgeClass: campaignStatusBadgeClass(c.status),
       demoted: wasDemotedAfterScheduling(c),
       updatedAtLabel: formatDateTime(c.updated_at),
+      canStats: canViewCampaignStats(c.status),
     })),
   );
-  let hasSelection = $derived(selectedId !== null);
-  // Non-null by construction whenever hasSelection is true — lets the
-  // template pass a plain number prop without a null-check of its own.
-  let selectedCampaignId = $derived(selectedId ?? -1);
+  let isEditorView = $derived(mode === 'editor');
+  let isStatsView = $derived(mode === 'stats');
+  let isListView = $derived(mode === 'list');
+  // Non-null by construction whenever isEditorView/isStatsView is true —
+  // lets the template pass a plain number prop without a null-check of its
+  // own (mirrors the pre-#0049 selectedCampaignId fallback).
+  let activeId = $derived(activeCampaignId ?? -1);
   let hasCampaigns = $derived(campaignRows.length > 0);
   let noCampaigns = $derived(campaignRows.length === 0);
   let listPanelNoPadding = $derived(hasCampaigns && !loading && loadError === null);
@@ -75,11 +89,18 @@
   });
 
   function openCampaign(id: number): void {
-    selectedId = id;
+    mode = 'editor';
+    activeCampaignId = id;
+  }
+
+  function openStats(id: number): void {
+    mode = 'stats';
+    activeCampaignId = id;
   }
 
   function backToList(): void {
-    selectedId = null;
+    mode = 'list';
+    activeCampaignId = null;
     void load();
   }
 
@@ -120,7 +141,8 @@
       });
       creating = false;
       campaigns = [created, ...campaigns];
-      selectedId = created.id;
+      mode = 'editor';
+      activeCampaignId = created.id;
     } catch (err) {
       createError = err instanceof ApiError ? err.message : 'Could not create this campaign.';
     } finally {
@@ -129,11 +151,15 @@
   }
 </script>
 
-{#if hasSelection}
-  {#key selectedCampaignId}
-    <CampaignEditor campaignId={selectedCampaignId} onBack={backToList} {onGoToSettings} {onGoToAudit} />
+{#if isEditorView}
+  {#key activeId}
+    <CampaignEditor campaignId={activeId} onBack={backToList} {onGoToSettings} {onGoToAudit} />
   {/key}
-{:else}
+{:else if isStatsView}
+  {#key activeId}
+    <CampaignStats campaignId={activeId} onBack={backToList} />
+  {/key}
+{:else if isListView}
   <Panel title="Campaigns" noPadding={listPanelNoPadding}>
     {#if loading}
       <p class="text-muted" role="status">Loading campaigns…</p>
@@ -150,6 +176,7 @@
               <th>Name</th>
               <th>Status</th>
               <th>Updated</th>
+              <th>Stats</th>
             </tr>
           </thead>
           <tbody>
@@ -165,6 +192,16 @@
                 </td>
                 <td><span class="badge {row.statusBadgeClass}">{row.statusLabel}</span></td>
                 <td>{row.updatedAtLabel}</td>
+                <td>
+                  <button
+                    type="button"
+                    class="link-button"
+                    disabled={!row.canStats}
+                    onclick={() => openStats(row.id)}
+                  >
+                    Stats
+                  </button>
+                </td>
               </tr>
             {/each}
           </tbody>
@@ -245,6 +282,11 @@
     font-family: var(--font);
     font-size: var(--fs-base);
     padding: 0;
+  }
+  .link-button:disabled {
+    color: var(--text-muted);
+    cursor: default;
+    text-decoration: none;
   }
   .modal-backdrop {
     position: fixed;

@@ -20,6 +20,7 @@ import type {
   PreflightResponse,
   AudiencePreviewResponse,
   CampaignPreviewResponse,
+  CampaignStatsResponse,
 } from './types';
 import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
 import type { UnsubscribeResult } from './unsubscribe';
@@ -618,6 +619,16 @@ export function sendCampaign(id: number, confirmCount: number): Promise<Campaign
  */
 export function cancelCampaign(id: number): Promise<Campaign> {
   return apiPost<Campaign>(`/admin/campaigns/${id}/cancel`);
+}
+
+/**
+ * GET /admin/campaigns/{id}/stats — the per-campaign outcome screen (admin
+ * only, #0049): counts by send status, bounce/complaint counts reconciled
+ * from email_events, and failed sends with their error messages. Read-only;
+ * writes no audit row (matches getCampaignPreflight/getCampaignAudience).
+ */
+export function getCampaignStats(id: number): Promise<CampaignStatsResponse> {
+  return apiGet<CampaignStatsResponse>(`/admin/campaigns/${id}/stats`);
 }
 
 // ── Public mailing-list journey: signup, confirm, preferences (#0029-#0031) ──
