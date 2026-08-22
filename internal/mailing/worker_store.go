@@ -242,10 +242,18 @@ func (s *SendStore) ClaimResume(ctx context.Context) (*claimedCampaign, error) {
 // OrphanSweep resets rows stuck in 'sending' for campaignID back to
 // 'queued' — but ONLY rows whose claim is stale: claimed_at IS NULL (a
 // 'sending' row that never went through ClaimRow) or claimed_at is older
-// than staleBefore. Run once per claim (start or resume), before draining.
+// than staleAfter's window. Run once per claim (start or resume), before
+// draining.
 //
-// staleBefore is the caller's job, not this method's (#0122) — worker.go
-// computes it as w.now().Add(-orphanStaleAfter), where orphanStaleAfter is
+// staleAfter is a plain duration, not an absolute cutoff — the caller
+// (worker.go's drainCampaign) hands over orphanStaleAfter itself and this
+// statement computes `claimed_at < now() - $2::interval` entirely in
+// Postgres. An earlier version of this fix computed the cutoff from the Go
+// process's own clock (w.now()) and compared it against claimed_at, which
+// Postgres stamps with ITS clock — correct only because both run on the
+// same host today, and undocumented as a dependency. Comparing against
+// Postgres's own now() on both sides of the predicate removes the
+// dependency entirely rather than merely noting it. orphanStaleAfter is
 // derived from the two hard timeouts (sendMessageTimeout,
 // writeStatusTimeout) that already bound how long a LIVE claim can
 // legitimately sit in 'sending'. Before #0122 this statement had no
@@ -255,12 +263,12 @@ func (s *SendStore) ClaimResume(ctx context.Context) (*claimedCampaign, error) {
 // (TestWorker_TwoWorkersOneCampaign_OrphanSweepDuringLiveClaim_NoDuplicate).
 // Returns the number of rows reset (0 in the ordinary case where nothing
 // crashed).
-func (s *SendStore) OrphanSweep(ctx context.Context, campaignID int64, staleBefore time.Time) (int64, error) {
+func (s *SendStore) OrphanSweep(ctx context.Context, campaignID int64, staleAfter time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE email_sends SET status = 'queued'
 		  WHERE campaign_id = $1 AND status = 'sending'
-		    AND (claimed_at IS NULL OR claimed_at < $2)`,
-		campaignID, staleBefore,
+		    AND (claimed_at IS NULL OR claimed_at < now() - $2::interval)`,
+		campaignID, staleAfter,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("mailing: sweeping orphaned sends for campaign %d: %w", campaignID, err)

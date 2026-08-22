@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -178,7 +179,7 @@ func TestWorker_TwoWorkersOneCampaign_EachRecipientSentExactlyOnce(t *testing.T)
 				t.Errorf("ClaimResume: c=%+v err=%v", c, err)
 				return
 			}
-			if err := w.drainCampaign(context.Background(), c); err != nil {
+			if _, err := w.drainCampaign(context.Background(), c); err != nil {
 				t.Errorf("drainLoop: %v", err)
 			}
 		}()
@@ -238,7 +239,7 @@ func TestWorker_TwoWorkersOneCampaign_OrphanSweepDuringLiveClaim_NoDuplicate(t *
 				t.Errorf("probe ClaimResume: %+v %v", c2, err)
 				return false
 			}
-			if err := w2.drainCampaign(context.Background(), c2); err != nil {
+			if _, err := w2.drainCampaign(context.Background(), c2); err != nil {
 				t.Errorf("probe drainCampaign: %v", err)
 			}
 		}
@@ -250,7 +251,7 @@ func TestWorker_TwoWorkersOneCampaign_OrphanSweepDuringLiveClaim_NoDuplicate(t *
 	if err != nil || c1 == nil {
 		t.Fatalf("ClaimResume: c=%+v err=%v", c1, err)
 	}
-	if err := w1.drainCampaign(context.Background(), c1); err != nil {
+	if _, err := w1.drainCampaign(context.Background(), c1); err != nil {
 		t.Errorf("drainLoop: %v", err)
 	}
 
@@ -266,6 +267,90 @@ func TestWorker_TwoWorkersOneCampaign_OrphanSweepDuringLiveClaim_NoDuplicate(t *
 	counts := countSendStatuses(t, pool, campaignID)
 	if counts["sent"] != n {
 		t.Errorf("email_sends sent count = %d, want %d (statuses: %v)", counts["sent"], n, counts)
+	}
+}
+
+// TestWorker_Run_ResumeWithLiveOrphan_DoesNotBusyLoop is #0122's fifth
+// acceptance criterion (added by review, 2026-08-21): a resume pass that
+// neither sent nor completed anything must not busy-spin Run.
+//
+// Before this pass, claimAndDrain reported processed=true for every resume
+// unconditionally, so Run's `if processed { continue }` (worker.go) never
+// reached the poll wait. With a live orphan present and not yet stale —
+// exactly what a worker restart within orphanStaleAfter of a campaign's last
+// claim produces — every pass swept 0 rows, claimed 0 rows, and
+// CompleteIfDone correctly refused (the orphan still counts as 'sending'):
+// an unthrottled loop against Postgres. The review measured this
+// independently against a real database at ~28,000 transactions/sec,
+// sustained for the whole ~70s orphanStaleAfter window and independent of
+// pollInterval, because the spin path never reached time.After.
+//
+// This asserts a COUNT, not a deadline (CLAUDE.md §5 — a day was already
+// spent undoing exactly that class of test): claimAndDrainHook counts every
+// pass Run performs while it runs for a FIXED wall-clock window against a
+// campaign in precisely this state. A throttled worker performs at most
+// window/pollInterval passes, give or take scheduling slack; the busy loop
+// this test reproduces (revert this pass; leave OrphanSweep's staleness
+// check intact) performs orders of magnitude more in the same window,
+// regardless of how loaded or fast the machine is — the assertion is on how
+// many passes happened, never on how long anything took.
+func TestWorker_Run_ResumeWithLiveOrphan_DoesNotBusyLoop(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	forceSending(t, pool, campaignID)
+
+	// One row claimed through the real ClaimRow path — status='sending',
+	// claimed_at=now() — and nothing else queued: ClaimBatch always returns
+	// empty and CompleteIfDone always refuses (the orphan still counts as
+	// 'sending'). This is exactly the "resumed and did nothing" pass the fix
+	// must throttle, not the "resumed and sent something" pass that must
+	// keep polling immediately.
+	sendID, _, _ := seedQueuedSend(t, pool, campaignID)
+	store := NewSendStore(pool, NewAudienceStore(pool), dbSettings{pool: pool}, nil, testWorkerBaseURL, testWorkerListDomain, testWorkerReplyTo)
+	if _, claimed, err := store.ClaimRow(context.Background(), sendID); err != nil || !claimed {
+		t.Fatalf("ClaimRow: claimed=%v err=%v", claimed, err)
+	}
+
+	mailer := &RecordingMailer{}
+	w := newTestWorker(t, pool, mailer)
+	w.pollInterval = 20 * time.Millisecond // realistic relative to the window below, not shrunk to zero
+
+	var passes int32
+	claimAndDrainHook = func() { atomic.AddInt32(&passes, 1) }
+	t.Cleanup(func() { claimAndDrainHook = nil })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		w.Run(ctx)
+		close(done)
+	}()
+
+	const window = 250 * time.Millisecond
+	time.Sleep(window)
+	cancel()
+	<-done
+
+	got := atomic.LoadInt32(&passes)
+	t.Logf("claimAndDrain ran %d times in %s (pollInterval=%s)", got, window, w.pollInterval)
+	// window/pollInterval = 250ms/20ms = 12.5 ticks; 20 is several ticks of
+	// slack for scheduling jitter on a busy CI box, still nowhere near what
+	// a busy loop produces (thousands in the same 250ms — the review's
+	// ~28,000/sec figure is ~7,000 in this window).
+	const maxPasses = 20
+	if got > maxPasses {
+		t.Fatalf("claimAndDrain ran %d times in %s with pollInterval=%s (want <= %d) — Run is busy-looping instead of falling back to the poll ticker on a resume that did nothing", got, window, w.pollInterval, maxPasses)
+	}
+	if got < 1 {
+		t.Fatalf("claimAndDrain ran %d times, want at least 1 — the worker never even attempted the resume", got)
+	}
+
+	// The orphan must still be untouched — it is not yet stale, and the fix
+	// must not have "solved" the spin by prematurely sweeping it.
+	if got := sendRowStatus(t, pool, sendID); got != "sending" {
+		t.Errorf("orphan row status = %q, want sending (not yet stale, must not have been swept)", got)
 	}
 }
 
@@ -307,7 +392,7 @@ func TestWorker_AbortBetweenSESAcceptAndStatusWrite_ResumesWithOneDuplicate(t *t
 	if err != nil || c1 == nil {
 		t.Fatalf("ClaimResume: c=%+v err=%v", c1, err)
 	}
-	err = w1.drainCampaign(context.Background(), c1)
+	_, err = w1.drainCampaign(context.Background(), c1)
 	if err == nil || !errors.Is(err, errAbortedForTest) {
 		t.Fatalf("first drainLoop error = %v, want errAbortedForTest", err)
 	}
@@ -322,16 +407,16 @@ func TestWorker_AbortBetweenSESAcceptAndStatusWrite_ResumesWithOneDuplicate(t *t
 	// orphanStaleAfter's window, so a resume within that window (as this
 	// test's immediate, real-time resume is) would otherwise leave
 	// recipient #4's row stuck 'sending' forever — the exact bug this fix
-	// closes, applied to a genuine crash instead of a live worker. Shifting
-	// w2's own clock forward simulates the real-world case this test
-	// stands in for: a restart that happens well after the crash, not one
-	// that happens in the same millisecond a unit test runs in.
-	w2.now = func() time.Time { return time.Now().Add(orphanStaleAfter + time.Minute) }
+	// closes, applied to a genuine crash instead of a live worker.
+	// forceOrphansStale simulates the real-world case this test stands in
+	// for: a restart that happens well after the crash, not one that
+	// happens in the same millisecond a unit test runs in.
+	forceOrphansStale(t)
 	c2, err := w2.store.ClaimResume(context.Background())
 	if err != nil || c2 == nil {
 		t.Fatalf("second ClaimResume: c=%+v err=%v", c2, err)
 	}
-	if err := w2.drainCampaign(context.Background(), c2); err != nil {
+	if _, err := w2.drainCampaign(context.Background(), c2); err != nil {
 		t.Fatalf("second drainLoop: %v", err)
 	}
 
@@ -389,7 +474,7 @@ func TestWorker_AbortBeforeSESCall_ResumesWithNoDuplicate(t *testing.T) {
 	if err != nil || c1 == nil {
 		t.Fatalf("ClaimResume: c=%+v err=%v", c1, err)
 	}
-	err = w1.drainCampaign(context.Background(), c1)
+	_, err = w1.drainCampaign(context.Background(), c1)
 	if err == nil || !errors.Is(err, errAbortedForTest) {
 		t.Fatalf("first drainLoop error = %v, want errAbortedForTest", err)
 	}
@@ -402,14 +487,14 @@ func TestWorker_AbortBeforeSESCall_ResumesWithNoDuplicate(t *testing.T) {
 	// See the identical comment in
 	// TestWorker_AbortBetweenSESAcceptAndStatusWrite_ResumesWithOneDuplicate
 	// — #0122's fix makes OrphanSweep time-gated, so this test's immediate
-	// real-time resume needs w2's clock shifted forward to simulate a
-	// restart that happens after orphanStaleAfter's window has elapsed.
-	w2.now = func() time.Time { return time.Now().Add(orphanStaleAfter + time.Minute) }
+	// real-time resume needs forceOrphansStale to simulate a restart that
+	// happens after orphanStaleAfter's window has elapsed.
+	forceOrphansStale(t)
 	c2, err := w2.store.ClaimResume(context.Background())
 	if err != nil || c2 == nil {
 		t.Fatalf("second ClaimResume: c=%+v err=%v", c2, err)
 	}
-	if err := w2.drainCampaign(context.Background(), c2); err != nil {
+	if _, err := w2.drainCampaign(context.Background(), c2); err != nil {
 		t.Fatalf("second drainLoop: %v", err)
 	}
 
@@ -450,7 +535,7 @@ func TestWorker_UnsubscribedBetweenMaterializeAndSend_IsSkippedNotMailed(t *test
 	if err != nil || c == nil {
 		t.Fatalf("ClaimResume: c=%+v err=%v", c, err)
 	}
-	if err := w.drainCampaign(context.Background(), c); err != nil {
+	if _, err := w.drainCampaign(context.Background(), c); err != nil {
 		t.Fatalf("drainLoop: %v", err)
 	}
 
@@ -502,7 +587,7 @@ func TestWorker_AllFourSuppressionReasons_AreSkipped(t *testing.T) {
 	if err != nil || c == nil {
 		t.Fatalf("ClaimResume: c=%+v err=%v", c, err)
 	}
-	if err := w.drainCampaign(context.Background(), c); err != nil {
+	if _, err := w.drainCampaign(context.Background(), c); err != nil {
 		t.Fatalf("drainLoop: %v", err)
 	}
 
@@ -544,7 +629,7 @@ func TestWorker_SentMessagesContainNoTrackingPixel(t *testing.T) {
 	if err != nil || c == nil {
 		t.Fatalf("ClaimResume: c=%+v err=%v", c, err)
 	}
-	if err := w.drainCampaign(context.Background(), c); err != nil {
+	if _, err := w.drainCampaign(context.Background(), c); err != nil {
 		t.Fatalf("drainLoop: %v", err)
 	}
 
@@ -610,7 +695,7 @@ func TestWorker_MultiRecipientBatch_EachMessageCarriesOwnFreshToken(t *testing.T
 	if err != nil || c == nil {
 		t.Fatalf("ClaimResume: c=%+v err=%v", c, err)
 	}
-	if err := w.drainCampaign(context.Background(), c); err != nil {
+	if _, err := w.drainCampaign(context.Background(), c); err != nil {
 		t.Fatalf("drainLoop: %v", err)
 	}
 
@@ -684,7 +769,7 @@ func TestWorker_RefusesCampaignWhenReplyToBlank(t *testing.T) {
 	if err != nil || c == nil {
 		t.Fatalf("ClaimResume: c=%+v err=%v", c, err)
 	}
-	if err := w.drainCampaign(context.Background(), c); err != nil {
+	if _, err := w.drainCampaign(context.Background(), c); err != nil {
 		t.Fatalf("drainLoop: %v", err)
 	}
 	if len(mailer.Sent()) != 0 {
@@ -819,7 +904,7 @@ func TestWorker_ThreeRetryableFailuresMarkRowFailed(t *testing.T) {
 		if c == nil {
 			break
 		}
-		if err := w.drainCampaign(context.Background(), c); err != nil {
+		if _, err := w.drainCampaign(context.Background(), c); err != nil {
 			t.Fatalf("drainLoop pass %d: %v", i, err)
 		}
 		if sendRowStatus(t, pool, badID) == "failed" {

@@ -49,7 +49,26 @@
 // row whose claimed_at predates orphanStaleAfter's window, which is sized
 // to exceed how long a LIVE claim can possibly take (sendMessageTimeout +
 // writeStatusTimeout), so a row claimed moments ago is never mistaken for
-// one abandoned by a crash.
+// one abandoned by a crash. The cutoff is computed entirely by Postgres
+// (`claimed_at < now() - $2::interval`, worker_store.go's OrphanSweep) —
+// Run hands over the orphanStaleAfter duration, not a Go-clock timestamp, so
+// there is no dependency on the app host's and the database's clocks
+// agreeing.
+//
+// # A resume pass that did nothing must not busy-loop (#0122, review pass 2)
+//
+// ClaimResume takes priority every poll (see Run's and claimAndDrain's own
+// doc comments): while a campaign is 'sending' with a not-yet-stale orphan
+// and nothing else queued, a resume pass claims nothing, sends nothing, and
+// CompleteIfDone correctly refuses (the orphan still counts as 'sending').
+// Before this section existed, claimAndDrain reported that pass as
+// "processed" unconditionally, so Run's `if processed { continue }` re-ran
+// it immediately with no ticker wait — a busy loop against Postgres for the
+// entire orphanStaleAfter window (measured at ~28,000 transactions/sec).
+// claimAndDrain, drainCampaign, and drainLoop now each report whether the
+// pass did anything (materialized an audience, failed/completed the
+// campaign, or claimed at least one row) rather than merely "ran without
+// error"; Run only skips the poll wait when that is true.
 package mailing
 
 import (
@@ -144,7 +163,6 @@ type Worker struct {
 	envMaxSendRate, batchSize              int
 
 	pollInterval time.Duration
-	now          func() time.Time
 	sleep        func(context.Context, time.Duration) error
 	log          *slog.Logger
 
@@ -250,7 +268,6 @@ func NewWorker(deps WorkerDeps) (*Worker, error) {
 		envMaxSendRate: envMaxSendRate,
 		batchSize:      batchSize,
 		pollInterval:   pollInterval,
-		now:            time.Now,
 		sleep:          sleepWithContext,
 		log:            log,
 		stopCh:         make(chan struct{}),
@@ -262,6 +279,14 @@ func NewWorker(deps WorkerDeps) (*Worker, error) {
 // done. Each pass claims at most one campaign (a resume takes priority over
 // a fresh start) and drains it to completion before returning to the
 // ticker — there is no concurrency across campaigns within one Worker.
+//
+// processed (claimAndDrain's return) means the pass did something —
+// claimed, materialized, sent, completed, failed, or demoted a campaign —
+// not merely "ran without error". A pass that resumed a campaign but found
+// nothing yet claimable (a live orphan not yet stale, nothing queued) is
+// NOT processed, and falls through to the ordinary pollInterval wait below
+// instead of looping immediately — see this file's package doc comment,
+// "A resume pass that did nothing must not busy-loop" (#0122).
 func (w *Worker) Run(ctx context.Context) {
 	defer close(w.doneCh)
 	for {
@@ -305,18 +330,33 @@ func (w *Worker) Stop(ctx context.Context) error {
 	}
 }
 
+// claimAndDrainHook, when non-nil, is called at the start of every
+// claimAndDrain pass — a test-only counting seam (the same nil-in-production
+// pattern as sendPreCrashHook/sendPostCrashHook above) for
+// TestWorker_Run_ResumeWithLiveOrphan_DoesNotBusyLoop (#0122, review pass 2),
+// which asserts a BOUNDED PASS COUNT over a fixed window to prove Run no
+// longer busy-loops on a resume that did nothing. Always nil in production.
+var claimAndDrainHook func()
+
 // claimAndDrain performs one poll pass: resume a campaign already 'sending'
 // if one exists, else evaluate the next due 'scheduled' campaign against the
 // gate and either demote it or claim and drain it. Returns processed=true
-// when this pass did something (claimed, drained, or demoted a campaign) so
-// Run can poll again immediately instead of waiting a full tick.
+// when this pass did something real (claimed, materialized, sent, completed,
+// failed, or demoted a campaign) so Run can poll again immediately instead
+// of waiting a full tick. A resume that found nothing yet claimable — a live
+// orphan not yet stale, nothing queued — is processed=false: see this file's
+// package doc comment, "A resume pass that did nothing must not busy-loop"
+// (#0122).
 func (w *Worker) claimAndDrain(ctx context.Context) (bool, error) {
+	if claimAndDrainHook != nil {
+		claimAndDrainHook()
+	}
 	resumed, err := w.store.ClaimResume(ctx)
 	if err != nil {
 		return false, err
 	}
 	if resumed != nil {
-		return true, w.drainCampaign(ctx, resumed)
+		return w.drainCampaign(ctx, resumed)
 	}
 
 	candidateID, ok, err := w.store.PeekScheduledCandidate(ctx)
@@ -364,7 +404,7 @@ func (w *Worker) claimAndDrain(ctx context.Context) (bool, error) {
 		// between our gate evaluation and this UPDATE.
 		return false, nil
 	}
-	return true, w.drainCampaign(ctx, started)
+	return w.drainCampaign(ctx, started)
 }
 
 // drainCampaign runs the orphan sweep, materializes the audience exactly
@@ -372,32 +412,34 @@ func (w *Worker) claimAndDrain(ctx context.Context) (bool, error) {
 // means this is the first claim (fresh start or a resume of a crash that
 // happened before materialization finished); non-nil means either a normal
 // resume or a fresh start whose materialization already completed in an
-// earlier attempt.
-func (w *Worker) drainCampaign(ctx context.Context, c *claimedCampaign) error {
-	// staleBefore is computed from THIS worker's own clock (w.now, injectable
-	// in tests) — see orphanStaleAfter's doc comment (#0122). Only a row
-	// claimed before staleBefore is treated as abandoned; a row a live
-	// worker claimed a moment ago is left alone.
-	staleBefore := w.now().Add(-orphanStaleAfter)
-	if _, err := w.store.OrphanSweep(ctx, c.ID, staleBefore); err != nil {
-		return err
+// earlier attempt. The bool return reports whether this call did anything
+// real — see claimAndDrain's doc comment (#0122).
+func (w *Worker) drainCampaign(ctx context.Context, c *claimedCampaign) (bool, error) {
+	// The cutoff is computed by Postgres itself (worker_store.go's
+	// OrphanSweep: `claimed_at < now() - $2::interval`), not by comparing
+	// this process's clock against claimed_at — see orphanStaleAfter's doc
+	// comment and this file's package doc comment (#0122).
+	if _, err := w.store.OrphanSweep(ctx, c.ID, orphanStaleAfter); err != nil {
+		return false, err
 	}
 
+	didWork := false
 	if c.MaterializedAt == nil {
 		aud := Audience{Mode: c.AudienceMode, InterestIDs: c.InterestIDs}
 		res, err := w.audience.Materialize(ctx, c.ID, aud)
 		if err != nil {
-			return err
+			return false, err
 		}
 		didStamp, err := w.store.SetMaterializedAt(ctx, c.ID)
 		if err != nil {
-			return err
+			return false, err
 		}
 
 		total, _, _, _, _, _, err := w.store.CountEmailSends(ctx, c.ID)
 		if err != nil {
-			return err
+			return false, err
 		}
+		didWork = true
 
 		if didStamp {
 			// campaign.send_started is written ONLY on the start claim,
@@ -410,36 +452,42 @@ func (w *Worker) drainCampaign(ctx context.Context, c *claimedCampaign) error {
 		if total == 0 {
 			// Preview said non-zero seconds earlier; zero rows here is
 			// genuinely anomalous (§4 of this issue's plan).
-			return w.failCampaign(ctx, c.ID, "empty_audience")
+			return true, w.failCampaign(ctx, c.ID, "empty_audience")
 		}
 	}
 
-	return w.drainLoop(ctx, c)
+	loopWork, err := w.drainLoop(ctx, c)
+	return didWork || loopWork, err
 }
 
 // drainLoop re-reads physical_address and reply-to fresh for this campaign
 // (never cached at boot — CLAUDE.md §9) and processes batches until nothing
 // remains queued, the drain is stopped by Stop, or a terminalCampaign-class
-// error halts it.
-func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) error {
+// error halts it. The bool return reports whether this call did anything
+// real: failed or completed the campaign, or claimed at least one batch row
+// — never true for the "nothing queued, orphan not yet stale, campaign not
+// done" pass that motivated this return value (#0122; see this file's
+// package doc comment).
+func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) (bool, error) {
 	physicalAddress, settingsErr := w.settings.GetSetting(ctx, settingPhysicalAddress)
 	if settingsErr != nil || strings.TrimSpace(physicalAddress) == "" {
 		// Refusing is always correct (CLAUDE.md §9) — this branch is what
 		// makes a resume whose address went blank after the original start
 		// claim stop rather than send non-compliant mail.
-		return w.failCampaign(ctx, c.ID, "physical_address_missing")
+		return true, w.failCampaign(ctx, c.ID, "physical_address_missing")
 	}
 	if strings.TrimSpace(w.replyTo) == "" {
-		return w.failCampaign(ctx, c.ID, "reply_to_missing")
+		return true, w.failCampaign(ctx, c.ID, "reply_to_missing")
 	}
 
 	fromHeader := w.resolveFromHeader(ctx)
 	backoff := time.Second
+	didWork := false
 
 	for {
 		select {
 		case <-w.stopCh:
-			return nil
+			return didWork, nil
 		default:
 		}
 
@@ -448,29 +496,36 @@ func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) error {
 
 		recipients, err := w.store.ClaimBatch(ctx, c.ID, w.batchSize)
 		if err != nil {
-			return err
+			return didWork, err
 		}
 
 		if len(recipients) == 0 {
 			done, err := w.store.CompleteIfDone(ctx, c.ID)
 			if err != nil {
-				return err
+				return didWork, err
 			}
 			if done {
 				w.auditSendCompleted(ctx, c.ID)
 				w.publishProgress(ctx, c.ID)
+				didWork = true
 			}
-			return nil
+			// done=false here is exactly "resumed and did nothing": nothing
+			// queued, and the campaign isn't actually finished (a live
+			// orphan not yet stale is still counted 'sending'). didWork
+			// stays false unless an earlier batch in this same call already
+			// set it — Run must fall back to pollInterval, not spin.
+			return didWork, nil
 		}
 
+		didWork = true
 		for _, r := range recipients {
 			select {
 			case <-w.stopCh:
-				return nil
+				return didWork, nil
 			default:
 			}
 			if err := limiter.Wait(ctx); err != nil {
-				return err
+				return didWork, err
 			}
 
 			outcome, sendErr := w.sendOne(ctx, c, r, physicalAddress, fromHeader)
@@ -479,7 +534,7 @@ func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) error {
 				backoff = time.Second
 			case sendOutcomeThrottled:
 				if serr := w.sleep(ctx, backoff); serr != nil {
-					return serr
+					return didWork, serr
 				}
 				backoff *= 2
 				if backoff > backoffCap {
@@ -489,14 +544,14 @@ func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) error {
 				if _, rerr := w.store.ReleaseRow(ctx, r.SendID); rerr != nil {
 					w.log.Error("mailing: releasing row after terminal campaign error", "send_id", r.SendID, "err", rerr)
 				}
-				return w.failCampaignSES(ctx, c.ID, sendErr)
+				return didWork, w.failCampaignSES(ctx, c.ID, sendErr)
 			case sendOutcomeAborted:
 				// A test fault-injection hook simulated the process dying at
 				// a specific instruction boundary (see sendPreCrashHook /
 				// sendPostCrashHook's doc comments) — return immediately, as
 				// a real crash would, leaving whatever state the row is
 				// already in. Never set outside a test.
-				return sendErr
+				return didWork, sendErr
 			}
 		}
 

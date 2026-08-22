@@ -18,8 +18,9 @@ ALTER TABLE email_campaigns ADD COLUMN test_sent_at TIMESTAMPTZ;
 
 -- Widen email_sends' status CHECK to add the seventh value 'sending' — the
 -- per-row claim state between 'queued' and 'sent'/'failed' the worker's
--- atomic per-row claim (#0045's plan §4) requires:
---   UPDATE email_sends SET status='sending', attempts=attempts+1
+-- atomic per-row claim (#0045's plan §4, updated by #0122 to also stamp
+-- claimed_at) requires:
+--   UPDATE email_sends SET status='sending', attempts=attempts+1, claimed_at=now()
 --    WHERE id=$1 AND status='queued'
 -- 000017's CHECK predates this state and must be dropped and re-added
 -- rather than edited in place (CHECK constraints have no ALTER-in-place

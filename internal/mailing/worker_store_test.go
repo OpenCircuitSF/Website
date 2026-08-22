@@ -83,7 +83,7 @@ func TestSendStore_DemoteToDraft_OnlyOnce(t *testing.T) {
 
 // TestSendStore_OrphanSweep_ResetsOnlySendingRows forces a row to 'sending'
 // via raw SQL — bypassing ClaimRow, so claimed_at stays NULL — and proves
-// OrphanSweep still recovers it regardless of the staleBefore cutoff passed
+// OrphanSweep still recovers it regardless of the staleAfter duration passed
 // in: a 'sending' row with no claimed_at is always treated as orphaned
 // (#0122's migration comment).
 func TestSendStore_OrphanSweep_ResetsOnlySendingRows(t *testing.T) {
@@ -102,9 +102,9 @@ func TestSendStore_OrphanSweep_ResetsOnlySendingRows(t *testing.T) {
 		t.Fatalf("force row to sent: %v", err)
 	}
 
-	// staleBefore is now() itself (the tightest possible cutoff) — even so,
-	// the NULL-claimed_at row must still be swept.
-	n, err := store.OrphanSweep(context.Background(), campaignID, time.Now())
+	// A zero staleAfter is the tightest possible cutoff (claimed_at < now())
+	// — even so, the NULL-claimed_at row must still be swept.
+	n, err := store.OrphanSweep(context.Background(), campaignID, 0)
 	if err != nil {
 		t.Fatalf("OrphanSweep: %v", err)
 	}
@@ -124,10 +124,14 @@ func TestSendStore_OrphanSweep_ResetsOnlySendingRows(t *testing.T) {
 
 // TestSendStore_OrphanSweep_LeavesFreshlyClaimedRowAlone is the store-level
 // half of #0122's proof: a row claimed through ClaimRow (so claimed_at is
-// stamped) must NOT be reset while staleBefore is still before claimed_at —
-// the exact condition a live worker's in-flight row satisfies — but MUST be
-// reset once staleBefore has moved past claimed_at, exactly as it would once
-// orphanStaleAfter's window has elapsed for a genuinely abandoned row.
+// stamped) must NOT be reset while staleAfter is still wide enough to cover
+// claimed_at — the exact condition a live worker's in-flight row satisfies —
+// but MUST be reset once staleAfter has narrowed past claimed_at, exactly as
+// it would once orphanStaleAfter's window has elapsed for a genuinely
+// abandoned row. staleAfter is a duration handed straight to Postgres
+// (`claimed_at < now() - $2::interval`, worker_store.go's OrphanSweep), not
+// a Go-computed timestamp — see that method's doc comment (#0122, review
+// pass 2) for why the cutoff must be computed by one clock, not two.
 func TestSendStore_OrphanSweep_LeavesFreshlyClaimedRowAlone(t *testing.T) {
 	pool := testPool(t)
 	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
@@ -140,8 +144,9 @@ func TestSendStore_OrphanSweep_LeavesFreshlyClaimedRowAlone(t *testing.T) {
 		t.Fatalf("ClaimRow: claimed=%v err=%v", claimed, err)
 	}
 
-	// A cutoff safely before this claim: the row must survive.
-	n, err := store.OrphanSweep(context.Background(), campaignID, time.Now().Add(-time.Hour))
+	// A wide staleAfter (cutoff an hour before Postgres's now()): the row,
+	// claimed moments ago, must survive.
+	n, err := store.OrphanSweep(context.Background(), campaignID, time.Hour)
 	if err != nil {
 		t.Fatalf("OrphanSweep (live claim): %v", err)
 	}
@@ -152,10 +157,10 @@ func TestSendStore_OrphanSweep_LeavesFreshlyClaimedRowAlone(t *testing.T) {
 		t.Fatalf("row status = %q, want sending (untouched)", got)
 	}
 
-	// A cutoff safely after this claim: the row must now be recovered,
-	// simulating orphanStaleAfter's window having elapsed for a row a
-	// crashed worker really did abandon.
-	n, err = store.OrphanSweep(context.Background(), campaignID, time.Now().Add(time.Hour))
+	// A negative staleAfter (cutoff an hour AFTER Postgres's now()): the row
+	// must now be recovered, simulating orphanStaleAfter's window having
+	// elapsed for a row a crashed worker really did abandon.
+	n, err = store.OrphanSweep(context.Background(), campaignID, -time.Hour)
 	if err != nil {
 		t.Fatalf("OrphanSweep (stale claim): %v", err)
 	}

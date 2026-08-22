@@ -252,6 +252,30 @@ func abortAfterNSends(n int) func(sendID int64) bool {
 	}
 }
 
+// forceOrphansStale makes OrphanSweep treat every 'sending' row as stale
+// regardless of when it was actually claimed, for the rest of the calling
+// test, by shrinking the package-level orphanStaleAfter var to a negative
+// duration — restored via t.Cleanup, the same pattern setSetting above uses,
+// and safe for the same reason: this package's tests never run in parallel.
+//
+// This replaces an earlier version of the fix that shifted a per-Worker
+// injectable clock (w.now) forward instead. That worked but compared the Go
+// process's clock against claimed_at, which Postgres stamps with ITS OWN
+// clock (#0122, review pass 2) — a dependency nothing enforced. OrphanSweep
+// now computes its cutoff entirely in SQL (`claimed_at < now() -
+// $2::interval`), so there is no Go-side "now" left to inject; shrinking the
+// duration handed to that statement is the equivalent lever. A negative
+// duration makes the cutoff run PAST Postgres's own now(), which is stale
+// enough to catch a claim stamped microseconds ago — simulating a resume
+// that happens well after orphanStaleAfter's real window has elapsed,
+// without a test ever sleeping that long.
+func forceOrphansStale(t *testing.T) {
+	t.Helper()
+	orig := orphanStaleAfter
+	orphanStaleAfter = -time.Hour
+	t.Cleanup(func() { orphanStaleAfter = orig })
+}
+
 // resetCampaignAuditRows deletes any audit_log rows already present for
 // campaignID (audit_log is never truncated by this package's TestMain — it
 // is a shared, append-only table other packages' tests also write to — and
