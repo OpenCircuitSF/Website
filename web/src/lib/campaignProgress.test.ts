@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   isProgressForCampaign,
   isTerminalSnapshot,
+  isTerminalCampaignStatus,
+  TERMINAL_CAMPAIGN_STATUSES,
+  createResyncSequencer,
   progressPercent,
   formatProgressSummary,
   formatProgressDetail,
@@ -16,6 +19,7 @@ import {
 function progress(fields: Partial<CampaignProgress>): CampaignProgress {
   return {
     campaign_id: 1,
+    status: 'sending',
     total: 100,
     sent: 0,
     failed: 0,
@@ -41,31 +45,182 @@ describe('isProgressForCampaign', () => {
   });
 });
 
+describe('isTerminalCampaignStatus', () => {
+  it('is true for exactly the three statuses a send never resumes from', () => {
+    expect(TERMINAL_CAMPAIGN_STATUSES.slice().sort()).toEqual(['canceled', 'failed', 'sent']);
+    for (const s of TERMINAL_CAMPAIGN_STATUSES) {
+      expect(isTerminalCampaignStatus(s)).toBe(true);
+    }
+  });
+
+  it('is false for every non-terminal status, and for an unknown/blank one', () => {
+    for (const s of ['draft', 'scheduled', 'sending', '', 'SENT', 'unknown']) {
+      expect(isTerminalCampaignStatus(s)).toBe(false);
+    }
+  });
+});
+
 describe('isTerminalSnapshot', () => {
   // #0048's review, point 1: this predicate is what drives
-  // CampaignEditor.svelte's onProgressEvent to resync campaign.status the
-  // moment a closing frame arrives, instead of only on a stream reconnect —
-  // without it a successful send's own final "0 remaining" frame updates the
-  // counts but leaves the heading reading "Sending…" forever.
-  it('is true once remaining reaches 0, mid-send or at completion', () => {
-    expect(isTerminalSnapshot(progress({ total: 10, sent: 10, remaining: 0 }))).toBe(true);
+  // CampaignEditor.svelte's onProgressEvent to resync campaign.status when a
+  // send ends, instead of only on a stream reconnect — without it a
+  // completed send leaves the heading reading "Sending…" forever, then adds
+  // a false "stalled" warning 30s later.
+  //
+  // #0048's SECOND review, point 3: it must key off the frame's campaign
+  // status, not its counts. MarkFailedCampaign never touches email_sends, so
+  // a failed campaign publishes remaining > 0 — the `remaining === 0` version
+  // of this predicate was false on exactly the paths that most needed it.
+
+  describe('by campaign status — the authoritative signal', () => {
+    it('is true for a failed campaign that still has queued rows (the point-3 regression)', () => {
+      // The literal shape failCampaign publishes: physical_address_missing /
+      // reply_to_missing / a terminal SES error stops the drain, the campaign
+      // is 'failed', and the recipients never mailed are still counted in
+      // remaining — which is correct, and is why remaining cannot be the test.
+      expect(
+        isTerminalSnapshot(progress({ status: 'failed', total: 10, sent: 4, remaining: 6 })),
+      ).toBe(true);
+    });
+
+    it('is true for a canceled campaign with rows still queued', () => {
+      expect(
+        isTerminalSnapshot(progress({ status: 'canceled', total: 10, sent: 2, remaining: 8 })),
+      ).toBe(true);
+    });
+
+    it('is true for a completed send', () => {
+      expect(
+        isTerminalSnapshot(progress({ status: 'sent', total: 10, sent: 10, remaining: 0 })),
+      ).toBe(true);
+    });
+
+    it('is false for a live send, whatever the counts say', () => {
+      expect(
+        isTerminalSnapshot(progress({ status: 'sending', total: 10, sent: 6, remaining: 4 })),
+      ).toBe(false);
+    });
+
+    it('is false for a campaign that never started sending', () => {
+      for (const status of ['draft', 'scheduled']) {
+        expect(isTerminalSnapshot(progress({ status, total: 10, remaining: 10 }))).toBe(false);
+      }
+    });
   });
 
-  it('is true for a failCampaign-style partial snapshot with nothing left queued/sending', () => {
-    // failCampaign (worker.go) can transition to 'failed' with some rows
-    // already sent, some failed/skipped, and none left queued or sending —
-    // remaining: 0 here does not imply sent === total.
-    expect(
-      isTerminalSnapshot(progress({ total: 10, sent: 4, failed: 1, skipped: 1, remaining: 0 })),
-    ).toBe(true);
+  describe('the remaining === 0 fallback, and its boundary', () => {
+    it("is true for drainLoop's last-batch frame, still 'sending' but drained", () => {
+      // The bottom-of-batch publish beats CompleteIfDone's status flip, so
+      // this frame really does arrive as sending/remaining:0. Treating it as
+      // possibly-closing is what makes the resync fire promptly; the second,
+      // 'sent' frame follows and createResyncSequencer orders the two.
+      expect(
+        isTerminalSnapshot(progress({ status: 'sending', total: 10, sent: 10, remaining: 0 })),
+      ).toBe(true);
+    });
+
+    it('is FALSE with exactly one row left — the boundary a <= 1 mutant would pass', () => {
+      // #0048's second review, point 4: the previous negative cases used
+      // remaining 4 and 10, so `p.remaining === 0` -> `p.remaining <= 1`
+      // survived the whole suite. This case is what kills that mutant.
+      expect(
+        isTerminalSnapshot(progress({ status: 'sending', total: 10, sent: 9, remaining: 1 })),
+      ).toBe(false);
+    });
+
+    it('is false for the very first frame of a fresh send (nothing sent yet)', () => {
+      expect(
+        isTerminalSnapshot(progress({ status: 'sending', total: 10, sent: 0, remaining: 10 })),
+      ).toBe(false);
+    });
   });
 
-  it('is false while any row is still queued or sending', () => {
-    expect(isTerminalSnapshot(progress({ total: 10, sent: 6, remaining: 4 }))).toBe(false);
+  describe('degrading when the payload carries no status (#0095 drift)', () => {
+    // A bundle running against a server that predates the status field, or a
+    // worker-side status read that errored and published "". The fallback
+    // must keep the successful-send path working rather than silently
+    // reinstating the "Sending…" forever bug.
+    it('falls back to the count when status is blank', () => {
+      expect(isTerminalSnapshot(progress({ status: '', remaining: 0 }))).toBe(true);
+      expect(isTerminalSnapshot(progress({ status: '', remaining: 1 }))).toBe(false);
+    });
+
+    it('does not throw when status is missing entirely at runtime', () => {
+      const noStatus = { campaign_id: 1, total: 10, sent: 10, failed: 0, skipped: 0, remaining: 0 };
+      expect(isTerminalSnapshot(noStatus as unknown as CampaignProgress)).toBe(true);
+      expect(
+        isTerminalSnapshot({ ...noStatus, sent: 9, remaining: 1 } as unknown as CampaignProgress),
+      ).toBe(false);
+    });
+  });
+});
+
+describe('createResyncSequencer', () => {
+  // #0048's second review, point 5. Two resyncs are genuinely in flight at
+  // once on a successful send (see isTerminalSnapshot's last-batch case); if
+  // the earlier one's response — which can predate CompleteIfDone's commit
+  // and therefore still read 'sending' — is applied last, the view reverts to
+  // "Sending…" with no further frames coming.
+  it('accepts the only request in flight', () => {
+    const seq = createResyncSequencer();
+    const a = seq.begin();
+    expect(seq.isCurrent(a)).toBe(true);
   });
 
-  it('is false for the very first frame of a fresh send (nothing sent yet)', () => {
-    expect(isTerminalSnapshot(progress({ total: 10, sent: 0, remaining: 10 }))).toBe(false);
+  it('discards an earlier request once a later one starts, even if it resolves last', () => {
+    const seq = createResyncSequencer();
+    const first = seq.begin();
+    const second = seq.begin();
+    // Responses arrive out of order: second, then first.
+    expect(seq.isCurrent(second)).toBe(true);
+    expect(seq.isCurrent(first)).toBe(false);
+  });
+
+  it('keeps accepting the newest across many overlapping requests', () => {
+    const seq = createResyncSequencer();
+    const tokens = [seq.begin(), seq.begin(), seq.begin(), seq.begin()];
+    expect(tokens.map((t) => seq.isCurrent(t))).toEqual([false, false, false, true]);
+  });
+
+  it('issues strictly increasing positive tokens', () => {
+    const seq = createResyncSequencer();
+    expect([seq.begin(), seq.begin(), seq.begin()]).toEqual([1, 2, 3]);
+  });
+
+  it('never treats 0 as a live request', () => {
+    // The counter's own initial value, and what any defaulted variable would
+    // carry — it must not wave an unsequenced write through, before or after
+    // any request has started.
+    const seq = createResyncSequencer();
+    expect(seq.isCurrent(0)).toBe(false);
+    seq.begin();
+    expect(seq.isCurrent(0)).toBe(false);
+  });
+
+  it('sequences two independent flows separately', () => {
+    const a = createResyncSequencer();
+    const b = createResyncSequencer();
+    const aToken = a.begin();
+    b.begin();
+    b.begin();
+    expect(a.isCurrent(aToken)).toBe(true);
+  });
+
+  it('applies only the last-started response in a real out-of-order race', async () => {
+    // The exact CampaignEditor.svelte shape: two overlapping best-effort
+    // re-reads, the STALE one resolving second.
+    const seq = createResyncSequencer();
+    let applied: string | null = null;
+    const resync = async (value: string, delayMs: number): Promise<void> => {
+      const token = seq.begin();
+      await new Promise((r) => setTimeout(r, delayMs));
+      if (!seq.isCurrent(token)) return;
+      applied = value;
+    };
+    const stale = resync('sending', 30); // started first, resolves LAST
+    const fresh = resync('sent', 0); // started second, resolves first
+    await Promise.all([stale, fresh]);
+    expect(applied).toBe('sent');
   });
 });
 

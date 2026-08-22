@@ -77,10 +77,10 @@ func NewCampaignProgressPublisher(broker *events.Broker, log *slog.Logger) maili
 func (p *campaignProgressPublisher) PublishCampaignProgress(_ context.Context, cp mailing.CampaignProgress) {
 	payload, err := json.Marshal(cp)
 	if err != nil {
-		// Defensive: CampaignProgress is a flat struct of int64s (see its
-		// own doc comment in worker.go), so encoding/json cannot actually
-		// fail here — logged rather than silently dropped in case that
-		// struct ever grows a field that can.
+		// Defensive: CampaignProgress is a flat struct of int64s and one
+		// string (see its own doc comment in worker.go), so encoding/json
+		// cannot actually fail here — logged rather than silently dropped in
+		// case that struct ever grows a field that can.
 		p.log.Error("campaign progress publisher: marshal", "campaign_id", cp.CampaignID, "err", err)
 		return
 	}

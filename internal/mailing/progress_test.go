@@ -9,6 +9,12 @@
 //     shrank under us" (an unsubscribe/suppression between materialization
 //     and send) is correct behavior, not an error.
 //
+// It also proves the third rule #0048's second review added: the snapshot
+// carries the campaign's own email_campaigns.status, because terminality is
+// NOT derivable from the counts (MarkFailedCampaign never touches
+// email_sends, so a 'failed' campaign publishes Remaining > 0). See
+// CampaignProgress's doc comment in worker.go.
+//
 // Mutation proof for both (see #0048's ## Verification): edit
 // publishProgress (worker.go) to drop `+ sending` from Remaining, or to
 // fold Skipped into Failed — TestWorker_PublishProgress_SevenStatusArithmetic
@@ -66,6 +72,7 @@ func TestWorker_PublishProgress_SevenStatusArithmetic(t *testing.T) {
 	seedSendWithStatus(t, pool, campaignID, "queued")
 	seedSendWithStatus(t, pool, campaignID, "queued")
 	seedSendWithStatus(t, pool, campaignID, "sending")
+	setCampaignStatus(t, pool, campaignID, "sending") // a mid-drain publish
 
 	w := newTestWorker(t, pool, &RecordingMailer{})
 	fake := &fakeProgressPublisher{}
@@ -79,6 +86,7 @@ func TestWorker_PublishProgress_SevenStatusArithmetic(t *testing.T) {
 	got := fake.calls[0]
 	want := CampaignProgress{
 		CampaignID: campaignID,
+		Status:     "sending",
 		Total:      6,
 		Sent:       1,
 		Failed:     1,
@@ -106,15 +114,26 @@ func TestWorker_PublishProgress_NilPublisherIsNoop(t *testing.T) {
 	w.publishProgress(context.Background(), campaignID) // must not panic
 }
 
-// TestWorker_FailCampaign_PublishesTerminalSnapshot is the mutation-check
-// target for #0048's review point 1 / #0045's own review finding: failCampaign
-// (the worker-detected-reason path — empty audience, physical_address/reply-to
-// gone blank) must publish a closing progress snapshot when it actually
-// performs the 'sending'->'failed' transition, the same way a normal
-// completion does, so a client reconciling against a fresh frame is never
-// stuck with a live batch's stale numbers. Mutation: delete
-// `w.publishProgress(ctx, campaignID)` from failCampaign's `if did {}` block
-// — this test must fail (0 calls, want 1).
+// TestWorker_FailCampaign_PublishesTerminalSnapshot proves what makes
+// failCampaign's closing frame TERMINAL, and — just as importantly — what
+// does not.
+//
+// #0048's second review bounced the previous version of this test for
+// asserting Remaining: 1 under a name promising a terminal snapshot, at a
+// time when the client's only terminality signal was `remaining === 0`. The
+// assertion was right about the worker and the name was right about the
+// intent; what was missing was the field that reconciles them. Remaining
+// stays 1 here BY DESIGN — MarkFailedCampaign (worker_store.go) updates
+// email_campaigns only, so the unsent row is still 'queued' and that
+// recipient genuinely will never be mailed. What makes the frame terminal is
+// Status: "failed", read fresh by publishProgress after the transition.
+//
+// Two mutations this is the target for:
+//   - delete `w.publishProgress(ctx, campaignID)` from failCampaign's
+//     `if did {}` block → 0 calls, want 1;
+//   - drop the CampaignStatus read from publishProgress (publish Status: "")
+//     → Status mismatch, which is exactly the defect that left a failed
+//     campaign rendering "Sending…" forever.
 func TestWorker_FailCampaign_PublishesTerminalSnapshot(t *testing.T) {
 	pool := testPool(t)
 	workerTestFixture(t, pool)
@@ -126,11 +145,7 @@ func TestWorker_FailCampaign_PublishesTerminalSnapshot(t *testing.T) {
 	// 'sending' (worker_store.go's `AND status='sending'` guard) —
 	// seedScheduledCampaign leaves it 'scheduled', so move it to 'sending'
 	// directly, the same state the real drain loop would have left it in.
-	if _, err := pool.Exec(context.Background(),
-		`UPDATE email_campaigns SET status = 'sending' WHERE id = $1`, campaignID,
-	); err != nil {
-		t.Fatalf("seed sending campaign: %v", err)
-	}
+	setCampaignStatus(t, pool, campaignID, "sending")
 
 	w := newTestWorker(t, pool, &RecordingMailer{})
 	fake := &fakeProgressPublisher{}
@@ -146,14 +161,83 @@ func TestWorker_FailCampaign_PublishesTerminalSnapshot(t *testing.T) {
 	got := fake.calls[0]
 	want := CampaignProgress{
 		CampaignID: campaignID,
+		Status:     "failed", // ← the terminal signal
 		Total:      2,
 		Sent:       1,
 		Failed:     0,
 		Skipped:    0,
-		Remaining:  1,
+		Remaining:  1, // ← deliberately NOT 0: one recipient will never be mailed
 	}
 	if got != want {
 		t.Fatalf("published progress = %+v, want %+v", got, want)
+	}
+
+	// Stated separately from the struct compare so a future edit cannot
+	// weaken the point by "fixing" Remaining to 0: the frame is terminal
+	// while rows remain, and that combination is the whole reason Status
+	// exists on CampaignProgress.
+	if got.Remaining == 0 {
+		t.Errorf("Remaining = 0; the failure path must NOT resolve unsent rows — see CampaignProgress's doc comment")
+	}
+	if got.Status != CampaignStatusFailed {
+		t.Errorf("Status = %q, want %q — the client's only terminality signal on this path", got.Status, CampaignStatusFailed)
+	}
+}
+
+// TestWorker_PublishProgress_CarriesLiveCampaignStatus pins the second half
+// of the contract the previous test proves for 'failed': the published Status
+// is read live from email_campaigns on every publish, so it tracks whatever
+// the campaign currently is rather than whatever the worker last assumed.
+// This is what lets the client treat 'sent'/'failed'/'canceled' as terminal
+// and 'sending' as not, without ever inspecting the counts.
+func TestWorker_PublishProgress_CarriesLiveCampaignStatus(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	// One queued row throughout, so Remaining is a CONSTANT 1 across every
+	// case below — the published Status therefore cannot be an artifact of
+	// the counts, which never change.
+	seedSendWithStatus(t, pool, campaignID, "queued")
+
+	w := newTestWorker(t, pool, &RecordingMailer{})
+	fake := &fakeProgressPublisher{}
+	w.progress = fake
+
+	for _, status := range []string{
+		CampaignStatusSending,
+		CampaignStatusSent,
+		CampaignStatusFailed,
+		CampaignStatusCanceled,
+	} {
+		setCampaignStatus(t, pool, campaignID, status)
+		fake.calls = nil
+
+		w.publishProgress(context.Background(), campaignID)
+
+		if len(fake.calls) != 1 {
+			t.Fatalf("status %q: PublishCampaignProgress called %d times, want exactly 1", status, len(fake.calls))
+		}
+		got := fake.calls[0]
+		if got.Status != status {
+			t.Errorf("published Status = %q, want %q", got.Status, status)
+		}
+		if got.Remaining != 1 {
+			t.Errorf("status %q: Remaining = %d, want a constant 1 across every case", status, got.Remaining)
+		}
+	}
+}
+
+// TestSendStore_CampaignStatus_UnknownCampaign asserts publishProgress's
+// error branch has something real to handle: a status read for a campaign
+// that does not exist errors rather than returning a plausible-looking empty
+// string from a silent no-rows path.
+func TestSendStore_CampaignStatus_UnknownCampaign(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+	w := newTestWorker(t, pool, &RecordingMailer{})
+
+	if _, err := w.store.CampaignStatus(context.Background(), -1); err == nil {
+		t.Fatal("CampaignStatus(-1) = nil error, want an error for a nonexistent campaign")
 	}
 }
 

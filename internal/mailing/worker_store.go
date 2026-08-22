@@ -517,6 +517,29 @@ func (s *SendStore) MarkFailedCampaign(ctx context.Context, campaignID int64) (b
 	return tag.RowsAffected() == 1, nil
 }
 
+// CampaignStatus reads email_campaigns.status for campaignID.
+//
+// This exists for #0048's progress snapshot, and the reason is worth stating
+// plainly: MarkFailedCampaign above updates email_campaigns ONLY — it never
+// touches email_sends. So on physical_address_missing, reply_to_missing, and
+// every terminal-class SES error, a campaign reaches 'failed' with its unsent
+// rows still 'queued', and publishProgress's Remaining (queued+sending) is
+// therefore > 0 on exactly the paths where the send has definitively stopped.
+// Terminality is a fact about the CAMPAIGN's status, not an arithmetic
+// property of the send counts, and it cannot be derived from them — so the
+// snapshot carries it rather than asking the client to infer it (#0048's
+// second review, point 3).
+func (s *SendStore) CampaignStatus(ctx context.Context, campaignID int64) (string, error) {
+	var status string
+	err := s.pool.QueryRow(ctx,
+		`SELECT status FROM email_campaigns WHERE id = $1`, campaignID,
+	).Scan(&status)
+	if err != nil {
+		return "", fmt.Errorf("mailing: reading status of campaign %d: %w", campaignID, err)
+	}
+	return status, nil
+}
+
 // GatherPreflight reads every fact preflight.go's Preflight function needs
 // for campaignID and assembles a PreflightInput — the one place both call
 // sites (the worker, authoritative; the campaignPreflightChecker HTTP

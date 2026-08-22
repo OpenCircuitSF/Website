@@ -129,14 +129,35 @@ var orphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 // struct is marshaled verbatim (internal/handlers/campaign_progress.go, via
 // encoding/json) into the SSE frame's data field, and web/src/lib/
 // campaignProgress.ts's CampaignProgress type is keyed off these exact
-// snake_case names.
+// snake_case names. #0095 exists because nothing mechanically enforces that
+// agreement — when a field is added here, add it there in the same commit.
+//
+// # Why Status is carried in the snapshot
+//
+// Status is email_campaigns.status as of this publish ('sending', 'sent',
+// 'failed', 'canceled'), read fresh by publishProgress. It is here because
+// TERMINALITY IS NOT DERIVABLE FROM THE COUNTS. #0048's first attempt had the
+// client infer "the send is over" from Remaining == 0, which is a true
+// statement about rows in flight but is not implied by — and on the failure
+// paths is actively contradicted by — the campaign reaching a terminal
+// status: MarkFailedCampaign (worker_store.go) updates email_campaigns only
+// and never touches email_sends, so physical_address_missing,
+// reply_to_missing, and every terminal-class SES error leave the unsent rows
+// 'queued' and publish Remaining > 0 on a campaign that has definitively
+// stopped. A failed campaign legitimately has recipients who will never be
+// mailed. Rather than force the counts to lie about that (resolving live
+// rows to a resting state would be a #0045-owned semantic change, and would
+// destroy the operator-facing fact of how many people were spared), the
+// snapshot states the campaign's status outright and the client stops
+// guessing.
 type CampaignProgress struct {
-	CampaignID int64 `json:"campaign_id"`
-	Total      int64 `json:"total"`
-	Sent       int64 `json:"sent"`
-	Failed     int64 `json:"failed"`
-	Skipped    int64 `json:"skipped"`
-	Remaining  int64 `json:"remaining"`
+	CampaignID int64  `json:"campaign_id"`
+	Status     string `json:"status"`
+	Total      int64  `json:"total"`
+	Sent       int64  `json:"sent"`
+	Failed     int64  `json:"failed"`
+	Skipped    int64  `json:"skipped"`
+	Remaining  int64  `json:"remaining"`
 }
 
 // ProgressPublisher is the seam #0048 supplies a broker-backed
@@ -824,13 +845,18 @@ func sesFailureReason(err error) string {
 // row. Also publishes a closing #0048 progress snapshot when it performs the
 // transition: #0045 shipped this path without a final publish (its own
 // review flagged it), which left a `failed` campaign's last SSE frame stuck
-// on whatever the previous live batch reported — never Remaining==0, and
-// never anything a client could use as a terminal signal on its own. This
-// does not by itself fix a `failed` campaign showing "Sending…" forever
-// (#0048's review, point 1) — that requires the client to reconcile against
-// campaign.status, which CampaignEditor.svelte now does on every progress
-// frame — but it does mean that reconciliation always has a fresh snapshot
-// to reconcile against, without waiting for a stream drop/reconnect.
+// on whatever the previous live batch reported.
+//
+// The publish is placed AFTER MarkFailedCampaign, inside `if did {}`, and
+// recomputes everything from the database — so the snapshot carries
+// Status: "failed" (CampaignProgress.Status, read by publishProgress), which
+// is what makes it terminal for the client. Note what it does NOT carry:
+// Remaining stays > 0 here, because MarkFailedCampaign updates
+// email_campaigns only and the unsent rows are still 'queued'. That is
+// correct and deliberate — those recipients really will never be mailed, and
+// the operator is entitled to see how many. A campaign is terminal because
+// of its status, not because its queue drained; see CampaignProgress's own
+// doc comment.
 func (w *Worker) failCampaign(ctx context.Context, campaignID int64, reason string) error {
 	_, sent, failed, _, queued, sending, cerr := w.store.CountEmailSends(ctx, campaignID)
 	if cerr != nil {
@@ -925,10 +951,22 @@ func (w *Worker) effectiveSendRate(ctx context.Context) int {
 }
 
 // publishProgress reports the current batch/completion snapshot to #0048's
-// seam, nil-guarded. Total/Sent/Failed/Skipped/Remaining are always
-// recomputed from email_sends rather than tracked incrementally, so a
-// publish after a resume is correct even though this Worker instance never
-// saw the earlier batches.
+// seam, nil-guarded. Every field is recomputed from the database rather than
+// tracked incrementally, so a publish after a resume is correct even though
+// this Worker instance never saw the earlier batches.
+//
+// Status is read fresh alongside the counts (never passed in by the caller)
+// for the same reason failCampaign re-reads its counts after the transition
+// rather than reusing the pre-transition ones: the database is the authority
+// on what the campaign is, and a caller's idea of the status it "just wrote"
+// can be stale the instant a concurrent cancel or a second worker's
+// transition lands. Because every call site publishes AFTER whatever
+// transition it performs, the status read here can only be at-or-after the
+// one just written — a snapshot can never claim a status the campaign has
+// not reached. A failed status read is logged and published as "", never
+// treated as fatal: the counts are still true and useful, and the client's
+// terminality predicate keeps a count-based fallback for exactly this case
+// (web/src/lib/campaignProgress.ts's isTerminalSnapshot).
 func (w *Worker) publishProgress(ctx context.Context, campaignID int64) {
 	if w.progress == nil {
 		return
@@ -938,8 +976,14 @@ func (w *Worker) publishProgress(ctx context.Context, campaignID int64) {
 		w.log.Error("mailing: counting sends for progress publish", "campaign_id", campaignID, "err", err)
 		return
 	}
+	status, serr := w.store.CampaignStatus(ctx, campaignID)
+	if serr != nil {
+		w.log.Error("mailing: reading campaign status for progress publish", "campaign_id", campaignID, "err", serr)
+		status = ""
+	}
 	w.progress.PublishCampaignProgress(ctx, CampaignProgress{
 		CampaignID: campaignID,
+		Status:     status,
 		Total:      total,
 		Sent:       sent,
 		Failed:     failed,

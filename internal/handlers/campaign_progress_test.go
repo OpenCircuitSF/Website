@@ -49,6 +49,7 @@ func TestCampaignProgressPublisher_PublishesJSONFrameToBroker(t *testing.T) {
 	p := &campaignProgressPublisher{broker: broker, log: discardTestLogger()}
 	cp := mailing.CampaignProgress{
 		CampaignID: 42,
+		Status:     "sending",
 		Total:      100,
 		Sent:       60,
 		Failed:     5,
@@ -66,22 +67,34 @@ func TestCampaignProgressPublisher_PublishesJSONFrameToBroker(t *testing.T) {
 		t.Errorf("event name = %q, want %q", got.Name, campaignProgressEventName)
 	}
 
-	var decoded map[string]int64
+	// Decoded as `any`, not int64: `status` is a string, and the point of
+	// this assertion is the exact wire shape web/src/lib/campaignProgress.ts's
+	// CampaignProgress interface is hand-kept in sync with (#0095 — nothing
+	// mechanically enforces that agreement; #0093 — two handlers once
+	// serialised one concept under two schemas).
+	var decoded map[string]any
 	if err := json.Unmarshal(got.Payload, &decoded); err != nil {
 		t.Fatalf("payload did not decode as JSON: %v", err)
 	}
-	want := map[string]int64{
-		"campaign_id": 42,
-		"total":       100,
-		"sent":        60,
-		"failed":      5,
-		"skipped":     3,
-		"remaining":   32,
+	want := map[string]any{
+		"campaign_id": float64(42),
+		"status":      "sending",
+		"total":       float64(100),
+		"sent":        float64(60),
+		"failed":      float64(5),
+		"skipped":     float64(3),
+		"remaining":   float64(32),
 	}
 	for k, v := range want {
 		if decoded[k] != v {
-			t.Errorf("payload[%q] = %d, want %d (full payload: %s)", k, decoded[k], v, got.Payload)
+			t.Errorf("payload[%q] = %#v, want %#v (full payload: %s)", k, decoded[k], v, got.Payload)
 		}
+	}
+	// No extra and no missing keys: a field added on the Go side without its
+	// TypeScript counterpart is exactly the drift #0095 describes, so the key
+	// set is pinned rather than only spot-checked.
+	if len(decoded) != len(want) {
+		t.Errorf("payload has %d keys, want exactly %d (%s)", len(decoded), len(want), got.Payload)
 	}
 }
 
