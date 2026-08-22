@@ -16,6 +16,10 @@ import type {
   PublicInterest,
   ConfirmResponse,
   PreferencesResponse,
+  Campaign,
+  PreflightResponse,
+  AudiencePreviewResponse,
+  CampaignPreviewResponse,
 } from './types';
 import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
 import type { UnsubscribeResult } from './unsubscribe';
@@ -505,6 +509,115 @@ export function removeSuppression(
   note: string,
 ): Promise<RemoveSuppressionResult> {
   return apiPost<RemoveSuppressionResult>('/admin/suppressions/remove', { email, reason, note });
+}
+
+// ── Admin: campaign compose (#0041/#0044/#0045/#0046/#0047) ─────────────────
+
+/** The fields POST /admin/campaigns and PATCH /admin/campaigns/{id} accept. */
+export interface CampaignDraftFields {
+  name?: string;
+  subject?: string;
+  preheader?: string;
+  body_md?: string;
+  audience_mode?: string;
+  interest_ids?: number[];
+}
+
+/** GET /admin/campaigns — every campaign, newest first (admin only). */
+export function listCampaigns(): Promise<{ campaigns: Campaign[] }> {
+  return apiGet<{ campaigns: Campaign[] }>('/admin/campaigns');
+}
+
+/** GET /admin/campaigns/{id} — one campaign (admin only). */
+export function getCampaign(id: number): Promise<Campaign> {
+  return apiGet<Campaign>(`/admin/campaigns/${id}`);
+}
+
+/**
+ * POST /admin/campaigns — create a new draft campaign (admin only). `name`,
+ * `subject`, and `body_md` are required by the server; `audience_mode`
+ * defaults to `any_of` when omitted.
+ */
+export function createCampaign(fields: CampaignDraftFields): Promise<Campaign> {
+  return apiPost<Campaign>('/admin/campaigns', fields);
+}
+
+/**
+ * PATCH /admin/campaigns/{id} — content-only edit (admin only). Every field
+ * is optional; only the ones present change. There is deliberately no
+ * `status` field — the server never changes status via this route (see
+ * `sendCampaign`/`cancelCampaign`). The server answers 409 unless the
+ * campaign is currently `draft` or `scheduled` (`canEditCampaign`).
+ */
+export function updateCampaign(id: number, fields: CampaignDraftFields): Promise<Campaign> {
+  return apiPatch<Campaign>(`/admin/campaigns/${id}`, fields);
+}
+
+/**
+ * GET /admin/campaigns/{id}/audience — the live recipient count for the
+ * campaign's CURRENTLY SAVED audience_mode/interest_ids (admin only). Never
+ * materializes anything (#0044's own contract) — safe to call on every
+ * checkbox change. Throws ApiError(409) for an empty interest set under
+ * any_of/all_of or an unknown mode; lib/audience.ts's `audienceErrorMessage`
+ * reads that verbatim.
+ */
+export function getCampaignAudience(id: number): Promise<AudiencePreviewResponse> {
+  return apiGet<AudiencePreviewResponse>(`/admin/campaigns/${id}/audience`);
+}
+
+/**
+ * GET /admin/campaigns/{id}/preflight — a read-only, non-mutating evaluation
+ * of #0045's send gate against the campaign's STORED row (admin only, #0047).
+ * Never sends anything, never transitions the campaign, writes no audit row.
+ */
+export function getCampaignPreflight(id: number): Promise<PreflightResponse> {
+  return apiGet<PreflightResponse>(`/admin/campaigns/${id}/preflight`);
+}
+
+/**
+ * POST /admin/campaigns/{id}/preview — renders the campaign's STORED row
+ * without sending anything (admin only, #0046). Accepts no body: the server
+ * structurally ignores any override, so the preview always matches what a
+ * send would render — see #0047's Notes on why the editor autosaves before
+ * calling this.
+ */
+export function previewCampaign(id: number): Promise<CampaignPreviewResponse> {
+  return apiPost<CampaignPreviewResponse>(`/admin/campaigns/${id}/preview`);
+}
+
+/**
+ * POST /admin/campaigns/{id}/test — sends one real test message to the
+ * REQUESTING ADMIN'S OWN address (admin only, #0046). Accepts no body and no
+ * destination — the endpoint never takes a client-supplied recipient (see
+ * `#0046`'s carried-in note, `admin_campaign_preview.go`'s package doc
+ * comment). Returns the updated Campaign (`test_sent_at` now set).
+ */
+export function testSendCampaign(id: number): Promise<Campaign> {
+  return apiPost<Campaign>(`/admin/campaigns/${id}/test`);
+}
+
+/**
+ * POST /admin/campaigns/{id}/send — the operator-triggered `draft|failed` →
+ * `scheduled` transition (admin only, #0041/#0047). `confirmCount` is the
+ * recipient count the operator typed to confirm — the server independently
+ * re-verifies it against the authoritative audience count and 409s on a
+ * mismatch, so a client-side check alone is never trusted. Throws
+ * ApiError(409) with body `{"unmet":[...]}` when the advisory preflight gate
+ * fails (see lib/preflight.ts's `parseUnmet`, which reads this exact shape
+ * off `ApiError.body`), or a plain `{"error":"..."}` ApiError for any other
+ * 409 (illegal transition, confirm_count mismatch, bad audience state).
+ */
+export function sendCampaign(id: number, confirmCount: number): Promise<Campaign> {
+  return apiPost<Campaign>(`/admin/campaigns/${id}/send`, { confirm_count: confirmCount });
+}
+
+/**
+ * POST /admin/campaigns/{id}/cancel — stops a `scheduled` or `sending`
+ * campaign (admin only, #0041). Never recalls an already-sent message; see
+ * lib/campaigns.ts's `cancelCopy` for the operator-facing distinction.
+ */
+export function cancelCampaign(id: number): Promise<Campaign> {
+  return apiPost<Campaign>(`/admin/campaigns/${id}/cancel`);
 }
 
 // ── Public mailing-list journey: signup, confirm, preferences (#0029-#0031) ──

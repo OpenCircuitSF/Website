@@ -235,6 +235,19 @@ func servePostgres(cfg *config.Config) error {
 	adminCampaignsH := handlers.NewAdminCampaignsHandler(campaignsStore, handlers.NewCampaignPreflightChecker(sendStore), audienceStore, auditLogger)
 	adminCampaignAudienceH := handlers.NewAdminCampaignAudienceHandler(audienceStore)
 
+	// Admin campaign read-only preflight (#0047, PRD §5.2/§6.6): GET
+	// .../preflight, the compose UI's dry-run evaluation of #0045's send
+	// gate — same mailing.Preflight function, same SendStore.GatherPreflight
+	// read, as the advisory checker adminCampaignsH.Send uses and the
+	// worker's own authoritative copy. nil when sendStore is nil
+	// (MAILER_NOOP=true — see newSendStoreIfEnabled): adminRoutes omits its
+	// one route in that case, mirroring adminCampaignsH's own preflight
+	// nil-tolerance.
+	var adminCampaignPreflightH *handlers.AdminCampaignPreflightHandler
+	if sendStore != nil {
+		adminCampaignPreflightH = handlers.NewAdminCampaignPreflightHandler(sendStore, campaignsStore, store, cfg.EmailFrom)
+	}
+
 	// Admin campaign preview and test send (#0046, PRD §5.2/§6.6): POST
 	// .../preview (render without sending) and POST .../test (a real send
 	// to the requesting admin's own address, through a dedicated synthetic
@@ -317,7 +330,7 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH, sendWorker,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -547,6 +560,12 @@ func serveDevMode(cfg *config.Config) error {
 	// routes when nil, mirroring adminCampaignAudienceH's own nil-guard.
 	var adminCampaignPreviewH *handlers.AdminCampaignPreviewHandler
 
+	// Admin campaign read-only preflight (#0047) has the same devstore gap
+	// as adminCampaignPreviewH above. Passing nil leaves every other admin
+	// route working in STORAGE=json mode; adminRoutes omits its one route
+	// when nil, mirroring adminCampaignPreviewH's own nil-guard.
+	var adminCampaignPreflightH *handlers.AdminCampaignPreflightHandler
+
 	// Public interests (#0029), confirm (#0030), preferences (#0031), and
 	// one-click unsubscribe (#0034) all have the same devstore gap as
 	// subscribeH/adminInterestsH above -- internal/devstore has no
@@ -576,7 +595,7 @@ func serveDevMode(cfg *config.Config) error {
 	var sendWorker *mailing.Worker
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH, sendWorker,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -616,6 +635,7 @@ func adminRoutes(
 	adminCampaignsH *handlers.AdminCampaignsHandler,
 	adminCampaignAudienceH *handlers.AdminCampaignAudienceHandler,
 	adminCampaignPreviewH *handlers.AdminCampaignPreviewHandler,
+	adminCampaignPreflightH *handlers.AdminCampaignPreflightHandler,
 ) []adminRoute {
 	routes := []adminRoute{
 		{http.MethodGet, "/admin/settings", http.HandlerFunc(settingsH.List)},
@@ -670,6 +690,11 @@ func adminRoutes(
 			adminRoute{http.MethodPost, "/admin/campaigns/{id}/test", http.HandlerFunc(adminCampaignPreviewH.Test)},
 		)
 	}
+	if adminCampaignPreflightH != nil {
+		routes = append(routes,
+			adminRoute{http.MethodGet, "/admin/campaigns/{id}/preflight", http.HandlerFunc(adminCampaignPreflightH.Preflight)},
+		)
+	}
 	return routes
 }
 
@@ -704,6 +729,7 @@ func mountAndServe(
 	adminCampaignsH *handlers.AdminCampaignsHandler,
 	adminCampaignAudienceH *handlers.AdminCampaignAudienceHandler,
 	adminCampaignPreviewH *handlers.AdminCampaignPreviewHandler,
+	adminCampaignPreflightH *handlers.AdminCampaignPreflightHandler,
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
 	subscribeH *handlers.SubscribeHandler,
@@ -777,7 +803,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 

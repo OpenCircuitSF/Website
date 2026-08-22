@@ -155,6 +155,11 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		campaignsStore, subscribersStore, store, mailing.MarkdownCampaignRenderer{}, nil, auditLogger,
 		cfg.BaseURL, "lists.example.com", "hello@example.com",
 	)
+	// #0047: exercised the same way as adminCampaignAudienceH above — a
+	// real read-only GET, no mailer/mutation involved, so a real
+	// *mailing.SendStore (backing GatherPreflight) is used rather than nil.
+	sendStore := mailing.NewSendStore(pool, audienceStore, store, nil, cfg.BaseURL, "lists.example.com", "hello@example.com")
+	adminCampaignPreflightH := handlers.NewAdminCampaignPreflightHandler(sendStore, campaignsStore, store, "hello@example.com")
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 	meH := handlers.NewMeHandler()
@@ -167,7 +172,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
@@ -281,7 +286,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			return status != http.StatusUnauthorized && status != http.StatusForbidden
 		}},
 	}
-	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH) {
+	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH) {
 		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID, targetCampaign.ID)
 		for _, c := range cases {
 			req, err := http.NewRequest(route.method, baseURL+path, nil)

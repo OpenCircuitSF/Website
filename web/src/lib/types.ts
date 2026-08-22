@@ -186,6 +186,94 @@ export interface ConfirmResponse {
   active_interests: PublicInterest[];
 }
 
+// ── Admin: campaign compose (#0041/#0044/#0045/#0046/#0047) ─────────────────
+
+/**
+ * One email campaign (GET/POST/PATCH /admin/campaigns[/{id}] item). Matches
+ * internal/handlers/admin_campaigns.go `campaignView`. `scheduled_at`,
+ * `started_at`, `completed_at`, and `test_sent_at` are all `json:",omitempty"`
+ * on the Go side, so a NULL column is an ABSENT key in the response, never a
+ * present key holding `null` — see lib/campaigns.ts's
+ * `wasDemotedAfterScheduling` for why this distinction is load-bearing
+ * (#0041's carried-in review finding, amended by #0046's third review once
+ * `test_sent_at` itself shipped).
+ */
+export interface Campaign {
+  id: number;
+  name: string;
+  subject: string;
+  preheader?: string;
+  body_md: string;
+  status: string; // draft | scheduled | sending | sent | canceled | failed
+  audience_mode: string; // all | any_of | all_of | none_selected
+  workshop_id?: number;
+  interest_ids: number[];
+  scheduled_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  test_sent_at?: string;
+  created_by?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One unmet pre-send requirement, as returned both by GET
+ * .../campaigns/{id}/preflight's `unmet` array and by the `{"unmet":[...]}`
+ * 409 body POST .../send answers when its advisory check fails. Matches
+ * internal/handlers/admin_campaigns.go `campaignPreflightFailure`. `message`
+ * is rendered verbatim by lib/preflight.ts's renderer — see that module's
+ * doc comment for why there is no client-side code→message table.
+ */
+export interface UnmetRequirement {
+  code: string;
+  message: string;
+}
+
+/**
+ * GET /admin/campaigns/{id}/preflight response. Matches
+ * internal/handlers/admin_campaign_preflight.go `campaignPreflightResponse`.
+ * `summary` is the server's read of the STORED row — what
+ * CampaignSendDialog.svelte confirms against, never the editor's unsaved
+ * buffer.
+ */
+export interface PreflightResponse {
+  ok: boolean;
+  unmet: UnmetRequirement[];
+  summary: {
+    subject: string;
+    from: string;
+    recipients: number;
+  };
+}
+
+/**
+ * GET /admin/campaigns/{id}/audience response. Matches
+ * internal/handlers/admin_campaign_audience.go `campaignAudienceView`.
+ * `sample` is capped at 20 server-side (campaignAudienceSampleLimit) — never
+ * client-controlled; lib/audience.ts's `sampleCaption` derives its wording
+ * from `sample.length`, not a repeated literal 20.
+ */
+export interface AudiencePreviewResponse {
+  mode: string;
+  interest_ids: number[];
+  count: number;
+  sample: string[];
+  warnings: string[];
+}
+
+/**
+ * POST /admin/campaigns/{id}/preview and POST /admin/campaigns/{id}/test both
+ * respond with this shape once a send/render succeeds (Test returns the
+ * updated Campaign instead — see api.ts's testSendCampaign). Matches
+ * internal/handlers/admin_campaign_preview.go `campaignPreviewResponse`.
+ */
+export interface CampaignPreviewResponse {
+  subject: string;
+  html: string;
+  text: string;
+}
+
 /** GET/PATCH /api/preferences body (#0031). email is masked
  * ("b•••••n@gmail.com") except when the SPA already holds the unmasked
  * address from a fresh ConfirmResponse (see PreferenceCenter.svelte).
