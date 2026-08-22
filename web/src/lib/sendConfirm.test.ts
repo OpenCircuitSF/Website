@@ -8,7 +8,14 @@
 
 import { describe, it, expect } from 'vitest';
 import type { UnmetRequirement } from './types';
-import { normalizeCountInput, confirmMatches, sendGuardState, type SendGuardState } from './sendConfirm';
+import {
+  normalizeCountInput,
+  confirmMatches,
+  sendGuardState,
+  sendGuardDescription,
+  sendGuardSummaryClass,
+  type SendGuardState,
+} from './sendConfirm';
 
 describe('normalizeCountInput', () => {
   it.each([
@@ -106,4 +113,60 @@ describe('sendGuardState', () => {
       expect(sendGuardState(c.input).kind).toBe(c.want);
     });
   }
+});
+
+// #0119: the blocked Send button's aria-describedby target renders exactly
+// this text. Every kind the editor-level guard (CampaignEditor.svelte's
+// editorGuard, which never produces 'needs-confirm' or 'sending') can
+// actually reach must announce a real, non-empty reason — the whole point
+// of this issue is that "blocked, no reason given" is silent to a screen
+// reader. 'unavailable' is the sole deliberate exception: the send control
+// isn't rendered in that state at all (canSendCampaign is the render gate),
+// so there is nothing for it to describe.
+describe('sendGuardDescription', () => {
+  const reachableAtEditorLevel: SendGuardState['kind'][] = ['blocked', 'empty-audience', 'ready'];
+
+  it.each(reachableAtEditorLevel)('names a non-empty reason for %s', (kind) => {
+    const desc = sendGuardDescription({ kind } as SendGuardState);
+    expect(desc.length).toBeGreaterThan(0);
+  });
+
+  it('blocked names "pre-send checks" — #0119 AC: the description names the pre-send checks', () => {
+    expect(sendGuardDescription({ kind: 'blocked' }).toLowerCase()).toContain('pre-send checks');
+  });
+
+  it('empty-audience is DISTINCT text from blocked — a plain unmet-list rendering would have missed this reason', () => {
+    const blocked = sendGuardDescription({ kind: 'blocked' });
+    const emptyAudience = sendGuardDescription({ kind: 'empty-audience' });
+    expect(emptyAudience).not.toBe(blocked);
+    expect(emptyAudience.toLowerCase()).toContain('audience');
+  });
+
+  it('ready describes success, distinct from every blocking reason', () => {
+    const ready = sendGuardDescription({ kind: 'ready' });
+    expect(ready).not.toBe(sendGuardDescription({ kind: 'blocked' }));
+    expect(ready).not.toBe(sendGuardDescription({ kind: 'empty-audience' }));
+  });
+
+  it('unavailable is empty — the send control is not rendered in this state', () => {
+    expect(sendGuardDescription({ kind: 'unavailable' })).toBe('');
+  });
+
+  it('sending and needs-confirm are non-empty too, even though the editor-level guard never reaches them', () => {
+    expect(sendGuardDescription({ kind: 'sending' }).length).toBeGreaterThan(0);
+    expect(sendGuardDescription({ kind: 'needs-confirm' }).length).toBeGreaterThan(0);
+  });
+});
+
+describe('sendGuardSummaryClass', () => {
+  it('is text-notice only when ready', () => {
+    expect(sendGuardSummaryClass({ kind: 'ready' })).toBe('text-notice');
+  });
+
+  it.each<SendGuardState['kind']>(['blocked', 'empty-audience', 'sending', 'needs-confirm', 'unavailable'])(
+    'is text-muted (never the success color) for %s',
+    (kind) => {
+      expect(sendGuardSummaryClass({ kind } as SendGuardState)).toBe('text-muted');
+    },
+  );
 });

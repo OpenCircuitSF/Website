@@ -111,3 +111,53 @@ export function sendGuardState(input: SendGuardInput): SendGuardState {
   }
   return { kind: 'ready' };
 }
+
+/**
+ * The pre-send panel's accessible summary line for a given guard state
+ * (#0119). This is the ONLY thing that decides what the blocked Send
+ * button's `aria-describedby` text says — CampaignEditor.svelte renders it
+ * verbatim and must never re-derive its own wording from the raw booleans,
+ * for the same reason `sendGuardState` itself is the single source of truth
+ * for whether the button may act (see that function's doc comment).
+ *
+ * Every `SendGuardState.kind` gets a non-empty line EXCEPT `unavailable`
+ * (the send control isn't rendered at all in that state — canSendCampaign
+ * is the render gate — so there is nothing to describe) and `needs-confirm`
+ * (that state exists only inside CampaignSendDialog's own typed-count
+ * field, never at the editor level, whose `confirmRaw` is always fabricated
+ * to match `audienceCount` — see the editor's `editorGuard` comment).
+ *
+ * `blocked` and `empty-audience` are both real, independently reachable
+ * reasons the editor-level button can be disabled (`sendGateOpen` in
+ * CampaignEditor.svelte), and #0119 was filed because a screen reader
+ * announced neither. `blocked` deliberately says "Pre-send checks" so an
+ * assistive-tech user hears the same phrase the panel itself is titled
+ * with, per #0119's acceptance criteria.
+ */
+export function sendGuardDescription(guard: SendGuardState): string {
+  switch (guard.kind) {
+    case 'unavailable':
+      return '';
+    case 'sending':
+      return 'A send for this campaign is already in progress.';
+    case 'blocked':
+      return 'Pre-send checks have not passed. See the list below.';
+    case 'empty-audience':
+      return 'Pre-send checks pass, but the current audience is empty. Adjust targeting before sending.';
+    case 'needs-confirm':
+      return 'Pre-send checks pass. Confirm the recipient count to send.';
+    case 'ready':
+      return 'All pre-send checks pass.';
+  }
+}
+
+/**
+ * The CSS class for `sendGuardDescription`'s text — `text-notice` (success
+ * green, app.css) only when nothing is blocking the send; `text-muted`
+ * otherwise. Kept out of CampaignEditor.svelte for the same reason as
+ * `sendGuardDescription` itself: the component must never re-derive a
+ * presentation decision from `.kind` inline (#0094).
+ */
+export function sendGuardSummaryClass(guard: SendGuardState): string {
+  return guard.kind === 'ready' ? 'text-notice' : 'text-muted';
+}

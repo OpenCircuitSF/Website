@@ -55,7 +55,7 @@
     sampleCaption,
     audienceErrorMessage,
   } from '../../lib/audience';
-  import { sendGuardState } from '../../lib/sendConfirm';
+  import { sendGuardState, sendGuardDescription, sendGuardSummaryClass } from '../../lib/sendConfirm';
   import { subscribeEvent } from '../../lib/events';
   import {
     CAMPAIGN_PROGRESS_EVENT,
@@ -208,6 +208,16 @@
     }),
   );
   let sendGateOpen = $derived(editorGuard.kind === 'ready');
+  // #0119: the pre-send panel's accessible summary line — the ONLY text the
+  // Send button's aria-describedby resolves to. Reads editorGuard.kind, the
+  // same single source of truth sendGateOpen itself reads, so the button's
+  // enabled/disabled state and its announced reason can never disagree (a
+  // dedicated case for "audience is empty" is exactly what a plain
+  // unmet-list rendering would have missed — see sendGuardDescription's own
+  // doc comment).
+  let preflightPanelSummary = $derived(sendGuardDescription(editorGuard));
+  let preflightSummaryClass = $derived(sendGuardSummaryClass(editorGuard));
+  let hasUnmetItems = $derived(unmetDisplay.length > 0);
   let isSaving = $derived(saveState === 'saving');
   let isSaved = $derived(saveState === 'saved');
   let modeOptions = $derived(AUDIENCE_MODES.map((opt) => ({ ...opt, selected: opt.value === mode })));
@@ -220,7 +230,6 @@
   let hasAudienceWarnings = $derived(audienceWarningsList.length > 0);
   let hasAudienceSample = $derived(audienceSampleList.length > 0);
   let preflightUnknown = $derived(unmet === null);
-  let preflightClear = $derived(unmet !== null && unmetDisplay.length === 0);
 
   // ── Loading ─────────────────────────────────────────────────────────────
   async function load(): Promise<void> {
@@ -712,29 +721,30 @@
       {/if}
     </Panel>
 
-    <Panel title="Pre-send checks">
+    <Panel>
       <h3 class="preflight-heading" tabindex="-1" bind:this={preflightHeadingEl}>Pre-send checks</h3>
-      <div role="status" aria-live="polite">
+      <div id="preflight-panel-hint" role="status" aria-live="polite">
         {#if preflightError}
           <p class="text-error">{preflightError}</p>
         {:else if preflightUnknown}
           <p class="text-muted">Checking…</p>
-        {:else if preflightClear}
-          <p class="text-notice">All pre-send checks pass.</p>
         {:else}
-          <ol class="unmet-list">
-            {#each unmetDisplay as item (item.code)}
-              <li data-code={item.code}>
-                <span aria-hidden="true">[ !! ]</span>
-                {item.message}
-                {#if item.fix}
-                  <button type="button" class="link-button" onclick={() => goToFix(item.fix?.section ?? '')}>
-                    {item.fix.label}
-                  </button>
-                {/if}
-              </li>
-            {/each}
-          </ol>
+          <p class={preflightSummaryClass}>{preflightPanelSummary}</p>
+          {#if hasUnmetItems}
+            <ol class="unmet-list">
+              {#each unmetDisplay as item (item.code)}
+                <li data-code={item.code}>
+                  <span aria-hidden="true">[ !! ]</span>
+                  {item.message}
+                  {#if item.fix}
+                    <button type="button" class="link-button" onclick={() => goToFix(item.fix?.section ?? '')}>
+                      {item.fix.label}
+                    </button>
+                  {/if}
+                </li>
+              {/each}
+            </ol>
+          {/if}
         {/if}
       </div>
       <Button onclick={reCheck}>Re-check</Button>
@@ -950,12 +960,20 @@
     margin: var(--space-2) 0 0;
     padding-left: var(--space-4);
   }
+  /* #0119: this heading is now the panel's ONLY "Pre-send checks" label —
+   * Panel is rendered with no `title` so it emits no second, non-semantic
+   * <header> underneath. Previously this class visually hid the heading
+   * (sr-only) while a separate Panel-generated header showed the same text
+   * — which left onOpenSend's programmatic focus landing on an invisible,
+   * zero-size element with no visible focus ring for a sighted keyboard
+   * user, even though :where([tabindex]):focus-visible in app.css would
+   * otherwise draw one. Making this the single visible heading fixes both
+   * the duplication and that dead-end focus target in one move. */
   .preflight-heading {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
+    margin: 0 0 var(--space-2);
+    font-size: var(--fs-base);
+    font-weight: 600;
+    color: var(--text);
   }
   .unmet-list {
     margin: 0;
