@@ -1075,6 +1075,130 @@ func TestWorker_SendStartedAuditWrittenOnlyOnFirstClaim(t *testing.T) {
 	}
 }
 
+// ── 16. Detached-context invariant (#0118) ──────────────────────────────────
+
+// ctxAwareMailer is a Mailer that observes whether the context it is handed
+// is already cancelled — RecordingMailer/recordingClassifiableMailer both
+// ignore their ctx argument, so neither can tell whether an in-flight SES
+// call was protected from an ambient cancellation. This is exactly the seam
+// #0118 found missing: without a mailer that actually checks ctx.Err(), a
+// call site that swapped the detached sendCtx for the ambient one would
+// still pass every existing test.
+type ctxAwareMailer struct {
+	mu   sync.Mutex
+	sent int
+}
+
+func (m *ctxAwareMailer) Send(ctx context.Context, _ Message) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sent++
+	return "ctx-ok-1", nil
+}
+
+func (m *ctxAwareMailer) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sent
+}
+
+var _ Mailer = (*ctxAwareMailer)(nil)
+
+// TestWorker_SendOne_SESCallAndStatusWriteSurviveAmbientCancellation pins
+// this file's most consequential invariant (package doc comment, "Shutdown
+// is a signal, not a context cancellation"): sendOne's SES call and its
+// subsequent MarkSent write each run on their own
+// context.WithTimeout(context.Background(), …) detached context, not on the
+// ambient ctx a SIGTERM-triggered Stop() can cancel between messages. If
+// either derived from ctx instead, a cancellation arriving after ClaimRow
+// has already claimed the row — after which SES may or may not have
+// accepted the message — would either skip the SES call outright or accept
+// it and then fail to record it, producing exactly the guaranteed duplicate
+// on resume this file's package doc comment describes.
+//
+// The naive version of this test — handing sendOne an already-cancelled ctx
+// — proves nothing: ClaimRow(ctx, …) is the FIRST statement in sendOne and
+// legitimately honours the ambient context, so a pre-cancelled ctx fails
+// there and returns sendOutcomeSkipped long before reaching the SES call.
+// Instead this cancels ctx from INSIDE sendOne, via sendPreCrashHook — which
+// already runs after ClaimRow succeeds and before the SES call — so
+// execution reaches the SES call and the MarkSent write with ctx genuinely
+// cancelled at the moment they run.
+//
+// ctxAwareMailer is required, not RecordingMailer: RecordingMailer's Send
+// ignores its context argument entirely, so it cannot distinguish a
+// detached context from a cancelled ambient one — a test built on it would
+// pass whether or not the invariant holds.
+//
+// Mutation that must turn this red: change EITHER
+// `context.WithTimeout(context.Background(), sendMessageTimeout)` or
+// `context.WithTimeout(context.Background(), writeStatusTimeout)` in
+// sendOne to `context.WithTimeout(ctx, …)`. The first mutation makes
+// mailer.count() come back 0 and outcome != sendOutcomeSent (Send sees
+// ctx.Err() != nil and returns an error). The second mutation leaves the SES
+// call intact (mailer.count() == 1) but MarkSent's context is cancelled
+// before the UPDATE commits, so the row status stays "sending" instead of
+// advancing to "sent" — sendOne's return value alone would not catch this
+// half, since MarkSent's error is only logged (worker.go), not returned.
+func TestWorker_SendOne_SESCallAndStatusWriteSurviveAmbientCancellation(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	forceSending(t, pool, campaignID)
+	sendID, _, _ := seedQueuedSend(t, pool, campaignID)
+
+	mailer := &ctxAwareMailer{}
+	w := newTestWorker(t, pool, mailer)
+
+	c, err := w.store.ClaimResume(context.Background())
+	if err != nil || c == nil {
+		t.Fatalf("ClaimResume: c=%+v err=%v", c, err)
+	}
+	recipients, err := w.store.ClaimBatch(context.Background(), c.ID, 10)
+	if err != nil || len(recipients) != 1 {
+		t.Fatalf("ClaimBatch: recipients=%+v err=%v", recipients, err)
+	}
+
+	physicalAddress, err := w.settings.GetSetting(context.Background(), settingPhysicalAddress)
+	if err != nil {
+		t.Fatalf("read physical_address: %v", err)
+	}
+	fromHeader := w.resolveFromHeader(context.Background())
+
+	ambientCtx, cancel := context.WithCancel(context.Background())
+	sendPreCrashHook = func(int64) bool {
+		// Runs after ClaimRow has already claimed the row (worker.go) and
+		// before the SES call — the exact instruction boundary this
+		// invariant needs to be observed at. Returning false tells sendOne
+		// to keep going, now with ambientCtx cancelled.
+		cancel()
+		return false
+	}
+	t.Cleanup(func() { sendPreCrashHook = nil })
+
+	outcome, sendErr := w.sendOne(ambientCtx, c, recipients[0], physicalAddress, fromHeader)
+
+	if ambientCtx.Err() == nil {
+		t.Fatal("test setup bug: ambientCtx was not actually cancelled before the SES call")
+	}
+	if sendErr != nil {
+		t.Fatalf("sendOne err = %v, want nil", sendErr)
+	}
+	if outcome != sendOutcomeSent {
+		t.Fatalf("outcome = %v, want sendOutcomeSent", outcome)
+	}
+	if got := mailer.count(); got != 1 {
+		t.Fatalf("mailer.count() = %d, want 1 (SES call must run on a detached ctx, not the cancelled ambient one)", got)
+	}
+	if got := sendRowStatus(t, pool, sendID); got != "sent" {
+		t.Fatalf("send row status = %q, want sent (MarkSent must run on a detached ctx, not the cancelled ambient one)", got)
+	}
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 func auditLoggerForTest(t *testing.T, pool *pgxpool.Pool) *audit.Logger {
