@@ -90,3 +90,28 @@ func (b *Broker) Publish(userID int64, event Event) {
 		}
 	}
 }
+
+// PublishAll fans event out to every channel currently subscribed, across
+// every userID — for events with no single owning user. #0048's campaign
+// send progress is the first of these: a campaign is not "owned" by
+// whichever admin happens to have it open, so every connected admin session
+// should see the same live counts, not just the one that triggered the
+// send. Same best-effort, non-blocking delivery as Publish (a slow or
+// absent reader is skipped, never blocks the publisher or another
+// subscriber); a Broker with no subscribers at all is a no-op.
+func (b *Broker) PublishAll(event Event) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for _, subs := range b.subscribers {
+		for _, ch := range subs {
+			select {
+			case ch <- event:
+			default:
+				// Subscriber buffer full: drop for this subscriber so one
+				// stuck reader cannot block Publish or the remaining
+				// subscribers.
+			}
+		}
+	}
+}

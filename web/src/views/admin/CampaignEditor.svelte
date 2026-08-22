@@ -56,6 +56,18 @@
     audienceErrorMessage,
   } from '../../lib/audience';
   import { sendGuardState } from '../../lib/sendConfirm';
+  import { subscribeEvent } from '../../lib/events';
+  import {
+    CAMPAIGN_PROGRESS_EVENT,
+    isProgressForCampaign,
+    shouldShowProgress,
+    progressHeading,
+    progressPercent,
+    formatProgressDetail,
+    progressVerdict,
+    remainingForCancel,
+    type CampaignProgress,
+  } from '../../lib/campaignProgress';
   import type { Campaign, PreflightResponse, AudiencePreviewResponse, CampaignPreviewResponse, UnmetRequirement, Interest } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
@@ -120,6 +132,20 @@
   let canceling = $state(false);
   let cancelError = $state<string | null>(null);
 
+  // ── Live send progress (#0048) ──────────────────────────────────────────
+  // progress/progressUpdatedAt hold the latest "campaign.progress" frame for
+  // THIS campaign (subscribeEvent delivers every connected admin's frames
+  // for every campaign — filtering to this one happens in the handler
+  // below via lib/campaignProgress's isProgressForCampaign, never inline
+  // here). nowTick exists solely so progressVerdict's derived value stays
+  // fresh with wall-clock time passing, not just on a new frame arriving —
+  // ticking it is the only way a "stalled" verdict can appear without a
+  // NEW event (the absence of one is exactly what "stalled" means).
+  let progress = $state<CampaignProgress | null>(null);
+  let progressUpdatedAt = $state<number | null>(null);
+  let nowTick = $state(Date.now());
+  let progressTicker: ReturnType<typeof setInterval> | undefined;
+
   // ── Focus targets ───────────────────────────────────────────────────────
   let headingEl = $state<HTMLHeadingElement | null>(null);
   let preflightHeadingEl = $state<HTMLHeadingElement | null>(null);
@@ -139,7 +165,25 @@
   );
   let audienceDescription = $derived(audiencePreview ? describeAudience(audiencePreview) : '—');
   let audienceSampleCaption = $derived(audiencePreview ? sampleCaption(audiencePreview) : '');
-  let cancelMessage = $derived(campaign ? cancelCopy(campaign.status) : '');
+  // #0048: the remaining-recipient count cancelCopy('sending') otherwise
+  // omits, sourced from the live progress stream via remainingForCancel
+  // (undefined — not 0 — when not sending or no matching snapshot yet, so
+  // cancelCopy falls back to its original no-digits wording).
+  let cancelRemaining = $derived(remainingForCancel(campaign?.status ?? '', campaignId, progress));
+  let cancelMessage = $derived(campaign ? cancelCopy(campaign.status, cancelRemaining) : '');
+
+  // ── Live send progress (#0048) ────────────────────────────────────────
+  let progressForThisCampaign = $derived(
+    progress !== null && isProgressForCampaign(progress, campaignId) ? progress : null,
+  );
+  let progressVisible = $derived(
+    shouldShowProgress(campaign?.status ?? '', progressForThisCampaign !== null),
+  );
+  let progressHeadingText = $derived(progressHeading(campaign?.status ?? ''));
+  let progressDetailText = $derived(progressForThisCampaign ? formatProgressDetail(progressForThisCampaign) : '');
+  let progressPercentValue = $derived(progressForThisCampaign ? progressPercent(progressForThisCampaign) : 0);
+  let progressVerdictValue = $derived(progressVerdict(campaign?.status ?? '', progressUpdatedAt, nowTick));
+  let progressStalled = $derived(progressVerdictValue === 'stalled');
   let htmlTabSelected = $derived(previewTab === 'html');
   // A stable, template-safe stand-in confirmation string equal to the live
   // count itself — this editor-level gate answers "is everything besides
@@ -201,12 +245,62 @@
     }
   }
 
+  // ── Live send progress wiring (#0048) ──────────────────────────────────
+  // onProgressEvent/resyncCampaignStatus are the only two things that touch
+  // progress/progressUpdatedAt/campaign from the stream — every decision
+  // about what to DO with a frame (does it belong to this campaign, does
+  // the region show, what it says) is a lib/campaignProgress.ts call read
+  // through the $derived values above, never decided here.
+  function onProgressEvent(p: CampaignProgress): void {
+    if (!isProgressForCampaign(p, campaignId)) {
+      return; // broadcast to every admin, for every campaign — not ours.
+    }
+    progress = p;
+    progressUpdatedAt = Date.now();
+  }
+
+  // Re-reads the campaign's status (not the editable buffer — see this
+  // function's own scope) on the stream's initial connect and every
+  // automatic reconnect. The database is the source of truth, not this
+  // stream (CLAUDE.md): a campaign can finish/fail/be cancelled entirely
+  // during a connection gap with no further batch to publish a closing
+  // frame (#0045's failCampaign does not publish), so relying solely on
+  // the next SSE frame could leave this view showing "Sending…" forever.
+  // Deliberately narrower than load(): it only replaces `campaign`, never
+  // the name/subject/preheader/bodyMd/mode/interestIds editable buffer, so
+  // an operator's in-progress (unsaved) edit is never clobbered by a
+  // background resync. Best-effort: a failure here just means the next
+  // progress frame or the operator's own next action refreshes it instead.
+  async function resyncCampaignStatus(): Promise<void> {
+    try {
+      campaign = await getCampaign(campaignId);
+    } catch {
+      // Best-effort — see this function's doc comment.
+    }
+  }
+
   onMount(() => {
     void load();
     void loadInterests();
     void tick().then(() => headingEl?.focus());
+
+    const unsubscribeProgress = subscribeEvent<CampaignProgress>(
+      CAMPAIGN_PROGRESS_EVENT,
+      onProgressEvent,
+      undefined,
+      () => void resyncCampaignStatus(),
+    );
+    // Keeps progressVerdict's "stalled" reading current even when no new
+    // frame ever arrives to trigger a re-render on its own — see nowTick's
+    // own doc comment above.
+    progressTicker = setInterval(() => {
+      nowTick = Date.now();
+    }, 5000);
+
     return () => {
       if (autosaveTimer) clearTimeout(autosaveTimer);
+      unsubscribeProgress();
+      if (progressTicker) clearInterval(progressTicker);
     };
   });
 
@@ -630,9 +724,25 @@
       {/if}
     </div>
 
-    <!-- Named, empty progress region for #0048 (SSE live send progress) to
-         fill. #0047 renders campaign status only and does not poll. -->
-    <div id="campaign-send-progress" role="status" aria-live="polite"></div>
+    <!-- #0048: live send progress over SSE. The outer div is #0047's named
+         region, rendered UNCONDITIONALLY and never wrapped in an {#if} — an
+         element inserted into the DOM together with its text is not
+         reliably announced (the #0036 -> #0063 live-region finding), so
+         only the CHILDREN below are conditional. Every value is a lib/
+         campaignProgress.ts call read through a $derived above; nothing
+         here recomputes a percentage, a status literal, or a comparison. -->
+    <div id="campaign-send-progress" role="status" aria-live="polite">
+      {#if progressVisible}
+        <p class="progress-heading">{progressHeadingText}</p>
+        <p class="progress-detail">{progressDetailText}</p>
+        <div class="progress-bar" aria-hidden="true">
+          <div class="progress-bar-fill" style="width: {progressPercentValue}%"></div>
+        </div>
+        {#if progressStalled}
+          <p class="text-muted">No update in a while — the worker may be paused or waiting on send-rate limits.</p>
+        {/if}
+      {/if}
+    </div>
 
     {#if sendDialogOpen && preflightSummary}
       <CampaignSendDialog
@@ -822,6 +932,30 @@
     display: flex;
     gap: var(--space-2);
     margin-top: var(--space-2);
+  }
+  #campaign-send-progress:not(:empty) {
+    margin-top: var(--space-2);
+  }
+  .progress-heading {
+    font-weight: 600;
+    margin: 0;
+  }
+  .progress-detail {
+    margin: var(--space-1) 0 0;
+    color: var(--text-muted);
+  }
+  .progress-bar {
+    margin-top: var(--space-2);
+    height: 0.5rem;
+    border-radius: var(--radius);
+    background: var(--bg-subtle);
+    border: var(--border-w) solid var(--border-strong);
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.3s ease;
   }
   .btn {
     font-family: var(--font);

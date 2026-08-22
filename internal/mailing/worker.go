@@ -73,10 +73,18 @@ const (
 // CampaignProgress is one snapshot of a campaign's send progress — the seam
 // #0048 publishes over SSE. Total is fixed at materialization (#0044's plan
 // requires a fixed denominator); Remaining is queued+sending; Skipped is its
-// own bucket, never folded into Failed.
+// own bucket, never folded into Failed. JSON tags are load-bearing: this
+// struct is marshaled verbatim (internal/handlers/campaign_progress.go, via
+// encoding/json) into the SSE frame's data field, and web/src/lib/
+// campaignProgress.ts's CampaignProgress type is keyed off these exact
+// snake_case names.
 type CampaignProgress struct {
-	CampaignID                              int64
-	Total, Sent, Failed, Skipped, Remaining int64
+	CampaignID int64 `json:"campaign_id"`
+	Total      int64 `json:"total"`
+	Sent       int64 `json:"sent"`
+	Failed     int64 `json:"failed"`
+	Skipped    int64 `json:"skipped"`
+	Remaining  int64 `json:"remaining"`
 }
 
 // ProgressPublisher is the seam #0048 supplies a broker-backed

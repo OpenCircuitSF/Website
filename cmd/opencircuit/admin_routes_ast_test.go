@@ -53,7 +53,10 @@ import (
 // /api and /account have no such table: every /api and /account
 // mux.Handle/HandleFunc call in mountAndServe already carries its own guard
 // (or deliberate absence of one) written directly at the call site —
-// requireSession(...) for /account/credentials*, /api/me, /api/events; no
+// requireSession(...) for /account/credentials* and /api/me;
+// requireAdmin(...) for /api/events (#0048: its one real consumer, live
+// campaign send progress, is admin data — see main.go's route comment for
+// why it stays outside this table despite being admin-gated); no
 // wrapper at all for the intentionally public /api/interests,
 // /api/subscribe, /api/subscribe/confirm, and /api/preferences, each with
 // its own comment explaining why. An AST rule there would have to encode

@@ -264,12 +264,23 @@ export function demotionExplanation(c: Campaign): string {
 /**
  * Operator-facing copy for the cancel confirmation, keyed by the campaign's
  * CURRENT status (only `scheduled` and `sending` ever offer Cancel — see
- * canCancelCampaign). Deliberately carries no number for the `sending` case:
- * the remaining-recipient count is #0048's progress stream to add, and a
- * stale number here would be worse than none.
+ * canCancelCampaign).
+ *
+ * `remaining`, added by #0048, is the live remaining-recipient count from
+ * lib/campaignProgress.ts's `remainingForCancel` — deliberately optional
+ * and `undefined` by default (not a magic 0) so a caller with no live
+ * snapshot yet (or none originally, before #0048) gets the same
+ * no-digits fallback wording this function always returned: a stale or
+ * fabricated number would be worse than none. Only the `sending` case ever
+ * uses it — `scheduled` has sent nothing yet, so there is no "remaining out
+ * of what" to state.
  */
-export function cancelCopy(status: string): string {
+export function cancelCopy(status: string, remaining?: number): string {
   if (status === 'sending') {
+    if (remaining != null) {
+      const who = remaining === 1 ? '1 recipient' : `${remaining} recipients`;
+      return `Messages already sent cannot be recalled. Cancelling stops the worker from sending to the ${who} not yet mailed.`;
+    }
     return 'Messages already sent cannot be recalled. Cancelling stops the worker from sending to anyone not already mailed.';
   }
   return 'Nothing has been sent yet. Cancelling stops the send before it starts.';

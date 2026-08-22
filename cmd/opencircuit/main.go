@@ -217,6 +217,23 @@ func servePostgres(cfg *config.Config) error {
 	campaignsStore := mailing.NewCampaignStore(pool)
 	audienceStore := mailing.NewAudienceStore(pool)
 
+	// SSE event broker: the in-memory pub/sub singleton shared by GET
+	// /api/events (eventsH below) and, as of #0048, the send worker's live
+	// progress publisher constructed just below. Built here — ahead of
+	// newSendWorkerIfEnabled — rather than alongside eventsH further down,
+	// specifically so the worker can be wired to it at construction time.
+	broker := events.NewBroker()
+	eventsH := handlers.NewEventsHandler(broker)
+
+	// Campaign send progress publisher (#0048, PRD §8): the broker-backed
+	// implementation of mailing.ProgressPublisher that newSendWorkerIfEnabled
+	// wires into WorkerDeps.Progress below, replacing the literal `nil`
+	// #0045 left there. Broadcasts over the SAME broker GET /api/events
+	// streams from — see internal/handlers/campaign_progress.go's package
+	// doc comment for why PublishAll (every connected admin), not Publish
+	// (one userID).
+	campaignProgressPub := handlers.NewCampaignProgressPublisher(broker, slog.Default())
+
 	// Send worker (#0045, PRD §6.6): the loop that turns queued email_sends
 	// rows into delivered mail, and the authoritative copy of the pre-send
 	// gate. sendWorker is nil when MAILER_NOOP=true (see
@@ -227,7 +244,7 @@ func servePostgres(cfg *config.Config) error {
 	// that deliberately doesn't run the worker itself (CLAUDE.md §10 item
 	// 4's "exactly one instance runs the worker" scaling story).
 	sendStore := newSendStoreIfEnabled(cfg, pool, audienceStore, store)
-	sendWorker, err := newSendWorkerIfEnabled(cfg, sendStore, audienceStore, auditLogger, sesSender, store, slog.Default())
+	sendWorker, err := newSendWorkerIfEnabled(cfg, sendStore, audienceStore, auditLogger, sesSender, store, campaignProgressPub, slog.Default())
 	if err != nil {
 		return fmt.Errorf("opencircuit: constructing send worker: %w", err)
 	}
@@ -308,10 +325,9 @@ func servePostgres(cfg *config.Config) error {
 		sesVerifier, pool, sesEventsStore, subscribersStore, suppressionsStore, store, auditLogger, slog.Default(),
 	)
 
-	// SSE event broker: the in-memory pub/sub singleton reused for live
-	// campaign send progress once the mailing subsystem lands.
-	broker := events.NewBroker()
-	eventsH := handlers.NewEventsHandler(broker)
+	// broker/eventsH (GET /api/events) were constructed earlier, alongside
+	// the send worker's campaign progress publisher — see that comment for
+	// why.
 
 	// Current user profile: GET /api/me returns {id, email, is_admin} read
 	// straight off the RequireSession-attached context, so the Svelte SPA can
@@ -426,7 +442,7 @@ func newSendStoreIfEnabled(cfg *config.Config, pool *pgxpool.Pool, audienceStore
 // A single slog.Warn records either refusal, since nothing about the
 // request path can otherwise surface "campaigns will not send" to an
 // operator.
-func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, audienceStore *mailing.AudienceStore, auditLogger *audit.Logger, mailer mailing.Mailer, settings mailing.SettingsReader, log *slog.Logger) (*mailing.Worker, error) {
+func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, audienceStore *mailing.AudienceStore, auditLogger *audit.Logger, mailer mailing.Mailer, settings mailing.SettingsReader, progress mailing.ProgressPublisher, log *slog.Logger) (*mailing.Worker, error) {
 	if cfg.MailerNoOp {
 		log.Warn("opencircuit: MAILER_NOOP=true — the send worker will not start; scheduled campaigns will not send")
 		return nil, nil
@@ -448,7 +464,7 @@ func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, au
 		Mailer:         mailer,
 		Render:         mailing.MarkdownCampaignRenderer{},
 		Settings:       settings,
-		Progress:       nil, // #0048 supplies the broker-backed implementation
+		Progress:       progress, // #0048: the broker-backed implementation, or nil (matching every call site's nil-tolerance) in tests that pass none
 		BaseURL:        cfg.BaseURL,
 		ListDomain:     cfg.EmailListDomain,
 		FromAddr:       cfg.EmailFrom,
@@ -811,9 +827,25 @@ func mountAndServe(
 	// {id, email, is_admin} for the SPA to gate the admin view.
 	mux.Handle("GET /api/me", requireSession(http.HandlerFunc(meH.Me)))
 
-	// SSE stream — behind RequireSession; pushes events to the authenticated
-	// user's connected clients (campaign send progress, once mailing lands).
-	mux.Handle("GET /api/events", requireSession(http.HandlerFunc(eventsH.Stream)))
+	// SSE stream (#0048, PRD §8) — behind requireAdmin (session + is_admin),
+	// not just requireSession: its one real consumer, live campaign send
+	// progress, is admin data (CLAUDE.md §9's "admin data" framing), and
+	// EventSource cannot set a custom Authorization header, so the existing
+	// session COOKIE is what carries auth here — requireAdmin composes
+	// RequireSession then RequireAdmin over that same cookie, exactly as it
+	// does for every /admin/* route, so no separate auth mechanism is
+	// needed for a stream a plain <script> tag can't attach a header to.
+	//
+	// Deliberately NOT registered through adminRoutes()/the admin loop
+	// below, even though it is now admin-gated: adminRoutes and
+	// TestAdminRoutesRegisteredOnlyViaTable (admin_routes_ast_test.go) are
+	// scoped to /admin/*, on purpose (see that test's own doc comment) —
+	// every /api/* route, including this one, carries its own guard
+	// written directly at its mux.Handle call site instead, and
+	// events_wiring_test.go proves this one requires session+admin at the
+	// real mux (401/403/200), mirroring TestMountAndServe_
+	// AdminRoutesRequireSessionAndAdmin's own proof shape for the table.
+	mux.Handle("GET /api/events", requireAdmin(http.HandlerFunc(eventsH.Stream)))
 
 	// Mailing-list signup (#0026) — public, unauthenticated, double opt-in.
 	// Rate-limited per PRD §6.3's stated 5/min-burst-3, matching every other

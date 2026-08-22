@@ -154,13 +154,21 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 		WebAuthnRPOrigin: baseURL,
 	}
 
-	// Real session auth for GET /api/events — it is mounted behind
-	// requireSession (main.go), unlike the passthrough-guarded routes the
-	// other subscribe/shutdown wiring tests exercise.
+	// Real session+admin auth for GET /api/events — as of #0048 it is
+	// mounted behind requireAdmin (main.go), not just requireSession, since
+	// its one real consumer (live campaign send progress) is admin data.
+	// Unlike the passthrough-guarded routes the other subscribe/shutdown
+	// wiring tests exercise, this test needs the connection to actually
+	// open (it is what forces Shutdown to consume its own budget below), so
+	// it composes the real middleware.RequireSession/RequireAdmin chain and
+	// seeds an ADMIN session — exactly what production does — rather than
+	// passing a passthrough that would make the auth here meaningless.
 	store := auth.NewStore(pool)
 	requireSession := middleware.RequireSession(store)
-	passthroughAdmin := func(next http.Handler) http.Handler { return next }
-	userID := seedAdminWiringUser(t, pool, fmt.Sprintf("zz-shutdown-budget-%d@example.com", time.Now().UnixNano()), false)
+	requireAdmin := func(next http.Handler) http.Handler {
+		return requireSession(middleware.RequireAdmin(next))
+	}
+	userID := seedAdminWiringUser(t, pool, fmt.Sprintf("zz-shutdown-budget-%d@example.com", time.Now().UnixNano()), true)
 	seedAdminWiringSession(t, pool, userID, "zz-shutdown-budget-token")
 
 	broker := events.NewBroker()
@@ -201,7 +209,7 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised */
 			nil, /* sesNotifyH: not exercised */
 			nil, /* sendWorker: not exercised */
-			requireSession, passthroughAdmin, nil, ready)
+			requireSession, requireAdmin, nil, ready)
 	}()
 
 	client := &http.Client{Timeout: wiringHTTPTimeout}

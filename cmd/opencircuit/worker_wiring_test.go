@@ -44,7 +44,7 @@ func TestNewSendWorkerIfEnabled_MailerNoOp_Refuses(t *testing.T) {
 		t.Fatal("newSendStoreIfEnabled under MAILER_NOOP=true = non-nil, want nil")
 	}
 
-	w, err := newSendWorkerIfEnabled(cfg, sendStore, nil, nil, nil, nil, discardLogger())
+	w, err := newSendWorkerIfEnabled(cfg, sendStore, nil, nil, nil, nil, nil, discardLogger())
 	if err != nil {
 		t.Fatalf("newSendWorkerIfEnabled: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestNewSendWorkerIfEnabled_SendWorkerDisabled_ReturnsNil(t *testing.T) {
 		t.Fatal("newSendStoreIfEnabled = nil, want non-nil — SEND_WORKER_ENABLED must not affect the preflight adapter's availability")
 	}
 
-	w, err := newSendWorkerIfEnabled(cfg, sendStore, nil, nil, nil, nil, discardLogger())
+	w, err := newSendWorkerIfEnabled(cfg, sendStore, nil, nil, nil, nil, nil, discardLogger())
 	if err != nil {
 		t.Fatalf("newSendWorkerIfEnabled: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestNewSendWorkerIfEnabled_Enabled_ConstructsWorker(t *testing.T) {
 		t.Fatal("newSendStoreIfEnabled = nil, want non-nil")
 	}
 
-	w, err := newSendWorkerIfEnabled(cfg, sendStore, audienceStore, nil, nullMailer{}, nullSettings{}, discardLogger())
+	w, err := newSendWorkerIfEnabled(cfg, sendStore, audienceStore, nil, nullMailer{}, nullSettings{}, nil, discardLogger())
 	if err != nil {
 		t.Fatalf("newSendWorkerIfEnabled: %v", err)
 	}

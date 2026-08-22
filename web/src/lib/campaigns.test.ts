@@ -189,8 +189,36 @@ describe('cancelCopy', () => {
     expect(cancelCopy('scheduled')).not.toBe(cancelCopy('sending'));
   });
 
-  it('contains no digits, in either case', () => {
+  it('contains no digits, in either case, when remaining is omitted', () => {
     expect(/\d/.test(cancelCopy('scheduled'))).toBe(false);
     expect(/\d/.test(cancelCopy('sending'))).toBe(false);
+  });
+
+  // #0048: remaining is the live remaining-recipient count only #0048's SSE
+  // stream knows — see lib/campaignProgress.ts's remainingForCancel.
+  it('still contains no digits for scheduled even when a remaining count is passed', () => {
+    // scheduled never had anything sent yet; a "remaining" count would be
+    // meaningless there, so it must be ignored.
+    expect(/\d/.test(cancelCopy('scheduled', 706))).toBe(false);
+  });
+
+  it('includes the remaining count for sending when supplied', () => {
+    const msg = cancelCopy('sending', 706);
+    expect(msg).toContain('706');
+  });
+
+  it('uses singular "1 recipient" for exactly one remaining', () => {
+    const msg = cancelCopy('sending', 1);
+    expect(msg).toContain('1 recipient');
+    expect(msg).not.toContain('1 recipients');
+  });
+
+  it('uses plural "recipients" for a remaining count other than 1, including 0', () => {
+    expect(cancelCopy('sending', 0)).toContain('0 recipients');
+    expect(cancelCopy('sending', 2)).toContain('2 recipients');
+  });
+
+  it('falls back to the no-digits wording when remaining is undefined', () => {
+    expect(cancelCopy('sending', undefined)).toBe(cancelCopy('sending'));
   });
 });

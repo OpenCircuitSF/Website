@@ -90,4 +90,41 @@ describe('subscribeEvent', () => {
     cleanup();
     expect(es.closed).toBe(true);
   });
+
+  it('does not register an open listener when onOpen is omitted', () => {
+    let es!: FakeEventSource;
+    subscribeEvent<TestPayload>(TEST_EVENT, () => {}, (url) => (es = new FakeEventSource(url)));
+    // Must not throw even though nothing is listening for 'open'.
+    expect(() => es.emit('open', '')).not.toThrow();
+  });
+
+  it('calls onOpen when the EventSource reports open', () => {
+    let es!: FakeEventSource;
+    const onOpen = vi.fn();
+    subscribeEvent<TestPayload>(
+      TEST_EVENT,
+      () => {},
+      (url) => (es = new FakeEventSource(url)),
+      onOpen,
+    );
+
+    expect(onOpen).not.toHaveBeenCalled();
+    es.emit('open', '');
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls onOpen again on a reconnect (a second open frame)', () => {
+    let es!: FakeEventSource;
+    const onOpen = vi.fn();
+    subscribeEvent<TestPayload>(
+      TEST_EVENT,
+      () => {},
+      (url) => (es = new FakeEventSource(url)),
+      onOpen,
+    );
+
+    es.emit('open', '');
+    es.emit('open', ''); // the browser's automatic reconnect fires 'open' again
+    expect(onOpen).toHaveBeenCalledTimes(2);
+  });
 });

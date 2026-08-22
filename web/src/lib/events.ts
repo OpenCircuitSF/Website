@@ -35,19 +35,36 @@ const defaultFactory: EventSourceFactory = (url) =>
  * down.
  *
  * Reconnection is intentionally NOT custom: the browser's built-in EventSource
- * reconnects automatically after a drop, so this stays simple.
+ * reconnects automatically after a drop, so this stays simple. Because the
+ * server always publishes a full recomputed snapshot rather than a delta
+ * (#0048's CampaignProgress, worker.go's own doc comment), a reconnect can
+ * never double-count — whatever the next frame says simply replaces whatever
+ * the consumer was showing.
  *
  * A malformed frame (non-JSON `data`) is swallowed defensively: it is ignored so
  * one bad event cannot crash the consuming view or kill the live stream.
  *
+ * `onOpen`, when given, fires on every `open` the underlying EventSource
+ * reports — the INITIAL connection and every automatic reconnect alike (the
+ * DOM EventSource does not distinguish the two). #0048's CampaignEditor uses
+ * this to re-fetch the campaign's status from the server on each (re)connect:
+ * the database, not this stream, is the source of truth (CLAUDE.md), and a
+ * campaign can finish sending — or be cancelled, or fail — entirely during a
+ * gap with no further batch to publish a closing frame, so a client that
+ * relies solely on the next event could wait forever for one that never
+ * comes. Re-checking status on every open bounds that gap to "however long
+ * the stream was down," rather than "possibly forever."
+ *
  * @param eventName the SSE `event:` name to listen for, e.g. "campaign.progress".
  * @param onEvent   called with each parsed JSON payload of that event name.
  * @param factory   optional EventSource factory (defaults to the global), for tests.
+ * @param onOpen    optional callback fired on the initial connection and every reconnect.
  */
 export function subscribeEvent<T>(
   eventName: string,
   onEvent: (payload: T) => void,
   factory: EventSourceFactory = defaultFactory,
+  onOpen?: () => void,
 ): () => void {
   const es = factory(EVENTS_URL);
 
@@ -61,6 +78,10 @@ export function subscribeEvent<T>(
     }
     onEvent(payload);
   });
+
+  if (onOpen) {
+    es.addEventListener('open', () => onOpen());
+  }
 
   return () => es.close();
 }

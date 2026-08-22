@@ -167,6 +167,78 @@ func TestPublishNonBlockingOnFullBuffer(t *testing.T) {
 	_ = slow
 }
 
+// TestPublishAllReachesEverySubscribedUser (#0048) asserts PublishAll fans an
+// event out across DIFFERENT userIDs, unlike Publish which is scoped to one —
+// campaign send progress has no single owning user, so every connected admin
+// session must see it.
+func TestPublishAllReachesEverySubscribedUser(t *testing.T) {
+	b := NewBroker()
+	a := b.Subscribe(1)
+	c := b.Subscribe(2)
+
+	b.PublishAll(Event{Name: "campaign.progress", Payload: []byte("x")})
+
+	if ev := recv(t, a); ev.Name != "campaign.progress" {
+		t.Errorf("user 1: name = %q", ev.Name)
+	}
+	if ev := recv(t, c); ev.Name != "campaign.progress" {
+		t.Errorf("user 2: name = %q", ev.Name)
+	}
+}
+
+// TestPublishAllReachesEveryChannelOfSameUser asserts a user with multiple
+// open tabs/connections gets the broadcast on every one of its channels, not
+// just the first.
+func TestPublishAllReachesEveryChannelOfSameUser(t *testing.T) {
+	b := NewBroker()
+	a := b.Subscribe(4)
+	c := b.Subscribe(4)
+
+	b.PublishAll(Event{Name: "campaign.progress", Payload: []byte("x")})
+
+	if ev := recv(t, a); ev.Name != "campaign.progress" {
+		t.Errorf("subscriber a: name = %q", ev.Name)
+	}
+	if ev := recv(t, c); ev.Name != "campaign.progress" {
+		t.Errorf("subscriber c: name = %q", ev.Name)
+	}
+}
+
+// TestPublishAllNoSubscribersNoop asserts PublishAll on a Broker with no
+// subscribers at all does not panic.
+func TestPublishAllNoSubscribersNoop(t *testing.T) {
+	b := NewBroker()
+	b.PublishAll(Event{Name: "campaign.progress", Payload: []byte("x")})
+}
+
+// TestPublishAllNonBlockingOnFullBuffer mirrors
+// TestPublishNonBlockingOnFullBuffer for the broadcast path: a slow
+// subscriber's full buffer must not block PublishAll or starve a fast
+// subscriber under a DIFFERENT userID.
+func TestPublishAllNonBlockingOnFullBuffer(t *testing.T) {
+	b := NewBroker()
+	slow := b.Subscribe(21) // never read from → buffer fills.
+	fast := b.Subscribe(22)
+
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < subscriberBuffer*4; i++ {
+			b.PublishAll(Event{Name: "campaign.progress", Payload: []byte("flood")})
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("PublishAll blocked on a full subscriber buffer")
+	}
+
+	if ev := recv(t, fast); ev.Name != "campaign.progress" {
+		t.Errorf("fast subscriber name = %q", ev.Name)
+	}
+	_ = slow
+}
+
 // TestConcurrentSubscribePublishUnsubscribe hammers the broker from many
 // goroutines to shake out data races under -race. It asserts no panic/deadlock;
 // correctness of individual deliveries is covered by the focused tests above.
