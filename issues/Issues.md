@@ -240,8 +240,9 @@ scripts/list-issues-by-phase --phase 6 --no-color
 ```
 
 Piped or redirected it degrades to plain aligned columns — `number  status
-phase  title` — so it stays greppable. It groups by phase and phases run in
-order, which is the order that matters.
+phase  title` — under `#` phase headers carrying the per-phase `d/t` and
+percentage, so it stays greppable (`grep -v '^#'` leaves the rows alone). It
+groups by phase and phases run in order, which is the order that matters.
 
 1. **Refresh the pricing cache if stale.** If `issues/model-pricing.json` is missing or its `fetched` date isn't today, fetch current model prices and rewrite it (once per day). See "Token usage and cost tracking" below.
 2. **Run the script** to get the candidate set. Candidates are issues marked

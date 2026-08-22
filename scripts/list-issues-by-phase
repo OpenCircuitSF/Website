@@ -12,8 +12,9 @@ overall header and each phase header carry a completion percentage.
     scripts/list-issues-by-phase --no-color   # plain columns for grep/awk
 
 On a terminal the output is colored and grouped. When piped or redirected it
-degrades to plain aligned columns (number, status, phase, title) so it stays
-greppable. NO_COLOR is honored.
+degrades to plain aligned columns (number, status, phase, title) under `#`
+phase headers that carry the same percentages, so it stays greppable —
+`grep -v '^#'` leaves the rows alone. NO_COLOR is honored.
 
 Completion is measured in issues, not acceptance criteria: an issue counts as
 done when its status is resolved or closed. `wontfix` issues are excluded from
@@ -232,18 +233,31 @@ def main() -> int:
             print(f"no issues in phase {args.phase}", file=sys.stderr)
             return 1
 
+    counted = [i for i in issues if i.counts]
+    total_done = sum(1 for i in counted if i.is_done)
+    wontfix = sum(1 for i in issues if i.is_wontfix)
+
     if not use_color:
+        # Headers carry the same percentages the colored output does, prefixed
+        # with `#` so `grep -v '^#'` still yields pure `number status phase
+        # title` rows.
+        excluded = f" ({wontfix} won't-fix excluded)" if wontfix else ""
+        print(f"# {project_name(issues_dir)} · {total_done}/{len(counted)} issues"
+              f" · {pct(total_done, len(counted))}%{excluded}")
         for k in ordered:
-            for it in sorted(groups[k], key=lambda i: i.num):
+            members = sorted(groups[k], key=lambda i: i.num)
+            cm = [i for i in members if i.counts]
+            d = sum(1 for i in cm if i.is_done)
+            label = members[0].phase_label if k is not None else "Unphased"
+            title = f"Phase {k} — {label}" if k is not None else label
+            print(f"# {title}  {d}/{len(cm)}  {pct(d, len(cm))}%")
+            for it in members:
                 if args.only_open and it.is_done:
                     continue
                 ph = f"{k}" if k is not None else "-"
                 print(f"{it.num}  {it.status:<12}  {ph:<2}  {it.title}")
         return 0
 
-    counted = [i for i in issues if i.counts]
-    total_done = sum(1 for i in counted if i.is_done)
-    wontfix = sum(1 for i in issues if i.is_wontfix)
     width = shutil.get_terminal_size((100, 24)).columns
 
     head = f"{project_name(issues_dir)} · {total_done}/{len(counted)} issues · {pct(total_done, len(counted))}%"
