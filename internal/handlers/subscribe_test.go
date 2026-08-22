@@ -384,6 +384,15 @@ func TestSubscribe_UniformResponseAcrossBranches(t *testing.T) {
 		{"suppressed", subscribeBody(suppressedEmail, nil, now)},
 		{"honeypot", withHoneypot(subscribeBody(subscribeUniqueEmail(t)+"-bot", nil, now))},
 		{"timing-gate", withTooFast(subscribeBody(subscribeUniqueEmail(t)+"-fast", nil, now), now)},
+		// #0046's review (phase 3, second bounce, finding 2): the reserved
+		// test-email-domain no-op processMutateJob added lives on the same
+		// async branch every other case here exercises, but this table had
+		// no entry naming it -- a genuine per-branch response oracle keyed
+		// on subscribers.IsReservedTestEmail slipped past every existing
+		// case. Proven by mutation: setting w.Header().Set("X-Reserved", "1")
+		// immediately before writeSubscribeUniform202 in Subscribe left this
+		// test green until this case was added.
+		{"reserved-test-domain", subscribeBody(fmt.Sprintf("zz-subtest-reserved-%d@%s", time.Now().UnixNano(), subscribers.ReservedTestEmailDomain), nil, now)},
 	}
 
 	var firstBody []byte
