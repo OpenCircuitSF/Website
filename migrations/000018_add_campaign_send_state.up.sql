@@ -16,7 +16,7 @@ ALTER TABLE email_campaigns ADD COLUMN materialized_at TIMESTAMPTZ;
 -- plan §3.
 ALTER TABLE email_campaigns ADD COLUMN test_sent_at TIMESTAMPTZ;
 
--- Widen email_sends' status CHECK to add the seventh value 'sending' — the
+-- Widen email_sends' status CHECK to add the fifth value 'sending' — the
 -- per-row claim state between 'queued' and 'sent'/'failed' the worker's
 -- atomic per-row claim (#0045's plan §4, updated by #0122 to also stamp
 -- claimed_at) requires:
@@ -24,11 +24,13 @@ ALTER TABLE email_campaigns ADD COLUMN test_sent_at TIMESTAMPTZ;
 --    WHERE id=$1 AND status='queued'
 -- 000017's CHECK predates this state and must be dropped and re-added
 -- rather than edited in place (CHECK constraints have no ALTER-in-place
--- form in Postgres).
+-- form in Postgres). ('bounced'/'complained' were never part of this list —
+-- #0131 removed them from 000017 directly, greenfield, rather than stacking
+-- a second widening migration.)
 ALTER TABLE email_sends DROP CONSTRAINT email_sends_status_check;
 ALTER TABLE email_sends
     ADD CONSTRAINT email_sends_status_check
-    CHECK (status IN ('queued', 'sending', 'sent', 'failed', 'bounced', 'complained', 'skipped'));
+    CHECK (status IN ('queued', 'sending', 'sent', 'failed', 'skipped'));
 
 -- claimed_at: stamped by SendStore.ClaimRow in the same statement that
 -- flips a row to 'sending' and increments attempts (#0122). Without it,

@@ -10,7 +10,7 @@ ALTER TABLE email_sends DROP COLUMN claimed_at;
 ALTER TABLE email_sends DROP CONSTRAINT email_sends_status_check;
 ALTER TABLE email_sends
     ADD CONSTRAINT email_sends_status_check
-    CHECK (status IN ('queued', 'sent', 'failed', 'bounced', 'complained', 'skipped'));
+    CHECK (status IN ('queued', 'sent', 'failed', 'skipped'));
 
 DELETE FROM settings WHERE key IN ('max_send_rate', 'default_from_name');
 

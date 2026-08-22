@@ -1,30 +1,32 @@
 // campaign_stats.go: the read-only reconciliation layer backing #0049's
 // per-campaign stats screen (GET /admin/campaigns/{id}/stats, PRD §11).
 //
-// # Why bounced/complained must be reconciled from email_events, not read off email_sends.status
+// # Why bounced/complained are reconciled from email_events, not read off email_sends.status
 //
-// migration 000014's email_sends.status CHECK allows 'bounced' and
-// 'complained' (carried in from #0044's plan), but nothing in this
-// package's send path, nor internal/sesnotify's SES/SNS event ingestion
-// (#0038), ever WRITES either value — worker_store.go's MarkSent only ever
-// writes 'sent', and every bounce/complaint notification lands exclusively
-// in email_events (#0038's own scope; that handler never touches
-// email_sends). So a raw `COUNT(*) FILTER (WHERE status = 'bounced')` is
-// always zero regardless of how many real bounces occurred. The true count
-// comes from joining email_sends to email_events on ses_message_id —
-// idx_email_sends_message_id and idx_email_events_message_id (migrations
-// 000014/000017) exist specifically for this join; see 000017's own comment
-// naming this issue by number.
+// Nothing in this package's send path, nor internal/sesnotify's SES/SNS
+// event ingestion (#0038), ever writes email_sends.status to 'bounced' or
+// 'complained' — worker_store.go's MarkSent only ever writes 'sent', and
+// every bounce/complaint notification lands exclusively in email_events
+// (#0038's own scope; that handler never touches email_sends). #0131
+// confirmed this and removed both values from migration 000017's
+// email_sends_status_check (widened by 000018 to add 'sending', which does
+// not touch this decision) — the CHECK now enforces at the database level
+// what was already true in practice, so a raw
+// `COUNT(*) FILTER (WHERE status = 'bounced')` is not merely always zero,
+// it is now structurally guaranteed to be. The true count comes from
+// joining email_sends to email_events on ses_message_id —
+// idx_email_sends_message_id (000017) and idx_email_events_message_id
+// (000014) exist specifically for this join.
 //
-// StatusCounts below still reports all seven email_sends.status buckets
-// verbatim (queued, sending, sent, failed, bounced, complained, skipped) —
-// the acceptance criterion "all seven statuses must be bucketed" is about
-// the column's full vocabulary being represented in the response, not a
-// claim that the last two are ever nonzero via this path. EventCounts is
-// the second, reconciled source web/src/lib/campaignStats.ts's
-// buildStatBuckets substitutes into the bounced/complained buckets for
-// display — see that function's doc comment for why the client, not this
-// file, owns that substitution decision.
+// StatusCounts below still reports Bounced/Complained fields, always zero
+// by construction — kept rather than removed so the response shape stays
+// stable and the guard test proving they read zero
+// (internal/handlers/admin_campaign_stats_test.go's
+// TestAdminCampaignStats_ReconcilesBounceAndComplaintFromEvents) keeps
+// guarding something real. EventCounts is the reconciled source
+// web/src/lib/campaignStats.ts's buildStatBuckets substitutes into the
+// bounced/complained buckets for display — see that function's doc comment
+// for why the client, not this file, owns that substitution decision.
 package mailing
 
 import (
@@ -52,8 +54,10 @@ func NewCampaignStatsStore(pool *pgxpool.Pool) *CampaignStatsStore {
 }
 
 // CampaignSendCounts is the raw email_sends.status breakdown for one
-// campaign — all seven values from migration 000014/000018's CHECK
-// constraint, none omitted. Skipped is its own field, distinct from Failed
+// campaign. Bounced and Complained are kept as fields even though migration
+// 000017 (as amended by #0131, widened by 000018) no longer admits either
+// value into the column — see this file's package doc comment for why they
+// stay, always reading zero. Skipped is its own field, distinct from Failed
 // (carried in from #0044's plan: a recipient who unsubscribed or was
 // suppressed between materialization and send is not a delivery failure —
 // counting it as one would misreport a correctly-working unsubscribe path).
@@ -68,8 +72,8 @@ type CampaignSendCounts struct {
 }
 
 // StatusCounts returns the raw per-status row counts for campaignID. See
-// this file's package doc comment for why Bounced/Complained read zero in
-// practice — EventCounts below is the reconciled source for those two.
+// this file's package doc comment for why Bounced/Complained read zero by
+// construction — EventCounts below is the reconciled source for those two.
 func (s *CampaignStatsStore) StatusCounts(ctx context.Context, campaignID int64) (CampaignSendCounts, error) {
 	var c CampaignSendCounts
 	err := s.pool.QueryRow(ctx,

@@ -542,10 +542,15 @@ CREATE TABLE email_sends (
     subscriber_id  BIGINT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
     email          TEXT NOT NULL,          -- snapshot at send time
     status         TEXT NOT NULL DEFAULT 'queued',
-                   -- queued | sending | sent | failed | bounced | complained | skipped
+                   -- queued | sending | sent | failed | skipped
                    -- 'sending' (000018) is the per-row claim state: the worker's atomic
                    -- UPDATE ... WHERE id=$1 AND status='queued' is what makes two workers
                    -- unable to take the same recipient
+                   -- 'bounced'/'complained' were removed by #0131: SES bounce and
+                   -- complaint events are recorded exclusively in email_events (#0038)
+                   -- and never stamped onto this column, so the two values described
+                   -- states nothing could ever produce. #0049's stats view reconciles
+                   -- bounce/complaint counts via a JOIN against email_events instead.
     ses_message_id TEXT,
     attempts       INT NOT NULL DEFAULT 0,
     error          TEXT,

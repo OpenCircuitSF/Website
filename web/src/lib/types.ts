@@ -278,15 +278,17 @@ export interface CampaignPreviewResponse {
  * GET /admin/campaigns/{id}/stats response (#0049, PRD §11). Matches
  * internal/handlers/admin_campaign_stats.go `campaignStatsResponse`.
  *
- * `counts` is the raw email_sends.status breakdown — all seven values from
- * migration 000018's CHECK, `bounced`/`complained` included. `reconciled`
- * is the SEPARATE, actually-meaningful bounce/complaint count, joined
- * server-side from email_events by ses_message_id — see
+ * `counts` is the raw email_sends.status breakdown, all seven response
+ * fields present including `bounced`/`complained` — but migration 000017
+ * (as amended by #0131, widened by 000018 to add `sending`) no longer
+ * admits either value into the column, so those two always read zero.
+ * `reconciled` is the SEPARATE, actually-meaningful bounce/complaint count,
+ * joined server-side from email_events by ses_message_id — see
  * internal/mailing/campaign_stats.go's package doc comment for why
- * `counts.bounced`/`counts.complained` read zero in practice (nothing in
- * this codebase ever writes those two email_sends.status values) and
- * lib/campaignStats.ts's `buildStatBuckets` for why the presentation layer
- * substitutes `reconciled` in their place.
+ * `counts.bounced`/`counts.complained` read zero (nothing in this codebase
+ * ever writes those two email_sends.status values, and the CHECK now
+ * forbids it outright) and lib/campaignStats.ts's `buildStatBuckets` for
+ * why the presentation layer substitutes `reconciled` in their place.
  */
 export interface CampaignStatsResponse {
   campaign_id: number;

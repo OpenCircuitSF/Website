@@ -122,13 +122,18 @@ func seedEmailEventRow(t *testing.T, pool *pgxpool.Pool, snsMessageID, sesMessag
 	})
 }
 
-// TestAdminCampaignStats_BucketsAllSevenStatuses seeds one email_sends row
+// TestAdminCampaignStats_BucketsAllValidStatuses seeds one email_sends row
 // per status migration 000018's CHECK allows and proves every one is
-// counted — including 'sending' (the seventh status, #0045/#0122) and
+// counted — including 'sending' (the fifth status, #0045/#0122) and
 // 'skipped' as its own bucket distinct from 'failed' (carried in from
 // #0044's plan: an unsubscribe/suppression between materialization and send
-// is not a delivery failure).
-func TestAdminCampaignStats_BucketsAllSevenStatuses(t *testing.T) {
+// is not a delivery failure). 'bounced'/'complained' are deliberately NOT
+// seeded here — #0131 removed both from the CHECK (email_events, #0038, is
+// the sole record of what SES said), so an INSERT at either value would now
+// be rejected by the database; see
+// TestAdminCampaignStats_ReconcilesBounceAndComplaintFromEvents below for
+// the guard that those two buckets still read zero.
+func TestAdminCampaignStats_BucketsAllValidStatuses(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
 	srv := httptest.NewServer(adminCampaignStatsMux(pool))
 	defer srv.Close()
@@ -138,7 +143,7 @@ func TestAdminCampaignStats_BucketsAllSevenStatuses(t *testing.T) {
 
 	campaignID := seedStatsCampaign(t, pool)
 
-	statuses := []string{"queued", "sending", "sent", "failed", "bounced", "complained", "skipped"}
+	statuses := []string{"queued", "sending", "sent", "failed", "skipped"}
 	for _, status := range statuses {
 		subID, email := seedStatsSubscriber(t, pool, status)
 		seedEmailSendRow(t, pool, campaignID, subID, email, status, nil, nil, 0)
@@ -153,17 +158,22 @@ func TestAdminCampaignStats_BucketsAllSevenStatuses(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	want := map[string]int64{
-		"queued": 1, "sending": 1, "sent": 1, "failed": 1, "bounced": 1, "complained": 1, "skipped": 1,
+		"queued": 1, "sending": 1, "sent": 1, "failed": 1, "skipped": 1,
 	}
 	got := map[string]int64{
 		"queued": out.Counts.Queued, "sending": out.Counts.Sending, "sent": out.Counts.Sent,
-		"failed": out.Counts.Failed, "bounced": out.Counts.Bounced, "complained": out.Counts.Complained,
-		"skipped": out.Counts.Skipped,
+		"failed": out.Counts.Failed, "skipped": out.Counts.Skipped,
 	}
 	for status, wantN := range want {
 		if got[status] != wantN {
 			t.Errorf("counts[%s] = %d, want %d (full counts = %+v)", status, got[status], wantN, out.Counts)
 		}
+	}
+	// Bounced/Complained are no longer reachable values (#0131) — nothing
+	// seeded either, and the CHECK now enforces they can never be anything
+	// but zero.
+	if out.Counts.Bounced != 0 || out.Counts.Complained != 0 {
+		t.Errorf("counts.bounced/complained = %d/%d, want 0/0 (unreachable since #0131)", out.Counts.Bounced, out.Counts.Complained)
 	}
 	if out.CampaignID != campaignID {
 		t.Errorf("campaign_id = %d, want %d", out.CampaignID, campaignID)
@@ -177,11 +187,14 @@ func TestAdminCampaignStats_BucketsAllSevenStatuses(t *testing.T) {
 // bearing proof for this issue: internal/mailing.CampaignStatsStore's
 // package doc comment explains that NOTHING in this codebase ever writes
 // email_sends.status='bounced'/'complained' — only email_events (#0038)
-// records those, joined back by ses_message_id. This test seeds two 'sent'
-// rows and attaches a Bounce event to one and a Complaint event to the
-// other, and proves `reconciled` reports them while the raw `counts` bucket
-// (which nothing here ever flips) stays zero — demonstrating the
-// reconciliation is real, not a passthrough of a column nothing sets.
+// records those, joined back by ses_message_id. Since #0131, the database
+// no longer even allows those two values into email_sends.status, but the
+// point of this test predates and survives that: it seeds two 'sent' rows
+// and attaches a Bounce event to one and a Complaint event to the other,
+// and proves `reconciled` reports them while the raw `counts` bucket (which
+// nothing here ever flips, and which the CHECK now forbids outright) stays
+// zero — demonstrating the reconciliation is real, not a passthrough of a
+// column nothing sets.
 func TestAdminCampaignStats_ReconcilesBounceAndComplaintFromEvents(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
 	srv := httptest.NewServer(adminCampaignStatsMux(pool))
@@ -224,9 +237,10 @@ func TestAdminCampaignStats_ReconcilesBounceAndComplaintFromEvents(t *testing.T)
 		t.Errorf("counts.sent = %d, want 3", out.Counts.Sent)
 	}
 	// The raw bucket: nothing wrote 'bounced'/'complained' onto email_sends
-	// directly, so it must read zero even though real events exist.
+	// directly (and since #0131 the CHECK forbids it outright), so it must
+	// read zero even though real events exist.
 	if out.Counts.Bounced != 0 || out.Counts.Complained != 0 {
-		t.Errorf("counts.bounced/complained = %d/%d, want 0/0 (nothing writes these email_sends statuses directly)",
+		t.Errorf("counts.bounced/complained = %d/%d, want 0/0 (unreachable email_sends statuses)",
 			out.Counts.Bounced, out.Counts.Complained)
 	}
 	// The reconciled figures: joined from email_events, DISTINCT per send row.

@@ -137,9 +137,13 @@ export function campaignComplaintRateVerdict(stats: CampaignStatsResponse): Comp
 
 /**
  * The error text to show for one failed send — `error` can be an empty
- * string (email_sends.error is nullable server-side and this handler
- * coalesces NULL to `""`, not omitted), and an empty error line reads as a
- * blank table cell rather than useful information.
+ * string. `email_sends.error` is nullable server-side and the handler
+ * coalesces NULL to `""` in Go, but the JSON struct tag is
+ * `json:"error,omitempty"`, so that empty string is OMITTED from the
+ * response entirely, not sent as `""`. Either way `types.ts` declares
+ * `error?: string`, so both the omitted and (if it ever arrives) the
+ * empty-string case land here, and an empty error line reads as a blank
+ * table cell rather than useful information.
  */
 export function failedSendErrorLabel(f: CampaignFailedSend): string {
   const msg = f.error?.trim();

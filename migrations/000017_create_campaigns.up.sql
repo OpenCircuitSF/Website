@@ -77,7 +77,14 @@ CREATE TABLE email_sends (
     subscriber_id  BIGINT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
     email          TEXT NOT NULL,                    -- snapshot of subscribers.email at materialization
     status         TEXT NOT NULL DEFAULT 'queued',
-                   -- queued | sent | failed | bounced | complained | skipped
+                   -- queued | sent | failed | skipped
+                   -- 'bounced'/'complained' were removed by #0131: SES bounce
+                   -- and complaint events are recorded exclusively in
+                   -- email_events (#0038), never stamped onto this column, so
+                   -- admitting the two values here described states no code
+                   -- path could ever produce. #0049's per-campaign stats
+                   -- reconcile bounce/complaint counts via a JOIN against
+                   -- email_events instead.
     ses_message_id TEXT,
     attempts       INT NOT NULL DEFAULT 0,
     error          TEXT,
@@ -88,7 +95,7 @@ CREATE TABLE email_sends (
 
 ALTER TABLE email_sends
     ADD CONSTRAINT email_sends_status_check
-    CHECK (status IN ('queued', 'sent', 'failed', 'bounced', 'complained', 'skipped'));
+    CHECK (status IN ('queued', 'sent', 'failed', 'skipped'));
 
 -- Same normalization guard subscribers.email and email_events.recipient
 -- already carry: the snapshot is taken from an already-normalized
