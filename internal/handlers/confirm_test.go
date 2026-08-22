@@ -64,6 +64,7 @@ func TestConfirmHandler_ValidToken_ActivatesAndReturnsManageToken(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if err := subs.SetInterests(ctx, created.ID, []int64{homelabID}); err != nil {
 		t.Fatalf("SetInterests: %v", err)
 	}
@@ -143,6 +144,7 @@ func TestConfirmHandler_ExpiredToken_Returns400(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	time.Sleep(2 * time.Millisecond)
 
 	auditor := audit.New(pool)
@@ -164,6 +166,7 @@ func TestConfirmHandler_ReplayedToken_ReturnsSameFriendly400AsUnknown(t *testing
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 
 	auditor := audit.New(pool)
 	_, mux := journeyConfirmMux(pool, auditor)
@@ -206,6 +209,7 @@ func TestConfirmHandler_ComplainedSubscriber_NeverReactivatedByConfirm(t *testin
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := subs.MarkComplained(ctx, created.ID, now); err != nil {
 		t.Fatalf("MarkComplained: %v", err)
 	}

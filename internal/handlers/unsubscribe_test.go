@@ -68,6 +68,7 @@ func TestUnsubscribeHandler_Post_ValidToken_UnsubscribesRotatesAndAudits(t *test
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
@@ -138,6 +139,7 @@ func TestUnsubscribeHandler_Get_NeverMutates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
@@ -238,6 +240,7 @@ func TestUnsubscribeHandler_Post_Replay_SecondHitIsNeutralNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
@@ -290,6 +293,7 @@ func TestUnsubscribeHandler_Post_Complained_IsSilentNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
@@ -384,6 +388,7 @@ func TestUnsubscribeHandler_Post_ComplainedBetweenLookupAndUnsubscribe_IsNoOp(t 
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := realStore.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}

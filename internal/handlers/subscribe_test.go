@@ -254,6 +254,13 @@ func readBody(t *testing.T, resp *http.Response) []byte {
 // and confirm_token/confirm_sent_at, bypassing the store's own API so tests
 // can construct states (active, bounced, complained, ...) the public API
 // alone cannot reach directly. Returns the row id.
+//
+// #0121: registers its own t.Cleanup deleting the row by the id it just
+// captured (CLAUDE.md §8b — never a literal id), so every call site gets
+// isolation for free instead of each of them having to remember to. Two
+// call sites (admin_campaign_preflight_test.go) already registered their
+// own identical cleanup before this existed; deleting an already-deleted id
+// is a no-op, so that redundancy is harmless and left as-is.
 func seedSubscriberRow(t *testing.T, pool *pgxpool.Pool, email, status string, confirmToken *string, confirmSentAt *time.Time) int64 {
 	t.Helper()
 	var id int64
@@ -266,6 +273,7 @@ func seedSubscriberRow(t *testing.T, pool *pgxpool.Pool, email, status string, c
 	if err != nil {
 		t.Fatalf("seed subscriber %s (%s): %v", email, status, err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, id) })
 	return id
 }
 

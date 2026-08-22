@@ -74,6 +74,7 @@ func TestPreferencesHandler_Get_ValidToken_ReturnsMaskedEmailAndInterests(t *tes
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if err := subs.SetInterests(ctx, created.ID, []int64{pcbID}); err != nil {
 		t.Fatalf("SetInterests: %v", err)
 	}
@@ -137,6 +138,7 @@ func TestPreferencesHandler_Patch_ReplacesInterestsAndWritesAudit(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if err := subs.SetInterests(ctx, created.ID, []int64{homelabID}); err != nil {
 		t.Fatalf("SetInterests: %v", err)
 	}
@@ -188,6 +190,7 @@ func TestPreferencesHandler_Patch_EmptyInterests_StaysActiveGeneralAnnouncements
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
@@ -240,6 +243,7 @@ func TestPreferencesHandler_Patch_EmptyInterests_UnsubscribedStaysUnsubscribedAn
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
@@ -288,6 +292,7 @@ func TestPreferencesHandler_Patch_EmptyInterests_ComplainedStaysComplainedAndSay
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
@@ -339,6 +344,7 @@ func TestPreferencesHandler_Patch_UnsubscribeEverything_ComplainedIsNoOpNoAudit(
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
@@ -404,6 +410,7 @@ func TestPreferencesHandler_Patch_UnsubscribeEverything_ComplainedNoOpMessageNam
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
@@ -443,6 +450,7 @@ func TestPreferencesHandler_Patch_UnsubscribeEverything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
@@ -496,6 +504,7 @@ func TestPreferencesHandler_Patch_UnknownInterestSlug_Returns400(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 
 	_, mux := journeyPreferencesMux(subs, ints, audit.New(pool))
 
@@ -543,6 +552,7 @@ func TestPreferencesHandler_Patch_PreservesInactiveInterestOnUnrelatedSave(t *te
 	if err != nil {
 		t.Fatalf("Create subscriber: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if err := subs.SetInterests(ctx, created.ID, []int64{legacy.ID}); err != nil {
 		t.Fatalf("SetInterests: %v", err)
 	}
@@ -625,6 +635,7 @@ func TestPreferencesHandler_Patch_ComplainedBetweenLookupAndUnsubscribe_IsNoOp(t
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
 	if _, err := realStore.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
