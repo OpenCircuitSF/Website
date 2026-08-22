@@ -414,7 +414,7 @@ that needs cost accounting; refresh once per day.
 
 ## 11. PRD section index
 
-`PRD.md` is 1,259 lines (~15k tokens). **Never read it whole.** Every issue's
+`PRD.md` is 1,616 lines (~19k tokens). **Never read it whole.** Every issue's
 `## Relation` block names the section it needs and carries the exact extraction
 command; run that. This table is the fallback when you need a section no issue
 cites.
@@ -425,29 +425,33 @@ the PRD.
 | Section | Lines | Extract |
 |---|---|---|
 | **§1 Overview** | 41 | `sed -n '/^## 1\. /,/^## [0-9]/p' PRD.md` |
-| **§2 v1 Scope** | 40 | `sed -n '/^## 2\. /,/^## [0-9]/p' PRD.md` |
+| **§2 v1 Scope** | 48 | `sed -n '/^## 2\. /,/^## [0-9]/p' PRD.md` |
 | **§3 Codebase Strategy — Copy and Strip** | 71 | `sed -n '/^## 3\. /,/^## [0-9]/p' PRD.md` |
 | §3.1 Copy unchanged (rename module path + branding strings only) | 19 | `sed -n '/^### 3\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §3.2 Delete outright | 15 | `sed -n '/^### 3\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §3.3 Build new | 9 | `sed -n '/^### 3\.3 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §3.4 Deviations from ShortLinks' architecture | 20 | `sed -n '/^### 3\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§4 Brand and Visual Design** | 173 | `sed -n '/^## 4\. /,/^## [0-9]/p' PRD.md` |
+| **§4 Brand and Visual Design** | 181 | `sed -n '/^## 4\. /,/^## [0-9]/p' PRD.md` |
 | §4.1 Direction | 24 | `sed -n '/^### 4\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §4.2 Color tokens | 79 | `sed -n '/^### 4\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §4.3 Typography | 12 | `sed -n '/^### 4\.3 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §4.4 Reusable motifs | 13 | `sed -n '/^### 4\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §4.4 Reusable motifs | 21 | `sed -n '/^### 4\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §4.5 Logo | 43 | `sed -n '/^### 4\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§5 Information Architecture** | 34 | `sed -n '/^## 5\. /,/^## [0-9]/p' PRD.md` |
-| §5.1 Public routes | 16 | `sed -n '/^### 5\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §5.2 Admin routes (session + `is_admin` required) | 16 | `sed -n '/^### 5\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§6 Mailing List — The Core Subsystem** | 466 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
+| **§5 Information Architecture** | 39 | `sed -n '/^## 5\. /,/^## [0-9]/p' PRD.md` |
+| §5.1 Public routes | 18 | `sed -n '/^### 5\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §5.2 Admin routes (session + `is_admin` required) | 19 | `sed -n '/^### 5\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| **§6 Mailing List — The Core Subsystem** | 775 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
 | §6.1 Interest taxonomy | 23 | `sed -n '/^### 6\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §6.2 Database schema | 158 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.2 Database schema | 246 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.3 Subscription flow (double opt-in) | 56 | `sed -n '/^### 6\.3 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.4 Preference center | 16 | `sed -n '/^### 6\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.5 Unsubscribe — three paths, all required | 93 | `sed -n '/^### 6\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.6 Sending engine | 78 | `sed -n '/^### 6\.6 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.7 SES event ingestion | 40 | `sed -n '/^### 6\.7 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.8 Public campaign archive | 65 | `sed -n '/^### 6\.8 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.9 Delivery health — bounce policy and the circuit breaker | 60 | `sed -n '/^### 6\.9 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.10 Subscriber import and consent provenance | 45 | `sed -n '/^### 6\.10 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.11 Durable outbound queue and the activity log | 51 | `sed -n '/^### 6\.11 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | **§7 Frontend** | 84 | `sed -n '/^## 7\. /,/^## [0-9]/p' PRD.md` |
 | §7.1 Stack | 7 | `sed -n '/^### 7\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §7.2 Routing | 14 | `sed -n '/^### 7\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
@@ -455,8 +459,8 @@ the PRD.
 | §7.4 SEO and social preview cards | 23 | `sed -n '/^### 7\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §7.5 Accessibility | 13 | `sed -n '/^### 7\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §7.6 Performance budget | 12 | `sed -n '/^### 7\.6 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§8 HTTP API** | 47 | `sed -n '/^## 8\. /,/^## [0-9]/p' PRD.md` |
-| **§9 Configuration** | 47 | `sed -n '/^## 9\. /,/^## [0-9]/p' PRD.md` |
+| **§8 HTTP API** | 61 | `sed -n '/^## 8\. /,/^## [0-9]/p' PRD.md` |
+| **§9 Configuration** | 57 | `sed -n '/^## 9\. /,/^## [0-9]/p' PRD.md` |
 | **§10 Infrastructure and Deployment** | 89 | `sed -n '/^## 10\. /,/^## [0-9]/p' PRD.md` |
 | §10.1 Topology | 38 | `sed -n '/^### 10\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §10.2 DNS records (Route 53) | 16 | `sed -n '/^### 10\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
@@ -465,9 +469,13 @@ the PRD.
 | §10.5 IAM | 9 | `sed -n '/^### 10\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §10.6 Backups | 9 | `sed -n '/^### 10\.6 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | **§11 Security and Compliance** | 35 | `sed -n '/^## 11\. /,/^## [0-9]/p' PRD.md` |
-| **§12 Phased Build Plan** | 53 | `sed -n '/^## 12\. /,/^## [0-9]/p' PRD.md` |
-| **§13 Issue Breakdown** | 43 | `sed -n '/^## 13\. /,/^## [0-9]/p' PRD.md` |
-| **§14 Open Questions** | 12 | `sed -n '/^## 14\. /,/^## [0-9]/p' PRD.md` |
+| **§12 Phased Build Plan** | 62 | `sed -n '/^## 12\. /,/^## [0-9]/p' PRD.md` |
+| **§13 Issue Breakdown** | 48 | `sed -n '/^## 13\. /,/^## [0-9]/p' PRD.md` |
+| **§14 Open Questions** | 15 | `sed -n '/^## 14\. /,/^## [0-9]/p' PRD.md` |
 
 Bold rows are whole top-level sections and include their subsections. §6 (the
-mailing list) is 459 lines — take the subsection, not the parent.
+mailing list) is 775 lines — take the subsection, not the parent.
+
+**Regenerated 2026-08-21** when Phase 8 (§6.8–§6.11) was added. Three rows had
+already drifted before that (`#0113`); every row above is recomputed from the
+current file.

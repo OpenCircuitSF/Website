@@ -63,6 +63,14 @@ what gets built new is enumerated in §3.
   SES with per-recipient unsubscribe tokens.
 - **List hygiene** — SES bounce/complaint ingestion, suppression list, inbound
   `mailto:` unsubscribe processing.
+- **Public campaign archive** — every sent campaign published at a permanent,
+  search-indexable URL, with a "view in browser" link in the email itself and
+  an archive index linked from the home page.
+- **Subscriber import** — admin-only CSV import from Luma and other sources,
+  recording where each address came from and when, with a batch-level revoke
+  for an import that turns out to lack consent.
+- **Delivery health** — per-subscriber bounce history, an admin deliverability
+  screen, and a send-time circuit breaker on bounce and complaint rates.
 - **Passkey accounts for staff** — organizers and admins only. WebAuthn/FIDO2,
   no passwords. Copied from ShortLinks.
 - **Admin console** — subscribers, interests, campaigns, workshops, users,
@@ -351,6 +359,8 @@ every size, a real `favicon.svg`, and `currentColor` tinting without the mask.
 | `/` | Home | Hero terminal block, what Open Circuit SF is, next 3 workshops, inline subscribe form |
 | `/workshops` | WorkshopsIndex | Upcoming (chronological) + past (reverse chronological) |
 | `/workshops/{slug}` | WorkshopDetail | Full description, date/time, location, what to bring, subscribe CTA |
+| `/archive` | ArchiveIndex | Every sent campaign, reverse chronological. Linked from Home. |
+| `/archive/{slug}` | ArchiveEntry | One campaign as a permanent web page. Indexable, public, no token. |
 | `/about` | About | Who we are, philosophy, venues, Discord link, contact |
 | `/subscribe` | Subscribe | Standalone signup with the full interest picker |
 | `/subscribe/thanks` | ConfirmSent | "Check your email" — no PII in the URL |
@@ -365,7 +375,10 @@ every size, a real `favicon.svg`, and `currentColor` tinting without the mask.
 | Path | Purpose |
 |---|---|
 | `/admin` | Overview — list size, growth, recent campaigns, pending sends |
-| `/admin/subscribers` | Search, filter by status/interest, detail drawer, manual add/suppress, CSV export |
+| `/admin/subscribers` | Search, filter by status/interest, detail drawer, manual add/suppress, CSV export/import |
+| `/admin/subscribers/pending` | Unconfirmed signups — age, resend confirmation, expire |
+| `/admin/subscribers/import` | CSV import wizard: map columns, declare source and consent, preview, commit |
+| `/admin/deliverability` | Bounce and complaint history, per-address event log, suppression list |
 | `/admin/interests` | CRUD the interest taxonomy, reorder, activate/deactivate |
 | `/admin/campaigns` | List, compose, preview, test-send, target, schedule, send, per-campaign stats |
 | `/admin/workshops` | CRUD workshops, publish/unpublish, "announce to list" shortcut |
@@ -422,6 +435,18 @@ CREATE TABLE subscribers (
     utm_campaign   TEXT,
     unsubscribed_at TIMESTAMPTZ,
     unsubscribe_source TEXT,                      -- one_click | preferences | mailto | admin
+    -- Provenance (§6.10). Every address must be able to answer
+    -- "where did this come from, and when?" without reading the event log.
+    source         TEXT NOT NULL DEFAULT 'signup_form',
+                   -- signup_form | import | admin_manual | api
+    source_detail  TEXT,                          -- e.g. 'luma:oc-soldering-2026-05'
+    consent_basis  TEXT,                          -- double_opt_in | imported_prior_consent | admin_attested
+    import_id      BIGINT REFERENCES subscriber_imports(id),
+    -- Delivery health (§6.9). The streak is the live decision variable;
+    -- email_events remains the immutable history behind it.
+    soft_bounce_streak INT NOT NULL DEFAULT 0,    -- consecutive Transient bounces; zeroed on Delivery
+    last_bounce_at TIMESTAMPTZ,
+    last_delivery_at TIMESTAMPTZ,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -450,11 +475,16 @@ CREATE INDEX idx_subscriber_interests_interest ON subscriber_interests (interest
 
 -- Global suppression list. Checked before EVERY send, regardless of
 -- subscriber status. Survives resubscribe attempts.
+-- Corrected 2026-08-21: the primary key is (email, reason), not email alone.
+-- Migration 000013 (#0100) widened it so a second reason for an address adds a
+-- coexisting row rather than silently no-opping, and Remove(email, reason)
+-- retires exactly one reason.
 CREATE TABLE suppressions (
-    email      TEXT PRIMARY KEY,
+    email      TEXT NOT NULL,
     reason     TEXT NOT NULL,   -- hard_bounce | complaint | manual | repeated_soft_bounce
     note       TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (email, reason)
 );
 
 CREATE TABLE email_campaigns (
@@ -463,8 +493,14 @@ CREATE TABLE email_campaigns (
     subject        TEXT NOT NULL,
     preheader      TEXT,
     body_md        TEXT NOT NULL,           -- authored source
+    slug           TEXT UNIQUE NOT NULL,    -- assigned at DRAFT time (§6.8): the
+                                            -- archive URL must exist before the
+                                            -- send so short links can be minted
+                                            -- against it ahead of announcement
     status         TEXT NOT NULL DEFAULT 'draft',
-                   -- draft | scheduled | sending | sent | canceled | failed
+                   -- draft | scheduled | sending | paused_delivery_health | sent | canceled | failed
+    archive_status TEXT NOT NULL DEFAULT 'pending',  -- pending | published | withheld
+    archived_at    TIMESTAMPTZ,
     audience_mode  TEXT NOT NULL DEFAULT 'any_of',  -- all | any_of | all_of | none_selected
     workshop_id    BIGINT REFERENCES workshops(id), -- optional: announcement source
     scheduled_at   TIMESTAMPTZ,
@@ -514,6 +550,68 @@ CREATE TABLE email_events (
 );
 CREATE INDEX idx_email_events_message_id ON email_events (ses_message_id);
 CREATE INDEX idx_email_events_recipient ON email_events (recipient);
+-- Powers the per-address bounce history on /admin/deliverability (§6.9).
+CREATE INDEX idx_email_events_recipient_time ON email_events (recipient, received_at DESC);
+
+-- One row per CSV import run (§6.10). The batch is the unit of revocation:
+-- an import that turns out to lack consent is undone wholesale, not row by row.
+CREATE TABLE subscriber_imports (
+    id             BIGSERIAL PRIMARY KEY,
+    source         TEXT NOT NULL,          -- luma | eventbrite | meetup | manual_csv | other
+    source_detail  TEXT,                   -- event name, export filename, URL
+    consent_note   TEXT NOT NULL,          -- how consent was obtained, in the admin's words
+    collected_at   DATE,                   -- when the source collected the addresses
+    filename       TEXT,
+    row_count      INT NOT NULL DEFAULT 0,
+    inserted_count INT NOT NULL DEFAULT 0,
+    skipped_count  INT NOT NULL DEFAULT 0,
+    status         TEXT NOT NULL DEFAULT 'committed',  -- committed | revoked
+    revoked_at     TIMESTAMPTZ,
+    revoked_reason TEXT,
+    imported_by    BIGINT REFERENCES users(id),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Append-only activity log, one row per meaningful thing that happened to an
+-- address (§6.11). Distinct from email_events (raw SES payloads) and from
+-- audit_log (privileged staff actions against the console).
+CREATE TABLE subscriber_events (
+    id            BIGSERIAL PRIMARY KEY,
+    subscriber_id BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
+    email         TEXT NOT NULL,          -- snapshot; survives erasure of the row
+    action        TEXT NOT NULL,          -- enum, see §6.11
+    campaign_id   BIGINT REFERENCES email_campaigns(id) ON DELETE SET NULL,
+    import_id     BIGINT REFERENCES subscriber_imports(id) ON DELETE SET NULL,
+    actor_user_id BIGINT REFERENCES users(id),   -- NULL when the subscriber or a webhook acted
+    detail        JSONB,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_subscriber_events_subscriber ON subscriber_events (subscriber_id, created_at DESC);
+CREATE INDEX idx_subscriber_events_email ON subscriber_events (email, created_at DESC);
+CREATE INDEX idx_subscriber_events_action ON subscriber_events (action, created_at DESC);
+
+-- Durable queue for transactional mail (§6.11). Campaign mail already has
+-- email_sends; this is its counterpart for confirmation, welcome, and
+-- notification messages, which were previously sent from an in-process
+-- goroutine and lost on restart.
+CREATE TABLE outbound_queue (
+    id             BIGSERIAL PRIMARY KEY,
+    kind           TEXT NOT NULL,          -- confirmation | already_subscribed | welcome |
+                                           -- goodbye | admin_alert | registration | recovery
+    recipient      TEXT NOT NULL,
+    subscriber_id  BIGINT REFERENCES subscribers(id) ON DELETE CASCADE,
+    payload        JSONB NOT NULL,         -- template inputs, not rendered MIME
+    status         TEXT NOT NULL DEFAULT 'queued',  -- queued | sent | failed | abandoned
+    attempts       INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ses_message_id TEXT,
+    error          TEXT,
+    claimed_at     TIMESTAMPTZ,            -- orphan sweep, same shape as email_sends
+    sent_at        TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_outbound_queue_due ON outbound_queue (next_attempt_at, id)
+    WHERE status = 'queued';
 
 CREATE TABLE workshops (
     id               BIGSERIAL PRIMARY KEY,
@@ -553,7 +651,10 @@ Plus the copied auth tables: `users`, `passkey_credentials`,
 > the `workshops` migration must be numbered ahead of the campaigns migration —
 > or the FK added in a later `ALTER TABLE`. Phase 5 lands before Phase 6, so
 > prefer the `ALTER TABLE` approach and keep the phases independently
-> deployable.
+> deployable. The same applies to `subscribers.import_id`, which references the
+> Phase 8 `subscriber_imports` table: `subscribers` shipped in migration
+> `000010`, so the column and its FK arrive by `ALTER TABLE` after
+> `subscriber_imports` is created, never by editing `000010`.
 
 **Email normalization.** Store `lower(trim(email))`. Do **not** strip Gmail dots
 or `+tag` suffixes — they are distinct addresses per RFC and users legitimately
@@ -842,6 +943,227 @@ protects the account reputation if ours ever has a bug.
 
 ---
 
+### 6.8 Public campaign archive
+
+Every campaign that has been sent is also a public web page. Three reasons, and
+each one earns its keep independently:
+
+1. **It is the only recurring indexable content the site will have.** There is
+   no blog by design (§2), and workshop pages go stale the day after the event.
+2. **A prospect can read past issues before subscribing.** That raises signup
+   quality and lowers the complaint rate — the metric SES suspends accounts
+   over (§6.9).
+3. **Email clients mangle HTML.** Every campaign carries a "View this email in
+   your browser" link to its archive page.
+
+**The slug is assigned at draft time, not at send time.** This is the load-bearing
+detail. Marketing for a campaign — a short link from `go.opencircuitsf.com`, a
+Discord post, a Luma description — has to be prepared *before* the send goes
+out, which means the URL has to exist before the send goes out. Creating a
+campaign draft therefore mints `email_campaigns.slug` immediately and the admin
+UI shows the full future URL as a copyable field. The page itself 404s until
+the campaign reaches `sent`.
+
+| | |
+|---|---|
+| Draft URL | `https://www.opencircuitsf.com/archive/{slug}` — reserved, 404 until sent |
+| Published | On transition to `sent`, `archive_status` → `published`, `archived_at` stamped |
+| Withheld | An admin can set `archive_status = 'withheld'` to keep a campaign off the archive (410 Gone, removed from the index and sitemap) |
+
+**Rendering.** One authored source, `email_campaigns.body_md`, renders three
+ways from the same Markdown:
+
+- **Email HTML** — the constrained, table-based, inline-styled template from
+  `#0043`. Assume 2003-era CSS support.
+- **Email plain text** — the existing text renderer.
+- **Web page** — the same Markdown through the site's normal renderer, nested
+  in the standard site shell (header, footer, tokens, fonts). This is a *web
+  page that happens to contain a newsletter*, not an email screenshotted into a
+  page. It is the one of the three that gets to look like the rest of the site.
+
+The email and web renderers share the Markdown parse; they do not share the
+output template. `#0042` already separates these concerns.
+
+**Indexing and SEO.**
+
+- `GET /archive` — reverse chronological index, in the sitemap, linked from
+  Home and from the site footer.
+- `GET /archive/{slug}` — `<title>` from the campaign subject, meta description
+  from the preheader, canonical URL, OG card. Server-injected via `#0019`'s
+  renderer.
+- Both are in `sitemap.xml`. `withheld` campaigns are excluded from the sitemap
+  and serve `410`.
+- No login, no token, no `noindex`. These pages are public on purpose.
+
+**Attribution.** Archive URLs are the natural landing target for the group's own
+marketing. Short links minted at `go.opencircuitsf.com` carry `utm_source` /
+`utm_medium` / `utm_campaign` through to the page, where `#0026`'s existing
+first-party UTM capture already stores them on any signup that results. This
+gives per-channel attribution for campaign promotion **without** adding any
+tracking to the email itself — the §2 non-goals (no open-tracking pixels, no
+per-recipient click tracking, no third-party analytics) stand unchanged.
+
+**Privacy.** The archive page renders the campaign body only. It must never
+render per-recipient substitutions, unsubscribe tokens, `manage_token` values,
+or recipient counts. The archive is built from the campaign row, never from an
+`email_sends` row.
+
+### 6.9 Delivery health — bounce policy and the circuit breaker
+
+AWS enforces a bounce rate under **5%** and a complaint rate under **0.1%**
+across the whole SES account. Crossing either puts the account under review and
+then into sandbox — which takes down the confirmation emails too, not just
+campaigns. Delivery health is therefore an availability concern, not a metric.
+
+**Classification.** SES reports three bounce types. They are not equivalent and
+must not be handled alike:
+
+| SES `bounceType` | Meaning | Policy |
+|---|---|---|
+| `Permanent` | The mailbox does not exist | Suppress immediately, reason `hard_bounce`. Never retried. |
+| `Transient` | Full mailbox, greylisting, temporary server failure | Increment `soft_bounce_streak`. Retry on future campaigns. |
+| `Undetermined` | SES could not classify it | Treat as `Transient` (#0109) |
+
+**The streak, and what resets it.** `subscribers.soft_bounce_streak` counts
+*consecutive* soft bounces. A SES `Delivery` event for the address sets it back
+to `0` and stamps `last_delivery_at`. When the streak reaches
+`soft_bounce_threshold_count` (settings, default `5`), the address is suppressed
+with reason `repeated_soft_bounce`.
+
+> **This supersedes the shipped windowed rule.** `#0039` and `#0112` implemented
+> the threshold as *N Transient bounces within a rolling 30-day window*, computed
+> by querying `email_events` at decision time. The window self-heals as it rolls,
+> but it has no notion of a successful delivery: an address that bounces four
+> times, then delivers cleanly for a month, still carries four bounces against
+> it. Consecutive-with-reset-on-delivery is the industry-standard rule (it is
+> what Mailchimp, Postmark, and SES's own reputation guidance describe) and it
+> is what a recipient would expect. `soft_bounce_threshold_window_days`
+> (settings, seeded by migration `000015`) is retired by this change.
+
+**History is never lost.** `email_events` stays append-only and is the record of
+every bounce and complaint SES ever reported. Resetting the streak resets a
+counter, not the history. `/admin/deliverability` reads that history:
+
+- A list of addresses with bounce activity, sorted by streak then recency.
+- Per-address: every event, its type, its SES diagnostic code, the campaign it
+  came from, and the timestamp.
+- Actions: clear the streak, suppress manually, remove a suppression (`#0100`'s
+  existing endpoints).
+
+**The circuit breaker.** The send worker tracks the running bounce and complaint
+rate of the campaign in flight. When either crosses its threshold **and** a
+minimum sample has been sent, the worker stops:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `send_health_min_sample` | `50` | Below this many sends, rates are too noisy to act on |
+| `send_health_bounce_pct` | `5.0` | Running bounce rate that pauses the send |
+| `send_health_complaint_pct` | `0.1` | Running complaint rate that pauses the send |
+
+On trip: campaign status → `paused_delivery_health`, the reason is written to
+the audit log, remaining `email_sends` rows stay `queued`, and an alert email
+goes to `ADMIN_EMAIL` through the outbound queue (§6.11). Resuming is a
+deliberate admin action with typed confirmation, exactly like starting a send.
+
+The breaker is a safety mechanism and, like the `physical_address` check in
+`#0045`, is **not bypassable from the UI**.
+
+### 6.10 Subscriber import and consent provenance
+
+The group already has audiences elsewhere — Luma attendees, Discord members, a
+spreadsheet. Importing them is legitimate; importing them carelessly burns the
+sending domain and is unlawful under CAN-SPAM and GDPR. The import path exists
+so that the careful version is the easy one.
+
+**Every import declares its provenance up front.** A `subscriber_imports` row is
+created before any address is inserted, and it requires:
+
+- `source` — `luma`, `eventbrite`, `meetup`, `manual_csv`, `other`
+- `source_detail` — the specific event or export it came from
+- `collected_at` — when the *source* collected the addresses, not when we imported them
+- `consent_note` — how consent was obtained, in the admin's own words. Required, non-empty.
+
+Each imported subscriber carries `source = 'import'`, the `import_id`, and a
+`consent_basis` of `imported_prior_consent`. `/admin/subscribers/{id}` shows all
+of it, so "why is this person on the list?" always has an answer.
+
+**Import rules.**
+
+- CSV, one email column, optional interest-slug column. Column mapping is chosen
+  in the UI, not assumed from the header.
+- Every address is checked against `suppressions` before insert. A suppressed
+  address is skipped and counted, never resurrected. This is absolute — an
+  import is exactly the mechanism by which a suppressed address gets a second
+  chance to complain.
+- An address already present is skipped, not overwritten. An import never
+  changes an existing subscriber's status, interests, or consent basis.
+- Imported subscribers land `active` — an import asserts prior consent, so
+  re-running double opt-in on them is the wrong shape. This is precisely why
+  `consent_note` is mandatory and why revocation exists.
+- Dry run first: the wizard previews counts (new / duplicate / suppressed /
+  malformed) and the admin commits explicitly.
+- Every import writes an `audit_log` entry and one `subscriber_events` row per
+  inserted address.
+
+**Batch revocation.** If an import turns out to lack proper consent, the whole
+batch is revoked in one action: every subscriber whose `import_id` matches and
+whose status is still `active` moves to `unsubscribed` with
+`unsubscribe_source = 'admin'`, the import row goes `status = 'revoked'` with a
+reason, and the action is audited. Addresses that have since engaged are still
+revoked — the question is whether we ever had the right to mail them, and the
+answer does not change because they opened something.
+
+### 6.11 Durable outbound queue and the activity log
+
+**The queue.** Campaign mail is durable — `email_sends` is a real table with an
+idempotency key. Transactional mail was not: the confirmation email is dispatched
+from an in-process goroutine with roughly a second of SES retry, so an SES
+outage or a process restart loses the signup silently. The subscriber sits
+`pending` and never hears anything.
+
+`outbound_queue` fixes that with the same shape `email_sends` already uses:
+a row per message, claimed by a worker, exponential backoff on retry
+(1m, 5m, 15m, 1h, 6h, 24h — capped at `queue.max_retries`, default 8), an
+orphan sweep for rows whose worker died, and `abandoned` as the terminal state
+with the last error retained. Enqueue happens inside the same transaction as the
+state change that caused it, so a confirmation email cannot go missing because
+the commit succeeded and the send did not.
+
+**The activity log.** `subscriber_events` is the answer to "what has happened to
+this address?" — one row per meaningful action, with a closed set of values:
+
+| `action` | Written when |
+|---|---|
+| `signup_requested` | `POST /api/subscribe` accepted a new address |
+| `confirmation_sent` | A confirmation message left the outbound queue |
+| `confirmed` | The double opt-in link was followed |
+| `confirmation_expired` | A pending signup aged past `confirm_expires_at` |
+| `welcome_sent` | The welcome message was sent |
+| `interests_changed` | The preference center replaced the interest set |
+| `unsubscribed` | Any of the three unsubscribe paths (§6.5) |
+| `resubscribed` | A previously unsubscribed address signed up again |
+| `imported` | Inserted by a CSV import |
+| `import_revoked` | Removed by a batch revocation |
+| `campaign_sent` | A campaign message was accepted by SES for this address |
+| `bounced_soft` / `bounced_hard` | SES reported a Transient / Permanent bounce |
+| `complained` | SES reported a complaint |
+| `delivered` | SES reported a delivery (this is what resets the streak) |
+| `suppressed` / `unsuppressed` | A suppression was added or removed |
+| `admin_edited` | A staff member changed the record directly |
+| `erased` | GDPR erasure (`#0060`) |
+
+Three logs, three jobs, no overlap: `audit_log` records what *staff* did to the
+console, `email_events` stores what *SES* said verbatim, and
+`subscriber_events` records what happened to an *address* in our own vocabulary.
+The subscriber detail drawer reads the third.
+
+`email` is snapshotted on every row so the log survives erasure of the
+`subscribers` row — `#0060`'s erasure nulls `subscriber_id` and redacts the
+`email` column on that address's rows rather than deleting the history, which
+would otherwise destroy the evidence that the erasure itself was performed.
+
+---
+
 ## 7. Frontend
 
 ### 7.1 Stack
@@ -939,6 +1261,8 @@ makes workshops eligible for rich results in search.
 | `PATCH` | `/api/preferences` | Replace interest set |
 | `POST` | `/api/unsubscribe` | One-click (RFC 8058) and in-page unsubscribe |
 | `GET` | `/api/unsubscribe` | **Never mutates.** 302 → `/unsubscribe` |
+| `GET` | `/api/archive` | Sent, published campaigns — reverse chronological |
+| `GET` | `/api/archive/{slug}` | One published campaign as web content. 404 until sent, 410 if withheld. |
 | `GET` | `/api/workshops` | Published workshops |
 | `GET` | `/api/workshops/{slug}` | One published workshop |
 | `POST` | `/api/ses/notifications` | SNS bounce/complaint webhook (signature-verified) |
@@ -959,6 +1283,16 @@ All of `/auth/*`, `/account/credentials*`, `/admin/users*`, `/admin/settings`,
 | `POST` | `/admin/subscribers/{id}/suppress` | Manual suppression with a note |
 | `DELETE` | `/admin/subscribers/{id}` | Hard delete (GDPR erasure request) |
 | `GET` | `/admin/subscribers/export` | CSV export |
+| `GET` | `/admin/subscribers/pending` | Unconfirmed signups with age |
+| `POST` | `/admin/subscribers/{id}/resend-confirmation` | Re-enqueue the confirmation email |
+| `POST` | `/admin/subscribers/import/preview` | Dry run — parse, map, and count without writing |
+| `POST` | `/admin/subscribers/import` | Commit an import batch |
+| `POST` | `/admin/imports/{id}/revoke` | Revoke a whole import batch |
+| `GET` | `/admin/deliverability` | Addresses with bounce activity |
+| `GET` | `/admin/deliverability/{email}` | Full event history for one address |
+| `POST` | `/admin/deliverability/{email}/reset-streak` | Clear the soft-bounce streak |
+| `GET` | `/admin/suppressions` | The suppression list (`#0100`) |
+| `POST` | `/admin/suppressions/remove` | Retire one suppression reason (`#0100`) |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/admin/interests[/{id}]` | Taxonomy CRUD |
 | `GET`/`POST`/`PATCH` | `/admin/campaigns[/{id}]` | Campaign CRUD |
 | `POST` | `/admin/campaigns/{id}/preview` | Render HTML + text without sending |
@@ -966,6 +1300,8 @@ All of `/auth/*`, `/account/credentials*`, `/admin/users*`, `/admin/settings`,
 | `GET` | `/admin/campaigns/{id}/audience` | Recipient count + sample, before committing |
 | `POST` | `/admin/campaigns/{id}/send` | Requires typed confirmation of the count |
 | `POST` | `/admin/campaigns/{id}/cancel` | Stop an in-flight send |
+| `POST` | `/admin/campaigns/{id}/resume` | Resume a send paused by the delivery-health breaker |
+| `PATCH` | `/admin/campaigns/{id}/archive` | Publish or withhold the archive page |
 | `GET` | `/admin/campaigns/{id}/stats` | Sent / failed / bounced / complained |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/admin/workshops[/{id}]` | Workshop CRUD |
 | `POST` | `/admin/workshops/{id}/announce` | Create a draft campaign pre-filled from the workshop |
@@ -1021,7 +1357,12 @@ ADMIN_EMAIL=offwhite@gmail.com
 
 Runtime-editable values live in the `settings` table, not the environment:
 `registrations_enabled`, `physical_address`, `max_send_rate`,
-`signup_enabled`, `default_from_name`.
+`signup_enabled`, `default_from_name`, `soft_bounce_threshold_count`,
+`send_health_min_sample`, `send_health_bounce_pct`,
+`send_health_complaint_pct`, `archive_enabled`.
+
+`soft_bounce_threshold_window_days` is **retired** by §6.9's move from a rolling
+window to a consecutive streak; the Phase 8 migration deletes its row.
 
 ---
 
@@ -1195,6 +1536,15 @@ SES inbound `mailto:` unsubscribe processing, CSV export, GDPR erasure,
 admin overview dashboard, backup verification, accessibility audit,
 `p=reject` DMARC.
 
+### Phase 8 — Archive, imports, and delivery health
+The public campaign archive with draft-time slugs and a "view in browser" link,
+CSV import with recorded consent provenance and batch revocation, the
+consecutive soft-bounce streak with an admin deliverability screen, the
+send-time bounce/complaint circuit breaker, the durable outbound queue and
+subscriber activity log, the welcome email, and the pending-subscriber screen.
+**Deployable:** the list becomes something you can grow deliberately and
+operate safely rather than only send from.
+
 ### Later / candidates
 RSVP with capacity and waitlist; per-campaign click tracking through
 `go.opencircuitsf.com`; a photos/recap section; ICS calendar feed for
@@ -1243,6 +1593,11 @@ JSON-LD Event markup · 0056 announce-to-list shortcut
 CSV export · 0060 GDPR erasure · 0061 admin overview · 0062 backup verification
 · 0063 accessibility audit · 0064 deployment runbook
 
+**Phase 8** — 0123 public campaign archive · 0124 delivery-health streak,
+history, and circuit breaker · 0125 subscriber CSV import with consent
+provenance · 0126 durable outbound queue + subscriber activity log · 0127
+welcome email · 0128 pending-subscriber admin screen
+
 ---
 
 ## 14. Open Questions
@@ -1257,3 +1612,5 @@ CSV export · 0060 GDPR erasure · 0061 admin overview · 0062 backup verificati
 | 6 | Is the interest taxonomy in §6.1 right, and should any be merged or dropped? | Phase 3 | Ship as listed; it is admin-editable |
 | 7 | Expected list size in year one — changes nothing architecturally, but sets the SES quota request | Phase 4 | Request 50k/day; ask for what you might need |
 | 8 | Do workshop pages need photos at launch, or is type-only acceptable? | Phase 6 | Type-only; add a cover image field now, populate later |
+| 9 | What exactly does a Luma attendee export contain, and does its terms of service permit adding attendees to a newsletter? | Phase 8 (`#0125`) | Assume email + name + event only; require the admin to attest consent per batch and keep revocation one click away |
+| 10 | Should the archive index be paginated, or is a single page fine for the first few years? | Phase 8 (`#0123`) | Single page; a community newsletter will not outgrow it soon, and one page indexes better |
