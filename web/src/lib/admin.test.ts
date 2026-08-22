@@ -18,6 +18,9 @@ import {
   formatDateTime,
   pageInfo,
   parseUserIdFilter,
+  parseTargetFilter,
+  campaignAuditFilter,
+  AUDIT_TARGET_EMAIL_CAMPAIGN,
   registrationsEnabled,
   isValidInterestSlug,
   validateNewInterest,
@@ -173,6 +176,58 @@ describe('parseUserIdFilter', () => {
     expect(parseUserIdFilter('0')).toEqual({ error: 'Enter a numeric user id.' });
     expect(parseUserIdFilter('-3')).toEqual({ error: 'Enter a numeric user id.' });
     expect(parseUserIdFilter('1.5')).toEqual({ error: 'Enter a numeric user id.' });
+  });
+});
+
+describe('parseTargetFilter', () => {
+  it('treats both fields empty as no filter', () => {
+    expect(parseTargetFilter('', '')).toEqual({ targetType: null, targetId: null });
+    expect(parseTargetFilter('  ', '  ')).toEqual({ targetType: null, targetId: null });
+  });
+
+  it('filters by target_type alone when target_id is empty', () => {
+    expect(parseTargetFilter('email_campaign', '')).toEqual({
+      targetType: 'email_campaign',
+      targetId: null,
+    });
+  });
+
+  it('parses a target_type/target_id pair', () => {
+    expect(parseTargetFilter('email_campaign', ' 42 ')).toEqual({
+      targetType: 'email_campaign',
+      targetId: 42,
+    });
+  });
+
+  it('rejects a target_id without a target_type — a bare id is ambiguous across types (#0114)', () => {
+    expect(parseTargetFilter('', '42')).toEqual({
+      error: 'Target type is required when target id is set.',
+    });
+  });
+
+  it('rejects a non-numeric or non-positive target_id', () => {
+    expect(parseTargetFilter('email_campaign', 'abc')).toEqual({
+      error: 'Enter a numeric target id.',
+    });
+    expect(parseTargetFilter('email_campaign', '0')).toEqual({
+      error: 'Enter a numeric target id.',
+    });
+    expect(parseTargetFilter('email_campaign', '-3')).toEqual({
+      error: 'Enter a numeric target id.',
+    });
+  });
+});
+
+describe('campaignAuditFilter', () => {
+  it('builds the email_campaign target filter for a campaign id', () => {
+    expect(campaignAuditFilter(42)).toEqual({
+      targetType: AUDIT_TARGET_EMAIL_CAMPAIGN,
+      targetId: 42,
+    });
+  });
+
+  it('uses the same target_type string the server writes (internal/audit.TargetEmailCampaign)', () => {
+    expect(AUDIT_TARGET_EMAIL_CAMPAIGN).toBe('email_campaign');
   });
 });
 

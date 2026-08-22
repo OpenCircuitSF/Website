@@ -264,6 +264,86 @@ func TestAdminAudit_UserIDFilter(t *testing.T) {
 	}
 }
 
+// TestAdminAudit_TargetFilter is #0114's regression test: it proves a
+// NULL-actor row (mirroring #0045's send worker, which writes
+// email_campaign.send_refused with no actor_id — the worker is not a user)
+// is reachable via ?target_type=&target_id=, and that a target_id without a
+// target_type is rejected rather than silently ignored.
+func TestAdminAudit_TargetFilter(t *testing.T) {
+	pool := credsTestPool(t)
+	srv := httptest.NewServer(adminAuditMux(pool))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin@example.com")
+	seedSession(t, pool, admin, "admin-token")
+
+	base := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	// campaignID is a bare value in the unconstrained target_id column (no FK
+	// to email_campaigns — see migrations/000005) so there is no seeded row
+	// to collide with; it only has to be distinct from the other rows here.
+	campaignID := int64(424242)
+	otherCampaignID := int64(424243)
+
+	// The row #0114 exists to make reachable: actor_id NULL, target_type
+	// email_campaign, target_id campaignID — exactly #0045's
+	// auditSendRefused shape.
+	refusedID := insertAuditRow(t, pool, nil, nil, audit.ActionEmailCampaignSendRefused,
+		audit.TargetEmailCampaign, &campaignID, `{"codes":["physical_address_missing"]}`, nil, base)
+	// A row for a DIFFERENT campaign, same target_type — must be excluded.
+	insertAuditRow(t, pool, nil, nil, audit.ActionEmailCampaignSendRefused,
+		audit.TargetEmailCampaign, &otherCampaignID, `{"codes":["physical_address_missing"]}`, nil, base.Add(time.Minute))
+	// A row for the same campaignID but a DIFFERENT target_type — must be
+	// excluded, proving target_id alone (paired with the wrong type) doesn't
+	// leak in.
+	insertAuditRow(t, pool, &admin, nil, audit.ActionSettingsUpdated,
+		audit.TargetSettings, &campaignID, `{}`, nil, base.Add(2*time.Minute))
+
+	resp, body := getAudit(t, srv, "admin-token",
+		"?target_type="+audit.TargetEmailCampaign+"&target_id="+strconv.FormatInt(campaignID, 10))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if body.Total != 1 || len(body.AuditLog) != 1 {
+		t.Fatalf("filtered rows = %d (total %d), want 1", len(body.AuditLog), body.Total)
+	}
+	got := body.AuditLog[0]
+	if got.ID != refusedID {
+		t.Errorf("row id = %d, want %d", got.ID, refusedID)
+	}
+	if got.ActorID != nil {
+		t.Errorf("actor_id = %v, want NULL (the send worker has no actor)", got.ActorID)
+	}
+	if got.TargetType == nil || *got.TargetType != audit.TargetEmailCampaign {
+		t.Errorf("target_type = %v, want %q", got.TargetType, audit.TargetEmailCampaign)
+	}
+	if got.TargetID == nil || *got.TargetID != campaignID {
+		t.Errorf("target_id = %v, want %d", got.TargetID, campaignID)
+	}
+
+	// target_type alone (no target_id) returns every email_campaign row —
+	// both send_refused rows, not the settings.updated row.
+	respType, bodyType := getAudit(t, srv, "admin-token", "?target_type="+audit.TargetEmailCampaign)
+	if respType.StatusCode != http.StatusOK {
+		t.Fatalf("target_type-only status = %d, want 200", respType.StatusCode)
+	}
+	if bodyType.Total != 2 {
+		t.Errorf("target_type-only total = %d, want 2", bodyType.Total)
+	}
+
+	// target_id without target_type is rejected — it would otherwise be
+	// ambiguous across target types (audit.Filter's doc comment).
+	badResp, _ := getAudit(t, srv, "admin-token", "?target_id="+strconv.FormatInt(campaignID, 10))
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Errorf("target_id-without-target_type status = %d, want 400", badResp.StatusCode)
+	}
+
+	// Garbage target_id → 400.
+	garbageResp, _ := getAudit(t, srv, "admin-token", "?target_type="+audit.TargetEmailCampaign+"&target_id=notanumber")
+	if garbageResp.StatusCode != http.StatusBadRequest {
+		t.Errorf("garbage target_id status = %d, want 400", garbageResp.StatusCode)
+	}
+}
+
 // TestAdminAudit_NullSerializationAndMetadata asserts nullable columns serialize
 // as JSON null and metadata round-trips as a JSON object (not a string).
 func TestAdminAudit_NullSerializationAndMetadata(t *testing.T) {

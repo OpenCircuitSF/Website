@@ -23,7 +23,10 @@
 
   interface Props {
     onGoToSettings: () => void;
-    onGoToAudit: () => void;
+    // #0114: takes the campaign id so the audit tab opens pre-filtered to
+    // that campaign's history (rather than the old unfiltered "just switch
+    // tabs" workaround) — see Admin.svelte's goToCampaignAudit.
+    onGoToAudit: (campaignId: number) => void;
   }
 
   let { onGoToSettings, onGoToAudit }: Props = $props();
@@ -157,7 +160,7 @@
   {/key}
 {:else if isStatsView}
   {#key activeId}
-    <CampaignStats campaignId={activeId} onBack={backToList} />
+    <CampaignStats campaignId={activeId} onBack={backToList} {onGoToAudit} />
   {/key}
 {:else if isListView}
   <Panel title="Campaigns" noPadding={listPanelNoPadding}>

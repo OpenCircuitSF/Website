@@ -76,6 +76,28 @@ export function canDeactivate(user: AdminUser, currentUserId: number): boolean {
 // ── Audit log rendering ──────────────────────────────────────────────────────
 
 /**
+ * The `target_type` value written for every email_campaign.* audit action —
+ * mirrors internal/audit/actions.go's `TargetEmailCampaign` constant. #0114:
+ * used to build the campaign-scoped audit filter the campaign screens
+ * deep-link into (see `campaignAuditFilter` below), so a demoted campaign's
+ * `email_campaign.send_refused` row — written with a NULL actor by #0045's
+ * send worker, and therefore unreachable through the user_id filter alone —
+ * is reachable from the campaign it belongs to.
+ */
+export const AUDIT_TARGET_EMAIL_CAMPAIGN = 'email_campaign';
+
+/**
+ * The audit filter to deep-link into for one campaign's history — every
+ * `email_campaign.*` row for `campaignId`, most importantly a
+ * `send_refused` row that has no user_id to filter by. The sole builder of
+ * this shape so the campaign screens (CampaignEditor's demoted banner,
+ * CampaignStats) and Admin.svelte's `listAudit` call agree on it.
+ */
+export function campaignAuditFilter(campaignId: number): { targetType: string; targetId: number } {
+  return { targetType: AUDIT_TARGET_EMAIL_CAMPAIGN, targetId: campaignId };
+}
+
+/**
  * Render an audit entry's actor for display. A NULL actor_id means a
  * system/anonymous action (e.g. account.registration_started); otherwise show
  * the numeric user id.
@@ -195,6 +217,39 @@ export function parseUserIdFilter(raw: string): { userId: number | null } | { er
     return { error: 'Enter a numeric user id.' };
   }
   return { userId: n };
+}
+
+/**
+ * Parse the user-entered `target_type`/`target_id` audit filter fields.
+ * Mirrors the server's validation (internal/handlers/audit.go's List): an
+ * empty target_id with a non-empty target_type filters by type alone; a
+ * non-empty target_id REQUIRES a non-empty target_type, since a bare
+ * target_id is ambiguous across target types (subscriber #5 and
+ * email_campaign #5 are unrelated rows) — see #0114 and
+ * internal/audit/read.go's Filter doc comment. Both fields empty is "no
+ * filter".
+ */
+export function parseTargetFilter(
+  targetTypeRaw: string,
+  targetIdRaw: string,
+): { targetType: string | null; targetId: number | null } | { error: string } {
+  const targetType = targetTypeRaw.trim();
+  const targetIdTrimmed = targetIdRaw.trim();
+
+  if (targetIdTrimmed === '') {
+    return { targetType: targetType === '' ? null : targetType, targetId: null };
+  }
+  if (!/^\d+$/.test(targetIdTrimmed)) {
+    return { error: 'Enter a numeric target id.' };
+  }
+  const n = Number(targetIdTrimmed);
+  if (!Number.isInteger(n) || n <= 0) {
+    return { error: 'Enter a numeric target id.' };
+  }
+  if (targetType === '') {
+    return { error: 'Target type is required when target id is set.' };
+  }
+  return { targetType, targetId: n };
 }
 
 /** Whether the `registrations_enabled` setting value string is the truthy "true". */

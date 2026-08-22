@@ -152,7 +152,7 @@ func TestListAuditLog_Empty(t *testing.T) {
 	s := devstore.New("")
 	ctx := context.Background()
 
-	records, total, err := s.ListAuditLog(ctx, nil, 50, 0)
+	records, total, err := s.ListAuditLog(ctx, audit.Filter{}, 50, 0)
 	if err != nil {
 		t.Fatalf("ListAuditLog: %v", err)
 	}

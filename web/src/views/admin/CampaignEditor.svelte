@@ -79,7 +79,9 @@
     campaignId: number;
     onBack: () => void;
     onGoToSettings: () => void;
-    onGoToAudit: () => void;
+    // #0114: takes the campaign id — the caller opens the audit tab
+    // pre-filtered to this campaign's own history.
+    onGoToAudit: (campaignId: number) => void;
   }
 
   let { campaignId, onBack, onGoToSettings, onGoToAudit }: Props = $props();
@@ -555,7 +557,7 @@
     {#if demoted}
       <div class="demoted-banner" role="status">
         <p>{demotionMessage}</p>
-        <Button variant="subtle" onclick={onGoToAudit}>View in audit log</Button>
+        <Button variant="subtle" onclick={() => onGoToAudit(campaignId)}>View in audit log</Button>
       </div>
     {/if}
 

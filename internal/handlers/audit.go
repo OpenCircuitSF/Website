@@ -22,7 +22,7 @@ const (
 // layer. *audit.Reader satisfies it. Depending on an interface keeps the
 // handler unit-testable with a fake and documents the exact contract.
 type auditReader interface {
-	ListAuditLog(ctx context.Context, userID *int64, limit, offset int) ([]audit.Record, int64, error)
+	ListAuditLog(ctx context.Context, filter audit.Filter, limit, offset int) ([]audit.Record, int64, error)
 }
 
 // AdminAuditHandler serves the admin-only audit log route:
@@ -85,9 +85,18 @@ type auditResponse struct {
 
 // List handles GET /admin/audit. It returns the audit log newest-first,
 // paginated via ?page= and ?per_page= (default 50, per_page capped at
-// maxAuditPerPage), and optionally filtered to a single user via ?user_id=. A
-// non-integer user_id, page, or per_page is rejected with 400. Admin-only via
-// the middleware chain.
+// maxAuditPerPage), and optionally filtered via ?user_id=, ?target_type=, and
+// ?target_id= (all combine with AND when more than one is given). A
+// non-integer user_id/target_id, an unpaired ?target_id= without
+// ?target_type=, or a non-integer page/per_page is rejected with 400.
+// Admin-only via the middleware chain.
+//
+// ?target_type=&?target_id= exist for #0114: #0045's send worker writes
+// audit.ActionEmailCampaignSendRefused with actor_id NULL (the worker is not
+// a user), so that row — the one explaining why a scheduled campaign was
+// demoted back to draft — has no user_id to filter by. TargetType/TargetID
+// reach it directly, and neither filter excludes a NULL-actor row: actor_id
+// plays no part in either clause.
 func (h *AdminAuditHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -116,8 +125,29 @@ func (h *AdminAuditHandler) List(w http.ResponseWriter, r *http.Request) {
 		userID = &id
 	}
 
+	// Optional ?target_type=/?target_id= filter pair. target_id alone is
+	// ambiguous (see audit.Filter's doc comment) so it is rejected outright
+	// rather than silently ignored — a caller who set it clearly meant to
+	// filter by it.
+	targetType := q.Get("target_type")
+	var targetID *int64
+	if raw := q.Get("target_id"); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid target_id")
+			return
+		}
+		if targetType == "" {
+			writeError(w, http.StatusBadRequest, "target_id requires target_type")
+			return
+		}
+		targetID = &id
+	}
+
+	filter := audit.Filter{UserID: userID, TargetType: targetType, TargetID: targetID}
+
 	offset := (page - 1) * perPage
-	records, total, err := h.reader.ListAuditLog(r.Context(), userID, perPage, offset)
+	records, total, err := h.reader.ListAuditLog(r.Context(), filter, perPage, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return

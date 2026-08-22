@@ -9,6 +9,16 @@
   no-error-message fallback) is a call into lib/campaignStats.ts, or a value
   taken straight off the server response — never a comparison, ternary, or
   status literal written directly here.
+
+  #0114: this screen is where an operator naturally looks for "what happened
+  to this campaign, and why" — including the send worker's own
+  email_campaign.send_refused row, which is not surfaced by any of the counts
+  above (it fires BEFORE materialization, so it never shows up as a
+  failed_sends row). "View audit history" deep-links to the audit tab
+  pre-filtered to this campaign rather than duplicating audit-row rendering
+  here — Admin.svelte's audit section already owns that (actor/target
+  labels, metadata formatting, pagination); repeating it here would be a
+  second, divergent implementation of the same table.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -27,9 +37,10 @@
   interface Props {
     campaignId: number;
     onBack: () => void;
+    onGoToAudit: (campaignId: number) => void;
   }
 
-  let { campaignId, onBack }: Props = $props();
+  let { campaignId, onBack, onGoToAudit }: Props = $props();
 
   let stats = $state<CampaignStatsResponse | null>(null);
   let loading = $state(true);
@@ -62,6 +73,7 @@
 
 <div class="row spread" style="margin-bottom: var(--space-3);">
   <Button onclick={onBack}>&larr; Back to campaigns</Button>
+  <Button variant="subtle" onclick={() => onGoToAudit(campaignId)}>View audit history</Button>
 </div>
 
 <Panel title="Campaign stats">

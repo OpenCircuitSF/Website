@@ -272,16 +272,29 @@ func (s *Store) ReactivateUser(_ context.Context, id int64, auditor *audit.Logge
 
 // ── auditReader (handlers.AdminAuditHandler) ────────────────────────────────
 
-// ListAuditLog returns audit records newest-first with optional user filter.
-func (s *Store) ListAuditLog(_ context.Context, userID *int64, limit, offset int) ([]audit.Record, int64, error) {
+// ListAuditLog returns audit records newest-first with optional user_id/
+// target_type/target_id filters (all ANDed together, mirroring
+// audit.Reader.ListAuditLog's Filter — see internal/audit/read.go's doc
+// comment for why a bare TargetID without TargetType is not treated as a
+// filter). A NULL-actor row (e.g. #0045's send worker writes) is returned
+// like any other row: none of these filters touch actor_id.
+func (s *Store) ListAuditLog(_ context.Context, filter audit.Filter, limit, offset int) ([]audit.Record, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var filtered []audit.Record
 	for i := len(s.audit) - 1; i >= 0; i-- {
 		rec := s.audit[i]
-		if userID != nil && (rec.UserID == nil || *rec.UserID != *userID) {
+		if filter.UserID != nil && (rec.UserID == nil || *rec.UserID != *filter.UserID) {
 			continue
+		}
+		if filter.TargetType != "" {
+			if rec.TargetType == nil || *rec.TargetType != filter.TargetType {
+				continue
+			}
+			if filter.TargetID != nil && (rec.TargetID == nil || *rec.TargetID != *filter.TargetID) {
+				continue
+			}
 		}
 		filtered = append(filtered, rec)
 	}
@@ -460,7 +473,7 @@ var _ interface {
 } = (*Store)(nil)
 
 var _ interface {
-	ListAuditLog(ctx context.Context, userID *int64, limit, offset int) ([]audit.Record, int64, error)
+	ListAuditLog(ctx context.Context, filter audit.Filter, limit, offset int) ([]audit.Record, int64, error)
 } = (*Store)(nil)
 
 var _ interface {

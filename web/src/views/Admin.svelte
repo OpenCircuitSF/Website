@@ -65,6 +65,8 @@
     formatDateTime,
     pageInfo,
     parseUserIdFilter,
+    parseTargetFilter,
+    campaignAuditFilter,
     registrationsEnabled,
     isValidInterestSlug,
     validateNewInterest,
@@ -292,14 +294,30 @@
   let auditError = $state<string | null>(null);
   let auditUserIdRaw = $state('');
   let auditUserIdFilter = $state<number | null>(null);
+  // target_type/target_id filter (#0114): reaches rows a user_id filter
+  // can't, e.g. #0045's send worker writes email_campaign.send_refused with
+  // a NULL actor_id — the worker is not a user.
+  let auditTargetTypeRaw = $state('');
+  let auditTargetIdRaw = $state('');
+  let auditTargetTypeFilter = $state<string | null>(null);
+  let auditTargetIdFilter = $state<number | null>(null);
   let auditFilterError = $state<string | null>(null);
   const auditPaging = $derived(pageInfo(auditTotal, auditPage, AUDIT_PER_PAGE));
+  const auditHasFilter = $derived(
+    auditUserIdFilter !== null || auditTargetTypeFilter !== null || auditTargetIdFilter !== null,
+  );
 
   async function loadAudit() {
     auditLoading = true;
     auditError = null;
     try {
-      const res = await listAudit(auditPage, AUDIT_PER_PAGE, auditUserIdFilter ?? undefined);
+      const res = await listAudit(
+        auditPage,
+        AUDIT_PER_PAGE,
+        auditUserIdFilter ?? undefined,
+        auditTargetTypeFilter ?? undefined,
+        auditTargetIdFilter ?? undefined,
+      );
       auditEntries = res.audit_log;
       auditTotal = res.total;
       auditPage = res.page;
@@ -313,13 +331,20 @@
 
   function applyAuditFilter(e: SubmitEvent) {
     e.preventDefault();
-    const parsed = parseUserIdFilter(auditUserIdRaw);
-    if ('error' in parsed) {
-      auditFilterError = parsed.error;
+    const userParsed = parseUserIdFilter(auditUserIdRaw);
+    if ('error' in userParsed) {
+      auditFilterError = userParsed.error;
+      return;
+    }
+    const targetParsed = parseTargetFilter(auditTargetTypeRaw, auditTargetIdRaw);
+    if ('error' in targetParsed) {
+      auditFilterError = targetParsed.error;
       return;
     }
     auditFilterError = null;
-    auditUserIdFilter = parsed.userId;
+    auditUserIdFilter = userParsed.userId;
+    auditTargetTypeFilter = targetParsed.targetType;
+    auditTargetIdFilter = targetParsed.targetId;
     auditPage = 1;
     void loadAudit();
   }
@@ -327,6 +352,10 @@
   function clearAuditFilter() {
     auditUserIdRaw = '';
     auditUserIdFilter = null;
+    auditTargetTypeRaw = '';
+    auditTargetIdRaw = '';
+    auditTargetTypeFilter = null;
+    auditTargetIdFilter = null;
     auditFilterError = null;
     auditPage = 1;
     void loadAudit();
@@ -334,6 +363,25 @@
 
   function auditGoTo(page: number) {
     auditPage = page;
+    void loadAudit();
+  }
+
+  /**
+   * #0114: navigate to the audit tab pre-filtered to one campaign's history
+   * — the deep link CampaignEditor's demoted banner and CampaignStats offer,
+   * replacing the old unfiltered "switch to the audit tab" workaround.
+   */
+  function goToCampaignAudit(campaignId: number) {
+    const filter = campaignAuditFilter(campaignId);
+    auditUserIdRaw = '';
+    auditUserIdFilter = null;
+    auditTargetTypeRaw = filter.targetType;
+    auditTargetIdRaw = String(filter.targetId);
+    auditTargetTypeFilter = filter.targetType;
+    auditTargetIdFilter = filter.targetId;
+    auditFilterError = null;
+    auditPage = 1;
+    section = 'audit';
     void loadAudit();
   }
 
@@ -1117,8 +1165,25 @@
             bind:value={auditUserIdRaw}
             style="width: 8rem;"
           />
+          <label for="audit-target-type" style="white-space: nowrap;">Target type</label>
+          <input
+            id="audit-target-type"
+            type="text"
+            placeholder="e.g. email_campaign"
+            bind:value={auditTargetTypeRaw}
+            style="width: 11rem;"
+          />
+          <label for="audit-target-id" style="white-space: nowrap;">Target id</label>
+          <input
+            id="audit-target-id"
+            type="text"
+            inputmode="numeric"
+            placeholder="e.g. 42"
+            bind:value={auditTargetIdRaw}
+            style="width: 8rem;"
+          />
           <Button type="submit" variant="primary">Apply</Button>
-          {#if auditUserIdFilter !== null}
+          {#if auditHasFilter}
             <Button onclick={clearAuditFilter}>Clear</Button>
           {/if}
         </form>
@@ -1784,7 +1849,7 @@
     {/if}
 
     {#if section === 'campaigns'}
-      <Campaigns onGoToSettings={() => (section = 'settings')} onGoToAudit={() => (section = 'audit')} />
+      <Campaigns onGoToSettings={() => (section = 'settings')} onGoToAudit={goToCampaignAudit} />
     {/if}
   {/if}
 </div>

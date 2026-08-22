@@ -315,13 +315,31 @@ export interface AuditPage {
 }
 
 /**
- * GET /admin/audit — paginated audit log (admin only), newest-first. An optional
- * `userId` narrows to a single actor/target via `?user_id=`.
+ * GET /admin/audit — paginated audit log (admin only), newest-first. `userId`
+ * narrows via `?user_id=`. `targetType`/`targetId` narrow via `?target_type=`/
+ * `?target_id=` (#0114) — the pair a campaign's demoted-banner and stats
+ * screen deep-link with (lib/admin.ts's `campaignAuditFilter`) to reach rows
+ * a user_id filter can't, like #0045's NULL-actor `send_refused` row. Passing
+ * `targetId` without `targetType` mirrors the server's 400 (see
+ * internal/handlers/audit.go's List) — callers should validate with
+ * `parseTargetFilter` first rather than relying on the round trip to catch it.
  */
-export function listAudit(page = 1, perPage = 50, userId?: number): Promise<AuditPage> {
+export function listAudit(
+  page = 1,
+  perPage = 50,
+  userId?: number,
+  targetType?: string,
+  targetId?: number,
+): Promise<AuditPage> {
   let path = `/admin/audit?page=${page}&per_page=${perPage}`;
   if (userId !== undefined) {
     path += `&user_id=${userId}`;
+  }
+  if (targetType !== undefined) {
+    path += `&target_type=${encodeURIComponent(targetType)}`;
+  }
+  if (targetId !== undefined) {
+    path += `&target_id=${targetId}`;
   }
   return apiGet<AuditPage>(path);
 }
