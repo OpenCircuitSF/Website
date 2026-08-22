@@ -433,12 +433,21 @@ CREATE TABLE subscribers (
     utm_source     TEXT,
     utm_medium     TEXT,
     utm_campaign   TEXT,
+    already_subscribed_sent_at TIMESTAMPTZ,       -- 000011: rate-limits the
+                                                  -- "you're already subscribed" reply so the
+                                                  -- uniform 202 cannot be used to mail-bomb
+    synthetic      BOOLEAN NOT NULL DEFAULT FALSE, -- 000019: campaign test-send recipient
+                                                  -- fixtures. Excluded from every audience,
+                                                  -- count, and export
     unsubscribed_at TIMESTAMPTZ,
     unsubscribe_source TEXT,                      -- one_click | preferences | mailto | admin
     -- Provenance (§6.10). Every address must be able to answer
     -- "where did this come from, and when?" without reading the event log.
     source         TEXT NOT NULL DEFAULT 'signup_form',
                    -- signup_form | import | admin_manual | api
+    invited_at     TIMESTAMPTZ,                   -- §6.10.1: set once, ever. Its presence is
+                                                  -- what makes "one invitation per address"
+                                                  -- enforceable across separate imports
     source_detail  TEXT,                          -- e.g. 'luma:oc-soldering-2026-05'
     consent_basis  TEXT,                          -- double_opt_in | imported_prior_consent | admin_attested
     import_id      BIGINT REFERENCES subscriber_imports(id),
@@ -502,8 +511,15 @@ CREATE TABLE email_campaigns (
     archive_status TEXT NOT NULL DEFAULT 'pending',  -- pending | published | withheld
     archived_at    TIMESTAMPTZ,
     audience_mode  TEXT NOT NULL DEFAULT 'any_of',  -- all | any_of | all_of | none_selected
-    workshop_id    BIGINT REFERENCES workshops(id), -- optional: announcement source
+    workshop_id    BIGINT,                  -- optional: announcement source. The FK to
+                                            -- workshops(id) is added by #0050 in Phase 6;
+                                            -- 000017 ships the bare column so Phase 5 and
+                                            -- Phase 6 stay independently deployable
     scheduled_at   TIMESTAMPTZ,
+    materialized_at TIMESTAMPTZ,            -- 000018: the "materialize exactly once" marker.
+                                            -- Distinguishes a complete audience from a send
+                                            -- that crashed mid-materialization
+    test_sent_at   TIMESTAMPTZ,             -- 000018: the no_test_send preflight gate
     started_at     TIMESTAMPTZ,
     completed_at   TIMESTAMPTZ,
     created_by     BIGINT REFERENCES users(id),
@@ -526,7 +542,10 @@ CREATE TABLE email_sends (
     subscriber_id  BIGINT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
     email          TEXT NOT NULL,          -- snapshot at send time
     status         TEXT NOT NULL DEFAULT 'queued',
-                   -- queued | sent | failed | bounced | complained | skipped
+                   -- queued | sending | sent | failed | bounced | complained | skipped
+                   -- 'sending' (000018) is the per-row claim state: the worker's atomic
+                   -- UPDATE ... WHERE id=$1 AND status='queued' is what makes two workers
+                   -- unable to take the same recipient
     ses_message_id TEXT,
     attempts       INT NOT NULL DEFAULT 0,
     error          TEXT,
@@ -541,12 +560,20 @@ CREATE INDEX idx_email_sends_message_id ON email_sends (ses_message_id);
 -- Raw SES/SNS notifications, kept for forensics. Append-only.
 CREATE TABLE email_events (
     id             BIGSERIAL PRIMARY KEY,
-    ses_message_id TEXT,
-    event_type     TEXT NOT NULL,   -- Bounce | Complaint | Delivery | Reject | ...
-    bounce_type    TEXT,            -- Permanent | Transient | Undetermined
-    recipient      TEXT,
-    payload        JSONB NOT NULL,
-    received_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    sns_message_id TEXT NOT NULL,   -- SNS's delivery id; half of the dedupe key
+    ses_message_id TEXT,            -- SES's id for the outbound email — the reconciliation
+                                    -- key back to email_sends, NOT a dedupe key
+    event_type     TEXT NOT NULL,   -- Bounce | Complaint | Delivery | Reject | RenderingFailure
+                                    -- | DeliveryDelay | Send | ''. Deliberately UNCONSTRAINED:
+                                    -- SES adds event types over time and this table records
+                                    -- whatever arrives rather than gatekeeping it
+    bounce_type    TEXT,            -- Permanent | Transient | Undetermined (Bounce only)
+    bounce_subtype TEXT,            -- §6.5's out-of-office handling needs the subtype
+    recipient      TEXT NOT NULL DEFAULT '',  -- lower(trim(...)); '' when the event carries none
+    event_at       TIMESTAMPTZ,     -- the event's own timestamp, when parseable
+    payload        JSONB NOT NULL,  -- raw inner SES JSON, recorded before interpretation
+    received_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (sns_message_id, recipient)  -- SNS delivers at-least-once; this is the dedupe
 );
 CREATE INDEX idx_email_events_message_id ON email_events (ses_message_id);
 CREATE INDEX idx_email_events_recipient ON email_events (recipient);
@@ -559,12 +586,16 @@ CREATE TABLE subscriber_imports (
     id             BIGSERIAL PRIMARY KEY,
     source         TEXT NOT NULL,          -- luma | eventbrite | meetup | manual_csv | other
     source_detail  TEXT,                   -- event name, export filename, URL
+    consent_mode   TEXT NOT NULL DEFAULT 'invite',  -- prior_consent | invite (§6.10)
     consent_note   TEXT NOT NULL,          -- how consent was obtained, in the admin's words
-    collected_at   DATE,                   -- when the source collected the addresses
+    collected_at   DATE NOT NULL,          -- when the source collected the addresses;
+                                           -- also quoted in the invitation copy
     filename       TEXT,
     row_count      INT NOT NULL DEFAULT 0,
     inserted_count INT NOT NULL DEFAULT 0,
     skipped_count  INT NOT NULL DEFAULT 0,
+    invited_count  INT NOT NULL DEFAULT 0,   -- invite mode only
+    confirmed_count INT NOT NULL DEFAULT 0,  -- invitations accepted, updated as they land
     status         TEXT NOT NULL DEFAULT 'committed',  -- committed | revoked
     revoked_at     TIMESTAMPTZ,
     revoked_reason TEXT,
@@ -655,6 +686,25 @@ Plus the copied auth tables: `users`, `passkey_credentials`,
 > Phase 8 `subscriber_imports` table: `subscribers` shipped in migration
 > `000010`, so the column and its FK arrive by `ALTER TABLE` after
 > `subscriber_imports` is created, never by editing `000010`.
+
+> **Greenfield until first deploy — decided 2026-08-21.** Nothing is in
+> production but the static placeholder. There is no PostgreSQL instance on the
+> EC2 box holding real data, no subscriber has ever signed up, and no campaign
+> has ever been sent. Until the first real release ships, the migration set is
+> **not** append-only in practice: `migrations/` may be squashed, renumbered, or
+> rewritten as a deliberate act, and the development database may be dropped and
+> recreated from scratch. No backfill logic is owed to data that does not exist.
+>
+> This is a scoped, temporary exception to CLAUDE.md §1's append-only rule, and
+> it expires the moment the first production deploy applies a migration to a
+> database anyone cares about. After that, append-only is absolute again —
+> `migrations/000007` exists because ShortLinks broke it once. An issue that
+> adds a column before that line is allowed to say "add it to `000010`" instead
+> of "add an `ALTER TABLE` in `000020`"; one filed after it is not.
+>
+> The corollary that actually matters day to day: when a Phase 8 issue wants a
+> column on `subscribers`, the cheap and correct answer today is to edit
+> `000010`, reset the dev database, and move on.
 
 **Email normalization.** Store `lower(trim(email))`. Do **not** strip Gmail dots
 or `+tag` suffixes — they are distinct addresses per RFC and users legitimately
@@ -1070,10 +1120,19 @@ The breaker is a safety mechanism and, like the `physical_address` check in
 
 ### 6.10 Subscriber import and consent provenance
 
-The group already has audiences elsewhere — Luma attendees, Discord members, a
-spreadsheet. Importing them is legitimate; importing them carelessly burns the
+**The website is the primary way addresses enter this list.** Import is the
+secondary path, for audiences the group already collected somewhere else — a
+Google Form, a sign-in sheet at an event, a spreadsheet. It is not expected to
+carry much volume. Importing is legitimate; importing carelessly burns the
 sending domain and is unlawful under CAN-SPAM and GDPR. The import path exists
 so that the careful version is the easy one.
+
+> **Luma is unlikely to be a real source — noted 2026-08-21.** Earlier drafts
+> treated a Luma attendee export as the motivating case. It probably is not one:
+> exporting attendee addresses out of Luma to mail them from elsewhere is not
+> something this project expects to do. `luma` survives as a `source` value for
+> labelling, and nothing in the importer is built around Luma's schema. Google
+> Forms and event sign-in sheets are the realistic sources.
 
 **Every import declares its provenance up front.** A `subscriber_imports` row is
 created before any address is inserted, and it requires:
@@ -1087,6 +1146,26 @@ Each imported subscriber carries `source = 'import'`, the `import_id`, and a
 `consent_basis` of `imported_prior_consent`. `/admin/subscribers/{id}` shows all
 of it, so "why is this person on the list?" always has an answer.
 
+**Two consent modes, chosen per batch.** `subscriber_imports.consent_mode`
+decides what happens to the addresses an import brings in:
+
+| Mode | What it does | When to use it |
+|---|---|---|
+| `prior_consent` | Inserts `active`. **Sends nothing** — no confirmation, no welcome. | The source already collected an opt-in and the admin is attesting to it |
+| `invite` | Inserts `pending` and sends one invitation naming where the address came from. The address becomes `active` only on confirmation. | Anything short of a clear prior opt-in — and the safer default |
+
+`prior_consent` sending nothing is deliberate and is the decision of record
+(2026-08-21). An import asserts that consent already exists; re-running double
+opt-in over it produces mail nobody asked for and a low confirmation rate that
+reads to SES as a spam signal. A welcome email is likewise not sent — the
+welcome (§6.3) is the reward for confirming, and these subscribers did not
+confirm here.
+
+That places the entire weight of `prior_consent` on the admin's attestation,
+which is why `consent_note` is mandatory and why batch revocation is one action.
+
+`invite` mode is specified in §6.10.1.
+
 **Import rules.**
 
 - CSV, one email column, optional interest-slug column. Column mapping is chosen
@@ -1097,9 +1176,8 @@ of it, so "why is this person on the list?" always has an answer.
   chance to complain.
 - An address already present is skipped, not overwritten. An import never
   changes an existing subscriber's status, interests, or consent basis.
-- Imported subscribers land `active` — an import asserts prior consent, so
-  re-running double opt-in on them is the wrong shape. This is precisely why
-  `consent_note` is mandatory and why revocation exists.
+- A `prior_consent` import lands subscribers `active` and sends them nothing.
+  An `invite` import lands them `pending` and sends one invitation (§6.10.1).
 - Dry run first: the wizard previews counts (new / duplicate / suppressed /
   malformed) and the admin commits explicitly.
 - Every import writes an `audit_log` entry and one `subscriber_events` row per
@@ -1112,6 +1190,53 @@ whose status is still `active` moves to `unsubscribed` with
 reason, and the action is audited. Addresses that have since engaged are still
 revoked — the question is whether we ever had the right to mail them, and the
 answer does not change because they opened something.
+
+#### 6.10.1 Invite mode — asking imported addresses for explicit consent
+
+Deduplication already tells an import which addresses are genuinely new. Those
+are exactly the addresses where consent is least certain, and `invite` mode
+turns that list into a request rather than an assumption.
+
+**The flow.**
+
+1. The import dedupes. Addresses already in `subscribers`, and addresses on the
+   suppression list, are skipped as always — they are never invited.
+2. Each genuinely-new address is inserted `pending` with a `confirm_token` and
+   `confirm_expires_at`, `source = 'import'`, `consent_basis = NULL`.
+3. One invitation goes out per address, through the outbound queue (§6.11).
+4. Confirming sets `active`, stamps `confirmed_at`, sets
+   `consent_basis = 'double_opt_in'`, and clears the token. From that point the
+   subscriber is indistinguishable from a website signup, because they are one.
+5. An invitation that is never accepted expires. The row stays `pending` and is
+   never mailed again by this mechanism.
+
+**The invitation must say where the address came from.** This is the difference
+between an invitation and spam, and it is not optional copy:
+
+> You gave us this address when you signed up for *Intro to Soldering* through
+> our Google Form on 12 May 2026. We're starting an email list for workshop
+> announcements — confirm below if you'd like to be on it. If not, do nothing
+> and you won't hear from us again.
+
+The source sentence is built from `subscriber_imports.source`, `source_detail`,
+and `collected_at`, which is the second reason those three fields are mandatory.
+
+**Rules.**
+
+- One invitation per address, ever. No reminder, no re-invite on a later import.
+  An address that has already been invited is skipped by every subsequent
+  import, in whatever mode.
+- The invitation carries `List-Unsubscribe` headers and a working opt-out that
+  suppresses the address outright, so declining is one click and not a
+  non-action.
+- No welcome email follows an accepted invitation — the invitation *was* the
+  introduction. §6.3's welcome belongs to website signups.
+- Invitations are subject to the same send-rate limit as campaign mail, and
+  count toward the delivery-health thresholds in §6.9. An invite batch that
+  starts bouncing trips the same breaker.
+- Revoking the import revokes uninvited and unconfirmed rows. An address that
+  confirmed has given consent directly and is left alone — its consent no longer
+  derives from the import.
 
 ### 6.11 Durable outbound queue and the activity log
 
@@ -1143,6 +1268,9 @@ this address?" — one row per meaningful action, with a closed set of values:
 | `unsubscribed` | Any of the three unsubscribe paths (§6.5) |
 | `resubscribed` | A previously unsubscribed address signed up again |
 | `imported` | Inserted by a CSV import |
+| `invite_sent` | An import invitation was sent (§6.10.1) |
+| `invite_accepted` | An import invitation was confirmed |
+| `invite_expired` | An import invitation aged out unaccepted |
 | `import_revoked` | Removed by a batch revocation |
 | `campaign_sent` | A campaign message was accepted by SES for this address |
 | `bounced_soft` / `bounced_hard` | SES reported a Transient / Permanent bounce |
@@ -1256,7 +1384,7 @@ makes workshops eligible for rich results in search.
 |---|---|---|
 | `GET` | `/api/interests` | Active interest list for the signup form |
 | `POST` | `/api/subscribe` | Start double opt-in. Rate-limited. Always 202. |
-| `POST` | `/api/subscribe/confirm` | Confirm with token → active |
+| `POST` | `/api/subscribe/confirm` | Confirm with token → active. Also accepts an import invitation (§6.10.1) — same token shape, same endpoint. |
 | `GET` | `/api/preferences?token=` | Read current interests |
 | `PATCH` | `/api/preferences` | Replace interest set |
 | `POST` | `/api/unsubscribe` | One-click (RFC 8058) and in-page unsubscribe |
@@ -1267,7 +1395,8 @@ makes workshops eligible for rich results in search.
 | `GET` | `/api/workshops/{slug}` | One published workshop |
 | `POST` | `/api/ses/notifications` | SNS bounce/complaint webhook (signature-verified) |
 | `POST` | `/api/ses/inbound` | SNS inbound-mail webhook (signature-verified) |
-| `GET` | `/healthz` | Liveness |
+| `GET` | `/health` | Liveness. **Shipped as `/health`**, not `/healthz` — corrected here 2026-08-21 to match `cmd/opencircuit`. |
+| `GET` | `/api/me` | Current session identity for the SPA shell |
 
 ### Authenticated (copied from ShortLinks)
 
@@ -1281,6 +1410,7 @@ All of `/auth/*`, `/account/credentials*`, `/admin/users*`, `/admin/settings`,
 | `GET` | `/admin/subscribers` | Paginated, filterable by status and interest |
 | `GET` | `/admin/subscribers/{id}` | Detail incl. consent evidence and event history |
 | `POST` | `/admin/subscribers/{id}/suppress` | Manual suppression with a note |
+| `POST` | `/admin/subscribers/{id}/clear-complaint` | Clear a `complained` state. Admin-only by design — a complained address never auto-resubscribes |
 | `DELETE` | `/admin/subscribers/{id}` | Hard delete (GDPR erasure request) |
 | `GET` | `/admin/subscribers/export` | CSV export |
 | `GET` | `/admin/subscribers/pending` | Unconfirmed signups with age |
@@ -1288,6 +1418,7 @@ All of `/auth/*`, `/account/credentials*`, `/admin/users*`, `/admin/settings`,
 | `POST` | `/admin/subscribers/import/preview` | Dry run — parse, map, and count without writing |
 | `POST` | `/admin/subscribers/import` | Commit an import batch |
 | `POST` | `/admin/imports/{id}/revoke` | Revoke a whole import batch |
+| `GET` | `/admin/imports` | Import history with per-batch counts and invitation outcomes |
 | `GET` | `/admin/deliverability` | Addresses with bounce activity |
 | `GET` | `/admin/deliverability/{email}` | Full event history for one address |
 | `POST` | `/admin/deliverability/{email}/reset-streak` | Clear the soft-bounce streak |
@@ -1295,6 +1426,7 @@ All of `/auth/*`, `/account/credentials*`, `/admin/users*`, `/admin/settings`,
 | `POST` | `/admin/suppressions/remove` | Retire one suppression reason (`#0100`) |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/admin/interests[/{id}]` | Taxonomy CRUD |
 | `GET`/`POST`/`PATCH` | `/admin/campaigns[/{id}]` | Campaign CRUD |
+| `GET` | `/admin/campaigns/{id}/preflight` | The pre-send gate's current verdict and every blocking reason |
 | `POST` | `/admin/campaigns/{id}/preview` | Render HTML + text without sending |
 | `POST` | `/admin/campaigns/{id}/test` | Send to one admin address |
 | `GET` | `/admin/campaigns/{id}/audience` | Recipient count + sample, before committing |
@@ -1353,6 +1485,20 @@ SEND_WORKER_ENABLED=true  # false on a second instance to avoid double-sending
 
 # ── Bootstrap ──────────────────────────────────────────────────────────────
 ADMIN_EMAIL=offwhite@gmail.com
+
+# ── Development and test seams ─────────────────────────────────────────────
+# These three ship in the config loader but were missing from this block until
+# the 2026-08-21 currency pass.
+STORAGE=postgres          # postgres | json. 'json' selects internal/devstore, the
+                          # in-memory stand-in that lets scripts/dev.sh run with no
+                          # database at all. Never 'json' in production.
+MAILER_NOOP=false         # true drops outbound mail instead of calling SES, so a dev
+                          # machine with no AWS credentials still exercises the flows.
+                          # The admin routes that would send real mail are omitted
+                          # from the route table entirely when this is set.
+SES_EVENTS_TOPIC_ARN=     # The SNS topic bounce/complaint notifications must arrive on.
+                          # A message from any other topic is refused before any
+                          # outbound certificate fetch (#0107).
 ```
 
 Runtime-editable values live in the `settings` table, not the environment:
@@ -1363,6 +1509,10 @@ Runtime-editable values live in the `settings` table, not the environment:
 
 `soft_bounce_threshold_window_days` is **retired** by §6.9's move from a rolling
 window to a consecutive streak; the Phase 8 migration deletes its row.
+
+Seeded by migration today: `physical_address` (`000008`),
+`soft_bounce_threshold_count` (`000015`), `max_send_rate` and
+`default_from_name` (`000018`).
 
 ---
 
@@ -1538,7 +1688,8 @@ admin overview dashboard, backup verification, accessibility audit,
 
 ### Phase 8 — Archive, imports, and delivery health
 The public campaign archive with draft-time slugs and a "view in browser" link,
-CSV import with recorded consent provenance and batch revocation, the
+CSV import with recorded consent provenance, batch revocation, and an invite
+mode that asks genuinely-new imported addresses for explicit consent, the
 consecutive soft-bounce streak with an admin deliverability screen, the
 send-time bounce/complaint circuit breaker, the durable outbound queue and
 subscriber activity log, the welcome email, and the pending-subscriber screen.
@@ -1596,7 +1747,8 @@ CSV export · 0060 GDPR erasure · 0061 admin overview · 0062 backup verificati
 **Phase 8** — 0123 public campaign archive · 0124 delivery-health streak,
 history, and circuit breaker · 0125 subscriber CSV import with consent
 provenance · 0126 durable outbound queue + subscriber activity log · 0127
-welcome email · 0128 pending-subscriber admin screen
+welcome email · 0128 pending-subscriber admin screen · 0129 invite imported
+addresses to confirm
 
 ---
 
@@ -1612,5 +1764,5 @@ welcome email · 0128 pending-subscriber admin screen
 | 6 | Is the interest taxonomy in §6.1 right, and should any be merged or dropped? | Phase 3 | Ship as listed; it is admin-editable |
 | 7 | Expected list size in year one — changes nothing architecturally, but sets the SES quota request | Phase 4 | Request 50k/day; ask for what you might need |
 | 8 | Do workshop pages need photos at launch, or is type-only acceptable? | Phase 6 | Type-only; add a cover image field now, populate later |
-| 9 | What exactly does a Luma attendee export contain, and does its terms of service permit adding attendees to a newsletter? | Phase 8 (`#0125`) | Assume email + name + event only; require the admin to attest consent per batch and keep revocation one click away |
+| 9 | ~~What does a Luma attendee export contain, and do its terms permit adding attendees to a newsletter?~~ — **resolved 2026-08-21**: Luma is unlikely to be an import source at all. The importer takes a generic CSV with UI column mapping; Google Forms and event sign-in sheets are the realistic sources. See §6.10. | — | — |
 | 10 | Should the archive index be paginated, or is a single page fine for the first few years? | Phase 8 (`#0123`) | Single page; a community newsletter will not outgrow it soon, and one page indexes better |

@@ -48,8 +48,18 @@ belong in this tracker.
 - Handlers depend on **narrow store interfaces**, never a concrete store — that
   is what lets `internal/devstore` stand in for Postgres under `STORAGE=json`.
 - SQL lives in the store package that owns the table, not in handlers.
-- **Migrations are append-only.** Never edit an applied migration; add a new
-  one. `migrations/000007` exists because ShortLinks broke this rule once.
+- **Migrations are append-only — *after* the first production deploy.** Never
+  edit a migration that has been applied to a database anyone cares about; add a
+  new one. `migrations/000007` exists because ShortLinks broke this rule once.
+  **Until then, this project is greenfield** (decided 2026-08-21): nothing is
+  live but the static placeholder, there is no PostgreSQL instance on AWS
+  holding real data, and no subscriber or campaign has ever existed. So
+  `migrations/` may be squashed, renumbered, or rewritten as a deliberate act,
+  and the dev database may be dropped and recreated. Prefer editing the
+  migration that owns a table over stacking an `ALTER TABLE`, and write no
+  backfill for data that does not exist. The exception expires at the first
+  deploy that applies a migration to production — see PRD §6.2's greenfield
+  note.
 - Tests sit beside the code as `_test.go`. DB-backed tests gate on
   `TEST_DATABASE_URL` and skip when it is unset — so a green `go test ./...`
   with that variable unset proves less than it looks like it does.
@@ -414,7 +424,7 @@ that needs cost accounting; refresh once per day.
 
 ## 11. PRD section index
 
-`PRD.md` is 1,616 lines (~19k tokens). **Never read it whole.** Every issue's
+`PRD.md` is 1,769 lines (~21k tokens). **Never read it whole.** Every issue's
 `## Relation` block names the section it needs and carries the exact extraction
 command; run that. This table is the fallback when you need a section no issue
 cites.
@@ -440,9 +450,9 @@ the PRD.
 | **§5 Information Architecture** | 39 | `sed -n '/^## 5\. /,/^## [0-9]/p' PRD.md` |
 | §5.1 Public routes | 18 | `sed -n '/^### 5\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §5.2 Admin routes (session + `is_admin` required) | 19 | `sed -n '/^### 5\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§6 Mailing List — The Core Subsystem** | 775 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
+| **§6 Mailing List — The Core Subsystem** | 903 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
 | §6.1 Interest taxonomy | 23 | `sed -n '/^### 6\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §6.2 Database schema | 246 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.2 Database schema | 296 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.3 Subscription flow (double opt-in) | 56 | `sed -n '/^### 6\.3 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.4 Preference center | 16 | `sed -n '/^### 6\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.5 Unsubscribe — three paths, all required | 93 | `sed -n '/^### 6\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
@@ -450,8 +460,8 @@ the PRD.
 | §6.7 SES event ingestion | 40 | `sed -n '/^### 6\.7 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.8 Public campaign archive | 65 | `sed -n '/^### 6\.8 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.9 Delivery health — bounce policy and the circuit breaker | 60 | `sed -n '/^### 6\.9 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §6.10 Subscriber import and consent provenance | 45 | `sed -n '/^### 6\.10 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §6.11 Durable outbound queue and the activity log | 51 | `sed -n '/^### 6\.11 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.10 Subscriber import and consent provenance | 120 | `sed -n '/^### 6\.10 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.11 Durable outbound queue and the activity log | 54 | `sed -n '/^### 6\.11 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | **§7 Frontend** | 84 | `sed -n '/^## 7\. /,/^## [0-9]/p' PRD.md` |
 | §7.1 Stack | 7 | `sed -n '/^### 7\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §7.2 Routing | 14 | `sed -n '/^### 7\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
@@ -459,8 +469,8 @@ the PRD.
 | §7.4 SEO and social preview cards | 23 | `sed -n '/^### 7\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §7.5 Accessibility | 13 | `sed -n '/^### 7\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §7.6 Performance budget | 12 | `sed -n '/^### 7\.6 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§8 HTTP API** | 61 | `sed -n '/^## 8\. /,/^## [0-9]/p' PRD.md` |
-| **§9 Configuration** | 57 | `sed -n '/^## 9\. /,/^## [0-9]/p' PRD.md` |
+| **§8 HTTP API** | 65 | `sed -n '/^## 8\. /,/^## [0-9]/p' PRD.md` |
+| **§9 Configuration** | 75 | `sed -n '/^## 9\. /,/^## [0-9]/p' PRD.md` |
 | **§10 Infrastructure and Deployment** | 89 | `sed -n '/^## 10\. /,/^## [0-9]/p' PRD.md` |
 | §10.1 Topology | 38 | `sed -n '/^### 10\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §10.2 DNS records (Route 53) | 16 | `sed -n '/^### 10\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
@@ -469,13 +479,16 @@ the PRD.
 | §10.5 IAM | 9 | `sed -n '/^### 10\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §10.6 Backups | 9 | `sed -n '/^### 10\.6 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | **§11 Security and Compliance** | 35 | `sed -n '/^## 11\. /,/^## [0-9]/p' PRD.md` |
-| **§12 Phased Build Plan** | 62 | `sed -n '/^## 12\. /,/^## [0-9]/p' PRD.md` |
-| **§13 Issue Breakdown** | 48 | `sed -n '/^## 13\. /,/^## [0-9]/p' PRD.md` |
+| **§12 Phased Build Plan** | 63 | `sed -n '/^## 12\. /,/^## [0-9]/p' PRD.md` |
+| **§13 Issue Breakdown** | 49 | `sed -n '/^## 13\. /,/^## [0-9]/p' PRD.md` |
 | **§14 Open Questions** | 15 | `sed -n '/^## 14\. /,/^## [0-9]/p' PRD.md` |
 
 Bold rows are whole top-level sections and include their subsections. §6 (the
-mailing list) is 775 lines — take the subsection, not the parent.
+mailing list) is 903 lines — take the subsection, not the parent.
 
-**Regenerated 2026-08-21** when Phase 8 (§6.8–§6.11) was added. Three rows had
-already drifted before that (`#0113`); every row above is recomputed from the
-current file.
+§6.10 includes §6.10.1 (import invite mode).
+
+**Regenerated 2026-08-21**, twice: when Phase 8 (§6.8–§6.11) was added, and
+again after the currency pass that synced §6.2, §8, and §9 to what actually
+shipped. Three rows had already drifted before either (`#0113`); every row above
+is recomputed from the current file.
