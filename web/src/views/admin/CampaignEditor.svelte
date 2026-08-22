@@ -60,6 +60,7 @@
   import {
     CAMPAIGN_PROGRESS_EVENT,
     isProgressForCampaign,
+    isTerminalSnapshot,
     shouldShowProgress,
     progressHeading,
     progressPercent,
@@ -251,26 +252,47 @@
   // about what to DO with a frame (does it belong to this campaign, does
   // the region show, what it says) is a lib/campaignProgress.ts call read
   // through the $derived values above, never decided here.
+  //
+  // #0048's review, point 1: campaign.status was previously refreshed only
+  // by load(), a stream (re)connect (resyncCampaignStatus below), and
+  // explicit mutations — never by a progress frame itself. On a healthy
+  // connection (the normal case) that meant the closing frame (remaining: 0)
+  // updated the counts but left campaign.status stuck on 'sending' forever:
+  // progressHeading('sending') kept showing "Sending…" over a completed
+  // send's own final numbers, and 30s later progressVerdict added a false
+  // "stalled" warning. isTerminalSnapshot (lib/campaignProgress.ts) is the
+  // fix: any frame reporting nothing left in flight triggers the same resync
+  // a reconnect does, so the heading/verdict move off 'sending' the moment
+  // the closing frame arrives rather than waiting for a connection drop that,
+  // on a healthy stream, never happens.
   function onProgressEvent(p: CampaignProgress): void {
     if (!isProgressForCampaign(p, campaignId)) {
       return; // broadcast to every admin, for every campaign — not ours.
     }
     progress = p;
     progressUpdatedAt = Date.now();
+    if (isTerminalSnapshot(p)) {
+      void resyncCampaignStatus();
+    }
   }
 
   // Re-reads the campaign's status (not the editable buffer — see this
-  // function's own scope) on the stream's initial connect and every
-  // automatic reconnect. The database is the source of truth, not this
-  // stream (CLAUDE.md): a campaign can finish/fail/be cancelled entirely
-  // during a connection gap with no further batch to publish a closing
-  // frame (#0045's failCampaign does not publish), so relying solely on
-  // the next SSE frame could leave this view showing "Sending…" forever.
-  // Deliberately narrower than load(): it only replaces `campaign`, never
-  // the name/subject/preheader/bodyMd/mode/interestIds editable buffer, so
-  // an operator's in-progress (unsaved) edit is never clobbered by a
-  // background resync. Best-effort: a failure here just means the next
-  // progress frame or the operator's own next action refreshes it instead.
+  // function's own scope) on the stream's initial connect, every automatic
+  // reconnect, and — since #0048's review, point 1 — every progress frame
+  // that isTerminalSnapshot reports as closing (onProgressEvent above). The
+  // database is the source of truth, not this stream (CLAUDE.md): a campaign
+  // can finish/fail/be cancelled entirely during a connection gap with no
+  // further batch to publish a closing frame, so relying solely on
+  // reconnect-driven resyncs could leave this view showing "Sending…" for as
+  // long as the connection happened to stay up — which, on a healthy
+  // connection, is forever. (worker.go's failCampaign now also publishes a
+  // closing snapshot itself, so the terminal-frame path covers that case
+  // too, not only CompleteIfDone's.) Deliberately narrower than load(): it
+  // only replaces `campaign`, never the name/subject/preheader/bodyMd/mode/
+  // interestIds editable buffer, so an operator's in-progress (unsaved) edit
+  // is never clobbered by a background resync. Best-effort: a failure here
+  // just means the next progress frame or the operator's own next action
+  // refreshes it instead.
   async function resyncCampaignStatus(): Promise<void> {
     try {
       campaign = await getCampaign(campaignId);

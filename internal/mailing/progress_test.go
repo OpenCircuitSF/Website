@@ -105,3 +105,80 @@ func TestWorker_PublishProgress_NilPublisherIsNoop(t *testing.T) {
 
 	w.publishProgress(context.Background(), campaignID) // must not panic
 }
+
+// TestWorker_FailCampaign_PublishesTerminalSnapshot is the mutation-check
+// target for #0048's review point 1 / #0045's own review finding: failCampaign
+// (the worker-detected-reason path — empty audience, physical_address/reply-to
+// gone blank) must publish a closing progress snapshot when it actually
+// performs the 'sending'->'failed' transition, the same way a normal
+// completion does, so a client reconciling against a fresh frame is never
+// stuck with a live batch's stale numbers. Mutation: delete
+// `w.publishProgress(ctx, campaignID)` from failCampaign's `if did {}` block
+// — this test must fail (0 calls, want 1).
+func TestWorker_FailCampaign_PublishesTerminalSnapshot(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	seedSendWithStatus(t, pool, campaignID, "sent")
+	seedSendWithStatus(t, pool, campaignID, "queued")
+
+	// failCampaign/MarkFailedCampaign only transitions a campaign currently
+	// 'sending' (worker_store.go's `AND status='sending'` guard) —
+	// seedScheduledCampaign leaves it 'scheduled', so move it to 'sending'
+	// directly, the same state the real drain loop would have left it in.
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE email_campaigns SET status = 'sending' WHERE id = $1`, campaignID,
+	); err != nil {
+		t.Fatalf("seed sending campaign: %v", err)
+	}
+
+	w := newTestWorker(t, pool, &RecordingMailer{})
+	fake := &fakeProgressPublisher{}
+	w.progress = fake
+
+	if err := w.failCampaign(context.Background(), campaignID, "empty_audience"); err != nil {
+		t.Fatalf("failCampaign: %v", err)
+	}
+
+	if len(fake.calls) != 1 {
+		t.Fatalf("PublishCampaignProgress called %d times, want exactly 1", len(fake.calls))
+	}
+	got := fake.calls[0]
+	want := CampaignProgress{
+		CampaignID: campaignID,
+		Total:      2,
+		Sent:       1,
+		Failed:     0,
+		Skipped:    0,
+		Remaining:  1,
+	}
+	if got != want {
+		t.Fatalf("published progress = %+v, want %+v", got, want)
+	}
+}
+
+// TestWorker_FailCampaign_NoTransitionNoPublish asserts failCampaign's
+// existing `if did {}` guard also covers the new publish: a second worker's
+// concurrent failure attempt against a campaign that already left 'sending'
+// (MarkFailedCampaign's own guard, worker_store.go) must not publish a
+// spurious extra snapshot.
+func TestWorker_FailCampaign_NoTransitionNoPublish(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	seedSendWithStatus(t, pool, campaignID, "sent")
+	// Leave the campaign 'scheduled' (never 'sending'), so MarkFailedCampaign's
+	// `AND status='sending'` guard makes `did` false.
+
+	w := newTestWorker(t, pool, &RecordingMailer{})
+	fake := &fakeProgressPublisher{}
+	w.progress = fake
+
+	if err := w.failCampaign(context.Background(), campaignID, "empty_audience"); err != nil {
+		t.Fatalf("failCampaign: %v", err)
+	}
+
+	if len(fake.calls) != 0 {
+		t.Fatalf("PublishCampaignProgress called %d times, want 0 (no transition performed)", len(fake.calls))
+	}
+}

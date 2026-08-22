@@ -43,6 +43,32 @@ export function isProgressForCampaign(p: CampaignProgress, campaignId: number): 
   return p.campaign_id === campaignId;
 }
 
+/**
+ * Whether a received CampaignProgress frame is the CLOSING one for its send —
+ * i.e. nothing is left in flight. `#0048`'s review (point 1): the component's
+ * `campaign.status` was only ever refreshed from `load()`, a stream
+ * (re)connect, and explicit mutations — never from a progress frame itself —
+ * so on a healthy connection the closing frame (`remaining: 0`, published by
+ * `CompleteIfDone` and now also by `failCampaign`, worker.go) arrived and
+ * updated the counts, but the component's own `campaign.status` stayed
+ * `'sending'` forever: `progressHeading('sending')` kept showing "Sending…"
+ * over "1,203 of 1,203 sent · 0 remaining" indefinitely, and 30s later
+ * `progressVerdict` layered a false "stalled" warning on top of a completed
+ * send. The fix is to re-fetch `campaign.status` (via
+ * `resyncCampaignStatus()`) whenever `isTerminalSnapshot` is true, not only
+ * on reconnect — see CampaignEditor.svelte's `onProgressEvent`.
+ *
+ * `remaining === 0` is deliberately the ONLY signal read here — not the
+ * frame's `status` (the payload carries none; campaign status lives only on
+ * the `Campaign` object, not on `CampaignProgress`) and not a comparison
+ * against `total`, which the batch/completion cadence documented on
+ * `publishProgress` (worker.go) guarantees `remaining` already reflects
+ * whether every row has left `queued`/`sending`.
+ */
+export function isTerminalSnapshot(p: CampaignProgress): boolean {
+  return p.remaining === 0;
+}
+
 /** done/total as an integer percentage in [0, 100]. total <= 0 (not yet materialized) reads as 0, never NaN/Infinity. */
 export function progressPercent(p: CampaignProgress): number {
   if (p.total <= 0) {

@@ -821,7 +821,16 @@ func sesFailureReason(err error) string {
 // worker-detected reason (not an SES error) — an anomalous empty audience
 // post-materialization, or physical_address/reply-to going blank. Guarded so
 // only the worker that actually performs the transition writes the audit
-// row.
+// row. Also publishes a closing #0048 progress snapshot when it performs the
+// transition: #0045 shipped this path without a final publish (its own
+// review flagged it), which left a `failed` campaign's last SSE frame stuck
+// on whatever the previous live batch reported — never Remaining==0, and
+// never anything a client could use as a terminal signal on its own. This
+// does not by itself fix a `failed` campaign showing "Sending…" forever
+// (#0048's review, point 1) — that requires the client to reconcile against
+// campaign.status, which CampaignEditor.svelte now does on every progress
+// frame — but it does mean that reconciliation always has a fresh snapshot
+// to reconcile against, without waiting for a stream drop/reconnect.
 func (w *Worker) failCampaign(ctx context.Context, campaignID int64, reason string) error {
 	_, sent, failed, _, queued, sending, cerr := w.store.CountEmailSends(ctx, campaignID)
 	if cerr != nil {
@@ -832,6 +841,7 @@ func (w *Worker) failCampaign(ctx context.Context, campaignID int64, reason stri
 		return err
 	}
 	if did {
+		w.publishProgress(ctx, campaignID)
 		w.auditSendFailed(ctx, campaignID, reason, sent, failed, queued+sending)
 	}
 	return nil

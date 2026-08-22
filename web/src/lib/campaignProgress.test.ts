@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   isProgressForCampaign,
+  isTerminalSnapshot,
   progressPercent,
   formatProgressSummary,
   formatProgressDetail,
@@ -37,6 +38,34 @@ describe('isProgressForCampaign', () => {
 
   it('is false when campaign_id differs — progress is broadcast to every admin', () => {
     expect(isProgressForCampaign(progress({ campaign_id: 42 }), 7)).toBe(false);
+  });
+});
+
+describe('isTerminalSnapshot', () => {
+  // #0048's review, point 1: this predicate is what drives
+  // CampaignEditor.svelte's onProgressEvent to resync campaign.status the
+  // moment a closing frame arrives, instead of only on a stream reconnect —
+  // without it a successful send's own final "0 remaining" frame updates the
+  // counts but leaves the heading reading "Sending…" forever.
+  it('is true once remaining reaches 0, mid-send or at completion', () => {
+    expect(isTerminalSnapshot(progress({ total: 10, sent: 10, remaining: 0 }))).toBe(true);
+  });
+
+  it('is true for a failCampaign-style partial snapshot with nothing left queued/sending', () => {
+    // failCampaign (worker.go) can transition to 'failed' with some rows
+    // already sent, some failed/skipped, and none left queued or sending —
+    // remaining: 0 here does not imply sent === total.
+    expect(
+      isTerminalSnapshot(progress({ total: 10, sent: 4, failed: 1, skipped: 1, remaining: 0 })),
+    ).toBe(true);
+  });
+
+  it('is false while any row is still queued or sending', () => {
+    expect(isTerminalSnapshot(progress({ total: 10, sent: 6, remaining: 4 }))).toBe(false);
+  });
+
+  it('is false for the very first frame of a fresh send (nothing sent yet)', () => {
+    expect(isTerminalSnapshot(progress({ total: 10, sent: 0, remaining: 10 }))).toBe(false);
   });
 });
 
