@@ -185,6 +185,10 @@ template database, a permission prompt nobody was there to answer. They share a
 shape — **they are knowable before the work starts and cheap to clear then,
 and expensive once an agent is halfway through a change.**
 
+[`docs/obstacles.md`](../docs/obstacles.md) catalogues the ones that have
+actually stopped work on this project, with the signal and the fix for each.
+Scan it; most of what a plan needs to say is already there.
+
 **The planning subagent's first job is an obstacle scan**, written into the
 issue as `## Obstacles` alongside `## Plan`. For each one: what it is, whether
 it can be avoided, and if not, the exact command or request that clears it.

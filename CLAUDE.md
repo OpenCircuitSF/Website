@@ -346,6 +346,10 @@ role without `CREATEDB`, a stale template database, a port already bound, a
 credential that does not exist yet. They share a shape — **knowable in advance,
 cheap to clear then, expensive once an agent is halfway through a change.**
 
+The catalogue of what has actually stopped work here — each entry with its
+signal, its cost, and the command that clears it — is
+[`docs/obstacles.md`](docs/obstacles.md). Read it when writing a plan.
+
 **The orchestrator clears obstacles before dispatch. The planning subagent
 finds them.** A phase-1 pass writes `## Obstacles` next to `## Plan`: what each
 one is, whether it can be avoided, and the exact command or request that clears

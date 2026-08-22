@@ -35,6 +35,10 @@ later.
 - [Brand & design system](design.md) — terminal-inspired design tokens, motifs, logo assets
 - [SEO & social preview cards](seo.md) — server-injected meta tags, sitemap, structured data
 
+## Working the tracker
+
+- [Obstacles](obstacles.md) — what stops work on an issue, the signal for each, and how to clear it before dispatch
+
 ## Project conventions
 
 - [`CLAUDE.md`](../CLAUDE.md) — binding project-wide guidance: identity, model policy, build/verify commands, restricted areas
