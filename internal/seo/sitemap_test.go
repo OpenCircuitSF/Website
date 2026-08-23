@@ -67,7 +67,20 @@ func TestSitemap_ExcludesUnpublishedWorkshops(t *testing.T) {
 		"published-1": {Slug: "published-1", Status: WorkshopPublished, UpdatedAt: "2026-08-01"},
 		"draft-1":     {Slug: "draft-1", Status: WorkshopDraft},
 		"unpub-1":     {Slug: "unpub-1", Status: WorkshopUnpublished},
-		"canceled-1":  {Slug: "canceled-1", Status: WorkshopCanceled},
+		// canceled-1 was never published (Published defaults false: a
+		// draft canceled outright). canceled-2 WAS published before the
+		// cancel (Published: true, mirroring published_at staying
+		// non-NULL across the transition -- see #0171's review notes).
+		// #0174: the sitemap gate is status-only (sitemap.go:86 checks
+		// only w.Status, never w.Published), so canceled-2 is the fixture
+		// that actually exercises the gate -- a hypothetical regression
+		// that swapped the check to key off Published instead of Status
+		// would still exclude canceled-1 (Published already false) but
+		// would wrongly include canceled-2. Both are kept so a
+		// never-published and a was-published canceled workshop are each
+		// covered.
+		"canceled-1": {Slug: "canceled-1", Status: WorkshopCanceled},
+		"canceled-2": {Slug: "canceled-2", Status: WorkshopCanceled, Published: true},
 	}
 	s := NewSitemap(testBaseURL, source)
 	body, err := s.Build()
@@ -79,7 +92,7 @@ func TestSitemap_ExcludesUnpublishedWorkshops(t *testing.T) {
 	if !strings.Contains(xmlStr, testBaseURL+"/workshops/published-1") {
 		t.Errorf("sitemap missing the published workshop: %s", xmlStr)
 	}
-	for _, excluded := range []string{"draft-1", "unpub-1", "canceled-1"} {
+	for _, excluded := range []string{"draft-1", "unpub-1", "canceled-1", "canceled-2"} {
 		if strings.Contains(xmlStr, "/workshops/"+excluded) {
 			t.Errorf("sitemap contains excluded (non-published) workshop %q: %s", excluded, xmlStr)
 		}

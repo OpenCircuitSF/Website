@@ -144,7 +144,7 @@ export function cancelConfirmMessage(title: string, wasPublished: boolean): stri
   if (wasPublished) {
     return `Cancel "${title}"? It stays visible on the public site, marked canceled, rather than disappearing.`;
   }
-  return `Cancel "${title}"? It was never published, so it stays private -- canceling it will not make it visible.`;
+  return `Cancel "${title}"? It is not currently published, so it stays private -- canceling it will not make it visible.`;
 }
 
 /** Confirmation copy for deleting `title` (the non-conflict path). */

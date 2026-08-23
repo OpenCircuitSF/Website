@@ -96,13 +96,20 @@ describe('status transition offers', () => {
     expect(cancelConfirmMessage('X', true)).toMatch(/stays visible/i);
   });
 
-  // #0171: canceling a workshop that was never published (a draft, or one
-  // unpublished before this cancel -- published_at NULL either way) does
-  // NOT make it public. The old unconditional "stays visible" copy was
+  // #0171: canceling a workshop that is not currently published (a draft,
+  // or one unpublished before this cancel -- published_at NULL either way)
+  // does NOT make it public. The old unconditional "stays visible" copy was
   // wrong for this case -- the exact defect issues/0171.md is about.
-  it('cancel copy for a never-published workshop says it stays private, not that it stays visible', () => {
+  //
+  // #0174: the copy must not claim "It was never published" -- that's false
+  // on the published -> unpublished -> canceled path (it WAS published;
+  // unpublishing cleared published_at). "not currently published" is true
+  // in both sub-cases, so assert that phrasing rather than "never
+  // published".
+  it('cancel copy for a not-currently-published workshop says it stays private, not that it stays visible', () => {
     const msg = cancelConfirmMessage('X', false);
-    expect(msg).toMatch(/never published/i);
+    expect(msg).toMatch(/not currently published/i);
+    expect(msg).not.toMatch(/never published/i);
     expect(msg).toMatch(/private/i);
     expect(msg).not.toMatch(/stays visible/i);
   });
