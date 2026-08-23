@@ -300,6 +300,73 @@ func TestAdminWorkshops_PatchPublishUnpublishCancel(t *testing.T) {
 	}
 }
 
+// TestAdminWorkshops_PatchClearsOptionalFieldWithExplicitEmptyString is
+// #0139's end-to-end regression: an admin who blanks an optional field and
+// saves must see it actually gone from the database, not just absent from
+// the request. patchWorkshopRequest already used *string pointers before
+// this issue (checked, not assumed -- see admin_workshops.go's Patch), so
+// the fix lived entirely client-side (lib/workshopAdmin.ts); this proves the
+// server half of the contract those pointer fields promise. It also proves
+// the inverse in the same request: a field the PATCH body never mentions at
+// all must survive untouched.
+func TestAdminWorkshops_PatchClearsOptionalFieldWithExplicitEmptyString(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-clear@example.com")
+	seedSession(t, pool, admin, "workshops-admin-clear-token")
+
+	store := workshops.NewStore(pool)
+	summary := "Original summary, to be cleared"
+	signupURL := "https://example.com/rsvp"
+	w, err := store.Create(context.Background(), workshops.CreateInput{
+		Title:     uniqueAdminWorkshopTitle(t),
+		Summary:   &summary,
+		SignupURL: &signupURL,
+	})
+	if err != nil {
+		t.Fatalf("seed workshop: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, w.ID)
+	path := fmt.Sprintf("/admin/workshops/%d", w.ID)
+
+	// Sanity: the seeded row genuinely has both fields set before the PATCH.
+	seeded, err := store.GetByID(context.Background(), w.ID)
+	if err != nil {
+		t.Fatalf("GetByID after seed: %v", err)
+	}
+	if seeded.Summary == nil || *seeded.Summary != summary {
+		t.Fatalf("seeded Summary = %v, want %q", seeded.Summary, summary)
+	}
+	if seeded.SignupURL == nil || *seeded.SignupURL != signupURL {
+		t.Fatalf("seeded SignupURL = %v, want %q", seeded.SignupURL, signupURL)
+	}
+
+	// The PATCH body carries an explicit "" for summary (clear it) and never
+	// mentions signup_url at all (leave it alone).
+	resp := doJSON(t, srv.Client(), http.MethodPatch, srv.URL+path, "workshops-admin-clear-token", `{"summary":""}`)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH clearing summary status = %d, want 200 (body=%s)", resp.StatusCode, body)
+	}
+
+	// Read the value back from the database, not from the response body --
+	// the acceptance criterion is that the value is actually gone, not just
+	// absent from what this one request happened to echo.
+	updated, err := store.GetByID(context.Background(), w.ID)
+	if err != nil {
+		t.Fatalf("GetByID after patch: %v", err)
+	}
+	if updated.Summary != nil {
+		t.Errorf("Summary = %q after explicit empty-string PATCH, want nil (cleared)", *updated.Summary)
+	}
+	if updated.SignupURL == nil || *updated.SignupURL != signupURL {
+		t.Errorf("SignupURL = %v after a PATCH that never mentioned it, want unchanged %q", updated.SignupURL, signupURL)
+	}
+}
+
 func TestAdminWorkshops_PatchUnknownStatusRejected(t *testing.T) {
 	pool := interestsTestPool(t)
 	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))

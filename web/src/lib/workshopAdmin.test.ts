@@ -197,18 +197,45 @@ describe('validateWorkshopForm', () => {
     const result = validateWorkshopForm(blankFields({ title: 'Soldering 101' }));
     expect(result).toEqual({
       title: 'Soldering 101',
-      summary: undefined,
-      body_md: undefined,
-      starts_at: undefined,
-      ends_at: undefined,
-      location_name: undefined,
-      location_address: undefined,
-      location_note: undefined,
+      // #0139: blank optional string fields are '', never undefined -- see
+      // ValidatedWorkshopFields's doc comment for why `undefined` (an
+      // omitted JSON key) can never mean "clear" server-side.
+      summary: '',
+      body_md: '',
+      starts_at: '',
+      ends_at: '',
+      location_name: '',
+      location_address: '',
+      location_note: '',
       capacity: undefined,
-      signup_url: undefined,
-      cover_image: undefined,
+      signup_url: '',
+      cover_image: '',
       interest_ids: [],
     });
+  });
+
+  it('#0139: represents a blanked optional field as an explicit empty string, not an omitted key', () => {
+    // The regression this issue fixed: JSON.stringify drops an
+    // undefined-valued key, which the server reads as "field not supplied,
+    // leave alone" rather than "field cleared." Every optional string field
+    // here must survive a round trip through JSON.stringify/JSON.parse as
+    // an explicit '' so the server's own empty-string-means-clear path runs.
+    const result = validateWorkshopForm(blankFields({ title: 'X' }));
+    if ('error' in result) throw new Error('unexpected validation error');
+    const roundTripped = JSON.parse(JSON.stringify(result));
+    for (const key of [
+      'summary',
+      'body_md',
+      'starts_at',
+      'ends_at',
+      'location_name',
+      'location_address',
+      'location_note',
+      'signup_url',
+      'cover_image',
+    ]) {
+      expect(roundTripped).toHaveProperty(key, '');
+    }
   });
 
   it('rejects an end before start', () => {

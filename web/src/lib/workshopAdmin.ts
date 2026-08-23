@@ -206,25 +206,35 @@ export interface WorkshopFormFields {
   interestIds: number[];
 }
 
-/** The validated, server-shaped fields a successful validateWorkshopForm call produces. */
+/**
+ * The validated, server-shaped fields a successful validateWorkshopForm call
+ * produces.
+ *
+ * #0139: every optional field is always present here, as `''` when blank --
+ * never `undefined`. `JSON.stringify` drops an `undefined`-valued key
+ * entirely, which is indistinguishable on the wire from a field the admin
+ * never touched, so a blanked field silently failed to clear
+ * (internal/handlers/admin_workshops.go's patchWorkshopRequest reads an
+ * absent key as "leave alone"). Sending the key with an explicit `''`
+ * instead lets the server's own `normalizeOptionalCampaignField`/
+ * `parseOptionalTime` "empty string means clear" path run -- the same
+ * convention CampaignEditor.svelte's preheader now uses (see api.ts's
+ * CampaignDraftFields). Always including the key is harmless on Create too:
+ * an unset field there normalizes to the same nil/NULL either way.
+ */
 export interface ValidatedWorkshopFields {
   title: string;
-  summary?: string;
-  body_md?: string;
-  starts_at?: string;
-  ends_at?: string;
-  location_name?: string;
-  location_address?: string;
-  location_note?: string;
+  summary: string;
+  body_md: string;
+  starts_at: string;
+  ends_at: string;
+  location_name: string;
+  location_address: string;
+  location_note: string;
   capacity?: number;
-  signup_url?: string;
-  cover_image?: string;
+  signup_url: string;
+  cover_image: string;
   interest_ids: number[];
-}
-
-function emptyToUndefined(s: string): string | undefined {
-  const trimmed = s.trim();
-  return trimmed === '' ? undefined : trimmed;
 }
 
 /** Whether a URL uses http:// or https:// -- used for both signup_url and an http(s) cover image. */
@@ -292,16 +302,22 @@ export function validateWorkshopForm(
 
   return {
     title,
-    summary: emptyToUndefined(fields.summary),
-    body_md: emptyToUndefined(fields.bodyMd),
-    starts_at: startsAt,
-    ends_at: endsAt,
-    location_name: emptyToUndefined(fields.locationName),
-    location_address: emptyToUndefined(fields.locationAddress),
-    location_note: emptyToUndefined(fields.locationNote),
+    // #0139: always the trimmed value, `''` when blank -- never `undefined`.
+    // See ValidatedWorkshopFields's doc comment for why.
+    summary: fields.summary.trim(),
+    body_md: fields.bodyMd.trim(),
+    starts_at: startsAt ?? '',
+    ends_at: endsAt ?? '',
+    location_name: fields.locationName.trim(),
+    location_address: fields.locationAddress.trim(),
+    location_note: fields.locationNote.trim(),
+    // capacity is a genuinely separate, still-open gap (see #0139's Gotchas):
+    // it is *int on the wire, and JSON `null` decodes to the same nil
+    // pointer as an absent key, so there is no value this client can send
+    // that unambiguously means "clear" without a Go-side wire-type change.
     capacity,
-    signup_url: signupUrl === '' ? undefined : signupUrl,
-    cover_image: coverImage === '' ? undefined : coverImage,
+    signup_url: signupUrl,
+    cover_image: coverImage,
     interest_ids: fields.interestIds,
   };
 }

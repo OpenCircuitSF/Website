@@ -567,10 +567,12 @@ export function createCampaign(fields: CampaignDraftFields): Promise<Campaign> {
 
 /**
  * PATCH /admin/campaigns/{id} — content-only edit (admin only). Every field
- * is optional; only the ones present change. There is deliberately no
- * `status` field — the server never changes status via this route (see
- * `sendCampaign`/`cancelCampaign`). The server answers 409 unless the
- * campaign is currently `draft` or `scheduled` (`canEditCampaign`).
+ * is optional; an omitted key is left alone server-side, and an explicit
+ * `''` on `preheader` clears it (#0139 — CampaignEditor.svelte's saveDraft
+ * always sends `''` rather than omitting the key when it's blank). There is
+ * deliberately no `status` field — the server never changes status via this
+ * route (see `sendCampaign`/`cancelCampaign`). The server answers 409 unless
+ * the campaign is currently `draft` or `scheduled` (`canEditCampaign`).
  */
 export function updateCampaign(id: number, fields: CampaignDraftFields): Promise<Campaign> {
   return apiPatch<Campaign>(`/admin/campaigns/${id}`, fields);
@@ -829,8 +831,11 @@ export function createWorkshop(fields: CreateWorkshopFields): Promise<AdminWorks
 
 /**
  * PATCH /admin/workshops/{id} — content edit and/or status transition
- * (admin only). Send only the fields that changed; omitted keys are left
- * alone server-side.
+ * (admin only). An omitted key is left alone server-side; an explicit `''`
+ * on an optional string field clears it (#0139) --
+ * WorkshopEditor.svelte/lib/workshopAdmin.ts's validateWorkshopForm always
+ * sends the blanked-vs-unset distinction this way, never by omitting the
+ * key.
  */
 export function updateWorkshop(id: number, fields: PatchWorkshopFields): Promise<AdminWorkshop> {
   return apiPatch<AdminWorkshop>(`/admin/workshops/${id}`, fields);

@@ -381,7 +381,14 @@
       const updated = await updateCampaign(campaignId, {
         name,
         subject,
-        preheader: preheader === '' ? undefined : preheader,
+        // #0139: send the trimmed value, even '' -- omitting the key here
+        // used to mean "clear this field silently fails," because
+        // JSON.stringify drops an undefined-valued key and the server reads
+        // an absent key as "leave alone" (admin_campaigns.go's
+        // patchCampaignRequest). An explicit '' hits
+        // normalizeOptionalCampaignField's already-correct "empty string
+        // means clear" path instead.
+        preheader,
         body_md: bodyMd,
         audience_mode: mode,
         interest_ids: interestIds,

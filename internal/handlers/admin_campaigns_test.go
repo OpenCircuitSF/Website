@@ -306,6 +306,70 @@ func TestAdminCampaigns_Patch_ContentEdit(t *testing.T) {
 	}
 }
 
+// TestAdminCampaigns_Patch_ClearsOptionalFieldWithExplicitEmptyString is
+// #0139's end-to-end regression, mirroring
+// TestAdminWorkshops_PatchClearsOptionalFieldWithExplicitEmptyString: an
+// admin who blanks the preheader and saves must see it actually gone from
+// the database, and a field the PATCH body never mentions must survive
+// untouched in the same request. patchCampaignRequest.Preheader was already
+// a *string (checked, not assumed), so the #0139 fix lived entirely
+// client-side (CampaignEditor.svelte's saveDraft); this proves the server
+// half of the contract that pointer field promises.
+func TestAdminCampaigns_Patch_ClearsOptionalFieldWithExplicitEmptyString(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-clear@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-clear")
+
+	store := mailing.NewCampaignStore(pool)
+	preheader := "Original preheader, to be cleared"
+	c, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "subject", BodyMD: "body",
+		AudienceMode: mailing.AudienceAll, Preheader: &preheader,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, c.ID)
+
+	// Sanity: the seeded row genuinely has both fields set before the PATCH.
+	seeded, err := store.GetByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("GetByID after seed: %v", err)
+	}
+	if seeded.Preheader == nil || *seeded.Preheader != preheader {
+		t.Fatalf("seeded Preheader = %v, want %q", seeded.Preheader, preheader)
+	}
+	if seeded.Subject != "subject" {
+		t.Fatalf("seeded Subject = %q, want %q", seeded.Subject, "subject")
+	}
+
+	// The PATCH body carries an explicit "" for preheader (clear it) and
+	// never mentions subject at all (leave it alone).
+	body := `{"preheader":""}`
+	resp := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, c.ID), "admin-token-campaigns-clear", body)
+	respBody := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH clearing preheader status = %d, want 200 (body=%s)", resp.StatusCode, respBody)
+	}
+
+	// Read the value back from the database, not from the response body --
+	// the acceptance criterion is that the value is actually gone, not just
+	// absent from what this one request happened to echo.
+	updated, err := store.GetByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("GetByID after patch: %v", err)
+	}
+	if updated.Preheader != nil {
+		t.Errorf("Preheader = %q after explicit empty-string PATCH, want nil (cleared)", *updated.Preheader)
+	}
+	if updated.Subject != "subject" {
+		t.Errorf("Subject = %q after a PATCH that never mentioned it, want unchanged %q", updated.Subject, "subject")
+	}
+}
+
 func TestAdminCampaigns_Patch_NotEditableWhenSending(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
 	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
