@@ -1,9 +1,9 @@
 // progress_test.go (#0048) proves publishProgress's two load-bearing rules,
 // carried in from #0045's plan and restated in #0048's issue text:
 //
-//   - Remaining is queued+sending — email_sends gained a SEVENTH status
+//   - Remaining is queued+sending — email_sends gained a FIFTH status
 //     ('sending', migration 000018) set by the per-row atomic claim just
-//     before each SES call; code that buckets only the original six
+//     before each SES call; code that buckets only the original four
 //     statuses silently drops every in-flight row from Remaining.
 //   - Skipped is its OWN bucket, never folded into Failed — "the list
 //     shrank under us" (an unsubscribe/suppression between materialization
@@ -17,7 +17,7 @@
 //
 // Mutation proof for both (see #0048's ## Verification): edit
 // publishProgress (worker.go) to drop `+ sending` from Remaining, or to
-// fold Skipped into Failed — TestWorker_PublishProgress_SevenStatusArithmetic
+// fold Skipped into Failed — TestWorker_PublishProgress_StatusArithmetic
 // must fail either way.
 package mailing
 
@@ -41,7 +41,7 @@ func (f *fakeProgressPublisher) PublishCampaignProgress(_ context.Context, p Cam
 
 // seedSendWithStatus inserts one email_sends row for campaignID, directly at
 // the given status — bypassing Materialize/ClaimRow so a test can assemble
-// an arbitrary mix of the seven email_sends.status values without driving
+// an arbitrary mix of the five email_sends.status values without driving
 // the worker's real claim/send pipeline for each one.
 func seedSendWithStatus(t *testing.T, pool *pgxpool.Pool, campaignID int64, status string) {
 	t.Helper()
@@ -56,9 +56,9 @@ func seedSendWithStatus(t *testing.T, pool *pgxpool.Pool, campaignID int64, stat
 	}
 }
 
-// TestWorker_PublishProgress_SevenStatusArithmetic is this issue's mutation-
+// TestWorker_PublishProgress_StatusArithmetic is this issue's mutation-
 // check target for both guards named in this file's package doc comment.
-func TestWorker_PublishProgress_SevenStatusArithmetic(t *testing.T) {
+func TestWorker_PublishProgress_StatusArithmetic(t *testing.T) {
 	pool := testPool(t)
 	workerTestFixture(t, pool)
 	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
