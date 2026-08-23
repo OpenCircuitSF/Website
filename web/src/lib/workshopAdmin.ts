@@ -48,11 +48,11 @@
 // §9 rules out. So cover_image now accepts ONLY a site-relative path: a
 // leading "/" and nothing else that could resolve off-site. This is a
 // narrower rule than #0138 applied to Markdown *link* destinations
-// (isSafeLinkHref in ./markdown, also touched by #0138 -- ./markdown's own
-// Markdown renderer was removed by #0136, which moved body-preview
-// rendering server-side; isSafeLinkHref itself is unaffected): a link is a
-// navigation the reader chooses to follow, so an
-// absolute https:// URL to any host stays allowed there (a workshop's
+// (isSafeLinkHref in ./linkSafety, also touched by #0138 -- that module was
+// markdown.ts until #0157 renamed it; its own Markdown renderer was removed
+// by #0136, which moved body-preview rendering server-side; isSafeLinkHref
+// itself is unaffected): a link is a navigation the reader chooses to
+// follow, so an absolute https:// URL to any host stays allowed there (a workshop's
 // signup_url is routinely an external ticketing site) -- an image is a load
 // the page performs on the reader's behalf without asking, so it gets the
 // tighter, same-origin-only rule.
@@ -337,13 +337,13 @@ function isHttpUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
 
-// C0 controls (0x00-0x1f) plus DEL (0x7f). Same rule as markdown.ts's
+// C0 controls (0x00-0x1f) plus DEL (0x7f). Same rule as linkSafety.ts's
 // HAS_CONTROL_CHAR (#0138 bounce, finding 1): a browser's URL parser
 // deletes every ASCII tab/LF/CR anywhere in the string before resolving it,
 // so e.g. "/\t/evil.host/x.jpg" doesn't *look* like it starts with "//" as
 // written, but reassembles into exactly that protocol-relative form once
 // the browser strips the tab back out. Rejecting the whole C0+DEL range
-// (not just tab/LF/CR) matches markdown.ts's existing rule rather than
+// (not just tab/LF/CR) matches linkSafety.ts's existing rule rather than
 // adding a third, narrower definition of "safe URL" to the codebase --
 // \x00, \x0b, \x0c and \x7f don't actually resolve off-site (a browser
 // percent-encodes them into the path), so rejecting those too is defence
@@ -369,7 +369,7 @@ const HAS_CONTROL_CHAR = /[\x00-\x1f\x7f]/;
  * any of that: a browser's URL parser deletes every ASCII tab, LF and CR
  * from the input before parsing it, so e.g. "/\t/evil.host/x.jpg" doesn't
  * start with "//" as written but reassembles into that exact off-site form
- * once the browser normalizes it away. See markdown.ts's isSafeLinkHref /
+ * once the browser normalizes it away. See linkSafety.ts's isSafeLinkHref /
  * HAS_CONTROL_CHAR, which already closed this same class for link
  * destinations -- this reuses the identical rule rather than a third
  * variant.

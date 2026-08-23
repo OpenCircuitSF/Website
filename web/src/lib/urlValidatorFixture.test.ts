@@ -14,7 +14,7 @@
 // is a red build here and in `go test`, not a discovery three issues later.
 
 import { describe, it, expect } from 'vitest';
-import { isSafeLinkHref } from './markdown';
+import { isSafeLinkHref } from './linkSafety';
 import { isSafeCoverImage } from './workshopAdmin';
 // tsconfig.json sets resolveJsonModule, so this is a typed static import --
 // no node:fs/node:path (this project carries no @types/node dependency,

@@ -1,16 +1,16 @@
 // Link-destination safety check shared across the SPA (#0136).
 //
-// This module used to also export `renderMarkdownPreview`, a
-// dependency-free Markdown->HTML renderer written for #0052's admin
-// workshop-body preview and rendered client-side via `{@html}`. Its first
-// version shipped a live XSS hole (control characters smuggling
-// `javascript:` past this exact scheme allowlist, past 22 passing tests --
-// fixed in b562800), and #0052's own reviewer named the right long-term fix:
-// render server-side through goldmark, the same engine
-// internal/mailing/campaign_markdown.go already uses for email_campaigns
-// bodies, so preview and publish share one renderer instead of a
-// browser-side one trying to independently re-derive what a browser's URL
-// parser will do with untrusted markup.
+// Renamed from markdown.ts to linkSafety.ts (#0157, per #0136's reviewer):
+// this module used to also export `renderMarkdownPreview`, a dependency-free
+// Markdown->HTML renderer written for #0052's admin workshop-body preview
+// and rendered client-side via `{@html}`. Its first version shipped a live
+// XSS hole (control characters smuggling `javascript:` past this exact
+// scheme allowlist, past 22 passing tests -- fixed in b562800), and #0052's
+// own reviewer named the right long-term fix: render server-side through
+// goldmark, the same engine internal/mailing/campaign_markdown.go already
+// uses for email_campaigns bodies, so preview and publish share one
+// renderer instead of a browser-side one trying to independently re-derive
+// what a browser's URL parser will do with untrusted markup.
 //
 // #0136 did exactly that: `POST /admin/workshops/{id}/preview`
 // (internal/handlers/admin_workshop_preview.go) and the public
@@ -22,15 +22,18 @@
 // renderBlocks, the heading/list-item regexes) were deleted along with it.
 //
 // What's left is `isSafeLinkHref` alone, which survives because two other
-// call sites depend on it and neither is a Markdown renderer:
+// call sites depend on it and neither is a Markdown renderer -- so this
+// module is no longer "markdown" anything, just the link-safety rule:
 //
 //   - workshopDetail.ts's `hasExternalSignup` (#0054) -- gates whether a
 //     workshop's signup_url is safe to render as an `<a href>` on the public
 //     detail page.
 //   - internal/handlers/admin_workshops.go's `isSafeLinkHref` (#0152) -- the
 //     Go twin of this exact function, validating signup_url AT THE API
-//     BOUNDARY. #0157 owns keeping the two in parity; #0138/#0152 own this
-//     function's URL-rule semantics. Neither is touched by #0136.
+//     BOUNDARY. #0157 owns keeping the two in parity (see
+//     testdata/url_validators.json and urlValidatorFixture.test.ts);
+//     #0138/#0152 own this function's URL-rule semantics. Neither is
+//     touched by #0136 or #0157.
 
 const SAFE_LINK_SCHEME = /^(https?|mailto):/i;
 const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;

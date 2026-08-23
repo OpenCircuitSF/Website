@@ -675,7 +675,7 @@ const coverImageErrorMessage = `cover_image must be a site-relative path startin
 // parsing it, so e.g. "/\t/evil.host/x.jpg" doesn't start with "//" as
 // written but reassembles into exactly that off-site form once the browser
 // strips the control character back out. Reject the whole C0 control range
-// plus DEL up front -- the same HAS_CONTROL_CHAR rule markdown.ts's
+// plus DEL up front -- the same HAS_CONTROL_CHAR rule linkSafety.ts's
 // isSafeLinkHref already uses for link destinations (#0052 pass 2) --
 // rather than adding a third, narrower definition of "safe URL" to this
 // codebase. \x00, \x0b, \x0c and \x7f don't actually resolve off-site (a
@@ -702,14 +702,14 @@ const signupURLErrorMessage = `signup_url must be an http(s) URL, a mailto: link
 // isHttpUrl) is a narrower client-only convenience, but the actual safety
 // gate — the one that decides whether a stored signup_url is ever allowed to
 // become a rendered `href` — is #0054's hasExternalSignup
-// (web/src/lib/workshopDetail.ts), which calls markdown.ts's
+// (web/src/lib/workshopDetail.ts), which calls linkSafety.ts's
 // isSafeLinkHref. Nothing on the server enforced that same rule, so a
 // javascript: (or control-character-smuggled) signup_url could be STORED by
 // any caller that skips the SPA, exactly the shape #0138 closed for
 // cover_image. #0152's acceptance criteria are explicit: reuse that rule,
 // don't write a third, subtly different one.
 //
-// This is the Go twin of markdown.ts's isSafeLinkHref, not of
+// This is the Go twin of linkSafety.ts's isSafeLinkHref, not of
 // isSafeCoverImage: a link is a navigation the reader chooses to follow
 // (unlike a cover image, which the page loads unasked), so an absolute
 // http(s):// URL to ANY host stays allowed — a workshop's signup_url is
@@ -728,7 +728,7 @@ const signupURLErrorMessage = `signup_url must be an http(s) URL, a mailto: link
 //
 // Trim decision (#0152, following up on #0138 pass 2's pipeline-divergence
 // note): this function trims internally before testing for emptiness or a
-// scheme, exactly mirroring markdown.ts's isSafeLinkHref — so the value
+// scheme, exactly mirroring linkSafety.ts's isSafeLinkHref — so the value
 // handed in does not need to be pre-trimmed by the caller, and neither
 // Create nor Patch trims it before calling this (the same convention
 // isSafeCoverImage already uses: validate the raw normalizeOptionalCampaignField
@@ -790,7 +790,7 @@ func isJSWhitespace(r rune) bool {
 
 // hasURLScheme reports whether s begins with an RFC 3986-shaped scheme
 // (a letter, then any run of letters/digits/"+"/"-"/".", then ":") — the Go
-// twin of markdown.ts's HAS_SCHEME regexp (/^[a-z][a-z0-9+.-]*:/i).
+// twin of linkSafety.ts's HAS_SCHEME regexp (/^[a-z][a-z0-9+.-]*:/i).
 func hasURLScheme(s string) bool {
 	if s == "" || !isASCIILetter(s[0]) {
 		return false
@@ -812,7 +812,7 @@ func isASCIILetter(c byte) bool {
 }
 
 // hasSafeLinkScheme reports whether s begins with "http:", "https:", or
-// "mailto:", case-insensitively — the Go twin of markdown.ts's
+// "mailto:", case-insensitively — the Go twin of linkSafety.ts's
 // SAFE_LINK_SCHEME regexp (/^(https?|mailto):/i). Only called once
 // hasURLScheme has already confirmed s has a scheme at all.
 func hasSafeLinkScheme(s string) bool {

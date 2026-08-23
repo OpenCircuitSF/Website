@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { isSafeLinkHref } from './markdown';
+import { isSafeLinkHref } from './linkSafety';
 
 // #0136 deleted renderMarkdownPreview and every test that covered it (the
 // Markdown->HTML rendering now happens server-side, goldmark, see
 // internal/handlers/admin_workshop_preview_test.go and
-// public_workshops_test.go) -- markdown.ts's header comment explains why
-// isSafeLinkHref alone survives. These are the same isSafeLinkHref tests
-// that existed before #0136, unchanged.
+// public_workshops_test.go) -- linkSafety.ts's header comment explains why
+// isSafeLinkHref alone survives, and why this module (formerly markdown.ts)
+// was renamed by #0157. These are the same isSafeLinkHref tests that existed
+// before #0136, unchanged.
 
 describe('isSafeLinkHref', () => {
   it('accepts http and https', () => {

@@ -11,7 +11,8 @@
 //
 // # Why this closes #0052's known hole instead of re-hardening it again
 //
-// web/src/lib/markdown.ts was a dependency-free, hand-rolled Markdown->HTML
+// web/src/lib/linkSafety.ts (markdown.ts before #0157's rename) was a
+// dependency-free, hand-rolled Markdown->HTML
 // renderer written for #0052's admin preview and rendered client-side via
 // `{@html}`. Its first version shipped a live XSS hole (control characters
 // smuggling `javascript:` past a scheme allowlist, past 22 passing tests —

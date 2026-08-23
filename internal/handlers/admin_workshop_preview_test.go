@@ -58,7 +58,7 @@ func TestAdminWorkshopPreview_RendersStoredRow(t *testing.T) {
 
 // TestAdminWorkshopPreview_EmphasisInsideLinkText is this issue's own named
 // acceptance criterion: `[**bold**](/p)` used to emit literal asterisks
-// inside the anchor under web/src/lib/markdown.ts's single left-to-right
+// inside the anchor under web/src/lib/linkSafety.ts's single left-to-right
 // scan (that scan existed specifically to stop emphasis regexes from
 // rewriting an already-built href attribute -- #0052's finding 1). A real
 // Markdown parser has no such conflict: goldmark parses the link's text as
@@ -190,7 +190,7 @@ func hrefStartsWithDangerousScheme(html string) bool {
 // exhaustive version of the payload table #0052's phase-3 review built
 // (issues/0052.md's "## Review notes"): five control-character disguises of
 // `javascript:` that were confirmed executable against the WHATWG URL
-// parser after passing web/src/lib/markdown.ts's ORIGINAL scheme check,
+// parser after passing web/src/lib/linkSafety.ts's ORIGINAL scheme check,
 // plus a plain `javascript:`/`data:` scheme and raw `<script>`/`<img
 // onerror>` HTML. Every one is re-run here against the SAME goldmark
 // pipeline this preview endpoint (and the published page) now use.
@@ -202,7 +202,7 @@ func hrefStartsWithDangerousScheme(html string) bool {
 // goldmark's util.URLEscape PERCENT-ENCODES a raw control byte in a link
 // destination (`\x01` -> `%01`, `\x00` -> `%00` -- three literal ASCII
 // characters, none of them a C0 control) rather than leaving the raw
-// control byte in the href attribute the way markdown.ts's original bug
+// control byte in the href attribute the way linkSafety.ts's original bug
 // did. Verified independently against Node's WHATWG URL implementation:
 //
 //	new URL("%01javascript:alert(1)", "https://opencircuitsf.com/workshops/x")
@@ -327,7 +327,7 @@ func TestAdminWorkshopPreview_SafetyPayloads(t *testing.T) {
 // posture unchanged, it does not weaken it further.
 //
 // It IS a narrowing of what the DELETED client-side renderer did for
-// workshop BODY content specifically: web/src/lib/markdown.ts's
+// workshop BODY content specifically: web/src/lib/linkSafety.ts's
 // renderMarkdownPreview called isSafeLinkHref on every link (including body
 // links), and isSafeLinkHref has rejected protocol-relative destinations
 // since #0138. The Go isSafeLinkHref twin (admin_workshops.go, #0152) still

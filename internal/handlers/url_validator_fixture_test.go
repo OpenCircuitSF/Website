@@ -24,7 +24,7 @@ package handlers
 //     //, .., %5C, %2F%2F, non-ASCII, a bare /, a 10,000+ char path)
 //
 // Every "want" was computed by executing the REAL functions -- the actual
-// web/src/lib/markdown.ts isSafeLinkHref and workshopAdmin.ts
+// web/src/lib/linkSafety.ts isSafeLinkHref and workshopAdmin.ts
 // isSafeCoverImage under Node 26 (which runs .ts natively), cross-checked
 // against these same Go functions at generation time (0 mismatches across
 // all 3,138). See issues/0157.md's `## Fix` for the generation script and

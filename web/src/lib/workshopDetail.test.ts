@@ -100,7 +100,7 @@ describe('hasExternalSignup', () => {
   });
 
   // #0054's phase-3 review: signup_url reached `href` with no scheme
-  // allowlist. hasExternalSignup now reuses markdown.ts's isSafeLinkHref
+  // allowlist. hasExternalSignup now reuses linkSafety.ts's isSafeLinkHref
   // (#0052) so an unsafe scheme never renders as the external action.
   it('is false when signup_url is a javascript: URL', () => {
     expect(hasExternalSignup(workshop({ signup_url: 'javascript:alert(1)' }))).toBe(false);

@@ -13,7 +13,7 @@
 // view directly rather than duplicated here.
 
 import type { PublicWorkshop } from './types';
-import { isSafeLinkHref } from './markdown';
+import { isSafeLinkHref } from './linkSafety';
 
 /**
  * Explicit cover-image render dimensions (#0054 acceptance criterion:
@@ -81,7 +81,7 @@ export function workshopPreselectSlugs(w: Pick<PublicWorkshop, 'interests'>): st
  * for staying on the mailing list, which is a separate action from
  * registering for this specific session.
  *
- * Also gates on `isSafeLinkHref` (`./markdown`, #0052) so a `javascript:`/
+ * Also gates on `isSafeLinkHref` (`./linkSafety`, #0052) so a `javascript:`/
  * `data:`/control-character-smuggled scheme an admin stored in signup_url
  * never reaches the rendered `href` -- #0054's phase-3 review flagged that
  * this field had no scheme allowlist on either side, the same class #0052

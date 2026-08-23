@@ -13,9 +13,10 @@
   can never show something publish wouldn't produce" contract campaigns'
   preview already enforces -- see refreshPreview below, called after load()
   and after every successful save(). This replaced
-  web/src/lib/markdown.ts's dependency-free client renderer, which shipped a
-  live XSS hole in its first version (fixed in b562800, then replaced
-  outright by #0136 rather than hardened a second time).
+  web/src/lib/markdown.ts's dependency-free client renderer (that module was
+  renamed linkSafety.ts by #0157, since only its isSafeLinkHref survives),
+  which shipped a live XSS hole in its first version (fixed in b562800, then
+  replaced outright by #0136 rather than hardened a second time).
 
   Interest tagging: checking/unchecking a box only edits the LOCAL
   `interestIds` buffer -- it is written to the server on the next Save, same
