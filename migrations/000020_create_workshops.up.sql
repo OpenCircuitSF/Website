@@ -47,8 +47,10 @@ ALTER TABLE workshops
 -- visibility rule, or a canceled workshop silently vanishes from the index
 -- while its direct link still 200s). Partial on status <> 'draft' so only
 -- draft rows -- never publicly visible -- are excluded from the index the
--- public page's hot path scans.
-CREATE INDEX idx_workshops_published ON workshops (starts_at DESC)
+-- public page's hot path scans. Named idx_workshops_visible (#0142, renamed
+-- from idx_workshops_published), matching Store.ListVisible -- the old name
+-- stopped meaning "published" the moment #0135 widened the predicate.
+CREATE INDEX idx_workshops_visible ON workshops (starts_at DESC)
     WHERE status <> 'draft';
 
 -- workshop_interests: which interests a workshop is tagged with, read by

@@ -450,9 +450,10 @@ func (s *Store) List(ctx context.Context) ([]Workshop, error) {
 // soonest-first (NULLS LAST, so a TBD date sorts after every dated one);
 // past is ordered most-recent-first.
 //
-// Uses idx_workshops_published (migration 000020's partial index, widened
-// by #0135 to WHERE status <> 'draft' to keep covering this query) for both
-// queries.
+// Uses idx_workshops_visible (migration 000020's partial index, widened by
+// #0135 to WHERE status <> 'draft' to keep covering this query, renamed by
+// #0142 from idx_workshops_published once that predicate made the old name
+// inaccurate) for both queries.
 func (s *Store) ListVisible(ctx context.Context, now time.Time) (upcoming, past []Workshop, err error) {
 	upcomingRows, err := s.pool.Query(ctx,
 		`SELECT `+workshopColumns+` FROM workshops
