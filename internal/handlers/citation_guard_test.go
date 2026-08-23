@@ -464,9 +464,11 @@ func TestCitationPatternAcceptsDocsURLFalsePositive(t *testing.T) {
 // catch. A file collected but not on disk is, by construction, unreachable
 // for any static filesystem state: "collected" is exactly the shipped
 // walk's output minus skipVendoredDirNames' SkipDir, and "on disk" is a
-// superset of that same walk (it additionally counts the two vendored
-// prefixes onDisk would otherwise miss), so collected is always a subset of
-// onDisk. #0200's review tried every candidate cause by direct probe — a
+// superset of that same walk (it additionally counts name-matched
+// directories that lie outside the two anchored prefixes — internal/dist,
+// internal/node_modules, and web/src/node_modules — since the anchoring
+// does not exclude them), so collected is always a subset of onDisk.
+// #0200's review tried every candidate cause by direct probe — a
 // *.go symlink lands in both walks identically since WalkDir lstats; a
 // symlinked directory is followed by neither walk; a dangling symlink or a
 // directory named *.go dies earlier at the shipped walk's parse
