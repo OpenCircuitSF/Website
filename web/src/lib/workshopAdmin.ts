@@ -169,6 +169,32 @@ export function announceTargetingDescription(interestIds: number[]): string {
 }
 
 /**
+ * CSS class for the Announce panel's targeting sentence (#0162).
+ *
+ * `#0151`'s unsaved-interests hint and this sentence both used to inherit
+ * `.text-muted` from the surrounding explanatory paragraph, so the one
+ * sentence most likely to change an admin's next action read as
+ * de-emphasised filler. This one is the higher-stakes of the two (it says
+ * the draft will reach *everyone*, not a segment) -- warn-styled exactly
+ * when that's what it's saying, `.text-muted` in the ordinary
+ * targeted-at-interests case. Uses `.text-warn`, the warning treatment
+ * already established for a conditionally-rendered admin-console notice
+ * (`Admin.svelte`'s slug-format hint and its interest-deactivation notice) --
+ * see this module's and `WorkshopEditor.svelte`'s header comments for why
+ * this doesn't also carry `role="status"`: unlike those two, and unlike
+ * `announceUnsavedInterestsHint` below, this sentence describes the
+ * workshop's already-loaded, saved state -- it is present the moment the
+ * panel first renders, not something that newly appears in response to an
+ * in-page action, so there is nothing for `role="status"` to announce.
+ * `#0063` (accessibility audit) owns the console-wide version of this
+ * question; this stays deliberately minimal rather than inventing a second
+ * pattern for it to reconcile.
+ */
+export function announceTargetingClass(interestIds: number[]): string {
+  return interestIds.length === 0 ? 'text-warn' : 'text-muted';
+}
+
+/**
  * Whether two interest-id arrays represent different SETS of ids --
  * order-insensitive, and tolerant of `undefined`/empty inputs (both treated
  * as the empty set). Two arrays holding the same ids in a different order
@@ -199,16 +225,62 @@ export function interestIdsDiverge(
  * other way (promising interest targeting Announce will not perform). This
  * only adds a heads-up that the two disagree.
  *
- * Returns '' (append nothing) when the two already match, so the two
+ * Returns '' (render nothing) when the two already match, so the two
  * existing #0143 copy paths are visually unchanged in the common case.
+ *
+ * #0162: this used to return a *leading-space* fragment
+ * (`' Unsaved interest changes...'`) meant to be concatenated onto the end
+ * of the Announce panel's muted explanatory paragraph, which is how it
+ * inherited that paragraph's `.text-muted` styling and read as filler
+ * rather than as the warning it is. `WorkshopEditor.svelte` now renders this
+ * as its own `.text-warn` paragraph with `role="status"` (it appears and
+ * disappears purely in response to the admin checking/unchecking interest
+ * boxes on this screen, so unlike `announceTargetingClass` above there IS
+ * something for `role="status"` to announce) -- so the returned string is a
+ * plain, non-prefixed sentence now; no caller relies on the old leading
+ * space (only `WorkshopEditor.svelte` consumed this, and it's updated
+ * alongside).
  */
 export function announceUnsavedInterestsHint(
   formInterestIds: number[] | undefined,
   savedInterestIds: number[] | undefined,
 ): string {
   return interestIdsDiverge(formInterestIds, savedInterestIds)
-    ? ' Unsaved interest changes are not included — save first.'
+    ? 'Unsaved interest changes are not included — save first.'
     : '';
+}
+
+// ── Body preview staleness (#0167) ──────────────────────────────────────────
+
+/**
+ * Whether the editor's live Markdown buffer has diverged from the
+ * workshop's last-SAVED body -- i.e. whether "Show preview" (which always
+ * renders the STORED row server-side, `#0136`, so preview output is
+ * byte-identical to what publishes) would currently show something other
+ * than what the admin is looking at in the textarea.
+ *
+ * `#0136` shipped `hasPreviewContent`, derived from `previewHtml` being
+ * non-empty -- that's the right gate for "is there anything to render at
+ * all" (true only once *something* has ever been saved), but it says
+ * nothing about whether what IS rendered still matches the buffer. That
+ * left the "Save the body first" cue visible only for a brand-new,
+ * never-saved workshop: editing one that already has a body, typing, and
+ * clicking "Show preview" showed the *previous* text with no indication it
+ * was stale. This predicate is the other, orthogonal check --
+ * `WorkshopEditor.svelte` uses both: `hasPreviewContent` (previewHtml
+ * non-empty) gates whether there's a rendered preview to show at all, and
+ * this gates whether a "this is the last saved version" cue should sit
+ * alongside it.
+ *
+ * `savedBodyMd` is `undefined` for a workshop whose `body_md` was never
+ * set (`AdminWorkshop.body_md` is optional) -- treated the same as `''`, the
+ * same convention `workshopToFormFields` already uses (`w.body_md ?? ''`).
+ * Deliberately NOT used to re-render the preview client-side -- that's the
+ * defect `#0136` exists to remove; this only decides whether to show a cue
+ * next to the server-rendered, last-saved HTML.
+ */
+export function isPreviewStale(bodyMd: string, savedBodyMd: string | undefined): boolean {
+  return bodyMd !== (savedBodyMd ?? '');
 }
 
 // ── Slug (server-owned -- see this module's header note) ───────────────────

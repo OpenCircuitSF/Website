@@ -12,7 +12,15 @@
   goldmark (internal/handlers/admin_workshop_preview.go), the same "preview
   can never show something publish wouldn't produce" contract campaigns'
   preview already enforces -- see refreshPreview below, called after load()
-  and after every successful save(). This replaced
+  and after every successful save(). #0167: that contract means the shown
+  HTML can lag the textarea whenever the admin has typed since the last
+  save, and the original affordance for that (the "Save the body first"
+  line) only ever appeared for a brand-new, never-saved workshop --
+  previewStale (lib/workshopAdmin.ts's isPreviewStale) is the general check,
+  compared against fields.bodyMd vs. workshop.body_md, and drives a
+  role="status" cue shown ALONGSIDE the still-rendered last-saved HTML, not
+  a replacement for it -- reintroducing client-side rendering to make the
+  preview "live" would undo #0136's whole point. This replaced
   web/src/lib/markdown.ts's dependency-free client renderer (that module was
   renamed linkSafety.ts by #0157, since only its isSafeLinkHref survives),
   which shipped a live XSS hole in its first version (fixed in b562800, then
@@ -79,6 +87,7 @@
     canCancel,
     publishConfirmMessage,
     announceTargetingDescription,
+    announceTargetingClass,
     announceUnsavedInterestsHint,
     unpublishConfirmMessage,
     cancelConfirmMessage,
@@ -87,6 +96,7 @@
     validateWorkshopForm,
     isDeleteConflict,
     workshopToFormFields,
+    isPreviewStale,
     type WorkshopFormFields,
   } from '../../lib/workshopAdmin';
   import { sortedInterests } from '../../lib/admin';
@@ -148,6 +158,12 @@
   let previewLoading = $state(false);
   let previewError = $state<string | null>(null);
   let hasPreviewContent = $derived(previewHtml.trim() !== '');
+  // #0167: hasPreviewContent (above) gates whether there's anything
+  // rendered to show at all -- true only once *something* has ever been
+  // saved. This is the orthogonal check: whether the currently-rendered
+  // HTML (always the last-SAVED body, #0136) still matches what's in the
+  // textarea right now. See isPreviewStale's doc comment.
+  let previewStale = $derived(isPreviewStale(fields.bodyMd, workshop?.body_md));
 
   async function refreshPreview(): Promise<void> {
     previewLoading = true;
@@ -230,6 +246,12 @@
   );
 
   let deleteMessage = $derived(workshop ? deleteConfirmMessage(workshop.title) : '');
+
+  // #0162: computed once here rather than called twice in the template (the
+  // conditional gating the paragraph, and the paragraph's own text).
+  let unsavedInterestsHint = $derived(
+    workshop ? announceUnsavedInterestsHint(fields.interestIds, workshop.interest_ids) : '',
+  );
 
   async function load(): Promise<void> {
     loading = true;
@@ -425,6 +447,12 @@
             {:else if previewError}
               <p class="text-error" role="alert">{previewError}</p>
             {:else if hasPreviewContent}
+              {#if previewStale}
+                <p class="text-warn" role="status">
+                  Showing the last saved version — your edits since then aren't included. Save to
+                  update the preview.
+                </p>
+              {/if}
               <!-- eslint-disable-next-line svelte/no-at-html-tags -->
               {@html previewHtml}
             {:else}
@@ -562,14 +590,26 @@
     </div>
   </Panel>
 
+  <!--
+    #0162: the targeting sentence and the unsaved-interests hint used to be
+    one muted paragraph, so the sentence most likely to change what an admin
+    does next read as de-emphasised filler. Both are now split into their
+    own elements styled with the console's existing `.text-warn` treatment
+    when what they're saying is a warning (see announceTargetingClass's and
+    announceUnsavedInterestsHint's doc comments in lib/workshopAdmin.ts for
+    why only the hint also gets role="status").
+  -->
   <Panel title="Announce">
     <p class="text-muted">
       Create a draft campaign pre-filled from this workshop's title, summary, date, and location.
-      {announceTargetingDescription(workshop.interest_ids)}{announceUnsavedInterestsHint(
-        fields.interestIds,
-        workshop.interest_ids,
-      )} Nothing is sent — review and send the draft from the Campaigns tab.
+      Nothing is sent — review and send the draft from the Campaigns tab.
     </p>
+    <p class={announceTargetingClass(workshop.interest_ids)}>
+      {announceTargetingDescription(workshop.interest_ids)}
+    </p>
+    {#if unsavedInterestsHint}
+      <p class="text-warn" role="status">{unsavedInterestsHint}</p>
+    {/if}
     {#if announceError}
       <p class="text-error" role="alert">{announceError}</p>
     {/if}

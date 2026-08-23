@@ -10,6 +10,7 @@ import {
   cancelConfirmMessage,
   deleteConfirmMessage,
   announceTargetingDescription,
+  announceTargetingClass,
   interestIdsDiverge,
   announceUnsavedInterestsHint,
   isSlugEditable,
@@ -22,6 +23,7 @@ import {
   isDeleteConflict,
   workshopToFormFields,
   blankWorkshopFormFields,
+  isPreviewStale,
   type WorkshopFormFields,
 } from './workshopAdmin';
 import type { AdminWorkshop } from './types';
@@ -106,6 +108,17 @@ describe('announceTargetingDescription', () => {
   });
 });
 
+describe('announceTargetingClass (#0162)', () => {
+  it('is text-warn when the workshop has no interests (targets everyone)', () => {
+    expect(announceTargetingClass([])).toBe('text-warn');
+  });
+
+  it('is text-muted when the workshop has interests set', () => {
+    expect(announceTargetingClass([7])).toBe('text-muted');
+    expect(announceTargetingClass([1, 2, 3])).toBe('text-muted');
+  });
+});
+
 describe('interestIdsDiverge (#0151)', () => {
   it('is false for identical arrays in the same order', () => {
     expect(interestIdsDiverge([1, 2, 3], [1, 2, 3])).toBe(false);
@@ -164,6 +177,33 @@ describe('announceUnsavedInterestsHint (#0151)', () => {
   it('warns to save first when the buffer has an unsaved removal', () => {
     const hint = announceUnsavedInterestsHint([1], [1, 2]);
     expect(hint).toMatch(/save first/i);
+  });
+
+  it('does not lead with a space -- #0162 renders it as its own paragraph, not appended text', () => {
+    const hint = announceUnsavedInterestsHint([1, 2, 9], [1, 2]);
+    expect(hint.startsWith(' ')).toBe(false);
+  });
+});
+
+describe('isPreviewStale (#0167)', () => {
+  it('is false when the buffer matches the saved body exactly', () => {
+    expect(isPreviewStale('Learn to solder.', 'Learn to solder.')).toBe(false);
+  });
+
+  it('is true when the buffer has been edited since the last save', () => {
+    expect(isPreviewStale('Learn to solder well.', 'Learn to solder.')).toBe(true);
+  });
+
+  it('treats an undefined saved body the same as an empty string -- a brand-new workshop', () => {
+    expect(isPreviewStale('', undefined)).toBe(false);
+  });
+
+  it('is true for a brand-new workshop once the admin starts typing an unsaved body', () => {
+    expect(isPreviewStale('Learn to solder.', undefined)).toBe(true);
+  });
+
+  it('is false for a brand-new workshop with an empty buffer and no saved body', () => {
+    expect(isPreviewStale('', '')).toBe(false);
   });
 });
 
