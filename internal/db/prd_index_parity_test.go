@@ -65,14 +65,36 @@ import (
 // and checkIndexStatementCoverage below counts "CREATE [UNIQUE] INDEX"
 // occurrences against what the pattern actually matched so any remaining
 // unparseable form (including a missing ";") fails the test loudly instead
-// of vanishing. SQL comments are stripped before any of this matching runs
-// (stripSQLComments), so a commented-out `-- CREATE INDEX …` cannot register
-// as live on either side.
+// of vanishing. SQL comments, string literals, and dollar-quoted bodies are
+// all blanked before any of this matching runs (prepareSQLText/tokenizeSQL,
+// #0164), so a commented-out `-- CREATE INDEX …`, one written inside a
+// string literal, or one inside a dollar-quoted DO block cannot register as
+// live on either side.
 //
 // Placement: same package as TestDatabaseDocMigrationParity for the same
 // reason that test gives (internal/db owns migrations), and to reuse its
 // listMigrations/migrationsDir rather than duplicating the migration-file
 // walk a second time.
+//
+// #0164: this file was widened three times (#0148 built it, #0154 added
+// coverage checks and column parity, #0159 added multi-clause ADD and a
+// dollar-quote lexer), and each round's reviewer found the next round's gap
+// one layer down — because each new scanner (stripSQLComments, splitTopLevel,
+// columnsFromCreateTable's close-paren finder) re-derived "am I inside a
+// string / dollar-quote / comment right now" independently, so a gap fixed
+// in one was still open in the others. tokenizeSQL below is the single scan
+// that answers that question once; prepareSQLText derives the two blanked
+// views (commentsBlanked, blanked) everything else in this file now reads
+// instead of tracking quote state itself. This closed #0159's two residual
+// gaps: a ';' inside a string literal used to truncate an ALTER TABLE
+// statement (alterTableStmtPattern's terminator ran over unblanked text, so
+// an embedded ';' looked real); and a CREATE TABLE/ADD COLUMN inside a
+// dollar-quoted body used to enter the live map as a phantom (its text
+// survived stripSQLComments unblanked, so the strict patterns still matched
+// it). Both are now structurally impossible: blanked has no punctuation or
+// keywords left inside any string/dollar/comment span for a pattern to
+// match, so a statement can't be cut short by one and a phantom can't be
+// found inside one — see tokenizeSQL and blankSpans for the mechanism.
 
 // prdPath is a var, not a const, so a proof of the column-parity guard's
 // failure mode can point it at a scratch copy of PRD.md instead of editing
@@ -175,77 +197,177 @@ func dollarQuoteEnd(text string, i int) (end int, ok bool) {
 	return i + len(tag) + closeIdx + len(tag), true
 }
 
-// stripSQLComments removes every SQL comment — both `-- ...` to end of line
-// and `/* ... */` — from text before any pattern in this file runs over it,
-// in one left-to-right, quote-aware pass. #0154's phase-3 review proved the
-// original regex-based version (`--[^\n]*`, with no `/* */` handling at all)
-// was itself a silent-skip generator: `DEFAULT 'see -- below'` made it eat
-// the rest of the line *including the following column's comma*, and a
-// `/* ... */` block comment inside a CREATE TABLE body was invisible to it
-// entirely, turning the comment's first token into a bogus column and
-// dropping the next real one. Tracking whether the scan is inside a `'...'`
-// string literal (Postgres escapes an embedded quote by doubling it: 'it''s')
-// is what fixes both: `--` and `/*` are only comment starts outside a string.
+// sqlSpanKind classifies one contiguous run of SQL source text as
+// tokenizeSQL walks it: either it's ordinary SQL text (kindText), or one of
+// the four non-text constructs a real SQL scanner has to recognize before
+// any character inside it can be trusted to mean what it looks like — a
+// `--` line comment, a `/* */` block comment, a single-quoted string
+// literal (Postgres escapes an embedded quote by doubling it: 'it''s'), or
+// a Postgres dollar-quoted body ($$...$$ / $tag$...$tag$).
+type sqlSpanKind int
+
+const (
+	kindText sqlSpanKind = iota
+	kindLineComment
+	kindBlockComment
+	kindString
+	kindDollar
+)
+
+// sqlSpan is one contiguous byte range of a tokenizeSQL scan, tagged with
+// its kind. start/end are byte offsets into the exact string tokenizeSQL was
+// given ([start, end), half-open).
+type sqlSpan struct {
+	kind       sqlSpanKind
+	start, end int
+}
+
+// tokenizeSQL is #0164's single scanning pass: it partitions s, left to
+// right, into sqlSpans that together cover the whole string with no gaps
+// and no overlaps, alternating kindText with whichever of the four non-text
+// constructs it recognizes. This replaces three separate hand-rolled
+// quote/comment scanners #0154 and #0159 built one at a time — inside the
+// old stripSQLComments, inside splitTopLevel, and inside
+// columnsFromCreateTable's close-paren finder — each independently
+// re-deriving "am I inside a string / dollar-quote / comment right now",
+// which is exactly why a gap fixed in one kept turning up in the others a
+// round later. Everything downstream now reads this one scan's answer
+// instead (see prepareSQLText and blankSpans).
 //
-// #0159 added the `$`/dollarQuoteEnd branch: a dollar-quoted span is copied
-// through byte-for-byte without ever being re-inspected for `'`, so an odd
-// apostrophe count inside one (e.g. `$x$it's fine$x$`) can no longer flip
-// inString for the rest of the file the way it did before.
-//
-// Applied uniformly to both sides of every comparison so (a) a commented-out
-// `-- CREATE INDEX …`/`-- CREATE TABLE …` can never register as a live
-// definition, and (b) checkIndexStatementCoverage's loose count and
-// createIndexPattern's strict count are counting the same text.
-func stripSQLComments(s string) string {
-	var b strings.Builder
-	inString := false
+// Precedence and fallback behavior are carried over unchanged from the
+// scanners this replaces: a '$' is checked for a dollar-quote opener before
+// anything else (dollarQuoteEnd's own contract — an unmatched opener, e.g. a
+// stray positional parameter like $1, falls back to being an ordinary
+// byte); an unterminated string runs to end of s (nothing after it can be
+// trusted to be outside the string); an unterminated block comment likewise
+// runs to end of s ("nothing after it is SQL"); a line comment ends at the
+// next newline or end of s, whichever comes first, and the newline itself
+// is left as ordinary text.
+func tokenizeSQL(s string) []sqlSpan {
+	var spans []sqlSpan
 	n := len(s)
-	for i := 0; i < n; i++ {
+	textStart := 0
+
+	flushText := func(end int) {
+		if end > textStart {
+			spans = append(spans, sqlSpan{kind: kindText, start: textStart, end: end})
+		}
+	}
+
+	for i := 0; i < n; {
 		c := s[i]
-		if inString {
-			b.WriteByte(c)
-			if c == '\'' {
-				if i+1 < n && s[i+1] == '\'' {
-					b.WriteByte(s[i+1])
-					i++
-					continue
-				}
-				inString = false
-			}
-			continue
-		}
-		if c == '$' {
-			if end, ok := dollarQuoteEnd(s, i); ok {
-				b.WriteString(s[i:end])
-				i = end - 1
-				continue
-			}
-		}
 		switch {
 		case c == '\'':
-			inString = true
-			b.WriteByte(c)
+			flushText(i)
+			j := i + 1
+			for j < n {
+				if s[j] == '\'' {
+					if j+1 < n && s[j+1] == '\'' {
+						j += 2
+						continue
+					}
+					j++
+					break
+				}
+				j++
+			}
+			spans = append(spans, sqlSpan{kind: kindString, start: i, end: j})
+			i, textStart = j, j
+
+		case c == '$':
+			if end, ok := dollarQuoteEnd(s, i); ok {
+				flushText(i)
+				spans = append(spans, sqlSpan{kind: kindDollar, start: i, end: end})
+				i, textStart = end, end
+				continue
+			}
+			i++
+
 		case c == '-' && i+1 < n && s[i+1] == '-':
+			flushText(i)
 			j := i
 			for j < n && s[j] != '\n' {
 				j++
 			}
-			i = j - 1 // loop's i++ lands back on the newline (or EOF), which is preserved
+			spans = append(spans, sqlSpan{kind: kindLineComment, start: i, end: j})
+			i, textStart = j, j
+
 		case c == '/' && i+1 < n && s[i+1] == '*':
+			flushText(i)
 			j := i + 2
 			for j+1 < n && !(s[j] == '*' && s[j+1] == '/') {
 				j++
 			}
+			end := n
 			if j+1 < n {
-				i = j + 1 // skip past the closing "*/"
-			} else {
-				i = n // unterminated block comment: nothing after it is SQL
+				end = j + 2
 			}
+			spans = append(spans, sqlSpan{kind: kindBlockComment, start: i, end: end})
+			i, textStart = end, end
+
 		default:
-			b.WriteByte(c)
+			i++
 		}
 	}
-	return b.String()
+	flushText(n)
+	return spans
+}
+
+// blankSpans returns s with every span in spans whose kind appears in kinds
+// replaced by ASCII spaces, byte for byte — so the result is exactly
+// len(s), and any byte offset into it names the same span of s (and of
+// whatever s itself was blanked from) it always did. A newline inside a
+// blanked span is left as '\n' rather than turned to a space, purely so a
+// multi-line comment or dollar-quoted body still blanks to the same number
+// of lines it occupied — cosmetic, nothing here depends on it.
+//
+// This is the operation that closes both of #0159's residual gaps, by
+// construction rather than by a new special case for either: called with
+// kindString and kindDollar included, a ';' that was inside a string
+// literal or dollar-quoted body is now a space in the text every statement
+// pattern in this file actually matches against, so it can no longer
+// terminate an ALTER TABLE statement early (the semicolon-in-a-DEFAULT-
+// literal gap); and a CREATE TABLE or ALTER TABLE keyword sequence that was
+// inside one of those spans is now spaces too, so it can never match
+// createTableStart/alterTableStmtPattern and enter the live map as a
+// phantom (the dollar-quoted-body gap).
+func blankSpans(s string, spans []sqlSpan, kinds ...sqlSpanKind) string {
+	blank := make(map[sqlSpanKind]bool, len(kinds))
+	for _, k := range kinds {
+		blank[k] = true
+	}
+	b := []byte(s)
+	for _, sp := range spans {
+		if !blank[sp.kind] {
+			continue
+		}
+		for i := sp.start; i < sp.end; i++ {
+			if b[i] != '\n' {
+				b[i] = ' '
+			}
+		}
+	}
+	return string(b)
+}
+
+// prepareSQLText tokenizes raw exactly once (tokenizeSQL) and derives the
+// two views the rest of this file needs, both exactly len(raw) bytes so a
+// byte offset means the same thing in either one (and in raw itself):
+//
+//   - commentsBlanked has only comments blanked. Quoted literal content
+//     (e.g. an index predicate's 'draft') survives, so a capture group that
+//     needs real text — an index's WHERE predicate or column list — can
+//     recover it from here instead of from the fully-blanked view, without
+//     risking comment text leaking into it either.
+//   - blanked additionally blanks string literals and dollar-quoted bodies.
+//     This is the text every pattern and coverage check in this file
+//     matches against; see blankSpans for why that closes #0159's two
+//     residual gaps.
+func prepareSQLText(raw string) (blanked, commentsBlanked string) {
+	spans := tokenizeSQL(raw)
+	commentsBlanked = blankSpans(raw, spans, kindLineComment, kindBlockComment)
+	blanked = blankSpans(commentsBlanked, spans, kindString, kindDollar)
+	return blanked, commentsBlanked
 }
 
 // checkIndexStatementCoverage is the guard for the guard (#0154). It counts
@@ -315,7 +437,7 @@ func liveIndexesFromMigrations(t *testing.T) map[string]indexDef {
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		text := stripSQLComments(string(content))
+		text, orig := prepareSQLText(string(content))
 		checkIndexStatementCoverage(t, text, "migrations/"+m.stem+".up.sql")
 
 		var ops []op
@@ -324,13 +446,19 @@ func liveIndexesFromMigrations(t *testing.T) map[string]indexDef {
 		}
 		for _, loc := range createIndexPattern.FindAllStringSubmatchIndex(text, -1) {
 			name := text[loc[2]:loc[3]]
+			// Match positions come from the fully-blanked text (safe from a
+			// stray ';'/'('/')' inside a literal ever mis-shaping the match),
+			// but columns/predicate are recovered from orig (comments-only
+			// blanked) so real literal content — e.g. idx_workshops_visible's
+			// WHERE status <> 'draft' — survives for the parity comparison
+			// below instead of coming back as blanked spaces (#0164).
 			def := indexDef{
 				table:      text[loc[4]:loc[5]],
-				columns:    text[loc[6]:loc[7]],
+				columns:    orig[loc[6]:loc[7]],
 				sourceFile: m.stem,
 			}
 			if loc[8] != -1 {
-				def.predicate = text[loc[8]:loc[9]]
+				def.predicate = orig[loc[8]:loc[9]]
 			}
 			ops = append(ops, op{pos: loc[0], drop: false, name: name, def: def})
 		}
@@ -347,17 +475,20 @@ func liveIndexesFromMigrations(t *testing.T) map[string]indexDef {
 }
 
 // prdIndexesFromSection parses every CREATE INDEX statement out of a slice
-// of PRD.md text (§6.2's section, already extracted by extractPRDSection).
-func prdIndexesFromSection(section string) map[string]indexDef {
+// of PRD.md text (§6.2's section, already extracted by extractPRDSection and
+// run through prepareSQLText by the caller — section is the blanked view,
+// origSection the comments-only-blanked view columns/predicate are
+// recovered from, for the identical reason liveIndexesFromMigrations does).
+func prdIndexesFromSection(section, origSection string) map[string]indexDef {
 	defs := map[string]indexDef{}
 	for _, loc := range createIndexPattern.FindAllStringSubmatchIndex(section, -1) {
 		name := section[loc[2]:loc[3]]
 		def := indexDef{
 			table:   section[loc[4]:loc[5]],
-			columns: section[loc[6]:loc[7]],
+			columns: origSection[loc[6]:loc[7]],
 		}
 		if loc[8] != -1 {
-			def.predicate = section[loc[8]:loc[9]]
+			def.predicate = origSection[loc[8]:loc[9]]
 		}
 		defs[name] = def
 	}
@@ -691,45 +822,21 @@ func checkColumnStatementCoverage(t *testing.T, text, label string) {
 // that doesn't exist there, and — more importantly — so a table constraint
 // like "PRIMARY KEY (subscriber_id, interest_id)" is treated as the single
 // segment it is rather than split apart by its own internal comma.
-// Quote-aware since #0154's phase-3 review (attack 8): a comma inside a
-// top-level `'...'` string literal (`DEFAULT 'x,y'`) used to be
-// indistinguishable from a real column-separating comma, splitting one
-// column definition into two and inventing a bogus "column" from the
-// fragment after the literal comma. Parens inside a string literal are
-// likewise skipped, for the matching reason columnsFromCreateTable's
-// close-paren finder needs the same tracking (attack 13). Dollar-quote-aware
-// since #0159, for the identical reason stripSQLComments is: a comma or
-// paren inside a dollar-quoted span must not be treated as SQL structure,
-// and the span must be skipped as one atomic unit rather than walked byte by
-// byte, so an odd apostrophe inside it can't corrupt inString for whatever
-// follows.
+//
+// #0164: no longer quote-aware itself. #0154 and #0159 each gave it its own
+// string/dollar-quote tracking (a comma or paren inside a literal, e.g.
+// `DEFAULT 'x,y'`, used to be indistinguishable from real structure) — now
+// unnecessary, because every caller passes s already run through
+// prepareSQLText's blanked view, where a string literal or dollar-quoted
+// body has had its content replaced with spaces upstream (tokenizeSQL,
+// blankSpans). There is no comma or paren left inside one for this function
+// to mis-split on, so a plain paren-depth counter is sufficient.
 func splitTopLevel(s string) []string {
 	var parts []string
 	depth := 0
 	start := 0
-	inString := false
-	n := len(s)
-	for i := 0; i < n; i++ {
-		c := s[i]
-		if inString {
-			if c == '\'' {
-				if i+1 < n && s[i+1] == '\'' {
-					i++
-					continue
-				}
-				inString = false
-			}
-			continue
-		}
-		if c == '$' {
-			if end, ok := dollarQuoteEnd(s, i); ok {
-				i = end - 1
-				continue
-			}
-		}
-		switch c {
-		case '\'':
-			inString = true
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
 		case '(':
 			depth++
 		case ')':
@@ -751,46 +858,22 @@ func splitTopLevel(s string) []string {
 // finds the matching close paren by depth-tracking rather than assuming a
 // single unnested pair — column definitions here nest parens freely
 // (REFERENCES t(id), DEFAULT now()) — then splits the body on top-level
-// commas and takes each segment's first token as the column name, skipping
-// any segment that isTableConstraintSegment identifies as a table-level
-// constraint rather than a column.
+// commas (splitTopLevel) and takes each segment's first token as the column
+// name, skipping any segment that isTableConstraintSegment identifies as a
+// table-level constraint rather than a column.
 //
-// The close-paren finder is quote-aware (#0154, phase-3 review, attack 13):
-// a `)` inside a `'...'` string literal (`DEFAULT ')'`) used to close the
-// body early and silently drop every column after it, the same way an
-// unbalanced-looking `(` inside a literal would open a phantom nesting
-// level. Tracking string state, not just paren characters, is what makes
-// this safe against literal content instead of merely against nested
-// *real* parens. Dollar-quote-aware since #0159, for the same reason
-// stripSQLComments and splitTopLevel are: a paren inside a dollar-quoted
-// span is skipped as part of one atomic jump over the whole span, rather
-// than risking an odd apostrophe inside it flipping inString.
+// #0164: the close-paren finder is no longer quote-aware itself, for the
+// identical reason splitTopLevel isn't anymore — text is always
+// prepareSQLText's blanked view by the time it reaches here, so a `)` or `(`
+// that used to hide inside a string literal or dollar-quoted body (#0154
+// attack 13; #0159's dollar-quote lexer) has already been blanked to a
+// space upstream and can no longer close the body early or open a phantom
+// nesting level.
 func columnsFromCreateTable(text string, openParen int) (cols []string, bodyEnd int) {
 	depth := 0
 	end := -1
-	inString := false
-	n := len(text)
-	for i := openParen; i < n; i++ {
-		c := text[i]
-		if inString {
-			if c == '\'' {
-				if i+1 < n && text[i+1] == '\'' {
-					i++
-					continue
-				}
-				inString = false
-			}
-			continue
-		}
-		if c == '$' {
-			if de, ok := dollarQuoteEnd(text, i); ok {
-				i = de - 1
-				continue
-			}
-		}
-		switch c {
-		case '\'':
-			inString = true
+	for i := openParen; i < len(text); i++ {
+		switch text[i] {
 		case '(':
 			depth++
 		case ')':
@@ -851,7 +934,7 @@ func liveColumnsFromMigrations(t *testing.T) map[string]map[string]columnDef {
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		text := stripSQLComments(string(content))
+		text, _ := prepareSQLText(string(content)) // column names are never quoted content; the blanked view alone is enough
 		checkColumnStatementCoverage(t, text, "migrations/"+m.stem+".up.sql")
 
 		var ops []op
@@ -884,7 +967,8 @@ func liveColumnsFromMigrations(t *testing.T) map[string]map[string]columnDef {
 
 // prdColumnsFromSection parses every CREATE TABLE's column list out of a
 // slice of PRD.md text (§6.2's section, already extracted by
-// extractPRDSection and comment-stripped by the caller).
+// extractPRDSection and run through prepareSQLText's blanked view by the
+// caller).
 func prdColumnsFromSection(section string) map[string]map[string]columnDef {
 	tables := map[string]map[string]columnDef{}
 	for _, loc := range createTableStart.FindAllStringSubmatchIndex(section, -1) {
@@ -950,9 +1034,9 @@ func TestPRDWorkshopAndMailingIndexParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", prdPath, err)
 	}
-	section := stripSQLComments(extractPRDSection(t, string(prdBytes), "### 6.2 "))
+	section, origSection := prepareSQLText(extractPRDSection(t, string(prdBytes), "### 6.2 "))
 	checkIndexStatementCoverage(t, section, "PRD.md §6.2")
-	prdIndexes := prdIndexesFromSection(section)
+	prdIndexes := prdIndexesFromSection(section, origSection)
 
 	var names []string
 	for name, def := range live {
@@ -1016,7 +1100,7 @@ func TestPRDWorkshopAndMailingColumnParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", prdPath, err)
 	}
-	section := stripSQLComments(extractPRDSection(t, string(prdBytes), "### 6.2 "))
+	section, _ := prepareSQLText(extractPRDSection(t, string(prdBytes), "### 6.2 ")) // column names only — blanked view is enough
 	checkColumnStatementCoverage(t, section, "PRD.md §6.2")
 	prdColumns := prdColumnsFromSection(section)
 
