@@ -113,6 +113,72 @@ func TestRenderMarkdownHTML_SafeLinkSchemesSurvive(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdownHTML_BodyLinkPolicyDocumented pins #0166's decision:
+// after #0136 deleted renderMarkdownPreview and the isSafeLinkHref call it
+// made over every body link, #0138's criterion 5 (which claimed a body-link
+// URL policy) was amended rather than restored server-side, because the
+// three forms goldmark now admits that the deleted validator refused don't
+// grant an attacker anything the criterion didn't already permit:
+//
+//   - "//evil.host/x" and "///evil.host/x" both resolve (WHATWG URL,
+//     verified against https://www.opencircuitsf.com/workshops/x) to
+//     "https://evil.host/x" -- exactly the ordinary absolute-https link
+//     #0138 always allowed for an off-site ticketing page.
+//   - "data:image/png|gif|jpeg|webp" link destinations survive as a live
+//     "<a href=\"data:...\">" -- goldmark's IsDangerousURL allowlists those
+//     four raster types -- but a real Chromium refuses top-level navigation
+//     to a data: URL ("Not allowed to navigate top frame to data URL"),
+//     confirmed by this issue rather than assumed, so this is inert.
+//     "data:image/svg+xml" (the executable one) is still refused.
+//
+// If any of these ever flips, campaigns' link policy changed underneath
+// this test (this function is exactly the one email_campaigns.body_md
+// renders through) and deserves its own review, not a widened assertion.
+func TestRenderMarkdownHTML_BodyLinkPolicyDocumented(t *testing.T) {
+	cases := []struct {
+		name       string
+		md         string
+		wantHref   string
+		wantNoLink bool // true if goldmark drops the link entirely (href="")
+	}{
+		// The three forms #0166 catalogued.
+		{name: "protocol-relative resolves off-site but survives", md: `[x](//evil.host/x)`, wantHref: `//evil.host/x`},
+		{name: "triple-slash resolves off-site identically and survives", md: `[x](///evil.host/x)`, wantHref: `///evil.host/x`},
+		{name: "data:image/png survives as a live but browser-inert href", md: `[x](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=)`, wantHref: `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=`},
+		// The executable data: subtype stays refused -- not part of the
+		// #0138/#0138-image allowlist goldmark's IsDangerousURL carries.
+		{name: "data:image/svg+xml stays refused", md: `[x](data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=)`, wantNoLink: true},
+		// Legitimate cases that must keep working unchanged.
+		{name: "https:// stays live", md: `[site](https://example.com/path)`, wantHref: `https://example.com/path`},
+		{name: "mailto: stays live", md: `[email us](mailto:hello@opencircuitsf.com)`, wantHref: `mailto:hello@opencircuitsf.com`},
+		{name: "root-relative path stays live", md: `[x](/workshops/soldering-101)`, wantHref: `/workshops/soldering-101`},
+	}
+
+	hrefRE := regexp.MustCompile(`href="([^"]*)"`)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := RenderMarkdownHTML(c.md)
+			if err != nil {
+				t.Fatalf("RenderMarkdownHTML(%q): %v", c.md, err)
+			}
+			m := hrefRE.FindStringSubmatch(got)
+			if m == nil {
+				t.Fatalf("RenderMarkdownHTML(%q): no href attribute found: %s", c.md, got)
+			}
+			href := html.UnescapeString(m[1])
+			if c.wantNoLink {
+				if href != "" {
+					t.Fatalf("RenderMarkdownHTML(%q): expected the destination to be refused (href=\"\"), got href=%q: %s", c.md, href, got)
+				}
+				return
+			}
+			if href != c.wantHref {
+				t.Fatalf("RenderMarkdownHTML(%q): href = %q, want %q: %s", c.md, href, c.wantHref, got)
+			}
+		})
+	}
+}
+
 // TestRenderMarkdownHTML_TextIsHTMLEscaped confirms ordinary text content
 // (not raw HTML, just literal < > & characters an author might type) is
 // escaped rather than injected, e.g. "5 < 10 & true" in body copy.
