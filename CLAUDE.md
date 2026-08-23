@@ -505,6 +505,17 @@ recoverable. Stage narrowly — `git add <specific-path>`, never `git add -A` or
 `git commit -a`, which sweep up other agents' work into a commit that does not
 describe it.
 
+**"Scoped" does not make `git stash` safe.** `#0120`'s implementer stashed to
+measure a pre-fix baseline and to prove its new guard failed against the old
+tree — a genuinely good reason, and it described the stash as scoped. But `git
+stash` takes the *whole* working tree; two other agents were mid-issue at the
+time, and it was luck rather than design that neither had uncommitted work when
+it ran. Verified afterwards: stash list empty, both their commits intact.
+
+To prove a guard fails against the old code, check the old file out **to a
+different path** and point the test at it, or run in a throwaway worktree at the
+parent commit. Never move the shared tree out from under other agents.
+
 **The usual motive is a before/after measurement.** An agent wanting a "before"
 test count ran a broad `git stash` / `git stash pop`, briefly sweeping another
 agent's in-flight `internal/mailing/worker_test.go` in with its own. The pop
