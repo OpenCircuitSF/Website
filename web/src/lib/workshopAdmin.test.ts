@@ -119,53 +119,53 @@ describe('status transition offers', () => {
     });
   });
 
-  it('cancel copy for a currently-published workshop says it stays visible, not that it disappears', () => {
-    const msg = cancelConfirmMessage('X', 'published', '2026-01-01T00:00:00Z');
-    expect(msg).toMatch(/stays visible/i);
-    // Must not also claim the "not currently published" story -- that
-    // would fail if the staysVisible and staysPrivate branches were ever
-    // swapped or merged.
-    expect(msg).not.toMatch(/not currently published/i);
+  // #0180: pinned whole-sentence with toBe, not a set of toMatch/not.toMatch
+  // fragments. #0177's review found a mutation that escapes fragment-style
+  // assertions entirely: appending a false history clause to either shared
+  // branch -- "...and has not been published before" onto staysPrivate, or
+  // "...it has no publication history at all" onto becomesVisible --
+  // without using the one literal phrase (`never published`) the old
+  // negative check watched for. Every existing toMatch/not.toMatch survived
+  // that mutation (the true claim was still present, the one banned phrase
+  // was still absent), so a false clause tacked onto the end went
+  // unnoticed. A toBe on the complete sentence has no such gap: ANY
+  // difference from the exact string -- reworded, appended, reordered --
+  // fails the assertion. This dialog earned that cost the hard way, across
+  // three passes (#0171's boolean, #0174's phrasing, #0177's matrix), each
+  // of which shipped copy that was wrong for a state nobody had enumerated
+  // yet. See this module's neighboring copy functions
+  // (announceTargetingDescription, announceUnsavedInterestsHint) and
+  // lib/campaigns.ts's demotionExplanation/cancelCopy for the deliberate
+  // choice NOT to extend whole-sentence pinning there -- recorded in
+  // issues/0180.md, not repeated here.
+  it('cancel copy for a currently-published workshop: exact staysVisible sentence', () => {
+    expect(cancelConfirmMessage('X', 'published', '2026-01-01T00:00:00Z')).toBe(
+      'Cancel "X"? It stays visible on the public site, marked canceled, rather than disappearing.',
+    );
   });
 
   // #0171: canceling a workshop that is not currently visible (a
   // never-published draft, or one unpublished before this cancel --
   // published_at NULL either way) does NOT make it public. The old
   // unconditional "stays visible" copy was wrong for this case -- the
-  // exact defect issues/0171.md is about.
-  //
-  // #0174: the copy must not claim "It was never published" -- that's
-  // false on the published -> unpublished -> canceled path (it WAS
-  // published; unpublishing cleared published_at). "not currently
-  // published" is true in both sub-cases. The real guard here is the
-  // POSITIVE assertion on that true phrasing, not the negative one below
-  // by itself -- #0174's review showed a purely negative
-  // `.not.toMatch(/never published/i)` still passes if the copy is
-  // reworded to say the same false thing differently (e.g. "has not been
-  // published before"). Kept as an explicit belt-and-suspenders check
-  // against that one known-false phrase, backed by the positive assertion
-  // that actually pins the wording.
-  it('cancel copy for a currently-invisible, never-published-or-unpublished workshop says it stays private, not that it stays visible', () => {
-    const msg = cancelConfirmMessage('X', 'draft', null);
-    expect(msg).toMatch(/not currently published/i);
-    expect(msg).not.toMatch(/never published/i);
-    expect(msg).toMatch(/private/i);
-    expect(msg).not.toMatch(/stays visible/i);
-    expect(msg).not.toMatch(/will make it visible/i);
+  // exact defect issues/0171.md is about. #0174 additionally requires the
+  // copy not claim "It was never published" -- false on the published ->
+  // unpublished -> canceled path (it WAS published; unpublishing cleared
+  // published_at). "not currently published" is true of both sub-cases.
+  it('cancel copy for a currently-invisible, never-published-or-unpublished workshop: exact staysPrivate sentence', () => {
+    expect(cancelConfirmMessage('X', 'draft', null)).toBe(
+      'Cancel "X"? It is not currently published, so it stays private — canceling it will not make it visible.',
+    );
   });
 
   // #0177's actual defect: a draft whose published_at survives from an
   // earlier publish (#0171's canceled -> draft cell). The dialog must warn
   // that canceling PUBLISHES it, not promise continuity with its current
   // (invisible) state.
-  it('cancel copy for a draft with a leftover published_at warns that canceling makes it visible, not that it stays as it is', () => {
-    const msg = cancelConfirmMessage('X', 'draft', '2026-01-01T00:00:00Z');
-    expect(msg).toMatch(/will make it visible/i);
-    // Must not borrow either other branch's claim: not "already visible"
-    // (staysVisible) and not "stays private" (staysPrivate) -- both are
-    // false here, and either one reintroduces #0177's under-warning.
-    expect(msg).not.toMatch(/stays visible/i);
-    expect(msg).not.toMatch(/stays private/i);
+  it('cancel copy for a draft with a leftover published_at: exact becomesVisible sentence', () => {
+    expect(cancelConfirmMessage('X', 'draft', '2026-01-01T00:00:00Z')).toBe(
+      'Cancel "X"? It is not currently visible, but canceling it will make it visible on the public site, marked canceled — it was published before, and that history was never cleared.',
+    );
   });
 });
 

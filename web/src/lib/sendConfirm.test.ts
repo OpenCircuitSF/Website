@@ -11,6 +11,7 @@ import type { UnmetRequirement } from './types';
 import {
   normalizeCountInput,
   confirmMatches,
+  confirmHint,
   sendGuardState,
   sendGuardDescription,
   sendGuardSummaryClass,
@@ -43,6 +44,37 @@ describe('confirmMatches', () => {
 
   it('matches with thousands separators', () => {
     expect(confirmMatches('1,482', 1482)).toBe(true);
+  });
+});
+
+// #0179: confirmHint guards a send (#0047 §7) -- it is what tells an admin
+// their typed count is wrong before the Send gate accepts it. Asserted
+// semantically (what the hint CLAIMS -- that it names the expected count),
+// not by pinning one phrasing of the sentence.
+describe('confirmHint', () => {
+  it('is null while the field is untouched (empty) -- no scolding an empty field', () => {
+    expect(confirmHint('', 482)).toBeNull();
+  });
+
+  it('is null once the typed count matches exactly', () => {
+    expect(confirmHint('482', 482)).toBeNull();
+  });
+
+  it('on a mismatch, names the expected count and not the typed one', () => {
+    // 999 and 482 share no digits, so a hint that named the wrong number
+    // (the typed value, or any other count) fails toContain('482') here --
+    // this is what makes the assertion fail if the hint stops naming the
+    // expected count, or names the wrong one.
+    const hint = confirmHint('999', 482);
+    expect(hint).not.toBeNull();
+    expect(hint).toContain('482');
+    expect(hint).not.toContain('999');
+  });
+
+  it('on a mismatch from non-numeric input, still names the expected count', () => {
+    const hint = confirmHint('abc', 482);
+    expect(hint).not.toBeNull();
+    expect(hint).toContain('482');
   });
 });
 
