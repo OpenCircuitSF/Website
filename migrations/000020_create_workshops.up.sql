@@ -41,6 +41,23 @@ ALTER TABLE workshops
     ADD CONSTRAINT workshops_status_check
     CHECK (status IN ('draft', 'published', 'canceled'));
 
+-- Range-guard capacity at the database too (#0155, found by #0146's review):
+-- the handler (internal/handlers/admin_workshops.go's isValidCapacity)
+-- rejects an out-of-range capacity with a 400, but a caller that bypasses
+-- the handler entirely -- a direct INSERT/UPDATE, a future import path --
+-- must still be refused rather than silently storing -1, 0, or a value that
+-- would otherwise only be caught by Postgres's INT overflow (which surfaced
+-- as an opaque 500, not a 400, before this issue). NULL stays the sole
+-- "no capacity limit" representation (0 is deliberately not a second
+-- spelling of that -- see isValidCapacity's doc comment for the reasoning),
+-- so the CHECK allows NULL through untouched. The upper bound duplicates
+-- what the INT column type already enforces on its own; it is written out
+-- explicitly anyway so the constraint is self-documenting about the
+-- intended range without requiring a reader to know INT's limit by heart.
+ALTER TABLE workshops
+    ADD CONSTRAINT workshops_capacity_check
+    CHECK (capacity IS NULL OR (capacity >= 1 AND capacity <= 2147483647));
+
 -- Public listing query (PRD §6.2 / #0051, widened by #0135): published AND
 -- canceled workshops ordered by start time -- both statuses are visible to
 -- the public (#0135: the index and the detail route must apply the same

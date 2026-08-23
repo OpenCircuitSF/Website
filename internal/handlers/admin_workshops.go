@@ -285,6 +285,10 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, signupURLErrorMessage)
 		return
 	}
+	if req.Capacity != nil && !isValidCapacity(*req.Capacity) {
+		writeError(w, http.StatusBadRequest, capacityErrorMessage)
+		return
+	}
 
 	created, err := h.store.Create(r.Context(), workshops.CreateInput{
 		Title:           title,
@@ -455,6 +459,10 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		capacity = nil // key present as `null`: explicit clear (#0146).
 	default:
 		v := req.Capacity.Value
+		if !isValidCapacity(v) {
+			writeError(w, http.StatusBadRequest, capacityErrorMessage)
+			return
+		}
 		capacity = &v // key present with a value.
 	}
 	signupURL := current.SignupURL
@@ -812,6 +820,36 @@ func hasSafeLinkScheme(s string) bool {
 	return strings.HasPrefix(lower, "http:") ||
 		strings.HasPrefix(lower, "https:") ||
 		strings.HasPrefix(lower, "mailto:")
+}
+
+// capacityErrorMessage is the 400 body for a capacity outside
+// isValidCapacity's range, shared by Create and Patch.
+const capacityErrorMessage = "capacity must be a whole number between 1 and 2147483647; to remove a capacity limit, send capacity as null (PATCH) or omit it (Create)"
+
+// isValidCapacity reports whether v is a legal `capacity` value (#0155,
+// found by #0146's phase-3 review while probing capacity with nonsense
+// inputs — negative and zero capacities stored cleanly with a 200, and
+// anything above 2^31-1 returned a 500 from a Postgres INT overflow instead
+// of a 400).
+//
+// Range chosen deliberately: 1..2147483647 (INT's max, since
+// migrations/000020's `capacity INT` column can hold nothing larger without
+// overflowing — the very failure mode this issue closes).
+//
+// Zero is REJECTED, not treated as "unlimited". NULL already means "no
+// capacity limit" (workshopView omits the field entirely when nil,
+// `capacity,omitempty`, and nothing in this codebase ever treats a *present*
+// zero specially) — a second spelling of the same idea invites exactly the
+// kind of confusion this issue is about: two different wire values
+// ("capacity was never set" vs "capacity is deliberately zero") that would
+// mean the same thing to every reader of the data, with no way to tell them
+// apart from the stored column alone. Rejecting 0 with a 400 keeps NULL as
+// the single, unambiguous "no limit" representation. Whether 0 is naturally
+// meaningless in this domain (nobody runs a workshop with room for nobody)
+// reinforces the choice, but the wire-representation argument above is the
+// deciding one even if it weren't.
+func isValidCapacity(v int) bool {
+	return v >= 1 && v <= 2147483647
 }
 
 // parseOptionalTime parses an optional RFC 3339 timestamp field. A nil or

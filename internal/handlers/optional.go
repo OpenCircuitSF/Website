@@ -5,6 +5,14 @@ package handlers
 
 import "encoding/json"
 
+// Request bodies only. Optional[T] has no MarshalJSON, so embedding it in a
+// RESPONSE struct would serialize as its raw field layout
+// (`{"Value":…,"Present":…,"Valid":…}`) instead of the plain JSON value a
+// client expects — nothing currently does this (workshopView keeps a plain
+// *int for Capacity; see admin_workshops.go's doc comment on that field),
+// but if a future response shape reaches for this type, add MarshalJSON
+// first (#0155, a ride-along nit from #0146's review).
+//
 // Optional wraps a PATCH request field whose wire representation must
 // distinguish three states: the key absent from the JSON object ("leave
 // alone"), the key present as the literal `null` ("clear it"), and the key

@@ -58,6 +58,17 @@ func uniqueAdminWorkshopTitle(t *testing.T) string {
 	return fmt.Sprintf("zz-subtest-workshop-%d", time.Now().UnixNano())
 }
 
+// intPtrString formats a *int for a test failure message. %v on a *int
+// prints the pointer's hex address, not the value it points to, which makes
+// a failure message like "Capacity = 0xc0001234, want 30" useless for
+// diagnosing anything (#0155, a ride-along nit from #0146's review).
+func intPtrString(p *int) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%d", *p)
+}
+
 func cleanupAdminWorkshop(t *testing.T, pool *pgxpool.Pool, id int64) {
 	t.Helper()
 	t.Cleanup(func() {
@@ -804,7 +815,7 @@ func TestAdminWorkshops_PatchClearsCapacityWithExplicitNull(t *testing.T) {
 		t.Fatalf("GetByID after seed: %v", err)
 	}
 	if seeded.Capacity == nil || *seeded.Capacity != capacity {
-		t.Fatalf("seeded Capacity = %v, want %d", seeded.Capacity, capacity)
+		t.Fatalf("seeded Capacity = %s, want %d", intPtrString(seeded.Capacity), capacity)
 	}
 
 	// The PATCH body carries an explicit null for capacity (clear it) and
@@ -870,7 +881,7 @@ func TestAdminWorkshops_PatchWithoutCapacityLeavesItAlone(t *testing.T) {
 		t.Fatalf("GetByID after patch: %v", err)
 	}
 	if updated.Capacity == nil || *updated.Capacity != capacity {
-		t.Errorf("Capacity = %v after a PATCH that never mentioned it, want unchanged %d", updated.Capacity, capacity)
+		t.Errorf("Capacity = %s after a PATCH that never mentioned it, want unchanged %d", intPtrString(updated.Capacity), capacity)
 	}
 	if updated.Summary == nil || *updated.Summary != newSummary {
 		t.Errorf("Summary = %v, want %q", updated.Summary, newSummary)
@@ -909,7 +920,231 @@ func TestAdminWorkshops_PatchSetsCapacityToNewValue(t *testing.T) {
 		t.Fatalf("GetByID after patch: %v", err)
 	}
 	if updated.Capacity == nil || *updated.Capacity != 25 {
-		t.Errorf("Capacity = %v after PATCH {capacity: 25}, want 25", updated.Capacity)
+		t.Errorf("Capacity = %s after PATCH {capacity: 25}, want 25", intPtrString(updated.Capacity))
+	}
+}
+
+// TestIsValidCapacity is a pure unit test over isValidCapacity's boundary,
+// with no database and no HTTP round trip — #0155's decided range is
+// 1..2147483647 (INT's max), and 0 is deliberately rejected rather than
+// reused as a second spelling of "no limit" (NULL already means that; see
+// isValidCapacity's doc comment).
+func TestIsValidCapacity(t *testing.T) {
+	cases := []struct {
+		name  string
+		value int
+		want  bool
+	}{
+		{"below minimum", -1, false},
+		{"zero, deliberately rejected (#0155)", 0, false},
+		{"at minimum", 1, true},
+		{"just above minimum", 2, true},
+		{"ordinary value", 30, true},
+		{"at maximum (INT max, 2^31-1)", 2147483647, true},
+		{"one below maximum", 2147483646, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isValidCapacity(c.value); got != c.want {
+				t.Errorf("isValidCapacity(%d) = %v, want %v", c.value, got, c.want)
+			}
+		})
+	}
+}
+
+// TestAdminWorkshops_CreateRejectsOutOfRangeCapacity is #0155's acceptance
+// criterion for Create: every boundary below the minimum, at the minimum,
+// at the maximum, and above the maximum, asserting the STATUS CODE (not
+// merely "something failed") and — for the rejected cases — that nothing
+// was stored. `3000000000` is the value #0146's review found returning a
+// bare 500 (Postgres INT overflow) before this issue; it must now be a 400
+// from the handler, never reaching the database at all.
+func TestAdminWorkshops_CreateRejectsOutOfRangeCapacity(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-capacity-range-create@example.com")
+	seedSession(t, pool, admin, "workshops-admin-capacity-range-create-token")
+
+	cases := []struct {
+		name     string
+		capacity string // raw JSON literal
+	}{
+		{"below minimum: -1", "-1"},
+		{"zero, rejected not treated as unlimited (#0155)", "0"},
+		{"above INT max: 3000000000 (#0146's review found this a 500)", "3000000000"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			title := uniqueAdminWorkshopTitle(t)
+			body := fmt.Sprintf(`{"title":%q,"capacity":%s}`, title, c.capacity)
+			resp := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/admin/workshops", "workshops-admin-capacity-range-create-token", body)
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("POST /admin/workshops with capacity=%s status = %d, want 400 (body=%s)", c.capacity, resp.StatusCode, respBody)
+			}
+
+			// Nothing was stored: this title never made it into the table.
+			var count int
+			err := pool.QueryRow(context.Background(), `SELECT count(*) FROM workshops WHERE title = $1`, title).Scan(&count)
+			if err != nil {
+				t.Fatalf("count workshops by title: %v", err)
+			}
+			if count != 0 {
+				t.Errorf("capacity=%s: %d row(s) stored despite the 400, want 0", c.capacity, count)
+			}
+		})
+	}
+}
+
+// TestAdminWorkshops_CreateAcceptsBoundaryCapacities is the accepting half
+// of #0155's boundary sweep: exactly at the minimum and exactly at the
+// maximum, both read back from the database.
+func TestAdminWorkshops_CreateAcceptsBoundaryCapacities(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-capacity-range-create-ok@example.com")
+	seedSession(t, pool, admin, "workshops-admin-capacity-range-create-ok-token")
+	store := workshops.NewStore(pool)
+
+	cases := []struct {
+		name     string
+		capacity int
+	}{
+		{"at minimum: 1", 1},
+		{"at maximum: 2147483647", 2147483647},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			title := uniqueAdminWorkshopTitle(t)
+			body := fmt.Sprintf(`{"title":%q,"capacity":%d}`, title, c.capacity)
+			resp := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/admin/workshops", "workshops-admin-capacity-range-create-ok-token", body)
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("POST /admin/workshops with capacity=%d status = %d, want 201 (body=%s)", c.capacity, resp.StatusCode, respBody)
+			}
+			var created struct {
+				ID int64 `json:"id"`
+			}
+			if err := json.Unmarshal(respBody, &created); err != nil {
+				t.Fatalf("decode created workshop: %v", err)
+			}
+			cleanupAdminWorkshop(t, pool, created.ID)
+
+			row, err := store.GetByID(context.Background(), created.ID)
+			if err != nil {
+				t.Fatalf("GetByID: %v", err)
+			}
+			if row.Capacity == nil || *row.Capacity != c.capacity {
+				t.Errorf("stored Capacity = %s, want %d", intPtrString(row.Capacity), c.capacity)
+			}
+		})
+	}
+}
+
+// TestAdminWorkshops_PatchRejectsOutOfRangeCapacity mirrors the Create
+// sweep for PATCH: below the minimum, at zero, and above INT's max, each
+// asserting a 400 and that the workshop's PREVIOUSLY-SET capacity survives
+// unchanged — an out-of-range PATCH must not clear or corrupt the existing
+// value.
+func TestAdminWorkshops_PatchRejectsOutOfRangeCapacity(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-capacity-range-patch@example.com")
+	seedSession(t, pool, admin, "workshops-admin-capacity-range-patch-token")
+	store := workshops.NewStore(pool)
+
+	cases := []struct {
+		name     string
+		capacity string // raw JSON literal
+	}{
+		{"below minimum: -1", "-1"},
+		{"zero, rejected not treated as unlimited (#0155)", "0"},
+		{"above INT max: 3000000000 (#0146's review found this a 500)", "3000000000"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			existing := 42
+			w, err := store.Create(context.Background(), workshops.CreateInput{
+				Title:    uniqueAdminWorkshopTitle(t),
+				Capacity: &existing,
+			})
+			if err != nil {
+				t.Fatalf("seed workshop: %v", err)
+			}
+			cleanupAdminWorkshop(t, pool, w.ID)
+			path := fmt.Sprintf("/admin/workshops/%d", w.ID)
+
+			body := fmt.Sprintf(`{"capacity":%s}`, c.capacity)
+			resp := doJSON(t, srv.Client(), http.MethodPatch, srv.URL+path, "workshops-admin-capacity-range-patch-token", body)
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("PATCH capacity=%s status = %d, want 400 (body=%s)", c.capacity, resp.StatusCode, respBody)
+			}
+
+			updated, err := store.GetByID(context.Background(), w.ID)
+			if err != nil {
+				t.Fatalf("GetByID after rejected PATCH: %v", err)
+			}
+			if updated.Capacity == nil || *updated.Capacity != existing {
+				t.Errorf("Capacity = %s after a rejected PATCH, want unchanged %d", intPtrString(updated.Capacity), existing)
+			}
+		})
+	}
+}
+
+// TestAdminWorkshops_PatchAcceptsBoundaryCapacities is the accepting half
+// for PATCH: exactly 1 and exactly 2147483647, both stored and read back
+// from the database.
+func TestAdminWorkshops_PatchAcceptsBoundaryCapacities(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-capacity-range-patch-ok@example.com")
+	seedSession(t, pool, admin, "workshops-admin-capacity-range-patch-ok-token")
+	store := workshops.NewStore(pool)
+
+	cases := []struct {
+		name     string
+		capacity int
+	}{
+		{"at minimum: 1", 1},
+		{"at maximum: 2147483647", 2147483647},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w, err := store.Create(context.Background(), workshops.CreateInput{Title: uniqueAdminWorkshopTitle(t)})
+			if err != nil {
+				t.Fatalf("seed workshop: %v", err)
+			}
+			cleanupAdminWorkshop(t, pool, w.ID)
+			path := fmt.Sprintf("/admin/workshops/%d", w.ID)
+
+			body := fmt.Sprintf(`{"capacity":%d}`, c.capacity)
+			resp := doJSON(t, srv.Client(), http.MethodPatch, srv.URL+path, "workshops-admin-capacity-range-patch-ok-token", body)
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("PATCH capacity=%d status = %d, want 200 (body=%s)", c.capacity, resp.StatusCode, respBody)
+			}
+
+			updated, err := store.GetByID(context.Background(), w.ID)
+			if err != nil {
+				t.Fatalf("GetByID after PATCH: %v", err)
+			}
+			if updated.Capacity == nil || *updated.Capacity != c.capacity {
+				t.Errorf("Capacity = %s after PATCH, want %d", intPtrString(updated.Capacity), c.capacity)
+			}
+		})
 	}
 }
 
