@@ -25,6 +25,11 @@
 # without Ctrl-C:
 #   RECLAIM_PORTS=1 ./scripts/dev.sh
 #
+# dev.sh waits for its OWN Go server to bind :$PORT before continuing, and
+# gives up with an error if that never happens. On a very cold build cache
+# raise the ceiling:
+#   DEV_READY_TIMEOUT=600 ./scripts/dev.sh
+#
 # Ctrl-C stops everything cleanly.
 #
 set -euo pipefail
@@ -65,7 +70,7 @@ info() { printf '    %s\n' "$*"; }
 MODE="hot"
 case "${1:-}" in
   --built|-b) MODE="built" ;;
-  -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
   "") : ;;
   *) printf 'Unknown flag: %s\n' "$1" >&2; exit 1 ;;
 esac
@@ -79,6 +84,73 @@ ok "repo:    $REPO"
 ok "storage: $STORAGE (no Postgres)"
 ok "admin:   $ADMIN_EMAIL"
 ok "port:    $PORT"
+
+# ── Process ownership (#0117) ────────────────────────────────────────────────
+# Ownership is derived from the fork, never from who happens to be on a port.
+# `lsof -ti tcp:P` matches ANY TCP endpoint on P — a left-open browser tab, a
+# stray curl, a health-check poller with an ESTABLISHED connection to our own
+# server all answer it — and none of that is evidence about who STARTED the
+# process. Inferring ownership from the port made dev.sh kill a stranger twice
+# (#0117, both review passes). A pid is ours only if it is $GO_PID or a
+# descendant of it.
+#
+# Every port lookup in this script is scoped to listeners (`-sTCP:LISTEN`), so
+# a mere client connection can neither be enrolled as owned nor block startup.
+port_listeners() { lsof -ti tcp:"$1" -sTCP:LISTEN 2>/dev/null || true; }
+
+# Pids are recorded with their start time, so a pid the OS recycled during a
+# long session can never be mistaken for the process we forked. The trailing
+# `|| true` matters: `set -o pipefail` is on, so without it `ps` failing on a
+# dead pid would make `x="$(proc_start …)"` a failing command and errexit
+# would kill the script mid-shutdown.
+proc_start() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' '_' | tr -d '\n' || true; }
+
+descendant_pids() {  # <root-pid> — the root plus every live descendant, one per line
+  ps -Ao pid=,ppid= | awk -v root="$1" '
+    { p[NR] = $1; pp[NR] = $2; n = NR }
+    END {
+      own[root] = 1
+      for (k = 0; k < n; k++) {              # ps output is not topological — iterate to a fixed point
+        changed = 0
+        for (i = 1; i <= n; i++) if (!own[p[i]] && own[pp[i]]) { own[p[i]] = 1; changed = 1 }
+        if (!changed) break
+      }
+      for (i = 1; i <= n; i++) if (own[p[i]]) print p[i]
+    }'
+}
+
+# own_pids <root-pid> — which pids does THIS run own? The single line in its
+# body IS the ownership model; scripts/dev_guard_test.sh mutates exactly that
+# line back to the discredited "whoever is on the port" answer to prove its
+# assertions are sensitive to the #0117 regression rather than vacuous.
+own_pids() {
+  descendant_pids "$1"
+}
+
+own_fingerprints() {  # <root-pid> — "pid:start-time" for every owned pid
+  local p s
+  for p in $(own_pids "$1"); do
+    s="$(proc_start "$p")"
+    if [ -n "$s" ]; then printf '%s:%s\n' "$p" "$s"; fi
+  done
+  return 0
+}
+
+is_owned() {  # <pid> <fingerprint-list> — true only for an exact pid+start-time match
+  local s
+  s="$(proc_start "$1")"
+  [ -n "$s" ] || return 1
+  printf '%s\n' "$2" | grep -qxF "$1:$s"
+}
+
+own_holds_port() {  # <port> <root-pid> — true when a pid WE forked is LISTENing there; records the owned set
+  local p="$1" root="$2" c
+  OWNED_PIDS="$(own_fingerprints "$root")"
+  for c in $(port_listeners "$p"); do
+    if is_owned "$c" "$OWNED_PIDS"; then return 0; fi
+  done
+  return 1
+}
 
 # Free the dev ports if a previous run left a server bound. `go run` leaks its
 # compiled child process when its parent is killed, so a stale server can keep
@@ -103,7 +175,7 @@ ok "port:    $PORT"
 RECLAIM_PORTS="${RECLAIM_PORTS:-0}"
 free_port() {
   local p="$1" force="${2:-0}" pids pid cmd still
-  pids="$(lsof -ti tcp:"$p" 2>/dev/null || true)"
+  pids="$(port_listeners "$p")"
   [ -z "$pids" ] && return 0
 
   if [ "$force" = "1" ] || [ "$RECLAIM_PORTS" = "1" ]; then
@@ -111,7 +183,7 @@ free_port() {
     # shellcheck disable=SC2086
     kill -9 $pids 2>/dev/null || true
     sleep 1
-    still="$(lsof -ti tcp:"$p" 2>/dev/null || true)"
+    still="$(port_listeners "$p")"
     if [ -n "$still" ]; then
       printf '  ERROR: port %s still held after kill -9 (pid(s): %s) — could not reclaim it.\n' "$p" "$(printf '%s' "$still" | tr '\n' ' ')" >&2
       exit 1
@@ -140,20 +212,16 @@ free_port 5173
 # lsof at exit time and killing it unconditionally is exactly what let a
 # foreign process that took over the port after this run's Go server died
 # (crash, stray pkill) get killed by an ordinary Ctrl-C (#0117 review). So the
-# trap kills only pids THIS run is known to have bound — tracked in
-# OWNED_PIDS, populated once the Go server is confirmed up, below — and warns
-# (without killing) about anything else it finds holding the port at exit.
-release_owned_port() {
-  local p="$1" owned="$2" current c o matched ours="" foreign="" pid cmd remaining
-  current="$(lsof -ti tcp:"$p" 2>/dev/null || true)"
+# trap kills only pids THIS run FORKED — $GO_PID and its descendants, recorded
+# as pid+start-time fingerprints — and warns, without killing, about anything
+# else it finds holding the port at exit.
+release_owned_port() {  # <port> <owned-fingerprints>
+  local p="$1" owned="$2" current c ours="" foreign="" pid cmd remaining
+  current="$(port_listeners "$p")"
   [ -z "$current" ] && return 0
 
   for c in $current; do
-    matched=0
-    for o in $owned; do
-      [ "$c" = "$o" ] && { matched=1; break; }
-    done
-    if [ "$matched" = "1" ]; then
+    if is_owned "$c" "$owned"; then
       ours="$ours $c"
     else
       foreign="$foreign $c"
@@ -209,27 +277,53 @@ fi
 # Start Go server in background; capture PID for cleanup.
 go run ./cmd/opencircuit serve &
 GO_PID=$!
-OWNED_PIDS=""   # pids THIS run bound to :$PORT — populated below once confirmed up; the EXIT trap only ever kills pids in this set (#0117)
+GO_FP="$GO_PID:$(proc_start "$GO_PID")"   # pins the fork itself, so a recycled $GO_PID is never mistaken for it (#0117)
+OWNED_PIDS=""   # "pid:start-time" for every pid THIS run forked; the EXIT trap kills nothing outside this set (#0117)
 
 cleanup() {
+  local live=""
   printf '\n'
   step "Shutting down…"
-  kill "$GO_PID" 2>/dev/null || true
-  pkill -P "$GO_PID" 2>/dev/null || true      # the go-run child server (go run leaks it otherwise)
-  release_owned_port "$PORT" "$OWNED_PIDS"    # backstop so :PORT is released — but only pids we started, never a stranger's (#0117)
+  # Gather the lineage evidence BEFORE signalling anything: once $GO_PID is
+  # killed, a leaked grandchild is reparented to launchd and the tree can no
+  # longer be walked. Skip the whole thing if $GO_PID is no longer the process
+  # we forked — `pkill -P` against a recycled pid would kill another program's
+  # children, which is this issue's defect wearing a different hat.
+  if [ "$GO_PID:$(proc_start "$GO_PID")" = "$GO_FP" ]; then
+    live="$(own_fingerprints "$GO_PID")"
+    kill "$GO_PID" 2>/dev/null || true
+    pkill -P "$GO_PID" 2>/dev/null || true    # the go-run child server (go run leaks it otherwise)
+  fi
+  OWNED_PIDS="$(printf '%s\n%s\n' "$OWNED_PIDS" "$live")"
+  release_owned_port "$PORT" "$OWNED_PIDS"    # backstop so :PORT is released — but only pids we forked, never a stranger's (#0117)
   # Vite (npm run dev) is the foreground process; it handles its own SIGINT.
   ok "stopped"
 }
 trap cleanup EXIT INT TERM
 
-# Give the Go server a moment to bind, then validate it's up.
-sleep 1
-if ! kill -0 "$GO_PID" 2>/dev/null; then
-  printf '  ERROR: Go server exited unexpectedly.\n' >&2
-  exit 1
-fi
+# Wait for OUR OWN process to actually bind :$PORT. The old check —
+# `sleep 1` then `kill -0 "$GO_PID"` — only said that `go run` had not exited
+# yet; it said nothing about who held the port. On any build slower than that
+# one second (a recompile, a cold cache) it passed while nothing of ours was
+# bound, and whatever `lsof` then reported got recorded as ours and killed at
+# exit (#0117 second review, repro B). Poll for a LISTENer that is a
+# descendant of $GO_PID instead, and fail loudly if that never happens.
+DEV_READY_TIMEOUT="${DEV_READY_TIMEOUT:-180}"
+ready_waited=0
+until own_holds_port "$PORT" "$GO_PID"; do
+  if ! kill -0 "$GO_PID" 2>/dev/null; then
+    printf '  ERROR: Go server exited unexpectedly.\n' >&2
+    exit 1
+  fi
+  ready_waited=$((ready_waited + 1))
+  if [ "$ready_waited" -ge "$DEV_READY_TIMEOUT" ]; then
+    printf '  ERROR: Go server did not bind 127.0.0.1:%s within %ss — giving up.\n' "$PORT" "$DEV_READY_TIMEOUT" >&2
+    printf '    Either something else holds the port, or the build is slower than the timeout (raise DEV_READY_TIMEOUT).\n' >&2
+    exit 1
+  fi
+  sleep 1
+done
 ok "Go API server started (pid $GO_PID)"
-OWNED_PIDS="$(lsof -ti tcp:"$PORT" 2>/dev/null || true)"
 
 step "Starting Vite dev server on http://localhost:5173"
 info "Vite proxies /api /auth /account /admin → http://localhost:${PORT}"
