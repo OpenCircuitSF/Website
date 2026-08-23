@@ -253,9 +253,26 @@ const SOURCE_FILES = import.meta.glob('../**/*.{ts,svelte}', {
 // "web/src/views/admin/WorkshopEditor.svelte" — matching the form the Go
 // half's own file paths are unambiguous in (absolute), just shorter and
 // pasteable without a machine-specific prefix.
+//
+// #0194: the else branch above assumed every non-"../" key had a "./"
+// prefix and unconditionally sliced off two characters (`globKey.slice(2)`).
+// Vite emits none today — the 83-key measurement in #0187's phase-3 review
+// found exactly two prefix shapes, "../" and "./" — but a bare key (no
+// prefix at all, which import.meta.glob would emit for a file glob-matched
+// in its own directory under some Vite configurations) would have two of
+// its own characters mangled off the front by that slice rather than
+// reported as-is. toRepoRelativePath now checks for "./" explicitly and
+// falls back to treating an unprefixed key as already relative to this
+// file's directory (web/src/lib/), matching what "./" means, instead of
+// slicing blind.
 function toRepoRelativePath(globKey: string): string {
-  const fromSrc = globKey.startsWith('../') ? globKey.slice(3) : `lib/${globKey.slice(2)}`;
-  return `web/src/${fromSrc}`;
+  if (globKey.startsWith('../')) {
+    return `web/src/${globKey.slice(3)}`;
+  }
+  if (globKey.startsWith('./')) {
+    return `web/src/lib/${globKey.slice(2)}`;
+  }
+  return `web/src/lib/${globKey}`;
 }
 
 describe('citation guard (web/src)', () => {
@@ -467,5 +484,375 @@ describe('citation guard catches (synthetic fixtures)', () => {
     expect(scanTsSource('fixture.ts', `export const a = 'PRD${section}6.6';`)).toHaveLength(1);
     expect(scanTsSource('fixture.ts', `export const a = 'PRD  ${section}6.6';`)).toHaveLength(1);
     expect(scanTsSource('fixture.ts', `export const a = 'PRDA${section}6.6';`)).toHaveLength(0);
+  });
+});
+
+// #0194: the shape matrix that three passes each rebuilt from scratch in a
+// throwaway probe and then deleted — #0181's pass-2 review (the original
+// 20-24 case sweep), #0187's implementation, and #0187's phase-3 review
+// (the 34-case version this table reproduces exactly). Committed here so
+// the next pass runs it instead of paying an afternoon to reconstruct it,
+// against the shipped scanSvelteSource, scanTsSource, and citationPattern
+// declared above in this same file — not a re-export, not a replica; this
+// literally calls the functions the guard itself runs. This tracker has
+// hit the replica trap three times already (#0184, #0189, #0195):
+// reproducing scanner logic in a probe instead of calling the shipped code
+// lets the probe and the shipped code drift apart silently. Nothing here
+// is reproduced — every case below is dispatched through runMatrixCase to
+// one of the three shipped exports.
+//
+// Self-reference hazard (the same one #0181's own doc comment names for
+// why the Go guard excludes _test.go): this table's fixtures are
+// citation-SHAPED by construction, since proving a catch requires writing
+// a string that looks exactly like what an admin must never see. That is
+// safe here for two independent reasons. First, this file is
+// citationGuard.test.ts — a .test.ts — and the guard's own SOURCE_FILES
+// glob skips any path ending .test.ts, the same way the Go guard's walk
+// skips *_test.go, so nothing below is ever scanned by the guard it is
+// testing. Second, and checked rather than assumed: the guard was re-run
+// against the real tree with this file in it (see #0194's
+// ## Verification) and stayed green — the fixtures do not leak into the
+// thing they are proving leaks get caught.
+//
+// Counts match #0194's acceptance criteria exactly, and MATRIX_COUNTS
+// below asserts it rather than leaving it to be counted by eye: 4 bounce
+// forms + 12 further Svelte shapes + 5 structural misses + 7 acceptable
+// misses + 6 boundary checks = 34, the same total #0187's phase-3 review
+// ran.
+type MatrixCategory = 'bounce' | 'further-shape' | 'structural-miss' | 'acceptable-miss' | 'boundary';
+
+interface MatrixCase {
+  category: MatrixCategory;
+  name: string;
+  kind: 'svelte' | 'ts' | 'pattern';
+  src: string;
+  expectMatch: boolean;
+  // Required (and enforced below) for every 'acceptable-miss' case: why
+  // this specific miss is deliberate rather than a regression. That is
+  // what lets a future pass tell "the guard still doesn't catch this, as
+  // designed" from "the guard broke."
+  note?: string;
+}
+
+function runMatrixCase(c: MatrixCase): boolean {
+  switch (c.kind) {
+    case 'svelte':
+      return scanSvelteSource('fixture.svelte', c.src).length > 0;
+    case 'ts':
+      return scanTsSource('fixture.ts', c.src).length > 0;
+    case 'pattern':
+      return citationPattern.test(c.src);
+  }
+}
+
+const MATRIX: MatrixCase[] = [
+  // ---- 4 bounce forms: the shapes #0181's original bounce named explicitly ----
+  {
+    category: 'bounce',
+    name: "string literal expression: {'...'}",
+    kind: 'svelte',
+    expectMatch: true,
+    src: `<p>{'see PRD §6.6'}</p>`,
+  },
+  {
+    category: 'bounce',
+    name: 'ternary expression',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `<script lang="ts">let cond = true;</script>\n<p>{cond ? 'see CLAUDE.md §9' : ''}</p>`,
+  },
+  {
+    category: 'bounce',
+    name: 'template literal expression',
+    kind: 'svelte',
+    expectMatch: true,
+    src: '<p>{`see #0138`}</p>',
+  },
+  {
+    category: 'bounce',
+    name: "{@html '...'}",
+    kind: 'svelte',
+    expectMatch: true,
+    src: `{@html 'see PRD §6.6'}`,
+  },
+
+  // ---- 12 further Svelte-expression shapes: every nested ESTree form
+  // collectByType walks for free once it walks by node `type` rather than
+  // by structural position ----
+  {
+    category: 'further-shape',
+    name: 'object literal in a prop',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `<Foo opts={{ hint: 'see PRD §6.6' }} />`,
+  },
+  {
+    category: 'further-shape',
+    name: 'array in a prop',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `<Foo items={['see PRD §6.6']} />`,
+  },
+  {
+    category: 'further-shape',
+    name: 'attribute expression',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `<p title={'see PRD §6.6'}>hi</p>`,
+  },
+  {
+    category: 'further-shape',
+    name: '{#if} block test expression',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `<script lang="ts">let s = 'see PRD §6.6';</script>\n{#if s === 'see PRD §6.6'}<p>match</p>{/if}`,
+  },
+  {
+    category: 'further-shape',
+    name: '{#if}/{:else}',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `<script lang="ts">let cond = false;</script>\n{#if cond}<p>a</p>{:else}<p>{'see PRD §6.6'}</p>{/if}`,
+  },
+  {
+    category: 'further-shape',
+    name: '{#each}',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `{#each ['see PRD §6.6'] as i}<p>{i}</p>{/each}`,
+  },
+  {
+    category: 'further-shape',
+    name: '{@const} inside {#each}',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `{#each [1] as x}{@const m = 'see PRD §6.6'}<p>{m}</p>{/each}`,
+  },
+  {
+    category: 'further-shape',
+    name: 'snippet body text',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `{#snippet hint()}<p>see PRD §6.6</p>{/snippet}{@render hint()}`,
+  },
+  {
+    category: 'further-shape',
+    name: 'snippet body expression',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `{#snippet hint()}<p>{'see PRD §6.6'}</p>{/snippet}{@render hint()}`,
+  },
+  {
+    category: 'further-shape',
+    name: '{@render} argument',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `{#snippet hint(x)}<p>{x}</p>{/snippet}{@render hint('see PRD §6.6')}`,
+  },
+  {
+    category: 'further-shape',
+    name: '{#await}...then',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `{#await Promise.resolve()}<p>pending</p>{:then v}<p>{'see PRD §6.6'}</p>{/await}`,
+  },
+  {
+    category: 'further-shape',
+    name: 'call argument',
+    kind: 'svelte',
+    expectMatch: true,
+    src: `<script lang="ts">function f(s: string) { return s; }</script>\n<p>{f('see PRD §6.6')}</p>`,
+  },
+
+  // ---- 5 structural misses: excluded by the AST shape itself, not by an
+  // allowlist ----
+  {
+    category: 'structural-miss',
+    name: 'JS comment inside an expression tag',
+    kind: 'svelte',
+    expectMatch: false,
+    src: `<p>{/* see PRD §6.6 and #0138 */ 'ok'}</p>`,
+  },
+  {
+    category: 'structural-miss',
+    name: '<style> block',
+    kind: 'svelte',
+    expectMatch: false,
+    src: `<style>/* see PRD §6.6 and #0138 */\n.x { color: #04140a; }</style>\n<p>hi</p>`,
+  },
+  {
+    category: 'structural-miss',
+    name: 'HTML comment in markup',
+    kind: 'svelte',
+    expectMatch: false,
+    src: `<!-- see PRD §6.6, CLAUDE.md §9, #0138, Issues.md, docs/x.md -->\n<p>hi</p>`,
+  },
+  {
+    category: 'structural-miss',
+    name: 'CAN-SPAM §7704 in an expression',
+    kind: 'svelte',
+    expectMatch: false,
+    src: `<p>{'CAN-SPAM §7704 requires a physical mailing address'}</p>`,
+  },
+  {
+    category: 'structural-miss',
+    name: 'EMAIL_REPLY_TO / EMAIL_LIST_DOMAIN env var names in an expression',
+    kind: 'svelte',
+    expectMatch: false,
+    src: `<p>{'Set EMAIL_REPLY_TO and EMAIL_LIST_DOMAIN before sending.'}</p>`,
+  },
+
+  // ---- 7 acceptable misses: each one deliberate, each one earning its
+  // own reason a future pass can check against ----
+  {
+    category: 'acceptable-miss',
+    name: 'split string concatenation (CLAUDE.md)',
+    kind: 'ts',
+    expectMatch: false,
+    src: `export const a = 'see CLAUDE' + '.md §9';`,
+    note: 'the scanner reads each literal node\'s own .text; runtime concatenation joins the two halves only after the program executes, so neither half alone matches CLAUDE\\.md — accepted because deliberately splitting a citation across two literals to dodge the guard is not a plausible authoring accident.',
+  },
+  {
+    category: 'acceptable-miss',
+    name: 'split string concatenation (issue number)',
+    kind: 'ts',
+    expectMatch: false,
+    src: `export const a = 'see #0' + '138';`,
+    note: 'same mechanism as the CLAUDE.md split above: "#0" and "138" are two separate literal nodes, and #0[0-9]{3}\\b never sees them joined.',
+  },
+  {
+    category: 'acceptable-miss',
+    name: 'template literal interpolation splitting PRD from §',
+    kind: 'ts',
+    expectMatch: false,
+    src: 'export const a = `see PRD ${1}§6.6`;',
+    note: 'a template literal with an interpolation is TemplateHead ("see PRD ") + expression + TemplateTail ("§6.6") as separate nodes; the whitespace-class term needs PRD and § in the same literal, so an interpolated value sitting between them breaks the match — accepted for the same reason as the two splits above.',
+  },
+  {
+    category: 'acceptable-miss',
+    name: 'unpadded issue number (#138, not #0138)',
+    kind: 'pattern',
+    expectMatch: false,
+    src: 'see #138 for context',
+    note: 'the pattern is #0[0-9]{3}\\b, matching the repo\'s own zero-padded four-digit convention (#0001-#0999); an unpadded reference is not the convention this tracker uses, so there is nothing to catch.',
+  },
+  {
+    category: 'acceptable-miss',
+    name: 'claude.md lowercase case variant',
+    kind: 'pattern',
+    expectMatch: false,
+    src: 'see claude.md for details',
+    note: 'CLAUDE\\.md is case-sensitive by design; the real file is CLAUDE.md (all caps) and every citation in the tree spells it that way, so a hypothetical lowercase variant is not a shape this project produces.',
+  },
+  {
+    category: 'acceptable-miss',
+    name: 'prose mentioning docs without a path',
+    kind: 'pattern',
+    expectMatch: false,
+    src: 'read the docs or any .md file for more',
+    note: 'docs/\\S*\\.md requires "docs/" immediately adjacent to the filename with no whitespace between; ordinary prose that merely uses the word "docs" has no slash there, so \\S* never bridges the space.',
+  },
+  {
+    category: 'acceptable-miss',
+    name: 'prose mentioning an external docs host',
+    kind: 'pattern',
+    expectMatch: false,
+    src: 'see docs.google.com for the shared doc',
+    note: 'docs\\.google\\.com has a dot, not a slash, after "docs" — the pattern needs "docs/", so a domain name that merely starts with "docs." never matches.',
+  },
+
+  // ---- 6 boundary checks: exact edges of the regex, not the AST walk ----
+  {
+    category: 'boundary',
+    name: 'PRD followed by two spaces then §',
+    kind: 'pattern',
+    expectMatch: true,
+    src: 'PRD  §6.6',
+  },
+  {
+    category: 'boundary',
+    name: 'PRD immediately followed by § (no space)',
+    kind: 'pattern',
+    expectMatch: true,
+    src: 'PRD§6.6',
+  },
+  {
+    category: 'boundary',
+    name: 'hex color that contains #041 as a substring',
+    kind: 'pattern',
+    expectMatch: false,
+    src: '#04140a',
+  },
+  {
+    category: 'boundary',
+    name: 'a genuine issue reference',
+    kind: 'pattern',
+    expectMatch: true,
+    src: 'see #0181 for context',
+  },
+  {
+    category: 'boundary',
+    name: 'an issues/NNNN.md tracker path',
+    kind: 'pattern',
+    expectMatch: true,
+    src: 'see issues/0138.md for the acceptance criteria',
+  },
+  {
+    category: 'boundary',
+    name: 'ordinary prose containing the word "issues"',
+    kind: 'pattern',
+    expectMatch: false,
+    src: 'see the issues tracker for details',
+  },
+];
+
+const MATRIX_COUNTS: Record<MatrixCategory, number> = {
+  bounce: 4,
+  'further-shape': 12,
+  'structural-miss': 5,
+  'acceptable-miss': 7,
+  boundary: 6,
+};
+
+describe('citation guard shape matrix (#0194)', () => {
+  it('has exactly the case counts #0187\'s phase-3 review ran (4/12/5/7/6 = 34)', () => {
+    for (const category of Object.keys(MATRIX_COUNTS) as MatrixCategory[]) {
+      const actual = MATRIX.filter((c) => c.category === category).length;
+      expect(actual, `expected ${MATRIX_COUNTS[category]} '${category}' cases, found ${actual}`).toBe(MATRIX_COUNTS[category]);
+    }
+    expect(MATRIX.length).toBe(34);
+  });
+
+  it('every acceptable-miss case carries a one-line note explaining why the miss is deliberate', () => {
+    for (const c of MATRIX.filter((c) => c.category === 'acceptable-miss')) {
+      expect(c.note, `case "${c.name}" has no note`).toBeTruthy();
+      expect((c.note ?? '').length, `case "${c.name}"'s note is suspiciously short`).toBeGreaterThan(20);
+    }
+  });
+
+  for (const c of MATRIX) {
+    it(`[${c.category}] ${c.name} — ${c.expectMatch ? 'should catch' : 'should miss'}`, () => {
+      expect(runMatrixCase(c)).toBe(c.expectMatch);
+    });
+  }
+});
+
+describe('toRepoRelativePath (#0194)', () => {
+  it('maps a "../" key to a path relative to web/src', () => {
+    expect(toRepoRelativePath('../views/admin/WorkshopEditor.svelte')).toBe('web/src/views/admin/WorkshopEditor.svelte');
+  });
+
+  it('maps a "./" key to web/src/lib', () => {
+    expect(toRepoRelativePath('./branding.ts')).toBe('web/src/lib/branding.ts');
+  });
+
+  it('does not mangle a bare (prefix-less) key', () => {
+    // #0194: the old else branch did `lib/${globKey.slice(2)}`, which
+    // assumed a two-character "./" prefix was always there to strip. Vite
+    // emits no bare key today (the 83/83 measurement in #0187's review
+    // confirms it), but if it ever did, slicing two characters off a key
+    // with no prefix would drop real filename characters rather than
+    // report the path as-is.
+    expect(toRepoRelativePath('branding.ts')).toBe('web/src/lib/branding.ts');
   });
 });

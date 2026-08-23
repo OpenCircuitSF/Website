@@ -159,6 +159,27 @@ type citationViolation struct {
 	value string
 }
 
+// #0194: adding "../../web" to scanGoRoots (#0187, item 1) made this walk
+// descend into web/node_modules and web/dist for the first time. Neither
+// holds a .go file today (the 95/95 measurement in #0187's review confirms
+// it), but both are vendored/build output nobody here authored: an npm
+// dependency that happens to ship Go source, or a build artifact, would be
+// parsed by scanDirForCitations below, and a parse failure there is a
+// t.Fatalf — a routine `npm install` could take this guard down pointing at
+// a file nobody in this project wrote. skipVendoredDirNames names every
+// directory this walk must never descend into, checked by exact directory
+// name (not by path prefix) so it applies uniformly under any of the three
+// roots, not just web/. Proof this is live rather than inert: see this
+// issue's ## Verification — a .go file citing PRD §6.6 was placed under
+// web/node_modules, the guard stayed green (SkipDir took effect before the
+// parser ever saw it), and the same file one level up under web/ made the
+// guard fail, confirming the skip is scoped to the vendored directory and
+// not swallowing web/ itself.
+var skipVendoredDirNames = map[string]bool{
+	"node_modules": true, // npm dependencies — none of this project's code
+	"dist":         true, // Vite build output — generated, not authored
+}
+
 // scanDirForCitations parses every non-test .go file under root — recursing
 // into subdirectories, since internal/ and cmd/ both nest packages — and
 // returns every string literal that matches citationPattern.
@@ -172,6 +193,9 @@ func scanDirForCitations(t *testing.T, root string) []citationViolation {
 		}
 		name := entry.Name()
 		if entry.IsDir() {
+			if skipVendoredDirNames[name] {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
