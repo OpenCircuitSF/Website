@@ -573,6 +573,19 @@ const WHITESPACE_MUST_NOT_MATCH: [string, number][] = [
   ['OBJECT REPLACEMENT CHARACTER', 0xfffc],
 ];
 
+// #0205: the two lists above are the ONLY thing enforcing the canonical
+// 25-accept/10-reject codepoint set — nothing else notices if an entry
+// is quietly deleted from one of them. WHITESPACE_LIST_COUNTS below pins
+// those lengths so that deleting a codepoint to silence a coupling failure
+// (the lazy repair the coupling test's own failure message invites) fails
+// this test by name instead of leaving both suites green. MATRIX_COUNTS
+// below (#0187) is the precedent for pinning a list's length as a named
+// constant this way rather than an inline magic number.
+const WHITESPACE_LIST_COUNTS = {
+  mustMatch: 25,
+  mustNotMatch: 10,
+};
+
 // describe block is #0198's coupling test: it fails if citationPattern's
 // whitespace class ever disagrees with the canonical 25-accept/10-reject
 // codepoint list above, which is asserted verbatim (same codepoints, same
@@ -582,6 +595,17 @@ const WHITESPACE_MUST_NOT_MATCH: [string, number][] = [
 // the same hardcoded ground truth, so a one-sided edit to either whitespace
 // class breaks that file's own test without needing the other suite to run.
 describe('citation guard whitespace class stays coupled with the Go guard (#0198)', () => {
+  it('has not had either canonical list shortened (#0205)', () => {
+    expect(
+      WHITESPACE_MUST_MATCH.length,
+      `WHITESPACE_MUST_MATCH has ${WHITESPACE_MUST_MATCH.length} entries, want ${WHITESPACE_LIST_COUNTS.mustMatch} — the accept list has been shortened; restore the deleted codepoint instead of deleting the next one the coupling test names`,
+    ).toBe(WHITESPACE_LIST_COUNTS.mustMatch);
+    expect(
+      WHITESPACE_MUST_NOT_MATCH.length,
+      `WHITESPACE_MUST_NOT_MATCH has ${WHITESPACE_MUST_NOT_MATCH.length} entries, want ${WHITESPACE_LIST_COUNTS.mustNotMatch} — the reject list has been shortened; restore the deleted codepoint instead of deleting the next one the coupling test names`,
+    ).toBe(WHITESPACE_LIST_COUNTS.mustNotMatch);
+  });
+
   it('matches every codepoint in the canonical accepted-whitespace list', () => {
     const section = String.fromCodePoint(0x00a7); // §
     for (const [name, cp] of WHITESPACE_MUST_MATCH) {

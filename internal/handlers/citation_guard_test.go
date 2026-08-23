@@ -410,7 +410,7 @@ func TestCitationPatternMatchesWebWhitespaceShapes(t *testing.T) {
 // (WHITESPACE_MUST_MATCH/WHITESPACE_MUST_NOT_MATCH and the "citation guard
 // whitespace class stays coupled with the Go guard" describe block), close
 // that gap the way #0198's notes recommend: not by comparing pattern text
-// (the two are legitimately spelled differently — \x{00A0} here,
+// (the two are legitimately spelled differently — \x{00A0} here, \u00A0
 // there — and always will be) and not by generating one pattern from the
 // other (RE2 and V8 read different escape and range syntaxes even for an
 // identical class, and there is no third file in this issue's scope to host
@@ -474,6 +474,35 @@ var whitespaceClassMustNotMatch = []rune{
 	0x2064, // INVISIBLE PLUS
 	0x3164, // HANGUL FILLER
 	0xFFFC, // OBJECT REPLACEMENT CHARACTER
+}
+
+// #0205: the two lists above are the ONLY thing enforcing the canonical
+// 25-accept/10-reject codepoint set — nothing else notices if an entry is
+// quietly deleted from one of them. whitespaceMustMatchCount and
+// whitespaceMustNotMatchCount below pin those lengths so that deleting a
+// codepoint to silence a coupling failure (the lazy repair the coupling
+// test's own failure message invites) fails this test by name instead of
+// leaving both suites green. #0187's MATRIX_COUNTS in this same file pair
+// is the precedent for pinning a list's length as a named constant rather
+// than an inline magic number.
+const (
+	whitespaceMustMatchCount    = 25
+	whitespaceMustNotMatchCount = 10
+)
+
+// TestWhitespaceClassCanonicalListsHaveNotBeenShortened is #0205: it fails
+// if either canonical list above has been shortened (or lengthened) rather
+// than repaired, which is the escape hatch #0198's review proved out — the
+// coupling test below fails naming a codepoint, and the lazy fix is to
+// delete that codepoint from the list rather than repair the pattern that
+// drifted from it.
+func TestWhitespaceClassCanonicalListsHaveNotBeenShortened(t *testing.T) {
+	if len(whitespaceClassMustMatch) != whitespaceMustMatchCount {
+		t.Fatalf("whitespaceClassMustMatch has %d entries, want %d — the accept list has been shortened; restore the deleted codepoint instead of deleting the next one the coupling test names", len(whitespaceClassMustMatch), whitespaceMustMatchCount)
+	}
+	if len(whitespaceClassMustNotMatch) != whitespaceMustNotMatchCount {
+		t.Fatalf("whitespaceClassMustNotMatch has %d entries, want %d — the reject list has been shortened; restore the deleted codepoint instead of deleting the next one the coupling test names", len(whitespaceClassMustNotMatch), whitespaceMustNotMatchCount)
+	}
 }
 
 // TestCitationPatternWhitespaceClassStaysCoupledWithWebGuard is #0198's
@@ -540,23 +569,24 @@ func TestCitationPatternAcceptsDocsURLFalsePositive(t *testing.T) {
 //
 // "on disk" is a second, independent enumeration of the same three
 // scanGoRoots that excludes the two vendored trees by ANCHORED PATH PREFIX
-// (baseDir-joined "../../web/node_modules" and "../../web/dist") rather
-// than reusing skipVendoredDirNames' bare-name check. #0201: the two are
-// not interchangeable, and the distinction is the whole point of this
-// test. skipVendoredDirNames matches a directory by name at ANY depth, so
-// a genuine, non-vendored directory that happens to be named
-// "node_modules" or "dist" anywhere under scanGoRoots is swallowed by the
-// shipped walk today with nothing failing — internal/dist below is exactly
-// such a case. Reusing that same name-based
-// check here would swallow it identically in the ground truth too, and the
-// mismatch this test exists to catch would never surface — a circular,
-// worthless comparison. A path-prefix exclusion has no such blind spot:
-// internal/dist/ does not share a path prefix with web/node_modules or
-// web/dist, so it is never excluded from "on disk" no matter how deep a
-// name-based skip elsewhere hides it, while a real npm dependency shipping
-// a non-test .go file under web/node_modules — the prospective hazard
-// #0200's review reported — is excluded from both sides identically and no
-// longer fails this test.
+// (baseDir-joined "../../web/node_modules" and "../../web/dist") rather than
+// reusing skipVendoredDirNames' bare-name check. #0201: the two are not
+// interchangeable, and the distinction is the whole point of this test.
+// skipVendoredDirNames matches a directory by name at ANY depth, so a
+// genuine, non-vendored directory that happens to be named "node_modules" or
+// "dist" anywhere under scanGoRoots is swallowed by the shipped walk today,
+// and the citation guard above (TestNoAdminFacingStringCitesInternalDocs)
+// stays green over it — this test, #0200's walk-coverage check, is what
+// actually catches the gap; internal/dist below is exactly such a case.
+// Reusing that same name-based check here would swallow it identically in the
+// ground truth too, and the mismatch this test exists to catch would never
+// surface — a circular, worthless comparison. A path-prefix exclusion has no
+// such blind spot: internal/dist/ does not share a path prefix with
+// web/node_modules or web/dist, so it is never excluded from "on disk" no
+// matter how deep a name-based skip elsewhere hides it, while a real npm
+// dependency shipping a non-test .go file under web/node_modules — the
+// prospective hazard #0200's review reported — is excluded from both sides
+// identically and no longer fails this test.
 //
 // Both directions are checked and reported separately, but they are not
 // symmetric hazards. A file present on disk but not collected means the
