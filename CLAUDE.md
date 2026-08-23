@@ -745,10 +745,24 @@ mailing list) is 933 lines — take the subsection, not the parent.
 
 §6.10 includes §6.10.1 (import invite mode).
 
-**Regenerated 2026-08-23** (`#0113`): every row was recomputed by running its
-own `sed` command against the current file. `#0148`'s §6.2 fix (workshops-index
-drift) had widened §6.2 by 30 lines and, with it, its §6 parent, without
-touching this table — proof that a prior "every row recomputed" note does not
-stay true past the next PRD edit. §14 had also drifted by one line, cause
-untraced. No guard in the Go suite reads this table; see `#0113`'s
-implementation notes for whether one was added.
+**Regenerated 2026-08-23** (`#0113`), and now **guarded**:
+`internal/db/prd_section_index_test.go` runs every row's own `sed` command
+against `PRD.md` and fails naming any row that disagrees. It is in
+`scripts/check.sh`'s default Go scope, so an edit that widens a section without
+updating this table fails an ordinary run.
+
+Two things the guard was written because of, both measured by `#0113`'s review:
+
+- **§6.2 drifted across two commits, not one** — `#0131` added 5 lines and
+  `#0148` added 25, table stuck at 296 against an actual 326. Neither pass
+  noticed, which is what a "every row recomputed" note cannot prevent.
+- **§14 never drifted; it was wrong from birth.** `45f659e` wrote `15` into the
+  table in the same commit that made the section 14 lines. §14 is the one row
+  with no following heading, so `sed` runs to EOF and its count is taken raw —
+  the regeneration applied `raw + 1` anyway, against the exception it had just
+  documented.
+
+**The guard checks arithmetic, not `sed` syntax.** Its BRE→RE2 translation
+handles `\{n,m\}` but a *bare* `{n,m}`, `+`, `?`, `(`, `)` are literal in BRE
+and operators in RE2 — a row using one would pass the guard while the real
+command extracts something else. `#0218` is open to lint for that.
