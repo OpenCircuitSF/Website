@@ -115,6 +115,33 @@ export function deleteConfirmMessage(title: string): string {
   return `Delete "${title}"? This permanently removes it and cannot be undone.`;
 }
 
+// ── Announce panel copy (#0143) ─────────────────────────────────────────────
+
+/**
+ * Describes what the Announce shortcut's draft campaign will actually
+ * target, given the workshop's currently *saved* interest ids.
+ *
+ * `POST /admin/workshops/{id}/announce` (#0056) takes no body -- it reads
+ * the persisted row, not this screen's local checkbox buffer -- so callers
+ * must pass the last-loaded/saved `AdminWorkshop.interest_ids`, not
+ * `WorkshopFormFields.interestIds`, or the copy can describe unsaved edits
+ * that Announce will not actually see.
+ *
+ * `internal/mailing` has no "empty audience" mode: with zero interest ids,
+ * `any_of` targeting is refused store-side and
+ * `internal/handlers/admin_workshop_announce.go` falls back to audience mode
+ * `all` -- every confirmed subscriber. #0056's reviewer accepted that
+ * fallback (`all` or refuse, and refusing breaks the one-click contract for
+ * what is usually a data-entry omission); the defect this fixes is that the
+ * panel said "targeted at its interests" even in the fallback case, which is
+ * simply untrue.
+ */
+export function announceTargetingDescription(interestIds: number[]): string {
+  return interestIds.length === 0
+    ? 'This workshop has no interests set, so the draft will target everyone on the list.'
+    : "It will be targeted at this workshop's interests.";
+}
+
 // ── Slug (server-owned -- see this module's header note) ───────────────────
 
 /** Always false today -- see this module's header note on the slug discrepancy. */

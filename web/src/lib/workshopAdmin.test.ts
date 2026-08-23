@@ -9,6 +9,7 @@ import {
   unpublishConfirmMessage,
   cancelConfirmMessage,
   deleteConfirmMessage,
+  announceTargetingDescription,
   isSlugEditable,
   toDatetimeLocalValue,
   fromDatetimeLocalValue,
@@ -88,6 +89,18 @@ describe('status transition offers', () => {
 
   it('cancel copy says the workshop stays visible, not that it disappears', () => {
     expect(cancelConfirmMessage('X')).toMatch(/stays visible/i);
+  });
+});
+
+describe('announceTargetingDescription', () => {
+  it('says the draft targets everyone when the workshop has no interests', () => {
+    expect(announceTargetingDescription([])).toMatch(/target everyone/i);
+  });
+
+  it('says the draft targets this workshop\'s interests when it has some', () => {
+    const description = announceTargetingDescription([7]);
+    expect(description).toMatch(/this workshop's interests/i);
+    expect(description).not.toMatch(/everyone/i);
   });
 });
 
