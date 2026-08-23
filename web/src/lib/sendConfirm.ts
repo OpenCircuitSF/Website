@@ -118,19 +118,31 @@ export type SendGuardState =
  *
  * This revisits, rather than merely preserves, two earlier decisions:
  *
- *   - #0184 originally put `status` before `inFlight`, reasoning that
- *     `unavailable` should win because canSendCampaign (`campaigns.ts`) is
- *     "the render gate" — the strictly stronger statement once `status`
- *     leaves `draft`. That reasoning holds for `editorGuard` (see above,
- *     where `inFlight` is always `false` and the render gate is real), but
- *     not for `CampaignSendDialog`, the only consumer where `inFlight` can
- *     actually be `true`: once mounted, the dialog is NOT re-gated by
- *     canSendCampaign while it stays open, and `unavailable` carries no
- *     defensive UI meaning there — `sendGuardDescription('unavailable')` is
- *     `''`, and neither `sending` nor `blockedAgain` become true. Demoting
- *     an outstanding request to `unavailable` in that consumer re-enabled
- *     the very controls it was supposed to keep dead, which is #0195 itself.
- *     `inFlight`-first is correct for the one consumer that can reach it.
+ *   - #0184 originally put `status` before `inFlight`, on THREE arguments,
+ *     not one: (a) the persisted `status` is a durable, server-authoritative
+ *     fact while `inFlight` is a transient client flag; (b) `unavailable`
+ *     should win because canSendCampaign (`campaigns.ts`) is "the render
+ *     gate" — the strictly stronger statement once `status` leaves `draft`;
+ *     and (c) — the ACTUAL tie-breaker, per that review's own reasoning —
+ *     neither ordering differed in SAFETY (both disabled the send), so the
+ *     tie went to the more authoritative fact. (a) and (b) only won because
+ *     (c) made the choice safety-neutral in the first place. (c) was true
+ *     when written: the dialog didn't call `sendGuardState` at all yet, and
+ *     `kind: 'sending'` had no production producer. #0186 then wired the
+ *     dialog to the guard and #0189 threaded the real `status` prop, which
+ *     made `unavailable` reachable in the one consumer where it disables
+ *     NOTHING — it re-enables the count input, Escape, the backdrop, and
+ *     Cancel (#0195). Once `unavailable` could produce no defensive UI in a
+ *     real consumer, the two orderings stopped being safety-equivalent and
+ *     (c) collapsed — that collapse, not a preference for one true fact
+ *     over another, is what actually licensed revisiting (a) and (b).
+ *     (b) still holds for `editorGuard` (see above, where `inFlight` is
+ *     always `false` and the render gate is real); it does not hold for
+ *     `CampaignSendDialog`, the only consumer where `inFlight` can actually
+ *     be `true`: once mounted, the dialog is NOT re-gated by
+ *     canSendCampaign while it stays open, so "the render gate" argument
+ *     has nothing left to bind to there. `inFlight`-first is correct for
+ *     the one consumer that can reach it.
  *   - #0184 also put `inFlight` before `unmet` (a send already in flight
  *     reads as `sending`, not `blocked`, even with a stale unmet list) and
  *     #0186 re-verified it; that relative order is UNCHANGED here —
