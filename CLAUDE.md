@@ -456,10 +456,12 @@ an opaque error — check it first if a Phase 1 ceremony fails.
 
 - **gofmt rewrites doc comments, and backticks do not protect you.** Since Go
   1.19 the doc-comment pass applies smart quotes, so a doubled `''` collapses
-  into a single curly `”`. `#0210` found this had mangled the Postgres escape
+  into a single curly `”` — and a doubled backtick collapses into `“`. `#0210` found this had mangled the Postgres escape
   examples in `internal/db/prd_index_parity_test.go` — including one **inside a
   backtick span**, which is not exempt. Only a genuine indented preformatted
-  block (`//` + tab) is left alone. Now that `scripts/check.sh` enforces
+  block (`//` + tab) is left alone — and it must be a **tab**: a four-space
+  indent leaves the text intact but gofmt rewrites the indent, so `gofmt -l`
+  flags the file. Ordinary non-doc comments are not touched at all. Now that `scripts/check.sh` enforces
   `gofmt -l`, any new declaration doc comment containing `''` will be rewritten
   the first time anyone formats. Put such examples in an indented block, and
   prove the result is stable by running `gofmt -w` and confirming the hash does
