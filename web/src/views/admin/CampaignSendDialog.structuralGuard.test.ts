@@ -347,42 +347,136 @@ function classifyTestHelper(sourceFile: ts.SourceFile, fnName: string): GateShap
 // ---- #0204 item 2: pinning the premise the `oldSending`/`oldBlockedAgain`
 // before/after block in CampaignSendDialog.guard.test.ts rests on ----
 
+function isInFlightIdentifier(node: SvelteNode | undefined): boolean {
+  return node?.type === 'Identifier' && node.name === 'inFlight';
+}
+
+function isUnmetLengthMember(node: SvelteNode | undefined): boolean {
+  return (
+    node?.type === 'MemberExpression' &&
+    (node.object as SvelteNode | undefined)?.type === 'Identifier' &&
+    ((node.object as SvelteNode).name as string) === 'unmet' &&
+    (node.property as SvelteNode | undefined)?.type === 'Identifier' &&
+    ((node.property as SvelteNode).name as string) === 'length'
+  );
+}
+
+function isBooleanLiteral(node: SvelteNode | undefined, value: boolean): boolean {
+  return node?.type === 'Literal' && node.value === value;
+}
+
+function isNumberLiteral(node: SvelteNode | undefined, value: number): boolean {
+  return node?.type === 'Literal' && node.value === value;
+}
+
 /**
  * True when `expr` is, at its top level (optionally negated by a single
  * `!`), exactly `inFlight` or exactly `unmet.length > 0` — the two formulas
  * `#0186` deleted from the component (`oldSending`/`oldBlockedAgain` in
- * CampaignSendDialog.guard.test.ts). Deliberately narrow: this is not
- * "mentions inFlight anywhere" (the real `$derived(sendGuardState({ ...,
- * inFlight }))` legitimately passes `inFlight` through, and must not trip
- * this), it is "a local's value comes directly from one of these two raw
- * expressions again, bypassing sendGuardState".
+ * CampaignSendDialog.guard.test.ts) — or one of the `#0206` semantic
+ * equivalents of those two formulas: `inFlight === true`, `!!inFlight`,
+ * `unmet.length !== 0`, `unmet.length >= 1`. Deliberately narrow: this is
+ * not "mentions inFlight anywhere" (the real `$derived(sendGuardState({
+ * ..., inFlight }))` legitimately passes `inFlight` through, and must not
+ * trip this), it is "a local's value comes directly from one of these
+ * formulas again, bypassing sendGuardState". Each added form is a rewrite
+ * of a shape already caught, not a widening toward the `sendGuardState(…)`
+ * call this must keep ignoring — see #0206.
  */
 function isDirectInFlightOrUnmetExpr(expr: SvelteNode): boolean {
   const inner =
     expr.type === 'UnaryExpression' && expr.operator === '!' ? (expr.argument as SvelteNode | undefined) : expr;
   if (!inner) return false;
-  if (inner.type === 'Identifier' && inner.name === 'inFlight') return true;
+  if (isInFlightIdentifier(inner)) return true;
   if (inner.type === 'BinaryExpression' && inner.operator === '>') {
     const left = inner.left as SvelteNode | undefined;
     const right = inner.right as SvelteNode | undefined;
-    const isUnmetLength =
-      left?.type === 'MemberExpression' &&
-      (left.object as SvelteNode | undefined)?.type === 'Identifier' &&
-      ((left.object as SvelteNode).name as string) === 'unmet' &&
-      (left.property as SvelteNode | undefined)?.type === 'Identifier' &&
-      ((left.property as SvelteNode).name as string) === 'length';
-    const isZero = right?.type === 'Literal' && right.value === 0;
-    if (isUnmetLength && isZero) return true;
+    if (isUnmetLengthMember(left) && isNumberLiteral(right, 0)) return true;
+  }
+  // #0206 item 1 — semantic equivalents that are not reachable by stripping
+  // a single leading `!` from `expr`, so they are checked directly against
+  // `expr` rather than `inner`.
+  if (expr.type === 'BinaryExpression' && expr.operator === '===') {
+    const left = expr.left as SvelteNode | undefined;
+    const right = expr.right as SvelteNode | undefined;
+    if (
+      (isInFlightIdentifier(left) && isBooleanLiteral(right, true)) ||
+      (isBooleanLiteral(left, true) && isInFlightIdentifier(right))
+    ) {
+      return true; // `inFlight === true`
+    }
+  }
+  if (
+    expr.type === 'UnaryExpression' &&
+    expr.operator === '!' &&
+    (expr.argument as SvelteNode | undefined)?.type === 'UnaryExpression' &&
+    ((expr.argument as SvelteNode).operator as string) === '!' &&
+    isInFlightIdentifier((expr.argument as SvelteNode).argument as SvelteNode | undefined)
+  ) {
+    return true; // `!!inFlight`
+  }
+  if (expr.type === 'BinaryExpression' && (expr.operator === '!==' || expr.operator === '>=')) {
+    const left = expr.left as SvelteNode | undefined;
+    const right = expr.right as SvelteNode | undefined;
+    if (isUnmetLengthMember(left)) {
+      if (expr.operator === '!==' && isNumberLiteral(right, 0)) return true; // `unmet.length !== 0`
+      if (expr.operator === '>=' && isNumberLiteral(right, 1)) return true; // `unmet.length >= 1`
+    }
   }
   return false;
 }
 
 /**
- * Searches every `$derived(...)`-bound local in the component's instance
- * script for one whose top-level expression is `isDirectInFlightOrUnmetExpr`
- * — i.e. a local derived directly from `inFlight` or `unmet.length > 0`
- * rather than routed through `sendGuardState`. Returns the offending
- * declarator, or undefined if none exists.
+ * True when `callee` is the bare `Identifier` `$derived` — the ordinary
+ * rune call, `$derived(expr)`.
+ */
+function isDerivedCallee(callee: SvelteNode | undefined): boolean {
+  return callee?.type === 'Identifier' && callee.name === '$derived';
+}
+
+/**
+ * True when `callee` is the `MemberExpression` `$derived.by` — the other
+ * half of the same Svelte 5 rune (#0206 item 2). A mechanical,
+ * behaviour-preserving rewrite from `$derived(inFlight)` to
+ * `$derived.by(() => inFlight)` must not silently unpin the premise just
+ * because the callee is no longer a bare `Identifier`.
+ */
+function isDerivedByCallee(callee: SvelteNode | undefined): boolean {
+  return (
+    callee?.type === 'MemberExpression' &&
+    (callee.object as SvelteNode | undefined)?.type === 'Identifier' &&
+    ((callee.object as SvelteNode).name as string) === '$derived' &&
+    (callee.property as SvelteNode | undefined)?.type === 'Identifier' &&
+    ((callee.property as SvelteNode).name as string) === 'by'
+  );
+}
+
+/**
+ * Given `$derived.by(fn)`'s callback, returns the expression its value
+ * actually comes from: the concise body of an arrow function
+ * (`() => inFlight`), or a block body's `return` expression
+ * (`() => { return inFlight; }`). Returns undefined for any other shape,
+ * so those fall through to "not matched" rather than throwing.
+ */
+function derivedByBodyExpr(fn: SvelteNode | undefined): SvelteNode | undefined {
+  if (!fn || (fn.type !== 'ArrowFunctionExpression' && fn.type !== 'FunctionExpression')) return undefined;
+  const body = fn.body as SvelteNode | undefined;
+  if (!body) return undefined;
+  if (body.type === 'BlockStatement') {
+    const stmts = (body.body as SvelteNode[] | undefined) ?? [];
+    const returnStmt = stmts.find((s) => s.type === 'ReturnStatement');
+    return returnStmt?.argument as SvelteNode | undefined;
+  }
+  return body; // concise arrow body IS the expression
+}
+
+/**
+ * Searches every `$derived(...)` and `$derived.by(...)`-bound local in the
+ * component's instance script for one whose value expression is
+ * `isDirectInFlightOrUnmetExpr` — i.e. a local derived directly from
+ * `inFlight` or `unmet.length > 0` (or a #0206 semantic equivalent) rather
+ * than routed through `sendGuardState`. Returns the offending declarator,
+ * or undefined if none exists.
  */
 function findDirectInFlightOrUnmetLocal(instanceContent: unknown): SvelteNode | undefined {
   return findFirst(instanceContent, (n) => {
@@ -392,9 +486,16 @@ function findDirectInFlightOrUnmetLocal(instanceContent: unknown): SvelteNode | 
     if (id?.type !== 'Identifier') return false;
     if (init?.type !== 'CallExpression') return false;
     const callee = init.callee as SvelteNode | undefined;
-    if (callee?.type !== 'Identifier' || callee.name !== '$derived') return false;
-    const arg = (init.arguments as SvelteNode[] | undefined)?.[0] as SvelteNode | undefined;
-    return !!arg && isDirectInFlightOrUnmetExpr(arg);
+    const args = init.arguments as SvelteNode[] | undefined;
+    if (isDerivedCallee(callee)) {
+      const arg = args?.[0] as SvelteNode | undefined;
+      return !!arg && isDirectInFlightOrUnmetExpr(arg);
+    }
+    if (isDerivedByCallee(callee)) {
+      const bodyExpr = derivedByBodyExpr(args?.[0] as SvelteNode | undefined);
+      return !!bodyExpr && isDirectInFlightOrUnmetExpr(bodyExpr);
+    }
+    return false;
   });
 }
 
@@ -494,16 +595,20 @@ describe('CampaignSendDialog structural guard (#0197)', () => {
     if (offender) {
       const id = offender.id as SvelteNode;
       const init = offender.init as SvelteNode;
-      const arg = (init.arguments as SvelteNode[])[0] as SvelteNode;
-      const start = arg.start as number;
-      const end = arg.end as number;
-      const exprText = componentSource.slice(start, end);
+      const callee = init.callee as SvelteNode | undefined;
+      const start = init.start as number;
+      const end = init.end as number;
+      // #0206: `init`'s own source text already distinguishes `$derived(…)`
+      // from `$derived.by(…)`, so quote the whole call rather than assuming
+      // the `$derived(expr)` shape when formatting the failure message.
+      const callText = componentSource.slice(start, end);
+      const isBy = isDerivedByCallee(callee);
       throw new Error(
-        `${COMPONENT_PATH}: \`${id.name as string}\` is \`$derived(${exprText})\` — a local derived directly ` +
-          "from `inFlight` or `unmet.length > 0` again, bypassing sendGuardState. " +
+        `${COMPONENT_PATH}: \`${id.name as string}\` is \`${callText}\` — a local derived directly ` +
+          `from \`inFlight\` or \`unmet.length > 0\` (or a #0206 semantic equivalent) again${isBy ? ' via `$derived.by`' : ''}, bypassing sendGuardState. ` +
           "CampaignSendDialog.guard.test.ts's oldSending/oldBlockedAgain before/after block compares against " +
           'these two raw formulas as dead code that nothing in the component matches any more; if a live local ' +
-          'like this exists, that comparison needs to target it instead (see #0186, #0197, #0204)',
+          'like this exists, that comparison needs to target it instead (see #0186, #0197, #0204, #0206)',
       );
     }
   });
