@@ -280,6 +280,11 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, coverImageErrorMessage)
 		return
 	}
+	signupURL := normalizeOptionalCampaignField(req.SignupURL)
+	if signupURL != nil && !isSafeLinkHref(*signupURL) {
+		writeError(w, http.StatusBadRequest, signupURLErrorMessage)
+		return
+	}
 
 	created, err := h.store.Create(r.Context(), workshops.CreateInput{
 		Title:           title,
@@ -291,7 +296,7 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		LocationAddress: normalizeOptionalCampaignField(req.LocationAddress),
 		LocationNote:    normalizeOptionalCampaignField(req.LocationNote),
 		Capacity:        req.Capacity,
-		SignupURL:       normalizeOptionalCampaignField(req.SignupURL),
+		SignupURL:       signupURL,
 		CoverImage:      coverImage,
 		InterestIDs:     req.InterestIDs,
 	})
@@ -454,7 +459,12 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 	signupURL := current.SignupURL
 	if req.SignupURL != nil {
-		signupURL = normalizeOptionalCampaignField(req.SignupURL)
+		normalized := normalizeOptionalCampaignField(req.SignupURL)
+		if normalized != nil && !isSafeLinkHref(*normalized) {
+			writeError(w, http.StatusBadRequest, signupURLErrorMessage)
+			return
+		}
+		signupURL = normalized
 	}
 	coverImage := current.CoverImage
 	if req.CoverImage != nil {
@@ -672,6 +682,136 @@ func isSafeCoverImage(v string) bool {
 	}
 	normalized := strings.ReplaceAll(v, `\`, "/")
 	return !strings.HasPrefix(normalized, "//")
+}
+
+// signupURLErrorMessage is the 400 body for a signup_url that fails
+// isSafeLinkHref, shared by Create and Patch.
+const signupURLErrorMessage = `signup_url must be an http(s) URL, a mailto: link, or a same-site relative path (not a javascript:/data: scheme or a protocol-relative "//host" URL)`
+
+// isSafeLinkHref validates signup_url AT THE API BOUNDARY (#0152, found by
+// #0138's phase-3 review while confirming the cover_image fix): the admin
+// editor's own signup_url field check (web/src/lib/workshopAdmin.ts's
+// isHttpUrl) is a narrower client-only convenience, but the actual safety
+// gate — the one that decides whether a stored signup_url is ever allowed to
+// become a rendered `href` — is #0054's hasExternalSignup
+// (web/src/lib/workshopDetail.ts), which calls markdown.ts's
+// isSafeLinkHref. Nothing on the server enforced that same rule, so a
+// javascript: (or control-character-smuggled) signup_url could be STORED by
+// any caller that skips the SPA, exactly the shape #0138 closed for
+// cover_image. #0152's acceptance criteria are explicit: reuse that rule,
+// don't write a third, subtly different one.
+//
+// This is the Go twin of markdown.ts's isSafeLinkHref, not of
+// isSafeCoverImage: a link is a navigation the reader chooses to follow
+// (unlike a cover image, which the page loads unasked), so an absolute
+// http(s):// URL to ANY host stays allowed — a workshop's signup_url is
+// routinely an external ticketing site (Eventbrite, a Google Form) — as does
+// mailto:. What's rejected: any other scheme (javascript:, data:,
+// vbscript:, ...), a protocol-relative "//host" destination and its
+// backslash spellings ("\\host", "/\host", "\/host" — a browser's URL
+// parser treats a leading backslash the same as a forward slash for a
+// special http/https base), and — per #0138's bounced pass 1 — any
+// character in the C0 control range (0x00-0x1f) or DEL (0x7f) ANYWHERE in
+// the string, because a browser deletes ASCII tab/LF/CR before resolving a
+// URL, so an interior control character can reassemble a dangerous
+// destination that a naive prefix/scheme check would miss (e.g.
+// "java<TAB>script:alert(1)" doesn't look like it has an unsafe scheme
+// until the browser strips the tab back out).
+//
+// Trim decision (#0152, following up on #0138 pass 2's pipeline-divergence
+// note): this function trims internally before testing for emptiness or a
+// scheme, exactly mirroring markdown.ts's isSafeLinkHref — so the value
+// handed in does not need to be pre-trimmed by the caller, and neither
+// Create nor Patch trims it before calling this (the same convention
+// isSafeCoverImage already uses: validate the raw normalizeOptionalCampaignField
+// result, let the rule itself decide what counts as "effectively blank").
+// normalizeOptionalCampaignField's own pre-existing quirk — it tests
+// TrimSpace(*v) == "" but returns the UNTRIMMED pointer — means a
+// leading/trailing-whitespace signup_url can still be stored once it passes
+// this check (e.g. " https://example.com" round-trips with its leading
+// space intact). That is unchanged, pre-existing behavior shared by every
+// optional campaign-style field (summary, location_name, ...), not
+// something new this issue introduces, and generalizing
+// normalizeOptionalCampaignField to trim was explicitly left for #0152 to
+// decide, not required by it — deferred again here as out of scope; the
+// rendering gate (hasExternalSignup) trims before calling isSafeLinkHref, so
+// stray whitespace never affects what's shown.
+func isSafeLinkHref(href string) bool {
+	if strings.ContainsFunc(href, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return false
+	}
+	trimmed := strings.TrimFunc(href, isJSWhitespace)
+	if trimmed == "" {
+		return false
+	}
+	if hasURLScheme(trimmed) {
+		return hasSafeLinkScheme(trimmed)
+	}
+	normalized := strings.ReplaceAll(trimmed, `\`, "/")
+	return !strings.HasPrefix(normalized, "//")
+}
+
+// isJSWhitespace mirrors the EXACT set of codepoints JavaScript's
+// String.prototype.trim() strips (ECMA-262's WhiteSpace and LineTerminator
+// productions) -- deliberately not unicode.IsSpace/strings.TrimSpace, which
+// disagree with it at two points, both confirmed by executing the real Go
+// and TypeScript isSafeLinkHref side by side over a codepoint sweep (#0152
+// verification): unicode.IsSpace treats U+0085 (NEL) as whitespace, which
+// JS's trim() does not, so "trimSpace(NEL+\"javascript:...\")" strips to a
+// bare dangerous scheme and Go would (wrongly) REJECT a value TS accepts;
+// and unicode.IsSpace does NOT treat U+FEFF (BOM/ZWNBSP) as whitespace,
+// which JS's trim() does, so a leading BOM would (wrongly) hide a
+// javascript: scheme from Go's check while TS's trim() strips it and
+// correctly rejects. Either divergence would have made this "twin" not
+// actually agree with the function it's a twin of, which is exactly what
+// #0152's acceptance criteria rule out. Every other codepoint the two
+// trim() implementations touch (tab/LF/VT/FF/CR/space/NBSP and the Unicode
+// Zs separators U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F,
+// U+3000) already agreed and is unaffected by this switch.
+func isJSWhitespace(r rune) bool {
+	switch r {
+	case 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x0020, 0x00A0, 0xFEFF,
+		0x1680,
+		0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A,
+		0x2028, 0x2029, 0x202F, 0x205F, 0x3000:
+		return true
+	default:
+		return false
+	}
+}
+
+// hasURLScheme reports whether s begins with an RFC 3986-shaped scheme
+// (a letter, then any run of letters/digits/"+"/"-"/".", then ":") — the Go
+// twin of markdown.ts's HAS_SCHEME regexp (/^[a-z][a-z0-9+.-]*:/i).
+func hasURLScheme(s string) bool {
+	if s == "" || !isASCIILetter(s[0]) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if c == ':' {
+			return true
+		}
+		if !isASCIILetter(c) && !(c >= '0' && c <= '9') && c != '+' && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return false
+}
+
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// hasSafeLinkScheme reports whether s begins with "http:", "https:", or
+// "mailto:", case-insensitively — the Go twin of markdown.ts's
+// SAFE_LINK_SCHEME regexp (/^(https?|mailto):/i). Only called once
+// hasURLScheme has already confirmed s has a scheme at all.
+func hasSafeLinkScheme(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.HasPrefix(lower, "http:") ||
+		strings.HasPrefix(lower, "https:") ||
+		strings.HasPrefix(lower, "mailto:")
 }
 
 // parseOptionalTime parses an optional RFC 3339 timestamp field. A nil or

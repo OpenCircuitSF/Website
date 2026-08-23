@@ -378,6 +378,179 @@ func TestAdminWorkshops_PatchAcceptsSafeCoverImageAndRoundTrips(t *testing.T) {
 	}
 }
 
+// ── #0152: signup_url validated at the API boundary ─────────────────────────
+
+func TestIsSafeLinkHref(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"https to any host", "https://eventbrite.com/e/soldering-101", true},
+		{"http to any host", "http://example.com/rsvp", true},
+		{"mailto", "mailto:hello@opencircuitsf.com", true},
+		{"root-relative path", "/rsvp", true},
+		{"case-insensitive scheme", "HTTPS://example.com/rsvp", true},
+		{"javascript scheme", "javascript:alert(1)", false},
+		{"data scheme", "data:text/html,evil", false},
+		{"vbscript scheme", "vbscript:msgbox(1)", false},
+		{"protocol-relative", "//evil.host/x", false},
+		{"backslash-backslash (normalizes to protocol-relative)", `\\evil.host/x`, false},
+		{"slash-backslash (normalizes to protocol-relative)", `/\evil.host/x`, false},
+		{"backslash-slash (normalizes to protocol-relative)", `\/evil.host/x`, false},
+		{"empty", "", false},
+		{"whitespace only", "   ", false},
+		// #0138's control-character-scheme-bypass class, reused here verbatim
+		// per #0152's acceptance criterion (same rule as isSafeLinkHref, not
+		// a third variant): a browser deletes ASCII tab/LF/CR before
+		// resolving a URL, so an interior control character can reassemble
+		// a dangerous scheme a naive check would miss.
+		{"tab inside scheme", "java\tscript:alert(1)", false},
+		{"CR inside scheme", "java\rscript:alert(1)", false},
+		{"LF inside scheme", "java\nscript:alert(1)", false},
+		{"tab between slashes", "/\t/evil.host/x", false},
+		{"leading control char", "\x01javascript:alert(1)", false},
+		{"NUL prefix", "\x00javascript:alert(1)", false},
+		{"trailing DEL", "javascript:alert(1)\x7f", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isSafeLinkHref(c.value); got != c.want {
+				t.Errorf("isSafeLinkHref(%q) = %v, want %v", c.value, got, c.want)
+			}
+		})
+	}
+}
+
+func TestAdminWorkshops_CreateRejectsUnsafeSignupURL(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-badsignup@example.com")
+	seedSession(t, pool, admin, "workshops-admin-badsignup-token")
+
+	badValues := []string{
+		"javascript:alert(1)", "data:text/html,evil", "//evil.host/x",
+		// #0138 bounce, finding 1: control character reassembles a
+		// dangerous scheme once the browser strips it back out.
+		"java\tscript:alert(1)",
+	}
+	for _, v := range badValues {
+		title := uniqueAdminWorkshopTitle(t)
+		body := fmt.Sprintf(`{"title":%q,"signup_url":%q}`, title, v)
+		resp := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/admin/workshops", "workshops-admin-badsignup-token", body)
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("POST /admin/workshops with signup_url=%q status = %d, want 400 (body=%s)", v, resp.StatusCode, respBody)
+		}
+	}
+}
+
+func TestAdminWorkshops_CreateAcceptsSafeSignupURLAndRoundTrips(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-goodsignup@example.com")
+	seedSession(t, pool, admin, "workshops-admin-goodsignup-token")
+
+	title := uniqueAdminWorkshopTitle(t)
+	body := fmt.Sprintf(`{"title":%q,"signup_url":"https://eventbrite.com/e/soldering-101"}`, title)
+	resp := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/admin/workshops", "workshops-admin-goodsignup-token", body)
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /admin/workshops with safe signup_url status = %d, want 201 (body=%s)", resp.StatusCode, respBody)
+	}
+	var created struct {
+		ID        int64  `json:"id"`
+		SignupURL string `json:"signup_url"`
+	}
+	if err := json.Unmarshal(respBody, &created); err != nil {
+		t.Fatalf("decode created workshop: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, created.ID)
+	if created.SignupURL != "https://eventbrite.com/e/soldering-101" {
+		t.Errorf("created.SignupURL = %q, want %q", created.SignupURL, "https://eventbrite.com/e/soldering-101")
+	}
+}
+
+func TestAdminWorkshops_PatchRejectsUnsafeSignupURL(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-patchbadsignup@example.com")
+	seedSession(t, pool, admin, "workshops-admin-patchbadsignup-token")
+
+	store := workshops.NewStore(pool)
+	target, err := store.Create(context.Background(), workshops.CreateInput{Title: uniqueAdminWorkshopTitle(t)})
+	if err != nil {
+		t.Fatalf("seed target workshop: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, target.ID)
+
+	resp := doJSON(t, srv.Client(), http.MethodPatch, fmt.Sprintf("%s/admin/workshops/%d", srv.URL, target.ID),
+		"workshops-admin-patchbadsignup-token", `{"signup_url":"javascript:alert(1)"}`)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("PATCH signup_url=javascript:alert(1) status = %d, want 400 (body=%s)", resp.StatusCode, body)
+	}
+
+	// #0138 bounce, finding 1: a control character between the slashes must
+	// be rejected at the API boundary too, not just the bare "//" prefix.
+	resp2 := doJSON(t, srv.Client(), http.MethodPatch, fmt.Sprintf("%s/admin/workshops/%d", srv.URL, target.ID),
+		"workshops-admin-patchbadsignup-token", "{\"signup_url\":\"/\\t/evil.host/x\"}")
+	body2, _ := io.ReadAll(resp2.Body)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Errorf("PATCH signup_url=/<TAB>/evil.host/x status = %d, want 400 (body=%s)", resp2.StatusCode, body2)
+	}
+
+	after, err := store.GetByID(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("reload workshop: %v", err)
+	}
+	if after.SignupURL != nil {
+		t.Errorf("after rejected PATCH, SignupURL = %v, want nil (unchanged)", after.SignupURL)
+	}
+}
+
+func TestAdminWorkshops_PatchAcceptsSafeSignupURLAndRoundTrips(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-patchgoodsignup@example.com")
+	seedSession(t, pool, admin, "workshops-admin-patchgoodsignup-token")
+
+	store := workshops.NewStore(pool)
+	target, err := store.Create(context.Background(), workshops.CreateInput{Title: uniqueAdminWorkshopTitle(t)})
+	if err != nil {
+		t.Fatalf("seed target workshop: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, target.ID)
+
+	resp := doJSON(t, srv.Client(), http.MethodPatch, fmt.Sprintf("%s/admin/workshops/%d", srv.URL, target.ID),
+		"workshops-admin-patchgoodsignup-token", `{"signup_url":"https://eventbrite.com/e/soldering-101"}`)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH with safe signup_url status = %d, want 200 (body=%s)", resp.StatusCode, body)
+	}
+
+	after, err := store.GetByID(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("reload workshop: %v", err)
+	}
+	if after.SignupURL == nil || *after.SignupURL != "https://eventbrite.com/e/soldering-101" {
+		t.Errorf("after.SignupURL = %v, want \"https://eventbrite.com/e/soldering-101\"", after.SignupURL)
+	}
+}
+
 // ── Patch: status transitions and audit action naming ──────────────────────────
 
 func TestAdminWorkshops_PatchPublishUnpublishCancel(t *testing.T) {
