@@ -524,6 +524,18 @@ shasum -a 256 <your-path> /tmp/before-NNNN # prove you restored it
 Or measure the baseline in a throwaway worktree pinned to a commit, where the
 working tree is yours alone.
 
+**The orchestrator can cause this too, and did.** While `#0113`'s subagent was
+editing `CLAUDE.md` §11, the orchestrator edited `CLAUDE.md` §7 and §10 and
+committed with `git commit -- CLAUDE.md`. A pathspec names a *file*, not a
+*hunk*, so it swept the subagent's uncommitted §11 corrections into a commit
+about something else. Nothing was lost and the content was verified correct, but
+the attribution is wrong and it could as easily have been a conflict.
+
+**So: do not edit a file you have dispatched an agent against.** Wait for it, or
+hand your change to that agent. If you must, `git diff -- <file>` first and
+confirm the only changes present are yours — a clean `git status` when you
+started is not evidence, because the agent may write at any moment.
+
 **Running the check is not the same as acting on it.** `#0161`'s implementer
 ran `git status --porcelain` before its `gofmt -w` sweep — and did not branch on
 the output. It formatted `cmd/opencircuit/seo_wiring_test.go` while `#0165` had
