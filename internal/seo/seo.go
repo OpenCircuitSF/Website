@@ -326,7 +326,7 @@ func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 		return RouteMeta{}, false
 	}
 	w, ok, err := r.workshop.WorkshopBySlug(slug)
-	if err != nil || !ok || w.Status == WorkshopDraft {
+	if err != nil || !ok || (w.Status != WorkshopPublished && w.Status != WorkshopCanceled) {
 		return RouteMeta{}, false
 	}
 

@@ -14,8 +14,8 @@
          Facebook, LinkedIn) fetch the raw HTML and never execute the SPA
          bundle, so the values need to already be correct in the markup they
          receive. Every substituted value is HTML-escaped by the injector. If
-         you're seeing a literal "%%OC_TITLE%%" in a browser tab, you're
-         looking at `vite`/`vite preview` output directly (dev mode) rather
+         you're seeing the raw, unsubstituted title placeholder in a browser
+         tab, you're looking at `vite`/`vite preview` output directly (dev mode) rather
          than through the Go server that performs the substitution -- use
          `./scripts/dev.sh --built` to see the real injected values. -->
     <meta name="description" content="%%OC_DESCRIPTION%%" />
@@ -26,8 +26,8 @@
     <meta property="og:type" content="%%OC_OG_TYPE%%" />
     <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
     <!-- schema.org Event structured data for a workshop detail page (#0055,
-         PRD §7.4). %%OC_JSONLD%% is substituted with either a whole
-         `<script type="application/ld+json">...</script>` block (built
+         PRD §7.4). The JSON-LD placeholder token below is substituted with
+         either a whole `<script type="application/ld+json">...</script>` block (built
          server-side by internal/seo/jsonld.go) or an empty string for every
          route that isn't a workshop with enough data for a spec-valid Event
          (name/startDate/location -- see that file's doc comments for exactly

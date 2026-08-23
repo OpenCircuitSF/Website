@@ -3,6 +3,7 @@ package seo
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -481,6 +482,38 @@ func TestRender_AllTokensSubstituted(t *testing.T) {
 			if strings.Contains(body, tok) {
 				t.Errorf("path %q: unsubstituted token %q leaked into rendered body", path, tok)
 			}
+		}
+	}
+}
+
+// TestSourceTemplate_EachTokenAppearsExactlyOnce guards against the #0055
+// review bounce: web/index.html (the real source template Renderer.substitute
+// runs against once built into dist/index.html) once carried an explanatory
+// comment that spelled out a live token literally (e.g. "%%OC_JSONLD%%" in
+// its own doc comment). strings.NewReplacer does not know the difference
+// between a comment and a real substitution site, so that second literal
+// occurrence got replaced too, duplicating an ~860-byte JSON-LD block on
+// every qualifying workshop page in a real `npm run build` artifact -- a
+// defect the placeholder-template-only tests above (TestRender_*) cannot
+// catch, since they never read the real source file. This test reads
+// web/index.html directly from the repo (not the embedded/placeholder dist,
+// per #0141) so it is meaningful in a clean checkout, and fails if any of
+// seo.go's own token constants appears there more than once.
+func TestSourceTemplate_EachTokenAppearsExactlyOnce(t *testing.T) {
+	const templatePath = "../../web/index.html"
+	raw, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", templatePath, err)
+	}
+	body := string(raw)
+
+	tokens := []string{
+		tokenTitle, tokenDescription, tokenOGTitle, tokenOGDescription,
+		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard, tokenJSONLD,
+	}
+	for _, tok := range tokens {
+		if n := strings.Count(body, tok); n != 1 {
+			t.Errorf("%s: token %q appears %d times, want exactly 1 (a duplicate is almost always a literal mention of the token inside an explanatory comment, which strings.NewReplacer substitutes just like the real substitution site)", templatePath, tok, n)
 		}
 	}
 }
