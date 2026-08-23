@@ -92,6 +92,17 @@ export type SendGuardState =
  * truth for whether mail can go out from this screen — CampaignEditor.svelte
  * and CampaignSendDialog.svelte must only ever branch on `.kind`, never
  * recompute any of the conditions below themselves.
+ *
+ * Branch order is significant, not incidental: `status` is checked BEFORE
+ * `inFlight`, so a non-`draft` status short-circuits straight to
+ * `unavailable` even while a send for that campaign is genuinely in
+ * flight — `kind === 'sending'` is reachable only once `status === 'draft'`
+ * has already passed. Threading a real `status` through is therefore a
+ * prerequisite for reusing this guard on a `'failed'` campaign retry, not
+ * sufficient for it: until this ordering (or the `unavailable` branch)
+ * changes, a `'failed'`-status caller sees `sending === false` mid-request,
+ * not `sending === true`, and a caller that only checks `sending` to know
+ * whether a request is outstanding will be misled.
  */
 export function sendGuardState(input: SendGuardInput): SendGuardState {
   if (input.status !== 'draft') {

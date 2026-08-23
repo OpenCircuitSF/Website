@@ -56,9 +56,15 @@
     }),
   );
   // `sending` replaces the old raw `inFlight` boolean everywhere below it
-  // was used to disable controls — identical truth value (status is always
-  // 'draft' here, and sendGuardState checks `inFlight` before `unmet`, so
-  // `kind === 'sending'` iff `inFlight`), but now routed through the guard.
+  // was used to disable controls — identical truth value for every status
+  // this dialog is reachable with today (only 'draft'; canSendCampaign
+  // gates the mount), because sendGuardState checks `inFlight` before
+  // `unmet` once past its `status` check, so `kind === 'sending'` iff
+  // `inFlight`. This routes through the guard rather than hardcoding that
+  // equivalence, which matters for a future non-draft reuse: the `status`
+  // check runs BEFORE the `inFlight` check (sendGuardState's own doc
+  // comment), so a `'failed'` status would short-circuit to `unavailable`
+  // even mid-send.
   let sending = $derived(guard.kind === 'sending');
   // `blockedAgain` replaces the old `unmet.length > 0` -- also routed
   // through the guard now, so it correctly defers to `sending` in the one

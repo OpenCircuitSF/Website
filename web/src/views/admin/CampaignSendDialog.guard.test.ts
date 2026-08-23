@@ -11,9 +11,12 @@
 // agree and — for the two deliberate exceptions — exactly how and why they
 // differ.
 //
-// The dialog always calls sendGuardState with `status: 'draft'` (a
-// documented stand-in — see the component's own comment), so every case
-// below fixes status to 'draft' too; sendGuardState's own tests
+// The dialog now threads the real `status` prop through (#0189) instead of
+// a hardcoded stand-in, but every case below still fixes status to 'draft'
+// — that is the only status this dialog is reachable with today
+// (canSendCampaign gates the mount), and it is the only status for which
+// `oldSending`/`oldBlockedAgain` below were ever accurate, since they
+// predate `status` existing at all. sendGuardState's own tests
 // (sendConfirm.test.ts) already cover the `status !== 'draft'` branch.
 
 import { describe, it, expect } from 'vitest';
@@ -77,10 +80,14 @@ const cases: Case[] = [
     audienceCount: 482,
     confirmRaw: '482',
   },
-  // Proves the separator class by execution rather than by inspection
-  // (#0189): a real U+2009 thin space, as normalizeCountInput's own doc
+  // A real U+2009 thin space (#0189), as normalizeCountInput's own doc
   // comment says it accepts as a thousands separator — not the ASCII space
   // a since-deleted hand-rolled replica of that function used to check for.
+  // Belt-and-braces here, not the discriminating assertion: both sides of
+  // this table call the same shared normalizer, so a thin-space regression
+  // would flip old and new together and this case would stay green. The
+  // positive, discriminating assertion for U+2009 support lives in
+  // sendConfirm.test.ts's `parses` table.
   {
     name: 'idle, correct count typed with a real thin-space thousands separator',
     inFlight: false,
