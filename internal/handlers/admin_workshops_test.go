@@ -50,6 +50,8 @@ func adminWorkshopsMux(pool *pgxpool.Pool, invalidator workshopCacheInvalidator)
 	mux.Handle("PATCH /admin/workshops/{id}", requireAdmin(http.HandlerFunc(h.Patch)))
 	mux.Handle("DELETE /admin/workshops/{id}", requireAdmin(http.HandlerFunc(h.Delete)))
 	mux.Handle("POST /admin/workshops/{id}/announce", requireAdmin(http.HandlerFunc(h.Announce)))
+	// #0136: the server-side body preview. See admin_workshop_preview_test.go.
+	mux.Handle("POST /admin/workshops/{id}/preview", requireAdmin(http.HandlerFunc(h.Preview)))
 	return mux
 }
 
@@ -138,6 +140,8 @@ func TestAdminWorkshops_NonAdminForbidden(t *testing.T) {
 		{http.MethodGet, targetPath, ""},
 		{http.MethodPatch, targetPath, `{"title":"X"}`},
 		{http.MethodDelete, targetPath, ""},
+		// #0136
+		{http.MethodPost, targetPath + "/preview", ""},
 	}
 	for _, c := range cases {
 		resp := doJSON(t, srv.Client(), c.method, srv.URL+c.path, "workshops-user-token", c.body)

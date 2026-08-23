@@ -33,7 +33,6 @@
     COVER_IMAGE_WIDTH,
     COVER_IMAGE_HEIGHT,
   } from '../lib/workshopDetail';
-  import { renderMarkdownPreview } from '../lib/markdown';
   import type { PublicWorkshop } from '../lib/types';
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
@@ -73,7 +72,12 @@
   const showsLocation = $derived(workshop ? hasAnyLocationInfo(workshop) : false);
   const preselect = $derived(workshop ? workshopPreselectSlugs(workshop) : []);
   const showsExternalSignup = $derived(workshop ? hasExternalSignup(workshop) : false);
-  const bodyHTML = $derived(workshop?.body_md ? renderMarkdownPreview(workshop.body_md) : '');
+  // #0136: body_html is rendered server-side (goldmark, the same pipeline
+  // email_campaigns bodies use -- internal/handlers/admin_workshop_preview.go's
+  // renderWorkshopBodyHTML, called by public_workshops.go's toPublicView for
+  // this exact response) rather than through a client-side Markdown
+  // renderer. It is trusted, sanitized HTML by the time it reaches here.
+  const bodyHTML = $derived(workshop?.body_html ?? '');
 
   function goToWorkshops(): void {
     navigate('/workshops');

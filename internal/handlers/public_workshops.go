@@ -84,6 +84,16 @@ type publicWorkshopView struct {
 	Title           string  `json:"title"`
 	Summary         *string `json:"summary,omitempty"`
 	BodyMD          *string `json:"body_md,omitempty"`
+	// BodyHTML is body_md rendered server-side through the exact same
+	// goldmark pipeline email_campaigns bodies use (#0136 --
+	// admin_workshop_preview.go's renderWorkshopBodyHTML, wrapping
+	// internal/mailing.RenderMarkdownHTML). WorkshopDetail.svelte renders
+	// this directly via `{@html}` rather than running body_md through a
+	// client-side renderer of its own -- see admin_workshop_preview.go's
+	// package doc comment for why that single shared function is what makes
+	// "preview matches published" true by construction. Omitted (not an
+	// empty string) when body_md is unset or renders to nothing.
+	BodyHTML        *string `json:"body_html,omitempty"`
 	StartsAt        *string `json:"starts_at,omitempty"`
 	EndsAt          *string `json:"ends_at,omitempty"`
 	LocationName    *string `json:"location_name,omitempty"`
@@ -106,6 +116,7 @@ func (h *PublicWorkshopsHandler) toPublicView(ctx context.Context, w workshops.W
 		Title:           w.Title,
 		Summary:         w.Summary,
 		BodyMD:          w.BodyMD,
+		BodyHTML:        renderWorkshopBodyHTMLPtr(w.BodyMD),
 		StartsAt:        formatTimePtr(w.StartsAt),
 		EndsAt:          formatTimePtr(w.EndsAt),
 		LocationName:    w.LocationName,

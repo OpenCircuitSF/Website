@@ -839,6 +839,11 @@ func adminRoutes(
 			// new parameter here or on mountAndServe -- just this one
 			// registration line inside the existing nil guard above.
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/announce", http.HandlerFunc(adminWorkshopsH.Announce)},
+			// #0136: the server-side body preview, replacing
+			// web/src/lib/markdown.ts's client-side renderer. Lives on
+			// AdminWorkshopsHandler itself, same as Announce above -- no new
+			// parameter here or on mountAndServe.
+			adminRoute{http.MethodPost, "/admin/workshops/{id}/preview", http.HandlerFunc(adminWorkshopsH.Preview)},
 		)
 	}
 	return routes

@@ -1,65 +1,36 @@
-// Minimal, dependency-free Markdown -> HTML renderer for the workshop body
-// preview (#0052 acceptance criterion: "Markdown editing and preview for the
-// body"). NOT goldmark parity: internal/mailing/campaign_render.go and
-// campaign_markdown.go (goldmark + a sanitizing HTML style pass) are the
-// send-time renderer for email_campaigns.body_md, and #0051's workshop admin
-// API has no equivalent /preview route (adding one is a backend change
-// outside this issue's admin-UI-only scope). This module exists purely to
-// give the admin author a fast, client-side approximation while typing: the
-// common subset an event write-up actually needs -- headings, paragraphs,
-// bold/italic, links, and lists.
+// Link-destination safety check shared across the SPA (#0136).
 //
-// Security: the ENTIRE input is HTML-escaped first, and only escaped text is
-// ever passed through the markup regexes below -- a literal "<script>" typed
-// into the body renders as inert text, never as markup, mirroring goldmark's
-// own raw-HTML-omitted default (see internal/mailing/campaign_markdown_test.go's
-// "raw-HTML-omitted marker" test). Link destinations are checked against a
-// scheme allowlist (http/https/mailto, or a relative/root-relative
-// destination with no scheme and no leading "//" -- see isSafeLinkHref's
-// doc comment, #0138) before being emitted, rejecting
-// javascript:/data:/vbscript: and protocol-relative off-site URLs alike.
+// This module used to also export `renderMarkdownPreview`, a
+// dependency-free Markdown->HTML renderer written for #0052's admin
+// workshop-body preview and rendered client-side via `{@html}`. Its first
+// version shipped a live XSS hole (control characters smuggling
+// `javascript:` past this exact scheme allowlist, past 22 passing tests --
+// fixed in b562800), and #0052's own reviewer named the right long-term fix:
+// render server-side through goldmark, the same engine
+// internal/mailing/campaign_markdown.go already uses for email_campaigns
+// bodies, so preview and publish share one renderer instead of a
+// browser-side one trying to independently re-derive what a browser's URL
+// parser will do with untrusted markup.
 //
-// #0052 review (bounced 2026-08-22, finding 1): a browser normalizes a URL
-// before resolving it -- stripping ASCII tab/CR/LF anywhere in the string and
-// stripping leading C0 controls -- so a destination containing one of those
-// characters could sail past a naive scheme check (it doesn't *look* like it
-// has a scheme, so it fell through to the "no scheme = relative, therefore
-// safe" branch) and still resolve to `javascript:` once the browser strips
-// the control character back out. Confirmed executable against the WHATWG
-// URL parser for all of `java<TAB>script:...`, `java<CR>script:...`,
-// `javascript<TAB>:...`, `<U+0001>javascript:...`, and `<NUL>javascript:...`.
-// `isSafeLinkHref` now rejects any destination containing a character below
-// U+0020 (or U+007F/DEL) outright, before the scheme test ever runs, which
-// closes the gap for all five without a per-string denylist. See
-// `markdown.test.ts`'s "control-character scheme bypass" tests for the exact
-// inputs and the corresponding legitimate cases that still pass.
+// #0136 did exactly that: `POST /admin/workshops/{id}/preview`
+// (internal/handlers/admin_workshop_preview.go) and the public
+// `GET /api/workshops/{slug}` route (public_workshops.go) both render
+// body_md through goldmark now, and WorkshopEditor.svelte /
+// WorkshopDetail.svelte consume that server-rendered HTML instead of
+// calling a client renderer. `renderMarkdownPreview` and every block/inline
+// rendering helper it used (escapeHtml, applyEmphasis, renderInline,
+// renderBlocks, the heading/list-item regexes) were deleted along with it.
 //
-// This module's output IS safe to render with `{@html}` under that model:
-// escaping is unconditional and comes first, and link destinations are now
-// validated against their post-normalization form. It is not goldmark parity
-// and never claims to be.
+// What's left is `isSafeLinkHref` alone, which survives because two other
+// call sites depend on it and neither is a Markdown renderer:
 //
-// Also fixed in the same pass: link substitution now happens in a single
-// left-to-right scan that never re-visits already-built `<a href="...">`
-// markup, so the later bold/italic passes run only against the literal text
-// between links, not against the link HTML itself. Previously the emphasis
-// regexes ran on the whole line *after* links were substituted in, so a `_`
-// or `*` inside an ordinary URL (a query string like `?utm_source=x`, or a
-// snake_case path like `/a_b_c`) was rewritten in place, corrupting the
-// `href` attribute (`href="/a<em>b</em>c"`) even though the link itself was
-// perfectly safe.
-//
-// The return value is a plain HTML string. The caller decides how to insert
-// it (WorkshopEditor.svelte renders it into the preview pane with {@html}).
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+//   - workshopDetail.ts's `hasExternalSignup` (#0054) -- gates whether a
+//     workshop's signup_url is safe to render as an `<a href>` on the public
+//     detail page.
+//   - internal/handlers/admin_workshops.go's `isSafeLinkHref` (#0152) -- the
+//     Go twin of this exact function, validating signup_url AT THE API
+//     BOUNDARY. #0157 owns keeping the two in parity; #0138/#0152 own this
+//     function's URL-rule semantics. Neither is touched by #0136.
 
 const SAFE_LINK_SCHEME = /^(https?|mailto):/i;
 const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
@@ -107,106 +78,4 @@ export function isSafeLinkHref(href: string): boolean {
   }
   const normalized = trimmed.replace(/\\/g, '/');
   return !normalized.startsWith('//');
-}
-
-const LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/g;
-
-function applyEmphasis(s: string): string {
-  let out = s;
-  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-  out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-  out = out.replace(/_([^_]+)_/g, '<em>$1</em>');
-  return out;
-}
-
-/** Apply inline markup (links, bold, italic) to a line that has already been HTML-escaped. */
-function renderInline(escaped: string): string {
-  const parts: string[] = [];
-  let lastIndex = 0;
-  LINK_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = LINK_RE.exec(escaped)) !== null) {
-    const [whole, text, href] = match;
-    parts.push(applyEmphasis(escaped.slice(lastIndex, match.index)));
-    parts.push(
-      isSafeLinkHref(href) ? `<a href="${href}" rel="noopener noreferrer">${text}</a>` : text,
-    );
-    lastIndex = match.index + whole.length;
-  }
-  parts.push(applyEmphasis(escaped.slice(lastIndex)));
-  return parts.join('');
-}
-
-const HEADING_RE = /^(#{1,6})\s+(.*)$/;
-const UL_ITEM_RE = /^[-*]\s+/;
-const OL_ITEM_RE = /^\d+\.\s+/;
-
-function renderBlocks(lines: string[]): string {
-  const out: string[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const trimmed = lines[i].trim();
-
-    if (trimmed === '') {
-      i++;
-      continue;
-    }
-
-    const heading = HEADING_RE.exec(trimmed);
-    if (heading) {
-      const level = heading[1].length;
-      out.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
-      i++;
-      continue;
-    }
-
-    if (UL_ITEM_RE.test(trimmed)) {
-      const items: string[] = [];
-      while (i < lines.length && UL_ITEM_RE.test(lines[i].trim())) {
-        items.push(`<li>${renderInline(lines[i].trim().replace(UL_ITEM_RE, ''))}</li>`);
-        i++;
-      }
-      out.push(`<ul>${items.join('')}</ul>`);
-      continue;
-    }
-
-    if (OL_ITEM_RE.test(trimmed)) {
-      const items: string[] = [];
-      while (i < lines.length && OL_ITEM_RE.test(lines[i].trim())) {
-        items.push(`<li>${renderInline(lines[i].trim().replace(OL_ITEM_RE, ''))}</li>`);
-        i++;
-      }
-      out.push(`<ol>${items.join('')}</ol>`);
-      continue;
-    }
-
-    const paraLines: string[] = [];
-    while (
-      i < lines.length &&
-      lines[i].trim() !== '' &&
-      !HEADING_RE.test(lines[i].trim()) &&
-      !UL_ITEM_RE.test(lines[i].trim()) &&
-      !OL_ITEM_RE.test(lines[i].trim())
-    ) {
-      paraLines.push(lines[i].trim());
-      i++;
-    }
-    out.push(`<p>${renderInline(paraLines.join(' '))}</p>`);
-  }
-
-  return out.join('\n');
-}
-
-/**
- * Render `source` (a workshop's body_md, or the create/edit form's live
- * buffer) as an HTML preview fragment. Empty/whitespace-only input renders
- * to the empty string, letting the caller show its own "nothing to preview
- * yet" placeholder rather than an empty `<p></p>`.
- */
-export function renderMarkdownPreview(source: string): string {
-  if (source.trim() === '') return '';
-  const escaped = escapeHtml(source);
-  return renderBlocks(escaped.split('\n'));
 }

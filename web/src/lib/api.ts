@@ -25,6 +25,7 @@ import type {
   PublicWorkshop,
   AdminWorkshop,
   AdminWorkshopsListResponse,
+  WorkshopPreviewResponse,
 } from './types';
 import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
 import type { UnsubscribeResult } from './unsubscribe';
@@ -868,4 +869,17 @@ export function deleteWorkshop(id: number): Promise<{ message: string }> {
  */
 export function announceWorkshop(id: number): Promise<Campaign> {
   return apiPost<Campaign>(`/admin/workshops/${id}/announce`);
+}
+
+/**
+ * POST /admin/workshops/{id}/preview (#0136, admin only) — renders the
+ * workshop's STORED body_md through goldmark, mirroring previewCampaign
+ * above. Accepts no body: the server structurally ignores any override
+ * (there is no decodeJSON call in the handler at all), so the preview
+ * always matches what publishing would render — see
+ * WorkshopEditor.svelte's own comment on why it fetches this after Save
+ * rather than rendering the unsaved buffer client-side.
+ */
+export function previewWorkshop(id: number): Promise<WorkshopPreviewResponse> {
+  return apiPost<WorkshopPreviewResponse>(`/admin/workshops/${id}/preview`);
 }

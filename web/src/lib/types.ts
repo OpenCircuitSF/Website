@@ -334,6 +334,15 @@ export interface PublicWorkshop {
   title: string;
   summary?: string;
   body_md?: string;
+  /**
+   * body_md rendered server-side through goldmark (#0136 --
+   * internal/handlers/admin_workshop_preview.go's renderWorkshopBodyHTML,
+   * the same function POST /admin/workshops/{id}/preview renders through).
+   * WorkshopDetail.svelte renders this directly with `{@html}` -- it never
+   * runs body_md through a client-side Markdown renderer. Absent when
+   * body_md is unset or renders to nothing.
+   */
+  body_html?: string;
   starts_at?: string;
   ends_at?: string;
   location_name?: string;
@@ -393,6 +402,17 @@ export interface AdminWorkshop {
 /** GET /admin/workshops response. Matches admin_workshops.go's workshopsListResponse. */
 export interface AdminWorkshopsListResponse {
   workshops: AdminWorkshop[];
+}
+
+/**
+ * POST /admin/workshops/{id}/preview response (#0136). Matches
+ * internal/handlers/admin_workshop_preview.go's workshopPreviewResponse --
+ * deliberately narrower than CampaignPreviewResponse above: a workshop page
+ * has no subject line and no plain-text alternative to render, only the one
+ * HTML fragment WorkshopEditor.svelte's preview pane shows.
+ */
+export interface WorkshopPreviewResponse {
+  html: string;
 }
 
 /** GET/PATCH /api/preferences body (#0031). email is masked

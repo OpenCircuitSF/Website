@@ -48,8 +48,10 @@
 // §9 rules out. So cover_image now accepts ONLY a site-relative path: a
 // leading "/" and nothing else that could resolve off-site. This is a
 // narrower rule than #0138 applied to Markdown *link* destinations
-// (renderMarkdownPreview / isSafeLinkHref in ./markdown, also touched by
-// #0138): a link is a navigation the reader chooses to follow, so an
+// (isSafeLinkHref in ./markdown, also touched by #0138 -- ./markdown's own
+// Markdown renderer was removed by #0136, which moved body-preview
+// rendering server-side; isSafeLinkHref itself is unaffected): a link is a
+// navigation the reader chooses to follow, so an
 // absolute https:// URL to any host stays allowed there (a workshop's
 // signup_url is routinely an external ticketing site) -- an image is a load
 // the page performs on the reader's behalf without asking, so it gets the

@@ -1,12 +1,21 @@
 <!--
   The workshop create/edit form (#0052, PRD §5.2): every field, Markdown
-  editing with a live preview for the body, interest tagging, the
+  editing with a preview for the body, interest tagging, the
   publish/unpublish/cancel actions, and delete.
 
   Explicit Save, not autosave: unlike CampaignEditor.svelte's ~2s-idle
-  autosave (justified there by a live preview that must always match the
-  STORED row), a workshop has no send-time preview to protect and a plain
+  autosave, a workshop has no send-time preview to protect and a plain
   "Save" button is the simpler, sufficient shape here.
+
+  Body preview is server-rendered, not "live" while typing (#0136): POST
+  /admin/workshops/{id}/preview always renders the STORED row through
+  goldmark (internal/handlers/admin_workshop_preview.go), the same "preview
+  can never show something publish wouldn't produce" contract campaigns'
+  preview already enforces -- see refreshPreview below, called after load()
+  and after every successful save(). This replaced
+  web/src/lib/markdown.ts's dependency-free client renderer, which shipped a
+  live XSS hole in its first version (fixed in b562800, then replaced
+  outright by #0136 rather than hardened a second time).
 
   Interest tagging: checking/unchecking a box only edits the LOCAL
   `interestIds` buffer -- it is written to the server on the next Save, same
@@ -58,6 +67,7 @@
     updateWorkshop,
     deleteWorkshop,
     announceWorkshop,
+    previewWorkshop,
     listInterests,
     ApiError,
   } from '../../lib/api';
@@ -81,7 +91,6 @@
     type WorkshopFormFields,
   } from '../../lib/workshopAdmin';
   import { sortedInterests } from '../../lib/admin';
-  import { renderMarkdownPreview } from '../../lib/markdown';
   import type { AdminWorkshop, Interest } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
@@ -126,10 +135,34 @@
   let saveError = $state<string | null>(null);
   let saveNotice = $state<string | null>(null);
 
-  // ── Body preview ────────────────────────────────────────────────────────
+  // ── Body preview (#0136) ─────────────────────────────────────────────────
+  // Server-rendered, not a client-side re-derivation of the unsaved buffer:
+  // POST .../preview (previewWorkshop) always renders the STORED row, the
+  // same "never preview one thing and publish another" contract
+  // CampaignEditor.svelte's autosave-then-preview flow already established
+  // for campaigns (see admin_workshop_preview.go's package doc comment).
+  // This editor has no autosave (explicit Save, per this file's own header
+  // comment), so the preview simply reflects whatever was last saved --
+  // refreshed after load() and after every successful save().
   let previewOpen = $state(false);
-  let previewHtml = $derived(renderMarkdownPreview(fields.bodyMd));
-  let hasPreviewContent = $derived(fields.bodyMd.trim() !== '');
+  let previewHtml = $state('');
+  let previewLoading = $state(false);
+  let previewError = $state<string | null>(null);
+  let hasPreviewContent = $derived(previewHtml.trim() !== '');
+
+  async function refreshPreview(): Promise<void> {
+    previewLoading = true;
+    previewError = null;
+    try {
+      const resp = await previewWorkshop(workshopId);
+      previewHtml = resp.html;
+    } catch (err) {
+      previewHtml = '';
+      previewError = err instanceof ApiError ? err.message : 'Could not render a preview.';
+    } finally {
+      previewLoading = false;
+    }
+  }
 
   // ── Status transitions ──────────────────────────────────────────────────
   type TransitionKind = 'publish' | 'unpublish' | 'cancel';
@@ -207,6 +240,7 @@
       workshop = w;
       fields = workshopToFormFields(w);
       taxonomyInterests = interestsResp.interests;
+      await refreshPreview();
     } catch (err) {
       loadError = err instanceof ApiError ? err.message : 'Could not load this workshop.';
     } finally {
@@ -238,6 +272,7 @@
       workshop = await updateWorkshop(workshopId, { title, ...rest });
       fields = workshopToFormFields(workshop);
       saveNotice = 'Saved.';
+      await refreshPreview();
     } catch (err) {
       saveError = err instanceof ApiError ? err.message : 'Could not save this workshop.';
     } finally {
@@ -390,10 +425,15 @@
         ></textarea>
         {#if previewOpen}
           <div class="body-preview" aria-label="Body preview">
-            {#if hasPreviewContent}
+            {#if previewLoading}
+              <p class="text-muted" role="status">Rendering preview…</p>
+            {:else if previewError}
+              <p class="text-error" role="alert">{previewError}</p>
+            {:else if hasPreviewContent}
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
               {@html previewHtml}
             {:else}
-              <p class="text-muted">Nothing to preview yet.</p>
+              <p class="text-muted">Nothing to preview yet. Save the body first — the preview shows the last saved version.</p>
             {/if}
           </div>
         {/if}
