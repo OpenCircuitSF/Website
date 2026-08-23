@@ -46,6 +46,40 @@ func TestOptional_DistinguishesAbsentNullAndValue(t *testing.T) {
 	}
 }
 
+// TestOptional_RejectsUnknownFieldInStructType is the #0169 regression test:
+// Optional[T].UnmarshalJSON must inherit decodeJSON's DisallowUnknownFields
+// strictness, not just for the Optional[int] this codebase happens to use
+// today, but for a struct T — the shape a future field is expected to reach
+// for (#0146's own note: "the next nullable non-string column would need
+// it"). Optional[int] alone can never exercise this: an int has no fields to
+// be unknown, so the defect #0169 found is invisible until a struct is
+// actually plugged in here.
+func TestOptional_RejectsUnknownFieldInStructType(t *testing.T) {
+	type inner struct {
+		Name string `json:"name"`
+	}
+	type req struct {
+		Detail Optional[inner] `json:"detail"`
+	}
+
+	// Known field only: decodes cleanly.
+	var ok req
+	if err := json.Unmarshal([]byte(`{"detail": {"name": "x"}}`), &ok); err != nil {
+		t.Fatalf("Unmarshal(known field): %v", err)
+	}
+	if !ok.Detail.Present || !ok.Detail.Valid || ok.Detail.Value.Name != "x" {
+		t.Fatalf("Detail = %+v, want Present/Valid with Name=x", ok.Detail)
+	}
+
+	// Unknown field inside the wrapped struct: must be rejected, matching
+	// decodeJSON's behavior for every top-level request body (#0137).
+	var bad req
+	err := json.Unmarshal([]byte(`{"detail": {"name": "x", "extra": "surprise"}}`), &bad)
+	if err == nil {
+		t.Fatalf("Unmarshal(unknown inner field) succeeded, want rejection; decoded Detail = %+v", bad.Detail)
+	}
+}
+
 // TestOptional_PointerFieldDoesNotWork documents, by test, the pitfall named
 // in optional.go's doc comment: wrapping Optional[T] in an extra pointer
 // (`*Optional[T]` as the struct field's type, rather than `Optional[T]`)
