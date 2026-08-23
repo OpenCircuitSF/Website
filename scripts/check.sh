@@ -37,6 +37,21 @@ FAILED=0
 step() { printf '\n\033[1m=== %s\033[0m\n' "$*"; }
 run()  { "$@"; local rc=$?; [ $rc -eq 0 ] || { FAILED=1; printf '\033[31mFAILED (%d): %s\033[0m\n' "$rc" "$*"; }; return 0; }
 
+# Regression guard for #0140: every `bash -c "..."` call site in this script
+# must run with `-o pipefail`. Without it, a pipeline like
+# `go test ... | tail -40` reports tail's exit status (always 0) instead of
+# go test's, so a failing build/vet/test/npm run prints its failure output
+# and this script still says VERIFICATION PASSED. This scans the script's own
+# source every time it runs, so the check cannot be silently skipped by a
+# future edit the way a separate, easily-forgotten test file could be.
+step "self-check: pipefail regression guard (#0140)"
+BAD_SITES="$(grep -n 'run bash -c' "$REPO/scripts/check.sh" | grep -v 'pipefail' || true)"
+if [ -n "$BAD_SITES" ]; then
+  printf '\033[31mPIPEFAIL REGRESSION (#0140): scripts/check.sh has a "run bash -c" call site missing "-o pipefail". That silently discards the piped command'"'"'s exit status (it becomes tail'"'"'s, which is always 0), so a failing build/vet/test/npm run would print FAILED output and still report VERIFICATION PASSED. See issues/0140.md. Offending line(s):\033[0m\n' >&2
+  echo "$BAD_SITES" >&2
+  exit 2
+fi
+
 for a in "$@"; do
   case "$a" in
     -count=1|-count) ;;
