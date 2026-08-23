@@ -165,9 +165,10 @@ func TestNoWiringTestUsesParallel(t *testing.T) {
 		"registerWiringTest(t) (admin_wiring_test.go) catches this at runtime for " +
 		"tests that call it, but a test that calls truncateAdminWiringTables under " +
 		"t.Parallel() WITHOUT calling registerWiringTest(t) is not protected -- " +
-		"reproduced empirically in #0209 (spurious 401s in 2 of 3 runs, ERROR: " +
-		"deadlock detected (SQLSTATE 40P01) in the third). Remove t.Parallel() " +
-		"from:\n")
+		"reproduced empirically by #0165's phase-3 review (spurious 401s in 2 of 3 " +
+		"runs, ERROR: deadlock detected (SQLSTATE 40P01) in the third). If the " +
+		"receiver below is not *testing.T (or *testing.B), this guard has " +
+		"over-fired -- see this file's Match rule. Remove t.Parallel() from:\n")
 	for _, v := range violations {
 		b.WriteString("  " + v.pos.String() + ": " + v.text + "\n")
 	}
