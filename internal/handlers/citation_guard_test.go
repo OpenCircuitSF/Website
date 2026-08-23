@@ -545,9 +545,9 @@ func TestCitationPatternAcceptsDocsURLFalsePositive(t *testing.T) {
 // not interchangeable, and the distinction is the whole point of this
 // test. skipVendoredDirNames matches a directory by name at ANY depth, so
 // a genuine, non-vendored directory that happens to be named
-// "node_modules" or "dist" anywhere under scanGoRoots (see that map's own
-// doc comment on internal/dist as the live example) is swallowed by the
-// shipped walk today with nothing failing. Reusing that same name-based
+// "node_modules" or "dist" anywhere under scanGoRoots is swallowed by the
+// shipped walk today with nothing failing — internal/dist below is exactly
+// such a case. Reusing that same name-based
 // check here would swallow it identically in the ground truth too, and the
 // mismatch this test exists to catch would never surface — a circular,
 // worthless comparison. A path-prefix exclusion has no such blind spot:
@@ -565,10 +565,11 @@ func TestCitationPatternAcceptsDocsURLFalsePositive(t *testing.T) {
 // catch. A file collected but not on disk is, by construction, unreachable
 // for any static filesystem state: "collected" is exactly the shipped
 // walk's output minus skipVendoredDirNames' SkipDir, and "on disk" is a
-// superset of that same walk (it additionally counts name-matched
-// directories that lie outside the two anchored prefixes — internal/dist,
-// internal/node_modules, and web/src/node_modules — since the anchoring
-// does not exclude them), so collected is always a subset of onDisk.
+// superset of that same walk (it additionally counts the non-test .go
+// files within name-matched directories that lie outside the two anchored
+// prefixes — e.g. internal/dist, internal/node_modules, and
+// web/src/node_modules — since the anchoring does not exclude them), so
+// collected is always a subset of onDisk.
 // #0200's review tried every candidate cause by direct probe — a
 // *.go symlink lands in both walks identically since WalkDir lstats; a
 // symlinked directory is followed by neither walk; a dangling symlink or a
