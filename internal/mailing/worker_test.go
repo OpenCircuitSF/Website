@@ -1162,9 +1162,8 @@ func TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors(t *testing.T) 
 			// NOT an OperationError, so it falls through to the catch-all
 			// and logs loudly instead — the change #0188 made and #0185's
 			// review judged correct (loud beats silent). Reverting
-			// errors.As back to strings.HasPrefix must turn this red: this
-			// row and TestWorker_TransportDiscriminatorMutationGuard below
-			// are the only things in the tree that would catch it (#0190).
+			// errors.As back to strings.HasPrefix must turn this red — this
+			// row is what catches it.
 			name: "SDK transport failure, prefix present but wraps *net.OpError directly (no *smithy.OperationError at all): unreachable through SESMailer today, but reaches the catch-all and logs rather than being silently misclassified unreachable",
 			err: fmt.Errorf("mailing: sending via SES: %w", &net.OpError{
 				Op:  "dial",
@@ -1173,6 +1172,33 @@ func TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors(t *testing.T) 
 			}),
 			want:    adminSendBuildFailureMessage,
 			wantLog: true,
+		},
+		{
+			// #0192's row — #0188's headline "improved" case, left unasserted
+			// until now. A bare, UNPREFIXED *smithy.OperationError: no
+			// sesWrapPrefix at all, so this is what a non-SESMailer Mailer's
+			// transport failure actually looks like reaching
+			// adminSendErrorMessage. Under the OLD prefix-based discriminator
+			// this fell through to the catch-all (no prefix, so it could not
+			// satisfy strings.HasPrefix either); under the type-based
+			// discriminator (errors.As(err, &opErr)) it IS a
+			// *smithy.OperationError, so it now classifies to
+			// adminSendUnreachableMessage — the case the discriminator change
+			// was actually made for. Critically, this row is what a
+			// well-meaning "belt and braces" PARTIAL revert
+			// (errors.As(…) && strings.HasPrefix(…)) still gets wrong: this
+			// error carries no prefix, so the added HasPrefix conjunct fails
+			// and the row falls back to the OLD (pre-#0188) classification —
+			// without this row, that partial mutation leaves the entire
+			// package green.
+			name: "bare, unprefixed *smithy.OperationError: no sesWrapPrefix at all — the case the type-based discriminator was made for",
+			err: &smithy.OperationError{
+				ServiceID:     "SES v2",
+				OperationName: "SendEmail",
+				Err:           errors.New("failed to refresh cached credentials, no EC2 IMDS role found"),
+			},
+			want:    adminSendUnreachableMessage,
+			wantLog: false,
 		},
 	}
 	for _, tc := range cases {
