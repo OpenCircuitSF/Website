@@ -787,6 +787,13 @@ func adminRoutes(
 			adminRoute{http.MethodGet, "/admin/subscribers/{id}", http.HandlerFunc(adminSubscribersH.Get)},
 			adminRoute{http.MethodPost, "/admin/subscribers/{id}/suppress", http.HandlerFunc(adminSubscribersH.Suppress)},
 			adminRoute{http.MethodPost, "/admin/subscribers/{id}/clear-complaint", http.HandlerFunc(adminSubscribersH.ClearComplaint)},
+			// #0059: streamed CSV export. Registered ahead of
+			// /admin/subscribers/{id} in file order only for readability —
+			// Go 1.22+'s pattern router already prefers the more specific
+			// literal segment ("export") over the wildcard ({id}) regardless
+			// of registration order, so there is no risk of this being
+			// shadowed by the id route or of "export" being parsed as an id.
+			adminRoute{http.MethodGet, "/admin/subscribers/export", http.HandlerFunc(adminSubscribersH.Export)},
 		)
 	}
 	if adminSuppressionsH != nil {

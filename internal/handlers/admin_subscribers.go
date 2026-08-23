@@ -67,6 +67,11 @@ type adminSubscriberStore interface {
 	InterestIDs(ctx context.Context, subscriberID int64) ([]int64, error)
 	Unsubscribe(ctx context.Context, id int64, source string, now time.Time) (subscribers.Subscriber, error)
 	AdminClearComplaint(ctx context.Context, id int64, now time.Time) (subscribers.Subscriber, error)
+	// StreamExport backs GET /admin/subscribers/export (#0059) — see
+	// admin_subscribers_export.go and internal/subscribers/export.go's
+	// package doc comment for why this is a separate streaming query rather
+	// than a reuse of List.
+	StreamExport(ctx context.Context, filter subscribers.ListFilter, fn func(subscribers.ExportRow) error) error
 }
 
 // adminInterestByIDReader is the behavior AdminSubscribersHandler needs from
@@ -109,6 +114,7 @@ type softBounceCounter interface {
 //	POST /admin/subscribers/{id}/suppress            — manual suppress (required note); see the package doc comment on what this does
 //	POST /admin/subscribers/{id}/clear-complaint     — the sole sanctioned exit from `complained` (subscribers.Store.AdminClearComplaint)
 //	POST /admin/subscribers                          — manual add; still requires double opt-in confirmation
+//	GET  /admin/subscribers/export                   — streaming CSV export, audited (#0059; admin_subscribers_export.go)
 //
 // All routes MUST be mounted behind middleware.RequireSession then
 // middleware.RequireAdmin, exactly like the other admin handlers in this

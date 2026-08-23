@@ -87,6 +87,7 @@ func adminSubscribersMux(pool *pgxpool.Pool, manualAdd *SubscribeHandler) http.H
 	mux.Handle("GET /admin/subscribers/{id}", requireAdmin(http.HandlerFunc(h.Get)))
 	mux.Handle("POST /admin/subscribers/{id}/suppress", requireAdmin(http.HandlerFunc(h.Suppress)))
 	mux.Handle("POST /admin/subscribers/{id}/clear-complaint", requireAdmin(http.HandlerFunc(h.ClearComplaint)))
+	mux.Handle("GET /admin/subscribers/export", requireAdmin(http.HandlerFunc(h.Export)))
 	return mux
 }
 
@@ -143,6 +144,7 @@ func TestAdminSubscribers_NonAdminForbidden(t *testing.T) {
 		{"GET", fmt.Sprintf("/admin/subscribers/%d", target)},
 		{"POST", fmt.Sprintf("/admin/subscribers/%d/suppress", target)},
 		{"POST", fmt.Sprintf("/admin/subscribers/%d/clear-complaint", target)},
+		{"GET", "/admin/subscribers/export"},
 	}
 	client := srv.Client()
 	for _, c := range cases {

@@ -163,6 +163,22 @@ const (
 	// brand-new address lands `pending` with a confirmation email queued,
 	// exactly as if the person had submitted the public form themselves.
 	ActionSubscriberManualAdd = "subscriber.manual_add"
+	// ActionSubscriberExported is written by GET /admin/subscribers/export
+	// (#0059) after the CSV stream finishes writing to the response — success
+	// or a mid-stream failure both get a row (metadata.error is present only
+	// for the latter), since the fields already streamed to the client by
+	// the time a failure occurs cannot be un-sent. TargetID is nil — the
+	// action's target is the whole matching set, not one subscriber. Actor is
+	// always the exporting admin. This is the highest-value single action an
+	// admin account can take against this table (the whole list can leave the
+	// system in one request, PRD §8's notes on #0059) and is exactly what an
+	// attacker holding a stolen session would do, so it is audited even
+	// though it is a read, not a mutation — see this file's other actions,
+	// which are otherwise all mutations. Metadata records `row_count`,
+	// `filter_status`, `filter_interest_id`, `filter_query` (all empty/zero
+	// when unfiltered, mirroring the export's own "respects the current
+	// status and interest filters" criterion).
+	ActionSubscriberExported = "subscriber.exported"
 
 	// Interest taxonomy lifecycle (PRD §6.1, §5.2 — the admin CRUD, #0024).
 	// ActionInterestUpdated covers any field change other than the active
