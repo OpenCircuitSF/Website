@@ -15,6 +15,7 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
@@ -37,7 +38,7 @@ func (c *countingWorkshopInvalidator) InvalidateWorkshops() { c.calls++ }
 func adminWorkshopsMux(pool *pgxpool.Pool, invalidator workshopCacheInvalidator) http.Handler {
 	authStore := auth.NewStore(pool)
 	store := workshops.NewStore(pool)
-	h := NewAdminWorkshopsHandler(store, invalidator, audit.New(pool))
+	h := NewAdminWorkshopsHandler(store, invalidator, mailing.NewCampaignStore(pool), audit.New(pool))
 	requireSession := middleware.RequireSession(authStore)
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
@@ -48,6 +49,7 @@ func adminWorkshopsMux(pool *pgxpool.Pool, invalidator workshopCacheInvalidator)
 	mux.Handle("GET /admin/workshops/{id}", requireAdmin(http.HandlerFunc(h.Get)))
 	mux.Handle("PATCH /admin/workshops/{id}", requireAdmin(http.HandlerFunc(h.Patch)))
 	mux.Handle("DELETE /admin/workshops/{id}", requireAdmin(http.HandlerFunc(h.Delete)))
+	mux.Handle("POST /admin/workshops/{id}/announce", requireAdmin(http.HandlerFunc(h.Announce)))
 	return mux
 }
 

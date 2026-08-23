@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
@@ -58,6 +59,16 @@ type workshopCacheInvalidator interface {
 	InvalidateWorkshops()
 }
 
+// announceCampaignStore is the narrow write Announce (admin_workshop_announce.go,
+// #0056) needs from internal/mailing.CampaignStore: the same Create call
+// AdminCampaignsHandler.Create makes for a hand-composed campaign, so the
+// row Announce produces is indistinguishable from one composed by hand
+// except for the WorkshopID link and its pre-filled content.
+// *mailing.CampaignStore satisfies it.
+type announceCampaignStore interface {
+	Create(ctx context.Context, in mailing.CampaignInput) (mailing.Campaign, error)
+}
+
 // AdminWorkshopsHandler serves the admin-only workshop CRUD routes (PRD
 // §5.2/§6.2/§8; #0051):
 //
@@ -73,7 +84,12 @@ type workshopCacheInvalidator interface {
 type AdminWorkshopsHandler struct {
 	store       workshopStore
 	invalidator workshopCacheInvalidator // nil disables cache invalidation (test-only — see doc comment above)
-	auditor     *audit.Logger
+	// campaigns backs Announce (admin_workshop_announce.go, #0056) — nil
+	// disables that one route's write (test-only; every production call
+	// site passes a real *mailing.CampaignStore, see NewAdminWorkshopsHandler's
+	// doc comment).
+	campaigns announceCampaignStore
+	auditor   *audit.Logger
 }
 
 // NewAdminWorkshopsHandler constructs an AdminWorkshopsHandler. A nil
@@ -88,8 +104,17 @@ type AdminWorkshopsHandler struct {
 // review judged that safe-by-construction (the nil was never dereferenced,
 // and the caches it would have invalidated held no workshop-derived bytes
 // either way, since seo.NewSite's WorkshopSource was also nil at the time).
-func NewAdminWorkshopsHandler(store workshopStore, invalidator workshopCacheInvalidator, auditor *audit.Logger) *AdminWorkshopsHandler {
-	return &AdminWorkshopsHandler{store: store, invalidator: invalidator, auditor: auditor}
+//
+// campaigns (#0056) is the write side of the announce-to-list shortcut —
+// *mailing.CampaignStore in production, the SAME instance
+// adminCampaignsH is built from (cmd/opencircuit/main.go), so a draft
+// created via Announce is created through the identical Create call path
+// as one composed by hand in the campaign UI. A nil campaigns disables
+// only POST /admin/workshops/{id}/announce (test-only — every production
+// call site passes a real store); every other route on this handler is
+// unaffected.
+func NewAdminWorkshopsHandler(store workshopStore, invalidator workshopCacheInvalidator, campaigns announceCampaignStore, auditor *audit.Logger) *AdminWorkshopsHandler {
+	return &AdminWorkshopsHandler{store: store, invalidator: invalidator, campaigns: campaigns, auditor: auditor}
 }
 
 func (h *AdminWorkshopsHandler) invalidate() {

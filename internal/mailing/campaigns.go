@@ -150,6 +150,14 @@ type Campaign struct {
 }
 
 // CampaignInput is the payload for Create.
+//
+// WorkshopID is optional provenance (nil for an ordinary hand-composed
+// campaign): #0056's announce-to-list shortcut is the first and, as of this
+// writing, only caller that sets it, linking the created campaign back to
+// the workshop it was pre-filled from via email_campaigns.workshop_id
+// (migrations 000017/000020). That FK carries no ON DELETE clause by design
+// — workshops.Store.Delete refuses (ErrHasCampaigns) rather than orphan or
+// cascade this link, see that package's doc comment.
 type CampaignInput struct {
 	Name         string
 	Subject      string
@@ -157,6 +165,7 @@ type CampaignInput struct {
 	BodyMD       string
 	AudienceMode string
 	InterestIDs  []int64
+	WorkshopID   *int64
 	CreatedBy    *int64
 }
 
@@ -388,10 +397,10 @@ func (s *CampaignStore) Create(ctx context.Context, in CampaignInput) (Campaign,
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	row := tx.QueryRow(ctx,
-		`INSERT INTO email_campaigns (name, subject, preheader, body_md, audience_mode, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO email_campaigns (name, subject, preheader, body_md, audience_mode, workshop_id, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING `+campaignColumns,
-		in.Name, in.Subject, in.Preheader, in.BodyMD, in.AudienceMode, in.CreatedBy,
+		in.Name, in.Subject, in.Preheader, in.BodyMD, in.AudienceMode, in.WorkshopID, in.CreatedBy,
 	)
 	c, err := scanCampaign(row)
 	if err != nil {

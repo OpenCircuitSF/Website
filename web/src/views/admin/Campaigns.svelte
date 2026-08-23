@@ -27,9 +27,25 @@
     // that campaign's history (rather than the old unfiltered "just switch
     // tabs" workaround) — see Admin.svelte's goToCampaignAudit.
     onGoToAudit: (campaignId: number) => void;
+    // #0056: when Admin.svelte sets this (right after the workshops
+    // screen's announce shortcut creates a draft), the effect below jumps
+    // straight into that campaign's editor instead of the list — "the
+    // workshop screen links to the created draft" per that issue's
+    // acceptance criteria. onOpenedCampaign lets Admin.svelte clear the
+    // value once consumed, so navigating back to this tab later doesn't
+    // re-open a stale draft.
+    openCampaignId?: number | null;
+    onOpenedCampaign?: () => void;
   }
 
-  let { onGoToSettings, onGoToAudit }: Props = $props();
+  let { onGoToSettings, onGoToAudit, openCampaignId = null, onOpenedCampaign }: Props = $props();
+
+  $effect(() => {
+    if (openCampaignId !== null) {
+      openCampaign(openCampaignId);
+      onOpenedCampaign?.();
+    }
+  });
 
   let campaigns = $state<Campaign[]>([]);
   let loading = $state(true);

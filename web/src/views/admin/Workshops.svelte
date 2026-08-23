@@ -42,6 +42,15 @@
   import Panel from '../../lib/Panel.svelte';
   import WorkshopEditor from './WorkshopEditor.svelte';
 
+  interface Props {
+    // #0056: forwarded to WorkshopEditor's own onAnnounced -- see that
+    // component's Props doc comment. Admin.svelte uses this to switch to
+    // the Campaigns tab with the newly-created draft already open.
+    onAnnounced: (campaignId: number) => void;
+  }
+
+  let { onAnnounced }: Props = $props();
+
   let workshops = $state<AdminWorkshop[]>([]);
   let loading = $state(true);
   let loadError = $state<string | null>(null);
@@ -151,7 +160,7 @@
 
 {#if mode === 'editor'}
   {#key activeId}
-    <WorkshopEditor workshopId={activeId} onBack={backToList} />
+    <WorkshopEditor workshopId={activeId} onBack={backToList} {onAnnounced} />
   {/key}
 {:else}
   <Panel title="Workshops" noPadding={listPanelNoPadding}>

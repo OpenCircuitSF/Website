@@ -57,6 +57,7 @@
     getAdminWorkshop,
     updateWorkshop,
     deleteWorkshop,
+    announceWorkshop,
     listInterests,
     ApiError,
   } from '../../lib/api';
@@ -86,9 +87,15 @@
   interface Props {
     workshopId: number;
     onBack: () => void;
+    // #0056: called with the newly-created draft campaign's id once
+    // Announce succeeds, so the caller (Workshops.svelte -> Admin.svelte)
+    // can switch to the Campaigns tab with that draft already open --
+    // "the workshop screen links to the created draft" per this issue's
+    // acceptance criteria.
+    onAnnounced: (campaignId: number) => void;
   }
 
-  let { workshopId, onBack }: Props = $props();
+  let { workshopId, onBack, onAnnounced }: Props = $props();
 
   // ── Load state ──────────────────────────────────────────────────────────
   let workshop = $state<AdminWorkshop | null>(null);
@@ -133,6 +140,16 @@
   let deleting = $state(false);
   let deleteError = $state<string | null>(null);
   let deleteConflict = $state(false);
+
+  // ── Announce-to-list shortcut (#0056) ─────────────────────────────────────
+  // Repeated clicks are allowed to create additional drafts (the API's own
+  // contract -- issues/0056.md's Notes: overwriting a partly-edited draft
+  // would lose work), so this state only tracks the MOST RECENTLY created
+  // draft's id for the "open it" link below, never a "already announced"
+  // guard.
+  let announcing = $state(false);
+  let announceError = $state<string | null>(null);
+  let announcedCampaignId = $state<number | null>(null);
 
   // ── Modal focus (#0052 review, finding 2) ───────────────────────────────
   let transitionModalEl = $state<HTMLDivElement | null>(null);
@@ -294,6 +311,25 @@
   function switchToCancel(): void {
     deleteOpen = false;
     openTransition('cancel');
+  }
+
+  // ── Announce-to-list shortcut ─────────────────────────────────────────────
+
+  async function announce(): Promise<void> {
+    announcing = true;
+    announceError = null;
+    try {
+      const campaign = await announceWorkshop(workshopId);
+      announcedCampaignId = campaign.id;
+    } catch (err) {
+      announceError = err instanceof ApiError ? err.message : 'Could not create a draft campaign.';
+    } finally {
+      announcing = false;
+    }
+  }
+
+  function openAnnouncedCampaign(): void {
+    if (announcedCampaignId !== null) onAnnounced(announcedCampaignId);
   }
 </script>
 
@@ -485,6 +521,24 @@
         <Button variant="danger" onclick={() => openTransition('cancel')}>Cancel workshop</Button>
       {/if}
       <Button variant="danger" onclick={openDelete}>Delete</Button>
+    </div>
+  </Panel>
+
+  <Panel title="Announce">
+    <p class="text-muted">
+      Create a draft campaign pre-filled from this workshop's title, summary, date, and location, targeted at
+      its interests. Nothing is sent — review and send the draft from the Campaigns tab.
+    </p>
+    {#if announceError}
+      <p class="text-error" role="alert">{announceError}</p>
+    {/if}
+    <div class="row">
+      <Button onclick={announce} disabled={announcing}>
+        {announcing ? 'Creating draft…' : 'Announce to list'}
+      </Button>
+      {#if announcedCampaignId !== null}
+        <Button variant="primary" onclick={openAnnouncedCampaign}>Open draft campaign</Button>
+      {/if}
     </div>
   </Panel>
 

@@ -17,6 +17,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
@@ -135,7 +136,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 
 	// The production shape (#0054): the SAME *seo.Site is handed to
 	// AdminWorkshopsHandler as its invalidator AND to mountAndServe below.
-	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, auditLogger)
+	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, mailing.NewCampaignStore(pool), auditLogger)
 
 	requireSession := middleware.RequireSession(store)
 	requireAdmin := func(next http.Handler) http.Handler {

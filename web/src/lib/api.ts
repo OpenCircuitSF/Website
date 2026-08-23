@@ -845,3 +845,15 @@ export function updateWorkshop(id: number, fields: PatchWorkshopFields): Promise
 export function deleteWorkshop(id: number): Promise<{ message: string }> {
   return apiDelete<{ message: string }>(`/admin/workshops/${id}`);
 }
+
+/**
+ * POST /admin/workshops/{id}/announce (#0056, admin only) — the
+ * announce-to-list shortcut: creates and returns a new `draft` campaign
+ * pre-filled from this workshop (subject, body, and interest targeting).
+ * Never sends anything -- the returned campaign is exactly as editable as
+ * one composed by hand in the Campaigns tab, and a repeat call creates a
+ * SEPARATE draft rather than reusing/overwriting the first one.
+ */
+export function announceWorkshop(id: number): Promise<Campaign> {
+  return apiPost<Campaign>(`/admin/workshops/${id}/announce`);
+}

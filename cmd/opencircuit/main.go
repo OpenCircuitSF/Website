@@ -206,6 +206,14 @@ func servePostgres(cfg *config.Config) error {
 	// instance safely backs both call sites.
 	adminInterestsH := handlers.NewAdminInterestsHandler(interestsStore, auditLogger)
 
+	// Campaign store, constructed here (ahead of the rest of the campaign
+	// wiring further below) so it can be handed to adminWorkshopsH just
+	// below as well: #0056's announce-to-list shortcut and #0041's
+	// hand-composed campaigns share the exact same CampaignStore.Create
+	// call path over the exact same instance, never two independently
+	// constructed ones.
+	campaignsStore := mailing.NewCampaignStore(pool)
+
 	// Workshop CRUD (#0051, PRD §5.2/§6.2/§8): admin create/list/edit/delete
 	// plus the public read routes (#0053/#0054's index and detail pages).
 	// workshopsStore is internal/workshops' data-access layer over
@@ -220,12 +228,17 @@ func servePostgres(cfg *config.Config) error {
 	// renderer/sitemap GET /workshops/{slug} and GET /sitemap.xml read from
 	// are provably the same instance, not two independently-constructed
 	// ones (see cmd/opencircuit/seo_wiring_test.go).
+	//
+	// campaignsStore (#0056) backs POST /admin/workshops/{id}/announce —
+	// see internal/handlers/admin_workshop_announce.go's package doc
+	// comment for why that route lives on this handler rather than its own
+	// type.
 	workshopsStore := workshops.NewStore(pool)
 	site, err := buildSEOSite(cfg, workshopSEOSource{store: workshopsStore})
 	if err != nil {
 		return err
 	}
-	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, auditLogger)
+	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, campaignsStore, auditLogger)
 	publicWorkshopsH := handlers.NewPublicWorkshopsHandler(workshopsStore, interestsStore)
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,
@@ -249,7 +262,10 @@ func servePostgres(cfg *config.Config) error {
 	// until #0045 wires in an adapter over its own mailing.Preflight — see
 	// internal/handlers/admin_campaigns.go's campaignPreflightChecker doc
 	// comment for why that is not a compliance gap (the send worker's own
-	// copy of the gate is authoritative regardless).
+	// copy of the gate is authoritative regardless). campaignsStore itself
+	// is constructed further up, alongside workshopsStore, so
+	// adminWorkshopsH's announce shortcut (#0056) and adminCampaignsH here
+	// share one instance.
 	//
 	// audienceStore (#0044, PRD §6.6) is internal/mailing's eligibility
 	// engine: the four audience predicates, the dry-run Preview behind GET
@@ -258,7 +274,6 @@ func servePostgres(cfg *config.Config) error {
 	// transaction. It is also handed to adminCampaignsH so Send can verify
 	// the operator's typed confirm_count against the real audience count
 	// (#0041's carried-in TODO) instead of accepting it unverified.
-	campaignsStore := mailing.NewCampaignStore(pool)
 	audienceStore := mailing.NewAudienceStore(pool)
 
 	// SSE event broker: the in-memory pub/sub singleton shared by GET
@@ -809,6 +824,12 @@ func adminRoutes(
 			adminRoute{http.MethodGet, "/admin/workshops/{id}", http.HandlerFunc(adminWorkshopsH.Get)},
 			adminRoute{http.MethodPatch, "/admin/workshops/{id}", http.HandlerFunc(adminWorkshopsH.Patch)},
 			adminRoute{http.MethodDelete, "/admin/workshops/{id}", http.HandlerFunc(adminWorkshopsH.Delete)},
+			// #0056: the announce-to-list shortcut. Lives on
+			// AdminWorkshopsHandler itself (see
+			// internal/handlers/admin_workshop_announce.go), so it needs no
+			// new parameter here or on mountAndServe -- just this one
+			// registration line inside the existing nil guard above.
+			adminRoute{http.MethodPost, "/admin/workshops/{id}/announce", http.HandlerFunc(adminWorkshopsH.Announce)},
 		)
 	}
 	return routes

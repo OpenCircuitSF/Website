@@ -387,6 +387,19 @@
     void loadAudit();
   }
 
+  // #0056: the workshops screen's announce shortcut hands back the id of
+  // the draft campaign it just created; jump to the Campaigns tab with
+  // that draft already open, mirroring goToCampaignAudit's cross-tab
+  // deep-link shape. pendingOpenCampaignId is passed to <Campaigns> below
+  // and cleared once it consumes it (see that component's onOpenedCampaign)
+  // so returning to this tab later doesn't reopen a stale draft.
+  let pendingOpenCampaignId = $state<number | null>(null);
+
+  function goToAnnouncedCampaign(campaignId: number) {
+    pendingOpenCampaignId = campaignId;
+    section = 'campaigns';
+  }
+
   // ── Interests ─────────────────────────────────────────────────────────────
   let interests = $state<Interest[]>([]);
   let interestsLoading = $state(true);
@@ -1858,11 +1871,16 @@
     {/if}
 
     {#if section === 'campaigns'}
-      <Campaigns onGoToSettings={() => (section = 'settings')} onGoToAudit={goToCampaignAudit} />
+      <Campaigns
+        onGoToSettings={() => (section = 'settings')}
+        onGoToAudit={goToCampaignAudit}
+        openCampaignId={pendingOpenCampaignId}
+        onOpenedCampaign={() => (pendingOpenCampaignId = null)}
+      />
     {/if}
 
     {#if section === 'workshops'}
-      <Workshops />
+      <Workshops onAnnounced={goToAnnouncedCampaign} />
     {/if}
   {/if}
 </div>
