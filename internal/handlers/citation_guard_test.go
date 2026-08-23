@@ -401,6 +401,107 @@ func TestCitationPatternMatchesWebWhitespaceShapes(t *testing.T) {
 	}
 }
 
+// #0198: the two guards' whitespace classes are proven equivalent in
+// *meaning* by #0193's exhaustive sweep, but nothing keeps them in step —
+// editing either citationPattern's whitespace class does not fail the
+// other guard's tests. whitespaceClassMustMatch/whitespaceClassMustNotMatch
+// below and TestCitationPatternWhitespaceClassStaysCoupledWithWebGuard, plus
+// their counterparts in web/src/lib/citationGuard.test.ts
+// (WHITESPACE_MUST_MATCH/WHITESPACE_MUST_NOT_MATCH and the "citation guard
+// whitespace class stays coupled with the Go guard" describe block), close
+// that gap the way #0198's notes recommend: not by comparing pattern text
+// (the two are legitimately spelled differently — \x{00A0} here,
+// there — and always will be) and not by generating one pattern from the
+// other (RE2 and V8 read different escape and range syntaxes even for an
+// identical class, and there is no third file in this issue's scope to host
+// a codegen step), but by asserting BOTH shipped citationPatterns, each in
+// its own real engine, against ONE identical canonical codepoint list.
+//
+// That list is #0193's phase-3 review, already exhaustive: sweeping all of
+// U+0000-U+10FFFF against Go's regexp, V8's own \s, and this pattern found
+// exactly 25 codepoints in the accepted set and named 10 specific
+// near-misses that a hand-maintained class most plausibly drifts to
+// (U+180E in particular — Zs before Unicode 6.3, Cf since). Reusing that
+// derived set here, rather than re-deriving a fresh one, is deliberate: the
+// two files independently passing against the SAME hardcoded list is what
+// makes the coupling structural rather than conventional. If a future edit
+// narrows or widens either citationPattern's whitespace class, one of
+// whitespaceClassMustMatch or whitespaceClassMustNotMatch stops holding for
+// that pattern, and this test — in whichever file was edited — fails on its
+// own, with no dependency on the other file's suite having run in the same
+// process or even the same language.
+var whitespaceClassMustMatch = []rune{
+	0x0009, // TAB
+	0x000A, // LF
+	0x000B, // VT
+	0x000C, // FF
+	0x000D, // CR
+	0x0020, // SPACE
+	0x00A0, // NBSP
+	0x1680, // OGHAM SPACE MARK
+	0x2000, // EN QUAD
+	0x2001, // EM QUAD
+	0x2002, // EN SPACE
+	0x2003, // EM SPACE
+	0x2004, // THREE-PER-EM SPACE
+	0x2005, // FOUR-PER-EM SPACE
+	0x2006, // SIX-PER-EM SPACE
+	0x2007, // FIGURE SPACE
+	0x2008, // PUNCTUATION SPACE
+	0x2009, // THIN SPACE
+	0x200A, // HAIR SPACE
+	0x2028, // LINE SEPARATOR
+	0x2029, // PARAGRAPH SEPARATOR
+	0x202F, // NARROW NO-BREAK SPACE
+	0x205F, // MEDIUM MATHEMATICAL SPACE
+	0x3000, // IDEOGRAPHIC SPACE
+	0xFEFF, // ZERO WIDTH NO-BREAK SPACE / BOM
+}
+
+// whitespaceClassMustNotMatch is #0193's near-miss set: codepoints a naive
+// Unicode-whitespace class could plausibly include but JavaScript's \s
+// (and, since #0193, this pattern) does not. U+180E is the one that matters
+// most: it was General Category Zs before Unicode 6.3 and is Cf now, so it
+// is the plausible drift if either engine's bundled Unicode version moves.
+var whitespaceClassMustNotMatch = []rune{
+	0x0085, // NEL (NEXT LINE)
+	0x00AD, // SOFT HYPHEN
+	0x180E, // MONGOLIAN VOWEL SEPARATOR
+	0x200B, // ZERO WIDTH SPACE
+	0x200C, // ZERO WIDTH NON-JOINER
+	0x200D, // ZERO WIDTH JOINER
+	0x2060, // WORD JOINER
+	0x2064, // INVISIBLE PLUS
+	0x3164, // HANGUL FILLER
+	0xFFFC, // OBJECT REPLACEMENT CHARACTER
+}
+
+// TestCitationPatternWhitespaceClassStaysCoupledWithWebGuard is #0198's
+// coupling test: it fails if citationPattern's whitespace class ever
+// disagrees with the canonical 25-accept/10-reject codepoint list above,
+// which is asserted verbatim (same codepoints, same expected outcome)
+// against the web guard's own citationPattern in
+// web/src/lib/citationGuard.test.ts. Neither file reads the other's source
+// or a shared data file — the coupling is that both are pinned to the same
+// hardcoded ground truth, so a one-sided edit to either whitespace class
+// breaks that file's own test without needing the other suite to run.
+func TestCitationPatternWhitespaceClassStaysCoupledWithWebGuard(t *testing.T) {
+	section := string(rune(0x00A7)) // §
+
+	for _, cp := range whitespaceClassMustMatch {
+		s := "PRD" + string(cp) + section + "6.6"
+		if !citationPattern.MatchString(s) {
+			t.Errorf("citationPattern did not match PRD + U+%04X + section — this codepoint is in the canonical whitespace list shared with citationGuard.test.ts's coupling test; the two guards have drifted", cp)
+		}
+	}
+	for _, cp := range whitespaceClassMustNotMatch {
+		s := "PRD" + string(cp) + section + "6.6"
+		if citationPattern.MatchString(s) {
+			t.Errorf("citationPattern matched PRD + U+%04X + section — this near-miss codepoint must stay outside the canonical whitespace list shared with citationGuard.test.ts's coupling test; the two guards have drifted", cp)
+		}
+	}
+}
+
 // TestCitationPatternCatchesIssueFilePath proves #0187 item 2: a string
 // literal citing a tracker file path (as opposed to the "#0181" form) trips
 // the guard.
