@@ -232,6 +232,14 @@ func TestIsSafeCoverImage(t *testing.T) {
 		{"javascript scheme", "javascript:alert(1)", false},
 		{"no leading slash", "assets/cover.jpg", false},
 		{"empty", "", false},
+		// #0138 bounce, finding 1: an interior control character reassembles
+		// into a protocol-relative URL once a browser strips it back out.
+		{"tab between slashes", "/\t/evil.host/x.jpg", false},
+		{"LF between slashes", "/\n/evil.host/x.jpg", false},
+		{"CR between slashes", "/\r/evil.host/x.jpg", false},
+		{"CRLF between slashes", "/\r\n/evil.host/x.jpg", false},
+		{"tab then backslash", "/\t\\evil.host/x.jpg", false},
+		{"LF then backslash", "/\n\\evil.host/x.jpg", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -250,7 +258,11 @@ func TestAdminWorkshops_CreateRejectsUnsafeCoverImage(t *testing.T) {
 	admin := seedAdmin(t, pool, "admin-workshops-badcover@example.com")
 	seedSession(t, pool, admin, "workshops-admin-badcover-token")
 
-	badValues := []string{"//evil.host/x.jpg", `\\evil.host/x.jpg`, "https://evil.host/x.jpg"}
+	badValues := []string{
+		"//evil.host/x.jpg", `\\evil.host/x.jpg`, "https://evil.host/x.jpg",
+		// #0138 bounce, finding 1: control character between the slashes.
+		"/\t/evil.host/x.jpg",
+	}
 	for _, v := range badValues {
 		title := uniqueAdminWorkshopTitle(t)
 		body := fmt.Sprintf(`{"title":%q,"cover_image":%q}`, title, v)
@@ -313,6 +325,16 @@ func TestAdminWorkshops_PatchRejectsUnsafeCoverImage(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("PATCH cover_image=//evil.host/x.jpg status = %d, want 400 (body=%s)", resp.StatusCode, body)
+	}
+
+	// #0138 bounce, finding 1: a control character between the slashes must
+	// be rejected at the API boundary too, not just the bare "//" prefix.
+	resp2 := doJSON(t, srv.Client(), http.MethodPatch, fmt.Sprintf("%s/admin/workshops/%d", srv.URL, target.ID),
+		"workshops-admin-patchbadcover-token", "{\"cover_image\":\"/\\t/evil.host/x.jpg\"}")
+	body2, _ := io.ReadAll(resp2.Body)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Errorf("PATCH cover_image=/<TAB>/evil.host/x.jpg status = %d, want 400 (body=%s)", resp2.StatusCode, body2)
 	}
 
 	after, err := store.GetByID(context.Background(), target.ID)

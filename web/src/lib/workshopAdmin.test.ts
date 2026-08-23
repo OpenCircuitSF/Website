@@ -361,6 +361,26 @@ describe('validateWorkshopForm', () => {
     }
   });
 
+  // #0138 bounce, finding 1: a control character (tab/LF/CR) between the
+  // slashes reassembles into a protocol-relative URL once a browser's URL
+  // parser strips it back out -- confirmed executable in headless Chromium
+  // resolving to http://evil.host/x.jpg. Same six payloads the reviewer
+  // proved were wrongly accepted.
+  it('rejects a control character disguising an off-site URL', () => {
+    for (const value of [
+      '/\t/evil.host/x.jpg',
+      '/\n/evil.host/x.jpg',
+      '/\r/evil.host/x.jpg',
+      '/\r\n/evil.host/x.jpg',
+      '/\t\\evil.host/x.jpg',
+      '/\n\\evil.host/x.jpg',
+    ]) {
+      expect('error' in validateWorkshopForm(blankFields({ title: 'X', coverImage: value }))).toBe(
+        true,
+      );
+    }
+  });
+
   it('carries interest_ids straight through', () => {
     const result = validateWorkshopForm(blankFields({ title: 'X', interestIds: [1, 3, 5] }));
     expect('error' in result).toBe(false);

@@ -639,7 +639,22 @@ const coverImageErrorMessage = `cover_image must be a site-relative path startin
 // base, so "\evil.host/x" and "/\evil.host/x" both normalize to that same
 // "//evil.host/x" form and are caught by normalizing backslashes to
 // slashes before the "//" check.
+//
+// #0138 bounce, finding 1: a prefix check alone isn't enough. A browser's
+// URL parser deletes every ASCII tab, LF and CR from the input before
+// parsing it, so e.g. "/\t/evil.host/x.jpg" doesn't start with "//" as
+// written but reassembles into exactly that off-site form once the browser
+// strips the control character back out. Reject the whole C0 control range
+// plus DEL up front -- the same HAS_CONTROL_CHAR rule markdown.ts's
+// isSafeLinkHref already uses for link destinations (#0052 pass 2) --
+// rather than adding a third, narrower definition of "safe URL" to this
+// codebase. \x00, \x0b, \x0c and \x7f don't actually resolve off-site (a
+// browser percent-encodes them into the path instead), so rejecting those
+// too is defence in depth, not strictly required to close the hole.
 func isSafeCoverImage(v string) bool {
+	if strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return false
+	}
 	if !strings.HasPrefix(v, "/") {
 		return false
 	}
