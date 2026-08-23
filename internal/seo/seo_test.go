@@ -1,6 +1,7 @@
 package seo
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -21,6 +22,7 @@ const testTemplate = `<!doctype html>
 <meta property="og:url" content="%%OC_OG_URL%%" />
 <meta property="og:type" content="%%OC_OG_TYPE%%" />
 <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
+%%OC_JSONLD%%
 </head><body><div id="app"></div></body></html>`
 
 const testBaseURL = "https://www.opencircuitsf.com"
@@ -137,6 +139,301 @@ func TestRender_WorkshopDetailUnknownSlugFallsBack(t *testing.T) {
 	}
 }
 
+// --- JSON-LD Event structured data (#0055) ---------------------------
+
+// fullWorkshop is a workshop with every field #0055's Event JSON-LD needs
+// set, reused as a base by several tests below via a copy-and-tweak.
+func fullWorkshop(slug string, status WorkshopStatus) Workshop {
+	return Workshop{
+		Slug:            slug,
+		Title:           "Intro to Soldering",
+		Summary:         "Learn the basics of through-hole soldering.",
+		CoverImage:      "/workshops/" + slug + "/cover.jpg",
+		Status:          status,
+		StartsAt:        "2026-09-12T18:00:00Z",
+		EndsAt:          "2026-09-12T20:00:00Z",
+		LocationName:    "Open Circuit SF",
+		LocationAddress: "123 Maker Way, San Francisco, CA",
+	}
+}
+
+// extractJSONLD finds the `<script type="application/ld+json">...</script>`
+// block in body, parses its contents as JSON, and returns the decoded
+// object -- failing the test if the block is missing or isn't valid JSON.
+// Used instead of substring checks so tests actually prove the emitted
+// block is a syntactically valid document, not just that some expected
+// words appear somewhere in the response body.
+func extractJSONLD(t *testing.T, body string) map[string]any {
+	t.Helper()
+	const open = `<script type="application/ld+json">`
+	const closeTag = `</script>`
+	start := strings.Index(body, open)
+	if start == -1 {
+		t.Fatalf("no JSON-LD <script> block found in body: %s", body)
+	}
+	start += len(open)
+	end := strings.Index(body[start:], closeTag)
+	if end == -1 {
+		t.Fatalf("JSON-LD <script> block has no closing tag: %s", body)
+	}
+	raw := body[start : start+end]
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		t.Fatalf("JSON-LD block did not parse as JSON: %v\nraw: %s", err, raw)
+	}
+	return decoded
+}
+
+// assertNoJSONLD fails the test if body contains a JSON-LD script block at
+// all -- the negative counterpart to extractJSONLD, for routes/workshops
+// #0055 says must not get one.
+func assertNoJSONLD(t *testing.T, body string) {
+	t.Helper()
+	if strings.Contains(body, `application/ld+json`) {
+		t.Errorf("unexpected JSON-LD block in body: %s", body)
+	}
+}
+
+// TestRender_JSONLD_PublishedWorkshopHasFullEvent is #0055's headline
+// acceptance criterion: a published workshop with a date and a location gets
+// a structurally valid schema.org Event carrying every required field.
+func TestRender_JSONLD_PublishedWorkshopHasFullEvent(t *testing.T) {
+	source := fakeWorkshopSource{"solder-101": fullWorkshop("solder-101", WorkshopPublished)}
+	r := newTestRenderer(source)
+	body := string(r.Render("/workshops/solder-101"))
+
+	ev := extractJSONLD(t, body)
+
+	if ev["@context"] != "https://schema.org" {
+		t.Errorf("@context = %v, want https://schema.org", ev["@context"])
+	}
+	if ev["@type"] != "Event" {
+		t.Errorf("@type = %v, want Event", ev["@type"])
+	}
+	if ev["name"] != "Intro to Soldering" {
+		t.Errorf("name = %v, want the workshop title", ev["name"])
+	}
+	if ev["startDate"] != "2026-09-12T18:00:00Z" {
+		t.Errorf("startDate = %v, want an ISO 8601 timestamp with an offset", ev["startDate"])
+	}
+	if ev["endDate"] != "2026-09-12T20:00:00Z" {
+		t.Errorf("endDate = %v", ev["endDate"])
+	}
+	if ev["eventStatus"] != "https://schema.org/EventScheduled" {
+		t.Errorf("eventStatus = %v, want EventScheduled for a published workshop", ev["eventStatus"])
+	}
+	if ev["eventAttendanceMode"] != "https://schema.org/OfflineEventAttendanceMode" {
+		t.Errorf("eventAttendanceMode = %v", ev["eventAttendanceMode"])
+	}
+	loc, ok := ev["location"].(map[string]any)
+	if !ok {
+		t.Fatalf("location is not an object: %v", ev["location"])
+	}
+	if loc["@type"] != "Place" {
+		t.Errorf("location.@type = %v, want Place", loc["@type"])
+	}
+	if loc["name"] != "Open Circuit SF" {
+		t.Errorf("location.name = %v", loc["name"])
+	}
+	if loc["address"] != "123 Maker Way, San Francisco, CA" {
+		t.Errorf("location.address = %v", loc["address"])
+	}
+	if ev["description"] != "Learn the basics of through-hole soldering." {
+		t.Errorf("description = %v", ev["description"])
+	}
+	org, ok := ev["organizer"].(map[string]any)
+	if !ok {
+		t.Fatalf("organizer is not an object: %v", ev["organizer"])
+	}
+	if org["@type"] != "Organization" || org["name"] != "Open Circuit SF" {
+		t.Errorf("organizer = %v, want Open Circuit SF -- no venue named as organizer", org)
+	}
+	if org["url"] != testBaseURL+"/" {
+		t.Errorf("organizer.url = %v, want the site URL", org["url"])
+	}
+	if ev["image"] != testBaseURL+"/workshops/solder-101/cover.jpg" {
+		t.Errorf("image = %v, want an absolute URL", ev["image"])
+	}
+	if ev["url"] != testBaseURL+"/workshops/solder-101" {
+		t.Errorf("url = %v, want the canonical workshop URL", ev["url"])
+	}
+}
+
+// TestRender_JSONLD_CanceledWorkshopEmitsEventCancelled is #0055's binding
+// ruling on a canceled workshop: it still gets an Event block, carrying its
+// OWN real name/dates (not the generic fallback), with eventStatus set to
+// EventCancelled -- distinct from a workshop simply not existing. This is a
+// deliberate divergence from the <title>/og:* tags, which stay on the
+// generic fallback for a canceled workshop per #0135's review ruling; that
+// half is asserted separately below.
+func TestRender_JSONLD_CanceledWorkshopEmitsEventCancelled(t *testing.T) {
+	source := fakeWorkshopSource{"solder-101": fullWorkshop("solder-101", WorkshopCanceled)}
+	r := newTestRenderer(source)
+	body := string(r.Render("/workshops/solder-101"))
+
+	ev := extractJSONLD(t, body)
+	if ev["eventStatus"] != "https://schema.org/EventCancelled" {
+		t.Errorf("eventStatus = %v, want EventCancelled for a canceled workshop", ev["eventStatus"])
+	}
+	if ev["name"] != "Intro to Soldering" {
+		t.Errorf("name = %v, want the canceled workshop's real title in the structured data", ev["name"])
+	}
+}
+
+// TestRender_JSONLD_CanceledWorkshopKeepsGenericSocialCard is the other half
+// of the ruling above: #0135's review left internal/seo's <title>/og:* fields
+// for a canceled workshop on the generic site fallback, and #0055 must not
+// change that -- only the JSON-LD block gets the workshop's real identity.
+func TestRender_JSONLD_CanceledWorkshopKeepsGenericSocialCard(t *testing.T) {
+	source := fakeWorkshopSource{"solder-101": fullWorkshop("solder-101", WorkshopCanceled)}
+	r := newTestRenderer(source)
+	body := string(r.Render("/workshops/solder-101"))
+
+	title := extractTag(t, body, "title")
+	if strings.Contains(title, "Intro to Soldering") {
+		t.Errorf("canceled workshop's <title> = %q, want the generic site fallback (unchanged from #0135's ruling)", title)
+	}
+}
+
+// TestRender_JSONLD_MissingStartDateOmitsBlock: a published workshop with no
+// date set yet cannot produce a spec-valid startDate, so no block should be
+// emitted at all rather than a fabricated or empty date.
+func TestRender_JSONLD_MissingStartDateOmitsBlock(t *testing.T) {
+	w := fullWorkshop("no-date", WorkshopPublished)
+	w.StartsAt = ""
+	source := fakeWorkshopSource{"no-date": w}
+	r := newTestRenderer(source)
+	assertNoJSONLD(t, string(r.Render("/workshops/no-date")))
+}
+
+// TestRender_JSONLD_MissingLocationOmitsBlock: a published, dated workshop
+// with no venue set yet (LocationName and LocationAddress both empty --
+// "Location TBA" in the UI) also cannot produce a spec-valid Event, since
+// location is required for a non-virtual event.
+func TestRender_JSONLD_MissingLocationOmitsBlock(t *testing.T) {
+	w := fullWorkshop("no-venue", WorkshopPublished)
+	w.LocationName = ""
+	w.LocationAddress = ""
+	source := fakeWorkshopSource{"no-venue": w}
+	r := newTestRenderer(source)
+	assertNoJSONLD(t, string(r.Render("/workshops/no-venue")))
+}
+
+// TestRender_JSONLD_OnlyOneOfNameOrAddressStillProducesLocation confirms
+// LocationName and LocationAddress are independently optional -- having
+// just one of the two is still enough for a valid Place, not treated the
+// same as having neither.
+func TestRender_JSONLD_OnlyOneOfNameOrAddressStillProducesLocation(t *testing.T) {
+	w := fullWorkshop("address-only", WorkshopPublished)
+	w.LocationName = ""
+	source := fakeWorkshopSource{"address-only": w}
+	r := newTestRenderer(source)
+	body := string(r.Render("/workshops/address-only"))
+
+	ev := extractJSONLD(t, body)
+	loc, ok := ev["location"].(map[string]any)
+	if !ok {
+		t.Fatalf("location missing when only address was set: %v", ev)
+	}
+	if loc["name"] != "123 Maker Way, San Francisco, CA" {
+		t.Errorf("location.name = %v, want the address to double as the name when no separate venue name is set", loc["name"])
+	}
+}
+
+// TestRender_JSONLD_DraftAndUnknownSlugOmitBlock confirms neither a draft
+// workshop (never public) nor an unknown slug produces any JSON-LD, matching
+// the same visibility rule as the fallback <title>/og:* tags.
+func TestRender_JSONLD_DraftAndUnknownSlugOmitBlock(t *testing.T) {
+	source := fakeWorkshopSource{"secret-draft": fullWorkshop("secret-draft", WorkshopDraft)}
+	r := newTestRenderer(source)
+	for _, slug := range []string{"does-not-exist", "secret-draft"} {
+		assertNoJSONLD(t, string(r.Render("/workshops/"+slug)))
+	}
+}
+
+// TestRender_JSONLD_StaticRoutesHaveNoBlock confirms the token is simply
+// removed (never left as a stray empty <script> tag or leaked into a
+// non-workshop page) for every static marketing route.
+func TestRender_JSONLD_StaticRoutesHaveNoBlock(t *testing.T) {
+	r := newTestRenderer(nil)
+	for _, p := range []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/admin"} {
+		assertNoJSONLD(t, string(r.Render(p)))
+	}
+}
+
+// TestRender_JSONLD_TitleWithQuotesStaysValidJSON is #0055's own acceptance
+// criterion: "JSON string values escaped correctly; a title containing
+// quotes does not break the block." A title/summary with quotes,
+// backslashes, and an embedded "</script>" sequence must still produce a
+// block that (a) parses as valid JSON with the literal characters intact and
+// (b) never lets a literal "</script>" reach the page (which would close the
+// script element early and dump the rest of the JSON as visible text/attempt
+// to parse it as HTML).
+func TestRender_JSONLD_TitleWithQuotesStaysValidJSON(t *testing.T) {
+	tricky := `Solder & Circuits "Intro" <script>alert(1)</script> \backslash\`
+	w := fullWorkshop("tricky-title", WorkshopPublished)
+	w.Title = tricky
+	w.Summary = tricky
+	source := fakeWorkshopSource{"tricky-title": w}
+	r := newTestRenderer(source)
+	body := string(r.Render("/workshops/tricky-title"))
+
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Fatalf("literal, unescaped </script> sequence reached the page: %s", body)
+	}
+	ev := extractJSONLD(t, body)
+	if ev["name"] != tricky {
+		t.Errorf("name = %v, want the exact tricky title round-tripped through JSON escaping", ev["name"])
+	}
+	if ev["description"] != tricky {
+		t.Errorf("description = %v, want the exact tricky summary round-tripped", ev["description"])
+	}
+}
+
+// TestRender_JSONLD_DistinctCanceledWorkshopsDoNotShareCacheEntry is a
+// regression test for the cache-bucket bug #0055 introduces the fix for:
+// before this issue, EVERY non-published workshop slug (draft, canceled,
+// unknown) shared the single cacheKeyFallback cache entry, which was safe
+// only because they all rendered byte-identical bodies. Once a canceled
+// workshop started carrying its own per-workshop JSON-LD, two different
+// canceled workshops sharing that one cache entry would leak one workshop's
+// structured data onto the other's page. resolve/workshopRouteMeta now give
+// a canceled workshop its own "workshop:{slug}" cache key -- this proves
+// two distinct canceled workshops render distinct bodies, not whichever one
+// happened to populate the shared bucket first.
+func TestRender_JSONLD_DistinctCanceledWorkshopsDoNotShareCacheEntry(t *testing.T) {
+	a := fullWorkshop("canceled-a", WorkshopCanceled)
+	a.Title = "Canceled Workshop A"
+	b := fullWorkshop("canceled-b", WorkshopCanceled)
+	b.Title = "Canceled Workshop B"
+	source := fakeWorkshopSource{"canceled-a": a, "canceled-b": b}
+	r := newTestRenderer(source)
+
+	bodyA := string(r.Render("/workshops/canceled-a"))
+	bodyB := string(r.Render("/workshops/canceled-b"))
+
+	evA := extractJSONLD(t, bodyA)
+	evB := extractJSONLD(t, bodyB)
+	if evA["name"] != "Canceled Workshop A" {
+		t.Errorf("canceled-a's JSON-LD name = %v, want its own title", evA["name"])
+	}
+	if evB["name"] != "Canceled Workshop B" {
+		t.Errorf("canceled-b's JSON-LD name = %v, want its own title -- got %v, which would mean it leaked A's cached entry", evB["name"], evB["name"])
+	}
+
+	r.mu.RLock()
+	_, hasA := r.cache["workshop:canceled-a"]
+	_, hasB := r.cache["workshop:canceled-b"]
+	_, hasFallback := r.cache[cacheKeyFallback]
+	r.mu.RUnlock()
+	if !hasA || !hasB {
+		t.Errorf("expected both canceled workshops to have their own cache entry (workshop:canceled-a=%v, workshop:canceled-b=%v)", hasA, hasB)
+	}
+	if hasFallback {
+		t.Errorf("canceled workshops should not populate the shared fallback bucket now that they carry per-workshop JSON-LD")
+	}
+}
+
 // --- Escaping ---------------------------------------------------------
 
 // TestRender_EscapesInjectedValues is the genuine injection-surface test:
@@ -176,7 +473,7 @@ func TestRender_AllTokensSubstituted(t *testing.T) {
 	r := newTestRenderer(nil)
 	tokens := []string{
 		tokenTitle, tokenDescription, tokenOGTitle, tokenOGDescription,
-		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard,
+		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard, tokenJSONLD,
 	}
 	for _, path := range []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/nonexistent", "/workshops/some-slug"} {
 		body := string(r.Render(path))

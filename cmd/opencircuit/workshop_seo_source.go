@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
@@ -69,6 +70,11 @@ func (s workshopSEOSource) Workshops() ([]seo.Workshop, error) {
 // precision is sufficient, and a zero time.Time (never expected from a real
 // row, but defensive) renders as "" so Sitemap omits <lastmod> entirely
 // rather than emitting a bogus 0001-01-01.
+//
+// StartsAt/EndsAt (#0055) are formatted as full RFC 3339 timestamps WITH a
+// UTC offset (time.RFC3339, e.g. "2026-09-12T18:00:00Z"), unlike UpdatedAt's
+// bare date -- JSON-LD's startDate/endDate need an offset to validate
+// against Google's Rich Results Test, a bare date does not carry one.
 func toSEOWorkshop(w workshops.Workshop) seo.Workshop {
 	var cover, summary string
 	if w.CoverImage != nil {
@@ -81,12 +87,30 @@ func toSEOWorkshop(w workshops.Workshop) seo.Workshop {
 	if !w.UpdatedAt.IsZero() {
 		updatedAt = w.UpdatedAt.UTC().Format("2006-01-02")
 	}
+	var startsAt, endsAt string
+	if w.StartsAt != nil {
+		startsAt = w.StartsAt.UTC().Format(time.RFC3339)
+	}
+	if w.EndsAt != nil {
+		endsAt = w.EndsAt.UTC().Format(time.RFC3339)
+	}
+	var locationName, locationAddress string
+	if w.LocationName != nil {
+		locationName = *w.LocationName
+	}
+	if w.LocationAddress != nil {
+		locationAddress = *w.LocationAddress
+	}
 	return seo.Workshop{
-		Slug:       w.Slug,
-		Title:      w.Title,
-		Summary:    summary,
-		CoverImage: cover,
-		Status:     seo.WorkshopStatus(w.Status),
-		UpdatedAt:  updatedAt,
+		Slug:            w.Slug,
+		Title:           w.Title,
+		Summary:         summary,
+		CoverImage:      cover,
+		Status:          seo.WorkshopStatus(w.Status),
+		UpdatedAt:       updatedAt,
+		StartsAt:        startsAt,
+		EndsAt:          endsAt,
+		LocationName:    locationName,
+		LocationAddress: locationAddress,
 	}
 }

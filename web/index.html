@@ -25,6 +25,19 @@
     <meta property="og:url" content="%%OC_OG_URL%%" />
     <meta property="og:type" content="%%OC_OG_TYPE%%" />
     <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
+    <!-- schema.org Event structured data for a workshop detail page (#0055,
+         PRD §7.4). %%OC_JSONLD%% is substituted with either a whole
+         `<script type="application/ld+json">...</script>` block (built
+         server-side by internal/seo/jsonld.go) or an empty string for every
+         route that isn't a workshop with enough data for a spec-valid Event
+         (name/startDate/location -- see that file's doc comments for exactly
+         which workshops qualify). Unlike the %%OC_OG_*%% tokens above, this
+         value is NOT run through html.EscapeString -- it is already a
+         complete, self-contained JSON document produced by
+         encoding/json.Marshal, which HTML-escapes <, >, and & by default, so
+         embedding it verbatim inside <script> is safe and re-escaping it as
+         HTML text would corrupt the JSON. -->
+    %%OC_JSONLD%%
     <!-- SVG favicon first (currentColor-free, self-switches light/dark via its
          own internal prefers-color-scheme, so it works before app.css loads);
          favicon-32.png is the raster fallback for browsers that don't support

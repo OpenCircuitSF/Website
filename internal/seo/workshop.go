@@ -13,9 +13,9 @@ const (
 	WorkshopCanceled    WorkshopStatus = "canceled"
 )
 
-// Workshop is the subset of workshop data #0019's meta injector and #0020's
-// sitemap generator need. #0051's real store returns richer rows; an
-// adapter there narrows to this shape.
+// Workshop is the subset of workshop data #0019's meta injector, #0020's
+// sitemap generator, and #0055's JSON-LD Event builder need. #0051's real
+// store returns richer rows; an adapter there narrows to this shape.
 type Workshop struct {
 	Slug       string
 	Title      string
@@ -23,6 +23,28 @@ type Workshop struct {
 	CoverImage string // root-relative path or absolute URL; "" falls back to the default OG image
 	Status     WorkshopStatus
 	UpdatedAt  string // RFC 3339 date (YYYY-MM-DD is sufficient for <lastmod>); "" omits <lastmod>
+
+	// StartsAt / EndsAt back #0055's JSON-LD startDate/endDate. Full RFC 3339
+	// timestamps WITH a UTC offset (Go's time.RFC3339, e.g.
+	// "2026-09-12T18:00:00Z") -- schema.org/Google's Rich Results validator
+	// wants an offset, a bare date is not enough. "" means "not yet
+	// scheduled"; buildEvent (jsonld.go) treats a missing StartsAt as "not
+	// enough data for a valid Event" and emits nothing rather than a
+	// fabricated date.
+	StartsAt string
+	EndsAt   string
+
+	// LocationName / LocationAddress back #0055's JSON-LD location (a
+	// schema.org Place). Both are independently optional in the source data;
+	// jsonld.go's eventLocation treats having NEITHER set as "no real venue
+	// yet", which -- like a missing StartsAt -- is treated as not enough data
+	// for a valid physical Event rather than papering over the gap with a
+	// placeholder like "Location TBA" (the UI's own copy for this case,
+	// web/src/lib/workshops.ts's workshopLocationLabel -- fine for a human
+	// reader, not a real address a search engine's structured-data validator
+	// will accept).
+	LocationName    string
+	LocationAddress string
 }
 
 // WorkshopSource supplies workshop data to the SEO renderer (#0019) and

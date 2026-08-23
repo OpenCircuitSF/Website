@@ -11,12 +11,15 @@
 // Design (PRD §7.4):
 //  1. Hold the built index.html in memory with placeholder markers (see
 //     web/index.html's %%OC_*%% tokens) for title, description, og:title,
-//     og:description, og:image, og:url, og:type, and twitter:card.
+//     og:description, og:image, og:url, og:type, twitter:card, and (#0055)
+//     a schema.org Event JSON-LD block for a workshop detail page.
 //  2. On each request, match the path against a route table: a compiled-in
 //     table for the static marketing routes, the workshop store for
 //     /workshops/{slug} (nil until #0051/#0054 land -- falls back to the
 //     generic default), and a distinct default for unknown paths (404).
-//  3. Substitute and serve. Every substituted value is HTML-escaped.
+//  3. Substitute and serve. Every substituted meta-tag value is
+//     HTML-escaped; the JSON-LD token is not (see jsonld.go's doc comment
+//     on eventJSONLD for why that's still safe).
 //  4. Cache the rendered bytes per resolved metadata bucket (not per raw
 //     path -- #0073) with a short TTL and a bounded entry count; invalidate
 //     on workshop mutation (Site.InvalidateWorkshops).
@@ -48,6 +51,7 @@ const (
 	tokenOGURL         = "%%OC_OG_URL%%"
 	tokenOGType        = "%%OC_OG_TYPE%%"
 	tokenTwitterCard   = "%%OC_TWITTER_CARD%%"
+	tokenJSONLD        = "%%OC_JSONLD%%"
 )
 
 // defaultCacheTTL is the short TTL PRD §7.4 calls for on the rendered
@@ -68,10 +72,14 @@ const defaultCacheTTL = 60 * time.Second
 // standing between the cache and unbounded growth.
 //
 // The realistic keyspace is tiny: the handful of static routes, one fallback
-// bucket, one not-found bucket, and one entry per distinct *published*
-// workshop slug actually requested (bounded by real catalog size, not by
-// how many distinct paths an attacker can invent). 512 is comfortable
-// headroom above that and should almost never be reached in practice.
+// bucket, one not-found bucket, and one entry per distinct *published or
+// canceled* workshop slug actually requested (bounded by real catalog size,
+// not by how many distinct paths an attacker can invent -- canceled joined
+// published at #0055, once a canceled workshop's cached rendering started
+// carrying its own per-workshop JSON-LD and could no longer safely share the
+// single fallback bucket with every other canceled/draft/unknown slug, see
+// resolve's doc comment). 512 is comfortable headroom above that and should
+// almost never be reached in practice.
 //
 // Eviction policy: a write that would grow the cache past the bound flushes
 // the entire cache first, then inserts the new entry. A full flush rather
@@ -100,6 +108,14 @@ type RouteMeta struct {
 	OGURL         string
 	OGType        string
 	TwitterCard   string
+
+	// JSONLD is the complete `<script type="application/ld+json">...</script>`
+	// block for #0055's schema.org Event data, or "" for every route that
+	// isn't a qualifying workshop detail page (see jsonld.go). Unlike the
+	// fields above, this is not run through html.EscapeString in substitute
+	// -- it is already-escaped, self-contained JSON built by
+	// encoding/json.Marshal.
+	JSONLD string
 }
 
 // Renderer holds the built index.html template in memory and produces a
@@ -249,11 +265,11 @@ func defaultNotFoundMeta(baseURL string) RouteMeta {
 // bucket key its rendered bytes belong under, in priority order: (1) an
 // exact static-route entry, keyed by the path itself -- bounded to len(r.static)
 // entries, (2) a workshop-detail match resolved against the workshop source,
-// keyed by slug -- bounded by the number of distinct published workshops
-// actually requested, not by how many distinct paths a client can invent,
-// (3) the known-but-uncataloged fallback, which is byte-identical for every
-// route that reaches it and therefore shares ONE cache key regardless of
-// which such route was requested, or (4) the not-found default when
+// keyed by slug -- bounded by the number of distinct published-or-canceled
+// workshops actually requested, not by how many distinct paths a client can
+// invent, (3) the known-but-uncataloged fallback, which is byte-identical for
+// every route that reaches it and therefore shares ONE cache key regardless
+// of which such route was requested, or (4) the not-found default when
 // handlers.IsKnownRoute rejects the path -- also byte-identical across every
 // unknown path, so it too shares one cache key. This is the fix for #0073:
 // caching by raw request path let an unauthenticated client grow the cache
@@ -268,13 +284,13 @@ func (r *Renderer) resolve(normalizedPath string) (cacheKey string, meta RouteMe
 		return normalizedPath, m
 	}
 	if slug, ok := handlers.WorkshopDetailSlug(normalizedPath); ok {
-		if m, ok := r.workshopMeta(slug); ok {
+		if m, ok := r.workshopRouteMeta(slug); ok {
 			return "workshop:" + slug, m
 		}
-		// Matches the dynamic pattern but no published workshop found (not
-		// yet wired, wrong slug, or a draft/canceled workshop) -- still a
-		// "known" path per handlers.IsKnownRoute (SPAHandler serves 200), so
-		// it gets the generic fallback rather than the 404 default.
+		// Matches the dynamic pattern but nothing worth its own cache entry
+		// was found (unknown slug, draft, or a workshop source error) --
+		// still a "known" path per handlers.IsKnownRoute (SPAHandler serves
+		// 200), so it gets the generic fallback rather than the 404 default.
 		return cacheKeyFallback, r.fallback
 	}
 	if handlers.IsKnownRoute(normalizedPath) {
@@ -283,16 +299,48 @@ func (r *Renderer) resolve(normalizedPath string) (cacheKey string, meta RouteMe
 	return cacheKeyNotFound, r.notFound
 }
 
-// workshopMeta looks up slug in the configured WorkshopSource and, if found
-// and published, builds a RouteMeta from its title/summary/cover image.
-func (r *Renderer) workshopMeta(slug string) (RouteMeta, bool) {
+// workshopRouteMeta looks up slug in the configured WorkshopSource and
+// builds the RouteMeta for a /workshops/{slug} request, including #0055's
+// JSON-LD (jsonld.go's eventJSONLD).
+//
+// ok=false (share the generic fallback bucket, resolve's caller) for: no
+// WorkshopSource configured, an unknown slug, a workshop source error, or a
+// draft workshop -- none of these are ever public, so there is nothing
+// workshop-specific to cache under its own key.
+//
+// ok=true for BOTH WorkshopPublished and WorkshopCanceled, which is a
+// deliberate divergence from this function's pre-#0055 behavior (published
+// only): a canceled workshop's <title>/og:* fields still come from
+// r.fallback, unchanged, per #0135's review ruling that internal/seo's
+// social-card/sitemap behavior for canceled workshops stays as it was -- but
+// eventJSONLD builds real, per-workshop EventCancelled JSON-LD for it, and
+// that per-workshop data must not be cached under the single shared
+// cacheKeyFallback bucket alongside every OTHER canceled/draft/unknown slug,
+// or two different canceled workshops' pages would leak each other's
+// structured data. Giving canceled its own "workshop:{slug}" cache key (via
+// resolve) is what prevents that, at the cost of widening the cache's
+// keyspace bound from "published workshops" to "published-or-canceled
+// workshops" -- see maxCacheEntries' doc comment.
+func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 	if r.workshop == nil {
 		return RouteMeta{}, false
 	}
 	w, ok, err := r.workshop.WorkshopBySlug(slug)
-	if err != nil || !ok || w.Status != WorkshopPublished {
+	if err != nil || !ok || w.Status == WorkshopDraft {
 		return RouteMeta{}, false
 	}
+
+	jsonld := eventJSONLD(w, r.baseURL)
+
+	if w.Status != WorkshopPublished {
+		// Canceled (or any other non-published, non-draft status): generic
+		// <title>/og:* fallback content, but its own cache entry so its
+		// JSON-LD isn't shared with any other slug.
+		m := r.fallback
+		m.JSONLD = jsonld
+		return m, true
+	}
+
 	image := absoluteURL(r.baseURL, w.CoverImage)
 	if image == "" {
 		image = r.baseURL + "/og-default.png"
@@ -307,6 +355,7 @@ func (r *Renderer) workshopMeta(slug string) (RouteMeta, bool) {
 		OGURL:         r.baseURL + "/workshops/" + slug,
 		OGType:        "website",
 		TwitterCard:   "summary_large_image",
+		JSONLD:        jsonld,
 	}, true
 }
 
@@ -378,12 +427,19 @@ func (r *Renderer) store(key string, body []byte) {
 	r.cache[key] = cacheEntry{body: body, expires: r.now().Add(r.ttl)}
 }
 
-// substitute performs the actual token replacement. Every value is passed
-// through html.EscapeString -- workshop titles/summaries flow in from
-// user-controlled admin input (#0051), so this is a genuine injection
-// surface once <meta content="..."> receives them, not a defensive
-// nicety. html.EscapeString escapes &, <, >, ' and ", which covers both a
-// double-quoted attribute value and <title> text content.
+// substitute performs the actual token replacement. Every %%OC_OG_*%%-style
+// value is passed through html.EscapeString -- workshop titles/summaries
+// flow in from user-controlled admin input (#0051), so this is a genuine
+// injection surface once <meta content="..."> receives them, not a
+// defensive nicety. html.EscapeString escapes &, <, >, ' and ", which covers
+// both a double-quoted attribute value and <title> text content.
+//
+// tokenJSONLD is deliberately NOT passed through html.EscapeString: m.JSONLD
+// is either "" or a complete `<script>...</script>` element whose JSON body
+// was already produced by encoding/json.Marshal (jsonld.go's eventJSONLD),
+// which HTML-escapes <, >, and & itself. Running html.EscapeString over it a
+// second time would corrupt the JSON (e.g. turn a literal `"` the JSON
+// syntax needs into `&#34;`) rather than making it safer.
 func (r *Renderer) substitute(m RouteMeta) []byte {
 	replacer := strings.NewReplacer(
 		tokenTitle, html.EscapeString(m.Title),
@@ -394,6 +450,7 @@ func (r *Renderer) substitute(m RouteMeta) []byte {
 		tokenOGURL, html.EscapeString(m.OGURL),
 		tokenOGType, html.EscapeString(m.OGType),
 		tokenTwitterCard, html.EscapeString(m.TwitterCard),
+		tokenJSONLD, m.JSONLD,
 	)
 	return []byte(replacer.Replace(string(r.template)))
 }
