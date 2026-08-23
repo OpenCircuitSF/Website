@@ -158,6 +158,17 @@ describe('status transition offers', () => {
     );
   });
 
+  // #0183: workshopView.PublishedAt is `*string` with `json:",omitempty"`
+  // (internal/handlers/admin_workshops.go), so a NULL published_at reaches
+  // the SPA as an ABSENT key -- `undefined`, not `null`. The case above only
+  // ever exercises `null`; cancelConfirmMessage was never asserted against
+  // the value production actually sends until this case.
+  it('cancel copy for a never-published draft when published_at is absent (undefined) -- the shape the API actually sends', () => {
+    expect(cancelConfirmMessage('X', 'draft', undefined)).toBe(
+      'Cancel "X"? It is not currently published, so it stays private — canceling it will not make it visible.',
+    );
+  });
+
   // #0177's actual defect: a draft whose published_at survives from an
   // earlier publish (#0171's canceled -> draft cell). The dialog must warn
   // that canceling PUBLISHES it, not promise continuity with its current

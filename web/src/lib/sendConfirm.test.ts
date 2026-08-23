@@ -24,11 +24,33 @@ describe('normalizeCountInput', () => {
     [' 1234 ', 1234],
     ['1,234', 1234],
     ['0482', 482],
+    // #0183: the doc comment promises U+2009 (thin space) as a thousands
+    // separator, distinct from the ASCII space '1234 ' above already tests
+    // via trim(). Dropping U+2009 from the separator character class passed
+    // 41/41 before this case existed.
+    ['1 234', 1234],
   ])('parses %j', (raw, want) => {
     expect(normalizeCountInput(raw)).toBe(want);
   });
 
-  it.each([[''], ['abc'], ['12.5'], ['12 34x'], ['-1']])('rejects %j', (raw) => {
+  it.each([
+    [''],
+    ['abc'],
+    ['12.5'],
+    ['12 34x'],
+    ['-1'],
+    // #0183: a 20-digit typed count is a valid \d+ string but not
+    // representable as a safe integer -- deleting the Number.isSafeInteger
+    // guard let it through as an inexact float instead of rejecting it.
+    // Passed 41/41 before this case existed.
+    ['9'.repeat(20)],
+    // #0183 sweep finding: a lone separator strips to an empty string,
+    // which is a DIFFERENT code path than the raw='' early return above --
+    // it must still fail the \d+ digit requirement rather than being read
+    // as 0. Loosening that regex from \d+ to \d* (allowing an empty match)
+    // passed 122/122 before this case existed.
+    [','],
+  ])('rejects %j', (raw) => {
     expect(normalizeCountInput(raw)).toBeNull();
   });
 });
@@ -54,6 +76,14 @@ describe('confirmMatches', () => {
 describe('confirmHint', () => {
   it('is null while the field is untouched (empty) -- no scolding an empty field', () => {
     expect(confirmHint('', 482)).toBeNull();
+  });
+
+  // #0183 sweep finding: a whitespace-only field is a DIFFERENT code path
+  // than the exact-empty-string case above -- it only reaches "untouched"
+  // via `.trim()`. Narrowing that check from `raw.trim() === ''` to
+  // `raw === ''` passed 122/122 before this case existed.
+  it('is null for a whitespace-only field too, not just exact empty string', () => {
+    expect(confirmHint('   ', 482)).toBeNull();
   });
 
   it('is null once the typed count matches exactly', () => {
@@ -86,6 +116,14 @@ describe('sendGuardState', () => {
     {
       name: 'blocked when unmet is non-empty, even with a correct count',
       input: { status: 'draft', unmet: oneUnmet, audienceCount: 482, confirmRaw: '482', inFlight: false },
+      want: 'blocked',
+    },
+    {
+      // #0183: pins the branch order -- no other case sets both `unmet`
+      // non-empty AND `audienceCount === 0`, so swapping those two branches
+      // in sendGuardState passed 41/41 before this case existed.
+      name: 'blocked wins over empty-audience when both unmet is non-empty and audienceCount is 0',
+      input: { status: 'draft', unmet: oneUnmet, audienceCount: 0, confirmRaw: '', inFlight: false },
       want: 'blocked',
     },
     {
