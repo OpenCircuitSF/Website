@@ -74,7 +74,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	registerWiringTest(t, pool)
+	registerWiringTest(t)
 	// A single Cleanup (truncate, then close), not a separate defer, since
 	// t.Cleanup funcs run AFTER a test's own defers — a standalone
 	// `defer pool.Close()` would close the pool before a later Cleanup got to
@@ -412,7 +412,7 @@ func resolveAdminRoutePath(path string, userID, interestID, subscriberID, campai
 //
 // registerWiringTest (below) turns that into an immediate, named failure
 // instead of silent corruption. Every *_wiring_test.go caller of this
-// function calls registerWiringTest(t, pool) once, before its first
+// function calls registerWiringTest(t) once, before its first
 // truncateAdminWiringTables call -- see admin_wiring_test.go's own callers
 // for the pattern. Adding t.Parallel() to a test that skips that call is
 // still a bug this guard cannot see; it protects the tests that use the
@@ -437,14 +437,25 @@ var wiringTablesOwner atomic.Pointer[string]
 
 // registerWiringTest claims exclusive use of truncateAdminWiringTables's
 // shared tables for the duration of t and registers a t.Cleanup that
-// releases the claim. Call it once, immediately after connecting pool and
-// before a wiring test's first truncateAdminWiringTables call.
+// releases the claim. Call it once, before a wiring test's first
+// truncateAdminWiringTables call.
+//
+// #0209: this used to take a *pgxpool.Pool parameter that it never read.
+// wiringTablesOwner is a package-level global -- correctly so, since the
+// hazard it guards against (a sibling's TRUNCATE landing mid-test) is an
+// in-process race, not something scoped to which database connection a test
+// happens to hold. A pool parameter would have implied a per-pool or
+// per-database claim, which is not what this does; dropped rather than kept
+// for call-site symmetry with truncateAdminWiringTables(t, pool).
 //
 // If another *_wiring_test.go test already holds the claim -- which can only
 // happen if this package gains t.Parallel() -- this fails the test
 // immediately, naming both tests, instead of letting one test's TRUNCATE
-// silently destroy the other's fixtures (#0165).
-func registerWiringTest(t *testing.T, pool *pgxpool.Pool) {
+// silently destroy the other's fixtures (#0165). #0209 additionally guards
+// the case this can't reach: a test that calls truncateAdminWiringTables
+// under t.Parallel() without ever calling registerWiringTest at all — see
+// wiring_parallel_guard_test.go.
+func registerWiringTest(t *testing.T) {
 	t.Helper()
 	name := t.Name()
 	if !wiringTablesOwner.CompareAndSwap(nil, &name) {
