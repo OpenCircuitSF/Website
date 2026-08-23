@@ -78,8 +78,12 @@ type AdminWorkshopsHandler struct {
 
 // NewAdminWorkshopsHandler constructs an AdminWorkshopsHandler. A nil
 // auditor disables audit writes (matching every other admin handler's
-// nil-tolerance); a nil invalidator disables the SEO/sitemap cache clear —
-// every production call site passes a real *seo.Site.
+// nil-tolerance); a nil invalidator disables the SEO/sitemap cache clear.
+// cmd/opencircuit/main.go's servePostgres path currently passes nil for the
+// invalidator too — a deliberate, safe-by-construction deferral (#0051's
+// review Ruling 1: the nil is never dereferenced, and the caches it would
+// invalidate hold no workshop-derived bytes yet either way) that #0054 is
+// bound to replace with a real *seo.Site.
 func NewAdminWorkshopsHandler(store workshopStore, invalidator workshopCacheInvalidator, auditor *audit.Logger) *AdminWorkshopsHandler {
 	return &AdminWorkshopsHandler{store: store, invalidator: invalidator, auditor: auditor}
 }

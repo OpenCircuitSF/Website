@@ -15,11 +15,27 @@
 // title that collides with an existing slug gets a numeric suffix appended
 // ("-2", "-3", ...) — never "-1", since the bare slug already stands in for
 // the first workshop with that title. The candidate is tried against the
-// UNIQUE constraint directly (a plain autocommitted INSERT per attempt, not
-// a pre-check-then-insert race): each attempt is its own statement, so a
-// failed one due to unique_violation never poisons the pgx connection for
-// the next attempt, and two concurrent Creates with the same title can never
-// both win the same slug.
+// UNIQUE constraint directly, never a pre-check-then-insert race: each
+// attempt is a real INSERT inside its own pseudo-nested transaction (a pgx
+// savepoint), so two concurrent Creates with the same title can never both
+// win the same slug.
+//
+// # Create is one transaction, savepoints and all (#0134)
+//
+// Create used to run the slug-retry loop as autocommitted statements outside
+// any transaction, then open a second transaction just for the
+// workshop_interests insert. That let a bad interest_id return
+// ErrInterestNotFound while the workshop row it should have taken down with
+// it stayed committed — a ghost draft that burned a slug and got no audit
+// row (issues/0134.md). The whole method now runs inside one transaction:
+// each slug attempt is a pgx pseudo-nested transaction (SAVEPOINT / RELEASE
+// SAVEPOINT / ROLLBACK TO SAVEPOINT under the hood), so a unique_violation on
+// one candidate only unwinds that attempt rather than aborting the outer
+// transaction outright — Postgres would otherwise reject every later
+// statement, including the next slug attempt and the interests insert, once
+// one statement in a transaction fails. If the interests insert then fails
+// with ErrInterestNotFound, the outer transaction's deferred Rollback undoes
+// the workshop insert along with it, so no row survives.
 //
 // # published_at's two transitions
 //
@@ -504,13 +520,22 @@ func (s *Store) GetBySlug(ctx context.Context, slug string) (Workshop, error) {
 // Create inserts a new workshop in status='draft' plus its workshop_interests
 // rows, generating a unique slug from in.Title (see the package doc comment
 // for the collision-suffix algorithm). Returns ErrTitleRequired if Title is
-// empty.
+// empty. The whole thing — slug retries and the interest links — runs inside
+// one transaction (#0134), so a bad interest id rolls back the workshop
+// insert too, leaving no ghost row; see the package doc comment for how the
+// slug-retry loop stays race-safe under that transaction.
 func (s *Store) Create(ctx context.Context, in CreateInput) (Workshop, error) {
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		return Workshop{}, ErrTitleRequired
 	}
 	base := slugify(title)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Workshop{}, fmt.Errorf("workshops: beginning create tx for %q: %w", title, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	var w Workshop
 	var insertErr error
@@ -519,7 +544,22 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Workshop, error) {
 		if attempt > 0 {
 			candidate = fmt.Sprintf("%s-%d", base, attempt+1)
 		}
-		row := s.pool.QueryRow(ctx,
+		// Each attempt runs inside its own pseudo-nested transaction (pgx
+		// implements Tx.Begin on a Tx as a SAVEPOINT/RELEASE
+		// SAVEPOINT/ROLLBACK TO SAVEPOINT triple), so a unique_violation on
+		// this candidate only unwinds this one attempt rather than aborting
+		// the whole outer transaction — the failed INSERT would otherwise
+		// leave the transaction in Postgres's "current transaction is
+		// aborted" state and reject every later statement, including the
+		// next attempt and the interests insert below. The attempt is still
+		// a real INSERT fought out against the UNIQUE constraint, not a
+		// pre-check-then-insert race, so two concurrent Creates with the
+		// same title still can never both win the same slug.
+		sp, err := tx.Begin(ctx)
+		if err != nil {
+			return Workshop{}, fmt.Errorf("workshops: starting slug-attempt savepoint for %q: %w", title, err)
+		}
+		row := sp.QueryRow(ctx,
 			`INSERT INTO workshops (slug, title, summary, body_md, starts_at, ends_at,
 				location_name, location_address, location_note, capacity, signup_url, cover_image)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -529,30 +569,31 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Workshop, error) {
 		)
 		w, insertErr = scanWorkshop(row)
 		if insertErr == nil {
+			if err := sp.Commit(ctx); err != nil {
+				return Workshop{}, fmt.Errorf("workshops: releasing slug-attempt savepoint for %q: %w", title, err)
+			}
 			break
 		}
 		if !isUniqueViolation(insertErr) {
 			return Workshop{}, fmt.Errorf("workshops: creating %q: %w", title, insertErr)
 		}
-		// Collision on this candidate slug — try the next suffix. Each
-		// attempt is its own autocommitted statement (no open transaction to
-		// abort), so retrying is safe.
+		// Collision on this candidate slug — roll back to the savepoint
+		// (undoing just this failed attempt, not the outer transaction) and
+		// try the next suffix.
+		if err := sp.Rollback(ctx); err != nil {
+			return Workshop{}, fmt.Errorf("workshops: rolling back slug-attempt savepoint for %q: %w", title, err)
+		}
 	}
 	if insertErr != nil {
 		return Workshop{}, fmt.Errorf("workshops: creating %q: %w", title, errSlugAttemptsExhausted)
 	}
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Workshop{}, fmt.Errorf("workshops: beginning create-interests tx for %d: %w", w.ID, err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 	interestIDs := dedupeInt64(in.InterestIDs)
 	if err := s.replaceInterestsTx(ctx, tx, w.ID, interestIDs); err != nil {
 		return Workshop{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return Workshop{}, fmt.Errorf("workshops: committing create-interests tx for %d: %w", w.ID, err)
+		return Workshop{}, fmt.Errorf("workshops: committing create tx for %q: %w", title, err)
 	}
 	w.InterestIDs = interestIDs
 	return w, nil

@@ -259,15 +259,16 @@ const (
 
 	// Workshop lifecycle (PRD §5.2/§6.2/§8; #0051's workshop CRUD API,
 	// migrations 000020/#0050). ActionWorkshopUpdated covers any
-	// content-only field change; the two status transitions PATCH can drive
-	// (draft/canceled -> published, published -> draft) get their own named
-	// actions, mirroring interest.deactivated/reactivated and
-	// email_campaign.scheduled/canceled above — "this workshop just went
-	// live or came down" is exactly the kind of change an operator scanning
-	// the log needs to spot without decoding metadata. Any OTHER status
-	// change (e.g. -> canceled, or canceled -> draft) is recorded as
-	// ActionWorkshopUpdated with old_status/new_status in metadata, same as
-	// every other field.
+	// content-only field change; three status transitions PATCH can drive
+	// (draft/canceled -> published, published -> draft, -> canceled from any
+	// other status) get their own named actions, mirroring
+	// interest.deactivated/reactivated and email_campaign.scheduled/canceled
+	// above — "this workshop just went live, came down, or was called off"
+	// is exactly the kind of change an operator scanning the log needs to
+	// spot without decoding metadata (internal/handlers/admin_workshops.go's
+	// PATCH handler). Any OTHER status change (currently just
+	// canceled -> draft) is recorded as ActionWorkshopUpdated with
+	// old_status/new_status in metadata, same as every other field.
 	ActionWorkshopCreated     = "workshop.created"
 	ActionWorkshopUpdated     = "workshop.updated"
 	ActionWorkshopPublished   = "workshop.published"

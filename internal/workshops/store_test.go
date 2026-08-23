@@ -137,12 +137,40 @@ func TestCreate_WithInterests(t *testing.T) {
 	}
 }
 
+// TestCreate_UnknownInterestRejected is #0134's atomicity acceptance
+// criterion, proved the way the #0051 reviewer proved the bug: call Create
+// with an unknown interest id, assert the error, then assert count(*) = 0
+// for the slug it would have taken — no ghost workshop row left behind, and
+// the slug is free for a subsequent real Create to claim.
 func TestCreate_UnknownInterestRejected(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
-	_, err := store.Create(context.Background(), CreateInput{Title: uniqueTitle(t), InterestIDs: []int64{999999999}})
+	ctx := context.Background()
+	title := uniqueTitle(t)
+	wantSlug := slugify(title)
+
+	_, err := store.Create(ctx, CreateInput{Title: title, InterestIDs: []int64{999999999}})
 	if !errors.Is(err, ErrInterestNotFound) {
 		t.Fatalf("Create with unknown interest id: err = %v, want ErrInterestNotFound", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM workshops WHERE slug = $1`, wantSlug).Scan(&count); err != nil {
+		t.Fatalf("counting workshops with slug %q: %v", wantSlug, err)
+	}
+	if count != 0 {
+		t.Fatalf("count(*) for slug %q = %d, want 0 (ghost row left behind by a non-atomic Create)", wantSlug, count)
+	}
+
+	// The slug must also be free for a real, valid Create to claim — proof
+	// that nothing (not even a half-committed row) survived to squat on it.
+	recovered, err := store.Create(ctx, CreateInput{Title: title})
+	if err != nil {
+		t.Fatalf("Create after the failed attempt: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM workshops WHERE id = $1`, recovered.ID) })
+	if recovered.Slug != wantSlug {
+		t.Fatalf("recovered.Slug = %q, want %q (the base slug, unclaimed)", recovered.Slug, wantSlug)
 	}
 }
 
