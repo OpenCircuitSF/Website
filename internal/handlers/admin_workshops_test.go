@@ -507,22 +507,26 @@ func TestAdminWorkshops_PatchRejectsUnsafeSignupURL(t *testing.T) {
 	}
 	cleanupAdminWorkshop(t, pool, target.ID)
 
-	resp := doJSON(t, srv.Client(), http.MethodPatch, fmt.Sprintf("%s/admin/workshops/%d", srv.URL, target.ID),
-		"workshops-admin-patchbadsignup-token", `{"signup_url":"javascript:alert(1)"}`)
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("PATCH signup_url=javascript:alert(1) status = %d, want 400 (body=%s)", resp.StatusCode, body)
+	// #0157 coverage nit (found by #0152's review): this used to check only
+	// 2 payloads where TestAdminWorkshops_CreateRejectsUnsafeSignupURL checks
+	// 4. Same badValues list as that test, so Patch's coverage of the shared
+	// isSafeLinkHref rule matches Create's exactly -- not a bounce (Patch
+	// calls the identical function), just a widened net.
+	badValues := []string{
+		"javascript:alert(1)", "data:text/html,evil", "//evil.host/x",
+		// #0138 bounce, finding 1: control character reassembles a
+		// dangerous scheme once the browser strips it back out.
+		"java\tscript:alert(1)",
 	}
-
-	// #0138 bounce, finding 1: a control character between the slashes must
-	// be rejected at the API boundary too, not just the bare "//" prefix.
-	resp2 := doJSON(t, srv.Client(), http.MethodPatch, fmt.Sprintf("%s/admin/workshops/%d", srv.URL, target.ID),
-		"workshops-admin-patchbadsignup-token", "{\"signup_url\":\"/\\t/evil.host/x\"}")
-	body2, _ := io.ReadAll(resp2.Body)
-	resp2.Body.Close()
-	if resp2.StatusCode != http.StatusBadRequest {
-		t.Errorf("PATCH signup_url=/<TAB>/evil.host/x status = %d, want 400 (body=%s)", resp2.StatusCode, body2)
+	for _, v := range badValues {
+		body := fmt.Sprintf(`{"signup_url":%q}`, v)
+		resp := doJSON(t, srv.Client(), http.MethodPatch, fmt.Sprintf("%s/admin/workshops/%d", srv.URL, target.ID),
+			"workshops-admin-patchbadsignup-token", body)
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("PATCH signup_url=%q status = %d, want 400 (body=%s)", v, resp.StatusCode, respBody)
+		}
 	}
 
 	after, err := store.GetByID(context.Background(), target.ID)

@@ -373,8 +373,16 @@ const HAS_CONTROL_CHAR = /[\x00-\x1f\x7f]/;
  * HAS_CONTROL_CHAR, which already closed this same class for link
  * destinations -- this reuses the identical rule rather than a third
  * variant.
+ *
+ * Exported (#0157) so the checked-in Go<->TypeScript parity fixture
+ * (testdata/url_validators.json, asserted by both this module's
+ * urlValidatorFixture.test.ts and internal/handlers's
+ * url_validator_fixture_test.go) can call the real function directly rather
+ * than a throwaway export-added copy, as the three prior ad-hoc sweeps
+ * (#0138 x2, #0152) all had to. No behavior change -- validateWorkshopForm's
+ * call site below is unaffected.
  */
-function isSafeCoverImage(value: string): boolean {
+export function isSafeCoverImage(value: string): boolean {
   if (HAS_CONTROL_CHAR.test(value)) return false;
   if (!value.startsWith('/')) return false;
   const normalized = value.replace(/\\/g, '/');
