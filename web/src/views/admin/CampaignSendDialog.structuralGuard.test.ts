@@ -35,6 +35,39 @@
 // failure message names both the component's real expression and the
 // test's claimed one. See `## Implementation notes` in issues/0197.md for
 // the executed proof.
+//
+// #0204 item 3 — WHAT THIS GUARD DOES NOT COVER, so a future reader does
+// not over-trust the mechanism. The replicated-logic trap above has shown
+// up in two distinct shapes:
+//
+//   - the MIRROR form (#0195): a test restates a one-token expression —
+//     `sending`, `!sending` — that can only go STALE, never disagree in
+//     substance. classifySvelteGate/classifyTsGate's whole vocabulary is
+//     `identity` / `negation` / `other` over a single identifier, and
+//     that vocabulary is exactly matched to this form. This file closes
+//     it, for these three gates.
+//   - the RE-IMPLEMENTATION form (#0184/#0189): a test rewrites a
+//     function's LOGIC — the hand-rolled `normalizeCountInput` copy that
+//     used an ASCII space where the real separator is U+2009 — and can
+//     therefore DISAGREE with the original, not just go stale. This
+//     guard's identity/negation/other vocabulary cannot express a regex
+//     character class, a `Number.isSafeInteger` call, or any other
+//     function body, so it cannot compare a test helper's body to a real
+//     function's body. A fourth hand-rolled `normalizeCountInput` copy
+//     landing in some other test file tomorrow would be exactly as
+//     invisible to this file as it was in #0189.
+//
+// The working answer to the re-implementation form is not a guard at all
+// — it is #0189's own fix: DELETE the replica and IMPORT AND CALL the
+// real function, the way CampaignSendDialog.guard.test.ts now calls
+// `normalizeCountInput` directly instead of re-deriving it. A structural
+// guard like this one is the right tool only where the real thing
+// genuinely cannot be called from a test — the `.svelte`-file case #0094
+// creates, which is why this file exists at all for the count-input /
+// Escape / backdrop gates. Generalising this file's mechanism to compare
+// function bodies should be considered only if a future case truly cannot
+// call the real thing; do not treat this file as having closed the
+// re-implementation form, because it has not. See issues/0204.md.
 import { describe, it, expect, beforeAll } from 'vitest';
 import ts from 'typescript';
 import { parse as parseSvelte } from 'svelte/compiler';
@@ -311,6 +344,60 @@ function classifyTestHelper(sourceFile: ts.SourceFile, fnName: string): GateShap
   return result;
 }
 
+// ---- #0204 item 2: pinning the premise the `oldSending`/`oldBlockedAgain`
+// before/after block in CampaignSendDialog.guard.test.ts rests on ----
+
+/**
+ * True when `expr` is, at its top level (optionally negated by a single
+ * `!`), exactly `inFlight` or exactly `unmet.length > 0` — the two formulas
+ * `#0186` deleted from the component (`oldSending`/`oldBlockedAgain` in
+ * CampaignSendDialog.guard.test.ts). Deliberately narrow: this is not
+ * "mentions inFlight anywhere" (the real `$derived(sendGuardState({ ...,
+ * inFlight }))` legitimately passes `inFlight` through, and must not trip
+ * this), it is "a local's value comes directly from one of these two raw
+ * expressions again, bypassing sendGuardState".
+ */
+function isDirectInFlightOrUnmetExpr(expr: SvelteNode): boolean {
+  const inner =
+    expr.type === 'UnaryExpression' && expr.operator === '!' ? (expr.argument as SvelteNode | undefined) : expr;
+  if (!inner) return false;
+  if (inner.type === 'Identifier' && inner.name === 'inFlight') return true;
+  if (inner.type === 'BinaryExpression' && inner.operator === '>') {
+    const left = inner.left as SvelteNode | undefined;
+    const right = inner.right as SvelteNode | undefined;
+    const isUnmetLength =
+      left?.type === 'MemberExpression' &&
+      (left.object as SvelteNode | undefined)?.type === 'Identifier' &&
+      ((left.object as SvelteNode).name as string) === 'unmet' &&
+      (left.property as SvelteNode | undefined)?.type === 'Identifier' &&
+      ((left.property as SvelteNode).name as string) === 'length';
+    const isZero = right?.type === 'Literal' && right.value === 0;
+    if (isUnmetLength && isZero) return true;
+  }
+  return false;
+}
+
+/**
+ * Searches every `$derived(...)`-bound local in the component's instance
+ * script for one whose top-level expression is `isDirectInFlightOrUnmetExpr`
+ * — i.e. a local derived directly from `inFlight` or `unmet.length > 0`
+ * rather than routed through `sendGuardState`. Returns the offending
+ * declarator, or undefined if none exists.
+ */
+function findDirectInFlightOrUnmetLocal(instanceContent: unknown): SvelteNode | undefined {
+  return findFirst(instanceContent, (n) => {
+    if (n.type !== 'VariableDeclarator') return false;
+    const id = n.id as SvelteNode | undefined;
+    const init = n.init as SvelteNode | undefined;
+    if (id?.type !== 'Identifier') return false;
+    if (init?.type !== 'CallExpression') return false;
+    const callee = init.callee as SvelteNode | undefined;
+    if (callee?.type !== 'Identifier' || callee.name !== '$derived') return false;
+    const arg = (init.arguments as SvelteNode[] | undefined)?.[0] as SvelteNode | undefined;
+    return !!arg && isDirectInFlightOrUnmetExpr(arg);
+  });
+}
+
 describe('CampaignSendDialog structural guard (#0197)', () => {
   let sendingVar: string;
   let componentAst: SvelteNode;
@@ -369,8 +456,55 @@ describe('CampaignSendDialog structural guard (#0197)', () => {
     const escapeExpr = findEscapeGate(instance.content, handlerName, componentSource);
     const backdropExpr = findBackdropClickGate(backdropDiv, componentSource);
 
-    expect(classifySvelteGate(disabledExpr, componentSource).varName).toBe(sendingVar);
-    expect(classifySvelteGate(escapeExpr, componentSource).varName).toBe(sendingVar);
-    expect(classifySvelteGate(backdropExpr, componentSource).varName).toBe(sendingVar);
+    // #0204: these three carried bare `expect(…).toBe(sendingVar)` calls
+    // with no message, so a failure read only `expected undefined to be
+    // 'sending'` — no file, no expression, nothing pasteable, unlike every
+    // other assertion in this file. Give each the same `detail` treatment.
+    function anchorDetail(label: string, expr: SvelteNode): string {
+      const actual = classifySvelteGate(expr, componentSource);
+      return (
+        `${label} (shared-anchor check): ${COMPONENT_PATH} has \`${actual.source}\` ` +
+        `(classified '${actual.kind}'${actual.varName ? `, of \`${actual.varName}\`` : ''}), but the ` +
+        `shared anchor found by findSendingVarName is \`${sendingVar}\` — this gate is not bound to ` +
+        'the same $derived variable as the others (see #0195, #0197, #0204)'
+      );
+    }
+
+    expect(classifySvelteGate(disabledExpr, componentSource).varName, anchorDetail('count-input disabled', disabledExpr)).toBe(
+      sendingVar,
+    );
+    expect(classifySvelteGate(escapeExpr, componentSource).varName, anchorDetail('Escape', escapeExpr)).toBe(sendingVar);
+    expect(classifySvelteGate(backdropExpr, componentSource).varName, anchorDetail('backdrop onclick', backdropExpr)).toBe(
+      sendingVar,
+    );
+  });
+
+  // #0204 item 2: CampaignSendDialog.guard.test.ts's `oldSending`/
+  // `oldBlockedAgain` before/after block only means anything if the
+  // component genuinely no longer derives a local directly from `inFlight`
+  // or `unmet.length > 0` — #0197's review checked that premise by hand
+  // (grep) and declined to guard it, reasoning there was nothing live left
+  // to structurally compare `oldSending`/`oldBlockedAgain` against. This
+  // pins that premise instead of leaving it to a future grep: if a raw
+  // derivation like this is ever reintroduced, the before/after block
+  // silently stops describing anything, and this test is what notices.
+  it('derives no local directly from `inFlight` or `unmet.length > 0` (#0186 premise)', () => {
+    const instance = componentAst.instance as SvelteNode;
+    const offender = findDirectInFlightOrUnmetLocal(instance.content);
+    if (offender) {
+      const id = offender.id as SvelteNode;
+      const init = offender.init as SvelteNode;
+      const arg = (init.arguments as SvelteNode[])[0] as SvelteNode;
+      const start = arg.start as number;
+      const end = arg.end as number;
+      const exprText = componentSource.slice(start, end);
+      throw new Error(
+        `${COMPONENT_PATH}: \`${id.name as string}\` is \`$derived(${exprText})\` — a local derived directly ` +
+          "from `inFlight` or `unmet.length > 0` again, bypassing sendGuardState. " +
+          "CampaignSendDialog.guard.test.ts's oldSending/oldBlockedAgain before/after block compares against " +
+          'these two raw formulas as dead code that nothing in the component matches any more; if a live local ' +
+          'like this exists, that comparison needs to target it instead (see #0186, #0197, #0204)',
+      );
+    }
   });
 });
