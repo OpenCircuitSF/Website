@@ -178,15 +178,21 @@ describe('sendGuardState', () => {
       want: 'sending',
     },
     {
-      // #0184: pins the branch order between the status check and the
-      // inFlight check -- no other case sets both `status !== 'draft'` AND
-      // `inFlight`, so swapping those two branches in sendGuardState passed
-      // the whole suite before this case existed. status is checked first:
-      // a campaign that has left 'draft' (e.g. mid-send, already
-      // 'sending') must still read as 'unavailable', not 'sending'.
-      name: 'unavailable wins over sending when status is not draft and inFlight is true',
+      // #0195: pins the branch order between the inFlight check and the
+      // status check -- no other case sets both `inFlight` AND
+      // `status !== 'draft'`, so reverting to #0184's original
+      // status-before-inFlight order passed the whole suite before this
+      // case existed. inFlight is now checked FIRST: a send already in
+      // flight for this campaign must still read as 'sending' even when a
+      // mid-request status flip (CampaignEditor.svelte's
+      // resyncCampaignStatus, on an SSE reconnect or a terminal progress
+      // frame) would otherwise say 'unavailable'. See sendGuardState's own
+      // doc comment for why #0184's original reasoning (favoring `status`)
+      // does not transfer to CampaignSendDialog, the one consumer where
+      // `inFlight` can actually be true.
+      name: 'sending wins over unavailable when inFlight is true and status is not draft',
       input: { status: 'sending', unmet: noUnmet, audienceCount: 482, confirmRaw: '482', inFlight: true },
-      want: 'unavailable',
+      want: 'sending',
     },
     {
       name: 'unavailable when status is scheduled',

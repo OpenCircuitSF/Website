@@ -64,11 +64,15 @@ export interface SendGuardInput {
  * The Send button/dialog's guard state — a discriminated union so the
  * component never has to re-derive "can this send" from raw booleans.
  *
+ *   - `sending`        — a send request for THIS campaign is already in
+ *                        flight (the dialog's own submitting state). Checked
+ *                        BEFORE `status` (#0195), so this wins even if
+ *                        `status` flips non-draft while the request is
+ *                        outstanding.
  *   - `unavailable`   — status isn't `draft` (the send control shouldn't
  *                        even be shown; canSendCampaign in campaigns.ts is
- *                        the render gate, this is the defensive fallback).
- *   - `sending`        — a send request for THIS campaign is already in
- *                        flight (the dialog's own submitting state).
+ *                        the render gate, this is the defensive fallback) —
+ *                        reached only once `inFlight` is false.
  *   - `blocked`        — the pre-send checks list is non-empty. This wins
  *                        over a correct typed count: a correct confirmation
  *                        of an audience the campaign still cannot legally
@@ -93,23 +97,54 @@ export type SendGuardState =
  * and CampaignSendDialog.svelte must only ever branch on `.kind`, never
  * recompute any of the conditions below themselves.
  *
- * Branch order is significant, not incidental: `status` is checked BEFORE
- * `inFlight`, so a non-`draft` status short-circuits straight to
- * `unavailable` even while a send for that campaign is genuinely in
- * flight — `kind === 'sending'` is reachable only once `status === 'draft'`
- * has already passed. Threading a real `status` through is therefore a
- * prerequisite for reusing this guard on a `'failed'` campaign retry, not
- * sufficient for it: until this ordering (or the `unavailable` branch)
- * changes, a `'failed'`-status caller sees `sending === false` mid-request,
- * not `sending === true`, and a caller that only checks `sending` to know
- * whether a request is outstanding will be misled.
+ * Branch order is significant, not incidental. As of #0195, `inFlight` is
+ * checked BEFORE `status`: a send that is genuinely outstanding for THIS
+ * campaign reads as `sending` even if `status` flips out from under the
+ * caller mid-request. That flip is reachable, not hypothetical —
+ * `CampaignEditor.svelte`'s `resyncCampaignStatus` reassigns `campaign`
+ * (and therefore `CampaignSendDialog`'s `status` prop) on every SSE
+ * connect/reconnect and every terminal progress frame, so a reconnect
+ * during an outstanding `onConfirmSend` request — or another admin sending
+ * the same campaign — can move `status` non-draft while `inFlight` stays
+ * `true`. Holding `sending` across that flip is what keeps the dialog's
+ * count input disabled and Escape/the backdrop dead for the duration of a
+ * request it already knows is outstanding.
+ *
+ * This reorder does NOT change `CampaignEditor.svelte`'s own `editorGuard`
+ * call, which hardcodes `inFlight: false`: with `inFlight` false the new
+ * first branch never fires, so evaluation falls straight through to the
+ * `status` check exactly as before — `sendGateOpen` and
+ * `preflightPanelSummary` are unaffected.
+ *
+ * This revisits, rather than merely preserves, two earlier decisions:
+ *
+ *   - #0184 originally put `status` before `inFlight`, reasoning that
+ *     `unavailable` should win because canSendCampaign (`campaigns.ts`) is
+ *     "the render gate" — the strictly stronger statement once `status`
+ *     leaves `draft`. That reasoning holds for `editorGuard` (see above,
+ *     where `inFlight` is always `false` and the render gate is real), but
+ *     not for `CampaignSendDialog`, the only consumer where `inFlight` can
+ *     actually be `true`: once mounted, the dialog is NOT re-gated by
+ *     canSendCampaign while it stays open, and `unavailable` carries no
+ *     defensive UI meaning there — `sendGuardDescription('unavailable')` is
+ *     `''`, and neither `sending` nor `blockedAgain` become true. Demoting
+ *     an outstanding request to `unavailable` in that consumer re-enabled
+ *     the very controls it was supposed to keep dead, which is #0195 itself.
+ *     `inFlight`-first is correct for the one consumer that can reach it.
+ *   - #0184 also put `inFlight` before `unmet` (a send already in flight
+ *     reads as `sending`, not `blocked`, even with a stale unmet list) and
+ *     #0186 re-verified it; that relative order is UNCHANGED here —
+ *     `inFlight` is checked even earlier now, still ahead of `unmet`, and
+ *     `status` sitting between them changes nothing because `status` never
+ *     intercepts a `draft` caller (every real dialog case) or an
+ *     already-`inFlight` caller (short-circuited before `status` runs).
  */
 export function sendGuardState(input: SendGuardInput): SendGuardState {
-  if (input.status !== 'draft') {
-    return { kind: 'unavailable' };
-  }
   if (input.inFlight) {
     return { kind: 'sending' };
+  }
+  if (input.status !== 'draft') {
+    return { kind: 'unavailable' };
   }
   if (input.unmet.length > 0) {
     return { kind: 'blocked' };

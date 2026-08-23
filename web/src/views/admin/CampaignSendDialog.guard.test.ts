@@ -13,11 +13,14 @@
 //
 // The dialog now threads the real `status` prop through (#0189) instead of
 // a hardcoded stand-in, but every case below still fixes status to 'draft'
-// — that is the only status this dialog is reachable with today
-// (canSendCampaign gates the mount), and it is the only status for which
+// — that is the only status this dialog is OPENED FROM (canSendCampaign
+// gates the mount), and it is the only status for which
 // `oldSending`/`oldBlockedAgain` below were ever accurate, since they
 // predate `status` existing at all. sendGuardState's own tests
-// (sendConfirm.test.ts) already cover the `status !== 'draft'` branch.
+// (sendConfirm.test.ts) already cover the `status !== 'draft'` branch. A
+// status flip WHILE the dialog stays open — a different thing from what it
+// is opened with — is exactly what #0195's describe block below drives;
+// see that block's own comment.
 
 import { describe, it, expect } from 'vitest';
 import type { UnmetRequirement } from '../../lib/types';
@@ -172,5 +175,69 @@ describe('CampaignSendDialog guard wiring (#0186) — old raw-boolean formulas v
       'idle, blocked, correct count typed anyway',
       'idle, blocked with two reasons, correct count typed anyway',
     ]);
+  });
+});
+
+// #0195: found by #0191's phase-3 review. `status` is a reactive `$props()`
+// value and `guard` is `$derived`, so this dialog's guard tracks
+// `campaign.status` live for as long as the dialog stays mounted.
+// CampaignEditor.svelte's resyncCampaignStatus (line ~326) reassigns
+// `campaign` on every SSE connect/reconnect and every terminal progress
+// frame, so a reconnect during onConfirmSend's outstanding request — or
+// another admin sending the same campaign — is a reachable way for
+// `status` to flip non-draft while `sendInFlight` is still `true`.
+// `handleSubmit` and `onCloseSend` already refuse to act on `sendInFlight`,
+// so nothing double-sends either way; the defect this closes is that the
+// dialog misrepresented its own state (count input re-enabled, Escape and
+// the backdrop live) during a request it already knew was outstanding.
+//
+// This drives the two-step sequence itself (inFlight goes true, THEN
+// status flips) through the dialog's own derived formulas — `sending` plus
+// the literal one-line gates the component applies to the count input's
+// `disabled`, the Escape handler, and the backdrop's `onclick` — rather
+// than asserting on `sendGuardState(...).kind` alone in isolation.
+describe('CampaignSendDialog guard wiring (#0195) — a mid-flight status flip while a send is outstanding', () => {
+  function sendingFor(status: string, inFlight: boolean): boolean {
+    return sendGuardState({ status, unmet: noUnmet, audienceCount: 482, confirmRaw: '482', inFlight }).kind ===
+      'sending';
+  }
+  // Mirror the component's OWN gates verbatim (CampaignSendDialog.svelte:
+  // the input's `disabled={sending}`, `handleKeydown`'s `!sending`, and the
+  // backdrop's `onclick={() => !sending && onClose()}`), so a test failure
+  // here means the actual affordance moved, not a re-derivation drifting
+  // from what the template does.
+  function countInputDisabled(sending: boolean): boolean {
+    return sending;
+  }
+  function escapeCloses(sending: boolean): boolean {
+    return !sending;
+  }
+  function backdropCloses(sending: boolean): boolean {
+    return !sending;
+  }
+
+  it('a genuinely outstanding send keeps the count input disabled and Escape/backdrop dead across the flip', () => {
+    // Step 1 — the operator submits: onConfirmSend sets sendInFlight = true
+    // while status is still 'draft', the ordinary start-of-send moment.
+    const sendingBeforeFlip = sendingFor('draft', true);
+    expect(sendingBeforeFlip).toBe(true);
+    expect(countInputDisabled(sendingBeforeFlip)).toBe(true);
+    expect(escapeCloses(sendingBeforeFlip)).toBe(false);
+    expect(backdropCloses(sendingBeforeFlip)).toBe(false);
+
+    // Step 2 — mid-request, a resync reassigns `campaign` and this
+    // dialog's live `status` prop flips to 'sending', while `inFlight`
+    // is UNCHANGED — still true, the request has not resolved.
+    const sendingDuringFlip = sendingFor('sending', true);
+    expect(sendingDuringFlip).toBe(true); // unchanged by the flip — #0195's fix
+    expect(countInputDisabled(sendingDuringFlip)).toBe(true);
+    expect(escapeCloses(sendingDuringFlip)).toBe(false);
+    expect(backdropCloses(sendingDuringFlip)).toBe(false);
+
+    // Contrast, for the record: once the request actually resolves
+    // (onConfirmSend's `finally` clears sendInFlight), the live status
+    // governs the dialog normally again — e.g. another admin's completed
+    // send correctly reads as unavailable, not a stale 'ready'/'sending'.
+    expect(sendingFor('sending', false)).toBe(false);
   });
 });
