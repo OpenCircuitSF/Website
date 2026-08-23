@@ -77,21 +77,43 @@ var testNameCitationPattern = regexp.MustCompile(`\bTest[A-Z0-9_][A-Za-z0-9_]*\b
 
 // nonTestIdentifierAllowlist is the discounted class that is a name, not a
 // shape: an identifier that matches testNameCitationPattern but names
-// something other than a test function — a struct field the mailing
-// subsystem's own comments describe next to its declaration in four
-// separate files (admin_campaigns.go, mailing/campaigns.go,
-// mailing/preflight.go, mailing/worker_store.go — none of them a
-// _test.go file, all of them scanned by this guard's walk regardless).
-// Extend this list if another such field turns up; don't loosen the
+// something other than a test function.
+//
+//   - "TestSentAt" is a struct field the mailing subsystem's own comments
+//     describe next to its declaration in four separate files
+//     (admin_campaigns.go, mailing/campaigns.go, mailing/preflight.go,
+//     mailing/worker_store.go — none of them a _test.go file, all of them
+//     scanned by this guard's walk regardless).
+//   - "TestPool" is the bare suffix word the *TestPool naming convention
+//     (credsTestPool, interestsTestPool, and friends — see
+//     testNameCitationPattern's own comment) is named after. It appears,
+//     asterisk-wrapped as markdown emphasis, in exactly three real
+//     comments in the tree: main_test.go's summary line and this file's
+//     own two uses of the convention name above. #0199 removed a
+//     preceding-`*` discount rule that used to cover this by punctuation
+//     rather than by name — and that rule was too broad: it silently
+//     excluded ANY markdown-emphasised citation, so a genuinely dangling
+//     citation written as "*TestSomethingGone*" was invisible to the
+//     guard (proved by planting one — see
+//     TestDanglingTestCitationPatternExcludesDiscountedShapes). Naming
+//     the one word that actually needed it here covers the same three
+//     real lines exactly, with no blind spot for anything else written
+//     between asterisks.
+//
+// Extend this list if another such name turns up; don't loosen the
 // pattern to admit it structurally, since the pattern's whole value is
 // that a real dangling function citation has nowhere to hide behind it.
 var nonTestIdentifierAllowlist = map[string]bool{
 	"TestSentAt": true,
+	"TestPool":   true,
 }
 
 // citationIsExcluded narrows testNameCitationPattern's candidate matches
 // down to the ones #0192's phase-3 sweep had to discount by hand, plus one
-// more of the same shape this issue's own dry run turned up:
+// more of the same shape this issue's own dry run turned up. #0199 removed
+// a fourth rule that used to live here — a punctuation-based markdown-
+// emphasis discount — and replaced its one real use with a name on
+// nonTestIdentifierAllowlist instead; see that variable's comment for why.
 //
 //   - a wildcard prefix reference naming a whole family rather than one
 //     function — the character (or three characters) immediately after
@@ -101,18 +123,19 @@ var nonTestIdentifierAllowlist = map[string]bool{
 //     more (audit_test.go's two references to
 //     internal/middleware/auth_test.go's pair of collision-probe helpers,
 //     each spelled "…Prefix..." rather than "…Prefix*") — same intent,
-//     different punctuation, so both are recognised;
-//   - the same '*' used the other way, as markdown-style emphasis around
-//     the naming convention itself rather than around a family reference
-//     — the character immediately BEFORE the match is '*'
-//     (main_test.go's own summary comment uses this form once, wrapping
-//     the bare suffix word the *TestPool convention is named after). The
-//     \b requirement in testNameCitationPattern already keeps every ACTUAL
-//     compound helper name (credsTestPool and its five siblings) out of
-//     the candidate set on its own, since there is no word boundary
-//     immediately before "Test" inside any of them; this second rule
-//     exists only for the bare, asterisk-wrapped convention name itself,
-//     which is never a defined function either way;
+//     different punctuation, so both are recognised. The "..." form has a
+//     blind spot with the same shape as the emphasis rule #0199 removed,
+//     at much lower stakes: a placeholder like "// TODO: write
+//     TestNotYetWritten... later" reads identically to a genuine
+//     family-wildcard reference and is silently accepted (planted and
+//     confirmed missed as part of #0199 — see #0199's implementation
+//     notes). No instance of this exists in the tree today (checked as
+//     part of this guard's own verification). It is not narrowed here,
+//     because there is no local signal — punctuation or otherwise — that
+//     tells "wildcard family reference" and "unwritten placeholder" apart;
+//     if a real instance ever turns up, the fix is the same shape as
+//     always: name it on nonTestIdentifierAllowlist, don't loosen this
+//     rule;
 //   - a name the comment honestly documents as retired — the phrase
 //     "renamed from" anywhere in the twenty characters immediately before
 //     the match (case-insensitive; templates_test.go carries the one
@@ -150,9 +173,6 @@ func citationIsExcluded(text string, start, end int) bool {
 		return true
 	}
 	if end+3 <= len(text) && text[end:end+3] == "..." {
-		return true
-	}
-	if start > 0 && text[start-1] == '*' {
 		return true
 	}
 	windowStart := start - 20
@@ -284,6 +304,29 @@ func stripCommentMarkers(text string) string {
 // no, the join is discarded entirely and the primary pass's own reading
 // of each line stands, which is what correctly leaves
 // "…NotARealSubscriber" resolved on its own.
+//
+// This makes the seam pass's answer depend on what the tree currently
+// defines, not on anything local to the comment being read — and #0199
+// found the one place that coupling actually bites: when the line-i
+// fragment of a wrap is ITSELF a name defined[] already recognises (not
+// the full wrapped name — just the piece up to the seam), the "does the
+// join produce a defined name" question above is moot, because the
+// primary pass below has already resolved that fragment as a complete
+// citation on its own. The seam pass never runs, the line-i+1 remainder is
+// never looked at, and a citation that was genuinely dangling disappears
+// with no punctuation difference from an ordinary caught one — proved by
+// planting one (see #0199's implementation notes). This needs a defined
+// function name that is a strict prefix of another defined function's
+// name, wrapped exactly at that boundary, which is contrived today — but
+// six such strict-prefix pairs already exist among the tree's defined test
+// functions (e.g. TestDeleteSessionsForUser is a strict prefix of
+// TestDeleteSessionsForUser_RemovesAllAndIsIdempotent), so the count of
+// candidates only grows as the tree does; nothing here re-checks it. The
+// alternatives are worse and already tried: a punctuation-based seam rule
+// (a trailing '_') failed on seo_test.go's real mid-camel-word wrap, and
+// merging unconditionally produces the "…NotARealSubscriber" + "is" false
+// positive above. So the coupling stays, and this paragraph exists so a
+// future reader does not have to rediscover why.
 func collectTestCitations(t *testing.T, roots []string, defined map[string]bool) []testCitation {
 	t.Helper()
 	var citations []testCitation
@@ -294,11 +337,28 @@ func collectTestCitations(t *testing.T, roots []string, defined map[string]bool)
 			t.Fatalf("parse %s: %v", path, perr)
 		}
 		for _, group := range file.Comments {
-			lines := make([]string, len(group.List))
-			positions := make([]token.Position, len(group.List))
-			for i, c := range group.List {
-				lines[i] = stripCommentMarkers(c.Text)
-				positions[i] = fset.Position(c.Slash)
+			// A "//" *ast.Comment always holds exactly one physical line,
+			// so one entry in group.List already means one entry here. A
+			// "/* ... */" *ast.Comment can span many physical lines in a
+			// single Text, all reported at one Slash position — #0199: a
+			// citation on any line but the block's first was reported at
+			// the block's OPENING line, off by however many lines separate
+			// them. Splitting each comment's stripped text on its own
+			// internal newlines and advancing the line number once per
+			// split fixes both shapes with the same code: a "//" comment's
+			// stripped text has no "\n" in it, so the split is a no-op and
+			// nothing changes there.
+			var lines []string
+			var positions []token.Position
+			for _, c := range group.List {
+				base := fset.Position(c.Slash)
+				stripped := stripCommentMarkers(c.Text)
+				for j, part := range strings.Split(stripped, "\n") {
+					pos := base
+					pos.Line += j
+					lines = append(lines, part)
+					positions = append(positions, pos)
+				}
 			}
 
 			// suppressFragment[i] holds the byte offset, within lines[i],
@@ -472,10 +532,27 @@ func TestDanglingTestCitationPatternExcludesDiscountedShapes(t *testing.T) {
 		t.Errorf("wildcard-suffixed reference %q*: want excluded, got flagged", wildcardPrefix)
 	}
 
+	// #0199: this used to be excluded by a preceding-'*' punctuation rule
+	// that discounted ANY markdown-emphasised citation. That rule is gone;
+	// "TestPool" is now excluded because it is on nonTestIdentifierAllowlist
+	// by name, not because of the asterisks around it.
 	poolWord := "Test" + "Pool"
 	emphasisText := "each of this package's *" + poolWord + " helpers checks that"
 	if !testCaseExcluded(t, emphasisText, poolWord) {
-		t.Errorf("asterisk-emphasised %q: want excluded, got flagged", poolWord)
+		t.Errorf("allowlisted %q written with markdown emphasis: want excluded, got flagged", poolWord)
+	}
+
+	// #0199, the other direction: a DIFFERENT name written with the same
+	// single-leading-asterisk emphasis main_test.go's real TestPool use has
+	// (no closing '*' immediately after the name — a trailing '*' right
+	// after the match is the SEPARATE, still-live wildcard-family rule
+	// above, and would exclude it regardless of this one) is no longer
+	// swallowed by punctuation alone. This is the dangling citation the old
+	// preceding-'*' rule used to hide.
+	emphasisedDanglingName := "Test" + "RenderSomethingThatGotRenamedAway"
+	emphasisedDanglingText := "each of this package's *" + emphasisedDanglingName + " helpers checks that"
+	if testCaseExcluded(t, emphasisedDanglingText, emphasisedDanglingName) {
+		t.Errorf("markdown-emphasised dangling citation %q: want NOT excluded now that the preceding-'*' rule is gone, got excluded", emphasisedDanglingName)
 	}
 
 	renamedName := "Test" + "ConfirmationAndAlreadySubscribed_NoCampaignHeaders"
@@ -580,5 +657,60 @@ type T struct{}
 	}
 	if len(missing) != 0 {
 		t.Errorf("fixture should resolve cleanly end to end, found undefined citations: %v", missing)
+	}
+}
+
+// TestDanglingTestCitationPatternReportsBlockCommentLineNotItsOpeningLine is
+// a direct, isolated proof of #0199's fix to a "/* ... */" line-number bug:
+// before the fix, a citation anywhere inside a multi-line block comment was
+// reported at the comment's OPENING line (the *ast.Comment's single Slash
+// position), no matter which physical line inside the block actually held
+// the citation — because collectTestCitations built one lines[]/positions[]
+// entry per *ast.Comment, and a whole multi-line block comment is a single
+// *ast.Comment. Latent in the real tree today — five multi-line block
+// comments exist there and none carries a citation — but the failure
+// message exists to be pasted into a search (#0187 established that for
+// the sibling guard), so it must name the citation's own line, not the
+// block's.
+func TestDanglingTestCitationPatternReportsBlockCommentLineNotItsOpeningLine(t *testing.T) {
+	dir := t.TempDir()
+	citedName := "Test" + "BlockCommentPlantedCitation"
+	const blockOpeningLine = 3 // the line the "/*" itself sits on
+	const citationLine = 6     // the line the planted name actually sits on
+	src := "package fixture\n" + // line 1
+		"\n" + // line 2
+		"/*\n" + // line 3 — blockOpeningLine
+		"Block comment opening line.\n" + // line 4
+		"Second line, still prose.\n" + // line 5
+		"Citation on this very line: " + citedName + " is dangling.\n" + // line 6 — citationLine
+		"Fourth line, wraps up.\n" + // line 7
+		"*/\n" + // line 8
+		"func Example() {}\n" // line 9
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	roots := []string{dir}
+	// citedName is deliberately never defined anywhere in this fixture —
+	// this test only cares about the LINE a citation of it is reported at,
+	// which collectTestCitations reports regardless of whether the name
+	// resolves.
+	defined := collectDefinedTestFuncs(t, roots)
+	citations := collectTestCitations(t, roots, defined)
+
+	var found *testCitation
+	for i := range citations {
+		if citations[i].name == citedName {
+			found = &citations[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a citation of %q, got %v", citedName, citations)
+	}
+	if found.pos.Line == blockOpeningLine {
+		t.Fatalf("citation %q reported at the block's opening line (%d) instead of its own line (%d) — the #0199 bug is back", citedName, blockOpeningLine, citationLine)
+	}
+	if found.pos.Line != citationLine {
+		t.Errorf("citation %q: want line %d, got %d", citedName, citationLine, found.pos.Line)
 	}
 }
