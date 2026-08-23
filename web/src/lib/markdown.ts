@@ -15,9 +15,37 @@
 // own raw-HTML-omitted default (see internal/mailing/campaign_markdown_test.go's
 // "raw-HTML-omitted marker" test). Link destinations are checked against a
 // scheme allowlist (http/https/mailto, or no scheme at all for a relative
-// path) before being emitted, rejecting javascript:/data:/vbscript: etc. --
-// the same "dangerous URL" rule that test file's TestRenderMarkdownHTML_*
-// dangerous-link cases document for goldmark's own renderer.
+// path) before being emitted, rejecting javascript:/data:/vbscript: etc.
+//
+// #0052 review (bounced 2026-08-22, finding 1): a browser normalizes a URL
+// before resolving it -- stripping ASCII tab/CR/LF anywhere in the string and
+// stripping leading C0 controls -- so a destination containing one of those
+// characters could sail past a naive scheme check (it doesn't *look* like it
+// has a scheme, so it fell through to the "no scheme = relative, therefore
+// safe" branch) and still resolve to `javascript:` once the browser strips
+// the control character back out. Confirmed executable against the WHATWG
+// URL parser for all of `java<TAB>script:...`, `java<CR>script:...`,
+// `javascript<TAB>:...`, `<U+0001>javascript:...`, and `<NUL>javascript:...`.
+// `isSafeLinkHref` now rejects any destination containing a character below
+// U+0020 (or U+007F/DEL) outright, before the scheme test ever runs, which
+// closes the gap for all five without a per-string denylist. See
+// `markdown.test.ts`'s "control-character scheme bypass" tests for the exact
+// inputs and the corresponding legitimate cases that still pass.
+//
+// This module's output IS safe to render with `{@html}` under that model:
+// escaping is unconditional and comes first, and link destinations are now
+// validated against their post-normalization form. It is not goldmark parity
+// and never claims to be.
+//
+// Also fixed in the same pass: link substitution now happens in a single
+// left-to-right scan that never re-visits already-built `<a href="...">`
+// markup, so the later bold/italic passes run only against the literal text
+// between links, not against the link HTML itself. Previously the emphasis
+// regexes ran on the whole line *after* links were substituted in, so a `_`
+// or `*` inside an ordinary URL (a query string like `?utm_source=x`, or a
+// snake_case path like `/a_b_c`) was rewritten in place, corrupting the
+// `href` attribute (`href="/a<em>b</em>c"`) even though the link itself was
+// perfectly safe.
 //
 // The return value is a plain HTML string. The caller decides how to insert
 // it (WorkshopEditor.svelte renders it into the preview pane with {@html}).
@@ -33,9 +61,18 @@ function escapeHtml(s: string): string {
 
 const SAFE_LINK_SCHEME = /^(https?|mailto):/i;
 const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+// C0 controls (0x00-0x1f) plus DEL (0x7f). A browser strips ASCII tab/CR/LF
+// anywhere in a URL and strips leading C0 controls/whitespace before
+// resolving it, so a destination containing one of these characters must be
+// rejected outright rather than scheme-checked as it stands -- checking the
+// raw string lets e.g. "java\x09script:..." or "\x00javascript:..." fail to
+// look like they have a scheme (so they fall through to the "safe, relative"
+// branch) and then resolve to "javascript:" once the browser normalizes them.
+const HAS_CONTROL_CHAR = /[\x00-\x1f\x7f]/;
 
 /** Whether a link destination is safe to emit: an allowed scheme, or no scheme at all (relative/root-relative). */
 export function isSafeLinkHref(href: string): boolean {
+  if (HAS_CONTROL_CHAR.test(href)) return false;
   const trimmed = href.trim();
   if (trimmed === '') return false;
   if (HAS_SCHEME.test(trimmed)) {
@@ -44,18 +81,33 @@ export function isSafeLinkHref(href: string): boolean {
   return true;
 }
 
-/** Apply inline markup (links, bold, italic) to a line that has already been HTML-escaped. */
-function renderInline(escaped: string): string {
-  let out = escaped;
-  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (whole, text: string, href: string) => {
-    if (!isSafeLinkHref(href)) return text;
-    return `<a href="${href}" rel="noopener noreferrer">${text}</a>`;
-  });
+const LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/g;
+
+function applyEmphasis(s: string): string {
+  let out = s;
   out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>');
   out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
   out = out.replace(/_([^_]+)_/g, '<em>$1</em>');
   return out;
+}
+
+/** Apply inline markup (links, bold, italic) to a line that has already been HTML-escaped. */
+function renderInline(escaped: string): string {
+  const parts: string[] = [];
+  let lastIndex = 0;
+  LINK_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = LINK_RE.exec(escaped)) !== null) {
+    const [whole, text, href] = match;
+    parts.push(applyEmphasis(escaped.slice(lastIndex, match.index)));
+    parts.push(
+      isSafeLinkHref(href) ? `<a href="${href}" rel="noopener noreferrer">${text}</a>` : text,
+    );
+    lastIndex = match.index + whole.length;
+  }
+  parts.push(applyEmphasis(escaped.slice(lastIndex)));
+  return parts.join('');
 }
 
 const HEADING_RE = /^(#{1,6})\s+(.*)$/;

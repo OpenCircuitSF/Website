@@ -102,4 +102,92 @@ describe('isSafeLinkHref', () => {
     expect(isSafeLinkHref('')).toBe(false);
     expect(isSafeLinkHref('   ')).toBe(false);
   });
+
+  // #0052 review, finding 1 (bounced 2026-08-22): a browser strips ASCII
+  // tab/CR/LF anywhere in a URL and strips leading C0 controls before
+  // resolving it, so these five inputs previously slipped past the scheme
+  // check (they don't *look* like they have a scheme) and resolved to
+  // `javascript:` once normalized. Each was confirmed executable against the
+  // WHATWG URL parser in the review. All five must now be rejected.
+  describe('control-character scheme bypass (#0052 finding 1)', () => {
+    it('rejects a tab spliced into the scheme name', () => {
+      expect(isSafeLinkHref('java\tscript:alert(1)')).toBe(false);
+    });
+
+    it('rejects a carriage return spliced into the scheme name', () => {
+      expect(isSafeLinkHref('java\rscript:alert(1)')).toBe(false);
+    });
+
+    it('rejects a tab spliced between the scheme name and colon', () => {
+      expect(isSafeLinkHref('javascript\t:alert(1)')).toBe(false);
+    });
+
+    it('rejects a leading U+0001 control character', () => {
+      expect(isSafeLinkHref(String.fromCharCode(1) + 'javascript:alert(1)')).toBe(false);
+    });
+
+    it('rejects a leading NUL byte', () => {
+      expect(isSafeLinkHref(String.fromCharCode(0) + 'javascript:alert(1)')).toBe(false);
+    });
+
+    it('rejects a line-feed spliced into the scheme name', () => {
+      expect(isSafeLinkHref('java\nscript:alert(1)')).toBe(false);
+    });
+
+    it('rejects a trailing DEL character', () => {
+      expect(isSafeLinkHref('javascript:alert(1)\x7f')).toBe(false);
+    });
+
+    it('still accepts the legitimate cases with no control characters', () => {
+      expect(isSafeLinkHref('https://example.com')).toBe(true);
+      expect(isSafeLinkHref('/workshops/soldering-101')).toBe(true);
+      expect(isSafeLinkHref('mailto:hello@opencircuitsf.com')).toBe(true);
+      expect(isSafeLinkHref('/a_b_c?utm_source=newsletter')).toBe(true);
+    });
+  });
+});
+
+describe('renderMarkdownPreview control-character link bypass (#0052 finding 1)', () => {
+  it('drops the link (renders inert text) for every confirmed bypass input', () => {
+    const cases = [
+      '[x](java\tscript:alert(1))',
+      '[x](java\rscript:alert(1))',
+      '[x](javascript\t:alert(1))',
+      '[x](' + String.fromCharCode(1) + 'javascript:alert(1))',
+      '[x](' + String.fromCharCode(0) + 'javascript:alert(1))',
+    ];
+    for (const md of cases) {
+      const out = renderMarkdownPreview(md);
+      expect(out).not.toContain('<a ');
+      expect(out).not.toContain('javascript:');
+    }
+  });
+});
+
+describe('renderMarkdownPreview link/emphasis ordering (#0052 finding 1, correctness bug)', () => {
+  it('does not let an underscore in a URL trigger italic markup inside href', () => {
+    const out = renderMarkdownPreview('[x](/a_b_c)');
+    expect(out).toBe('<p><a href="/a_b_c" rel="noopener noreferrer">x</a></p>');
+    expect(out).not.toContain('<em>');
+  });
+
+  it('does not let asterisks in a URL trigger bold markup inside href', () => {
+    const out = renderMarkdownPreview('[x](/a**b**c)');
+    expect(out).toBe('<p><a href="/a**b**c" rel="noopener noreferrer">x</a></p>');
+    expect(out).not.toContain('<strong>');
+  });
+
+  it('still applies emphasis to text around a link on the same line', () => {
+    const out = renderMarkdownPreview('Read **this** and [click here](/workshops/x) for _details_.');
+    expect(out).toBe(
+      '<p>Read <strong>this</strong> and <a href="/workshops/x" rel="noopener noreferrer">click here</a> for <em>details</em>.</p>',
+    );
+  });
+
+  it('handles two links on the same line without cross-contaminating hrefs', () => {
+    const out = renderMarkdownPreview('[a](/x_y) and [b](/p_q)');
+    expect(out).toBe(
+      '<p><a href="/x_y" rel="noopener noreferrer">a</a> and <a href="/p_q" rel="noopener noreferrer">b</a></p>',
+    );
+  });
 });

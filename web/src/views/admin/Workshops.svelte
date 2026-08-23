@@ -16,9 +16,18 @@
   panel's `onkeydown={(e) => e.stopPropagation()}` guard eats Escape before
   it ever reaches the backdrop's own `onkeydown`, so Escape silently does
   nothing. Do not copy that shape here -- see closeCreate's call site below.
+
+  #0052 review (bounced 2026-08-22, finding 2): having a correct Escape
+  handler on the panel is not enough by itself -- nothing was moving focus
+  INTO the panel on open, so it stayed on the "New workshop" trigger button,
+  outside this backdrop's subtree, and the keydown never fired at all. Fixed
+  with `bind:this={modalEl}` plus a `$effect` that calls `tick().then(() =>
+  modalEl?.focus())` once `creating` goes true -- the same shape already
+  working in `CampaignSendDialog.svelte`. This also closes the `aria-modal`
+  initial-focus gap for free.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { listAdminWorkshops, createWorkshop, ApiError } from '../../lib/api';
   import {
     workshopStatusLabel,
@@ -50,6 +59,13 @@
   let newTitle = $state('');
   let createError = $state<string | null>(null);
   let submittingCreate = $state(false);
+  let modalEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    // Move focus into the modal panel itself once it opens, so the Escape
+    // handler below is actually reachable (#0052 review, finding 2).
+    if (creating) void tick().then(() => modalEl?.focus());
+  });
 
   let sortedWorkshops = $derived(sortWorkshopsByDate(workshops, sortDirection));
   let workshopRows = $derived(
@@ -195,13 +211,10 @@
         aria-modal="true"
         aria-label="New workshop"
         tabindex="-1"
+        bind:this={modalEl}
         onclick={(e) => e.stopPropagation()}
         onkeydown={(e) => {
-          if (e.key === 'Escape') {
-            closeCreate();
-            return;
-          }
-          e.stopPropagation();
+          if (e.key === 'Escape') closeCreate();
         }}
       >
         <h2 class="modal-title">New workshop</h2>

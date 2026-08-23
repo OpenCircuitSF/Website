@@ -34,16 +34,25 @@
   clear explanation and a shortcut into Cancel instead of leaving the admin
   to read a raw error string.
 
-  Modal Escape handling (all three modals below -- publish/unpublish/cancel
+  Modal Escape handling (both modals below -- publish/unpublish/cancel
   confirm, and delete confirm): each modal's own `onkeydown` closes on
-  Escape directly and stopPropagation()s every other key. #0120 (still open)
-  is the same bug reproduced elsewhere in this codebase: a modal's keydown
-  guard does `onkeydown={(e) => e.stopPropagation()}` unconditionally, which
-  eats Escape before it can bubble to the backdrop's own handler, so Escape
-  silently does nothing. Do not copy that shape.
+  Escape directly. #0120 (still open) is the same bug reproduced elsewhere in
+  this codebase: a modal's keydown guard does
+  `onkeydown={(e) => e.stopPropagation()}` unconditionally, which eats Escape
+  before it can bubble to the backdrop's own handler, so Escape silently does
+  nothing. Do not copy that shape.
+
+  #0052 review (bounced 2026-08-22, finding 2): a correct Escape handler on
+  the panel is not enough by itself -- nothing was moving focus INTO either
+  panel on open, so it stayed on the trigger button that opened it, outside
+  the backdrop's subtree, and the keydown never fired. Fixed with
+  `bind:this={...ModalEl}` plus a `$effect` per modal that calls
+  `tick().then(() => el?.focus())` once its open-state goes true -- the same
+  shape already working in `CampaignSendDialog.svelte`. This also closes the
+  `aria-modal` initial-focus gap for both modals.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import {
     getAdminWorkshop,
     updateWorkshop,
@@ -124,6 +133,18 @@
   let deleting = $state(false);
   let deleteError = $state<string | null>(null);
   let deleteConflict = $state(false);
+
+  // ── Modal focus (#0052 review, finding 2) ───────────────────────────────
+  let transitionModalEl = $state<HTMLDivElement | null>(null);
+  let deleteModalEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    if (transitionOpen) void tick().then(() => transitionModalEl?.focus());
+  });
+
+  $effect(() => {
+    if (deleteOpen) void tick().then(() => deleteModalEl?.focus());
+  });
 
   let interestOptions = $derived(
     sortedInterests(taxonomyInterests).map((it) => ({
@@ -482,13 +503,10 @@
         aria-modal="true"
         aria-label={transitionHeading}
         tabindex="-1"
+        bind:this={transitionModalEl}
         onclick={(e) => e.stopPropagation()}
         onkeydown={(e) => {
-          if (e.key === 'Escape') {
-            closeTransition();
-            return;
-          }
-          e.stopPropagation();
+          if (e.key === 'Escape') closeTransition();
         }}
       >
         <h2 class="modal-title">{transitionHeading}</h2>
@@ -525,13 +543,10 @@
         aria-modal="true"
         aria-label="Delete workshop"
         tabindex="-1"
+        bind:this={deleteModalEl}
         onclick={(e) => e.stopPropagation()}
         onkeydown={(e) => {
-          if (e.key === 'Escape') {
-            closeDelete();
-            return;
-          }
-          e.stopPropagation();
+          if (e.key === 'Escape') closeDelete();
         }}
       >
         {#if deleteConflict}
