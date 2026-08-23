@@ -202,7 +202,8 @@ scripts/check.sh web                                    # npm run check + npm te
 scripts/check.sh all                                    # whole suite — batch review pass only
 
 scripts/testdb.sh template   # rebuild the test template after a migration change
-scripts/testdb.sh gc         # drop leftover per-agent databases
+scripts/testdb.sh drop NNNN  # drop YOUR database when done
+scripts/testdb.sh gc --all   # drop every agent's — only when you are alone
 scripts/db-reset.sh          # rebuild the local dev DB from migrations + seed admin
 
 ./scripts/dev.sh             # Vite :5173 + Go API :8080, hot reload, STORAGE=json
@@ -333,8 +334,11 @@ contend at all. `scripts/testdb.sh` clones a fully-migrated template database in
   N times just multiplies the load that caused it.
 - **Kill what you start.** Before finishing, `pgrep -f 'go test|\.test '` and
   clean up your own processes. Drop any scratch database you created (§8b) —
-  `scripts/check.sh` does this for you on exit; `scripts/testdb.sh gc` sweeps
-  whatever leaked.
+  `scripts/check.sh` does this for you on exit, and `scripts/testdb.sh drop
+  NNNN` drops one by hand. **`gc` is not a cleanup step**: it sweeps *every*
+  agent's database, so it now refuses without `--all` and skips databases with
+  live connections. One agent swept another's mid-session before that guard
+  existed.
 
 If a verification genuinely needs the whole suite under `-race`, say so and ask
 first — on this tree that is a ~5 minute fully-loaded run, and it is not free.

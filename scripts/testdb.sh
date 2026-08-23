@@ -20,7 +20,7 @@
 #     scripts/testdb.sh reset  0123      # drop + create
 #     scripts/testdb.sh template         # (re)build the template from migrations/
 #     scripts/testdb.sh list             # every scratch database that exists
-#     scripts/testdb.sh gc               # drop ALL scratch databases
+#     scripts/testdb.sh gc --all         # drop ALL scratch databases (yours AND other agents')
 #
 # Typical use inside a subagent:
 #
@@ -132,7 +132,26 @@ case "$cmd" in
     psql_admin -tAc "select datname from pg_database where datname like '${PREFIX}%' order by 1"
     ;;
   gc)
-    for db in $(psql_admin -tAc "select datname from pg_database where datname like '${PREFIX}%' and datname <> '$TEMPLATE'"); do
+    # Sweeping is destructive to OTHER agents, not just to your own leftovers:
+    # every scratch database belongs to somebody, and a bare `gc` used to drop
+    # all of them. It must be asked for explicitly now. Use `drop NNNN` for
+    # your own; `gc --all` only when you know you are alone.
+    dbs=$(psql_admin -tAc "select datname from pg_database where datname like '${PREFIX}%' and datname <> '$TEMPLATE'")
+    if [ "${1:-}" != "--all" ]; then
+      if [ -z "$dbs" ]; then echo "no scratch databases"; exit 0; fi
+      echo "refusing to sweep — these belong to somebody, possibly another agent:"
+      echo "$dbs" | sed 's/^/  /'
+      echo
+      echo "drop your own:  scripts/testdb.sh drop <ISSUE>"
+      echo "sweep them all: scripts/testdb.sh gc --all   (only when you are alone)"
+      exit 1
+    fi
+    for db in $dbs; do
+      conns=$(psql_admin -tAc "select count(*) from pg_stat_activity where datname = '$db'")
+      if [ "${conns:-0}" -gt 0 ]; then
+        echo "skipped $db — $conns active connection(s), someone is using it"
+        continue
+      fi
       psql_admin -qc "DROP DATABASE $db;" && echo "dropped $db"
     done
     ;;
