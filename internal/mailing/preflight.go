@@ -167,8 +167,9 @@ func Preflight(in PreflightInput) PreflightResult {
 			"Physical mailing address is not set (Settings → physical address). CAN-SPAM §7704 requires it in every campaign email.")
 	}
 	if strings.TrimSpace(in.ReplyTo) == "" {
+		// PRD §6.6 requires a monitored reply address, not noreply@.
 		fail(PreflightCodeReplyToMissing,
-			"Reply-To address is not configured (EMAIL_REPLY_TO). PRD §6.6 requires a monitored reply address, not noreply@.")
+			"Reply-To address is not configured (EMAIL_REPLY_TO). Set it to an address someone reads, not noreply@.")
 	}
 	if in.TestSentAt == nil {
 		fail(PreflightCodeNoTestSend, "No test send has been delivered yet.")

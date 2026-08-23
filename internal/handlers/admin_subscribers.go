@@ -550,7 +550,10 @@ func (h *AdminSubscribersHandler) Suppress(w http.ResponseWriter, r *http.Reques
 
 	message := "Subscriber unsubscribed (source: admin) and added to the permanent suppression list."
 	if noOp {
-		message = "This subscriber has complained, and CLAUDE.md §9 refuses to let unsubscribe touch a complained row — no status change."
+		// CLAUDE.md §9: a complained subscriber never auto-resubscribes, and
+		// unsubscribe is not an exit from that state — only an admin
+		// clearing the complaint (below) is.
+		message = "This subscriber has complained. By design, unsubscribing a complained row makes no status change — that is enforced, not a glitch."
 		if suppressionAdded {
 			message += " The address was still added to the permanent suppression list."
 		} else {
@@ -725,7 +728,9 @@ func manualAddMessage(status string) string {
 	case subscribers.StatusActive:
 		return "This address was already confirmed and active; an \"already subscribed\" notice has been queued."
 	case subscribers.StatusComplained:
-		return "This address has previously complained and CLAUDE.md §9 refuses to auto-resubscribe it. Nothing was sent."
+		// CLAUDE.md §9: a complained subscriber never auto-resubscribes;
+		// only an admin clearing the complaint moves it out of that state.
+		return "This address has previously complained. By design, adding it here does not resubscribe it. Nothing was sent."
 	default:
 		return "Request processed; resulting status: " + status
 	}

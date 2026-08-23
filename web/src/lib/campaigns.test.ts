@@ -16,8 +16,10 @@ import {
   subjectLengthAdvice,
   preheaderLengthAdvice,
   wasDemotedAfterScheduling,
+  demotionExplanation,
   cancelCopy,
 } from './campaigns';
+import { formatDateTime } from './admin';
 
 function campaign(fields: Partial<Campaign>): Campaign {
   return {
@@ -103,6 +105,50 @@ describe('wasDemotedAfterScheduling', () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe('demotionExplanation', () => {
+  // #0178: pin what the sentence CLAIMS, not one phrasing of it — a
+  // phrase-match test here would be exactly the kind #0174 was filed over.
+
+  it('names the scheduled time when scheduled_at is present', () => {
+    const scheduledAt = '2026-03-04T15:30:00Z';
+    const msg = demotionExplanation(campaign({ status: 'draft', scheduled_at: scheduledAt }));
+    expect(msg).toContain(formatDateTime(scheduledAt));
+  });
+
+  it('falls back to unformatted wording when scheduled_at is absent', () => {
+    const c = campaign({ status: 'draft' });
+    expect('scheduled_at' in c).toBe(false);
+    const msg = demotionExplanation(c);
+    // No real timestamp exists to show, so nothing date-shaped should
+    // appear — this is the branch's whole point, not a specific phrase.
+    expect(/\d{4}/.test(msg)).toBe(false);
+  });
+
+  it('says sending was refused and the campaign is back in draft', () => {
+    const msg = demotionExplanation(
+      campaign({ status: 'draft', scheduled_at: '2026-03-04T15:30:00Z' }),
+    ).toLowerCase();
+    expect(msg).toContain('refused');
+    expect(msg).toContain('draft');
+  });
+
+  it('does not name an internal component as the agent of the refusal (CLAUDE.md §9)', () => {
+    // #0175 dropped "the send worker" deliberately: the property that
+    // matters to an admin is that sending was refused, not who refused it.
+    const msg = demotionExplanation(
+      campaign({ status: 'draft', scheduled_at: '2026-03-04T15:30:00Z' }),
+    ).toLowerCase();
+    expect(msg).not.toContain('worker');
+  });
+
+  it('points at the checks panel as the actionable next step', () => {
+    const msg = demotionExplanation(
+      campaign({ status: 'draft', scheduled_at: '2026-03-04T15:30:00Z' }),
+    ).toLowerCase();
+    expect(msg).toContain('check');
   });
 });
 
