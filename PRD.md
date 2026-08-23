@@ -554,6 +554,12 @@ CREATE TABLE email_sends (
     ses_message_id TEXT,
     attempts       INT NOT NULL DEFAULT 0,
     error          TEXT,
+    claimed_at     TIMESTAMPTZ,            -- 000018 (#0122): stamped by the worker's
+                                           -- atomic claim (status='sending', attempts+1,
+                                           -- claimed_at=now()); OrphanSweep resets a row
+                                           -- back to 'queued' once claimed_at is older than
+                                           -- worker.go's orphanStaleAfter, so a crashed
+                                           -- worker's abandoned claim doesn't stall the send
     sent_at        TIMESTAMPTZ,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (campaign_id, subscriber_id)
@@ -582,6 +588,18 @@ CREATE TABLE email_events (
 );
 CREATE INDEX idx_email_events_message_id ON email_events (ses_message_id);
 CREATE INDEX idx_email_events_recipient ON email_events (recipient);
+-- Backs the currently-shipped windowed soft-bounce rule (#0039, widened by
+-- #0109 to also count Undetermined bounces and exclude the sender-fault
+-- Transient subtypes). §6.9 below supersedes this rule with a
+-- consecutive-streak count on subscribers.soft_bounce_streak instead of a
+-- rolling-window query, at which point this index is retired -- until that
+-- ships, it is live and this is what internal/sesnotify's count query uses.
+CREATE INDEX idx_email_events_soft_bounce
+    ON email_events (recipient, received_at DESC)
+    WHERE event_type = 'Bounce'
+      AND bounce_type IN ('Transient', 'Undetermined')
+      AND (bounce_subtype IS NULL
+           OR bounce_subtype NOT IN ('MessageTooLarge', 'ContentRejected', 'AttachmentRejected'));
 -- Powers the per-address bounce history on /admin/deliverability (§6.9).
 CREATE INDEX idx_email_events_recipient_time ON email_events (recipient, received_at DESC);
 
@@ -668,14 +686,21 @@ CREATE TABLE workshops (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_workshops_published ON workshops (starts_at DESC)
-    WHERE status = 'published';
+-- Published AND canceled workshops are both publicly visible (#0135: the
+-- index and the detail route must apply the same visibility rule, or a
+-- canceled workshop silently vanishes from the index while its direct link
+-- still 200s). Named idx_workshops_visible (#0142, renamed from
+-- idx_workshops_published, matching Store.ListVisible) -- the old name
+-- stopped meaning "published" the moment #0135 widened the predicate.
+CREATE INDEX idx_workshops_visible ON workshops (starts_at DESC)
+    WHERE status <> 'draft';
 
 CREATE TABLE workshop_interests (
     workshop_id BIGINT NOT NULL REFERENCES workshops(id) ON DELETE CASCADE,
     interest_id BIGINT NOT NULL REFERENCES interests(id) ON DELETE CASCADE,
     PRIMARY KEY (workshop_id, interest_id)
 );
+CREATE INDEX idx_workshop_interests_interest ON workshop_interests (interest_id);
 ```
 
 Plus the copied auth tables: `users`, `passkey_credentials`,
