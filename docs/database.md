@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000019`). No ORM — every
+(`migrations/`, numbered `000001`–`000020`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -67,12 +67,14 @@ store packages for the tables above them; `internal/mailing` now owns
 `email_campaigns`/`email_sends` (`#0041`'s `CampaignStore`, `#0044`'s
 `AudienceStore`, `#0045`'s `SendStore`).
 
-## Planned schema (Phase 5+ continued, per `PRD.md` §6.2)
+## Workshop schema (Phase 6, per `PRD.md` §6.2)
 
-Not yet implemented. `PRD.md` §6.2 is the authoritative source for exact
-column definitions; the tables it describes, roughly in build order:
+| Migration | Tables / change |
+|---|---|
+| `000020_create_workshops` | `workshops`, `workshop_interests` (`#0050`), plus the FK deferred from `#0040`: `ALTER TABLE email_campaigns ADD CONSTRAINT email_campaigns_workshop_id_fkey FOREIGN KEY (workshop_id) REFERENCES workshops(id)`, no `ON DELETE` clause, matching PRD §6.2's ALTER TABLE and the `email_campaigns.created_by -> users(id)` precedent. `workshops.status` is CHECK-constrained to `draft \| published \| canceled`. `idx_workshops_published` is a partial index on `(starts_at DESC) WHERE status = 'published'` — the public listing's hot-path query. `workshop_interests` is a join table with `ON DELETE CASCADE` on both `workshop_id` and `interest_id`, matching `campaign_interests`' and `subscriber_interests`' precedent. No slug-generation logic lands here — the migration only enforces uniqueness (`slug TEXT UNIQUE NOT NULL`); generating a slug from a title with a collision suffix is `#0051`'s CRUD API concern, the same way `email_campaigns.slug` is assigned by its own store layer rather than by `000017` |
 
-- `workshops`
+`internal/workshops` (not yet created — `#0051`) will be the corresponding
+Go store package for the two tables above.
 
 ## Conventions
 
