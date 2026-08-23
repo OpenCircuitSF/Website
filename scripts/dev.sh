@@ -8,17 +8,24 @@
 # the mock admin.
 #
 # Usage:
-#   ./scripts/dev.sh           # hot-reload: Go API on :8080 + Vite dev server on :5173
-#   ./scripts/dev.sh --built   # built-SPA: npm build + go run serving on :8080 only
+#   ./scripts/dev.sh           # hot-reload: Go API on :$PORT + Vite dev server on :5173
+#   ./scripts/dev.sh --built   # built-SPA: npm build + go run serving on :$PORT only
 #
 # Open in browser:
-#   hot-reload mode:  http://localhost:5173  (Vite proxies /api → :8080)
-#   built mode:       http://localhost:8080
+#   hot-reload mode:  http://localhost:5173  (Vite proxies /api → :$PORT)
+#   built mode:       http://localhost:$PORT
 #
 # Override any env var before calling, e.g.:
 #   ADMIN_EMAIL=me@example.com ./scripts/dev.sh
+#   PORT=9090 ./scripts/dev.sh   # threaded into BASE_URL, WEBAUTHN_RP_ORIGIN,
+#                                 # and Vite's proxy targets (#0213) — the whole
+#                                 # stack moves, not just the Go server
 #
-# If :8080 or :5173 is already held by another process, dev.sh refuses to
+# $PORT defaults to 8080 and :5173 is Vite's own fixed port (not
+# configurable — it is spelled the same way in web/vite.config.ts, README.md,
+# and docs/dev.md, and changing it here alone would desync those).
+#
+# If :$PORT or :5173 is already held by another process, dev.sh refuses to
 # start rather than killing it (#0117) — it may be another agent's server, or
 # the user's own editor preview (CLAUDE.md §8b). To reclaim a port you are
 # sure is your own stale dev.sh, e.g. re-running after a terminal was closed
@@ -41,12 +48,26 @@ cd "$REPO"
 # All of these can be overridden by setting them in the calling environment.
 # DATABASE_URL is intentionally unset: STORAGE=json skips Postgres entirely.
 export STORAGE="${STORAGE:-json}"
-export BASE_URL="${BASE_URL:-http://localhost:8080}"
+# PORT must be set before BASE_URL/WEBAUTHN_RP_ORIGIN so both can default off
+# of it (#0213 — they used to hardcode :8080 regardless of $PORT). It is also
+# exported before `npm run dev` runs so web/vite.config.ts can read it via
+# process.env at config-evaluation time — Vite has no other way to see a
+# shell variable, since the config file is evaluated once, before any request
+# arrives.
+export PORT="${PORT:-8080}"
+export BASE_URL="${BASE_URL:-http://localhost:${PORT}}"
 export WEBAUTHN_RP_ID="${WEBAUTHN_RP_ID:-localhost}"
-export WEBAUTHN_RP_ORIGIN="${WEBAUTHN_RP_ORIGIN:-http://localhost:8080}"
+# In --built mode the front end and API share one origin (:$PORT), so this
+# value is exactly what a browser would send. In hot-reload mode the browser's
+# real origin is :5173 (Vite), not :$PORT — but that mismatch is inert here:
+# internal/middleware.DevAutoLogin bypasses WebAuthn entirely under
+# STORAGE=json (see the header comment), so no real ceremony ever checks this
+# value against a request Origin. It is threaded to $PORT anyway so --built
+# mode is correct and so the value stays honest about which port dev.sh
+# actually started, rather than silently naming a fixed 8080 (CLAUDE.md §7).
+export WEBAUTHN_RP_ORIGIN="${WEBAUTHN_RP_ORIGIN:-http://localhost:${PORT}}"
 export SESSION_SECRET="${SESSION_SECRET:-dev-session-secret-not-for-production}"
 export ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
-export PORT="${PORT:-8080}"
 # AWS_REGION, EMAIL_FROM, and EMAIL_LIST_DOMAIN are unconditionally required by
 # config.Load (#0116) even though STORAGE=json's serveDevMode never reads them
 # for anything but that validation — dev mode never constructs the SES mailer
@@ -70,7 +91,7 @@ info() { printf '    %s\n' "$*"; }
 MODE="hot"
 case "${1:-}" in
   --built|-b) MODE="built" ;;
-  -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
   "") : ;;
   *) printf 'Unknown flag: %s\n' "$1" >&2; exit 1 ;;
 esac
@@ -154,8 +175,8 @@ own_holds_port() {  # <port> <root-pid> — true when a pid WE forked is LISTENi
 
 # Free the dev ports if a previous run left a server bound. `go run` leaks its
 # compiled child process when its parent is killed, so a stale server can keep
-# holding :8080 — which both blocks startup ("address already in use") AND keeps
-# serving an OLD build.
+# holding :$PORT — which both blocks startup ("address already in use") AND
+# keeps serving an OLD build.
 #
 # But a held port is not necessarily OUR stale process (#0117): it may be
 # another agent's dev.sh (CLAUDE.md §5a permits several running at once), or
