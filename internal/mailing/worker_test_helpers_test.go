@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // errTestSettingNotFound mirrors auth.ErrSettingNotFound's role for
@@ -296,5 +297,5 @@ func resetCampaignAuditRows(t *testing.T, pool *pgxpool.Pool, campaignID int64) 
 
 func uniqueMailingEmail(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-mailing-worker-%d@example.com", time.Now().UnixNano())
+	return fmt.Sprintf("zz-mailing-worker-%d@example.com", testdb.Unique())
 }

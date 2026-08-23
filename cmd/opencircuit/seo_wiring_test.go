@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
@@ -20,6 +19,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
 
@@ -143,7 +143,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 		return requireSession(middleware.RequireAdmin(next))
 	}
 
-	adminID := seedAdminWiringUser(t, pool, fmt.Sprintf("seo-wiring-admin-%d@example.com", time.Now().UnixNano()), true)
+	adminID := seedAdminWiringUser(t, pool, fmt.Sprintf("seo-wiring-admin-%d@example.com", testdb.Unique()), true)
 	seedAdminWiringSession(t, pool, adminID, "seo-wiring-admin-token")
 
 	errCh := make(chan error, 1)
@@ -172,7 +172,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 
 	// Seed a throwaway draft workshop through the real store (never a
 	// literal/seeded id, CLAUDE.md §8b) with a unique title/slug per run.
-	origTitle := fmt.Sprintf("SEO Wiring Workshop %d", time.Now().UnixNano())
+	origTitle := fmt.Sprintf("SEO Wiring Workshop %d", testdb.Unique())
 	created, err := workshopsStore.Create(context.Background(), workshops.CreateInput{Title: origTitle})
 	if err != nil {
 		t.Fatalf("seed workshop: %v", err)

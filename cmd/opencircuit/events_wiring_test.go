@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
@@ -15,6 +14,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // TestMountAndServe_EventsRequiresSessionAndAdmin is #0048's proof that GET
@@ -108,8 +108,8 @@ func TestMountAndServe_EventsRequiresSessionAndAdmin(t *testing.T) {
 	client := &http.Client{Timeout: wiringHTTPTimeout}
 	waitForHealthy(t, client, baseURL, errCh, ready)
 
-	nonAdminID := seedAdminWiringUser(t, pool, fmt.Sprintf("zz-events-nonadmin-%d@example.com", time.Now().UnixNano()), false)
-	adminID := seedAdminWiringUser(t, pool, fmt.Sprintf("zz-events-admin-%d@example.com", time.Now().UnixNano()), true)
+	nonAdminID := seedAdminWiringUser(t, pool, fmt.Sprintf("zz-events-nonadmin-%d@example.com", testdb.Unique()), false)
+	adminID := seedAdminWiringUser(t, pool, fmt.Sprintf("zz-events-admin-%d@example.com", testdb.Unique()), true)
 	seedAdminWiringSession(t, pool, nonAdminID, "zz-events-nonadmin-token")
 	seedAdminWiringSession(t, pool, adminID, "zz-events-admin-token")
 

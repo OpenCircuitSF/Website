@@ -23,6 +23,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // blockingTestMailer blocks Send until either release is closed (by the
@@ -151,7 +152,7 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 	client := &http.Client{Timeout: wiringHTTPTimeout}
 	waitForHealthy(t, client, baseURL, errCh, ready)
 
-	email := fmt.Sprintf("zz-sigterm-%d@example.com", time.Now().UnixNano())
+	email := fmt.Sprintf("zz-sigterm-%d@example.com", testdb.Unique())
 	body, err := json.Marshal(map[string]any{
 		"email":       email,
 		"interests":   []string{},

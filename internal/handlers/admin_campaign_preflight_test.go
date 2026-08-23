@@ -15,6 +15,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // adminCampaignPreflightMux wires the real GET /admin/campaigns/{id}/preflight
@@ -79,7 +80,7 @@ func TestAdminCampaignPreflight_UnmetCodesInPinnedOrder(t *testing.T) {
 	// One active subscriber so empty_audience does not also fire — this
 	// test isolates physical_address_missing and no_test_send, and their
 	// order relative to each other.
-	subID1 := seedSubscriberRow(t, pool, fmt.Sprintf("zz-preflightorder-%d@example.com", time.Now().UnixNano()), subscribers.StatusActive, nil, nil)
+	subID1 := seedSubscriberRow(t, pool, fmt.Sprintf("zz-preflightorder-%d@example.com", testdb.Unique()), subscribers.StatusActive, nil, nil)
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, subID1) })
 
 	resp := doJSON(t, srv.Client(), "GET", fmt.Sprintf("%s/admin/campaigns/%d/preflight", srv.URL, c.ID), "admin-token-campaign-preflight-order", "")
@@ -147,7 +148,7 @@ func TestAdminCampaignPreflight_OKWhenNothingUnmet(t *testing.T) {
 		t.Fatalf("seed campaign: %v", err)
 	}
 	cleanupAdminCampaign(t, pool, c.ID)
-	subID2 := seedSubscriberRow(t, pool, fmt.Sprintf("zz-preflightok-%d@example.com", time.Now().UnixNano()), subscribers.StatusActive, nil, nil)
+	subID2 := seedSubscriberRow(t, pool, fmt.Sprintf("zz-preflightok-%d@example.com", testdb.Unique()), subscribers.StatusActive, nil, nil)
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, subID2) })
 	if _, err := store.MarkTestSent(context.Background(), c.ID, time.Now()); err != nil {
 		t.Fatalf("MarkTestSent: %v", err)

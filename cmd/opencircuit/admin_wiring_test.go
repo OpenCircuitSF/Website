@@ -24,6 +24,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
 
@@ -226,7 +227,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// destroyed it. This target is created fresh per run and swept up below
 	// by its zz-wiring- prefix, so it stays safe even while the guard under
 	// test is deliberately gone.
-	targetSlug := fmt.Sprintf("zz-wiring-%d", time.Now().UnixNano())
+	targetSlug := fmt.Sprintf("zz-wiring-%d", testdb.Unique())
 	targetInterest, err := interestsStore.Create(context.Background(), targetSlug, "Wiring guard target", nil, 0)
 	if err != nil {
 		t.Fatalf("seed target interest: %v", err)
@@ -249,7 +250,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// complained; POST .../suppress 400s since this test sends no body) —
 	// neither mutates it, but the cleanup below is unconditional regardless.
 	targetSubscriber, err := subscribersStore.Create(context.Background(), subscribers.NewSignup{
-		Email:      fmt.Sprintf("zz-wiring-%d@example.com", time.Now().UnixNano()),
+		Email:      fmt.Sprintf("zz-wiring-%d@example.com", testdb.Unique()),
 		ConfirmTTL: time.Hour,
 	}, time.Now())
 	if err != nil {
@@ -271,7 +272,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// mutates the row, but the cleanup below is unconditional regardless,
 	// matching targetSubscriber's own comment above.
 	targetCampaign, err := campaignsStore.Create(context.Background(), mailing.CampaignInput{
-		Name:         fmt.Sprintf("zz-wiring-%d", time.Now().UnixNano()),
+		Name:         fmt.Sprintf("zz-wiring-%d", testdb.Unique()),
 		Subject:      "Wiring guard target",
 		BodyMD:       "wiring guard target body",
 		AudienceMode: mailing.AudienceAll,
@@ -298,7 +299,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// 503 above. The cleanup below is unconditional regardless of whether
 	// DELETE actually ran.
 	targetWorkshop, err := workshopsStore.Create(context.Background(), workshops.CreateInput{
-		Title: fmt.Sprintf("zz-wiring-%d", time.Now().UnixNano()),
+		Title: fmt.Sprintf("zz-wiring-%d", testdb.Unique()),
 	})
 	if err != nil {
 		t.Fatalf("seed target workshop: %v", err)

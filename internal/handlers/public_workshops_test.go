@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
 
@@ -31,7 +32,7 @@ func publicWorkshopsMux(pool *pgxpool.Pool) http.Handler {
 
 func uniquePublicWorkshopTitle(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-subtest-pubworkshop-%d", time.Now().UnixNano())
+	return fmt.Sprintf("zz-subtest-pubworkshop-%d", testdb.Unique())
 }
 
 func cleanupPublicWorkshop(t *testing.T, pool *pgxpool.Pool, id int64) {
@@ -237,7 +238,7 @@ func TestPublicWorkshops_GetBySlug_IncludesInterestTags(t *testing.T) {
 	defer srv.Close()
 
 	interestsStore := interests.NewStore(pool)
-	interestSlug := fmt.Sprintf("zz-test-pubworkshop-interest-%d", time.Now().UnixNano())
+	interestSlug := fmt.Sprintf("zz-test-pubworkshop-interest-%d", testdb.Unique())
 	it, err := interestsStore.Create(context.Background(), interestSlug, "Test Interest", nil, 0)
 	if err != nil {
 		t.Fatalf("seed interest: %v", err)

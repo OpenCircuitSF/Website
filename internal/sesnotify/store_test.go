@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // testPool returns the package's single shared pool (opened once in
@@ -25,7 +27,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 // rows, never target a literal or seeded id).
 func uniqueSNSMessageID(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-0038-sns-%d", time.Now().UnixNano())
+	return fmt.Sprintf("zz-0038-sns-%d", testdb.Unique())
 }
 
 func TestStore_InsertTx_InsertsRowAndReturnsInserted(t *testing.T) {
@@ -266,7 +268,7 @@ func TestStore_CountRecentSoftBounces_CountsOnlyMatchingTypeAndRecipient(t *test
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
-	recipient := fmt.Sprintf("zz-0039-count-%d@example.com", time.Now().UnixNano())
+	recipient := fmt.Sprintf("zz-0039-count-%d@example.com", testdb.Unique())
 	now := time.Now()
 
 	// Two Transient bounces for the target recipient (should count)...
@@ -289,7 +291,7 @@ func TestStore_CountRecentSoftBounces_CountsOnlyMatchingTypeAndRecipient(t *test
 		t.Fatalf("InsertTx (delivery): %v", err)
 	}
 	// ...and a Transient bounce for a DIFFERENT recipient (must NOT count).
-	otherRecipient := fmt.Sprintf("zz-0039-count-other-%d@example.com", time.Now().UnixNano())
+	otherRecipient := fmt.Sprintf("zz-0039-count-other-%d@example.com", testdb.Unique())
 	seedTransientBounce(t, pool, store, uniqueSNSMessageID(t), otherRecipient, now.Add(-time.Hour))
 
 	count, err := store.CountRecentSoftBounces(ctx, pool, recipient, now.Add(-30*24*time.Hour))
@@ -310,7 +312,7 @@ func TestStore_CountRecentSoftBounces_CountsUndetermined(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
-	recipient := fmt.Sprintf("zz-0109-undetermined-%d@example.com", time.Now().UnixNano())
+	recipient := fmt.Sprintf("zz-0109-undetermined-%d@example.com", testdb.Unique())
 	now := time.Now()
 
 	seedBounceEvent(t, pool, store, uniqueSNSMessageID(t), recipient, BounceTypeTransient, "", now.Add(-time.Hour))
@@ -335,7 +337,7 @@ func TestStore_CountRecentSoftBounces_ExcludesSenderFaultSubtypes(t *testing.T) 
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
-	recipient := fmt.Sprintf("zz-0109-senderfault-%d@example.com", time.Now().UnixNano())
+	recipient := fmt.Sprintf("zz-0109-senderfault-%d@example.com", testdb.Unique())
 	now := time.Now()
 
 	// Counts: an ordinary Transient bounce with a ordinary subtype.
@@ -366,7 +368,7 @@ func TestStore_CountRecentSoftBounces_WindowSlides_ExcludesOlderEvents(t *testin
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
-	recipient := fmt.Sprintf("zz-0039-window-%d@example.com", time.Now().UnixNano())
+	recipient := fmt.Sprintf("zz-0039-window-%d@example.com", testdb.Unique())
 	now := time.Now()
 	window := 30 * 24 * time.Hour
 	since := now.Add(-window)
@@ -398,7 +400,7 @@ func TestStore_CountRecentSoftBounces_WindowBoundaryIsInclusive(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
-	recipient := fmt.Sprintf("zz-0039-boundary-%d@example.com", time.Now().UnixNano())
+	recipient := fmt.Sprintf("zz-0039-boundary-%d@example.com", testdb.Unique())
 	since := time.Now().Add(-30 * 24 * time.Hour)
 
 	seedTransientBounce(t, pool, store, uniqueSNSMessageID(t), recipient, since)
@@ -416,7 +418,7 @@ func TestStore_CountRecentSoftBouncesPool_MatchesTxVersion(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
-	recipient := fmt.Sprintf("zz-0039-pool-%d@example.com", time.Now().UnixNano())
+	recipient := fmt.Sprintf("zz-0039-pool-%d@example.com", testdb.Unique())
 	now := time.Now()
 
 	seedTransientBounce(t, pool, store, uniqueSNSMessageID(t), recipient, now.Add(-time.Hour))

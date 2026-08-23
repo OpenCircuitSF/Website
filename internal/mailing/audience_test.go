@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // ── helpers (CLAUDE.md §8b: every test seeds its own throwaway rows, never
@@ -18,7 +19,7 @@ import (
 
 func uniqueMailingSubscriberEmail(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-mailing-audience-%d@example.com", time.Now().UnixNano())
+	return fmt.Sprintf("zz-mailing-audience-%d@example.com", testdb.Unique())
 }
 
 // seedSubscriber inserts a minimal subscribers row directly at the given
@@ -29,7 +30,7 @@ func seedSubscriber(t *testing.T, pool *pgxpool.Pool, status string) int64 {
 	var id int64
 	err := pool.QueryRow(context.Background(),
 		`INSERT INTO subscribers (email, status, manage_token) VALUES ($1, $2, $3) RETURNING id`,
-		uniqueMailingSubscriberEmail(t), status, fmt.Sprintf("zz-mailing-mtok-%d", time.Now().UnixNano()),
+		uniqueMailingSubscriberEmail(t), status, fmt.Sprintf("zz-mailing-mtok-%d", testdb.Unique()),
 	).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed subscriber at status %q: %v", status, err)
@@ -640,7 +641,7 @@ func TestAudienceStore_RecheckEligible_ManageTokenIsFresh(t *testing.T) {
 		t.Fatalf("find materialized row: %v", err)
 	}
 
-	newToken := fmt.Sprintf("zz-mailing-rotated-%d", time.Now().UnixNano())
+	newToken := fmt.Sprintf("zz-mailing-rotated-%d", testdb.Unique())
 	if _, err := pool.Exec(ctx, `UPDATE subscribers SET manage_token = $2 WHERE id = $1`, active, newToken); err != nil {
 		t.Fatalf("rotate manage_token: %v", err)
 	}

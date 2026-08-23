@@ -16,6 +16,7 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 func sesTooManyRequests() error     { return &types.TooManyRequestsException{} }
@@ -669,7 +670,7 @@ func TestWorker_MultiRecipientBatch_EachMessageCarriesOwnFreshToken(t *testing.T
 
 	// Rotate subscriber 2's token AFTER materialization — the fresh value
 	// RecheckEligibleTx reads, not any snapshot.
-	newToken := fmt.Sprintf("zz-rotated-token-%d", time.Now().UnixNano())
+	newToken := fmt.Sprintf("zz-rotated-token-%d", testdb.Unique())
 	if _, err := pool.Exec(context.Background(), `UPDATE subscribers SET manage_token = $2 WHERE id = $1`, sub2, newToken); err != nil {
 		t.Fatalf("rotate token: %v", err)
 	}

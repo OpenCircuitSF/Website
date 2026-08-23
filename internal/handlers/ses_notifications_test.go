@@ -28,6 +28,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // failingBeginner stands in for "the database is unreachable" — Begin
@@ -145,7 +146,7 @@ func sesSignMessageV1(t *testing.T, priv *rsa.PrivateKey, m *sesnotify.Message) 
 // §8b: never target a literal or seeded id).
 func sesUniqueID(t *testing.T, label string) string {
 	t.Helper()
-	return fmt.Sprintf("zz-0038-%s-%d", label, time.Now().UnixNano())
+	return fmt.Sprintf("zz-0038-%s-%d", label, testdb.Unique())
 }
 
 // sesBaseNotification returns a well-formed, unsigned Notification envelope
@@ -1300,7 +1301,7 @@ func TestSESNotifications_NoSubscriberRow_StillRecordsAndSuppresses(t *testing.T
 	h := sesTestHandler(t, pool)
 	key, _ := sesTestFixture(t)
 
-	email := fmt.Sprintf("zz-0038-nosub-%d@example.com", time.Now().UnixNano())
+	email := fmt.Sprintf("zz-0038-nosub-%d@example.com", testdb.Unique())
 	sesCleanupSuppression(t, pool, email)
 
 	inner := sesEncodeSESEvent(t, map[string]any{

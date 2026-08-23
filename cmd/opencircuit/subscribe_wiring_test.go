@@ -19,6 +19,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // TestMountAndServe_RateLimitsSubscribe closes the same kind of gap
@@ -152,7 +153,7 @@ func TestMountAndServe_RateLimitsSubscribe(t *testing.T) {
 // looks at the body.
 func doSubscribeRequest(client *http.Client, baseURL, clientIP string, n int) (*http.Response, error) {
 	body, _ := json.Marshal(map[string]any{
-		"email":       fmt.Sprintf("zz-ratelimit-%d-%d@example.com", time.Now().UnixNano(), n),
+		"email":       fmt.Sprintf("zz-ratelimit-%d-%d@example.com", testdb.Unique(), n),
 		"interests":   []string{},
 		"website":     "",
 		"rendered_at": time.Now().Add(-5 * time.Second).UnixMilli(),

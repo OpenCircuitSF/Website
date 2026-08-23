@@ -15,6 +15,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // adminSuppressionsMux wires the real admin suppressions routes guarded by
@@ -37,7 +38,7 @@ func adminSuppressionsMux(pool *pgxpool.Pool) http.Handler {
 
 func uniqueAdminSuppressionEmail(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-subtest-suppress-%d@example.com", time.Now().UnixNano())
+	return fmt.Sprintf("zz-subtest-suppress-%d@example.com", testdb.Unique())
 }
 
 // ── List ──────────────────────────────────────────────────────────────────────

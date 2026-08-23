@@ -16,6 +16,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
 
@@ -68,7 +69,7 @@ func TestAdminWorkshopAnnounce_PrefillAndLink(t *testing.T) {
 	admin := seedAdmin(t, pool, "admin-announce-prefill@example.com")
 	seedSession(t, pool, admin, "announce-prefill-token")
 
-	interestSlug := fmt.Sprintf("zz-subtest-announce-interest-%d", time.Now().UnixNano())
+	interestSlug := fmt.Sprintf("zz-subtest-announce-interest-%d", testdb.Unique())
 	interest, err := interests.NewStore(pool).Create(context.Background(), interestSlug, "Announce guard target", nil, 0)
 	if err != nil {
 		t.Fatalf("seed interest: %v", err)

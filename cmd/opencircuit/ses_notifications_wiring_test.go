@@ -30,6 +30,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // This file is #0038's §12 tests 16–17: proving, against the REAL
@@ -129,7 +130,7 @@ func sesWiringBaseMessage(t *testing.T, topicArn, innerJSON string) *sesnotify.M
 	t.Helper()
 	return &sesnotify.Message{
 		Type:           sesnotify.TypeNotification,
-		MessageId:      fmt.Sprintf("zz-0038-wiring-%d", time.Now().UnixNano()),
+		MessageId:      fmt.Sprintf("zz-0038-wiring-%d", testdb.Unique()),
 		Message:        innerJSON,
 		Timestamp:      time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		TopicArn:       topicArn,

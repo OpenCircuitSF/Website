@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // uniqueCampaignName returns a nanosecond-suffixed name unique to this call,
@@ -17,7 +18,7 @@ import (
 // every test seeds its own throwaway rows, never targets a literal id).
 func uniqueCampaignName(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-mailing-test-%d", time.Now().UnixNano())
+	return fmt.Sprintf("zz-mailing-test-%d", testdb.Unique())
 }
 
 // cleanupCampaign deletes a campaign row (cascading to campaign_interests and
@@ -34,7 +35,7 @@ func cleanupCampaign(t *testing.T, pool *pgxpool.Pool, id int64) {
 func seedInterest(t *testing.T, pool *pgxpool.Pool) interests.Interest {
 	t.Helper()
 	store := interests.NewStore(pool)
-	slug := fmt.Sprintf("zz-mailing-test-%d", time.Now().UnixNano())
+	slug := fmt.Sprintf("zz-mailing-test-%d", testdb.Unique())
 	it, err := store.Create(context.Background(), slug, "Mailing test interest", nil, 0)
 	if err != nil {
 		t.Fatalf("seed interest: %v", err)

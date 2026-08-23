@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
 
@@ -55,7 +55,7 @@ func adminWorkshopsMux(pool *pgxpool.Pool, invalidator workshopCacheInvalidator)
 
 func uniqueAdminWorkshopTitle(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-subtest-workshop-%d", time.Now().UnixNano())
+	return fmt.Sprintf("zz-subtest-workshop-%d", testdb.Unique())
 }
 
 // intPtrString formats a *int for a test failure message. %v on a *int
@@ -1197,7 +1197,7 @@ func TestAdminWorkshops_DeleteBlockedByCampaignReturns409(t *testing.T) {
 	if err := pool.QueryRow(context.Background(),
 		`INSERT INTO email_campaigns (name, subject, body_md, audience_mode, workshop_id)
 		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		fmt.Sprintf("zz-subtest-campaign-%d", time.Now().UnixNano()), "Subject", "Body", "all", w.ID,
+		fmt.Sprintf("zz-subtest-campaign-%d", testdb.Unique()), "Subject", "Body", "all", w.ID,
 	).Scan(&campaignID); err != nil {
 		t.Fatalf("seed referencing campaign: %v", err)
 	}

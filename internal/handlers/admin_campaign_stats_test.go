@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // adminCampaignStatsMux wires the real GET /admin/campaigns/{id}/stats route
@@ -79,7 +79,7 @@ func seedStatsCampaign(t *testing.T, pool *pgxpool.Pool) int64 {
 // since (campaign_id, subscriber_id) is UNIQUE (migration 000014).
 func seedStatsSubscriber(t *testing.T, pool *pgxpool.Pool, tag string) (id int64, email string) {
 	t.Helper()
-	email = fmt.Sprintf("zz-campstats-%s-%d@example.com", tag, time.Now().UnixNano())
+	email = fmt.Sprintf("zz-campstats-%s-%d@example.com", tag, testdb.Unique())
 	id = seedSubscriberRow(t, pool, email, subscribers.StatusActive, nil, nil)
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, id) })
 	return id, email
@@ -209,9 +209,9 @@ func TestAdminCampaignStats_ReconcilesBounceAndComplaintFromEvents(t *testing.T)
 	complainedSubID, complainedEmail := seedStatsSubscriber(t, pool, "complained")
 	cleanSubID, cleanEmail := seedStatsSubscriber(t, pool, "clean")
 
-	bouncedMsgID := fmt.Sprintf("zz-campstats-msg-bounced-%d", time.Now().UnixNano())
-	complainedMsgID := fmt.Sprintf("zz-campstats-msg-complained-%d", time.Now().UnixNano())
-	cleanMsgID := fmt.Sprintf("zz-campstats-msg-clean-%d", time.Now().UnixNano())
+	bouncedMsgID := fmt.Sprintf("zz-campstats-msg-bounced-%d", testdb.Unique())
+	complainedMsgID := fmt.Sprintf("zz-campstats-msg-complained-%d", testdb.Unique())
+	cleanMsgID := fmt.Sprintf("zz-campstats-msg-clean-%d", testdb.Unique())
 
 	seedEmailSendRow(t, pool, campaignID, bouncedSubID, bouncedEmail, mailing.CampaignStatusSent, &bouncedMsgID, nil, 1)
 	seedEmailSendRow(t, pool, campaignID, complainedSubID, complainedEmail, mailing.CampaignStatusSent, &complainedMsgID, nil, 1)
@@ -220,9 +220,9 @@ func TestAdminCampaignStats_ReconcilesBounceAndComplaintFromEvents(t *testing.T)
 	// Two Bounce events for the SAME ses_message_id — proves EventCounts
 	// counts DISTINCT email_sends rows, not raw event rows (a recipient
 	// bounced twice must still read as one affected recipient).
-	seedEmailEventRow(t, pool, fmt.Sprintf("zz-campstats-sns-bounce-1-%d", time.Now().UnixNano()), bouncedMsgID, "Bounce", bouncedEmail)
-	seedEmailEventRow(t, pool, fmt.Sprintf("zz-campstats-sns-bounce-2-%d", time.Now().UnixNano()), bouncedMsgID, "Bounce", bouncedEmail)
-	seedEmailEventRow(t, pool, fmt.Sprintf("zz-campstats-sns-complaint-%d", time.Now().UnixNano()), complainedMsgID, "Complaint", complainedEmail)
+	seedEmailEventRow(t, pool, fmt.Sprintf("zz-campstats-sns-bounce-1-%d", testdb.Unique()), bouncedMsgID, "Bounce", bouncedEmail)
+	seedEmailEventRow(t, pool, fmt.Sprintf("zz-campstats-sns-bounce-2-%d", testdb.Unique()), bouncedMsgID, "Bounce", bouncedEmail)
+	seedEmailEventRow(t, pool, fmt.Sprintf("zz-campstats-sns-complaint-%d", testdb.Unique()), complainedMsgID, "Complaint", complainedEmail)
 
 	resp := doJSON(t, srv.Client(), "GET", fmt.Sprintf("%s/admin/campaigns/%d/stats", srv.URL, campaignID), "admin-token-campaign-stats-reconcile", "")
 	if resp.StatusCode != http.StatusOK {

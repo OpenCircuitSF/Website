@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // seedInterest inserts a throwaway interests row for workshop_interests
@@ -15,7 +17,7 @@ import (
 // t.Cleanup — never a literal/seeded id, per CLAUDE.md §8b.
 func seedInterest(t *testing.T, pool *pgxpool.Pool) int64 {
 	t.Helper()
-	slug := fmt.Sprintf("zz-test-workshop-interest-%d", time.Now().UnixNano())
+	slug := fmt.Sprintf("zz-test-workshop-interest-%d", testdb.Unique())
 	var id int64
 	if err := pool.QueryRow(context.Background(),
 		`INSERT INTO interests (slug, name) VALUES ($1, $2) RETURNING id`,
@@ -31,7 +33,7 @@ func seedInterest(t *testing.T, pool *pgxpool.Pool) int64 {
 
 func uniqueTitle(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("Test Workshop %d", time.Now().UnixNano())
+	return fmt.Sprintf("Test Workshop %d", testdb.Unique())
 }
 
 func TestSlugify(t *testing.T) {
@@ -397,7 +399,7 @@ func TestDelete_BlockedByReferencingCampaign(t *testing.T) {
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO email_campaigns (name, subject, body_md, audience_mode, workshop_id)
 		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		fmt.Sprintf("zz-test-campaign-%d", time.Now().UnixNano()), "Subject", "Body", "all", w.ID,
+		fmt.Sprintf("zz-test-campaign-%d", testdb.Unique()), "Subject", "Body", "all", w.ID,
 	).Scan(&campaignID); err != nil {
 		t.Fatalf("seed referencing campaign: %v", err)
 	}

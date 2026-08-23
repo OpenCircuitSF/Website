@@ -10,9 +10,10 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // journeyTestPool returns the package's single shared pool (opened once in
@@ -48,5 +49,5 @@ func journeySeededInterestID(t *testing.T, pool *pgxpool.Pool, slug string) int6
 
 func journeyUniqueEmail(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-journeytest-%d@example.com", time.Now().UnixNano())
+	return fmt.Sprintf("zz-journeytest-%d@example.com", testdb.Unique())
 }

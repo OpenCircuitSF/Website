@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // suppressionEmailSeq guarantees uniqueSuppressionEmail never returns the
@@ -22,7 +24,7 @@ var suppressionEmailSeq uint64
 func uniqueSuppressionEmail(t *testing.T) string {
 	t.Helper()
 	seq := atomic.AddUint64(&suppressionEmailSeq, 1)
-	return fmt.Sprintf("zz-suppress-%d-%d@example.com", time.Now().UnixNano(), seq)
+	return fmt.Sprintf("zz-suppress-%d-%d@example.com", testdb.Unique(), seq)
 }
 
 func TestSuppressionStore_Add_NormalizesEmailAndPersistsFields(t *testing.T) {
@@ -30,7 +32,7 @@ func TestSuppressionStore_Add_NormalizesEmailAndPersistsFields(t *testing.T) {
 	store := NewSuppressionStore(pool)
 	now := time.Now().UTC().Truncate(time.Second)
 
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	suffix := fmt.Sprintf("%d", testdb.Unique())
 	raw := fmt.Sprintf("  ZZ-Suppress-Mixed-%s@Example.com  ", suffix)
 	want := fmt.Sprintf("zz-suppress-mixed-%s@example.com", suffix)
 
@@ -471,7 +473,7 @@ func TestSuppressionStore_ListByEmail_NormalizesEmail(t *testing.T) {
 	store := NewSuppressionStore(pool)
 	ctx := context.Background()
 
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	suffix := fmt.Sprintf("%d", testdb.Unique())
 	normalized := fmt.Sprintf("zz-suppress-listbyemail-%s@example.com", suffix)
 	decorated := fmt.Sprintf("  ZZ-Suppress-ListByEmail-%s@Example.com  ", suffix)
 
@@ -669,7 +671,7 @@ func TestSuppressionStore_Remove_NormalizesEmail(t *testing.T) {
 	store := NewSuppressionStore(pool)
 	ctx := context.Background()
 
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	suffix := fmt.Sprintf("%d", testdb.Unique())
 	normalized := fmt.Sprintf("zz-suppress-remove-norm-%s@example.com", suffix)
 	decorated := fmt.Sprintf("  ZZ-Suppress-Remove-Norm-%s@Example.com  ", suffix)
 

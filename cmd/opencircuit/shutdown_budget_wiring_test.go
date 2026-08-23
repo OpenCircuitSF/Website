@@ -24,6 +24,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // delayedMailer models a mailer send that takes real, deterministic wall-clock
@@ -168,7 +169,7 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
 	}
-	userID := seedAdminWiringUser(t, pool, fmt.Sprintf("zz-shutdown-budget-%d@example.com", time.Now().UnixNano()), true)
+	userID := seedAdminWiringUser(t, pool, fmt.Sprintf("zz-shutdown-budget-%d@example.com", testdb.Unique()), true)
 	seedAdminWiringSession(t, pool, userID, "zz-shutdown-budget-token")
 
 	broker := events.NewBroker()
@@ -247,7 +248,7 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 	// worker to actually dequeue it (mailer.entered) before triggering
 	// shutdown — otherwise the SIGTERM below could race the enqueue and the
 	// elapsed-time math would be measuring the wrong thing.
-	email := fmt.Sprintf("zz-shutdown-budget-%d@example.com", time.Now().UnixNano())
+	email := fmt.Sprintf("zz-shutdown-budget-%d@example.com", testdb.Unique())
 	body, err := json.Marshal(map[string]any{
 		"email":       email,
 		"interests":   []string{},

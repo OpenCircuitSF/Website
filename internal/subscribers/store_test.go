@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // testPool returns the package's single shared pool (opened once in
@@ -64,7 +66,7 @@ func seededInterestID(t *testing.T, pool *pgxpool.Pool, slug string) int64 {
 
 func uniqueEmail(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-test-%d@example.com", time.Now().UnixNano())
+	return fmt.Sprintf("zz-test-%d@example.com", testdb.Unique())
 }
 
 // uniqueRawToken returns a manage_token/confirm_token-shaped value unique to
@@ -74,7 +76,7 @@ func uniqueEmail(t *testing.T) string {
 // the same test visually distinct in a failure message.
 func uniqueRawToken(t *testing.T, label string) string {
 	t.Helper()
-	return fmt.Sprintf("zz-test-raw-token-%s-%d", label, time.Now().UnixNano())
+	return fmt.Sprintf("zz-test-raw-token-%s-%d", label, testdb.Unique())
 }
 
 func TestCreate_NormalizesEmailAndGeneratesTokens(t *testing.T) {
@@ -87,7 +89,7 @@ func TestCreate_NormalizesEmailAndGeneratesTokens(t *testing.T) {
 	// hardcode would collide with its own row on a second `-count=2`
 	// iteration. suffix keeps the case/whitespace/+tag shape the test is
 	// actually exercising while making the address unique per call.
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	suffix := fmt.Sprintf("%d", testdb.Unique())
 	raw := "  Zz-Test-Mixed-Case+ABC-" + suffix + "@Example.COM  "
 	sub, err := store.Create(context.Background(), NewSignup{
 		Email:           raw,
@@ -146,7 +148,7 @@ func TestCreate_PreservesGmailDotsAndPlusTags(t *testing.T) {
 	// `-count=2` iteration. suffix keeps the dot/+tag/whitespace shape each
 	// case is actually exercising while making every address unique per
 	// call.
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	suffix := fmt.Sprintf("%d", testdb.Unique())
 	cases := []struct {
 		in   string
 		want string
@@ -181,7 +183,7 @@ func TestCreate_NonASCIILocalPartNormalizedConsistentlyWithCheckConstraint(t *te
 	store := NewStore(pool)
 	now := time.Now()
 
-	raw := fmt.Sprintf("ǅ-zztest-%d@example.com", time.Now().UnixNano())
+	raw := fmt.Sprintf("ǅ-zztest-%d@example.com", testdb.Unique())
 	sub, err := store.Create(context.Background(), NewSignup{Email: raw, ConfirmTTL: time.Hour}, now)
 	if err != nil {
 		t.Fatalf("Create(%q): %v (want no CHECK-constraint violation)", raw, err)
@@ -829,7 +831,7 @@ func TestDB_EmailUniqueConstraint(t *testing.T) {
 func TestDB_ManageTokenUniqueConstraint(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
-	token := fmt.Sprintf("zz-test-shared-token-%d", time.Now().UnixNano())
+	token := fmt.Sprintf("zz-test-shared-token-%d", testdb.Unique())
 
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO subscribers (email, manage_token) VALUES ($1, $2)`, uniqueEmail(t), token,
@@ -846,7 +848,7 @@ func TestDB_ManageTokenUniqueConstraint(t *testing.T) {
 func TestDB_ConfirmTokenUniqueConstraint(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
-	token := fmt.Sprintf("zz-test-shared-confirm-%d", time.Now().UnixNano())
+	token := fmt.Sprintf("zz-test-shared-confirm-%d", testdb.Unique())
 
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO subscribers (email, manage_token, confirm_token)
@@ -1186,7 +1188,7 @@ func seedActiveSubscriber(t *testing.T, pool *pgxpool.Pool) int64 {
 	err := pool.QueryRow(context.Background(),
 		`INSERT INTO subscribers (email, status, manage_token)
 		 VALUES ($1, $2, $3) RETURNING id`,
-		uniqueEmail(t), StatusActive, fmt.Sprintf("mtok-%d", time.Now().UnixNano()),
+		uniqueEmail(t), StatusActive, fmt.Sprintf("mtok-%d", testdb.Unique()),
 	).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed active subscriber: %v", err)
@@ -1441,7 +1443,7 @@ func TestList_SearchesByEmailSubstringCaseInsensitive(t *testing.T) {
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	unique := fmt.Sprintf("zz-search-%d", time.Now().UnixNano())
+	unique := fmt.Sprintf("zz-search-%d", testdb.Unique())
 	email := unique + "@Example.COM"
 	created, err := store.Create(ctx, NewSignup{Email: email, ConfirmTTL: time.Hour}, time.Now())
 	if err != nil {
@@ -1469,7 +1471,7 @@ func TestList_SearchEscapesLikeWildcards(t *testing.T) {
 	// there a subscriber matching this shape") beyond an exact substring
 	// search. Escaping "_" (and "%") means only a literal underscore can
 	// ever match one.
-	unique := fmt.Sprintf("zz-under-%d", time.Now().UnixNano())
+	unique := fmt.Sprintf("zz-under-%d", testdb.Unique())
 	email := unique + "-axb@example.com"
 	if _, err := store.Create(ctx, NewSignup{Email: email, ConfirmTTL: time.Hour}, time.Now()); err != nil {
 		t.Fatalf("Create: %v", err)

@@ -16,6 +16,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // adminCampaignsMux wires the real admin campaigns routes guarded by
@@ -57,7 +58,7 @@ func (s stubPreflightChecker) Check(context.Context, int64) ([]campaignPreflight
 
 func uniqueAdminCampaignName(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-subtest-campaign-%d", time.Now().UnixNano())
+	return fmt.Sprintf("zz-subtest-campaign-%d", testdb.Unique())
 }
 
 // cleanupAdminCampaign deletes a campaign row (cascading to
@@ -701,7 +702,7 @@ func TestAdminCampaigns_Send_RealPreflightAdapter_Returns409UnmetShape(t *testin
 	cleanupAdminCampaign(t, pool, c.ID)
 	// Seed one active subscriber so empty_audience does not also fire —
 	// this test isolates physical_address_missing and no_test_send.
-	seedSubscriberRow(t, pool, fmt.Sprintf("zz-realpreflight-%d@example.com", time.Now().UnixNano()), subscribers.StatusActive, nil, nil)
+	seedSubscriberRow(t, pool, fmt.Sprintf("zz-realpreflight-%d@example.com", testdb.Unique()), subscribers.StatusActive, nil, nil)
 
 	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/campaigns/%d/send", srv.URL, c.ID), "admin-token-campaigns-real-preflight", `{"confirm_count":1}`)
 	if resp.StatusCode != http.StatusConflict {

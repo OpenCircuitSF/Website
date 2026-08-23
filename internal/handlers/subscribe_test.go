@@ -20,6 +20,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // subscribeTestPool returns the package's single shared pool (opened once in
@@ -43,7 +44,7 @@ func subscribeTestPool(t *testing.T) *pgxpool.Pool {
 
 func subscribeUniqueEmail(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-subtest-%d@example.com", time.Now().UnixNano())
+	return fmt.Sprintf("zz-subtest-%d@example.com", testdb.Unique())
 }
 
 // fakeSuppressionChecker is a test double for SuppressionChecker: reports
@@ -400,7 +401,7 @@ func TestSubscribe_UniformResponseAcrossBranches(t *testing.T) {
 		// case. Proven by mutation: setting w.Header().Set("X-Reserved", "1")
 		// immediately before writeSubscribeUniform202 in Subscribe left this
 		// test green until this case was added.
-		{"reserved-test-domain", subscribeBody(fmt.Sprintf("zz-subtest-reserved-%d@%s", time.Now().UnixNano(), subscribers.ReservedTestEmailDomain), nil, now)},
+		{"reserved-test-domain", subscribeBody(fmt.Sprintf("zz-subtest-reserved-%d@%s", testdb.Unique(), subscribers.ReservedTestEmailDomain), nil, now)},
 	}
 
 	var firstBody []byte
@@ -623,7 +624,7 @@ func TestSubscribe_ReservedTestDomain_NoActionTaken(t *testing.T) {
 	mailer := &mailing.RecordingMailer{}
 	h, mux := subscribeMux(t, pool, mailer, nil)
 
-	email := fmt.Sprintf("campaign-test+admin-%d@%s", time.Now().UnixNano(), subscribers.ReservedTestEmailDomain)
+	email := fmt.Sprintf("campaign-test+admin-%d@%s", testdb.Unique(), subscribers.ReservedTestEmailDomain)
 
 	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
 	if resp.StatusCode != http.StatusAccepted {
@@ -890,7 +891,7 @@ func TestSubscribe_InvalidEmailSyntaxRejected(t *testing.T) {
 func TestSubscribe_NonASCIIEmailAccepted(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	email := fmt.Sprintf("café-%d@example.com", time.Now().UnixNano())
+	email := fmt.Sprintf("café-%d@example.com", testdb.Unique())
 	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
@@ -914,7 +915,7 @@ func TestSubscribe_NonASCIIEmailAccepted(t *testing.T) {
 func TestSubscribe_TitlecaseDigraphEmailAccepted(t *testing.T) {
 	pool := subscribeTestPool(t)
 	mailer := &mailing.RecordingMailer{}
-	email := fmt.Sprintf("ǅ-%d@example.com", time.Now().UnixNano())
+	email := fmt.Sprintf("ǅ-%d@example.com", testdb.Unique())
 	h, mux := subscribeMux(t, pool, mailer, nil)
 
 	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))

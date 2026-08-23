@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // testPool returns the package's single shared pool (opened once in
@@ -34,7 +36,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 // in the shared database.
 func testSlug(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
-	slug := fmt.Sprintf("zz-test-%d", time.Now().UnixNano())
+	slug := fmt.Sprintf("zz-test-%d", testdb.Unique())
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -289,11 +291,11 @@ func TestGetByID_NotFound(t *testing.T) {
 func seedSubscriberWithInterest(t *testing.T, pool *pgxpool.Pool, interestID int64) int64 {
 	t.Helper()
 	ctx := context.Background()
-	email := fmt.Sprintf("zz-test-sub-%d@example.com", time.Now().UnixNano())
+	email := fmt.Sprintf("zz-test-sub-%d@example.com", testdb.Unique())
 	var subID int64
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO subscribers (email, manage_token) VALUES ($1, $2) RETURNING id`,
-		email, fmt.Sprintf("zz-token-%d", time.Now().UnixNano()),
+		email, fmt.Sprintf("zz-token-%d", testdb.Unique()),
 	).Scan(&subID); err != nil {
 		t.Fatalf("seed subscriber: %v", err)
 	}
@@ -416,7 +418,7 @@ func TestDB_SlugFormatConstraint(t *testing.T) {
 func TestDB_SlugUniqueConstraint(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
-	slug := fmt.Sprintf("zz-test-unique-%d", time.Now().UnixNano())
+	slug := fmt.Sprintf("zz-test-unique-%d", testdb.Unique())
 
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO interests (slug, name) VALUES ($1, 'first')`, slug); err != nil {

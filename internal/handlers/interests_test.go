@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // interestsTestPool returns the package's single shared pool (opened once in
@@ -45,7 +45,7 @@ func interestsTestPool(t *testing.T) *pgxpool.Pool {
 // a leftover row from a failed assertion must not survive regardless).
 func testInterestSlug(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
-	slug := fmt.Sprintf("zz-test-%d", time.Now().UnixNano())
+	slug := fmt.Sprintf("zz-test-%d", testdb.Unique())
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
 		defer cancel()
@@ -62,11 +62,11 @@ func testInterestSlug(t *testing.T, pool *pgxpool.Pool) string {
 func seedSubscriberLinkedToInterest(t *testing.T, pool *pgxpool.Pool, interestID int64) int64 {
 	t.Helper()
 	ctx := context.Background()
-	email := fmt.Sprintf("zz-test-sub-%d@example.com", time.Now().UnixNano())
+	email := fmt.Sprintf("zz-test-sub-%d@example.com", testdb.Unique())
 	var subID int64
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO subscribers (email, manage_token) VALUES ($1, $2) RETURNING id`,
-		email, fmt.Sprintf("zz-test-token-%d", time.Now().UnixNano()),
+		email, fmt.Sprintf("zz-test-token-%d", testdb.Unique()),
 	).Scan(&subID); err != nil {
 		t.Fatalf("seed subscriber: %v", err)
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // adminSubscribersTestPool returns the package's single shared pool (opened
@@ -51,7 +52,7 @@ func adminSubscribersTestPool(t *testing.T) *pgxpool.Pool {
 // testSubscriberEmail returns an email scoped to this test run.
 func testSubscriberEmail(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("zz-subtest-%d@example.com", time.Now().UnixNano())
+	return fmt.Sprintf("zz-subtest-%d@example.com", testdb.Unique())
 }
 
 // newTestSubscribeHandler builds a real *SubscribeHandler over the given
@@ -160,7 +161,7 @@ func seedTestSubscriber(t *testing.T, pool *pgxpool.Pool, status string) int64 {
 	t.Helper()
 	ctx := context.Background()
 	email := testSubscriberEmail(t)
-	token := fmt.Sprintf("zz-subtest-token-%d", time.Now().UnixNano())
+	token := fmt.Sprintf("zz-subtest-token-%d", testdb.Unique())
 	var id int64
 	if err := pool.QueryRow(ctx,
 		`INSERT INTO subscribers (email, status, manage_token, signup_ip, signup_user_agent,
@@ -335,7 +336,7 @@ func TestAdminSubscribers_Get_IncludesSoftBounceCount(t *testing.T) {
 
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {
-		snsID := fmt.Sprintf("zz-0039-detail-%d-%d", i, time.Now().UnixNano())
+		snsID := fmt.Sprintf("zz-0039-detail-%d-%d", i, testdb.Unique())
 		if _, err := pool.Exec(ctx,
 			`INSERT INTO email_events (sns_message_id, event_type, bounce_type, recipient, payload)
 			 VALUES ($1, 'Bounce', 'Transient', lower(trim($2)), '{}'::jsonb)`,
@@ -915,7 +916,7 @@ func TestAdminSubscribers_Create_ExistingPendingResendsConfirmation(t *testing.T
 	// pending row.
 	if _, err := pool.Exec(context.Background(),
 		`UPDATE subscribers SET confirm_token = $2, confirm_expires_at = now() + interval '7 days' WHERE id = $1`,
-		id, fmt.Sprintf("zz-subtest-confirmtok-%d", time.Now().UnixNano()),
+		id, fmt.Sprintf("zz-subtest-confirmtok-%d", testdb.Unique()),
 	); err != nil {
 		t.Fatalf("seed confirm token: %v", err)
 	}
