@@ -7,8 +7,11 @@ package handlers
 // (strings.TrimSpace vs JS trim() disagreeing on U+FEFF) invisible to every
 // test that existed at the time.
 //
-// testdata/url_validators.json is that sweep, made permanent. It holds 3,138
-// {rule, value, want} cases generated from ground truth, not hand-listed:
+// testdata/url_validators.json is that sweep, made permanent. It holds 3,139
+// {rule, value, want} cases. 3,138 were generated from ground truth, not
+// hand-listed; the last (a cover_image data: case) was appended by hand in
+// #0166 after the generator turned out to be a throwaway that was never
+// committed. See #0157's ## Gotchas:
 //   - every codepoint 0x00-0xFF, C0∪{DEL} included, swept in interior,
 //     leading, doubled-leading, and trailing position against both rules
 //   - the exact ECMA-262 whitespace set, computed by asking V8 (Node
@@ -27,13 +30,13 @@ package handlers
 // web/src/lib/linkSafety.ts isSafeLinkHref and workshopAdmin.ts
 // isSafeCoverImage under Node 26 (which runs .ts natively), cross-checked
 // against these same Go functions at generation time (0 mismatches across
-// all 3,138). See issues/0157.md's `## Fix` for the generation script and
+// all 3,139). See issues/0157.md's `## Fix` for the generation method and
 // the dedup-vs-fixture reasoning.
 //
 // This file is the Go side of that check: TestURLValidatorFixture and
 // urlValidatorFixture_test.ts (web/src/lib/) both read the identical file,
 // so an edit to either isSafeCoverImage/isSafeLinkHref that changes behavior
-// on any of these 3,138 payloads is a red build in that language, and an
+// on any of these 3,139 payloads is a red build in that language, and an
 // edit that breaks Go<->TS agreement specifically requires BOTH files to be
 // updated in lockstep -- there is no way to "fix" only one side's test.
 
