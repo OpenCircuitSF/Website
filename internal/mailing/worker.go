@@ -82,6 +82,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/sesv2/types"
+	smithy "github.com/aws/smithy-go"
 	"golang.org/x/time/rate"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
@@ -887,33 +888,84 @@ const adminNoMessageIDMessage = "Not sent — SES accepted this message but did 
 // through raw (#0182).
 const adminSendTimedOutMessage = "Not sent — the send attempt did not complete before its time limit."
 
+// adminSendUnreachableMessage is written to email_sends.error when
+// SESMailer.Send's call to AWS carries sesWrapPrefix but never received (or
+// never got far enough to receive) a service response to deserialize — a
+// credential-chain refresh failure, a DNS/dial failure, or any other
+// transport-level fault the AWS SDK reports through *smithy.OperationError
+// without a smithy.APIError underneath it (smithy-go's Client.Invoke wraps
+// every operation error in OperationError; a genuine SES response —
+// modeled or not — deserializes into something that also implements
+// APIError, everything else does not). Deliberately distinct from the raw
+// SES-rejection text kept below: a rejection reason is about THIS
+// recipient or campaign and an admin debugging a bad campaign wants it
+// verbatim, while a credential/transport failure is about the deployment
+// and repeating AWS/Go internals ("failed to refresh cached credentials",
+// a bare dial error) would point an admin at the wrong thing entirely —
+// the distinction #0185 asked this function to draw (#0182's own Notes
+// warned against flattening every failure to one shape, and this is the
+// case that warning was about).
+const adminSendUnreachableMessage = "Not sent — this attempt could not reach SES at all (a network or credentials problem on our end, not anything about this recipient or campaign). If this keeps happening, an engineer needs to check the server's AWS configuration."
+
 // adminSendErrorMessage maps a Mailer.Send error to text for
-// email_sends.error. Only an error carrying SESMailer.Send's own
-// sesWrapPrefix came from the AWS SDK's response to a SendEmail call — a
-// rejection reason, a quota, a throttling exception — genuinely useful
-// diagnostic information about what the recipient's mail system (or SES
-// acting on our behalf) did, so once that prefix is stripped it is kept
-// unchanged. SESMailer.Send has three returns that carry no prefix and are
-// this package's own sentences, not SES's: ErrNoMessageID and two
-// argument-guard errors (msg.To == "", an empty body). Those are matched
-// explicitly below and given fixed admin text, the same way
-// adminEligibilityFailureMessage and adminRenderFailureMessage replace our
-// own guard errors rather than passing them through raw. A context timeout
-// during the retry backoff carries the prefix but is also our own
-// (well, the ambient deadline's) doing rather than SES's, so it is matched
-// too before the prefix-stripped fallback (#0182).
+// email_sends.error. The discriminator is deliberately NOT
+// SESMailer.Send's sesWrapPrefix — a Mailer other than SESMailer (every
+// test double in this package included) can legitimately return a bare
+// AWS SDK error with no such wrapping, and gating on the prefix's presence
+// first made every one of those look "unrecognized" (#0185 caught this in
+// its own first draft: TestWorker_ThreeRetryableFailuresMarkRowFailed's
+// bare *types.TooManyRequestsException logged as unenumerated on every
+// attempt). Instead:
+//
+//  1. This package's own sentinels (ErrNoMessageID, ErrEmptyRecipient,
+//     ErrEmptyBody) and a context timeout during SESMailer.Send's retry
+//     backoff are matched explicitly by errors.Is — never inferred from
+//     "no prefix" — the same way #0182 bounced once for assuming a class
+//     instead of enumerating it.
+//  2. Anything else that is (or wraps) a smithy.APIError — every modeled
+//     sesv2/types exception, and smithy.GenericAPIError for one that
+//     isn't modeled yet — is a genuine response from SES about this
+//     specific send: a rejection reason, a quota, a throttling notice.
+//     Genuinely useful to an admin, so it is kept, with only our own
+//     sesWrapPrefix (if present) stripped.
+//  3. Anything else carrying sesWrapPrefix is a transport-level failure
+//     from inside SESMailer.Send's SendEmail call that never resolved to
+//     an API response at all — a credential-chain refresh failure, a
+//     DNS/dial failure — mapped to adminSendUnreachableMessage, since
+//     that describes a server/deployment problem, not anything about this
+//     recipient (see its own doc comment for why that distinction
+//     matters).
+//  4. Anything left is an error shape this function was not written
+//     against — logged loudly rather than silently mislabeled.
 func adminSendErrorMessage(err error) string {
 	if errors.Is(err, ErrNoMessageID) {
 		return adminNoMessageIDMessage
 	}
-	stripped, hasPrefix := strings.CutPrefix(err.Error(), sesWrapPrefix)
-	if !hasPrefix {
+	if errors.Is(err, ErrEmptyRecipient) || errors.Is(err, ErrEmptyBody) {
 		return adminSendBuildFailureMessage
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return adminSendTimedOutMessage
 	}
-	return stripped
+
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		if stripped, ok := strings.CutPrefix(err.Error(), sesWrapPrefix); ok {
+			return stripped
+		}
+		return err.Error()
+	}
+
+	if strings.HasPrefix(err.Error(), sesWrapPrefix) {
+		return adminSendUnreachableMessage
+	}
+
+	// Should not happen: every case this function was written against is
+	// handled above. An engineer needs to know this function was handed a
+	// return it was never enumerated for, rather than have it silently
+	// mislabeled "could not be built" (#0185).
+	slog.Default().Error("mailing: adminSendErrorMessage saw an unrecognized error", "err", err)
+	return adminSendBuildFailureMessage
 }
 
 // sesFailureReason names a terminalCampaign-class error for

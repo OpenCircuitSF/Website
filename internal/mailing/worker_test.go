@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/sesv2/types"
+	smithy "github.com/aws/smithy-go"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
@@ -27,6 +28,12 @@ func sesMailFromNotVerified() error { return &types.MailFromDomainNotVerifiedExc
 func sesNotFound() error            { return &types.NotFoundException{} }
 func sesBadRequest() error          { return &types.BadRequestException{} }
 func sesMessageRejected() error     { return &types.MessageRejected{} }
+
+// strPtr returns a pointer to a fresh copy of s — the sesv2/types error
+// structs (e.g. MessageRejected.Message) take *string, and these tests need
+// literal, human-readable text to assert against rather than a zero-value
+// nil.
+func strPtr(s string) *string { return &s }
 
 // ── 1. The physical_address refusal (CLAUDE.md §9) ─────────────────────────
 
@@ -990,19 +997,29 @@ func TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors(t *testing.T) 
 			want: adminNoMessageIDMessage,
 		},
 		{
-			name: "no recipient guard: our own errors.New, no prefix",
-			err:  errors.New("mailing: message has no recipient"),
+			name: "ErrEmptyRecipient sentinel, no prefix",
+			err:  ErrEmptyRecipient,
 			want: adminSendBuildFailureMessage,
 		},
 		{
-			name: "no body guard: our own errors.New, no prefix",
-			err:  errors.New("mailing: message has neither an HTML nor a text body"),
+			name: "ErrEmptyRecipient wrapped: errors.Is still matches",
+			err:  fmt.Errorf("build message: %w", ErrEmptyRecipient),
+			want: adminSendBuildFailureMessage,
+		},
+		{
+			name: "ErrEmptyBody sentinel, no prefix",
+			err:  ErrEmptyBody,
+			want: adminSendBuildFailureMessage,
+		},
+		{
+			name: "unrecognized unprefixed error: not one of the three enumerated sentinels, still degrades to the build-failure sentence",
+			err:  errors.New("some future SESMailer.Send return nobody enumerated yet"),
 			want: adminSendBuildFailureMessage,
 		},
 		{
 			name: "SES rejection: prefix present, stripped and kept verbatim",
-			err:  fmt.Errorf("mailing: sending via SES: %w", errors.New("api error MessageRejected: Email address is not verified")),
-			want: "api error MessageRejected: Email address is not verified",
+			err:  fmt.Errorf("mailing: sending via SES: %w", &types.MessageRejected{Message: strPtr("Email address is not verified")}),
+			want: "MessageRejected: Email address is not verified",
 		},
 		{
 			name: "retry-backoff deadline exceeded: prefix present but ours, not SES's",
@@ -1013,6 +1030,15 @@ func TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors(t *testing.T) 
 			name: "retry-backoff canceled: prefix present but ours, not SES's",
 			err:  fmt.Errorf("mailing: sending via SES: %w", context.Canceled),
 			want: adminSendTimedOutMessage,
+		},
+		{
+			name: "SDK transport/credential failure: prefix present, but no smithy.APIError underneath — mapped, not passed through raw",
+			err: fmt.Errorf("mailing: sending via SES: %w", &smithy.OperationError{
+				ServiceID:     "SES v2",
+				OperationName: "SendEmail",
+				Err:           errors.New("failed to refresh cached credentials, no EC2 IMDS role found"),
+			}),
+			want: adminSendUnreachableMessage,
 		},
 	}
 	for _, tc := range cases {
@@ -1043,9 +1069,19 @@ func TestWorker_SESRejectionReachesFailedSendsIntact(t *testing.T) {
 	forceSending(t, pool, campaignID)
 	sendID, _, _ := seedQueuedSend(t, pool, campaignID)
 
-	const sesText = "MessageRejected: Email address is not verified. The following identities failed the check in region US-WEST-2: bogus@example.com"
+	// A real modeled sesv2/types exception, not a bare errors.New stand-in
+	// (#0185 — SESMailer.Send never actually wraps a bare errors.New; the
+	// AWS SDK's SendEmail always returns something smithy-shaped, and
+	// adminSendErrorMessage's item-2 fix now discriminates on exactly that
+	// shape via smithy.APIError, so this test must use one to keep exercising
+	// the "genuine SES rejection reaches the admin intact" property rather
+	// than accidentally exercising the new transport-failure branch instead).
+	// LimitExceededException (a quota, §8's retryable class) keeps this
+	// test on the retryable call site (MarkRetryOrFailed); the sibling
+	// terminal-row test below covers MarkFailedRow with MessageRejected.
+	const sesReason = "Daily sending quota exceeded for this account"
 	mailer := &RecordingMailer{}
-	mailer.SetError(fmt.Errorf("mailing: sending via SES: %w", errors.New(sesText)))
+	mailer.SetError(fmt.Errorf("mailing: sending via SES: %w", &types.LimitExceededException{Message: strPtr(sesReason)}))
 
 	w := newTestWorker(t, pool, mailer)
 
@@ -1072,8 +1108,72 @@ func TestWorker_SESRejectionReachesFailedSendsIntact(t *testing.T) {
 	if len(failed) != 1 {
 		t.Fatalf("len(failed) = %d, want 1 (full = %+v)", len(failed), failed)
 	}
-	if failed[0].Error != sesText {
-		t.Errorf("failed_sends[0].error = %q, want %q (byte-identical minus our prefix)", failed[0].Error, sesText)
+	want := "LimitExceededException: " + sesReason
+	if failed[0].Error != want {
+		t.Errorf("failed_sends[0].error = %q, want %q (byte-identical minus our prefix, via MarkRetryOrFailed)", failed[0].Error, want)
+	}
+}
+
+// TestWorker_SESRejectionReachesFailedSendsIntact_TerminalRow closes #0185's
+// headline gap. TestWorker_SESRejectionReachesFailedSendsIntact above drives
+// a rejection via errors.New(sesText), which classifySendError does not
+// recognize as any modeled sesv2/types exception, so it takes the
+// *retryable* path (MarkRetryOrFailed) — not the terminal-row path
+// (MarkFailedRow) its own doc comment claims to reproduce. #0185 found that
+// MarkFailedRow's adminSendErrorMessage(sendErr) argument (worker.go's
+// sendClassTerminalRow case, sendOne) can be replaced with "" and the whole
+// suite still passes, because nothing exercised that exact call site end to
+// end. This test drives a genuine, modeled &types.MessageRejected{} — the
+// one classifySendError actually routes to sendClassTerminalRow — through a
+// real drainCampaign and reads the row back via
+// CampaignStatsStore.FailedSends, the same call the stats handler makes.
+func TestWorker_SESRejectionReachesFailedSendsIntact_TerminalRow(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+	setSetting(t, pool, settingMaxSendRate, "100000")
+
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	forceSending(t, pool, campaignID)
+	sendID, _, _ := seedQueuedSend(t, pool, campaignID)
+
+	const rejectReason = "Email address is not verified: bogus@example.com"
+	mailer := &RecordingMailer{}
+	mailer.SetError(fmt.Errorf("mailing: sending via SES: %w", &types.MessageRejected{Message: strPtr(rejectReason)}))
+
+	w := newTestWorker(t, pool, mailer)
+
+	c, err := w.store.ClaimResume(context.Background())
+	if err != nil {
+		t.Fatalf("ClaimResume: %v", err)
+	}
+	if c == nil {
+		t.Fatal("ClaimResume returned nil campaign")
+	}
+	if _, err := w.drainCampaign(context.Background(), c); err != nil {
+		t.Fatalf("drainCampaign: %v", err)
+	}
+
+	// classifySendError routes *types.MessageRejected to
+	// sendClassTerminalRow (worker.go), which sendOne serves through
+	// MarkFailedRow — confirming that, not just the row's final status, is
+	// the point: MarkRetryOrFailed can also leave a row 'failed' once
+	// retries are exhausted, so status alone would not distinguish which
+	// call site ran.
+	if got := sendRowStatus(t, pool, sendID); got != "failed" {
+		t.Fatalf("send row status = %q, want failed", got)
+	}
+
+	stats := NewCampaignStatsStore(pool)
+	failed, err := stats.FailedSends(context.Background(), campaignID)
+	if err != nil {
+		t.Fatalf("FailedSends: %v", err)
+	}
+	if len(failed) != 1 {
+		t.Fatalf("len(failed) = %d, want 1 (full = %+v)", len(failed), failed)
+	}
+	want := "MessageRejected: " + rejectReason
+	if failed[0].Error != want {
+		t.Errorf("failed_sends[0].error = %q, want %q (byte-identical minus our prefix, via MarkFailedRow)", failed[0].Error, want)
 	}
 }
 

@@ -31,6 +31,18 @@ type sesAPI interface {
 // not string matching.
 var ErrNoMessageID = errors.New("mailing: SES accepted the send but returned no MessageId")
 
+// ErrEmptyRecipient and ErrEmptyBody are Send's two argument-guard errors —
+// building the SendEmailInput failed before any AWS SDK call was made, so
+// neither carries sesWrapPrefix (worker.go). Named sentinels, rather than an
+// errors.New literal at each guard, so adminSendErrorMessage can enumerate
+// SESMailer.Send's unprefixed returns explicitly via errors.Is instead of
+// assuming every unprefixed error is one of these two — #0182 already
+// bounced once for exactly that class of assumption, one layer over (#0185).
+var (
+	ErrEmptyRecipient = errors.New("mailing: message has no recipient")
+	ErrEmptyBody      = errors.New("mailing: message has neither an HTML nor a text body")
+)
+
 const (
 	// maxSendAttempts bounds retries on SES throttling. 4 attempts with the
 	// backoff schedule below (200ms, 400ms, 800ms) spans a bit over a second
@@ -108,10 +120,10 @@ func NewSESMailer(ctx context.Context, cfg *config.Config) (*SESMailer, error) {
 // #0038's join key for bounce/complaint events.
 func (m *SESMailer) Send(ctx context.Context, msg Message) (string, error) {
 	if msg.To == "" {
-		return "", errors.New("mailing: message has no recipient")
+		return "", ErrEmptyRecipient
 	}
 	if msg.HTMLBody == "" && msg.TextBody == "" {
-		return "", errors.New("mailing: message has neither an HTML nor a text body")
+		return "", ErrEmptyBody
 	}
 
 	body := &types.Body{}
