@@ -539,10 +539,14 @@
           bind:value={fields.coverImage}
           disabled={saving}
         />
+        <!-- No upload endpoint exists, by design (#0051's API, struck by #0138 -- see PRD
+             §5.2), and an external URL is rejected because the site takes no external image
+             hosts (CLAUDE.md §9: no external CDNs). Both citations stay here, not in the
+             admin-facing copy below (#0172). -->
         <p class="text-muted cover-hint">
-          A site-relative path (e.g. "/assets/workshops/soldering.jpg") -- there is no upload
-          control here (#0138: no upload endpoint exists, by design -- see PRD §5.2) and an
-          external URL is not accepted (CLAUDE.md §9: no external CDNs).
+          A site-relative path (e.g. "/assets/workshops/soldering.jpg") to an image already
+          hosted on this site. There is no upload control here, and external image URLs are
+          not accepted.
         </p>
       </div>
     </Panel>

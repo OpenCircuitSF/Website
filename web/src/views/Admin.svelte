@@ -1688,9 +1688,11 @@
 
               <h3 class="detail-heading">Email event history</h3>
               {#if viewingSubscriber.email_events.length === 0}
+                <!-- Empty today because SES bounce/complaint ingestion (#0038) hasn't landed
+                     yet -- this section starts populating once it does (#0172). -->
                 <p class="text-muted">
-                  No events recorded yet. SES bounce/complaint ingestion (#0038) fills this
-                  section in once it lands.
+                  No events recorded yet. Bounce and complaint tracking will appear here once
+                  it's set up.
                 </p>
               {:else}
                 <ul class="detail-interest-list">

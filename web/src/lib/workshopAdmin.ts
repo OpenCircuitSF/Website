@@ -571,7 +571,7 @@ export function validateWorkshopForm(
       capacityValue <= 0 ||
       capacityValue > MAX_WORKSHOP_CAPACITY
     ) {
-      return { error: 'Capacity must be a whole number between 1 and 2147483647.' };
+      return { error: `Capacity must be a whole number between 1 and ${MAX_WORKSHOP_CAPACITY}.` };
     }
     capacity = capacityValue;
   }
