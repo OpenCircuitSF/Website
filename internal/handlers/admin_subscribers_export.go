@@ -44,15 +44,20 @@
 // permits unusual local-parts, per internal/subscribers.Store's doc
 // comment), and interests is admin-controlled but cheap to guard uniformly
 // rather than special-cased. csvInjectionGuard below prefixes any field
-// whose first character is =, +, -, or @ with a single quote, matching
-// #0059's Notes: that neutralizes the formula interpretation in Excel/
-// Sheets/Numbers while leaving the value visibly intact (a leading quote
-// is stripped from Excel's on-screen render of a text cell, and is exactly
-// what Excel itself inserts when you type a leading-apostrophe-protected
-// value). Applied to every free-text column an external submitter can
-// influence: email, interests, utm_source, utm_medium, utm_campaign. status
-// is one of a fixed Go-constant vocabulary and confirmed_at/created_at are
-// server-generated timestamps, so neither needs it.
+// whose first NON-WHITESPACE character is =, +, -, or @ with a single
+// quote, matching #0059's Notes: that neutralizes the formula interpretation
+// in Excel/Sheets/Numbers while leaving the value visibly intact (a leading
+// quote is stripped from Excel's on-screen render of a text cell, and is
+// exactly what Excel itself inserts when you type a leading-apostrophe-
+// protected value). Checking the first non-whitespace byte rather than just
+// s[0] matters: a leading TAB or CR (named by OWASP alongside =+-@) — or
+// LF, space, vertical tab — is trimmed by spreadsheet importers before the
+// cell is evaluated, so a naive first-byte check is bypassed by exactly the
+// characters an attacker would use to hide the leading =. Applied to every
+// free-text column an external submitter can influence: email, interests,
+// utm_source, utm_medium, utm_campaign. status is one of a fixed
+// Go-constant vocabulary and confirmed_at/created_at are server-generated
+// timestamps, so neither needs it.
 //
 // # Buffered vs. streamed
 //
@@ -65,21 +70,64 @@
 // wraps its output in a bufio.Writer, which flushes to the underlying
 // ResponseWriter on its own once its (small, fixed) internal buffer fills,
 // so rows reach the client well before the query finishes even without an
-// explicit per-row Flush call here. If this project ever needed the export
-// to survive a MID-STREAM failure more gracefully than "the client sees a
-// truncated CSV and a broken pipe on the server side" — e.g. a resumable
-// export, or a background job that emails a completed file — that would be
-// the point to add real chunked-with-checkpoints machinery; nothing here
-// today calls for it (CLAUDE.md §5: "no performance requirement", a
-// marketing-site mailing list, not a bulk-data platform).
+// explicit per-row Flush call here.
+//
+// # Mid-stream failure — what the client actually sees, and the audit fix
+//
+// WriteHeader(200) happens before StreamExport runs, so a store failure
+// partway through cannot change the status already sent. Measured directly
+// (a store failing after 3 of 100 rows): status=200, a valid Content-Length,
+// a nil body-read error, and a syntactically well-formed — merely short —
+// CSV. There is NO broken-pipe signal and no truncation marker of any kind:
+// a truncated export is indistinguishable from a complete one at the HTTP
+// layer, and a well-behaved client saves the short file as a complete
+// backup. (An external prior version of this comment claimed "a truncated
+// CSV and a broken pipe on the server side"; that was never true — it
+// described what might happen on a real client TCP disconnect, not on a
+// server-side/store failure, which is the actually-reachable case this
+// paragraph is about.)
+//
+// The one place this failure IS recorded is the audit row below:
+// h.auditor.Record runs unconditionally, success or mid-stream failure, and
+// its metadata carries "error" (only when streamErr != nil) alongside the
+// partial row_count and the filter that was applied — enough to
+// reconstruct who exported what, how much of it actually went out, and
+// under what filter. That Record call uses context.WithoutCancel(r.Context()),
+// not r.Context() — deliberately, and only here (see the Record call site
+// below for why) — so the row survives even a genuine client disconnect,
+// which is the case the naive r.Context() version of this handler lost
+// entirely (#0059's phase-3 review).
+//
+// Decision, recorded per that same review: this handler does NOT
+// panic(http.ErrAbortHandler) to turn a mid-stream store failure into a
+// hard transfer error the client can detect. That is the idiomatic Go way
+// to abort a response deliberately, and it was considered. Reasons against,
+// for now: (1) it would change observable behavior for the admin console's
+// own download on a failure mode — the backing store erroring mid-scan —
+// that is not this project's normal operating condition (CLAUDE.md §5: no
+// performance requirement, a marketing-site mailing list, not a bulk-data
+// platform); (2) it interacts with the audit fix above in a way that is
+// easy to get backwards — the panic must happen strictly AFTER
+// h.auditor.Record, or aborting the response reintroduces the exact
+// lost-audit-row defect this paragraph's fix exists to close; (3) the audit
+// log already carries the forensic signal a hard abort would only gesture
+// at (see above), which is sufficient for the operator-facing threat model
+// this issue's Notes describe. Revisit if this endpoint ever gains a
+// consumer other than a human at the admin console — e.g. a scheduled
+// backup job — that would act on a short file as though it were complete;
+// that is the point where the CLIENT needs its own failure signal, not just
+// a record an operator can look up after the fact.
 package handlers
 
 import (
+	"context"
 	"encoding/csv"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
@@ -93,15 +141,32 @@ var exportCSVHeader = []string{
 	"utm_source", "utm_medium", "utm_campaign",
 }
 
-// csvInjectionGuard prefixes s with a single quote if its first byte is one
-// Excel/Sheets/Numbers treats as starting a formula (=, +, -, @) when a CSV
-// cell is opened — see the package doc comment. Left untouched otherwise,
-// including the empty string (nothing to guard).
+// csvInjectionGuard prefixes s with a single quote if its first
+// NON-WHITESPACE byte is one Excel/Sheets/Numbers treats as starting a
+// formula (=, +, -, @) when a CSV cell is opened — see the package doc
+// comment. Left untouched otherwise, including the empty string and a
+// string that is all whitespace (nothing to guard).
+//
+// Checking s[0] alone (the original implementation) was bypassed by a
+// leading TAB, CR, LF, space, or vertical tab: encoding/csv round-trips such
+// a field byte-exact (quoting it because it contains a control character or
+// starts with a space), but spreadsheet importers trim leading whitespace
+// before evaluating the cell, so the trimmed value still opens as a formula.
+// OWASP's CSV-injection guidance names TAB and CR alongside =, +, -, @ for
+// exactly this reason. The quote is still inserted at the very front of the
+// ORIGINAL (untrimmed) string, not the trimmed one: a leading apostrophe
+// forces Excel to treat the whole cell as text regardless of what follows
+// it, whitespace included, so there is no need to also strip the
+// whitespace. This is also why the guard stays idempotent on re-export — a
+// value already prefixed with "'" has "'" as its first non-whitespace byte,
+// which is not one of the four guarded characters, so it is never
+// double-prefixed.
 func csvInjectionGuard(s string) string {
-	if s == "" {
+	trimmed := strings.TrimLeftFunc(s, unicode.IsSpace)
+	if trimmed == "" {
 		return s
 	}
-	switch s[0] {
+	switch trimmed[0] {
 	case '=', '+', '-', '@':
 		return "'" + s
 	default:
@@ -234,7 +299,17 @@ func (h *AdminSubscribersHandler) Export(w http.ResponseWriter, r *http.Request)
 		if streamErr != nil {
 			metadata["error"] = streamErr.Error()
 		}
-		h.auditor.Record(r.Context(), audit.Entry{
+		// context.WithoutCancel, not r.Context(): this handler is the one
+		// place in the tree where that matters (see the package doc
+		// comment's "Audit and client disconnect" section) — a download
+		// that runs for the duration of a large transfer, whose audit row
+		// is an anti-exfiltration control rather than an ordinary change
+		// record. r.Context() remains correct at every other Record call
+		// site in this package/tree (22 of 26, per the phase-3 review); do
+		// not change those — for them the mutation and the audit insert are
+		// microseconds apart under the same request, so there is no
+		// meaningful disconnect window to lose the row to.
+		h.auditor.Record(context.WithoutCancel(r.Context()), audit.Entry{
 			ActorID:    &actorID,
 			Action:     audit.ActionSubscriberExported,
 			TargetType: audit.TargetSubscriber,

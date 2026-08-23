@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
+	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
+	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
@@ -174,6 +180,27 @@ func TestAdminSubscribers_Export_CSVEdgeCases(t *testing.T) {
 		status:    subscribers.StatusActive,
 		utmSource: strPtr("=SUM(A1:A9)"), utmMedium: strPtr("+shady"), utmCampaign: strPtr("-1+cmd|calc"),
 	})
+	// Leading-whitespace bypass (phase-3 review bounce, #0059): TAB and CR
+	// are named by OWASP alongside =+-@ specifically because spreadsheet
+	// importers trim them before evaluating the cell, so a first-byte-only
+	// guard lets them straight through. LF, space, and vertical tab are the
+	// same class of bypass and are included for the same reason the
+	// reviewer probed all five.
+	_, tabInjectionEmail := seedExportSubscriber(t, pool, exportSeedOpts{
+		status: subscribers.StatusActive, utmSource: strPtr("\t=cmd|'/c calc'!A1"),
+	})
+	_, crInjectionEmail := seedExportSubscriber(t, pool, exportSeedOpts{
+		status: subscribers.StatusActive, utmMedium: strPtr("\r=cmd|'/c calc'!A1"),
+	})
+	_, lfInjectionEmail := seedExportSubscriber(t, pool, exportSeedOpts{
+		status: subscribers.StatusActive, utmCampaign: strPtr("\n=1+1"),
+	})
+	_, spaceInjectionEmail := seedExportSubscriber(t, pool, exportSeedOpts{
+		status: subscribers.StatusActive, utmSource: strPtr(" =cmd|'/c calc'!A1"),
+	})
+	_, vtInjectionEmail := seedExportSubscriber(t, pool, exportSeedOpts{
+		status: subscribers.StatusActive, utmMedium: strPtr("\v=1+1"),
+	})
 	atInjectionEmail := "=" + testSubscriberEmail(t) // leading '=' is the injection char, not a realistic address, but the sanitizer must guard it uniformly regardless of column
 	if _, err := pool.Exec(context.Background(),
 		`INSERT INTO subscribers (email, status, manage_token, confirmed_at) VALUES ($1, $2, $3, now())`,
@@ -237,6 +264,25 @@ func TestAdminSubscribers_Export_CSVEdgeCases(t *testing.T) {
 		t.Errorf("email injection guard: want a row keyed %q (quote-prefixed), got records: %v", "'"+atInjectionEmail, keysOf(records))
 	} else if rec[0] != "'"+atInjectionEmail {
 		t.Errorf("email injection guard: got %q", rec[0])
+	}
+
+	// Leading-whitespace bypass cases: the guard must still fire, and the
+	// quote goes in front of the ORIGINAL (untrimmed) value — the whitespace
+	// is preserved after the inserted quote, not stripped.
+	if rec, ok := records[tabInjectionEmail]; !ok || rec[5] != "'\t=cmd|'/c calc'!A1" {
+		t.Errorf("TAB-prefixed injection guard: got %v, ok=%v, want utm_source %q", rec, ok, "'\t=cmd|'/c calc'!A1")
+	}
+	if rec, ok := records[crInjectionEmail]; !ok || rec[6] != "'\r=cmd|'/c calc'!A1" {
+		t.Errorf("CR-prefixed injection guard: got %v, ok=%v, want utm_medium %q", rec, ok, "'\r=cmd|'/c calc'!A1")
+	}
+	if rec, ok := records[lfInjectionEmail]; !ok || rec[7] != "'\n=1+1" {
+		t.Errorf("LF-prefixed injection guard: got %v, ok=%v, want utm_campaign %q", rec, ok, "'\n=1+1")
+	}
+	if rec, ok := records[spaceInjectionEmail]; !ok || rec[5] != "' =cmd|'/c calc'!A1" {
+		t.Errorf("space-prefixed injection guard: got %v, ok=%v, want utm_source %q", rec, ok, "' =cmd|'/c calc'!A1")
+	}
+	if rec, ok := records[vtInjectionEmail]; !ok || rec[6] != "'\v=1+1" {
+		t.Errorf("VT-prefixed injection guard: got %v, ok=%v, want utm_medium %q", rec, ok, "'\v=1+1")
 	}
 }
 
@@ -398,4 +444,133 @@ func TestAdminSubscribers_Export_Audited(t *testing.T) {
 	if meta.FilterStatus != subscribers.StatusActive {
 		t.Errorf("metadata filter_status = %q, want %q", meta.FilterStatus, subscribers.StatusActive)
 	}
+}
+
+// disconnectContextMiddleware simulates a client disconnecting mid-request:
+// it derives an already-cancelled child of the request's context — AFTER
+// RequireSession/RequireAdmin have already attached the authenticated user,
+// so downstream authorization still sees it exactly as it would for a real
+// request — and calls the wrapped handler with that context instead. This
+// is the same reproduction technique the phase-3 review used to prove the
+// audit row was lost on disconnect (issues/0059.md's Review notes: "a
+// wrapper hands Export a cancelled child of that context"): a live
+// net/http server cancels r.Context() the moment the underlying connection
+// goes away, and this stands in for that without needing a real dropped
+// TCP connection in a test.
+func disconnectContextMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithCancel(r.Context())
+		cancel()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// adminSubscribersExportDisconnectMux wires ONLY GET /admin/subscribers/export
+// behind the real RequireSession -> RequireAdmin guard, then
+// disconnectContextMiddleware, so Export runs with a context that is already
+// cancelled by the time it reads it — reproducing a client that vanished
+// mid-stream. Deliberately a separate, minimal mux rather than an addition
+// to adminSubscribersMux (admin_subscribers_test.go), which every other
+// subscribers handler test also shares and which must keep running with a
+// live, uncancelled request context.
+func adminSubscribersExportDisconnectMux(pool *pgxpool.Pool) http.Handler {
+	authStore := auth.NewStore(pool)
+	subStore := subscribers.NewStore(pool)
+	interestsStore := interests.NewStore(pool)
+	suppressionsStore := subscribers.NewSuppressionStore(pool)
+	sesEventsStore := sesnotify.NewStore(pool)
+	h := NewAdminSubscribersHandler(subStore, interestsStore, nil, suppressionsStore, sesEventsStore, authStore, audit.New(pool))
+	requireSession := middleware.RequireSession(authStore)
+	requireAdmin := func(next http.Handler) http.Handler {
+		return requireSession(middleware.RequireAdmin(next))
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /admin/subscribers/export", requireAdmin(disconnectContextMiddleware(http.HandlerFunc(h.Export))))
+	return mux
+}
+
+// TestAdminSubscribers_Export_AuditedOnClientDisconnect is the fix for
+// defect 2 of the phase-3 review bounce: h.auditor.Record used to reuse the
+// cancelled request context, so a client that disconnected mid-download lost
+// its audit row entirely (audit_log delta 0, only a slog WARN) — defeating
+// the export audit's whole purpose in the stolen-session threat model
+// #0059's Notes name. With Export using context.WithoutCancel for the
+// Record call, the row must survive even though the request context handed
+// to StreamExport is already cancelled (so the stream itself fails with
+// "context canceled" and rows_written=0 — the exact reproduction the review
+// used).
+func TestAdminSubscribers_Export_AuditedOnClientDisconnect(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminSubscribersExportDisconnectMux(pool))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-subs-export-disconnect@example.com")
+	seedSession(t, pool, admin, "admin-token-export-disconnect")
+	seedExportSubscriber(t, pool, exportSeedOpts{status: subscribers.StatusActive})
+
+	ctx := context.Background()
+	countExportedRows := func() int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(ctx,
+			`SELECT count(*) FROM audit_log WHERE action = 'subscriber.exported' AND actor_id = $1`,
+			admin,
+		).Scan(&n); err != nil {
+			t.Fatalf("count audit rows: %v", err)
+		}
+		return n
+	}
+	before := countExportedRows()
+
+	client := srv.Client()
+	resp, err := client.Do(mustNewRequest(t, "GET", srv.URL+"/admin/subscribers/export", "admin-token-export-disconnect"))
+	if err != nil {
+		t.Fatalf("GET /admin/subscribers/export: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	after := countExportedRows()
+	if delta := after - before; delta != 1 {
+		t.Fatalf("audit_log delta = %d, want 1 (before=%d after=%d) — the export's audit row must survive a cancelled request context", delta, before, after)
+	}
+
+	var metaRaw []byte
+	if err := pool.QueryRow(ctx,
+		`SELECT metadata FROM audit_log
+		  WHERE action = 'subscriber.exported' AND actor_id = $1
+		  ORDER BY id DESC LIMIT 1`,
+		admin,
+	).Scan(&metaRaw); err != nil {
+		t.Fatalf("query audit metadata: %v", err)
+	}
+	var meta struct {
+		Error    string `json:"error"`
+		RowCount int    `json:"row_count"`
+	}
+	if err := json.Unmarshal(metaRaw, &meta); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if meta.Error == "" {
+		t.Errorf("metadata.error is empty, want the context-canceled stream error recorded")
+	}
+	if meta.RowCount != 0 {
+		t.Errorf("metadata.row_count = %d, want 0 (context was already cancelled before StreamExport ran)", meta.RowCount)
+	}
+}
+
+// mustNewRequest builds a GET request carrying the bearer token, matching
+// doJSON's (subscribe_test.go) request-construction convention but returning
+// the *http.Request itself so the caller can drive client.Do and inspect the
+// raw response rather than going through doJSON's body-parsing helpers.
+func mustNewRequest(t *testing.T, method, url, token string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return req
 }
