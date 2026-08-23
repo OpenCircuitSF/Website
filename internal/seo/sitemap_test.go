@@ -64,7 +64,13 @@ func TestSitemap_ContainsStaticRoutesWithLastmod(t *testing.T) {
 // published workshop's slug should ever appear.
 func TestSitemap_ExcludesUnpublishedWorkshops(t *testing.T) {
 	source := fakeWorkshopSource{
-		"published-1": {Slug: "published-1", Status: WorkshopPublished, UpdatedAt: "2026-08-01"},
+		// #0177: status=published always implies a stamped published_at
+		// (#0171, proved by execution), so Published must be true here --
+		// Published: false paired with WorkshopPublished is a state #0171
+		// proved unreachable. Harmless to the assertion below (the sitemap
+		// gate is status-only, per the canceled-2 comment above), but it
+		// made the conjunctive gate pass for the wrong reason.
+		"published-1": {Slug: "published-1", Status: WorkshopPublished, Published: true, UpdatedAt: "2026-08-01"},
 		"draft-1":     {Slug: "draft-1", Status: WorkshopDraft},
 		"unpub-1":     {Slug: "unpub-1", Status: WorkshopUnpublished},
 		// canceled-1 was never published (Published defaults false: a

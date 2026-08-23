@@ -8,6 +8,7 @@ import {
   publishConfirmMessage,
   unpublishConfirmMessage,
   cancelConfirmMessage,
+  cancelVisibilityOutcome,
   deleteConfirmMessage,
   announceTargetingDescription,
   announceTargetingClass,
@@ -78,7 +79,7 @@ describe('status transition offers', () => {
     expect(canUnpublish('canceled')).toBe(false);
   });
 
-  it('canCancel is true unless already canceled', () => {
+  it('canCancel is true unless already canceled -- offered even for the #0177 draft-with-published_at cell, see canCancel\'s doc comment for why', () => {
     expect(canCancel('draft')).toBe(true);
     expect(canCancel('published')).toBe(true);
     expect(canCancel('canceled')).toBe(false);
@@ -87,31 +88,84 @@ describe('status transition offers', () => {
   it('confirm messages mention the title', () => {
     expect(publishConfirmMessage('Soldering 101')).toContain('Soldering 101');
     expect(unpublishConfirmMessage('Soldering 101')).toContain('Soldering 101');
-    expect(cancelConfirmMessage('Soldering 101', true)).toContain('Soldering 101');
-    expect(cancelConfirmMessage('Soldering 101', false)).toContain('Soldering 101');
+    expect(cancelConfirmMessage('Soldering 101', 'published', '2026-01-01T00:00:00Z')).toContain(
+      'Soldering 101',
+    );
+    expect(cancelConfirmMessage('Soldering 101', 'draft', null)).toContain('Soldering 101');
     expect(deleteConfirmMessage('Soldering 101')).toContain('Soldering 101');
   });
 
-  it('cancel copy for a workshop that WAS published says it stays visible, not that it disappears', () => {
-    expect(cancelConfirmMessage('X', true)).toMatch(/stays visible/i);
+  // #0177: cancelVisibilityOutcome derives the true consequence from BOTH
+  // status and published_at together (#0171's matrix), not from a single
+  // `wasPublished = !!published_at` boolean -- that collapse was the
+  // defect (a draft with a leftover published_at read as "was published"
+  // and was told canceling wouldn't change its visibility, when it
+  // actually publishes it). Each state below produces a DIFFERENT output,
+  // so swapping any two branches' return values fails at least one of
+  // these three assertions -- that is the mutation-provability the issue
+  // asks for at the derivation layer, before copy is even involved.
+  describe('cancelVisibilityOutcome (#0177: the matrix, not one boolean)', () => {
+    it('never-published draft, or published -> unpublished (published_at NULL either way): stays private', () => {
+      expect(cancelVisibilityOutcome('draft', null)).toBe('staysPrivate');
+      expect(cancelVisibilityOutcome('draft', undefined)).toBe('staysPrivate');
+    });
+
+    it('published (published_at always set, #0171): stays visible', () => {
+      expect(cancelVisibilityOutcome('published', '2026-01-01T00:00:00Z')).toBe('staysVisible');
+    });
+
+    it('draft with a leftover published_at -- #0171\'s canceled -> draft cell: becomes visible', () => {
+      expect(cancelVisibilityOutcome('draft', '2026-01-01T00:00:00Z')).toBe('becomesVisible');
+    });
   });
 
-  // #0171: canceling a workshop that is not currently published (a draft,
-  // or one unpublished before this cancel -- published_at NULL either way)
-  // does NOT make it public. The old unconditional "stays visible" copy was
-  // wrong for this case -- the exact defect issues/0171.md is about.
+  it('cancel copy for a currently-published workshop says it stays visible, not that it disappears', () => {
+    const msg = cancelConfirmMessage('X', 'published', '2026-01-01T00:00:00Z');
+    expect(msg).toMatch(/stays visible/i);
+    // Must not also claim the "not currently published" story -- that
+    // would fail if the staysVisible and staysPrivate branches were ever
+    // swapped or merged.
+    expect(msg).not.toMatch(/not currently published/i);
+  });
+
+  // #0171: canceling a workshop that is not currently visible (a
+  // never-published draft, or one unpublished before this cancel --
+  // published_at NULL either way) does NOT make it public. The old
+  // unconditional "stays visible" copy was wrong for this case -- the
+  // exact defect issues/0171.md is about.
   //
-  // #0174: the copy must not claim "It was never published" -- that's false
-  // on the published -> unpublished -> canceled path (it WAS published;
-  // unpublishing cleared published_at). "not currently published" is true
-  // in both sub-cases, so assert that phrasing rather than "never
-  // published".
-  it('cancel copy for a not-currently-published workshop says it stays private, not that it stays visible', () => {
-    const msg = cancelConfirmMessage('X', false);
+  // #0174: the copy must not claim "It was never published" -- that's
+  // false on the published -> unpublished -> canceled path (it WAS
+  // published; unpublishing cleared published_at). "not currently
+  // published" is true in both sub-cases. The real guard here is the
+  // POSITIVE assertion on that true phrasing, not the negative one below
+  // by itself -- #0174's review showed a purely negative
+  // `.not.toMatch(/never published/i)` still passes if the copy is
+  // reworded to say the same false thing differently (e.g. "has not been
+  // published before"). Kept as an explicit belt-and-suspenders check
+  // against that one known-false phrase, backed by the positive assertion
+  // that actually pins the wording.
+  it('cancel copy for a currently-invisible, never-published-or-unpublished workshop says it stays private, not that it stays visible', () => {
+    const msg = cancelConfirmMessage('X', 'draft', null);
     expect(msg).toMatch(/not currently published/i);
     expect(msg).not.toMatch(/never published/i);
     expect(msg).toMatch(/private/i);
     expect(msg).not.toMatch(/stays visible/i);
+    expect(msg).not.toMatch(/will make it visible/i);
+  });
+
+  // #0177's actual defect: a draft whose published_at survives from an
+  // earlier publish (#0171's canceled -> draft cell). The dialog must warn
+  // that canceling PUBLISHES it, not promise continuity with its current
+  // (invisible) state.
+  it('cancel copy for a draft with a leftover published_at warns that canceling makes it visible, not that it stays as it is', () => {
+    const msg = cancelConfirmMessage('X', 'draft', '2026-01-01T00:00:00Z');
+    expect(msg).toMatch(/will make it visible/i);
+    // Must not borrow either other branch's claim: not "already visible"
+    // (staysVisible) and not "stays private" (staysPrivate) -- both are
+    // false here, and either one reintroduces #0177's under-warning.
+    expect(msg).not.toMatch(/stays visible/i);
+    expect(msg).not.toMatch(/stays private/i);
   });
 });
 
@@ -502,7 +556,7 @@ describe('validateWorkshopForm', () => {
       validateWorkshopForm(blankFields({ title: 'X', coverImage: 'javascript:alert(1)' })),
     ).toEqual({
       error:
-        'Cover image must be a site-relative path starting with "/" (e.g. "/assets/workshops/soldering.jpg") -- an external URL is not accepted.',
+        'Cover image must be a site-relative path starting with "/" (e.g. "/assets/workshops/soldering.jpg") — an external URL is not accepted.',
     });
   });
 

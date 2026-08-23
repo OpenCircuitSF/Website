@@ -234,7 +234,12 @@
       case 'unpublish':
         return unpublishConfirmMessage(workshop.title);
       case 'cancel':
-        return cancelConfirmMessage(workshop.title, !!workshop.published_at);
+        // #0177: derived from status AND published_at together (the
+        // matrix), not a `!!workshop.published_at` boolean alone -- that
+        // collapse was the defect (a draft with a leftover published_at
+        // read as "was published" and got told canceling wouldn't change
+        // its visibility, when canceling actually publishes it).
+        return cancelConfirmMessage(workshop.title, workshop.status, workshop.published_at);
     }
   });
   let transitionHeading = $derived(

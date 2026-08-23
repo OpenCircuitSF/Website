@@ -111,7 +111,33 @@ export function canUnpublish(status: string): boolean {
   return status === 'published';
 }
 
-/** Whether "Cancel" should be offered (workshop is not already canceled). */
+/**
+ * Whether "Cancel" should be offered (workshop is not already canceled).
+ *
+ * `#0177` considered narrowing this further -- refusing to offer Cancel for
+ * a `draft` whose `published_at` is still set (`#0171`'s `canceled ->
+ * draft` cell, store.go's doc comment: "any status -> canceled (except from
+ * published): published_at is left UNCHANGED"). Kept broad, on purpose:
+ *
+ *   - This module's own header comment already establishes the rule these
+ *     three `can*` functions follow -- they decide what to OFFER, never
+ *     what to ENFORCE, because store.go's `Update` accepts any status ->
+ *     any other status regardless. Narrowing `canCancel` alone would break
+ *     that symmetry with `canPublish`/`canUnpublish` for one cell of the
+ *     matrix rather than the whole rule.
+ *   - The state is real, not hypothetical: `#0171`'s review notes proved it
+ *     by execution (`canceled -> draft`, `published_at` genuinely `set`).
+ *     An admin who reverted a canceled workshop to draft (to reschedule,
+ *     say) and then decides not to run it after all has a legitimate
+ *     reason to cancel it again -- refusing would stem them at the console
+ *     while the server-side route still accepts the same PATCH directly,
+ *     which is a worse outcome than warning correctly.
+ *   - `cancelConfirmMessage` below now derives its copy from `status` AND
+ *     `published_at` together (the matrix, not one boolean), so the
+ *     dialog can tell the admin the true consequence -- including the case
+ *     this issue exists for, where canceling makes the workshop visible --
+ *     instead of needing to hide the action to avoid explaining it.
+ */
 export function canCancel(status: string): boolean {
   return status !== 'canceled';
 }
@@ -127,24 +153,76 @@ export function unpublishConfirmMessage(title: string): string {
 }
 
 /**
- * Confirmation copy for canceling `title`. Mirrors store.go's own note that
- * cancel is not unpublish: a canceled workshop that WAS published stays
- * visible on the public site (with a canceled badge -- see
+ * What canceling `status`/`publishedAt` does to the workshop's public
+ * visibility -- the piece `cancelConfirmMessage` turns into prose.
+ *
+ * Derived from `#0171`'s transition matrix (`issues/0171.md`'s `## Review
+ * notes`), not from a single `wasPublished` boolean -- that was `#0177`'s
+ * defect. `ListVisible`/the detail route require `published_at IS NOT
+ * NULL` *and* `status IN (published, canceled)` (internal/workshops/store.go
+ * §"The published_at guard"), and store.go's own note that cancel "leaves
+ * published_at UNCHANGED" is what makes each branch below true:
+ *
+ * | Reachable, cancelable state (status != canceled) | `published_at` | Currently visible | After Cancel |
+ * |---|---|---|---|
+ * | never-published draft, or published -> unpublished | NULL | no | stays invisible (`'staysPrivate'`) |
+ * | published | set (status=published implies this, per #0171) | yes | stays visible (`'staysVisible'`) |
+ * | canceled -> draft (`#0171`'s cell) | set | no -- status filter alone hides it | **becomes visible** (`'becomesVisible'`) |
+ *
+ * The first row collapses two different histories into one outcome on
+ * purpose: with `published_at` NULL, a never-published draft and a
+ * published-then-unpublished one are indistinguishable from the fields
+ * this function receives, and `#0174`'s review is exactly why that must not
+ * be papered over with a fabricated distinction -- "not currently
+ * published" is true of both; "never published" is true of only one.
+ */
+export function cancelVisibilityOutcome(
+  status: string,
+  publishedAt: string | null | undefined,
+): 'staysPrivate' | 'staysVisible' | 'becomesVisible' {
+  if (status === 'published') {
+    // status=published implies a stamped published_at (#0171, proved by
+    // execution); cancel preserves it, so the workshop stays visible.
+    return 'staysVisible';
+  }
+  if (publishedAt) {
+    // Not published now, but published_at survives from an earlier publish
+    // that a cancel never cleared (only unpublish clears it). The status
+    // filter is the only thing hiding it today, and canceling does not add
+    // a second filter -- it becomes visible.
+    return 'becomesVisible';
+  }
+  return 'staysPrivate';
+}
+
+/**
+ * Confirmation copy for canceling `title`, given its current `status` and
+ * `published_at`. Mirrors store.go's own note that cancel is not unpublish:
+ * a workshop that stays visible does so with a canceled badge (see
  * lib/workshops.ts's workshopBadgeLabel) rather than disappearing.
  *
- * `wasPublished` must be `!!workshop.published_at` at the moment the admin
- * opens this confirmation -- the same signal the public read path
- * (internal/handlers/public_workshops.go, #0171) uses to decide visibility.
- * A workshop that has never been published (a draft, or one that was
- * unpublished before this cancel) has `published_at` NULL, and canceling it
- * does NOT make it public -- the pre-#0171 defect this function's old,
- * unconditional "stays visible" copy was describing wrong for that case.
+ * Pass `workshop.status` and `workshop.published_at` directly -- the same
+ * fields `cancelVisibilityOutcome` above keys on. Do not collapse them into
+ * a single boolean before calling this; that collapse (`wasPublished =
+ * !!workshop.published_at`, ignoring `status`) is `#0177`'s defect: a
+ * `draft` with a leftover `published_at` read as "was published" and got
+ * told canceling keeps it exactly as invisible as it already is, when
+ * canceling actually publishes it.
  */
-export function cancelConfirmMessage(title: string, wasPublished: boolean): string {
-  if (wasPublished) {
-    return `Cancel "${title}"? It stays visible on the public site, marked canceled, rather than disappearing.`;
+export function cancelConfirmMessage(
+  title: string,
+  status: string,
+  publishedAt: string | null | undefined,
+): string {
+  switch (cancelVisibilityOutcome(status, publishedAt)) {
+    case 'staysVisible':
+      return `Cancel "${title}"? It stays visible on the public site, marked canceled, rather than disappearing.`;
+    case 'becomesVisible':
+      return `Cancel "${title}"? It is not currently visible, but canceling it will make it visible on the public site, marked canceled — it was published before, and that history was never cleared.`;
+    case 'staysPrivate':
+    default:
+      return `Cancel "${title}"? It is not currently published, so it stays private — canceling it will not make it visible.`;
   }
-  return `Cancel "${title}"? It is not currently published, so it stays private -- canceling it will not make it visible.`;
 }
 
 /** Confirmation copy for deleting `title` (the non-conflict path). */
@@ -585,7 +663,7 @@ export function validateWorkshopForm(
   if (coverImage !== '' && !isSafeCoverImage(coverImage)) {
     return {
       error:
-        'Cover image must be a site-relative path starting with "/" (e.g. "/assets/workshops/soldering.jpg") -- an external URL is not accepted.',
+        'Cover image must be a site-relative path starting with "/" (e.g. "/assets/workshops/soldering.jpg") — an external URL is not accepted.',
     };
   }
 
