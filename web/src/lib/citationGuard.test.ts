@@ -34,17 +34,21 @@
 // synthetic-source proof of both properties plus the comment exclusion,
 // and the "catches" block for proof the guard actually fires.
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, dirname, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { parse as parseSvelte } from 'svelte/compiler';
 
 // The pattern requires a word boundary after the three digits so it cannot
 // match inside e.g. a hex color (app.css's --series-6: #008300 style
 // values, if one ever ended up in a .ts token file, would contain "#008"
-// but "\b" fails between the '8' and the '3' that follows it).
-const citationPattern = /CLAUDE\.md|PRD §|#0\d{3}\b/;
+// but "\b" fails between the '8' and the '3' that follows it). "PRD\s*§"
+// (rather than a single literal space) closes the "PRD  §6.6" (two spaces)
+// and "PRD§6.6" (no space) variants — both plausible typography, both
+// missed by the original pattern, zero-cost to close (#0181 review, pass
+// 2). Issues.md, HANDOFF.md, and docs/*.md join CLAUDE.md and PRD § as
+// documents an admin cannot read either — #0178's own whole-tree grep
+// already included Issues.md and HANDOFF, so there is no principled reason
+// to guard one internal document and not the others.
+const citationPattern = /CLAUDE\.md|PRD\s*§|#0\d{3}\b|Issues\.md|HANDOFF\.md|docs\/\S*\.md/;
 
 interface Violation {
   file: string;
@@ -105,19 +109,43 @@ function collectByType(node: unknown, types: Set<string>, out: Record<string, un
   return out;
 }
 
+// extractLiteralValue reads the string a Text/Literal/TemplateElement node
+// carries. Shared between the fragment walk and the script walk so both
+// extract identically.
+function extractLiteralValue(n: Record<string, unknown>): string | undefined {
+  if (n.type === 'Text') {
+    return n.data as string | undefined;
+  }
+  if (n.type === 'Literal' && typeof n.value === 'string') {
+    return n.value;
+  }
+  if (n.type === 'TemplateElement') {
+    const v = n.value as { cooked?: string; raw?: string } | undefined;
+    return v?.cooked ?? v?.raw;
+  }
+  return undefined;
+}
+
 function scanSvelteSource(fileName: string, source: string): Violation[] {
   const violations: Violation[] = [];
   const ast = parseSvelte(source, { filename: fileName, modern: true }) as unknown as Record<string, unknown>;
 
   const lineOf = (offset: number): number => source.slice(0, offset).split('\n').length;
 
-  // Rendered template text — Comment nodes are a distinct type and are
-  // never in this set, so HTML comments are excluded structurally.
-  for (const n of collectByType(ast.fragment, new Set(['Text']))) {
-    const data = n.data as string | undefined;
+  // Rendered template text, AND string/template literals nested inside a
+  // markup expression ({'...'}, {cond ? '...' : ''}, {`...`}, {@html '...'}).
+  // #0181 review, pass 2 (the bounce): an ExpressionTag in the markup
+  // carries its own ESTree subtree, which belongs to the fragment tree, not
+  // the instance script — the original scan collected only Text from
+  // ast.fragment, so a citation reachable only through a template
+  // expression was never seen. Collecting Literal/TemplateElement here too
+  // closes that gap; Comment nodes remain a distinct type never in this
+  // set, so HTML comments stay excluded structurally.
+  for (const n of collectByType(ast.fragment, new Set(['Text', 'Literal', 'TemplateElement']))) {
+    const value = extractLiteralValue(n);
     const start = n.start as number | undefined;
-    if (data && citationPattern.test(data)) {
-      violations.push({ file: fileName, line: start !== undefined ? lineOf(start) : 0, text: data });
+    if (value && citationPattern.test(value)) {
+      violations.push({ file: fileName, line: start !== undefined ? lineOf(start) : 0, text: value });
     }
   }
 
@@ -127,13 +155,7 @@ function scanSvelteSource(fileName: string, source: string): Violation[] {
   for (const root of [ast.instance, ast.module]) {
     if (!root) continue;
     for (const n of collectByType((root as Record<string, unknown>).content, new Set(['Literal', 'TemplateElement']))) {
-      let value: string | undefined;
-      if (n.type === 'Literal' && typeof n.value === 'string') {
-        value = n.value;
-      } else if (n.type === 'TemplateElement') {
-        const v = n.value as { cooked?: string; raw?: string } | undefined;
-        value = v?.cooked ?? v?.raw;
-      }
+      const value = extractLiteralValue(n);
       const start = n.start as number | undefined;
       if (value && citationPattern.test(value)) {
         violations.push({ file: fileName, line: start !== undefined ? lineOf(start) : 0, text: value });
@@ -144,30 +166,29 @@ function scanSvelteSource(fileName: string, source: string): Violation[] {
   return violations;
 }
 
-const THIS_FILE = fileURLToPath(import.meta.url);
-const SRC_ROOT = dirname(dirname(THIS_FILE)); // web/src/lib/.. -> web/src
-
-function walk(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    const path = join(dir, entry);
-    const stat = statSync(path);
-    if (stat.isDirectory()) {
-      walk(path, out);
-      continue;
-    }
-    if (path === THIS_FILE) continue;
-    if (entry.endsWith('.test.ts') || entry.endsWith('.d.ts')) continue;
-    if (entry.endsWith('.ts') || entry.endsWith('.svelte')) out.push(path);
-  }
-  return out;
-}
+// #0181 review, pass 2: import.meta.glob replaces the readdirSync/statSync
+// file walk. It is strictly narrower — it needed no @types/node dependency
+// and no "node" entry in tsconfig.json's types array (both reverted in this
+// pass; vite/client already declares import.meta.glob) — and it deletes the
+// walk/fileURLToPath machinery outright. Keys are paths relative to this
+// file (web/src/lib/), e.g. "../App.svelte" or
+// "../views/admin/WorkshopEditor.svelte", which is exactly the kind of
+// relative path the old walk() produced (via path.relative(SRC_ROOT, ...))
+// for the failure message to print. { eager: true } resolves all matches at
+// module-load time so this is a plain object, not a set of loader
+// functions.
+const SOURCE_FILES = import.meta.glob('../**/*.{ts,svelte}', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
 
 describe('citation guard (web/src)', () => {
   it('no source file contains an admin-facing string that cites CLAUDE.md, PRD, or a tracker issue', () => {
     const violations: Violation[] = [];
-    for (const path of walk(SRC_ROOT)) {
-      const source = readFileSync(path, 'utf8');
-      const rel = relative(SRC_ROOT, path);
+    for (const [path, source] of Object.entries(SOURCE_FILES)) {
+      if (path.endsWith('.test.ts') || path.endsWith('.d.ts')) continue;
+      const rel = path.replace(/^\.\.\//, '');
       const found = path.endsWith('.svelte') ? scanSvelteSource(rel, source) : scanTsSource(rel, source);
       violations.push(...found);
     }
@@ -218,6 +239,17 @@ describe('citation guard exclusions (synthetic fixtures)', () => {
 `;
     expect(scanSvelteSource('fixture.svelte', src)).toHaveLength(0);
   });
+
+  it('does not trip on a code comment citing Issues.md, HANDOFF.md, or docs/*.md', () => {
+    const src = `
+      // See Issues.md for status, HANDOFF.md for environment notes, and
+      // docs/architecture.md for the package map.
+      export function ok(): string {
+        return 'nothing to see here';
+      }
+    `;
+    expect(scanTsSource('fixture.ts', src)).toHaveLength(0);
+  });
 });
 
 describe('citation guard catches (synthetic fixtures)', () => {
@@ -249,5 +281,40 @@ describe('citation guard catches (synthetic fixtures)', () => {
 `;
     const found = scanSvelteSource('fixture.svelte', src);
     expect(found.some((v) => v.text.includes('#0138'))).toBe(true);
+  });
+
+  // #0181 review, pass 2: the four template-expression shapes the bounce
+  // named explicitly — a string literal expression, a ternary, a template
+  // literal, and {@html ...} — none of these tripped the pre-fix scanner
+  // because the ExpressionTag's ESTree subtree lives in the fragment tree,
+  // which the scan only walked for Text nodes.
+  it('fires on a string literal expression: {\'...\'}', () => {
+    const src = `<p>{'see PRD §6.6'}</p>`;
+    const found = scanSvelteSource('fixture.svelte', src);
+    expect(found.some((v) => v.text.includes('PRD §6.6'))).toBe(true);
+  });
+
+  it('fires on a ternary expression citing CLAUDE.md', () => {
+    const src = `<script lang="ts">let cond = true;</script>\n<p>{cond ? 'see CLAUDE.md §9' : ''}</p>`;
+    const found = scanSvelteSource('fixture.svelte', src);
+    expect(found.some((v) => v.text.includes('CLAUDE.md'))).toBe(true);
+  });
+
+  it('fires on a template literal expression citing an issue number', () => {
+    const src = '<p>{`see #0138`}</p>';
+    const found = scanSvelteSource('fixture.svelte', src);
+    expect(found.some((v) => v.text.includes('#0138'))).toBe(true);
+  });
+
+  it('fires on {@html \'...\'} citing PRD §', () => {
+    const src = `{@html 'see PRD §6.6'}`;
+    const found = scanSvelteSource('fixture.svelte', src);
+    expect(found.some((v) => v.text.includes('PRD §6.6'))).toBe(true);
+  });
+
+  it('fires on Issues.md, HANDOFF.md, and docs/*.md citations', () => {
+    expect(scanTsSource('fixture.ts', `export const a = 'see Issues.md for status';`).length).toBe(1);
+    expect(scanTsSource('fixture.ts', `export const b = 'see HANDOFF.md for context';`).length).toBe(1);
+    expect(scanTsSource('fixture.ts', `export const c = 'see docs/architecture.md';`).length).toBe(1);
   });
 });

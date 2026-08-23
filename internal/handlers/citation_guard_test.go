@@ -62,46 +62,68 @@ import (
 // match inside a hex color: internal/mailing/templates.go's
 // colorButtonText = "#04140a" contains the substring "#041" but "\b" fails
 // between the '4' and the '0' that follows it (both word characters), so it
-// does not trip the guard.
-var citationPattern = regexp.MustCompile(`CLAUDE\.md|PRD §|#0[0-9]{3}\b`)
+// does not trip the guard. "PRD\s*§" (rather than a single literal space)
+// closes the "PRD  §6.6" (two spaces) and "PRD§6.6" (no space) variants —
+// both plausible typography a human could produce, both missed by the
+// original pattern, and both zero-cost to close (#0181 review, pass 2).
+// Issues.md, HANDOFF.md, and docs/*.md join CLAUDE.md and PRD § as
+// documents an admin cannot read either — #0178's own whole-tree grep
+// already included Issues.md and HANDOFF, and there is no principled
+// reason to guard one internal document and not the others.
+var citationPattern = regexp.MustCompile(`CLAUDE\.md|PRD\s*§|#0[0-9]{3}\b|Issues\.md|HANDOFF\.md|docs/\S*\.md`)
 
-// citationGuardDirs are relative to this file's own directory
-// (internal/handlers), so the test works regardless of the process's
-// working directory — the same technique internal/db's parity tests use
-// for migrationsDir.
-var citationGuardDirs = []string{".", "../middleware", "../seo", "../mailing"}
+// #0181 review, pass 2: rather than reasoning a fixed set of directories
+// into scope by hand (internal/mailing had to be added that way on the
+// first pass, after tracing PreflightFailure.Message back from #0178's
+// leak), scanGoRoots walks every non-test .go file under internal/ and
+// cmd/ recursively. The reviewer ran the (three-pattern) version of this
+// same scan over the whole repo, cmd/ included, and found zero hits outside
+// the four packages already in scope — so widening costs nothing today and
+// removes the "is the boundary still right?" question for the next package
+// that gains an authored-here-serialized-there field, the way
+// internal/mailing did.
+//
+// Both entries are relative to this file's own directory (internal/handlers):
+// ".." is internal/ itself (walked recursively, so this file's own package
+// and every sibling package are covered in one root), and "../../cmd" is the
+// repo's cmd/ tree.
+var scanGoRoots = []string{"..", "../../cmd"}
 
 type citationViolation struct {
 	pos   token.Position
 	value string
 }
 
-// scanDirForCitations parses every non-test .go file directly inside dir
-// (no recursion — none of these packages nest subpackages) and returns
-// every string literal that matches citationPattern.
-func scanDirForCitations(t *testing.T, dir string) []citationViolation {
+// scanDirForCitations parses every non-test .go file under root — recursing
+// into subdirectories, since internal/ and cmd/ both nest packages — and
+// returns every string literal that matches citationPattern.
+func scanDirForCitations(t *testing.T, root string) []citationViolation {
 	t.Helper()
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read %s: %v", dir, err)
-	}
-
 	var violations []citationViolation
-	for _, entry := range entries {
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
 		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
+		if entry.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
 		}
 
-		path := filepath.Join(dir, name)
 		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
+		file, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			t.Fatalf("parse %s: %v", path, perr)
 		}
 
 		violations = append(violations, scanFileForCitations(fset, file)...)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
 	}
 	return violations
 }
@@ -144,7 +166,7 @@ func TestNoAdminFacingStringCitesInternalDocs(t *testing.T) {
 	baseDir := filepath.Dir(thisFile)
 
 	var all []citationViolation
-	for _, rel := range citationGuardDirs {
+	for _, rel := range scanGoRoots {
 		dir := filepath.Join(baseDir, rel)
 		all = append(all, scanDirForCitations(t, dir)...)
 	}
