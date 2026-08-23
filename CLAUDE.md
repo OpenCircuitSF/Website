@@ -522,6 +522,16 @@ assume during that window that *nothing* is protecting the data underneath it.
 
 ## 9. Restricted areas
 
+- **Subagents do not file new issues; they report them.** Picking "the next
+  number" is not safe when several agents run at once — two of them read the
+  same highest number and both write `issues/NNNN.md`, and the second commit
+  silently overwrites the first. **This happened twice in one session**, both
+  times a reviewer's follow-up being clobbered by the orchestrator; both were
+  recovered from the losing commit (`#0154`, `#0159`) only because the content
+  was still in git. A reviewer that wants an issue filed should say so in its
+  report and in its `## Review notes` — the orchestrator, which is single and
+  therefore cannot race itself, allocates the number and writes the file.
+
 - **Never mark an issue `resolved`, `closed`, or `wontfix` by inference.** The
   reviewer may set `resolved` after independently re-verifying. Only the user
   sets `closed`. See the critical rule at the top of `issues/Issues.md`.
