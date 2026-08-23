@@ -667,8 +667,11 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 
 	if strings.TrimSpace(r.ManageToken) == "" {
 		// A message with a dead unsubscribe link is a compliance failure
-		// (§8 of this issue's plan) — fail loudly, no SES call.
-		if _, err := w.store.MarkFailedRow(ctx, r.SendID, "empty manage token from eligibility recheck"); err != nil {
+		// (§8 of this issue's plan) — fail loudly, no SES call. The row's
+		// stored reason is written for the admin who reads it on
+		// CampaignStats.svelte's failed-sends list, not for a developer —
+		// see adminEligibilityFailureMessage's doc comment (#0182).
+		if _, err := w.store.MarkFailedRow(ctx, r.SendID, adminEligibilityFailureMessage); err != nil {
 			w.log.Error("mailing: marking empty-token row failed", "send_id", r.SendID, "err", err)
 		}
 		return sendOutcomeTerminalRow, nil
@@ -683,7 +686,7 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 		PhysicalAddress: physicalAddress,
 	})
 	if rerr != nil {
-		if _, err := w.store.MarkFailedRow(ctx, r.SendID, rerr.Error()); err != nil {
+		if _, err := w.store.MarkFailedRow(ctx, r.SendID, adminRenderFailureMessage(rerr)); err != nil {
 			w.log.Error("mailing: marking render-failed row failed", "send_id", r.SendID, "err", err)
 		}
 		return sendOutcomeTerminalRow, nil
@@ -732,12 +735,12 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 		// however the caller chooses to release it.
 		return sendOutcomeTerminalCampaign, sendErr
 	case sendClassTerminalRow:
-		if _, err := w.store.MarkFailedRow(ctx, r.SendID, sendErr.Error()); err != nil {
+		if _, err := w.store.MarkFailedRow(ctx, r.SendID, adminSendErrorMessage(sendErr)); err != nil {
 			w.log.Error("mailing: marking rejected row failed", "send_id", r.SendID, "err", err)
 		}
 		return sendOutcomeTerminalRow, nil
 	default: // retryable
-		if _, err := w.store.MarkRetryOrFailed(ctx, r.SendID, sendErr.Error()); err != nil {
+		if _, err := w.store.MarkRetryOrFailed(ctx, r.SendID, adminSendErrorMessage(sendErr)); err != nil {
 			w.log.Error("mailing: retry-or-fail on send row", "send_id", r.SendID, "err", err)
 		}
 		if isThrottlingError(sendErr) {
@@ -809,6 +812,40 @@ func classifySendError(err error) sendClass {
 func isThrottlingError(err error) bool {
 	var tooMany *types.TooManyRequestsException
 	return errors.As(err, &tooMany)
+}
+
+// adminEligibilityFailureMessage is written to email_sends.error (rendered
+// verbatim in CampaignStats.svelte's failed-sends list) for a row whose
+// recheck-eligible ManageToken came back blank — an invariant that
+// RecheckEligibleTx's own query should never let through, so seeing this
+// means our own bookkeeping produced a row it should not have. Not the
+// recipient's mail system's doing, so unlike adminSendErrorMessage below it
+// carries no raw diagnostic text — an admin cannot act on "eligibility
+// recheck" or "manage token" (#0182).
+const adminEligibilityFailureMessage = "Not sent — a required unsubscribe link could not be generated for this recipient, so the message was withheld rather than sent without one."
+
+// adminRenderFailureMessage maps a CampaignRenderer.Campaign error to text
+// for the same admin-facing surface as adminEligibilityFailureMessage.
+// Every error RenderCampaign can return — ErrMissingManageToken,
+// ErrMissingBaseURL, a wrapped Markdown-conversion failure, or a recovered
+// panic — originates in our own rendering code, not in anything the
+// recipient's mail system said, so like the eligibility case above it is
+// replaced rather than passed through raw (#0182).
+func adminRenderFailureMessage(err error) string {
+	return "Not sent — this message's content could not be rendered for this recipient. The campaign draft or server configuration needs attention before this row is retried."
+}
+
+// adminSendErrorMessage maps a Mailer.Send error to text for
+// email_sends.error. Unlike adminEligibilityFailureMessage and
+// adminRenderFailureMessage, every error that reaches this function came
+// from SES itself — a rejection reason, a quota, a throttling exception —
+// genuinely useful diagnostic information about what the recipient's mail
+// system (or SES acting on our behalf) did, so it is kept. Only this
+// package's own wrapping prefix (SESMailer.Send's fmt.Errorf("mailing:
+// sending via SES: %w", ...)) is stripped, since that prefix names our
+// package rather than describing what SES said (#0182).
+func adminSendErrorMessage(err error) string {
+	return strings.TrimPrefix(err.Error(), "mailing: sending via SES: ")
 }
 
 // sesFailureReason names a terminalCampaign-class error for

@@ -550,14 +550,19 @@ func (h *AdminSubscribersHandler) Suppress(w http.ResponseWriter, r *http.Reques
 
 	message := "Subscriber unsubscribed (source: admin) and added to the permanent suppression list."
 	if noOp {
-		// CLAUDE.md §9: a complained subscriber never auto-resubscribes, and
-		// unsubscribe is not an exit from that state — only an admin
-		// clearing the complaint (below) is.
-		message = "This subscriber has complained. By design, unsubscribing a complained row makes no status change — that is enforced, not a glitch."
+		// A complained subscriber never auto-resubscribes, and unsubscribe
+		// is not an exit from that state — only an admin explicitly
+		// clearing the complaint (below) is. The pointer to "Clear
+		// complaint" used to be appended only when h.suppressions was nil
+		// — dev/test wiring that production never takes, so the message an
+		// admin actually saw never named the exit. It is unconditional now:
+		// this modal sits over the same row Admin.svelte renders a "Clear
+		// complaint" button on, so the button is not the only place the
+		// route forward is named, but this message stands on its own too
+		// (#0182).
+		message = "This subscriber has complained. By design, unsubscribing a complained row makes no status change — that is enforced, not a glitch. Use \"Clear complaint\" to change that."
 		if suppressionAdded {
 			message += " The address was still added to the permanent suppression list."
-		} else {
-			message += " Use \"Clear complaint\" first if the complaint should be cleared."
 		}
 	}
 	writeJSON(w, http.StatusOK, suppressResponse{
@@ -728,9 +733,14 @@ func manualAddMessage(status string) string {
 	case subscribers.StatusActive:
 		return "This address was already confirmed and active; an \"already subscribed\" notice has been queued."
 	case subscribers.StatusComplained:
-		// CLAUDE.md §9: a complained subscriber never auto-resubscribes;
-		// only an admin clearing the complaint moves it out of that state.
-		return "This address has previously complained. By design, adding it here does not resubscribe it. Nothing was sent."
+		// A complained subscriber never auto-resubscribes; only an admin
+		// clearing the complaint moves it out of that state. This message
+		// lands in createSubNotice on the manual-add form, where no "Clear
+		// complaint" button is adjacent (that button lives on the
+		// subscriber row, not the add form), so the route forward has to be
+		// named in the copy itself — nothing on screen names it otherwise
+		// (#0182).
+		return "This address has previously complained. By design, adding it here does not resubscribe it — only clearing the complaint on that subscriber's row changes that. Nothing was sent."
 	default:
 		return "Request processed; resulting status: " + status
 	}
