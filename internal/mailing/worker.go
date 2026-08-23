@@ -670,7 +670,13 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 		// (§8 of this issue's plan) — fail loudly, no SES call. The row's
 		// stored reason is written for the admin who reads it on
 		// CampaignStats.svelte's failed-sends list, not for a developer —
-		// see adminEligibilityFailureMessage's doc comment (#0182).
+		// see adminEligibilityFailureMessage's doc comment. Log the
+		// invariant violation itself too — RecheckEligibleTx's query
+		// should never hand back a row with a blank token, so this line is
+		// what lets an engineer notice that happened at all, since the
+		// admin-facing string deliberately carries no diagnostic detail
+		// (#0182).
+		w.log.Error("mailing: recipient row has empty manage token from eligibility recheck", "send_id", r.SendID)
 		if _, err := w.store.MarkFailedRow(ctx, r.SendID, adminEligibilityFailureMessage); err != nil {
 			w.log.Error("mailing: marking empty-token row failed", "send_id", r.SendID, "err", err)
 		}
@@ -686,6 +692,13 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 		PhysicalAddress: physicalAddress,
 	})
 	if rerr != nil {
+		// The admin-facing string is deliberately fixed and generic (see
+		// adminRenderFailureMessage's doc comment) — it does not carry
+		// rerr, so without this line a render panic, ErrMissingBaseURL,
+		// and a Markdown-conversion failure would be indistinguishable to
+		// an engineer too, not just to the admin reading CampaignStats.svelte
+		// (#0182).
+		w.log.Error("mailing: rendering campaign for recipient", "send_id", r.SendID, "err", rerr)
 		if _, err := w.store.MarkFailedRow(ctx, r.SendID, adminRenderFailureMessage(rerr)); err != nil {
 			w.log.Error("mailing: marking render-failed row failed", "send_id", r.SendID, "err", err)
 		}
@@ -835,17 +848,72 @@ func adminRenderFailureMessage(err error) string {
 	return "Not sent — this message's content could not be rendered for this recipient. The campaign draft or server configuration needs attention before this row is retried."
 }
 
+// sesWrapPrefix is the exact text SESMailer.Send wraps around whatever the
+// AWS SDK (or, for the retry-backoff wait, the local context) produced —
+// emitted at exactly three places (ses_mailer.go's SendEmail-error,
+// sleep-error, and final-attempt returns), all with this identical literal
+// and no double wrapping. Its presence is what adminSendErrorMessage uses to
+// tell an SES-produced error from one of SESMailer.Send's own two
+// argument-guard errors or ErrNoMessageID, none of which carry it (#0182 —
+// a prior pass wrongly assumed every error reaching that function had it).
+const sesWrapPrefix = "mailing: sending via SES: "
+
+// adminSendBuildFailureMessage is written to email_sends.error for
+// SESMailer.Send's two argument-guard errors (msg.To == "", an empty
+// HTML/text body) — a should-never-happen invariant in our own call
+// construction (worker.go builds msg.To from r.Email, already checked
+// non-blank by ClaimRow's query, and the body from RenderCampaign's already
+// successful output), not anything SES said. Effectively unreachable from
+// sendOne today, kept for the same reason adminEligibilityFailureMessage is:
+// if a should-never-happen guard ever fires, it should not describe itself
+// in this package's own vocabulary (#0182).
+const adminSendBuildFailureMessage = "Not sent — this message could not be built for this recipient. The campaign draft or server configuration needs attention before this row is retried."
+
+// adminNoMessageIDMessage is written to email_sends.error when SES reports
+// success but the response carries no MessageId (ErrNoMessageID) — SES's
+// behavior, but not SES's wording: ErrNoMessageID is an errors.New in this
+// package, not text the AWS SDK produced, so it gets its own admin sentence
+// rather than being passed through adminSendErrorMessage's raw-text
+// passthrough (#0182).
+const adminNoMessageIDMessage = "Not sent — SES accepted this message but did not report a delivery id, so it cannot be confirmed or tracked."
+
+// adminSendTimedOutMessage is written to email_sends.error when the context
+// deadline set around a SES call expires during the throttling-retry
+// backoff wait (ses_mailer.go's sleep between attempts). That local timeout
+// is wrapped in the same sesWrapPrefix as SES's own errors, since it
+// happens inside SESMailer.Send's retry loop — but the "context deadline
+// exceeded" / "context canceled" text underneath it is Go runtime
+// vocabulary, not anything SES said, so it is replaced rather than passed
+// through raw (#0182).
+const adminSendTimedOutMessage = "Not sent — the send attempt did not complete before its time limit."
+
 // adminSendErrorMessage maps a Mailer.Send error to text for
-// email_sends.error. Unlike adminEligibilityFailureMessage and
-// adminRenderFailureMessage, every error that reaches this function came
-// from SES itself — a rejection reason, a quota, a throttling exception —
-// genuinely useful diagnostic information about what the recipient's mail
-// system (or SES acting on our behalf) did, so it is kept. Only this
-// package's own wrapping prefix (SESMailer.Send's fmt.Errorf("mailing:
-// sending via SES: %w", ...)) is stripped, since that prefix names our
-// package rather than describing what SES said (#0182).
+// email_sends.error. Only an error carrying SESMailer.Send's own
+// sesWrapPrefix came from the AWS SDK's response to a SendEmail call — a
+// rejection reason, a quota, a throttling exception — genuinely useful
+// diagnostic information about what the recipient's mail system (or SES
+// acting on our behalf) did, so once that prefix is stripped it is kept
+// unchanged. SESMailer.Send has three returns that carry no prefix and are
+// this package's own sentences, not SES's: ErrNoMessageID and two
+// argument-guard errors (msg.To == "", an empty body). Those are matched
+// explicitly below and given fixed admin text, the same way
+// adminEligibilityFailureMessage and adminRenderFailureMessage replace our
+// own guard errors rather than passing them through raw. A context timeout
+// during the retry backoff carries the prefix but is also our own
+// (well, the ambient deadline's) doing rather than SES's, so it is matched
+// too before the prefix-stripped fallback (#0182).
 func adminSendErrorMessage(err error) string {
-	return strings.TrimPrefix(err.Error(), "mailing: sending via SES: ")
+	if errors.Is(err, ErrNoMessageID) {
+		return adminNoMessageIDMessage
+	}
+	stripped, hasPrefix := strings.CutPrefix(err.Error(), sesWrapPrefix)
+	if !hasPrefix {
+		return adminSendBuildFailureMessage
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return adminSendTimedOutMessage
+	}
+	return stripped
 }
 
 // sesFailureReason names a terminalCampaign-class error for

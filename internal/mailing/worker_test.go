@@ -963,6 +963,120 @@ func TestClassifySendError(t *testing.T) {
 	}
 }
 
+// TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors pins the
+// #0182 phase-2 defect: SESMailer.Send has three returns that carry no
+// "mailing: sending via SES: " prefix and are this package's own sentences,
+// not anything the AWS SDK said, and a context timeout during the
+// throttling-retry backoff carries the prefix but is still our own ambient
+// deadline rather than SES's doing. Without this test, all four regress
+// silently to being shown to an admin with "mailing:" (or Go's bare
+// "context deadline exceeded") attached, which is exactly what this issue
+// was filed to stop and what the phase-1 fix wrongly asserted could not
+// happen ("every error that reaches this function came from SES itself").
+func TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "ErrNoMessageID: our own sentinel, no prefix",
+			err:  ErrNoMessageID,
+			want: adminNoMessageIDMessage,
+		},
+		{
+			name: "ErrNoMessageID wrapped: errors.Is still matches",
+			err:  fmt.Errorf("claim row: %w", ErrNoMessageID),
+			want: adminNoMessageIDMessage,
+		},
+		{
+			name: "no recipient guard: our own errors.New, no prefix",
+			err:  errors.New("mailing: message has no recipient"),
+			want: adminSendBuildFailureMessage,
+		},
+		{
+			name: "no body guard: our own errors.New, no prefix",
+			err:  errors.New("mailing: message has neither an HTML nor a text body"),
+			want: adminSendBuildFailureMessage,
+		},
+		{
+			name: "SES rejection: prefix present, stripped and kept verbatim",
+			err:  fmt.Errorf("mailing: sending via SES: %w", errors.New("api error MessageRejected: Email address is not verified")),
+			want: "api error MessageRejected: Email address is not verified",
+		},
+		{
+			name: "retry-backoff deadline exceeded: prefix present but ours, not SES's",
+			err:  fmt.Errorf("mailing: sending via SES: %w", context.DeadlineExceeded),
+			want: adminSendTimedOutMessage,
+		},
+		{
+			name: "retry-backoff canceled: prefix present but ours, not SES's",
+			err:  fmt.Errorf("mailing: sending via SES: %w", context.Canceled),
+			want: adminSendTimedOutMessage,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := adminSendErrorMessage(tc.err); got != tc.want {
+				t.Errorf("adminSendErrorMessage(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWorker_SESRejectionReachesFailedSendsIntact reproduces the #0182
+// phase-3 review's end-to-end proof rather than just the helper-level table
+// above: drives a real drainCampaign with a mailer returning the exact
+// wrapping SESMailer.Send emits around an SES rejection, then reads the row
+// back through CampaignStatsStore.FailedSends — the same store call
+// admin_campaign_stats.go's handler makes — and checks the AWS-produced
+// text survived byte-identical once this package's own
+// "mailing: sending via SES: " prefix is gone. This is the property
+// adminSendErrorMessage's new prefix/no-prefix branching must not break
+// while fixing the three misclassified cases above.
+func TestWorker_SESRejectionReachesFailedSendsIntact(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+	setSetting(t, pool, settingMaxSendRate, "100000")
+
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	forceSending(t, pool, campaignID)
+	sendID, _, _ := seedQueuedSend(t, pool, campaignID)
+
+	const sesText = "MessageRejected: Email address is not verified. The following identities failed the check in region US-WEST-2: bogus@example.com"
+	mailer := &RecordingMailer{}
+	mailer.SetError(fmt.Errorf("mailing: sending via SES: %w", errors.New(sesText)))
+
+	w := newTestWorker(t, pool, mailer)
+
+	c, err := w.store.ClaimResume(context.Background())
+	if err != nil {
+		t.Fatalf("ClaimResume: %v", err)
+	}
+	if c == nil {
+		t.Fatal("ClaimResume returned nil campaign")
+	}
+	if _, err := w.drainCampaign(context.Background(), c); err != nil {
+		t.Fatalf("drainCampaign: %v", err)
+	}
+
+	if got := sendRowStatus(t, pool, sendID); got != "failed" {
+		t.Fatalf("send row status = %q, want failed", got)
+	}
+
+	stats := NewCampaignStatsStore(pool)
+	failed, err := stats.FailedSends(context.Background(), campaignID)
+	if err != nil {
+		t.Fatalf("FailedSends: %v", err)
+	}
+	if len(failed) != 1 {
+		t.Fatalf("len(failed) = %d, want 1 (full = %+v)", len(failed), failed)
+	}
+	if failed[0].Error != sesText {
+		t.Errorf("failed_sends[0].error = %q, want %q (byte-identical minus our prefix)", failed[0].Error, sesText)
+	}
+}
+
 // ── 13. From header injection ───────────────────────────────────────────────
 
 func TestWorker_FromHeaderRejectsUnsafeDisplayName(t *testing.T) {
