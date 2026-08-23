@@ -502,6 +502,12 @@ else's build.
 The same caution applies to any shared mutable resource — a database, a
 scratch directory, `web/dist/`. Namespace it or verify ownership.
 
+**The scratchpad directory is not session-private in practice.** Two agents
+have now had a script pick up a *previous* session's leftover file from it —
+one nearly pasted another issue's review notes into the file it was writing,
+and caught it only from `git diff`. Use a unique filename (include the issue
+number), and read back what you wrote before believing it.
+
 **Mutation testing that removes a guard must run against a private database.**
 Removing an authorization check is exactly what lets a destructive request reach
 real data. This happened: `#0024`'s guard-removal proof aimed a `DELETE` at a
