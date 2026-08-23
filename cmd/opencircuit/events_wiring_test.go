@@ -46,6 +46,7 @@ func TestMountAndServe_EventsRequiresSessionAndAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+	registerWiringTest(t, pool)
 	t.Cleanup(func() {
 		truncateAdminWiringTables(t, pool)
 		pool.Close()

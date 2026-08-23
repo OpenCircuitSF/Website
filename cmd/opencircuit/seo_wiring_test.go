@@ -93,6 +93,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 	// sessions_token_key (this test used a fixed admin token and never
 	// cleaned up, which is exactly what broke re-runs; see #0054's
 	// Review notes finding 2).
+	registerWiringTest(t, pool)
 	t.Cleanup(func() {
 		truncateAdminWiringTables(t, pool)
 		pool.Close()

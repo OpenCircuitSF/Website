@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,6 +74,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+	registerWiringTest(t, pool)
 	// A single Cleanup (truncate, then close), not a separate defer, since
 	// t.Cleanup funcs run AFTER a test's own defers — a standalone
 	// `defer pool.Close()` would close the pool before a later Cleanup got to
@@ -391,6 +393,30 @@ func resolveAdminRoutePath(path string, userID, interestID, subscriberID, campai
 // it starts and leaves the shared TEST_DATABASE_URL clean. audit_log is
 // truncated too since RequireAdmin/RequireSession failures never write it but
 // this keeps the cleanup symmetric with the handlers-package convention.
+//
+// These tables are shared by every *_wiring_test.go in this package that
+// calls this helper, and the TRUNCATE has no isolation of its own: it clears
+// every row, not just the ones the calling test seeded. That is safe today
+// only because nothing in this package calls t.Parallel() (#0165 verified
+// zero occurrences). If a test in this package ever gains t.Parallel(), one
+// test's entry or cleanup TRUNCATE can run while a sibling is mid-test,
+// wiping its seeded users and sessions out from under it.
+//
+// Reproduced (#0165): with t.Parallel() added temporarily to two of these
+// tests and run under `-parallel 2`, 4 of 5 runs failed -- either a
+// foreign-key violation seeding a session ("sessions_user_id_fkey", the
+// user row truncated between insert calls) or spurious 401s from routes that
+// should have returned 403/200 (the session row truncated mid-request). Nothing
+// in the output points back at the truncate; it presents as an unrelated
+// test's fixtures mysteriously vanishing.
+//
+// registerWiringTest (below) turns that into an immediate, named failure
+// instead of silent corruption. Every *_wiring_test.go caller of this
+// function calls registerWiringTest(t, pool) once, before its first
+// truncateAdminWiringTables call -- see admin_wiring_test.go's own callers
+// for the pattern. Adding t.Parallel() to a test that skips that call is
+// still a bug this guard cannot see; it protects the tests that use the
+// established pattern, not the package against every possible misuse.
 func truncateAdminWiringTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), wiringDBOpTimeout)
@@ -400,6 +426,41 @@ func truncateAdminWiringTables(t *testing.T, pool *pgxpool.Pool) {
 	); err != nil {
 		t.Fatalf("truncate tables: %v", err)
 	}
+}
+
+// wiringTablesOwner names the test currently holding exclusive use of
+// truncateAdminWiringTables's shared tables, or is nil when no such test is
+// active. registerWiringTest sets it for the duration of a test (entry
+// through t.Cleanup), not just for the instant of a TRUNCATE call, because
+// the hazard is a sibling's TRUNCATE landing anywhere in that window.
+var wiringTablesOwner atomic.Pointer[string]
+
+// registerWiringTest claims exclusive use of truncateAdminWiringTables's
+// shared tables for the duration of t and registers a t.Cleanup that
+// releases the claim. Call it once, immediately after connecting pool and
+// before a wiring test's first truncateAdminWiringTables call.
+//
+// If another *_wiring_test.go test already holds the claim -- which can only
+// happen if this package gains t.Parallel() -- this fails the test
+// immediately, naming both tests, instead of letting one test's TRUNCATE
+// silently destroy the other's fixtures (#0165).
+func registerWiringTest(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	name := t.Name()
+	if !wiringTablesOwner.CompareAndSwap(nil, &name) {
+		holder := "another test"
+		if prev := wiringTablesOwner.Load(); prev != nil {
+			holder = *prev
+		}
+		t.Fatalf("registerWiringTest: %s cannot run concurrently with %s -- "+
+			"both use truncateAdminWiringTables's shared tables with no "+
+			"isolation, so this package must not run *_wiring_test.go tests "+
+			"under t.Parallel() (see truncateAdminWiringTables's doc comment, #0165)",
+			name, holder)
+	}
+	t.Cleanup(func() {
+		wiringTablesOwner.Store(nil)
+	})
 }
 
 // seedAdminWiringUser inserts an active account and returns its id.

@@ -128,6 +128,7 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+	registerWiringTest(t, pool)
 	t.Cleanup(func() {
 		truncateAdminWiringTables(t, pool)
 		_, _ = pool.Exec(context.Background(), `TRUNCATE subscriber_interests, subscribers RESTART IDENTITY CASCADE`)
