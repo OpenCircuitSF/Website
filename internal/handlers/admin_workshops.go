@@ -328,19 +328,28 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 // patchCampaignRequest — see this file's package doc comment for why
 // workshops has no dedicated transition routes.
 type patchWorkshopRequest struct {
-	Title           *string  `json:"title,omitempty"`
-	Summary         *string  `json:"summary,omitempty"`
-	BodyMD          *string  `json:"body_md,omitempty"`
-	StartsAt        *string  `json:"starts_at,omitempty"`
-	EndsAt          *string  `json:"ends_at,omitempty"`
-	LocationName    *string  `json:"location_name,omitempty"`
-	LocationAddress *string  `json:"location_address,omitempty"`
-	LocationNote    *string  `json:"location_note,omitempty"`
-	Capacity        *int     `json:"capacity,omitempty"`
-	SignupURL       *string  `json:"signup_url,omitempty"`
-	CoverImage      *string  `json:"cover_image,omitempty"`
-	Status          *string  `json:"status,omitempty"`
-	InterestIDs     *[]int64 `json:"interest_ids,omitempty"`
+	Title           *string `json:"title,omitempty"`
+	Summary         *string `json:"summary,omitempty"`
+	BodyMD          *string `json:"body_md,omitempty"`
+	StartsAt        *string `json:"starts_at,omitempty"`
+	EndsAt          *string `json:"ends_at,omitempty"`
+	LocationName    *string `json:"location_name,omitempty"`
+	LocationAddress *string `json:"location_address,omitempty"`
+	LocationNote    *string `json:"location_note,omitempty"`
+	// Capacity is Optional[int], not *int (#0146): JSON null and an absent
+	// key both decode to a nil *int, so *int alone cannot tell "clear it"
+	// apart from "leave it alone". See optional.go's doc comment for why
+	// and how. Every other field above stays *string/*[]int64 because
+	// #0139 already gave every optional string an in-band clear sentinel
+	// (an explicit ""), and InterestIDs already distinguishes "absent" (nil
+	// pointer) from "clear to zero interests" (a non-nil pointer to an
+	// empty slice, from an explicit `[]`) without any wrapper — capacity is
+	// the only field with no spare value to reuse.
+	Capacity    Optional[int] `json:"capacity"`
+	SignupURL   *string       `json:"signup_url,omitempty"`
+	CoverImage  *string       `json:"cover_image,omitempty"`
+	Status      *string       `json:"status,omitempty"`
+	InterestIDs *[]int64      `json:"interest_ids,omitempty"`
 }
 
 // Patch handles PATCH /admin/workshops/{id}: loads the current row, merges
@@ -422,8 +431,14 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		locationNote = normalizeOptionalCampaignField(req.LocationNote)
 	}
 	capacity := current.Capacity
-	if req.Capacity != nil {
-		capacity = req.Capacity
+	switch {
+	case !req.Capacity.Present:
+		// key absent from the PATCH body: leave capacity alone.
+	case !req.Capacity.Valid:
+		capacity = nil // key present as `null`: explicit clear (#0146).
+	default:
+		v := req.Capacity.Value
+		capacity = &v // key present with a value.
 	}
 	signupURL := current.SignupURL
 	if req.SignupURL != nil {

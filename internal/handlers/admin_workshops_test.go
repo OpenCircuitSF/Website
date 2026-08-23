@@ -574,6 +574,150 @@ func TestAdminWorkshops_PatchTreatsWhitespaceOnlyOptionalFieldAsCleared(t *testi
 	}
 }
 
+// TestAdminWorkshops_PatchClearsCapacityWithExplicitNull is #0146's fix:
+// capacity is Optional[int] on the wire (internal/handlers/optional.go), not
+// *int, precisely so an explicit JSON `null` can mean "clear it" without
+// being indistinguishable from an absent key. Mirrors
+// TestAdminWorkshops_PatchClearsOptionalFieldWithExplicitEmptyString's
+// shape: read the value back from the database, and prove the leave-alone
+// guard has teeth on a field in the SAME request.
+func TestAdminWorkshops_PatchClearsCapacityWithExplicitNull(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-capacity-clear@example.com")
+	seedSession(t, pool, admin, "workshops-admin-capacity-clear-token")
+
+	store := workshops.NewStore(pool)
+	capacity := 30
+	signupURL := "https://example.com/rsvp-capacity-clear"
+	w, err := store.Create(context.Background(), workshops.CreateInput{
+		Title:     uniqueAdminWorkshopTitle(t),
+		Capacity:  &capacity,
+		SignupURL: &signupURL,
+	})
+	if err != nil {
+		t.Fatalf("seed workshop: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, w.ID)
+	path := fmt.Sprintf("/admin/workshops/%d", w.ID)
+
+	// Sanity: the seeded row genuinely has a capacity before the PATCH.
+	seeded, err := store.GetByID(context.Background(), w.ID)
+	if err != nil {
+		t.Fatalf("GetByID after seed: %v", err)
+	}
+	if seeded.Capacity == nil || *seeded.Capacity != capacity {
+		t.Fatalf("seeded Capacity = %v, want %d", seeded.Capacity, capacity)
+	}
+
+	// The PATCH body carries an explicit null for capacity (clear it) and
+	// never mentions signup_url at all (leave it alone).
+	resp := doJSON(t, srv.Client(), http.MethodPatch, srv.URL+path,
+		"workshops-admin-capacity-clear-token", `{"capacity": null}`)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH clearing capacity status = %d, want 200 (body=%s)", resp.StatusCode, body)
+	}
+
+	// Read the value back from the database, not the response body -- the
+	// acceptance criterion is that the value is actually gone.
+	updated, err := store.GetByID(context.Background(), w.ID)
+	if err != nil {
+		t.Fatalf("GetByID after patch: %v", err)
+	}
+	if updated.Capacity != nil {
+		t.Errorf("Capacity = %d after explicit-null PATCH, want nil (cleared)", *updated.Capacity)
+	}
+	if updated.SignupURL == nil || *updated.SignupURL != signupURL {
+		t.Errorf("SignupURL = %v after a PATCH that never mentioned it, want unchanged %q", updated.SignupURL, signupURL)
+	}
+}
+
+// TestAdminWorkshops_PatchWithoutCapacityLeavesItAlone is the other half of
+// #0146's acceptance criteria: a PATCH that never mentions capacity at all
+// (as opposed to mentioning it as null) must leave the stored value alone --
+// the "absent" and "explicit null" wire states must resolve differently.
+func TestAdminWorkshops_PatchWithoutCapacityLeavesItAlone(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-capacity-leave@example.com")
+	seedSession(t, pool, admin, "workshops-admin-capacity-leave-token")
+
+	store := workshops.NewStore(pool)
+	capacity := 15
+	w, err := store.Create(context.Background(), workshops.CreateInput{
+		Title:    uniqueAdminWorkshopTitle(t),
+		Capacity: &capacity,
+	})
+	if err != nil {
+		t.Fatalf("seed workshop: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, w.ID)
+	path := fmt.Sprintf("/admin/workshops/%d", w.ID)
+
+	// The PATCH body mentions a different field and never mentions capacity.
+	newSummary := "Updated by a PATCH that never mentions capacity"
+	resp := doJSON(t, srv.Client(), http.MethodPatch, srv.URL+path,
+		"workshops-admin-capacity-leave-token", fmt.Sprintf(`{"summary":%q}`, newSummary))
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want 200 (body=%s)", resp.StatusCode, body)
+	}
+
+	updated, err := store.GetByID(context.Background(), w.ID)
+	if err != nil {
+		t.Fatalf("GetByID after patch: %v", err)
+	}
+	if updated.Capacity == nil || *updated.Capacity != capacity {
+		t.Errorf("Capacity = %v after a PATCH that never mentioned it, want unchanged %d", updated.Capacity, capacity)
+	}
+	if updated.Summary == nil || *updated.Summary != newSummary {
+		t.Errorf("Summary = %v, want %q", updated.Summary, newSummary)
+	}
+}
+
+// TestAdminWorkshops_PatchSetsCapacityToNewValue is the third state: a PATCH
+// carrying a real number for capacity must set it, whether or not the row
+// had one before.
+func TestAdminWorkshops_PatchSetsCapacityToNewValue(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-capacity-set@example.com")
+	seedSession(t, pool, admin, "workshops-admin-capacity-set-token")
+
+	store := workshops.NewStore(pool)
+	w, err := store.Create(context.Background(), workshops.CreateInput{Title: uniqueAdminWorkshopTitle(t)})
+	if err != nil {
+		t.Fatalf("seed workshop: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, w.ID)
+	path := fmt.Sprintf("/admin/workshops/%d", w.ID)
+
+	resp := doJSON(t, srv.Client(), http.MethodPatch, srv.URL+path,
+		"workshops-admin-capacity-set-token", `{"capacity": 25}`)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH setting capacity status = %d, want 200 (body=%s)", resp.StatusCode, body)
+	}
+
+	updated, err := store.GetByID(context.Background(), w.ID)
+	if err != nil {
+		t.Fatalf("GetByID after patch: %v", err)
+	}
+	if updated.Capacity == nil || *updated.Capacity != 25 {
+		t.Errorf("Capacity = %v after PATCH {capacity: 25}, want 25", updated.Capacity)
+	}
+}
+
 func TestAdminWorkshops_PatchUnknownStatusRejected(t *testing.T) {
 	pool := interestsTestPool(t)
 	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))

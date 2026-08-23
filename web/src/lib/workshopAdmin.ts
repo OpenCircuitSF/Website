@@ -279,7 +279,9 @@ export interface ValidatedWorkshopFields {
   location_name: string;
   location_address: string;
   location_note: string;
-  capacity?: number;
+  // #0146: always present, `null` (not an omitted key) is the clear
+  // sentinel -- see validateWorkshopForm's doc comment.
+  capacity: number | null;
   signup_url: string;
   cover_image: string;
   interest_ids: number[];
@@ -318,6 +320,14 @@ function isSafeCoverImage(value: string): boolean {
  * (capacity as a positive integer, a plausible signup URL, a safe cover
  * image reference) so an obviously-bad submit never round-trips. The server
  * remains the source of truth for anything not checked here.
+ *
+ * #0146: capacity is `number | null`, always present, the same "always send
+ * the key" convention #0139 uses for the string fields -- but `null`, not
+ * `''`, is capacity's clear sentinel, because the server's `capacity` field
+ * is `handlers.Optional[int]` (internal/handlers/optional.go), which reads
+ * an explicit JSON `null` as "clear it" and an absent key as "leave it
+ * alone". Sending `null` here relies on JSON.stringify keeping an
+ * explicit-null key (it does -- only `undefined`-valued keys get dropped).
  */
 export function validateWorkshopForm(
   fields: WorkshopFormFields,
@@ -344,7 +354,7 @@ export function validateWorkshopForm(
   }
 
   const capacityTrimmed = fields.capacity.trim();
-  let capacity: number | undefined;
+  let capacity: number | null = null;
   if (capacityTrimmed !== '') {
     if (!/^\d+$/.test(capacityTrimmed) || Number(capacityTrimmed) <= 0) {
       return { error: 'Capacity must be a positive whole number.' };
@@ -376,10 +386,9 @@ export function validateWorkshopForm(
     location_name: fields.locationName.trim(),
     location_address: fields.locationAddress.trim(),
     location_note: fields.locationNote.trim(),
-    // capacity is a genuinely separate, still-open gap (see #0139's Gotchas):
-    // it is *int on the wire, and JSON `null` decodes to the same nil
-    // pointer as an absent key, so there is no value this client can send
-    // that unambiguously means "clear" without a Go-side wire-type change.
+    // #0146: `null` when blank (never `undefined`) -- see this function's
+    // doc comment and ValidatedWorkshopFields.capacity's comment for why
+    // capacity's clear sentinel is `null` rather than #0139's `''`.
     capacity,
     signup_url: signupUrl,
     cover_image: coverImage,

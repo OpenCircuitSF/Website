@@ -797,6 +797,13 @@ export interface CreateWorkshopFields {
  * an absent key leaves that column unchanged server-side (admin_workshops.go's
  * patchWorkshopRequest). `status` is the sole path to publish/unpublish/cancel
  * (workshops has no dedicated transition sub-routes, unlike campaigns).
+ *
+ * `capacity` is `number | null`, not `number` (#0146): the server decodes it
+ * as `handlers.Optional[int]`, which reads an explicit JSON `null` as "clear
+ * it" and treats the key's absence (this property simply omitted from the
+ * object passed in) as "leave it alone" -- the same three-state distinction
+ * every other field above gets from a plain `*T` on the Go side, which `int`
+ * cannot express without this wrapper. See optional.go's doc comment.
  */
 export interface PatchWorkshopFields {
   title?: string;
@@ -807,7 +814,7 @@ export interface PatchWorkshopFields {
   location_name?: string;
   location_address?: string;
   location_note?: string;
-  capacity?: number;
+  capacity?: number | null;
   signup_url?: string;
   cover_image?: string;
   status?: string;

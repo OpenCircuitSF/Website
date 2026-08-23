@@ -220,7 +220,10 @@ describe('validateWorkshopForm', () => {
       location_name: '',
       location_address: '',
       location_note: '',
-      capacity: undefined,
+      // #0146: null, never undefined -- see ValidatedWorkshopFields's
+      // capacity comment for why capacity's clear sentinel differs from
+      // the other optional fields' ''.
+      capacity: null,
       signup_url: '',
       cover_image: '',
       interest_ids: [],
@@ -249,6 +252,20 @@ describe('validateWorkshopForm', () => {
     ]) {
       expect(roundTripped).toHaveProperty(key, '');
     }
+  });
+
+  it('#0146: represents a blanked capacity as an explicit null, not an omitted key', () => {
+    // capacity's clear sentinel is `null`, not #0139's `''` -- the server
+    // decodes it as handlers.Optional[int] (internal/handlers/optional.go),
+    // which reads an explicit JSON null as "clear it" and an absent key as
+    // "leave it alone". JSON.stringify keeps an explicit-null key (only
+    // undefined-valued keys get dropped), so the round trip must still see
+    // the key with a null value, never drop it.
+    const result = validateWorkshopForm(blankFields({ title: 'X' }));
+    if ('error' in result) throw new Error('unexpected validation error');
+    expect(result.capacity).toBeNull();
+    const roundTripped = JSON.parse(JSON.stringify(result));
+    expect(roundTripped).toHaveProperty('capacity', null);
   });
 
   it('rejects an end before start', () => {
