@@ -179,15 +179,15 @@ func (m *SESMailer) Send(ctx context.Context, msg Message) (string, error) {
 		lastErr = err
 		var throttled *types.TooManyRequestsException
 		if !errors.As(err, &throttled) || attempt == maxSendAttempts {
-			return "", fmt.Errorf("mailing: sending via SES: %w", err)
+			return "", fmt.Errorf("%s%w", sesWrapPrefix, err)
 		}
 		if sleepErr := sleep(ctx, delay); sleepErr != nil {
-			return "", fmt.Errorf("mailing: sending via SES: %w", sleepErr)
+			return "", fmt.Errorf("%s%w", sesWrapPrefix, sleepErr)
 		}
 		delay *= 2
 	}
 	// Unreachable: the loop above always returns on its final attempt.
-	return "", fmt.Errorf("mailing: sending via SES: %w", lastErr)
+	return "", fmt.Errorf("%s%w", sesWrapPrefix, lastErr)
 }
 
 // sleepWithContext waits for d or ctx's cancellation, whichever comes first.

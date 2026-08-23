@@ -849,17 +849,20 @@ func adminRenderFailureMessage(err error) string {
 	return "Not sent — this message's content could not be rendered for this recipient. The campaign draft or server configuration needs attention before this row is retried."
 }
 
-// sesWrapPrefix is the exact text SESMailer.Send wraps around whatever the
-// AWS SDK (or, for the retry-backoff wait, the local context) produced —
-// emitted at exactly three places (ses_mailer.go's SendEmail-error,
-// sleep-error, and final-attempt returns), all with this identical literal
-// and no double wrapping. adminSendErrorMessage no longer inspects this
-// prefix (#0188 — see that function's doc comment for why matching on
-// err.Error() text was itself the defect: SDK errors nest, so stripping a
-// literal prefix off the formatted string left the nested
-// "operation error …, https response error …" scaffolding behind it). Kept
-// as documentation of SESMailer.Send's own wrapping behavior, which other
-// comments in this file still reference.
+// sesWrapPrefix is the exact text ses_mailer.go's Send wraps around whatever
+// the AWS SDK (or, for the retry-backoff wait, the local context) produced —
+// emitted at exactly three places (SendEmail-error, sleep-error, and
+// final-attempt returns), all through this constant so the literal cannot
+// drift from what adminSendErrorMessage's doc comment and worker_test.go's
+// sesResponseError describe (#0190 — ses_mailer.go used to repeat the
+// literal at each of the three call sites instead of referencing this
+// constant, so nothing tied them together). adminSendErrorMessage itself no
+// longer inspects this prefix to classify an error (#0188 — see that
+// function's doc comment for why matching on err.Error() text was itself
+// the defect: SDK errors nest, so stripping a literal prefix off the
+// formatted string left the nested "operation error …, https response
+// error …" scaffolding behind it) — it is purely a wrapping detail now, not
+// a discriminator.
 const sesWrapPrefix = "mailing: sending via SES: "
 
 // adminSendBuildFailureMessage is written to email_sends.error for
@@ -971,6 +974,15 @@ func adminSendErrorMessage(log *slog.Logger, sendID int64, err error) string {
 
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
+		// A modeled exception's Message is only set when the response body
+		// carried one (awsRestjson1_deserializeDocumentMessageRejected sets
+		// it only when the JSON body has "message"/"Message", with no
+		// default) — reachable in production, not just in a test double
+		// (#0190). Fall back to the bare code rather than leave a dangling
+		// "Code: " with nothing after the colon.
+		if apiErr.ErrorMessage() == "" {
+			return apiErr.ErrorCode()
+		}
 		return apiErr.ErrorCode() + ": " + apiErr.ErrorMessage()
 	}
 

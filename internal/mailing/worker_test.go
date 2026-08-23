@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -1027,6 +1028,10 @@ func TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors(t *testing.T) 
 		name string
 		err  error
 		want string
+		// wantLog pins whether the catch-all's log.Error fires for this
+		// case — every classified branch returns before reaching it, so
+		// only a genuine catch-all row should set this true (#0190).
+		wantLog bool
 	}{
 		{
 			name: "ErrNoMessageID: our own sentinel, no prefix",
@@ -1054,9 +1059,10 @@ func TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors(t *testing.T) 
 			want: adminSendBuildFailureMessage,
 		},
 		{
-			name: "unrecognized unprefixed error: not one of the three enumerated sentinels, still degrades to the build-failure sentence",
-			err:  errors.New("some future SESMailer.Send return nobody enumerated yet"),
-			want: adminSendBuildFailureMessage,
+			name:    "unrecognized unprefixed error: not one of the three enumerated sentinels, still degrades to the build-failure sentence",
+			err:     errors.New("some future SESMailer.Send return nobody enumerated yet"),
+			want:    adminSendBuildFailureMessage,
+			wantLog: true,
 		},
 		{
 			name: "SES rejection, bare (a test double's shape): prefix present, stripped and kept verbatim",
@@ -1103,24 +1109,121 @@ func TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors(t *testing.T) 
 			want: adminSendUnreachableMessage,
 		},
 		{
-			// The same transport fault, but nested inside awshttp.ResponseError
-			// the way a real deserialization-layer failure would be — proves
-			// item 3's discriminator (errors.As against *smithy.OperationError)
-			// still lands here even when the wrapping is deeper than the bare
-			// case above.
-			name: "SDK transport failure, nested one layer deeper: still no smithy.APIError underneath — still mapped",
+			// The same transport fault, but genuinely nested one layer
+			// deeper than the bare-OperationError case above: a real
+			// *net.OpError (a dial failure) inside *awshttp.ResponseError
+			// (the deserialized-HTTP-response layer) inside
+			// *smithy.OperationError — the shape a transport failure that
+			// got as far as the HTTP round trip before dying would actually
+			// have. Built independently of the sesResponseError helper
+			// (#0190 — that helper is the implementer's own construction;
+			// this case exists specifically to prove the discriminator, so
+			// it does not lean on the thing it is trying to prove) so a
+			// wrong shape in the helper could not make this pass by
+			// accident. Proves item 3's discriminator (errors.As against
+			// *smithy.OperationError) still lands here even when the
+			// wrapping is deeper than the bare case above — previously this
+			// case's comment claimed this nesting while the code below it
+			// built the identical bare shape as the row above; #0190 fixed
+			// the mismatch by building what the comment describes.
+			name: "SDK transport failure, nested one layer deeper (net.OpError inside awshttp.ResponseError inside smithy.OperationError): still no smithy.APIError underneath — still mapped",
 			err: fmt.Errorf("mailing: sending via SES: %w", &smithy.OperationError{
 				ServiceID:     "SES v2",
 				OperationName: "SendEmail",
-				Err:           errors.New("dial tcp: lookup email.us-west-2.amazonaws.com: no such host"),
+				Err: &awshttp.ResponseError{
+					ResponseError: &smithyhttp.ResponseError{
+						Response: &smithyhttp.Response{
+							Response: &http.Response{StatusCode: 400},
+						},
+						Err: &net.OpError{
+							Op:  "dial",
+							Net: "tcp",
+							Err: errors.New("lookup email.us-west-2.amazonaws.com: no such host"),
+						},
+					},
+					RequestID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+				},
 			}),
 			want: adminSendUnreachableMessage,
+		},
+		{
+			// #0190's mutation-guarding row. Prefix present (this package's
+			// own sesWrapPrefix), but the wrapped value is a bare
+			// *net.OpError with NO *smithy.OperationError anywhere in the
+			// chain — a shape SESMailer.Send itself can never produce
+			// (every SDK-call return there is wrapped in OperationError by
+			// smithy-go's Client.Invoke), constructible only by a different
+			// Mailer or by hand. Under the OLD discriminator
+			// (strings.HasPrefix(err.Error(), sesWrapPrefix)) this landed on
+			// adminSendUnreachableMessage — silently, because "has our
+			// prefix" was treated as sufficient evidence of an SDK
+			// transport failure. Under the type-based discriminator
+			// (errors.As(err, &opErr) against *smithy.OperationError) it is
+			// NOT an OperationError, so it falls through to the catch-all
+			// and logs loudly instead — the change #0188 made and #0185's
+			// review judged correct (loud beats silent). Reverting
+			// errors.As back to strings.HasPrefix must turn this red: this
+			// row and TestWorker_TransportDiscriminatorMutationGuard below
+			// are the only things in the tree that would catch it (#0190).
+			name: "SDK transport failure, prefix present but wraps *net.OpError directly (no *smithy.OperationError at all): unreachable through SESMailer today, but reaches the catch-all and logs rather than being silently misclassified unreachable",
+			err: fmt.Errorf("mailing: sending via SES: %w", &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: errors.New("connect: connection refused"),
+			}),
+			want:    adminSendBuildFailureMessage,
+			wantLog: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&buf, nil))
+			if got := adminSendErrorMessage(log, 0, tc.err); got != tc.want {
+				t.Errorf("adminSendErrorMessage(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+			if gotLog := buf.Len() > 0; gotLog != tc.wantLog {
+				t.Errorf("adminSendErrorMessage(%v) logged = %v (output %q), want wantLog %v", tc.err, gotLog, buf.String(), tc.wantLog)
+			}
+		})
+	}
+}
+
+// TestAdminSendErrorMessage_EmptyMessageHasNoDanglingSeparator pins #0190's
+// second tidy-up: a modeled exception whose Message the SDK never populated
+// (awsRestjson1_deserializeDocumentMessageRejected sets it only when the
+// response body carries a "message"/"Message" key) used to concatenate to a
+// bare "MessageRejected: " with a dangling ": " and nothing after it.
+// Reachable in production, not just by constructing the zero value by hand.
+func TestAdminSendErrorMessage_EmptyMessageHasNoDanglingSeparator(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "nil Message, bare",
+			err:  fmt.Errorf("mailing: sending via SES: %w", &types.MessageRejected{}),
+			want: "MessageRejected",
+		},
+		{
+			name: "empty-string Message, bare",
+			err:  fmt.Errorf("mailing: sending via SES: %w", &types.MessageRejected{Message: strPtr("")}),
+			want: "MessageRejected",
+		},
+		{
+			name: "nil Message, production-shaped nesting",
+			err:  sesResponseError(&types.MessageRejected{}),
+			want: "MessageRejected",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := adminSendErrorMessage(discardLogger(), 0, tc.err); got != tc.want {
 				t.Errorf("adminSendErrorMessage(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+			if strings.HasSuffix(adminSendErrorMessage(discardLogger(), 0, tc.err), ": ") {
+				t.Errorf("adminSendErrorMessage(%v) has a dangling separator", tc.err)
 			}
 		})
 	}
