@@ -64,7 +64,27 @@ belong in this tracker.
   `TEST_DATABASE_URL` and skip when it is unset — so a green `go test ./...`
   with that variable unset proves less than it looks like it does.
 - SPA logic goes in plain TypeScript modules under `web/src/lib/` so it is
-  unit-testable without a DOM; Svelte components stay thin.
+  unit-testable without a DOM; Svelte components stay thin. That is still the
+  default and the cheap path — the whole suite runs in ~1s.
+- **Components can now be mounted and driven, since `#0094`.** Put
+  `// @vitest-environment jsdom` at the top of a test file and use
+  `@testing-library/svelte`'s `render()`. Only files carrying that pragma pay
+  jsdom's ~270ms startup; the rest stay on the fast default. `vite.config.ts`
+  has a `VITEST`-gated `resolve.conditions: ['browser']` block — without it Vite
+  resolves Svelte's *server* build and `render()` crashes in `mount()`. The gate
+  is why `vite build` output is unaffected, verified byte-identical across all
+  20 `dist/` files.
+
+  Runes work under it, measured rather than assumed: `$effect` runs on mount,
+  re-runs on dependency change, and runs its cleanup on unmount; a `$derived`
+  chain settles synchronously, so an assertion needs no `await` unless the
+  component itself schedules one (a `tick().then(…)`, typically for focus).
+
+  **jsdom is not a browser.** Layout, visibility, IME, and some focus-order
+  edge cases are approximations — a passing jsdom test is weaker evidence than a
+  real-browser one, and a verification claim should say which it rests on. The
+  AST guards (`#0181`, `#0197`, `#0120`) are not redundant: they catch drift
+  between what a test claims and what a component says, which mounting cannot.
 
 ## 2. Identity — decided, do not re-litigate
 
