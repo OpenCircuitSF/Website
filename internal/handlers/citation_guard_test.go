@@ -62,10 +62,35 @@ import (
 // match inside a hex color: internal/mailing/templates.go's
 // colorButtonText = "#04140a" contains the substring "#041" but "\b" fails
 // between the '4' and the '0' that follows it (both word characters), so it
-// does not trip the guard. "PRD\s*§" (rather than a single literal space)
-// closes the "PRD  §6.6" (two spaces) and "PRD§6.6" (no space) variants —
-// both plausible typography a human could produce, both missed by the
-// original pattern, and both zero-cost to close (#0181 review, pass 2).
+// does not trip the guard.
+//
+// #0193: "PRD\s*§" used to mean two different things in the two guards.
+// Go's regexp/syntax \s is exactly [\t\n\f\r ] — five ASCII characters, and
+// notably not \v (vertical tab, U+000B). JavaScript's \s is Unicode-aware
+// by spec (ECMA-262's WhiteSpace and LineTerminator productions) regardless
+// of the u/v flag, and additionally matches \v, NBSP (U+00A0), Ogham space
+// mark (U+1680), the eleven general-punctuation spaces U+2000-U+200A
+// (including thin space, U+2009), the line/paragraph separators U+2028 and
+// U+2029, narrow no-break space (U+202F), medium mathematical space
+// (U+205F), ideographic space (U+3000), and ZWNBSP/BOM (U+FEFF). So a
+// non-breaking space before "§" — exactly what pasting out of a word
+// processor produces — was caught by the web half and silently missed by
+// this one, the half that covers handler code (#0187's phase-3 review,
+// item 1; filed as #0193).
+//
+// Decided: widen Go to match web, rather than narrow both to a smaller
+// explicit set. The web guard's broader coverage was already correct and
+// live; narrowing it to make the comparison easier would be removing real
+// coverage, not fixing a bug. The class below spells out, by codepoint,
+// every character JavaScript's \s matches, so this pattern and the web
+// guard's (web/src/lib/citationGuard.test.ts) now say the identical thing
+// rather than one leaning on regexp/syntax's \s and the other on V8's —
+// verified by running both patterns over the same codepoint cases (see the
+// whitespace-shape tests in this file and in citationGuard.test.ts). "PRD
+// followed by whitespace then §" (rather than a single literal space)
+// originally closed the "PRD  §6.6" (two spaces) and "PRD§6.6" (no space)
+// variants (#0181 review, pass 2); the explicit class still closes both,
+// plus everything listed above.
 // Issues.md, HANDOFF.md, and docs/*.md join CLAUDE.md and PRD § as
 // documents an admin cannot read either — #0178's own whole-tree grep
 // already included Issues.md and HANDOFF, and there is no principled
@@ -78,19 +103,27 @@ import (
 // closes it; the repo's own #0NNN convention already guarantees the
 // four-digit form.
 //
-// #0187, item 3: docs/\S*\.md (and, after this pass, issues/[0-9]{4}\.md)
-// would also fire on an external URL that happens to contain a matching
-// path segment, e.g. "https://example.com/docs/guide.md". Decided:
-// accepted rather than tightened. Go's regexp/syntax (RE2) has no
-// lookbehind, so excluding a preceding "scheme://" cannot be expressed in
-// this pattern the way it can in the web guard's PCRE-flavored engine
-// (V8) — closing it here would mean the two guards no longer share one
-// pattern shape, which is a bigger maintenance hazard than the false
-// positive it prevents. The false positive is also nil today and
-// structurally unlikely to appear: CLAUDE.md §9 forbids external CDNs,
-// and the #0181 review's whole-tree sweep found every existing docs/*.md
-// occurrence in scanned Go scope was a `//` comment, not a live literal.
-var citationPattern = regexp.MustCompile(`CLAUDE\.md|PRD\s*§|#0[0-9]{3}\b|Issues\.md|HANDOFF\.md|docs/\S*\.md|issues/[0-9]{4}\.md`)
+// #0187, item 3: docs/\S*\.md (and issues/[0-9]{4}\.md) also fire on an
+// external URL that happens to contain a matching path segment, e.g.
+// "https://example.com/docs/guide.md". Decided: accepted rather than
+// tightened (TestCitationPatternAcceptsDocsURLFalsePositive pins it).
+//
+// #0193 corrects the reasoning recorded here for that decision. It used to
+// say only V8 could express a scheme exclusion because RE2 has no
+// lookbehind. RE2 lacking lookbehind is true; the inference is false — a
+// scheme exclusion does not need lookbehind, only a consumed leading
+// boundary, e.g. `(?:^|[^:/\w])docs/\S*\.md`, which compiles and matches
+// correctly in both RE2 and V8 verbatim (#0187's phase-3 review built and
+// ran it, 13/13 on intent, in both engines — not adopted here; #0193
+// reports it as a filing candidate rather than taking on that change). The
+// actual reason to accept, once the RE2 claim falls away, is what that
+// review gave: the false positive is nil in the tree today, and the cost
+// of tightening the pattern is real against that nil risk. It is not
+// "tightening would diverge the two guards" — the PRD-whitespace fix above
+// exists precisely because the two guards were already diverged on a
+// different term, so "the guards must share one pattern shape" was never a
+// fact this decision could rest on.
+var citationPattern = regexp.MustCompile(`CLAUDE\.md|PRD[\t\n\v\f\r \x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]*§|#0[0-9]{3}\b|Issues\.md|HANDOFF\.md|docs/\S*\.md|issues/[0-9]{4}\.md`)
 
 // #0181 review, pass 2: rather than reasoning a fixed set of directories
 // into scope by hand (internal/mailing had to be added that way on the
@@ -277,6 +310,59 @@ func TestCitationPatternIgnoresHexColors(t *testing.T) {
 	}
 	if !citationPattern.MatchString("see #0181 for context") {
 		t.Fatal("citationPattern failed to match a genuine issue reference")
+	}
+}
+
+// TestCitationPatternMatchesWebWhitespaceShapes proves #0193's fix: the
+// five whitespace shapes the phase-3 review of #0187 found caught by the
+// web guard's Unicode-aware \s and missed by this file's Go \s (NBSP, thin
+// space, VT, ZWNBSP, ideographic space) all match here now, plus the rest
+// of the codepoints JavaScript's \s matches by spec that this pattern was
+// widened to include. Built from rune codepoints, not pasted characters, so
+// what the test asserts is provably what it contains rather than what was
+// typed and might not have landed (#0193's own instruction, taken
+// seriously: see this file's git history for a Go-only guard that, before
+// this fix, missed exactly these cases).
+func TestCitationPatternMatchesWebWhitespaceShapes(t *testing.T) {
+	section := string(rune(0x00A7)) // §
+
+	mustMatch := []struct {
+		name string
+		cp   rune
+	}{
+		{"NBSP", 0x00A0},
+		{"thin space", 0x2009},
+		{"vertical tab", 0x000B},
+		{"ZWNBSP/BOM", 0xFEFF},
+		{"ideographic space", 0x3000},
+		{"ogham space mark", 0x1680},
+		{"line separator", 0x2028},
+		{"paragraph separator", 0x2029},
+		{"narrow no-break space", 0x202F},
+		{"medium mathematical space", 0x205F},
+		{"en quad", 0x2000},
+		{"hair space", 0x200A},
+		{"tab", 0x0009},
+		{"newline", 0x000A},
+		{"carriage return", 0x000D},
+		{"form feed", 0x000C},
+		{"regular space", 0x0020},
+	}
+	for _, c := range mustMatch {
+		s := "PRD" + string(c.cp) + section + "6.6"
+		if !citationPattern.MatchString(s) {
+			t.Errorf("citationPattern did not match PRD + %s (U+%04X) + section 6.6", c.name, c.cp)
+		}
+	}
+
+	if !citationPattern.MatchString("PRD" + section + "6.6") {
+		t.Error("citationPattern did not match PRD immediately followed by section (zero whitespace)")
+	}
+	if !citationPattern.MatchString("PRD  " + section + "6.6") {
+		t.Error("citationPattern did not match PRD followed by two spaces then section")
+	}
+	if citationPattern.MatchString("PRDA" + section + "6.6") {
+		t.Error("citationPattern matched PRD followed by a non-whitespace letter before section; the class must not include ordinary letters")
 	}
 }
 

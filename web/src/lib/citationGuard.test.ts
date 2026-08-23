@@ -40,14 +40,38 @@ import { parse as parseSvelte } from 'svelte/compiler';
 // The pattern requires a word boundary after the three digits so it cannot
 // match inside e.g. a hex color (app.css's --series-6: #008300 style
 // values, if one ever ended up in a .ts token file, would contain "#008"
-// but "\b" fails between the '8' and the '3' that follows it). "PRD\s*§"
-// (rather than a single literal space) closes the "PRD  §6.6" (two spaces)
-// and "PRD§6.6" (no space) variants — both plausible typography, both
-// missed by the original pattern, zero-cost to close (#0181 review, pass
-// 2). Issues.md, HANDOFF.md, and docs/*.md join CLAUDE.md and PRD § as
-// documents an admin cannot read either — #0178's own whole-tree grep
-// already included Issues.md and HANDOFF, so there is no principled reason
-// to guard one internal document and not the others.
+// but "\b" fails between the '8' and the '3' that follows it).
+//
+// #0193: "PRD\s*§" used to mean two different things in the two guards.
+// JavaScript's \s is Unicode-aware by spec (ECMA-262's WhiteSpace and
+// LineTerminator productions) regardless of the u/v flag: it matches tab,
+// newline, vertical tab, form feed, carriage return, regular space, NBSP
+// (U+00A0), Ogham space mark (U+1680), the eleven general-punctuation
+// spaces U+2000-U+200A (including thin space, U+2009), the line/paragraph
+// separators U+2028 and U+2029, narrow no-break space (U+202F), medium
+// mathematical space (U+205F), ideographic space (U+3000), and ZWNBSP/BOM
+// (U+FEFF). Go's regexp/syntax \s is exactly [\t\n\f\r ] — five ASCII
+// characters, and notably not even \v. So a non-breaking space before "§"
+// — exactly what pasting out of a word processor produces — was caught
+// here and silently missed by the Go half, the half that covers handler
+// code (#0187's phase-3 review, item 1; filed as #0193).
+//
+// Decided: widen Go to match this half, rather than narrow both to a
+// smaller explicit set. This guard's coverage was already correct and
+// live; narrowing it to make the comparison easier would be removing real
+// coverage, not fixing a bug. The class below spells out, by codepoint,
+// every character this engine's \s matches, so this pattern and the Go
+// guard's (internal/handlers/citation_guard_test.go) now say the identical
+// thing rather than one leaning on V8's \s and the other on regexp/syntax's
+// — verified by running both patterns over the same codepoint cases (see
+// the whitespace-shape tests in this file and in citation_guard_test.go).
+// "PRD followed by whitespace then §" (rather than a single literal space)
+// originally closed the "PRD  §6.6" (two spaces) and "PRD§6.6" (no space)
+// variants (#0181 review, pass 2); the explicit class still closes both,
+// plus everything listed above. Issues.md, HANDOFF.md, and docs/*.md join
+// CLAUDE.md and PRD § as documents an admin cannot read either — #0178's
+// own whole-tree grep already included Issues.md and HANDOFF, so there is
+// no principled reason to guard one internal document and not the others.
 //
 // #0187, item 2: issues/NNNN.md (a path to one tracker file, e.g.
 // "issues/0138.md") was missing even though docs/*.md was added — an
@@ -56,20 +80,32 @@ import { parse as parseSvelte } from 'svelte/compiler';
 // closes it; the repo's own #0NNN convention already guarantees the
 // four-digit form.
 //
-// #0187, item 3: docs/\S*\.md (and, after this pass, issues\/\d{4}\.md)
-// would also fire on an external URL that happens to contain a matching
-// path segment, e.g. "https://example.com/docs/guide.md". Decided:
-// accepted rather than tightened. The Go half of this guard
-// (internal/handlers/citation_guard_test.go) shares this exact pattern
-// text and runs on Go's regexp/syntax (RE2), which has no lookbehind — a
-// (?<!\w+:\/\/\S*) exclusion could be added here in V8 but could not be
-// mirrored there, so tightening only one side would leave the two guards
-// silently diverged in what they catch, which is a bigger hazard than the
-// false positive it prevents. The false positive is also nil today and
-// structurally unlikely to appear: CLAUDE.md §9 forbids external CDNs, and
-// no docs/*.md-shaped string exists anywhere in web/src outside comments
-// (#0181 review, pass 2).
-const citationPattern = /CLAUDE\.md|PRD\s*§|#0\d{3}\b|Issues\.md|HANDOFF\.md|docs\/\S*\.md|issues\/\d{4}\.md/;
+// #0187, item 3: docs/\S*\.md (and issues\/\d{4}\.md) also fire on an
+// external URL that happens to contain a matching path segment, e.g.
+// "https://example.com/docs/guide.md". Decided: accepted rather than
+// tightened (see "documents the accepted docs/*.md external-URL false
+// positive" below, which pins it).
+//
+// #0193 corrects the reasoning recorded here for that decision. It used to
+// say tightening this side would leave the two guards silently diverged,
+// since the Go half's RE2 engine has no lookbehind and couldn't mirror a
+// (?<!\w+:\/\/\S*) exclusion. RE2 lacking lookbehind is true; the
+// inference is false — a scheme exclusion does not need lookbehind, only a
+// consumed leading boundary, e.g. `(?:^|[^:/\w])docs/\S*\.md`, which
+// compiles and matches correctly in both V8 and RE2 verbatim (#0187's
+// phase-3 review built and ran it, 13/13 on intent, in both engines — not
+// adopted here; #0193 reports it as a filing candidate rather than taking
+// on that change). The actual reason to accept, once that claim falls
+// away, is what the review gave: the false positive is nil in the tree
+// today, and the cost of tightening the pattern is real against that nil
+// risk. It is not "tightening would diverge the two guards" — the
+// PRD-whitespace fix above exists precisely because the two guards were
+// already diverged on a different term, so "the guards must share one
+// pattern shape" was never a fact this decision could rest on. The false
+// positive is also structurally unlikely to appear: CLAUDE.md §9 forbids
+// external CDNs, and no docs/*.md-shaped string exists anywhere in
+// web/src outside comments (#0181 review, pass 2).
+const citationPattern = /CLAUDE\.md|PRD[\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]*§|#0\d{3}\b|Issues\.md|HANDOFF\.md|docs\/\S*\.md|issues\/\d{4}\.md/;
 
 interface Violation {
   file: string;
@@ -369,14 +405,67 @@ describe('citation guard catches (synthetic fixtures)', () => {
   });
 
   // #0187, item 3: documents the decision to accept, rather than tighten,
-  // the one false-positive shape docs/\S*\.md (and now issues\/\d{4}\.md)
+  // the one false-positive shape docs/\S*\.md (and issues\/\d{4}\.md)
   // introduces — an external URL containing a matching path segment. See
-  // the comment above citationPattern for the full reasoning (the Go half
-  // of this guard shares this pattern text and cannot express the
-  // lookbehind that would exclude it). This test exists so a future change
-  // that silently closes or widens the gap shows up in a diff.
+  // the comment above citationPattern for the full reasoning: the false
+  // positive is nil in the tree today and the cost of tightening is real
+  // against that nil risk — not, as an earlier version of this comment
+  // said, that only V8 could express a scheme exclusion (#0193 corrected
+  // that; a consumed-boundary form is valid in both engines, just not
+  // adopted here). This test exists so a future change that silently
+  // closes or widens the gap shows up in a diff.
   it('documents the accepted docs/*.md external-URL false positive (#0187 item 3)', () => {
     const found = scanTsSource('fixture.ts', `export const a = 'see https://example.com/docs/guide.md for details';`);
     expect(found).toHaveLength(1);
+  });
+
+  // #0193: the five whitespace shapes the phase-3 review of #0187 found
+  // caught here and missed by the Go guard's Go \s (NBSP, thin space, VT,
+  // ZWNBSP, ideographic space), plus the rest of the codepoints this
+  // engine's \s matches by spec that the Go pattern was widened to include.
+  // Built from codepoints via String.fromCodePoint, not pasted characters,
+  // so what the test asserts is provably what it contains.
+  it('fires on every whitespace shape JavaScript\'s \\s matches between PRD and §', () => {
+    const section = String.fromCodePoint(0x00a7); // §
+    // Two of these codepoints (LF, CR) are LineTerminator characters that
+    // ECMA-262 forbids raw and unescaped inside a single-quoted string
+    // literal -- embedding them directly as characters would make the
+    // *fixture* itself invalid source, not exercise the pattern. A
+    // \uXXXX escape sequence, built here from a codepoint (never pasted as
+    // a literal character), is valid for every one of these codepoints
+    // regardless of category, so the fixture is always well-formed and
+    // uniform across all 17 cases.
+    const backslash = String.fromCharCode(92);
+    const uEscape = (cp: number) => backslash + 'u' + cp.toString(16).toUpperCase().padStart(4, '0');
+
+    const mustMatch: [string, number][] = [
+      ['NBSP', 0x00a0],
+      ['thin space', 0x2009],
+      ['vertical tab', 0x000b],
+      ['ZWNBSP/BOM', 0xfeff],
+      ['ideographic space', 0x3000],
+      ['ogham space mark', 0x1680],
+      ['line separator', 0x2028],
+      ['paragraph separator', 0x2029],
+      ['narrow no-break space', 0x202f],
+      ['medium mathematical space', 0x205f],
+      ['en quad', 0x2000],
+      ['hair space', 0x200a],
+      ['tab', 0x0009],
+      ['newline', 0x000a],
+      ['carriage return', 0x000d],
+      ['form feed', 0x000c],
+      ['regular space', 0x0020],
+    ];
+    for (const [name, cp] of mustMatch) {
+      const src = `export const a = 'PRD${uEscape(cp)}§6.6';`;
+      const found = scanTsSource('fixture.ts', src);
+      expect(found, `expected a match for PRD + ${name} (U+${cp.toString(16).toUpperCase().padStart(4, '0')}) + section 6.6, fixture: ${src}`).toHaveLength(1);
+      expect(found[0]?.text).toBe(`PRD${String.fromCodePoint(cp)}${section}6.6`);
+    }
+
+    expect(scanTsSource('fixture.ts', `export const a = 'PRD${section}6.6';`)).toHaveLength(1);
+    expect(scanTsSource('fixture.ts', `export const a = 'PRD  ${section}6.6';`)).toHaveLength(1);
+    expect(scanTsSource('fixture.ts', `export const a = 'PRDA${section}6.6';`)).toHaveLength(0);
   });
 });
