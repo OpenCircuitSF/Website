@@ -463,6 +463,22 @@ recoverable. Stage narrowly — `git add <specific-path>`, never `git add -A` or
 `git commit -a`, which sweep up other agents' work into a commit that does not
 describe it.
 
+**Staging narrowly is not enough — the index is shared too.** `git commit` with
+no pathspec commits *whatever is staged*, including files another agent staged
+seconds earlier. This happened twice in one session: two implementers working
+disjoint halves of Phase 6 each swept the other's staged work into a commit that
+did not describe it. Both caught it from `git show --stat` and recovered with
+`git reset --soft HEAD~1` plus `git restore --staged <their-paths>` — which is
+safe only because neither touched file *contents*. Two habits prevent it:
+
+```bash
+git diff --cached --name-only          # before every commit — is anything here not yours?
+git commit -- <your-paths>             # pathspec on the commit, not just the add
+```
+
+Nothing was lost either time, and only because both agents checked and
+disclosed. Assume the index has someone else's work in it.
+
 ## 8b. Ports, when agents run concurrently
 
 **Never bind a fixed, shared port for a verification server.** A subagent
