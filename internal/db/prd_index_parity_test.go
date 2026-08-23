@@ -135,6 +135,46 @@ var (
 	looseIndexStartPattern = regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX\b`)
 )
 
+// dollarQuoteOpenPattern matches a Postgres dollar-quote tag opener at the
+// very start of the text it's run against: `$$` (the untagged form) or
+// `$tag$`, where tag follows Postgres's own identifier rule (a letter or
+// underscore, then any run of letters/digits/underscores) rather than a bare
+// `\w*`, so a stray `$1` (a positional parameter, not a dollar-quote) is
+// never mistaken for one.
+var dollarQuoteOpenPattern = regexp.MustCompile(`^\$([A-Za-z_]\w*)?\$`)
+
+// dollarQuoteEnd reports whether a dollar-quoted string starts at text[i]
+// (the caller has already checked text[i] == '$') and, if so, the index one
+// past its matching closing tag. Postgres dollar-quoting is not
+// nesting-aware — the *first* later occurrence of the identical tag text
+// closes it, full stop, even if a differently-tagged (or untagged) `$...$`
+// pair appears textually inside — which is exactly what searching for the
+// next literal occurrence of the opening tag gives for free, without having
+// to recursively parse whatever is between the tags.
+//
+// #0159: this is what fixes dollar quoting's exposure to the quote-aware
+// scanners below. Before this, a `'` inside a dollar-quoted body (an odd
+// number of them, as in `$x$it's fine$x$`) was indistinguishable from a
+// genuine `'...'` string literal opening, so a scanner that had never heard
+// of dollar-quoting flipped into "inside a string" for the remainder of the
+// file — silently eating every later `--` comment, comma, and paren. Jumping
+// straight from the opening tag to its matching closer, without ever
+// inspecting what's inside for quotes of its own, removes that exposure
+// entirely: nothing inside a dollar-quoted span is treated as SQL structure,
+// which is also exactly how Postgres itself treats it.
+func dollarQuoteEnd(text string, i int) (end int, ok bool) {
+	loc := dollarQuoteOpenPattern.FindStringIndex(text[i:])
+	if loc == nil {
+		return 0, false
+	}
+	tag := text[i : i+loc[1]] // e.g. "$$" or "$x$"
+	closeIdx := strings.Index(text[i+len(tag):], tag)
+	if closeIdx == -1 {
+		return 0, false // unterminated — caller falls back to treating '$' as a literal byte
+	}
+	return i + len(tag) + closeIdx + len(tag), true
+}
+
 // stripSQLComments removes every SQL comment — both `-- ...` to end of line
 // and `/* ... */` — from text before any pattern in this file runs over it,
 // in one left-to-right, quote-aware pass. #0154's phase-3 review proved the
@@ -146,6 +186,11 @@ var (
 // dropping the next real one. Tracking whether the scan is inside a `'...'`
 // string literal (Postgres escapes an embedded quote by doubling it: 'it''s')
 // is what fixes both: `--` and `/*` are only comment starts outside a string.
+//
+// #0159 added the `$`/dollarQuoteEnd branch: a dollar-quoted span is copied
+// through byte-for-byte without ever being re-inspected for `'`, so an odd
+// apostrophe count inside one (e.g. `$x$it's fine$x$`) can no longer flip
+// inString for the rest of the file the way it did before.
 //
 // Applied uniformly to both sides of every comparison so (a) a commented-out
 // `-- CREATE INDEX …`/`-- CREATE TABLE …` can never register as a live
@@ -168,6 +213,13 @@ func stripSQLComments(s string) string {
 				inString = false
 			}
 			continue
+		}
+		if c == '$' {
+			if end, ok := dollarQuoteEnd(s, i); ok {
+				b.WriteString(s[i:end])
+				i = end - 1
+				continue
+			}
 		}
 		switch {
 		case c == '\'':
@@ -378,40 +430,95 @@ var createTableStart = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EX
 // quoted name, or a future form nobody has written yet.
 var looseTableStartPattern = regexp.MustCompile(`(?i)CREATE\s+TABLE\b`)
 
-// columnAddPattern matches the ALTER TABLE forms this project's migrations
-// use to grow a table after its CREATE TABLE — a single-column
-// `ALTER TABLE t ADD [COLUMN] [IF NOT EXISTS] c ...;` (CLAUDE.md §1's
-// append-only-migrations rule plus its greenfield exception — e.g.
-// migrations/000011, 000018, 000019) — while still matching (so they can be
-// recognized and excluded, not silently dropped) `ALTER TABLE t ADD
-// CONSTRAINT …`/`ADD PRIMARY KEY …` forms this tree also uses (000009,
-// 000010, 000012, 000013, 000014, 000017, 000020).
+// alterTableStmtPattern matches one whole ALTER TABLE statement — table name
+// through the terminating ";" — rather than a single ADD clause. #0159 found
+// the previous single-clause pattern (matching "ALTER TABLE t ADD ..." once
+// per statement) was blind to two things: a second or later comma-joined
+// clause in a multi-clause ALTER (`ALTER TABLE t ADD COLUMN a …, ADD COLUMN
+// b …;` — this project already writes multi-clause ALTERs, e.g.
+// migrations/000007's `ALTER TABLE sessions ALTER COLUMN …, ALTER COLUMN …,
+// …`), and the `ALTER TABLE ONLY t` / `ALTER TABLE "t"` forms, whose table
+// name never matched the old pattern's bare `\w+` slot at all. Capturing the
+// whole clause list as one blob (group 2) and splitting it into individual
+// clauses afterward (splitTopLevel, reused from the CREATE TABLE column-list
+// case) is what lets every clause — not just the first — be classified on
+// its own.
 //
-// #0154's phase-3 review (attacks 17, 18) found the original pattern
-// required the literal "COLUMN" keyword, which Postgres makes optional:
-// `ALTER TABLE t ADD c TEXT;` matched nothing at all (silent), and
-// `ADD COLUMN IF NOT EXISTS c` matched "IF" as the column name while `c`
-// itself went unrecorded (wrong AND silent about the real column). Group 2
-// is a capturing "COLUMN " literal (empty/unmatched when the keyword is
-// absent) rather than non-capturing, so classifyColumnAdd can tell "the
-// COLUMN keyword said so" apart from "no keyword — check whether what
-// follows ADD is actually a constraint, not a column name" without a second
-// pattern.
-var columnAddPattern = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+(\w+)\s+ADD\s+(COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(\w+)(?:\s+(\w+))?`)
+// The table name accepts an optional ONLY and optional double-quoting
+// (unwrapped, not captured as part of the name), matching Postgres's actual
+// grammar; a schema-qualified name (`public.t`) is deliberately not handled
+// here, the same policy createTableStart uses for CREATE TABLE — it becomes
+// wrong-but-loud via checkAlterTableStatementCoverage below, not silent.
+var alterTableStmtPattern = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+(?:ONLY\s+)?"?(\w+)"?\s+([^;]*);`)
 
-// looseColumnAddPattern is columnAddPattern's coverage ceiling. Unlike
-// columnAddPattern, it requires nothing at all after "ADD" — no token, no
-// trailing word — so it matches every "ALTER TABLE t ADD" occurrence
-// regardless of what (if anything) follows, including a form so malformed
-// that no identifier follows at all. That asymmetry is what gives
-// checkColumnAddCoverage real teeth: columnAddPattern's own `(\w+)` is
-// mandatory, so a statement it can't identify a token for is *not* counted
-// on the strict side, producing a genuine, catchable mismatch instead of the
-// two patterns being structurally unable to disagree.
-var looseColumnAddPattern = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+\w+\s+ADD\b`)
+// looseAlterTableStmtPattern is alterTableStmtPattern's coverage ceiling —
+// bare "ALTER TABLE " (note the trailing \s+, not just \b: PRD.md §6.2 has
+// several prose mentions of "`ALTER TABLE`" in backtick-quoted text with no
+// following whitespace at all, e.g. "the FK added in a later `ALTER
+// TABLE`." — requiring real whitespace after "TABLE" is what keeps those
+// out of the count on both sides without needing an allowlist) — so
+// checkAlterTableStatementCoverage can catch a form alterTableStmtPattern
+// still can't parse (a schema-qualified name, a missing ";") instead of
+// letting it, and every column it adds, vanish silently — the same failure
+// shape looseTableStartPattern/checkTableStatementCoverage already closed on
+// the CREATE TABLE side.
+var looseAlterTableStmtPattern = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+`)
 
-// classifyColumnAdd interprets one ADD statement's tokens — the "COLUMN "
-// literal if columnAddPattern matched it, and the identifier/next-word that
+// checkAlterTableStatementCoverage is the statement-level half of the
+// ALTER-TABLE-ADD coverage check (#0159): it catches an ALTER TABLE
+// statement alterTableStmtPattern can't parse at all — before any of its
+// clauses are even examined. checkColumnAddCoverage below is the
+// clause-level half, for a statement that *did* parse but contains an ADD
+// clause it can't classify.
+//
+// found can never come out less than matched: every alterTableStmtPattern
+// match begins with literal "ALTER TABLE " text, which looseAlterTableStmtPattern
+// also matches at the identical starting position, so a strict match always
+// has a corresponding loose match backing it.
+func checkAlterTableStatementCoverage(t *testing.T, text, label string) {
+	t.Helper()
+	found := len(looseAlterTableStmtPattern.FindAllStringIndex(text, -1))
+	matched := len(alterTableStmtPattern.FindAllStringIndex(text, -1))
+	if found != matched {
+		t.Errorf(
+			"%s: found %d \"ALTER TABLE\" occurrence(s) but only parsed %d as a "+
+				"complete statement — one of them uses a SQL form alterTableStmtPattern "+
+				"can't parse (a schema-qualified name, a missing terminating ';', or a "+
+				"form not yet handled). A silent skip here means every column that "+
+				"statement adds is invisible to this guard — fix the statement or widen "+
+				"alterTableStmtPattern, don't leave the mismatch. See #0159.",
+			label, found, matched,
+		)
+	}
+}
+
+// clauseAddPattern matches one ALTER TABLE clause — already isolated from
+// its statement's clause list by splitTopLevel, so it never has to account
+// for a *later* clause's own commas — that adds a single column: an
+// optional COLUMN keyword, optional IF NOT EXISTS, the column's identifier,
+// and (optionally) its type's first token. Anchored at the start (^) because
+// it is matched against one already-split clause, never scanned across a
+// whole file. Group 1 is a capturing "COLUMN " literal (empty/unmatched when
+// the keyword is absent) rather than non-capturing, so classifyColumnAdd can
+// tell "the COLUMN keyword said so" apart from "no keyword — check whether
+// what follows ADD is actually a constraint, not a column name" without a
+// second pattern (#0154, attacks 17/18 — carried over unchanged by #0159's
+// statement/clause split).
+var clauseAddPattern = regexp.MustCompile(`(?i)^\s*ADD\s+(COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(\w+)(?:\s+(\w+))?`)
+
+// looseClauseAddPattern is clauseAddPattern's coverage ceiling within one
+// already-split clause: does this clause even claim to be an ADD at all,
+// regardless of whether clauseAddPattern can parse what follows. Unlike
+// clauseAddPattern it requires nothing after "ADD" — no token, not even a
+// trailing word — so a clause so malformed that no identifier follows it at
+// all still counts on the loose side, producing a genuine, catchable
+// mismatch instead of the two patterns being structurally unable to
+// disagree (#0154's own retrospective on its first, too-close-to-strict
+// draft).
+var looseClauseAddPattern = regexp.MustCompile(`(?i)^\s*ADD\b`)
+
+// classifyColumnAdd interprets one ADD clause's tokens — the "COLUMN "
+// literal if clauseAddPattern matched it, and the identifier/next-word that
 // follow — and reports the column name being added, or ok=false if this is
 // actually a table-level constraint addition (ADD CONSTRAINT …, ADD PRIMARY
 // KEY (...), …) rather than a column. An explicit COLUMN keyword is
@@ -440,8 +547,8 @@ func matchGroup(s string, loc []int, i int) string {
 
 // peekTwoWords returns the first two whitespace-separated tokens of s (each
 // "" if absent), used by checkColumnAddCoverage to classify what follows a
-// looseColumnAddPattern match without requiring the loose pattern itself to
-// capture anything — the same isTableConstraintSegment test columnAddPattern's
+// looseClauseAddPattern match without requiring the loose pattern itself to
+// capture anything — the same isTableConstraintSegment test clauseAddPattern's
 // own tokens go through, applied to whatever text (if any) actually follows
 // "ADD".
 func peekTwoWords(s string) (first, second string) {
@@ -455,15 +562,42 @@ func peekTwoWords(s string) (first, second string) {
 	return first, second
 }
 
-// checkTableStatementCoverage and checkColumnAddCoverage are checkIndexStatementCoverage's
+// columnAddsInClauses walks one ALTER TABLE statement's already-split
+// clauses (splitTopLevel(blob), where blob is alterTableStmtPattern's group
+// 2) and returns the column name added by each clause that genuinely adds a
+// column — never a clause that isn't an ADD at all (ALTER COLUMN, DROP
+// COLUMN, …) and never a table-level constraint add (ADD CONSTRAINT, ADD
+// PRIMARY KEY, ADD UNIQUE, ADD FOREIGN KEY, ADD EXCLUDE USING). Shared by
+// liveColumnsFromMigrations (extraction) and, via the same
+// clauseAddPattern/classifyColumnAdd, checkColumnAddCoverage (counting), so
+// the two can never disagree about what counts as a column.
+func columnAddsInClauses(clauses []string) []string {
+	var cols []string
+	for _, clause := range clauses {
+		loc := clauseAddPattern.FindStringSubmatchIndex(clause)
+		if loc == nil {
+			continue
+		}
+		if col, ok := classifyColumnAdd(matchGroup(clause, loc, 2), matchGroup(clause, loc, 4), matchGroup(clause, loc, 6)); ok {
+			cols = append(cols, col)
+		}
+	}
+	return cols
+}
+
+// checkTableStatementCoverage, checkAlterTableStatementCoverage (above), and
+// checkColumnAddCoverage (below) are checkIndexStatementCoverage's
 // column-side counterparts (#0154, phase-3 review — "a coverage check for
-// the column half... is what makes attacks 15-18 loud instead of silent").
-// Each counts a loose, maximally permissive pattern's occurrences against how
-// many the corresponding strict pattern actually parsed into a table/column,
-// and t.Errorf's on a mismatch naming the file. That is what turns any
-// CREATE TABLE or ALTER TABLE ADD form neither pattern anticipates into a
-// loud test failure instead of a silent absence from the live map — exactly
-// the property checkIndexStatementCoverage already gives the index half.
+// the column half... is what makes attacks 15-18 loud instead of silent";
+// #0159 split the ADD half into a statement tier and a clause tier so a
+// multi-clause ALTER's second and later clauses are no longer invisible to
+// both). Each counts a loose, maximally permissive pattern's occurrences
+// against how many the corresponding strict pattern actually parsed into a
+// table/column, and t.Errorf's on a mismatch naming the file. That is what
+// turns any CREATE TABLE or ALTER TABLE ADD form none of these patterns
+// anticipate into a loud test failure instead of a silent absence from the
+// live map — exactly the property checkIndexStatementCoverage already gives
+// the index half.
 func checkTableStatementCoverage(t *testing.T, text, label string) {
 	t.Helper()
 	found := len(looseTableStartPattern.FindAllStringIndex(text, -1))
@@ -481,41 +615,73 @@ func checkTableStatementCoverage(t *testing.T, text, label string) {
 	}
 }
 
+// checkColumnAddCoverage is the clause-level half of the ALTER-TABLE-ADD
+// coverage check (#0159). It walks every ALTER TABLE statement
+// checkAlterTableStatementCoverage above already confirmed alterTableStmtPattern
+// can parse, splits its clause list on top-level commas, and — clause by
+// clause — counts a loose "does this even claim to be an ADD (and isn't a
+// constraint add)?" test against how many clauseAddPattern actually parsed
+// into a column. A mismatch here means one comma-separated clause in a
+// (possibly multi-clause) ALTER TABLE statement uses a form clauseAddPattern
+// can't parse — including a second or later ADD clause that the pre-#0159
+// single-shot-per-statement pattern could never even see.
+//
+// found can never come out less than matched, for the same structural
+// reason checkColumnStatementCoverage's other checks can't: every clause
+// clauseAddPattern successfully parses necessarily starts with "ADD" (its
+// own pattern requires that literal prefix), so looseClauseAddPattern always
+// matches there too; and both sides classify "is this actually a constraint
+// add, not a column" through the identical isTableConstraintSegment call —
+// the loose side on the clause's first token(s) after "ADD", the strict side
+// on classifyColumnAdd's identifier/nextWord, which is the same token
+// whenever no COLUMN keyword is present, and never a constraint at all
+// whenever one is.
 func checkColumnAddCoverage(t *testing.T, text, label string) {
 	t.Helper()
 	found := 0
-	for _, loc := range looseColumnAddPattern.FindAllStringIndex(text, -1) {
-		first, second := peekTwoWords(text[loc[1]:])
-		if !isTableConstraintSegment(first, second) {
-			found++
-		}
-	}
 	matched := 0
-	for _, loc := range columnAddPattern.FindAllStringSubmatchIndex(text, -1) {
-		if _, ok := classifyColumnAdd(matchGroup(text, loc, 4), matchGroup(text, loc, 6), matchGroup(text, loc, 8)); ok {
-			matched++
+	for _, sloc := range alterTableStmtPattern.FindAllStringSubmatchIndex(text, -1) {
+		blob := matchGroup(text, sloc, 4)
+		for _, clause := range splitTopLevel(blob) {
+			rest := looseClauseAddPattern.FindString(clause)
+			if rest == "" {
+				continue // not an ADD clause at all — ALTER COLUMN, DROP COLUMN, ...
+			}
+			first, second := peekTwoWords(clause[len(rest):])
+			if isTableConstraintSegment(first, second) {
+				continue // ADD CONSTRAINT / ADD PRIMARY KEY / ... — classified out identically on both sides
+			}
+			found++
+			if aloc := clauseAddPattern.FindStringSubmatchIndex(clause); aloc != nil {
+				if _, ok := classifyColumnAdd(matchGroup(clause, aloc, 2), matchGroup(clause, aloc, 4), matchGroup(clause, aloc, 6)); ok {
+					matched++
+				}
+			}
 		}
 	}
 	if found != matched {
 		t.Errorf(
-			"%s: found %d \"ALTER TABLE ... ADD\" column occurrence(s) (excluding "+
-				"constraint adds) but only parsed %d as a complete ADD COLUMN "+
-				"statement — one of them uses a SQL form columnAddPattern can't "+
-				"parse. A silent skip here means the column is invisible to this "+
-				"guard — fix the statement or widen columnAddPattern, don't leave "+
-				"the mismatch. See #0154.",
+			"%s: found %d \"ALTER TABLE ... ADD\" column clause(s) (excluding "+
+				"constraint adds, counted per comma-separated clause across every "+
+				"ALTER TABLE statement) but only parsed %d as a complete ADD COLUMN "+
+				"clause — one of them uses a SQL form clauseAddPattern can't parse. A "+
+				"silent skip here means the column is invisible to this guard — fix "+
+				"the statement or widen clauseAddPattern, don't leave the mismatch. "+
+				"See #0159.",
 			label, found, matched,
 		)
 	}
 }
 
-// checkColumnStatementCoverage runs both column-side coverage checks
-// (checkTableStatementCoverage and checkColumnAddCoverage) against one piece
-// of text, mirroring checkIndexStatementCoverage's single call site per
-// migration file / PRD section.
+// checkColumnStatementCoverage runs every column-side coverage check
+// (checkTableStatementCoverage, checkAlterTableStatementCoverage, and
+// checkColumnAddCoverage) against one piece of text, mirroring
+// checkIndexStatementCoverage's single call site per migration file / PRD
+// section.
 func checkColumnStatementCoverage(t *testing.T, text, label string) {
 	t.Helper()
 	checkTableStatementCoverage(t, text, label)
+	checkAlterTableStatementCoverage(t, text, label)
 	checkColumnAddCoverage(t, text, label)
 }
 
@@ -531,7 +697,12 @@ func checkColumnStatementCoverage(t *testing.T, text, label string) {
 // column definition into two and inventing a bogus "column" from the
 // fragment after the literal comma. Parens inside a string literal are
 // likewise skipped, for the matching reason columnsFromCreateTable's
-// close-paren finder needs the same tracking (attack 13).
+// close-paren finder needs the same tracking (attack 13). Dollar-quote-aware
+// since #0159, for the identical reason stripSQLComments is: a comma or
+// paren inside a dollar-quoted span must not be treated as SQL structure,
+// and the span must be skipped as one atomic unit rather than walked byte by
+// byte, so an odd apostrophe inside it can't corrupt inString for whatever
+// follows.
 func splitTopLevel(s string) []string {
 	var parts []string
 	depth := 0
@@ -549,6 +720,12 @@ func splitTopLevel(s string) []string {
 				inString = false
 			}
 			continue
+		}
+		if c == '$' {
+			if end, ok := dollarQuoteEnd(s, i); ok {
+				i = end - 1
+				continue
+			}
 		}
 		switch c {
 		case '\'':
@@ -584,7 +761,10 @@ func splitTopLevel(s string) []string {
 // unbalanced-looking `(` inside a literal would open a phantom nesting
 // level. Tracking string state, not just paren characters, is what makes
 // this safe against literal content instead of merely against nested
-// *real* parens.
+// *real* parens. Dollar-quote-aware since #0159, for the same reason
+// stripSQLComments and splitTopLevel are: a paren inside a dollar-quoted
+// span is skipped as part of one atomic jump over the whole span, rather
+// than risking an odd apostrophe inside it flipping inString.
 func columnsFromCreateTable(text string, openParen int) (cols []string, bodyEnd int) {
 	depth := 0
 	end := -1
@@ -601,6 +781,12 @@ func columnsFromCreateTable(text string, openParen int) (cols []string, bodyEnd 
 				inString = false
 			}
 			continue
+		}
+		if c == '$' {
+			if de, ok := dollarQuoteEnd(text, i); ok {
+				i = de - 1
+				continue
+			}
 		}
 		switch c {
 		case '\'':
@@ -675,13 +861,13 @@ func liveColumnsFromMigrations(t *testing.T) map[string]map[string]columnDef {
 			cols, _ := columnsFromCreateTable(text, openParen)
 			ops = append(ops, op{pos: loc[0], table: table, columns: cols})
 		}
-		for _, loc := range columnAddPattern.FindAllStringSubmatchIndex(text, -1) {
-			table := text[loc[2]:loc[3]]
-			col, ok := classifyColumnAdd(matchGroup(text, loc, 4), matchGroup(text, loc, 6), matchGroup(text, loc, 8))
-			if !ok {
-				continue // ADD CONSTRAINT / ADD PRIMARY KEY / ... — not a column
+		for _, loc := range alterTableStmtPattern.FindAllStringSubmatchIndex(text, -1) {
+			table := matchGroup(text, loc, 2)
+			blob := matchGroup(text, loc, 4)
+			cols := columnAddsInClauses(splitTopLevel(blob))
+			if len(cols) > 0 {
+				ops = append(ops, op{pos: loc[0], table: table, columns: cols})
 			}
-			ops = append(ops, op{pos: loc[0], table: table, columns: []string{col}})
 		}
 		sort.Slice(ops, func(i, j int) bool { return ops[i].pos < ops[j].pos })
 		for _, o := range ops {
