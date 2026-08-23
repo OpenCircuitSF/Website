@@ -207,6 +207,155 @@ func TestAdminWorkshops_CreateEmptyTitleRejected(t *testing.T) {
 	}
 }
 
+// ── Cover image validation at the API boundary (#0138) ─────────────────────────
+//
+// Client-side validation (web/src/lib/workshopAdmin.ts's isSafeCoverImage)
+// doesn't protect a value that arrives by any other path, and internal/seo's
+// absoluteURL prefixes whatever cover_image holds without checking it
+// (#0055's phase-3 review) -- so the handler itself must reject an unsafe
+// value, not just the editor.
+
+func TestIsSafeCoverImage(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"site-relative path", "/assets/workshops/soldering.jpg", true},
+		{"bare root", "/", true},
+		{"protocol-relative", "//evil.host/x.jpg", false},
+		{"backslash-backslash (normalizes to protocol-relative)", `\\evil.host/x.jpg`, false},
+		{"slash-backslash (normalizes to protocol-relative)", `/\evil.host/x.jpg`, false},
+		{"backslash-slash (normalizes to protocol-relative)", `\/evil.host/x.jpg`, false},
+		{"absolute https to another host", "https://example.com/cover.jpg", false},
+		{"absolute http", "http://example.com/cover.jpg", false},
+		{"javascript scheme", "javascript:alert(1)", false},
+		{"no leading slash", "assets/cover.jpg", false},
+		{"empty", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isSafeCoverImage(c.value); got != c.want {
+				t.Errorf("isSafeCoverImage(%q) = %v, want %v", c.value, got, c.want)
+			}
+		})
+	}
+}
+
+func TestAdminWorkshops_CreateRejectsUnsafeCoverImage(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-badcover@example.com")
+	seedSession(t, pool, admin, "workshops-admin-badcover-token")
+
+	badValues := []string{"//evil.host/x.jpg", `\\evil.host/x.jpg`, "https://evil.host/x.jpg"}
+	for _, v := range badValues {
+		title := uniqueAdminWorkshopTitle(t)
+		body := fmt.Sprintf(`{"title":%q,"cover_image":%q}`, title, v)
+		resp := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/admin/workshops", "workshops-admin-badcover-token", body)
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("POST /admin/workshops with cover_image=%q status = %d, want 400 (body=%s)", v, resp.StatusCode, respBody)
+		}
+	}
+}
+
+func TestAdminWorkshops_CreateAcceptsSafeCoverImageAndRoundTrips(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-goodcover@example.com")
+	seedSession(t, pool, admin, "workshops-admin-goodcover-token")
+
+	title := uniqueAdminWorkshopTitle(t)
+	body := fmt.Sprintf(`{"title":%q,"cover_image":"/assets/workshops/soldering.jpg"}`, title)
+	resp := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/admin/workshops", "workshops-admin-goodcover-token", body)
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /admin/workshops with safe cover_image status = %d, want 201 (body=%s)", resp.StatusCode, respBody)
+	}
+	var created struct {
+		ID         int64  `json:"id"`
+		CoverImage string `json:"cover_image"`
+	}
+	if err := json.Unmarshal(respBody, &created); err != nil {
+		t.Fatalf("decode created workshop: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, created.ID)
+	if created.CoverImage != "/assets/workshops/soldering.jpg" {
+		t.Errorf("created.CoverImage = %q, want %q", created.CoverImage, "/assets/workshops/soldering.jpg")
+	}
+}
+
+func TestAdminWorkshops_PatchRejectsUnsafeCoverImage(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-patchbadcover@example.com")
+	seedSession(t, pool, admin, "workshops-admin-patchbadcover-token")
+
+	store := workshops.NewStore(pool)
+	target, err := store.Create(context.Background(), workshops.CreateInput{Title: uniqueAdminWorkshopTitle(t)})
+	if err != nil {
+		t.Fatalf("seed target workshop: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, target.ID)
+
+	resp := doJSON(t, srv.Client(), http.MethodPatch, fmt.Sprintf("%s/admin/workshops/%d", srv.URL, target.ID),
+		"workshops-admin-patchbadcover-token", `{"cover_image":"//evil.host/x.jpg"}`)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("PATCH cover_image=//evil.host/x.jpg status = %d, want 400 (body=%s)", resp.StatusCode, body)
+	}
+
+	after, err := store.GetByID(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("reload workshop: %v", err)
+	}
+	if after.CoverImage != nil {
+		t.Errorf("after rejected PATCH, CoverImage = %v, want nil (unchanged)", after.CoverImage)
+	}
+}
+
+func TestAdminWorkshops_PatchAcceptsSafeCoverImageAndRoundTrips(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-patchgoodcover@example.com")
+	seedSession(t, pool, admin, "workshops-admin-patchgoodcover-token")
+
+	store := workshops.NewStore(pool)
+	target, err := store.Create(context.Background(), workshops.CreateInput{Title: uniqueAdminWorkshopTitle(t)})
+	if err != nil {
+		t.Fatalf("seed target workshop: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, target.ID)
+
+	resp := doJSON(t, srv.Client(), http.MethodPatch, fmt.Sprintf("%s/admin/workshops/%d", srv.URL, target.ID),
+		"workshops-admin-patchgoodcover-token", `{"cover_image":"/assets/workshops/soldering.jpg"}`)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH with safe cover_image status = %d, want 200 (body=%s)", resp.StatusCode, body)
+	}
+
+	after, err := store.GetByID(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("reload workshop: %v", err)
+	}
+	if after.CoverImage == nil || *after.CoverImage != "/assets/workshops/soldering.jpg" {
+		t.Errorf("after.CoverImage = %v, want \"/assets/workshops/soldering.jpg\"", after.CoverImage)
+	}
+}
+
 // ── Patch: status transitions and audit action naming ──────────────────────────
 
 func TestAdminWorkshops_PatchPublishUnpublishCancel(t *testing.T) {

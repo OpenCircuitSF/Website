@@ -468,7 +468,7 @@
         />
       </div>
       <div class="field">
-        <label for="workshop-cover-image">Cover image (path or URL)</label>
+        <label for="workshop-cover-image">Cover image (site-relative path)</label>
         <input
           id="workshop-cover-image"
           type="text"
@@ -476,8 +476,9 @@
           disabled={saving}
         />
         <p class="text-muted cover-hint">
-          A site-relative path (e.g. "/assets/workshops/soldering.jpg") or an http(s) URL --
-          there is no upload control here (the API has no upload endpoint yet).
+          A site-relative path (e.g. "/assets/workshops/soldering.jpg") -- there is no upload
+          control here (#0138: no upload endpoint exists, by design -- see PRD §5.2) and an
+          external URL is not accepted (CLAUDE.md §9: no external CDNs).
         </p>
       </div>
     </Panel>

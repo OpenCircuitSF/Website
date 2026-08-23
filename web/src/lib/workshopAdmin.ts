@@ -27,12 +27,33 @@
 // reviewer to decide whether #0052's criterion or #0051's committed API
 // contract is the one that needs to change.
 //
-// # Cover image: path/URL entry only, no upload
+// # Cover image: path entry only, no upload, same-origin only (#0138)
 // #0051's API has no upload endpoint (no multipart route, no storage
 // integration) and adding one is a backend change outside this issue's
-// admin-UI-only scope. This module and the editor support "cover image ...
-// path entry" (a site-relative path or an http(s) URL saved to
-// cover_image), not "upload".
+// admin-UI-only scope -- #0138 struck #0052's "upload or path entry"
+// criterion for exactly this reason: no storage location, size/type limit,
+// or serving path has ever been designed, PRD §5.2 does not ask for an
+// upload route, and nothing else in the product uploads a file, so an
+// upload endpoint deserves its own issue rather than riding in on this one.
+// Path entry is the intended v1 behavior.
+//
+// #0138 also closed a hole in what path entry accepted: isSafeCoverImage
+// used to also accept a full http(s) URL, including one to another host --
+// entirely reasonable-looking, since an admin might paste a photo's URL --
+// but CLAUDE.md §9 ("no external CDNs ... self-contained by design") and
+// PRD §6.2's own schema comment ("cover_image TEXT, -- path under /assets")
+// both say a cover image belongs on THIS site. An absolute URL to another
+// host loads that host's asset on every page view (a referer leak, and a
+// dependency on a server this project doesn't control) -- exactly the thing
+// §9 rules out. So cover_image now accepts ONLY a site-relative path: a
+// leading "/" and nothing else that could resolve off-site. This is a
+// narrower rule than #0138 applied to Markdown *link* destinations
+// (renderMarkdownPreview / isSafeLinkHref in ./markdown, also touched by
+// #0138): a link is a navigation the reader chooses to follow, so an
+// absolute https:// URL to any host stays allowed there (a workshop's
+// signup_url is routinely an external ticketing site) -- an image is a load
+// the page performs on the reader's behalf without asking, so it gets the
+// tighter, same-origin-only rule.
 
 import type { AdminWorkshop } from './types';
 
@@ -264,14 +285,30 @@ export interface ValidatedWorkshopFields {
   interest_ids: number[];
 }
 
-/** Whether a URL uses http:// or https:// -- used for both signup_url and an http(s) cover image. */
+/** Whether a URL uses http:// or https:// -- used for signup_url. */
 function isHttpUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
 
-/** Whether a cover image value is a site-relative path or an http(s) URL -- never a javascript:/data: scheme. */
+/**
+ * Whether a cover image value is a site-relative path -- SAME-ORIGIN ONLY
+ * (#0138; see this module's header note for why an http(s) URL to another
+ * host, previously accepted here, no longer is).
+ *
+ * A single leading "/" is required. That alone isn't enough: a value
+ * starting with "//" is a protocol-relative URL (`//evil.host/x` resolves
+ * against the page's own scheme but a DIFFERENT host -- an off-site load,
+ * not a path), and a browser's URL parser treats a leading backslash the
+ * same as a forward slash when resolving a relative reference against a
+ * special (http/https) base, so `\evil.host/x` and `/\evil.host/x` both
+ * normalize to that same off-site `//evil.host/x` form. Normalizing
+ * backslashes to slashes before the "//" check catches both spellings with
+ * one rule instead of a per-string denylist.
+ */
 function isSafeCoverImage(value: string): boolean {
-  return value.startsWith('/') || isHttpUrl(value);
+  if (!value.startsWith('/')) return false;
+  const normalized = value.replace(/\\/g, '/');
+  return !normalized.startsWith('//');
 }
 
 /**
@@ -323,7 +360,8 @@ export function validateWorkshopForm(
   const coverImage = fields.coverImage.trim();
   if (coverImage !== '' && !isSafeCoverImage(coverImage)) {
     return {
-      error: 'Cover image must be a site-relative path (starting with "/") or an http(s) URL.',
+      error:
+        'Cover image must be a site-relative path starting with "/" (e.g. "/assets/workshops/soldering.jpg") -- an external URL is not accepted.',
     };
   }
 

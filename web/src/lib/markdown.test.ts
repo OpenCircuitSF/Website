@@ -70,6 +70,14 @@ describe('renderMarkdownPreview', () => {
     expect(renderMarkdownPreview('[x](data:text/html,evil)')).toBe('<p>x</p>');
   });
 
+  // #0138: a protocol-relative destination has no scheme by the naive
+  // letter-first test, but resolves off-site exactly like an absolute URL
+  // would -- it must be dropped the same way javascript:/data: are, not
+  // treated as a safe relative path.
+  it('drops markup for a protocol-relative link destination', () => {
+    expect(renderMarkdownPreview('[x](//evil.host/y)')).toBe('<p>x</p>');
+  });
+
   it('mixes block and inline elements in one document', () => {
     const out = renderMarkdownPreview('# Soldering 101\n\nLearn to **solder** with us.\n\n- Bring safety glasses\n- Bring a multimeter');
     expect(out).toBe(
@@ -143,6 +151,33 @@ describe('isSafeLinkHref', () => {
       expect(isSafeLinkHref('/workshops/soldering-101')).toBe(true);
       expect(isSafeLinkHref('mailto:hello@opencircuitsf.com')).toBe(true);
       expect(isSafeLinkHref('/a_b_c?utm_source=newsletter')).toBe(true);
+    });
+  });
+
+  // #0138, found by #0052's pass-2 review: "no scheme = relative, therefore
+  // safe" let a PROTOCOL-RELATIVE destination through -- `//evil.host/x` has
+  // no scheme by HAS_SCHEME's letter-first test, but a browser resolves it
+  // against the current page's own scheme with a DIFFERENT host, same as an
+  // absolute URL to that host would. A leading backslash normalizes to the
+  // same thing for a special (http/https) base. #0054's hasExternalSignup
+  // (workshopDetail.ts) reuses this exact function for signup_url, so it
+  // inherits this same fix.
+  describe('protocol-relative off-site destinations (#0138)', () => {
+    it('rejects a bare protocol-relative href', () => {
+      expect(isSafeLinkHref('//evil.host/x')).toBe(false);
+    });
+
+    it('rejects backslash-disguised protocol-relative hrefs', () => {
+      expect(isSafeLinkHref('\\\\evil.host/x')).toBe(false);
+      expect(isSafeLinkHref('/\\evil.host/x')).toBe(false);
+      expect(isSafeLinkHref('\\/evil.host/x')).toBe(false);
+    });
+
+    it('still accepts the narrower, legitimate cases', () => {
+      expect(isSafeLinkHref('/img/x.png')).toBe(true);
+      expect(isSafeLinkHref('/workshops/soldering-101')).toBe(true);
+      expect(isSafeLinkHref('https://eventbrite.com/e/soldering-101')).toBe(true);
+      expect(isSafeLinkHref('mailto:hello@opencircuitsf.com')).toBe(true);
     });
   });
 });

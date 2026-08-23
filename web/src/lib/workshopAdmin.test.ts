@@ -310,17 +310,38 @@ describe('validateWorkshopForm', () => {
     expect(
       validateWorkshopForm(blankFields({ title: 'X', coverImage: 'javascript:alert(1)' })),
     ).toEqual({
-      error: 'Cover image must be a site-relative path (starting with "/") or an http(s) URL.',
+      error:
+        'Cover image must be a site-relative path starting with "/" (e.g. "/assets/workshops/soldering.jpg") -- an external URL is not accepted.',
     });
   });
 
-  it('accepts a site-relative path or http(s) URL cover image', () => {
-    expect('error' in validateWorkshopForm(blankFields({ title: 'X', coverImage: '/assets/cover.jpg' }))).toBe(
-      false,
-    );
+  it('accepts a site-relative path cover image', () => {
     expect(
-      'error' in validateWorkshopForm(blankFields({ title: 'X', coverImage: 'https://example.com/cover.jpg' })),
+      'error' in validateWorkshopForm(blankFields({ title: 'X', coverImage: '/assets/cover.jpg' })),
     ).toBe(false);
+  });
+
+  // #0138: cover_image is now same-origin only -- an http(s) URL to ANY
+  // host, including this reasonable-looking one, is rejected. See
+  // workshopAdmin.ts's header note for why images and Markdown links (the
+  // signup URL is checked separately, above, via isHttpUrl -- it's fine for
+  // that to stay external) get different rules.
+  it('rejects an absolute http(s) URL cover image, even to a plausible host', () => {
+    expect(
+      'error' in
+        validateWorkshopForm(blankFields({ title: 'X', coverImage: 'https://example.com/cover.jpg' })),
+    ).toBe(true);
+  });
+
+  // #0138: protocol-relative and backslash-normalized-protocol-relative
+  // cover images resolve off-site exactly like an absolute URL would --
+  // //evil.host is not "just a path" and must be rejected the same way.
+  it('rejects protocol-relative and backslash-disguised cover images', () => {
+    for (const value of ['//evil.host/x.jpg', '\\\\evil.host/x.jpg', '/\\evil.host/x.jpg']) {
+      expect('error' in validateWorkshopForm(blankFields({ title: 'X', coverImage: value }))).toBe(
+        true,
+      );
+    }
   });
 
   it('carries interest_ids straight through', () => {

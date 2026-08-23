@@ -263,6 +263,11 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	coverImage := normalizeOptionalCampaignField(req.CoverImage)
+	if coverImage != nil && !isSafeCoverImage(*coverImage) {
+		writeError(w, http.StatusBadRequest, coverImageErrorMessage)
+		return
+	}
 
 	created, err := h.store.Create(r.Context(), workshops.CreateInput{
 		Title:           title,
@@ -275,7 +280,7 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		LocationNote:    normalizeOptionalCampaignField(req.LocationNote),
 		Capacity:        req.Capacity,
 		SignupURL:       normalizeOptionalCampaignField(req.SignupURL),
-		CoverImage:      normalizeOptionalCampaignField(req.CoverImage),
+		CoverImage:      coverImage,
 		InterestIDs:     req.InterestIDs,
 	})
 	switch {
@@ -426,7 +431,12 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 	coverImage := current.CoverImage
 	if req.CoverImage != nil {
-		coverImage = normalizeOptionalCampaignField(req.CoverImage)
+		normalized := normalizeOptionalCampaignField(req.CoverImage)
+		if normalized != nil && !isSafeCoverImage(*normalized) {
+			writeError(w, http.StatusBadRequest, coverImageErrorMessage)
+			return
+		}
+		coverImage = normalized
 	}
 	status := current.Status
 	if req.Status != nil {
@@ -586,6 +596,40 @@ func parseWorkshopID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+// coverImageErrorMessage is the 400 body for a cover_image that fails
+// isSafeCoverImage, shared by Create and Patch.
+const coverImageErrorMessage = `cover_image must be a site-relative path starting with "/" (an absolute URL to another host is not accepted)`
+
+// isSafeCoverImage validates cover_image AT THE API BOUNDARY (#0138, found
+// by #0055's phase-3 review): the admin editor already runs an equivalent
+// check client-side (web/src/lib/workshopAdmin.ts's isSafeCoverImage), but
+// client-side validation doesn't protect a value that arrives by any other
+// path -- a hand-crafted request, a future import route, a bug in the
+// editor -- and a garbage cover_image reaches internal/seo's absoluteURL
+// unvalidated, which prefixes whatever the column holds into a syntactically
+// invalid `image` URL in JSON-LD (#0055) and `og:image` (#0019).
+//
+// The accepted set mirrors the TypeScript twin exactly, and for the same
+// reason: CLAUDE.md §9 ("no external CDNs ... self-contained by design") and
+// PRD §6.2's own schema comment ("cover_image TEXT, -- path under /assets")
+// both say a cover image belongs on THIS site, so an absolute URL to any
+// other host -- which loads that host's asset (and leaks a referer) on
+// every page view -- is refused outright, not merely restricted to https.
+// A single leading "/" is required, and a leading "//" is rejected as
+// protocol-relative (same scheme as the page, different host -- exactly as
+// off-site as an absolute URL would be); a browser's URL parser treats a
+// leading backslash the same as a forward slash for a special (http/https)
+// base, so "\evil.host/x" and "/\evil.host/x" both normalize to that same
+// "//evil.host/x" form and are caught by normalizing backslashes to
+// slashes before the "//" check.
+func isSafeCoverImage(v string) bool {
+	if !strings.HasPrefix(v, "/") {
+		return false
+	}
+	normalized := strings.ReplaceAll(v, `\`, "/")
+	return !strings.HasPrefix(normalized, "//")
 }
 
 // parseOptionalTime parses an optional RFC 3339 timestamp field. A nil or
