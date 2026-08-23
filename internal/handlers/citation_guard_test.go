@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -183,10 +184,18 @@ var skipVendoredDirNames = map[string]bool{
 // scanDirForCitations parses every non-test .go file under root — recursing
 // into subdirectories, since internal/ and cmd/ both nest packages — and
 // returns every string literal that matches citationPattern.
-func scanDirForCitations(t *testing.T, root string) []citationViolation {
+//
+// #0200: it also returns the path of every file it collected (parsed),
+// alongside the violations. This is instrumentation on the shipped
+// collection step, not a second implementation of it — the same WalkDir
+// call, the same skipVendoredDirNames check, the same suffix filter — so
+// TestScanDirForCitationsCollectsExactlyDiskFiles below can compare what
+// the real guard walked against what is actually on disk, and a change to
+// the skip logic here is automatically visible to that test without also
+// needing to be mirrored into it.
+func scanDirForCitations(t *testing.T, root string) (violations []citationViolation, collected []string) {
 	t.Helper()
 
-	var violations []citationViolation
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -201,6 +210,7 @@ func scanDirForCitations(t *testing.T, root string) []citationViolation {
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			return nil
 		}
+		collected = append(collected, path)
 
 		fset := token.NewFileSet()
 		file, perr := parser.ParseFile(fset, path, nil, 0)
@@ -214,7 +224,7 @@ func scanDirForCitations(t *testing.T, root string) []citationViolation {
 	if err != nil {
 		t.Fatalf("walk %s: %v", root, err)
 	}
-	return violations
+	return violations, collected
 }
 
 // scanFileForCitations walks only *ast.BasicLit string-literal nodes —
@@ -257,7 +267,8 @@ func TestNoAdminFacingStringCitesInternalDocs(t *testing.T) {
 	var all []citationViolation
 	for _, rel := range scanGoRoots {
 		dir := filepath.Join(baseDir, rel)
-		all = append(all, scanDirForCitations(t, dir)...)
+		v, _ := scanDirForCitations(t, dir)
+		all = append(all, v...)
 	}
 
 	if len(all) == 0 {
@@ -411,4 +422,103 @@ func TestCitationPatternAcceptsDocsURLFalsePositive(t *testing.T) {
 	if !citationPattern.MatchString("see https://example.com/docs/guide.md for details") {
 		t.Fatal("citationPattern no longer matches the accepted external-URL false positive — update the #0187 comment above citationPattern if this was deliberate")
 	}
+}
+
+// TestScanDirForCitationsCollectsExactlyDiskFiles is #0200: the 95/95
+// walk-coverage invariant, pinned as a permanent test instead of being
+// re-derived by scratch probe and thrown away a sixth time (#0181 review
+// pass 2, #0187's implementation, #0187's review, #0194's implementation,
+// #0194's review all did this and kept none of it).
+//
+// It runs against the shipped scanDirForCitations — the same function
+// TestNoAdminFacingStringCitesInternalDocs above uses for the real guard,
+// now also returning the paths it collected — rather than re-implementing
+// its walk predicate; a replica could not notice the shipped walk
+// narrowing, which is exactly the failure mode this test exists to catch
+// (see #0197 on this tracker's history of that mistake).
+//
+// "on disk" is a second, independent enumeration of the same three
+// scanGoRoots with NO skip logic of any kind — not even a reuse of
+// skipVendoredDirNames — because reusing that map here would make this
+// test blind to precisely the bug it is meant to catch: skipVendoredDirNames
+// matches a directory by name at any depth, so a genuine, non-vendored
+// directory that happens to be named "node_modules" or "dist" (see that
+// map's own doc comment on internal/dist as the live example) is swallowed
+// by the shipped walk today with nothing failing. Comparing against a walk
+// that shares the same exclusion would swallow it identically and the
+// mismatch would never surface.
+//
+// Both directions are checked and reported separately: a file present on
+// disk but not collected means the shipped walk is narrowing (the
+// internal/dist scenario above); a file collected but not on disk means
+// something else entirely (a stale path, a symlink, a duplicate walk
+// entry) — different causes, so the message names each set rather than
+// just reporting "sets differ".
+func TestScanDirForCitationsCollectsExactlyDiskFiles(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	baseDir := filepath.Dir(thisFile)
+
+	collected := map[string]bool{}
+	onDisk := map[string]bool{}
+	for _, rel := range scanGoRoots {
+		dir := filepath.Join(baseDir, rel)
+
+		_, files := scanDirForCitations(t, dir)
+		for _, p := range files {
+			collected[p] = true
+		}
+
+		err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			name := entry.Name()
+			if strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
+				onDisk[path] = true
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", dir, err)
+		}
+	}
+
+	var uncollected, extra []string
+	for p := range onDisk {
+		if !collected[p] {
+			uncollected = append(uncollected, p)
+		}
+	}
+	for p := range collected {
+		if !onDisk[p] {
+			extra = append(extra, p)
+		}
+	}
+	if len(uncollected) == 0 && len(extra) == 0 {
+		return
+	}
+	sort.Strings(uncollected)
+	sort.Strings(extra)
+
+	var b strings.Builder
+	b.WriteString("scanDirForCitations's collected file set does not match the non-test .go files on disk under scanGoRoots:\n")
+	if len(uncollected) > 0 {
+		b.WriteString("  present on disk but NOT collected (skipVendoredDirNames may be swallowing a real directory):\n")
+		for _, p := range uncollected {
+			b.WriteString("    " + p + "\n")
+		}
+	}
+	if len(extra) > 0 {
+		b.WriteString("  collected but NOT present on disk (stale path, symlink, or duplicate walk entry):\n")
+		for _, p := range extra {
+			b.WriteString("    " + p + "\n")
+		}
+	}
+	t.Fatal(b.String())
 }
