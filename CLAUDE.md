@@ -417,10 +417,13 @@ WEBAUTHN_RP_ORIGIN=https://www.opencircuitsf.com   # must match the browser's re
 These two are **not** interchangeable. A mismatch fails passkey ceremonies with
 an opaque error — check it first if a Phase 1 ceremony fails.
 
-> **Known defect in the tracker:** `#0064`'s acceptance criteria say the vhost
-> should redirect `www` → apex. Production does the opposite, and
-> `WEBAUTHN_RP_ORIGIN` depends on www staying canonical. Correct that criterion
-> before implementing `#0064`.
+> **Settled 2026-08-18 — do not "fix" this back.** `#0064`'s vhost criterion now
+> correctly reads **apex → `www`**, matching production and
+> `deploy/apache/opencircuitsf.com.conf` (`ServerName www.…`, `RewriteCond
+> %{HTTP_HOST} !^www\.`). It once read the reverse; that was the defect, and it
+> was corrected in the issue itself, which carries the correction note.
+> `WEBAUTHN_RP_ORIGIN` depends on www staying canonical, so a passkey ceremony
+> fails with an opaque error if this is inverted again.
 
 ## 8. Gotchas that already cost someone a day
 
@@ -630,13 +633,20 @@ assume during that window that *nothing* is protecting the data underneath it.
 
 ## 10. Open items blocking later phases
 
+**Deployment is deliberately deferred** (user, 2026-08-23): no live site until
+enough features are ready. Develop and verify against **localhost with mocked
+services** — SES especially. An issue that can only be proved against real
+infrastructure is not blocked work to be attempted anyway; it is work to be
+built against a mock now and validated on the box later. Say which of the two a
+verification claim rests on.
+
 Started on other people's clocks, not code. Track them; do not let a phase
 stall silently on one.
 
 | # | Item | Blocks | Status |
 |---|---|---|---|
 | 1 | Rename the GitHub repo to `OpenCircuitSF` | `#0001` housekeeping | not done |
-| 2 | SES: verify domain in `us-west-2`, Easy DKIM, custom MAIL FROM, DMARC at `p=none`, request production access | real sends from Phase 3; sandbox is enough to develop against | not started |
+| 2 | SES: verify domain in `us-west-2`, Easy DKIM, custom MAIL FROM, DMARC at `p=none`, request production access | real sends from Phase 3 | **deferred to deployment (user, 2026-08-23).** SES will be configured on the EC2 box and tested there. Until then **develop against mocks** — do not block an issue on SES existing, and do not attempt live SES calls: the credentials on this machine are `certbot-dns-updater`, which cannot even `ses:ListEmailIdentities` |
 | 3 | Physical mailing address (PO box) | `#0045` refuses to start a campaign without it — Phase 5 | not started |
 | 4 | Sending identity (`hello@` vs `workshops@`) and **who reads that inbox** | Phase 3 — **but load-bearing now** | undecided. `#0075` published a privacy policy routing erasure and data-export requests to `hello@opencircuitsf.com`. The page is honest either way, but the commitment only works if someone reads that mailbox from the day it ships |
 | 5 | Whether the domain needs human mailboxes — determines apex MX | Phase 0 DNS | undecided; PRD §14 Q3 |
@@ -648,7 +658,7 @@ that needs cost accounting; refresh once per day.
 
 ## 11. PRD section index
 
-`PRD.md` is 1,769 lines (~21k tokens). **Never read it whole.** Every issue's
+`PRD.md` is 1,798 lines (~21k tokens). **Never read it whole.** Every issue's
 `## Relation` block names the section it needs and carries the exact extraction
 command; run that. This table is the fallback when you need a section no issue
 cites.
@@ -674,9 +684,9 @@ the PRD.
 | **§5 Information Architecture** | 39 | `sed -n '/^## 5\. /,/^## [0-9]/p' PRD.md` |
 | §5.1 Public routes | 18 | `sed -n '/^### 5\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §5.2 Admin routes (session + `is_admin` required) | 19 | `sed -n '/^### 5\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§6 Mailing List — The Core Subsystem** | 903 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
+| **§6 Mailing List — The Core Subsystem** | 933 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
 | §6.1 Interest taxonomy | 23 | `sed -n '/^### 6\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §6.2 Database schema | 296 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.2 Database schema | 326 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.3 Subscription flow (double opt-in) | 56 | `sed -n '/^### 6\.3 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.4 Preference center | 16 | `sed -n '/^### 6\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.5 Unsubscribe — three paths, all required | 93 | `sed -n '/^### 6\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
@@ -705,14 +715,17 @@ the PRD.
 | **§11 Security and Compliance** | 35 | `sed -n '/^## 11\. /,/^## [0-9]/p' PRD.md` |
 | **§12 Phased Build Plan** | 63 | `sed -n '/^## 12\. /,/^## [0-9]/p' PRD.md` |
 | **§13 Issue Breakdown** | 49 | `sed -n '/^## 13\. /,/^## [0-9]/p' PRD.md` |
-| **§14 Open Questions** | 15 | `sed -n '/^## 14\. /,/^## [0-9]/p' PRD.md` |
+| **§14 Open Questions** | 14 | `sed -n '/^## 14\. /,/^## [0-9]/p' PRD.md` |
 
 Bold rows are whole top-level sections and include their subsections. §6 (the
-mailing list) is 903 lines — take the subsection, not the parent.
+mailing list) is 933 lines — take the subsection, not the parent.
 
 §6.10 includes §6.10.1 (import invite mode).
 
-**Regenerated 2026-08-21**, twice: when Phase 8 (§6.8–§6.11) was added, and
-again after the currency pass that synced §6.2, §8, and §9 to what actually
-shipped. Three rows had already drifted before either (`#0113`); every row above
-is recomputed from the current file.
+**Regenerated 2026-08-23** (`#0113`): every row was recomputed by running its
+own `sed` command against the current file. `#0148`'s §6.2 fix (workshops-index
+drift) had widened §6.2 by 30 lines and, with it, its §6 parent, without
+touching this table — proof that a prior "every row recomputed" note does not
+stay true past the next PRD edit. §14 had also drifted by one line, cause
+untraced. No guard in the Go suite reads this table; see `#0113`'s
+implementation notes for whether one was added.
