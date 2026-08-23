@@ -196,8 +196,9 @@
   // A stable, template-safe stand-in confirmation string equal to the live
   // count itself — this editor-level gate answers "is everything besides
   // the operator's confirmation ready", never the real confirmation (that
-  // lives inside CampaignSendDialog, which re-evaluates sendGuardState
-  // against what the operator actually typed).
+  // lives inside CampaignSendDialog, which since #0186 calls sendGuardState
+  // itself — with its own `inFlight` and `confirmRaw` — against what the
+  // operator actually typed, rather than this stand-in).
   let editorGuard = $derived(
     sendGuardState({
       status: campaign?.status ?? '',

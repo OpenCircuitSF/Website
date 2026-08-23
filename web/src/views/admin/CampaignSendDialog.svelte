@@ -8,12 +8,17 @@
   nothing.
 
   Markup and wiring only — every decision (whether the typed count matches,
-  the hint text) is a call into lib/sendConfirm.ts. This component holds no
-  comparison, no `.trim()`, and no status literal of its own.
+  the hint text, whether the Send control may act) is a call into
+  lib/sendConfirm.ts, via sendGuardState's `.kind` (#0186). This component
+  holds no comparison and no `.trim()` of its own. The one literal it does
+  hold is `status: 'draft'` in that sendGuardState call — a documented
+  stand-in, not a re-derivation: the parent never mounts this dialog outside
+  draft status (see the `guard` derivation's own comment below).
 -->
+
 <script lang="ts">
   import { tick } from 'svelte';
-  import { normalizeCountInput, confirmMatches, confirmHint } from '../../lib/sendConfirm';
+  import { confirmHint, sendGuardState } from '../../lib/sendConfirm';
   import type { PreflightResponse, UnmetRequirement } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
 
@@ -31,8 +36,39 @@
   let confirmRaw = $state('');
   let dialogEl = $state<HTMLDivElement | null>(null);
 
+  // #0186: the single source of truth for the Send control's guard state
+  // (lib/sendConfirm.ts's own doc comment) — this dialog must branch on
+  // `.kind`, never recompute `inFlight`/`unmet` conditions itself. `status`
+  // is hardcoded to 'draft' rather than threaded as a prop: the parent only
+  // ever mounts this dialog while the campaign is draft (CampaignEditor's
+  // onOpenSend gates on sendGateOpen) and closes it before a successful
+  // send can move status past draft, so 'draft' is the one value it can
+  // ever legitimately hold for as long as this component exists — the same
+  // kind of documented stand-in CampaignEditor's own editorGuard uses.
+  let guard = $derived(
+    sendGuardState({
+      status: 'draft',
+      unmet,
+      audienceCount: summary.recipients,
+      confirmRaw,
+      inFlight,
+    }),
+  );
+  // `sending` replaces the old raw `inFlight` boolean everywhere below it
+  // was used to disable controls — identical truth value (status is always
+  // 'draft' here, and sendGuardState checks `inFlight` before `unmet`, so
+  // `kind === 'sending'` iff `inFlight`), but now routed through the guard.
+  let sending = $derived(guard.kind === 'sending');
+  // `blockedAgain` replaces the old `unmet.length > 0` -- also routed
+  // through the guard now, so it correctly defers to `sending` in the one
+  // state where both were true at once (a retry submitted while the
+  // pre-send checks had just failed again): `sendGuardState` checks
+  // `inFlight` before `unmet`, so this panel steps aside for "Sending…"
+  // instead of showing "no longer ready" copy that invites yet another
+  // retry click while one is already outstanding — see this module's
+  // header on why that precedence is not cosmetic.
+  let blockedAgain = $derived(guard.kind === 'blocked');
   let hint = $derived(confirmHint(confirmRaw, summary.recipients));
-  let blockedAgain = $derived(unmet.length > 0);
   let fromDisplay = $derived(summary.from === '' ? 'Not configured' : summary.from);
 
   $effect(() => {
@@ -44,26 +80,28 @@
   });
 
   function handleKeydown(e: KeyboardEvent): void {
-    if (e.key === 'Escape' && !inFlight) {
+    if (e.key === 'Escape' && !sending) {
       onClose();
     }
   }
 
   function handleSubmit(e: SubmitEvent): void {
     e.preventDefault();
-    if (inFlight) return;
-    const n = normalizeCountInput(confirmRaw);
-    if (n === null || !confirmMatches(confirmRaw, summary.recipients)) {
-      return;
-    }
-    onConfirm(n);
+    // #0186: was `if (inFlight) return;` followed by a re-derived
+    // count/match check that never looked at `unmet` at all -- a retry
+    // typed correctly while `blockedAgain` was showing could still reach
+    // onConfirm. Routing through `.kind === 'ready'` closes that gap: ready
+    // implies confirmMatches(confirmRaw, summary.recipients), so the
+    // confirmed count IS summary.recipients, with no need to re-derive it.
+    if (guard.kind !== 'ready') return;
+    onConfirm(summary.recipients);
   }
 </script>
 
 <div
   class="modal-backdrop"
   role="presentation"
-  onclick={() => !inFlight && onClose()}
+  onclick={() => !sending && onClose()}
   onkeydown={handleKeydown}
 >
   <div
@@ -112,7 +150,7 @@
           inputmode="numeric"
           autocomplete="off"
           bind:value={confirmRaw}
-          disabled={inFlight}
+          disabled={sending}
         />
         {#if hint}
           <p class="text-muted confirm-hint">{hint}</p>
@@ -124,10 +162,10 @@
       {/if}
 
       <div class="row send-actions">
-        <Button type="submit" variant="danger" disabled={inFlight}>
-          {inFlight ? 'Sending…' : 'Send now'}
+        <Button type="submit" variant="danger" disabled={sending}>
+          {sending ? 'Sending…' : 'Send now'}
         </Button>
-        <Button type="button" disabled={inFlight} onclick={onClose}>Cancel</Button>
+        <Button type="button" disabled={sending} onclick={onClose}>Cancel</Button>
       </div>
     </form>
   </div>
