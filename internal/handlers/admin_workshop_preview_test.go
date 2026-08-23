@@ -167,11 +167,11 @@ func TestAdminWorkshopPreview_IgnoresRequestBody(t *testing.T) {
 // emitted `<a href="...">` would actually RESOLVE to a javascript:/data:
 // navigation. This is deliberately narrower than "does the HTML contain the
 // substring javascript: anywhere" -- see
-// TestRenderWorkshopBodyHTML_LeadingControlCharPercentEncodedNotStripped's
-// doc comment for why a percent-encoded control-character prefix
-// (`href="%01javascript:..."`) contains that substring textually while
-// never being interpreted as the javascript: scheme by a URL parser. A
-// substring check that doesn't distinguish the two would fail on safe
+// TestRenderWorkshopBodyHTML_SafetyPayloads's doc comment (the "leading
+// U+0001 control char" case) for why a percent-encoded control-character
+// prefix (`href="%01javascript:..."`) contains that substring textually
+// while never being interpreted as the javascript: scheme by a URL parser.
+// A substring check that doesn't distinguish the two would fail on safe
 // output.
 func hrefStartsWithDangerousScheme(html string) bool {
 	lower := strings.ToLower(html)
