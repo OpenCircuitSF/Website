@@ -181,6 +181,15 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		return requireSession(middleware.RequireAdmin(next))
 	}
 
+	// #0054: a real *seo.Site, built the same way production does (via
+	// buildSEOSite) so this test exercises the real GET /sitemap.xml /
+	// GET /robots.txt routes rather than a nil that would panic
+	// site.Middleware/SitemapHandler.
+	site, err := buildSEOSite(cfg, nil)
+	if err != nil {
+		t.Fatalf("build seo site: %v", err)
+	}
+
 	errCh := make(chan error, 1)
 	ready := make(chan struct{})
 	go func() {
@@ -189,6 +198,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
+			site,
 			requireSession, requireAdmin, nil, ready)
 	}()
 

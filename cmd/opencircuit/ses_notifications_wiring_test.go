@@ -168,6 +168,12 @@ func sesWiringStartServer(t *testing.T, pool *pgxpool.Pool, sesNotifyH *handlers
 		return requireSession(middleware.RequireAdmin(next))
 	}
 
+	// #0054: a real *seo.Site, built the same way production does.
+	site, err := buildSEOSite(cfg, nil)
+	if err != nil {
+		t.Fatalf("build seo site: %v", err)
+	}
+
 	errCh = make(chan error, 1)
 	ready := make(chan struct{})
 	go func() {
@@ -187,6 +193,7 @@ func sesWiringStartServer(t *testing.T, pool *pgxpool.Pool, sesNotifyH *handlers
 			nil, /* publicWorkshopsH: not exercised by this test */
 			sesNotifyH,
 			nil, /* sendWorker: not exercised by this test */
+			site,
 			requireSession, requireAdmin, nil, ready)
 	}()
 

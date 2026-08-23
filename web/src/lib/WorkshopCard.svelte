@@ -6,11 +6,9 @@
   // fallback) is a call into lib/workshops.ts, per CLAUDE.md's "SPA logic goes
   // in plain TypeScript modules ... Svelte components stay thin."
   //
-  // The title links to /workshops/{slug} (#0054's future detail page). The
-  // History API router (#0014) already resolves that path to the
-  // 'workshop-detail' route name; until #0054 builds the view, App.svelte's
-  // catch-all renders its generic "this page is on the way" placeholder for
-  // it, which is an honest state for a link that exists ahead of its target.
+  // The title links to /workshops/{slug} -- WorkshopDetail.svelte (#0054).
+  // The History API router (#0014) resolves that path to the
+  // 'workshop-detail' route name, which App.svelte routes to that view.
   import Panel from './Panel.svelte';
   import { formatWorkshopDate, workshopLocationLabel, workshopBadgeLabel } from './workshops';
   import type { PublicWorkshop } from './types';

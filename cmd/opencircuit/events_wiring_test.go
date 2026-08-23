@@ -78,6 +78,12 @@ func TestMountAndServe_EventsRequiresSessionAndAdmin(t *testing.T) {
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 
+	// #0054: a real *seo.Site, built the same way production does.
+	site, err := buildSEOSite(cfg, nil)
+	if err != nil {
+		t.Fatalf("build seo site: %v", err)
+	}
+
 	errCh := make(chan error, 1)
 	ready := make(chan struct{})
 	go func() {
@@ -95,6 +101,7 @@ func TestMountAndServe_EventsRequiresSessionAndAdmin(t *testing.T) {
 			nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH: not exercised */
 			nil, /* sesNotifyH: not exercised */
 			nil, /* sendWorker: not exercised */
+			site,
 			requireSession, requireAdmin, nil, ready)
 	}()
 

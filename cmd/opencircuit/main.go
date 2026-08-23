@@ -79,6 +79,27 @@ func serve() error {
 	return servePostgres(cfg)
 }
 
+// buildSEOSite constructs the *seo.Site shared by mountAndServe's per-route
+// meta-tag middleware, GET /sitemap.xml, and GET /robots.txt (#0019, #0020),
+// reading the embedded, built dist/index.html (web/index.html's %%OC_*%%
+// placeholder markers) once. Called from servePostgres and serveDevMode --
+// not from inside mountAndServe itself -- specifically so the caller can
+// also hand the identical *seo.Site to NewAdminWorkshopsHandler as its cache
+// invalidator (servePostgres only; #0054, carried in from #0051's review
+// Ruling 1): threading one shared instance out to both call sites is what
+// makes a workshop mutation and the SEO renderer/sitemap provably read from
+// the same cache, rather than leaving mountAndServe to build its own,
+// second, never-invalidated Site the way it did before this issue.
+// source is nil on the dev-mode path (STORAGE=json has no workshops-table
+// backing -- see serveDevMode's call site).
+func buildSEOSite(cfg *config.Config, source seo.WorkshopSource) (*seo.Site, error) {
+	indexHTML, err := fs.ReadFile(web.DistFS(), "index.html")
+	if err != nil {
+		return nil, fmt.Errorf("buildSEOSite: read embedded index.html: %w", err)
+	}
+	return seo.NewSite(indexHTML, cfg.BaseURL, source), nil
+}
+
 // servePostgres is the production path: connects to Postgres, constructs the
 // real stores, and serves.
 func servePostgres(cfg *config.Config) error {
@@ -190,29 +211,21 @@ func servePostgres(cfg *config.Config) error {
 	// workshopsStore is internal/workshops' data-access layer over
 	// migration 000020's workshops/workshop_interests tables (#0050).
 	//
-	// The cache-invalidation seam (nil here, deliberately): #0051's own
-	// acceptance criteria require every workshop mutation to call
-	// *seo.Site.InvalidateWorkshops (carried in from #0073's review), but
-	// *seo.Site is constructed further down, inside mountAndServe, from the
-	// embedded index.html this function has no access to -- exactly the
-	// same "the real implementation doesn't exist at this call site yet"
-	// situation campaignPreflightChecker/campaignAudienceCounter solved
-	// above by passing nil and letting a LATER issue wire the adapter in
-	// (see AdminCampaignsHandler's own doc comment). Here that later issue
-	// is #0054: internal/seo/workshop.go's doc comment and this file's
-	// existing comment on seo.NewSite's third argument both already name
-	// #0054 as the one that wires the real WorkshopSource in, and doing so
-	// is also the natural point to thread *seo.Site back to this handler
-	// (mountAndServe would need to construct AdminWorkshopsHandler itself,
-	// or expose Site earlier, either of which is #0054's restructuring to
-	// make, not #0051's). Until then, AdminWorkshopsHandler.invalidate is a
-	// documented, tested no-op (internal/handlers/admin_workshops_test.go
-	// proves the call happens via a fake invalidator) -- NOT a compliance
-	// gap: nothing reads internal/seo's cache today because its
-	// WorkshopSource is ALSO nil (seo.NewSite's third argument, below), so
-	// there is nothing yet for a missed invalidation to make stale.
+	// #0054 wires the cache-invalidation seam #0051 deliberately deferred
+	// (carried in from #0073's review, formerly a literal nil here): site is
+	// built by buildSEOSite from the SAME workshopsStore, wrapped by
+	// workshopSEOSource (workshop_seo_source.go), that this handler mutates
+	// -- and the identical *seo.Site pointer is threaded into mountAndServe
+	// below, so AdminWorkshopsHandler.invalidate() and the SEO
+	// renderer/sitemap GET /workshops/{slug} and GET /sitemap.xml read from
+	// are provably the same instance, not two independently-constructed
+	// ones (see cmd/opencircuit/seo_wiring_test.go).
 	workshopsStore := workshops.NewStore(pool)
-	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, nil, auditLogger)
+	site, err := buildSEOSite(cfg, workshopSEOSource{store: workshopsStore})
+	if err != nil {
+		return err
+	}
+	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, auditLogger)
 	publicWorkshopsH := handlers.NewPublicWorkshopsHandler(workshopsStore, interestsStore)
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,
@@ -390,7 +403,7 @@ func servePostgres(cfg *config.Config) error {
 
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker, site,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -525,6 +538,17 @@ func serveDevMode(cfg *config.Config) error {
 	log.Printf("opencircuit: STORAGE=json — starting with in-memory dev store (no Postgres)")
 
 	ds := devstore.New(cfg.AdminEmail)
+
+	// SEO site (#0019/#0020, threaded through #0054): dev mode has no
+	// workshopsStore to adapt (internal/devstore has no workshops-table
+	// backing -- see adminWorkshopsH/publicWorkshopsH's own nil comments
+	// below), so the WorkshopSource stays nil here, same as before #0054 --
+	// /workshops/{slug} and the sitemap's workshop portion fall back to
+	// their documented generic defaults (seo.WorkshopSource's doc comment).
+	site, err := buildSEOSite(cfg, nil)
+	if err != nil {
+		return err
+	}
 
 	// WebAuthn is still needed for the config but auth routes are stubbed.
 	// In dev mode WebAuthnRPID/Origin may be empty; provide localhost defaults.
@@ -671,7 +695,7 @@ func serveDevMode(cfg *config.Config) error {
 
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -834,6 +858,7 @@ func mountAndServe(
 	publicWorkshopsH *handlers.PublicWorkshopsHandler,
 	sesNotifyH *handlers.SESNotificationsHandler,
 	sendWorker *mailing.Worker,
+	site *seo.Site,
 	requireSession func(http.Handler) http.Handler,
 	requireAdmin func(http.Handler) http.Handler,
 	outerMiddleware func(http.Handler) http.Handler,
@@ -1040,20 +1065,16 @@ func mountAndServe(
 	}
 
 	// SEO: server-injected per-route meta tags (#0019) and generated
-	// sitemap.xml / robots.txt (#0020). indexHTML is the embedded, built
-	// dist/index.html carrying the %%OC_*%% placeholder markers (web/index.html)
-	// that seo.Site substitutes per request path -- social crawlers fetch the
-	// raw HTML and never execute the SPA bundle, so the injected values have to
-	// already be correct in what this handler serves. The workshop source is
-	// nil until #0051 (workshops store) and #0054 (workshop detail view) land;
-	// until then /workshops/{slug} and the sitemap's workshop portion both fall
-	// back to their documented defaults (seo.WorkshopSource's doc comment).
-	indexHTML, err := fs.ReadFile(web.DistFS(), "index.html")
-	if err != nil {
-		return fmt.Errorf("mountAndServe: read embedded index.html: %w", err)
-	}
-	site := seo.NewSite(indexHTML, cfg.BaseURL, nil)
-
+	// sitemap.xml / robots.txt (#0020). site is built by buildSEOSite in
+	// servePostgres/serveDevMode (not here) and passed in, deliberately: on
+	// the Postgres path it is the SAME *seo.Site instance already handed to
+	// AdminWorkshopsHandler as its cache invalidator (#0054, carried in
+	// from #0051's review Ruling 1), so a workshop mutation and the
+	// GET /workshops/{slug} / GET /sitemap.xml routes mounted below read
+	// from one shared cache rather than two independently-constructed ones.
+	// On the dev-mode path (STORAGE=json) its WorkshopSource is nil --
+	// /workshops/{slug} and the sitemap's workshop portion fall back to
+	// their documented generic defaults (seo.WorkshopSource's doc comment).
 	mux.Handle("GET /sitemap.xml", site.SitemapHandler())
 	mux.Handle("GET /robots.txt", site.RobotsHandler())
 

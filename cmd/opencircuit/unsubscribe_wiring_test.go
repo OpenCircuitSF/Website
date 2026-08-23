@@ -83,6 +83,12 @@ func TestMountAndServe_UnsubscribePost_NeverRateLimited(t *testing.T) {
 	requireSession := middleware.RequireSession(auth.NewStore(pool))
 	requireAdmin := func(next http.Handler) http.Handler { return next }
 
+	// #0054: a real *seo.Site, built the same way production does.
+	site, err := buildSEOSite(cfg, nil)
+	if err != nil {
+		t.Fatalf("build seo site: %v", err)
+	}
+
 	errCh := make(chan error, 1)
 	ready := make(chan struct{})
 	go func() {
@@ -102,6 +108,7 @@ func TestMountAndServe_UnsubscribePost_NeverRateLimited(t *testing.T) {
 			nil, /* publicWorkshopsH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
+			site,
 			requireSession, requireAdmin, nil, ready)
 	}()
 
@@ -193,6 +200,12 @@ func TestMountAndServe_UnsubscribePost_NoSessionNoCSRF(t *testing.T) {
 	requireSession := middleware.RequireSession(auth.NewStore(pool))
 	requireAdmin := func(next http.Handler) http.Handler { return next }
 
+	// #0054: a real *seo.Site, built the same way production does.
+	site, err := buildSEOSite(cfg, nil)
+	if err != nil {
+		t.Fatalf("build seo site: %v", err)
+	}
+
 	errCh := make(chan error, 1)
 	ready := make(chan struct{})
 	go func() {
@@ -212,6 +225,7 @@ func TestMountAndServe_UnsubscribePost_NoSessionNoCSRF(t *testing.T) {
 			nil, /* publicWorkshopsH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
+			site,
 			requireSession, requireAdmin, nil, ready)
 	}()
 

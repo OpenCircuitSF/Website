@@ -22,6 +22,7 @@ import type {
   CampaignPreviewResponse,
   CampaignStatsResponse,
   WorkshopsListResponse,
+  PublicWorkshop,
   AdminWorkshop,
   AdminWorkshopsListResponse,
 } from './types';
@@ -724,6 +725,24 @@ export function patchPreferences(body: PreferencesPatchBody): Promise<Preference
  */
 export function listPublicWorkshops(): Promise<WorkshopsListResponse> {
   return apiGet<WorkshopsListResponse>('/api/workshops');
+}
+
+/**
+ * GET /api/workshops/{slug} — one workshop for the detail page (#0054,
+ * PRD §7.3). Serves published AND canceled workshops (#0051's review
+ * Ruling 2: "a canceled workshop stays visible with a clear cancellation
+ * notice — people who saw the announcement will come looking, and a 404
+ * tells them nothing"); a draft, or a slug with no matching row, both throw
+ * ApiError(404) with a byte-identical body, so WorkshopDetail.svelte cannot
+ * distinguish "exists but unpublished" from "never existed" and renders one
+ * neutral not-found state for both. The /workshops/{slug} path itself is
+ * always a KNOWN route (handlers.WorkshopDetailSlug matches on shape alone),
+ * so the SPA still serves 200 and this component's own not-found state is
+ * what the visitor sees — this route never falls through to the generic
+ * NotFound view.
+ */
+export function getPublicWorkshop(slug: string): Promise<PublicWorkshop> {
+  return apiGet<PublicWorkshop>(`/api/workshops/${encodeURIComponent(slug)}`);
 }
 
 /**
