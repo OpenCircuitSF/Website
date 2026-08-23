@@ -202,7 +202,7 @@ func dollarQuoteEnd(text string, i int) (end int, ok bool) {
 // the four non-text constructs a real SQL scanner has to recognize before
 // any character inside it can be trusted to mean what it looks like — a
 // `--` line comment, a `/* */` block comment, a single-quoted string
-// literal (Postgres escapes an embedded quote by doubling it: 'it''s'), or
+// literal (Postgres escapes an embedded quote by doubling it: 'it”s'), or
 // a Postgres dollar-quoted body ($$...$$ / $tag$...$tag$).
 type sqlSpanKind int
 
@@ -272,7 +272,7 @@ type sqlSpan struct {
 //     quoted identifiers.
 //
 // A kindQuotedIdent case (~10 lines: open on a bare `"`, close on the next
-// unescaped `"`, `""` doubles like a string's `''` does) would close this for
+// unescaped `"`, `""` doubles like a string's `”` does) would close this for
 // good and is worth adding the day either form shows up in a migration or in
 // PRD.md — until then it is unreachable, so it stays undone rather than
 // carrying untested code for an input that cannot occur.

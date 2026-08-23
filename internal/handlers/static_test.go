@@ -34,8 +34,8 @@ func serveSPA(fsys fs.FS, path string) *httptest.ResponseRecorder {
 func TestSPAFaviconServedFromDist(t *testing.T) {
 	pngMagic := "\x89PNG\r\n\x1a\n" // first 8 bytes of any PNG file
 	fsys := distFS(map[string]string{
-		"index.html":       "<!doctype html><title>Open Circuit SF</title><div id=\"app\"></div>",
-		"favicon.png":      pngMagic + "fake-favicon-body",
+		"index.html":           "<!doctype html><title>Open Circuit SF</title><div id=\"app\"></div>",
+		"favicon.png":          pngMagic + "fake-favicon-body",
 		"apple-touch-icon.png": pngMagic + "fake-apple-touch-icon-body",
 	})
 
@@ -207,4 +207,3 @@ func TestSPAUnknownPathReturns404WithShell(t *testing.T) {
 		}
 	}
 }
-

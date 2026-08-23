@@ -84,6 +84,7 @@ var testNameCitationPattern = regexp.MustCompile(`\bTest[A-Z0-9_][A-Za-z0-9_]*\b
 //     (admin_campaigns.go, mailing/campaigns.go, mailing/preflight.go,
 //     mailing/worker_store.go — none of them a _test.go file, all of them
 //     scanned by this guard's walk regardless).
+//
 //   - "TestPool" is the bare suffix word the *TestPool naming convention
 //     (credsTestPool, interestsTestPool, and friends — see
 //     testNameCitationPattern's own comment) is named after. It appears,
@@ -721,8 +722,8 @@ type T struct{}
 func TestDanglingTestCitationPatternReportsBlockCommentLineNotItsOpeningLine(t *testing.T) {
 	dir := t.TempDir()
 	citedName := "Test" + "BlockCommentPlantedCitation"
-	const blockOpeningLine = 3 // the line the "/*" itself sits on
-	const citationLine = 6     // the line the planted name actually sits on
+	const blockOpeningLine = 3   // the line the "/*" itself sits on
+	const citationLine = 6       // the line the planted name actually sits on
 	src := "package fixture\n" + // line 1
 		"\n" + // line 2
 		"/*\n" + // line 3 — blockOpeningLine

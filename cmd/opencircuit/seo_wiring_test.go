@@ -152,13 +152,13 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
 			nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
-			nil, /* adminSubscribersH: not exercised by this test */
-			nil, /* adminSuppressionsH: not exercised by this test */
-			nil, /* adminCampaignsH: not exercised by this test */
-			nil, /* adminCampaignAudienceH: not exercised by this test */
-			nil, /* adminCampaignPreviewH: not exercised by this test */
-			nil, /* adminCampaignPreflightH: not exercised by this test */
-			nil, /* adminCampaignStatsH: not exercised by this test */
+			nil,                            /* adminSubscribersH: not exercised by this test */
+			nil,                            /* adminSuppressionsH: not exercised by this test */
+			nil,                            /* adminCampaignsH: not exercised by this test */
+			nil,                            /* adminCampaignAudienceH: not exercised by this test */
+			nil,                            /* adminCampaignPreviewH: not exercised by this test */
+			nil,                            /* adminCampaignPreflightH: not exercised by this test */
+			nil,                            /* adminCampaignStatsH: not exercised by this test */
 			adminWorkshopsH, nil, nil, nil, /* eventsH, meH, subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
 			nil, /* publicWorkshopsH: not exercised by this test -- this test hits the SEO-rendered detail page, not the JSON API */

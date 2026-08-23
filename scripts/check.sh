@@ -99,16 +99,41 @@ web_check() {
   step "npm test";      run bash -o pipefail -c "cd web && npm test 2>&1 | tail -$TAIL"
 }
 
+# #0161: gofmt drift is otherwise invisible — `go vet` does not check
+# formatting, so an unformatted file passes build+vet+test silently and
+# stays unformatted indefinitely. Scoped to the whole repo (`.`), not a list
+# of package roots: gofmt only ever looks at *.go files, so scanning the
+# whole tree can't false-positive on non-Go content (web/, migrations/,
+# etc.) and needs no maintenance as packages are added or moved. Must FAIL,
+# not just print — `gofmt -l` exits 0 even when it lists files (the #0140
+# shape of bug: a real signal sitting in output nobody checks), so the
+# non-empty output itself is what flips FAILED here.
+gofmt_check() {
+  step "gofmt -l (#0161 — formatting drift)"
+  local out
+  out="$(gofmt -l . 2>&1)"
+  if [ -n "$out" ]; then
+    FAILED=1
+    printf '\033[31mFAILED: gofmt -l found unformatted file(s):\033[0m\n%s\n' "$out"
+    printf '\033[31mFix: gofmt -w %s\033[0m\n' "$(echo "$out" | tr '\n' ' ' | sed 's/ *$//')"
+  else
+    echo "(clean)"
+  fi
+}
+
 case "$MODE" in
   go)  step "go build"; run bash -o pipefail -c "go build ./... 2>&1 | tail -$TAIL"
        step "go vet";   run bash -o pipefail -c "go vet ./... 2>&1 | tail -$TAIL"
+       gofmt_check
        go_test "$@" ;;
   web) web_check ;;
   all) step "go build"; run bash -o pipefail -c "go build ./... 2>&1 | tail -$TAIL"
        step "go vet";   run bash -o pipefail -c "go vet ./... 2>&1 | tail -$TAIL"
+       gofmt_check
        go_test "./..."; web_check ;;
   *)   step "go build"; run bash -o pipefail -c "go build ./... 2>&1 | tail -$TAIL"
        step "go vet";   run bash -o pipefail -c "go vet ./... 2>&1 | tail -$TAIL"
+       gofmt_check
        go_test "./internal/... ./cmd/..."; web_check ;;
 esac
 

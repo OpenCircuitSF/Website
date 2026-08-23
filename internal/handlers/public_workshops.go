@@ -90,10 +90,10 @@ func NewPublicWorkshopsHandler(store publicWorkshopStore, interestStore publicWo
 // numeric id (the public wire contract identifies a workshop by slug, same
 // convention as publicInterestView dropping interests' numeric id).
 type publicWorkshopView struct {
-	Slug            string  `json:"slug"`
-	Title           string  `json:"title"`
-	Summary         *string `json:"summary,omitempty"`
-	BodyMD          *string `json:"body_md,omitempty"`
+	Slug    string  `json:"slug"`
+	Title   string  `json:"title"`
+	Summary *string `json:"summary,omitempty"`
+	BodyMD  *string `json:"body_md,omitempty"`
 	// BodyHTML is body_md rendered server-side through the exact same
 	// goldmark pipeline email_campaigns bodies use (#0136 --
 	// admin_workshop_preview.go's renderWorkshopBodyHTML, wrapping

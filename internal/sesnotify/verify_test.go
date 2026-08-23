@@ -278,16 +278,16 @@ func TestVerify_HostileSigningCertURL(t *testing.T) {
 	key, cert := testFixture(t)
 
 	hostile := []string{
-		"http://sns.us-west-2.amazonaws.com/x.pem",                // not HTTPS
-		"https://sns.us-west-2.amazonaws.com.evil.com/x.pem",      // suffix trick
-		"https://evil.com/sns.us-west-2.amazonaws.com.pem",        // path trick
-		"https://my-bucket.s3.amazonaws.com/x.pem",                // correction 1: shared-tenancy S3 host
-		"https://sns.us-west-2.amazonaws.com@evil.com/x.pem",      // userinfo
-		"https://169.254.169.254/latest/meta-data/",               // IMDS
-		"https://sns.us-west-2.amazonaws.com:8443/x.pem",          // explicit port
-		"https://sns.eu-west-1.amazonaws.com/x.pem",               // wrong region, region pinning on
-		"file:///etc/passwd",                                      // non-http(s) scheme
-		"",                                                        // empty
+		"http://sns.us-west-2.amazonaws.com/x.pem",           // not HTTPS
+		"https://sns.us-west-2.amazonaws.com.evil.com/x.pem", // suffix trick
+		"https://evil.com/sns.us-west-2.amazonaws.com.pem",   // path trick
+		"https://my-bucket.s3.amazonaws.com/x.pem",           // correction 1: shared-tenancy S3 host
+		"https://sns.us-west-2.amazonaws.com@evil.com/x.pem", // userinfo
+		"https://169.254.169.254/latest/meta-data/",          // IMDS
+		"https://sns.us-west-2.amazonaws.com:8443/x.pem",     // explicit port
+		"https://sns.eu-west-1.amazonaws.com/x.pem",          // wrong region, region pinning on
+		"file:///etc/passwd",                                 // non-http(s) scheme
+		"",                                                   // empty
 	}
 
 	for _, certURL := range hostile {
@@ -573,10 +573,10 @@ func TestFetchSubscribeURLReal_RefusesRedirect(t *testing.T) {
 func TestVerifier_FetchSubscribeURL_HostileURLRejectedBeforeFetch(t *testing.T) {
 	v := NewVerifier("us-west-2", "irrelevant", discardLogger())
 	for _, hostile := range []string{
-		"http://sns.us-west-2.amazonaws.com/x",             // not https
-		"https://my-bucket.s3.amazonaws.com/x",              // shared-tenancy host
-		"https://evil.example.com/steal-me",                 // unrelated host entirely
-		"https://sns.us-west-2.amazonaws.com.evil.com/x",    // suffix trick
+		"http://sns.us-west-2.amazonaws.com/x",           // not https
+		"https://my-bucket.s3.amazonaws.com/x",           // shared-tenancy host
+		"https://evil.example.com/steal-me",              // unrelated host entirely
+		"https://sns.us-west-2.amazonaws.com.evil.com/x", // suffix trick
 	} {
 		if err := v.FetchSubscribeURL(context.Background(), hostile); err == nil {
 			t.Errorf("FetchSubscribeURL(%q) = nil error, want rejection by the same host allowlist validateCertURL enforces", hostile)
