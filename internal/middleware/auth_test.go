@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // testPool returns the package's single shared pool (opened once in
@@ -35,17 +37,55 @@ func testPool(t *testing.T) *pgxpool.Pool {
 // two: replaces the fixed literals ("valid@example.com" etc.) this file
 // used to insertUser with, which only worked because every test truncated
 // the users table first.
+//
+// #0163: the uniqueness came from formatting time.Now() to
+// nanosecond-looking precision, which is the same repeating-clock defect
+// #0158 fixed elsewhere — just rendered as a string instead of an int, so
+// the earlier sweep's grep for UnixNano() didn't catch it. label still
+// discriminates every call site today, but the clock stops being the
+// mechanism that has to hold.
 func uniqueAuthEmail(label string) string {
-	return "zz-mw-" + label + "-" + time.Now().UTC().Format("20060102T150405.000000000") + "@example.com"
+	return fmt.Sprintf("zz-mw-%s-%d@example.com", label, testdb.Unique())
 }
 
 // uniqueSessionToken returns a session token unique to this test/call, for
 // the same reason as uniqueAuthEmail: sessions.token has no uniqueness
 // requirement in the schema, but two tests sharing a literal token value
 // would let one test's insertSession silently shadow another's row once the
-// table stopped being truncated between tests.
+// table stopped being truncated between tests. See #0163.
 func uniqueSessionToken(label string) string {
-	return "zz-mw-tok-" + label + "-" + time.Now().UTC().Format("20060102T150405.000000000")
+	return fmt.Sprintf("zz-mw-tok-%s-%d", label, testdb.Unique())
+}
+
+// TestUniqueAuthEmail_NeverCollidesAcrossManyBackToBackCalls and
+// TestUniqueSessionToken_NeverCollidesAcrossManyBackToBackCalls are plain
+// unit tests (no database) guarding #0163's fix: no two back-to-back calls
+// with the same label ever return the same value, now that both helpers
+// rely on testdb.Unique() rather than a formatted wall clock. Shape follows
+// internal/subscribers' TestUniqueSuppressionEmail_NeverCollidesAcrossManyBackToBackCalls
+// (#0108/#0160).
+func TestUniqueAuthEmail_NeverCollidesAcrossManyBackToBackCalls(t *testing.T) {
+	const n = 20000
+	seen := make(map[string]struct{}, n)
+	for i := 0; i < n; i++ {
+		email := uniqueAuthEmail("same-label")
+		if _, dup := seen[email]; dup {
+			t.Fatalf("call %d: uniqueAuthEmail returned a duplicate address %q", i, email)
+		}
+		seen[email] = struct{}{}
+	}
+}
+
+func TestUniqueSessionToken_NeverCollidesAcrossManyBackToBackCalls(t *testing.T) {
+	const n = 20000
+	seen := make(map[string]struct{}, n)
+	for i := 0; i < n; i++ {
+		token := uniqueSessionToken("same-label")
+		if _, dup := seen[token]; dup {
+			t.Fatalf("call %d: uniqueSessionToken returned a duplicate token %q", i, token)
+		}
+		seen[token] = struct{}{}
+	}
 }
 
 // insertUser creates a users row and returns its id.

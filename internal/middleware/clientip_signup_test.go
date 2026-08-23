@@ -2,12 +2,14 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // signupTestPool returns the package's single shared pool (opened once in
@@ -87,6 +89,29 @@ func TestSignupSurvivesPortOnRightmostEntry(t *testing.T) {
 	}
 }
 
+// uniqueSignupEmail is the live defect #0163 fixes: unlike the file's other
+// helpers it takes no label, so the clock used to be its *only*
+// discriminator, and the two tests above call it separated by nothing but
+// a database insert — exactly the "masked by intervening round trips until
+// it isn't" shape #0158's review flagged.
 func uniqueSignupEmail() string {
-	return "zz-clientip-" + time.Now().UTC().Format("20060102T150405.000000000") + "@example.com"
+	return fmt.Sprintf("zz-clientip-%d@example.com", testdb.Unique())
+}
+
+// TestUniqueSignupEmail_NeverCollidesAcrossManyBackToBackCalls is a plain
+// unit test (no database) guarding #0163's fix to the live defect in this
+// file: uniqueSignupEmail takes no label, so before the fix the formatted
+// wall clock was its *only* discriminator, and TestSignupSurvivesUnparseableXFF
+// / TestSignupSurvivesPortOnRightmostEntry above call it separated by
+// nothing but a database insert.
+func TestUniqueSignupEmail_NeverCollidesAcrossManyBackToBackCalls(t *testing.T) {
+	const n = 20000
+	seen := make(map[string]struct{}, n)
+	for i := 0; i < n; i++ {
+		email := uniqueSignupEmail()
+		if _, dup := seen[email]; dup {
+			t.Fatalf("call %d: uniqueSignupEmail returned a duplicate address %q", i, email)
+		}
+		seen[email] = struct{}{}
+	}
 }

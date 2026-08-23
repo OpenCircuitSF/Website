@@ -3,10 +3,12 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // auditTestPool returns the package's single shared pool (opened once in
@@ -31,9 +33,13 @@ func auditTestPool(t *testing.T) *pgxpool.Pool {
 // would collide with the same test's own row on a second `-count=2`
 // iteration, and no assertion in this file depends on the exact address,
 // only on the returned id.
+//
+// #0163: the "-<ts>" suffix used to be time.Now() formatted to
+// nanosecond-looking precision, the same repeating-clock defect #0158
+// fixed elsewhere in other helpers, just rendered as a string.
 func seedUser(t *testing.T, pool *pgxpool.Pool, label string) int64 {
 	t.Helper()
-	email := "zz-audit-" + label + "-" + time.Now().UTC().Format("20060102T150405.000000000") + "@example.com"
+	email := fmt.Sprintf("zz-audit-%s-%d@example.com", label, testdb.Unique())
 	var id int64
 	if err := pool.QueryRow(context.Background(),
 		`INSERT INTO users (email, is_admin, active, created_at)
@@ -42,6 +48,24 @@ func seedUser(t *testing.T, pool *pgxpool.Pool, label string) int64 {
 		t.Fatalf("seed user %s: %v", email, err)
 	}
 	return id
+}
+
+// TestSeedUser_BackToBackCallsNeverCollide proves two back-to-back calls to
+// seedUser, with the same label and no intervening work, always produce
+// distinct users rather than the second INSERT failing the users.email
+// UNIQUE constraint (migrations/000001). Before #0163, the email's
+// uniqueness came from formatting time.Now().UTC() to nanosecond-looking
+// precision — the same clock #0158 measured repeating on 94.7% of adjacent
+// reads, just spelled as a string, so this pair of calls was a near
+// coin-flip for "duplicate key value violates unique constraint
+// users_email_key" surfacing as seedUser's own t.Fatalf.
+func TestSeedUser_BackToBackCallsNeverCollide(t *testing.T) {
+	pool := auditTestPool(t)
+	id1 := seedUser(t, pool, "b2b")
+	id2 := seedUser(t, pool, "b2b")
+	if id1 == id2 {
+		t.Fatalf("seedUser returned the same id twice back-to-back: %d", id1)
+	}
 }
 
 func ptr(v int64) *int64 { return &v }
