@@ -99,12 +99,18 @@ work — it lets work finish and be wrong.
 - **Ambient state between tests.** `#0121`: three tests asserted exact
   whole-table counts and passed only because Go's sorted file order happened to
   run them first. Its review then found a *second* instance one table over.
+- **`web/node_modules`.** `#0204`'s implementer found the whole directory gone
+  mid-run — almost certainly another agent's `npm ci` in `web/`, which removes
+  and reinstalls it. Every `npm run check` and `npm test` in flight at that
+  moment fails in a way that looks like a broken build. Restoring it is just
+  `npm ci` against the unchanged `package-lock.json`, but only if you recognise
+  the signal.
 
 | | |
 |---|---|
-| **Signal** | a passing check you cannot attribute to your own build; a test that passes only in one order |
+| **Signal** | a passing check you cannot attribute to your own build; a test that passes only in one order; a sudden wholesale module-resolution failure in `web/` |
 | **Check** | verify the server answering is yours by confirming a build-specific detail (a hashed asset name, a string you just changed) |
-| **Clear** | pick an unlikely port; `ISSUE=NNNN scripts/check.sh` for a private database; never target a literal or seeded row id |
+| **Clear** | pick an unlikely port; `ISSUE=NNNN scripts/check.sh` for a private database; never target a literal or seeded row id; `npm ci` restores a vanished `web/node_modules` — prefer a worktree with its own copy when two agents both build `web/` |
 
 ---
 
