@@ -113,7 +113,7 @@ func (h *AdminWorkshopsHandler) Announce(w http.ResponseWriter, r *http.Request)
 	created, err := h.campaigns.Create(r.Context(), mailing.CampaignInput{
 		Name:         announceCampaignName(wk),
 		Subject:      announceSubject(wk),
-		BodyMD:       announceBodyMD(wk),
+		BodyMD:       announceBodyMD(wk, h.baseURL),
 		AudienceMode: mode,
 		InterestIDs:  interestIDs,
 		WorkshopID:   &workshopID,
@@ -180,7 +180,25 @@ func announceSubject(wk workshops.Workshop) string {
 // omitting any section whose source field is unset rather than emitting an
 // empty "**When:**" line. Fully editable by the operator before send — see
 // the package doc comment.
-func announceBodyMD(wk workshops.Workshop) string {
+//
+// # Call to action (#0145)
+//
+// PRD §8's acceptance criterion for this body names only title/summary/
+// date/location — it does not ask for a link at all. But a body with no
+// link is not something an admin would send unedited (this file's binding
+// goal, stated in the package doc comment), so the body always closes with
+// a link to the workshop's own public page at baseURL+"/workshops/{slug}"
+// (the same "/workshops/"+slug shape internal/seo's sitemap, OG tags, and
+// JSON-LD already build canonical URLs from — see internal/seo/seo.go,
+// sitemap.go, jsonld.go). When the workshop also has an external
+// signup_url, that link is emitted FIRST as "Sign up" — it stays the
+// primary action per #0145's acceptance criterion — and the site page is
+// offered second as "View this workshop" so the two never look like
+// duplicate CTAs. baseURL is config.Config.BaseURL (already trailing-slash
+// normalized by internal/config; see NewAdminWorkshopsHandler's doc
+// comment) — never a hardcoded host, so a local/staging deploy links to
+// itself rather than production.
+func announceBodyMD(wk workshops.Workshop, baseURL string) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# %s\n\n", wk.Title)
@@ -197,40 +215,95 @@ func announceBodyMD(wk workshops.Workshop) string {
 		fmt.Fprintf(&b, "**Where:** %s\n\n", where)
 	}
 
-	if wk.SignupURL != nil && strings.TrimSpace(*wk.SignupURL) != "" {
-		fmt.Fprintf(&b, "[Sign up](%s)\n\n", strings.TrimSpace(*wk.SignupURL))
+	signupURL := ""
+	if wk.SignupURL != nil {
+		signupURL = strings.TrimSpace(*wk.SignupURL)
+	}
+	if signupURL != "" {
+		fmt.Fprintf(&b, "[Sign up](%s)\n\n", signupURL)
+		fmt.Fprintf(&b, "[View this workshop](%s)\n\n", announceWorkshopURL(baseURL, wk.Slug))
+	} else {
+		fmt.Fprintf(&b, "[View this workshop](%s)\n\n", announceWorkshopURL(baseURL, wk.Slug))
 	}
 
 	return strings.TrimRight(b.String(), "\n") + "\n"
 }
 
+// announceWorkshopURL builds the workshop's own public page URL the same
+// way internal/seo builds canonical/OG/sitemap URLs for it: baseURL (no
+// trailing slash, per config.normalizeBaseURL) + "/workshops/" + slug.
+func announceWorkshopURL(baseURL, slug string) string {
+	return strings.TrimRight(baseURL, "/") + "/workshops/" + slug
+}
+
+// announceLocation is the timezone the announce body renders workshop
+// start/end times in.
+//
+// # Hardcoded, deliberately — not config.Config (#0144's acceptance
+// criterion asks this be decided and recorded)
+//
+// Open Circuit SF is a single, fixed Bay Area organization, not a
+// multi-tenant platform: config.Config's other location-shaped values are
+// likewise pinned facts about this one org rather than per-deployment
+// knobs (WEBAUTHN_RP_ID is literally opencircuitsf.com in every env file
+// this repo ships, and the CAN-SPAM physical_address setting names one
+// building, not a list). PRD.md names no requirement for a second venue in
+// another timezone, and CLAUDE.md §5's standing instruction is not to build
+// for a load or a requirement that does not exist. A config knob here would
+// be one more environment variable, one more thing every deploy must get
+// right, for a value that has never needed to vary.
+//
+// It is still isolated in this one named var (never inlined at a call
+// site) precisely so that IF Open Circuit SF ever runs a workshop outside
+// the Bay Area, promoting it to a WORKSHOP_TIMEZONE config field alongside
+// BaseURL is a small, local change — not a repo-wide search.
+var announceLocation = mustLoadLocation("America/Los_Angeles")
+
+func mustLoadLocation(name string) *time.Location {
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		// Only reachable if the Go toolchain's tzdata is missing/corrupt —
+		// every workshop announce would be broken regardless, so fail loud
+		// at package init rather than silently rendering wrong times.
+		panic(fmt.Sprintf("admin_workshop_announce: load location %q: %v", name, err))
+	}
+	return loc
+}
+
 // announceDateLayout formats a workshop timestamp for the pre-filled body.
-// Displayed in UTC (workshops.starts_at/ends_at are TIMESTAMPTZ; the store
-// never records a display timezone) — acceptable for a draft the operator
-// reviews and edits before sending, not a claim about local event time.
+// The "MST" reference field is Go's placeholder for "the zone
+// abbreviation of whatever *time.Location the time.Time was converted
+// into" — formatting a time in announceLocation renders "PST" or "PDT" as
+// appropriate, it does not literally print Mountain time.
 const announceDateLayout = "Monday, January 2, 2006 at 3:04 PM MST"
 
-// announceWhen renders the workshop's date/time range, or "" when
-// StartsAt is unset. EndsAt, when present, is appended as a time-only
-// range ("6:00 PM to 8:00 PM") when it falls on the same UTC calendar day
-// as StartsAt, or as a full second timestamp otherwise.
+// announceWhen renders the workshop's date/time range in America/Los_Angeles
+// (#0144 — matches web/src/lib/workshops.ts's viewer-zone rendering on the
+// public page for a Bay Area reader), or "" when StartsAt is unset. EndsAt,
+// when present, is appended as a time-only range ("6:00 PM to 8:00 PM") when
+// it falls on the same Pacific calendar day as StartsAt, or as a full second
+// timestamp otherwise — compared in Pacific, not UTC, since a late-evening
+// Pacific start can already be the next UTC calendar day.
 func announceWhen(wk workshops.Workshop) string {
 	if wk.StartsAt == nil {
 		return ""
 	}
-	starts := wk.StartsAt.UTC()
+	starts := wk.StartsAt.In(announceLocation)
 	when := starts.Format(announceDateLayout)
 	if wk.EndsAt == nil {
 		return when
 	}
-	ends := wk.EndsAt.UTC()
-	if sameUTCDate(starts, ends) {
+	ends := wk.EndsAt.In(announceLocation)
+	if sameLocalDate(starts, ends) {
 		return fmt.Sprintf("%s to %s", when, ends.Format("3:04 PM MST"))
 	}
 	return fmt.Sprintf("%s to %s", when, ends.Format(announceDateLayout))
 }
 
-func sameUTCDate(a, b time.Time) bool {
+// sameLocalDate reports whether a and b fall on the same calendar day in
+// whatever zone they are already expressed in — callers pass times already
+// converted via announceLocation.In, so this compares Pacific dates.
+func sameLocalDate(a, b time.Time) bool {
 	ay, am, ad := a.Date()
 	by, bm, bd := b.Date()
 	return ay == by && am == bm && ad == bd

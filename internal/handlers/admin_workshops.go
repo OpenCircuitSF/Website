@@ -90,6 +90,13 @@ type AdminWorkshopsHandler struct {
 	// doc comment).
 	campaigns announceCampaignStore
 	auditor   *audit.Logger
+	// baseURL backs Announce's link to the workshop's own page
+	// (admin_workshop_announce.go, #0145) — config.Config.BaseURL, the
+	// same value AdminCampaignPreviewHandler and mailing.SendStore build
+	// unsubscribe/manage links from. An empty baseURL (test-only; every
+	// production call site passes cfg.BaseURL) produces a relative
+	// "/workshops/{slug}" link rather than panicking.
+	baseURL string
 }
 
 // NewAdminWorkshopsHandler constructs an AdminWorkshopsHandler. A nil
@@ -113,8 +120,13 @@ type AdminWorkshopsHandler struct {
 // only POST /admin/workshops/{id}/announce (test-only — every production
 // call site passes a real store); every other route on this handler is
 // unaffected.
-func NewAdminWorkshopsHandler(store workshopStore, invalidator workshopCacheInvalidator, campaigns announceCampaignStore, auditor *audit.Logger) *AdminWorkshopsHandler {
-	return &AdminWorkshopsHandler{store: store, invalidator: invalidator, campaigns: campaigns, auditor: auditor}
+//
+// baseURL (#0145) is config.Config.BaseURL, threaded through exactly like
+// NewAdminCampaignPreviewHandler's baseURL parameter, so Announce's
+// "view this workshop" link is built from the same canonical host every
+// other outbound link in this codebase uses — never a hardcoded one.
+func NewAdminWorkshopsHandler(store workshopStore, invalidator workshopCacheInvalidator, campaigns announceCampaignStore, auditor *audit.Logger, baseURL string) *AdminWorkshopsHandler {
+	return &AdminWorkshopsHandler{store: store, invalidator: invalidator, campaigns: campaigns, auditor: auditor, baseURL: baseURL}
 }
 
 func (h *AdminWorkshopsHandler) invalidate() {

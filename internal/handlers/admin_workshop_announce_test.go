@@ -129,6 +129,13 @@ func TestAdminWorkshopAnnounce_PrefillAndLink(t *testing.T) {
 	}
 	wantBodyFragments := []string{
 		wk.Title, summary, "September 12, 2026", locationName, locationAddress, locationNote, signupURL,
+		// #0144: rendered in the org's zone, not UTC — 18:00Z/20:00Z on
+		// 2026-09-12 is 11:00 AM/1:00 PM PDT the same Pacific day.
+		"11:00 AM PDT to 1:00 PM PDT",
+		// #0145: the workshop's own page is always linked, end to end
+		// through the real h.baseURL wired by adminWorkshopAnnounceMux
+		// (adminWorkshopsMux passes "https://example.com").
+		"https://example.com/workshops/" + wk.Slug,
 	}
 	for _, frag := range wantBodyFragments {
 		if !strings.Contains(created.BodyMD, frag) {

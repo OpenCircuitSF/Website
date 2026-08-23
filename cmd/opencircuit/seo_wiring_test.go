@@ -136,7 +136,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 
 	// The production shape (#0054): the SAME *seo.Site is handed to
 	// AdminWorkshopsHandler as its invalidator AND to mountAndServe below.
-	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, mailing.NewCampaignStore(pool), auditLogger)
+	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, mailing.NewCampaignStore(pool), auditLogger, cfg.BaseURL)
 
 	requireSession := middleware.RequireSession(store)
 	requireAdmin := func(next http.Handler) http.Handler {

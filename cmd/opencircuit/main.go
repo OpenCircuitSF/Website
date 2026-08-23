@@ -238,7 +238,7 @@ func servePostgres(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, campaignsStore, auditLogger)
+	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, campaignsStore, auditLogger, cfg.BaseURL)
 	publicWorkshopsH := handlers.NewPublicWorkshopsHandler(workshopsStore, interestsStore)
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,

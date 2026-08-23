@@ -38,7 +38,7 @@ func (c *countingWorkshopInvalidator) InvalidateWorkshops() { c.calls++ }
 func adminWorkshopsMux(pool *pgxpool.Pool, invalidator workshopCacheInvalidator) http.Handler {
 	authStore := auth.NewStore(pool)
 	store := workshops.NewStore(pool)
-	h := NewAdminWorkshopsHandler(store, invalidator, mailing.NewCampaignStore(pool), audit.New(pool))
+	h := NewAdminWorkshopsHandler(store, invalidator, mailing.NewCampaignStore(pool), audit.New(pool), "https://example.com")
 	requireSession := middleware.RequireSession(authStore)
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
