@@ -48,7 +48,28 @@ import { parse as parseSvelte } from 'svelte/compiler';
 // documents an admin cannot read either — #0178's own whole-tree grep
 // already included Issues.md and HANDOFF, so there is no principled reason
 // to guard one internal document and not the others.
-const citationPattern = /CLAUDE\.md|PRD\s*§|#0\d{3}\b|Issues\.md|HANDOFF\.md|docs\/\S*\.md/;
+//
+// #0187, item 2: issues/NNNN.md (a path to one tracker file, e.g.
+// "issues/0138.md") was missing even though docs/*.md was added — an
+// asymmetry, not a decision, since a tracker-file path is the least
+// readable citation of the whole set to an admin. issues\/\d{4}\.md
+// closes it; the repo's own #0NNN convention already guarantees the
+// four-digit form.
+//
+// #0187, item 3: docs/\S*\.md (and, after this pass, issues\/\d{4}\.md)
+// would also fire on an external URL that happens to contain a matching
+// path segment, e.g. "https://example.com/docs/guide.md". Decided:
+// accepted rather than tightened. The Go half of this guard
+// (internal/handlers/citation_guard_test.go) shares this exact pattern
+// text and runs on Go's regexp/syntax (RE2), which has no lookbehind — a
+// (?<!\w+:\/\/\S*) exclusion could be added here in V8 but could not be
+// mirrored there, so tightening only one side would leave the two guards
+// silently diverged in what they catch, which is a bigger hazard than the
+// false positive it prevents. The false positive is also nil today and
+// structurally unlikely to appear: CLAUDE.md §9 forbids external CDNs, and
+// no docs/*.md-shaped string exists anywhere in web/src outside comments
+// (#0181 review, pass 2).
+const citationPattern = /CLAUDE\.md|PRD\s*§|#0\d{3}\b|Issues\.md|HANDOFF\.md|docs\/\S*\.md|issues\/\d{4}\.md/;
 
 interface Violation {
   file: string;
@@ -170,25 +191,43 @@ function scanSvelteSource(fileName: string, source: string): Violation[] {
 // file walk. It is strictly narrower — it needed no @types/node dependency
 // and no "node" entry in tsconfig.json's types array (both reverted in this
 // pass; vite/client already declares import.meta.glob) — and it deletes the
-// walk/fileURLToPath machinery outright. Keys are paths relative to this
-// file (web/src/lib/), e.g. "../App.svelte" or
-// "../views/admin/WorkshopEditor.svelte", which is exactly the kind of
-// relative path the old walk() produced (via path.relative(SRC_ROOT, ...))
-// for the failure message to print. { eager: true } resolves all matches at
-// module-load time so this is a plain object, not a set of loader
-// functions.
+// walk/fileURLToPath machinery outright. Keys are paths relative to *this
+// file's own directory* (web/src/lib/): a file in that same directory
+// yields "./foo.ts", and a file reached by going up first (everything else
+// under web/src) yields "../App.svelte" or
+// "../views/admin/WorkshopEditor.svelte" — measured directly rather than
+// assumed, since Vite's own docs example only shows the single-prefix
+// case. { eager: true } resolves all matches at module-load time so this
+// is a plain object, not a set of loader functions.
 const SOURCE_FILES = import.meta.glob('../**/*.{ts,svelte}', {
   query: '?raw',
   import: 'default',
   eager: true,
 }) as Record<string, string>;
 
+// #0187, item 4: the failure message exists to be pasted into a search, so
+// every reported path must be one consistent form. The pre-#0187 code only
+// stripped a leading "../", which left the two glob-key shapes above
+// printing inconsistently — "./branding.ts" (a file in web/src/lib/,
+// untouched by the strip) alongside "views/admin/WorkshopEditor.svelte" (a
+// file reached via "../", stripped down to no prefix at all). Neither of
+// those is a path anyone could paste into a repo-rooted search or `grep`
+// invocation unambiguously. toRepoRelativePath produces one form for both:
+// repo-relative from the checkout root, e.g. "web/src/lib/branding.ts" and
+// "web/src/views/admin/WorkshopEditor.svelte" — matching the form the Go
+// half's own file paths are unambiguous in (absolute), just shorter and
+// pasteable without a machine-specific prefix.
+function toRepoRelativePath(globKey: string): string {
+  const fromSrc = globKey.startsWith('../') ? globKey.slice(3) : `lib/${globKey.slice(2)}`;
+  return `web/src/${fromSrc}`;
+}
+
 describe('citation guard (web/src)', () => {
   it('no source file contains an admin-facing string that cites CLAUDE.md, PRD, or a tracker issue', () => {
     const violations: Violation[] = [];
     for (const [path, source] of Object.entries(SOURCE_FILES)) {
       if (path.endsWith('.test.ts') || path.endsWith('.d.ts')) continue;
-      const rel = path.replace(/^\.\.\//, '');
+      const rel = toRepoRelativePath(path);
       const found = path.endsWith('.svelte') ? scanSvelteSource(rel, source) : scanTsSource(rel, source);
       violations.push(...found);
     }
@@ -240,10 +279,11 @@ describe('citation guard exclusions (synthetic fixtures)', () => {
     expect(scanSvelteSource('fixture.svelte', src)).toHaveLength(0);
   });
 
-  it('does not trip on a code comment citing Issues.md, HANDOFF.md, or docs/*.md', () => {
+  it('does not trip on a code comment citing Issues.md, HANDOFF.md, docs/*.md, or issues/NNNN.md', () => {
     const src = `
-      // See Issues.md for status, HANDOFF.md for environment notes, and
-      // docs/architecture.md for the package map.
+      // See Issues.md for status, HANDOFF.md for environment notes,
+      // docs/architecture.md for the package map, and issues/0138.md for
+      // the original report.
       export function ok(): string {
         return 'nothing to see here';
       }
@@ -316,5 +356,27 @@ describe('citation guard catches (synthetic fixtures)', () => {
     expect(scanTsSource('fixture.ts', `export const a = 'see Issues.md for status';`).length).toBe(1);
     expect(scanTsSource('fixture.ts', `export const b = 'see HANDOFF.md for context';`).length).toBe(1);
     expect(scanTsSource('fixture.ts', `export const c = 'see docs/architecture.md';`).length).toBe(1);
+  });
+
+  // #0187, item 2: issues/NNNN.md was the one form of "internal document an
+  // admin cannot read" missing from the pattern even though docs/*.md was
+  // added — the least readable citation of the set, and the asymmetry was
+  // not deliberate.
+  it('fires on an issues/NNNN.md citation', () => {
+    const found = scanTsSource('fixture.ts', `export const a = 'see issues/0138.md for the acceptance criteria';`);
+    expect(found).toHaveLength(1);
+    expect(found[0].text).toContain('issues/0138.md');
+  });
+
+  // #0187, item 3: documents the decision to accept, rather than tighten,
+  // the one false-positive shape docs/\S*\.md (and now issues\/\d{4}\.md)
+  // introduces — an external URL containing a matching path segment. See
+  // the comment above citationPattern for the full reasoning (the Go half
+  // of this guard shares this pattern text and cannot express the
+  // lookbehind that would exclude it). This test exists so a future change
+  // that silently closes or widens the gap shows up in a diff.
+  it('documents the accepted docs/*.md external-URL false positive (#0187 item 3)', () => {
+    const found = scanTsSource('fixture.ts', `export const a = 'see https://example.com/docs/guide.md for details';`);
+    expect(found).toHaveLength(1);
   });
 });

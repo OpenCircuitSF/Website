@@ -70,7 +70,27 @@ import (
 // documents an admin cannot read either — #0178's own whole-tree grep
 // already included Issues.md and HANDOFF, and there is no principled
 // reason to guard one internal document and not the others.
-var citationPattern = regexp.MustCompile(`CLAUDE\.md|PRD\s*§|#0[0-9]{3}\b|Issues\.md|HANDOFF\.md|docs/\S*\.md`)
+//
+// #0187, item 2: `issues/NNNN.md` (a path to one tracker file, e.g.
+// "issues/0138.md") was missing even though docs/*.md was added — an
+// asymmetry, not a decision, since a tracker-file path is the least
+// readable citation of the whole set to an admin. `issues/[0-9]{4}\.md`
+// closes it; the repo's own #0NNN convention already guarantees the
+// four-digit form.
+//
+// #0187, item 3: docs/\S*\.md (and, after this pass, issues/[0-9]{4}\.md)
+// would also fire on an external URL that happens to contain a matching
+// path segment, e.g. "https://example.com/docs/guide.md". Decided:
+// accepted rather than tightened. Go's regexp/syntax (RE2) has no
+// lookbehind, so excluding a preceding "scheme://" cannot be expressed in
+// this pattern the way it can in the web guard's PCRE-flavored engine
+// (V8) — closing it here would mean the two guards no longer share one
+// pattern shape, which is a bigger maintenance hazard than the false
+// positive it prevents. The false positive is also nil today and
+// structurally unlikely to appear: CLAUDE.md §9 forbids external CDNs,
+// and the #0181 review's whole-tree sweep found every existing docs/*.md
+// occurrence in scanned Go scope was a `//` comment, not a live literal.
+var citationPattern = regexp.MustCompile(`CLAUDE\.md|PRD\s*§|#0[0-9]{3}\b|Issues\.md|HANDOFF\.md|docs/\S*\.md|issues/[0-9]{4}\.md`)
 
 // #0181 review, pass 2: rather than reasoning a fixed set of directories
 // into scope by hand (internal/mailing had to be added that way on the
@@ -83,11 +103,23 @@ var citationPattern = regexp.MustCompile(`CLAUDE\.md|PRD\s*§|#0[0-9]{3}\b|Issue
 // that gains an authored-here-serialized-there field, the way
 // internal/mailing did.
 //
-// Both entries are relative to this file's own directory (internal/handlers):
-// ".." is internal/ itself (walked recursively, so this file's own package
-// and every sibling package are covered in one root), and "../../cmd" is the
-// repo's cmd/ tree.
-var scanGoRoots = []string{"..", "../../cmd"}
+// #0187: the same review's coverage measurement counted 94 non-test .go
+// files collected against 94 on disk under internal/ and cmd/ — set
+// identical — but noted a 95th non-test .go file exists outside both roots:
+// web/embed.go. It authors one panic string about a malformed embedded FS,
+// not admin-facing copy, so nothing was exposed; but a guard whose whole
+// point is not needing a boundary argument should not itself need one, so
+// "../../web" is added rather than documented as a deliberate exclusion.
+// Re-measured after adding it: 95 files collected, 95 non-test .go files on
+// disk across internal/, cmd/, and web/ (find . -name '*.go' ! -name
+// '*_test.go' under those three roots), set-identical.
+//
+// All three entries are relative to this file's own directory
+// (internal/handlers): ".." is internal/ itself (walked recursively, so
+// this file's own package and every sibling package are covered in one
+// root), "../../cmd" is the repo's cmd/ tree, and "../../web" is the one
+// package outside internal/ and cmd/ that has a non-test .go file.
+var scanGoRoots = []string{"..", "../../cmd", "../../web"}
 
 type citationViolation struct {
 	pos   token.Position
@@ -245,5 +277,28 @@ func TestCitationPatternIgnoresHexColors(t *testing.T) {
 	}
 	if !citationPattern.MatchString("see #0181 for context") {
 		t.Fatal("citationPattern failed to match a genuine issue reference")
+	}
+}
+
+// TestCitationPatternCatchesIssueFilePath proves #0187 item 2: a string
+// literal citing a tracker file path (as opposed to the "#0181" form) trips
+// the guard.
+func TestCitationPatternCatchesIssueFilePath(t *testing.T) {
+	if !citationPattern.MatchString("see issues/0138.md for the acceptance criteria") {
+		t.Fatal("citationPattern failed to match an issues/NNNN.md path")
+	}
+	if citationPattern.MatchString("see the issues tracker for details") {
+		t.Fatal("citationPattern matched ordinary prose containing the word \"issues\"")
+	}
+}
+
+// TestCitationPatternAcceptsDocsURLFalsePositive documents #0187 item 3's
+// decision: docs/\S*\.md is not tightened to exclude a scheme-prefixed
+// path, so an external URL containing a matching segment does fire. This
+// test exists so a future change to citationPattern that accidentally
+// closes (or widens) the gap is visible in a diff rather than silent.
+func TestCitationPatternAcceptsDocsURLFalsePositive(t *testing.T) {
+	if !citationPattern.MatchString("see https://example.com/docs/guide.md for details") {
+		t.Fatal("citationPattern no longer matches the accepted external-URL false positive — update the #0187 comment above citationPattern if this was deliberate")
 	}
 }
