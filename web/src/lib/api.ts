@@ -772,11 +772,12 @@ export function unsubscribeOneClick(token: string | null): Promise<UnsubscribeRe
 /**
  * The fields POST /admin/workshops accepts. `title` is the only field the
  * server requires (internal/handlers/admin_workshops.go's Create); a "slug"
- * field is deliberately absent here -- the server generates it and ignores
- * any client-supplied value (see that handler's Create doc comment), and
- * PATCH has no slug field at all, so nothing in this module can ever send
- * one. See lib/workshopAdmin.ts's header comment for what that means for
- * the "editable before first publish" acceptance criterion.
+ * field is deliberately absent here -- the server generates it, and a
+ * request body carrying one is REJECTED with 400 (see that handler's
+ * Create doc comment), and PATCH has no slug field at all, so nothing in
+ * this module can ever send one. #0137 decided the slug stays
+ * server-generated and immutable -- see lib/workshopAdmin.ts's header
+ * comment for the full reasoning.
  */
 export interface CreateWorkshopFields {
   title: string;

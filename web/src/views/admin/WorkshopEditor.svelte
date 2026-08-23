@@ -83,7 +83,6 @@
     unpublishConfirmMessage,
     cancelConfirmMessage,
     deleteConfirmMessage,
-    isSlugEditable,
     toggleInterestId,
     validateWorkshopForm,
     isDeleteConflict,
@@ -394,12 +393,8 @@
         <span class="field-label">Slug</span>
         <p class="slug-value mono">{workshop.slug}</p>
         <p class="text-muted slug-hint">
-          {#if isSlugEditable()}
-            Auto-generated from the title.
-          {:else}
-            Auto-generated from the title and set once at creation -- the server does not accept
-            edits to it through this screen.
-          {/if}
+          Auto-generated from the title and set once at creation -- the server does not accept
+          edits to it through this screen.
         </p>
       </div>
 
