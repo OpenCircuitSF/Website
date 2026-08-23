@@ -439,6 +439,13 @@ an opaque error — check it first if a Phase 1 ceremony fails.
 - **Headless Chromium enforces a ~485 px minimum window width.**
   `--window-size=390` silently clips a wider render, which looks exactly like a
   horizontal-overflow bug. Test narrow layouts in a sized `<iframe>` instead.
+- **BSD `grep -P` on this machine matches nothing, silently.** It does not
+  error and does not warn — it reports zero hits on a file that demonstrably
+  contains the bytes, which reads exactly like "the string isn't there." A
+  reviewer hit this while byte-verifying a U+2009 thin space. Scan with
+  `python3` (or `grep -a` on a hex dump) when you need to prove a byte sequence
+  is or is not present; never conclude absence from `grep -P`.
+
 - **`.gitignore` anchors the binary as `/opencircuit`.** An unanchored binary
   name matches at any depth and silently excludes `cmd/opencircuit/` source.
   This already bit ShortLinks.
