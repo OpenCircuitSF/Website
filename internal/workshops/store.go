@@ -421,8 +421,30 @@ func (s *Store) List(ctx context.Context) ([]Workshop, error) {
 }
 
 // ListVisible returns every workshop the public may see — status
-// 'published' OR 'canceled', never 'draft' — split into upcoming and past
-// relative to now, for the public listing (GET /api/workshops; #0135).
+// 'published' OR 'canceled', AND published_at IS NOT NULL, never 'draft' —
+// split into upcoming and past relative to now, for the public listing
+// (GET /api/workshops; #0135).
+//
+// # The published_at guard (#0171)
+//
+// Status alone is not enough: draft -> canceled is a legal transition (an
+// admin canceling a workshop that fell through before it was ever
+// announced) and it leaves published_at NULL, per this package's own
+// "published_at's two transitions" doc comment above -- cancel preserves
+// whatever published_at already was, it never stamps one. Filtering only on
+// status IN ('published', 'canceled') would put that never-announced draft
+// on the public index the instant it was canceled, which is worse than
+// leaving it a draft. Requiring published_at IS NOT NULL closes that gap
+// while leaving #0051's ruling untouched: a workshop that WAS published and
+// is later canceled keeps its (unchanged) published_at and stays visible.
+// The same guard also privatizes published -> unpublished -> canceled
+// (unpublish clears published_at to NULL, and cancel then preserves that
+// NULL) -- deliberately: unpublishing is the admin's explicit "take this
+// back out of public view" action, and re-canceling from draft after that
+// should not resurrect visibility any more than canceling a workshop that
+// was never published should grant it. GetBySlug's caller
+// (internal/handlers/public_workshops.go) applies the identical guard, so
+// both routes agree.
 //
 // Named ListVisible, not ListPublished, since #0135: the index used to be
 // published-only, which made the detail route (GetBySlug, #0051) and the
@@ -457,7 +479,8 @@ func (s *Store) List(ctx context.Context) ([]Workshop, error) {
 func (s *Store) ListVisible(ctx context.Context, now time.Time) (upcoming, past []Workshop, err error) {
 	upcomingRows, err := s.pool.Query(ctx,
 		`SELECT `+workshopColumns+` FROM workshops
-		  WHERE status IN ($1, $2) AND (starts_at IS NULL OR starts_at >= $3)
+		  WHERE status IN ($1, $2) AND published_at IS NOT NULL
+		    AND (starts_at IS NULL OR starts_at >= $3)
 		  ORDER BY starts_at ASC NULLS LAST, id ASC`,
 		StatusPublished, StatusCanceled, now)
 	if err != nil {
@@ -471,7 +494,8 @@ func (s *Store) ListVisible(ctx context.Context, now time.Time) (upcoming, past 
 
 	pastRows, err := s.pool.Query(ctx,
 		`SELECT `+workshopColumns+` FROM workshops
-		  WHERE status IN ($1, $2) AND starts_at IS NOT NULL AND starts_at < $3
+		  WHERE status IN ($1, $2) AND published_at IS NOT NULL
+		    AND starts_at IS NOT NULL AND starts_at < $3
 		  ORDER BY starts_at DESC, id DESC`,
 		StatusPublished, StatusCanceled, now)
 	if err != nil {

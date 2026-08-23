@@ -161,7 +161,7 @@ func TestSite_EmittedURLsShareConfiguredHost(t *testing.T) {
 	source := fakeWorkshopSource{
 		"solder-101": {
 			Slug: "solder-101", Title: "Intro to Soldering", Summary: "s",
-			CoverImage: "/cover.jpg", Status: WorkshopPublished, UpdatedAt: "2026-08-01",
+			CoverImage: "/cover.jpg", Status: WorkshopPublished, Published: true, UpdatedAt: "2026-08-01",
 		},
 	}
 	site := NewSite([]byte(testTemplate), configuredBaseURL, source)

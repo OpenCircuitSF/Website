@@ -107,6 +107,7 @@ func toSEOWorkshop(w workshops.Workshop) seo.Workshop {
 		Summary:         summary,
 		CoverImage:      cover,
 		Status:          seo.WorkshopStatus(w.Status),
+		Published:       w.PublishedAt != nil, // #0171 -- draft -> canceled leaves this nil
 		UpdatedAt:       updatedAt,
 		StartsAt:        startsAt,
 		EndsAt:          endsAt,

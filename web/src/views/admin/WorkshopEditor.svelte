@@ -234,7 +234,7 @@
       case 'unpublish':
         return unpublishConfirmMessage(workshop.title);
       case 'cancel':
-        return cancelConfirmMessage(workshop.title);
+        return cancelConfirmMessage(workshop.title, !!workshop.published_at);
     }
   });
   let transitionHeading = $derived(

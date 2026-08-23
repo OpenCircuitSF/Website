@@ -321,7 +321,23 @@ func TestListVisible_SplitsUpcomingAndPast(t *testing.T) {
 			t.Fatalf("seed %q: %v", title, err)
 		}
 		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM workshops WHERE id = $1`, w.ID) })
-		if status != StatusDraft {
+		switch status {
+		case StatusDraft:
+			// nothing further -- stays draft, published_at nil
+		case StatusCanceled:
+			// #0171: this test exercises "was published, later canceled"
+			// (#0051's ruling -- stays visible), so route through published
+			// first so published_at actually gets stamped, exactly as a real
+			// admin canceling an announced workshop would. Canceling
+			// straight from draft is a different case (published_at stays
+			// nil, must NOT be visible) and has its own test below.
+			if _, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, StartsAt: startsAt, Status: StatusPublished}); err != nil {
+				t.Fatalf("transition %q to published (en route to canceled): %v", title, err)
+			}
+			if _, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, StartsAt: startsAt, Status: StatusCanceled}); err != nil {
+				t.Fatalf("transition %q to canceled: %v", title, err)
+			}
+		default:
 			if _, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, StartsAt: startsAt, Status: status}); err != nil {
 				t.Fatalf("transition %q to %s: %v", title, status, err)
 			}
@@ -382,6 +398,99 @@ func TestListVisible_SplitsUpcomingAndPast(t *testing.T) {
 	}
 	if pastIDs[draftW.ID] {
 		t.Errorf("draft workshop %d leaked into past list", draftW.ID)
+	}
+}
+
+// TestListVisible_ExcludesNeverPublishedCanceled is #0171's headline
+// regression test: a workshop canceled directly from draft -- the never-
+// published-but-canceled case every prior pass skipped, per #0135's review
+// -- must NOT appear in ListVisible. draft -> canceled is a legal admin
+// transition (issues/0171.md) and leaves published_at NULL (this package's
+// "published_at's two transitions" doc comment: cancel only preserves
+// whatever published_at already was), so status alone cannot be the guard.
+func TestListVisible_ExcludesNeverPublishedCanceled(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	future := now.Add(48 * time.Hour)
+
+	w := createTestWorkshop(t, store, uniqueTitle(t)+" never-published-canceled")
+	if w.PublishedAt != nil {
+		t.Fatalf("freshly created workshop PublishedAt = %v, want nil", w.PublishedAt)
+	}
+	canceled, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, StartsAt: &future, Status: StatusCanceled})
+	if err != nil {
+		t.Fatalf("draft -> canceled: %v", err)
+	}
+	if canceled.PublishedAt != nil {
+		t.Fatalf("PublishedAt = %v after draft -> canceled, want nil", canceled.PublishedAt)
+	}
+
+	upcoming, past, err := store.ListVisible(ctx, now)
+	if err != nil {
+		t.Fatalf("ListVisible: %v", err)
+	}
+	for _, got := range upcoming {
+		if got.ID == w.ID {
+			t.Errorf("never-published canceled workshop %d leaked into upcoming list", w.ID)
+		}
+	}
+	for _, got := range past {
+		if got.ID == w.ID {
+			t.Errorf("never-published canceled workshop %d leaked into past list", w.ID)
+		}
+	}
+}
+
+// TestListVisible_ExcludesCanceledAfterUnpublish covers the third matrix
+// cell #0171 asks for: published -> unpublished -> canceled. Unpublish
+// clears published_at to NULL (TestUpdate_UnpublishClearsPublishedAt), and
+// cancel then preserves whatever published_at already was -- so this
+// workshop ends up in exactly the same state as one canceled straight from
+// draft (Status=canceled, PublishedAt=nil), and the decision recorded in
+// issues/0171.md's ## Fix is that it must be private: unpublishing is the
+// admin's deliberate "take this back out of public view" action, and
+// canceling afterward must not resurrect visibility.
+func TestListVisible_ExcludesCanceledAfterUnpublish(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	future := now.Add(48 * time.Hour)
+
+	w := createTestWorkshop(t, store, uniqueTitle(t)+" unpublished-then-canceled")
+	if _, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, StartsAt: &future, Status: StatusPublished}); err != nil {
+		t.Fatalf("draft -> published: %v", err)
+	}
+	unpublished, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, StartsAt: &future, Status: StatusDraft})
+	if err != nil {
+		t.Fatalf("published -> draft (unpublish): %v", err)
+	}
+	if unpublished.PublishedAt != nil {
+		t.Fatalf("PublishedAt = %v after unpublish, want nil", unpublished.PublishedAt)
+	}
+	canceled, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, StartsAt: &future, Status: StatusCanceled})
+	if err != nil {
+		t.Fatalf("draft -> canceled (after unpublish): %v", err)
+	}
+	if canceled.PublishedAt != nil {
+		t.Fatalf("PublishedAt = %v after unpublish -> canceled, want nil (preserved from the unpublish step)", canceled.PublishedAt)
+	}
+
+	upcoming, past, err := store.ListVisible(ctx, now)
+	if err != nil {
+		t.Fatalf("ListVisible: %v", err)
+	}
+	for _, got := range upcoming {
+		if got.ID == w.ID {
+			t.Errorf("published->unpublished->canceled workshop %d leaked into upcoming list", w.ID)
+		}
+	}
+	for _, got := range past {
+		if got.ID == w.ID {
+			t.Errorf("published->unpublished->canceled workshop %d leaked into past list", w.ID)
+		}
 	}
 }
 

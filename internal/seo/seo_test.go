@@ -106,7 +106,7 @@ func TestRender_WorkshopDetailUsesStoreData(t *testing.T) {
 		"solder-101": {
 			Slug: "solder-101", Title: "Intro to Soldering",
 			Summary:    "Learn the basics of through-hole soldering.",
-			CoverImage: "/workshops/solder-101/cover.jpg", Status: WorkshopPublished,
+			CoverImage: "/workshops/solder-101/cover.jpg", Status: WorkshopPublished, Published: true,
 		},
 	}
 	r := newTestRenderer(source)
@@ -144,6 +144,13 @@ func TestRender_WorkshopDetailUnknownSlugFallsBack(t *testing.T) {
 
 // fullWorkshop is a workshop with every field #0055's Event JSON-LD needs
 // set, reused as a base by several tests below via a copy-and-tweak.
+// fullWorkshop builds a workshop that HAS been published at some point
+// (Published: true) -- the common case every existing caller wants,
+// including a "published" one that later became WorkshopCanceled (mirroring
+// #0051's "published -> canceled preserves published_at" rule). Callers
+// exercising #0171's actual defect -- a canceled workshop that was NEVER
+// published -- override Published: false explicitly on the returned value,
+// so that case can never pass by accident.
 func fullWorkshop(slug string, status WorkshopStatus) Workshop {
 	return Workshop{
 		Slug:            slug,
@@ -151,6 +158,7 @@ func fullWorkshop(slug string, status WorkshopStatus) Workshop {
 		Summary:         "Learn the basics of through-hole soldering.",
 		CoverImage:      "/workshops/" + slug + "/cover.jpg",
 		Status:          status,
+		Published:       true,
 		StartsAt:        "2026-09-12T18:00:00Z",
 		EndsAt:          "2026-09-12T20:00:00Z",
 		LocationName:    "Open Circuit SF",
@@ -293,6 +301,30 @@ func TestRender_JSONLD_CanceledWorkshopKeepsGenericSocialCard(t *testing.T) {
 	title := extractTag(t, body, "title")
 	if strings.Contains(title, "Intro to Soldering") {
 		t.Errorf("canceled workshop's <title> = %q, want the generic site fallback (unchanged from #0135's ruling)", title)
+	}
+}
+
+// TestRender_JSONLD_NeverPublishedCanceledOmitsBlockAndUsesGenericCard is
+// #0171's own regression test on the SEO renderer: a workshop canceled
+// directly from draft (Status=canceled, Published=false -- draft ->
+// canceled never stamps published_at) must be treated exactly like a draft
+// or an unknown slug -- no per-workshop JSON-LD Event, and the generic
+// fallback <title>, never the workshop's real one. Before this issue,
+// workshopRouteMeta's gate checked Status alone, so this exact workshop
+// would have produced a real, indexable EventCancelled block for a
+// workshop the public was never told existed.
+func TestRender_JSONLD_NeverPublishedCanceledOmitsBlockAndUsesGenericCard(t *testing.T) {
+	w := fullWorkshop("secret-canceled-draft", WorkshopCanceled)
+	w.Published = false
+	source := fakeWorkshopSource{"secret-canceled-draft": w}
+	r := newTestRenderer(source)
+	body := string(r.Render("/workshops/secret-canceled-draft"))
+
+	assertNoJSONLD(t, body)
+
+	title := extractTag(t, body, "title")
+	if strings.Contains(title, "Intro to Soldering") {
+		t.Errorf("never-published canceled workshop's <title> = %q, want the generic site fallback, never its real title", title)
 	}
 }
 
@@ -447,7 +479,7 @@ func TestRender_EscapesInjectedValues(t *testing.T) {
 	source := fakeWorkshopSource{
 		"xss-test": {
 			Slug: "xss-test", Title: malicious, Summary: malicious,
-			Status: WorkshopPublished,
+			Status: WorkshopPublished, Published: true,
 		},
 	}
 	r := newTestRenderer(source)
@@ -678,7 +710,7 @@ func (m *mutatingWorkshopSource) WorkshopBySlug(slug string) (Workshop, bool, er
 	if slug != "mutable" {
 		return Workshop{}, false, nil
 	}
-	return Workshop{Slug: "mutable", Title: m.title, Summary: "s", Status: WorkshopPublished, UpdatedAt: m.updatedAt}, true, nil
+	return Workshop{Slug: "mutable", Title: m.title, Summary: "s", Status: WorkshopPublished, Published: true, UpdatedAt: m.updatedAt}, true, nil
 }
 
 func (m *mutatingWorkshopSource) Workshops() ([]Workshop, error) {

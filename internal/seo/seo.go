@@ -304,29 +304,34 @@ func (r *Renderer) resolve(normalizedPath string) (cacheKey string, meta RouteMe
 // JSON-LD (jsonld.go's eventJSONLD).
 //
 // ok=false (share the generic fallback bucket, resolve's caller) for: no
-// WorkshopSource configured, an unknown slug, a workshop source error, or a
-// draft workshop -- none of these are ever public, so there is nothing
+// WorkshopSource configured, an unknown slug, a workshop source error, a
+// draft workshop, or (#0171) a canceled workshop that was never actually
+// published (w.Published false -- draft -> canceled leaves published_at
+// NULL) -- none of these are ever public, so there is nothing
 // workshop-specific to cache under its own key.
 //
-// ok=true for BOTH WorkshopPublished and WorkshopCanceled, which is a
-// deliberate divergence from this function's pre-#0055 behavior (published
-// only): a canceled workshop's <title>/og:* fields still come from
-// r.fallback, unchanged, per #0135's review ruling that internal/seo's
-// social-card/sitemap behavior for canceled workshops stays as it was -- but
-// eventJSONLD builds real, per-workshop EventCancelled JSON-LD for it, and
-// that per-workshop data must not be cached under the single shared
-// cacheKeyFallback bucket alongside every OTHER canceled/draft/unknown slug,
-// or two different canceled workshops' pages would leak each other's
-// structured data. Giving canceled its own "workshop:{slug}" cache key (via
-// resolve) is what prevents that, at the cost of widening the cache's
-// keyspace bound from "published workshops" to "published-or-canceled
-// workshops" -- see maxCacheEntries' doc comment.
+// ok=true for BOTH WorkshopPublished and WorkshopCanceled workshops that
+// HAVE been published (w.Published true), which is a deliberate divergence
+// from this function's pre-#0055 behavior (published only): a canceled
+// workshop's <title>/og:* fields still come from r.fallback, unchanged, per
+// #0135's review ruling that internal/seo's social-card/sitemap behavior for
+// canceled workshops stays as it was -- but eventJSONLD builds real,
+// per-workshop EventCancelled JSON-LD for it, and that per-workshop data
+// must not be cached under the single shared cacheKeyFallback bucket
+// alongside every OTHER canceled/draft/unknown slug, or two different
+// canceled workshops' pages would leak each other's structured data. Giving
+// canceled its own "workshop:{slug}" cache key (via resolve) is what
+// prevents that, at the cost of widening the cache's keyspace bound from
+// "published workshops" to "published-or-canceled workshops" -- see
+// maxCacheEntries' doc comment. The w.Published guard (#0171) keeps a
+// never-published canceled draft out of that widened keyspace entirely, the
+// same way it is kept off the sitemap and the JSON API's detail route.
 func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 	if r.workshop == nil {
 		return RouteMeta{}, false
 	}
 	w, ok, err := r.workshop.WorkshopBySlug(slug)
-	if err != nil || !ok || (w.Status != WorkshopPublished && w.Status != WorkshopCanceled) {
+	if err != nil || !ok || (w.Status != WorkshopPublished && w.Status != WorkshopCanceled) || !w.Published {
 		return RouteMeta{}, false
 	}
 

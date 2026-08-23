@@ -73,14 +73,29 @@ func TestPublicWorkshops_List_SplitsUpcomingPastExcludesDraft(t *testing.T) {
 			t.Fatalf("seed %q: %v", title, err)
 		}
 		cleanupPublicWorkshop(t, pool, w.ID)
-		if status != workshops.StatusDraft {
+		switch status {
+		case workshops.StatusDraft:
+			return w
+		case workshops.StatusCanceled:
+			// #0171: this test covers "was published, later canceled"
+			// (#0051's ruling -- stays visible), so route through published
+			// first so published_at is actually stamped. Canceling straight
+			// from draft is #0171's own defect and has its own tests below.
+			if _, uerr := store.Update(ctx, w.ID, workshops.UpdateInput{Title: w.Title, StartsAt: startsAt, Status: workshops.StatusPublished}); uerr != nil {
+				t.Fatalf("transition %q to published (en route to canceled): %v", title, uerr)
+			}
+			updated, uerr := store.Update(ctx, w.ID, workshops.UpdateInput{Title: w.Title, StartsAt: startsAt, Status: workshops.StatusCanceled})
+			if uerr != nil {
+				t.Fatalf("transition %q to canceled: %v", title, uerr)
+			}
+			return updated
+		default:
 			updated, uerr := store.Update(ctx, w.ID, workshops.UpdateInput{Title: w.Title, StartsAt: startsAt, Status: status})
 			if uerr != nil {
 				t.Fatalf("transition %q to %s: %v", title, status, uerr)
 			}
 			return updated
 		}
-		return w
 	}
 
 	upcoming := mk(uniquePublicWorkshopTitle(t)+" upcoming", &future, workshops.StatusPublished)
@@ -170,14 +185,29 @@ func TestPublicWorkshops_GetBySlug_VisibilityByStatus(t *testing.T) {
 			t.Fatalf("seed: %v", err)
 		}
 		cleanupPublicWorkshop(t, pool, w.ID)
-		if status == workshops.StatusDraft {
+		switch status {
+		case workshops.StatusDraft:
 			return w
+		case workshops.StatusCanceled:
+			// #0171: this covers "was published, later canceled" (#0051's
+			// ruling -- stays visible), so route through published first so
+			// published_at is actually stamped. The never-published case is
+			// #0171's own defect, covered separately below.
+			if _, err := store.Update(ctx, w.ID, workshops.UpdateInput{Title: w.Title, Status: workshops.StatusPublished}); err != nil {
+				t.Fatalf("transition to published (en route to canceled): %v", err)
+			}
+			updated, err := store.Update(ctx, w.ID, workshops.UpdateInput{Title: w.Title, Status: workshops.StatusCanceled})
+			if err != nil {
+				t.Fatalf("transition to canceled: %v", err)
+			}
+			return updated
+		default:
+			updated, err := store.Update(ctx, w.ID, workshops.UpdateInput{Title: w.Title, Status: status})
+			if err != nil {
+				t.Fatalf("transition to %s: %v", status, err)
+			}
+			return updated
 		}
-		updated, err := store.Update(ctx, w.ID, workshops.UpdateInput{Title: w.Title, Status: status})
-		if err != nil {
-			t.Fatalf("transition to %s: %v", status, err)
-		}
-		return updated
 	}
 
 	cases := []struct {
@@ -212,6 +242,151 @@ func TestPublicWorkshops_GetBySlug_VisibilityByStatus(t *testing.T) {
 				t.Errorf("status=%s: response Slug = %q, want %q", c.status, got.Slug, w.Slug)
 			}
 		}
+	}
+}
+
+// TestPublicWorkshops_List_ExcludesNeverPublishedCanceled and
+// TestPublicWorkshops_GetBySlug_NeverPublishedCanceledIs404 are #0171's
+// headline regression tests: canceling a draft that was never published is
+// a legal admin transition (issues/0171.md), and before this issue it made
+// the draft public on both routes. #0135's tests all seeded a *published*
+// workshop before canceling it, so this exact case -- and the third matrix
+// cell, published -> unpublished -> canceled -- had never been exercised.
+
+func TestPublicWorkshops_List_ExcludesNeverPublishedCanceled(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(publicWorkshopsMux(pool))
+	defer srv.Close()
+
+	store := workshops.NewStore(pool)
+	ctx := context.Background()
+	future := time.Now().Add(72 * time.Hour)
+
+	// draft -> canceled directly: published_at stays nil.
+	draftCanceled, err := store.Create(ctx, workshops.CreateInput{Title: uniquePublicWorkshopTitle(t) + " draft-canceled", StartsAt: &future})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cleanupPublicWorkshop(t, pool, draftCanceled.ID)
+	draftCanceled, err = store.Update(ctx, draftCanceled.ID, workshops.UpdateInput{Title: draftCanceled.Title, StartsAt: &future, Status: workshops.StatusCanceled})
+	if err != nil {
+		t.Fatalf("draft -> canceled: %v", err)
+	}
+
+	// published -> unpublished -> canceled: published_at cleared by
+	// unpublish, then preserved (still nil) by cancel.
+	unpubCanceled, err := store.Create(ctx, workshops.CreateInput{Title: uniquePublicWorkshopTitle(t) + " unpub-canceled", StartsAt: &future})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cleanupPublicWorkshop(t, pool, unpubCanceled.ID)
+	if _, err := store.Update(ctx, unpubCanceled.ID, workshops.UpdateInput{Title: unpubCanceled.Title, StartsAt: &future, Status: workshops.StatusPublished}); err != nil {
+		t.Fatalf("draft -> published: %v", err)
+	}
+	if _, err := store.Update(ctx, unpubCanceled.ID, workshops.UpdateInput{Title: unpubCanceled.Title, StartsAt: &future, Status: workshops.StatusDraft}); err != nil {
+		t.Fatalf("published -> draft (unpublish): %v", err)
+	}
+	unpubCanceled, err = store.Update(ctx, unpubCanceled.ID, workshops.UpdateInput{Title: unpubCanceled.Title, StartsAt: &future, Status: workshops.StatusCanceled})
+	if err != nil {
+		t.Fatalf("draft -> canceled (after unpublish): %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/workshops")
+	if err != nil {
+		t.Fatalf("GET /api/workshops: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, body)
+	}
+	var list decodedPublicWorkshopsList
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, body)
+	}
+	for _, w := range append(append([]decodedPublicWorkshop{}, list.Upcoming...), list.Past...) {
+		if w.Slug == draftCanceled.Slug {
+			t.Errorf("never-published canceled workshop %q leaked into the public index", draftCanceled.Slug)
+		}
+		if w.Slug == unpubCanceled.Slug {
+			t.Errorf("published->unpublished->canceled workshop %q leaked into the public index", unpubCanceled.Slug)
+		}
+	}
+}
+
+func TestPublicWorkshops_GetBySlug_NeverPublishedCanceledIs404(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(publicWorkshopsMux(pool))
+	defer srv.Close()
+
+	store := workshops.NewStore(pool)
+	ctx := context.Background()
+
+	// draft -> canceled directly.
+	draftCanceled, err := store.Create(ctx, workshops.CreateInput{Title: uniquePublicWorkshopTitle(t) + " draft-canceled"})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cleanupPublicWorkshop(t, pool, draftCanceled.ID)
+	draftCanceled, err = store.Update(ctx, draftCanceled.ID, workshops.UpdateInput{Title: draftCanceled.Title, Status: workshops.StatusCanceled})
+	if err != nil {
+		t.Fatalf("draft -> canceled: %v", err)
+	}
+	if draftCanceled.PublishedAt != nil {
+		t.Fatalf("PublishedAt = %v after draft -> canceled, want nil", draftCanceled.PublishedAt)
+	}
+
+	// published -> unpublished -> canceled.
+	unpubCanceled, err := store.Create(ctx, workshops.CreateInput{Title: uniquePublicWorkshopTitle(t) + " unpub-canceled"})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cleanupPublicWorkshop(t, pool, unpubCanceled.ID)
+	if _, err := store.Update(ctx, unpubCanceled.ID, workshops.UpdateInput{Title: unpubCanceled.Title, Status: workshops.StatusPublished}); err != nil {
+		t.Fatalf("draft -> published: %v", err)
+	}
+	if _, err := store.Update(ctx, unpubCanceled.ID, workshops.UpdateInput{Title: unpubCanceled.Title, Status: workshops.StatusDraft}); err != nil {
+		t.Fatalf("published -> draft (unpublish): %v", err)
+	}
+	unpubCanceled, err = store.Update(ctx, unpubCanceled.ID, workshops.UpdateInput{Title: unpubCanceled.Title, Status: workshops.StatusCanceled})
+	if err != nil {
+		t.Fatalf("draft -> canceled (after unpublish): %v", err)
+	}
+	if unpubCanceled.PublishedAt != nil {
+		t.Fatalf("PublishedAt = %v after unpublish -> canceled, want nil", unpubCanceled.PublishedAt)
+	}
+
+	for _, w := range []workshops.Workshop{draftCanceled, unpubCanceled} {
+		resp, err := http.Get(srv.URL + "/api/workshops/" + w.Slug)
+		if err != nil {
+			t.Fatalf("GET /api/workshops/%s: %v", w.Slug, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("slug=%s: status = %d, want 404 (body=%s)", w.Slug, resp.StatusCode, body)
+		}
+	}
+
+	// The 404 body must be byte-identical to an unknown slug's, same
+	// existence-leak posture GetBySlug's own doc comment already promises
+	// for the draft case -- prove it still holds for this one too.
+	unknownResp, err := http.Get(srv.URL + "/api/workshops/zz-does-not-exist-0171")
+	if err != nil {
+		t.Fatalf("GET unknown slug: %v", err)
+	}
+	unknownBody, _ := io.ReadAll(unknownResp.Body)
+	unknownResp.Body.Close()
+
+	draftCanceledResp, err := http.Get(srv.URL + "/api/workshops/" + draftCanceled.Slug)
+	if err != nil {
+		t.Fatalf("GET draft-canceled slug: %v", err)
+	}
+	draftCanceledBody, _ := io.ReadAll(draftCanceledResp.Body)
+	draftCanceledResp.Body.Close()
+
+	if string(unknownBody) != string(draftCanceledBody) {
+		t.Errorf("404 body differs between unknown slug (%s) and never-published-canceled slug (%s) -- leaks existence", unknownBody, draftCanceledBody)
 	}
 }
 

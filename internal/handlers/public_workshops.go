@@ -1,17 +1,20 @@
-// Public workshop read path (PRD §6.2, §7.3, §8; #0051, widened by #0135):
-// GET /api/workshops (the index — #0053) and GET /api/workshops/{slug} (the
-// detail page — #0054). No session or admin gate.
+// Public workshop read path (PRD §6.2, §7.3, §8; #0051, widened by #0135,
+// narrowed by #0171): GET /api/workshops (the index — #0053) and
+// GET /api/workshops/{slug} (the detail page — #0054). No session or admin
+// gate.
 //
-// # Visibility rule (same on both routes, since #0135)
+// # Visibility rule (same on both routes, since #0135; both now also #0171)
 //
-// Both routes serve a workshop whose status is 'published' OR 'canceled';
-// 'draft' is invisible to both, and a slug with no matching row 404s just
-// like a draft (indistinguishable, so probing slugs leaks nothing).
+// Both routes serve a workshop whose status is 'published' OR 'canceled'
+// AND whose published_at is non-NULL; 'draft' is invisible to both, and so
+// is a canceled workshop that was never actually published (published_at
+// still NULL — draft -> canceled leaves it untouched, per
+// workshops.Store's own doc comment). A slug with no matching row 404s just
+// like either of those, indistinguishable, so probing slugs leaks nothing.
 //
-//   - GET /api/workshops returns published-or-canceled workshops, split
-//     into upcoming and past (workshops.Store.ListVisible).
-//   - GET /api/workshops/{slug} returns one published-or-canceled workshop,
-//     or 404.
+//   - GET /api/workshops returns published-or-canceled, published_at-set
+//     workshops, split into upcoming and past (workshops.Store.ListVisible).
+//   - GET /api/workshops/{slug} returns one such workshop, or 404.
 //
 // Before #0135 these two routes disagreed: the detail route served canceled
 // (deliberately — PRD's Notes, issues/0051.md: "a canceled workshop stays
@@ -24,6 +27,13 @@
 // the direct link learned it was canceled. #0135 widened the index to match,
 // so #0053's canceled-badge criterion (web/src/lib/workshops.ts's
 // isCanceled/workshopBadgeLabel) can now actually be reached.
+//
+// #0135's widening was reasoned about for workshops that had been visible
+// already, and missed the case where they never were: canceling a draft
+// (never published) is a legal admin transition, and it was making that
+// draft public. #0171 adds the published_at requirement above to both
+// routes to close that — see workshops.Store.ListVisible's doc comment for
+// the full transition-by-transition reasoning.
 package handlers
 
 import (
@@ -181,12 +191,15 @@ func (h *PublicWorkshopsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // ── GET /api/workshops/{slug} ────────────────────────────────────────────────
 
-// GetBySlug handles GET /api/workshops/{slug}: one workshop, if it exists
-// and its status is published or canceled. A draft workshop, or a slug with
-// no matching row, both 404 -- deliberately indistinguishable to the caller,
-// so a signed-out visitor probing slugs learns nothing about the existence
-// of an unpublished workshop (mirrors ConfirmHandler's and
-// PreferencesHandler's "don't leak existence" posture for token lookups).
+// GetBySlug handles GET /api/workshops/{slug}: one workshop, if it exists,
+// its status is published or canceled, AND it has actually been published
+// at some point (published_at non-NULL). A draft, a canceled workshop that
+// was never published (#0171 -- draft -> canceled leaves published_at
+// NULL), or a slug with no matching row, all 404 -- deliberately
+// indistinguishable to the caller, so a signed-out visitor probing slugs
+// learns nothing about the existence of an unpublished workshop (mirrors
+// ConfirmHandler's and PreferencesHandler's "don't leak existence" posture
+// for token lookups).
 func (h *PublicWorkshopsHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	wk, err := h.store.GetBySlug(r.Context(), slug)
@@ -199,7 +212,7 @@ func (h *PublicWorkshopsHandler) GetBySlug(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	if wk.Status == workshops.StatusDraft {
+	if wk.Status == workshops.StatusDraft || wk.PublishedAt == nil {
 		writeError(w, http.StatusNotFound, "workshop not found")
 		return
 	}

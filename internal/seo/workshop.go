@@ -22,7 +22,18 @@ type Workshop struct {
 	Summary    string
 	CoverImage string // root-relative path or absolute URL; "" falls back to the default OG image
 	Status     WorkshopStatus
-	UpdatedAt  string // RFC 3339 date (YYYY-MM-DD is sufficient for <lastmod>); "" omits <lastmod>
+	// Published mirrors workshops.Workshop.PublishedAt != nil (#0171): true
+	// once the workshop has actually gone live at least once, false for a
+	// workshop that has never been published -- notably a draft canceled
+	// before it was ever announced, which leaves Status=canceled but
+	// Published=false. workshopRouteMeta requires this in addition to
+	// Status being published-or-canceled before building any
+	// workshop-specific data (the per-workshop JSON-LD Event in
+	// particular): status alone would let a never-published canceled draft
+	// produce a real, indexable structured-data block, the same leak #0171
+	// closed on the JSON API routes.
+	Published bool
+	UpdatedAt string // RFC 3339 date (YYYY-MM-DD is sufficient for <lastmod>); "" omits <lastmod>
 
 	// StartsAt / EndsAt back #0055's JSON-LD startDate/endDate. Full RFC 3339
 	// timestamps WITH a UTC offset (Go's time.RFC3339, e.g.

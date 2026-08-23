@@ -87,12 +87,24 @@ describe('status transition offers', () => {
   it('confirm messages mention the title', () => {
     expect(publishConfirmMessage('Soldering 101')).toContain('Soldering 101');
     expect(unpublishConfirmMessage('Soldering 101')).toContain('Soldering 101');
-    expect(cancelConfirmMessage('Soldering 101')).toContain('Soldering 101');
+    expect(cancelConfirmMessage('Soldering 101', true)).toContain('Soldering 101');
+    expect(cancelConfirmMessage('Soldering 101', false)).toContain('Soldering 101');
     expect(deleteConfirmMessage('Soldering 101')).toContain('Soldering 101');
   });
 
-  it('cancel copy says the workshop stays visible, not that it disappears', () => {
-    expect(cancelConfirmMessage('X')).toMatch(/stays visible/i);
+  it('cancel copy for a workshop that WAS published says it stays visible, not that it disappears', () => {
+    expect(cancelConfirmMessage('X', true)).toMatch(/stays visible/i);
+  });
+
+  // #0171: canceling a workshop that was never published (a draft, or one
+  // unpublished before this cancel -- published_at NULL either way) does
+  // NOT make it public. The old unconditional "stays visible" copy was
+  // wrong for this case -- the exact defect issues/0171.md is about.
+  it('cancel copy for a never-published workshop says it stays private, not that it stays visible', () => {
+    const msg = cancelConfirmMessage('X', false);
+    expect(msg).toMatch(/never published/i);
+    expect(msg).toMatch(/private/i);
+    expect(msg).not.toMatch(/stays visible/i);
   });
 });
 

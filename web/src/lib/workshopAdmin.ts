@@ -128,12 +128,23 @@ export function unpublishConfirmMessage(title: string): string {
 
 /**
  * Confirmation copy for canceling `title`. Mirrors store.go's own note that
- * cancel is not unpublish: a canceled workshop stays visible on the public
- * site (with a canceled badge -- see lib/workshops.ts's workshopBadgeLabel)
- * rather than disappearing.
+ * cancel is not unpublish: a canceled workshop that WAS published stays
+ * visible on the public site (with a canceled badge -- see
+ * lib/workshops.ts's workshopBadgeLabel) rather than disappearing.
+ *
+ * `wasPublished` must be `!!workshop.published_at` at the moment the admin
+ * opens this confirmation -- the same signal the public read path
+ * (internal/handlers/public_workshops.go, #0171) uses to decide visibility.
+ * A workshop that has never been published (a draft, or one that was
+ * unpublished before this cancel) has `published_at` NULL, and canceling it
+ * does NOT make it public -- the pre-#0171 defect this function's old,
+ * unconditional "stays visible" copy was describing wrong for that case.
  */
-export function cancelConfirmMessage(title: string): string {
-  return `Cancel "${title}"? It stays visible on the public site, marked canceled, rather than disappearing.`;
+export function cancelConfirmMessage(title: string, wasPublished: boolean): string {
+  if (wasPublished) {
+    return `Cancel "${title}"? It stays visible on the public site, marked canceled, rather than disappearing.`;
+  }
+  return `Cancel "${title}"? It was never published, so it stays private -- canceling it will not make it visible.`;
 }
 
 /** Confirmation copy for deleting `title` (the non-conflict path). */
