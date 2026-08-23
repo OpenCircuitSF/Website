@@ -238,7 +238,8 @@
             />
           </div>
           <p class="text-muted create-hint">
-            The slug and every other field are set from the full editor after the workshop is created.
+            The slug is auto-generated from this title at creation and can't be changed
+            afterward. Every other field is set in the full editor next.
           </p>
           {#if createError}
             <p class="text-error" role="alert">{createError}</p>

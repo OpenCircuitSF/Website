@@ -106,6 +106,12 @@ describe('announceTargetingDescription', () => {
     expect(description).toMatch(/this workshop's interests/i);
     expect(description).not.toMatch(/everyone/i);
   });
+
+  it('#0170: names the subject instead of opening with a pronoun -- this sentence opens its own paragraph, so "It" has no local antecedent', () => {
+    const description = announceTargetingDescription([7]);
+    expect(description).toMatch(/^The draft will be targeted/);
+    expect(description.startsWith('It ')).toBe(false);
+  });
 });
 
 describe('announceTargetingClass (#0162)', () => {
@@ -204,6 +210,16 @@ describe('isPreviewStale (#0167)', () => {
 
   it('is false for a brand-new workshop with an empty buffer and no saved body', () => {
     expect(isPreviewStale('', '')).toBe(false);
+  });
+
+  it('#0170: is false for a whitespace-only edit -- validateWorkshopForm saves bodyMd.trim(), so this would be a byte-identical save', () => {
+    expect(isPreviewStale('Learn to solder.  ', 'Learn to solder.')).toBe(false);
+    expect(isPreviewStale('  Learn to solder.', 'Learn to solder.')).toBe(false);
+    expect(isPreviewStale('\n\nLearn to solder.\n', 'Learn to solder.')).toBe(false);
+  });
+
+  it('#0170: still true when whitespace differs AND the content itself differs', () => {
+    expect(isPreviewStale('  Learn to solder well.', 'Learn to solder.')).toBe(true);
   });
 });
 
@@ -395,13 +411,16 @@ describe('validateWorkshopForm', () => {
 
   it('rejects a non-numeric or non-positive capacity', () => {
     expect(validateWorkshopForm(blankFields({ title: 'X', capacity: 'abc' }))).toEqual({
-      error: 'Capacity must be a positive whole number.',
+      error: 'Capacity must be a whole number between 1 and 2147483647.',
     });
+    // #0168: 0 stays rejected, not treated as "unlimited" -- #0155's
+    // decision. NULL (an empty capacity field) is the only "no limit"
+    // spelling; see blankWorkshopFormFields.
     expect(validateWorkshopForm(blankFields({ title: 'X', capacity: '0' }))).toEqual({
-      error: 'Capacity must be a positive whole number.',
+      error: 'Capacity must be a whole number between 1 and 2147483647.',
     });
     expect(validateWorkshopForm(blankFields({ title: 'X', capacity: '-5' }))).toEqual({
-      error: 'Capacity must be a positive whole number.',
+      error: 'Capacity must be a whole number between 1 and 2147483647.',
     });
   });
 
@@ -411,6 +430,39 @@ describe('validateWorkshopForm', () => {
     if (!('error' in result)) {
       expect(result.capacity).toBe(20);
     }
+  });
+
+  describe('capacity upper bound (#0168)', () => {
+    // Mirrors migrations/000020_create_workshops.up.sql's
+    // workshops_capacity_check CHECK (capacity <= 2147483647) and
+    // internal/handlers/admin_workshops.go's isValidCapacity -- INT's max
+    // value in Postgres. Before this, an admin typing something above that
+    // got a round trip and a server 400 instead of an immediate local
+    // message (#0155 made that 400 correct behavior; #0168 makes it
+    // unnecessary for this specific, common typo).
+    it('accepts the boundary value 2147483647', () => {
+      const result = validateWorkshopForm(blankFields({ title: 'X', capacity: '2147483647' }));
+      expect('error' in result).toBe(false);
+      if (!('error' in result)) {
+        expect(result.capacity).toBe(2147483647);
+      }
+    });
+
+    it('rejects one past the boundary, 2147483648', () => {
+      expect(
+        validateWorkshopForm(blankFields({ title: 'X', capacity: '2147483648' })),
+      ).toEqual({
+        error: 'Capacity must be a whole number between 1 and 2147483647.',
+      });
+    });
+
+    it('rejects a capacity far beyond the boundary', () => {
+      expect(
+        validateWorkshopForm(blankFields({ title: 'X', capacity: '3000000000' })),
+      ).toEqual({
+        error: 'Capacity must be a whole number between 1 and 2147483647.',
+      });
+    });
   });
 
   it('rejects a signup URL without http(s)', () => {

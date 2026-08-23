@@ -165,7 +165,14 @@ export function deleteConfirmMessage(title: string): string {
 export function announceTargetingDescription(interestIds: number[]): string {
   return interestIds.length === 0
     ? 'This workshop has no interests set, so the draft will target everyone on the list.'
-    : "It will be targeted at this workshop's interests.";
+    : // #0170 (carried in from #0162/#0167's review): this used to read "It
+      // will be targeted..." -- but by the time this sentence renders it
+      // opens its own paragraph (#0162 split the panel into three separate
+      // elements; see the <!-- #0162 --> comment above this panel in
+      // WorkshopEditor.svelte), so "It" pointed at an antecedent ("the
+      // draft") two sentences back in a different paragraph. Naming the
+      // subject again reads better than a pronoun with no local antecedent.
+      "The draft will be targeted at this workshop's interests.";
 }
 
 /**
@@ -278,9 +285,23 @@ export function announceUnsavedInterestsHint(
  * Deliberately NOT used to re-render the preview client-side -- that's the
  * defect `#0136` exists to remove; this only decides whether to show a cue
  * next to the server-rendered, last-saved HTML.
+ *
+ * #0170 (carried in from #0162/#0167's review): compares TRIMMED bodies.
+ * `validateWorkshopForm` below saves `fields.bodyMd.trim()`, so a
+ * whitespace-only edit (leading/trailing space added or removed, nothing
+ * else) previously flagged the preview as stale even though clicking Save
+ * would store a byte-identical `body_md` -- the cue would then immediately
+ * clear on save with nothing having actually changed server-side. That's a
+ * pure over-warn, never an under-warn (anything that survives a `.trim()`
+ * diff also differs untrimmed), so it wasn't a defect, just noise. This
+ * departs from #0167's original literal criterion ("previewStale is true
+ * whenever fields.bodyMd !== workshop.body_md") in favor of matching what
+ * the buffer will actually persist as; leaving it untrimmed and documenting
+ * why was an equally defensible choice, but there's no reason to warn an
+ * admin about a save that will change nothing.
  */
 export function isPreviewStale(bodyMd: string, savedBodyMd: string | undefined): boolean {
-  return bodyMd !== (savedBodyMd ?? '');
+  return bodyMd.trim() !== (savedBodyMd ?? '').trim();
 }
 
 // ── Slug (server-owned -- see this module's header note) ───────────────────
@@ -412,6 +433,23 @@ function isHttpUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
 
+// #0168: the client-side upper bound on capacity, kept as one named
+// constant rather than a literal at the call site so it's found by whoever
+// next changes either side of this Go<->TypeScript-duplicated rule.
+// Mirrors internal/handlers/admin_workshops.go's isValidCapacity AND
+// migrations/000020_create_workshops.up.sql's workshops_capacity_check
+// CHECK constraint (`capacity IS NULL OR (capacity >= 1 AND capacity <=
+// 2147483647)`) -- capacity is `workshops.capacity INT`, and 2147483647 is
+// INT's max value in Postgres. Without a client-side check an admin typing
+// something like 3000000000 got a round trip and a 400 (previously a raw
+// 500, before #0155 added the CHECK) instead of an immediate local message;
+// see #0168's Notes for why this single-value comment is the right amount
+// of ceremony rather than a full parity fixture like #0157's URL
+// validators. If `migrations/000020` ever widens the column (e.g. to
+// BIGINT), this constant, isValidCapacity, and the CHECK all need to move
+// together.
+const MAX_WORKSHOP_CAPACITY = 2147483647;
+
 // C0 controls (0x00-0x1f) plus DEL (0x7f). Same rule as linkSafety.ts's
 // HAS_CONTROL_CHAR (#0138 bounce, finding 1): a browser's URL parser
 // deletes every ASCII tab/LF/CR anywhere in the string before resolving it,
@@ -507,10 +545,24 @@ export function validateWorkshopForm(
   const capacityTrimmed = fields.capacity.trim();
   let capacity: number | null = null;
   if (capacityTrimmed !== '') {
-    if (!/^\d+$/.test(capacityTrimmed) || Number(capacityTrimmed) <= 0) {
-      return { error: 'Capacity must be a positive whole number.' };
+    // #0168: the message matches capacityErrorMessage in
+    // internal/handlers/admin_workshops.go -- same rule, same wording, in
+    // both places. `Number(capacityTrimmed) <= 0` guards the lower bound
+    // (0 is rejected, not treated as "unlimited" -- #0155's decision;
+    // NULL/blank is the only "no limit" spelling, see blankWorkshopFormFields
+    // and ValidatedWorkshopFields.capacity's doc comment above), and the new
+    // upper-bound check below is what #0168 adds: without it, a value like
+    // 3000000000 passed the regex/positivity check here and only got caught
+    // by the server's 400, a round trip for something checkable locally.
+    const capacityValue = Number(capacityTrimmed);
+    if (
+      !/^\d+$/.test(capacityTrimmed) ||
+      capacityValue <= 0 ||
+      capacityValue > MAX_WORKSHOP_CAPACITY
+    ) {
+      return { error: 'Capacity must be a whole number between 1 and 2147483647.' };
     }
-    capacity = Number(capacityTrimmed);
+    capacity = capacityValue;
   }
 
   const signupUrl = fields.signupUrl.trim();
