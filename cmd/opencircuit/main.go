@@ -31,6 +31,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 	"github.com/brennanMKE/OpenCircuitSF/web"
 )
 
@@ -183,6 +184,36 @@ func servePostgres(cfg *config.Config) error {
 	// interests.Store is a stateless wrapper over the shared pool, so one
 	// instance safely backs both call sites.
 	adminInterestsH := handlers.NewAdminInterestsHandler(interestsStore, auditLogger)
+
+	// Workshop CRUD (#0051, PRD §5.2/§6.2/§8): admin create/list/edit/delete
+	// plus the public read routes (#0053/#0054's index and detail pages).
+	// workshopsStore is internal/workshops' data-access layer over
+	// migration 000020's workshops/workshop_interests tables (#0050).
+	//
+	// The cache-invalidation seam (nil here, deliberately): #0051's own
+	// acceptance criteria require every workshop mutation to call
+	// *seo.Site.InvalidateWorkshops (carried in from #0073's review), but
+	// *seo.Site is constructed further down, inside mountAndServe, from the
+	// embedded index.html this function has no access to -- exactly the
+	// same "the real implementation doesn't exist at this call site yet"
+	// situation campaignPreflightChecker/campaignAudienceCounter solved
+	// above by passing nil and letting a LATER issue wire the adapter in
+	// (see AdminCampaignsHandler's own doc comment). Here that later issue
+	// is #0054: internal/seo/workshop.go's doc comment and this file's
+	// existing comment on seo.NewSite's third argument both already name
+	// #0054 as the one that wires the real WorkshopSource in, and doing so
+	// is also the natural point to thread *seo.Site back to this handler
+	// (mountAndServe would need to construct AdminWorkshopsHandler itself,
+	// or expose Site earlier, either of which is #0054's restructuring to
+	// make, not #0051's). Until then, AdminWorkshopsHandler.invalidate is a
+	// documented, tested no-op (internal/handlers/admin_workshops_test.go
+	// proves the call happens via a fake invalidator) -- NOT a compliance
+	// gap: nothing reads internal/seo's cache today because its
+	// WorkshopSource is ALSO nil (seo.NewSite's third argument, below), so
+	// there is nothing yet for a missed invalidation to make stale.
+	workshopsStore := workshops.NewStore(pool)
+	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, nil, auditLogger)
+	publicWorkshopsH := handlers.NewPublicWorkshopsHandler(workshopsStore, interestsStore)
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,
 	// manual suppress, clear-complaint, and manual add. manualAdd (subscribeH)
@@ -358,8 +389,8 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH, sendWorker,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, eventsH, meH, subscribeH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -600,6 +631,16 @@ func serveDevMode(cfg *config.Config) error {
 	// when nil, mirroring adminCampaignPreflightH's own nil-guard.
 	var adminCampaignStatsH *handlers.AdminCampaignStatsHandler
 
+	// Workshop CRUD (#0051) has the same devstore gap as adminCampaignStatsH
+	// above -- internal/devstore has no workshops/workshop_interests
+	// backing. Passing nil leaves every other route working in STORAGE=json
+	// mode; adminRoutes omits its four routes when nil, and mountAndServe
+	// only registers GET /api/workshops and GET /api/workshops/{slug} when
+	// publicWorkshopsH is non-nil, mirroring publicInterestsH's own
+	// nil-guard.
+	var adminWorkshopsH *handlers.AdminWorkshopsHandler
+	var publicWorkshopsH *handlers.PublicWorkshopsHandler
+
 	// Public interests (#0029), confirm (#0030), preferences (#0031), and
 	// one-click unsubscribe (#0034) all have the same devstore gap as
 	// subscribeH/adminInterestsH above -- internal/devstore has no
@@ -629,8 +670,8 @@ func serveDevMode(cfg *config.Config) error {
 	var sendWorker *mailing.Worker
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, sesNotifyH, sendWorker,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, eventsH, meH, subscribeH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -655,11 +696,11 @@ type adminRoute struct {
 // test with no edit to the test itself required.
 //
 // adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH,
-// adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, and
-// adminCampaignStatsH may be nil (dev mode / STORAGE=json has no
-// interests/subscribers-table backing yet — see mountAndServe's comment on
-// the call site); their routes are simply omitted, mirroring mountAndServe's
-// own former nil guard.
+// adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH,
+// adminCampaignStatsH, and adminWorkshopsH may be nil (dev mode /
+// STORAGE=json has no interests/subscribers-table backing yet — see
+// mountAndServe's comment on the call site); their routes are simply
+// omitted, mirroring mountAndServe's own former nil guard.
 func adminRoutes(
 	settingsH *handlers.SettingsHandler,
 	adminUsersH *handlers.AdminUsersHandler,
@@ -672,6 +713,7 @@ func adminRoutes(
 	adminCampaignPreviewH *handlers.AdminCampaignPreviewHandler,
 	adminCampaignPreflightH *handlers.AdminCampaignPreflightHandler,
 	adminCampaignStatsH *handlers.AdminCampaignStatsHandler,
+	adminWorkshopsH *handlers.AdminWorkshopsHandler,
 ) []adminRoute {
 	routes := []adminRoute{
 		{http.MethodGet, "/admin/settings", http.HandlerFunc(settingsH.List)},
@@ -736,6 +778,15 @@ func adminRoutes(
 			adminRoute{http.MethodGet, "/admin/campaigns/{id}/stats", http.HandlerFunc(adminCampaignStatsH.Stats)},
 		)
 	}
+	if adminWorkshopsH != nil {
+		routes = append(routes,
+			adminRoute{http.MethodGet, "/admin/workshops", http.HandlerFunc(adminWorkshopsH.List)},
+			adminRoute{http.MethodPost, "/admin/workshops", http.HandlerFunc(adminWorkshopsH.Create)},
+			adminRoute{http.MethodGet, "/admin/workshops/{id}", http.HandlerFunc(adminWorkshopsH.Get)},
+			adminRoute{http.MethodPatch, "/admin/workshops/{id}", http.HandlerFunc(adminWorkshopsH.Patch)},
+			adminRoute{http.MethodDelete, "/admin/workshops/{id}", http.HandlerFunc(adminWorkshopsH.Delete)},
+		)
+	}
 	return routes
 }
 
@@ -772,6 +823,7 @@ func mountAndServe(
 	adminCampaignPreviewH *handlers.AdminCampaignPreviewHandler,
 	adminCampaignPreflightH *handlers.AdminCampaignPreflightHandler,
 	adminCampaignStatsH *handlers.AdminCampaignStatsHandler,
+	adminWorkshopsH *handlers.AdminWorkshopsHandler,
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
 	subscribeH *handlers.SubscribeHandler,
@@ -779,6 +831,7 @@ func mountAndServe(
 	preferencesH *handlers.PreferencesHandler,
 	confirmH *handlers.ConfirmHandler,
 	unsubscribeH *handlers.UnsubscribeHandler,
+	publicWorkshopsH *handlers.PublicWorkshopsHandler,
 	sesNotifyH *handlers.SESNotificationsHandler,
 	sendWorker *mailing.Worker,
 	requireSession func(http.Handler) http.Handler,
@@ -845,7 +898,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 
@@ -889,6 +942,17 @@ func mountAndServe(
 	// same trust level as GET /sitemap.xml below.
 	if publicInterestsH != nil {
 		mux.Handle("GET /api/interests", http.HandlerFunc(publicInterestsH.List))
+	}
+
+	// Public workshop read routes (#0051, PRD §6.2/§7.3/§8) — no auth, no
+	// rate limit, same trust level as the interests read above: a read-only
+	// GET filtered to already-published (or, for the detail route,
+	// published/canceled) rows. publicWorkshopsH is nil in dev mode
+	// (STORAGE=json — internal/devstore has no workshops-table backing yet,
+	// see serveDevMode's comment).
+	if publicWorkshopsH != nil {
+		mux.Handle("GET /api/workshops", http.HandlerFunc(publicWorkshopsH.List))
+		mux.Handle("GET /api/workshops/{slug}", http.HandlerFunc(publicWorkshopsH.GetBySlug))
 	}
 
 	// Preference center (#0031) and confirmation (#0030) — public,

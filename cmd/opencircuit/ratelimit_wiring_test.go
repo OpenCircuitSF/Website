@@ -103,9 +103,10 @@ func TestMountAndServe_RateLimitsAuthLoginStart(t *testing.T) {
 			nil,               /* adminCampaignAudienceH: not exercised by this test */
 			nil,               /* adminCampaignPreviewH: not exercised by this test */
 			nil,               /* adminCampaignPreflightH: not exercised by this test */
-			nil, /* adminCampaignStatsH: not exercised by this test */
+			nil,               /* adminCampaignStatsH: not exercised by this test */
+			nil,               /* adminWorkshopsH: not exercised by this test */
 			eventsH, meH, nil, /* subscribeH: not exercised by this test */
-			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
+			nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
 			requireSession, requireAdmin, nil, ready)

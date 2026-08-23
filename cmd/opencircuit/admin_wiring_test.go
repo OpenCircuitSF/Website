@@ -24,6 +24,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
 
 // TestMountAndServe_AdminRoutesRequireSessionAndAdmin closes the same kind of
@@ -165,6 +166,13 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// *mailing.CampaignStatsStore, no mailer/mutation involved.
 	campaignStatsStore := mailing.NewCampaignStatsStore(pool)
 	adminCampaignStatsH := handlers.NewAdminCampaignStatsHandler(campaignStatsStore, campaignsStore)
+	// #0051: exercised the same way as adminCampaignStatsH above. The
+	// invalidator is nil (matching main.go's own production wiring — see
+	// that call site's comment: *seo.Site is wired in by #0054), which has
+	// no bearing on this test's guard proof since RequireAdmin runs before
+	// the handler ever calls it.
+	workshopsStore := workshops.NewStore(pool)
+	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, nil, auditLogger)
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 	meH := handlers.NewMeHandler()
@@ -177,8 +185,8 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
-			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
+			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
 			requireSession, requireAdmin, nil, ready)
@@ -267,6 +275,30 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM email_campaigns WHERE name LIKE 'zz-wiring-%'`)
 	})
 
+	// A dedicated throwaway workshop for the /admin/workshops/{id} family,
+	// seeded through the real store — never a literal id, same CLAUDE.md
+	// §8b reasoning as targetInterest/targetSubscriber/targetCampaign above.
+	// The admin-session case reaches the real handler for every verb (GET,
+	// PATCH, DELETE); this test sends no body on any route, so PATCH 400s
+	// (title cannot be empty resolves to the current non-empty title, but
+	// status is required and this test sends none — see
+	// workshops.ErrUnknownStatus) and DELETE genuinely removes the row —
+	// still proof enough that RequireAdmin let the request through, the
+	// same standard this test already applies to POST /admin/subscribers's
+	// 503 above. The cleanup below is unconditional regardless of whether
+	// DELETE actually ran.
+	targetWorkshop, err := workshopsStore.Create(context.Background(), workshops.CreateInput{
+		Title: fmt.Sprintf("zz-wiring-%d", time.Now().UnixNano()),
+	})
+	if err != nil {
+		t.Fatalf("seed target workshop: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), wiringDBOpTimeout)
+		defer cancel()
+		_, _ = pool.Exec(ctx, `DELETE FROM workshops WHERE title LIKE 'zz-wiring-%'`)
+	})
+
 	// adminRoutes (cmd/opencircuit/main.go) is the single list mountAndServe
 	// itself loops over to register every admin route behind requireAdmin.
 	// Enumerating it here, rather than hand-listing paths, is what closes
@@ -291,8 +323,8 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			return status != http.StatusUnauthorized && status != http.StatusForbidden
 		}},
 	}
-	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH) {
-		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID, targetCampaign.ID)
+	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH) {
+		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID, targetCampaign.ID, targetWorkshop.ID)
 		for _, c := range cases {
 			req, err := http.NewRequest(route.method, baseURL+path, nil)
 			if err != nil {
@@ -327,7 +359,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 // id; /admin/campaigns/... routes (#0041) take a campaign id, including its
 // /send and /cancel sub-routes. Routes with no {id} (e.g. /admin/settings,
 // /admin/audit, /admin/subscribers itself) pass through unchanged.
-func resolveAdminRoutePath(path string, userID, interestID, subscriberID, campaignID int64) string {
+func resolveAdminRoutePath(path string, userID, interestID, subscriberID, campaignID, workshopID int64) string {
 	switch {
 	case strings.HasPrefix(path, "/admin/users/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(userID), 1)
@@ -337,6 +369,8 @@ func resolveAdminRoutePath(path string, userID, interestID, subscriberID, campai
 		return strings.Replace(path, "{id}", fmt.Sprint(subscriberID), 1)
 	case strings.HasPrefix(path, "/admin/campaigns/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(campaignID), 1)
+	case strings.HasPrefix(path, "/admin/workshops/"):
+		return strings.Replace(path, "{id}", fmt.Sprint(workshopID), 1)
 	default:
 		return path
 	}

@@ -95,8 +95,9 @@ func TestMountAndServe_RateLimitsSubscribe(t *testing.T) {
 			nil, /* adminCampaignPreviewH: not exercised by this test */
 			nil, /* adminCampaignPreflightH: not exercised by this test */
 			nil, /* adminCampaignStatsH: not exercised by this test */
+			nil, /* adminWorkshopsH: not exercised by this test */
 			nil, nil, subscribeH,
-			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
+			nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
 			passthrough, passthrough, nil, ready)

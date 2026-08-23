@@ -256,6 +256,28 @@ const (
 	// carries the reason plus how many rows sent before the stop and how
 	// many remain queued.
 	ActionEmailCampaignSendFailed = "email_campaign.send_failed"
+
+	// Workshop lifecycle (PRD §5.2/§6.2/§8; #0051's workshop CRUD API,
+	// migrations 000020/#0050). ActionWorkshopUpdated covers any
+	// content-only field change; the two status transitions PATCH can drive
+	// (draft/canceled -> published, published -> draft) get their own named
+	// actions, mirroring interest.deactivated/reactivated and
+	// email_campaign.scheduled/canceled above — "this workshop just went
+	// live or came down" is exactly the kind of change an operator scanning
+	// the log needs to spot without decoding metadata. Any OTHER status
+	// change (e.g. -> canceled, or canceled -> draft) is recorded as
+	// ActionWorkshopUpdated with old_status/new_status in metadata, same as
+	// every other field.
+	ActionWorkshopCreated     = "workshop.created"
+	ActionWorkshopUpdated     = "workshop.updated"
+	ActionWorkshopPublished   = "workshop.published"
+	ActionWorkshopUnpublished = "workshop.unpublished"
+	ActionWorkshopCanceled    = "workshop.canceled"
+	// ActionWorkshopDeleted is written only on an actual DELETE success —
+	// never for a delete refused with ErrHasCampaigns (409), which the
+	// handler surfaces without an audit row, matching
+	// AdminInterestsHandler.Delete's convention for its own refused case.
+	ActionWorkshopDeleted = "workshop.deleted"
 )
 
 // Deleted (#0068): ActionCampaignCreated/Updated/Deleted and
@@ -289,4 +311,7 @@ const (
 	// metadata instead, since target_id is a BIGINT foreign-key-shaped
 	// column and an ARN is a string.
 	TargetSNSTopic = "sns_topic"
+	// TargetWorkshop is the target type for the workshop.* actions above
+	// (#0051).
+	TargetWorkshop = "workshop"
 )

@@ -180,9 +180,11 @@ func sesWiringStartServer(t *testing.T, pool *pgxpool.Pool, sesNotifyH *handlers
 			nil, /* adminCampaignPreviewH: not exercised by this test */
 			nil, /* adminCampaignPreflightH: not exercised by this test */
 			nil, /* adminCampaignStatsH: not exercised by this test */
+			nil, /* adminWorkshopsH: not exercised by this test */
 			nil, nil, nil,
 			nil, nil, nil, /* publicInterestsH, preferencesH, confirmH: not exercised by this test */
 			nil, /* unsubscribeH: not exercised by this test */
+			nil, /* publicWorkshopsH: not exercised by this test */
 			sesNotifyH,
 			nil, /* sendWorker: not exercised by this test */
 			requireSession, requireAdmin, nil, ready)
