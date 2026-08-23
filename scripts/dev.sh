@@ -18,6 +18,13 @@
 # Override any env var before calling, e.g.:
 #   ADMIN_EMAIL=me@example.com ./scripts/dev.sh
 #
+# If :8080 or :5173 is already held by another process, dev.sh refuses to
+# start rather than killing it (#0117) — it may be another agent's server, or
+# the user's own editor preview (CLAUDE.md §8b). To reclaim a port you are
+# sure is your own stale dev.sh, e.g. re-running after a terminal was closed
+# without Ctrl-C:
+#   RECLAIM_PORTS=1 ./scripts/dev.sh
+#
 # Ctrl-C stops everything cleanly.
 #
 set -euo pipefail
@@ -76,16 +83,47 @@ ok "port:    $PORT"
 # Free the dev ports if a previous run left a server bound. `go run` leaks its
 # compiled child process when its parent is killed, so a stale server can keep
 # holding :8080 — which both blocks startup ("address already in use") AND keeps
-# serving an OLD build. Always start from a clean port.
+# serving an OLD build.
+#
+# But a held port is not necessarily OUR stale process (#0117): it may be
+# another agent's dev.sh (CLAUDE.md §5a permits several running at once), or
+# the user's own editor preview (§8b — "never bind a fixed, shared port ...
+# without verifying ownership" applies just as much to killing one). Default
+# to refusing and naming the holder, the same shape §4/#0150 settled on for
+# `testdb.sh gc`: a destructive default that assumes you're alone is what
+# caused that incident, so don't repeat it here. RECLAIM_PORTS=1 is the
+# explicit opt-in for the one case that's still common — a developer's own
+# earlier dev.sh left an orphaned child (see header comment).
+#
+# `force=1` is used only for the EXIT-trap backstop below, where the port in
+# question is the server THIS run just started — not a foreign process, so
+# there's nothing to ask permission for.
+RECLAIM_PORTS="${RECLAIM_PORTS:-0}"
 free_port() {
-  local p="$1" pids
+  local p="$1" force="${2:-0}" pids pid cmd
   pids="$(lsof -ti tcp:"$p" 2>/dev/null || true)"
-  if [ -n "$pids" ]; then
+  [ -z "$pids" ] && return 0
+
+  if [ "$force" = "1" ] || [ "$RECLAIM_PORTS" = "1" ]; then
     info "freeing port $p (stale process: $(printf '%s' "$pids" | tr '\n' ' '))"
     # shellcheck disable=SC2086
     kill -9 $pids 2>/dev/null || true
     sleep 1
+    return 0
   fi
+
+  printf '  ERROR: port %s is already in use — dev.sh will not kill a process it did not start.\n' "$p" >&2
+  for pid in $pids; do
+    cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    [ -z "$cmd" ] && cmd="(process exited before it could be inspected)"
+    printf '    pid %s: %s\n' "$pid" "$cmd" >&2
+  done
+  printf '  This may be another agent'"'"'s dev.sh (CLAUDE.md section 5a) or an unrelated process — not necessarily yours to kill.\n' >&2
+  printf '  Options:\n' >&2
+  printf '    - if it is genuinely yours (e.g. an orphaned dev.sh from a closed terminal), stop it: kill %s\n' "$(printf '%s' "$pids" | tr '\n' ' ')" >&2
+  printf '    - or force dev.sh to reclaim it: RECLAIM_PORTS=1 ./scripts/dev.sh\n' >&2
+  printf '    - or find out whose it is first: lsof -i tcp:%s\n' "$p" >&2
+  exit 1
 }
 free_port "$PORT"
 free_port 5173
@@ -121,7 +159,7 @@ cleanup() {
   step "Shutting down…"
   kill "$GO_PID" 2>/dev/null || true
   pkill -P "$GO_PID" 2>/dev/null || true   # the go-run child server (go run leaks it otherwise)
-  free_port "$PORT" 2>/dev/null || true    # backstop so :PORT is actually released on exit
+  free_port "$PORT" 1 2>/dev/null || true  # backstop so :PORT is actually released on exit (force=1: it's our own leaked child, see free_port above)
   # Vite (npm run dev) is the foreground process; it handles its own SIGINT.
   ok "stopped"
 }
