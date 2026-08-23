@@ -29,6 +29,11 @@ describe('normalizeCountInput', () => {
     // via trim(). Dropping U+2009 from the separator character class passed
     // 41/41 before this case existed.
     ['1 234', 1234],
+    // #0184: pins the exact Number.MAX_SAFE_INTEGER boundary as accepted --
+    // narrowing the safe-integer guard to `n < Number.MAX_SAFE_INTEGER`
+    // (excluding the boundary itself) passed the whole suite before this
+    // case existed.
+    [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
   ])('parses %j', (raw, want) => {
     expect(normalizeCountInput(raw)).toBe(want);
   });
@@ -50,6 +55,16 @@ describe('normalizeCountInput', () => {
     // as 0. Loosening that regex from \d+ to \d* (allowing an empty match)
     // passed 122/122 before this case existed.
     [','],
+    // #0184: an ASCII space is NOT one of the two accepted separators
+    // (',' and the U+2009 thin space tested above as '1\u2009234') -- an
+    // internal ASCII space must still fail the \d+ digit requirement.
+    // Adding ASCII space to the separator character class (/[,\u2009]/ ->
+    // /[,\u2009 ]/) passed the whole suite before this case existed.
+    ['1 234'],
+    // #0184: a leading '+' is not part of the \d+ contract -- loosening the
+    // digit regex to accept an optional leading '+' (/^\d+$/ -> /^\+?\d+$/)
+    // passed the whole suite before this case existed.
+    ['+482'],
   ])('rejects %j', (raw) => {
     expect(normalizeCountInput(raw)).toBeNull();
   });
@@ -150,6 +165,28 @@ describe('sendGuardState', () => {
       name: 'sending while in flight, even if otherwise ready',
       input: { status: 'draft', unmet: noUnmet, audienceCount: 482, confirmRaw: '482', inFlight: true },
       want: 'sending',
+    },
+    {
+      // #0184: pins the branch order between the inFlight check and the
+      // unmet check -- no other case sets both `inFlight` AND `unmet`
+      // non-empty, so swapping those two branches in sendGuardState passed
+      // the whole suite before this case existed. inFlight is checked
+      // first: a send already in flight for this campaign must read as
+      // 'sending' even when the pre-send checks would otherwise block it.
+      name: 'sending wins over blocked when inFlight is true and unmet is non-empty',
+      input: { status: 'draft', unmet: oneUnmet, audienceCount: 482, confirmRaw: '482', inFlight: true },
+      want: 'sending',
+    },
+    {
+      // #0184: pins the branch order between the status check and the
+      // inFlight check -- no other case sets both `status !== 'draft'` AND
+      // `inFlight`, so swapping those two branches in sendGuardState passed
+      // the whole suite before this case existed. status is checked first:
+      // a campaign that has left 'draft' (e.g. mid-send, already
+      // 'sending') must still read as 'unavailable', not 'sending'.
+      name: 'unavailable wins over sending when status is not draft and inFlight is true',
+      input: { status: 'sending', unmet: noUnmet, audienceCount: 482, confirmRaw: '482', inFlight: true },
+      want: 'unavailable',
     },
     {
       name: 'unavailable when status is scheduled',
