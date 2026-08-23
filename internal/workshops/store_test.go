@@ -300,10 +300,11 @@ func TestGetBySlug_NotFound(t *testing.T) {
 	}
 }
 
-// TestListPublished_SplitsUpcomingAndPast is #0051's own acceptance
-// criterion: GET /api/workshops (backed by ListPublished) splits published
-// workshops into upcoming and past, and excludes draft/canceled entirely.
-func TestListPublished_SplitsUpcomingAndPast(t *testing.T) {
+// TestListVisible_SplitsUpcomingAndPast is #0051's own acceptance
+// criterion, widened by #0135: GET /api/workshops (backed by ListVisible)
+// splits published-or-canceled workshops into upcoming and past, and
+// excludes draft entirely.
+func TestListVisible_SplitsUpcomingAndPast(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
@@ -328,19 +329,21 @@ func TestListPublished_SplitsUpcomingAndPast(t *testing.T) {
 
 	upcomingW := mk(uniqueTitle(t)+" upcoming", &future, StatusPublished)
 	pastW := mk(uniqueTitle(t)+" past", &past, StatusPublished)
-	mk(uniqueTitle(t)+" draft", &future, StatusDraft)
+	draftW := mk(uniqueTitle(t)+" draft", &future, StatusDraft)
 	tbdW := mk(uniqueTitle(t)+" tbd", nil, StatusPublished)
+	canceledUpcomingW := mk(uniqueTitle(t)+" canceled upcoming", &future, StatusCanceled)
+	canceledPastW := mk(uniqueTitle(t)+" canceled past", &past, StatusCanceled)
 
-	gotUpcoming, gotPast, err := store.ListPublished(ctx, now)
+	gotUpcoming, gotPast, err := store.ListVisible(ctx, now)
 	if err != nil {
-		t.Fatalf("ListPublished: %v", err)
+		t.Fatalf("ListVisible: %v", err)
 	}
 
 	upcomingIDs := map[int64]bool{}
 	for _, w := range gotUpcoming {
 		upcomingIDs[w.ID] = true
-		if w.Status != StatusPublished {
-			t.Errorf("upcoming contains non-published workshop %d (status=%s)", w.ID, w.Status)
+		if w.Status != StatusPublished && w.Status != StatusCanceled {
+			t.Errorf("upcoming contains draft workshop %d (status=%s)", w.ID, w.Status)
 		}
 	}
 	if !upcomingIDs[upcomingW.ID] {
@@ -349,22 +352,34 @@ func TestListPublished_SplitsUpcomingAndPast(t *testing.T) {
 	if !upcomingIDs[tbdW.ID] {
 		t.Errorf("TBD (nil starts_at) published workshop %d missing from upcoming list", tbdW.ID)
 	}
+	if !upcomingIDs[canceledUpcomingW.ID] {
+		t.Errorf("canceled-but-upcoming workshop %d missing from upcoming list", canceledUpcomingW.ID)
+	}
 	if upcomingIDs[pastW.ID] {
 		t.Errorf("past workshop %d incorrectly in upcoming list", pastW.ID)
+	}
+	if upcomingIDs[draftW.ID] {
+		t.Errorf("draft workshop %d leaked into upcoming list", draftW.ID)
 	}
 
 	pastIDs := map[int64]bool{}
 	for _, w := range gotPast {
 		pastIDs[w.ID] = true
-		if w.Status != StatusPublished {
-			t.Errorf("past contains non-published workshop %d (status=%s)", w.ID, w.Status)
+		if w.Status != StatusPublished && w.Status != StatusCanceled {
+			t.Errorf("past contains draft workshop %d (status=%s)", w.ID, w.Status)
 		}
 	}
 	if !pastIDs[pastW.ID] {
 		t.Errorf("past workshop %d missing from past list", pastW.ID)
 	}
-	if pastIDs[upcomingW.ID] || pastIDs[tbdW.ID] {
+	if !pastIDs[canceledPastW.ID] {
+		t.Errorf("canceled-and-past workshop %d missing from past list", canceledPastW.ID)
+	}
+	if pastIDs[upcomingW.ID] || pastIDs[tbdW.ID] || pastIDs[canceledUpcomingW.ID] {
 		t.Errorf("upcoming/TBD workshop incorrectly in past list")
+	}
+	if pastIDs[draftW.ID] {
+		t.Errorf("draft workshop %d leaked into past list", draftW.ID)
 	}
 }
 

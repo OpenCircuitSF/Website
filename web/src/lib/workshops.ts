@@ -10,23 +10,22 @@
 // through here, never a comparison or ternary written directly in the
 // component.
 //
-// # A discrepancy with #0051, for that issue's reviewer
+// # The canceled badge is live (#0135)
 //
 // This issue's own acceptance criteria say "canceled workshops shown with a
-// clear canceled badge" for the /workshops index. But
-// internal/handlers/public_workshops.go's List handler (#0051, still in
-// review as this was written) calls workshops.Store.ListPublished, whose own
-// doc comment says the index returns ONLY status='published' rows — a
-// canceled workshop never reaches GET /api/workshops at all, only the detail
-// route (GET /api/workshops/{slug}). So under the API as committed, a
-// canceled workshop simply never appears on this index for the badge logic
-// below to apply to. `isCanceled`/`workshopBadgeLabel` are implemented and
-// tested anyway (a `publicWorkshopView` always carries `status`, so nothing
-// stops a canceled row from showing up here if that handler behavior
-// changes), but as things stand they are effectively dead code on the index
-// path. Not fixed here — #0051 is someone else's in-flight change; flagging
-// for its reviewer to decide whether the index criterion or the handler's
-// ListPublished contract is the one that's wrong.
+// clear canceled badge" for the /workshops index. At the time this file was
+// first written, `internal/handlers/public_workshops.go`'s `List` handler
+// called `workshops.Store.ListPublished`, which returned only
+// `status='published'` rows, so a canceled workshop never reached
+// `GET /api/workshops` for the badge logic below to apply to — `isCanceled`/
+// `workshopBadgeLabel` were implemented and unit-tested regardless, but
+// effectively dead code on the index path. `#0135` closed that gap: the
+// index now calls `workshops.Store.ListVisible`, which returns published
+// *and* canceled workshops (never draft), matching the detail route
+// (`GetBySlug`). A canceled workshop is placed in the upcoming/past split by
+// the same `starts_at` comparison as a published one. `isCanceled`/
+// `workshopBadgeLabel` are unchanged — they were already correct — and now
+// render for real.
 
 import type { PublicWorkshop, WorkshopsListResponse } from './types';
 
@@ -108,7 +107,7 @@ export const NEXT_UP_LIMIT = 3;
 
 /**
  * The next N upcoming workshops for Home.svelte's "next up" section. The
- * API already returns `upcoming` in chronological order (ListPublished), so
+ * API already returns `upcoming` in chronological order (ListVisible), so
  * this is a plain slice — no re-sorting here, which would risk drifting from
  * the server's own ordering rule.
  */

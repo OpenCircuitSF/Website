@@ -41,11 +41,15 @@ ALTER TABLE workshops
     ADD CONSTRAINT workshops_status_check
     CHECK (status IN ('draft', 'published', 'canceled'));
 
--- Public listing query (PRD §6.2 / #0051): published workshops ordered by
--- start time. Partial so draft/canceled rows never bloat the index the
+-- Public listing query (PRD §6.2 / #0051, widened by #0135): published AND
+-- canceled workshops ordered by start time -- both statuses are visible to
+-- the public (#0135: the index and the detail route must apply the same
+-- visibility rule, or a canceled workshop silently vanishes from the index
+-- while its direct link still 200s). Partial on status <> 'draft' so only
+-- draft rows -- never publicly visible -- are excluded from the index the
 -- public page's hot path scans.
 CREATE INDEX idx_workshops_published ON workshops (starts_at DESC)
-    WHERE status = 'published';
+    WHERE status <> 'draft';
 
 -- workshop_interests: which interests a workshop is tagged with, read by
 -- #0051's public listing filters and any future campaign-audience

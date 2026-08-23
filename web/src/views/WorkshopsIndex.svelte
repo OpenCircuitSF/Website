@@ -2,8 +2,10 @@
   // WorkshopsIndex — /workshops (#0053, PRD §5.1/§7.3). Upcoming workshops in
   // chronological order, past workshops in reverse chronological order — both
   // orderings come straight from GET /api/workshops
-  // (workshops.Store.ListPublished, #0051); this view does no re-sorting of
-  // its own.
+  // (workshops.Store.ListVisible, #0051/#0135); this view does no re-sorting
+  // of its own. The index includes canceled workshops alongside published
+  // ones (#0135) — WorkshopCard/lib/workshops.ts's isCanceled/
+  // workshopBadgeLabel render the "Canceled" badge for them.
   //
   // Past workshops are shown deliberately (see this issue's Notes): they are
   // the evidence that this is a real, recurring group, which is exactly what

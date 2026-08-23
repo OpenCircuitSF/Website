@@ -53,8 +53,9 @@ type decodedPublicWorkshopsList struct {
 }
 
 // TestPublicWorkshops_List_SplitsUpcomingPastExcludesDraft is #0051's own
-// acceptance criterion: GET /api/workshops returns published workshops
-// split into upcoming and past, and never surfaces a draft.
+// acceptance criterion, widened by #0135: GET /api/workshops returns
+// published-or-canceled workshops split into upcoming and past, and never
+// surfaces a draft.
 func TestPublicWorkshops_List_SplitsUpcomingPastExcludesDraft(t *testing.T) {
 	pool := interestsTestPool(t)
 	srv := httptest.NewServer(publicWorkshopsMux(pool))
@@ -84,7 +85,13 @@ func TestPublicWorkshops_List_SplitsUpcomingPastExcludesDraft(t *testing.T) {
 	upcoming := mk(uniquePublicWorkshopTitle(t)+" upcoming", &future, workshops.StatusPublished)
 	pastW := mk(uniquePublicWorkshopTitle(t)+" past", &past, workshops.StatusPublished)
 	draftW := mk(uniquePublicWorkshopTitle(t)+" draft", &future, workshops.StatusDraft)
-	canceledW := mk(uniquePublicWorkshopTitle(t)+" canceled", &future, workshops.StatusCanceled)
+	// #0135: a canceled workshop belongs in the index now, split by
+	// starts_at exactly like a published one -- one canceled-and-upcoming
+	// (the case that matters: a reader checking on a session they planned to
+	// attend) and one canceled-and-past (harmless either way, honest
+	// history), so both halves of the split are covered.
+	canceledUpcomingW := mk(uniquePublicWorkshopTitle(t)+" canceled upcoming", &future, workshops.StatusCanceled)
+	canceledPastW := mk(uniquePublicWorkshopTitle(t)+" canceled past", &past, workshops.StatusCanceled)
 
 	resp, err := http.Get(srv.URL + "/api/workshops")
 	if err != nil {
@@ -100,26 +107,47 @@ func TestPublicWorkshops_List_SplitsUpcomingPastExcludesDraft(t *testing.T) {
 		t.Fatalf("decode: %v (body=%s)", err, body)
 	}
 
-	upcomingSlugs := map[string]bool{}
+	upcomingByslug := map[string]decodedPublicWorkshop{}
 	for _, w := range list.Upcoming {
-		upcomingSlugs[w.Slug] = true
+		upcomingByslug[w.Slug] = w
 	}
-	pastSlugs := map[string]bool{}
+	pastByslug := map[string]decodedPublicWorkshop{}
 	for _, w := range list.Past {
-		pastSlugs[w.Slug] = true
+		pastByslug[w.Slug] = w
 	}
 
-	if !upcomingSlugs[upcoming.Slug] {
+	if _, ok := upcomingByslug[upcoming.Slug]; !ok {
 		t.Errorf("upcoming workshop %q missing from upcoming list", upcoming.Slug)
 	}
-	if !pastSlugs[pastW.Slug] {
+	if _, ok := pastByslug[pastW.Slug]; !ok {
 		t.Errorf("past workshop %q missing from past list", pastW.Slug)
 	}
-	if upcomingSlugs[draftW.Slug] || pastSlugs[draftW.Slug] {
-		t.Errorf("draft workshop %q leaked into the public list", draftW.Slug)
+	if _, ok := upcomingByslug[draftW.Slug]; ok {
+		t.Errorf("draft workshop %q leaked into upcoming list", draftW.Slug)
 	}
-	if upcomingSlugs[canceledW.Slug] || pastSlugs[canceledW.Slug] {
-		t.Errorf("canceled workshop %q leaked into the public list (index is published-only)", canceledW.Slug)
+	if _, ok := pastByslug[draftW.Slug]; ok {
+		t.Errorf("draft workshop %q leaked into past list", draftW.Slug)
+	}
+
+	// The end-to-end proof #0135 asks for: a canceled workshop actually
+	// appears in the index payload, with status="canceled" so the frontend
+	// badge (isCanceled/workshopBadgeLabel in web/src/lib/workshops.ts) can
+	// render it, placed in the correct half of the split by starts_at.
+	if got, ok := upcomingByslug[canceledUpcomingW.Slug]; !ok {
+		t.Errorf("canceled-but-upcoming workshop %q missing from upcoming list", canceledUpcomingW.Slug)
+	} else if got.Status != workshops.StatusCanceled {
+		t.Errorf("canceled-but-upcoming workshop %q: Status = %q, want %q", canceledUpcomingW.Slug, got.Status, workshops.StatusCanceled)
+	}
+	if _, ok := pastByslug[canceledUpcomingW.Slug]; ok {
+		t.Errorf("canceled-but-upcoming workshop %q incorrectly in past list", canceledUpcomingW.Slug)
+	}
+	if got, ok := pastByslug[canceledPastW.Slug]; !ok {
+		t.Errorf("canceled-and-past workshop %q missing from past list", canceledPastW.Slug)
+	} else if got.Status != workshops.StatusCanceled {
+		t.Errorf("canceled-and-past workshop %q: Status = %q, want %q", canceledPastW.Slug, got.Status, workshops.StatusCanceled)
+	}
+	if _, ok := upcomingByslug[canceledPastW.Slug]; ok {
+		t.Errorf("canceled-and-past workshop %q incorrectly in upcoming list", canceledPastW.Slug)
 	}
 }
 

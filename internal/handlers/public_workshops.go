@@ -1,22 +1,29 @@
-// Public workshop read path (PRD §6.2, §7.3, §8; #0051): GET /api/workshops
-// (the index — #0053) and GET /api/workshops/{slug} (the detail page —
-// #0054). No session or admin gate; unlike AdminWorkshopsHandler, these
-// routes filter what an anonymous visitor may see.
+// Public workshop read path (PRD §6.2, §7.3, §8; #0051, widened by #0135):
+// GET /api/workshops (the index — #0053) and GET /api/workshops/{slug} (the
+// detail page — #0054). No session or admin gate.
 //
-// # Visibility rule (#0051's own acceptance criteria)
+// # Visibility rule (same on both routes, since #0135)
 //
-//   - GET /api/workshops returns ONLY status='published' workshops, split
-//     into upcoming and past (workshops.Store.ListPublished) — draft and
-//     canceled workshops never appear in the index at all.
-//   - GET /api/workshops/{slug} returns a published OR canceled workshop
-//     (200); a draft, or a slug with no matching row, 404s. This is
-//     deliberately WIDER than the index: PRD's Notes (issues/0051.md) are
-//     explicit that "a canceled workshop stays visible with a clear
-//     cancellation notice — people who saw the announcement will come
-//     looking, and a 404 tells them nothing" — that guarantee is about the
-//     DETAIL page a shared link points at, not the index listing, which
-//     drops a canceled workshop from its published-only view per the
-//     acceptance criterion above.
+// Both routes serve a workshop whose status is 'published' OR 'canceled';
+// 'draft' is invisible to both, and a slug with no matching row 404s just
+// like a draft (indistinguishable, so probing slugs leaks nothing).
+//
+//   - GET /api/workshops returns published-or-canceled workshops, split
+//     into upcoming and past (workshops.Store.ListVisible).
+//   - GET /api/workshops/{slug} returns one published-or-canceled workshop,
+//     or 404.
+//
+// Before #0135 these two routes disagreed: the detail route served canceled
+// (deliberately — PRD's Notes, issues/0051.md: "a canceled workshop stays
+// visible with a clear cancellation notice — people who saw the
+// announcement will come looking, and a 404 tells them nothing"), but the
+// index called ListPublished and silently dropped canceled workshops. That
+// produced exactly the outcome the detail route's own reasoning exists to
+// prevent, one route over: a visitor who bookmarked the index would see a
+// canceled workshop vanish with no explanation, while only someone holding
+// the direct link learned it was canceled. #0135 widened the index to match,
+// so #0053's canceled-badge criterion (web/src/lib/workshops.ts's
+// isCanceled/workshopBadgeLabel) can now actually be reached.
 package handlers
 
 import (
@@ -34,7 +41,7 @@ import (
 // matches publicInterestStore/campaignStore's pattern elsewhere in this
 // package.
 type publicWorkshopStore interface {
-	ListPublished(ctx context.Context, now time.Time) (upcoming, past []workshops.Workshop, err error)
+	ListVisible(ctx context.Context, now time.Time) (upcoming, past []workshops.Workshop, err error)
 	GetBySlug(ctx context.Context, slug string) (workshops.Workshop, error)
 }
 
@@ -49,7 +56,7 @@ type publicWorkshopInterestStore interface {
 // PublicWorkshopsHandler serves the public, unauthenticated workshop read
 // routes:
 //
-//	GET /api/workshops       — List:   published workshops, split into upcoming/past
+//	GET /api/workshops       — List:   published-or-canceled workshops, split into upcoming/past
 //	GET /api/workshops/{slug} — GetBySlug: one published or canceled workshop; draft/missing 404s
 type PublicWorkshopsHandler struct {
 	store         publicWorkshopStore
@@ -146,11 +153,11 @@ type workshopsListResponsePublic struct {
 
 // ── GET /api/workshops ───────────────────────────────────────────────────────
 
-// List handles GET /api/workshops: published workshops split into upcoming
-// and past (workshops.Store.ListPublished), relative to the request time.
-// Public, no auth required.
+// List handles GET /api/workshops: published-or-canceled workshops split
+// into upcoming and past (workshops.Store.ListVisible), relative to the
+// request time. Public, no auth required.
 func (h *PublicWorkshopsHandler) List(w http.ResponseWriter, r *http.Request) {
-	upcoming, past, err := h.store.ListPublished(r.Context(), h.now())
+	upcoming, past, err := h.store.ListVisible(r.Context(), h.now())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return

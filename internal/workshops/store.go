@@ -344,7 +344,7 @@ func (s *Store) interestIDs(ctx context.Context, workshopID int64) ([]int64, err
 }
 
 // interestIDsByWorkshop batch-loads interest ids for every workshop id in
-// ids, for List/ListPublished (avoids N+1 queries) — mirrors
+// ids, for List/ListVisible (avoids N+1 queries) — mirrors
 // mailing.CampaignStore.interestIDsByCampaign.
 func (s *Store) interestIDsByWorkshop(ctx context.Context, ids []int64) (map[int64][]int64, error) {
 	out := make(map[int64][]int64, len(ids))
@@ -420,23 +420,47 @@ func (s *Store) List(ctx context.Context) ([]Workshop, error) {
 	return ws, nil
 }
 
-// ListPublished returns every status='published' workshop split into
-// upcoming and past relative to now, for the public listing (#0051's own
-// acceptance criterion; GET /api/workshops). A workshop with no starts_at
-// set (TBD scheduling) is treated as upcoming — it has no past date to
-// belong to, and hiding an announced-but-undated workshop entirely would be
-// worse than surfacing it. upcoming is ordered soonest-first (NULLS LAST, so
-// a TBD date sorts after every dated one); past is ordered most-recent-first.
-// Uses idx_workshops_published (migration 000020's partial index on
-// (starts_at DESC) WHERE status = 'published') for both queries.
-func (s *Store) ListPublished(ctx context.Context, now time.Time) (upcoming, past []Workshop, err error) {
+// ListVisible returns every workshop the public may see — status
+// 'published' OR 'canceled', never 'draft' — split into upcoming and past
+// relative to now, for the public listing (GET /api/workshops; #0135).
+//
+// Named ListVisible, not ListPublished, since #0135: the index used to be
+// published-only, which made the detail route (GetBySlug, #0051) and the
+// index route disagree about a canceled workshop — GetBySlug served it,
+// List silently dropped it. That produced exactly the outcome GetBySlug's
+// own reasoning exists to prevent ("a 404 tells them nothing"): someone who
+// bookmarked the index would see a canceled workshop vanish with no
+// explanation, learning it was canceled only if they still held the direct
+// link. #0135 widened the index to match the detail route, so both routes
+// now apply the same visibility rule (published or canceled; never draft),
+// and #0053's "canceled workshops shown with a clear canceled badge"
+// criterion can actually be reached.
+//
+// A canceled workshop is placed in upcoming/past by the same starts_at
+// comparison as a published one — a canceled workshop whose date hasn't
+// passed yet is the case that matters (a reader checking on a session they
+// planned to attend), and dropping it from upcoming the moment its date
+// passes would just delay the same silent-vanish problem by one week. A
+// canceled workshop safely in the past is harmless either way and reads as
+// honest history there.
+//
+// A workshop with no starts_at set (TBD scheduling) is treated as upcoming
+// — it has no past date to belong to, and hiding an announced-but-undated
+// workshop entirely would be worse than surfacing it. upcoming is ordered
+// soonest-first (NULLS LAST, so a TBD date sorts after every dated one);
+// past is ordered most-recent-first.
+//
+// Uses idx_workshops_published (migration 000020's partial index, widened
+// by #0135 to WHERE status <> 'draft' to keep covering this query) for both
+// queries.
+func (s *Store) ListVisible(ctx context.Context, now time.Time) (upcoming, past []Workshop, err error) {
 	upcomingRows, err := s.pool.Query(ctx,
 		`SELECT `+workshopColumns+` FROM workshops
-		  WHERE status = $1 AND (starts_at IS NULL OR starts_at >= $2)
+		  WHERE status IN ($1, $2) AND (starts_at IS NULL OR starts_at >= $3)
 		  ORDER BY starts_at ASC NULLS LAST, id ASC`,
-		StatusPublished, now)
+		StatusPublished, StatusCanceled, now)
 	if err != nil {
-		return nil, nil, fmt.Errorf("workshops: listing upcoming published: %w", err)
+		return nil, nil, fmt.Errorf("workshops: listing upcoming visible: %w", err)
 	}
 	upcoming, err = collectWorkshops(upcomingRows)
 	upcomingRows.Close()
@@ -446,11 +470,11 @@ func (s *Store) ListPublished(ctx context.Context, now time.Time) (upcoming, pas
 
 	pastRows, err := s.pool.Query(ctx,
 		`SELECT `+workshopColumns+` FROM workshops
-		  WHERE status = $1 AND starts_at IS NOT NULL AND starts_at < $2
+		  WHERE status IN ($1, $2) AND starts_at IS NOT NULL AND starts_at < $3
 		  ORDER BY starts_at DESC, id DESC`,
-		StatusPublished, now)
+		StatusPublished, StatusCanceled, now)
 	if err != nil {
-		return nil, nil, fmt.Errorf("workshops: listing past published: %w", err)
+		return nil, nil, fmt.Errorf("workshops: listing past visible: %w", err)
 	}
 	past, err = collectWorkshops(pastRows)
 	pastRows.Close()
