@@ -74,7 +74,12 @@ import (
 // listMigrations/migrationsDir rather than duplicating the migration-file
 // walk a second time.
 
-const prdPath = "../../PRD.md"
+// prdPath is a var, not a const, so a proof of the column-parity guard's
+// failure mode can point it at a scratch copy of PRD.md instead of editing
+// the project's actual specification in place (#0154's phase-3 review had to
+// do the latter, copy the real file aside, and restore it byte-identically —
+// see issues/0154.md's "Gotchas"/"What would clear the bounce").
+var prdPath = "../../PRD.md"
 
 // prdIndexParityTables is the exact set of tables PRD.md §6.2 specifies with
 // a literal CREATE TABLE statement — everything that section transcribes in
@@ -128,17 +133,67 @@ var (
 	createIndexPattern     = regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\s+(\w+)\s*(\([^;]*?\))(?:\s+WHERE\s+([^;]*?))?;`)
 	dropIndexPattern       = regexp.MustCompile(`(?i)DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(\w+)\s*;`)
 	looseIndexStartPattern = regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX\b`)
-	sqlCommentPattern      = regexp.MustCompile(`--[^\n]*`)
 )
 
-// stripSQLComments removes every SQL line comment (`-- ...` to end of line)
-// from text before any pattern in this file runs over it. Applied uniformly
-// to both sides of every comparison so (a) a commented-out
+// stripSQLComments removes every SQL comment — both `-- ...` to end of line
+// and `/* ... */` — from text before any pattern in this file runs over it,
+// in one left-to-right, quote-aware pass. #0154's phase-3 review proved the
+// original regex-based version (`--[^\n]*`, with no `/* */` handling at all)
+// was itself a silent-skip generator: `DEFAULT 'see -- below'` made it eat
+// the rest of the line *including the following column's comma*, and a
+// `/* ... */` block comment inside a CREATE TABLE body was invisible to it
+// entirely, turning the comment's first token into a bogus column and
+// dropping the next real one. Tracking whether the scan is inside a `'...'`
+// string literal (Postgres escapes an embedded quote by doubling it: 'it''s')
+// is what fixes both: `--` and `/*` are only comment starts outside a string.
+//
+// Applied uniformly to both sides of every comparison so (a) a commented-out
 // `-- CREATE INDEX …`/`-- CREATE TABLE …` can never register as a live
 // definition, and (b) checkIndexStatementCoverage's loose count and
 // createIndexPattern's strict count are counting the same text.
 func stripSQLComments(s string) string {
-	return sqlCommentPattern.ReplaceAllString(s, "")
+	var b strings.Builder
+	inString := false
+	n := len(s)
+	for i := 0; i < n; i++ {
+		c := s[i]
+		if inString {
+			b.WriteByte(c)
+			if c == '\'' {
+				if i+1 < n && s[i+1] == '\'' {
+					b.WriteByte(s[i+1])
+					i++
+					continue
+				}
+				inString = false
+			}
+			continue
+		}
+		switch {
+		case c == '\'':
+			inString = true
+			b.WriteByte(c)
+		case c == '-' && i+1 < n && s[i+1] == '-':
+			j := i
+			for j < n && s[j] != '\n' {
+				j++
+			}
+			i = j - 1 // loop's i++ lands back on the newline (or EOF), which is preserved
+		case c == '/' && i+1 < n && s[i+1] == '*':
+			j := i + 2
+			for j+1 < n && !(s[j] == '*' && s[j+1] == '/') {
+				j++
+			}
+			if j+1 < n {
+				i = j + 1 // skip past the closing "*/"
+			} else {
+				i = n // unterminated block comment: nothing after it is SQL
+			}
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // checkIndexStatementCoverage is the guard for the guard (#0154). It counts
@@ -265,33 +320,204 @@ type columnDef struct {
 }
 
 // tableConstraintKeywords are the leading tokens that mark a CREATE TABLE
-// body's top-level comma-separated segment as a table-level constraint
-// (PRIMARY KEY (...), UNIQUE (...), CHECK (...), FOREIGN KEY (...),
-// CONSTRAINT name ..., EXCLUDE (...)) rather than a column definition. No
-// column in this schema is ever named one of these bare reserved words, so
-// checking a segment's first token is sufficient without a real SQL parser
-// — the same "narrow, not a parser" tradeoff createIndexPattern already
-// makes.
+// body's top-level comma-separated segment (or an ALTER TABLE ADD's target)
+// as a table-level constraint (PRIMARY KEY (...), UNIQUE (...), CHECK (...),
+// FOREIGN KEY (...), CONSTRAINT name ...) rather than a column definition.
+// Every one of these is reserved in Postgres, so a bare column can never
+// legally be named one of them and checking a segment's first token is
+// sufficient without a real SQL parser — the same "narrow, not a parser"
+// tradeoff createIndexPattern already makes.
+//
+// EXCLUDE is deliberately not in this map (#0154, phase-3 review, attack 11):
+// unlike the other five, EXCLUDE is *non-reserved* in Postgres, so
+// `exclude BOOLEAN` is a legal bare column name — a table naming one would
+// have had it silently dropped by a blanket keyword match. isTableConstraintSegment
+// below only treats EXCLUDE as a constraint when it is immediately followed
+// by USING, which is EXCLUDE's only valid constraint syntax
+// (`EXCLUDE USING <method> (...)`).
 var tableConstraintKeywords = map[string]bool{
 	"PRIMARY":    true,
 	"UNIQUE":     true,
 	"CHECK":      true,
 	"FOREIGN":    true,
 	"CONSTRAINT": true,
-	"EXCLUDE":    true,
 }
 
-// createTableStart matches "CREATE TABLE name (" and its match end lands
-// exactly one byte past the opening paren, which is what lets callers derive
-// the paren's own index as loc[1]-1.
-var createTableStart = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(\w+)\s*\(`)
+// isTableConstraintSegment reports whether a CREATE TABLE body segment or an
+// ALTER TABLE ADD's target — given its first token and, if present, its
+// second — is a table-level constraint rather than a column (or column-add).
+// Shared by columnsFromCreateTable (table-body segments) and
+// liveColumnsFromMigrations/the column-add coverage check (ALTER TABLE ADD's
+// captured tokens), so the two paths can never disagree about what counts as
+// a constraint.
+func isTableConstraintSegment(first, second string) bool {
+	first = strings.ToUpper(first)
+	if first == "EXCLUDE" {
+		return strings.ToUpper(second) == "USING"
+	}
+	return tableConstraintKeywords[first]
+}
 
-// columnAddPattern matches the one ALTER TABLE form this project's
-// migrations use to grow a table after its CREATE TABLE: a single-column
-// `ALTER TABLE t ADD COLUMN c ...;` (CLAUDE.md §1's append-only-migrations
-// rule plus its greenfield exception — e.g. migrations/000011, 000018,
-// 000019).
-var columnAddPattern = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)`)
+// createTableStart matches "CREATE TABLE [IF NOT EXISTS] name (" and its
+// match end lands exactly one byte past the opening paren, which is what
+// lets callers derive the paren's own index as loc[1]-1.
+//
+// #0154's phase-3 review (attack 15) found the original pattern — no IF NOT
+// EXISTS clause — simply didn't match `CREATE TABLE IF NOT EXISTS workshops
+// (`, and a non-match here means the *entire table*, all of its columns,
+// silently never enters the live map: the same silent-skip shape the index
+// guard was widened to close, reintroduced on the table side. checkTableStatementCoverage
+// below is what catches any remaining form this prefix still can't parse
+// (e.g. a quoted table name), instead of letting it vanish the same way.
+var createTableStart = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(`)
+
+// looseTableStartPattern is createTableStart's coverage ceiling (#0154,
+// mirroring looseIndexStartPattern/checkIndexStatementCoverage): every
+// "CREATE TABLE" occurrence, however it's spelled, so checkTableStatementCoverage
+// can catch a table createTableStart's own prefix still can't parse — a
+// quoted name, or a future form nobody has written yet.
+var looseTableStartPattern = regexp.MustCompile(`(?i)CREATE\s+TABLE\b`)
+
+// columnAddPattern matches the ALTER TABLE forms this project's migrations
+// use to grow a table after its CREATE TABLE — a single-column
+// `ALTER TABLE t ADD [COLUMN] [IF NOT EXISTS] c ...;` (CLAUDE.md §1's
+// append-only-migrations rule plus its greenfield exception — e.g.
+// migrations/000011, 000018, 000019) — while still matching (so they can be
+// recognized and excluded, not silently dropped) `ALTER TABLE t ADD
+// CONSTRAINT …`/`ADD PRIMARY KEY …` forms this tree also uses (000009,
+// 000010, 000012, 000013, 000014, 000017, 000020).
+//
+// #0154's phase-3 review (attacks 17, 18) found the original pattern
+// required the literal "COLUMN" keyword, which Postgres makes optional:
+// `ALTER TABLE t ADD c TEXT;` matched nothing at all (silent), and
+// `ADD COLUMN IF NOT EXISTS c` matched "IF" as the column name while `c`
+// itself went unrecorded (wrong AND silent about the real column). Group 2
+// is a capturing "COLUMN " literal (empty/unmatched when the keyword is
+// absent) rather than non-capturing, so classifyColumnAdd can tell "the
+// COLUMN keyword said so" apart from "no keyword — check whether what
+// follows ADD is actually a constraint, not a column name" without a second
+// pattern.
+var columnAddPattern = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+(\w+)\s+ADD\s+(COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(\w+)(?:\s+(\w+))?`)
+
+// looseColumnAddPattern is columnAddPattern's coverage ceiling. Unlike
+// columnAddPattern, it requires nothing at all after "ADD" — no token, no
+// trailing word — so it matches every "ALTER TABLE t ADD" occurrence
+// regardless of what (if anything) follows, including a form so malformed
+// that no identifier follows at all. That asymmetry is what gives
+// checkColumnAddCoverage real teeth: columnAddPattern's own `(\w+)` is
+// mandatory, so a statement it can't identify a token for is *not* counted
+// on the strict side, producing a genuine, catchable mismatch instead of the
+// two patterns being structurally unable to disagree.
+var looseColumnAddPattern = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+\w+\s+ADD\b`)
+
+// classifyColumnAdd interprets one ADD statement's tokens — the "COLUMN "
+// literal if columnAddPattern matched it, and the identifier/next-word that
+// follow — and reports the column name being added, or ok=false if this is
+// actually a table-level constraint addition (ADD CONSTRAINT …, ADD PRIMARY
+// KEY (...), …) rather than a column. An explicit COLUMN keyword is
+// unambiguous on its own; its absence means identifier/nextWord must be
+// checked against isTableConstraintSegment to tell "ADD c TEXT" (a column)
+// apart from "ADD CONSTRAINT c CHECK (...)" (not one).
+func classifyColumnAdd(columnKeyword, identifier, nextWord string) (name string, ok bool) {
+	if columnKeyword != "" {
+		return identifier, true
+	}
+	if isTableConstraintSegment(identifier, nextWord) {
+		return "", false
+	}
+	return identifier, true
+}
+
+// matchGroup returns submatch group i (as produced by
+// FindAllStringSubmatchIndex, so loc[i]/loc[i+1]) of s, or "" if the group
+// didn't participate in the match.
+func matchGroup(s string, loc []int, i int) string {
+	if loc[i] == -1 {
+		return ""
+	}
+	return s[loc[i]:loc[i+1]]
+}
+
+// peekTwoWords returns the first two whitespace-separated tokens of s (each
+// "" if absent), used by checkColumnAddCoverage to classify what follows a
+// looseColumnAddPattern match without requiring the loose pattern itself to
+// capture anything — the same isTableConstraintSegment test columnAddPattern's
+// own tokens go through, applied to whatever text (if any) actually follows
+// "ADD".
+func peekTwoWords(s string) (first, second string) {
+	fields := strings.Fields(s)
+	if len(fields) > 0 {
+		first = fields[0]
+	}
+	if len(fields) > 1 {
+		second = fields[1]
+	}
+	return first, second
+}
+
+// checkTableStatementCoverage and checkColumnAddCoverage are checkIndexStatementCoverage's
+// column-side counterparts (#0154, phase-3 review — "a coverage check for
+// the column half... is what makes attacks 15-18 loud instead of silent").
+// Each counts a loose, maximally permissive pattern's occurrences against how
+// many the corresponding strict pattern actually parsed into a table/column,
+// and t.Errorf's on a mismatch naming the file. That is what turns any
+// CREATE TABLE or ALTER TABLE ADD form neither pattern anticipates into a
+// loud test failure instead of a silent absence from the live map — exactly
+// the property checkIndexStatementCoverage already gives the index half.
+func checkTableStatementCoverage(t *testing.T, text, label string) {
+	t.Helper()
+	found := len(looseTableStartPattern.FindAllStringIndex(text, -1))
+	matched := len(createTableStart.FindAllStringIndex(text, -1))
+	if found != matched {
+		t.Errorf(
+			"%s: found %d \"CREATE TABLE\" occurrence(s) but only parsed %d as a "+
+				"complete statement — one of them uses a SQL form createTableStart "+
+				"can't parse (check for a quoted table name, or a form not yet "+
+				"handled). A silent skip here means the whole table — every column "+
+				"it defines — is invisible to this guard — fix the statement or "+
+				"widen createTableStart, don't leave the mismatch. See #0154.",
+			label, found, matched,
+		)
+	}
+}
+
+func checkColumnAddCoverage(t *testing.T, text, label string) {
+	t.Helper()
+	found := 0
+	for _, loc := range looseColumnAddPattern.FindAllStringIndex(text, -1) {
+		first, second := peekTwoWords(text[loc[1]:])
+		if !isTableConstraintSegment(first, second) {
+			found++
+		}
+	}
+	matched := 0
+	for _, loc := range columnAddPattern.FindAllStringSubmatchIndex(text, -1) {
+		if _, ok := classifyColumnAdd(matchGroup(text, loc, 4), matchGroup(text, loc, 6), matchGroup(text, loc, 8)); ok {
+			matched++
+		}
+	}
+	if found != matched {
+		t.Errorf(
+			"%s: found %d \"ALTER TABLE ... ADD\" column occurrence(s) (excluding "+
+				"constraint adds) but only parsed %d as a complete ADD COLUMN "+
+				"statement — one of them uses a SQL form columnAddPattern can't "+
+				"parse. A silent skip here means the column is invisible to this "+
+				"guard — fix the statement or widen columnAddPattern, don't leave "+
+				"the mismatch. See #0154.",
+			label, found, matched,
+		)
+	}
+}
+
+// checkColumnStatementCoverage runs both column-side coverage checks
+// (checkTableStatementCoverage and checkColumnAddCoverage) against one piece
+// of text, mirroring checkIndexStatementCoverage's single call site per
+// migration file / PRD section.
+func checkColumnStatementCoverage(t *testing.T, text, label string) {
+	t.Helper()
+	checkTableStatementCoverage(t, text, label)
+	checkColumnAddCoverage(t, text, label)
+}
 
 // splitTopLevel splits s on commas that are not nested inside parens, so a
 // column definition like "import_id BIGINT REFERENCES
@@ -299,12 +525,34 @@ var columnAddPattern = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+(\w+)\s+ADD\s+COL
 // that doesn't exist there, and — more importantly — so a table constraint
 // like "PRIMARY KEY (subscriber_id, interest_id)" is treated as the single
 // segment it is rather than split apart by its own internal comma.
+// Quote-aware since #0154's phase-3 review (attack 8): a comma inside a
+// top-level `'...'` string literal (`DEFAULT 'x,y'`) used to be
+// indistinguishable from a real column-separating comma, splitting one
+// column definition into two and inventing a bogus "column" from the
+// fragment after the literal comma. Parens inside a string literal are
+// likewise skipped, for the matching reason columnsFromCreateTable's
+// close-paren finder needs the same tracking (attack 13).
 func splitTopLevel(s string) []string {
 	var parts []string
 	depth := 0
 	start := 0
-	for i, r := range s {
-		switch r {
+	inString := false
+	n := len(s)
+	for i := 0; i < n; i++ {
+		c := s[i]
+		if inString {
+			if c == '\'' {
+				if i+1 < n && s[i+1] == '\'' {
+					i++
+					continue
+				}
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '\'':
+			inString = true
 		case '(':
 			depth++
 		case ')':
@@ -327,12 +575,36 @@ func splitTopLevel(s string) []string {
 // single unnested pair — column definitions here nest parens freely
 // (REFERENCES t(id), DEFAULT now()) — then splits the body on top-level
 // commas and takes each segment's first token as the column name, skipping
-// any segment whose first token is a table constraint keyword.
+// any segment that isTableConstraintSegment identifies as a table-level
+// constraint rather than a column.
+//
+// The close-paren finder is quote-aware (#0154, phase-3 review, attack 13):
+// a `)` inside a `'...'` string literal (`DEFAULT ')'`) used to close the
+// body early and silently drop every column after it, the same way an
+// unbalanced-looking `(` inside a literal would open a phantom nesting
+// level. Tracking string state, not just paren characters, is what makes
+// this safe against literal content instead of merely against nested
+// *real* parens.
 func columnsFromCreateTable(text string, openParen int) (cols []string, bodyEnd int) {
 	depth := 0
 	end := -1
-	for i := openParen; i < len(text); i++ {
-		switch text[i] {
+	inString := false
+	n := len(text)
+	for i := openParen; i < n; i++ {
+		c := text[i]
+		if inString {
+			if c == '\'' {
+				if i+1 < n && text[i+1] == '\'' {
+					i++
+					continue
+				}
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '\'':
+			inString = true
 		case '(':
 			depth++
 		case ')':
@@ -354,7 +626,11 @@ func columnsFromCreateTable(text string, openParen int) (cols []string, bodyEnd 
 		if len(fields) == 0 {
 			continue
 		}
-		if tableConstraintKeywords[strings.ToUpper(fields[0])] {
+		second := ""
+		if len(fields) > 1 {
+			second = fields[1]
+		}
+		if isTableConstraintSegment(fields[0], second) {
 			continue
 		}
 		cols = append(cols, fields[0])
@@ -390,6 +666,7 @@ func liveColumnsFromMigrations(t *testing.T) map[string]map[string]columnDef {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		text := stripSQLComments(string(content))
+		checkColumnStatementCoverage(t, text, "migrations/"+m.stem+".up.sql")
 
 		var ops []op
 		for _, loc := range createTableStart.FindAllStringSubmatchIndex(text, -1) {
@@ -400,7 +677,10 @@ func liveColumnsFromMigrations(t *testing.T) map[string]map[string]columnDef {
 		}
 		for _, loc := range columnAddPattern.FindAllStringSubmatchIndex(text, -1) {
 			table := text[loc[2]:loc[3]]
-			col := text[loc[4]:loc[5]]
+			col, ok := classifyColumnAdd(matchGroup(text, loc, 4), matchGroup(text, loc, 6), matchGroup(text, loc, 8))
+			if !ok {
+				continue // ADD CONSTRAINT / ADD PRIMARY KEY / ... — not a column
+			}
 			ops = append(ops, op{pos: loc[0], table: table, columns: []string{col}})
 		}
 		sort.Slice(ops, func(i, j int) bool { return ops[i].pos < ops[j].pos })
@@ -551,6 +831,7 @@ func TestPRDWorkshopAndMailingColumnParity(t *testing.T) {
 		t.Fatalf("read %s: %v", prdPath, err)
 	}
 	section := stripSQLComments(extractPRDSection(t, string(prdBytes), "### 6.2 "))
+	checkColumnStatementCoverage(t, section, "PRD.md §6.2")
 	prdColumns := prdColumnsFromSection(section)
 
 	var tables []string
