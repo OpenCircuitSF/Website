@@ -9,23 +9,26 @@
 // validity, status offers, or sort order is a call into this module -- never
 // a comparison, `.trim()`, or status literal written inline in a template.
 //
-// # The slug discrepancy, for this issue's reviewer
+// # The slug discrepancy -- decided by #0137, not open anymore
 //
-// #0052's acceptance criteria say the slug should be "auto-generated from
-// the title, editable before first publish and locked after." But #0051's
-// API (internal/handlers/admin_workshops.go, already committed and
-// resolved) never accepts a client-supplied slug at all: Create's doc
-// comment says any "slug" field in the POST body is "simply ignored", and
-// patchWorkshopRequest has NO slug field whatsoever -- "slug is immutable
-// through this route" per that struct's own doc comment. There is no admin
-// route that can ever change a workshop's slug, before or after first
-// publish. This module therefore treats the slug as always read-only
-// (isSlugEditable below always returns false) and the editor displays it as
-// plain text, never an input. That satisfies "auto-generated" and "locked"
-// but not "editable before first publish" -- flagging this the same way
-// lib/workshops.ts (#0053) flagged its own #0051 discrepancy, for the
-// reviewer to decide whether #0052's criterion or #0051's committed API
-// contract is the one that needs to change.
+// #0052's acceptance criteria originally asked for a slug "auto-generated
+// from the title, editable before first publish and locked after." #0051's
+// API (internal/handlers/admin_workshops.go) never accepted a
+// client-supplied slug at all -- createWorkshopRequest has no "slug" field
+// and patchWorkshopRequest has none either ("slug is immutable through this
+// route" per that struct's own doc comment) -- so #0052's reviewer left the
+// criterion unticked rather than build something the API could not support.
+// #0137 resolved the disagreement: the API is right. A stable,
+// server-generated slug is one less thing an admin can get wrong, the
+// collision-suffix retry already guarantees uniqueness, and an editable slug
+// would reopen the "unvalidated value reaches a URL" class #0138/#0144/#0145
+// closed. #0052's criterion was struck with a note pointing here. The
+// accepted cost: a title typo caught after publish leaves a permanently
+// wrong slug, since editing the title does not regenerate it (proved by
+// execution in #0137 -- PATCHing only `title` leaves `slug` byte-identical).
+// This module therefore treats the slug as always read-only
+// (isSlugEditable below always returns false, and stays that way by design,
+// not by gap) and the editor displays it as plain text, never an input.
 //
 // # Cover image: path entry only, no upload, same-origin only (#0138)
 // #0051's API has no upload endpoint (no multipart route, no storage
@@ -210,7 +213,7 @@ export function announceUnsavedInterestsHint(
 
 // ── Slug (server-owned -- see this module's header note) ───────────────────
 
-/** Always false today -- see this module's header note on the slug discrepancy. */
+/** Always false, by design (#0137) -- see this module's header note. */
 export function isSlugEditable(): boolean {
   return false;
 }

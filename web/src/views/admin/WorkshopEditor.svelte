@@ -27,12 +27,11 @@
   downstream (#0053/#0056) -- this screen's only job is letting an admin set
   them.
 
-  Slug: always shown read-only. See lib/workshopAdmin.ts's header comment
-  for why -- #0051's committed API accepts no client-supplied slug on
-  create or patch, so "editable before first publish" (this issue's own
-  acceptance criterion) cannot be built without a backend change outside
-  this issue's admin-UI-only scope. Flagged for the reviewer there and in
-  this issue's Gotchas.
+  Slug: always shown read-only, by design (#0137). #0051's API accepts no
+  client-supplied slug on create or patch, so #0052's original "editable
+  before first publish" criterion could not be built; #0137 decided the API
+  is right and struck that criterion rather than adding a slug-editing
+  route. See lib/workshopAdmin.ts's header comment for the full reasoning.
 
   Cover image: a path/URL text field, not an upload control -- #0051's API
   has no upload endpoint. Also flagged as a discrepancy in lib/workshopAdmin.ts

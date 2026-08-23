@@ -244,12 +244,19 @@ type createWorkshopRequest struct {
 // Create handles POST /admin/workshops. Always creates in status='draft'
 // (workshops.Store.Create's own contract); the slug is server-generated from
 // title (never client-supplied — see internal/workshops/store.go's doc
-// comment for the collision-suffix algorithm), so any "slug" field in the
-// request body is simply ignored rather than round-tripped, matching
-// decodeJSON's general DisallowUnknownFields posture for OTHER unrecognized
-// fields elsewhere in this package (this one is recognized-but-unsettable,
-// intentionally not rejected, since a client naively echoing the view back
-// as a create payload shouldn't 400 on its own read-only field).
+// comment for the collision-suffix algorithm). createWorkshopRequest below
+// has no "slug" field at all, so a request body carrying one is genuinely
+// REJECTED with 400 "invalid request body" — decodeJSON's
+// DisallowUnknownFields treats an unrecognized "slug" key exactly like any
+// other unrecognized field elsewhere in this package. (#0137 corrected this
+// comment: an earlier version claimed the key was silently ignored as
+// "recognized-but-unsettable"; that was never true of this struct and was
+// proved false by execution — see issues/0137.md. The API's stance, decided
+// there, is that a client-supplied slug should be refused outright rather
+// than accepted-and-dropped, so this behavior is the intended one and is
+// kept as-is. No production caller ever sends this field: the admin UI never
+// includes "slug" in a create or patch payload — see
+// web/src/lib/workshopAdmin.ts's header comment.)
 func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	actor, ok := middleware.UserFromContext(r.Context())
 	if !ok {
