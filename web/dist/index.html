@@ -4,15 +4,25 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <title>Short Links</title>
-    <!-- PNG-only favicons (no favicon.ico). The ?v= is a cache-buster: browsers
-         cache favicons very aggressively and will otherwise keep painting a
-         previously-cached icon (e.g. the old white-line one). Bump on change. -->
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png?v=3" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png?v=3" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3" />
-    <script type="module" crossorigin src="/assets/index-DZpkJF5j.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BRRCTnhm.css">
+    <title>%%OC_TITLE%%</title>
+    <!-- This is a MINIMAL PLACEHOLDER, not real build output -- see
+         .gitignore's comment above the web/dist/* rule. It exists only so
+         `go build ./...` can //go:embed something before a real
+         `npm run build` has run. Its %%OC_*%% tokens must match
+         web/index.html's exactly (internal/seo substitutes them per
+         request; internal/seo/seo_test.go and
+         cmd/opencircuit/seo_wiring_test.go both depend on a token-bearing
+         index.html being embeddable from a clean checkout). It does not
+         reference any built asset (no hashed .js/.css) because none exists
+         until `npm run build` produces one -- run that (or
+         `./scripts/dev.sh --built`) to see the real page. -->
+    <meta name="description" content="%%OC_DESCRIPTION%%" />
+    <meta property="og:title" content="%%OC_OG_TITLE%%" />
+    <meta property="og:description" content="%%OC_OG_DESCRIPTION%%" />
+    <meta property="og:image" content="%%OC_OG_IMAGE%%" />
+    <meta property="og:url" content="%%OC_OG_URL%%" />
+    <meta property="og:type" content="%%OC_OG_TYPE%%" />
+    <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
   </head>
   <body>
     <div id="app"></div>

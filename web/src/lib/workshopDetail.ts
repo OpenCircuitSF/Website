@@ -13,6 +13,7 @@
 // view directly rather than duplicated here.
 
 import type { PublicWorkshop } from './types';
+import { isSafeLinkHref } from './markdown';
 
 /**
  * Explicit cover-image render dimensions (#0054 acceptance criterion:
@@ -79,7 +80,18 @@ export function workshopPreselectSlugs(w: Pick<PublicWorkshop, 'interests'>): st
  * traffic routed there; the inline SubscribeForm still renders alongside it
  * for staying on the mailing list, which is a separate action from
  * registering for this specific session.
+ *
+ * Also gates on `isSafeLinkHref` (`./markdown`, #0052) so a `javascript:`/
+ * `data:`/control-character-smuggled scheme an admin stored in signup_url
+ * never reaches the rendered `href` -- #0054's phase-3 review flagged that
+ * this field had no scheme allowlist on either side, the same class #0052
+ * was bounced for, one trust level up (admin-authored, not public). Reusing
+ * the hardened helper here rather than writing a second scheme check keeps
+ * there being exactly one place that decides what's a safe link
+ * destination. An unsafe signup_url simply doesn't render the external
+ * button; the inline SubscribeForm CTA is unaffected.
  */
 export function hasExternalSignup(w: Pick<PublicWorkshop, 'signup_url'>): boolean {
-  return !!w.signup_url && w.signup_url.trim() !== '';
+  const url = w.signup_url?.trim();
+  return !!url && isSafeLinkHref(url);
 }

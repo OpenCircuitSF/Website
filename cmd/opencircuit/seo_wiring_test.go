@@ -64,6 +64,15 @@ import (
 // same way. Both were exercised by hand against this test body during
 // implementation and reverted; see #0054's Verification section in
 // issues/0054.md for the transcript.
+//
+// Scope note (#0054's phase-3 review, finding 3): this test rebuilds the
+// production wiring shape BY HAND inside the test body -- it constructs its
+// own site/adminWorkshopsH and calls mountAndServe directly -- rather than
+// exercising servePostgres itself. It proves the seam works when the same
+// *seo.Site is threaded to both call sites, matching every other
+// *_wiring_test.go in this package, but it does not pin servePostgres's own
+// wiring: a future edit that reintroduces a literal nil or a second
+// buildSEOSite call inside main.go's servePostgres would not be caught here.
 func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -77,7 +86,17 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	t.Cleanup(pool.Close)
+	// Truncate on both ends -- mirrors admin_wiring_test.go and
+	// shutdown_budget_wiring_test.go's convention -- so a second run
+	// against the same database doesn't die on
+	// sessions_token_key (this test used a fixed admin token and never
+	// cleaned up, which is exactly what broke re-runs; see #0054's
+	// Review notes finding 2).
+	t.Cleanup(func() {
+		truncateAdminWiringTables(t, pool)
+		pool.Close()
+	})
+	truncateAdminWiringTables(t, pool)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

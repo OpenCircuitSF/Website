@@ -98,6 +98,23 @@ describe('hasExternalSignup', () => {
   it('is true when signup_url is a non-empty string', () => {
     expect(hasExternalSignup(workshop({ signup_url: 'https://example.com/rsvp' }))).toBe(true);
   });
+
+  // #0054's phase-3 review: signup_url reached `href` with no scheme
+  // allowlist. hasExternalSignup now reuses markdown.ts's isSafeLinkHref
+  // (#0052) so an unsafe scheme never renders as the external action.
+  it('is false when signup_url is a javascript: URL', () => {
+    expect(hasExternalSignup(workshop({ signup_url: 'javascript:alert(1)' }))).toBe(false);
+  });
+
+  it('is false when signup_url is a data: URL', () => {
+    expect(
+      hasExternalSignup(workshop({ signup_url: 'data:text/html,<script>alert(1)</script>' })),
+    ).toBe(false);
+  });
+
+  it('is true when signup_url is a root-relative path', () => {
+    expect(hasExternalSignup(workshop({ signup_url: '/rsvp' }))).toBe(true);
+  });
 });
 
 describe('cover image dimensions', () => {
