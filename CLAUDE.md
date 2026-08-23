@@ -439,6 +439,21 @@ an opaque error — check it first if a Phase 1 ceremony fails.
 - **Headless Chromium enforces a ~485 px minimum window width.**
   `--window-size=390` silently clips a wider render, which looks exactly like a
   horizontal-overflow bug. Test narrow layouts in a sized `<iframe>` instead.
+- **A backslash escape you type may land as the real character.** An agent
+  writing `\u00A0` into a source file twice got the actual NBSP bytes
+  (`\xc2\xa0`) on disk instead of the six ASCII characters it intended — so a
+  pattern meant to *describe* a codepoint silently *contained* it. Anything
+  whose correctness depends on a file holding literal escape text must be read
+  back as bytes: `python3 -c "print(open(P,'rb').read())"`. The workaround that
+  worked was generating the backslash at runtime (`chr(92)` /
+  `String.fromCharCode(92)`) rather than typing it.
+- **A malformed TypeScript fixture fails silently, not loudly.** A raw LF inside
+  a single-quoted JS string is invalid, but the parser is error-tolerant: the
+  test reported "0 matches" and passed, rather than raising a syntax error. A
+  zero-match result from a fixture you just wrote is a reason to check the
+  fixture, not to conclude the pattern missed. Build such fixtures from
+  `\uXXXX` escapes uniformly.
+
 - **BSD `grep -P` on this machine matches nothing, silently.** It does not
   error and does not warn — it reports zero hits on a file that demonstrably
   contains the bytes, which reads exactly like "the string isn't there." A
