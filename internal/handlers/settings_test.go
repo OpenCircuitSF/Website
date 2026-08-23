@@ -3,9 +3,15 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +20,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 // TestValidSettingValue_MaxSendRate is #0045's carried-in obligation: only
@@ -68,62 +75,138 @@ func settingsTestPool(t *testing.T) *pgxpool.Pool {
 	return testDBPool
 }
 
-// resetSettings restores the settings table to exactly the migration seed:
-// registrations_enabled=false (000004), physical_address=empty string (000008),
-// #0039's soft_bounce_threshold_count=5 / soft_bounce_threshold_window_days=30
-// (000015), and #0045's max_send_rate=10 / default_from_name=empty string
-// (000018). This isolates each settings test from values left by earlier
-// tests (the auth suite flips the registrations_enabled row; #0039's own
-// tests may flip the threshold rows to exercise configurability). Callers
-// that want the DB left in the seeded state on teardown, not just on entry,
-// must register their own t.Cleanup(func() { resetSettings(t, pool) }) —
-// settingsTestPool does this already.
+// settingsMigrationsDir is where resetSettings looks for the migration seed
+// — the repo's migrations/ directory, relative to this package's own
+// directory (`go test` runs with the package directory as its working
+// directory). settingsSeedStatements reads it as a var, not a constant, so
+// TestResetSettings_PreservesFutureMigrationSeed can point it at a fixture
+// directory to prove resetSettings needs no code change for a new seeded
+// key, then restore it.
+var settingsMigrationsDir = "../../migrations"
+
+// settingsSeedStmtRe matches one `INSERT INTO settings ...;` statement,
+// case-insensitively, anchored to the start of a line so a doc comment that
+// merely mentions "settings" cannot match. `(?s)` lets `.` cross the
+// statement's own newlines; the match still stops at the first `;`, which
+// is safe here because none of these statements contain a semicolon in a
+// string or subquery.
+var settingsSeedStmtRe = regexp.MustCompile(`(?ims)^INSERT INTO settings\b.*?;`)
+
+// settingsSeedStatements extracts every `INSERT INTO settings ...;`
+// statement out of every *.up.sql file in settingsMigrationsDir, in
+// filename order, and returns them verbatim.
 //
-// #0130: this used to re-insert only four of the six migration-seeded rows,
-// so a DELETE FROM settings followed by this re-seed silently dropped
-// max_send_rate and default_from_name from opencircuit_test for good — the
-// next internal/handlers run left the table missing two rows migration
-// 000018 seeded. Nothing in this package failed because effectiveSendRate
-// falls back when max_send_rate is absent, but internal/mailing's own
-// tests (worker_test_helpers_test.go) assume those two rows are present as
-// GLOBAL rows seeded by migration. All six keys are re-inserted now so a
-// reset always leaves the table matching the migration seed exactly.
+// #0132: resetSettings used to restate the migration seed as six
+// hand-typed INSERTs (registrations_enabled from 000004, physical_address
+// from 000008, the two soft_bounce_threshold_* rows from 000015,
+// max_send_rate and default_from_name from 000018) — a second,
+// hand-maintained copy of what migrations/ already seeds. #0130 had to fix
+// that copy once already when it silently dropped two of the six; the
+// duplication itself was still there and would silently drop the *next*
+// migration's new row the same way. This reads the actual SQL the
+// migrations run — not a Go-side restatement, not a snapshot of a live
+// table (which a differently-ordered package's uncleaned test data can
+// pollute before this package's own tests ever run) — so a migration that
+// adds a new `INSERT INTO settings ... ON CONFLICT (key) DO NOTHING`
+// statement is picked up automatically, with no matching edit here.
+func settingsSeedStatements() ([]string, error) {
+	entries, err := os.ReadDir(settingsMigrationsDir)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", settingsMigrationsDir, err)
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".up.sql") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+
+	var stmts []string
+	for _, name := range names {
+		content, err := os.ReadFile(filepath.Join(settingsMigrationsDir, name))
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", name, err)
+		}
+		stmts = append(stmts, settingsSeedStmtRe.FindAllString(string(content), -1)...)
+	}
+	if len(stmts) == 0 {
+		return nil, fmt.Errorf("no INSERT INTO settings statements found under %s", settingsMigrationsDir)
+	}
+	return stmts, nil
+}
+
+// resetSettings restores the settings table to exactly what a fresh
+// migration run produces: it clears the table, then replays every
+// `INSERT INTO settings ...;` statement settingsSeedStatements finds in
+// migrations/*.up.sql. This isolates each settings test from values left by
+// earlier tests (the auth suite flips the registrations_enabled row;
+// #0039's own tests may flip the threshold rows to exercise
+// configurability). Callers that want the DB left in the seeded state on
+// teardown, not just on entry, must register their own
+// t.Cleanup(func() { resetSettings(t, pool) }) — settingsTestPool does this
+// already.
 func resetSettings(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
+	stmts, err := settingsSeedStatements()
+	if err != nil {
+		t.Fatalf("resetSettings: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
 	defer cancel()
 	if _, err := pool.Exec(ctx, `DELETE FROM settings`); err != nil {
 		t.Fatalf("clear settings: %v", err)
 	}
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO settings (key, value, updated_at)
-		 VALUES ('physical_address', '', now())`); err != nil {
-		t.Fatalf("seed physical_address setting: %v", err)
+	for _, stmt := range stmts {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("replay migration seed statement %q: %v", stmt, err)
+		}
 	}
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO settings (key, value, updated_at)
-		 VALUES ('registrations_enabled', 'false', now())`); err != nil {
-		t.Fatalf("seed settings: %v", err)
+}
+
+// TestResetSettings_PreservesFutureMigrationSeed is #0132's mutation proof.
+// A hand-maintained literal list in resetSettings (the pre-#0132 shape)
+// would silently drop any settings row a future migration seeds that the
+// list doesn't name — exactly what #0130 found and fixed for two rows, and
+// exactly the defect class this issue closes structurally rather than by
+// re-syncing the copy.
+//
+// It points settingsMigrationsDir at a throwaway directory holding a single
+// fixture *.up.sql file — standing in for a brand new migration that seeds
+// a settings key resetSettings has never heard of — and asserts the key
+// survives a DELETE-and-reseed with zero edits to resetSettings or to any
+// list of known keys, because there is no such list any more.
+func TestResetSettings_PreservesFutureMigrationSeed(t *testing.T) {
+	pool := settingsTestPool(t)
+	ctx := context.Background()
+
+	extraKey := fmt.Sprintf("zz_test_future_setting_%d", testdb.Unique())
+	fixtureDir := t.TempDir()
+	fixture := fmt.Sprintf(
+		"-- fixture standing in for a future migration (#0132's mutation proof)\n"+
+			"INSERT INTO settings (key, value, updated_at)\n"+
+			"VALUES ('%s', 'present', now())\n"+
+			"ON CONFLICT (key) DO NOTHING;\n", extraKey)
+	if err := os.WriteFile(filepath.Join(fixtureDir, "999999_future.up.sql"), []byte(fixture), 0o644); err != nil {
+		t.Fatalf("write fixture migration: %v", err)
 	}
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO settings (key, value, updated_at)
-		 VALUES ('soft_bounce_threshold_count', '5', now())`); err != nil {
-		t.Fatalf("seed soft_bounce_threshold_count setting: %v", err)
+
+	saved := settingsMigrationsDir
+	settingsMigrationsDir = fixtureDir
+	t.Cleanup(func() {
+		settingsMigrationsDir = saved
+		resetSettings(t, pool)
+	})
+
+	resetSettings(t, pool)
+
+	var value string
+	err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, extraKey).Scan(&value)
+	if err != nil {
+		t.Fatalf("expected %s to survive resetSettings, got: %v", extraKey, err)
 	}
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO settings (key, value, updated_at)
-		 VALUES ('soft_bounce_threshold_window_days', '30', now())`); err != nil {
-		t.Fatalf("seed soft_bounce_threshold_window_days setting: %v", err)
-	}
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO settings (key, value, updated_at)
-		 VALUES ('max_send_rate', '10', now())`); err != nil {
-		t.Fatalf("seed max_send_rate setting: %v", err)
-	}
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO settings (key, value, updated_at)
-		 VALUES ('default_from_name', '', now())`); err != nil {
-		t.Fatalf("seed default_from_name setting: %v", err)
+	if value != "present" {
+		t.Errorf("value = %q, want %q", value, "present")
 	}
 }
 
