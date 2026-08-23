@@ -508,6 +508,24 @@ shasum -a 256 <your-path> /tmp/before-NNNN # prove you restored it
 Or measure the baseline in a throwaway worktree pinned to a commit, where the
 working tree is yours alone.
 
+**Running the check is not the same as acting on it.** `#0161`'s implementer
+ran `git status --porcelain` before its `gofmt -w` sweep — and did not branch on
+the output. It formatted `cmd/opencircuit/seo_wiring_test.go` while `#0165` had
+that file open, caught it in `git diff`, reversed only its own hunk by hand, and
+waited for the other agent to commit before reformatting. Nothing was lost, and
+only because it looked afterwards.
+
+A bulk rewrite (`gofmt -w`, a codemod, `sed -i` over a glob) is the dangerous
+shape: it touches files you never named. Filter the list first, and skip what is
+dirty:
+
+```bash
+gofmt -l . | while read -r f; do
+  [ -n "$(git status --porcelain -- "$f")" ] && { echo "skip (dirty): $f"; continue; }
+  gofmt -w "$f"
+done
+```
+
 **Staging narrowly is not enough — the index is shared too.** `git commit` with
 no pathspec commits *whatever is staged*, including files another agent staged
 seconds earlier. This happened twice in one session: two implementers working
