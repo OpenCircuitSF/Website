@@ -474,6 +474,25 @@ recoverable. Stage narrowly — `git add <specific-path>`, never `git add -A` or
 `git commit -a`, which sweep up other agents' work into a commit that does not
 describe it.
 
+**The usual motive is a before/after measurement.** An agent wanting a "before"
+test count ran a broad `git stash` / `git stash pop`, briefly sweeping another
+agent's in-flight `internal/mailing/worker_test.go` in with its own. The pop
+reapplied cleanly and nothing was lost, and it disclosed the whole thing — which
+is the only reason it is written down here. `git stash` is not a read-only
+operation on a shared tree, and "I'll put it right back" is exactly the shape of
+the reasoning that precedes a loss.
+
+To measure a before/after, copy your own file aside and compare hashes:
+
+```bash
+cp <your-path> /tmp/before-NNNN            # your file only
+# ...edit, measure...
+shasum -a 256 <your-path> /tmp/before-NNNN # prove you restored it
+```
+
+Or measure the baseline in a throwaway worktree pinned to a commit, where the
+working tree is yours alone.
+
 **Staging narrowly is not enough — the index is shared too.** `git commit` with
 no pathspec commits *whatever is staged*, including files another agent staged
 seconds earlier. This happened twice in one session: two implementers working
