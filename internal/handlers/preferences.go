@@ -126,8 +126,15 @@ type preferencesResponse struct {
 	// complained row: Store.Unsubscribe silently no-ops there (see its doc
 	// comment), so Unsubscribed above is false and Message explains why
 	// nothing changed instead of implying success (#0031 review finding 2 —
-	// mirrors AdminSubscribersHandler.Suppress's no_op field, #0032).
-	NoOp bool `json:"no_op,omitempty"`
+	// mirrors AdminSubscribersHandler.Suppress's no_op field, #0032). No
+	// `omitempty`, so `false` is always explicit rather than indistinguishable
+	// from absent (#0093: this field used to carry `omitempty` while its twin
+	// in admin_subscribers.go never did — a client couldn't write one branch
+	// for both. unsubscribe.go's unsubscribeResponse.NoOp already matched
+	// admin_subscribers.go's plain tag before this fix; this field now does
+	// too, so all three no_op-bearing responses in this package share one
+	// schema).
+	NoOp bool `json:"no_op"`
 }
 
 // Get handles GET /api/preferences?token=. Invalid/unknown/rotated tokens

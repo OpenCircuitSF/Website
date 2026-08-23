@@ -469,6 +469,25 @@ func TestPreferencesHandler_Patch_UnsubscribeEverything(t *testing.T) {
 	if !resp.Unsubscribed {
 		t.Error("Unsubscribed = false, want true")
 	}
+	if resp.NoOp {
+		t.Error("NoOp = true for a real unsubscribe, want false")
+	}
+
+	// #0093: the field must be PRESENT and false on the wire, not merely
+	// false after decoding into a Go struct (which can't distinguish an
+	// explicit `false` from an omitted key). preferences.go used to tag NoOp
+	// `omitempty`, which would drop the key here entirely — the exact
+	// asymmetry with admin_subscribers.go's plain `json:"no_op"` this issue
+	// tracked. Parse into a map to inspect the raw JSON keys.
+	var raw map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw response: %v", err)
+	}
+	if v, ok := raw["no_op"]; !ok {
+		t.Error(`response body has no "no_op" key at all — want it present and false (omitempty would drop it here)`)
+	} else if v != false {
+		t.Errorf(`response body's "no_op" = %v, want false`, v)
+	}
 
 	after, err := subs.GetByID(ctx, created.ID)
 	if err != nil {

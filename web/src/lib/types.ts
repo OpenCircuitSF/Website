@@ -423,7 +423,11 @@ export interface WorkshopPreviewResponse {
  * complained (Store.Unsubscribe's documented no-op case) — unsubscribed is
  * false in that case, and PreferenceCenter.svelte must not treat it as a
  * success (#0031 review finding 2). Matches
- * internal/handlers/preferences.go's preferencesResponse. */
+ * internal/handlers/preferences.go's preferencesResponse. no_op is always
+ * present (#0093: the server used to tag it `omitempty`, the one field this
+ * type had that AdminSubscribers' SubscriberActionResult-and-no_op shape and
+ * UnsubscribeResult's no_op did not — both of those were always required).
+ */
 export interface PreferencesResponse {
   message?: string;
   email: string;
@@ -431,5 +435,5 @@ export interface PreferencesResponse {
   interests: string[];
   active_interests: PublicInterest[];
   unsubscribed: boolean;
-  no_op?: boolean;
+  no_op: boolean;
 }

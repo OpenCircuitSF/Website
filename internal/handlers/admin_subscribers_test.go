@@ -431,13 +431,14 @@ func TestAdminSubscribers_Suppress_ActiveSubscriberBecomesUnsubscribed(t *testin
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
+	body := readBody(t, resp)
 	var out struct {
 		Subscriber struct {
 			Status string `json:"status"`
 		} `json:"subscriber"`
 		NoOp bool `json:"no_op"`
 	}
-	if err := json.Unmarshal(readBody(t, resp), &out); err != nil {
+	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if out.Subscriber.Status != subscribers.StatusUnsubscribed {
@@ -445,6 +446,22 @@ func TestAdminSubscribers_Suppress_ActiveSubscriberBecomesUnsubscribed(t *testin
 	}
 	if out.NoOp {
 		t.Error("NoOp = true for an active subscriber, want false (the action took effect)")
+	}
+
+	// #0093: assert the field is PRESENT (not merely decoded as its zero
+	// value) — this endpoint's tag never carried `omitempty`, but proving it
+	// on the wire, the same way preferences_test.go now does for its twin
+	// endpoint, is what makes the two endpoints' non-no-op responses
+	// verifiably the same shape rather than coincidentally equal after
+	// struct decoding.
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("decode raw response: %v", err)
+	}
+	if v, ok := raw["no_op"]; !ok {
+		t.Error(`response body has no "no_op" key at all — want it present and false`)
+	} else if v != false {
+		t.Errorf(`response body's "no_op" = %v, want false`, v)
 	}
 
 	actions := auditActionsForSubscriberTarget(t, pool, id)

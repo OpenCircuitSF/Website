@@ -82,14 +82,16 @@
 //
 // # Response schema
 //
-// #0093 (open, not fixed here) tracks two DIFFERENT no_op JSON schemas
-// already living in this package: preferences.go tags NoOp
-// `json:"no_op,omitempty"`, admin_subscribers.go tags it plain
-// `json:"no_op"`. Rather than add a third shape to that drift, this
-// handler's unsubscribeResponse matches admin_subscribers.go's — no
-// omitempty, so `false` is always explicit in the body — since that is the
-// shape #0093 itself names as correct ("prefer dropping omitempty ...
-// matching #0032's original").
+// #0093 tracked two DIFFERENT no_op JSON schemas living in this package:
+// preferences.go tagged NoOp `json:"no_op,omitempty"`, admin_subscribers.go
+// tagged it plain `json:"no_op"`. Rather than add a third shape to that
+// drift, this handler's unsubscribeResponse was written to match
+// admin_subscribers.go's from the start — no omitempty, so `false` is
+// always explicit in the body — since that is the shape #0093 itself named
+// as correct ("prefer dropping omitempty ... matching #0032's original").
+// #0093's fix brought preferences.go into line with this and
+// admin_subscribers.go, so all three no_op-bearing responses in this
+// package now share one schema.
 package handlers
 
 import (
