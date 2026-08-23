@@ -749,12 +749,12 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 		// however the caller chooses to release it.
 		return sendOutcomeTerminalCampaign, sendErr
 	case sendClassTerminalRow:
-		if _, err := w.store.MarkFailedRow(ctx, r.SendID, adminSendErrorMessage(sendErr)); err != nil {
+		if _, err := w.store.MarkFailedRow(ctx, r.SendID, adminSendErrorMessage(w.log, r.SendID, sendErr)); err != nil {
 			w.log.Error("mailing: marking rejected row failed", "send_id", r.SendID, "err", err)
 		}
 		return sendOutcomeTerminalRow, nil
 	default: // retryable
-		if _, err := w.store.MarkRetryOrFailed(ctx, r.SendID, adminSendErrorMessage(sendErr)); err != nil {
+		if _, err := w.store.MarkRetryOrFailed(ctx, r.SendID, adminSendErrorMessage(w.log, r.SendID, sendErr)); err != nil {
 			w.log.Error("mailing: retry-or-fail on send row", "send_id", r.SendID, "err", err)
 		}
 		if isThrottlingError(sendErr) {
@@ -853,10 +853,13 @@ func adminRenderFailureMessage(err error) string {
 // AWS SDK (or, for the retry-backoff wait, the local context) produced —
 // emitted at exactly three places (ses_mailer.go's SendEmail-error,
 // sleep-error, and final-attempt returns), all with this identical literal
-// and no double wrapping. Its presence is what adminSendErrorMessage uses to
-// tell an SES-produced error from one of SESMailer.Send's own two
-// argument-guard errors or ErrNoMessageID, none of which carry it (#0182 —
-// a prior pass wrongly assumed every error reaching that function had it).
+// and no double wrapping. adminSendErrorMessage no longer inspects this
+// prefix (#0188 — see that function's doc comment for why matching on
+// err.Error() text was itself the defect: SDK errors nest, so stripping a
+// literal prefix off the formatted string left the nested
+// "operation error …, https response error …" scaffolding behind it). Kept
+// as documentation of SESMailer.Send's own wrapping behavior, which other
+// comments in this file still reference.
 const sesWrapPrefix = "mailing: sending via SES: "
 
 // adminSendBuildFailureMessage is written to email_sends.error for
@@ -888,9 +891,9 @@ const adminNoMessageIDMessage = "Not sent — SES accepted this message but did 
 // through raw (#0182).
 const adminSendTimedOutMessage = "Not sent — the send attempt did not complete before its time limit."
 
-// adminSendUnreachableMessage is written to email_sends.error when
-// SESMailer.Send's call to AWS carries sesWrapPrefix but never received (or
-// never got far enough to receive) a service response to deserialize — a
+// adminSendUnreachableMessage is written to email_sends.error when a
+// send error wraps *smithy.OperationError but never received (or never got
+// far enough to receive) a service response to deserialize — a
 // credential-chain refresh failure, a DNS/dial failure, or any other
 // transport-level fault the AWS SDK reports through *smithy.OperationError
 // without a smithy.APIError underneath it (smithy-go's Client.Invoke wraps
@@ -926,18 +929,36 @@ const adminSendUnreachableMessage = "Not sent — this attempt could not reach S
 //     sesv2/types exception, and smithy.GenericAPIError for one that
 //     isn't modeled yet — is a genuine response from SES about this
 //     specific send: a rejection reason, a quota, a throttling notice.
-//     Genuinely useful to an admin, so it is kept, with only our own
-//     sesWrapPrefix (if present) stripped.
-//  3. Anything else carrying sesWrapPrefix is a transport-level failure
-//     from inside SESMailer.Send's SendEmail call that never resolved to
-//     an API response at all — a credential-chain refresh failure, a
-//     DNS/dial failure — mapped to adminSendUnreachableMessage, since
-//     that describes a server/deployment problem, not anything about this
-//     recipient (see its own doc comment for why that distinction
-//     matters).
+//     Genuinely useful to an admin, so it is built from apiErr.ErrorCode()
+//     and apiErr.ErrorMessage() directly — NOT err.Error() with
+//     sesWrapPrefix stripped off the front (#0188): production nests a
+//     modeled exception inside *smithy.OperationError and, over HTTP,
+//     inside *smithy.(transport/http).ResponseError too, each of which
+//     prepends its own "operation error …, " / "https response error
+//     StatusCode: …, RequestID: …, " text to Error()'s formatted string.
+//     Stripping only our own sesWrapPrefix left every layer between it and
+//     the modeled exception intact — exactly the "implementation detail an
+//     admin cannot act on" this function exists to keep out, and it only
+//     ever showed up in production, because every test before #0188
+//     exercised a *bare* modeled exception (Error() == "Code: Message",
+//     nothing to strip). apiErr.ErrorCode()+": "+apiErr.ErrorMessage()
+//     reaches the same text regardless of how deep the modeled exception is
+//     nested, because it reads the exception's own fields rather than
+//     re-parsing anything's Error() string.
+//  3. Anything else that is (or wraps) *smithy.OperationError without a
+//     smithy.APIError inside it is a transport-level failure from inside
+//     the AWS SDK call that never resolved to an API response at all — a
+//     credential-chain refresh failure, a DNS/dial failure — mapped to
+//     adminSendUnreachableMessage, since that describes a server/deployment
+//     problem, not anything about this recipient (see its own doc comment
+//     for why that distinction matters). Type-based via errors.As, like
+//     every branch above it (#0188 — a prior draft discriminated this one
+//     case on sesWrapPrefix's string presence instead, the one branch in
+//     this function not keyed off the error's shape).
 //  4. Anything left is an error shape this function was not written
-//     against — logged loudly rather than silently mislabeled.
-func adminSendErrorMessage(err error) string {
+//     against — logged loudly, with send_id for correlation against the
+//     rest of this worker's logging, rather than silently mislabeled.
+func adminSendErrorMessage(log *slog.Logger, sendID int64, err error) string {
 	if errors.Is(err, ErrNoMessageID) {
 		return adminNoMessageIDMessage
 	}
@@ -950,13 +971,11 @@ func adminSendErrorMessage(err error) string {
 
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
-		if stripped, ok := strings.CutPrefix(err.Error(), sesWrapPrefix); ok {
-			return stripped
-		}
-		return err.Error()
+		return apiErr.ErrorCode() + ": " + apiErr.ErrorMessage()
 	}
 
-	if strings.HasPrefix(err.Error(), sesWrapPrefix) {
+	var opErr *smithy.OperationError
+	if errors.As(err, &opErr) {
 		return adminSendUnreachableMessage
 	}
 
@@ -964,7 +983,7 @@ func adminSendErrorMessage(err error) string {
 	// handled above. An engineer needs to know this function was handed a
 	// return it was never enumerated for, rather than have it silently
 	// mislabeled "could not be built" (#0185).
-	slog.Default().Error("mailing: adminSendErrorMessage saw an unrecognized error", "err", err)
+	log.Error("mailing: adminSendErrorMessage saw an unrecognized error", "send_id", sendID, "err", err)
 	return adminSendBuildFailureMessage
 }
 

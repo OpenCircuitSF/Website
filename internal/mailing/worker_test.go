@@ -1,9 +1,14 @@
 package mailing
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync"
@@ -11,14 +16,51 @@ import (
 	"testing"
 	"time"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 	smithy "github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
+
+// discardLogger is a *slog.Logger that throws its output away — for tests
+// exercising adminSendErrorMessage's classified branches, where no log line
+// should fire at all (see TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors's
+// own doc comment) and a nil/default logger would either panic or write to
+// the test binary's stderr.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// sesResponseError builds the AWS SDK v2 shape a genuine SES call actually
+// returns when SES answers with an error response: modeled *inner* nested
+// inside *awshttp.ResponseError (the deserialized HTTP response, carrying
+// statusCode and requestID) nested inside *smithy.OperationError (what
+// smithy-go's Client.Invoke wraps every operation error in) — then wrapped
+// in SESMailer.Send's own sesWrapPrefix, exactly as ses_mailer.go emits it.
+// #0188: every test before this one only ever wrapped a BARE modeled
+// exception, a shape the AWS SDK never actually returns on its own, which is
+// what let the "operation error SES v2: SendEmail, https response error
+// StatusCode: 400, RequestID: <uuid>, " scaffolding survive undetected.
+func sesResponseError(inner error) error {
+	return fmt.Errorf("%s%w", sesWrapPrefix, &smithy.OperationError{
+		ServiceID:     "SES v2",
+		OperationName: "SendEmail",
+		Err: &awshttp.ResponseError{
+			ResponseError: &smithyhttp.ResponseError{
+				Response: &smithyhttp.Response{
+					Response: &http.Response{StatusCode: 400},
+				},
+				Err: inner,
+			},
+			RequestID: "11111111-2222-3333-4444-555555555555",
+		},
+	})
+}
 
 func sesTooManyRequests() error     { return &types.TooManyRequestsException{} }
 func sesLimitExceeded() error       { return &types.LimitExceededException{} }
@@ -1017,9 +1059,29 @@ func TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors(t *testing.T) 
 			want: adminSendBuildFailureMessage,
 		},
 		{
-			name: "SES rejection: prefix present, stripped and kept verbatim",
+			name: "SES rejection, bare (a test double's shape): prefix present, stripped and kept verbatim",
 			err:  fmt.Errorf("mailing: sending via SES: %w", &types.MessageRejected{Message: strPtr("Email address is not verified")}),
 			want: "MessageRejected: Email address is not verified",
+		},
+		{
+			// #0188's headline case. Production never returns a bare
+			// modeled exception — smithy-go's Client.Invoke always nests it
+			// inside *smithy.OperationError, and over HTTP inside
+			// *awshttp.ResponseError too, so Error() reads
+			// "operation error SES v2: SendEmail, https response error
+			// StatusCode: 400, RequestID: …, MessageRejected: Email address
+			// is not verified". A prefix-strip of err.Error() left the
+			// "operation error …, https response error …" half of that
+			// intact; reading apiErr.ErrorCode()/ErrorMessage() directly
+			// does not.
+			name: "SES rejection, production-shaped (nested in OperationError + awshttp.ResponseError): scaffolding stripped, message kept verbatim",
+			err:  sesResponseError(&types.MessageRejected{Message: strPtr("Email address is not verified")}),
+			want: "MessageRejected: Email address is not verified",
+		},
+		{
+			name: "SES throttle, production-shaped: same nesting, a different modeled exception",
+			err:  sesResponseError(&types.TooManyRequestsException{Message: strPtr("Maximum sending rate exceeded")}),
+			want: "TooManyRequestsException: Maximum sending rate exceeded",
 		},
 		{
 			name: "retry-backoff deadline exceeded: prefix present but ours, not SES's",
@@ -1032,7 +1094,7 @@ func TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors(t *testing.T) 
 			want: adminSendTimedOutMessage,
 		},
 		{
-			name: "SDK transport/credential failure: prefix present, but no smithy.APIError underneath — mapped, not passed through raw",
+			name: "SDK transport/credential failure, bare OperationError: no smithy.APIError underneath — mapped, not passed through raw",
 			err: fmt.Errorf("mailing: sending via SES: %w", &smithy.OperationError{
 				ServiceID:     "SES v2",
 				OperationName: "SendEmail",
@@ -1040,13 +1102,57 @@ func TestAdminSendErrorMessage_DiscriminatesPrefixedFromOwnErrors(t *testing.T) 
 			}),
 			want: adminSendUnreachableMessage,
 		},
+		{
+			// The same transport fault, but nested inside awshttp.ResponseError
+			// the way a real deserialization-layer failure would be — proves
+			// item 3's discriminator (errors.As against *smithy.OperationError)
+			// still lands here even when the wrapping is deeper than the bare
+			// case above.
+			name: "SDK transport failure, nested one layer deeper: still no smithy.APIError underneath — still mapped",
+			err: fmt.Errorf("mailing: sending via SES: %w", &smithy.OperationError{
+				ServiceID:     "SES v2",
+				OperationName: "SendEmail",
+				Err:           errors.New("dial tcp: lookup email.us-west-2.amazonaws.com: no such host"),
+			}),
+			want: adminSendUnreachableMessage,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := adminSendErrorMessage(tc.err); got != tc.want {
+			if got := adminSendErrorMessage(discardLogger(), 0, tc.err); got != tc.want {
 				t.Errorf("adminSendErrorMessage(%v) = %q, want %q", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestAdminSendErrorMessage_CatchAllLogCarriesSendID pins #0188's second
+// smaller item: unlike every other error log in worker.go, the catch-all
+// branch for an error shape adminSendErrorMessage was not written against
+// used to log with no send_id at all, making it the one line in this file
+// an admin/engineer could not correlate back to a row. It now takes the
+// logger and send id as arguments (the two are supplied by sendOne's call
+// sites) rather than reaching for slog.Default() itself.
+func TestAdminSendErrorMessage_CatchAllLogCarriesSendID(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	const sendID int64 = 4242
+	got := adminSendErrorMessage(log, sendID, errors.New("some future SESMailer.Send return nobody enumerated yet"))
+	if got != adminSendBuildFailureMessage {
+		t.Fatalf("adminSendErrorMessage = %q, want %q", got, adminSendBuildFailureMessage)
+	}
+
+	var rec map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("log output is not valid JSON: %v\noutput: %s", err, buf.String())
+	}
+	if rec["level"] != "ERROR" {
+		t.Errorf("level = %v, want ERROR", rec["level"])
+	}
+	gotSendID, ok := rec["send_id"].(float64)
+	if !ok || int64(gotSendID) != sendID {
+		t.Errorf("send_id = %v, want %d", rec["send_id"], sendID)
 	}
 }
 
@@ -1174,6 +1280,61 @@ func TestWorker_SESRejectionReachesFailedSendsIntact_TerminalRow(t *testing.T) {
 	want := "MessageRejected: " + rejectReason
 	if failed[0].Error != want {
 		t.Errorf("failed_sends[0].error = %q, want %q (byte-identical minus our prefix, via MarkFailedRow)", failed[0].Error, want)
+	}
+}
+
+// TestWorker_SESRejectionReachesFailedSendsIntact_ProductionShaped is
+// TestWorker_SESRejectionReachesFailedSendsIntact_TerminalRow's #0188
+// sibling: the sibling above drives a mailer returning a BARE modeled
+// exception wrapped only in sesWrapPrefix — the shape every test before
+// #0188 used, and one the AWS SDK never actually returns on its own. This
+// test drives the shape production really returns (a modeled exception
+// nested inside *smithy.OperationError and *awshttp.ResponseError, built by
+// sesResponseError) through the same real drainCampaign ->
+// CampaignStatsStore.FailedSends path, so the "an admin sees the SES
+// rejection reason and nothing else" property is proven against production's
+// actual error shape, not just the convenient one to construct in a test.
+func TestWorker_SESRejectionReachesFailedSendsIntact_ProductionShaped(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+	setSetting(t, pool, settingMaxSendRate, "100000")
+
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	forceSending(t, pool, campaignID)
+	sendID, _, _ := seedQueuedSend(t, pool, campaignID)
+
+	const rejectReason = "Email address is not verified: bogus@example.com"
+	mailer := &RecordingMailer{}
+	mailer.SetError(sesResponseError(&types.MessageRejected{Message: strPtr(rejectReason)}))
+
+	w := newTestWorker(t, pool, mailer)
+
+	c, err := w.store.ClaimResume(context.Background())
+	if err != nil {
+		t.Fatalf("ClaimResume: %v", err)
+	}
+	if c == nil {
+		t.Fatal("ClaimResume returned nil campaign")
+	}
+	if _, err := w.drainCampaign(context.Background(), c); err != nil {
+		t.Fatalf("drainCampaign: %v", err)
+	}
+
+	if got := sendRowStatus(t, pool, sendID); got != "failed" {
+		t.Fatalf("send row status = %q, want failed", got)
+	}
+
+	stats := NewCampaignStatsStore(pool)
+	failed, err := stats.FailedSends(context.Background(), campaignID)
+	if err != nil {
+		t.Fatalf("FailedSends: %v", err)
+	}
+	if len(failed) != 1 {
+		t.Fatalf("len(failed) = %d, want 1 (full = %+v)", len(failed), failed)
+	}
+	want := "MessageRejected: " + rejectReason
+	if failed[0].Error != want {
+		t.Errorf("failed_sends[0].error = %q, want %q (no \"operation error …\" / \"https response error …\" scaffolding)", failed[0].Error, want)
 	}
 }
 
