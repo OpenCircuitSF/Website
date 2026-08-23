@@ -74,26 +74,26 @@ MODE="${1:-default}"; shift || true
 go_test() {
   local pkgs="$*"; [ -n "$pkgs" ] || pkgs="./internal/... ./cmd/..."
   step "go test $pkgs -p 2"
-  run bash -c "go test $pkgs -p 2 -count=1 2>&1 | tail -$TAIL"
+  run bash -o pipefail -c "go test $pkgs -p 2 -count=1 2>&1 | tail -$TAIL"
   step "skip audit — a package reporting [no test files] or 'no test files' proves nothing"
   go test $pkgs -p 2 -count=1 2>&1 | grep -E 'no test files|SKIP|--- SKIP' | head -20 || echo "(no skips)"
 }
 
 web_check() {
-  step "npm run check"; run bash -c "cd web && npm run check 2>&1 | tail -$TAIL"
-  step "npm test";      run bash -c "cd web && npm test 2>&1 | tail -$TAIL"
+  step "npm run check"; run bash -o pipefail -c "cd web && npm run check 2>&1 | tail -$TAIL"
+  step "npm test";      run bash -o pipefail -c "cd web && npm test 2>&1 | tail -$TAIL"
 }
 
 case "$MODE" in
-  go)  step "go build"; run bash -c "go build ./... 2>&1 | tail -$TAIL"
-       step "go vet";   run bash -c "go vet ./... 2>&1 | tail -$TAIL"
+  go)  step "go build"; run bash -o pipefail -c "go build ./... 2>&1 | tail -$TAIL"
+       step "go vet";   run bash -o pipefail -c "go vet ./... 2>&1 | tail -$TAIL"
        go_test "$@" ;;
   web) web_check ;;
-  all) step "go build"; run bash -c "go build ./... 2>&1 | tail -$TAIL"
-       step "go vet";   run bash -c "go vet ./... 2>&1 | tail -$TAIL"
+  all) step "go build"; run bash -o pipefail -c "go build ./... 2>&1 | tail -$TAIL"
+       step "go vet";   run bash -o pipefail -c "go vet ./... 2>&1 | tail -$TAIL"
        go_test "./..."; web_check ;;
-  *)   step "go build"; run bash -c "go build ./... 2>&1 | tail -$TAIL"
-       step "go vet";   run bash -c "go vet ./... 2>&1 | tail -$TAIL"
+  *)   step "go build"; run bash -o pipefail -c "go build ./... 2>&1 | tail -$TAIL"
+       step "go vet";   run bash -o pipefail -c "go vet ./... 2>&1 | tail -$TAIL"
        go_test "./internal/... ./cmd/..."; web_check ;;
 esac
 
