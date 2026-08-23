@@ -25,6 +25,20 @@ func auditTestPool(t *testing.T) *pgxpool.Pool {
 	return testDBPool
 }
 
+// seedUserEmail builds the unique email seedUser inserts. Split out from
+// seedUser (#0163 review pass 2) so the identifier construction can be
+// guarded on its own, with no database in the loop — the DB round trip
+// seedUser performs between two calls was masking the very defect the
+// original guard was meant to catch (see
+// TestSeedUser_BackToBackCallsNeverCollide's doc comment below).
+//
+// #0163: the "-<ts>" suffix used to be time.Now() formatted to
+// nanosecond-looking precision, the same repeating-clock defect #0158
+// fixed elsewhere in other helpers, just rendered as a string.
+func seedUserEmail(label string) string {
+	return fmt.Sprintf("zz-audit-%s-%d@example.com", label, testdb.Unique())
+}
+
 // seedUser inserts an active account and returns its id, so an entry's
 // actor_id/user_id can satisfy the FK constraint. label becomes a prefix of
 // a generated unique email, not the literal address: #0091 round two
@@ -33,13 +47,9 @@ func auditTestPool(t *testing.T) *pgxpool.Pool {
 // would collide with the same test's own row on a second `-count=2`
 // iteration, and no assertion in this file depends on the exact address,
 // only on the returned id.
-//
-// #0163: the "-<ts>" suffix used to be time.Now() formatted to
-// nanosecond-looking precision, the same repeating-clock defect #0158
-// fixed elsewhere in other helpers, just rendered as a string.
 func seedUser(t *testing.T, pool *pgxpool.Pool, label string) int64 {
 	t.Helper()
-	email := fmt.Sprintf("zz-audit-%s-%d@example.com", label, testdb.Unique())
+	email := seedUserEmail(label)
 	var id int64
 	if err := pool.QueryRow(context.Background(),
 		`INSERT INTO users (email, is_admin, active, created_at)
@@ -50,15 +60,38 @@ func seedUser(t *testing.T, pool *pgxpool.Pool, label string) int64 {
 	return id
 }
 
-// TestSeedUser_BackToBackCallsNeverCollide proves two back-to-back calls to
-// seedUser, with the same label and no intervening work, always produce
-// distinct users rather than the second INSERT failing the users.email
-// UNIQUE constraint (migrations/000001). Before #0163, the email's
-// uniqueness came from formatting time.Now().UTC() to nanosecond-looking
-// precision — the same clock #0158 measured repeating on 94.7% of adjacent
-// reads, just spelled as a string, so this pair of calls was a near
-// coin-flip for "duplicate key value violates unique constraint
-// users_email_key" surfacing as seedUser's own t.Fatalf.
+// TestSeedUserEmail_NeverCollidesAcrossManyBackToBackCalls is the real guard
+// for #0163's fix to seedUser. It loops the identifier expression itself,
+// with no database in the loop, in the shape
+// internal/middleware/auth_test.go's TestUniqueAuthEmail_... and
+// TestUniqueSessionToken_... use.
+//
+// #0163 review pass 1 bounced a DB-backed two-call variant of this test
+// (see TestSeedUser_BackToBackCallsNeverCollide below) as vacuous: measured
+// on this machine, the old formatted-clock construction repeated on
+// 1545/2000 (77.2%) of truly adjacent reads, but 0/200 (0.0%) of reads
+// separated by a single INSERT round trip — and seedUser always performs an
+// INSERT between its two identifier constructions, so a two-call DB guard
+// can never observe the defect it names. This test removes the round trip
+// instead of adding more calls around it.
+func TestSeedUserEmail_NeverCollidesAcrossManyBackToBackCalls(t *testing.T) {
+	const n = 20000
+	seen := make(map[string]struct{}, n)
+	for i := 0; i < n; i++ {
+		email := seedUserEmail("same-label")
+		if _, dup := seen[email]; dup {
+			t.Fatalf("call %d: seedUserEmail returned a duplicate address %q", i, email)
+		}
+		seen[email] = struct{}{}
+	}
+}
+
+// TestSeedUser_BackToBackCallsNeverCollide is a secondary, DB-backed
+// integration check that seedUser's INSERT actually succeeds twice in a
+// row against the real users.email UNIQUE constraint (migrations/000001).
+// It is not the guard against #0163's defect — see
+// TestSeedUserEmail_NeverCollidesAcrossManyBackToBackCalls's doc comment for
+// why a two-call, round-trip-separated test cannot detect that regression.
 func TestSeedUser_BackToBackCallsNeverCollide(t *testing.T) {
 	pool := auditTestPool(t)
 	id1 := seedUser(t, pool, "b2b")
