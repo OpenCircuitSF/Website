@@ -99,6 +99,7 @@
   import Panel from '../lib/Panel.svelte';
   import { APP_NAME } from '../lib/branding';
   import Campaigns from './admin/Campaigns.svelte';
+  import Workshops from './admin/Workshops.svelte';
 
   type Section =
     | 'settings'
@@ -107,7 +108,8 @@
     | 'interests'
     | 'subscribers'
     | 'suppressions'
-    | 'campaigns';
+    | 'campaigns'
+    | 'workshops';
   let section = $state<Section>('settings');
 
   // ── Settings ──────────────────────────────────────────────────────────────
@@ -951,6 +953,13 @@
         aria-current={section === 'campaigns' ? 'page' : undefined}
         onclick={() => (section = 'campaigns')}
       >Campaigns</button>
+      <button
+        type="button"
+        class="subtab"
+        class:active={section === 'workshops'}
+        aria-current={section === 'workshops' ? 'page' : undefined}
+        onclick={() => (section = 'workshops')}
+      >Workshops</button>
     </nav>
 
     {#if section === 'settings'}
@@ -1850,6 +1859,10 @@
 
     {#if section === 'campaigns'}
       <Campaigns onGoToSettings={() => (section = 'settings')} onGoToAudit={goToCampaignAudit} />
+    {/if}
+
+    {#if section === 'workshops'}
+      <Workshops />
     {/if}
   {/if}
 </div>

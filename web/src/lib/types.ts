@@ -357,6 +357,44 @@ export interface WorkshopsListResponse {
   past: PublicWorkshop[];
 }
 
+// ── Admin workshops (#0051 API, #0052 admin UI) ──────────────────────────────
+
+/**
+ * One workshop as the admin CRUD API sees it (GET/POST/PATCH
+ * /admin/workshops[/{id}]) -- wider than PublicWorkshop above: carries the
+ * numeric id, every status (draft/published/canceled, not just
+ * published/canceled), and interest_ids as raw ids rather than embedded
+ * PublicInterest objects (the admin screen resolves those against the
+ * interests list it already loads for the taxonomy section -- see
+ * lib/admin.ts). Matches
+ * internal/handlers/admin_workshops.go's workshopView.
+ */
+export interface AdminWorkshop {
+  id: number;
+  slug: string;
+  title: string;
+  summary?: string;
+  body_md?: string;
+  starts_at?: string;
+  ends_at?: string;
+  location_name?: string;
+  location_address?: string;
+  location_note?: string;
+  capacity?: number;
+  signup_url?: string;
+  cover_image?: string;
+  status: string; // draft | published | canceled
+  published_at?: string;
+  interest_ids: number[];
+  created_at: string;
+  updated_at: string;
+}
+
+/** GET /admin/workshops response. Matches admin_workshops.go's workshopsListResponse. */
+export interface AdminWorkshopsListResponse {
+  workshops: AdminWorkshop[];
+}
+
 /** GET/PATCH /api/preferences body (#0031). email is masked
  * ("b•••••n@gmail.com") except when the SPA already holds the unmasked
  * address from a fresh ConfirmResponse (see PreferenceCenter.svelte).

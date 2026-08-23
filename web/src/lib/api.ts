@@ -22,6 +22,8 @@ import type {
   CampaignPreviewResponse,
   CampaignStatsResponse,
   WorkshopsListResponse,
+  AdminWorkshop,
+  AdminWorkshopsListResponse,
 } from './types';
 import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
 import type { UnsubscribeResult } from './unsubscribe';
@@ -741,4 +743,86 @@ export function listPublicWorkshops(): Promise<WorkshopsListResponse> {
 export function unsubscribeOneClick(token: string | null): Promise<UnsubscribeResult> {
   const path = token ? `/api/unsubscribe?token=${encodeURIComponent(token)}` : '/api/unsubscribe';
   return apiPost<UnsubscribeResult>(path);
+}
+
+// ── Admin: workshops (#0051 API, #0052 admin UI) ─────────────────────────────
+
+/**
+ * The fields POST /admin/workshops accepts. `title` is the only field the
+ * server requires (internal/handlers/admin_workshops.go's Create); a "slug"
+ * field is deliberately absent here -- the server generates it and ignores
+ * any client-supplied value (see that handler's Create doc comment), and
+ * PATCH has no slug field at all, so nothing in this module can ever send
+ * one. See lib/workshopAdmin.ts's header comment for what that means for
+ * the "editable before first publish" acceptance criterion.
+ */
+export interface CreateWorkshopFields {
+  title: string;
+  summary?: string;
+  body_md?: string;
+  starts_at?: string;
+  ends_at?: string;
+  location_name?: string;
+  location_address?: string;
+  location_note?: string;
+  capacity?: number;
+  signup_url?: string;
+  cover_image?: string;
+  interest_ids?: number[];
+}
+
+/**
+ * The fields PATCH /admin/workshops/{id} accepts. Every field is optional --
+ * an absent key leaves that column unchanged server-side (admin_workshops.go's
+ * patchWorkshopRequest). `status` is the sole path to publish/unpublish/cancel
+ * (workshops has no dedicated transition sub-routes, unlike campaigns).
+ */
+export interface PatchWorkshopFields {
+  title?: string;
+  summary?: string;
+  body_md?: string;
+  starts_at?: string;
+  ends_at?: string;
+  location_name?: string;
+  location_address?: string;
+  location_note?: string;
+  capacity?: number;
+  signup_url?: string;
+  cover_image?: string;
+  status?: string;
+  interest_ids?: number[];
+}
+
+/** GET /admin/workshops — every workshop regardless of status, newest-created first (admin only). */
+export function listAdminWorkshops(): Promise<AdminWorkshopsListResponse> {
+  return apiGet<AdminWorkshopsListResponse>('/admin/workshops');
+}
+
+/** GET /admin/workshops/{id} — one workshop, with its interest_ids (admin only). */
+export function getAdminWorkshop(id: number): Promise<AdminWorkshop> {
+  return apiGet<AdminWorkshop>(`/admin/workshops/${id}`);
+}
+
+/** POST /admin/workshops — create a new draft workshop (admin only); the server generates the slug. */
+export function createWorkshop(fields: CreateWorkshopFields): Promise<AdminWorkshop> {
+  return apiPost<AdminWorkshop>('/admin/workshops', fields);
+}
+
+/**
+ * PATCH /admin/workshops/{id} — content edit and/or status transition
+ * (admin only). Send only the fields that changed; omitted keys are left
+ * alone server-side.
+ */
+export function updateWorkshop(id: number, fields: PatchWorkshopFields): Promise<AdminWorkshop> {
+  return apiPatch<AdminWorkshop>(`/admin/workshops/${id}`, fields);
+}
+
+/**
+ * DELETE /admin/workshops/{id} (admin only). The server answers 409 when an
+ * email_campaign still references this workshop (workshops.ErrHasCampaigns)
+ * -- callers must handle that status as a real, expected outcome (see
+ * WorkshopEditor.svelte), not a generic error toast.
+ */
+export function deleteWorkshop(id: number): Promise<{ message: string }> {
+  return apiDelete<{ message: string }>(`/admin/workshops/${id}`);
 }
