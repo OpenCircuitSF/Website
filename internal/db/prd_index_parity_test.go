@@ -243,6 +243,39 @@ type sqlSpan struct {
 // runs to end of s ("nothing after it is SQL"); a line comment ends at the
 // next newline or end of s, whichever comes first, and the newline itself
 // is left as ordinary text.
+//
+// #0173 (declined — recorded here, not just in the issue, since this is
+// where the next reader looking at string-quoting behavior will land): an
+// unpaired ' reaching this function while it is in ordinary text state opens
+// a kindString span that, having no closing ' to find, truncates to end of s
+// exactly like an unterminated block comment does above — silently, since a
+// span that runs to EOF still parses as "a string, just a long one" rather
+// than as an error. #0159's classification table called the identical two
+// inputs (an unterminated dollar-quote, and mismatched dollar-quote tags —
+// both end in a stray ' once the tag machinery gives up and falls back to a
+// literal byte) "right"; under this tokenizer they are "wrong-but-silent"
+// instead, so those two rows now behave differently than #0159 recorded.
+// That regression was examined, not overlooked, and left as-is:
+//   - three of the four ways to trigger it (an unterminated dollar-quote, a
+//     mismatched dollar-quote tag pair, an unterminated string) are SQL
+//     Postgres itself rejects — a migration containing one fails
+//     scripts/testdb.sh template / golang-migrate before this guard is ever
+//     reached, and truncate-to-EOF for an unclosed construct is the same
+//     policy #0154 already accepted as correct for an unterminated block
+//     comment, now applied to strings for consistency rather than
+//     inconsistently to just one construct;
+//   - the only way to trigger it with SQL Postgres *does* accept is a
+//     double-quoted identifier containing an apostrophe (e.g. "it's") or an
+//     E'...' backslash-escape string, and this tokenizer has no state for
+//     either — grep over migrations/*.up.sql and PRD.md's fenced SQL finds
+//     neither form anywhere in this tree, and this project does not write
+//     quoted identifiers.
+//
+// A kindQuotedIdent case (~10 lines: open on a bare `"`, close on the next
+// unescaped `"`, `""` doubles like a string's `''` does) would close this for
+// good and is worth adding the day either form shows up in a migration or in
+// PRD.md — until then it is unreachable, so it stays undone rather than
+// carrying untested code for an input that cannot occur.
 func tokenizeSQL(s string) []sqlSpan {
 	var spans []sqlSpan
 	n := len(s)
@@ -295,6 +328,17 @@ func tokenizeSQL(s string) []sqlSpan {
 		case c == '/' && i+1 < n && s[i+1] == '*':
 			flushText(i)
 			j := i + 2
+			// #0173 (declined): closes at the *first* "*/", so unlike
+			// Postgres — whose block comments nest — a nested
+			// "/* /* */ */" leaves everything after the inner "*/" live SQL
+			// again. Harmless unless a phantom statement inside that tail
+			// collides with a guarded table name, in which case it's a
+			// loud false "PRD does not mention X", never a silent miss.
+			// No block comment of any kind exists in migrations/ or in
+			// PRD.md's §6.2 fenced SQL today, so there is nothing in this
+			// tree for it to bite; nesting support is a few lines (track a
+			// depth counter instead of stopping at the first close) worth
+			// adding the day a nested block comment actually appears.
 			for j+1 < n && !(s[j] == '*' && s[j+1] == '/') {
 				j++
 			}
@@ -1024,6 +1068,52 @@ func extractPRDSection(t *testing.T, doc, headingPrefix string) string {
 	return rest[:firstNewline+1+endLoc[0]]
 }
 
+// sqlFencePattern matches a markdown fenced code block explicitly labeled
+// ```sql, capturing its body. #6.2's schema listing is written as one such
+// block; nothing outside a fence in that section is SQL, no matter how much
+// it may look like it (a backtick-quoted identifier in prose, a semicolon
+// ending a sentence, an apostrophe in a contraction).
+var sqlFencePattern = regexp.MustCompile("(?s)```sql\r?\n(.*?)\r?\n```")
+
+// extractFencedSQL narrows a PRD.md section down to only the SQL inside its
+// ```sql fenced code block(s), before any of it reaches tokenizeSQL.
+//
+// #0173: every prior pass over this guard fed extractPRDSection's whole
+// output — markdown prose and all — straight into prepareSQLText, which
+// tokenizes it as if every byte were SQL. That is usually harmless (prose
+// rarely contains SQL punctuation in a way that confuses the tokenizer) but
+// not reliably so: §6.2 has one unpaired apostrophe in an ordinary sentence
+// ("...CLAUDE.md §1's append-only rule..." — the contraction pairs with none
+// of the section's SQL string literals), which opens a runaway kindString
+// span that runs to the next apostrophe found anywhere later in the section,
+// blanking 867 of §6.2's 18,660 bytes including part of unrelated prose nowhere
+// near a schema statement. Nothing is lost today — the blanked span happens to
+// land between statements — but that is luck, not design: a schema line
+// landing inside a future blanked span would fail with "PRD does not mention
+// X", and the real cause (an apostrophe in an unrelated sentence, possibly in
+// a completely different paragraph) would not be obvious from that message.
+//
+// The fix removes the whole class rather than this one instance: prose can
+// contain arbitrarily many unpaired quotes, comment markers, or semicolons,
+// and none of it is ever fed to the tokenizer, because none of it is SQL.
+// Multiple fenced blocks are joined with a blank-line separator so a
+// tokenizeSQL run can never read the tail of one fence and the head of the
+// next as one continuous statement (relevant if a second ```sql block is ever
+// added to this section; today there is exactly one).
+func extractFencedSQL(t *testing.T, section string) string {
+	t.Helper()
+	matches := sqlFencePattern.FindAllStringSubmatch(section, -1)
+	if len(matches) == 0 {
+		t.Fatalf("PRD.md: no ```sql fenced code block found in this section — has §6.2's schema listing moved out of a fenced block, or lost its \"sql\" language tag? See #0173.")
+	}
+	var b strings.Builder
+	for _, m := range matches {
+		b.WriteString(m[1])
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
 // TestPRDWorkshopAndMailingIndexParity is #0148's guard — see the package
 // comment above for why it is scoped to indexes and to one direction
 // (migrations -> PRD.md) only.
@@ -1034,7 +1124,8 @@ func TestPRDWorkshopAndMailingIndexParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", prdPath, err)
 	}
-	section, origSection := prepareSQLText(extractPRDSection(t, string(prdBytes), "### 6.2 "))
+	sqlOnly := extractFencedSQL(t, extractPRDSection(t, string(prdBytes), "### 6.2 "))
+	section, origSection := prepareSQLText(sqlOnly)
 	checkIndexStatementCoverage(t, section, "PRD.md §6.2")
 	prdIndexes := prdIndexesFromSection(section, origSection)
 
@@ -1100,7 +1191,8 @@ func TestPRDWorkshopAndMailingColumnParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", prdPath, err)
 	}
-	section, _ := prepareSQLText(extractPRDSection(t, string(prdBytes), "### 6.2 ")) // column names only — blanked view is enough
+	sqlOnly := extractFencedSQL(t, extractPRDSection(t, string(prdBytes), "### 6.2 "))
+	section, _ := prepareSQLText(sqlOnly) // column names only — blanked view is enough
 	checkColumnStatementCoverage(t, section, "PRD.md §6.2")
 	prdColumns := prdColumnsFromSection(section)
 
