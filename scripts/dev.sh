@@ -95,12 +95,14 @@ ok "port:    $PORT"
 # explicit opt-in for the one case that's still common — a developer's own
 # earlier dev.sh left an orphaned child (see header comment).
 #
-# `force=1` is used only for the EXIT-trap backstop below, where the port in
-# question is the server THIS run just started — not a foreign process, so
-# there's nothing to ask permission for.
+# `force=1` (equivalently RECLAIM_PORTS=1) is an explicit, user-requested
+# override: the caller is asserting the holder is theirs to kill. Once asked,
+# actually verify it worked — a swallowed `kill -9` failure followed by
+# "freeing port ..." would claim success while the port stays held and the
+# run fails later with a confusing "address already in use" (#0117 review).
 RECLAIM_PORTS="${RECLAIM_PORTS:-0}"
 free_port() {
-  local p="$1" force="${2:-0}" pids pid cmd
+  local p="$1" force="${2:-0}" pids pid cmd still
   pids="$(lsof -ti tcp:"$p" 2>/dev/null || true)"
   [ -z "$pids" ] && return 0
 
@@ -109,6 +111,11 @@ free_port() {
     # shellcheck disable=SC2086
     kill -9 $pids 2>/dev/null || true
     sleep 1
+    still="$(lsof -ti tcp:"$p" 2>/dev/null || true)"
+    if [ -n "$still" ]; then
+      printf '  ERROR: port %s still held after kill -9 (pid(s): %s) — could not reclaim it.\n' "$p" "$(printf '%s' "$still" | tr '\n' ' ')" >&2
+      exit 1
+    fi
     return 0
   fi
 
@@ -127,6 +134,55 @@ free_port() {
 }
 free_port "$PORT"
 free_port 5173
+
+# The EXIT-trap backstop (cleanup(), below) must never repeat this issue's own
+# defect on the way out: re-deriving "whoever holds :$PORT right now" from
+# lsof at exit time and killing it unconditionally is exactly what let a
+# foreign process that took over the port after this run's Go server died
+# (crash, stray pkill) get killed by an ordinary Ctrl-C (#0117 review). So the
+# trap kills only pids THIS run is known to have bound — tracked in
+# OWNED_PIDS, populated once the Go server is confirmed up, below — and warns
+# (without killing) about anything else it finds holding the port at exit.
+release_owned_port() {
+  local p="$1" owned="$2" current c o matched ours="" foreign="" pid cmd remaining
+  current="$(lsof -ti tcp:"$p" 2>/dev/null || true)"
+  [ -z "$current" ] && return 0
+
+  for c in $current; do
+    matched=0
+    for o in $owned; do
+      [ "$c" = "$o" ] && { matched=1; break; }
+    done
+    if [ "$matched" = "1" ]; then
+      ours="$ours $c"
+    else
+      foreign="$foreign $c"
+    fi
+  done
+
+  if [ -n "$ours" ]; then
+    info "freeing port $p (own process:$ours)"
+    # shellcheck disable=SC2086
+    kill -9 $ours 2>/dev/null || true
+    sleep 1
+    remaining=""
+    for pid in $ours; do
+      kill -0 "$pid" 2>/dev/null && remaining="$remaining $pid"
+    done
+    if [ -n "$remaining" ]; then
+      printf '  WARNING: port %s still held after kill -9 (pid(s):%s) — a later run may fail with "address already in use".\n' "$p" "$remaining" >&2
+    fi
+  fi
+
+  if [ -n "$foreign" ]; then
+    printf '  WARNING: port %s is now held by a process this run did not start — leaving it alone.\n' "$p" >&2
+    for pid in $foreign; do
+      cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+      [ -z "$cmd" ] && cmd="(process exited before it could be inspected)"
+      printf '    pid %s: %s\n' "$pid" "$cmd" >&2
+    done
+  fi
+}
 
 # ── Built-SPA mode ───────────────────────────────────────────────────────────
 if [ "$MODE" = "built" ]; then
@@ -153,13 +209,14 @@ fi
 # Start Go server in background; capture PID for cleanup.
 go run ./cmd/opencircuit serve &
 GO_PID=$!
+OWNED_PIDS=""   # pids THIS run bound to :$PORT — populated below once confirmed up; the EXIT trap only ever kills pids in this set (#0117)
 
 cleanup() {
   printf '\n'
   step "Shutting down…"
   kill "$GO_PID" 2>/dev/null || true
-  pkill -P "$GO_PID" 2>/dev/null || true   # the go-run child server (go run leaks it otherwise)
-  free_port "$PORT" 1 2>/dev/null || true  # backstop so :PORT is actually released on exit (force=1: it's our own leaked child, see free_port above)
+  pkill -P "$GO_PID" 2>/dev/null || true      # the go-run child server (go run leaks it otherwise)
+  release_owned_port "$PORT" "$OWNED_PIDS"    # backstop so :PORT is released — but only pids we started, never a stranger's (#0117)
   # Vite (npm run dev) is the foreground process; it handles its own SIGINT.
   ok "stopped"
 }
@@ -172,6 +229,7 @@ if ! kill -0 "$GO_PID" 2>/dev/null; then
   exit 1
 fi
 ok "Go API server started (pid $GO_PID)"
+OWNED_PIDS="$(lsof -ti tcp:"$PORT" 2>/dev/null || true)"
 
 step "Starting Vite dev server on http://localhost:5173"
 info "Vite proxies /api /auth /account /admin → http://localhost:${PORT}"
