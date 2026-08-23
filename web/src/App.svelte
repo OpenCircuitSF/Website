@@ -12,6 +12,7 @@
   import Header from './lib/Header.svelte';
   import Footer from './lib/Footer.svelte';
   import Home from './views/Home.svelte';
+  import WorkshopsIndex from './views/WorkshopsIndex.svelte';
   import About from './views/About.svelte';
   import PrivacyPolicy from './views/PrivacyPolicy.svelte';
   import Subscribe from './views/Subscribe.svelte';
@@ -77,12 +78,14 @@
   <RecoverVerify />
 {:else}
   <!-- Every other route is a public marketing page (PRD §5.1), and shares
-       the site header shell (#0017). This placeholder covers the remaining
-       public routes (workshops) until their own later-phase issues
-       (#0053-0054) build them; not-found is a real 404, not a placeholder. -->
+       the site header shell (#0017). The catch-all placeholder below still
+       covers workshop-detail (/workshops/{slug}) until #0054 builds it;
+       not-found is a real 404, not a placeholder. -->
   <Header />
   {#if $currentRoute.name === 'home'}
     <Home />
+  {:else if $currentRoute.name === 'workshops'}
+    <WorkshopsIndex />
   {:else if $currentRoute.name === 'about'}
     <About />
   {:else if $currentRoute.name === 'privacy'}

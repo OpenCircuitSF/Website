@@ -9,29 +9,42 @@
   //
   // The headline is the page's LCP element by construction: no images in the
   // hero, just type -- see PRD §7.6's LCP budget (<2.0s on 4G).
+  //
+  // "Next up" (#0053): switched from a static placeholder to the real
+  // workshops API. GET /api/workshops (#0051) returns upcoming workshops
+  // already in chronological order; lib/workshops.ts's nextWorkshops caps
+  // that list at three, per this view's original acceptance criteria, and
+  // WorkshopCard is the same card component WorkshopsIndex.svelte uses so
+  // Home and /workshops render a next-up workshop identically.
+  import { onMount } from 'svelte';
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
   import StatusList from '../lib/StatusList.svelte';
   import CommandLine from '../lib/CommandLine.svelte';
   import TraceDivider from '../lib/TraceDivider.svelte';
   import Panel from '../lib/Panel.svelte';
+  import WorkshopCard from '../lib/WorkshopCard.svelte';
   import SubscribeForm from '../lib/SubscribeForm.svelte';
+  import { listPublicWorkshops } from '../lib/api';
+  import { nextWorkshops } from '../lib/workshops';
   import { APP_NAME } from '../lib/branding';
+  import type { PublicWorkshop } from '../lib/types';
 
-  // Static placeholder for "next up" until #0053 wires the real workshops
-  // API. Deliberately generic -- no invented dates or locations that could
-  // read as a real scheduled event -- since there is no backing data source
-  // yet. Capped at three per the acceptance criteria.
-  interface UpcomingPlaceholder {
-    title: string;
-    blurb: string;
-  }
+  type UpcomingStatus = 'loading' | 'loaded' | 'error';
 
-  const UPCOMING: readonly UpcomingPlaceholder[] = [
-    { title: 'Soldering fundamentals', blurb: 'Beginner-friendly. Tools and kit provided.' },
-    { title: 'Microcontroller basics', blurb: 'ESP32 and Arduino, from blink to first sensor.' },
-    { title: 'Home automation night', blurb: 'Bring a project, or start one from scratch.' },
-  ];
+  let upcomingStatus = $state<UpcomingStatus>('loading');
+  let upcoming = $state<PublicWorkshop[]>([]);
+
+  onMount(() => {
+    listPublicWorkshops()
+      .then((res) => {
+        upcoming = nextWorkshops(res);
+        upcomingStatus = 'loaded';
+      })
+      .catch(() => {
+        upcomingStatus = 'error';
+      });
+  });
 </script>
 
 <main id="main-content" class="app-shell home-shell">
@@ -70,16 +83,20 @@
 
   <section class="next-up" aria-labelledby="next-up-h">
     <h2 id="next-up-h">Next up</h2>
-    <div class="workshop-cards">
-      {#each UPCOMING as w (w.title)}
-        <Panel title={w.title}>
-          <p class="workshop-blurb">{w.blurb}</p>
-        </Panel>
-      {/each}
-    </div>
-    <p class="text-muted next-up-note">
-      Full workshop listings with dates and locations are on the way.
-    </p>
+    {#if upcomingStatus === 'loading'}
+      <p class="text-muted">Loading…</p>
+    {:else if upcomingStatus === 'error'}
+      <p class="text-error">Couldn't load upcoming workshops right now.</p>
+    {:else if upcoming.length === 0}
+      <p class="text-muted">Nothing scheduled yet — check back soon, or subscribe below.</p>
+    {:else}
+      <div class="workshop-cards">
+        {#each upcoming as w (w.slug)}
+          <WorkshopCard workshop={w} />
+        {/each}
+      </div>
+    {/if}
+    <p class="text-muted next-up-note"><a href="/workshops">See all workshops</a></p>
   </section>
 
   <TraceDivider />
@@ -132,11 +149,6 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: var(--space-4);
-  }
-
-  .workshop-blurb {
-    margin: 0;
-    color: var(--text-muted);
   }
 
   .next-up-note {

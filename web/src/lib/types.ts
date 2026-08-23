@@ -317,6 +317,46 @@ export interface CampaignFailedSend {
   attempts: number;
 }
 
+// ── Public workshops (#0051/#0053/#0054) ─────────────────────────────────────
+
+/**
+ * One workshop as shown to an anonymous visitor (GET /api/workshops and GET
+ * /api/workshops/{slug} item). Matches
+ * internal/handlers/public_workshops.go's publicWorkshopView -- deliberately
+ * narrower than an admin workshop view: no numeric id, the public wire
+ * contract identifies a workshop by slug (same convention PublicInterest
+ * follows for interests). `status` is included even though the index
+ * (GET /api/workshops) only ever contains 'published' rows -- the detail
+ * route also serves 'canceled', and this type is shared by both callers.
+ */
+export interface PublicWorkshop {
+  slug: string;
+  title: string;
+  summary?: string;
+  body_md?: string;
+  starts_at?: string;
+  ends_at?: string;
+  location_name?: string;
+  location_address?: string;
+  location_note?: string;
+  capacity?: number;
+  signup_url?: string;
+  cover_image?: string;
+  status: string; // published | canceled (draft never reaches a public route)
+  interests: PublicInterest[];
+}
+
+/**
+ * GET /api/workshops response (#0051, #0053). Matches
+ * internal/handlers/public_workshops.go's workshopsListResponsePublic:
+ * published workshops split into upcoming (chronological) and past (reverse
+ * chronological) relative to the server's clock.
+ */
+export interface WorkshopsListResponse {
+  upcoming: PublicWorkshop[];
+  past: PublicWorkshop[];
+}
+
 /** GET/PATCH /api/preferences body (#0031). email is masked
  * ("b•••••n@gmail.com") except when the SPA already holds the unmasked
  * address from a fresh ConfirmResponse (see PreferenceCenter.svelte).

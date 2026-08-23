@@ -21,6 +21,7 @@ import type {
   AudiencePreviewResponse,
   CampaignPreviewResponse,
   CampaignStatsResponse,
+  WorkshopsListResponse,
 } from './types';
 import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
 import type { UnsubscribeResult } from './unsubscribe';
@@ -706,6 +707,21 @@ export function getPreferences(token: string): Promise<PreferencesResponse> {
  */
 export function patchPreferences(body: PreferencesPatchBody): Promise<PreferencesResponse> {
   return apiPatch<PreferencesResponse>('/api/preferences', body);
+}
+
+// ── Public workshops (#0051, #0053) ─────────────────────────────────────────
+
+/**
+ * GET /api/workshops — the public, unauthenticated workshop index (#0051,
+ * #0053): published workshops split into upcoming and past, relative to the
+ * server's clock. Source for WorkshopsIndex.svelte's two sections and
+ * Home.svelte's "next up" cards (lib/workshops.ts's `nextWorkshops`).
+ * Draft and canceled workshops never appear here — see the handler's own
+ * doc comment (internal/handlers/public_workshops.go) for why that is
+ * narrower than the detail route.
+ */
+export function listPublicWorkshops(): Promise<WorkshopsListResponse> {
+  return apiGet<WorkshopsListResponse>('/api/workshops');
 }
 
 /**
