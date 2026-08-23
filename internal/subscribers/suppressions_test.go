@@ -4,27 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
-// suppressionEmailSeq guarantees uniqueSuppressionEmail never returns the
-// same address twice, even for two calls made back to back. #0108: macOS's
-// wall clock advances in 1 microsecond steps, and a warm test binary can
-// make two adjacent calls inside a single tick — time.Now().UnixNano() alone
-// collided on about 62% of adjacent pairs, which made
-// TestSuppressionStore_List_JoinsSubscriberStatus fail roughly half the
-// time. A monotonic counter closes that window regardless of clock
-// resolution.
-var suppressionEmailSeq uint64
-
+// uniqueSuppressionEmail returns an address that never repeats, even across
+// calls made back to back with no intervening work. #0108 first hit that
+// requirement here: macOS's wall clock can hold the same value across
+// adjacent time.Now().UnixNano() reads, and TestSuppressionStore_List_JoinsSubscriberStatus
+// failed roughly half the time as a result, so this helper grew its own
+// atomic counter layered on top of the clock read. #0158 later replaced
+// time.Now().UnixNano() everywhere, including here, with testdb.Unique() —
+// a process-PID-plus-counter scheme that is collision-free on its own — so
+// the local counter became redundant and #0160 removed it.
 func uniqueSuppressionEmail(t *testing.T) string {
 	t.Helper()
-	seq := atomic.AddUint64(&suppressionEmailSeq, 1)
-	return fmt.Sprintf("zz-suppress-%d-%d@example.com", testdb.Unique(), seq)
+	return fmt.Sprintf("zz-suppress-%d@example.com", testdb.Unique())
 }
 
 func TestSuppressionStore_Add_NormalizesEmailAndPersistsFields(t *testing.T) {
@@ -693,12 +690,14 @@ func TestSuppressionStore_Remove_NormalizesEmail(t *testing.T) {
 }
 
 // TestUniqueSuppressionEmail_NeverCollidesAcrossManyBackToBackCalls is a
-// plain unit test (no database) covering #0108: it calls the helper many
-// thousands of times back to back — the exact adjacency that let
-// time.Now().UnixNano() alone collide on ~62% of pairs under a warm test
-// binary — and asserts every address is distinct. This does not need
-// TEST_DATABASE_URL and is not a repeated run of the DB-backed suite; it is
-// one deterministic assertion about the helper itself.
+// plain unit test (no database) guarding the #0108 requirement — no two
+// back-to-back calls ever return the same address — against regression now
+// that uniqueSuppressionEmail relies solely on testdb.Unique() (#0160)
+// rather than the local atomic counter #0108 originally added on top of
+// time.Now().UnixNano(), which collided on ~62% of adjacent pairs under a
+// warm test binary. This does not need TEST_DATABASE_URL and is not a
+// repeated run of the DB-backed suite; it is one deterministic assertion
+// about the helper itself.
 func TestUniqueSuppressionEmail_NeverCollidesAcrossManyBackToBackCalls(t *testing.T) {
 	const n = 20000
 	seen := make(map[string]struct{}, n)
