@@ -19,9 +19,15 @@
 // to #0120's Escape wiring instead, since that is the deferred verification
 // four other issues this session explicitly left unproven: see this file's
 // sibling issue notes). Wiring up every other modal is follow-up work, not
-// this issue's deliverable — see web/HANDOFF or issues/0094.md's
-// "Implementation notes" for the enumerated list of what is now testable
-// but not yet tested.
+// this issue's deliverable — see issues/0094.md's "Implementation notes"
+// (the "Newly-testable surface" paragraph) for the enumerated list of what
+// is now testable but not yet tested. (There is no HANDOFF.md under web/ —
+// web/ contains no .md file at all; the project-root HANDOFF.md does not
+// cover this either.) A sibling file,
+// ../../lib/modalFocusWiring.structuralGuard.test.ts (#0216), covers the
+// same positive-wiring question structurally for the six sites this file
+// does not mount: Admin.svelte's five modals and CampaignEditor.svelte's
+// cancel dialog.
 //
 // What this test establishes, precisely: under jsdom, mounting this
 // component moves focus into the dialog panel and a real 'keydown' event
@@ -30,8 +36,10 @@
 // NOT establish that a real browser's focus/tab order, CSS-driven
 // visibility, or screen-reader announcement behave the same way; jsdom's
 // focus and event model is an approximation of a browser's, not the thing
-// itself (see this repo's CLAUDE.md §... discussion and this issue's
-// Implementation notes for the full caveat).
+// itself. CLAUDE.md has no section specifically on jsdom's fidelity to a
+// real browser — the nearest relevant text is §5's verification rules, on
+// what running a test does and does not prove in general — so the full
+// caveat lives here and in this issue's Implementation notes, not there.
 import { render, fireEvent, cleanup, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import CampaignSendDialog from './CampaignSendDialog.svelte';

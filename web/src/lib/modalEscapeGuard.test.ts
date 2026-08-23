@@ -1,9 +1,10 @@
 // #0120: "Escape does not close any admin modal" was one root cause
-// reproduced at nine sites across three files (Admin.svelte x5,
-// CampaignEditor.svelte x1, Campaigns.svelte x1, CampaignSendDialog.svelte
-// x1, plus two already fixed under #0052 in WorkshopEditor.svelte and
-// Workshops.svelte before this issue was even filed) -- every `role="dialog"
-// aria-modal="true"` panel's own `onkeydown={(e) => e.stopPropagation()}`,
+// reproduced at 8 sites across 4 files (Admin.svelte x5, CampaignEditor
+// .svelte x1, Campaigns.svelte x1, CampaignSendDialog.svelte x1) -- two more
+// sites, in WorkshopEditor.svelte and Workshops.svelte, had already been
+// fixed under #0052 before this issue was even filed, so they are not part
+// of that count -- every `role="dialog" aria-modal="true"` panel's own
+// `onkeydown={(e) => e.stopPropagation()}`,
 // added to mirror the click guard that keeps a click inside the panel from
 // reaching the backdrop's click-outside-to-dismiss `onclick`. There is no
 // keyboard analogue of "inside vs. outside the panel", so that handler did
@@ -11,11 +12,14 @@
 // could bubble to the backdrop's own Escape handler.
 //
 // This is a REPO-WIDE structural guard, not a per-component regression test
-// enumerating the nine sites by name: it walks every .svelte file under
+// enumerating the 8 sites by name: it walks every .svelte file under
 // web/src/views via svelte/compiler's parse({ modern: true }) AST (the same
 // technique citationGuard.test.ts and CampaignSendDialog.structuralGuard
-// .test.ts already use for the same reason -- #0094 is still open, there is
-// no DOM harness, and no .svelte file is imported by any test), finds every
+// .test.ts already use for the same reason -- at the time this guard was
+// written, #0094 had not yet landed, so there was no DOM harness and no
+// .svelte file was imported by any test; #0094 has since added one, see
+// ../views/admin/CampaignSendDialog.behavior.test.ts and this directory's
+// modalFocusWiring.structuralGuard.test.ts), finds every
 // `role="dialog"` panel, and fails if that panel's `onkeydown` is exactly
 // the blind-stopPropagation shape. A future modal built by copying the old
 // markup (the way #0047's three components did, per this issue's own Notes)
@@ -32,14 +36,22 @@
 //     Escape kept as-is rather than migrated, out of caution about touching
 //     code already verified working in a real browser with no way to
 //     re-verify here).
-//   - CampaignSendDialog.svelte: the panel's onkeydown attribute was deleted
-//     outright, letting the keydown bubble to the backdrop's existing
-//     `handleKeydown` (which already checked `e.key === 'Escape' && !sending`
-//     correctly) -- chosen over rewriting `handleKeydown` because #0197 built
-//     a structural guard (CampaignSendDialog.structuralGuard.test.ts) that
-//     reads that exact expression shape out of this component's own AST;
-//     changing the shape would mean deliberately updating that guard too,
-//     out of proportion to this fix.
+//   - CampaignSendDialog.svelte: the panel's blind-stopPropagation onkeydown
+//     was replaced by binding the SAME `handleKeydown` reference already on
+//     the backdrop (which already checked `e.key === 'Escape' && !sending`
+//     correctly) to the panel too, deliberately, rather than rewriting
+//     `handleKeydown` itself -- because #0197 built a structural guard
+//     (CampaignSendDialog.structuralGuard.test.ts) that reads that exact
+//     expression shape out of this component's own AST; changing the shape
+//     would mean deliberately updating that guard too, out of proportion to
+//     this fix. (An earlier attempt did delete the panel's onkeydown outright
+//     rather than rebind it, but that attempt was abandoned -- it tripped
+//     svelte-check's a11y_click_events_have_key_events on the panel's
+//     onclick, since a11y rules require an interactive div to carry ITS OWN
+//     keydown handler. What shipped binds handleKeydown to both nodes, so a
+//     real Escape keypress on the focused panel fires handleKeydown twice
+//     per press -- harmless, since every close function here is idempotent;
+//     see #0094's Implementation notes for the executed proof.)
 // The one thing both shapes have in common, and the only thing worth
 // asserting structurally without re-deriving each component's specific
 // close function, is the ABSENCE of the blind-stopPropagation shape.
