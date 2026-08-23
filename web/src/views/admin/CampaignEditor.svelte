@@ -381,14 +381,16 @@
       const updated = await updateCampaign(campaignId, {
         name,
         subject,
-        // #0139: send the trimmed value, even '' -- omitting the key here
-        // used to mean "clear this field silently fails," because
-        // JSON.stringify drops an undefined-valued key and the server reads
-        // an absent key as "leave alone" (admin_campaigns.go's
-        // patchCampaignRequest). An explicit '' hits
-        // normalizeOptionalCampaignField's already-correct "empty string
-        // means clear" path instead.
-        preheader,
+        // #0139: always send the key, even '' -- omitting it here used to
+        // mean "clear this field silently fails," because JSON.stringify
+        // drops an undefined-valued key and the server reads an absent key
+        // as "leave alone" (admin_campaigns.go's patchCampaignRequest). An
+        // explicit '' hits normalizeOptionalCampaignField's "empty (or
+        // whitespace-only, #0147) string means clear" path instead.
+        // #0147: trim client-side too, matching workshopAdmin.ts's
+        // validateWorkshopForm convention, so a whitespace-only preheader
+        // clears rather than round-tripping as invisible spaces.
+        preheader: preheader.trim(),
         body_md: bodyMd,
         audience_mode: mode,
         interest_ids: interestIds,

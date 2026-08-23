@@ -367,6 +367,64 @@ func TestAdminWorkshops_PatchClearsOptionalFieldWithExplicitEmptyString(t *testi
 	}
 }
 
+// TestAdminWorkshops_PatchTreatsWhitespaceOnlyOptionalFieldAsCleared is
+// #0147's regression: normalizeOptionalCampaignField used to compare
+// *v == "" without trimming, so a whitespace-only value like "   " was
+// stored verbatim instead of being treated as a clear. It also proves two
+// things in the same request: a field the PATCH never mentions is left
+// alone, and a field set to real content padded with leading/trailing
+// spaces is stored exactly as sent -- the fix only changes what counts as
+// "blank," it does not trim genuine content.
+func TestAdminWorkshops_PatchTreatsWhitespaceOnlyOptionalFieldAsCleared(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-workshops-ws-clear@example.com")
+	seedSession(t, pool, admin, "workshops-admin-ws-clear-token")
+
+	store := workshops.NewStore(pool)
+	summary := "Original summary, to be cleared by whitespace"
+	signupURL := "https://example.com/rsvp"
+	w, err := store.Create(context.Background(), workshops.CreateInput{
+		Title:     uniqueAdminWorkshopTitle(t),
+		Summary:   &summary,
+		SignupURL: &signupURL,
+	})
+	if err != nil {
+		t.Fatalf("seed workshop: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, w.ID)
+	path := fmt.Sprintf("/admin/workshops/%d", w.ID)
+
+	// The PATCH body carries a whitespace-only summary (must clear, not
+	// store the spaces), a location_note padded with real content (must be
+	// stored verbatim, not trimmed), and never mentions signup_url (must be
+	// left alone).
+	resp := doJSON(t, srv.Client(), http.MethodPatch, srv.URL+path, "workshops-admin-ws-clear-token",
+		`{"summary":"   ","location_note":"  Padded real content  "}`)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH with whitespace-only summary status = %d, want 200 (body=%s)", resp.StatusCode, body)
+	}
+
+	updated, err := store.GetByID(context.Background(), w.ID)
+	if err != nil {
+		t.Fatalf("GetByID after patch: %v", err)
+	}
+	if updated.Summary != nil {
+		t.Errorf("Summary = %q after whitespace-only PATCH, want nil (cleared)", *updated.Summary)
+	}
+	if updated.SignupURL == nil || *updated.SignupURL != signupURL {
+		t.Errorf("SignupURL = %v after a PATCH that never mentioned it, want unchanged %q", updated.SignupURL, signupURL)
+	}
+	const wantNote = "  Padded real content  "
+	if updated.LocationNote == nil || *updated.LocationNote != wantNote {
+		t.Errorf("LocationNote = %v, want verbatim %q (real content is not trimmed)", updated.LocationNote, wantNote)
+	}
+}
+
 func TestAdminWorkshops_PatchUnknownStatusRejected(t *testing.T) {
 	pool := interestsTestPool(t)
 	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))

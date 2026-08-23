@@ -426,9 +426,13 @@ func (h *AdminCampaignsHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 // normalizeOptionalCampaignField applies the same "empty string means unset"
 // convention AdminInterestsHandler.Patch uses for description: nil stays
-// nil, an explicit empty string is treated as absent (stored NULL).
+// nil, an explicit empty (or whitespace-only) string is treated as absent
+// (stored NULL) — matching parseOptionalTime's blank check. A non-blank
+// value is returned unchanged, leading/trailing whitespace and all: this
+// only decides whether the field counts as "cleared," it does not
+// otherwise normalize real content.
 func normalizeOptionalCampaignField(v *string) *string {
-	if v == nil || *v == "" {
+	if v == nil || strings.TrimSpace(*v) == "" {
 		return nil
 	}
 	return v

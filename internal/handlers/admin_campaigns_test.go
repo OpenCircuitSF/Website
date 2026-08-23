@@ -370,6 +370,71 @@ func TestAdminCampaigns_Patch_ClearsOptionalFieldWithExplicitEmptyString(t *test
 	}
 }
 
+// TestAdminCampaigns_Patch_TreatsWhitespaceOnlyPreheaderAsCleared is
+// #0147's regression: normalizeOptionalCampaignField used to compare
+// *v == "" without trimming, so a whitespace-only preheader like "   " was
+// stored verbatim instead of being treated as a clear -- it reloaded
+// looking blank in the editor while still occupying the row. Also proves,
+// in the same request, that a field the PATCH never mentions is left alone.
+func TestAdminCampaigns_Patch_TreatsWhitespaceOnlyPreheaderAsCleared(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-ws-clear@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-ws-clear")
+
+	store := mailing.NewCampaignStore(pool)
+	preheader := "Original preheader, to be cleared by whitespace"
+	c, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "subject", BodyMD: "body",
+		AudienceMode: mailing.AudienceAll, Preheader: &preheader,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, c.ID)
+
+	// Whitespace-only preheader must clear, not store the spaces. Subject
+	// is never mentioned and must survive untouched.
+	body := `{"preheader":"   "}`
+	resp := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, c.ID), "admin-token-campaigns-ws-clear", body)
+	respBody := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH with whitespace-only preheader status = %d, want 200 (body=%s)", resp.StatusCode, respBody)
+	}
+
+	updated, err := store.GetByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("GetByID after patch: %v", err)
+	}
+	if updated.Preheader != nil {
+		t.Errorf("Preheader = %q after whitespace-only PATCH, want nil (cleared)", *updated.Preheader)
+	}
+	if updated.Subject != "subject" {
+		t.Errorf("Subject = %q after a PATCH that never mentioned it, want unchanged %q", updated.Subject, "subject")
+	}
+
+	// Real content padded with leading/trailing spaces is stored verbatim:
+	// the server-side fix only changes what counts as "blank," it does not
+	// trim genuine content (CampaignEditor.svelte trims client-side, so
+	// this is defense-in-depth for any other caller of the PATCH API).
+	const padded = "  Padded real content  "
+	body2 := fmt.Sprintf(`{"preheader":%q}`, padded)
+	resp2 := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, c.ID), "admin-token-campaigns-ws-clear", body2)
+	respBody2 := readBody(t, resp2)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH with padded preheader status = %d, want 200 (body=%s)", resp2.StatusCode, respBody2)
+	}
+	repadded, err := store.GetByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("GetByID after second patch: %v", err)
+	}
+	if repadded.Preheader == nil || *repadded.Preheader != padded {
+		t.Errorf("Preheader = %v, want verbatim %q (real content is not trimmed)", repadded.Preheader, padded)
+	}
+}
+
 func TestAdminCampaigns_Patch_NotEditableWhenSending(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
 	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
