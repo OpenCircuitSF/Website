@@ -814,6 +814,7 @@
     {#if sendDialogOpen && preflightSummary}
       <CampaignSendDialog
         summary={preflightSummary}
+        status={campaign?.status ?? 'draft'}
         unmet={sendUnmet}
         inFlight={sendInFlight}
         errorMessage={sendError}

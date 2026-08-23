@@ -18,7 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { UnmetRequirement } from '../../lib/types';
-import { sendGuardState } from '../../lib/sendConfirm';
+import { normalizeCountInput, sendGuardState } from '../../lib/sendConfirm';
 
 const noUnmet: UnmetRequirement[] = [];
 const oneUnmet: UnmetRequirement[] = [{ code: 'physical_address_missing', message: 'x' }];
@@ -77,6 +77,17 @@ const cases: Case[] = [
     audienceCount: 482,
     confirmRaw: '482',
   },
+  // Proves the separator class by execution rather than by inspection
+  // (#0189): a real U+2009 thin space, as normalizeCountInput's own doc
+  // comment says it accepts as a thousands separator — not the ASCII space
+  // a since-deleted hand-rolled replica of that function used to check for.
+  {
+    name: 'idle, correct count typed with a real thin-space thousands separator',
+    inFlight: false,
+    unmet: noUnmet,
+    audienceCount: 1482,
+    confirmRaw: '1 482',
+  },
 ];
 
 /** The dialog's formulas as they existed immediately before #0186. */
@@ -87,11 +98,14 @@ function oldBlockedAgain(c: Case): boolean {
   return c.unmet.length > 0;
 }
 /** handleSubmit's old bail-out: checked inFlight and the typed count, but
- *  never looked at `unmet` at all. */
+ *  never looked at `unmet` at all. Calls the real `normalizeCountInput`
+ *  (sendConfirm.ts) rather than replicating its separator-stripping regex —
+ *  a hand-rolled copy of that regex previously used an ASCII space where the
+ *  real function uses a U+2009 thin space, and came within one test case of
+ *  being silently wrong about it (see #0184's review notes and #0189). */
 function oldMaySubmit(c: Case): boolean {
   if (c.inFlight) return false;
-  const stripped = c.confirmRaw.trim().replace(/[, ]/g, '');
-  const n = /^\d+$/.test(stripped) ? Number(stripped) : null;
+  const n = normalizeCountInput(c.confirmRaw);
   return n !== null && n === c.audienceCount;
 }
 

@@ -10,20 +10,23 @@
   Markup and wiring only — every decision (whether the typed count matches,
   the hint text, whether the Send control may act) is a call into
   lib/sendConfirm.ts, via sendGuardState's `.kind` (#0186). This component
-  holds no comparison and no `.trim()` of its own. The one literal it does
-  hold is `status: 'draft'` in that sendGuardState call — a documented
-  stand-in, not a re-derivation: the parent never mounts this dialog outside
-  draft status (see the `guard` derivation's own comment below).
+  holds no comparison and no `.trim()` of its own. `status` is threaded in as
+  a prop (#0189) — the parent (CampaignEditor's `campaign.status`) is the
+  authoritative source; this component never hardcodes or re-derives it, so
+  a future reuse of this dialog for a non-draft status (CampaignStore.Send
+  also accepts `failed`, for a retry) is handed the real value instead of a
+  silently wrong stand-in.
 -->
 
 <script lang="ts">
   import { tick } from 'svelte';
-  import { confirmHint, sendGuardState } from '../../lib/sendConfirm';
+  import { confirmHint, sendGuardDescription, sendGuardState } from '../../lib/sendConfirm';
   import type { PreflightResponse, UnmetRequirement } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
 
   interface Props {
     summary: PreflightResponse['summary'];
+    status: string;
     unmet: UnmetRequirement[];
     inFlight: boolean;
     errorMessage: string | null;
@@ -31,23 +34,21 @@
     onClose: () => void;
   }
 
-  let { summary, unmet, inFlight, errorMessage, onConfirm, onClose }: Props = $props();
+  let { summary, status, unmet, inFlight, errorMessage, onConfirm, onClose }: Props = $props();
 
   let confirmRaw = $state('');
   let dialogEl = $state<HTMLDivElement | null>(null);
 
-  // #0186: the single source of truth for the Send control's guard state
-  // (lib/sendConfirm.ts's own doc comment) — this dialog must branch on
-  // `.kind`, never recompute `inFlight`/`unmet` conditions itself. `status`
-  // is hardcoded to 'draft' rather than threaded as a prop: the parent only
-  // ever mounts this dialog while the campaign is draft (CampaignEditor's
-  // onOpenSend gates on sendGateOpen) and closes it before a successful
-  // send can move status past draft, so 'draft' is the one value it can
-  // ever legitimately hold for as long as this component exists — the same
-  // kind of documented stand-in CampaignEditor's own editorGuard uses.
+  // #0186 / #0189: the single source of truth for the Send control's guard
+  // state (lib/sendConfirm.ts's own doc comment) — this dialog must branch
+  // on `.kind`, never recompute `inFlight`/`unmet` conditions itself.
+  // `status` is the real prop from the parent (CampaignEditor's
+  // `campaign.status`), not a hardcoded 'draft' literal — that stand-in was
+  // safe only as long as this dialog was draft-only, and CampaignStore.Send
+  // already accepts 'failed' for a retry.
   let guard = $derived(
     sendGuardState({
-      status: 'draft',
+      status,
       unmet,
       audienceCount: summary.recipients,
       confirmRaw,
@@ -70,6 +71,17 @@
   let blockedAgain = $derived(guard.kind === 'blocked');
   let hint = $derived(confirmHint(confirmRaw, summary.recipients));
   let fromDisplay = $derived(summary.from === '' ? 'Not configured' : summary.from);
+  // #0189, mirroring #0119's fix in CampaignEditor.svelte: in `blocked` and
+  // `needs-confirm`, the Send button below is left enabled (not the native
+  // `disabled` attribute — that stays reserved for `sending`) because
+  // `handleSubmit` already refuses to act unless `guard.kind === 'ready'`.
+  // An enabled-but-inert button needs its non-ready state announced, so it
+  // carries `aria-disabled` plus an `aria-describedby` naming the reason.
+  // Both ids it points at (`send-blocked-hint`, `confirm-hint` below) are
+  // rendered UNCONDITIONALLY, not wrapped in `{#if}` — #0119's own defect
+  // was exactly a dangling `aria-describedby` from a conditionally-rendered
+  // target, so only their CONTENTS are conditional here.
+  let guardDescription = $derived(sendGuardDescription(guard));
 
   $effect(() => {
     // Focus the DIALOG CONTAINER, not the input, so the subject / from /
@@ -127,9 +139,12 @@
 
     <p class="text-error">Mail cannot be unsent.</p>
 
-    {#if blockedAgain}
-      <div role="status" aria-live="polite" class="send-blocked">
-        <p class="text-error">This campaign is no longer ready to send:</p>
+    <!-- #0189: rendered unconditionally (only the inner content is
+         conditional) so the Send button's aria-describedby below always
+         resolves to a real element, in every guard state -- see #0119. -->
+    <div id="send-blocked-hint" role="status" aria-live="polite" class:send-blocked={blockedAgain}>
+      {#if blockedAgain}
+        <p class="text-error">{guardDescription}</p>
         <ol>
           {#each unmet as item (item.code)}
             <li data-code={item.code}>
@@ -138,8 +153,8 @@
             </li>
           {/each}
         </ol>
-      </div>
-    {/if}
+      {/if}
+    </div>
 
     <form onsubmit={handleSubmit}>
       <div class="field">
@@ -152,9 +167,18 @@
           bind:value={confirmRaw}
           disabled={sending}
         />
-        {#if hint}
-          <p class="text-muted confirm-hint">{hint}</p>
-        {/if}
+        <!-- #0189: same unconditional-container reasoning as send-blocked-hint
+             above. Falls back to sendGuardDescription's generic needs-confirm
+             text when the field is untouched (confirmHint returns null then,
+             by design -- no scolding an empty field), so this id never
+             resolves to empty content while guard.kind is 'needs-confirm'. -->
+        <div id="confirm-hint" role="status" aria-live="polite">
+          {#if hint}
+            <p class="text-muted confirm-hint">{hint}</p>
+          {:else if guard.kind === 'needs-confirm'}
+            <p class="text-muted confirm-hint">{guardDescription}</p>
+          {/if}
+        </div>
       </div>
 
       {#if errorMessage}
@@ -162,7 +186,13 @@
       {/if}
 
       <div class="row send-actions">
-        <Button type="submit" variant="danger" disabled={sending}>
+        <Button
+          type="submit"
+          variant="danger"
+          disabled={sending}
+          aria-disabled={guard.kind !== 'ready'}
+          aria-describedby="send-blocked-hint confirm-hint"
+        >
           {sending ? 'Sending…' : 'Send now'}
         </Button>
         <Button type="button" disabled={sending} onclick={onClose}>Cancel</Button>
