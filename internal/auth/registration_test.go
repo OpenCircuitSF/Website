@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/descope/virtualwebauthn"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/protocol/webauthncose"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
@@ -107,20 +109,60 @@ func truncateAuthTables(t *testing.T, pool *pgxpool.Pool) {
 	}
 }
 
-// setRegistrationsEnabled writes the registrations_enabled setting.
+// setRegistrationsEnabled writes the registrations_enabled setting and
+// registers a t.Cleanup that restores whatever value (or absence) the row
+// held beforehand. Without this, the setting leaks across the package
+// boundary: every DB-backed package shares one physical TEST_DATABASE_URL,
+// and #0132's review demonstrated the leak by measuring
+// registrations_enabled before and after `go test ./internal/auth/` alone
+// (#0215). t.Cleanup is used rather than a plain deferred restore because it
+// must still run when the test that changed the value fails — Go runs
+// cleanups on failure, skip, and panic alike, which a bare defer in the test
+// body would not survive a t.Fatalf in a later helper. This matches the
+// shape #0130 used to fix the sibling leak in
+// internal/handlers/audit_seams_test.go.
 func setRegistrationsEnabled(t *testing.T, pool *pgxpool.Pool, enabled bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	var prior string
+	hadRow := true
+	err := pool.QueryRow(ctx,
+		`SELECT value FROM settings WHERE key = $1`, settingRegistrationsEnabled).Scan(&prior)
+	switch {
+	case err == nil:
+		// hadRow already true.
+	case errors.Is(err, pgx.ErrNoRows):
+		hadRow = false
+	default:
+		t.Fatalf("read registrations_enabled: %v", err)
+	}
+
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer ccancel()
+		if hadRow {
+			if _, err := pool.Exec(cctx,
+				`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, now())
+				 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+				settingRegistrationsEnabled, prior); err != nil {
+				t.Errorf("restore registrations_enabled: %v", err)
+			}
+		} else if _, err := pool.Exec(cctx,
+			`DELETE FROM settings WHERE key = $1`, settingRegistrationsEnabled); err != nil {
+			t.Errorf("cleanup registrations_enabled: %v", err)
+		}
+	})
+
 	value := "false"
 	if enabled {
 		value = "true"
 	}
-	_, err := pool.Exec(ctx,
+	if _, err := pool.Exec(ctx,
 		`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, now())
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-		settingRegistrationsEnabled, value)
-	if err != nil {
+		settingRegistrationsEnabled, value); err != nil {
 		t.Fatalf("set registrations_enabled: %v", err)
 	}
 }
