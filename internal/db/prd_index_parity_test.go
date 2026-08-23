@@ -42,23 +42,32 @@ import (
 //     migration — idx_email_events_recipient_time, written for §6.9's
 //     /admin/deliverability page, which does not exist yet — simply never
 //     enters the live-index map this test walks and is never flagged.
-//  2. Indexes only, not full table/column parity. A CREATE/DROP INDEX
-//     statement is one self-contained, regexp-extractable unit with no
-//     ambiguity about whether it is "shipped" — unlike a column, which
-//     requires replaying a CREATE TABLE plus every later ALTER TABLE ADD
-//     COLUMN across up to 20 files with no single-statement anchor, and
-//     unlike a CHECK constraint, which §6.2 has never attempted to
-//     transcribe (PRD.md never lists e.g. interests_slug_format or
-//     subscribers_email_normalized — that level of detail lives in
-//     docs/database.md's migration-by-migration prose instead). Indexes are
-//     also the proven-recurring class here: #0135 and #0142 are two
-//     separate drifts on the very same index. #0148's manual sweep also
-//     found one column-level drift, email_sends.claimed_at (#0122's
-//     OrphanSweep timestamp, added by migrations/000018 but never added to
-//     PRD.md's email_sends table) — fixed by hand as part of that issue,
-//     not mechanically guarded here. A second column-level drift would be
-//     the signal to build that guard too; one instance, with a materially
-//     harder extraction problem, was judged not worth it yet.
+//  2. Indexes, and (as of #0154) columns — never a CHECK constraint. §6.2 has
+//     never attempted to transcribe those (PRD.md never lists e.g.
+//     interests_slug_format or subscribers_email_normalized — that level of
+//     detail lives in docs/database.md's migration-by-migration prose
+//     instead), and nothing has ever drifted on one, unlike indexes
+//     (#0135, #0142 — two separate drifts on the same index) and columns
+//     (email_sends.claimed_at, #0122's OrphanSweep timestamp, added by
+//     migrations/000018 but missing from PRD.md until #0148 fixed it by
+//     hand). #0148 originally deferred the column check as "materially more
+//     parsing surface"; #0148's own review prototyped it in ~30 lines during
+//     the sweep that found the deferral's stated reason was cost, not
+//     difficulty, and #0154 built it: TestPRDWorkshopAndMailingColumnParity
+//     below, same one-direction scope, same prdIndexParityTables.
+//
+// #0154 also closed a silent failure mode in the index guard itself: the
+// original createIndexPattern had no match at all for CREATE UNIQUE INDEX,
+// CREATE INDEX CONCURRENTLY, CREATE INDEX IF NOT EXISTS, or a statement
+// missing its terminating ";" — and a no-match on the migrations side just
+// meant the index never entered the live map, silently, with the suite
+// staying green. The prefix is now widened to parse the first three forms,
+// and checkIndexStatementCoverage below counts "CREATE [UNIQUE] INDEX"
+// occurrences against what the pattern actually matched so any remaining
+// unparseable form (including a missing ";") fails the test loudly instead
+// of vanishing. SQL comments are stripped before any of this matching runs
+// (stripSQLComments), so a commented-out `-- CREATE INDEX …` cannot register
+// as live on either side.
 //
 // Placement: same package as TestDatabaseDocMigrationParity for the same
 // reason that test gives (internal/db owns migrations), and to reuse its
@@ -106,10 +115,58 @@ var prdIndexParityTables = map[string]bool{
 // what lets idx_email_events_soft_bounce's predicate — itself containing a
 // nested `(bounce_subtype IS NULL OR ...)` — match correctly without any
 // paren-depth tracking.
+//
+// The prefix accepts UNIQUE, CONCURRENTLY, and IF NOT EXISTS, in Postgres's
+// required order (CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS]
+// name ON table …) — #0154: none of the three exist in this tree today, but
+// the first one anyone writes must not be invisible to this guard the way it
+// was before. Capture group numbering is unaffected: the three added clauses
+// are non-capturing, so group 1 is still the index name, 2 the table, 3 the
+// column list, 4 the predicate — every caller indexing loc[2:3]/[4:5]/[6:7]/
+// [8:9] is unchanged.
 var (
-	createIndexPattern = regexp.MustCompile(`(?i)CREATE\s+INDEX\s+(\w+)\s+ON\s+(\w+)\s*(\([^;]*?\))(?:\s+WHERE\s+([^;]*?))?;`)
-	dropIndexPattern   = regexp.MustCompile(`(?i)DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(\w+)\s*;`)
+	createIndexPattern     = regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\s+(\w+)\s*(\([^;]*?\))(?:\s+WHERE\s+([^;]*?))?;`)
+	dropIndexPattern       = regexp.MustCompile(`(?i)DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(\w+)\s*;`)
+	looseIndexStartPattern = regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX\b`)
+	sqlCommentPattern      = regexp.MustCompile(`--[^\n]*`)
 )
+
+// stripSQLComments removes every SQL line comment (`-- ...` to end of line)
+// from text before any pattern in this file runs over it. Applied uniformly
+// to both sides of every comparison so (a) a commented-out
+// `-- CREATE INDEX …`/`-- CREATE TABLE …` can never register as a live
+// definition, and (b) checkIndexStatementCoverage's loose count and
+// createIndexPattern's strict count are counting the same text.
+func stripSQLComments(s string) string {
+	return sqlCommentPattern.ReplaceAllString(s, "")
+}
+
+// checkIndexStatementCoverage is the guard for the guard (#0154). It counts
+// every "CREATE [UNIQUE] INDEX" occurrence in text (already comment-stripped)
+// and compares it against how many statements createIndexPattern actually
+// matched. Before #0154, a form the pattern couldn't parse — CREATE UNIQUE
+// INDEX, CREATE INDEX CONCURRENTLY, CREATE INDEX IF NOT EXISTS, or a
+// statement missing its terminating ";" — simply produced no match and no
+// error, so the index vanished from the live map in total silence. The first
+// three are now parsed by the widened prefix above; this check is what makes
+// any *remaining* unparseable form (a missing ";", or some fifth form nobody
+// has written yet) fail loudly instead of vanishing the same way.
+func checkIndexStatementCoverage(t *testing.T, text, label string) {
+	t.Helper()
+	found := len(looseIndexStartPattern.FindAllStringIndex(text, -1))
+	matched := len(createIndexPattern.FindAllStringIndex(text, -1))
+	if found != matched {
+		t.Errorf(
+			"%s: found %d \"CREATE [UNIQUE] INDEX\" occurrence(s) but only "+
+				"parsed %d as a complete statement — one of them uses a SQL form "+
+				"createIndexPattern can't parse (check for a missing terminating "+
+				"';', or a form not yet handled). A silent skip here means the "+
+				"index is invisible to this guard — fix the statement or widen "+
+				"createIndexPattern, don't leave the mismatch. See #0154.",
+			label, found, matched,
+		)
+	}
+}
 
 // indexDef is one CREATE INDEX statement's parsed shape, from either side of
 // the comparison (a migration file or PRD.md's §6.2 section).
@@ -151,7 +208,8 @@ func liveIndexesFromMigrations(t *testing.T) map[string]indexDef {
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		text := string(content)
+		text := stripSQLComments(string(content))
+		checkIndexStatementCoverage(t, text, "migrations/"+m.stem+".up.sql")
 
 		var ops []op
 		for _, loc := range dropIndexPattern.FindAllStringSubmatchIndex(text, -1) {
@@ -197,6 +255,186 @@ func prdIndexesFromSection(section string) map[string]indexDef {
 		defs[name] = def
 	}
 	return defs
+}
+
+// columnDef is one column's provenance, from either side of the column
+// parity comparison. Only the migrations side ever populates sourceFile —
+// the PRD side needs no error message pointer to itself.
+type columnDef struct {
+	sourceFile string // migration stem; unset for PRD-side defs
+}
+
+// tableConstraintKeywords are the leading tokens that mark a CREATE TABLE
+// body's top-level comma-separated segment as a table-level constraint
+// (PRIMARY KEY (...), UNIQUE (...), CHECK (...), FOREIGN KEY (...),
+// CONSTRAINT name ..., EXCLUDE (...)) rather than a column definition. No
+// column in this schema is ever named one of these bare reserved words, so
+// checking a segment's first token is sufficient without a real SQL parser
+// — the same "narrow, not a parser" tradeoff createIndexPattern already
+// makes.
+var tableConstraintKeywords = map[string]bool{
+	"PRIMARY":    true,
+	"UNIQUE":     true,
+	"CHECK":      true,
+	"FOREIGN":    true,
+	"CONSTRAINT": true,
+	"EXCLUDE":    true,
+}
+
+// createTableStart matches "CREATE TABLE name (" and its match end lands
+// exactly one byte past the opening paren, which is what lets callers derive
+// the paren's own index as loc[1]-1.
+var createTableStart = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(\w+)\s*\(`)
+
+// columnAddPattern matches the one ALTER TABLE form this project's
+// migrations use to grow a table after its CREATE TABLE: a single-column
+// `ALTER TABLE t ADD COLUMN c ...;` (CLAUDE.md §1's append-only-migrations
+// rule plus its greenfield exception — e.g. migrations/000011, 000018,
+// 000019).
+var columnAddPattern = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)`)
+
+// splitTopLevel splits s on commas that are not nested inside parens, so a
+// column definition like "import_id BIGINT REFERENCES
+// subscriber_imports(id)" is never mistaken for two segments by the comma
+// that doesn't exist there, and — more importantly — so a table constraint
+// like "PRIMARY KEY (subscriber_id, interest_id)" is treated as the single
+// segment it is rather than split apart by its own internal comma.
+func splitTopLevel(s string) []string {
+	var parts []string
+	depth := 0
+	start := 0
+	for i, r := range s {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, s[start:])
+	return parts
+}
+
+// columnsFromCreateTable extracts every column name from one
+// "CREATE TABLE name ( ... )" body, given the index of its opening paren
+// (openParen, as produced by createTableStart's match end minus one). It
+// finds the matching close paren by depth-tracking rather than assuming a
+// single unnested pair — column definitions here nest parens freely
+// (REFERENCES t(id), DEFAULT now()) — then splits the body on top-level
+// commas and takes each segment's first token as the column name, skipping
+// any segment whose first token is a table constraint keyword.
+func columnsFromCreateTable(text string, openParen int) (cols []string, bodyEnd int) {
+	depth := 0
+	end := -1
+	for i := openParen; i < len(text); i++ {
+		switch text[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				end = i
+			}
+		}
+		if end != -1 {
+			break
+		}
+	}
+	if end == -1 {
+		end = len(text)
+	}
+	body := text[openParen+1 : end]
+	for _, seg := range splitTopLevel(body) {
+		fields := strings.Fields(seg)
+		if len(fields) == 0 {
+			continue
+		}
+		if tableConstraintKeywords[strings.ToUpper(fields[0])] {
+			continue
+		}
+		cols = append(cols, fields[0])
+	}
+	return cols, end
+}
+
+// liveColumnsFromMigrations replays every CREATE TABLE and
+// ALTER TABLE ADD COLUMN statement across migrations/*.up.sql — in version
+// order and by byte position within each file, the same ordering
+// liveIndexesFromMigrations uses and for the same reason: today every column
+// change in this tree is a monotonic addition (CREATE TABLE's own list, or a
+// later ADD COLUMN — migrations/000011, 000018, 000019), so a plain union
+// gives the right answer, but the position-ordered replay is what keeps that
+// true if a future migration ever DROPs and recreates a table or drops a
+// column, exactly as idx_email_events_soft_bounce's DROP+CREATE pair is what
+// makes the *index* replay's ordering load-bearing rather than incidental.
+func liveColumnsFromMigrations(t *testing.T) map[string]map[string]columnDef {
+	t.Helper()
+	stems := listMigrations(t)
+	live := map[string]map[string]columnDef{}
+
+	type op struct {
+		pos     int
+		table   string
+		columns []string
+	}
+
+	for _, m := range stems {
+		path := migrationsDir + "/" + m.stem + ".up.sql"
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := stripSQLComments(string(content))
+
+		var ops []op
+		for _, loc := range createTableStart.FindAllStringSubmatchIndex(text, -1) {
+			table := text[loc[2]:loc[3]]
+			openParen := loc[1] - 1
+			cols, _ := columnsFromCreateTable(text, openParen)
+			ops = append(ops, op{pos: loc[0], table: table, columns: cols})
+		}
+		for _, loc := range columnAddPattern.FindAllStringSubmatchIndex(text, -1) {
+			table := text[loc[2]:loc[3]]
+			col := text[loc[4]:loc[5]]
+			ops = append(ops, op{pos: loc[0], table: table, columns: []string{col}})
+		}
+		sort.Slice(ops, func(i, j int) bool { return ops[i].pos < ops[j].pos })
+		for _, o := range ops {
+			if live[o.table] == nil {
+				live[o.table] = map[string]columnDef{}
+			}
+			for _, c := range o.columns {
+				live[o.table][c] = columnDef{sourceFile: m.stem}
+			}
+		}
+	}
+	return live
+}
+
+// prdColumnsFromSection parses every CREATE TABLE's column list out of a
+// slice of PRD.md text (§6.2's section, already extracted by
+// extractPRDSection and comment-stripped by the caller).
+func prdColumnsFromSection(section string) map[string]map[string]columnDef {
+	tables := map[string]map[string]columnDef{}
+	for _, loc := range createTableStart.FindAllStringSubmatchIndex(section, -1) {
+		table := section[loc[2]:loc[3]]
+		openParen := loc[1] - 1
+		cols, _ := columnsFromCreateTable(section, openParen)
+		set := tables[table]
+		if set == nil {
+			set = map[string]columnDef{}
+			tables[table] = set
+		}
+		for _, c := range cols {
+			set[c] = columnDef{}
+		}
+	}
+	return tables
 }
 
 // normalizeSQL collapses whitespace runs (including newlines) to single
@@ -246,7 +484,8 @@ func TestPRDWorkshopAndMailingIndexParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", prdPath, err)
 	}
-	section := extractPRDSection(t, string(prdBytes), "### 6.2 ")
+	section := stripSQLComments(extractPRDSection(t, string(prdBytes), "### 6.2 "))
+	checkIndexStatementCoverage(t, section, "PRD.md §6.2")
 	prdIndexes := prdIndexesFromSection(section)
 
 	var names []string
@@ -280,6 +519,68 @@ func TestPRDWorkshopAndMailingIndexParity(t *testing.T) {
 				got.table, normalizeSQL(got.columns), orNone(normalizeSQL(got.predicate)),
 				want.table, normalizeSQL(want.columns), orNone(normalizeSQL(want.predicate)),
 			)
+		}
+	}
+}
+
+// TestPRDWorkshopAndMailingColumnParity is #0154's column-parity guard,
+// deferred by #0148 and built here. Same one-direction scope as the index
+// guard above, for the identical reason (see the package comment): every
+// column a migration has actually created on a prdIndexParityTables table
+// must appear, by name, in PRD.md §6.2's CREATE TABLE for that table. It
+// never asks the reverse question, so the Phase 8 forward-declared columns
+// (subscribers.source/invited_at/consent_basis/import_id/
+// soft_bounce_streak/last_bounce_at/last_delivery_at,
+// email_campaigns.slug/archive_status/archived_at, and the
+// subscriber_imports/subscriber_events/outbound_queue tables outright — all
+// owned by open Phase 8 issues #0123-0129) are correctly never flagged: none
+// of them have a migration yet, so they never enter the live map this test
+// walks.
+//
+// Column *names* are the assertion, not types or defaults. #0148's review
+// prototyped a type/default comparison too during its independent sweep and
+// found it false-positive-free against this tree, but shipping it isn't
+// required to reproduce the one known drift (email_sends.claimed_at, a name
+// difference) and it adds a second axis of "how similar is similar enough"
+// that a name-only check doesn't need — see #0154's acceptance criteria.
+func TestPRDWorkshopAndMailingColumnParity(t *testing.T) {
+	live := liveColumnsFromMigrations(t)
+
+	prdBytes, err := os.ReadFile(prdPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", prdPath, err)
+	}
+	section := stripSQLComments(extractPRDSection(t, string(prdBytes), "### 6.2 "))
+	prdColumns := prdColumnsFromSection(section)
+
+	var tables []string
+	for table := range live {
+		if prdIndexParityTables[table] {
+			tables = append(tables, table)
+		}
+	}
+	sort.Strings(tables)
+
+	for _, table := range tables {
+		prdCols := prdColumns[table]
+
+		var cols []string
+		for col := range live[table] {
+			cols = append(cols, col)
+		}
+		sort.Strings(cols)
+
+		for _, col := range cols {
+			def := live[table][col]
+			if _, ok := prdCols[col]; !ok {
+				t.Errorf(
+					"PRD.md §6.2's CREATE TABLE %s does not mention column %q, added "+
+						"by migrations/%s.up.sql — PRD.md's schema listing has fallen "+
+						"behind the migration. Add the column to PRD.md §6.2's "+
+						"CREATE TABLE %s — see #0154.",
+					table, col, def.sourceFile, table,
+				)
+			}
 		}
 	}
 }
