@@ -438,28 +438,66 @@ func TestCitationPatternAcceptsDocsURLFalsePositive(t *testing.T) {
 // (see #0197 on this tracker's history of that mistake).
 //
 // "on disk" is a second, independent enumeration of the same three
-// scanGoRoots with NO skip logic of any kind — not even a reuse of
-// skipVendoredDirNames — because reusing that map here would make this
-// test blind to precisely the bug it is meant to catch: skipVendoredDirNames
-// matches a directory by name at any depth, so a genuine, non-vendored
-// directory that happens to be named "node_modules" or "dist" (see that
-// map's own doc comment on internal/dist as the live example) is swallowed
-// by the shipped walk today with nothing failing. Comparing against a walk
-// that shares the same exclusion would swallow it identically and the
-// mismatch would never surface.
+// scanGoRoots that excludes the two vendored trees by ANCHORED PATH PREFIX
+// (baseDir-joined "../../web/node_modules" and "../../web/dist") rather
+// than reusing skipVendoredDirNames' bare-name check. #0201: the two are
+// not interchangeable, and the distinction is the whole point of this
+// test. skipVendoredDirNames matches a directory by name at ANY depth, so
+// a genuine, non-vendored directory that happens to be named
+// "node_modules" or "dist" anywhere under scanGoRoots (see that map's own
+// doc comment on internal/dist as the live example) is swallowed by the
+// shipped walk today with nothing failing. Reusing that same name-based
+// check here would swallow it identically in the ground truth too, and the
+// mismatch this test exists to catch would never surface — a circular,
+// worthless comparison. A path-prefix exclusion has no such blind spot:
+// internal/dist/ does not share a path prefix with web/node_modules or
+// web/dist, so it is never excluded from "on disk" no matter how deep a
+// name-based skip elsewhere hides it, while a real npm dependency shipping
+// a non-test .go file under web/node_modules — the prospective hazard
+// #0200's review reported — is excluded from both sides identically and no
+// longer fails this test.
 //
-// Both directions are checked and reported separately: a file present on
-// disk but not collected means the shipped walk is narrowing (the
-// internal/dist scenario above); a file collected but not on disk means
-// something else entirely (a stale path, a symlink, a duplicate walk
-// entry) — different causes, so the message names each set rather than
-// just reporting "sets differ".
+// Both directions are checked and reported separately, but they are not
+// symmetric hazards. A file present on disk but not collected means the
+// shipped walk is narrowing beyond the two anchored vendored prefixes — the
+// internal/dist scenario above, and the actual bug this test exists to
+// catch. A file collected but not on disk is, by construction, unreachable
+// for any static filesystem state: "collected" is exactly the shipped
+// walk's output minus skipVendoredDirNames' SkipDir, and "on disk" is a
+// superset of that same walk (it additionally counts the two vendored
+// prefixes onDisk would otherwise miss), so collected is always a subset of
+// onDisk. #0200's review tried every candidate cause by direct probe — a
+// *.go symlink lands in both walks identically since WalkDir lstats; a
+// symlinked directory is followed by neither walk; a dangling symlink or a
+// directory named *.go dies earlier at the shipped walk's parse
+// t.Fatalf — and found none of them can populate this set. The only thing
+// that could is a file vanishing between the two walks of the same root
+// within a single test run: a filesystem race, not a code path a static
+// tree can hit. The branch is kept rather than deleted (temporarily
+// narrowing the ground truth in that review correctly turned it on), but
+// its message says what it actually guards instead of naming causes that
+// cannot produce it.
 func TestScanDirForCitationsCollectsExactlyDiskFiles(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller(0) failed")
 	}
 	baseDir := filepath.Dir(thisFile)
+
+	// #0201: anchored to baseDir, not matched by bare name — see the
+	// doc comment above for why that distinction is load-bearing.
+	excludedPrefixes := []string{
+		filepath.Join(baseDir, "../../web/node_modules"),
+		filepath.Join(baseDir, "../../web/dist"),
+	}
+	excluded := func(path string) bool {
+		for _, prefix := range excludedPrefixes {
+			if path == prefix || strings.HasPrefix(path, prefix+string(filepath.Separator)) {
+				return true
+			}
+		}
+		return false
+	}
 
 	collected := map[string]bool{}
 	onDisk := map[string]bool{}
@@ -474,6 +512,12 @@ func TestScanDirForCitationsCollectsExactlyDiskFiles(t *testing.T) {
 		err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
+			}
+			if excluded(path) {
+				if entry.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 			if entry.IsDir() {
 				return nil
@@ -515,7 +559,11 @@ func TestScanDirForCitationsCollectsExactlyDiskFiles(t *testing.T) {
 		}
 	}
 	if len(extra) > 0 {
-		b.WriteString("  collected but NOT present on disk (stale path, symlink, or duplicate walk entry):\n")
+		// #0201: this branch is unreachable for any static filesystem state
+		// (see the doc comment above the test) — reaching it at all means a
+		// file vanished between the shipped walk and this second walk of
+		// the same root, within this one run.
+		b.WriteString("  collected but NOT present on disk (a file vanished between the two walks of the same root during this run):\n")
 		for _, p := range extra {
 			b.WriteString("    " + p + "\n")
 		}
