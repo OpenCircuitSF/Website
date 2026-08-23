@@ -17,7 +17,7 @@ import (
 	_ "time/tzdata" // #0156: embed the IANA tzdata database in the binary so
 	// internal/handlers' announceLocation (America/Los_Angeles,
 	// admin_workshop_announce.go) can load at package init without relying
-	// on the host having its own copy. A missing host tzdata is the
+	// on the host having its own copy. A missing host tzdata is not the
 	// deploy target's normal case today (Amazon Linux ships it,
 	// CLAUDE.md §7), but a future scratch/distroless base would otherwise
 	// panic the whole binary at startup rather than just the announce
