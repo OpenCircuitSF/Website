@@ -1,9 +1,9 @@
 // #0120: "Escape does not close any admin modal" was one root cause
 // reproduced at 8 sites across 4 files (Admin.svelte x5, CampaignEditor
-// .svelte x1, Campaigns.svelte x1, CampaignSendDialog.svelte x1) -- two more
-// sites, in WorkshopEditor.svelte and Workshops.svelte, had already been
-// fixed under #0052 before this issue was even filed, so they are not part
-// of that count -- every `role="dialog" aria-modal="true"` panel's own
+// .svelte x1, Campaigns.svelte x1, CampaignSendDialog.svelte x1) -- three
+// more sites, in WorkshopEditor.svelte (x2) and Workshops.svelte (x1), had
+// already been fixed under #0052 before this issue was even filed, so they
+// are not part of that count -- every `role="dialog" aria-modal="true"` panel's own
 // `onkeydown={(e) => e.stopPropagation()}`,
 // added to mirror the click guard that keeps a click inside the panel from
 // reaching the backdrop's click-outside-to-dismiss `onclick`. There is no

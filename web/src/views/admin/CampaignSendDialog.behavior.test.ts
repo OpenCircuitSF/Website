@@ -36,10 +36,12 @@
 // NOT establish that a real browser's focus/tab order, CSS-driven
 // visibility, or screen-reader announcement behave the same way; jsdom's
 // focus and event model is an approximation of a browser's, not the thing
-// itself. CLAUDE.md has no section specifically on jsdom's fidelity to a
-// real browser — the nearest relevant text is §5's verification rules, on
-// what running a test does and does not prove in general — so the full
-// caveat lives here and in this issue's Implementation notes, not there.
+// itself. CLAUDE.md §1 says so directly, under a bullet headed "jsdom is not
+// a browser.": "a passing jsdom test is weaker evidence than a real-browser
+// one, and a verification claim should say which it rests on." This test's
+// claim rests on jsdom, not a real browser — recorded here, in that
+// section's own terms, rather than restating it as if no such guidance
+// existed.
 import { render, fireEvent, cleanup, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import CampaignSendDialog from './CampaignSendDialog.svelte';
