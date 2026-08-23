@@ -1012,8 +1012,7 @@
               <label class="setting-name" for="physical-address">Physical mailing address</label>
               <p class="text-muted setting-desc">
                 Included in every campaign email. CAN-SPAM requires a physical postal address in
-                every commercial message — the send worker refuses to start a campaign while this
-                is empty.
+                every commercial message — campaigns cannot be sent until an address is set here.
               </p>
               <textarea
                 id="physical-address"

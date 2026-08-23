@@ -206,7 +206,7 @@
                     {row.name}
                   </button>
                   {#if row.demoted}
-                    <p class="text-error demoted-hint">Returned to draft — worker refused it</p>
+                    <p class="text-error demoted-hint">Returned to draft — sending was refused</p>
                   {/if}
                 </td>
                 <td><span class="badge {row.statusBadgeClass}">{row.statusLabel}</span></td>

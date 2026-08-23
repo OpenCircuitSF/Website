@@ -249,14 +249,14 @@ export function wasDemotedAfterScheduling(c: Campaign): boolean {
 
 /**
  * The operator-facing explanation shown atop a demoted campaign's editor and
- * list row. Deliberately does not restate WHY the worker refused it — that
+ * list row. Deliberately does not restate WHY sending was refused — that
  * is the live pre-send panel (lib/preflight.ts's renderer), which is the
  * actionable answer since `#0114` records the send_refused audit row is not
  * yet filterable to this campaign.
  */
 export function demotionExplanation(c: Campaign): string {
   const when = c.scheduled_at ? formatDateTime(c.scheduled_at) : 'an earlier time';
-  return `This campaign was scheduled for ${when} but the send worker refused it and returned it to draft. The checks below are its current state.`;
+  return `This campaign was scheduled for ${when} but sending was refused and it was returned to draft. The checks below are its current state.`;
 }
 
 // ── Cancel copy (#0041's Cancel transition) ──────────────────────────────────
@@ -279,9 +279,9 @@ export function cancelCopy(status: string, remaining?: number): string {
   if (status === 'sending') {
     if (remaining != null) {
       const who = remaining === 1 ? '1 recipient' : `${remaining} recipients`;
-      return `Messages already sent cannot be recalled. Cancelling stops the worker from sending to the ${who} not yet mailed.`;
+      return `Messages already sent cannot be recalled. Cancelling stops sending to the ${who} not yet mailed.`;
     }
-    return 'Messages already sent cannot be recalled. Cancelling stops the worker from sending to anyone not already mailed.';
+    return 'Messages already sent cannot be recalled. Cancelling stops sending to anyone not already mailed.';
   }
   return 'Nothing has been sent yet. Cancelling stops the send before it starts.';
 }

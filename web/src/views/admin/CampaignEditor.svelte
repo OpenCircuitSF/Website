@@ -805,7 +805,7 @@
           <div class="progress-bar-fill" style="width: {progressPercentValue}%"></div>
         </div>
         {#if progressStalled}
-          <p class="text-muted">No update in a while — the worker may be paused or waiting on send-rate limits.</p>
+          <p class="text-muted">No update in a while — sending may be paused or waiting on send-rate limits.</p>
         {/if}
       {/if}
     </div>

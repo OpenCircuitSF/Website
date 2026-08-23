@@ -415,7 +415,7 @@
         <span class="field-label">Slug</span>
         <p class="slug-value mono">{workshop.slug}</p>
         <p class="text-muted slug-hint">
-          Auto-generated from the title and set once at creation -- the server does not accept
+          Auto-generated from the title and set once at creation — the server does not accept
           edits to it through this screen.
         </p>
       </div>
@@ -694,7 +694,7 @@
           <p class="text-error" role="alert">{deleteError}</p>
           <p>
             An email campaign already announces this workshop, and deleting it would break that
-            campaign's record. Cancel the workshop instead -- it stays visible on the public site,
+            campaign's record. Cancel the workshop instead — it stays visible on the public site,
             marked canceled.
           </p>
           <div class="row" style="margin-top: var(--space-3);">
