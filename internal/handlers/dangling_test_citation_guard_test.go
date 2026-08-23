@@ -87,18 +87,31 @@ var testNameCitationPattern = regexp.MustCompile(`\bTest[A-Z0-9_][A-Za-z0-9_]*\b
 //   - "TestPool" is the bare suffix word the *TestPool naming convention
 //     (credsTestPool, interestsTestPool, and friends — see
 //     testNameCitationPattern's own comment) is named after. It appears,
-//     asterisk-wrapped as markdown emphasis, in exactly three real
-//     comments in the tree: main_test.go's summary line and this file's
-//     own two uses of the convention name above. #0199 removed a
+//     leading-asterisk-only (a '*' immediately before the name but no
+//     closing '*' immediately after it — see below), in exactly three
+//     real comments in the tree: main_test.go's summary line and this
+//     file's own two uses of the convention name above. #0199 removed a
 //     preceding-`*` discount rule that used to cover this by punctuation
 //     rather than by name — and that rule was too broad: it silently
-//     excluded ANY markdown-emphasised citation, so a genuinely dangling
-//     citation written as "*TestSomethingGone*" was invisible to the
-//     guard (proved by planting one — see
-//     TestDanglingTestCitationPatternExcludesDiscountedShapes). Naming
-//     the one word that actually needed it here covers the same three
-//     real lines exactly, with no blind spot for anything else written
-//     between asterisks.
+//     excluded ANY leading-asterisk-only citation, regardless of name —
+//     so a genuinely dangling one written the same way (no closing
+//     asterisk immediately after it) was invisible to the guard. That
+//     shape is now caught — proved by the emphasisedDanglingName case in
+//     TestDanglingTestCitationPatternExcludesDiscountedShapes, whose
+//     fictitious name is built from string concatenation rather than
+//     spelled out here, per this file's own opening comment on why a
+//     genuinely dangling example must never appear as a real comment
+//     token in this file. Naming the one word that actually needed it
+//     here covers the same three real lines exactly.
+//
+//     It does NOT close the fully-emphasised markdown form "*Name*"
+//     (an asterisk on both sides, right against the name) — a
+//     genuinely dangling citation written that way is still missed,
+//     because the SEPARATE trailing-`*` wildcard-family rule in
+//     citationIsExcluded below fires on the closing asterisk
+//     regardless of what removing the preceding-`*` rule did here. See
+//     that rule's comment for why this stays open rather than being
+//     narrowed.
 //
 // Extend this list if another such name turns up; don't loosen the
 // pattern to admit it structurally, since the pattern's whole value is
@@ -135,7 +148,25 @@ var nonTestIdentifierAllowlist = map[string]bool{
 //     tells "wildcard family reference" and "unwritten placeholder" apart;
 //     if a real instance ever turns up, the fix is the same shape as
 //     always: name it on nonTestIdentifierAllowlist, don't loosen this
-//     rule;
+//     rule. The same closing-'*' match has a second, unrelated
+//     consequence: it also discounts genuine markdown emphasis "*Name*"
+//     (an asterisk on both sides of the name), because at the point
+//     this rule looks — one character past the match — that shape is
+//     indistinguishable from the family-wildcard shape "Name*". A
+//     dangling citation written that way is therefore silently accepted
+//     too — pinned by the fullyEmphasisedDanglingName case in
+//     TestDanglingTestCitationPatternExcludesDiscountedShapes, whose
+//     fictitious name is likewise built from string concatenation
+//     rather than spelled out here. This is
+//     not narrowed either, for the same reason as the "..." case above:
+//     nothing local distinguishes "closes a wildcard family" from
+//     "closes markdown emphasis", and #0196 mutation-tested this rule
+//     as narrow and load-bearing (TestFetchSubscribeURLReal_*,
+//     TestRender_*), so it is not the rule to change.
+//     nonTestIdentifierAllowlist's TestPool entry closes only the
+//     LEADING-asterisk-only shape (no closing '*' right after the
+//     name) — this fully-emphasised "*Name*" shape is a distinct,
+//     still-open gap;
 //   - a name the comment honestly documents as retired — the phrase
 //     "renamed from" anywhere in the twenty characters immediately before
 //     the match (case-insensitive; templates_test.go carries the one
@@ -553,6 +584,21 @@ func TestDanglingTestCitationPatternExcludesDiscountedShapes(t *testing.T) {
 	emphasisedDanglingText := "each of this package's *" + emphasisedDanglingName + " helpers checks that"
 	if testCaseExcluded(t, emphasisedDanglingText, emphasisedDanglingName) {
 		t.Errorf("markdown-emphasised dangling citation %q: want NOT excluded now that the preceding-'*' rule is gone, got excluded", emphasisedDanglingName)
+	}
+
+	// #0199's bounce: the FULLY-emphasised form "*Name*" (an asterisk on
+	// BOTH sides of the name, unlike emphasisedDanglingName above which has
+	// only a leading one) is a distinct case the allowlist change above does
+	// NOT close. It stays excluded — genuinely dangling or not — because the
+	// trailing-'*' wildcard-family rule tested at the top of this function
+	// fires on the closing asterisk regardless of what removed the
+	// preceding-'*' rule. This pins that gap rather than only describing it;
+	// see citationIsExcluded's wildcard-rule comment for why it is not
+	// narrowed.
+	fullyEmphasisedDanglingName := "Test" + "RenderSomethingElseThatGotRenamedAway"
+	fullyEmphasisedDanglingText := "see *" + fullyEmphasisedDanglingName + "* for the rationale"
+	if !testCaseExcluded(t, fullyEmphasisedDanglingText, fullyEmphasisedDanglingName) {
+		t.Errorf("fully markdown-emphasised dangling citation %q (asterisks on both sides): want excluded by the trailing-'*' wildcard rule, got flagged", fullyEmphasisedDanglingName)
 	}
 
 	renamedName := "Test" + "ConfirmationAndAlreadySubscribed_NoCampaignHeaders"
