@@ -31,4 +31,13 @@ export default defineConfig({
       '/admin': apiTarget,
     },
   },
+  // #0094: under Vitest, Vite's default module resolution picks Svelte's
+  // SERVER build (the `node`/default export condition) even though tests
+  // run in jsdom, which is what made an early attempt at this file's own
+  // component-mount test fail with "lifecycle_function_unavailable: mount()
+  // is not available on the server" — svelte-testing-library's `render()`
+  // calls Svelte's client `mount()`, but without this the resolver was
+  // handing it the server module instead. Scoped to `process.env.VITEST`
+  // (set by Vitest itself) so `vite build`/`vite dev` are untouched.
+  resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,
 });
