@@ -14,6 +14,15 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata" // #0156: embed the IANA tzdata database in the binary so
+	// internal/handlers' announceLocation (America/Los_Angeles,
+	// admin_workshop_announce.go) can load at package init without relying
+	// on the host having its own copy. A missing host tzdata is the
+	// deploy target's normal case today (Amazon Linux ships it,
+	// CLAUDE.md §7), but a future scratch/distroless base would otherwise
+	// panic the whole binary at startup rather than just the announce
+	// path — mustLoadLocation's panic-on-missing-zone behavior is correct
+	// and stays; this only removes the host as a source of that failure.
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/time/rate"

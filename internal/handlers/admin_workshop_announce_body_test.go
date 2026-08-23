@@ -80,6 +80,59 @@ func TestAnnounceWhen_StartOnly(t *testing.T) {
 	}
 }
 
+// TestAnnounceWhen_SameLocalDate_ComparesPacificNotUTC is #0156 item 1: a
+// regression test for sameLocalDate's day-boundary comparison. #0144's
+// reviewer found that reverting sameLocalDate from Pacific calendar days
+// back to UTC calendar days left the entire internal/handlers suite green —
+// nothing committed defended the Pacific-vs-UTC choice. These two cases,
+// carried over verbatim (instants and expected strings) from #0144's
+// `## Review notes` mutation spot-check, each fail under exactly one of the
+// two comparison rules, so together they pin the Pacific behavior and would
+// catch the same reversion.
+func TestAnnounceWhen_SameLocalDate_ComparesPacificNotUTC(t *testing.T) {
+	tests := []struct {
+		name   string
+		starts string
+		ends   string
+		want   string
+	}{
+		{
+			// Spans a UTC calendar-day boundary (Jan 14 -> Jan 15 UTC) but
+			// not a Pacific one (both instants are Jan 14 in Pacific,
+			// 2:00 PM and 5:00 PM PST) — must render the short
+			// same-day form. Under the old UTC comparison this would have
+			// been treated as two different days and rendered in full.
+			name:   "spans UTC day, not Pacific day -> short form",
+			starts: "2026-01-14T22:00:00Z",
+			ends:   "2026-01-15T01:00:00Z",
+			want:   "Wednesday, January 14, 2026 at 2:00 PM PST to 5:00 PM PST",
+		},
+		{
+			// Spans a Pacific calendar-day boundary (Jan 14 11:00 PM ->
+			// Jan 15 1:00 AM PST) but not a UTC one (both instants are
+			// Jan 15 in UTC) — must render the long two-timestamp form.
+			// Under the old UTC comparison this would have collapsed to
+			// the bare same-day "11:00 PM to 1:00 AM" form.
+			name:   "spans Pacific day, not UTC day -> long form",
+			starts: "2026-01-15T07:00:00Z",
+			ends:   "2026-01-15T09:00:00Z",
+			want:   "Wednesday, January 14, 2026 at 11:00 PM PST to Thursday, January 15, 2026 at 1:00 AM PST",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			starts := mustParseAnnounceTime(t, tc.starts)
+			ends := mustParseAnnounceTime(t, tc.ends)
+			wk := workshops.Workshop{StartsAt: &starts, EndsAt: &ends}
+			got := announceWhen(wk)
+			if got != tc.want {
+				t.Errorf("announceWhen() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func mustParseAnnounceTime(t *testing.T, s string) time.Time {
 	t.Helper()
 	tm, err := time.Parse(time.RFC3339, s)
