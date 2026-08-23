@@ -5,7 +5,7 @@
   i.e. only once the subtab is first shown.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { listCampaigns, createCampaign, ApiError } from '../../lib/api';
   import {
     campaignStatusLabel,
@@ -15,6 +15,7 @@
   } from '../../lib/campaigns';
   import { canViewCampaignStats } from '../../lib/campaignStats';
   import { formatDateTime } from '../../lib/admin';
+  import { isModalEscape } from '../../lib/modalKeydown';
   import type { Campaign } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
@@ -66,6 +67,17 @@
   let newBody = $state('');
   let createError = $state<string | null>(null);
   let submittingCreate = $state(false);
+  let createModalEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    // #0120: move focus into the modal panel itself once it opens, so the
+    // panel's own Escape handler (below) is reachable and so the dialog
+    // meets the aria-modal="true" contract of taking focus on open --
+    // mirrors the shape #0052 established in WorkshopEditor.svelte /
+    // Workshops.svelte (and Admin.svelte's five modals under this issue).
+    // This dialog had no focus management at all before this fix.
+    if (creating) void tick().then(() => createModalEl?.focus());
+  });
 
   let campaignRows = $derived(
     campaigns.map((c) => ({
@@ -237,7 +249,7 @@
       role="presentation"
       onclick={closeCreate}
       onkeydown={(e) => {
-        if (e.key === 'Escape') closeCreate();
+        if (isModalEscape(e)) closeCreate();
       }}
     >
       <div
@@ -246,8 +258,11 @@
         aria-modal="true"
         aria-label="New campaign"
         tabindex="-1"
+        bind:this={createModalEl}
         onclick={(e) => e.stopPropagation()}
-        onkeydown={(e) => e.stopPropagation()}
+        onkeydown={(e) => {
+          if (isModalEscape(e)) closeCreate();
+        }}
       >
         <h2 class="modal-title">New campaign</h2>
         <form onsubmit={submitCreate}>

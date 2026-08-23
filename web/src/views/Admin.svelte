@@ -30,9 +30,10 @@
     this section) — see #0024's Gotchas for why.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { currentUser } from '../lib/stores';
   import { navigate } from '../lib/router';
+  import { isModalEscape } from '../lib/modalKeydown';
   import {
     getSettings,
     updateSetting,
@@ -208,6 +209,20 @@
   let deactError = $state<string | null>(null);
   let deactSubmitting = $state(false);
   const deactNoteRequired = $derived(deactReason === 'other');
+  let deactivateModalEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    // #0120: move focus into the modal panel itself once it opens, so the
+    // panel's own Escape handler (below) is reachable and so the dialog
+    // meets the aria-modal="true" contract of taking focus on open --
+    // mirrors the shape #0052 established in WorkshopEditor.svelte /
+    // Workshops.svelte. This modal had no focus management at all before
+    // this fix: without it, focus stays on the "Deactivate" trigger button
+    // (still present in the users table behind the modal), so neither this
+    // panel's keydown nor the backdrop's ever fires on Escape regardless of
+    // what either handler does.
+    if (deactivatingUser) void tick().then(() => deactivateModalEl?.focus());
+  });
 
   let userRowError = $state<Record<number, string>>({});
   let reactivatingId = $state<number | null>(null);
@@ -469,6 +484,12 @@
   let editError = $state<string | null>(null);
   let editSubmitting = $state(false);
   const editDeactivating = $derived(editingInterest !== null && editingInterest.active && !editActive);
+  let editInterestModalEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    // #0120: see the deactivate modal's identical $effect above for why.
+    if (editingInterest) void tick().then(() => editInterestModalEl?.focus());
+  });
 
   function openEditInterest(it: Interest) {
     editingInterest = it;
@@ -644,6 +665,18 @@
   let viewingSubscriber = $state<Subscriber | null>(null);
   let viewingLoading = $state(false);
   let viewingError = $state<string | null>(null);
+  let subscriberDetailModalEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    // #0120: see the deactivate modal's identical $effect above for why.
+    // The modal itself is open whenever any of these three is truthy (see
+    // its {#if} below, which shows a loading or error state before the
+    // subscriber arrives), so this effect re-runs (and re-focuses) on each
+    // of those transitions too, not just the initial open.
+    if (viewingSubscriber || viewingLoading || viewingError) {
+      void tick().then(() => subscriberDetailModalEl?.focus());
+    }
+  });
 
   async function openSubscriberDetail(id: number) {
     viewingSubscriber = null;
@@ -677,6 +710,12 @@
   let suppressError = $state<string | null>(null);
   let suppressNotice = $state<string | null>(null);
   let suppressSubmitting = $state(false);
+  let suppressModalEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    // #0120: see the deactivate modal's identical $effect above for why.
+    if (suppressingSubscriber) void tick().then(() => suppressModalEl?.focus());
+  });
 
   function openSuppress(sub: Subscriber) {
     suppressingSubscriber = sub;
@@ -828,6 +867,12 @@
   let removeSuppressionNote = $state('');
   let removeSuppressionError = $state<string | null>(null);
   let removeSuppressionSubmitting = $state(false);
+  let removeSuppressionModalEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    // #0120: see the deactivate modal's identical $effect above for why.
+    if (removingSuppression) void tick().then(() => removeSuppressionModalEl?.focus());
+  });
 
   function openRemoveSuppression(sup: Suppression) {
     removingSuppression = sup;
@@ -1120,7 +1165,7 @@
           role="presentation"
           onclick={closeDeactivate}
           onkeydown={(e) => {
-            if (e.key === 'Escape') closeDeactivate();
+            if (isModalEscape(e)) closeDeactivate();
           }}
         >
           <div
@@ -1129,8 +1174,11 @@
             tabindex="-1"
             aria-modal="true"
             aria-label="Deactivate user"
+            bind:this={deactivateModalEl}
             onclick={(e) => e.stopPropagation()}
-            onkeydown={(e) => e.stopPropagation()}
+            onkeydown={(e) => {
+              if (isModalEscape(e)) closeDeactivate();
+            }}
           >
             <h2 class="modal-title">Deactivate {deactivatingUser.email}</h2>
             <form onsubmit={submitDeactivate}>
@@ -1405,7 +1453,7 @@
           role="presentation"
           onclick={closeEditInterest}
           onkeydown={(e) => {
-            if (e.key === 'Escape') closeEditInterest();
+            if (isModalEscape(e)) closeEditInterest();
           }}
         >
           <div
@@ -1414,8 +1462,11 @@
             tabindex="-1"
             aria-modal="true"
             aria-label="Edit interest"
+            bind:this={editInterestModalEl}
             onclick={(e) => e.stopPropagation()}
-            onkeydown={(e) => e.stopPropagation()}
+            onkeydown={(e) => {
+              if (isModalEscape(e)) closeEditInterest();
+            }}
           >
             <h2 class="modal-title">Edit {editingInterest.name}</h2>
             <p class="text-muted mono">slug: {editingInterest.slug} (fixed — cannot be renamed)</p>
@@ -1627,7 +1678,7 @@
           role="presentation"
           onclick={closeSubscriberDetail}
           onkeydown={(e) => {
-            if (e.key === 'Escape') closeSubscriberDetail();
+            if (isModalEscape(e)) closeSubscriberDetail();
           }}
         >
           <div
@@ -1636,8 +1687,11 @@
             tabindex="-1"
             aria-modal="true"
             aria-label="Subscriber detail"
+            bind:this={subscriberDetailModalEl}
             onclick={(e) => e.stopPropagation()}
-            onkeydown={(e) => e.stopPropagation()}
+            onkeydown={(e) => {
+              if (isModalEscape(e)) closeSubscriberDetail();
+            }}
           >
             {#if viewingLoading}
               <p class="text-muted" role="status">Loading…</p>
@@ -1717,7 +1771,7 @@
           role="presentation"
           onclick={closeSuppress}
           onkeydown={(e) => {
-            if (e.key === 'Escape') closeSuppress();
+            if (isModalEscape(e)) closeSuppress();
           }}
         >
           <div
@@ -1726,8 +1780,11 @@
             tabindex="-1"
             aria-modal="true"
             aria-label="Suppress subscriber"
+            bind:this={suppressModalEl}
             onclick={(e) => e.stopPropagation()}
-            onkeydown={(e) => e.stopPropagation()}
+            onkeydown={(e) => {
+              if (isModalEscape(e)) closeSuppress();
+            }}
           >
             <h2 class="modal-title">Suppress {suppressingSubscriber.email}</h2>
             <p>
@@ -1827,7 +1884,7 @@
           role="presentation"
           onclick={closeRemoveSuppression}
           onkeydown={(e) => {
-            if (e.key === 'Escape') closeRemoveSuppression();
+            if (isModalEscape(e)) closeRemoveSuppression();
           }}
         >
           <div
@@ -1836,8 +1893,11 @@
             tabindex="-1"
             aria-modal="true"
             aria-label="Remove suppression"
+            bind:this={removeSuppressionModalEl}
             onclick={(e) => e.stopPropagation()}
-            onkeydown={(e) => e.stopPropagation()}
+            onkeydown={(e) => {
+              if (isModalEscape(e)) closeRemoveSuppression();
+            }}
           >
             <h2 class="modal-title">
               Remove {suppressionReasonLabel(removingSuppression.reason)} suppression for {removingSuppression.email}

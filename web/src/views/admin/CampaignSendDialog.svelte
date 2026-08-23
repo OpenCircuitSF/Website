@@ -101,6 +101,25 @@
     void tick().then(() => dialogEl?.focus());
   });
 
+  // #0120: this used to be unreachable dead code. The panel below
+  // (role="dialog") had its own `onkeydown={(e) => e.stopPropagation()}`,
+  // added to mirror the click guard that keeps a click inside the panel
+  // from reaching this backdrop's click-outside-to-dismiss `onclick` --
+  // but there is no keyboard analogue of "inside vs. outside the panel",
+  // so it did nothing but blindly eat every keydown, including Escape,
+  // before it could bubble here. Focus lives on `dialogEl` (the panel)
+  // for the entire time this dialog is open (the $effect above), so that
+  // stopPropagation ran on every single keypress. Fixed by binding this
+  // SAME function (not a copy) to the panel's own onkeydown too, instead
+  // of a stopPropagation guard -- so a keypress is handled once whichever
+  // element it fires on, with no `stopPropagation` anywhere in this file's
+  // keydown path. (Binding the identical function reference to both
+  // elements also keeps svelte-check's a11y_click_events_have_key_events
+  // rule satisfied on the panel's onclick, which flagged once the old
+  // blind-stopPropagation onkeydown was simply deleted.) This function's
+  // `e.key === 'Escape' && !sending` shape is read verbatim by
+  // CampaignSendDialog.structuralGuard.test.ts's AST (#0197) off the
+  // BACKDROP's onkeydown specifically, so it is left exactly as it was.
   function handleKeydown(e: KeyboardEvent): void {
     if (e.key === 'Escape' && !sending) {
       onClose();
@@ -134,7 +153,7 @@
     tabindex="-1"
     bind:this={dialogEl}
     onclick={(e) => e.stopPropagation()}
-    onkeydown={(e) => e.stopPropagation()}
+    onkeydown={handleKeydown}
   >
     <h2 class="modal-title">Send this campaign?</h2>
 

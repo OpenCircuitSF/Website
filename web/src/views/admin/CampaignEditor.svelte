@@ -56,6 +56,7 @@
     audienceErrorMessage,
   } from '../../lib/audience';
   import { sendGuardState, sendGuardDescription, sendGuardSummaryClass } from '../../lib/sendConfirm';
+  import { isModalEscape } from '../../lib/modalKeydown';
   import { subscribeEvent } from '../../lib/events';
   import {
     CAMPAIGN_PROGRESS_EVENT,
@@ -135,6 +136,18 @@
   let cancelDialogOpen = $state(false);
   let canceling = $state(false);
   let cancelError = $state<string | null>(null);
+  let cancelModalEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    // #0120: move focus into the modal panel itself once it opens, so the
+    // panel's own Escape handler (below) is reachable and so the dialog
+    // meets the aria-modal="true" contract of taking focus on open --
+    // mirrors the shape #0052 established in WorkshopEditor.svelte /
+    // Workshops.svelte, and the same fix applied to Admin.svelte's five
+    // modals under this issue. This dialog had no focus management at all
+    // before this fix.
+    if (cancelDialogOpen) void tick().then(() => cancelModalEl?.focus());
+  });
 
   // ── Live send progress (#0048) ──────────────────────────────────────────
   // progress/progressUpdatedAt hold the latest "campaign.progress" frame for
@@ -829,7 +842,7 @@
         role="presentation"
         onclick={closeCancel}
         onkeydown={(e) => {
-          if (e.key === 'Escape') closeCancel();
+          if (isModalEscape(e)) closeCancel();
         }}
       >
         <div
@@ -838,8 +851,11 @@
           aria-modal="true"
           aria-label="Cancel campaign"
           tabindex="-1"
+          bind:this={cancelModalEl}
           onclick={(e) => e.stopPropagation()}
-          onkeydown={(e) => e.stopPropagation()}
+          onkeydown={(e) => {
+            if (isModalEscape(e)) closeCancel();
+          }}
         >
           <h2 class="modal-title">Cancel this campaign?</h2>
           <p>{cancelMessage}</p>
