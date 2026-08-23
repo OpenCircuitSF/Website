@@ -163,6 +163,49 @@ export function announceTargetingDescription(interestIds: number[]): string {
     : "It will be targeted at this workshop's interests.";
 }
 
+/**
+ * Whether two interest-id arrays represent different SETS of ids --
+ * order-insensitive, and tolerant of `undefined`/empty inputs (both treated
+ * as the empty set). Two arrays holding the same ids in a different order
+ * are NOT a divergence; a genuine addition, removal, or swap is.
+ */
+export function interestIdsDiverge(
+  a: number[] | undefined,
+  b: number[] | undefined,
+): boolean {
+  const as = new Set(a ?? []);
+  const bs = new Set(b ?? []);
+  if (as.size !== bs.size) return true;
+  for (const id of as) {
+    if (!bs.has(id)) return true;
+  }
+  return false;
+}
+
+/**
+ * A trailing warning for the Announce panel (#0151) when the editor's local,
+ * unsaved checkbox buffer (`WorkshopFormFields.interestIds`) diverges from
+ * the workshop's last-*saved* `interest_ids` -- the value
+ * `announceTargetingDescription` describes and the only one
+ * `POST /admin/workshops/{id}/announce` actually reads (see that function's
+ * doc comment). Deliberately does NOT change what
+ * `announceTargetingDescription` itself says: sourcing the sentence from the
+ * unsaved buffer would reintroduce #0143's original defect, pointing the
+ * other way (promising interest targeting Announce will not perform). This
+ * only adds a heads-up that the two disagree.
+ *
+ * Returns '' (append nothing) when the two already match, so the two
+ * existing #0143 copy paths are visually unchanged in the common case.
+ */
+export function announceUnsavedInterestsHint(
+  formInterestIds: number[] | undefined,
+  savedInterestIds: number[] | undefined,
+): string {
+  return interestIdsDiverge(formInterestIds, savedInterestIds)
+    ? ' Unsaved interest changes are not included — save first.'
+    : '';
+}
+
 // ── Slug (server-owned -- see this module's header note) ───────────────────
 
 /** Always false today -- see this module's header note on the slug discrepancy. */

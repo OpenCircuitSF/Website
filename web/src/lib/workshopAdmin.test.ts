@@ -10,6 +10,8 @@ import {
   cancelConfirmMessage,
   deleteConfirmMessage,
   announceTargetingDescription,
+  interestIdsDiverge,
+  announceUnsavedInterestsHint,
   isSlugEditable,
   toDatetimeLocalValue,
   fromDatetimeLocalValue,
@@ -101,6 +103,67 @@ describe('announceTargetingDescription', () => {
     const description = announceTargetingDescription([7]);
     expect(description).toMatch(/this workshop's interests/i);
     expect(description).not.toMatch(/everyone/i);
+  });
+});
+
+describe('interestIdsDiverge (#0151)', () => {
+  it('is false for identical arrays in the same order', () => {
+    expect(interestIdsDiverge([1, 2, 3], [1, 2, 3])).toBe(false);
+  });
+
+  it('is false for the same ids in a DIFFERENT order -- order-insensitive', () => {
+    expect(interestIdsDiverge([3, 1, 2], [1, 2, 3])).toBe(false);
+  });
+
+  it('is false when both are empty', () => {
+    expect(interestIdsDiverge([], [])).toBe(false);
+  });
+
+  it('treats undefined the same as an empty array on either side', () => {
+    expect(interestIdsDiverge(undefined, [])).toBe(false);
+    expect(interestIdsDiverge([], undefined)).toBe(false);
+    expect(interestIdsDiverge(undefined, undefined)).toBe(false);
+  });
+
+  it('is true when an id was added', () => {
+    expect(interestIdsDiverge([1, 2, 3], [1, 2])).toBe(true);
+  });
+
+  it('is true when an id was removed', () => {
+    expect(interestIdsDiverge([1], [1, 2])).toBe(true);
+  });
+
+  it('is true when one side is empty/undefined and the other is not', () => {
+    expect(interestIdsDiverge([1], [])).toBe(true);
+    expect(interestIdsDiverge([1], undefined)).toBe(true);
+  });
+
+  it('is true for a same-length swap (same count, different ids)', () => {
+    expect(interestIdsDiverge([1, 2], [1, 3])).toBe(true);
+  });
+});
+
+describe('announceUnsavedInterestsHint (#0151)', () => {
+  it('is empty when the form buffer matches the saved ids, same order', () => {
+    expect(announceUnsavedInterestsHint([1, 2], [1, 2])).toBe('');
+  });
+
+  it('is empty when the form buffer matches the saved ids, different order', () => {
+    expect(announceUnsavedInterestsHint([2, 1], [1, 2])).toBe('');
+  });
+
+  it('is empty when both are empty (no interests, nothing unsaved)', () => {
+    expect(announceUnsavedInterestsHint([], [])).toBe('');
+  });
+
+  it('warns to save first when the buffer has an unsaved addition', () => {
+    const hint = announceUnsavedInterestsHint([1, 2, 9], [1, 2]);
+    expect(hint).toMatch(/save first/i);
+  });
+
+  it('warns to save first when the buffer has an unsaved removal', () => {
+    const hint = announceUnsavedInterestsHint([1], [1, 2]);
+    expect(hint).toMatch(/save first/i);
   });
 });
 

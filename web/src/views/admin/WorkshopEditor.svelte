@@ -69,6 +69,7 @@
     canCancel,
     publishConfirmMessage,
     announceTargetingDescription,
+    announceUnsavedInterestsHint,
     unpublishConfirmMessage,
     cancelConfirmMessage,
     deleteConfirmMessage,
@@ -529,8 +530,10 @@
   <Panel title="Announce">
     <p class="text-muted">
       Create a draft campaign pre-filled from this workshop's title, summary, date, and location.
-      {announceTargetingDescription(workshop.interest_ids)} Nothing is sent — review and send the draft
-      from the Campaigns tab.
+      {announceTargetingDescription(workshop.interest_ids)}{announceUnsavedInterestsHint(
+        fields.interestIds,
+        workshop.interest_ids,
+      )} Nothing is sent — review and send the draft from the Campaigns tab.
     </p>
     {#if announceError}
       <p class="text-error" role="alert">{announceError}</p>
