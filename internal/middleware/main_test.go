@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -34,19 +33,17 @@ func TestMain(m *testing.M) {
 	// every call. Both suites now seed rows under a per-test-unique value
 	// (uniqueAuthEmail/uniqueSessionToken, uniqueSignupEmail) instead, so the
 	// tables only need to start clean once, here, before any test runs.
+	// #0097 item 2: this used to carry its own fixed 10s deadline via a
+	// local context.WithTimeout, a second differently-valued bound
+	// alongside the 20s internal/handlers and cmd/opencircuit settled on
+	// (#0084). testdb.EntryTruncate centralizes the constant and adds
+	// lock-holder diagnosis on failure (#0097 item 3).
 	if testDBPool != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_, truncErr := testDBPool.Exec(ctx,
+		testdb.EntryTruncate(testDBPool, release,
 			`TRUNCATE subscriber_interests, subscribers,
 			          sessions, passkey_credentials, audit_log, users
-			 RESTART IDENTITY CASCADE`)
-		cancel()
-		if truncErr != nil {
-			fmt.Fprintf(os.Stderr, "testdb: entry truncate failed: %v\n", truncErr)
-			testDBPool.Close()
-			release()
-			os.Exit(1)
-		}
+			 RESTART IDENTITY CASCADE`,
+			[]string{"subscriber_interests", "subscribers", "sessions", "passkey_credentials", "audit_log", "users"})
 	}
 
 	code := m.Run()

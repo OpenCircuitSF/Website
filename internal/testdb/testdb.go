@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -91,6 +92,142 @@ func Connect(ctx context.Context) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("testdb: ping test db: %w", err)
 	}
 	return pool, nil
+}
+
+// TruncateTimeout bounds a single TestMain-time entry TRUNCATE — the same
+// class of operation, and the same value, that #0084 settled on for
+// internal/handlers' and cmd/opencircuit's own single-DB-statement bounds
+// (handlersDBOpTimeout, wiringDBOpTimeout: both 20s, sized by direct
+// measurement against realistic concurrent-agent load — see issues/0084.md's
+// Work log). #0097 item 2 flagged the entry truncates several packages'
+// TestMain added when #0091 moved them onto one shared pool per package run:
+// each had grown its own, differently-valued fixed 10s deadline — a second
+// arbitrary number for the exact same kind of statement #0084 already
+// tuned. Centralizing the constant here, and running the truncate through
+// EntryTruncate below, is what keeps a future change to the policy from
+// requiring an N-package hunt for uncoordinated literals.
+const TruncateTimeout = 20 * time.Second
+
+// EntryTruncate runs sqlStmt — a TestMain-time entry TRUNCATE — against pool
+// under TruncateTimeout, and is what a DB-backed package's TestMain should
+// call instead of composing its own context.WithTimeout + Exec, so every
+// package's entry truncate shares one deadline, one diagnostic, and one
+// failure path.
+//
+// tables names every relation sqlStmt's TRUNCATE takes a lock on — including
+// any table it reaches only via ON DELETE CASCADE, since TRUNCATE ... CASCADE
+// locks those too. It is used only to diagnose a failure (see below), not to
+// build the statement; callers still write their own SQL so the table list
+// stays visible and reviewable at the call site.
+//
+// On success EntryTruncate returns normally and the caller proceeds to
+// m.Run(). On failure — most plausibly a lock wait against another session's
+// open transaction on one of tables, since #0091 moved every DB-backed
+// package onto a pool shared for its whole run against one shared database —
+// it:
+//
+//  1. runs a short diagnostic query naming every session currently holding a
+//     granted lock on one of tables (pid, state, query text, query_start), so
+//     the failure names its culprit instead of just "context deadline
+//     exceeded" — the blocking pid and the table are the two facts #0097
+//     item 3 asked for;
+//  2. prints why the whole test binary is about to exit — a TestMain that
+//     cannot guarantee its package's tables start clean cannot let any test
+//     in that package run at all;
+//  3. closes pool, calls release (releasing the advisory lock so it does not
+//     also wedge every other package queued behind Lock), and os.Exit(1)s.
+//
+// EntryTruncate does not return on failure, so callers do not need their own
+// truncErr-handling branch.
+func EntryTruncate(pool *pgxpool.Pool, release func(), sqlStmt string, tables []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), TruncateTimeout)
+	_, err := pool.Exec(ctx, sqlStmt)
+	cancel()
+	if err == nil {
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "testdb: entry truncate failed: %v\n", err)
+	if diag := diagnoseLockHolders(pool, tables); diag != "" {
+		fmt.Fprintf(os.Stderr, "testdb: session(s) holding a lock on %s at diagnosis time:\n%s",
+			strings.Join(tables, ", "), diag)
+	} else {
+		fmt.Fprintf(os.Stderr, "testdb: no lock holder found on %s at diagnosis time — "+
+			"the blocker may have released between the timeout and this check, or the "+
+			"failure was not a lock wait at all\n", strings.Join(tables, ", "))
+	}
+	fmt.Fprintf(os.Stderr, "testdb: exiting this test binary (os.Exit(1)) — TestMain cannot "+
+		"guarantee a clean starting state for %s, so no test in this package can safely run\n",
+		strings.Join(tables, ", "))
+	pool.Close()
+	release()
+	os.Exit(1)
+}
+
+// diagnoseLockHolders queries pg_locks/pg_stat_activity for every session
+// (other than this one) currently holding a granted lock on one of tables,
+// and formats one line per session. It uses a fresh, short-lived query
+// against pool rather than the caller's own (already-expired) context, since
+// the whole point is to still succeed diagnostically even though the
+// original statement could not.
+//
+// Deliberately excludes advisory locks (pg_locks.relation is NULL for those,
+// so the join drops them): the cross-package serialization lock from Lock
+// above is expected to be held by whichever package is mid-run, and would
+// otherwise show up as false "culprit" noise on every single diagnosis.
+func diagnoseLockHolders(pool *pgxpool.Pool, tables []string) string {
+	if len(tables) == 0 {
+		return ""
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rows, err := pool.Query(ctx, `
+		SELECT l.pid, c.relname, a.state, COALESCE(a.query, ''), a.query_start
+		  FROM pg_locks l
+		  JOIN pg_class c ON c.oid = l.relation
+		  JOIN pg_stat_activity a ON a.pid = l.pid
+		 WHERE l.granted
+		   AND l.pid <> pg_backend_pid()
+		   AND c.relname = ANY($1)
+		 ORDER BY l.pid`, tables)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "testdb: lock diagnosis query itself failed: %v\n", err)
+		return ""
+	}
+	defer rows.Close()
+
+	var b strings.Builder
+	seen := make(map[int32]bool)
+	for rows.Next() {
+		var (
+			pid        int32
+			relname    string
+			state      string
+			query      string
+			queryStart *time.Time
+		)
+		if scanErr := rows.Scan(&pid, &relname, &state, &query, &queryStart); scanErr != nil {
+			fmt.Fprintf(os.Stderr, "testdb: lock diagnosis scan failed: %v\n", scanErr)
+			continue
+		}
+		if seen[pid] {
+			continue
+		}
+		seen[pid] = true
+
+		started := "unknown"
+		if queryStart != nil {
+			started = queryStart.Format(time.RFC3339)
+		}
+		fmt.Fprintf(&b, "  pid %d holds a lock on %s, state=%s, query_start=%s: %s\n",
+			pid, relname, state, started, query)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		fmt.Fprintf(os.Stderr, "testdb: lock diagnosis row iteration failed: %v\n", rowsErr)
+	}
+	return b.String()
 }
 
 // uniqueCounter backs Unique. It is process-wide (not per-package,

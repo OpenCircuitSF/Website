@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -34,17 +33,20 @@ func TestMain(m *testing.M) {
 	// safe to start this package's suite from an empty table rather than
 	// accumulating rows across runs against a shared (per-agent) test
 	// database. workshop_interests cascades via migration 000020's
-	// ON DELETE CASCADE.
+	// ON DELETE CASCADE, so it is listed alongside workshops below even
+	// though it is never named in the TRUNCATE statement itself — CASCADE
+	// locks it too, and #0097 item 3's diagnosis needs to know to look
+	// there.
+	//
+	// #0097 item 2: this used to carry its own fixed 10s deadline via a
+	// local context.WithTimeout, a second differently-valued bound
+	// alongside the 20s internal/handlers and cmd/opencircuit settled on
+	// (#0084). testdb.EntryTruncate centralizes the constant and adds
+	// lock-holder diagnosis on failure (#0097 item 3).
 	if testDBPool != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_, truncErr := testDBPool.Exec(ctx, `TRUNCATE workshops RESTART IDENTITY CASCADE`)
-		cancel()
-		if truncErr != nil {
-			fmt.Fprintf(os.Stderr, "testdb: entry truncate failed: %v\n", truncErr)
-			testDBPool.Close()
-			release()
-			os.Exit(1)
-		}
+		testdb.EntryTruncate(testDBPool, release,
+			`TRUNCATE workshops RESTART IDENTITY CASCADE`,
+			[]string{"workshops", "workshop_interests"})
 	}
 
 	code := m.Run()

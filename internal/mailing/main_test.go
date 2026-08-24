@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -42,17 +41,15 @@ func TestMain(m *testing.M) {
 	// original three campaign tables, since audience_test.go seeds and reads
 	// across all of them. Still a single TestMain per this package's own
 	// "extend, don't add a second one" rule above.
+	// #0097 item 2: this used to carry its own fixed 10s deadline via a
+	// local context.WithTimeout, a second differently-valued bound
+	// alongside the 20s internal/handlers and cmd/opencircuit settled on
+	// (#0084). testdb.EntryTruncate centralizes the constant and adds
+	// lock-holder diagnosis on failure (#0097 item 3).
 	if testDBPool != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_, truncErr := testDBPool.Exec(ctx,
-			`TRUNCATE email_sends, campaign_interests, email_campaigns, subscriber_interests, subscribers, suppressions RESTART IDENTITY CASCADE`)
-		cancel()
-		if truncErr != nil {
-			fmt.Fprintf(os.Stderr, "testdb: entry truncate failed: %v\n", truncErr)
-			testDBPool.Close()
-			release()
-			os.Exit(1)
-		}
+		testdb.EntryTruncate(testDBPool, release,
+			`TRUNCATE email_sends, campaign_interests, email_campaigns, subscriber_interests, subscribers, suppressions RESTART IDENTITY CASCADE`,
+			[]string{"email_sends", "campaign_interests", "email_campaigns", "subscriber_interests", "subscribers", "suppressions"})
 	}
 
 	code := m.Run()

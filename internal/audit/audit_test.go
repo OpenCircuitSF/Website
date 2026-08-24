@@ -103,6 +103,34 @@ func TestSeedUser_BackToBackCallsNeverCollide(t *testing.T) {
 
 func ptr(v int64) *int64 { return &v }
 
+// auditLogWatermark returns the current max audit_log.id (0 if the table is
+// empty). A test calls it immediately before its own logger.Write, then
+// scopes its read-back to `WHERE id > watermark ORDER BY id ASC LIMIT 1` —
+// "the row this call inserted" — instead of `ORDER BY id DESC LIMIT 1`,
+// "the newest row in the table" (#0097 item 1).
+//
+// The two only coincide because every test below performs exactly one Write
+// and reads it back strictly afterward, with no t.Parallel() anywhere in
+// this repository (confirmed by #0091's review) and rows now accumulating
+// across a run rather than being truncated per test (#0091). Scoping by a
+// watermark taken right before the write removes that coincidence: it stays
+// correct even if a test grows a second Write (call this again, right
+// before that Write, for a fresh boundary) or another test's rows land
+// around it in the same run.
+func auditLogWatermark(t *testing.T, pool *pgxpool.Pool) int64 {
+	t.Helper()
+	var id *int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT MAX(id) FROM audit_log`,
+	).Scan(&id); err != nil {
+		t.Fatalf("audit log watermark: %v", err)
+	}
+	if id == nil {
+		return 0
+	}
+	return *id
+}
+
 // TestWrite_FullEntryPersists writes an entry with every column populated and a
 // JSONB metadata object, then reads the row back and asserts each column,
 // including the round-tripped metadata JSON.
@@ -118,6 +146,7 @@ func TestWrite_FullEntryPersists(t *testing.T) {
 		"title":           "Example",
 		"duplicate":       false,
 	}
+	watermark := auditLogWatermark(t, pool)
 	if err := logger.Write(context.Background(), Entry{
 		ActorID:    &actor,
 		UserID:     &actor,
@@ -139,9 +168,12 @@ func TestWrite_FullEntryPersists(t *testing.T) {
 		gotMeta   []byte
 		gotIP     *string
 	)
+	// #0097 item 1: scoped to the row this Write created (id > watermark),
+	// not to whichever row happens to be newest — see auditLogWatermark's
+	// doc comment.
 	err := pool.QueryRow(context.Background(),
 		`SELECT actor_id, user_id, action, target_type, target_id, metadata, host(ip_address)
-		   FROM audit_log ORDER BY id DESC LIMIT 1`,
+		   FROM audit_log WHERE id > $1 ORDER BY id ASC LIMIT 1`, watermark,
 	).Scan(&gotActor, &gotUser, &gotAction, &gotType, &gotTarget, &gotMeta, &gotIP)
 	if err != nil {
 		t.Fatalf("read back row: %v", err)
@@ -184,6 +216,7 @@ func TestWrite_NilActorAndTargetStoreNull(t *testing.T) {
 	pool := auditTestPool(t)
 	logger := New(pool)
 
+	watermark := auditLogWatermark(t, pool)
 	if err := logger.Write(context.Background(), Entry{
 		Action: ActionAccountRegistrationStarted,
 		// ActorID, UserID, TargetID, Metadata, IP all zero/nil → NULL.
@@ -199,10 +232,13 @@ func TestWrite_NilActorAndTargetStoreNull(t *testing.T) {
 		ipNull     bool
 		gotAction  string
 	)
+	// #0097 item 1: scoped to the row this Write created (id > watermark) —
+	// this test's row has no other distinguishing column, since every
+	// nullable field is deliberately NULL.
 	err := pool.QueryRow(context.Background(),
 		`SELECT actor_id IS NULL, user_id IS NULL, target_id IS NULL,
 		        metadata IS NULL, ip_address IS NULL, action
-		   FROM audit_log ORDER BY id DESC LIMIT 1`,
+		   FROM audit_log WHERE id > $1 ORDER BY id ASC LIMIT 1`, watermark,
 	).Scan(&actorNull, &userNull, &targetNull, &metaNull, &ipNull, &gotAction)
 	if err != nil {
 		t.Fatalf("read back row: %v", err)
@@ -225,6 +261,7 @@ func TestWrite_PartialActorWithUser(t *testing.T) {
 	victim := seedUser(t, pool, "victim")
 	logger := New(pool)
 
+	watermark := auditLogWatermark(t, pool)
 	if err := logger.Write(context.Background(), Entry{
 		ActorID:    &admin,
 		UserID:     &victim,
@@ -237,9 +274,11 @@ func TestWrite_PartialActorWithUser(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
+	// #0097 item 1: scoped to the row this Write created (id > watermark),
+	// not to whichever row happens to be newest.
 	var gotActor, gotUser int64
 	if err := pool.QueryRow(context.Background(),
-		`SELECT actor_id, user_id FROM audit_log ORDER BY id DESC LIMIT 1`,
+		`SELECT actor_id, user_id FROM audit_log WHERE id > $1 ORDER BY id ASC LIMIT 1`, watermark,
 	).Scan(&gotActor, &gotUser); err != nil {
 		t.Fatalf("read back row: %v", err)
 	}
