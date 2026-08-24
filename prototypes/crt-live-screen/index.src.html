@@ -79,11 +79,11 @@
 }
 
 @font-face{font-family:'Archivo';font-style:normal;font-weight:100 900;font-display:swap;
-  src:url('../../web/public/fonts/archivo-variable-latin.woff2') format('woff2-variations');}
+  src:url('assets/archivo-variable-latin.woff2') format('woff2-variations');}
 @font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400;font-display:swap;
-  src:url('../../web/public/fonts/jetbrains-mono-400-latin.woff2') format('woff2');}
+  src:url('assets/jetbrains-mono-400-latin.woff2') format('woff2');}
 @font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:700;font-display:swap;
-  src:url('../../web/public/fonts/jetbrains-mono-700-latin.woff2') format('woff2');}
+  src:url('assets/jetbrains-mono-700-latin.woff2') format('woff2');}
 
 *,*::before,*::after{box-sizing:border-box;}
 html,body{margin:0;padding:0;}
@@ -142,17 +142,17 @@ body{
    colours the WebP DECODES to, not the source PNG's — see #0231. */
 .hero{
   --bg-panel:#e8eee5; --bg-header:#dae3d6; --border:#c6d1c2;
-  --crt-photo:url('../../web/public/hero-crt-light-760.webp');
+  --crt-photo:url('assets/hero-crt-light-760.webp');
 }
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]) .hero{
     --bg-panel:#191c17; --bg-header:#1b231c; --border:#243028;
-    --crt-photo:url('../../web/public/hero-crt-760.webp');
+    --crt-photo:url('assets/hero-crt-760.webp');
   }
 }
 :root[data-theme="dark"] .hero{
   --bg-panel:#191c17; --bg-header:#1b231c; --border:#243028;
-  --crt-photo:url('../../web/public/hero-crt-760.webp');
+  --crt-photo:url('assets/hero-crt-760.webp');
 }
 
 .hero-row{display:flex; flex-direction:column; align-items:center; gap:var(--space-5);}
