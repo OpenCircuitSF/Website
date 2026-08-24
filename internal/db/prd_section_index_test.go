@@ -43,10 +43,14 @@ import (
 // a bad translation compile silently rather than error. So this test rejects
 // (via sedPatternUnsafeConstruct, before ever compiling a pattern) any
 // Extract cell containing a construct it cannot translate faithfully — a
-// bare `{` `}` `(` `)` `+` `?` `|`, or an escaped `\(` `\)` — naming the row
-// and the construct, rather than translating it wrong and silently passing.
-// A row whose START pattern is safe but matches nothing in PRD.md still
-// fails loudly by name too.
+// bare `{` `}` `(` `)` `+` `?` `|` `^` `$` in a disallowed position, or an
+// escaped `\(` `\)` — naming the row and the construct, rather than
+// translating it wrong and silently passing. A row whose START pattern is
+// safe but matches nothing in PRD.md still fails loudly by name too.
+// sedPatternUnsafeConstruct does not model bracket expressions, so `[{]` and
+// `[+]` are rejected even though they are literal (and safe) in both
+// dialects there — a deliberate fail-safe over-rejection (#0230), not a gap
+// worth bracket-expression parsing to close.
 const prdSectionIndexHeading = "## 11. PRD section index"
 
 // prdIndexRow is one data row of §11's table.
@@ -145,6 +149,32 @@ func parsePRDIndexTable(t *testing.T, claudeMD string) []prdIndexRow {
 	return rows
 }
 
+// oddPrecedingBackslashes reports whether the byte at index i in s is itself
+// escaped by counting the run of '\\' bytes immediately before it: an *odd*
+// count means i is escaped (the last backslash of the run pairs with i and
+// has no partner of its own), an *even* count (including zero) means it
+// isn't — the preceding backslashes pair off with each other and i is
+// unescaped. This is parity, not "is the one immediately preceding byte a
+// backslash": `a\\{b` has two backslashes before `{` (even → `{` is
+// unescaped, a real literal-brace-in-BRE case), while `a\{b` has one (odd →
+// `{` is escaped, a BRE interval). Backslash is single-byte in UTF-8 and
+// never a continuation byte of a multi-byte rune, so byte indexing here
+// agrees with rune indexing for any input.
+//
+// #0230: parseSedRangeCmd already implemented exactly this scan (to tell an
+// escaped literal `/` in START's own pattern text apart from the real
+// `/,/` separator) before sedPatternUnsafeConstruct existed; the two were
+// never unified, and sedPatternUnsafeConstruct grew the simpler, wrong
+// `runes[i-1] == '\\'` check independently — a metacharacter preceded by an
+// even number (≥2) of backslashes was wrongly treated as escaped there.
+func oddPrecedingBackslashes(s string, i int) bool {
+	n := 0
+	for j := i - 1; j >= 0 && s[j] == '\\'; j-- {
+		n++
+	}
+	return n%2 != 0
+}
+
 // parseSedRangeCmd splits `sed -n '/START/,/END/p' PRD.md` into its START
 // and END patterns. Every §11 row uses exactly this shape (verified by the
 // caller rejecting anything else).
@@ -155,8 +185,7 @@ func parsePRDIndexTable(t *testing.T, claudeMD string) []prdIndexRow {
 // the naive search has no way to tell that `/` apart from the real
 // separator. No current row's pattern contains a `/` at all, so this was
 // latent, not triggered — but it is cheap to do correctly: scan for a `/,/`
-// whose leading `/` is not itself escaped (an even number of immediately
-// preceding backslashes), rather than trusting the first textual match.
+// whose leading `/` is not itself escaped, via oddPrecedingBackslashes.
 func parseSedRangeCmd(cmd string) (startPat, endPat string, ok bool) {
 	const prefix = "sed -n '/"
 	const suffix = "/p' PRD.md"
@@ -169,11 +198,7 @@ func parseSedRangeCmd(cmd string) (startPat, endPat string, ok bool) {
 		if body[i] != '/' || body[i+1] != ',' || body[i+2] != '/' {
 			continue
 		}
-		backslashes := 0
-		for j := i - 1; j >= 0 && body[j] == '\\'; j-- {
-			backslashes++
-		}
-		if backslashes%2 != 0 {
+		if oddPrecedingBackslashes(body, i) {
 			// This '/' is escaped — part of START's own pattern text, not
 			// the START/END separator. Keep scanning.
 			continue
@@ -226,18 +251,47 @@ func sedBREToGoRegex(pat string) string {
 //     grouping is lost either way a pattern could plausibly use it
 //   - bare `+` `?` `|`  — literal text in BRE; RE2 metacharacters (one-or-
 //     more, optional, alternation) if left untranslated
+//   - a mid-pattern bare `^`  — literal in BRE anywhere but the pattern's
+//     first position; an anchor in RE2 wherever it appears, so `a^b` reads
+//     the literal three characters in BRE but never matches anything as RE2
+//     (#0230: an END pattern built this way would silently under-count,
+//     since countPRDSection's terminator would never be found and the range
+//     would run to EOF or fail loudly some other way, never partially)
+//   - a mid-pattern bare `$`  — the same divergence as `^`, mirrored: literal
+//     in BRE anywhere but the pattern's last position, an anchor in RE2
+//     wherever it appears. A *trailing* `$` is an anchor in both and is not
+//     flagged.
 //
 // `\+` `\?` `\|` are omitted: they are literal on this repo's sed (BSD) and
 // remain literal, unrewritten, in RE2 — agreement, not divergence. They only
-// diverge under GNU sed, which this project does not use (CLAUDE.md §5).
+// diverge under GNU sed, which this project does not use (CLAUDE.md §5). A
+// leading `^` and a trailing `$` are omitted for the same reason: both
+// dialects treat them as anchors there.
 //
 // Backreferences (`\1`) are also omitted: an unrewritten `\1` is not valid
 // RE2 syntax, so regexp.Compile already rejects it loudly in countPRDSection
 // — no silent-pass risk to guard against here.
+//
+// #0230 fix: "escaped" now means an *odd* number of immediately preceding
+// backslashes (oddPrecedingBackslashes, the same scan parseSedRangeCmd
+// already used), not "the immediately preceding rune is a backslash". The
+// old check treated a metacharacter preceded by an *even* number (≥2) of
+// backslashes as escaped, so `a\\{b` and `a\\+b` mistranslated silently —
+// BSD sed reads a literal `a\{b` (the doubled backslash is one literal
+// backslash, and `{` is unescaped and literal in BRE either way), RE2 read
+// an interval.
+//
+// What this function does *not* catch (#0230): `[{]` and `[+]` are literal
+// in both dialects inside a bracket expression, but this scan has no notion
+// of bracket-expression state, so it flags the bare metacharacter anyway.
+// That is a deliberate, accepted over-rejection — it fails safe (a loud
+// refusal on a pattern that would actually translate fine), never silent —
+// rather than adding bracket-expression parsing for a case none of the
+// current 48 rows use.
 func sedPatternUnsafeConstruct(pat string) (construct string, safe bool) {
-	runes := []rune(pat)
-	for i, c := range runes {
-		escaped := i > 0 && runes[i-1] == '\\'
+	for i := 0; i < len(pat); i++ {
+		c := pat[i]
+		escaped := oddPrecedingBackslashes(pat, i)
 		switch c {
 		case '{', '}':
 			if !escaped {
@@ -251,6 +305,14 @@ func sedPatternUnsafeConstruct(pat string) (construct string, safe bool) {
 		case '+', '?', '|':
 			if !escaped {
 				return "a bare `" + string(c) + "` (literal in sed's BRE, an RE2 metacharacter if untranslated)", false
+			}
+		case '^':
+			if !escaped && i != 0 {
+				return "a mid-pattern `^` (literal in sed's BRE except at the pattern's start, an RE2 anchor wherever it appears)", false
+			}
+		case '$':
+			if !escaped && i != len(pat)-1 {
+				return "a mid-pattern `$` (literal in sed's BRE except at the pattern's end, an RE2 anchor wherever it appears)", false
 			}
 		}
 	}
@@ -331,6 +393,112 @@ func countPRDSection(t *testing.T, prdLines []string, startPat, endPat string) (
 	}
 	raw := endIdx - startIdx + 1
 	return raw - 1, true, mayRestart
+}
+
+// TestSedPatternUnsafeConstruct exercises sedPatternUnsafeConstruct directly
+// against shapes #0230's review found undercovered by the 48 rows in
+// CLAUDE.md today. "unsafe" cases must be rejected (safe == false); "safe"
+// cases must pass through untouched (safe == true) so a legitimate pattern
+// isn't refused.
+func TestSedPatternUnsafeConstruct(t *testing.T) {
+	t.Run("unsafe", func(t *testing.T) {
+		cases := []struct {
+			name string
+			pat  string
+		}{
+			{
+				// #0230 bug 1: two backslashes before `{` is an *even*
+				// count -- the backslashes pair with each other, so `{` is
+				// unescaped and literal in BRE, an untranslated RE2
+				// interval. The old `runes[i-1] == '\\'` check saw the
+				// immediately preceding rune was a backslash and wrongly
+				// called this escaped, letting it pass silently.
+				name: `a\\{b (even backslashes -- bare, unsafe brace)`,
+				pat:  `a\\{b`,
+			},
+			{
+				// Same bug, the `+` form named in the issue.
+				name: `a\\+b (even backslashes -- bare, unsafe plus)`,
+				pat:  `a\\+b`,
+			},
+			{
+				// #0230 bug 2: `^` anywhere but the pattern's first
+				// position is a literal in BRE but an RE2 anchor wherever
+				// it appears, so an untranslated `a^b` never matches as
+				// RE2 even though BRE reads it as three literal characters.
+				name: "a^b (mid-pattern caret)",
+				pat:  "a^b",
+			},
+			{
+				// The `$` mirror of the case above -- literal in BRE
+				// anywhere but the pattern's last position.
+				name: "a$b (mid-pattern dollar)",
+				pat:  "a$b",
+			},
+			{
+				// #0230 criterion 4: sedPatternUnsafeConstruct does not
+				// model bracket expressions, so a literal `{` or `+` inside
+				// one is still rejected -- a deliberate, documented,
+				// fail-safe over-rejection, not a bug this issue closes.
+				name: "[{] (over-rejected on purpose -- see doc comment)",
+				pat:  "[{]",
+			},
+			{
+				name: "[+] (over-rejected on purpose -- see doc comment)",
+				pat:  "[+]",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				if construct, safe := sedPatternUnsafeConstruct(tc.pat); safe {
+					t.Errorf("sedPatternUnsafeConstruct(%q) = (%q, true), want safe == false", tc.pat, construct)
+				}
+			})
+		}
+	})
+
+	t.Run("safe", func(t *testing.T) {
+		cases := []struct {
+			name string
+			pat  string
+		}{
+			{
+				// A single backslash before `{` is an *odd* count -- `{`
+				// is genuinely escaped, a real BRE interval, exactly what
+				// sedBREToGoRegex translates.
+				name: `a\{b (odd backslashes -- a real BRE interval)`,
+				pat:  `a\{b`,
+			},
+			{
+				name: `a\+b (odd backslashes -- literal plus, agreement)`,
+				pat:  `a\+b`,
+			},
+			{
+				name: "^ab (leading caret is an anchor in both dialects)",
+				pat:  "^ab",
+			},
+			{
+				name: "ab$ (trailing dollar is an anchor in both dialects)",
+				pat:  "ab$",
+			},
+			{
+				name: "^ab$ (both, at their only permitted positions)",
+				pat:  "^ab$",
+			},
+			{
+				// The exact shape every current §11 row uses.
+				name: `^### 4\.2 `,
+				pat:  `^### 4\.2 `,
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				if construct, safe := sedPatternUnsafeConstruct(tc.pat); !safe {
+					t.Errorf("sedPatternUnsafeConstruct(%q) = (%q, false), want safe == true", tc.pat, construct)
+				}
+			})
+		}
+	})
 }
 
 // TestPRDSectionIndexParity is #0113's guard: every row of CLAUDE.md §11
