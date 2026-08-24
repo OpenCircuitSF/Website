@@ -368,7 +368,7 @@ body{
     <div class="toolbar">
       <label class="switch"><input id="calToggle" type="checkbox"> Show handles</label>
       <button id="resetBtn" type="button">Reset</button>
-      <button id="bootBtn" type="button">Replay boot</button>
+      <button id="bootBtn" type="button">Restart session</button>
       <button id="widthBtn" type="button">Toggle wide stage</button>
       <label class="switch"><input id="bakedToggle" type="checkbox"> Original photo (text baked in)</label>
       <label class="switch"><input id="scanToggle" type="checkbox" checked> Scanlines</label>
@@ -430,8 +430,8 @@ body{
   // harness is worth keeping — it is the only check that shows over- and
   // under-shoot at all four corners at once, which a text render does not.
   const defaults = {
-    tl:{x:22.5,y:24.0}, tr:{x:69.8,y:18.0},
-    br:{x:68.2,y:72.4}, bl:{x:23.0,y:72.3}
+    tl:{x:23.03,y:28.84}, tr:{x:68.38,y:23.03},
+    br:{x:67.68,y:77.51}, bl:{x:23.00,y:72.30}
   };
   const corners = JSON.parse(JSON.stringify(defaults));
 
@@ -590,17 +590,64 @@ body{
   const gctx = glow.getContext('2d');
 
   const PHOS = '#3dff86', HOT = '#d5ffe2';
-  const FONT_PX = 26, LINE_H = 33, LEFT = 40, TOP = 38, MAX_LINES = 12;
+  // MAX_LINES is what makes it scroll: paint() only ever draws the last N, so
+  // pushing a line past N shifts everything up by one, exactly like a terminal
+  // whose scrollback has left the viewport. 38 + 13*33 = 467 < 512, so the
+  // thirteenth line and its cursor still clear the bottom of the raster.
+  const FONT_PX = 26, LINE_H = 33, LEFT = 40, TOP = 38, MAX_LINES = 13;
+
+  // Roughly 36 characters fit at this size. Longer lines are not wrapped --
+  // they would run past the glass -- so keep them short.
+  const SESSION = [
+    { cmd: 'workshops --next', out: [
+      'soldering 101 ..... sat 12:30',
+      'kicad from scratch  sep 18',
+      'esp32 + sensors ... oct 02',
+      '3 scheduled, 12 seats open' ] },
+    { cmd: 'whoami', out: [
+      'open circuit sf',
+      'a san francisco group that',
+      'builds things on tables.' ] },
+    { cmd: 'ls tools/', out: [
+      'irons  multimeters  scopes',
+      'logic-analysers  hot-air',
+      'all provided. bring nothing.' ] },
+    { cmd: 'cat topics.txt', out: [
+      'microcontrollers',
+      'soldering',
+      'homelab',
+      'home automation' ] },
+    { cmd: 'where --venues', out: [
+      'makerspaces, co-working rooms,',
+      "somebody's garage.",
+      'venue-independent by design.' ] },
+    { cmd: 'skill --required', out: [
+      'none.',
+      'absolute beginners welcome.' ] },
+    { cmd: 'subscribe --interests', out: [
+      'pick only what you want:',
+      '[x] workshops  [ ] digests',
+      '[ ] announcements',
+      'double opt-in. leave anytime.' ] },
+    { cmd: 'uptime', out: [
+      'soldering irons hot since 2026',
+      'no analytics. no trackers.' ] }
+  ];
 
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   document.getElementById('motionNote').textContent =
     reduceMotion.matches ? 'reduced motion: on (screen is static)' : 'reduced motion: off';
 
-  let lines = [], cursorOn = true, timers = [];
+  let lines = [], cursorOn = true, timers = [], generation = 0;
   const clearTimers = () => { timers.forEach(clearTimeout); timers = []; };
   const wait = ms => new Promise(r => timers.push(setTimeout(r, ms)));
 
   function paint() {
+    // Nothing is visible in a background tab, so do not pay for it. The
+    // visibilitychange handler repaints once on the way back, so no state
+    // change is lost -- it is just not drawn while nobody can see it.
+    if (document.hidden) return;
+
     ctx.setTransform(1,0,0,1,0,0);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowBlur = 0;
     // Cleared, not filled. Everything the photograph already shows -- phosphor
@@ -635,49 +682,79 @@ body{
     gctx.drawImage(term, 0, 0);
   }
 
-  async function type(text, into) {
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) paint(); });
+
+  const push = text => { lines.push(text); paint(); };
+
+  // Every await checks the generation it started under. Restarting the session
+  // bumps it, which strands any in-flight typing loop instead of leaving two
+  // of them writing into `lines` at once.
+  async function typeLine(gen, text) {
+    lines.push('');
     for (const ch of text) {
-      lines[into] = (lines[into] || '') + ch;
+      if (gen !== generation) return false;
+      lines[lines.length - 1] += ch;
       paint();
-      await wait(46 + Math.random() * 26);
+      await wait(42 + Math.random() * 30);
     }
+    return gen === generation;
   }
 
-  const SCRIPT = [
-    'soldering ......... sat 12:30',
-    'kicad from scratch  sep 18',
-    'esp32 + sensors ... oct 02',
-    '',
-    'beginners welcome.',
-    'tools provided.'
-  ];
+  async function bootSequence(gen) {
+    lines = []; paint();
+    await wait(240);
+    if (gen !== generation) return false;
+    push('open circuit sf // sf, ca');
+    await wait(300);
+    if (gen !== generation) return false;
+    push('memory ok. phosphor ok.');
+    await wait(420);
+    return gen === generation;
+  }
 
-  async function boot() {
+  const PAUSE_MS = 3000;   // the user's read-time between commands
+
+  async function runSession() {
     clearTimers();
-    lines = [];
-    // The static frame a reduced-motion reader sees is the finished state,
-    // not a blank screen.
+    const gen = ++generation;
+
     if (reduceMotion.matches) {
-      lines = ['> open_circuit_sf', '', ...SCRIPT];
+      // A still frame, not a blank screen and not an animation: the finished
+      // state of one command, which is what someone who asked for less motion
+      // should get.
+      const step = SESSION[0];
+      lines = ['open circuit sf // sf, ca', '', '> ' + step.cmd, ...step.out];
       cursorOn = true; paint();
       return;
     }
-    paint();
-    await wait(260);
-    lines = ['']; await type('> open_circuit_sf', 0);
-    await wait(420);
-    lines.push('');
-    for (const l of SCRIPT) { lines.push(l); paint(); await wait(430); }
+
+    if (!await bootSequence(gen)) return;
+
+    for (let i = 0; gen === generation; i++) {
+      const step = SESSION[i % SESSION.length];
+      push('');
+      if (!await typeLine(gen, '> ' + step.cmd)) return;
+      await wait(260);
+      for (const line of step.out) {
+        if (gen !== generation) return;
+        push(line);
+        await wait(150);
+      }
+      // Hold so it can be read, then the next command types itself. This is
+      // the only thing separating "a terminal someone is using" from "a list
+      // that scrolled past".
+      await wait(PAUSE_MS);
+    }
   }
 
-  document.getElementById('bootBtn').addEventListener('click', boot);
+  document.getElementById('bootBtn').addEventListener('click', runSession);
 
   if (!reduceMotion.matches) {
     setInterval(() => { cursorOn = !cursorOn; paint(); }, 530);
   }
 
   applyWarp();
-  boot();
+  runSession();
 })();
 </script>
 </body>

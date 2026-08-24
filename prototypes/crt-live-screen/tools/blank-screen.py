@@ -38,8 +38,8 @@ ASSETS = HERE.parent / "assets"
 UPSTREAM = HERE.parent.parent.parent / "web" / "public"
 
 # The photographed raster's corners, % of the image (measured for #0233).
-CORNERS = {"tl": (22.5, 24.0), "tr": (69.8, 18.0),
-           "br": (68.2, 72.4), "bl": (23.0, 72.3)}
+CORNERS = {"tl": (23.03, 28.84), "tr": (68.38, 23.03),
+           "br": (67.68, 77.51), "bl": (23.00, 72.30)}
 
 PAIRS = [("hero-crt-760.webp", "hero-crt-blank-760.webp"),
          ("hero-crt-light-760.webp", "hero-crt-blank-light-760.webp")]
