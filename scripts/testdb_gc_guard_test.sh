@@ -68,12 +68,65 @@ fail() {
 }
 pass() { printf 'PASS: %s\n' "$1"; }
 
+# #0223: killing the local psql client only stops that local process — it
+# does not, by itself, stop the backend it was talking to. Measured directly
+# while fixing this: a backend blocked inside `select pg_sleep(20)` keeps
+# running for however long the sleep has left even after its client is
+# killed, because Postgres does not poll the client socket while blocked
+# inside a long-running function call (client_connection_check_interval is
+# unset here, so nothing does). So the backend can still be attached — and
+# `dropdb_raw`'s `DROP DATABASE IF EXISTS ... || true` can still silently
+# swallow a "database is being accessed by other users" failure — long after
+# the local kill returned. terminate_backends() below stops the backend
+# itself; wait_for_disconnect() polls pg_stat_activity (bounded, not a blind
+# sleep) so a caller can confirm that actually happened before dropping.
+terminate_backends() {
+  local db="$1"
+  psql_admin -tAc "select pg_terminate_backend(pid) from pg_stat_activity where datname='$db' and pid <> pg_backend_pid()" >/dev/null 2>&1 || true
+}
+
+wait_for_disconnect() {
+  local db="$1" timeout="${2:-20}" waited=0
+  while [ "$waited" -lt "$timeout" ]; do
+    local n
+    n="$(psql_admin -tAc "select count(*) from pg_stat_activity where datname='$db'" 2>/dev/null)"
+    [ "$n" = "0" ] && return 0
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  local pid
+  pid="$(psql_admin -tAc "select pid from pg_stat_activity where datname='$db' limit 1" 2>/dev/null)"
+  echo "warning: connection to $db did not close within $(awk "BEGIN{print $timeout*0.5}")s (surviving pid: ${pid:-unknown})" >&2
+  return 1
+}
+
+# Drop $1 and verify it is actually gone afterwards, rather than trusting
+# dropdb_raw's swallowed `|| true` (the other half of #0223).
+drop_and_verify() {
+  local db="$1"
+  dropdb_raw "$db"
+  if db_exists "$db"; then
+    fail "cleanup failed to drop $db (still exists after DROP DATABASE IF EXISTS)"
+    return 1
+  fi
+  return 0
+}
+
 cleanup() {
   for pid in "${BG_PIDS[@]:-}"; do
     [ -n "$pid" ] && kill "$pid" >/dev/null 2>&1 || true
   done
+  for pid in "${BG_PIDS[@]:-}"; do
+    [ -n "$pid" ] && wait "$pid" 2>/dev/null || true
+  done
   for db in "${CREATED_DBS[@]:-}"; do
-    [ -n "$db" ] && dropdb_raw "$db"
+    [ -n "$db" ] || continue
+    terminate_backends "$db"
+    wait_for_disconnect "$db" 20 || true
+    dropdb_raw "$db"
+    if db_exists "$db"; then
+      echo "warning: cleanup trap could not confirm $db was dropped — it may still exist (see any surviving-pid warning above)" >&2
+    fi
   done
   rm -rf "$WORKDIR"
 }
@@ -166,10 +219,20 @@ else
   pass "gc --all dropped $IDLE_DB, which had no connection"
 fi
 
+# Terminate the backend server-side rather than trusting the local client's
+# death to stop it — see the comment above terminate_backends() (#0223): a
+# backend blocked inside pg_sleep(20) keeps running, sleep and all, for as
+# long as it has left even after its client is killed.
+terminate_backends "$CONN_DB"
 kill "$CONN_PID" >/dev/null 2>&1 || true
 wait "$CONN_PID" 2>/dev/null || true
-dropdb_raw "$CONN_DB"
-dropdb_raw "$IDLE_DB"
+if wait_for_disconnect "$CONN_DB" 20; then
+  pass "connection to $CONN_DB closed before cleanup dropped it"
+else
+  fail "REGRESSION #0223: connection to $CONN_DB did not close within the poll timeout before cleanup attempted to drop it"
+fi
+drop_and_verify "$CONN_DB"
+drop_and_verify "$IDLE_DB"
 
 echo "== Part 3: mutation proof — remove the guard, confirm bare gc sweeps again =="
 
@@ -198,8 +261,18 @@ if db_exists "$MUT_DB"; then
 else
   pass "with the refusal guard removed, bare gc DID sweep — confirms Part 1's assertions are sensitive to the #0150 regression, not vacuously true"
 fi
-# createdb_raw already queued MUT_DB in CREATED_DBS for cleanup; drop is a
-# harmless no-op if the mutant already swept it.
+# Drop-and-verify rather than leaving this to the trap: harmless no-op if the
+# mutant already swept it, and keeps every explicitly-created database
+# accounted for before the leak census below runs.
+drop_and_verify "$MUT_DB"
+
+echo "== Part 4: leak census — no ${TESTPREFIX}* database survives this run =="
+LEFTOVER="$(psql_admin -tAc "select datname from pg_database where datname like '${TESTPREFIX}%'" 2>/dev/null | tr '\n' ' ' | xargs)"
+if [ -z "$LEFTOVER" ]; then
+  pass "no ${TESTPREFIX}* databases remain after cleanup"
+else
+  fail "REGRESSION #0223: leaked database(s) after cleanup: $LEFTOVER"
+fi
 
 echo "== Byte-identity check =="
 SHA_AFTER="$(shasum -a 256 "$REAL_SCRIPT" | awk '{print $1}')"
