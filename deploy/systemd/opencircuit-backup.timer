@@ -1,0 +1,18 @@
+[Unit]
+Description=Schedule the Open Circuit SF nightly PostgreSQL backup
+Documentation=https://github.com/brennanMKE/OpenCircuitSF
+
+[Timer]
+# 07:30 UTC, matching the off-peak window ShortLinks' own cron entry used
+# (docs/backups.md in the ShortLinks checkout, CLAUDE.md §6).
+OnCalendar=*-*-* 07:30:00 UTC
+# If the box was down at 07:30, run the missed backup as soon as it's back —
+# a skipped night is exactly the silent-failure shape this issue exists to
+# close.
+Persistent=true
+# Spread load if this ever runs across several instances at once; harmless
+# jitter for one.
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

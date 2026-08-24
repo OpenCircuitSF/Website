@@ -1,0 +1,21 @@
+[Unit]
+Description=Alert a human that the Open Circuit SF backup run failed
+Documentation=https://github.com/brennanMKE/OpenCircuitSF
+# Deliberately no OnFailure= of its own — see scripts/db/backup-alert.sh's
+# header for why this unit is written to never exit non-zero itself.
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+WorkingDirectory=/opt/opencircuit
+# Optional: a Slack/Discord/Mattermost incoming-webhook URL, or a
+# healthchecks.io-style "fail" URL. Not present by default — no such channel
+# is configured anywhere in this repo or on this machine yet (CLAUDE.md §10
+# items 2 and 6). The leading `-` makes this file optional so the unit still
+# starts (and still logs to the journal) before it exists.
+EnvironmentFile=-/etc/opencircuit/backup-alert.env
+ExecStart=/usr/bin/bash /opt/opencircuit/scripts/db/backup-alert.sh
+
+NoNewPrivileges=true
+PrivateTmp=true

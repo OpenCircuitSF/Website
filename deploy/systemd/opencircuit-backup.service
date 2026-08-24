@@ -1,0 +1,48 @@
+[Unit]
+Description=Open Circuit SF nightly PostgreSQL backup
+Documentation=https://github.com/brennanMKE/OpenCircuitSF
+After=network.target postgresql.service
+Wants=postgresql.service
+# #0229: this is the half of the backup story that used to be missing —
+# backup.sh already exits non-zero on failure (verified in #0062), and until
+# this OnFailure= existed nothing consumed that exit code. See
+# opencircuit-backup-alert.service and scripts/db/backup-alert.sh.
+OnFailure=opencircuit-backup-alert.service
+
+[Service]
+Type=oneshot
+# Runs as the postgres OS user so pg_dump uses peer authentication, matching
+# backup.sh's own documented production path (BACKUP_RUN_AS=postgres, its
+# default). Because this unit's User= already IS postgres, backup.sh's
+# internal `sudo -u "$BACKUP_RUN_AS"` check becomes a same-user no-op — no
+# passwordless-sudo grant is needed for this path.
+User=postgres
+Group=postgres
+
+# scripts/db/backup.sh assumes it can find the project's .env two directories
+# up (for its BACKUP_DATABASES fallback) when run from the repo checkout.
+# Adjust this to wherever the repo actually lives on the box — CLAUDE.md §10
+# item 6 records the real server layout as still undocumented; /opt/opencircuit
+# mirrors ShortLinks' own /opt/shortlinks convention (its DEPLOYMENT.md) and is
+# a placeholder until the real path is captured.
+WorkingDirectory=/opt/opencircuit
+ExecStart=/usr/bin/bash /opt/opencircuit/scripts/db/backup.sh
+
+# Optional overrides, uncomment/edit once the real box's layout is known:
+#Environment=BACKUP_ROOT=/var/backups/postgres
+#Environment=BACKUP_RETENTION_DAYS=14
+#Environment=BACKUP_DATABASES=opencircuit
+
+# Hardening, mirroring opencircuit.service where it does not conflict with
+# writing dumps under BACKUP_ROOT (default /var/backups/postgres).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+
+# No [Install] section: this unit is triggered by opencircuit-backup.timer
+# (enabled separately, see its own [Install]) and by manual
+# `systemctl start opencircuit-backup.service` for testing — it is not meant
+# to be enabled directly against a target.

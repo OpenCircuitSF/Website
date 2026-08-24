@@ -701,7 +701,7 @@ that needs cost accounting; refresh once per day.
 
 ## 11. PRD section index
 
-`PRD.md` is 1,807 lines (~21k tokens). **Never read it whole.** Every issue's
+`PRD.md` is 1,829 lines (~21k tokens). **Never read it whole.** Every issue's
 `## Relation` block names the section it needs and carries the exact extraction
 command; run that. This table is the fallback when you need a section no issue
 cites.
@@ -748,13 +748,13 @@ the PRD.
 | §7.6 Performance budget | 12 | `sed -n '/^### 7\.6 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | **§8 HTTP API** | 65 | `sed -n '/^## 8\. /,/^## [0-9]/p' PRD.md` |
 | **§9 Configuration** | 75 | `sed -n '/^## 9\. /,/^## [0-9]/p' PRD.md` |
-| **§10 Infrastructure and Deployment** | 89 | `sed -n '/^## 10\. /,/^## [0-9]/p' PRD.md` |
+| **§10 Infrastructure and Deployment** | 111 | `sed -n '/^## 10\. /,/^## [0-9]/p' PRD.md` |
 | §10.1 Topology | 38 | `sed -n '/^### 10\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §10.2 DNS records (Route 53) | 16 | `sed -n '/^### 10\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §10.3 SES region choice | 7 | `sed -n '/^### 10\.3 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §10.4 SES production access | 8 | `sed -n '/^### 10\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §10.5 IAM | 9 | `sed -n '/^### 10\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §10.6 Backups | 9 | `sed -n '/^### 10\.6 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §10.6 Backups | 31 | `sed -n '/^### 10\.6 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | **§11 Security and Compliance** | 35 | `sed -n '/^## 11\. /,/^## [0-9]/p' PRD.md` |
 | **§12 Phased Build Plan** | 63 | `sed -n '/^## 12\. /,/^## [0-9]/p' PRD.md` |
 | **§13 Issue Breakdown** | 49 | `sed -n '/^## 13\. /,/^## [0-9]/p' PRD.md` |

@@ -1637,10 +1637,32 @@ Instance role policy, scoped tightly:
 
 ### 10.6 Backups
 
-`pg_dump` nightly to S3 with a 30-day lifecycle, via the same script pattern
-ShortLinks uses. The subscriber list is the single most valuable and least
-reconstructible asset in the system — verify a restore before launch, not after
-the first incident.
+`pg_dump` nightly to a local directory tree on the database host
+(`scripts/db/backup.sh`, custom or plain format, pruned after
+`BACKUP_RETENTION_DAYS`), then an `rsync`-over-SSH **pull** to a separate
+offsite machine — a Mac mini, not the server — run by
+`scripts/db/pull-backups.sh` (pull rather than push, so a server compromise
+never holds the offsite copy's credentials). `scripts/db/restore.sh` reassigns
+ownership of every restored table, sequence, and view to the application
+role, since the dump itself carries no owner or grants (`--no-owner
+--no-privileges`, stripped so the dump doesn't require the dump-time role to
+exist on the target). A systemd timer plus an `OnFailure=` alert unit
+(`deploy/systemd/opencircuit-backup.{service,timer}`,
+`opencircuit-backup-alert.service`) run the nightly dump and notify on
+failure. The subscriber list is the single most valuable and least
+reconstructible asset in the system — verify a restore before launch, not
+after the first incident; see `docs/deployment.md`'s Backups section for the
+full runbook, including what remains unverified until a real server and a
+real offsite host exist.
+
+**S3 is a deferred option, not the design.** An earlier draft of this section
+specified `pg_dump` to S3 with a 30-day lifecycle rule, bucket encryption, a
+public-access block, and IAM scoped to the bucket prefix. None of that is
+built, and this section no longer specifies it as the target — it needs an
+AWS account, which does not exist yet (`CLAUDE.md` §10 item 2), and building
+it now would mean writing against credentials nobody has, same reasoning as
+SES. The design above ships without it; S3 upload can be added later on top
+of `backup.sh` without redesigning the local-dump/offsite-pull shape.
 
 ---
 

@@ -1,10 +1,22 @@
-# systemd service for Open Circuit SF
+# systemd units for Open Circuit SF
 
-This directory contains the systemd unit that manages the Open Circuit SF Go
-binary on the EC2 host. The service runs `/usr/local/bin/opencircuit serve` as
-a dedicated non-root user, loads its configuration from
-`/etc/opencircuit/config.env`, listens on `127.0.0.1:8080` behind the Apache
-reverse proxy, and is restarted automatically on failure.
+This directory contains the systemd units for the EC2 host:
+
+| Unit | Purpose |
+|---|---|
+| `opencircuit.service` | Runs `/usr/local/bin/opencircuit serve` as a dedicated non-root user, listens on `127.0.0.1:8080` behind the Apache reverse proxy, restarted automatically on failure |
+| `opencircuit-backup.timer` | Fires `opencircuit-backup.service` nightly (`#0229`) |
+| `opencircuit-backup.service` | Runs `scripts/db/backup.sh` as `postgres`; `OnFailure=` chains to the alert unit below |
+| `opencircuit-backup-alert.service` | Logs a high-priority journal entry and (if configured) POSTs a webhook when a backup run fails — see `scripts/db/backup-alert.sh` |
+
+## Create the system user
+
+The main service runs as an unprivileged `opencircuit` system user (and
+group). Create it once before installing the service:
+
+```bash
+sudo useradd --system --no-create-home opencircuit
+```
 
 ## Create the system user
 
@@ -43,3 +55,50 @@ sudo journalctl -u opencircuit -f
   apply config-only changes — no rebuild needed.
 - If the unit file itself changes, re-copy it and run
   `sudo systemctl daemon-reload` before restarting.
+
+## Backup timer and failure alert (`#0229`)
+
+`opencircuit-backup.service` assumes the repo is checked out at
+`/opt/opencircuit` (`WorkingDirectory=` and `ExecStart=` both reference it) —
+a placeholder matching ShortLinks' own `/opt/shortlinks` convention until the
+real server layout is captured (`CLAUDE.md` §10 item 6, still undocumented).
+**Edit the unit file to match the real path before installing it.**
+
+Install and enable the timer (the `.service` files are triggered, not
+enabled directly — see the "No `[Install]` section" note in
+`opencircuit-backup.service`):
+
+```bash
+sudo cp opencircuit-backup.service opencircuit-backup.timer opencircuit-backup-alert.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now opencircuit-backup.timer
+```
+
+Test the backup path by hand before trusting the timer:
+
+```bash
+sudo systemctl start opencircuit-backup.service   # runs backup.sh once, right now
+sudo systemctl status opencircuit-backup.service
+sudo journalctl -u opencircuit-backup -n 50
+```
+
+Test the alert path by deliberately breaking a run (e.g. point `BACKUP_ROOT`
+at a path `postgres` cannot write, per `docs/deployment.md`'s Backups
+section) and confirming `opencircuit-backup-alert.service` fires:
+
+```bash
+sudo journalctl -u opencircuit-backup-alert -n 20
+```
+
+To also notify an external channel (Slack/Discord/Mattermost incoming
+webhook, or a healthchecks.io-style "fail" URL), create
+`/etc/opencircuit/backup-alert.env`:
+
+```env
+BACKUP_ALERT_WEBHOOK_URL=https://hooks.example.com/...
+```
+
+No such channel is configured anywhere in this repo — that URL does not exist
+yet. Until it does, the journal log is the alert. See `docs/deployment.md`'s
+Backups section for exactly what this pair of units has and has not been
+verified against.
