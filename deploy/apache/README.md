@@ -42,5 +42,16 @@ sudo certbot --apache -d opencircuitsf.com -d www.opencircuitsf.com
   can be proxied to the backend.
 - `www` is the canonical host; a request on any other name is redirected to
   it, never proxied directly. This matches production and is the opposite of
-  `#0064`'s acceptance criteria, which are a known tracker defect — see
+  an old, now-corrected reading of `#0064`'s acceptance criteria — see
   `CLAUDE.md` §7.
+- **Security headers** (HSTS, `X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`, and a `Content-Security-Policy` with no `unsafe-inline`
+  for scripts) are set with `Header always set …`, which needs `mod_headers`.
+  It ships in AL2023's `httpd` package and is loaded by default — if the
+  headers don't appear in a response, confirm with `httpd -M | grep
+  headers_module` before assuming the directive is wrong. Syntax-checked
+  locally with a real Apache 2.4.67 (`httpd -t`, self-signed cert standing in
+  for the Let's Encrypt paths) — **not** yet checked against AL2023's `httpd`
+  or against a real running instance. See `docs/deployment.md`'s "Security
+  headers" section for how the one script-src hash was computed and why
+  style-src still needs `unsafe-inline`.

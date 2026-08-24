@@ -1,9 +1,15 @@
 # Deployment & Operations
 
-Production is not yet live for this codebase — the domain currently serves
-a static placeholder (`CLAUDE.md` §7). This is a stub with real headings;
-`PRD.md` §10 (89 lines) and `CLAUDE.md` §7/§10 are authoritative in the
-meantime.
+**Deployment is deliberately deferred** (user, 2026-08-23; `CLAUDE.md` §10).
+No EC2 instance has been provisioned for this codebase, no AWS account exists
+for SES, and nothing below has been followed end to end on a real host. This
+is a **runbook written and syntax-checked against local tooling**, not a
+record of a deploy that happened. Every step says which of the two it rests
+on, per `CLAUDE.md` §10's honesty requirement, and the acceptance criterion
+"the whole runbook followed once on a clean instance and corrected where it
+was wrong" (`#0064`) is explicitly **not met** — it cannot be, until a real
+instance exists to run it against. `PRD.md` §10 and `CLAUDE.md` §7/§10 remain
+authoritative wherever this document is silent or wrong.
 
 ## Current production facts (`CLAUDE.md` §7)
 
@@ -11,9 +17,34 @@ meantime.
 |---|---|
 | Canonical host | `https://www.opencircuitsf.com` — apex and plain HTTP both 301 to it |
 | Server | Apache 2.4.68, Amazon Linux, OpenSSL 3.5.7 |
-| TLS | Let's Encrypt |
+| TLS | Let's Encrypt, valid to 2026-11-16 |
 | Already on the box | PostgreSQL and Apache |
 | Currently served | the static placeholder (`placeholder/`) |
+
+**A box already exists and already runs Apache and PostgreSQL** — the
+production facts above are measured, not aspirational. What is missing is
+this project's own configuration on it, and, per `CLAUDE.md` §10 item 6, the
+specific operational details of that box: instance ID, size, region, SSH
+access, `DocumentRoot`, the vhost file actually installed, the certbot
+renewal schedule, and whether the Postgres already running there is the
+target for this project's `opencircuit` database or a separate instance is
+needed. None of that is documented anywhere available to this agent, and
+none of it is guessed at here — every place below that would need one of
+those facts is marked `[PLACEHOLDER: CLAUDE.md §10 item 6]` rather than
+invented. **Capture the real values into this table the first time someone
+with access to the box reads this file**, then delete the placeholder
+markers.
+
+| Fact | Value |
+|---|---|
+| Instance ID | `[PLACEHOLDER: CLAUDE.md §10 item 6]` |
+| Instance size / type | `[PLACEHOLDER: CLAUDE.md §10 item 6 — PRD §10.1 assumes t4g.small, Amazon Linux 2023, unconfirmed]` |
+| Region | `[PLACEHOLDER: CLAUDE.md §10 item 6 — PRD §10.3 specifies us-west-2 for SES; confirm the EC2 instance is in the same region]` |
+| SSH access | `[PLACEHOLDER: CLAUDE.md §10 item 6 — key pair / bastion / SSM, whichever applies]` |
+| `DocumentRoot` (current, static placeholder) | `[PLACEHOLDER: CLAUDE.md §10 item 6]` |
+| Installed vhost file(s) | `[PLACEHOLDER: CLAUDE.md §10 item 6 — confirm against deploy/apache/opencircuitsf.com.conf before assuming they match]` |
+| certbot renewal schedule | `[PLACEHOLDER: CLAUDE.md §10 item 6 — certbot installs its own systemd timer/cron by default; confirm which]` |
+| Is the existing Postgres the target for `opencircuit`? | `[PLACEHOLDER: CLAUDE.md §10 item 6 — if it already hosts a `shortlinks` database, `opencircuit` is a second database on the same cluster, not a second cluster]` |
 
 ## Planned topology (`PRD.md` §10.1)
 
@@ -45,54 +76,755 @@ meantime.
              AWS SES ─────── events ───┘
                   │
                   ▼ inbound (lists.opencircuitsf.com MX)
+             S3 + SNS
 ```
 
+## Coexistence with the ShortLinks install
+
 One EC2 instance hosts **both** this service and the separate ShortLinks
-deploy, behind one Apache instance with two vhosts. `opencircuit` and
-`shortlinks` are independent systemd units and independent PostgreSQL
-databases — a redeploy of one must never touch the other.
+deploy (`go.opencircuitsf.com`), behind **one** Apache instance with **two**
+vhosts. They share nothing on the box but the host itself, the Apache
+process, and (if `[PLACEHOLDER: CLAUDE.md §10 item 6]` confirms it) the
+PostgreSQL server process — never a database, a service account, a config
+file, or a port:
+
+| | `opencircuit` (this project) | `shortlinks` |
+|---|---|---|
+| Local port | `127.0.0.1:8080` | `127.0.0.1:8081` |
+| PostgreSQL database | `opencircuit` | `shortlinks` |
+| PostgreSQL login role | `opencircuit` | `shortlinks` |
+| systemd unit | `opencircuit.service` | `shortlinks.service` |
+| systemd service account | `opencircuit` (system user, no home, no shell login) | `shortlinks` (same shape) |
+| Config file | `/etc/opencircuit/config.env` | `/etc/shortlinks/config.env` |
+| Repo checkout | `/opt/opencircuit` (placeholder — see the Prerequisites step) | `/opt/shortlinks`, per its own `DEPLOYMENT.md` |
+| Apache vhost | `deploy/apache/opencircuitsf.com.conf` → `www.opencircuitsf.com` / `opencircuitsf.com` | ShortLinks' own vhost → `go.opencircuitsf.com` |
+
+**A redeploy of one must never touch the other.** `scripts/deploy.sh` (this
+project's) only ever builds, installs, and restarts `opencircuit` — it does
+not reference `shortlinks` anywhere, and the reverse is true of ShortLinks'
+own `scripts/deploy.sh`. Restarting Apache (`systemctl reload httpd`) *does*
+affect both vhosts simultaneously, since they share one Apache process — that
+is expected and is why the vhost file for each service should be edited and
+reloaded independently, with `httpd -t` run before every reload regardless of
+which vhost changed (see the Apache step below).
+
+`SEND_WORKER_ENABLED` (`docs/configuration.md`) exists for a *future* second
+`opencircuit` instance, not for the ShortLinks split above — it has nothing
+to do with ShortLinks and should stay `true` on this single-instance
+topology.
 
 ## `deploy/`
 
-`deploy/systemd/opencircuit.service` and `deploy/apache/opencircuitsf.com.conf`
-are this project's own deploy config (`#0066` renamed and retargeted the
-ShortLinks assets `#0001` copied wholesale). The Apache vhost redirects the
-apex to the canonical `www` host per the DNS table below.
+| File | Purpose |
+|---|---|
+| `deploy/apache/opencircuitsf.com.conf` | Apache vhost: apex→www redirect, reverse proxy to `127.0.0.1:8080`, `flushpackets=on` on `/api/events`, security headers |
+| `deploy/apache/README.md` | Install steps for the vhost |
+| `deploy/systemd/opencircuit.service` | The main service unit — hardened per the ShortLinks pattern (see the systemd step below) |
+| `deploy/systemd/opencircuit-backup.timer` / `.service` / `-alert.service` | Nightly backup + failure alert (`#0229`) — see **Backups** below |
+| `deploy/systemd/README.md` | Install steps for every unit above |
 
-`deploy/systemd/opencircuit-backup.timer`, `opencircuit-backup.service`, and
-`opencircuit-backup-alert.service` (`#0229`) schedule the nightly backup and
-alert on failure — see `deploy/systemd/README.md`'s "Backup timer and failure
-alert" section for install steps, and the Backups section below for what has
-and has not been verified.
+---
 
-## DNS (Route 53) — see [`email-setup.md`](email-setup.md) for the mail-specific records
+## 1. Prerequisites
+
+These are the same regardless of whether the box already exists (per the
+production facts above, it likely does) or is provisioned fresh. Confirm what
+is already installed before reinstalling anything — Apache and PostgreSQL are
+already on the box per `CLAUDE.md` §7.
+
+- **EC2 instance**, Amazon Linux 2023, sized per `[PLACEHOLDER: CLAUDE.md §10
+  item 6]` (PRD §10.1 assumes `t4g.small` — an ARM/Graviton instance; confirm
+  the architecture before downloading arch-specific tarballs below, since
+  Graviton needs `arm64` builds and an Intel/AMD instance needs `amd64`).
+- **Apache (`httpd`) with `mod_ssl`, `mod_proxy`, `mod_proxy_http`,
+  `mod_rewrite`, and `mod_headers`.** Already on the box per `CLAUDE.md` §7;
+  if provisioning fresh:
+
+  ```bash
+  sudo dnf install -y httpd mod_ssl
+  sudo systemctl enable --now httpd
+  ```
+
+  All of the above modules ship in AL2023's base `httpd` package and are
+  loaded by default — confirm with `httpd -M | grep -E 'ssl|proxy|rewrite|headers'`
+  rather than assuming.
+
+- **PostgreSQL 16.** Already on the box per `CLAUDE.md` §7 — confirm the
+  major version with `psql --version` before assuming it matches what this
+  project's migrations were verified against (`#0062`/`#0228`'s drills both
+  ran on PostgreSQL 16.14, Homebrew). If provisioning fresh:
+
+  ```bash
+  sudo dnf list 'postgresql*server' # confirm the exact package name/version AL2023 offers today
+  sudo dnf install -y postgresql16-server postgresql16
+  sudo postgresql-setup --initdb
+  sudo systemctl enable --now postgresql
+  ```
+
+- **Node.js 20+** — build-time only, not needed at runtime (the SPA is
+  compiled to `web/dist/` and embedded into the Go binary):
+
+  ```bash
+  curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+  sudo dnf install -y nodejs
+  node --version   # v20.x or newer
+  ```
+
+- **Go 1.26+** (this repo's `go.mod` pins `go 1.26.3`). AL2023's `dnf` Go
+  package is typically older; install from the official tarball:
+
+  ```bash
+  GO_VERSION=1.26.3
+  GOARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+  curl -OL https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz
+  sudo rm -rf /usr/local/go
+  sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-${GOARCH}.tar.gz
+  echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee /etc/profile.d/go.sh
+  source /etc/profile.d/go.sh
+  go version
+  ```
+
+  Log out and back in so every future shell (including deploy scripts) picks
+  up the `PATH` change.
+
+- **`golang-migrate` CLI**, built with the `postgres` tag:
+
+  ```bash
+  go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+  migrate --version
+  ```
+
+- **`openssl` and `certbot`**:
+
+  ```bash
+  sudo dnf install -y openssl certbot python3-certbot-apache
+  ```
+
+- **DNS already resolving** — confirm before requesting a TLS certificate
+  (Certbot's HTTP-01 challenge needs the hostname to already resolve to this
+  box):
+
+  ```bash
+  dig +short www.opencircuitsf.com
+  dig +short opencircuitsf.com
+  ```
+
+Clone the repository (into `/opt/opencircuit`, matching the ShortLinks
+`/opt/shortlinks` convention the systemd units already assume — see
+`deploy/systemd/README.md`'s "Backup timer" section, which flags this same
+placeholder):
+
+```bash
+sudo git clone https://github.com/brennanMKE/OpenCircuitSF.git /opt/opencircuit
+cd /opt/opencircuit
+```
+
+(The GitHub repo rename `Website` → `OpenCircuitSF` is `CLAUDE.md` §10 item
+1, **not done** as of this writing — the clone URL above is the target name,
+not necessarily what resolves today. Confirm before running it verbatim.)
+
+---
+
+## 2. Database setup
+
+The one-time bootstrap creates the application **login role** and
+**database** — it creates no tables; schema is owned by `golang-migrate` and
+applied in the Migrations step. `scripts/db/create.sql` ships with a
+placeholder password (`CHANGE_ME_IN_PRODUCTION`) that **must** be replaced
+before running this anywhere real:
+
+```bash
+# scripts/db/create.sql, in the CREATE ROLE line:
+CREATE ROLE opencircuit LOGIN PASSWORD '<a real, strong secret — keep it out of source control>';
+```
+
+Then, as the `postgres` superuser:
+
+```bash
+sudo -u postgres psql -f scripts/db/create.sql
+```
+
+Idempotent for the role; `CREATE DATABASE` cannot be guarded with
+`IF NOT EXISTS` in PostgreSQL, so a re-run raises a harmless "database
+already exists" error on that one statement.
+
+> To reset a **local/dev** database to a clean slate — **never** in
+> production, and never against a database anyone depends on:
+>
+> ```bash
+> sudo -u postgres psql -f scripts/db/drop.sql
+> ```
+>
+> `scripts/db-reset.sh` does the local dev-loop version of this (drop,
+> recreate, migrate, seed) and refuses to run against anything but
+> localhost/127.0.0.1 and a database name starting with `opencircuit` — it is
+> a development convenience, not a production tool, and per `CLAUDE.md` §1
+> this project's greenfield exception for rewriting migrations ends at the
+> first production deploy.
+
+**Syntax-checked, not run against a production instance:** `psql --version`
+confirms local PostgreSQL 16 syntax-accepts `scripts/db/create.sql` and
+`scripts/db/drop.sql` unchanged (they are copied from ShortLinks, `#0001`,
+and already exercised repeatedly by `scripts/testdb.sh` and
+`scripts/db-reset.sh` against local databases) — this step has not been run
+as the `postgres` OS user against a fresh AL2023 PostgreSQL 16 install.
+
+---
+
+## 3. Configuration
+
+All runtime configuration is loaded from environment variables
+(`internal/config.Load()`) — see [`configuration.md`](configuration.md) for
+the full variable reference, including which are required, which have
+defaults, and the `BASE_URL`/`WEBAUTHN_RP_ORIGIN` "must be the www form"
+gotcha that has already bitten this project once (`#0072`). **That table,
+not `PRD.md` §9, is authoritative for the config template** — `#0072`
+corrected both `.env.example` and `docs/configuration.md` to the www form;
+`PRD.md` §9's own configuration block was separately corrected in the same
+pass and the two now agree, but `.env.example` is what you actually copy.
+
+```bash
+sudo mkdir -p /etc/opencircuit
+sudo cp .env.example /etc/opencircuit/config.env
+sudo chmod 600 /etc/opencircuit/config.env
+sudo nano /etc/opencircuit/config.env
+```
+
+Fill in every value `.env.example` ships blank or with a placeholder:
+
+- `DATABASE_URL` — must use the same role name (`opencircuit`), database name
+  (`opencircuit`), and password set in step 2.
+- `SESSION_SECRET` — generate with `openssl rand -hex 32`; a blank value
+  fails startup closed (`config: missing required variable SESSION_SECRET`)
+  rather than silently signing sessions with a key that was ever published in
+  this public repository (`#0067`).
+- `ADMIN_EMAIL` — the address pre-authorized as admin on first registration.
+- `AWS_REGION`, `SES_CONFIGURATION_SET`, `EMAIL_FROM`, `EMAIL_REPLY_TO`,
+  `EMAIL_LIST_DOMAIN`, `SES_INBOUND_BUCKET` — see **SES setup** below; these
+  require the SES account and domain verification that `CLAUDE.md` §10 item 2
+  records as not started. Fill in the ones that don't depend on SES existing
+  (`EMAIL_LIST_DOMAIN`, `AWS_REGION`) now; the rest can be corrected later
+  without a rebuild (see **Redeploy procedure**).
+- `MAX_SEND_RATE` — **set to `1` while the SES account is in the sandbox**
+  (1 message/second cap). This is a deploy-time fact the code cannot enforce
+  on its own — nothing in this codebase can detect sandbox-vs-production SES
+  status (`docs/configuration.md`'s "Developing against the SES sandbox"
+  section). `CLAUDE.md` §5: there is no performance requirement in this
+  project: this value paces for SES's quota, not for throughput.
+
+`BASE_URL` and `WEBAUTHN_RP_ORIGIN` must both be the **www** form
+(`https://www.opencircuitsf.com`) — the apex 301s to www, and
+`WEBAUTHN_RP_ORIGIN` must match the browser's actual origin exactly or every
+passkey ceremony fails with an opaque error (`CLAUDE.md` §7).
+
+**Not verified against a real box:** this step was exercised locally
+(`scripts/db-reset.sh` builds the equivalent environment inline for dev use)
+but never as `/etc/opencircuit/config.env` read by a real `EnvironmentFile=`
+on a real systemd unit — see the systemd step for what that confirms and
+does not.
+
+---
+
+## 4. Build
+
+The SPA is embedded into the Go binary at compile time
+(`//go:embed all:dist`), so it must be built **first**:
+
+```bash
+cd web && npm ci && npm run build
+cd ..
+go build -o opencircuit ./cmd/opencircuit
+```
+
+Install to the path the systemd unit's `ExecStart` references:
+
+```bash
+sudo install -m 0755 opencircuit /usr/local/bin/opencircuit
+```
+
+**Syntax/build-checked, not run on AL2023:** `go build ./...` and the web
+`npm run check`/`npm test` suite pass locally on macOS/arm64 as of this
+writing (see `## Verification` in `#0064`). Cross-compilation to
+`linux/arm64` or `linux/amd64` was **not** attempted here — `go build`
+without `GOOS`/`GOARCH` overrides targets the host it runs on, so run this
+step **on the target instance itself** (per the Prerequisites step's Go
+install), not on a developer's Mac, unless a cross-compile + transfer
+pipeline is deliberately set up later.
+
+---
+
+## 5. Migrations
+
+Apply the schema with `golang-migrate`, pointing at the migration files and
+the database URL from `/etc/opencircuit/config.env`:
+
+```bash
+export DATABASE_URL='postgres://opencircuit:<password>@localhost:5432/opencircuit?sslmode=disable'
+migrate -path migrations -database "$DATABASE_URL" up
+```
+
+This repo currently ships migrations `000001`–`000020`, applied in order.
+Run this again on every deploy that adds new migration files — check first:
+
+```bash
+git diff --name-only <last-deployed-sha>..HEAD -- migrations/   # any output => a migration is needed
+migrate -path migrations -database "$DATABASE_URL" version       # or compare against the DB's applied version
+```
+
+Per `CLAUDE.md` §1, this project is greenfield until the **first** production
+deploy — after that, migrations become append-only and must never be edited
+in place again. The first real run of this step, against a database that
+matters, is the event that ends the greenfield exception.
+
+**Verified locally, not on a real box:** `#0062`'s and `#0228`'s restore
+drills both ran this exact `migrate ... up` invocation repeatedly against
+local scratch databases (`schema_migrations` landing at `version=20,
+dirty=false` every time) — see **Backups** below. It has not been run
+against a freshly `initdb`'d AL2023 PostgreSQL 16 cluster.
+
+---
+
+## 6. Seed
+
+Bootstrap the admin user (idempotent — safe to re-run):
+
+```bash
+opencircuit seed
+```
+
+This ensures the `ADMIN_EMAIL` user exists with `is_admin = true` and
+`active = true`. Unlike ShortLinks' version, it does not seed a test link —
+this project has no `links` table (`PRD.md` §3.2). The interest taxonomy is
+seeded by migration `#0023`, not by this command.
+
+**The seeded admin has no passkey** — see **First admin login** below;
+`seed` only creates the user row.
+
+---
+
+## 7. systemd
+
+The service runs as an unprivileged `opencircuit` system user. Create it
+once:
+
+```bash
+sudo useradd --system --no-create-home opencircuit
+```
+
+Install the unit, reload, enable, and start:
+
+```bash
+sudo cp deploy/systemd/opencircuit.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now opencircuit
+sudo systemctl status opencircuit
+```
+
+Confirm the service is healthy from the host before fronting it with Apache:
+
+```bash
+curl -fsS http://127.0.0.1:8080/health
+```
+
+### Hardening — mirrors the ShortLinks pattern
+
+`deploy/systemd/opencircuit.service` already carries every directive this
+issue's acceptance criterion names, inspected directly in the file:
+`NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=true`,
+`PrivateTmp=true`, and `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX` —
+plus `PrivateDevices`, `ProtectKernelTunables`, `ProtectKernelModules`,
+`ProtectControlGroups`, `RestrictNamespaces`, and `LockPersonality`, which go
+beyond the criterion's named set. It also encodes the process's own graceful
+-shutdown budget (`TimeoutStopSec=30`, documented inline against
+`cmd/opencircuit/main.go`'s two independent shutdown timeouts) — read that
+unit file's comments before changing `TimeoutStopSec` for any reason.
+
+**Structurally verified, not run under real systemd:** there is no systemd on
+the development machine (macOS) this runbook was written on, and no
+`systemd-analyze verify` available to check the unit file directly (the same
+gap `#0229` recorded for the backup units). Confirmed instead: every
+non-comment line is `key=value` and every section header is `[Section]`
+(the same structural check `#0229` used), and the file was diffed line by
+line against `deploy/systemd/README.md`'s and this project's own
+`opencircuit-backup.service`'s equivalents for consistency. **What this does
+not prove:** that `EnvironmentFile=/etc/opencircuit/config.env` resolves
+correctly, that the hardening directives don't reject something the process
+legitimately needs (e.g. `RestrictAddressFamilies` blocking a DNS lookup path
+that needs `AF_NETLINK`, which is not in the allowed list — watch for this on
+first real start), or that `Restart=on-failure` / `KillSignal=SIGTERM`
+actually behave as documented under a real crash.
+
+---
+
+## 8. Apache
+
+Install the vhost and reload — on AL2023, any `.conf` file dropped into
+`/etc/httpd/conf.d/` is loaded automatically; there is no `a2ensite`:
+
+```bash
+sudo cp deploy/apache/opencircuitsf.com.conf /etc/httpd/conf.d/
+sudo httpd -t              # syntax check BEFORE reloading — see below
+sudo systemctl reload httpd
+```
+
+The vhost (`ServerName www.opencircuitsf.com`, `ServerAlias
+opencircuitsf.com`) redirects any request that didn't arrive on `www` before
+it reaches the proxy rules, and proxies `/api/events` with
+`flushpackets=on` **before** the wildcard `ProxyPass /` — Apache evaluates
+`ProxyPass` top-to-bottom, so the SSE route must come first or the wildcard
+would swallow it and response buffering would not be disabled.
+
+### Security headers (`#0064`, `PRD.md` §11 / `CLAUDE.md` §11)
+
+The vhost now also sets, via `mod_headers`:
+
+```
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: strict-origin-when-cross-origin
+Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-dwSwJdScBQq2rtRDgx+PNrnX/IUc7TDIKGH+8kn188Y='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'
+```
+
+**`script-src` has no `unsafe-inline`**, which is the criterion's actual
+requirement. `web/index.html` has exactly one inline `<script>` (the
+pre-paint theme-flash guard that reads `localStorage`) and everything else
+Vite emits is a same-origin, hashed asset — so `script-src 'self'` plus one
+hash for that inline script is genuinely achievable, matching this issue's
+own Notes ("Vite emits hashable assets, so `unsafe-inline` is genuinely
+avoidable here").
+
+**How the hash above was computed, and its real limitation:** it is
+`base64(sha256(<the exact bytes between <script> and </script> in the
+*source* web/index.html>))`, computed directly (Python's `hashlib`/`base64`,
+not typed by hand — `CLAUDE.md` §8 warns that hand-typed escapes can land as
+the literal bytes rather than describing them). **This was computed from the
+unminified source, not from a real `npm run build` output.** `web/dist/` is
+explicitly out of this pass's scope (`CLAUDE.md` §8b flags it as a shared
+mutable resource other concurrent agents may be building into, and the
+dispatch instructions for this pass named `web/` as off-limits), so this
+hash was never checked against what Vite's HTML/JS minifier actually emits —
+minification can reformat inline-script whitespace and change the hash.
+**Before enabling this CSP against a real deploy, recompute and compare:**
+
+```bash
+python3 - <<'PYEOF'
+import re, hashlib, base64
+html = open('web/dist/index.html', encoding='utf-8').read()   # the REAL build output
+m = re.search(r'<script>\n(.*?)</script>', html, re.S)
+h = hashlib.sha256(m.group(1).encode('utf-8')).digest()
+print("sha256-" + base64.b64encode(h).decode())
+PYEOF
+```
+
+If the printed hash differs from the one in the vhost file, update the vhost
+and reload — a stale hash here doesn't fail open, it fails **closed**: the
+browser blocks the inline script and the pre-paint theme flash guard simply
+stops running (a cosmetic flash-of-wrong-theme on load), not a security
+regression, but worth fixing rather than leaving broken.
+
+**`style-src` keeps `'unsafe-inline'` — a real, load-bearing gap against the
+criterion, not an oversight.** Several Svelte components use plain
+`style="..."` HTML attributes for per-instance dynamic values (e.g.
+`web/src/lib/Logo.svelte`'s `style="--logo-size: {size}px; …"`, and several
+static `style="margin-top: …"` attributes in `web/src/views/Admin.svelte`).
+CSP's `style-src` governs the `style` attribute the same way it governs
+`<style>` elements, and:
+
+- **Hash-allowlisting an attribute needs the CSP3 `'unsafe-hashes'` keyword**
+  (hash/nonce sources apply only to elements, not attributes, without it) —
+  itself a keyword with "unsafe" in the name for a reason, and it would still
+  need one hash per distinct static string, which is fragile against every
+  future edit to any of these components.
+- **The dynamic ones (`Logo.svelte`) cannot be hash-allowlisted at all** —
+  the value changes per render (interpolated from a prop), so there is no
+  fixed string to hash.
+- Locking `style-src` down for real needs a source-level refactor: moving
+  dynamic per-instance styling to `element.style.setProperty(...)` in a
+  `$effect` (which CSP's `style-src` does **not** govern — direct CSSOM
+  property assignment is exempt) instead of a template `style="..."`
+  attribute, and moving the static ones to plain CSS classes. That is a
+  `web/src/` change and is out of this pass's scope (`web/` is off-limits
+  here); reporting it rather than silently narrowing the criterion.
+
+So the criterion is met for the security-critical half (`script-src`, where
+an injected `<script>` is the actual XSS vector) and not for the lower-severity
+half (`style-src`, where the realistic worst case is CSS-based UI redressing,
+not arbitrary code execution) — a defensible, common compromise, but not what
+"a CSP with no `unsafe-inline`" says literally.
+
+**Syntax-checked, not run on AL2023 or against a real request:**
+
+```bash
+# Minimal wrapper config: load mpm_event, proxy, proxy_http, rewrite, ssl,
+# headers; point the vhost's two SSLCertificateFile paths at a throwaway
+# self-signed cert (the real /etc/letsencrypt/... paths don't exist on a
+# dev machine); Include the real vhost file unmodified; set ErrorLog/
+# ServerName so httpd has somewhere to log and doesn't just warn.
+openssl req -x509 -newkey rsa:2048 -keyout /tmp/privkey.pem \
+  -out /tmp/fullchain.pem -days 1 -nodes -subj "/CN=test"
+sed "s#/etc/letsencrypt/live/opencircuitsf.com/fullchain.pem#/tmp/fullchain.pem#; \
+     s#/etc/letsencrypt/live/opencircuitsf.com/privkey.pem#/tmp/privkey.pem#" \
+  deploy/apache/opencircuitsf.com.conf > /tmp/vhost-scratch.conf
+cat > /tmp/httpd-check.conf <<EOF
+ServerRoot "/usr"
+LoadModule mpm_event_module libexec/apache2/mod_mpm_event.so
+LoadModule proxy_module libexec/apache2/mod_proxy.so
+LoadModule proxy_http_module libexec/apache2/mod_proxy_http.so
+LoadModule rewrite_module libexec/apache2/mod_rewrite.so
+LoadModule ssl_module libexec/apache2/mod_ssl.so
+LoadModule headers_module libexec/apache2/mod_headers.so
+LoadModule unixd_module libexec/apache2/mod_unixd.so
+LoadModule log_config_module libexec/apache2/mod_log_config.so
+LoadModule authz_core_module libexec/apache2/mod_authz_core.so
+Listen 8443
+Include /tmp/vhost-scratch.conf
+ErrorLog /tmp/httpd-check-error.log
+ServerName localhost
+EOF
+httpd -t -f /tmp/httpd-check.conf
+# → Syntax OK
+```
+
+run against the real Apache 2.4.67 installed on this development machine
+(`httpd -v`) — the closest available stand-in for AL2023's 2.4.68, not the
+real thing. This confirms the file **parses**: every `Header`/`ProxyPass`/
+`RewriteRule` directive is spelled correctly and every module they need
+(`mod_headers`, `mod_proxy`, `mod_proxy_http`, `mod_rewrite`, `mod_ssl`) is
+one Apache actually ships. It does **not** confirm the headers are correct
+under a real HTTPS request, that the CSP doesn't break some interaction not
+exercised by the SPA's automated tests, or that `flushpackets=on` behaves as
+documented under a real proxied SSE connection.
+
+---
+
+## 9. TLS
+
+Obtain a single certificate covering both names:
+
+```bash
+sudo certbot --apache -d opencircuitsf.com -d www.opencircuitsf.com
+```
+
+Certbot's Apache plugin typically offers to add its own `:80` vhost with an
+HTTP→HTTPS redirect if one doesn't already exist for these names — **accept
+that offer** (or add one by hand) so plain-HTTP requests aren't served
+insecurely; `deploy/apache/opencircuitsf.com.conf` as committed only defines
+a `:443` vhost. Certbot also installs its own renewal timer/cron entry
+automatically; confirm which (`systemctl list-timers | grep certbot` on a
+systemd-managed renewal) and record it in the production-facts table above —
+`[PLACEHOLDER: CLAUDE.md §10 item 6]`.
+
+Reload once more if certbot didn't already:
+
+```bash
+sudo systemctl reload httpd
+curl -fsS https://www.opencircuitsf.com/health
+```
+
+**Not run anywhere** — this needs a real, publicly resolvable hostname
+pointed at a real box before certbot's HTTP-01 challenge can succeed; there
+is nothing to run it against yet.
+
+---
+
+## 10. First admin login
+
+`seed` (step 6) creates the admin user row but does **not** enroll a
+passkey — the **only** path to the first passkey is **"Recover account"**,
+not "Register". Registration rejects an email that already has a user row,
+so trying to register `ADMIN_EMAIL` after seeding silently does nothing.
+Recovery adds a passkey to an existing account without creating a new user
+and does not check the `registrations_enabled` gate — the correct path for
+an account that exists but has no passkey yet (mirrors ShortLinks
+`DEPLOYMENT.md` step 10).
+
+1. Open the site and click **"Recover account / lost passkey"** on the login
+   page.
+2. Enter the `ADMIN_EMAIL` address and submit. The page shows a generic
+   confirmation regardless of whether the address exists (email enumeration
+   is a first-class concern here, `CLAUDE.md` §9).
+3. **Email delivery must be working** — SES configured, `MAILER_NOOP=false`
+   in `/etc/opencircuit/config.env` — before this step succeeds. See **SES
+   setup** below; until SES exists, `MAILER_NOOP=true` logs the recovery
+   link to stdout instead (`docs/configuration.md`), which is a
+   `dev.sh`/local-only substitute, never a production setting.
+4. Follow the magic link from the recovery email. The browser opens the
+   recovery ceremony page and calls `navigator.credentials.create()` —
+   WebAuthn requires HTTPS, so TLS (step 9) must already be live.
+5. You are redirected in as the admin user; `is_admin` is preserved
+   throughout recovery.
+
+**Enabling registration for other users.** `registrations_enabled` defaults
+to `false`. Once signed in as admin, toggle it on under **Admin → Settings**
+before inviting anyone else to register — non-admin users use the
+**Register** form (not Recover account) and complete an email verification
+step.
+
+**Not run against a real deploy** — no SES account exists to send the
+recovery email through yet (`CLAUDE.md` §10 item 2), and no live instance
+exists to receive the HTTPS request. Locally, `#0008`'s manual verification
+procedure exercises the equivalent flow with `MAILER_NOOP=true` logging the
+link to stdout — that is the closest thing to a proof this step has.
+
+---
+
+## DNS (Route 53) — real values from `PRD.md` §10.2
 
 | Name | Type | Value | Purpose |
 |---|---|---|---|
-| `www.opencircuitsf.com` | A | EC2 Elastic IP | **Canonical host** |
-| `opencircuitsf.com` | A | EC2 Elastic IP | 301 → `www` |
-| `go.opencircuitsf.com` | A | EC2 Elastic IP | ShortLinks |
+| `www.opencircuitsf.com` | A | `[PLACEHOLDER: the EC2 instance's Elastic IP — CLAUDE.md §10 item 6]` | **Canonical host** |
+| `opencircuitsf.com` | A | `[PLACEHOLDER: same Elastic IP]` | 301 → `www` |
+| `go.opencircuitsf.com` | A | `[PLACEHOLDER: same Elastic IP — ShortLinks shares the box]` | ShortLinks |
+| `<sel1..3>._domainkey.opencircuitsf.com` | CNAME | `[PLACEHOLDER: issued by SES on domain verification, PRD §10.2/§10.4]` | DKIM |
+| `mail.opencircuitsf.com` | MX | `10 feedback-smtp.us-west-2.amazonses.com` | Custom MAIL FROM |
+| `mail.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF alignment |
+| `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-west-2.amazonaws.com` | **Inbound unsubscribe only** — never the apex MX, `CLAUDE.md` §9 |
+| `_dmarc.opencircuitsf.com` | TXT | `v=DMARC1; p=none; adkim=s; aspf=s; rua=mailto:…; fo=1` | DMARC — **start at `p=none`** |
 
-> **Known defect in the issue tracker:** `#0064`'s acceptance criteria say
-> the vhost should redirect `www` → apex. Production does the opposite,
-> and `WEBAUTHN_RP_ORIGIN` depends on `www` staying canonical — correct
-> that criterion before implementing `#0064` (`CLAUDE.md` §7).
+Every record name, type, and static value above is real, copied verbatim
+from `PRD.md` §10.2 (not invented for this document); the two things that
+cannot be known before an instance exists are the Elastic IP and the
+SES-issued DKIM CNAME targets — both explicitly placeholdered rather than
+guessed, per this pass's instructions not to invent `CLAUDE.md` §10 item 6
+facts.
 
-## IAM (`PRD.md` §10.5)
+**DMARC ramp — three steps, not one record.** Start `p=none` for at least
+two weeks and read the aggregate (`rua=`) reports, then move to
+`p=quarantine`, then `p=reject` once the reports show DKIM/SPF passing
+cleanly. Jumping straight to `p=reject` risks silently dropping legitimate
+mail with no visibility into why.
 
-The EC2 instance role is scoped tightly: `ses:SendEmail`/`ses:SendRawEmail`
-restricted to the verified identity ARN and configuration set;
-`s3:GetObject`/`s3:DeleteObject` on the inbound bucket only. No `ses:*`, no
-wildcard resources.
+---
 
-## Backups (`PRD.md` §10.6, `#0062`)
+## SES setup
+
+`CLAUDE.md` §10 item 2 records this as **not started**, deferred to
+deployment (user, 2026-08-23) — the only AWS credentials available in this
+development environment (`certbot-dns-updater`) cannot even
+`ses:ListEmailIdentities`, so nothing below has been run, and nothing in this
+pass attempted to run it. This section documents the steps to run **on the
+real box, once the AWS account exists** — see
+[`email-setup.md`](email-setup.md) for the same information organized by
+subsystem rather than by deploy sequence.
+
+1. **Region: `us-west-2`.** Closest to San Francisco and one of the shorter
+   list of regions supporting SES **inbound** receiving (needed for the
+   `mailto:` unsubscribe path, `PRD.md` §10.3). Verify the current
+   inbound-region list before committing, since AWS revises it.
+2. **Verify the domain** (`opencircuitsf.com`) in SES, enable **Easy DKIM**,
+   and add the resulting CNAME records to Route 53 (the DNS table above).
+3. **Custom MAIL FROM** — `mail.opencircuitsf.com`, with the MX and SPF TXT
+   records already listed above.
+4. **DMARC** — the ramp described in the DNS section above.
+5. **Request production access.** New accounts are sandboxed (200
+   messages/day, verified recipients only); approval takes roughly 24 hours
+   and everything downstream depends on it, so request this **early**, not
+   after everything else is ready. Describe the use case honestly: opt-in
+   announcement email for a community electronics workshop group, double
+   opt-in, one-click unsubscribe, bounce and complaint handling wired to
+   suppression (`PRD.md` §10.4).
+6. **A configuration set with open/click tracking disabled.** This is a
+   deploy-time fact the code cannot enforce and no test in this repo can
+   observe — an enabled configuration set injects a tracking pixel
+   **server-side**, at send time, which would violate `CLAUDE.md` §9's
+   no-open-tracking rule with zero code change and no visible symptom until
+   someone inspects a delivered message's HTML. Create
+   `opencircuit-transactional` (matching `.env.example`'s
+   `SES_CONFIGURATION_SET` default) with tracking explicitly off.
+7. **Enable SES's account-level suppression list** as belt-and-suspenders
+   alongside this project's own `suppressions` table (`PRD.md` §6.7,
+   `email-setup.md`'s own runbook step):
+
+   ```bash
+   aws sesv2 put-account-suppression-attributes \
+       --suppressed-reasons BOUNCE COMPLAINT \
+       --region us-west-2
+   ```
+
+8. **IAM instance role** — see the next section.
+9. Fill in the SES-dependent variables in `/etc/opencircuit/config.env`
+   (step 3) and restart: `AWS_REGION`, `SES_CONFIGURATION_SET`, `EMAIL_FROM`,
+   `EMAIL_REPLY_TO`, `EMAIL_LIST_DOMAIN`, `SES_INBOUND_BUCKET`. Set
+   `SES_SANDBOX=true` (or leave it, since `.env.example` defaults it true)
+   until step 5's production-access approval lands, and correspondingly cap
+   `MAX_SEND_RATE=1` — see step 3 above.
+
+**None of the above was executed.** This is a transcription of `PRD.md`
+§10.2–§10.4 and `email-setup.md` into deploy order, re-checked against those
+two documents for consistency, not a record of a real SES setup.
+
+---
+
+## IAM
+
+The EC2 instance role must be scoped tightly (`PRD.md` §10.5) — no static
+credentials anywhere in this project's configuration; the AWS SDK's default
+credential chain picks up the instance role automatically
+(`docs/configuration.md`'s `AWS_REGION` row). A policy document matching
+§10.5 exactly:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SESSendScoped",
+      "Effect": "Allow",
+      "Action": ["ses:SendEmail", "ses:SendRawEmail"],
+      "Resource": [
+        "arn:aws:ses:us-west-2:<ACCOUNT_ID>:identity/opencircuitsf.com"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ses:configuration-set": "opencircuit-transactional"
+        }
+      }
+    },
+    {
+      "Sid": "InboundBucketScoped",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::opencircuitsf-inbound/*"
+    }
+  ]
+}
+```
+
+`<ACCOUNT_ID>` is `[PLACEHOLDER: the AWS account ID, unknown until the
+account from CLAUDE.md §10 item 2 exists]`. No `ses:*`, no wildcard
+`Resource`, and no action beyond the two named pairs — matching `PRD.md`
+§10.5 and `email-setup.md`'s IAM section verbatim. **This policy has never
+been created or attached to a real role**; it is transcribed from the spec
+and re-checked against `docs/configuration.md`'s `SES_INBOUND_BUCKET`
+(`opencircuitsf-inbound`) and `SES_CONFIGURATION_SET`
+(`opencircuit-transactional`) defaults for consistency, not validated by
+`aws iam simulate-principal-policy` or any live AWS call — no credentials
+
+**The `ses:configuration-set` condition key above is a best-effort encoding
+of §10.5's "restricted to ... the configuration set" requirement, not a
+verified one.** Its exact name and availability for `ses:SendEmail`/
+`ses:SendRawEmail` was **not** checked against AWS's current IAM
+condition-key reference for SES — no live AWS access exists in this
+environment to confirm it (`CLAUDE.md` §10 item 2). Verify this key against
+AWS's service-authorization reference for Amazon SES before attaching this
+policy to a real role; the `Resource`-scoped identity-ARN restriction above
+it does not depend on this key and is solid either way. The JSON itself
+parses (`python3 -m json.tool`, see `## Verification`) — that only proves it
+is well-formed, not that IAM will accept every key in it.
+capable of that exist in this environment (`CLAUDE.md` §10 item 2).
+
+---
+
+## Backups (`PRD.md` §10.6, `#0062`, `#0228`, `#0229`)
 
 The subscriber list is the single most valuable and least reconstructible
 asset in the system. `#0062` performed and verified a full restore drill
-against a local PostgreSQL 16 cluster (see **Restore drill** below) — this
-is a demonstrated round trip, not a belief. **Everything below the drill is
-either already implemented, or explicitly marked as not yet built /
-not re-verified on the server.**
+against a local PostgreSQL 16 cluster, `#0228` closed a real ownership defect
+the drill's own review found, and `#0229` reconciled the specification with
+what actually shipped and built the schedule. **Everything below is either
+already implemented, or explicitly marked as not yet built / not
+re-verified on the server.**
 
 ### What actually exists today — `PRD.md` §10.6 corrected to match (`#0229`)
 
@@ -146,10 +878,11 @@ throwaway and none collides with `scripts/testdb.sh`'s per-agent pool.
 #    workshop_interests, email_campaigns + campaign_interests + email_sends,
 #    email_events. Seed throwaway rows — never target a literal or seeded id
 #    (CLAUDE.md §8b).
-DSN="$(scripts/testdb.sh create 0062src)"   # captured ONCE — `create` drops-then-recreates,
-psql "$DSN" -f seed.sql                     # so calling it a second time destroys what step 1 just made
-#   seed.sql is not a repo file — it's a throwaway script you write for the
-#   drill, containing INSERT ... RETURNING id statements, no hardcoded ids.
+DSN="$(scripts/testdb.sh create 0062src)"   # captured ONCE — create a seed.sql
+psql "$DSN" -f seed.sql                     # of your own INSERT ... RETURNING id
+                                             # statements first; testdb.sh create
+                                             # drops-then-recreates, so it must run
+                                             # exactly once before you seed, not twice
 
 # 2. Snapshot what "correct" looks like BEFORE backing up: row counts per
 #    table, schema_migrations (version + dirty), every sequence's last_value
@@ -421,37 +1154,183 @@ triggers the alert unit the way the unit graph implies, or that `journalctl
   key — see "What this drill does not cover" above for exactly what that
   verification looks like.
 
-## Bootstrap admin (`opencircuit seed`)
+---
 
-After the first `migrate up` on a fresh database, run:
+## Redeploy procedure
+
+### Recommended: `scripts/deploy.sh`
+
+From the repo checkout on the host, on the latest commit:
 
 ```bash
-opencircuit seed
+git pull --rebase origin main
+./scripts/deploy.sh
 ```
 
-This idempotently ensures the `ADMIN_EMAIL` user exists with `is_admin = true`
-and `active = true` — safe to re-run; a second run is a no-op that exits `0`
-and does not create a duplicate row. Unlike ShortLinks' version, it does not
-seed a test link — this project has no `links` table (`PRD.md` §3.2). The
-interest taxonomy is seeded by the migration (`#0023`), not by this command.
+`scripts/deploy.sh` runs the redeploy with a verification gate at every step
+and **refuses to restart the service unless a genuinely fresh binary is
+ready**, in order: rejects any unresolved `[PLACEHOLDER: ...]` marker in
+`web/src/` (facts only the user can supply, `#0075`); rebuilds the SPA and
+confirms it produced hashed assets, not the committed placeholder; builds the
+Go binary and confirms with `grep -a` that it actually **embeds the bundle
+it just built** (catching a stale-`web/dist` build); asks for a `[y/N]`
+confirmation; installs to the path resolved from the live systemd unit's
+`ExecStart` and restarts it; confirms the service is `active` after restart;
+then curls the **live public URL** and fails unless it is serving that exact
+bundle. If any gate fails, it stops with an error instead of shipping a
+broken deploy. Override defaults with `SERVICE=… PUBLIC_URL=… BIN=…
+./scripts/deploy.sh`.
 
-**The seeded admin has no passkey.** `seed` only creates the user row; it
-cannot enroll a credential. First sign-in must use **"Recover account"** on
-the login page, not "Register" — Register rejects an email that already has a
-user row, so trying to register `ADMIN_EMAIL` after seeding silently does
-nothing. Recovery adds a passkey to an existing account without creating a
-new user and does not check the `registrations_enabled` gate, which is why it
-is the correct path for the seeded admin (mirrors ShortLinks
-`DEPLOYMENT.md` step 6). This is non-obvious and blocks first login if
-forgotten:
+**`scripts/deploy.sh` does not run `migrate` at all** — it only builds the
+SPA, builds and installs the binary, and restarts the service. If the commit
+being deployed added new migration files, running the script alone is not a
+complete deploy: run `migrate ... up` (**Migrations**, above) **before**
+running `./scripts/deploy.sh`, so the schema is already in the state the
+freshly built binary's queries expect by the time the service restarts onto
+it.
 
-1. Open the site and click **"Recover account / lost passkey"** on the login
-   page.
-2. Enter the `ADMIN_EMAIL` address and submit.
-3. Follow the magic link from the recovery email to complete the passkey
-   ceremony (`navigator.credentials.create()`).
-4. You are redirected in as the admin user; `is_admin` is preserved
-   throughout recovery.
+```bash
+git diff --name-only <last-deployed-sha>..HEAD -- migrations/   # any output => migrate first
+```
+
+### Manual steps (what the script automates)
+
+```bash
+cd /opt/opencircuit
+git pull
+
+# 1. Rebuild the SPA and the binary
+cd web && npm ci && npm run build
+cd ..
+go build -o opencircuit ./cmd/opencircuit
+sudo install -m 0755 opencircuit /usr/local/bin/opencircuit
+
+# 2. Apply any new migrations
+export DATABASE_URL='postgres://opencircuit:<password>@localhost:5432/opencircuit?sslmode=disable'
+migrate -path migrations -database "$DATABASE_URL" up
+
+# 3. Restart the service
+sudo systemctl restart opencircuit
+sudo systemctl status opencircuit
+curl -fsS https://www.opencircuitsf.com/health
+```
+
+If a deploy only changes `/etc/opencircuit/config.env`, `sudo systemctl
+restart opencircuit` alone is enough — no rebuild needed. If the systemd
+unit file itself changed, re-copy it and `sudo systemctl daemon-reload`
+first.
+
+---
+
+## Troubleshooting: a deploy ran but the site doesn't show the changes
+
+The SPA is **compiled into the Go binary** (`web/embed.go`, `//go:embed
+all:dist`) and served by that binary behind Apache. So "my changes don't
+appear" almost always means one link in this chain is stale:
+
+> latest commit → `npm run build` writes `web/dist/` → `go build` embeds it
+> → binary installed to the `ExecStart` path → service restarted → Apache
+> proxies it → browser.
+
+**Fastest single check — compare the served bundle to the built bundle:**
+
+```bash
+curl -s https://www.opencircuitsf.com/ | grep -oE '/assets/index-[^"]+'
+grep -oE 'index-[A-Za-z0-9_-]+\.(js|css)' web/dist/index.html
+```
+
+If those hashes differ, the new build isn't being served. Causes, most
+common first:
+
+1. **The SPA wasn't rebuilt before the binary.** `go build` without first
+   running `npm run build` embeds the old (or placeholder) bundle. Confirm
+   what the binary actually contains — use `grep -a` (whole-file scan), not
+   `strings`, which can false-negative on some platforms:
+
+   ```bash
+   grep -ao 'index-[A-Za-z0-9_-]*\.js' /usr/local/bin/opencircuit | sort -u
+   ```
+
+2. **The service wasn't restarted onto the new binary.** A new file on disk
+   does nothing until the process restarts — use `restart`, not `start`:
+
+   ```bash
+   systemctl show -p ExecMainStartTimestamp opencircuit   # should read "just now"
+   ```
+
+3. **The binary was built to a different path than systemd runs.**
+   `go build -o opencircuit` writes to the current directory; systemd runs
+   whatever `ExecStart` points at (`/usr/local/bin/opencircuit`). Always
+   `sudo install` to the `ExecStart` path.
+4. **The build host isn't on the latest commit.** `git rev-parse --short
+   HEAD` on the box must match what you intend to ship.
+5. **`go build` compiled a different `web/dist` than you rebuilt.** Check for
+   a workspace/vendor redirect or a symlinked dist:
+
+   ```bash
+   go env GOWORK
+   ls -ld vendor 2>/dev/null
+   readlink -f web/dist
+   ```
+
+6. **Apache is serving a static copy instead of proxying to the binary.**
+   Rebuilding the binary changes nothing if the vhost has a
+   `DocumentRoot`/`Alias` pointing at a static directory instead of
+   `ProxyPass` to `127.0.0.1:8080` — check the deployed config matches
+   `deploy/apache/opencircuitsf.com.conf`:
+
+   ```bash
+   grep -rE 'DocumentRoot|Alias|ProxyPass' /etc/httpd/conf.d/
+   ```
+
+7. **Caching (browser / CDN / proxy).** Hashed `assets/*` filenames bust
+   themselves, but `index.html` can be cached. Test with `curl` and a hard
+   refresh.
+
+`scripts/deploy.sh` checks #1, #2, #3, and #7 automatically and prints a
+diagnosis for #5 — prefer it over the manual steps.
+
+---
+
+## Loopback trust model and the CDN failure mode (`#0077`)
+
+`internal/middleware.ClientIP` (`internal/middleware/clientip.go`) trusts
+`X-Forwarded-For` only when the immediate TCP peer (`r.RemoteAddr`) is
+loopback, then takes the **rightmost** entry — the single hop
+`mod_proxy_http` appends. The Go process itself only ever binds
+`127.0.0.1:<port>` (`cmd/opencircuit/main.go`'s `addr :=
+fmt.Sprintf("127.0.0.1:%d", cfg.Port)`, currently line 1167 — cite the
+symbol, not the line number, since it shifts as the file grows), and there
+is no config knob to change either the bind address or the trusted-peer
+check — the anchor is enforced in code, not configuration.
+
+**Operational consequence: nothing else on this host may proxy or tunnel
+into `127.0.0.1:8080`.** Another local process, a host-network container, or
+an SSH tunnel forwarded to that port would be trusted exactly as if it were
+Apache — able to forge `X-Forwarded-For` and have it believed for rate
+limiting and `signup_ip` attribution. This is a real constraint on anything
+else ever run on the box (a monitoring agent, a debugging tunnel, a second
+reverse proxy for some other purpose) — audit what else binds or forwards to
+that port before adding anything, not after.
+
+**If a CDN or a second proxy is ever put in front of Apache**, the rightmost
+`X-Forwarded-For` entry becomes *that* proxy's egress IP, not the real
+client's: every user collapses into one rate-limit bucket and `signup_ip`
+records the CDN's IP for every signup — **silently, with no error anywhere**.
+`middleware.ClientIP` would need to be revisited (trusting the CDN's IP range
+and reading one entry further left) before any such change ships; this
+project currently has no CDN and no plan to add one, but the failure mode is
+worth knowing before someone reaches for one to solve an unrelated problem.
+
+---
+
+## Bootstrap admin (`opencircuit seed`)
+
+See **Seed** (step 6) and **First admin login** (step 10) above for the full
+procedure — kept here as a single cross-reference since earlier issues in
+this tracker (`#0010`) point at this heading directly.
+
+---
 
 ## Open items blocking a real deploy (`CLAUDE.md` §10)
 
@@ -469,13 +1348,59 @@ Tracked so a phase doesn't stall silently on one of these — none are code:
 6. Server-side details: instance ID/size/region, SSH access,
    `DocumentRoot`, vhost file, certbot renewal schedule, whether the
    existing Postgres is the target — undocumented, capture as encountered.
+   This is the item most of this document's `[PLACEHOLDER: ...]` markers
+   trace back to.
+7. SES account-level suppression list (`aws sesv2
+   put-account-suppression-attributes --suppressed-reasons BOUNCE
+   COMPLAINT`) — see **SES setup** above, step 7; gated on item 2.
+
+---
+
+## What this document is, and is not, verified against
+
+This is a **documentation deliverable**, verified by local inspection,
+syntax-checking, and cross-referencing against the repo's actual files and
+issue history — not by following it end to end on a real instance, which
+does not exist. Concretely, for this pass:
+
+- Every artifact path cited (`scripts/db/{create,drop}.sql`,
+  `.env.example`, `deploy/apache/opencircuitsf.com.conf`,
+  `deploy/systemd/{opencircuit,opencircuit-backup*}.service`,
+  `deploy/systemd/opencircuit-backup.timer`, `cmd/opencircuit/{main,seed}.go`,
+  `scripts/deploy.sh`, `scripts/db-reset.sh`) was confirmed to exist and was
+  read, not assumed.
+- The Apache vhost, including the new security headers, syntax-checks clean
+  (`httpd -t`) against a real local Apache 2.4.67 with `mod_proxy`,
+  `mod_proxy_http`, `mod_rewrite`, `mod_ssl`, and `mod_headers` loaded — see
+  the Apache step above for exactly what that does and does not prove.
+- The `script-src` CSP hash was computed programmatically (not hand-typed,
+  `CLAUDE.md` §8) from `web/index.html`'s source, with the limitation that
+  it was never checked against a real `npm run build` output — stated
+  inline where the hash appears, with the exact recompute command.
+- `deploy/systemd/opencircuit.service`'s hardening directives were confirmed
+  present by reading the file directly, not by running it — there is no
+  systemd on this development machine.
+- The DNS, SES, and IAM sections are transcriptions of `PRD.md` §10.2–§10.5
+  and `docs/email-setup.md`, cross-checked against `.env.example` and
+  `docs/configuration.md` for internal consistency (variable names, default
+  values), not validated against a real AWS account, which does not exist.
+- `CLAUDE.md` §10 item 6's unknowns (instance ID, size, region, SSH access,
+  `DocumentRoot`, installed vhost, certbot schedule, target Postgres) are
+  left as explicit `[PLACEHOLDER: ...]` markers throughout, not invented.
+- The acceptance criterion "the whole runbook followed once on a clean
+  instance and corrected where it was wrong" is **not met** and cannot be
+  until a real instance exists — see the top of this document.
 
 ## Where to look
 
 | Concern | File |
 |---|---|
-| systemd unit | `deploy/systemd/opencircuit.service` |
+| systemd unit (the service) | `deploy/systemd/opencircuit.service` |
 | Backup timer + failure alert (`#0229`) | `deploy/systemd/opencircuit-backup.{service,timer}`, `opencircuit-backup-alert.service`, `scripts/db/backup-alert.sh` |
-| Apache vhost | `deploy/apache/opencircuitsf.com.conf` |
+| Apache vhost (proxy, apex→www redirect, security headers) | `deploy/apache/opencircuitsf.com.conf` |
+| Redeploy automation | `scripts/deploy.sh` |
+| Local dev-database reset (never production) | `scripts/db-reset.sh` |
 | DB backup/restore scripts | `scripts/db/{backup,restore,pull-backups}.sh` |
 | DB create/drop | `scripts/db/{create,drop}.sql` |
+| Every configuration variable | `docs/configuration.md`, `.env.example` |
+| SES / DNS detail organized by subsystem | `docs/email-setup.md` |
