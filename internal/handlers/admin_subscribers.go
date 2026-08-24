@@ -72,6 +72,10 @@ type adminSubscriberStore interface {
 	// package doc comment for why this is a separate streaming query rather
 	// than a reuse of List.
 	StreamExport(ctx context.Context, filter subscribers.ListFilter, fn func(subscribers.ExportRow) error) error
+	// Erase backs DELETE /admin/subscribers/{id} (#0060) — see
+	// internal/subscribers/erase.go's package doc comment for what it does
+	// and why.
+	Erase(ctx context.Context, id int64, now time.Time) (subscribers.ErasureResult, error)
 }
 
 // adminInterestByIDReader is the behavior AdminSubscribersHandler needs from
@@ -115,6 +119,7 @@ type softBounceCounter interface {
 //	POST /admin/subscribers/{id}/clear-complaint     — the sole sanctioned exit from `complained` (subscribers.Store.AdminClearComplaint)
 //	POST /admin/subscribers                          — manual add; still requires double opt-in confirmation
 //	GET  /admin/subscribers/export                   — streaming CSV export, audited (#0059; admin_subscribers_export.go)
+//	DELETE /admin/subscribers/{id}                   — GDPR/CCPA erasure: hard delete + permanent suppression (#0060; see Erase below)
 //
 // All routes MUST be mounted behind middleware.RequireSession then
 // middleware.RequireAdmin, exactly like the other admin handlers in this
@@ -847,5 +852,144 @@ func (h *AdminSubscribersHandler) Create(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, manualAddResponse{
 		Subscriber: toSubscriberView(result, nil),
 		Message:    manualAddMessage(result.Status),
+	})
+}
+
+// ── DELETE /admin/subscribers/{id} ───────────────────────────────────────────
+
+// eraseSubscriberRequest is DELETE /admin/subscribers/{id}'s body.
+// ConfirmEmail is the typed confirmation #0060's acceptance criteria
+// requires: the caller must type the subscriber's own email address back,
+// the "type the resource's name to confirm" pattern GitHub/similar consoles
+// use for irreversible actions, rather than a bare boolean flag a client
+// could send without any evidence an operator saw what they were about to
+// destroy.
+type eraseSubscriberRequest struct {
+	ConfirmEmail string `json:"confirm_email"`
+}
+
+// eraseSubscriberResponse is DELETE /admin/subscribers/{id}'s 200 body. The
+// subscriber row itself is gone by the time this is built — every field
+// below is a copy Erase captured before deleting it.
+type eraseSubscriberResponse struct {
+	Erased               bool   `json:"erased"`
+	Email                string `json:"email"`
+	PreviousStatus       string `json:"previous_status"`
+	InterestsRemoved     int    `json:"interests_removed"`
+	EmailSendsAnonymized int64  `json:"email_sends_anonymized"`
+	Message              string `json:"message"`
+}
+
+// Erase handles DELETE /admin/subscribers/{id} (#0060, PRD §11): hard-deletes
+// the subscriber, cascading its subscriber_interests rows, after
+// anonymizing its email_sends rows and adding a permanent `manual`
+// suppression for its address — see internal/subscribers/erase.go's package
+// doc comment for the full design, and CLAUDE.md §9 for why a hard delete
+// here does not defeat the "complained never auto-resubscribes" rule (the
+// suppression added below outlives the row and blocks return either way).
+//
+// Requires a typed confirmation: the request body's confirm_email must
+// case-insensitively match the target subscriber's own address (400
+// otherwise), so this destructive, irreversible action cannot be triggered
+// by a bare click with no evidence the operator saw what they were about to
+// erase — the same "typed confirmation enforced only in the browser is
+// theatre" reasoning #0047's campaign-send confirm_count carries in
+// (admin_campaigns.go's sendCampaignRequest).
+//
+// 409s with ErrHasPendingSends if the subscriber has a queued or
+// currently-sending campaign delivery — see erase.go's package doc comment
+// for exactly why erasing through that would leave a stuck email_sends row
+// rather than protecting anyone, and what an operator should do instead
+// (wait for the send to finish, or cancel the campaign, then retry).
+//
+// For a copy of this subscriber's data before erasing it (this issue's
+// "data-export-on-request path" criterion), reuse #0059's export filtered
+// to this one address: GET /admin/subscribers/export?q=<email> —
+// StreamExport's Query filter is already a case-insensitive substring match
+// against email, so the exact address this handler just verified against
+// before (below) returns exactly one row. A dedicated single-subscriber
+// export endpoint would duplicate that query for no new behavior.
+func (h *AdminSubscribersHandler) Erase(w http.ResponseWriter, r *http.Request) {
+	actor, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	id, ok := parseSubscriberID(w, r)
+	if !ok {
+		return
+	}
+
+	var req eraseSubscriberRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	confirmEmail := strings.ToLower(strings.TrimSpace(req.ConfirmEmail))
+	if confirmEmail == "" {
+		writeError(w, http.StatusBadRequest, "confirm_email is required")
+		return
+	}
+
+	// Loaded (and its email compared against the typed confirmation) BEFORE
+	// calling Erase: the store method's own before-state doesn't reach this
+	// handler, and a 400 for a mistyped confirmation must not have mutated
+	// anything.
+	before, err := h.store.GetByID(r.Context(), id)
+	switch {
+	case errors.Is(err, subscribers.ErrNotFound):
+		writeError(w, http.StatusNotFound, "subscriber not found")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if confirmEmail != strings.ToLower(strings.TrimSpace(before.Email)) {
+		writeError(w, http.StatusBadRequest, "confirm_email does not match this subscriber's address")
+		return
+	}
+
+	now := h.now()
+	result, err := h.store.Erase(r.Context(), id, now)
+	switch {
+	case errors.Is(err, subscribers.ErrNotFound):
+		// Raced with a concurrent delete between GetByID above and here.
+		writeError(w, http.StatusNotFound, "subscriber not found")
+		return
+	case errors.Is(err, subscribers.ErrHasPendingSends):
+		writeError(w, http.StatusConflict, "cannot erase: a campaign delivery to this subscriber is queued or in progress")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	if h.auditor != nil {
+		actorID := actor.ID
+		targetID := id
+		h.auditor.Record(r.Context(), audit.Entry{
+			ActorID:    &actorID,
+			Action:     audit.ActionSubscriberErased,
+			TargetType: audit.TargetSubscriber,
+			TargetID:   &targetID,
+			Metadata: map[string]any{
+				"email":                  result.Email,
+				"previous_status":        result.PreviousStatus,
+				"interests_removed":      result.InterestsRemoved,
+				"email_sends_anonymized": result.EmailSendsAnonymized,
+				"suppression_reason":     subscribers.SuppressionReasonManual,
+				"suppression_preexisted": result.SuppressionPreexisted,
+			},
+			IP: clientIP(r),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, eraseSubscriberResponse{
+		Erased:               true,
+		Email:                result.Email,
+		PreviousStatus:       result.PreviousStatus,
+		InterestsRemoved:     result.InterestsRemoved,
+		EmailSendsAnonymized: result.EmailSendsAnonymized,
+		Message:              "Subscriber erased. The address remains on the permanent suppression list and cannot be silently re-added.",
 	})
 }

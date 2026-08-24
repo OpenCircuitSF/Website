@@ -794,6 +794,12 @@ func adminRoutes(
 			// of registration order, so there is no risk of this being
 			// shadowed by the id route or of "export" being parsed as an id.
 			adminRoute{http.MethodGet, "/admin/subscribers/export", http.HandlerFunc(adminSubscribersH.Export)},
+			// #0060: GDPR/CCPA erasure — hard delete + permanent suppression.
+			// Registered on the same {id} literal-vs-wildcard footing as
+			// export above; Go 1.22+'s pattern router dispatches by method
+			// first, so DELETE /admin/subscribers/{id} coexists safely with
+			// GET /admin/subscribers/{id} on the identical path pattern.
+			adminRoute{http.MethodDelete, "/admin/subscribers/{id}", http.HandlerFunc(adminSubscribersH.Erase)},
 		)
 	}
 	if adminSuppressionsH != nil {

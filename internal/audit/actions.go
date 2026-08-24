@@ -179,6 +179,33 @@ const (
 	// when unfiltered, mirroring the export's own "respects the current
 	// status and interest filters" criterion).
 	ActionSubscriberExported = "subscriber.exported"
+	// ActionSubscriberErased is written by DELETE /admin/subscribers/{id}
+	// (#0060, PRD §11's "erasure is a hard delete plus a permanent
+	// suppression entry" GDPR/CCPA posture), after
+	// subscribers.Store.Erase's transaction commits. TargetID is the
+	// erased subscriber's former id — audit_log.target_id carries no
+	// foreign key to subscribers (migrations/000005), so the row is not
+	// orphaned by the delete it records; it is the one place that id can
+	// still be resolved to an email after this row exists. Actor is
+	// always the requesting admin, never nil (unlike
+	// ActionSubscriberSignup's pre-auth convention). Metadata records
+	// `email` (also independently retained on the `manual` suppressions
+	// row this same transaction wrote — see
+	// internal/subscribers/erase.go's package doc comment — so this is
+	// not a new place the address becomes recoverable), `previous_status`,
+	// `interests_removed` (the subscriber_interests row count the
+	// subscribers(id) ON DELETE CASCADE just destroyed), `email_sends_
+	// anonymized` (how many send-history rows had their `email` snapshot
+	// overwritten rather than deleted — PRD §11/this issue's Notes:
+	// preserving campaign counts), `suppression_reason` (always "manual"
+	// — the reason Erase itself adds) and `suppression_preexisted` (true
+	// when a `manual` suppression for this address already existed before
+	// this call, e.g. a repeat erasure request). Deliberately omits
+	// signup_ip/signup_user_agent/utm_*/confirm_token/manage_token — an
+	// erasure audit row exists to prove the action happened and let an
+	// operator reconstruct its scope, not to become a second place the
+	// data just erased is still sitting in plaintext.
+	ActionSubscriberErased = "subscriber.erased"
 
 	// Interest taxonomy lifecycle (PRD §6.1, §5.2 — the admin CRUD, #0024).
 	// ActionInterestUpdated covers any field change other than the active

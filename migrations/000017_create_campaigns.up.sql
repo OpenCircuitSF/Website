@@ -71,11 +71,22 @@ CREATE TABLE campaign_interests (
 -- unsubscribed or been suppressed is marked 'skipped' rather than mailed.
 -- Landing it here avoids #0044 shipping its own ALTER TABLE just to widen
 -- this CHECK.
+--
+-- subscriber_id is nullable with ON DELETE SET NULL, not the NOT NULL/
+-- CASCADE pair an earlier version of this migration had (#0060, edited into
+-- this migration in place — greenfield, CLAUDE.md §1). #0060's acceptance
+-- criteria require a GDPR erasure to ANONYMIZE this table's rows for the
+-- erased subscriber rather than delete them, so historical campaign counts
+-- never silently change. A CASCADE delete would destroy exactly the rows
+-- erasure must preserve, so subscribers.Store.Erase (internal/subscribers/
+-- erase.go) anonymizes email_sends.email for the subscriber's rows and lets
+-- the subsequent DELETE FROM subscribers set subscriber_id to NULL via this
+-- FK — severing the identifying link without losing the row or its status.
 CREATE TABLE email_sends (
     id             BIGSERIAL PRIMARY KEY,
     campaign_id    BIGINT NOT NULL REFERENCES email_campaigns(id) ON DELETE CASCADE,
-    subscriber_id  BIGINT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
-    email          TEXT NOT NULL,                    -- snapshot of subscribers.email at materialization
+    subscriber_id  BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
+    email          TEXT NOT NULL,                    -- snapshot of subscribers.email at materialization (anonymized in place by #0060's erasure)
     status         TEXT NOT NULL DEFAULT 'queued',
                    -- queued | sent | failed | skipped
                    -- 'bounced'/'complained' were removed by #0131: SES bounce
