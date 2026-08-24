@@ -44,6 +44,13 @@ TRACKED = {
     "FONT-LICENSE":                   "fonts/LICENSE",
 }
 
+# Derived here, with no upstream counterpart: the same photographs with the
+# baked-in "> Open Circuit SF _" reconstructed away, so a transparent canvas
+# can draw live text over the real screen without colliding with it. Made by
+# tools/blank-screen.py. Not drift-checked, because there is nothing to check
+# against -- if the upstream photographs change, regenerate these.
+DERIVED = ("hero-crt-blank-760.webp", "hero-crt-blank-light-760.webp")
+
 MIME = {".webp": "image/webp", ".woff2": "font/woff2", ".png": "image/png"}
 
 
@@ -74,6 +81,11 @@ def check_assets(sync: bool) -> int:
             drift += 1
             if sync:
                 shutil.copy2(up, local)
+
+    for name in DERIVED:
+        if not (ASSETS / name).is_file():
+            print(f"  !  {name}: MISSING — regenerate with tools/blank-screen.py")
+            drift += 1
 
     if drift and sync:
         print(f"synced {drift} asset(s) from web/public/")

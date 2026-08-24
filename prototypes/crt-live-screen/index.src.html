@@ -142,17 +142,20 @@ body{
    colours the WebP DECODES to, not the source PNG's — see #0231. */
 .hero{
   --bg-panel:#e8eee5; --bg-header:#dae3d6; --border:#c6d1c2;
-  --crt-photo:url('assets/hero-crt-light-760.webp');
+  --crt-photo:url('assets/hero-crt-blank-light-760.webp');
+  --crt-photo-baked:url('assets/hero-crt-light-760.webp');
 }
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]) .hero{
     --bg-panel:#191c17; --bg-header:#1b231c; --border:#243028;
-    --crt-photo:url('assets/hero-crt-760.webp');
+    --crt-photo:url('assets/hero-crt-blank-760.webp');
+    --crt-photo-baked:url('assets/hero-crt-760.webp');
   }
 }
 :root[data-theme="dark"] .hero{
   --bg-panel:#191c17; --bg-header:#1b231c; --border:#243028;
-  --crt-photo:url('assets/hero-crt-760.webp');
+  --crt-photo:url('assets/hero-crt-blank-760.webp');
+  --crt-photo-baked:url('assets/hero-crt-760.webp');
 }
 
 .hero-row{display:flex; flex-direction:column; align-items:center; gap:var(--space-5);}
@@ -210,7 +213,12 @@ body{
   transform-origin:0 0;
   overflow:hidden;
   border-radius:8%/6%;
-  background:#03200c;
+  /* No background. The canvas is cleared rather than filled, so the
+     photograph's own screen -- its texture, curvature, vignette and corner
+     glow -- shows through and only the glyphs are drawn on top. Painting a
+     flat #03200c here instead would hide every one of those and leave a
+     visibly flatter rectangle sitting on a curved tube. */
+  background:transparent;
   will-change:transform;
 }
 .screen-plane canvas,.scanlines,.glass{position:absolute; inset:0; width:100%; height:100%;}
@@ -220,12 +228,21 @@ body{
 .scanlines{
   background:repeating-linear-gradient(to bottom,
     rgba(0,0,0,.16) 0 1px, transparent 1px 3px);
-  opacity:.55;
+  /* Much lighter than it would need to be over a flat fill: the photographed
+     screen already carries its own scan texture, so this only reinforces it.
+     Doubling it reads as moire. */
+  opacity:.22;
 }
+.stage.no-scanlines .scanlines{display:none;}
+.stage.no-glass .glass{display:none;}
+.stage.baked-photo{background-image:var(--crt-photo-baked);}
 .glass{
+  /* Also reduced. The photograph's tube already darkens toward its corners;
+     the earlier values were tuned against an opaque fill that had no vignette
+     of its own, and over the real screen they crushed the corners twice. */
   background:
-    radial-gradient(ellipse at center, transparent 52%, rgba(0,0,0,.14) 74%, rgba(0,0,0,.60) 100%),
-    linear-gradient(150deg, rgba(255,255,255,.04), transparent 26%, transparent 74%, rgba(95,255,145,.02));
+    radial-gradient(ellipse at center, transparent 62%, rgba(0,0,0,.06) 80%, rgba(0,0,0,.26) 100%),
+    linear-gradient(150deg, rgba(255,255,255,.03), transparent 26%, transparent 74%, rgba(95,255,145,.02));
 }
 
 /* ── PROTOTYPE ONLY — calibration scaffolding, does not ship ───────────────── */
@@ -353,6 +370,9 @@ body{
       <button id="resetBtn" type="button">Reset</button>
       <button id="bootBtn" type="button">Replay boot</button>
       <button id="widthBtn" type="button">Toggle wide stage</button>
+      <label class="switch"><input id="bakedToggle" type="checkbox"> Original photo (text baked in)</label>
+      <label class="switch"><input id="scanToggle" type="checkbox" checked> Scanlines</label>
+      <label class="switch"><input id="glassToggle" type="checkbox" checked> Glass vignette</label>
       <span class="switch" id="motionNote"></span>
     </div>
     <div class="grid4">
@@ -543,6 +563,20 @@ body{
     for (const n of Object.keys(defaults)) { corners[n].x = defaults[n].x; corners[n].y = defaults[n].y; }
     applyWarp();
   });
+  // The canvas is transparent, so the photographed screen is what shows
+  // through -- which means the baked-in "> Open Circuit SF _" would collide
+  // with the live text. assets/hero-crt-blank-*.webp are the same photographs
+  // with that line reconstructed away; this toggle shows why they exist.
+  const bakedToggle = document.getElementById('bakedToggle');
+  bakedToggle.addEventListener('change', () =>
+    stage.classList.toggle('baked-photo', bakedToggle.checked));
+  const scanToggle = document.getElementById('scanToggle');
+  scanToggle.addEventListener('change', () =>
+    stage.classList.toggle('no-scanlines', !scanToggle.checked));
+  const glassToggle = document.getElementById('glassToggle');
+  glassToggle.addEventListener('change', () =>
+    stage.classList.toggle('no-glass', !glassToggle.checked));
+
   document.getElementById('widthBtn').addEventListener('click', () => {
     stage.style.width = stage.style.width === '560px' ? '' : '560px';
     applyWarp();
@@ -555,7 +589,7 @@ body{
   const ctx = term.getContext('2d');
   const gctx = glow.getContext('2d');
 
-  const BG = '#03200c', PHOS = '#3dff86', HOT = '#d5ffe2';
+  const PHOS = '#3dff86', HOT = '#d5ffe2';
   const FONT_PX = 26, LINE_H = 33, LEFT = 40, TOP = 38, MAX_LINES = 12;
 
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -569,7 +603,11 @@ body{
   function paint() {
     ctx.setTransform(1,0,0,1,0,0);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowBlur = 0;
-    ctx.fillStyle = BG; ctx.fillRect(0,0,SRC_W,SRC_H);
+    // Cleared, not filled. Everything the photograph already shows -- phosphor
+    // texture, tube curvature, corner falloff, the glow pooling at the top --
+    // survives, and only the glyphs are composited over it. A flat fill would
+    // replace all of it with a rectangle.
+    ctx.clearRect(0,0,SRC_W,SRC_H);
 
     ctx.textBaseline = 'top';
     ctx.font = FONT_PX + "px 'JetBrains Mono', ui-monospace, Menlo, monospace";
@@ -587,10 +625,13 @@ body{
       ctx.restore();
     }
 
+    // The bloom layer is the glyphs alone, blurred. It must also be cleared
+    // rather than filled: this canvas is composited with mix-blend-mode
+    // screen, and screen against a filled ground would lift the whole
+    // photographed screen, not just the text.
     gctx.setTransform(1,0,0,1,0,0);
     gctx.globalCompositeOperation = 'source-over';
-    gctx.fillStyle = BG; gctx.fillRect(0,0,SRC_W,SRC_H);
-    gctx.globalCompositeOperation = 'screen';
+    gctx.clearRect(0,0,SRC_W,SRC_H);
     gctx.drawImage(term, 0, 0);
   }
 
