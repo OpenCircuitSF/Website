@@ -85,6 +85,26 @@ func TestUnsubscribeHandler_Post_ValidToken_UnsubscribesRotatesAndAudits(t *test
 		t.Error("NoOp = true, want false — this is a real unsubscribe")
 	}
 
+	// #0221: unsubscribe.go's doc comment claims this response shares the
+	// same no_op schema as preferences.go and admin_subscribers.go (#0093),
+	// but only those two carried a raw-JSON presence assertion proving the
+	// key survives on the wire rather than merely decoding to the zero
+	// value. Struct-decoding can't tell an explicit `false` from an omitted
+	// key, so this mirrors preferences_test.go's
+	// TestPreferencesHandler_Patch_UnsubscribeEverything assertion: parse
+	// into a map and confirm "no_op" is present and false. Reinstating
+	// `,omitempty` on unsubscribeResponse.NoOp would drop the key here and
+	// fail this check.
+	var raw map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw response: %v", err)
+	}
+	if v, ok := raw["no_op"]; !ok {
+		t.Error(`response body has no "no_op" key at all — want it present and false (omitempty would drop it here)`)
+	} else if v != false {
+		t.Errorf(`response body's "no_op" = %v, want false`, v)
+	}
+
 	after, err := subs.GetByID(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
