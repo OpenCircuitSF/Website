@@ -170,9 +170,17 @@ func EntryTruncate(pool *pgxpool.Pool, release func(), sqlStmt string, tables []
 		fmt.Fprintf(os.Stderr, "testdb: session(s) holding a lock on %s at diagnosis time:\n%s",
 			strings.Join(closure, ", "), diag)
 	} else {
+		// Three possibilities, not two (#0225 review): the blocker may have
+		// released between the timeout and this check, it may be holding a
+		// lock this diagnostic did not check for, or — a case the previous
+		// wording didn't name — the original failure above may not have been
+		// a lock wait at all. That third case isn't actually misleading (the
+		// real error from pool.Exec printed on the line above this block),
+		// but it should still be named here rather than left implicit.
 		fmt.Fprintf(os.Stderr, "testdb: no lock holder found on %s at diagnosis time — "+
-			"the blocker may have released between the timeout and this check, or is holding "+
-			"a lock this diagnostic did not check for\n", strings.Join(closure, ", "))
+			"either the blocker released between the timeout and this check, it is holding "+
+			"a lock this diagnostic did not check for, or the original failure (see the error "+
+			"above) was not a lock wait at all\n", strings.Join(closure, ", "))
 	}
 	fmt.Fprintf(os.Stderr, "testdb: exiting this test binary (os.Exit(1)) — TestMain cannot "+
 		"guarantee a clean starting state for %s, so no test in this package can safely run\n",
@@ -264,10 +272,31 @@ func cascadeClosure(pool *pgxpool.Pool, roots []string) ([]string, error) {
 // to still succeed diagnostically even though the original statement could
 // not.
 //
-// Deliberately excludes advisory locks (pg_locks.relation is NULL for those,
-// so the join drops them): the cross-package serialization lock from Lock
-// above is expected to be held by whichever package is mid-run, and would
-// otherwise show up as false "culprit" noise on every single diagnosis.
+// tables' entries are matched by relation identity (oid), not by formatted
+// text (#0225). cascadeClosure hands back conrelid::regclass::text — quoted
+// where a name needs it, schema-qualified where the relation is outside
+// search_path — and a naive `pg_class.relname = ANY(tables)` (the previous
+// version) does not agree with that format for either shape: it missed a
+// same-quoted or non-search_path relation entirely, and would conversely
+// have false-matched a same-named relation in a different schema had one
+// ever been passed in raw. to_regclass() parses exactly the same syntax
+// `::regclass::text` produces — quoted, schema-qualified, or bare — and
+// resolves it under the same search_path rules, so pairing it with
+// l.relation (already an oid, no join needed to get one) sidesteps the
+// dialect mismatch entirely: identity is compared as oid = oid, and the
+// display column below reconstructs a canonical (possibly quoted,
+// possibly schema-qualified) name from that oid rather than trusting
+// pg_class.relname to already be one. Unlike a plain `::regclass` cast,
+// to_regclass() returns NULL rather than erroring for a relation that no
+// longer exists (e.g. dropped between the timeout and this diagnosis), so
+// a stale entry in tables degrades to "no match" instead of failing the
+// whole query.
+//
+// Deliberately excludes advisory locks (pg_locks.relation is NULL for
+// those): NULL = ANY(...) is NULL, never true, so those rows never satisfy
+// the WHERE clause. The cross-package serialization lock from Lock above is
+// expected to be held by whichever package is mid-run, and would otherwise
+// show up as false "culprit" noise on every single diagnosis.
 //
 // A session holding locks on more than one of tables gets one line, not one
 // per table (#0097 item 3 review: the previous version deduplicated by pid
@@ -283,13 +312,15 @@ func diagnoseLockHolders(pool *pgxpool.Pool, tables []string) string {
 	defer cancel()
 
 	rows, err := pool.Query(ctx, `
-		SELECT l.pid, c.relname, a.state, COALESCE(a.query, ''), a.query_start
+		SELECT l.pid, l.relation::regclass::text, a.state, COALESCE(a.query, ''), a.query_start
 		  FROM pg_locks l
-		  JOIN pg_class c ON c.oid = l.relation
 		  JOIN pg_stat_activity a ON a.pid = l.pid
 		 WHERE l.granted
 		   AND l.pid <> pg_backend_pid()
-		   AND c.relname = ANY($1)
+		   AND l.relation = ANY(
+		         SELECT to_regclass(t)::oid
+		           FROM unnest($1::text[]) AS t
+		       )
 		 ORDER BY l.pid`, tables)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "testdb: lock diagnosis query itself failed: %v\n", err)
