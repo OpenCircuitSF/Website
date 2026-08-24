@@ -137,3 +137,58 @@ func TestAccountComplaintRate_DuplicateEventsCountRecipientOnce(t *testing.T) {
 			afterComplained, beforeComplained+1, beforeComplained)
 	}
 }
+
+// TestAccountComplaintRate_NumeratorExcludesNonSentStatus is #0227 item 2's
+// regression test: the numerator's FILTER now carries the same
+// `s.status = 'sent'` predicate the denominator's always has (see
+// AccountComplaintRate's own doc comment for why this was previously
+// missing, and why it was unreachable rather than a live bug). Nothing at
+// the schema level (migration 000018's email_sends_status_check) forbids a
+// non-'sent' row from carrying a ses_message_id — only this package's own
+// writers (worker_store.go's MarkSent) happen to always pair the two — so
+// this seeds exactly that combination directly, bypassing the worker's claim
+// path entirely, the same way seedSentSend bypasses it for the 'sent' case
+// above.
+func TestAccountComplaintRate_NumeratorExcludesNonSentStatus(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	stats := NewCampaignStatsStore(pool)
+	campaignStore := NewCampaignStore(pool)
+
+	c, err := campaignStore.Create(ctx, CampaignInput{
+		Name: uniqueCampaignName(t), Subject: "s", BodyMD: "b", AudienceMode: AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupCampaign(t, pool, c.ID)
+
+	beforeComplained, beforeSent, err := stats.AccountComplaintRate(ctx)
+	if err != nil {
+		t.Fatalf("AccountComplaintRate (before): %v", err)
+	}
+
+	subscriberID := seedSubscriber(t, pool, subscribers.StatusActive)
+	sesMessageID := fmt.Sprintf("zz-complaintrate-failed-%d", testdb.Unique())
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO email_sends (campaign_id, subscriber_id, email, status, ses_message_id)
+		 VALUES ($1, $2, $3, 'failed', $4)`,
+		c.ID, subscriberID, fmt.Sprintf("zz-complaintrate-failed-%d@example.com", testdb.Unique()), sesMessageID,
+	); err != nil {
+		t.Fatalf("seed failed send carrying a ses_message_id: %v", err)
+	}
+	seedComplaintEvent(t, pool, sesMessageID)
+
+	afterComplained, afterSent, err := stats.AccountComplaintRate(ctx)
+	if err != nil {
+		t.Fatalf("AccountComplaintRate (after): %v", err)
+	}
+	if afterComplained != beforeComplained {
+		t.Errorf("complained = %d, want %d (unchanged) — a 'failed' row's linked Complaint event must not count toward the numerator, matching the denominator's own status='sent' predicate",
+			afterComplained, beforeComplained)
+	}
+	if afterSent != beforeSent {
+		t.Errorf("sent = %d, want %d (unchanged) — a 'failed' row must not count toward the denominator either",
+			afterSent, beforeSent)
+	}
+}

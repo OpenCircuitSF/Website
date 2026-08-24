@@ -495,8 +495,16 @@ export interface DashboardCampaignRow {
  * it as exact"). inbound_mail_unavailable is always true today: PRD §6.5
  * path 3 (#0058) is not built, so there is no count this figure could ever
  * report — see admin_dashboard.go's package doc comment.
+ *
+ * complaint_rate_review (amber, #0227) and complaint_rate_high (red) are
+ * INDEPENDENT booleans, not tiers of one escalating scale: a rate above the
+ * red threshold sets both true, because both consequences — AWS may
+ * re-sandbox the account (review) and Gmail/Yahoo will filter mail (high)
+ * — apply at once. lib/dashboard.ts's buildWarnings renders each as its
+ * own distinct message.
  */
 export interface DashboardWarnings {
+  complaint_rate_review: boolean;
   complaint_rate_high: boolean;
   complaint_rate_pct?: number;
   complaint_sample_size: number;

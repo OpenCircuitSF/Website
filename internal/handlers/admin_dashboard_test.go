@@ -396,3 +396,67 @@ func TestAdminDashboardOverview_ComplaintRateHighAboveThreshold(t *testing.T) {
 		t.Errorf("complaint_rate_pct = %.4f, want > %.4f threshold", *after.Warnings.ComplaintRatePct, dashboardComplaintRateThresholdPct)
 	}
 }
+
+// TestAdminDashboardBuildWarnings_ComplaintRateBandBoundaries is #0227's
+// regression test for both complaint-rate bands, proved the way #0061's
+// review proved the original single 0.3% threshold: one send either side of
+// each boundary, asserting the corresponding flag flips. Unlike that
+// review's proof (a throwaway probe binary against a live database, recorded
+// only in prose — see #0061's Review notes), this drives buildWarnings
+// directly — it is pure arithmetic over (complained, sent) with no store
+// dependency, so no database or seeded fixture is needed to pin an EXACT
+// fraction the way the DB-backed tests in this file (which assert only a
+// delta against a shared, never-truncated table) cannot.
+//
+// The amber boundary (0.1%) is the arithmetically harder one per #0227's
+// notes: 1/1000 = 0.100000000000000005551115... in float64, which this test
+// confirmed (by hand, outside Go) rounds to the SAME float64 value as the
+// literal 0.1 used for dashboardComplaintReviewThresholdPct, so `pct >=
+// threshold` is a genuine equality at the boundary, not a near-miss that
+// happens to round the right way. 1/1001 lands measurably below it
+// (0.0999000999...%), so the two cases are not a coincidence of rounding.
+//
+// The red boundary (0.3%) reuses #0061's own already-verified pair (1/333
+// warns, 1/334 does not) rather than re-deriving a new one, since #0227
+// leaves that threshold's VALUE unchanged — only the comparison operator
+// moved from strict `>` to `>=` (## Decision's table: "≥ 0.3%"), which this
+// pair cannot distinguish (neither fraction lands exactly on 0.3%) but which
+// the exact-0.3% case below does.
+func TestAdminDashboardBuildWarnings_ComplaintRateBandBoundaries(t *testing.T) {
+	h := &AdminDashboardHandler{}
+
+	cases := []struct {
+		name       string
+		complained int64
+		sent       int64
+		wantReview bool
+		wantHigh   bool
+	}{
+		{"far below both bands: 0/1000 = 0.0%", 0, 1000, false, false},
+		{"amber boundary, warns: 1/1000 = 0.1000...%", 1, 1000, true, false},
+		{"amber boundary, does not warn: 1/1001 = 0.0999...%", 1, 1001, false, false},
+		{"between the bands: 1/500 = 0.2%", 1, 500, true, false},
+		{"red boundary, exact: 3/1000 = 0.3000...%", 3, 1000, true, true},
+		{"red boundary, just below exact: 2999/1000000 = 0.2999%", 2999, 1_000_000, true, false},
+		{"red boundary, warns (#0061's own pair): 1/333 = 0.3003...%", 1, 333, true, true},
+		{"red boundary, does not warn (#0061's own pair): 1/334 = 0.2994...%", 1, 334, true, false},
+		{"far above both bands: 60/60 = 100%", 60, 60, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := h.buildWarnings(tc.complained, tc.sent, nil)
+			pct := float64(tc.complained) / float64(tc.sent) * 100
+			if w.ComplaintRatePct == nil {
+				t.Fatalf("complaint_rate_pct is nil at sent=%d (>= dashboardComplaintMinSample=%d, should be populated)", tc.sent, dashboardComplaintMinSample)
+			}
+			if w.ComplaintRateReview != tc.wantReview {
+				t.Errorf("complaint_rate_review = %v, want %v (pct=%.10f%%, amber threshold=%.2f%%)",
+					w.ComplaintRateReview, tc.wantReview, pct, dashboardComplaintReviewThresholdPct)
+			}
+			if w.ComplaintRateHigh != tc.wantHigh {
+				t.Errorf("complaint_rate_high = %v, want %v (pct=%.10f%%, red threshold=%.2f%%)",
+					w.ComplaintRateHigh, tc.wantHigh, pct, dashboardComplaintRateThresholdPct)
+			}
+		})
+	}
+}

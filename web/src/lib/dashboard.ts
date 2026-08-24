@@ -40,12 +40,20 @@ export interface DashboardWarning {
  * Builds the "what needs attention" list from the server's warnings block.
  * Order is fixed (not severity-sorted) so the list doesn't reshuffle between
  * loads — physical address first since it is the one #0061's own notes call
- * out as blocking a send outright, then delivery health, then
+ * out as blocking a send outright, then the two complaint-rate bands (#0227:
+ * amber before red, matching the ## Decision table's own ordering), then
  * infrastructure status, then the acknowledged gap.
  *
  * complaint_rate_pct being absent (small sample) is NOT a warning — it is
  * "not enough data yet," rendered as no row at all rather than a false
- * "high" or a fabricated "0.00%".
+ * "high"/"review" or a fabricated "0.00%".
+ *
+ * The two complaint-rate rows are independent, not an escalating pair: both
+ * can render together (a rate above 0.3% is also above 0.1%), because both
+ * consequences — AWS may re-sandbox the account, and Gmail/Yahoo will
+ * filter mail — are true at once. Collapsing them into a single row keyed
+ * off the higher band would silently drop the re-sandboxing warning exactly
+ * when it matters most.
  */
 export function buildWarnings(w: DashboardWarnings): DashboardWarning[] {
   const rows: DashboardWarning[] = [];
@@ -59,10 +67,18 @@ export function buildWarnings(w: DashboardWarnings): DashboardWarning[] {
     });
   }
 
+  if (w.complaint_rate_pct !== undefined && w.complaint_rate_review) {
+    rows.push({
+      key: 'complaint-rate-review',
+      message: `Account-wide complaint rate is ${formatComplaintRatePct(w.complaint_rate_pct)}, at or above AWS's 0.1% account-wide threshold — AWS may put this account under review and return it to the sandbox, which would stop sending altogether.`,
+      alert: true,
+    });
+  }
+
   if (w.complaint_rate_pct !== undefined && w.complaint_rate_high) {
     rows.push({
-      key: 'complaint-rate',
-      message: `Account-wide complaint rate is ${formatComplaintRatePct(w.complaint_rate_pct)}, above Gmail/Yahoo's published 0.3% bulk-sender limit — this domain risks throttling or blocking.`,
+      key: 'complaint-rate-high',
+      message: `Account-wide complaint rate is ${formatComplaintRatePct(w.complaint_rate_pct)}, at or above Gmail/Yahoo's published 0.3% bulk-sender limit — this domain risks throttling or blocking.`,
       alert: true,
     });
   }
@@ -71,7 +87,7 @@ export function buildWarnings(w: DashboardWarnings): DashboardWarning[] {
     rows.push({
       key: 'ses-sandbox',
       message:
-        'SES is still in sandbox mode (200 messages/day, verified recipients only). Request production access before sending to the real list.',
+        'This environment is configured for SES sandbox mode (200 messages/day, verified recipients only). Request production access before sending to the real list.',
       alert: false,
     });
   }

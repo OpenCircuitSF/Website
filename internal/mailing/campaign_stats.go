@@ -128,11 +128,14 @@ func (s *CampaignStatsStore) EventCounts(ctx context.Context, campaignID int64) 
 
 // AccountComplaintRate reconciles bounce/complaint events across EVERY
 // campaign — not scoped to one campaignID, unlike EventCounts/StatusCounts
-// above — for #0061's admin overview dashboard warning: "complaint rate
-// above 0.3%" (PRD §11's RFC 8058 / Gmail-Yahoo bulk-sender threshold). This
-// is a DIFFERENT number from send_health_complaint_pct (worker.go,
-// PRD §6.9's per-campaign circuit breaker, default 0.1%): that one trips
-// mid-send on ONE campaign's own running rate; this one is the account-wide
+// above — for #0061's admin overview dashboard warnings (widened to two
+// bands by #0227): the account-wide rate against both AWS's 0.1%
+// re-sandboxing threshold and Gmail/Yahoo's 0.3% bulk-sender threshold
+// (PRD §6.9, PRD §11's RFC 8058). This is a DIFFERENT number from the
+// per-campaign circuit breaker's own running complaint rate (PRD §6.9,
+// default 0.1%, tripped mid-send on ONE campaign): that breaker is #0124,
+// unimplemented — no `send_health_complaint_pct` constant exists in this
+// codebase to conflate this figure with. This one is the account-wide
 // figure an operator watches to keep the whole domain's sender reputation
 // healthy, computed fresh on every dashboard load rather than tracked
 // incrementally.
@@ -144,9 +147,20 @@ func (s *CampaignStatsStore) EventCounts(ctx context.Context, campaignID int64) 
 // safe against the JOIN's fan-out (a send with more than one Complaint
 // notification, or a send whose ses_message_id also matches a Bounce row),
 // mirroring EventCounts' own reasoning for the same construction.
+//
+// The numerator's FILTER carries the same `s.status = 'sent'` predicate as
+// the denominator's (#0227 item 2) — unreachable in practice today, since
+// the only writer of ses_message_id (worker_store.go's MarkSent) always
+// pairs it with status='sent' in the same statement, but nothing at the
+// schema level forbids a non-'sent' row from carrying one (see
+// campaign_stats_test.go's TestAccountComplaintRate_NumeratorExcludesNonSentStatus,
+// which seeds exactly that combination directly). Without the filter, such
+// a row's linked Complaint event would inflate the numerator while its
+// denominator predicate excluded the row itself — a rate above 100%,
+// representable if a future change ever produces that combination for real.
 func (s *CampaignStatsStore) AccountComplaintRate(ctx context.Context) (complained, sent int64, err error) {
 	err = s.pool.QueryRow(ctx,
-		`SELECT count(DISTINCT s.id) FILTER (WHERE e.event_type = 'Complaint'),
+		`SELECT count(DISTINCT s.id) FILTER (WHERE e.event_type = 'Complaint' AND s.status = 'sent'),
 		        count(DISTINCT s.id) FILTER (WHERE s.status = 'sent')
 		   FROM email_sends s
 		   LEFT JOIN email_events e ON e.ses_message_id = s.ses_message_id`,

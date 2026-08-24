@@ -19,6 +19,7 @@ function growth(overrides: Partial<DashboardGrowth> = {}): DashboardGrowth {
 
 function warnings(overrides: Partial<DashboardWarnings> = {}): DashboardWarnings {
   return {
+    complaint_rate_review: false,
     complaint_rate_high: false,
     complaint_sample_size: 0,
     physical_address_unset: false,
@@ -82,7 +83,7 @@ describe('buildWarnings', () => {
     expect(rows[0].alert).toBe(false);
   });
 
-  it('includes complaint rate as an alert only when BOTH high is true AND a percentage is present', () => {
+  it('includes the red complaint-rate row as an alert only when BOTH high is true AND a percentage is present', () => {
     // High with no percentage (should not happen server-side, but the
     // client must not fabricate one) — omitted.
     expect(buildWarnings(warnings({ complaint_rate_high: true }))).toEqual([]);
@@ -93,22 +94,46 @@ describe('buildWarnings', () => {
     // Both present and high — included, with the percentage in the message.
     const rows = buildWarnings(warnings({ complaint_rate_pct: 0.42, complaint_rate_high: true }));
     expect(rows).toHaveLength(1);
-    expect(rows[0].key).toBe('complaint-rate');
+    expect(rows[0].key).toBe('complaint-rate-high');
     expect(rows[0].alert).toBe(true);
     expect(rows[0].message).toContain('0.42%');
   });
 
-  it('orders physical address first, then complaint rate, then SES sandbox, then inbound mail', () => {
+  it('includes the amber complaint-rate-review row as an alert only when BOTH review is true AND a percentage is present', () => {
+    expect(buildWarnings(warnings({ complaint_rate_review: true }))).toEqual([]);
+    expect(buildWarnings(warnings({ complaint_rate_pct: 0.05, complaint_rate_review: false }))).toEqual([]);
+
+    const rows = buildWarnings(warnings({ complaint_rate_pct: 0.15, complaint_rate_review: true }));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].key).toBe('complaint-rate-review');
+    expect(rows[0].alert).toBe(true);
+    expect(rows[0].message).toContain('0.15%');
+  });
+
+  it('renders BOTH bands together when a rate clears both thresholds — they are independent, not an escalating pair', () => {
+    const rows = buildWarnings(warnings({ complaint_rate_pct: 0.5, complaint_rate_review: true, complaint_rate_high: true }));
+    expect(rows.map((r) => r.key)).toEqual(['complaint-rate-review', 'complaint-rate-high']);
+    expect(rows.every((r) => r.alert)).toBe(true);
+  });
+
+  it('orders physical address first, then amber complaint review, then red complaint high, then SES sandbox, then inbound mail', () => {
     const rows = buildWarnings(
       warnings({
         physical_address_unset: true,
         complaint_rate_pct: 1,
+        complaint_rate_review: true,
         complaint_rate_high: true,
         ses_sandbox_active: true,
         inbound_mail_unavailable: true,
       }),
     );
-    expect(rows.map((r) => r.key)).toEqual(['physical-address', 'complaint-rate', 'ses-sandbox', 'inbound-mail']);
+    expect(rows.map((r) => r.key)).toEqual([
+      'physical-address',
+      'complaint-rate-review',
+      'complaint-rate-high',
+      'ses-sandbox',
+      'inbound-mail',
+    ]);
   });
 });
 

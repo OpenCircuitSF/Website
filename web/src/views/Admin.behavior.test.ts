@@ -149,6 +149,7 @@ function emptyOverview(): DashboardOverview {
     interests: [],
     recent_campaigns: [],
     warnings: {
+      complaint_rate_review: false,
       complaint_rate_high: false,
       complaint_sample_size: 0,
       physical_address_unset: false,

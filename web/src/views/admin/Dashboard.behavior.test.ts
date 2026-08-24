@@ -46,6 +46,7 @@ function emptyOverview(): DashboardOverview {
     interests: [],
     recent_campaigns: [],
     warnings: {
+      complaint_rate_review: false,
       complaint_rate_high: false,
       complaint_sample_size: 0,
       physical_address_unset: false,
@@ -71,6 +72,7 @@ function populatedOverview(): DashboardOverview {
     ],
     sending_campaign: { id: 10, name: 'September teaser', status: 'sending', started_at: '2026-08-24T09:00:00Z' },
     warnings: {
+      complaint_rate_review: true,
       complaint_rate_high: true,
       complaint_rate_pct: 0.42,
       complaint_sample_size: 200,
@@ -128,10 +130,16 @@ describe('Dashboard — populated payload', () => {
     const addressWarning = screen.getByText(/No physical mailing address is set/);
     expect(addressWarning.closest('li')?.classList.contains('alert')).toBe(true);
 
-    const complaintWarning = screen.getByText(/0.42%/);
-    expect(complaintWarning.closest('li')?.classList.contains('alert')).toBe(true);
+    // Both complaint-rate bands render as their own alert row (#0227: the
+    // amber AWS-review warning and the red Gmail/Yahoo warning are
+    // independent, not one escalating row).
+    const reviewWarning = screen.getByText(/AWS's 0.1% account-wide threshold/);
+    expect(reviewWarning.closest('li')?.classList.contains('alert')).toBe(true);
 
-    const sandboxWarning = screen.getByText(/SES is still in sandbox mode/);
+    const highWarning = screen.getByText(/Gmail\/Yahoo's published 0.3% bulk-sender limit/);
+    expect(highWarning.closest('li')?.classList.contains('alert')).toBe(true);
+
+    const sandboxWarning = screen.getByText(/configured for SES sandbox mode/);
     expect(sandboxWarning.closest('li')?.classList.contains('alert')).toBe(false);
   });
 

@@ -44,15 +44,33 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 )
 
+// dashboardComplaintReviewThresholdPct is AWS's account-wide complaint-rate
+// ceiling (PRD §6.9: "AWS enforces... a complaint rate under 0.1% across the
+// whole SES account. Crossing... puts the account under review and then into
+// sandbox"), computed account-wide across every campaign ever sent — the
+// AMBER band (#0227). Crossing it does not degrade inbox placement the way
+// the red band below does; it risks sending stopping altogether, since a
+// re-sandboxed account can't send even confirmation emails. This is NOT
+// send_health_complaint_pct (PRD §6.9's per-campaign circuit breaker, also
+// defaulted to 0.1% but scoped to ONE campaign's own running rate at send
+// time) — that setting doesn't exist as code today; the breaker itself is
+// #0124, unimplemented. Keep the two separate once #0124 lands: conflating
+// them would either weaken the breaker's bound or make this warning read
+// from a per-campaign figure instead of the account-wide one it is defined
+// against.
+const dashboardComplaintReviewThresholdPct = 0.1
+
 // dashboardComplaintRateThresholdPct is the Gmail/Yahoo bulk-sender
 // complaint-rate ceiling (PRD §11: "complaint rate under 0.3%"), computed
-// account-wide across every campaign ever sent. This is NOT
-// send_health_complaint_pct (worker.go, PRD §6.9's per-campaign circuit
-// breaker, default 0.1%) — that number trips mid-send on one campaign's own
-// running rate and is read from the settings table; this one is a fixed
-// threshold the dashboard checks fresh on every load. Keep the two separate:
-// conflating them would either weaken the breaker's tighter bound or make
-// this warning fire on the breaker's stricter one.
+// account-wide across every campaign ever sent — the RED band (#0227).
+// Crossing it degrades inbox placement (throttling/filtering), a different
+// and lesser consequence than the amber band above (AWS re-sandboxing,
+// which stops sending entirely) — the two are reported as independent
+// booleans, not one escalating color, precisely because the failure modes
+// differ. Like the amber threshold, this is NOT
+// send_health_complaint_pct — see that constant's doc comment; #0124 is the
+// per-campaign circuit breaker this would-be settings-table value belongs
+// to once it exists.
 const dashboardComplaintRateThresholdPct = 0.3
 
 // dashboardComplaintMinSample: below this many account-wide sends, a
@@ -191,7 +209,18 @@ func toDashboardCampaignRow(c mailing.Campaign) dashboardCampaignRow {
 // the operator see a warning banner" signal; the accompanying data fields
 // give the banner something concrete to say rather than a bare flag.
 type dashboardWarnings struct {
-	ComplaintRateHigh bool `json:"complaint_rate_high"`
+	// ComplaintRateReview (amber, #0227): the account-wide rate has crossed
+	// AWS's 0.1% threshold — the account may be put under review and
+	// returned to the sandbox, which would stop sending altogether.
+	// ComplaintRateHigh (red): the account-wide rate has crossed Gmail/
+	// Yahoo's 0.3% bulk-sender limit — mail will be filtered. The two are
+	// independent booleans, not tiers of one scale: a rate above 0.3% sets
+	// BOTH true, because both consequences apply simultaneously, and the
+	// client renders each as its own distinct message (dashboard.ts's
+	// buildWarnings) rather than collapsing them into one escalating
+	// color.
+	ComplaintRateReview bool `json:"complaint_rate_review"`
+	ComplaintRateHigh   bool `json:"complaint_rate_high"`
 	// ComplaintRatePct is omitted (nil) when the account-wide sample is
 	// below dashboardComplaintMinSample — see this file's doc comment on
 	// that constant. Never fabricated as 0 in that case, per CLAUDE.md §5's
@@ -362,7 +391,13 @@ func (h *AdminDashboardHandler) buildWarnings(complained, sent int64, settings [
 	if sent >= dashboardComplaintMinSample {
 		pct := float64(complained) / float64(sent) * 100
 		w.ComplaintRatePct = &pct
-		w.ComplaintRateHigh = pct > dashboardComplaintRateThresholdPct
+		// Both bands use >=, matching the ## Decision table in #0227
+		// (both "≥"): a rate landing exactly ON either boundary is inside
+		// the band, not below it — mirroring PRD §6.9's own "under 0.1%"/
+		// "under 0.3%" framing, where the safe zone is strictly under and
+		// the boundary value itself is already the violation.
+		w.ComplaintRateReview = pct >= dashboardComplaintReviewThresholdPct
+		w.ComplaintRateHigh = pct >= dashboardComplaintRateThresholdPct
 	}
 
 	addr := ""
