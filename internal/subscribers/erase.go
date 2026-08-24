@@ -1,6 +1,11 @@
 // erase.go implements GDPR/CCPA erasure (PRD §11; #0060) as one method on
 // *Store: a hard delete of the subscribers row that leaves behind exactly
-// the three things #0075's privacy policy already promises it will —
+// three of the four things web/src/views/PrivacyPolicy.svelte's "How to
+// leave" section promises it will (the fourth, an audit_log entry, is
+// written by the HANDLER after Erase returns — see
+// internal/handlers/admin_subscribers.go's audit.Entry{Action:
+// ActionSubscriberErased} call — not by this method, which has no
+// dependency on internal/audit) —
 //
 //  1. a permanent `manual`-reason suppressions row, so the address cannot be
 //     silently re-added by a future import or signup;
@@ -9,6 +14,15 @@
 //  3. email_events rows, untouched — the raw SES/SNS payload stays for
 //     deliverability forensics, but with no way back to this person once
 //     the subscribers row and the email_sends snapshot are both gone.
+//
+// This comment used to say "the three things" as if that were the whole
+// list — #0226 corrected it after finding it stale against the privacy
+// policy's own four-item list (the fourth landed in #0060's own Phase 3
+// bounce, months before this comment was last touched). See
+// web/src/views/PrivacyPolicy.guard.test.ts for the guard tying the
+// policy's list to this package's and admin_subscribers.go's actual
+// behavior, and PrivacyPolicy.svelte's own header comment for the fourth
+// item's exact wording.
 //
 // # Why hard-deleting the subscriber does not defeat the "complained never
 // # auto-resubscribes" rule (CLAUDE.md §9)

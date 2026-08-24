@@ -47,6 +47,34 @@
   //    "don't close either list with an absolute" note above, if a future
   //    change adds or removes a retained category, update the count rather
   //    than re-closing it at a fixed number.
+  //    `PrivacyPolicy.guard.test.ts` (#0226) asserts this list structurally
+  //    against `internal/subscribers/erase.go` and
+  //    `internal/handlers/admin_subscribers.go`'s real behavior -- see that
+  //    file for the exact source lines each item is checked against. Two
+  //    accuracy fixes from #0226's own review, both folded into the item
+  //    text above rather than left as a second "the page previously said"
+  //    footnote:
+  //      - the audit-log item now says "each action" / "each entry records
+  //        the IP address of the request that made it", not just "your
+  //        signup IP address" -- audit.Entry{IP: clientIP(r)} is written on
+  //        every subscriber-driven request (signup, the confirming click,
+  //        both unsubscribe paths, a preference update), not only signup
+  //        (internal/handlers/subscribe.go, confirm.go, unsubscribe.go,
+  //        preferences.go all set it), and the erasure entry itself carries
+  //        the ADMIN's IP (admin_subscribers.go's clientIP(r) is the admin's
+  //        own request), not the erased subscriber's -- worth not implying
+  //        otherwise. The item also now says this is "a separate mechanism"
+  //        from the single consent-evidence IP the Consent section
+  //        describes, so the two sections read as complementary rather than
+  //        contradictory (the Consent section's "not a second IP address"
+  //        claim is about the `subscribers` table's own columns -- it has
+  //        exactly one, `signup_ip` -- and stays true; audit_log is a
+  //        different table serving a different, operational purpose).
+  //      - the deliverability-events item now names "bounce/complaint
+  //        handling" as a purpose alongside "spam/abuse forensics" -- the
+  //        events themselves (bounces, complaints, deliveries) were already
+  //        named, but the parenthetical purpose list omitted the reason
+  //        PRD §6.9's delivery-health circuit breaker exists at all.
   //  - "No third-party analytics, ad trackers, external CDNs, or email
   //    open-tracking pixels" is CLAUDE.md §9's binding restriction, stated
   //    here as a fact about how the site is built, not a promise.
@@ -195,8 +223,8 @@
         items={[
           'a permanent suppression entry, so the address cannot be silently re-added by a future import or signup',
           'anonymized rows in our send history, so historical campaign counts (how many people a given email actually reached) do not silently change',
-          'the raw deliverability events (bounces, complaints, deliveries) already logged against your address, kept without the link back to your identity, for spam/abuse forensics',
-          'an internal admin audit log entry recording earlier actions on your account (signup, confirmation, and the erasure itself) — this includes your email address and your signup IP address, kept so we can prove a request was honored and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
+          'the raw deliverability events (bounces, complaints, deliveries) already logged against your address, kept without the link back to your identity, for spam/abuse forensics and to keep our own bounce/complaint handling accurate',
+          'an internal admin audit log entry for each action on your account (signup, confirmation, any unsubscribe or preference update, and the erasure itself) — each entry records the IP address of the request that made it, a separate mechanism from the single consent-evidence IP described above; the erasure entry itself carries the IP of the acting admin, not yours — kept so we can prove a request was honored and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
         ]}
       />
       <p>
