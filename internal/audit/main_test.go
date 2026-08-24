@@ -39,7 +39,12 @@ func TestMain(m *testing.M) {
 	// local context.WithTimeout, a second differently-valued bound
 	// alongside the 20s internal/handlers and cmd/opencircuit settled on
 	// (#0084). testdb.EntryTruncate centralizes the constant and adds
-	// lock-holder diagnosis on failure (#0097 item 3).
+	// lock-holder diagnosis on failure (#0097 item 3). The tables argument
+	// below names only what this statement truncates literally — CASCADE
+	// closure (e.g. users -> email_campaigns via its created_by FK, which
+	// carries no ON DELETE clause at all) is derived by EntryTruncate itself
+	// from pg_constraint; do not hand-add relations here (#0097 item 3
+	// review: a hand-written attempt at this list missed 6).
 	if testDBPool != nil {
 		testdb.EntryTruncate(testDBPool, release,
 			`TRUNCATE audit_log, users RESTART IDENTITY CASCADE`,

@@ -114,23 +114,32 @@ const TruncateTimeout = 20 * time.Second
 // package's entry truncate shares one deadline, one diagnostic, and one
 // failure path.
 //
-// tables names every relation sqlStmt's TRUNCATE takes a lock on — including
-// any table it reaches only via ON DELETE CASCADE, since TRUNCATE ... CASCADE
-// locks those too. It is used only to diagnose a failure (see below), not to
-// build the statement; callers still write their own SQL so the table list
-// stays visible and reviewable at the call site.
+// tables names the relations sqlStmt truncates literally — exactly what
+// appears in the TRUNCATE statement itself. EntryTruncate computes the
+// TRUNCATE ... CASCADE closure of tables from pg_constraint on its own (see
+// cascadeClosure) before diagnosing a failure, so callers no longer need to
+// hand-enumerate CASCADE-reached relations and cannot get that enumeration
+// wrong the way three of four #0097-era call sites originally did — see
+// issues/0097.md's Review notes for the reproduction (a hand-written list
+// missed 6, 4, and 3 relations respectively, and the diagnostic below told
+// the reader, wrongly, that a real lock wait "was not a lock wait at all"
+// because the blocker was holding a lock on exactly one of the omitted
+// tables). tables is used only to diagnose a failure (see below), not to
+// build the statement; callers still write their own SQL so the truncated
+// tables stay visible and reviewable at the call site.
 //
 // On success EntryTruncate returns normally and the caller proceeds to
 // m.Run(). On failure — most plausibly a lock wait against another session's
-// open transaction on one of tables, since #0091 moved every DB-backed
-// package onto a pool shared for its whole run against one shared database —
-// it:
+// open transaction on one of tables or a relation reachable from it, since
+// #0091 moved every DB-backed package onto a pool shared for its whole run
+// against one shared database — it:
 //
 //  1. runs a short diagnostic query naming every session currently holding a
-//     granted lock on one of tables (pid, state, query text, query_start), so
-//     the failure names its culprit instead of just "context deadline
-//     exceeded" — the blocking pid and the table are the two facts #0097
-//     item 3 asked for;
+//     granted lock on one of tables or the CASCADE closure computed from
+//     them (pid, state, query text, query_start, and every such relation it
+//     holds a lock on), so the failure names its culprit instead of just
+//     "context deadline exceeded" — the blocking pid and the table are the
+//     two facts #0097 item 3 asked for;
 //  2. prints why the whole test binary is about to exit — a TestMain that
 //     cannot guarantee its package's tables start clean cannot let any test
 //     in that package run at all;
@@ -148,33 +157,123 @@ func EntryTruncate(pool *pgxpool.Pool, release func(), sqlStmt string, tables []
 	}
 
 	fmt.Fprintf(os.Stderr, "testdb: entry truncate failed: %v\n", err)
-	if diag := diagnoseLockHolders(pool, tables); diag != "" {
+
+	closure, closureErr := cascadeClosure(pool, tables)
+	if closureErr != nil {
+		fmt.Fprintf(os.Stderr, "testdb: cascade closure lookup failed (%v); diagnosing only the "+
+			"literally-named relations %s, which may miss a CASCADE-reached culprit\n",
+			closureErr, strings.Join(tables, ", "))
+		closure = tables
+	}
+
+	if diag := diagnoseLockHolders(pool, closure); diag != "" {
 		fmt.Fprintf(os.Stderr, "testdb: session(s) holding a lock on %s at diagnosis time:\n%s",
-			strings.Join(tables, ", "), diag)
+			strings.Join(closure, ", "), diag)
 	} else {
 		fmt.Fprintf(os.Stderr, "testdb: no lock holder found on %s at diagnosis time — "+
-			"the blocker may have released between the timeout and this check, or the "+
-			"failure was not a lock wait at all\n", strings.Join(tables, ", "))
+			"the blocker may have released between the timeout and this check, or is holding "+
+			"a lock this diagnostic did not check for\n", strings.Join(closure, ", "))
 	}
 	fmt.Fprintf(os.Stderr, "testdb: exiting this test binary (os.Exit(1)) — TestMain cannot "+
 		"guarantee a clean starting state for %s, so no test in this package can safely run\n",
-		strings.Join(tables, ", "))
+		strings.Join(closure, ", "))
 	pool.Close()
 	release()
 	os.Exit(1)
 }
 
+// cascadeClosure returns roots plus every relation reachable by following
+// foreign-key references transitively from roots — i.e. the actual set of
+// tables a `TRUNCATE roots... CASCADE` locks, computed from pg_constraint
+// rather than trusted from a hand-written list at each EntryTruncate call
+// site.
+//
+// TRUNCATE ... CASCADE truncates (and locks) every table with a foreign key
+// pointing at a table being truncated, regardless of that key's ON DELETE
+// action — not only the ones declared ON DELETE CASCADE. #0097 item 3's
+// review reproduced this concretely: internal/audit's hand-written tables
+// list named only audit_log and users, but users(id) is also referenced by
+// email_campaigns.created_by with no ON DELETE clause at all (a plain
+// REFERENCES, migrations/000017_create_campaigns.up.sql), and
+// `TRUNCATE users CASCADE` still takes an ACCESS EXCLUSIVE lock on
+// email_campaigns — and, transitively, on its own two children
+// campaign_interests and email_sends — to preserve referential integrity.
+// A closure built only from confdeltype='c' rows would have missed exactly
+// the same relations the hand-written list did, so this walks every foreign
+// key (contype='f'), not only the ON DELETE CASCADE subset.
+func cascadeClosure(pool *pgxpool.Pool, roots []string) ([]string, error) {
+	if len(roots) == 0 {
+		return roots, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rows, err := pool.Query(ctx, `
+		SELECT conrelid::regclass::text, confrelid::regclass::text
+		  FROM pg_constraint
+		 WHERE contype = 'f'`)
+	if err != nil {
+		return nil, fmt.Errorf("testdb: cascade closure query: %w", err)
+	}
+	defer rows.Close()
+
+	// childrenOf[parent] lists every relation whose foreign key points at
+	// parent — i.e. every relation TRUNCATE parent CASCADE also locks.
+	childrenOf := make(map[string][]string)
+	for rows.Next() {
+		var child, parent string
+		if scanErr := rows.Scan(&child, &parent); scanErr != nil {
+			return nil, fmt.Errorf("testdb: cascade closure scan: %w", scanErr)
+		}
+		childrenOf[parent] = append(childrenOf[parent], child)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("testdb: cascade closure row iteration: %w", rowsErr)
+	}
+
+	seen := make(map[string]bool, len(roots))
+	closure := make([]string, 0, len(roots))
+	queue := make([]string, 0, len(roots))
+	for _, t := range roots {
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		closure = append(closure, t)
+		queue = append(queue, t)
+	}
+	for i := 0; i < len(queue); i++ {
+		for _, child := range childrenOf[queue[i]] {
+			if seen[child] {
+				continue
+			}
+			seen[child] = true
+			closure = append(closure, child)
+			queue = append(queue, child)
+		}
+	}
+	return closure, nil
+}
+
 // diagnoseLockHolders queries pg_locks/pg_stat_activity for every session
 // (other than this one) currently holding a granted lock on one of tables,
-// and formats one line per session. It uses a fresh, short-lived query
-// against pool rather than the caller's own (already-expired) context, since
-// the whole point is to still succeed diagnostically even though the
-// original statement could not.
+// and formats one line per session, naming every one of tables that session
+// holds a lock on. It uses a fresh, short-lived query against pool rather
+// than the caller's own (already-expired) context, since the whole point is
+// to still succeed diagnostically even though the original statement could
+// not.
 //
 // Deliberately excludes advisory locks (pg_locks.relation is NULL for those,
 // so the join drops them): the cross-package serialization lock from Lock
 // above is expected to be held by whichever package is mid-run, and would
 // otherwise show up as false "culprit" noise on every single diagnosis.
+//
+// A session holding locks on more than one of tables gets one line, not one
+// per table (#0097 item 3 review: the previous version deduplicated by pid
+// alone and reported only whichever relation happened to sort first for
+// that pid, so a session blocking on several of the truncated tables looked
+// like it was blocking on just one, arbitrarily chosen).
 func diagnoseLockHolders(pool *pgxpool.Pool, tables []string) string {
 	if len(tables) == 0 {
 		return ""
@@ -198,8 +297,14 @@ func diagnoseLockHolders(pool *pgxpool.Pool, tables []string) string {
 	}
 	defer rows.Close()
 
-	var b strings.Builder
-	seen := make(map[int32]bool)
+	type holder struct {
+		relnames   []string
+		state      string
+		query      string
+		queryStart *time.Time
+	}
+	holders := make(map[int32]*holder)
+	var order []int32 // first-seen order == ascending pid, per ORDER BY l.pid
 	for rows.Next() {
 		var (
 			pid        int32
@@ -212,20 +317,37 @@ func diagnoseLockHolders(pool *pgxpool.Pool, tables []string) string {
 			fmt.Fprintf(os.Stderr, "testdb: lock diagnosis scan failed: %v\n", scanErr)
 			continue
 		}
-		if seen[pid] {
-			continue
-		}
-		seen[pid] = true
 
-		started := "unknown"
-		if queryStart != nil {
-			started = queryStart.Format(time.RFC3339)
+		h, ok := holders[pid]
+		if !ok {
+			h = &holder{state: state, query: query, queryStart: queryStart}
+			holders[pid] = h
+			order = append(order, pid)
 		}
-		fmt.Fprintf(&b, "  pid %d holds a lock on %s, state=%s, query_start=%s: %s\n",
-			pid, relname, state, started, query)
+		dup := false
+		for _, r := range h.relnames {
+			if r == relname {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			h.relnames = append(h.relnames, relname)
+		}
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		fmt.Fprintf(os.Stderr, "testdb: lock diagnosis row iteration failed: %v\n", rowsErr)
+	}
+
+	var b strings.Builder
+	for _, pid := range order {
+		h := holders[pid]
+		started := "unknown"
+		if h.queryStart != nil {
+			started = h.queryStart.Format(time.RFC3339)
+		}
+		fmt.Fprintf(&b, "  pid %d holds a lock on %s, state=%s, query_start=%s: %s\n",
+			pid, strings.Join(h.relnames, ", "), h.state, started, h.query)
 	}
 	return b.String()
 }

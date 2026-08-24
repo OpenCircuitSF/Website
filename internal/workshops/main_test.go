@@ -32,11 +32,19 @@ func TestMain(m *testing.M) {
 	// no seed data (unlike interests' twelve-row taxonomy), so it is always
 	// safe to start this package's suite from an empty table rather than
 	// accumulating rows across runs against a shared (per-agent) test
-	// database. workshop_interests cascades via migration 000020's
-	// ON DELETE CASCADE, so it is listed alongside workshops below even
-	// though it is never named in the TRUNCATE statement itself — CASCADE
-	// locks it too, and #0097 item 3's diagnosis needs to know to look
-	// there.
+	// database.
+	//
+	// The tables argument below names only what this TRUNCATE statement
+	// truncates literally — "workshops" — not workshop_interests or any
+	// other relation reached only via CASCADE. testdb.EntryTruncate derives
+	// that closure itself from pg_constraint (#0097 item 3 review: a
+	// hand-written list here previously named workshop_interests but missed
+	// email_campaigns, campaign_interests, and email_sends — all reachable
+	// because email_campaigns.workshop_id references workshops with no ON
+	// DELETE clause at all, migrations/000020 — so TRUNCATE workshops
+	// CASCADE locks them too). Do not hand-add relations here; extend
+	// cascadeClosure's reasoning in internal/testdb/testdb.go instead if a
+	// gap is ever found.
 	//
 	// #0097 item 2: this used to carry its own fixed 10s deadline via a
 	// local context.WithTimeout, a second differently-valued bound
@@ -46,7 +54,7 @@ func TestMain(m *testing.M) {
 	if testDBPool != nil {
 		testdb.EntryTruncate(testDBPool, release,
 			`TRUNCATE workshops RESTART IDENTITY CASCADE`,
-			[]string{"workshops", "workshop_interests"})
+			[]string{"workshops"})
 	}
 
 	code := m.Run()
