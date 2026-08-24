@@ -53,7 +53,12 @@ ENV_FILE="$SCRIPT_DIR/../../.env"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/postgres}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 BACKUP_FORMAT="${BACKUP_FORMAT:-custom}"
-BACKUP_RUN_AS="${BACKUP_RUN_AS:-postgres}"
+#0062: use `-` (unset-only), not `:-` (unset-or-empty) — the header comment
+# above promises "set empty ... to skip sudo", but `:-` treats an explicitly
+# empty BACKUP_RUN_AS the same as an unset one and silently falls back to
+# "postgres" anyway. Verified against a local cluster: BACKUP_RUN_AS="" now
+# actually skips sudo, matching the documented contract.
+BACKUP_RUN_AS="${BACKUP_RUN_AS-postgres}"
 
 # Databases: positional args win; else $BACKUP_DATABASES; else the db name from
 # the project .env DATABASE_URL (parsed, not sourced, so other values can't break

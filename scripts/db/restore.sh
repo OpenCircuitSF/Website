@@ -29,7 +29,10 @@ set -euo pipefail
 
 DUMP="${1:?usage: restore.sh <dump-file> <target-db>}"
 TARGET="${2:?usage: restore.sh <dump-file> <target-db>}"
-BACKUP_RUN_AS="${BACKUP_RUN_AS:-postgres}"
+#0062: `-` (unset-only), not `:-` (unset-or-empty) — see backup.sh's matching
+# comment. BACKUP_RUN_AS="" must actually skip sudo, not silently fall back
+# to "postgres".
+BACKUP_RUN_AS="${BACKUP_RUN_AS-postgres}"
 RESTORE_CREATE="${RESTORE_CREATE:-0}"
 
 [ -f "$DUMP" ] || { echo "ERROR: dump file not found: $DUMP" >&2; exit 2; }
