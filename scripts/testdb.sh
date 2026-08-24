@@ -121,8 +121,25 @@ case "$cmd" in
     dsn "$db"                     # stdout is ONLY the DSN, so it is safe to $( ) into a var
     ;;
   drop)
+    # #0228: the old `A && B && C || D` chain reported "$db does not exist"
+    # whenever B (the DROP) failed for ANY reason, not just when A (existence)
+    # was false — so a database that exists but is owned by another role
+    # (e.g. one restore.sh created with RESTORE_CREATE=1 as a different OS
+    # user) hit `ERROR: must be owner of database`, printed the misleading
+    # "does not exist" message, and exited 0, leaving the stray database
+    # behind. Existence and drop-success are now checked separately, and a
+    # real drop failure is reported as a failure with a non-zero exit.
     db="$(name_for "${1:-}")"
-    db_exists "$db" && psql_admin -qc "DROP DATABASE $db;" && echo "dropped $db" || echo "$db does not exist"
+    if ! db_exists "$db"; then
+      echo "$db does not exist"
+      exit 0
+    fi
+    if psql_admin -qc "DROP DATABASE $db;"; then
+      echo "dropped $db"
+    else
+      echo "error: failed to drop $db (see the psql error above — commonly: you are not its owner)" >&2
+      exit 1
+    fi
     ;;
   reset)
     "$0" drop "${1:-}" >/dev/null; "$0" create "${1:-}"
