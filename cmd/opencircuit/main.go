@@ -345,6 +345,18 @@ func servePostgres(cfg *config.Config) error {
 	campaignStatsStore := mailing.NewCampaignStatsStore(pool)
 	adminCampaignStatsH := handlers.NewAdminCampaignStatsHandler(campaignStatsStore, campaignsStore)
 
+	// Admin overview dashboard (#0061, PRD §5.2): GET /admin/overview, the
+	// /admin landing screen. Reuses subscribersStore, interestsStore,
+	// campaignsStore, campaignStatsStore, and store (settings) constructed
+	// above rather than building any new store — see
+	// internal/handlers/admin_dashboard.go's package doc comment for why
+	// every figure it reads is already a single aggregate query on an
+	// existing store. cfg.SESSandbox is the manually-set operational flag
+	// that field's own doc comment (internal/config/config.go) explains.
+	adminDashboardH := handlers.NewAdminDashboardHandler(
+		subscribersStore, interestsStore, campaignsStore, campaignStatsStore, store, cfg.SESSandbox,
+	)
+
 	// Admin campaign preview and test send (#0046, PRD §5.2/§6.6): POST
 	// .../preview (render without sending) and POST .../test (a real send
 	// to the requesting admin's own address, through a dedicated synthetic
@@ -426,7 +438,7 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker, site,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -689,6 +701,14 @@ func serveDevMode(cfg *config.Config) error {
 	var adminWorkshopsH *handlers.AdminWorkshopsHandler
 	var publicWorkshopsH *handlers.PublicWorkshopsHandler
 
+	// Admin overview dashboard (#0061) has the same devstore gap as
+	// adminCampaignStatsH/adminWorkshopsH above -- it reads subscribers,
+	// interests, campaigns, and campaign stats, none of which
+	// internal/devstore backs. Passing nil leaves every other admin route
+	// working in STORAGE=json mode; adminRoutes omits its one route when
+	// nil.
+	var adminDashboardH *handlers.AdminDashboardHandler
+
 	// Public interests (#0029), confirm (#0030), preferences (#0031), and
 	// one-click unsubscribe (#0034) all have the same devstore gap as
 	// subscribeH/adminInterestsH above -- internal/devstore has no
@@ -718,7 +738,7 @@ func serveDevMode(cfg *config.Config) error {
 	var sendWorker *mailing.Worker
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -745,8 +765,8 @@ type adminRoute struct {
 //
 // adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH,
 // adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH,
-// adminCampaignStatsH, and adminWorkshopsH may be nil (dev mode /
-// STORAGE=json has no interests/subscribers-table backing yet — see
+// adminCampaignStatsH, adminWorkshopsH, and adminDashboardH may be nil (dev
+// mode / STORAGE=json has no interests/subscribers-table backing yet — see
 // mountAndServe's comment on the call site); their routes are simply
 // omitted, mirroring mountAndServe's own former nil guard.
 func adminRoutes(
@@ -762,6 +782,7 @@ func adminRoutes(
 	adminCampaignPreflightH *handlers.AdminCampaignPreflightHandler,
 	adminCampaignStatsH *handlers.AdminCampaignStatsHandler,
 	adminWorkshopsH *handlers.AdminWorkshopsHandler,
+	adminDashboardH *handlers.AdminDashboardHandler,
 ) []adminRoute {
 	routes := []adminRoute{
 		{http.MethodGet, "/admin/settings", http.HandlerFunc(settingsH.List)},
@@ -860,6 +881,12 @@ func adminRoutes(
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/preview", http.HandlerFunc(adminWorkshopsH.Preview)},
 		)
 	}
+	if adminDashboardH != nil {
+		routes = append(routes,
+			// #0061: the /admin landing screen's single data call.
+			adminRoute{http.MethodGet, "/admin/overview", http.HandlerFunc(adminDashboardH.Overview)},
+		)
+	}
 	return routes
 }
 
@@ -897,6 +924,7 @@ func mountAndServe(
 	adminCampaignPreflightH *handlers.AdminCampaignPreflightHandler,
 	adminCampaignStatsH *handlers.AdminCampaignStatsHandler,
 	adminWorkshopsH *handlers.AdminWorkshopsHandler,
+	adminDashboardH *handlers.AdminDashboardHandler,
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
 	subscribeH *handlers.SubscribeHandler,
@@ -972,7 +1000,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 

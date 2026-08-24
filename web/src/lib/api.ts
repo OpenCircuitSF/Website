@@ -26,6 +26,7 @@ import type {
   AdminWorkshop,
   AdminWorkshopsListResponse,
   WorkshopPreviewResponse,
+  DashboardOverview,
 } from './types';
 import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
 import type { UnsubscribeResult } from './unsubscribe';
@@ -654,6 +655,11 @@ export function cancelCampaign(id: number): Promise<Campaign> {
  */
 export function getCampaignStats(id: number): Promise<CampaignStatsResponse> {
   return apiGet<CampaignStatsResponse>(`/admin/campaigns/${id}/stats`);
+}
+
+/** GET /admin/overview (#0061): the /admin landing screen's single data call. */
+export function getOverview(): Promise<DashboardOverview> {
+  return apiGet<DashboardOverview>('/admin/overview');
 }
 
 // ── Public mailing-list journey: signup, confirm, preferences (#0029-#0031) ──

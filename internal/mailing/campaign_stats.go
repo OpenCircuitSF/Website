@@ -126,6 +126,37 @@ func (s *CampaignStatsStore) EventCounts(ctx context.Context, campaignID int64) 
 	return c, nil
 }
 
+// AccountComplaintRate reconciles bounce/complaint events across EVERY
+// campaign — not scoped to one campaignID, unlike EventCounts/StatusCounts
+// above — for #0061's admin overview dashboard warning: "complaint rate
+// above 0.3%" (PRD §11's RFC 8058 / Gmail-Yahoo bulk-sender threshold). This
+// is a DIFFERENT number from send_health_complaint_pct (worker.go,
+// PRD §6.9's per-campaign circuit breaker, default 0.1%): that one trips
+// mid-send on ONE campaign's own running rate; this one is the account-wide
+// figure an operator watches to keep the whole domain's sender reputation
+// healthy, computed fresh on every dashboard load rather than tracked
+// incrementally.
+//
+// LEFT JOIN, deliberately unlike EventCounts' INNER JOIN: a sent row with no
+// linked event must still count toward the "sent" denominator, and an INNER
+// JOIN would silently drop every clean send, understating the denominator
+// and overstating the rate. count(DISTINCT s.id) makes both FILTER clauses
+// safe against the JOIN's fan-out (a send with more than one Complaint
+// notification, or a send whose ses_message_id also matches a Bounce row),
+// mirroring EventCounts' own reasoning for the same construction.
+func (s *CampaignStatsStore) AccountComplaintRate(ctx context.Context) (complained, sent int64, err error) {
+	err = s.pool.QueryRow(ctx,
+		`SELECT count(DISTINCT s.id) FILTER (WHERE e.event_type = 'Complaint'),
+		        count(DISTINCT s.id) FILTER (WHERE s.status = 'sent')
+		   FROM email_sends s
+		   LEFT JOIN email_events e ON e.ses_message_id = s.ses_message_id`,
+	).Scan(&complained, &sent)
+	if err != nil {
+		return 0, 0, fmt.Errorf("mailing: computing account-wide complaint rate: %w", err)
+	}
+	return complained, sent, nil
+}
+
 // FailedSend is one email_sends row at status='failed', for the "failed
 // sends listable with their error messages" acceptance criterion.
 type FailedSend struct {

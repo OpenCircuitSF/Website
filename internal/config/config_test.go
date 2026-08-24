@@ -40,6 +40,7 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 	t.Setenv("SES_INBOUND_BUCKET", "opencircuitsf-inbound")
 	t.Setenv("SES_EVENTS_TOPIC_ARN", "arn:aws:sns:us-west-2:123456789012:opencircuit-ses-events")
 	t.Setenv("MAILER_NOOP", "true")
+	t.Setenv("SES_SANDBOX", "false")
 	t.Setenv("MAX_SEND_RATE", "25")
 	t.Setenv("SEND_BATCH_SIZE", "100")
 	t.Setenv("SEND_WORKER_ENABLED", "false")
@@ -68,6 +69,7 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 		{"SESInboundBucket", cfg.SESInboundBucket, "opencircuitsf-inbound"},
 		{"SESEventsTopicARN", cfg.SESEventsTopicARN, "arn:aws:sns:us-west-2:123456789012:opencircuit-ses-events"},
 		{"MailerNoOp", cfg.MailerNoOp, true},
+		{"SESSandbox", cfg.SESSandbox, false},
 		{"MaxSendRate", cfg.MaxSendRate, 25},
 		{"SendBatchSize", cfg.SendBatchSize, 100},
 		{"SendWorkerEnabled", cfg.SendWorkerEnabled, false},
@@ -154,6 +156,9 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	}
 	if cfg.MailerNoOp != false {
 		t.Errorf("MailerNoOp = %v, want default false — production must default to the real SES mailer", cfg.MailerNoOp)
+	}
+	if cfg.SESSandbox != true {
+		t.Errorf("SESSandbox = %v, want default true — no SES production-access request has been made yet (CLAUDE.md §10 item 2)", cfg.SESSandbox)
 	}
 }
 
@@ -271,6 +276,19 @@ func TestLoad_InvalidMailerNoOpBoolean(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "MAILER_NOOP") {
 		t.Errorf("error = %q, want substring %q", err.Error(), "MAILER_NOOP")
+	}
+}
+
+func TestLoad_InvalidSESSandboxBoolean(t *testing.T) {
+	setRequired(t)
+	t.Setenv("SES_SANDBOX", "not-a-bool")
+
+	_, err := loadFromFile(noEnvFile)
+	if err == nil {
+		t.Fatal("expected error for invalid SES_SANDBOX, got nil")
+	}
+	if !strings.Contains(err.Error(), "SES_SANDBOX") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "SES_SANDBOX")
 	}
 }
 

@@ -437,3 +437,70 @@ export interface PreferencesResponse {
   unsubscribed: boolean;
   no_op: boolean;
 }
+
+/**
+ * GET /admin/overview (#0061): the /admin landing screen's single data call.
+ * Matches internal/handlers/admin_dashboard.go's dashboardOverviewResponse
+ * exactly — see that file's package doc comment for why every figure here
+ * is one aggregate query, not a loop.
+ */
+export interface DashboardOverview {
+  subscribers: DashboardSubscribers;
+  interests: DashboardInterestRow[];
+  recent_campaigns: DashboardCampaignRow[];
+  /** Absent (undefined) when no campaign is currently mid-send. */
+  sending_campaign?: DashboardCampaignRow;
+  warnings: DashboardWarnings;
+}
+
+export interface DashboardSubscriberCounts {
+  pending: number;
+  active: number;
+  unsubscribed: number;
+  bounced: number;
+  complained: number;
+}
+
+export interface DashboardGrowth {
+  confirmed_30d: number;
+  unsubscribed_30d: number;
+  net_30d: number;
+}
+
+export interface DashboardSubscribers {
+  counts: DashboardSubscriberCounts;
+  growth_30d: DashboardGrowth;
+}
+
+export interface DashboardInterestRow {
+  id: number;
+  slug: string;
+  name: string;
+  subscriber_count: number;
+}
+
+export interface DashboardCampaignRow {
+  id: number;
+  name: string;
+  status: string; // draft | scheduled | sending | sent | canceled | failed
+  scheduled_at?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+/**
+ * The "what needs attention" row. complaint_rate_pct is absent when the
+ * account-wide sample is below the server's minimum-sample floor — never
+ * fabricated as 0 (CLAUDE.md §5: "say so in the UI rather than presenting
+ * it as exact"). inbound_mail_unavailable is always true today: PRD §6.5
+ * path 3 (#0058) is not built, so there is no count this figure could ever
+ * report — see admin_dashboard.go's package doc comment.
+ */
+export interface DashboardWarnings {
+  complaint_rate_high: boolean;
+  complaint_rate_pct?: number;
+  complaint_sample_size: number;
+  physical_address_unset: boolean;
+  ses_sandbox_active: boolean;
+  inbound_mail_unavailable: boolean;
+}

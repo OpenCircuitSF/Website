@@ -1055,6 +1055,35 @@ func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 	return counts, nil
 }
 
+// Growth30Days returns two counts over the trailing window starting at
+// since (the caller passes now.Add(-30*24*time.Hour); kept as a parameter
+// rather than computed here so the result is deterministic in tests, the
+// same convention every other now-sensitive method on this store follows,
+// e.g. Confirm's own now parameter): how many subscribers were confirmed
+// (became active) since that time, and how many unsubscribed since that
+// time. #0061's admin overview dashboard subtracts the two for a net growth
+// figure; both are returned rather than pre-subtracted so the dashboard can
+// show "N joined, M left" rather than only the net.
+//
+// Excludes synthetic=true rows unconditionally, same as StatusCounts above
+// — #0061's amendment (issue notes, from #0046's second phase-3 review)
+// requires this of any new aggregate that counts subscribers rows directly,
+// for the same reason: a per-admin campaign test-send fixture is not a real
+// signup or a real departure.
+func (s *Store) Growth30Days(ctx context.Context, since time.Time) (confirmed, unsubscribed int64, err error) {
+	err = s.pool.QueryRow(ctx,
+		`SELECT
+		    count(*) FILTER (WHERE confirmed_at >= $1),
+		    count(*) FILTER (WHERE unsubscribed_at >= $1)
+		 FROM subscribers WHERE synthetic = false`,
+		since,
+	).Scan(&confirmed, &unsubscribed)
+	if err != nil {
+		return 0, 0, fmt.Errorf("subscribers: computing 30-day growth: %w", err)
+	}
+	return confirmed, unsubscribed, nil
+}
+
 // isUniqueViolation reports whether err is a Postgres unique_violation
 // (SQLSTATE 23505), e.g. a duplicate email or token collision.
 func isUniqueViolation(err error) bool {

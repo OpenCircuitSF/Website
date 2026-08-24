@@ -79,6 +79,19 @@ type Config struct {
 	// #0008's manual passkey verification procedure reads the magic link.
 	MailerNoOp bool
 
+	// SESSandbox reports whether the SES account is still sandboxed (200
+	// messages/day, verified recipients only — PRD §10.4). There is no live
+	// AWS call anywhere in this codebase that could detect this (the
+	// account doesn't exist yet as of CLAUDE.md §10 item 2, "not started"),
+	// so this is a manually-set operational flag, the same shape as
+	// MailerNoOp above: it defaults to true (sandboxed, the safe assumption
+	// for a project that has never requested production access) and an
+	// operator flips it to false once AWS approves the production-access
+	// request. #0061's admin overview dashboard surfaces it as a warning
+	// while true, so the operator sees "still sandboxed" on every visit
+	// rather than needing to remember to check.
+	SESSandbox bool
+
 	// Sending. These are the environment-level ceiling/toggles; the operator
 	// dial beneath MaxSendRate and the signup/registration toggles live in the
 	// settings table, not here.
@@ -139,6 +152,7 @@ func loadFromFile(path string) (*Config, error) {
 		SESInboundBucket:    os.Getenv("SES_INBOUND_BUCKET"),
 		SESEventsTopicARN:   os.Getenv("SES_EVENTS_TOPIC_ARN"),
 		MailerNoOp:          getBool("MAILER_NOOP", false, &errs),
+		SESSandbox:          getBool("SES_SANDBOX", true, &errs),
 		MaxSendRate:         getInt("MAX_SEND_RATE", defaultMaxSendRate, &errs),
 		SendBatchSize:       getInt("SEND_BATCH_SIZE", defaultSendBatchSize, &errs),
 		SendWorkerEnabled:   getBool("SEND_WORKER_ENABLED", defaultSendWorkerEnabled, &errs),

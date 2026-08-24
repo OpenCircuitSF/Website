@@ -1631,3 +1631,98 @@ func TestIsolation_UniqueDataNeverCollides(t *testing.T) {
 			"iteration's) row", count)
 	}
 }
+
+// TestGrowth30Days_BoundaryAndSyntheticExclusion is #0061's proof for the
+// admin overview dashboard's 30-day growth figure. Like every other test in
+// this file, the table is never empty at the start (see testPool's doc
+// comment), so this proves the boundary and the synthetic exclusion via
+// before/after deltas around a fixed `since` instant, never an absolute
+// count.
+func TestGrowth30Days_BoundaryAndSyntheticExclusion(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	since := time.Now()
+
+	// A: confirmed BEFORE `since` — must be excluded from the confirmed_30d
+	// count no matter when this test runs relative to it. ConfirmTTL is
+	// generous (24h, not the usual 1h) so confirm_expires_at (created_at +
+	// ConfirmTTL) stays safely after the backdated confirm time below —
+	// Confirm requires ConfirmExpiresAt.After(now), and a 1h TTL against a
+	// 2h-backdated Create would make expires_at fall before (in fact equal
+	// to) the confirm call's own backdated `now`, failing with
+	// ErrTokenInvalid for a reason that has nothing to do with what this
+	// test is proving.
+	a, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: 24 * time.Hour}, since.Add(-2*time.Hour))
+	if err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+	if _, err := store.Confirm(ctx, *a.ConfirmToken, since.Add(-time.Hour)); err != nil {
+		t.Fatalf("Confirm A: %v", err)
+	}
+
+	before, _, err := store.Growth30Days(ctx, since)
+	if err != nil {
+		t.Fatalf("Growth30Days (before): %v", err)
+	}
+
+	// B: confirmed AFTER `since` — must be included.
+	// Same generous-TTL reasoning as A above: Confirm requires
+	// ConfirmExpiresAt strictly AFTER the confirm-time `now`, and a 1h TTL
+	// from `since` would make expires_at equal (not after) the since+1h
+	// confirm call below.
+	b, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: 24 * time.Hour}, since)
+	if err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
+	if _, err := store.Confirm(ctx, *b.ConfirmToken, since.Add(time.Hour)); err != nil {
+		t.Fatalf("Confirm B: %v", err)
+	}
+
+	// C: a SYNTHETIC subscriber, also confirmed after `since` — must NOT move
+	// the count, per #0061's amendment (same exclusion StatusCounts already
+	// applies).
+	c, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: 24 * time.Hour, Synthetic: true}, since)
+	if err != nil {
+		t.Fatalf("Create C (synthetic): %v", err)
+	}
+	if _, err := store.Confirm(ctx, *c.ConfirmToken, since.Add(time.Hour)); err != nil {
+		t.Fatalf("Confirm C: %v", err)
+	}
+
+	after, _, err := store.Growth30Days(ctx, since)
+	if err != nil {
+		t.Fatalf("Growth30Days (after): %v", err)
+	}
+	if after != before+1 {
+		t.Errorf("confirmed_30d = %d, want %d (before=%d + B, excluding A's earlier confirm and C's synthetic confirm)", after, before+1, before)
+	}
+
+	// A's confirm predates `since` by only an hour; moving the boundary back
+	// far enough to include it proves the WHERE clause is an exact
+	// comparison, not e.g. always-true.
+	includingA, _, err := store.Growth30Days(ctx, since.Add(-3*time.Hour))
+	if err != nil {
+		t.Fatalf("Growth30Days (boundary moved back): %v", err)
+	}
+	if includingA != after+1 {
+		t.Errorf("confirmed_30d with an earlier `since` = %d, want %d (A's confirm should now be in range)", includingA, after+1)
+	}
+
+	// Unsubscribed side of the same figure, same before/after shape.
+	beforeUnsub, unsubBefore, err := store.Growth30Days(ctx, since)
+	_ = beforeUnsub
+	if err != nil {
+		t.Fatalf("Growth30Days (unsub before): %v", err)
+	}
+	if _, err := store.Unsubscribe(ctx, b.ID, "one_click", since.Add(2*time.Hour)); err != nil {
+		t.Fatalf("Unsubscribe B: %v", err)
+	}
+	_, unsubAfter, err := store.Growth30Days(ctx, since)
+	if err != nil {
+		t.Fatalf("Growth30Days (unsub after): %v", err)
+	}
+	if unsubAfter != unsubBefore+1 {
+		t.Errorf("unsubscribed_30d = %d, want %d", unsubAfter, unsubBefore+1)
+	}
+}

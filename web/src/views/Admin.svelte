@@ -101,8 +101,10 @@
   import { APP_NAME } from '../lib/branding';
   import Campaigns from './admin/Campaigns.svelte';
   import Workshops from './admin/Workshops.svelte';
+  import Dashboard from './admin/Dashboard.svelte';
 
   type Section =
+    | 'overview'
     | 'settings'
     | 'users'
     | 'audit'
@@ -111,7 +113,10 @@
     | 'suppressions'
     | 'campaigns'
     | 'workshops';
-  let section = $state<Section>('settings');
+  // #0061: the /admin landing screen (PRD §5.2's "Overview — list size,
+  // growth, recent campaigns, pending sends") is the default tab, matching
+  // what an admin who navigates straight to /admin actually sees first.
+  let section = $state<Section>('overview');
 
   // ── Settings ──────────────────────────────────────────────────────────────
   let settings = $state<Setting[]>([]);
@@ -965,6 +970,13 @@
       <button
         type="button"
         class="subtab"
+        class:active={section === 'overview'}
+        aria-current={section === 'overview' ? 'page' : undefined}
+        onclick={() => (section = 'overview')}
+      >Overview</button>
+      <button
+        type="button"
+        class="subtab"
         class:active={section === 'settings'}
         aria-current={section === 'settings' ? 'page' : undefined}
         onclick={() => (section = 'settings')}
@@ -1019,6 +1031,10 @@
         onclick={() => (section = 'workshops')}
       >Workshops</button>
     </nav>
+
+    {#if section === 'overview'}
+      <Dashboard onOpenCampaign={goToAnnouncedCampaign} />
+    {/if}
 
     {#if section === 'settings'}
       <Panel title="Settings">
