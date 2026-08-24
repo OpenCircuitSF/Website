@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Circuit SF — live CRT screen prototype</title>
+
+<!--
+  #0233 — proof of concept for a live, perspective-warped terminal screen
+  composited onto the hero CRT photograph.
+
+  This file deliberately duplicates the home page's markup and design tokens
+  rather than importing them. It is a PROTOTYPE: the point is to settle the
+  technique and the corner calibration in something that can be opened,
+  dragged and re-measured without a build step, before any of it is written
+  into web/src/views/Home.svelte.
+
+  Everything below the "PROTOTYPE ONLY" divider (the calibration panel) is
+  scaffolding and does not ship.
+
+  THIS IS THE SOURCE FILE. Edit it, then run:
+
+      python3 prototypes/crt-live-screen/build.py
+
+  which regenerates the sibling index.html with every asset inlined as a
+  data: URI. Open THAT one — it works straight from the Finder over file://.
+
+  The split exists because a browser will not reliably fetch subresources
+  from outside the page's own directory under file://, so relative paths out
+  of web/public/ leave the CRT an empty box and the fonts on a fallback
+  stack — which looks like a broken stylesheet rather than a blocked fetch.
+  Inlining at build time keeps one copy of each asset in the tree (here they
+  are still ordinary relative paths) while making the artefact people
+  actually open genuinely standalone.
+
+  A server works too, if you prefer editing without rebuilding:
+      python3 -m http.server -d . 8200      (from the repository root)
+      open http://localhost:8200/prototypes/crt-live-screen/index.src.html
+-->
+
+<style>
+/* ══ Design tokens ═══════════════════════════════════════════════════════════
+   Copied from web/src/app.css. Light is the default branch; dark is applied
+   by the same two-selector pattern the real stylesheet uses, so an explicit
+   toggle and the OS preference both work. If these drift from app.css the
+   prototype stops being evidence — re-copy rather than re-tune. */
+:root {
+  --bg-page:#F4F6F3; --bg-panel:#FFFFFF; --bg-subtle:#E9EEE6; --bg-header:#E1E8DE;
+  --text:#10140F; --text-muted:#4C574A; --text-faint:#5F6A5C;
+  --border:#CFD8CA; --border-strong:#87977F;
+  --accent:#2F7D0C; --accent-hover:#245F09; --accent-text:#FFFFFF;
+  --accent-subtle:#E4F1DB; --accent-dim:#79C34A;
+  --warning:#8A5A00; --danger:#B4231B;
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:24px; --space-6:32px;
+  --font:'Archivo',ui-sans-serif,system-ui,sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --fs-sm:12px; --fs-base:13px; --fs-md:15px; --fs-lg:18px; --fs-xl:22px;
+  --lh:1.45; --measure:62ch; --radius:4px; --border-w:1px;
+  color-scheme:light dark;
+}
+@media (prefers-color-scheme:dark) {
+  :root:not([data-theme="light"]) {
+    --bg-page:#0A0D0B; --bg-panel:#121712; --bg-subtle:#182018; --bg-header:#1B231C;
+    --text:#E8F0E8; --text-muted:#9AA79E; --text-faint:#7E8D82;
+    --border:#243028; --border-strong:#4E6553;
+    --accent:#68FF23; --accent-hover:#8AFF55; --accent-text:#0A0D0B;
+    --accent-subtle:#142B0C; --accent-dim:#3C9E0F;
+    --warning:#E5B22C; --danger:#FF5F56;
+  }
+}
+:root[data-theme="dark"] {
+  --bg-page:#0A0D0B; --bg-panel:#121712; --bg-subtle:#182018; --bg-header:#1B231C;
+  --text:#E8F0E8; --text-muted:#9AA79E; --text-faint:#7E8D82;
+  --border:#243028; --border-strong:#4E6553;
+  --accent:#68FF23; --accent-hover:#8AFF55; --accent-text:#0A0D0B;
+  --accent-subtle:#142B0C; --accent-dim:#3C9E0F;
+  --warning:#E5B22C; --danger:#FF5F56;
+}
+
+@font-face{font-family:'Archivo';font-style:normal;font-weight:100 900;font-display:swap;
+  src:url('../../web/public/fonts/archivo-variable-latin.woff2') format('woff2-variations');}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../web/public/fonts/jetbrains-mono-400-latin.woff2') format('woff2');}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:700;font-display:swap;
+  src:url('../../web/public/fonts/jetbrains-mono-700-latin.woff2') format('woff2');}
+
+*,*::before,*::after{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:var(--bg-page); color:var(--text);
+  font-family:var(--font); font-size:var(--fs-base); line-height:var(--lh);
+}
+
+/* ══ Site header (matches lib/Header.svelte closely enough to judge the hero) */
+.site-header{
+  display:flex; align-items:center; gap:var(--space-5);
+  padding:var(--space-4) var(--space-5);
+  border-bottom:var(--border-w) solid var(--border);
+  background:var(--bg-panel);
+}
+.brand{font-family:var(--font-mono); font-weight:700; font-size:var(--fs-md);}
+.brand .mark{color:var(--accent);}
+.site-header nav{display:flex; gap:var(--space-5); margin-left:var(--space-4);}
+.site-header nav a{color:var(--text-muted); text-decoration:none; font-size:var(--fs-base);}
+.site-header nav a:hover{color:var(--text);}
+.theme-toggle{
+  margin-left:auto; min-height:32px; padding:0 var(--space-3);
+  font-family:var(--font-mono); font-size:var(--fs-sm);
+  background:var(--bg-panel); color:var(--text);
+  border:var(--border-w) solid var(--border); border-radius:var(--radius);
+  cursor:pointer;
+}
+.theme-toggle:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+
+.app-shell{width:min(1010px,100%); margin:0 auto; padding:var(--space-6) var(--space-5);}
+
+/* ══ Terminal panel (lib/TerminalPanel.svelte) ═══════════════════════════════ */
+.terminal-panel{
+  background:var(--bg-panel);
+  border:var(--border-w) solid var(--border);
+  border-radius:6px; overflow:hidden;
+}
+.terminal-bar{
+  display:flex; align-items:center; gap:7px;
+  padding:var(--space-3) var(--space-4);
+  background:var(--bg-header);
+  border-bottom:var(--border-w) solid var(--border);
+}
+.dots{display:flex; align-items:center; gap:7px;}
+.dot{flex:none; width:10px; height:10px; border-radius:50%;}
+.dot-1{background:var(--danger);} .dot-2{background:var(--warning);} .dot-3{background:var(--accent);}
+.terminal-title{
+  margin-left:var(--space-2); font-family:var(--font-mono); font-size:var(--fs-sm);
+  letter-spacing:.04em; text-transform:uppercase; color:var(--text-faint);
+}
+.terminal-body{padding:var(--space-6) var(--space-5) var(--space-5);}
+
+/* ══ Hero (views/Home.svelte) ════════════════════════════════════════════════
+   The hero pins --bg-panel/--bg-header/--border to the photograph's own
+   backdrop so the photo's background IS the panel's background. These are the
+   colours the WebP DECODES to, not the source PNG's — see #0231. */
+.hero{
+  --bg-panel:#e8eee5; --bg-header:#dae3d6; --border:#c6d1c2;
+  --crt-photo:url('../../web/public/hero-crt-light-760.webp');
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]) .hero{
+    --bg-panel:#191c17; --bg-header:#1b231c; --border:#243028;
+    --crt-photo:url('../../web/public/hero-crt-760.webp');
+  }
+}
+:root[data-theme="dark"] .hero{
+  --bg-panel:#191c17; --bg-header:#1b231c; --border:#243028;
+  --crt-photo:url('../../web/public/hero-crt-760.webp');
+}
+
+.hero-row{display:flex; flex-direction:column; align-items:center; gap:var(--space-5);}
+.hero-text{width:100%;}
+.hero-crt{display:flex; justify-content:center;}
+@media (min-width:860px){
+  .hero-row{flex-direction:row; align-items:center; gap:var(--space-6);}
+  .hero-text{flex:1 1 auto; min-width:0;}
+  .hero-crt{flex:none;}
+}
+
+.prompt{margin:0; font-family:var(--font-mono); font-size:clamp(13px,2.4vw,15px); color:var(--accent);}
+.prompt::before{content:'> '; color:var(--accent-dim);}
+.headline{
+  margin:var(--space-3) 0 var(--space-5);
+  font-weight:800; text-transform:uppercase; letter-spacing:-.01em;
+  line-height:1.05; font-size:clamp(28px,7vw,52px); color:var(--text);
+}
+.status-list{display:grid; gap:var(--space-2); margin:0 0 var(--space-4); padding:0; list-style:none;}
+.status-list li{display:flex; gap:var(--space-3); font-family:var(--font-mono);
+  font-size:clamp(12px,2.2vw,14px); color:var(--text-muted);}
+.status-list .ok{color:var(--accent); flex:none;}
+.cmdline{margin:0; font-family:var(--font-mono); font-size:clamp(13px,2.4vw,15px); color:var(--text);}
+.cmdline::before{content:'$ '; color:var(--accent);}
+.cmdline .cursor{
+  display:inline-block; width:.58em; height:1.05em; margin-left:.15em;
+  background:var(--accent); vertical-align:text-bottom; animation:blink 1.06s step-end infinite;
+}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:0;}}
+
+/* ══ The CRT stage ═══════════════════════════════════════════════════════════
+   The stage is the photograph's own box: aspect-ratio locked to the asset's
+   1402x1122 so a percentage corner means the same point at every width. The
+   photo is a background (not an <img>) for the same reason the shipped hero
+   uses one — it has to swap on an explicit theme attribute, which <picture>
+   cannot do. */
+.stage{
+  position:relative; width:240px; aspect-ratio:1402/1122;
+  background-image:var(--crt-photo);
+  background-size:100% 100%; background-repeat:no-repeat;
+  user-select:none;
+}
+
+/* Declared AFTER the base .stage rule on purpose: same specificity, so source
+   order decides. Putting this back up with the other hero breakpoints silently
+   pins the stage at 240px. */
+@media (min-width:860px){ .stage{width:380px;} }
+
+/* The live display is an ordinary rectangle; JS applies a projective
+   matrix3d() mapping it onto the four calibrated corners of the photographed
+   glass. transform-origin must be 0 0 or the homography is wrong. */
+.screen-plane{
+  position:absolute; left:0; top:0;
+  width:640px; height:512px;
+  transform-origin:0 0;
+  overflow:hidden;
+  border-radius:8%/6%;
+  background:#03200c;
+  will-change:transform;
+}
+.screen-plane canvas,.scanlines,.glass{position:absolute; inset:0; width:100%; height:100%;}
+.screen-plane canvas{display:block;}
+#glowCanvas{filter:blur(9px); opacity:.42; mix-blend-mode:screen;}
+.scanlines,.glass{pointer-events:none;}
+.scanlines{
+  background:repeating-linear-gradient(to bottom,
+    rgba(0,0,0,.16) 0 1px, transparent 1px 3px);
+  opacity:.55;
+}
+.glass{
+  background:
+    radial-gradient(ellipse at center, transparent 52%, rgba(0,0,0,.14) 74%, rgba(0,0,0,.60) 100%),
+    linear-gradient(150deg, rgba(255,255,255,.04), transparent 26%, transparent 74%, rgba(95,255,145,.02));
+}
+
+/* ── PROTOTYPE ONLY — calibration scaffolding, does not ship ───────────────── */
+.quad{position:absolute; inset:0; pointer-events:none; display:none;}
+.stage.calibrating .quad{display:block;}
+.quad svg{position:absolute; inset:0; width:100%; height:100%; overflow:visible;}
+.quad polygon{fill:rgba(104,255,35,.05); stroke:#68FF23; stroke-width:2;
+  stroke-dasharray:6 4; vector-effect:non-scaling-stroke;}
+.handle{
+  position:absolute; width:26px; height:26px; margin:-13px 0 0 -13px;
+  border:2px solid #d6ffe0; border-radius:50%; background:#1c6f39;
+  box-shadow:0 0 0 4px rgba(42,255,112,.18);
+  pointer-events:auto; cursor:grab; touch-action:none; padding:0;
+}
+.handle:active{cursor:grabbing;}
+.handle:focus-visible{outline:2px solid var(--accent); outline-offset:3px;}
+.lab{
+  margin-top:var(--space-6); padding:var(--space-5);
+  border:var(--border-w) dashed var(--border-strong); border-radius:6px;
+  background:var(--bg-subtle);
+}
+.lab h2{margin:0 0 var(--space-2); font-size:var(--fs-md); font-family:var(--font-mono);}
+.lab p.note{margin:0 0 var(--space-4); color:var(--text-muted); font-size:var(--fs-sm); max-width:var(--measure);}
+.toolbar{display:flex; gap:var(--space-3); flex-wrap:wrap; align-items:center;}
+.lab button, .lab input, .lab select{font:inherit;}
+.lab button{
+  min-height:34px; padding:0 var(--space-3);
+  border:var(--border-w) solid var(--border); border-radius:var(--radius);
+  background:var(--bg-panel); color:var(--text); cursor:pointer;
+}
+.lab button:hover{background:var(--bg-header);}
+.lab button:focus-visible,.lab input:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+.switch{display:inline-flex; gap:var(--space-2); align-items:center; color:var(--text-muted);}
+.grid4{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--space-3); margin-top:var(--space-4);}
+.card{padding:var(--space-3); border:var(--border-w) solid var(--border); border-radius:var(--radius); background:var(--bg-panel);}
+.card strong{display:block; margin-bottom:var(--space-2); font-size:var(--fs-sm); font-family:var(--font-mono);}
+.xy{display:grid; grid-template-columns:16px minmax(0,1fr); gap:6px; align-items:center; margin-top:5px;}
+.xy label{color:var(--text-faint); font-size:var(--fs-sm);}
+.xy input{width:100%; min-width:0; min-height:30px; padding:0 6px;
+  border:var(--border-w) solid var(--border); border-radius:var(--radius);
+  background:var(--bg-page); color:var(--text);}
+.out{margin-top:var(--space-4);}
+.out label{display:block; margin-bottom:var(--space-2); color:var(--text-faint); font-size:var(--fs-sm);}
+.out textarea{width:100%; min-height:84px; resize:vertical; padding:var(--space-2);
+  border:var(--border-w) solid var(--border); border-radius:var(--radius);
+  background:var(--bg-page); color:var(--text); font-family:var(--font-mono); font-size:var(--fs-sm);}
+@media (max-width:820px){.grid4{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media (max-width:500px){.grid4{grid-template-columns:1fr;}}
+
+/* Motion is decorative here; a reader who asked for less gets a still screen.
+   The canvas still renders one frame, so nothing is blank. */
+@media (prefers-reduced-motion:reduce){
+  .cmdline .cursor{animation:none;}
+}
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <span class="brand"><span class="mark">&gt;_</span> Open Circuit SF</span>
+  <nav><a href="#">Workshops</a><a href="#">About</a><a href="#">Subscribe</a></nav>
+  <button class="theme-toggle" id="themeToggle" type="button">Auto</button>
+</header>
+
+<main class="app-shell">
+  <section class="hero" aria-labelledby="home-headline">
+    <div class="terminal-panel">
+      <div class="terminal-bar">
+        <span class="dots" aria-hidden="true"><span class="dot dot-1"></span><span class="dot dot-2"></span><span class="dot dot-3"></span></span>
+        <span class="terminal-title">open_circuit_sf</span>
+      </div>
+      <div class="terminal-body">
+        <div class="hero-row">
+          <div class="hero-text">
+            <p class="prompt">open_circuit // san_francisco</p>
+            <h1 id="home-headline" class="headline">Hands-on electronics workshops</h1>
+            <ul class="status-list">
+              <li><span class="ok" aria-hidden="true">[ OK ]</span><span>absolute beginners welcome</span></li>
+              <li><span class="ok" aria-hidden="true">[ OK ]</span><span>tools and parts provided</span></li>
+              <li><span class="ok" aria-hidden="true">[ OK ]</span><span>hosted anywhere — makerspace to neighborhood garage</span></li>
+              <li><span class="ok" aria-hidden="true">[ OK ]</span><span>microcontrollers · soldering · homelab · automation</span></li>
+            </ul>
+            <p class="cmdline">opencircuitsf.com<span class="cursor" aria-hidden="true"></span></p>
+          </div>
+
+          <div class="hero-crt">
+            <!-- The photograph is decorative and the live screen repeats copy
+                 that is already in the headline beside it, so the stage as a
+                 whole carries no text alternative. -->
+            <div id="stage" class="stage">
+              <div id="screenPlane" class="screen-plane" aria-hidden="true">
+                <canvas id="glowCanvas" width="640" height="512"></canvas>
+                <canvas id="terminalCanvas" width="640" height="512"></canvas>
+                <div class="scanlines"></div>
+                <div class="glass"></div>
+              </div>
+              <div id="quad" class="quad" aria-hidden="true">
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon id="quadPolygon" points=""></polygon></svg>
+                <button class="handle" data-corner="tl" type="button" aria-label="Top left corner"></button>
+                <button class="handle" data-corner="tr" type="button" aria-label="Top right corner"></button>
+                <button class="handle" data-corner="br" type="button" aria-label="Bottom right corner"></button>
+                <button class="handle" data-corner="bl" type="button" aria-label="Bottom left corner"></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── PROTOTYPE ONLY ────────────────────────────────────────────────────── -->
+  <section class="lab">
+    <h2>Calibration — prototype scaffolding</h2>
+    <p class="note">
+      Turn on the handles and drag them onto the four corners of the photographed
+      raster. The live canvas is projectively warped into that quadrilateral —
+      real perspective, not a rotate/skew. Corners are percentages of the
+      photograph, so the fit survives a resize. Paste the JSON below into the
+      component when the numbers are right. The two photographs are registered
+      to within 2px, so one calibration serves both themes — switch the theme
+      and confirm rather than assuming.
+    </p>
+    <div class="toolbar">
+      <label class="switch"><input id="calToggle" type="checkbox"> Show handles</label>
+      <button id="resetBtn" type="button">Reset</button>
+      <button id="bootBtn" type="button">Replay boot</button>
+      <button id="widthBtn" type="button">Toggle wide stage</button>
+      <span class="switch" id="motionNote"></span>
+    </div>
+    <div class="grid4">
+      <div class="card"><strong>Top left</strong>
+        <div class="xy"><label for="tlx">X</label><input id="tlx" type="number" step="0.1"></div>
+        <div class="xy"><label for="tly">Y</label><input id="tly" type="number" step="0.1"></div></div>
+      <div class="card"><strong>Top right</strong>
+        <div class="xy"><label for="trx">X</label><input id="trx" type="number" step="0.1"></div>
+        <div class="xy"><label for="try">Y</label><input id="try" type="number" step="0.1"></div></div>
+      <div class="card"><strong>Bottom right</strong>
+        <div class="xy"><label for="brx">X</label><input id="brx" type="number" step="0.1"></div>
+        <div class="xy"><label for="bry">Y</label><input id="bry" type="number" step="0.1"></div></div>
+      <div class="card"><strong>Bottom left</strong>
+        <div class="xy"><label for="blx">X</label><input id="blx" type="number" step="0.1"></div>
+        <div class="xy"><label for="bly">Y</label><input id="bly" type="number" step="0.1"></div></div>
+    </div>
+    <div class="out">
+      <label for="settingsText">Corner settings (% of the photograph)</label>
+      <textarea id="settingsText" readonly></textarea>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  /* ── Theme toggle — mirrors lib/theme.ts's three states ─────────────────── */
+  const order = ['auto','light','dark'];
+  const toggle = document.getElementById('themeToggle');
+  let themeIndex = 0;
+  toggle.addEventListener('click', () => {
+    themeIndex = (themeIndex + 1) % order.length;
+    const t = order[themeIndex];
+    if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', t);
+    toggle.textContent = t[0].toUpperCase() + t.slice(1);
+  });
+
+  /* ── Projective warp ────────────────────────────────────────────────────── */
+  const SRC_W = 640, SRC_H = 512;
+
+  // The photographed raster's corners, as a percentage of the photograph.
+  //
+  // Measured, not guessed, and not measured by eye either: automatic detection
+  // was tried twice and abandoned. Thresholding the phosphor green finds the
+  // GLOW pooling on the bezel rather than the raster edge, and a half-maximum
+  // crossing per scanline is worse still — the brightest point in most columns
+  // is that same glow, so the "bottom edge" it reports jumps between 23% and
+  // 75% of image height depending on the column. Both attempts are recorded in
+  // the issue so nobody repeats them.
+  //
+  // What worked: fill the warped plane with flat magenta, screenshot it over
+  // the photograph, and compare footprints. Two refinement passes. The fill
+  // harness is worth keeping — it is the only check that shows over- and
+  // under-shoot at all four corners at once, which a text render does not.
+  const defaults = {
+    tl:{x:22.5,y:24.0}, tr:{x:69.8,y:18.0},
+    br:{x:68.2,y:72.4}, bl:{x:23.0,y:72.3}
+  };
+  const corners = JSON.parse(JSON.stringify(defaults));
+
+  const stage = document.getElementById('stage');
+  const plane = document.getElementById('screenPlane');
+  const poly  = document.getElementById('quadPolygon');
+  const calToggle = document.getElementById('calToggle');
+  const settingsText = document.getElementById('settingsText');
+
+  const handles = {};
+  for (const el of document.querySelectorAll('.handle')) handles[el.dataset.corner] = el;
+  const fields = {
+    tl:{x:tlx,y:tly}, tr:{x:trx,y:document.getElementById('try')},
+    br:{x:brx,y:bry}, bl:{x:blx,y:bly}
+  };
+
+  // Gauss-Jordan with partial pivoting. Eight unknowns: the projective
+  // homography's independent coefficients (h33 is fixed at 1).
+  function solve(A, b) {
+    const n = b.length;
+    const M = A.map((row, i) => [...row, b[i]]);
+    for (let c = 0; c < n; c++) {
+      let p = c, best = Math.abs(M[p][c]);
+      for (let r = c + 1; r < n; r++) {
+        const v = Math.abs(M[r][c]);
+        if (v > best) { best = v; p = r; }
+      }
+      if (best < 1e-12) throw new Error('degenerate quadrilateral');
+      if (p !== c) { const t = M[c]; M[c] = M[p]; M[p] = t; }
+      const piv = M[c][c];
+      for (let k = c; k <= n; k++) M[c][k] /= piv;
+      for (let r = 0; r < n; r++) {
+        if (r === c) continue;
+        const f = M[r][c];
+        for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+      }
+    }
+    return M.map(r => r[n]);
+  }
+
+  function homography(src, dst) {
+    const A = [], b = [];
+    for (let i = 0; i < 4; i++) {
+      const {x, y} = src[i], X = dst[i].x, Y = dst[i].y;
+      A.push([x, y, 1, 0, 0, 0, -X * x, -X * y]); b.push(X);
+      A.push([0, 0, 0, x, y, 1, -Y * x, -Y * y]); b.push(Y);
+    }
+    return solve(A, b);
+  }
+
+  function pct(p) {
+    return { x: stage.clientWidth * p.x / 100, y: stage.clientHeight * p.y / 100 };
+  }
+
+  function applyWarp() {
+    const src = [{x:0,y:0},{x:SRC_W,y:0},{x:SRC_W,y:SRC_H},{x:0,y:SRC_H}];
+    const dst = [pct(corners.tl), pct(corners.tr), pct(corners.br), pct(corners.bl)];
+    try {
+      const h = homography(src, dst);
+      // CSS matrix3d is column-major; with z=0 this yields
+      //   X = (h0*x + h1*y + h2) / (h6*x + h7*y + 1)
+      //   Y = (h3*x + h4*y + h5) / (h6*x + h7*y + 1)
+      const m = [h[0],h[3],0,h[6], h[1],h[4],0,h[7], 0,0,1,0, h[2],h[5],0,1];
+      plane.style.transform = 'matrix3d(' + m.map(v =>
+        Number((Math.abs(v) < 1e-12 ? 0 : v).toFixed(12))).join(',') + ')';
+    } catch (e) {
+      console.error(e);
+    }
+    syncUi();
+  }
+
+  function syncUi() {
+    const names = ['tl','tr','br','bl'];
+    for (const n of names) {
+      handles[n].style.left = corners[n].x + '%';
+      handles[n].style.top  = corners[n].y + '%';
+      if (document.activeElement !== fields[n].x) fields[n].x.value = corners[n].x.toFixed(1);
+      if (document.activeElement !== fields[n].y) fields[n].y.value = corners[n].y.toFixed(1);
+    }
+    poly.setAttribute('points', names.map(n => corners[n].x + ',' + corners[n].y).join(' '));
+    settingsText.value = JSON.stringify(corners, null, 2);
+  }
+
+  const clamp = v => Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 0;
+
+  for (const n of Object.keys(fields)) {
+    for (const axis of ['x','y']) {
+      fields[n][axis].addEventListener('change', () => {
+        const v = Number(fields[n][axis].value);
+        if (Number.isFinite(v)) { corners[n][axis] = clamp(v); applyWarp(); }
+      });
+    }
+  }
+
+  let dragging = null;
+  for (const [n, el] of Object.entries(handles)) {
+    el.addEventListener('pointerdown', e => {
+      if (!calToggle.checked) return;
+      dragging = n; el.setPointerCapture(e.pointerId); e.preventDefault();
+    });
+    el.addEventListener('pointermove', e => {
+      if (dragging !== n) return;
+      const r = stage.getBoundingClientRect();
+      corners[n].x = clamp((e.clientX - r.left) / r.width * 100);
+      corners[n].y = clamp((e.clientY - r.top) / r.height * 100);
+      applyWarp();
+    });
+    const stop = e => {
+      if (dragging === n) {
+        dragging = null;
+        if (e.pointerId != null && el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+      }
+    };
+    el.addEventListener('pointerup', stop);
+    el.addEventListener('pointercancel', stop);
+    // Keyboard nudge, so calibration does not require a pointer.
+    el.addEventListener('keydown', e => {
+      const step = e.shiftKey ? 1 : 0.1;
+      const d = {ArrowLeft:['x',-step],ArrowRight:['x',step],ArrowUp:['y',-step],ArrowDown:['y',step]}[e.key];
+      if (!d) return;
+      e.preventDefault();
+      corners[n][d[0]] = clamp(corners[n][d[0]] + d[1]);
+      applyWarp();
+    });
+  }
+
+  calToggle.addEventListener('change', () => stage.classList.toggle('calibrating', calToggle.checked));
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    for (const n of Object.keys(defaults)) { corners[n].x = defaults[n].x; corners[n].y = defaults[n].y; }
+    applyWarp();
+  });
+  document.getElementById('widthBtn').addEventListener('click', () => {
+    stage.style.width = stage.style.width === '560px' ? '' : '560px';
+    applyWarp();
+  });
+  window.addEventListener('resize', applyWarp);
+
+  /* ── The screen itself ──────────────────────────────────────────────────── */
+  const term = document.getElementById('terminalCanvas');
+  const glow = document.getElementById('glowCanvas');
+  const ctx = term.getContext('2d');
+  const gctx = glow.getContext('2d');
+
+  const BG = '#03200c', PHOS = '#3dff86', HOT = '#d5ffe2';
+  const FONT_PX = 26, LINE_H = 33, LEFT = 40, TOP = 38, MAX_LINES = 12;
+
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  document.getElementById('motionNote').textContent =
+    reduceMotion.matches ? 'reduced motion: on (screen is static)' : 'reduced motion: off';
+
+  let lines = [], cursorOn = true, timers = [];
+  const clearTimers = () => { timers.forEach(clearTimeout); timers = []; };
+  const wait = ms => new Promise(r => timers.push(setTimeout(r, ms)));
+
+  function paint() {
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowBlur = 0;
+    ctx.fillStyle = BG; ctx.fillRect(0,0,SRC_W,SRC_H);
+
+    ctx.textBaseline = 'top';
+    ctx.font = FONT_PX + "px 'JetBrains Mono', ui-monospace, Menlo, monospace";
+    ctx.fillStyle = PHOS; ctx.shadowColor = PHOS; ctx.shadowBlur = 3;
+
+    const vis = lines.slice(-MAX_LINES);
+    vis.forEach((l, i) => ctx.fillText(l, LEFT, TOP + i * LINE_H));
+
+    if (cursorOn && vis.length) {
+      const last = vis[vis.length - 1];
+      ctx.save();
+      ctx.fillStyle = HOT; ctx.shadowColor = PHOS; ctx.shadowBlur = 9;
+      ctx.fillRect(LEFT + ctx.measureText(last).width + 4,
+                   TOP + (vis.length - 1) * LINE_H + 3, 13, FONT_PX - 3);
+      ctx.restore();
+    }
+
+    gctx.setTransform(1,0,0,1,0,0);
+    gctx.globalCompositeOperation = 'source-over';
+    gctx.fillStyle = BG; gctx.fillRect(0,0,SRC_W,SRC_H);
+    gctx.globalCompositeOperation = 'screen';
+    gctx.drawImage(term, 0, 0);
+  }
+
+  async function type(text, into) {
+    for (const ch of text) {
+      lines[into] = (lines[into] || '') + ch;
+      paint();
+      await wait(46 + Math.random() * 26);
+    }
+  }
+
+  const SCRIPT = [
+    'soldering ......... sat 12:30',
+    'kicad from scratch  sep 18',
+    'esp32 + sensors ... oct 02',
+    '',
+    'beginners welcome.',
+    'tools provided.'
+  ];
+
+  async function boot() {
+    clearTimers();
+    lines = [];
+    // The static frame a reduced-motion reader sees is the finished state,
+    // not a blank screen.
+    if (reduceMotion.matches) {
+      lines = ['> open_circuit_sf', '', ...SCRIPT];
+      cursorOn = true; paint();
+      return;
+    }
+    paint();
+    await wait(260);
+    lines = ['']; await type('> open_circuit_sf', 0);
+    await wait(420);
+    lines.push('');
+    for (const l of SCRIPT) { lines.push(l); paint(); await wait(430); }
+  }
+
+  document.getElementById('bootBtn').addEventListener('click', boot);
+
+  if (!reduceMotion.matches) {
+    setInterval(() => { cursorOn = !cursorOn; paint(); }, 530);
+  }
+
+  applyWarp();
+  boot();
+})();
+</script>
+</body>
+</html>
