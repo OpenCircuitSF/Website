@@ -82,15 +82,24 @@ func settingsTestPool(t *testing.T) *pgxpool.Pool {
 // TestResetSettings_PreservesFutureMigrationSeed can point it at a fixture
 // directory to prove resetSettings needs no code change for a new seeded
 // key, then restore it.
+//
+// That global-var swap-and-restore is safe only because this package has
+// zero t.Parallel() calls — two tests here never interleave, so no other
+// test can observe the fixture directory mid-swap. Adding a t.Parallel()
+// call anywhere in this package would reopen that window (#0217, following
+// #0215's review notes on the same hazard one package over, in
+// internal/auth's setRegistrationsEnabled).
 var settingsMigrationsDir = "../../migrations"
 
 // settingsSeedStmtRe matches one `INSERT INTO settings ...;` statement,
-// case-insensitively, anchored to the start of a line so a doc comment that
-// merely mentions "settings" cannot match. `(?s)` lets `.` cross the
-// statement's own newlines; the match still stops at the first `;`, which
-// is safe here because none of these statements contain a semicolon in a
-// string or subquery.
-var settingsSeedStmtRe = regexp.MustCompile(`(?ims)^INSERT INTO settings\b.*?;`)
+// case-insensitively, anchored to the start of a line (allowing leading
+// horizontal whitespace, #0217 — a statement indented inside e.g. a `DO`
+// block or just a differently-styled migration file would otherwise silently
+// fail to match) so a doc comment that merely mentions "settings" cannot
+// match. `(?s)` lets `.` cross the statement's own newlines; the match still
+// stops at the first `;`, which is safe here because none of these
+// statements contain a semicolon in a string or subquery.
+var settingsSeedStmtRe = regexp.MustCompile(`(?ims)^[ \t]*INSERT INTO settings\b.*?;`)
 
 // settingsSeedStatements extracts every `INSERT INTO settings ...;`
 // statement out of every *.up.sql file in settingsMigrationsDir, in
@@ -161,6 +170,27 @@ func resetSettings(t *testing.T, pool *pgxpool.Pool) {
 		if _, err := pool.Exec(ctx, stmt); err != nil {
 			t.Fatalf("replay migration seed statement %q: %v", stmt, err)
 		}
+	}
+}
+
+// TestSettingsSeedStmtRe_MatchesIndentedInsert is #0217's fix to a silent
+// false negative in #0132's original `^INSERT` anchor: a migration whose
+// `INSERT INTO settings ...;` statement is indented (inside a `DO` block, or
+// just a differently-styled file) would fail to match and would be dropped
+// from the seed with no error anywhere — settingsSeedStatements only
+// t.Fatalf's when it finds zero statements across every migration file, not
+// when it silently misses one inside a file that has others. No live
+// database needed: this asserts directly against the compiled regex.
+func TestSettingsSeedStmtRe_MatchesIndentedInsert(t *testing.T) {
+	sql := "  \tINSERT INTO settings (key, value, updated_at)\n" +
+		"VALUES ('indented_test_key', 'yes', now())\n" +
+		"ON CONFLICT (key) DO NOTHING;\n"
+	matches := settingsSeedStmtRe.FindAllString(sql, -1)
+	if len(matches) != 1 {
+		t.Fatalf("FindAllString found %d matches, want 1 for an indented INSERT INTO settings statement (sql=%q)", len(matches), sql)
+	}
+	if !strings.Contains(matches[0], "indented_test_key") {
+		t.Errorf("match = %q, want it to contain the indented statement's key", matches[0])
 	}
 }
 

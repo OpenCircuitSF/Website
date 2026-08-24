@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -121,15 +122,34 @@ func truncateAuthTables(t *testing.T, pool *pgxpool.Pool) {
 // body would not survive a t.Fatalf in a later helper. This matches the
 // shape #0130 used to fix the sibling leak in
 // internal/handlers/audit_seams_test.go.
+//
+// The restore preserves the row's prior updated_at along with its prior
+// value (#0217) — #0215's review measured that writing back an unchanged
+// value with `updated_at = now()` still moved the full-row hash on exactly
+// that field, so criterion 3's "byte-identical" held only on (key, value).
+// Nothing in the tree reads an absolute settings.updated_at (the sole
+// consumer, internal/handlers/settings_test.go's settingUpdatedAt, compares
+// relatively), but restoring the real prior timestamp is cheap and makes the
+// restore byte-identical on the whole row, not just two of its three
+// columns.
+//
+// This read-then-write is safe only because internal/testdb.Lock() (every
+// package's TestMain) serialises which package's binary touches the shared
+// database, and because internal/auth itself has zero t.Parallel() calls —
+// two tests here never interleave, so no other write can land between this
+// read and the later Exec. Adding a t.Parallel() call anywhere in this
+// package would reopen that window; do not add one without revisiting this
+// helper (#0217, following #0215's review notes on the same hazard).
 func setRegistrationsEnabled(t *testing.T, pool *pgxpool.Pool, enabled bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var prior string
+	var priorUpdatedAt time.Time
 	hadRow := true
 	err := pool.QueryRow(ctx,
-		`SELECT value FROM settings WHERE key = $1`, settingRegistrationsEnabled).Scan(&prior)
+		`SELECT value, updated_at FROM settings WHERE key = $1`, settingRegistrationsEnabled).Scan(&prior, &priorUpdatedAt)
 	switch {
 	case err == nil:
 		// hadRow already true.
@@ -144,9 +164,9 @@ func setRegistrationsEnabled(t *testing.T, pool *pgxpool.Pool, enabled bool) {
 		defer ccancel()
 		if hadRow {
 			if _, err := pool.Exec(cctx,
-				`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, now())
-				 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-				settingRegistrationsEnabled, prior); err != nil {
+				`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, $3)
+				 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+				settingRegistrationsEnabled, prior, priorUpdatedAt); err != nil {
 				t.Errorf("restore registrations_enabled: %v", err)
 			}
 		} else if _, err := pool.Exec(cctx,
@@ -164,6 +184,159 @@ func setRegistrationsEnabled(t *testing.T, pool *pgxpool.Pool, enabled bool) {
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
 		settingRegistrationsEnabled, value); err != nil {
 		t.Fatalf("set registrations_enabled: %v", err)
+	}
+}
+
+// settingsRow snapshots a settings row's value and updated_at together, so a
+// test can assert nothing on the row moved across a restore — not just the
+// value.
+type settingsRow struct {
+	value     string
+	updatedAt time.Time
+	present   bool
+}
+
+func (r settingsRow) String() string {
+	if !r.present {
+		return "<absent>"
+	}
+	return fmt.Sprintf("value=%q updated_at=%s", r.value, r.updatedAt.Format(time.RFC3339Nano))
+}
+
+// readSettingsRow reads a settings row's full state (value, updated_at, and
+// whether the row exists at all), for before/after comparisons.
+func readSettingsRow(t *testing.T, pool *pgxpool.Pool, key string) settingsRow {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var row settingsRow
+	err := pool.QueryRow(ctx,
+		`SELECT value, updated_at FROM settings WHERE key = $1`, key).Scan(&row.value, &row.updatedAt)
+	switch {
+	case err == nil:
+		row.present = true
+	case errors.Is(err, pgx.ErrNoRows):
+		row.present = false
+	default:
+		t.Fatalf("read settings row %q: %v", key, err)
+	}
+	return row
+}
+
+// TestSetRegistrationsEnabled_RestoreIsByteIdenticalOnTheWholeRow is #0217's
+// criterion 1 and 2: setRegistrationsEnabled's t.Cleanup restores the prior
+// updated_at along with the prior value, so writing back an unchanged value
+// through the helper moves nothing on the row — not even the timestamp.
+// #0215's review measured the pre-fix behavior directly: restoring only
+// value while stamping updated_at = now() moved the full-row hash
+// (555f2c3c… -> fbac46c8…) on exactly that column. This seeds a known row
+// directly (bypassing the helper under test, so the baseline doesn't depend
+// on it), runs the helper inside a subtest so its t.Cleanup fires before
+// this test's own assertion, and compares the full row before and after.
+func TestSetRegistrationsEnabled_RestoreIsByteIdenticalOnTheWholeRow(t *testing.T) {
+	pool := testPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Snapshot the package's own baseline row (ordinarily the migration
+	// seed's registrations_enabled=false) BEFORE overwriting it, and restore
+	// exactly that — not an unconditional DELETE — on teardown. An
+	// unconditional delete would leak this test's own setup into whichever
+	// test in this package runs next, the same defect class #0217 exists to
+	// close.
+	baseline := readSettingsRow(t, pool, settingRegistrationsEnabled)
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer ccancel()
+		if baseline.present {
+			if _, err := pool.Exec(cctx,
+				`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, $3)
+				 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+				settingRegistrationsEnabled, baseline.value, baseline.updatedAt); err != nil {
+				t.Errorf("restore baseline registrations_enabled: %v", err)
+			}
+		} else if _, err := pool.Exec(cctx,
+			`DELETE FROM settings WHERE key = $1`, settingRegistrationsEnabled); err != nil {
+			t.Errorf("cleanup baseline registrations_enabled: %v", err)
+		}
+	})
+
+	seededAt := time.Now().Add(-time.Hour).Round(time.Microsecond)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, $3)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+		settingRegistrationsEnabled, "false", seededAt); err != nil {
+		t.Fatalf("seed registrations_enabled: %v", err)
+	}
+
+	before := readSettingsRow(t, pool, settingRegistrationsEnabled)
+
+	// The subtest's t.Cleanup runs when the subtest returns, which is
+	// before this outer test's own code resumes — so the restore has
+	// already happened by the time `after` is read below.
+	t.Run("write back the same value through the helper", func(t *testing.T) {
+		setRegistrationsEnabled(t, pool, false) // same value as seeded above
+	})
+
+	after := readSettingsRow(t, pool, settingRegistrationsEnabled)
+	if before.present != after.present || before.value != after.value || !before.updatedAt.Equal(after.updatedAt) {
+		t.Errorf("row moved across a write-back of the same value: before={%s} after={%s}", before, after)
+	}
+}
+
+// TestSetRegistrationsEnabled_NeverExistedRowStaysAbsent is #0217's criterion
+// 3, re-proving #0215's review probes E and F against the updated_at-aware
+// helper: when the row never existed before the helper's call, the
+// t.Cleanup must delete it again on teardown, not resurrect it at some
+// default value.
+func TestSetRegistrationsEnabled_NeverExistedRowStaysAbsent(t *testing.T) {
+	pool := testPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Snapshot whatever this package's own baseline row looks like (the
+	// migration seed's registrations_enabled=false, ordinarily) and restore
+	// it on teardown — this test's own precondition (an ABSENT row) must not
+	// leak into the package's next test any more than the helper under test
+	// is allowed to leak. Using readSettingsRow/setRegistrationsEnabled here
+	// (rather than a bespoke restore) would register a second, redundant
+	// cleanup, so this restores directly.
+	baseline := readSettingsRow(t, pool, settingRegistrationsEnabled)
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer ccancel()
+		if baseline.present {
+			if _, err := pool.Exec(cctx,
+				`INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, $3)
+				 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+				settingRegistrationsEnabled, baseline.value, baseline.updatedAt); err != nil {
+				t.Errorf("restore baseline registrations_enabled: %v", err)
+			}
+		} else if _, err := pool.Exec(cctx,
+			`DELETE FROM settings WHERE key = $1`, settingRegistrationsEnabled); err != nil {
+			t.Errorf("cleanup baseline registrations_enabled: %v", err)
+		}
+	})
+
+	if _, err := pool.Exec(ctx,
+		`DELETE FROM settings WHERE key = $1`, settingRegistrationsEnabled); err != nil {
+		t.Fatalf("pre-delete registrations_enabled: %v", err)
+	}
+	if row := readSettingsRow(t, pool, settingRegistrationsEnabled); row.present {
+		t.Fatalf("row present after delete: %s", row)
+	}
+
+	t.Run("helper call on an absent row", func(t *testing.T) {
+		setRegistrationsEnabled(t, pool, true)
+		if row := readSettingsRow(t, pool, settingRegistrationsEnabled); !row.present || row.value != "true" {
+			t.Fatalf("expected row present with value=true during subtest, got %s", row)
+		}
+	})
+
+	after := readSettingsRow(t, pool, settingRegistrationsEnabled)
+	if after.present {
+		t.Errorf("row resurrected after cleanup (got %s), want absent — a never-existed row must be deleted, not defaulted", after)
 	}
 }
 
