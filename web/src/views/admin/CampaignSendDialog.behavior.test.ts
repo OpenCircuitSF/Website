@@ -25,9 +25,13 @@
 // web/ contains no .md file at all; the project-root HANDOFF.md does not
 // cover this either.) A sibling file,
 // ../../lib/modalFocusWiring.structuralGuard.test.ts (#0216), covers the
-// same positive-wiring question structurally for the six sites this file
-// does not mount: Admin.svelte's five modals and CampaignEditor.svelte's
-// cancel dialog.
+// same positive-wiring question structurally for the ten sites this file
+// does not mount: Admin.svelte's five modals, CampaignEditor.svelte's
+// cancel dialog, Campaigns.svelte's create-campaign modal, WorkshopEditor
+// .svelte's two modals, and Workshops.svelte's create modal. (An earlier
+// version of this comment said "six sites," counting only the first two --
+// #0222 caught the undercount; modalFocusWiring.structuralGuard.test.ts's
+// own header had the same error, corrected there too.)
 //
 // What this test establishes, precisely: under jsdom, mounting this
 // component moves focus into the dialog panel and a real 'keydown' event
