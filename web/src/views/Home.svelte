@@ -185,6 +185,32 @@
     background: #181d17;
   }
 
+  /* In light mode the pinned panel is a dark block on a pale page. Left flat
+   * it reads as pasted-on. A soft ambient shadow plus a faint green cast
+   * makes it read as a lit object sitting on the page -- the same thing a
+   * real CRT does to the wall behind it. Dark mode needs none of this: the
+   * panel and page are already the same family, so the shadow is scoped to
+   * light only rather than being dialled down to nothing in dark. */
+  :root[data-theme='light'] .hero :global(.terminal-panel) {
+    border-color: #243028;
+    border-radius: 8px;
+    box-shadow:
+      0 1px 2px rgba(10, 13, 11, 0.18),
+      0 12px 28px -10px rgba(10, 13, 11, 0.34),
+      0 0 44px -18px rgba(104, 255, 35, 0.28);
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme='dark']) .hero :global(.terminal-panel) {
+      border-color: #243028;
+      border-radius: 8px;
+      box-shadow:
+        0 1px 2px rgba(10, 13, 11, 0.18),
+        0 12px 28px -10px rgba(10, 13, 11, 0.34),
+        0 0 44px -18px rgba(104, 255, 35, 0.28);
+    }
+  }
+
   .hero :global(.terminal-bar) {
     background: #1b231c;
     border-bottom-color: #243028;
