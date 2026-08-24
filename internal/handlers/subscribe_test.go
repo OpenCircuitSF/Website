@@ -98,34 +98,64 @@ func (m *blockingMailer) Send(ctx context.Context, _ mailing.Message) (string, e
 }
 
 // blockingSubscriberStore wraps a real subscriberStore, delegating every
-// method to inner except Create, which blocks until either release is
-// closed (by the test) or ctx is cancelled — whichever happens first — and
-// closes entered the instant Create is called, before it starts waiting.
-// Mirrors blockingMailer's shape and contract exactly (see above), for the
-// same reason: #0088's deferral half — Subscribe handing the
-// branch-dependent writes to processMutateJob on a worker goroutine instead
-// of running them inline, per the package doc comment ("The elapsed-time
-// channel — #0088") — has no other deterministic, non-timing way to prove
-// out. entered is closed at most once per instance — construct a fresh
-// blockingSubscriberStore per expected Create call.
+// method to inner except the ONE named by which, which blocks until either
+// release is closed (by the test) or ctx is cancelled — whichever happens
+// first — and closes entered the instant that method is called, before it
+// starts waiting. Mirrors blockingMailer's shape and contract exactly (see
+// above), for the same reason: #0088's deferral half — Subscribe handing
+// the branch-dependent writes to processMutateJob on a worker goroutine
+// instead of running them inline, per the package doc comment ("The
+// elapsed-time channel — #0088") — has no other deterministic, non-timing
+// way to prove out. entered is closed at most once per instance — construct
+// a fresh blockingSubscriberStore per expected call to the blocked method.
+//
+// which selects exactly one of "Create", "RestartSignup", or
+// "ClaimAlreadySubscribedSend" — #0098's regression coverage for the
+// deferral guard's original gap: the guard's own
+// TestSubscribe_MutationDeferredDoesNotBlockResponse only ever proved out
+// Create (the brand-new-signup branch), so a change that left the
+// EXISTING-subscriber branches (RestartSignup, ClaimAlreadySubscribedSend)
+// on the request path — exactly the shape #0088's second review
+// demonstrated leaves the whole package green — went undetected. Every
+// other method still delegates straight to inner unconditionally, same as
+// before #0098.
 type blockingSubscriberStore struct {
 	inner   subscriberStore
 	entered chan struct{}
 	release chan struct{}
+	which   string
 }
 
 func newBlockingSubscriberStore(inner subscriberStore) *blockingSubscriberStore {
-	return &blockingSubscriberStore{inner: inner, entered: make(chan struct{}), release: make(chan struct{})}
+	return newBlockingSubscriberStoreOn(inner, "Create")
 }
 
-func (b *blockingSubscriberStore) Create(ctx context.Context, in subscribers.NewSignup, now time.Time) (subscribers.Subscriber, error) {
+// newBlockingSubscriberStoreOn is newBlockingSubscriberStore generalized to
+// block a caller-chosen method — see the type's own doc comment for why.
+func newBlockingSubscriberStoreOn(inner subscriberStore, which string) *blockingSubscriberStore {
+	return &blockingSubscriberStore{inner: inner, entered: make(chan struct{}), release: make(chan struct{}), which: which}
+}
+
+// awaitReleaseOrCancel is the shared block/unblock mechanics every blocked
+// method uses: close entered (once), then wait for either release (the test
+// letting it through) or ctx cancellation (Close's shutdown path).
+func (b *blockingSubscriberStore) awaitReleaseOrCancel(ctx context.Context) error {
 	close(b.entered)
 	select {
 	case <-b.release:
-		return b.inner.Create(ctx, in, now)
+		return nil
 	case <-ctx.Done():
-		return subscribers.Subscriber{}, ctx.Err()
+		return ctx.Err()
 	}
+}
+
+func (b *blockingSubscriberStore) Create(ctx context.Context, in subscribers.NewSignup, now time.Time) (subscribers.Subscriber, error) {
+	if b.which == "Create" {
+		if err := b.awaitReleaseOrCancel(ctx); err != nil {
+			return subscribers.Subscriber{}, err
+		}
+	}
+	return b.inner.Create(ctx, in, now)
 }
 
 func (b *blockingSubscriberStore) FindByEmail(ctx context.Context, email string) (subscribers.Subscriber, error) {
@@ -133,6 +163,11 @@ func (b *blockingSubscriberStore) FindByEmail(ctx context.Context, email string)
 }
 
 func (b *blockingSubscriberStore) RestartSignup(ctx context.Context, id int64, in subscribers.RestartSignupInput, now time.Time) (subscribers.Subscriber, error) {
+	if b.which == "RestartSignup" {
+		if err := b.awaitReleaseOrCancel(ctx); err != nil {
+			return subscribers.Subscriber{}, err
+		}
+	}
 	return b.inner.RestartSignup(ctx, id, in, now)
 }
 
@@ -145,6 +180,11 @@ func (b *blockingSubscriberStore) ReleaseConfirmationClaim(ctx context.Context, 
 }
 
 func (b *blockingSubscriberStore) ClaimAlreadySubscribedSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (bool, error) {
+	if b.which == "ClaimAlreadySubscribedSend" {
+		if err := b.awaitReleaseOrCancel(ctx); err != nil {
+			return false, err
+		}
+	}
 	return b.inner.ClaimAlreadySubscribedSend(ctx, id, now, cooldown)
 }
 
@@ -1696,71 +1736,127 @@ func TestSubscribe_SyncQueryCountEqualAcrossBranches(t *testing.T) {
 //
 // This closes the hole the same deterministic, non-timing way
 // TestSubscribe_AsyncSendDoesNotBlockResponse (#0081, above) closes the
-// equivalent gap for mailer.Send: a subscriberStore whose Create call
-// blocks until released, driven directly over ServeHTTP for a brand-new
-// signup (the branch whose synchronous Create/SetInterests/audit-log writes
-// produced #0088's P(active > new) = 0.000 clusters). Subscribe's response
-// must be written while Create is PROVABLY still blocked — blocked.release
-// is never closed anywhere in this test, only Close's sendCtx cancellation
-// (via t.Cleanup) can ever unblock it, and that cancellation does not fire
-// within this test's own 2s bound. If processMutateJob ever ran
-// synchronously on the request goroutine again, ServeHTTP would not return
-// until Close's cancellation interrupts it — i.e. this test would hang past
-// the bound and fail, not merely report a wrong count. The 2s figure is a
-// hang guard, not a race window: Create should return in well under a
-// millisecond when the property holds, the same allowance
-// TestSubscribe_AsyncSendDoesNotBlockResponse already makes.
+// equivalent gap for mailer.Send: a subscriberStore whose one designated
+// method blocks until released, driven directly over ServeHTTP, with
+// Subscribe's response required to return while that method is PROVABLY
+// still blocked — blocked.release is never closed anywhere in this test,
+// only Close's sendCtx cancellation (via t.Cleanup) can ever unblock it,
+// and that cancellation does not fire within this test's own 2s bound. If
+// processMutateJob ever ran synchronously on the request goroutine again,
+// ServeHTTP would not return until Close's cancellation interrupts it —
+// i.e. this subtest would hang past the bound and fail, not merely report
+// a wrong count. The 2s figure is a hang guard, not a race window: the
+// blocked method should return in well under a millisecond when the
+// property holds, the same allowance TestSubscribe_AsyncSendDoesNotBlockResponse
+// already makes.
+//
+// #0098 widened this from a single Create-only case to three subtests, one
+// per store method processMutateJob's dispatch can reach — because the
+// original single case caught only a defect that un-defers the ENTIRE
+// mutation job, not one that un-defers a single branch. #0088's second
+// review proved that gap concretely: dispatching only the
+// existing-subscriber branches inline (`if findErr == nil {
+// runMutationSynchronously(job) } else { enqueueMutation(job) }`) left the
+// whole package green, because the guard's one Create-blocking case is only
+// ever reached via the findErr != nil (ErrNotFound, brand-new signup)
+// path — it never observes RestartSignup or ClaimAlreadySubscribedSend,
+// which are exactly the calls that shape would put back on the request
+// path. #0098's own Verification section (issues/0098.md) records the
+// mutation proof: applying exactly that conditional dispatch made the
+// "unsubscribed restart" and "already active resend" subtests below fail
+// while the pre-existing "brand new signup" subtest kept passing —
+// confirming the widened coverage catches what the original single case
+// could not, without weakening what it already caught.
 func TestSubscribe_MutationDeferredDoesNotBlockResponse(t *testing.T) {
 	pool := subscribeTestPool(t)
 
-	blocked := newBlockingSubscriberStore(subscribers.NewStore(pool))
-	h := NewSubscribeHandler(
-		blocked, interests.NewStore(pool), &mailing.RecordingMailer{},
-		NoSuppressions{}, fakePhysicalAddress{value: "123 Main St, San Francisco, CA"},
-		audit.New(pool), "https://example.test", nil,
-	)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := h.Close(ctx); err != nil {
-			t.Errorf("cleanup: h.Close: %v", err)
-		}
-	})
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/subscribe", h.Subscribe)
-
-	email := subscribeUniqueEmail(t)
-	body, err := json.Marshal(subscribeBody(email, nil, time.Now()))
-	if err != nil {
-		t.Fatalf("marshal request body: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "/api/subscribe", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	done := make(chan struct{})
-	go func() {
-		mux.ServeHTTP(rec, req)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Good: Subscribe returned even though blocked.release has not
-		// been (and, within this test, will not be) closed.
-	case <-time.After(2 * time.Second):
-		t.Fatal("Subscribe did not return within 2s while Create is still blocked — processMutateJob appears to be running on the request goroutine, which would reopen #0088's timing oracle")
+	tests := []struct {
+		// name also documents which existingSignup branch (PRD §6.3's
+		// table) reaches the blocked method: brand-new signups reach
+		// Create via newSignup; an unsubscribed (or bounced — same code
+		// path) subscriber reaches RestartSignup via restartSignup; an
+		// active subscriber reaches ClaimAlreadySubscribedSend via
+		// sendAlreadySubscribed.
+		name  string
+		which string
+		seed  func(t *testing.T, pool *pgxpool.Pool, email string)
+	}{
+		{
+			name:  "brand new signup (Create)",
+			which: "Create",
+			seed:  func(t *testing.T, pool *pgxpool.Pool, email string) {},
+		},
+		{
+			name:  "unsubscribed restart (RestartSignup)",
+			which: "RestartSignup",
+			seed: func(t *testing.T, pool *pgxpool.Pool, email string) {
+				seedSubscriberRow(t, pool, email, subscribers.StatusUnsubscribed, nil, nil)
+			},
+		},
+		{
+			name:  "already active resend (ClaimAlreadySubscribedSend)",
+			which: "ClaimAlreadySubscribedSend",
+			seed: func(t *testing.T, pool *pgxpool.Pool, email string) {
+				seedSubscriberRow(t, pool, email, subscribers.StatusActive, nil, nil)
+			},
+		},
 	}
 
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			email := subscribeUniqueEmail(t)
+			tc.seed(t, pool, email)
 
-	// Confirm the mutation really was queued for this signup — otherwise a
-	// fast response would prove nothing (no Create ever attempted).
-	select {
-	case <-blocked.entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Create was never entered — no mutation was queued for this signup; the fast response above proves nothing")
+			blocked := newBlockingSubscriberStoreOn(subscribers.NewStore(pool), tc.which)
+			h := NewSubscribeHandler(
+				blocked, interests.NewStore(pool), &mailing.RecordingMailer{},
+				NoSuppressions{}, fakePhysicalAddress{value: "123 Main St, San Francisco, CA"},
+				audit.New(pool), "https://example.test", nil,
+			)
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := h.Close(ctx); err != nil {
+					t.Errorf("cleanup: h.Close: %v", err)
+				}
+			})
+			mux := http.NewServeMux()
+			mux.HandleFunc("POST /api/subscribe", h.Subscribe)
+
+			body, err := json.Marshal(subscribeBody(email, nil, time.Now()))
+			if err != nil {
+				t.Fatalf("marshal request body: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/subscribe", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			done := make(chan struct{})
+			go func() {
+				mux.ServeHTTP(rec, req)
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				// Good: Subscribe returned even though blocked.release has
+				// not been (and, within this subtest, will not be) closed.
+			case <-time.After(2 * time.Second):
+				t.Fatalf("Subscribe did not return within 2s while %s is still blocked — processMutateJob appears to be running on the request goroutine, which would reopen #0088's timing oracle", tc.which)
+			}
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
+			}
+
+			// Confirm the mutation really was queued for this signup —
+			// otherwise a fast response would prove nothing (the blocked
+			// method never attempted).
+			select {
+			case <-blocked.entered:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s was never entered — no mutation was queued for this signup; the fast response above proves nothing", tc.which)
+			}
+		})
 	}
 }
