@@ -12,12 +12,22 @@
   // command-line block on the left, the CRT on the right, both inside the
   // same bordered terminal-body -- not a separate element beside the panel.
   // At >=860px that split is a two-column grid; below it, the image stacks
-  // beneath the text at a smaller size rather than disappearing, since the
-  // <img> always carries a real `src` (a bare `<img>` with no src is broken
-  // markup) and the byte cost is paid either way. At >=860px the image is
-  // large enough to become the LCP candidate, displacing the headline; see
-  // the issue's Implementation notes for the measured before/after numbers
-  // and why that still clears PRD §7.6's <2.0s-on-4G budget.
+  // beneath the text at a smaller size rather than disappearing. At >=860px
+  // the image is large enough to become the LCP candidate, displacing the
+  // headline; see the issue's Implementation notes for the measured
+  // before/after numbers and why that still clears PRD §7.6's <2.0s-on-4G
+  // budget.
+  //
+  // The photo is a CSS background rather than an <img> because it must swap
+  // per theme, and a <picture> cannot: `<source media="(prefers-color-
+  // scheme: dark)">` reads only the OS preference, so the explicit
+  // light/dark toggle in the header (lib/theme.ts writes `data-theme` on
+  // <html>) would leave a dark photo on a light panel. A background driven
+  // by a custom property answers to both signals and still downloads only
+  // the one asset that matches -- two <img>s toggled by `display` would
+  // fetch both. The photo is decorative (it repeats what the adjacent
+  // headline and command line already say), so it carried alt="" as an
+  // <img> and needs no text alternative as a background.
   //
   // "Next up" (#0053): switched from a static placeholder to the real
   // workshops API. GET /api/workshops (#0051) returns upcoming workshops
@@ -75,19 +85,7 @@
         </div>
 
         <div class="hero-crt">
-          <div class="crt-frame">
-            <picture>
-              <source media="(min-width: 860px)" type="image/webp" srcset="/hero-crt-380.webp 1x, /hero-crt-760.webp 2x" />
-              <img
-                class="crt-photo"
-                src="/hero-crt-380.webp"
-                alt=""
-                width="380"
-                height="354"
-                decoding="async"
-              />
-            </picture>
-          </div>
+          <div class="crt-frame"></div>
         </div>
       </div>
     </TerminalPanel>
@@ -167,66 +165,68 @@
    * (see the script comment) -- a stacked, smaller photo costs no more
    * bytes than a hidden one would, so hiding it outright would only waste
    * the download for nothing. */
-  /* #0231: the hero panel is pinned to the CRT photo's own backdrop
-   * (#181d17, measured uniform at every corner and mid-edge) in BOTH themes,
-   * so the photo's background IS the section's background and no seam,
-   * frame, or border is possible. The photo therefore ships with no alpha
-   * channel at all -- a flat backdrop compresses to 3.8 KB where the keyed
-   * cutout cost 37 KB, and the cutout could never be clean anyway: the
-   * monitor's dark right flank and bottom shadow are indistinguishable from
-   * the backdrop in the source photograph.
+  /* #0231: the hero panel is pinned to the CRT photo's own backdrop, so the
+   * photo's background IS the panel's background and no seam, frame, border,
+   * or alpha channel is possible. The photo ships fully opaque: a flat
+   * backdrop compresses to a few KB where a keyed cutout cost ten times that,
+   * and the cutout could never be clean anyway -- the monitor's dark right
+   * flank and bottom shadow are indistinguishable from the backdrop in the
+   * source photograph, which two separate keying attempts confirmed.
    *
-   * Pinning the surface means pinning the text tokens with it, or light mode
-   * would render dark type on a dark panel. These are the dark palette's
-   * values from app.css, scoped to this panel only -- the rest of the page
-   * still follows the theme. */
-  .hero :global(.terminal-panel),
-  .hero :global(.terminal-body) {
-    background: #181d17;
+   * There are two photographs, one shot against a dark backdrop and one
+   * against a light one, because pinning a single dark photo forced the whole
+   * hero to stay dark in light mode -- one dark band across the top of an
+   * otherwise pale page. Each theme pins to its own photo's backdrop instead.
+   *
+   * The pinned values are the colors the WebP *decodes* to, not the colors the
+   * source PNGs contain: lossy encoding shifts a flat field by a step or two
+   * (#E9EEE6 decodes to #E8EEE5, #181D17 to #191C17), and it is the decoded
+   * value the browser paints next to the panel background. Lossless encoding
+   * would hold the source values exactly but costs 262 KB against 19 KB at 2x
+   * -- not worth it for a difference of one 255th. Both figures are measured;
+   * re-measure with the mode of the border pixels if either asset is
+   * re-encoded.
+   *
+   * Everything below drives TerminalPanel through the custom properties it
+   * already reads (--bg-panel, --bg-header, --border), so no :global()
+   * override of its internals is needed. Light is the default branch, dark is
+   * applied by the same two-selector pattern app.css uses: the media query for
+   * the OS preference, guarded against an explicit light choice, plus the
+   * explicit dark attribute. Text tokens are NOT overridden -- each theme's
+   * own palette already contrasts correctly against its own photo backdrop. */
+  .hero {
+    --bg-panel: #e8eee5;
+    --bg-header: #dae3d6;
+    --border: #c6d1c2;
+    --crt-photo: url('/hero-crt-light-380.webp');
+    --crt-photo-set: image-set(
+      url('/hero-crt-light-380.webp') 1x,
+      url('/hero-crt-light-760.webp') 2x
+    );
   }
 
-  /* In light mode the pinned panel is a dark block on a pale page. Left flat
-   * it reads as pasted-on. A soft ambient shadow plus a faint green cast
-   * makes it read as a lit object sitting on the page -- the same thing a
-   * real CRT does to the wall behind it. Dark mode needs none of this: the
-   * panel and page are already the same family, so the shadow is scoped to
-   * light only rather than being dialled down to nothing in dark. */
-  :root[data-theme='light'] .hero :global(.terminal-panel) {
-    border-color: #243028;
-    border-radius: 8px;
-    box-shadow:
-      0 1px 2px rgba(10, 13, 11, 0.18),
-      0 12px 28px -10px rgba(10, 13, 11, 0.34),
-      0 0 44px -18px rgba(104, 255, 35, 0.28);
-  }
-
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme='dark']) .hero :global(.terminal-panel) {
-      border-color: #243028;
-      border-radius: 8px;
-      box-shadow:
-        0 1px 2px rgba(10, 13, 11, 0.18),
-        0 12px 28px -10px rgba(10, 13, 11, 0.34),
-        0 0 44px -18px rgba(104, 255, 35, 0.28);
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) .hero {
+      --bg-panel: #191c17;
+      --bg-header: #1b231c;
+      --border: #243028;
+      --crt-photo: url('/hero-crt-380.webp');
+      --crt-photo-set: image-set(
+        url('/hero-crt-380.webp') 1x,
+        url('/hero-crt-760.webp') 2x
+      );
     }
   }
 
-  .hero :global(.terminal-bar) {
-    background: #1b231c;
-    border-bottom-color: #243028;
-  }
-
-  .hero {
-    --bg-panel: #181d17;
+  :root[data-theme='dark'] .hero {
+    --bg-panel: #191c17;
     --bg-header: #1b231c;
-    --text: #e8f0e8;
-    --text-muted: #9aa79e;
-    --text-faint: #7e8d82;
     --border: #243028;
-    --border-strong: #4e6553;
-    --accent: #68ff23;
-    --accent-dim: #3c9e0f;
-    color: var(--text);
+    --crt-photo: url('/hero-crt-380.webp');
+    --crt-photo-set: image-set(
+      url('/hero-crt-380.webp') 1x,
+      url('/hero-crt-760.webp') 2x
+    );
   }
 
   .hero-row {
@@ -245,30 +245,19 @@
     justify-content: center;
   }
 
-  /* The photo's backdrop measures a uniform #181d17 (issue #0231's
-   * Description) at every corner and mid-edge. Verified against both
-   * surfaces it can now land on: TerminalPanel's own --bg-panel is #FFFFFF
-   * in light mode (the cutout ghosts badly there, matching the same
-   * problem the page ground had) and #121712 in dark mode (close enough
-   * that compositing directly onto it showed no visible seam -- but that
-   * near-match is a coincidence of the current dark palette, not something
-   * to depend on, and light mode still needs a real fix). Rather than
-   * branch the treatment per theme, the frame stays a single fixed dark
-   * surface in both -- like a CRT sitting in a dim alcove built into the
-   * terminal chrome -- so there is exactly one asset and one background
-   * value, not a per-theme swap. That is why it is a literal hex value
-   * here rather than a token: the whole point is that it must NOT change
-   * with the theme. --border still comes from the token, same as every
-   * other panel on this page. */
+  /* Both photographs are 1402x1122; the ratio is declared here so the frame
+   * reserves its height before the background loads. A background image has
+   * no intrinsic size to fall back on the way an <img> does, so without this
+   * the row would collapse and then jump. The 1x/2x pair is selected by
+   * image-set; the plain url() above it is the fallback for engines that do
+   * not support image-set, which get the 1x asset rather than nothing. */
   .crt-frame {
-    display: flex;
     width: 240px;
-  }
-
-  .crt-photo {
-    display: block;
-    width: 100%;
-    height: auto;
+    aspect-ratio: 1402 / 1122;
+    background-image: var(--crt-photo);
+    background-image: var(--crt-photo-set);
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
   }
 
   @media (min-width: 860px) {
