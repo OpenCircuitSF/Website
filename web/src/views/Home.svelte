@@ -167,6 +167,42 @@
    * (see the script comment) -- a stacked, smaller photo costs no more
    * bytes than a hidden one would, so hiding it outright would only waste
    * the download for nothing. */
+  /* #0231: the hero panel is pinned to the CRT photo's own backdrop
+   * (#181d17, measured uniform at every corner and mid-edge) in BOTH themes,
+   * so the photo's background IS the section's background and no seam,
+   * frame, or border is possible. The photo therefore ships with no alpha
+   * channel at all -- a flat backdrop compresses to 3.8 KB where the keyed
+   * cutout cost 37 KB, and the cutout could never be clean anyway: the
+   * monitor's dark right flank and bottom shadow are indistinguishable from
+   * the backdrop in the source photograph.
+   *
+   * Pinning the surface means pinning the text tokens with it, or light mode
+   * would render dark type on a dark panel. These are the dark palette's
+   * values from app.css, scoped to this panel only -- the rest of the page
+   * still follows the theme. */
+  .hero :global(.terminal-panel),
+  .hero :global(.terminal-body) {
+    background: #181d17;
+  }
+
+  .hero :global(.terminal-bar) {
+    background: #1b231c;
+    border-bottom-color: #243028;
+  }
+
+  .hero {
+    --bg-panel: #181d17;
+    --bg-header: #1b231c;
+    --text: #e8f0e8;
+    --text-muted: #9aa79e;
+    --text-faint: #7e8d82;
+    --border: #243028;
+    --border-strong: #4e6553;
+    --accent: #68ff23;
+    --accent-dim: #3c9e0f;
+    color: var(--text);
+  }
+
   .hero-row {
     display: flex;
     flex-direction: column;
@@ -200,11 +236,7 @@
    * other panel on this page. */
   .crt-frame {
     display: flex;
-    width: 220px;
-    background: #181d17;
-    border: var(--border-w) solid var(--border);
-    border-radius: 6px;
-    padding: var(--space-3);
+    width: 240px;
   }
 
   .crt-photo {
