@@ -78,6 +78,7 @@
     subscriberStatusLabel,
     subscriberStatusBadgeClass,
     canClearComplaint,
+    subscribersExportHref,
     validateManualAddEmail,
     validateSuppressNote,
     signupEvidenceSummary,
@@ -621,6 +622,18 @@
   let subsQueryRaw = $state('');
   let subsQueryApplied = $state('');
   const subsPaging = $derived(pageInfo(subsTotal, subsPage, SUBS_PER_PAGE));
+  // #0219: the CSV export link's href, carrying the same status/interest/query
+  // triple loadSubscribers() below sends -- so what downloads matches what is
+  // on screen. Real navigation (a plain <a download> below), not fetch: the
+  // export endpoint streams deliberately (#0059) and a fetch(...).blob() would
+  // buffer the whole response first, which is exactly the property lost.
+  const subsExportHref = $derived(
+    subscribersExportHref({
+      status: subsStatusFilter || undefined,
+      interestId: subsInterestFilter ? Number(subsInterestFilter) : undefined,
+      q: subsQueryApplied || undefined,
+    }),
+  );
 
   async function loadSubscribers() {
     subsLoading = true;
@@ -1619,6 +1632,7 @@
           {#if subsStatusFilter || subsInterestFilter || subsQueryApplied}
             <Button onclick={clearSubsFilters}>Clear</Button>
           {/if}
+          <a class="link-button" href={subsExportHref} download>Export CSV</a>
         </form>
       </Panel>
 
@@ -2114,6 +2128,29 @@
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
+  }
+  /* #0219: styled to match lib/Button.svelte's default .btn look, but as a
+     real <a href download> rather than a <button> -- Svelte scopes component
+     styles per-file, so Button.svelte's own .btn rule does not reach markup
+     written here. */
+  .link-button {
+    display: inline-block;
+    font-family: var(--font);
+    font-size: var(--fs-base);
+    line-height: 1;
+    padding: var(--space-2) var(--space-3);
+    border: var(--border-w) solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--bg-subtle);
+    color: var(--text);
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .link-button:hover {
+    background: var(--bg-header);
+  }
+  .link-button:active {
+    background: var(--border);
   }
   .actions-col {
     white-space: nowrap;

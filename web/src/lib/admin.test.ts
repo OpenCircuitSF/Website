@@ -30,6 +30,7 @@ import {
   subscriberStatusLabel,
   subscriberStatusBadgeClass,
   canClearComplaint,
+  subscribersExportHref,
   isPlausibleEmail,
   validateManualAddEmail,
   validateSuppressNote,
@@ -421,6 +422,37 @@ describe('canClearComplaint', () => {
     expect(canClearComplaint('pending')).toBe(false);
     expect(canClearComplaint('unsubscribed')).toBe(false);
     expect(canClearComplaint('bounced')).toBe(false);
+  });
+});
+
+describe('subscribersExportHref (#0219)', () => {
+  it('with no filter, points at the bare export endpoint', () => {
+    expect(subscribersExportHref()).toBe('/admin/subscribers/export');
+    expect(subscribersExportHref({})).toBe('/admin/subscribers/export');
+  });
+
+  it('carries status alone', () => {
+    expect(subscribersExportHref({ status: 'active' })).toBe('/admin/subscribers/export?status=active');
+  });
+
+  it('carries interestId alone, as interest_id', () => {
+    expect(subscribersExportHref({ interestId: 7 })).toBe('/admin/subscribers/export?interest_id=7');
+  });
+
+  it('carries q alone, URL-encoded', () => {
+    expect(subscribersExportHref({ q: 'a b@example.com' })).toBe(
+      '/admin/subscribers/export?q=a+b%40example.com',
+    );
+  });
+
+  it('carries all three together, matching what admin_subscribers_export.go reads (status, interest_id, q)', () => {
+    expect(subscribersExportHref({ status: 'pending', interestId: 3, q: 'example.com' })).toBe(
+      '/admin/subscribers/export?status=pending&interest_id=3&q=example.com',
+    );
+  });
+
+  it('omits a param entirely when its value is falsy (empty string, 0, undefined) — never emits status= or interest_id=0', () => {
+    expect(subscribersExportHref({ status: '', interestId: 0, q: '' })).toBe('/admin/subscribers/export');
   });
 });
 

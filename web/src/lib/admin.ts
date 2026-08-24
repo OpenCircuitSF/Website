@@ -407,6 +407,38 @@ export function canClearComplaint(status: string): boolean {
   return status === 'complained';
 }
 
+/** The current status/interest/query filter for the subscribers screen — the
+ * same triple `listSubscribers` sends and `GET /admin/subscribers/export`
+ * accepts and audits (internal/handlers/admin_subscribers_export.go). */
+export interface SubscribersExportFilter {
+  status?: string;
+  interestId?: number;
+  q?: string;
+}
+
+/**
+ * #0219: the href for the subscribers CSV export link, carrying whatever
+ * filter is currently applied so the download matches what the admin is
+ * looking at. Deliberately a plain string builder, not a fetch — the export
+ * endpoint streams (`#0059`), and a `fetch(...).then(r => r.blob())` client
+ * would buffer the whole response in memory first, undoing exactly the
+ * property the server was built to have. The caller renders this as an
+ * `<a href={...} download>`, a real browser navigation, not this function
+ * performing one.
+ *
+ * Mirrors listSubscribers' own query-building (src/lib/api.ts) except there
+ * is no page/per_page — the export is the whole filtered list, not one page
+ * of it.
+ */
+export function subscribersExportHref(filter: SubscribersExportFilter = {}): string {
+  const sp = new URLSearchParams();
+  if (filter.status) sp.set('status', filter.status);
+  if (filter.interestId) sp.set('interest_id', String(filter.interestId));
+  if (filter.q) sp.set('q', filter.q);
+  const qs = sp.toString();
+  return qs ? `/admin/subscribers/export?${qs}` : '/admin/subscribers/export';
+}
+
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** A permissive client-side email syntax check — the server remains the source of truth. */
