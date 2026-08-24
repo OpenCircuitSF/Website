@@ -219,6 +219,25 @@ func verifyContiguous(t *testing.T, stems []migrationStem) {
 //     character. CommonMark requires the closing fence be at least as long
 //     as the opener; fenceLen now records the opener's run length and the
 //     close check requires the same-or-longer run.
+//
+// #0092 closed two further residuals in the close check specifically --
+// #0089's fix required the closer's run to be *long enough*, but never
+// checked the closer's own indentation or what followed the run:
+//
+//  1. A closer indented 4+ columns still closed the fence, because the run
+//     length was measured against trimmed (strings.TrimSpace already
+//     dropped the indentation) rather than against the raw line. CommonMark
+//     caps a closing fence at 3 columns of indentation; at 4+ columns the
+//     line is code content, not a closer. Now checked with
+//     leadingIndentWidth(line) <= 3, the same helper and the same threshold
+//     the indented-code-block check below already uses.
+//  2. A closer followed by trailing text (e.g. "``` nope") still closed the
+//     fence, because leadingRunLength(trimmed, fenceChar) >= fenceLen only
+//     checks a prefix -- it never confirmed nothing else followed the run.
+//     CommonMark permits only whitespace after a closing fence's run, and
+//     trimmed already had trailing whitespace stripped by TrimSpace, so
+//     "the run is all of trimmed" (leadingRunLength(trimmed, fenceChar) ==
+//     len(trimmed)) is exactly that check.
 func docTableRowLines(doc string) []string {
 	var rows []string
 	var fenceChar byte // 0 outside a fence; '`' or '~' while inside one
@@ -246,7 +265,15 @@ func docTableRowLines(doc string) []string {
 				continue
 			}
 		} else {
-			if leadingRunLength(trimmed, fenceChar) >= fenceLen {
+			// #0092: a closer must (a) run at least as long as the opener
+			// (#0089's rule, unchanged), (b) be nothing but that run once
+			// trimmed -- trimmed already dropped surrounding whitespace, so
+			// requiring the run to account for the *whole* trimmed line is
+			// how "only whitespace may follow the run" gets checked -- and
+			// (c) sit at 3 columns of indentation or less on the raw,
+			// untrimmed line.
+			run := leadingRunLength(trimmed, fenceChar)
+			if run >= fenceLen && run == len(trimmed) && leadingIndentWidth(line) <= 3 {
 				fenceChar = 0
 				fenceLen = 0
 			}
@@ -451,6 +478,23 @@ func TestDocTableRowLines(t *testing.T) {
 				// fence content, not a closer.
 				name: "short closer does not end a longer tilde fence",
 				doc:  "~~~~\n~~~\n| `000003_add_x` | stale |\n~~~~\n",
+			},
+			{
+				// #0092 residual 1: CommonMark caps a closing fence at 3
+				// columns of indentation. The old check measured the run
+				// length against trimmed, which had already discarded the
+				// indentation, so a closer indented 4+ columns still closed
+				// the fence.
+				name: "closer indented 4+ spaces does not close the fence",
+				doc:  "```\n| `000003_add_x` | stale |\n    ```\n| `000003_add_x` | stale |\n```\n",
+			},
+			{
+				// #0092 residual 2: CommonMark permits only whitespace after
+				// a closer's run. The old check only tested a prefix, so
+				// "``` nope" (a leading run of 3 backticks) still closed a
+				// 3-backtick fence even though "nope" follows it.
+				name: "closer with trailing text does not close the fence",
+				doc:  "```\n| `000003_add_x` | stale |\n``` nope\n| `000003_add_x` | stale |\n```\n",
 			},
 		}
 		for _, tc := range cases {
