@@ -238,6 +238,39 @@ func verifyContiguous(t *testing.T, stems []migrationStem) {
 //     trimmed already had trailing whitespace stripped by TrimSpace, so
 //     "the run is all of trimmed" (leadingRunLength(trimmed, fenceChar) ==
 //     len(trimmed)) is exactly that check.
+//
+// #0224 found the same defect class -- #0092's review, on the *opposite*
+// branch: the fence *opener* had no indentation cap of its own, checking
+// only leadingRunLength(trimmed, ch) >= 3 and discarding indentation exactly
+// as the closer branch used to. Two divergences, both silent (an incorrect
+// open, not a compile error or a loud rejection):
+//
+//  1. An opener indented 4+ columns (including a single leading tab, which
+//     leadingIndentWidth counts as 4 columns under CommonMark's tab-stop
+//     rule) still opened a fence. Fixed the same way the closer branch was
+//     in #0092: leadingIndentWidth(line) <= 3 gates the open.
+//  2. A backtick inside a backtick fence's info string (e.g. "``` foo`bar")
+//     still opened a fence. CommonMark forbids this specifically for
+//     backtick fences -- a backtick in the info string would be
+//     indistinguishable from the start of an inline code span -- but not for
+//     tilde fences, where a backtick can never be confused with the fence
+//     marker. Fixed by rejecting a backtick anywhere in the text following
+//     the opening run when, and only when, that run is backticks.
+//
+// Individually each fix only ever turns an incorrect open into a correct
+// non-open (the safe direction: content that should be normal prose stops
+// being mistaken for code). But #0224's review found the *composition*
+// dangerous: a spurious open from an indented opener flips fence parity,
+// masking real rows as code until some later line coincidentally satisfies
+// the closer branch's own conditions and flips parity back -- and a line
+// that fails to open (e.g. the info-string case) is exactly such a
+// candidate, because it is not itself masked and is evaluated by the
+// (already-correct) closer branch once state is wrongly "inside". A doc row
+// naming a migration that does not exist on disk, sitting inside such a
+// wrongly-open span, was silently dropped from rowLines entirely -- never
+// seen by verifyDocRowsHaveMigration's reverse check at all, rather than
+// being flagged as stale. See
+// TestDocTableRowLinesParityFlipMaskingRegression for the reproduction.
 func docTableRowLines(doc string) []string {
 	var rows []string
 	var fenceChar byte // 0 outside a fence; '`' or '~' while inside one
@@ -254,12 +287,21 @@ func docTableRowLines(doc string) []string {
 		// both which character opened it and how long that opening run was
 		// rather than toggling a single boolean.
 		if fenceChar == 0 {
+			// #0224: an opener is capped at 3 columns of indentation, the
+			// same threshold and the same helper the closer branch uses
+			// (below) -- a single leading tab counts as 4 columns. A
+			// backtick-run opener additionally may not have a backtick
+			// anywhere in its info string (the text after the run);
+			// CommonMark does not extend that restriction to a tilde-run
+			// opener.
+			indented := leadingIndentWidth(line) > 3
 			switch {
-			case leadingRunLength(trimmed, '`') >= 3:
+			case !indented && leadingRunLength(trimmed, '`') >= 3 &&
+				!strings.Contains(trimmed[leadingRunLength(trimmed, '`'):], "`"):
 				fenceChar = '`'
 				fenceLen = leadingRunLength(trimmed, '`')
 				continue
-			case leadingRunLength(trimmed, '~') >= 3:
+			case !indented && leadingRunLength(trimmed, '~') >= 3:
 				fenceChar = '~'
 				fenceLen = leadingRunLength(trimmed, '~')
 				continue
@@ -496,6 +538,15 @@ func TestDocTableRowLines(t *testing.T) {
 				name: "closer with trailing text does not close the fence",
 				doc:  "```\n| `000003_add_x` | stale |\n``` nope\n| `000003_add_x` | stale |\n```\n",
 			},
+			{
+				// #0224: unlike a backtick fence, CommonMark does not forbid
+				// a backtick in a tilde fence's info string -- a backtick can
+				// never be mistaken for part of a "~~~" marker. This proves
+				// the opener fix didn't over-correct into rejecting tilde
+				// opens generally.
+				name: "tilde opener with backtick in info string still opens",
+				doc:  "~~~ foo`bar\n| `000003_add_x` | stale |\n~~~\n",
+			},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -545,6 +596,36 @@ func TestDocTableRowLines(t *testing.T) {
 					"</details>",
 				wantRows: 2,
 			},
+			{
+				// #0224 opener residual 1: CommonMark caps a fence *opener*
+				// at 3 columns of indentation, the same as a closer. Before
+				// the fix, the opener check discarded indentation entirely
+				// (it ran against trimmed), so a 4-space-indented "```" still
+				// opened a fence and masked the real row that follows.
+				name:     "opener indented 4+ spaces does not open a fence",
+				doc:      "    ```\n| `000003_add_x` | stale |\n",
+				wantRows: 1,
+			},
+			{
+				// #0224 opener residual 1, tab form: a single leading tab is
+				// 4 columns under CommonMark's tab-stop rule, using the same
+				// leadingIndentWidth the closer branch and the indented-code
+				// check already depend on.
+				name:     "tab-indented opener does not open a fence",
+				doc:      "\t```\n| `000003_add_x` | stale |\n",
+				wantRows: 1,
+			},
+			{
+				// #0224 opener residual 2: CommonMark forbids a backtick
+				// anywhere in a backtick fence's info string -- it would be
+				// indistinguishable from the start of an inline code span.
+				// Before the fix, the opener check never looked past the
+				// run, so "``` foo`bar" still opened a fence and masked the
+				// real row that follows.
+				name:     "backtick in backtick fence info string does not open a fence",
+				doc:      "``` foo`bar\n| `000003_add_x` | stale |\n",
+				wantRows: 1,
+			},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -555,6 +636,55 @@ func TestDocTableRowLines(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestDocTableRowLinesParityFlipMaskingRegression reproduces #0224's review
+// scenario -- the composition its title refers to, and "the criterion that
+// matters" per the issue: each opener residual is individually loud (a
+// spurious open only ever turns real rows into masked code, which a missing
+// doc row already surfaces), but composed with the already-correct closer
+// branch (#0092) they cancel out silently.
+//
+// Line 2 is a "```" indented 4 columns -- pre-#0224, this satisfied
+// leadingRunLength(trimmed, '`') >= 3 with indentation discarded, so it
+// spuriously opened a fence (opener residual 1) even though CommonMark
+// treats a 4-column-indented line as an indented code block, not a fence
+// opener. Line 4, "``` bogus`info", never gets a chance to demonstrate
+// opener residual 2 on its own -- by the time the loop reaches it, fenceChar
+// is already (spuriously) non-zero from line 2, so it is evaluated by the
+// closer branch instead of the opener branch. The already-correct closer
+// logic (#0092) requires the run to be all of trimmed, and "``` bogus`info"
+// has trailing text, so it correctly refuses to close -- which means the
+// fence pre-#0224 never closes at all for the rest of the document, and
+// every line from line 2 onward -- including a doc row naming a migration
+// that does not exist on disk -- is masked out of rowLines entirely. That
+// row never reaches verifyDocRowsHaveMigration's reverse check, so the
+// parity guard reports ok despite the document actually containing a stale
+// reference. Verified by hand against the pre-#0224 docTableRowLines (see
+// this issue's `## Verification`): it returns only the first line as a row;
+// this test asserts the post-#0224 function returns all three.
+func TestDocTableRowLinesParityFlipMaskingRegression(t *testing.T) {
+	doc := "| `000003_add_x` | real row one |\n" +
+		"    ```\n" +
+		"| `000999_stale_phantom` | should surface for the reverse check |\n" +
+		"``` bogus`info\n" +
+		"| `000003_add_x` | real row two |\n"
+
+	want := []string{
+		"| `000003_add_x` | real row one |",
+		"| `000999_stale_phantom` | should surface for the reverse check |",
+		"| `000003_add_x` | real row two |",
+	}
+
+	got := docTableRowLines(doc)
+	if len(got) != len(want) {
+		t.Fatalf("docTableRowLines(%q) returned %d row(s) %v, want %d row(s) %v", doc, len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("docTableRowLines(%q) row %d = %q, want %q", doc, i, got[i], want[i])
+		}
+	}
 }
 
 // TestDatabaseDocMigrationParity is #0082's guard, extended by #0083 to be
