@@ -535,11 +535,20 @@ CREATE TABLE campaign_interests (
 
 -- One row per (campaign, subscriber). Materialized when a send starts.
 -- The UNIQUE key is the idempotency guarantee: a crashed and restarted send
--- can never double-deliver.
+-- can never double-deliver. Note the NULL carve-out: Postgres treats NULLs
+-- as distinct for UNIQUE purposes, so once #0060's erasure anonymizes a
+-- row's subscriber_id to NULL, that row is no longer constrained by this
+-- key against any other NULL row — harmless today because an erased
+-- subscriber can never be re-materialized into a new send.
+-- subscriber_id is nullable with ON DELETE SET NULL, not NOT NULL/CASCADE:
+-- #0060's GDPR erasure anonymizes this table's rows for the erased
+-- subscriber rather than deleting them, so historical campaign counts never
+-- silently change; a CASCADE delete would destroy exactly the rows erasure
+-- must preserve.
 CREATE TABLE email_sends (
     id             BIGSERIAL PRIMARY KEY,
     campaign_id    BIGINT NOT NULL REFERENCES email_campaigns(id) ON DELETE CASCADE,
-    subscriber_id  BIGINT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+    subscriber_id  BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
     email          TEXT NOT NULL,          -- snapshot at send time
     status         TEXT NOT NULL DEFAULT 'queued',
                    -- queued | sending | sent | failed | skipped

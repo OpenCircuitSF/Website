@@ -63,6 +63,12 @@ CREATE TABLE campaign_interests (
 -- materialization re-runs as `ON CONFLICT (campaign_id, subscriber_id) DO
 -- NOTHING` — never DO UPDATE, which would be a documented path from 'sent'
 -- back to 'queued', i.e. a double-send written into the schema itself.
+-- Carve-out: Postgres treats NULLs as distinct for UNIQUE purposes, so once
+-- #0060's erasure sets a row's subscriber_id to NULL, that row is no longer
+-- constrained by this key against any other NULL row. Harmless today — an
+-- erased subscriber can never be re-materialized into a new send, so there
+-- is nothing left to double-deliver to — but the key is not a guarantee for
+-- anonymized rows the way it is for live ones.
 --
 -- 'skipped' is carried in from #0044's plan (2026-08-21), not present in
 -- PRD §6.2's prose table but already listed in its email_sends comment: the

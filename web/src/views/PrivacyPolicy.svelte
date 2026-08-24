@@ -35,11 +35,18 @@
   //  - The Consent section names only what §6.2 actually has two of:
   //    `signup_ip` + `confirmed_at`. There is no confirm-time IP column --
   //    don't reintroduce "the confirming click's IP" here.
-  //  - The erasure paragraph under "How to leave" must keep naming all three
+  //  - The erasure paragraph under "How to leave" must keep naming all four
   //    things #0060 retains after a hard delete (suppression entry,
-  //    anonymized `email_sends` rows, raw `email_events` payloads) -- #0060's
-  //    own acceptance criteria require this page to document that, and a
-  //    bare "we delete your data entirely" is false against that design.
+  //    anonymized `email_sends` rows, raw `email_events` payloads, and the
+  //    internal admin audit log) -- #0060's own acceptance criteria require
+  //    this page to document that, and a bare "we delete your data entirely"
+  //    is false against that design. Do not shrink this back to "three
+  //    things": a Phase 3 review of #0060 walked the real subscribe -> confirm
+  //    -> erase journey and found the audit log still holds the address and
+  //    the signup IP after erasure -- the page previously omitted it. Per the
+  //    "don't close either list with an absolute" note above, if a future
+  //    change adds or removes a retained category, update the count rather
+  //    than re-closing it at a fixed number.
   //  - "No third-party analytics, ad trackers, external CDNs, or email
   //    open-tracking pixels" is CLAUDE.md §9's binding restriction, stated
   //    here as a fact about how the site is built, not a promise.
@@ -181,7 +188,7 @@
       <p>
         <strong>Erasure.</strong> You can request that we delete your personal data
         rather than just unsubscribing. An erasure request hard-deletes your
-        subscriber record — your email, interests, and signup details — but three
+        subscriber record — your email, interests, and signup details — but four
         things are deliberately retained rather than deleted:
       </p>
       <StatusList
@@ -189,6 +196,7 @@
           'a permanent suppression entry, so the address cannot be silently re-added by a future import or signup',
           'anonymized rows in our send history, so historical campaign counts (how many people a given email actually reached) do not silently change',
           'the raw deliverability events (bounces, complaints, deliveries) already logged against your address, kept without the link back to your identity, for spam/abuse forensics',
+          'an internal admin audit log entry recording earlier actions on your account (signup, confirmation, and the erasure itself) — this includes your email address and your signup IP address, kept so we can prove a request was honored and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
         ]}
       />
       <p>
