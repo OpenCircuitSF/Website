@@ -7,8 +7,17 @@
   // design reference already using this exact language, including the
   // venue-independence framing).
   //
-  // The headline is the page's LCP element by construction: no images in the
-  // hero, just type -- see PRD §7.6's LCP budget (<2.0s on 4G).
+  // #0231 added a photo of the physical CRT monitor the terminal motif
+  // refers to, inside the terminal panel itself: the prompt/headline/status/
+  // command-line block on the left, the CRT on the right, both inside the
+  // same bordered terminal-body -- not a separate element beside the panel.
+  // At >=860px that split is a two-column grid; below it, the image stacks
+  // beneath the text at a smaller size rather than disappearing, since the
+  // <img> always carries a real `src` (a bare `<img>` with no src is broken
+  // markup) and the byte cost is paid either way. At >=860px the image is
+  // large enough to become the LCP candidate, displacing the headline; see
+  // the issue's Implementation notes for the measured before/after numbers
+  // and why that still clears PRD §7.6's <2.0s-on-4G budget.
   //
   // "Next up" (#0053): switched from a static placeholder to the real
   // workshops API. GET /api/workshops (#0051) returns upcoming workshops
@@ -50,17 +59,37 @@
 <main id="main-content" class="app-shell home-shell">
   <section class="hero" aria-labelledby="home-headline">
     <TerminalPanel title="open_circuit_sf">
-      <Prompt text="open_circuit // san_francisco" />
-      <h1 id="home-headline" class="headline">Hands-on electronics workshops</h1>
-      <StatusList
-        items={[
-          'absolute beginners welcome',
-          'tools and parts provided',
-          'hosted anywhere — makerspace to neighborhood garage',
-          'microcontrollers · soldering · homelab · automation',
-        ]}
-      />
-      <CommandLine command="opencircuitsf.com" />
+      <div class="hero-row">
+        <div class="hero-text">
+          <Prompt text="open_circuit // san_francisco" />
+          <h1 id="home-headline" class="headline">Hands-on electronics workshops</h1>
+          <StatusList
+            items={[
+              'absolute beginners welcome',
+              'tools and parts provided',
+              'hosted anywhere — makerspace to neighborhood garage',
+              'microcontrollers · soldering · homelab · automation',
+            ]}
+          />
+          <CommandLine command="opencircuitsf.com" />
+        </div>
+
+        <div class="hero-crt">
+          <div class="crt-frame">
+            <picture>
+              <source media="(min-width: 860px)" type="image/webp" srcset="/hero-crt-380.webp 1x, /hero-crt-760.webp 2x" />
+              <img
+                class="crt-photo"
+                src="/hero-crt-380.webp"
+                alt=""
+                width="380"
+                height="354"
+                decoding="async"
+              />
+            </picture>
+          </div>
+        </div>
+      </div>
     </TerminalPanel>
   </section>
 
@@ -128,6 +157,81 @@
      * size on desktop, without ever forcing horizontal scroll. */
     font-size: clamp(28px, 7vw, 52px);
     color: var(--text);
+  }
+
+  /* #0231: the CRT photo lives inside the terminal panel's own body, not
+   * beside it -- .hero-row is what .terminal-body's single child renders,
+   * splitting into text (left) and photo (right). Below 860px it stacks:
+   * text first, then the photo at a smaller size. It is never removed from
+   * the DOM at any width, because the <img> always carries a real `src`
+   * (see the script comment) -- a stacked, smaller photo costs no more
+   * bytes than a hidden one would, so hiding it outright would only waste
+   * the download for nothing. */
+  .hero-row {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-5);
+  }
+
+  .hero-text {
+    width: 100%;
+  }
+
+  .hero-crt {
+    display: flex;
+    justify-content: center;
+  }
+
+  /* The photo's backdrop measures a uniform #181d17 (issue #0231's
+   * Description) at every corner and mid-edge. Verified against both
+   * surfaces it can now land on: TerminalPanel's own --bg-panel is #FFFFFF
+   * in light mode (the cutout ghosts badly there, matching the same
+   * problem the page ground had) and #121712 in dark mode (close enough
+   * that compositing directly onto it showed no visible seam -- but that
+   * near-match is a coincidence of the current dark palette, not something
+   * to depend on, and light mode still needs a real fix). Rather than
+   * branch the treatment per theme, the frame stays a single fixed dark
+   * surface in both -- like a CRT sitting in a dim alcove built into the
+   * terminal chrome -- so there is exactly one asset and one background
+   * value, not a per-theme swap. That is why it is a literal hex value
+   * here rather than a token: the whole point is that it must NOT change
+   * with the theme. --border still comes from the token, same as every
+   * other panel on this page. */
+  .crt-frame {
+    display: flex;
+    width: 220px;
+    background: #181d17;
+    border: var(--border-w) solid var(--border);
+    border-radius: 6px;
+    padding: var(--space-3);
+  }
+
+  .crt-photo {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  @media (min-width: 860px) {
+    .hero-row {
+      flex-direction: row;
+      align-items: center;
+      gap: var(--space-6);
+    }
+
+    .hero-text {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .hero-crt {
+      flex: none;
+    }
+
+    .crt-frame {
+      width: 380px;
+    }
   }
 
   .lede h2,
