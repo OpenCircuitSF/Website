@@ -48,18 +48,25 @@ of them before calling the script:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `STORAGE` | `json` | Must stay `json` for dev mode |
-| `BASE_URL` | `http://localhost:8080` | Public base URL |
+| `PORT` | `8080` | Go server port |
+| `BASE_URL` | `http://localhost:${PORT}` | Public base URL — derives from `$PORT` (#0213), so it moves with an override rather than staying fixed at `:8080` |
 | `WEBAUTHN_RP_ID` | `localhost` | WebAuthn relying-party ID |
-| `WEBAUTHN_RP_ORIGIN` | `http://localhost:8080` | WebAuthn origin |
+| `WEBAUTHN_RP_ORIGIN` | `http://localhost:${PORT}` | WebAuthn origin — also derives from `$PORT` (#0213) |
 | `SESSION_SECRET` | *(dev value)* | HMAC signing key — insecure, dev only |
 | `ADMIN_EMAIL` | `admin@localhost` | Mock admin email |
-| `PORT` | `8080` | Go server port |
+
+`$PORT` is listed first because `BASE_URL` and `WEBAUTHN_RP_ORIGIN` are
+defined in terms of it — `scripts/dev.sh` sets `PORT` before either, for the
+same reason.
 
 Example override:
 
 ```bash
 ADMIN_EMAIL=me@example.com PORT=9090 ./scripts/dev.sh
 ```
+
+With this override, `BASE_URL` and `WEBAUTHN_RP_ORIGIN` both default to
+`http://localhost:9090`, not `:8080` — they track whatever `$PORT` is set to.
 
 ## Production path is unchanged
 

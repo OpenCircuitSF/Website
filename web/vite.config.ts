@@ -24,6 +24,20 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    // #0214: previously unset, so 5173 was only Vite's own default rather
+    // than something this file stated — a bare `npm run dev` with 5173 taken
+    // would slide silently to 5174 while README.md, docs/dev.md, CLAUDE.md,
+    // and scripts/dev.sh's messages all still say 5173. Stated explicitly so
+    // the port matches what every doc claims, and strictPort:true makes a
+    // collision fail loudly (matching this project's general preference for
+    // refusing over silently doing something else — see scripts/dev.sh's own
+    // free_port) instead of masking it with a different port nobody expects.
+    // Unreachable through scripts/dev.sh itself: #0117's preflight
+    // (free_port 5173) already refuses before Vite ever starts, so Vite here
+    // only ever sees a free port in that path. This only changes behavior on
+    // the bare `npm run dev` path, which dev.sh's guard tests do not cover.
+    port: 5173,
+    strictPort: true,
     proxy: {
       '/api': apiTarget,
       '/auth': apiTarget,
