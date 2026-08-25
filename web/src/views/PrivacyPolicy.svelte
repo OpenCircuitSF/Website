@@ -117,13 +117,15 @@
   //        made it" was true only for the request-driven entries.
   //        `internal/handlers/audit_email_metadata_guard_test.go` (#0237) is
   //        the durable version of this check #0226's Notes asked for: it
-  //        walks every production `audit.Entry{` construction in internal/
-  //        and cmd/, classifies whether its Metadata could carry the literal
-  //        key "email" (resolving inline literals, a traced local variable
-  //        built across the function including any conditional index
-  //        assignment, and one known-safe helper call), and fails --
-  //        naming the exact file and action -- if the SET of call sites that
-  //        write an email differs from what it has pinned.
+  //        walks every production `audit.Entry{` construction found inside a
+  //        named function's body in internal/ and cmd/ (see that file's
+  //        header and #0252 below for the shapes that sit outside one and
+  //        are therefore invisible to it), classifies whether its Metadata
+  //        could carry the literal key "email" (resolving inline literals, a
+  //        traced local variable built across the function including any
+  //        conditional index assignment, and one known-safe helper call),
+  //        and fails -- naming the exact file and action -- if the SET of
+  //        call sites that write an email differs from what it has pinned.
   //      - #0237's own phase-3 review BOUNCED the first pass: its guard
   //        matched only the literal key "email", so a real production shape
   //        it had just excluded as a near-miss --
@@ -156,6 +158,25 @@
   //        `ActionSubscriberComplaintCleared`, neither carrying an email);
   //        softening it to an example list is honest without enumerating
   //        two more actions that touch nothing this bullet is about.
+  //      - #0252 corrected this comment block's own echo of a false claim
+  //        the guard file's header made about itself: "walks every
+  //        production `audit.Entry{` construction" overstated the guard's
+  //        reach -- it only walks composite literals found inside a named
+  //        function's body, and three demonstrated shapes sit outside one
+  //        entirely (a package-level var literal, one inside a func literal
+  //        on a package-level var, and an elided-type slice element), all
+  //        invisible to it (SITES=0, run directly, not reasoned about). A
+  //        fourth shape -- `e := audit.Entry{}` then a later
+  //        `e.Metadata = ...` struct-field assignment -- was SEEN by the
+  //        walk but resolved as email-free by default, a silent pass; #0252
+  //        fixed the guard itself to report that shape as unresolved
+  //        instead, the same conservative "cannot classify means fail"
+  //        default every other unresolvable shape already gets. None of the
+  //        three structurally invisible shapes is exercised by any real
+  //        site in this tree, so nothing about the "six actions" disclosure
+  //        above changed -- only the guard's own description of what it
+  //        can see, and the guard's actual behavior for the one shape that
+  //        was a live risk rather than a structural blind spot.
   //  - "No third-party analytics, ad trackers, external CDNs, or email
   //    open-tracking pixels" is CLAUDE.md §9's binding restriction, stated
   //    here as a fact about how the site is built, not a promise.

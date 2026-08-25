@@ -28,9 +28,14 @@ import (
 // suppression removal) and SES-driven (two bounce paths, one complaint) —
 // bringing the confirmed total to seven, because nothing was keyed to the
 // actual SET OF CALL SITES that write an email. This file is that guard: it
-// walks every audit.Entry{...} composite literal in production Go source
-// (internal/ and cmd/; _test.go files are excluded because a test fixture
-// never becomes a real inserted row) and classifies whether its Metadata
+// walks every audit.Entry{...} composite literal FOUND INSIDE A TOP-LEVEL
+// FUNCTION'S BODY in production Go source (internal/ and cmd/; _test.go
+// files are excluded because a test fixture never becomes a real inserted
+// row) — not, as an earlier draft of this sentence claimed, every
+// audit.Entry{...} composite literal in production Go source, full stop;
+// #0252 demonstrated three shapes that sit entirely outside a function body
+// and are invisible to this walk as a result (see the "structurally
+// invisible" paragraph below) — and classifies whether its Metadata
 // could carry an email-shaped value under any of a fixed set of suspect key
 // tokens (see metadataKeyIsSuspectedEmailCarrier — not just the literal key
 // "email"; #0237's own phase-3 review found that exact-match blind to
@@ -106,6 +111,56 @@ import (
 // treatment the camelCase key gap gets. Widening what this guard resolves
 // should always be a deliberate, reviewed change to this file, not a
 // byproduct of loosening this description.
+//
+// #0252 found two more false claims in this same file, both predating the
+// paragraphs above and untouched by them — the header's "walks every
+// audit.Entry{...} composite literal" opening claim, and a doc comment on
+// auditEmailMetadataSuspectKeyTokens (see that var). Fixing the first
+// required actually running four candidate shapes through
+// scanAuditEntrySites, not reasoning about the code, the same standard the
+// paragraphs above hold themselves to:
+//
+//   - a package-level var initialized directly from an audit.Entry{}
+//     literal (var seedEntry = audit.Entry{...}) — SITES=0. The outer walk
+//     below only descends into composite literals found inside a
+//     *ast.FuncDecl's Body; a package-level *ast.GenDecl is walked for
+//     nothing.
+//   - an audit.Entry{} literal inside a func literal assigned to a
+//     package-level var (var recordFn = func() { ... audit.Entry{...} }) —
+//     SITES=0, for the same reason: the outer walk keys specifically on
+//     *ast.FuncDecl, and a *ast.FuncLit hanging off a package-level var is
+//     never one.
+//   - an elided-type element of a []audit.Entry{{...}} slice literal —
+//     SITES=0. isAuditEntryType type-asserts a literal's Type field as
+//     *ast.SelectorExpr naming "audit.Entry"; an elided element type
+//     (Go's own syntax for "same type as the slice") leaves that field
+//     nil, so the assertion fails and the element is never recognized as
+//     an audit.Entry site to begin with.
+//   - `e := audit.Entry{}` followed by `e.Metadata = map[string]any{...}`
+//     — SEEN (the empty literal IS a real site) but, before this pass, a
+//     SILENT PASS (hasEmail=false, unresolved=""): the Metadata-reading
+//     loop only ever looked at the literal's own Elts, never at a later
+//     struct-field assignment on the identifier it produced. This is the
+//     one #0252 named as the plausible refactor shape — the form someone
+//     naturally reaches for when an entry needs building across a few
+//     lines — and it is now FIXED, not merely documented: see
+//     collectDeferredMetadataFieldIdents and compositeLitAssignedIdents
+//     below, which connect a bare `audit.Entry{}` literal to any later
+//     `.Metadata = ...` on the same identifier and report the site as
+//     unresolved (the guard's existing conservative default everywhere
+//     else) rather than passing it silently.
+//     TestAuditEmailMetadataGuardFailsOnDeferredStructFieldAssignment pins
+//     this, mutation-proved against the pre-fix code.
+//
+// The first three are pinned, unfixed, structural blind spots — the walk
+// finds nothing to even classify — by
+// TestAuditEmailMetadataGuardDocumentedInvisibleShapes below, the same
+// documented-gap treatment the camelCase key gap and the four silent-pass
+// shapes above get. None of the three is exercised by any real site in this
+// tree today (checked directly, not assumed: every real audit.Entry{}
+// construction in internal/ and cmd/ is either an inline literal inside a
+// named function or reached through the traced-local-variable path this
+// file already resolves).
 
 // auditEmailMetadataScanRoots is deliberately narrower than
 // citedTestScanRoots (#0196/#0220's comment-citation guards): the privacy
@@ -280,6 +335,8 @@ func scanAuditEntrySites(t *testing.T, roots []string) []auditEntrySite {
 				return true
 			}
 			localKeys := collectLocalMapKeys(fn.Body)
+			deferredMetadataIdents := collectDeferredMetadataFieldIdents(fn.Body)
+			literalIdents := compositeLitAssignedIdents(fn.Body)
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				cl, ok := n.(*ast.CompositeLit)
 				if !ok || !isAuditEntryType(cl.Type) {
@@ -287,6 +344,7 @@ func scanAuditEntrySites(t *testing.T, roots []string) []auditEntrySite {
 				}
 				pos := sf.fset.Position(cl.Pos())
 				site := auditEntrySite{file: sf.path, line: pos.Line}
+				metadataKeyFound := false
 				for _, elt := range cl.Elts {
 					kv, ok := elt.(*ast.KeyValueExpr)
 					if !ok {
@@ -302,7 +360,22 @@ func scanAuditEntrySites(t *testing.T, roots []string) []auditEntrySite {
 					case "IP":
 						site.hasIP = true
 					case "Metadata":
+						metadataKeyFound = true
 						site.hasEmail, site.unresolved = classifyMetadataExpr(kv.Value, dir, localKeys, helperFuncs)
+					}
+				}
+				// #0252: a literal that leaves Metadata out entirely (`e :=
+				// audit.Entry{}`) used to resolve as hasEmail=false,
+				// unresolved="" by the zero-value default above — a silent
+				// pass — even when the SAME identifier gets Metadata set a
+				// moment later via a struct-field assignment
+				// (`e.Metadata = ...`), which this guard has no way to read
+				// the content of. Report that shape as unresolved instead,
+				// matching the guard's conservative default everywhere else:
+				// unclassifiable fails, it does not pass.
+				if !metadataKeyFound {
+					if identName, ok := literalIdents[cl]; ok && deferredMetadataIdents[identName] {
+						site.unresolved = fmt.Sprintf("Metadata is set via a struct-field assignment (%s.Metadata = ...) after this audit.Entry{} literal, not inside it — this guard does not read what that assignment writes; move Metadata into the literal, or extend this guard deliberately", identName)
 					}
 				}
 				sites = append(sites, site)
@@ -312,6 +385,69 @@ func scanAuditEntrySites(t *testing.T, roots []string) []auditEntrySite {
 		})
 	}
 	return sites
+}
+
+// collectDeferredMetadataFieldIdents returns the set of identifier names that
+// have Metadata set via a struct-field assignment (`ident.Metadata = ...`)
+// somewhere in body, rather than inside the identifier's own audit.Entry{}
+// composite literal. Paired with compositeLitAssignedIdents below to catch
+// `e := audit.Entry{}` followed by `e.Metadata = ...` (#0252) — a literal
+// that carries no Metadata key of its own and would otherwise resolve as
+// "nothing to see" with nothing reported wrong, even though the site plainly
+// does carry Metadata a statement later.
+func collectDeferredMetadataFieldIdents(body *ast.BlockStmt) map[string]bool {
+	result := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			sel, ok := lhs.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			ident, ok := sel.X.(*ast.Ident)
+			if !ok || sel.Sel.Name != "Metadata" {
+				continue
+			}
+			result[ident.Name] = true
+		}
+		return true
+	})
+	return result
+}
+
+// compositeLitAssignedIdents maps each audit.Entry composite literal in body
+// that is the direct right-hand side of `ident := audit.Entry{...}` or
+// `ident = audit.Entry{...}` to that identifier's name, so a later
+// struct-field assignment on the same identifier
+// (collectDeferredMetadataFieldIdents) can be connected back to the literal
+// that produced it. A literal that is never assigned to a bare identifier —
+// built directly inline as a call argument, the common shape in this tree —
+// has no entry here, which is correct: there is no later statement that
+// could mutate a value nothing holds a reference to.
+func compositeLitAssignedIdents(body *ast.BlockStmt) map[*ast.CompositeLit]string {
+	result := map[*ast.CompositeLit]string{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != len(assign.Rhs) {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			ident, ok := lhs.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			cl, ok := assign.Rhs[i].(*ast.CompositeLit)
+			if !ok || !isAuditEntryType(cl.Type) {
+				continue
+			}
+			result[cl] = ident.Name
+		}
+		return true
+	})
+	return result
 }
 
 // isAuditEntryType reports whether t is the type expression "audit.Entry".
@@ -440,15 +576,21 @@ func compositeLitStringKeys(cl *ast.CompositeLit) []string {
 // resolves credentialMetadata's return the same way classifyMetadataExpr
 // does, matching the third phase-3 review's own independent count exactly;
 // an earlier pass had written 86 here, which no independent recount
-// reproduces) before adding anything: no key in the tree contains "to",
-// "mail", or "contact" as an
-// underscore-delimited token today (the closest near-miss, "topic_arn",
-// splits to "topic"/"arn" — neither collides), so all three are free:
-// "to" newly matches the one real "to" key above (already pinned via
-// "recipient_email", so no NEW site to add to
-// auditEmailMetadataKnownSites — see TestAuditEntryEmailMetadataMatchesKnownSites),
-// and "mail"/"contact" match nothing in the tree today but close the
-// "user_mail"/"contact"-shaped gap the review named for free.
+// reproduces) before adding anything: no key in the tree contains "mail" or
+// "contact" as an underscore-delimited token today (the closest near-miss,
+// "topic_arn", splits to "topic"/"arn" — neither collides), so those two
+// are free — they match nothing in the tree today, closing the
+// "user_mail"/"contact"-shaped gap the review named for zero new sites.
+// "to" is NOT free in that same sense, and an earlier draft of this
+// paragraph wrongly said it was: admin_campaign_preview.go:419 writes the
+// literal key "to" TODAY (Metadata: map[string]any{"to": actor.Email, ...})
+// — the exact site named three paragraphs above as the reason "to" was
+// added in the first place. Adding "to" to this token set does not
+// introduce a new site to auditEmailMetadataKnownSites, because that site
+// is already pinned there via its OTHER suspect key,
+// "recipient_email" — but the key "to" itself is real, present, and the
+// entire motivation for this token, not absent from the tree the way
+// "mail" and "contact" are.
 //
 // "recipientEmail" (camelCase) is deliberately NOT covered. This split is
 // underscore-only, so a camelCase key is invisible to it by construction —
@@ -1023,5 +1165,122 @@ func recordSomething() {
 	}
 	if sites[0].unresolved == "" {
 		t.Fatal("expected an unresolvable-call Metadata expression to be reported as unresolved, not silently classified")
+	}
+}
+
+// TestAuditEmailMetadataGuardFailsOnDeferredStructFieldAssignment proves the
+// fix for #0252's blocking finding: `e := audit.Entry{}` followed by
+// `e.Metadata = map[string]any{"email": addr}` used to resolve as
+// hasEmail=false, unresolved="" — SEEN (the empty literal is a real site)
+// but a SILENT PASS, because scanAuditEntrySites only ever read Metadata out
+// of the composite literal's own Elts, never out of a later struct-field
+// assignment on the identifier it was assigned to. That was the one shape,
+// of the four #0252 named, that was genuinely live risk rather than a
+// structural blind spot: it is the natural shape a future refactor reaches
+// for when an entry needs building across a few lines, and it is exactly
+// the kind of hole this guard's own conservative philosophy — unclassifiable
+// fails, it does not pass — exists to close everywhere else.
+// collectDeferredMetadataFieldIdents + compositeLitAssignedIdents together
+// now catch it: this asserts the site comes back unresolved rather than
+// silently classified as email-free.
+func TestAuditEmailMetadataGuardFailsOnDeferredStructFieldAssignment(t *testing.T) {
+	dir := t.TempDir()
+	writeSyntheticGoFile(t, dir, "fixture.go", `package fixture
+
+func recordSomething() {
+	e := audit.Entry{}
+	e.Metadata = map[string]any{"email": addr}
+	auditor.Record(ctx, e)
+}
+`)
+	sites := scanAuditEntrySites(t, []string{dir})
+	if len(sites) != 1 {
+		t.Fatalf("expected exactly one audit.Entry site (the empty literal itself), found %d", len(sites))
+	}
+	if sites[0].unresolved == "" {
+		t.Fatal("expected a struct-field Metadata assignment after construction to be reported as unresolved, not silently classified as hasEmail=false — this is the #0252 hole this test pins closed")
+	}
+}
+
+// TestAuditEmailMetadataGuardDocumentedInvisibleShapes pins the three
+// structural blind spots #0252 found and this file's header now documents:
+// shapes where scanAuditEntrySites finds ZERO sites at all, so a real
+// audit.Entry{} written this way contradicts neither
+// auditEmailMetadataKnownSites nor the "unresolved" failure path — it is
+// simply never visited. Each subtest asserts len(sites) == 0. None is
+// exercised by any real site in this tree today (checked directly while
+// writing this pin, the same way TestAuditEmailMetadataGuardDocumentedSilentPassShapes'
+// four shapes were): the same treatment given every other documented,
+// deliberate gap in this file — a named, asserted absence rather than a
+// silent one. If any of these starts finding a site, either the walk was
+// widened (update this test and the header to say so) or something about
+// how scanAuditEntrySites locates audit.Entry{} literals regressed.
+func TestAuditEmailMetadataGuardDocumentedInvisibleShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			// A package-level var initialized directly from an audit.Entry{}
+			// literal. The outer walk only descends into composite literals
+			// found INSIDE a *ast.FuncDecl's body; a package-level
+			// *ast.GenDecl/*ast.ValueSpec is never inspected for one.
+			name: "package-level var composite literal",
+			src: `package fixture
+
+var seedEntry = audit.Entry{
+	Action:   audit.ActionSubscriberSuppressed,
+	Metadata: map[string]any{"email": addr},
+}
+`,
+		},
+		{
+			// An audit.Entry{} literal inside a func literal assigned to a
+			// package-level var. The literal's body is reachable syntactically
+			// (it is still part of the file), but nothing walks INTO a
+			// *ast.FuncLit outside a *ast.FuncDecl — the outer walk keys
+			// specifically on *ast.FuncDecl nodes.
+			name: "audit.Entry inside a func literal on a package-level var",
+			src: `package fixture
+
+var recordFn = func() {
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{"email": addr},
+	})
+}
+`,
+		},
+		{
+			// An elided-type element of a []audit.Entry{...} slice literal —
+			// `{...}` with no repeated `audit.Entry` on the element itself, a
+			// syntax Go permits for a slice/array composite literal.
+			// isAuditEntryType type-asserts cl.Type as *ast.SelectorExpr; an
+			// elided type leaves cl.Type nil, so the assertion fails and the
+			// element is never recognized as an audit.Entry site at all.
+			name: "elided-type element in []audit.Entry{{...}}",
+			src: `package fixture
+
+func recordSomething() {
+	entries := []audit.Entry{{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{"email": addr},
+	}}
+	auditor.RecordAll(ctx, entries)
+}
+`,
+		},
+	}
+
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSyntheticGoFile(t, dir, "fixture.go", c.src)
+			sites := scanAuditEntrySites(t, []string{dir})
+			if len(sites) != 0 {
+				t.Fatalf("expected 0 sites (this shape is invisible to the walk, the documented gap this test pins), found %d", len(sites))
+			}
+		})
 	}
 }
