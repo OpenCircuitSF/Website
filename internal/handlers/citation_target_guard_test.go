@@ -254,10 +254,31 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 	// "Campaigns.svelte/CampaignEditor.svelte" (the equivalent web/
 	// shape, found in the parallel dry run behind citationGuard.test.ts),
 	// or "PRD/CLAUDE.md" (campaign_markdown.go:14, meaning "PRD §9 and
-	// CLAUDE.md §9", not a nested path). Every INTERMEDIATE segment (not
+	// CLAUDE.md §9", not a nested path). ANY intermediate segment (not
 	// the last) already looking like a complete filename with a
 	// recognized extension, OR being one of this repo's own bare
-	// document names, is what tells the two shapes apart structurally.
+	// document names, excludes the whole citation — this is a match on
+	// the FIRST such segment, not a requirement that every intermediate
+	// segment qualify. (`#0220`'s phase-3 review caught this file
+	// documenting "every" while the loop below implements "any" — the
+	// two coincide for every real two-segment instance above, so it went
+	// unnoticed until a three-segment probe split them: a synthetic
+	// three-segment citation shaped "AdminDotSvelte / lib /
+	// totallyNonexistentXyzDotTs" (see the review's own reproduction —
+	// not spelled out here as a literal slash-joined token, since this
+	// comment is itself scanned by the guard below) is silently excluded
+	// by its first segment's file-like extension alone, even though the
+	// remainder does not exist and the whole citation is genuinely
+	// dangling. That is the accepted cost of matching "any" rather than
+	// "every": a multi-segment citation of the shape "SomeFile.ext/dir/
+	// gone.ext" passes this guard once its FIRST segment alone looks
+	// file-like, even if a later segment is a real,
+	// unresolvable path. No such instance exists in the tree today (the
+	// tree-wide run has zero "any-but-not-every" hits); "any" is kept
+	// rather than tightened to "every" because it is the direct
+	// generalisation of the two- and three-segment real instances above,
+	// which are themselves each exactly two names joined by "/" with no
+	// third, independently-checkable segment.)
 	for _, seg := range segments[:len(segments)-1] {
 		if citationTargetFileLikeSegmentPattern.MatchString(seg) || citationTargetBareDocNames[seg] {
 			return true
@@ -316,7 +337,9 @@ func pathExistsDirectly(paths map[string]bool, cited string) bool {
 // citationTargetSkipDirs are pruned entirely from the repo-path walk:
 // version control internals and the one genuinely large vendored tree.
 // Deliberately NOT "dist" (web/dist/): web/dist/index.html is a tracked
-// placeholder (CLAUDE.md §1, "the built SPA is embedded via //go:embed"),
+// placeholder (docs/frontend.md:16-18, "web/dist/index.html is
+// committed as a minimal placeholder ... web/dist/* is otherwise
+// gitignored"),
 // and several real comments cite it as "dist/index.html" or
 // "web/dist/index.html" (cmd/opencircuit/main.go, static.go, confirm.go,
 // web/embed.go, internal/seo). Pruning "dist" would make every one of
@@ -696,12 +719,24 @@ func TestPathCitationResolvesShortenedAndLeadingWordForms(t *testing.T) {
 
 	// Bare "HANDOFF"/"README"/"LICENSE" form with ".md" appended — the
 	// mutation this issue reinstates below is the ONE real historical
-	// instance that did NOT resolve; a real, valid one must.
+	// instance that did NOT resolve; a real, valid one must. Deliberately
+	// NOT t.Skip: `#0220`'s phase-3 review flagged a t.Skip positioned
+	// before the load-bearing assertion below (the actual reinstated
+	// historical defect, see its own comment) as a latent hole — t.Skip
+	// aborts the rest of the function immediately, so if docs/README.md
+	// were ever removed from this checkout, the whole test would report
+	// SKIP and that final assertion would silently never run at all,
+	// rather than the failure it should be once the bare-suffix rule
+	// itself is what's broken. t.Error instead records the missing
+	// fixture as a real failure and lets execution continue into the
+	// assertion that follows.
 	if !pathCitationResolves(paths, "docs/README") {
-		t.Skip("docs/README.md does not exist in this checkout — nothing to assert (see assets/logo/README.md instead)")
+		t.Error("docs/README.md does not exist in this checkout — pick a different real bare-suffix fixture (see assets/logo/README.md)")
 	}
 
-	// The actual reinstated historical defect must NOT resolve.
+	// The actual reinstated historical defect must NOT resolve. Runs
+	// unconditionally — not gated behind the docs/README check above —
+	// so it cannot be silently swallowed by that check's outcome.
 	if pathCitationResolves(paths, "web/HANDOFF") {
 		t.Error("\"web/HANDOFF\" unexpectedly resolves — web/ has no HANDOFF(.md) file; this was #0216's real dangling citation")
 	}

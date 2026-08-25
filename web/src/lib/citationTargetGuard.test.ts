@@ -69,7 +69,7 @@ import { parse as parseSvelte } from 'svelte/compiler';
 // citationTargetPathPattern mirrors citation_target_guard_test.go's
 // citationTargetPathPattern exactly (same extension set, same
 // HANDOFF/README/LICENSE bare-suffix exception for the real historical
-// the "web" + "HANDOFF" defect) -- see that file's own doc comment for the
+// "web" + "HANDOFF" defect) -- see that file's own doc comment for the
 // reasoning; not repeated here so the two never drift on which reasoning
 // is authoritative, only on which engine reads it (V8 here, RE2 there).
 const citationTargetPathPattern =
@@ -117,8 +117,8 @@ const citationTargetPlaceholderSegments = new Set(['NNNN']);
 
 const citationTargetBareDocNames = new Set(['HANDOFF', 'README', 'LICENSE', 'PRD']);
 
-// citationTargetTestFileLikePattern additionally recognizes a bare
-// a bare "Name" + ".something" + ".test.ts"-shaped reference with NO
+// citationTargetBareTestFilePattern additionally recognizes a bare
+// "Name" + ".something" + ".test.ts"-shaped reference with NO
 // leading directory -- the real historical shape #0216 shipped in
 // modalKeydown.test.ts (e.g. a fully-qualified "web/src/views/" path for
 // the first of three sibling *.structuralGuard.test.ts names, with the
@@ -172,6 +172,14 @@ function pathCitationIsExcluded(text: string, start: number, end: number): boole
     if (citationTargetPlaceholderSegments.has(base)) return true;
   }
 
+  // ANY intermediate segment (not the last) matching -- not a requirement
+  // that every intermediate segment qualify. Mirrors
+  // internal/handlers/citation_target_guard_test.go's own
+  // pathCitationIsExcluded exactly, including its cost: a citation shaped
+  // "SomeFile.svelte/dir/gone.ts" is excluded by its first segment alone,
+  // even if a later segment is a genuinely dangling path. See that file's
+  // doc comment for the full reasoning and the real probe that surfaced
+  // "any" vs "every" (#0220's phase-3 review).
   for (const seg of segments.slice(0, -1)) {
     if (citationTargetFileLikeSegmentPattern.test(seg) || citationTargetBareDocNames.has(seg)) return true;
   }
