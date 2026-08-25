@@ -28,10 +28,19 @@ Group=postgres
 WorkingDirectory=/opt/opencircuit
 ExecStart=/usr/bin/bash /opt/opencircuit/scripts/db/backup.sh
 
+# BACKUP_DATABASES is REQUIRED, not optional tuning (#0236). scripts/db/backup.sh
+# no longer defaults to any database name — with this commented out and no
+# readable .env at WorkingDirectory, it used to fall through to the literal
+# "shortlinks" (a different project's database, inherited when the script was
+# ported from ShortLinks by #0001), silently backing up the wrong project or
+# failing against a database that doesn't exist on this box. Leaving this
+# commented out now makes the unit fail loudly instead — which is correct, but
+# means backups never ran until someone noticed the failure. Set it explicitly.
+Environment=BACKUP_DATABASES=opencircuit
+
 # Optional overrides, uncomment/edit once the real box's layout is known:
 #Environment=BACKUP_ROOT=/var/backups/postgres
 #Environment=BACKUP_RETENTION_DAYS=14
-#Environment=BACKUP_DATABASES=opencircuit
 
 # Hardening, mirroring opencircuit.service where it does not conflict with
 # writing dumps under BACKUP_ROOT (default /var/backups/postgres).

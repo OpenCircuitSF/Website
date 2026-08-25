@@ -6,11 +6,12 @@
 # Designed to run on the EC2 host (Amazon Linux 2023) from cron, but it works
 # anywhere pg_dump can reach the cluster. Run directly:
 #
-#     # back up the databases named in BACKUP_DATABASES (or the project default)
-#     sudo bash scripts/db/backup.sh
+#     # back up the databases named in BACKUP_DATABASES (required — see #0236;
+#     # there is no default database name, on purpose)
+#     BACKUP_DATABASES=opencircuit sudo -E bash scripts/db/backup.sh
 #
-#     # back up specific databases
-#     sudo bash scripts/db/backup.sh shortlinks otherdb
+#     # back up specific databases, named explicitly
+#     sudo bash scripts/db/backup.sh opencircuit shortlinks
 #
 # Each database is dumped with `pg_dump -Fc` (PostgreSQL's compressed custom
 # format, restored with pg_restore) into its own subfolder under BACKUP_ROOT:
@@ -32,7 +33,10 @@
 #
 # ── Configuration (all overridable via environment) ──────────────────────────
 #   BACKUP_ROOT             Common backup root.        Default: /var/backups/postgres
-#   BACKUP_DATABASES        Space/comma list of DBs.   Default: parsed from ../../.env
+#   BACKUP_DATABASES        Space/comma list of DBs.   Default: parsed from ../../.env's
+#                             DATABASE_URL; no positional args, no
+#                             BACKUP_DATABASES, and no readable .env is a hard
+#                             error (#0236) — this never guesses a database name.
 #   BACKUP_RETENTION_DAYS   Prune dumps older than N.  Default: 14
 #   BACKUP_FORMAT           custom | plain.            Default: custom
 #                             custom → <db>-<ts>.dump  (pg_restore)
@@ -60,9 +64,21 @@ BACKUP_FORMAT="${BACKUP_FORMAT:-custom}"
 # actually skips sudo, matching the documented contract.
 BACKUP_RUN_AS="${BACKUP_RUN_AS-postgres}"
 
-# Databases: positional args win; else $BACKUP_DATABASES; else the db name from
-# the project .env DATABASE_URL (parsed, not sourced, so other values can't break
-# this script); else "shortlinks".
+# Databases: positional args win; else $BACKUP_DATABASES; else the db name
+# parsed from the project .env DATABASE_URL (parsed, not sourced, so other
+# values can't break this script).
+#
+# #0236: this used to fall through to a fourth, silent default of the
+# literal "shortlinks" — this script was ported wholesale from the
+# ShortLinks project (#0001), and that literal is ShortLinks' own database
+# name, not this project's. With BACKUP_DATABASES unset (as
+# deploy/systemd/opencircuit-backup.service used to ship it, commented out)
+# and no readable .env, every night either silently backed up a database
+# that has nothing to do with this project, or pg_dump failed against a
+# database that doesn't exist on this box — either way Open Circuit's own
+# data was never backed up, and nothing said so until an alert fired or
+# someone went looking. This now fails loudly instead, naming exactly what
+# is missing, rather than guessing a project name.
 if [ "$#" -gt 0 ]; then
   DATABASES=("$@")
 elif [ -n "${BACKUP_DATABASES:-}" ]; then
@@ -75,7 +91,32 @@ else
     # postgres://user:pass@host:port/DBNAME?params  → DBNAME
     db_from_env="$(printf '%s' "$url" | sed -E 's#^.*/([^/?]+)(\?.*)?$#\1#')"
   fi
-  DATABASES=("${db_from_env:-shortlinks}")
+  if [ -z "$db_from_env" ]; then
+    cat >&2 <<EOF
+ERROR: no database to back up was configured, and this script now refuses to guess.
+
+Checked, in order:
+  1. command-line arguments        (none given)
+  2. \$BACKUP_DATABASES             (unset or empty)
+  3. DATABASE_URL in $ENV_FILE (not found, unreadable, or unparseable)
+
+This script no longer defaults to a database name — a prior version silently
+fell back to the literal "shortlinks" (a different project's database,
+inherited when this script was ported from ShortLinks), which either backed
+up the wrong project or failed against a database that does not exist here.
+
+Fix: set BACKUP_DATABASES explicitly, e.g. in
+deploy/systemd/opencircuit-backup.service:
+
+    Environment=BACKUP_DATABASES=opencircuit
+
+or pass database names as arguments:
+
+    sudo bash scripts/db/backup.sh opencircuit
+EOF
+    exit 2
+  fi
+  DATABASES=("$db_from_env")
 fi
 
 # ── pg_dump runner (peer auth as the postgres user on the server) ─────────────

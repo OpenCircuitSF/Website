@@ -64,6 +64,14 @@ a placeholder matching ShortLinks' own `/opt/shortlinks` convention until the
 real server layout is captured (`CLAUDE.md` §10 item 6, still undocumented).
 **Edit the unit file to match the real path before installing it.**
 
+**Also confirm `Environment=BACKUP_DATABASES=opencircuit` is present and
+uncommented (`#0236`) before enabling the timer.** `scripts/db/backup.sh`
+has no default database name to fall back on — with this unset it now exits 2
+naming the missing configuration, rather than the pre-`#0236` behavior of
+silently defaulting to `shortlinks` (a different project's database,
+inherited from the ShortLinks port). A loud failure here is much cheaper than
+discovering, some night later, that backups were never running.
+
 Install and enable the timer (the `.service` files are triggered, not
 enabled directly — see the "No `[Install]` section" note in
 `opencircuit-backup.service`):

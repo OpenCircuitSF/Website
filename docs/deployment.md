@@ -1242,6 +1242,21 @@ anything that is not a fresh scratch database:
 
 ### Schedule and failure alert (`#0229`) — built, not yet exercised on a real box
 
+**Required install step, not optional tuning (`#0236`): set `BACKUP_DATABASES`
+before starting the timer.** `deploy/systemd/opencircuit-backup.service` ships
+`Environment=BACKUP_DATABASES=opencircuit`, matching this project's own
+database — confirm that line is present and uncommented before enabling
+`opencircuit-backup.timer`. `scripts/db/backup.sh` no longer has any default
+database name to fall back on: with `BACKUP_DATABASES` unset (and no readable
+`.env` at `WorkingDirectory`) it now exits 2 and names exactly what's missing,
+rather than the pre-`#0236` behavior of silently defaulting to the literal
+`shortlinks` — a different project's database, inherited when this script was
+ported from ShortLinks by `#0001`. That failure mode was worse than an error:
+depending on whether `shortlinks` happened to exist on the box, it either
+backed up the wrong project every night or failed against a database that
+isn't there, and either way Open Circuit's own data was never backed up until
+someone noticed.
+
 `backup.sh` exiting non-zero on failure was verified working by `#0062`, but
 until `#0229` nothing consumed that exit code. Two systemd units now do:
 `deploy/systemd/opencircuit-backup.timer` fires `opencircuit-backup.service`
@@ -1285,8 +1300,9 @@ triggers the alert unit the way the unit graph implies, or that `journalctl
   undocumented) that must be corrected to the real path before installing.
 - **The timer and the alert unit, installed on a real systemd host** —
   confirm `opencircuit-backup.timer` actually fires nightly, that
-  `BACKUP_DATABASES` (or the `.env` `DATABASE_URL` fallback) resolves to
-  `opencircuit` on that box, and that a deliberately broken run (e.g. a bad
+  `BACKUP_DATABASES` is actually set on that box (`#0236` — it is a required
+  unit setting, not a fallback to rely on: `backup.sh` refuses to guess a
+  database name), and that a deliberately broken run (e.g. a bad
   `BACKUP_ROOT`) produces a real, seen alert — not just a journal line and a
   non-zero exit code nobody is watching. If `BACKUP_ALERT_WEBHOOK_URL` gets
   configured, confirm the webhook actually delivers to wherever a human
