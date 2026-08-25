@@ -161,6 +161,73 @@ import (
 // construction in internal/ and cmd/ is either an inline literal inside a
 // named function or reached through the traced-local-variable path this
 // file already resolves).
+//
+// #0252's phase-3 review found #0252's own fix incomplete — four more
+// shapes, all predating that pass, three of them still blind to it. Each was
+// confirmed by actually running it through scanAuditEntrySites, not by
+// reasoning about the code, the same standard every paragraph above holds
+// itself to:
+//
+//   - `e := audit.Entry{Metadata: map[string]any{"slug": s}}` followed by
+//     `e.Metadata = map[string]any{"email": addr}` — SEEN but, before this
+//     pass, a SILENT PASS (hasEmail=false, unresolved=""): the deferred-
+//     assignment check #0252 added ran `if !metadataKeyFound`, so a literal
+//     that ALSO set its own Metadata key skipped the check entirely, and
+//     classification came from the literal's own map — the value that LOSES
+//     at runtime, since the later assignment is what the running code
+//     actually inserts. This is the shape a developer writes without
+//     thinking (initialize some metadata inline, replace it a line later),
+//     which is what made it the priority finding. Now FIXED: the check runs
+//     unconditionally whenever the identifier is later mutated with a
+//     struct-field .Metadata assignment, regardless of whether the literal
+//     itself also set one.
+//     TestAuditEmailMetadataGuardFailsWhenLiteralAlsoSetsMetadataThenOverridden
+//     pins this.
+//   - `w.e = audit.Entry{}` followed by `w.e.Metadata = map[string]any{...}`
+//     (the entry held in a struct field, not a bare identifier) — SILENT
+//     PASS, unfixed: both compositeLitAssignedIdents and
+//     collectDeferredMetadataFieldIdents require a bare *ast.Ident on the
+//     relevant side of the assignment; `w.e` is an *ast.SelectorExpr on
+//     both sides, so neither helper ever connects the literal to the later
+//     field write. A structural blind spot, not a live hole — pinned, not
+//     fixed, by TestAuditEmailMetadataGuardDocumentedSilentPassShapes.
+//   - `e := audit.Entry{}` followed by `setMeta(&e)`, where setMeta sets
+//     `e.Metadata` on the pointer it receives — SILENT PASS, unfixed:
+//     collectDeferredMetadataFieldIdents only recognizes a direct
+//     `ident.Metadata = ...` *ast.AssignStmt in the enclosing function's own
+//     body; a helper call that mutates the identifier's field through a
+//     pointer argument is invisible to it regardless of what the call does.
+//     Same pinned-not-fixed treatment, same test.
+//   - two FALSE POSITIVES, both failing closed, in the very check the first
+//     bullet above just widened: collectDeferredMetadataFieldIdents matches
+//     a later `.Metadata = ...` assignment by identifier NAME across the
+//     whole function body, with no Go scope resolution and no statement-
+//     order awareness. A same-named variable of an unrelated type in a
+//     disjoint block, or a `.Metadata = ...` that textually precedes the
+//     `audit.Entry{...}` literal it gets attributed to, both make an
+//     innocent site report unresolved. The direction is safe — it fails
+//     closed, never a silent pass — but the message used to assert a
+//     same-variable runtime override it had not established. FIXED the
+//     message, not the detection: it now says a same-named struct-field
+//     assignment appears "somewhere in this function" — hedged with
+//     "possibly before or after ... and possibly on an unrelated variable of
+//     the same name" — rather than claiming a specific override. Pinned as
+//     an accepted, documented false positive by
+//     TestAuditEmailMetadataGuardDocumentedFalsePositiveShapes, the same
+//     treatment every other known gap in this file gets.
+//
+// None of the three unfixed shapes above (struct field, pointer helper, the
+// two false positives) is exercised by any real site in this tree today —
+// checked directly while making this change: `grep -rn '\.Metadata\s*='
+// internal cmd --include='*.go'` excluding _test.go files finds exactly one
+// hit tree-wide (internal/audit/read.go:159, a *different* type's Metadata
+// field, unrelated to audit.Entry), and no production audit.Entry is ever
+// held in a struct field or mutated through a pointer argument. The
+// 45-site/87-key census below is unchanged by this pass — re-derived with
+// the guard's own key-extraction functions
+// (compositeLitStringKeys/collectLocalMapKeys), not assumed, because this
+// pass touches only the deferred-assignment resolution gate, not any
+// key-extraction or token-matching code.
 
 // auditEmailMetadataScanRoots is deliberately narrower than
 // citedTestScanRoots (#0196/#0220's comment-citation guards): the privacy
@@ -373,10 +440,40 @@ func scanAuditEntrySites(t *testing.T, roots []string) []auditEntrySite {
 				// the content of. Report that shape as unresolved instead,
 				// matching the guard's conservative default everywhere else:
 				// unclassifiable fails, it does not pass.
-				if !metadataKeyFound {
-					if identName, ok := literalIdents[cl]; ok && deferredMetadataIdents[identName] {
-						site.unresolved = fmt.Sprintf("Metadata is set via a struct-field assignment (%s.Metadata = ...) after this audit.Entry{} literal, not inside it — this guard does not read what that assignment writes; move Metadata into the literal, or extend this guard deliberately", identName)
+				//
+				// #0255: this used to run ONLY `if !metadataKeyFound`, which
+				// meant `e := audit.Entry{Metadata: map[string]any{"slug": s}}`
+				// followed by `e.Metadata = map[string]any{"email": addr}`
+				// skipped the check entirely — metadataKeyFound was true, so
+				// classification came from the literal's OWN map, the value
+				// that LOSES at runtime, since the later assignment is what
+				// the running code actually inserts. Run this check
+				// unconditionally: if the identifier is later mutated with a
+				// struct-field .Metadata assignment anywhere in the function,
+				// this guard cannot prove which value the running code uses —
+				// whether or not the literal itself also set one.
+				//
+				// This lookup has no Go scope or statement-order awareness:
+				// identName is matched by NAME against every .Metadata =
+				// assignment ast.Inspect finds anywhere in the function body,
+				// not the specific variable this literal produced and not
+				// only assignments that come after it textually. That means
+				// it also fires on two shapes that are not actually this
+				// hazard — a same-named variable of an unrelated type in a
+				// disjoint block, and a `.Metadata = ...` that textually
+				// precedes the literal it gets attributed to. Both still fail
+				// closed (unresolved, never a silent pass), which is the safe
+				// direction, so the message below is written to describe what
+				// was actually found — a same-named struct-field assignment
+				// somewhere in this function — rather than asserting a
+				// same-variable runtime override this lookup has not
+				// established.
+				if identName, ok := literalIdents[cl]; ok && deferredMetadataIdents[identName] {
+					literalNote := ""
+					if metadataKeyFound {
+						literalNote = " (this literal also sets its own Metadata, which that assignment may or may not override)"
 					}
+					site.unresolved = fmt.Sprintf("a struct-field assignment (%s.Metadata = ...) appears somewhere in this function%s — possibly before or after this audit.Entry{} literal, and possibly on an unrelated variable of the same name, since this guard matches by identifier name only and has no scope or statement-order awareness — so it cannot prove which value the running code actually uses; move Metadata into the literal exclusively, or extend this guard deliberately", identName, literalNote)
 				}
 				sites = append(sites, site)
 				return true
@@ -950,11 +1047,15 @@ func recordSomething() {
 	}
 }
 
-// TestAuditEmailMetadataGuardDocumentedSilentPassShapes pins the four
-// silent-pass shapes named in this file's header comment — found by #0237's
-// third phase-3 review running eight synthetic Metadata expressions through
-// scanAuditEntrySites rather than reading the code, and reproduced again
-// during the header's own correction. Each subtest asserts hasEmail=false,
+// TestAuditEmailMetadataGuardDocumentedSilentPassShapes pins the six
+// silent-pass shapes named in this file's header comment: the original four
+// found by #0237's third phase-3 review running eight synthetic Metadata
+// expressions through scanAuditEntrySites rather than reading the code
+// (reproduced again during the header's own correction), plus two more
+// #0255 found — an audit.Entry held in a struct field, and Metadata set
+// through a pointer passed to a helper — both structural blind spots the
+// deferred-struct-field-assignment fix (#0252, tightened by #0255's own
+// shape-1 fix) still cannot see. Each subtest asserts hasEmail=false,
 // unresolved="" (a silent pass, not a FAILURE) for a shape the header now
 // says is unresolved but not caught. None is exercised by any real site in
 // this tree (see the header comment and the 45-site/87-key census it
@@ -1040,6 +1141,55 @@ func recordSomething() {
 		Action:   audit.ActionSubscriberSuppressed,
 		Metadata: metadata,
 	})
+}
+`,
+		},
+		{
+			// #0255, shape 2: the entry is held in a struct field rather than
+			// a bare identifier. Both compositeLitAssignedIdents (`ident :=
+			// audit.Entry{...}`) and collectDeferredMetadataFieldIdents
+			// (`ident.Metadata = ...`) require the assignment's relevant side
+			// to be a bare *ast.Ident; `w.e` is an *ast.SelectorExpr on both
+			// sides here, so neither helper ever connects the empty literal
+			// to the later field write. Not exercised by any real site in
+			// this tree today (checked directly: no production audit.Entry
+			// is held in a struct field — see the header comment's #0255
+			// paragraph).
+			name: "entry held in a struct field, not a bare identifier",
+			src: `package fixture
+
+type worker struct {
+	e audit.Entry
+}
+
+func (w *worker) recordSomething() {
+	w.e = audit.Entry{}
+	w.e.Metadata = map[string]any{"email": addr}
+	auditor.Record(ctx, w.e)
+}
+`,
+		},
+		{
+			// #0255, shape 3: Metadata is set through a pointer passed to a
+			// helper, not through any assignment statement in the enclosing
+			// function's own body. collectDeferredMetadataFieldIdents only
+			// recognizes a direct `ident.Metadata = ...` *ast.AssignStmt; it
+			// has no model of a function call mutating a field through a
+			// pointer argument, so setMeta(&e) is invisible regardless of
+			// what setMeta does inside it. Not exercised by any real site in
+			// this tree today — checked directly the same way as the struct-
+			// field shape above.
+			name: "pointer mutation through a helper function",
+			src: `package fixture
+
+func setMeta(e *audit.Entry) {
+	e.Metadata = map[string]any{"email": addr}
+}
+
+func recordSomething() {
+	e := audit.Entry{}
+	setMeta(&e)
+	auditor.Record(ctx, e)
 }
 `,
 		},
@@ -1199,6 +1349,112 @@ func recordSomething() {
 	}
 	if sites[0].unresolved == "" {
 		t.Fatal("expected a struct-field Metadata assignment after construction to be reported as unresolved, not silently classified as hasEmail=false — this is the #0252 hole this test pins closed")
+	}
+}
+
+// TestAuditEmailMetadataGuardFailsWhenLiteralAlsoSetsMetadataThenOverridden
+// proves the fix for #0255's shape 1, the priority finding of that issue: a
+// literal that sets its OWN Metadata key AND is later mutated with a
+// struct-field .Metadata assignment used to resolve as hasEmail=false,
+// unresolved="" — a silent pass carrying whatever hasEmail value the
+// literal's map happened to produce, which is not the value the running
+// code actually inserts (the later assignment is). The #0252 deferred-
+// assignment check only ran `if !metadataKeyFound`, so a literal that ALSO
+// set Metadata skipped it entirely; #0255 removed that condition. This
+// fixture is exactly the one-line variant #0255 named: a "slug"-only
+// literal immediately overridden by an "email"-carrying assignment.
+func TestAuditEmailMetadataGuardFailsWhenLiteralAlsoSetsMetadataThenOverridden(t *testing.T) {
+	dir := t.TempDir()
+	writeSyntheticGoFile(t, dir, "fixture.go", `package fixture
+
+func recordSomething() {
+	e := audit.Entry{Metadata: map[string]any{"slug": s}}
+	e.Metadata = map[string]any{"email": addr}
+	auditor.Record(ctx, e)
+}
+`)
+	sites := scanAuditEntrySites(t, []string{dir})
+	if len(sites) != 1 {
+		t.Fatalf("expected exactly one audit.Entry site (the literal itself), found %d", len(sites))
+	}
+	if sites[0].unresolved == "" {
+		t.Fatal("expected the site to be reported as unresolved — the literal's own \"slug\"-only Metadata is not what the running code uses; the later e.Metadata = ... assignment is, and this guard cannot read its content. Silently passing this as hasEmail=false is the #0255 shape-1 hole this test pins closed")
+	}
+}
+
+// TestAuditEmailMetadataGuardDocumentedFalsePositiveShapes pins the two
+// false-positive shapes #0255 found in the #0252/#0255 deferred-assignment
+// check: collectDeferredMetadataFieldIdents matches a later .Metadata =
+// assignment by identifier NAME across the whole function body, with no Go
+// scope resolution and no statement-order awareness, so it also fires on an
+// innocent site that happens to share a name with an unrelated variable, or
+// whose .Metadata = assignment textually precedes the literal it gets
+// attributed to. Both fail closed (unresolved, never a silent pass), which
+// is the safe direction — this test does not change that — but pins that
+// the failure message describes what was actually found (a same-named
+// struct-field assignment somewhere in the function) rather than asserting
+// a same-variable runtime override it has not established. If either
+// subtest starts passing cleanly (unresolved==""), scope or statement-order
+// awareness was added and this test (and the header) should be updated to
+// say so.
+func TestAuditEmailMetadataGuardDocumentedFalsePositiveShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			// A same-named variable of an unrelated type, in a disjoint
+			// block of the SAME function, has its own field also named
+			// Metadata set — collectDeferredMetadataFieldIdents cannot tell
+			// this "e" is not the audit.Entry "e" below.
+			name: "unrelated same-named variable in a disjoint block",
+			src: `package fixture
+
+func recordSomething() {
+	e := audit.Entry{Action: audit.ActionSubscriberSuppressed}
+	if false {
+		var e otherType
+		e.Metadata = something
+	}
+	auditor.Record(ctx, e)
+}
+`,
+		},
+		{
+			// The .Metadata = assignment textually precedes the literal it
+			// gets attributed to. In real Go this is a genuine false
+			// positive: `e = audit.Entry{...}` below discards whatever the
+			// earlier e.Metadata = ... wrote, since it replaces the whole
+			// struct value.
+			name: "struct-field assignment precedes the literal, not follows it",
+			src: `package fixture
+
+func recordSomething() {
+	var e audit.Entry
+	e.Metadata = map[string]any{"reason": r}
+	e = audit.Entry{Action: audit.ActionSubscriberSuppressed}
+	auditor.Record(ctx, e)
+}
+`,
+		},
+	}
+
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSyntheticGoFile(t, dir, "fixture.go", c.src)
+			sites := scanAuditEntrySites(t, []string{dir})
+			if len(sites) != 1 {
+				t.Fatalf("expected exactly one audit.Entry site, found %d", len(sites))
+			}
+			if sites[0].unresolved == "" {
+				t.Fatal("expected this false positive to still fail closed (unresolved != \"\") — if it now resolves cleanly, scope/ordering awareness was added; update this test and the header to say so")
+			}
+			if !strings.Contains(sites[0].unresolved, "possibly") {
+				t.Fatalf("message should hedge (\"possibly ...\") rather than assert a same-variable override this lookup has not established: %s", sites[0].unresolved)
+			}
+		})
 	}
 }
 
