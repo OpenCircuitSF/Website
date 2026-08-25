@@ -557,6 +557,22 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   counting — `GUARD-0208` closes this with begin/end counts; anything modelled
   on it must too.
 
+- **The agent shell is zsh; the scripts are bash. Verification snippets run in
+  the wrong one.** Tool-invoked commands here go through **zsh**, while every
+  script in `scripts/` is `#!/usr/bin/env bash` (3.2.57 — see the bash-4 entry
+  below). An ad hoc snippet typed to check a script's behaviour is therefore
+  *not* running under the same interpreter as the script, and constructs that
+  differ silently between the two — array syntax, `[[ ]]` word splitting,
+  `${BASH_SOURCE}`, `local` scoping — will give an answer about the wrong
+  shell. `#0258`'s implementer had one of its own verification snippets
+  silently corrupted this way. Run script checks with an explicit
+  `bash -c '…'` or by invoking the script, never by pasting its innards into
+  the tool shell.
+
+  Related, from the same pass: `${BASH_SOURCE[0]}` is **not** a fix for a
+  relative `$0`. It holds the same relative string and fails identically once
+  the script has `cd`'d. Resolve an absolute path *before* changing directory.
+
 - **BSD `grep -P` on this machine matches nothing, silently.** It does not
   error and does not warn — it reports zero hits on a file that demonstrably
   contains the bytes, which reads exactly like "the string isn't there." A
