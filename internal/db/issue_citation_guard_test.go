@@ -25,29 +25,42 @@ import (
 // Before writing the pattern, this guard's `## Verification` was produced by
 // running its candidate extractor (the pattern and discount rules below)
 // against the real corpus. **Every figure in this comment is a point-in-time
-// measurement at commit 03db7ce**, not a constant: 268 `issues/NNNN.md`
-// files, both `## Verification` and `## Implementation notes` sections,
-// 1,766 raw `Test…`-shaped tokens. `#0196`'s four rules alone (wildcard
-// family — trailing `*`/`...` — a `renamed from` note, and the `TestSentAt`/
-// `TestPool` allowlist) leave 146 unresolved. Two more rules this corpus
-// specifically required (below) narrow that further: the `-run`-style
+// measurement, taken at the tree #0268 was implemented against**, not a
+// constant: 268 `issues/NNNN.md` files, all the sections listed in
+// issueCitationSectionHeaders, 2,796 raw `Test…`-shaped tokens. `#0196`'s
+// four rules alone (wildcard family — trailing `*`/`...` — a `renamed from`
+// note, and the `TestSentAt`/`TestPool` allowlist) leave 256 unresolved.
+// Three more rules this corpus specifically required (below) narrow that
+// further: the line-wrap rule takes it to 251, the `-run`-style
 // regex-alternation-fragment rule (adjacent `|`, scoped to a genuine
-// substring of a defined test name — see below for why) takes it to 114,
-// and the go-test-output-marker rule takes it to 94. **All 94 are in
+// substring of a defined test name — see below for why) takes it to 199,
+// and the go-test-output-marker rule takes it to 161. **All 161 are in
 // `resolved` issue files. Zero are in `open` or `in-progress` files** —
-// and the zero, not the 94, is what this guard enforces.
+// and the zero, not the 161, is what this guard enforces.
 //
-// The corpus-wide total drifts with ordinary work and is expected to. It
-// read 1,742 / 107 / 87 when this guard was first written, 1,746 / 140 /
-// 108 / 88 after `#0265`'s fix pass corrected a misattributed milestone,
-// and 1,766 / 146 / 114 / 94 here. The last step was not an error in either
-// pass: `#0124` (06fefb3) deleted ten soft-bounce test functions that
-// `issues/0039.md` and `issues/0109.md` cite, and exactly six of those
-// citations thereby became dangling — measured by diffing the set of
-// defined `Test…` functions at the two commits and intersecting it with the
-// dangling set. All six are in `resolved` files; the enforced scope stayed
-// at zero throughout. That is precisely the `resolved`-file drift the scope
-// decision below deliberately declines to police.
+// The corpus-wide total drifts with ordinary work and is expected to. Over
+// this guard's short history it has read 1,742 / 107 / 87 when first
+// written; 1,746 / 140 / 108 / 88 after `#0265`'s fix pass corrected a
+// misattributed milestone; 1,766 / 146 / 114 / 94 at 03db7ce; and
+// 2,783 / 256 / 204 / 166 here. Two of those steps are worth separating,
+// because only one of them is anybody's error:
+//
+//   - **1,746 → 1,766, and 88 → 94, was external.** `#0124` (06fefb3)
+//     deleted ten soft-bounce test functions that `issues/0039.md` and
+//     `issues/0109.md` cite, and exactly six of those citations thereby
+//     became dangling — measured by diffing the set of defined `Test…`
+//     functions at the two commits and intersecting it with the dangling
+//     set. All six are in `resolved` files. That is precisely the
+//     `resolved`-file drift the scope decision below deliberately declines
+//     to police.
+//
+//   - **1,766 → 2,796 is #0268 widening what gets scanned**, not the corpus
+//     growing. Admitting `## Fix pass`, `## Review notes` and their earlier
+//     spellings roughly doubled the text this guard reads. The enforced
+//     `open`/`in-progress` scope was 0 before the widening and is 0 after —
+//     but only after the eleven dangling citations #0268 measured in the
+//     newly-admitted sections were fixed. It failed loudly on first run,
+//     which was the point.
 //
 // That is not a coincidence of a small sample; it is the project's own
 // mutation-testing convention (`CLAUDE.md` §8b, §8a: copy a file aside,
@@ -56,7 +69,7 @@ import (
 // others document a scratch or plant test file created to *prove a guard
 // fires*, exercised once, and deleted — its name genuinely does not exist in
 // the tree today, and was never meant to. Scanning `resolved` files
-// unconditionally would fail this guard at introduction on ~94 lines of
+// unconditionally would fail this guard at introduction on ~161 lines of
 // exactly that shape, which is precisely the "a guard everyone disables is
 // worse than none" failure this issue itself warns against (see
 // `issues/0265.md` Notes).
@@ -70,12 +83,12 @@ import (
 // `resolved`. A guard scoped this way would have caught all six the moment
 // `check.sh` next ran against the dirty file, rather than requiring two
 // review passes. `resolved`-file drift (acceptance criterion 3's "true when
-// written, false now") is real — a handful of the 94 are genuine stale
+// written, false now") is real — a handful of the 161 are genuine stale
 // citations surviving a later rename (#0028 cites the pre-rename confirmation
 // test name that #0196's own guard commentary documents as later renamed —
 // not spelled out here, since it is exactly the dangling shape this file
 // itself must not cite in a real comment; see #0196's Notes for the name) —
-// but it is a minority of the 94, buried in scratch-test noise, and catching it
+// but it is a minority of the 161, buried in scratch-test noise, and catching it
 // is not worth the false-positive rate measured above. If it matters later,
 // the fix is a second, opt-in pass over `resolved` files with a stronger
 // discount for the scratch/plant/probe naming convention, not widening this
@@ -98,10 +111,19 @@ import (
 //
 // issueCitationExcluded carries #0196's four discount rules (wildcard `*`,
 // wildcard `...`, `renamed from` within 20 bytes, and the
-// TestSentAt/TestPool allowlist), plus two this corpus specifically
-// required and neither #0196 nor #0199 needed, because a markdown
-// `## Verification` section quotes shell and go-test output in ways a Go
-// doc comment never does:
+// TestSentAt/TestPool allowlist), plus three this corpus specifically
+// required and neither #0196 nor #0199 needed, because a markdown evidence
+// section quotes shell and go-test output — and wraps long identifiers
+// across lines — in ways a Go doc comment never does:
+//
+//   - **A line break immediately after the match, where the match joined
+//     with the identifier characters continuing on the next line names a
+//     defined function.** Markdown prose wraps, and a wrapped test name
+//     reads to the pattern as a truncated prefix resolving to nothing. See
+//     isLineWrappedDefinedTestName for the live instance that prompted this
+//     and for why the rule cannot smuggle anything past the guard: it
+//     discounts only when the *joined* name is defined, so a wrapped
+//     fabrication is still reported.
 //
 //   - **A `|` immediately before or after the match, AND the match is a
 //     substring of some test function the tree actually defines.**
@@ -196,28 +218,39 @@ import (
 //     issue's own `git cat-file`-verified commit, not a narrower regexp —
 //     not something this rule's 40-byte window can provide on its own.
 //
-// Neither new rule is hypothetical — removing either reopens exactly the
-// real corpus line that motivated it (proved directly in
-// TestIssueCitationExcludedDiscountRulesAreEachLoadBearing). But the two
-// rules do **not** carry equal weight in the scope this guard actually
-// enforces, and an earlier draft of this paragraph claimed they did:
+// None of the three added rules is hypothetical — removing any one reopens
+// real corpus lines (proved directly in
+// TestIssueCitationExcludedDiscountRulesAreEachLoadBearing and, for the
+// line-wrap rule, in
+// TestIssueCitationLineWrappedNameResolvesOnlyWhenJoinedNameIsDefined). But
+// they carry different weight in the scope this guard actually enforces, and
+// that weight **changed when #0268 widened what gets scanned** — so an earlier
+// draft of this paragraph, correct before the widening, is not correct after
+// it. Measured by toggling each rule and re-running the scan over the whole
+// corpus:
 //
-//   - The **marker rule is load-bearing there**. Delete it and the enforced
-//     `open`/`in-progress` scope goes from 0 to 1 — a single in-progress
-//     citation quoting the real output of a scratch proof file that was
-//     created, run once, and deleted (see #0258's `## Verification`).
+//   - **Marker rule: load-bearing.** Removing it takes the enforced
+//     `open`/`in-progress` scope from 0 to 5. Before the widening it took it
+//     from 0 to 1 — a single in-progress citation quoting the real output of
+//     a scratch proof file created, run once and deleted (see #0258's
+//     `## Verification`). Widening the scan multiplied what depends on it.
 //
-//   - The **pipe rule is not**. Delete it outright and the enforced scope
-//     is still 0. Its motivating line lives in #0007, a `resolved` file,
-//     outside the scope. It earns its place by keeping the corpus-wide
-//     count honest and by making `-run` alternations writable at all, not
-//     by preventing any enforced failure today.
+//   - **Pipe rule: load-bearing now, but it was not before #0268.** Removing
+//     it takes the enforced scope from 0 to 2. Measured before the widening,
+//     removing it left the scope at 0, because its motivating line lives in
+//     #0007, a `resolved` file. Fix passes and review notes quote `-run`
+//     alternations constantly, which is what changed.
 //
-// Both measured at 03db7ce by toggling each rule and re-running the scan.
+//   - **Line-wrap rule: not load-bearing today.** Removing it leaves the
+//     enforced scope at 0 and moves the corpus-wide count by 5. It is here
+//     because the shape it covers was observed producing six false positives
+//     at once in a live file during #0268's own implementation, and because
+//     it cannot produce a false negative.
+//
 // The pipe rule is narrow by construction (mechanically checked against
-// `defined`, with the tree-wide caveat above); the marker rule is not
-// narrow, and is not claimed to be — see immediately above for its blind
-// spot and why it stays.
+// `defined`, with the tree-wide caveat above); the line-wrap rule likewise,
+// and more strictly. The marker rule is not narrow, and is not claimed to
+// be — see immediately above for its blind spot and why it stays.
 
 // issueTestCitationPattern matches a "Test…" identifier as go test itself
 // recognizes one: a word boundary, then "Test", then anything except a
@@ -257,6 +290,47 @@ func isPipeAdjacentFragmentOfDefinedTest(name string, defined map[string]bool) b
 	return false
 }
 
+// isLineWrappedDefinedTestName reports whether the match ending at end is the
+// first half of a test-function name that markdown prose broke across a line,
+// where the two halves joined name a function the tree really defines.
+//
+// #0268 widened this guard to read `## Fix pass` and `## Review notes`, which
+// are long-form wrapped prose full of long identifiers, and a name split at a
+// line break reads to issueTestCitationPattern as a truncated prefix that
+// resolves to nothing. This was observed live: while this pass was running,
+// another agent's in-progress issue file briefly carried six such names in its
+// `## Verification` section — a section this guard already scanned before
+// #0268 — and every one was reported as dangling although each joined into a
+// real defined function.
+//
+// The rule cannot smuggle anything past the guard, because it discounts only
+// when the *joined* name is in defined. A wrapped name whose halves do not
+// join into something real is still reported. Blockquote markers are skipped
+// along with indentation, since review notes are frequently quoted.
+func isLineWrappedDefinedTestName(text string, end int, name string, defined map[string]bool) bool {
+	if end >= len(text) || text[end] != '\n' {
+		return false
+	}
+	i := end + 1
+	for i < len(text) && (text[i] == ' ' || text[i] == '\t' || text[i] == '>') {
+		i++
+	}
+	j := i
+	for j < len(text) && isGoIdentByte(text[j]) {
+		j++
+	}
+	if j == i {
+		return false
+	}
+	return defined[name+text[i:j]]
+}
+
+// isGoIdentByte reports whether b may appear in a Go identifier after the
+// first character, restricted to the ASCII subset test function names use.
+func isGoIdentByte(b byte) bool {
+	return b == '_' || (b >= '0' && b <= '9') || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
+}
+
 // issueCitationExcluded reports whether the Test-shaped match at
 // text[start:end] should be discounted rather than resolved against
 // defined, the set of test functions the tree actually defines. See the
@@ -272,6 +346,9 @@ func issueCitationExcluded(text string, start, end int, defined map[string]bool)
 		return true
 	}
 	if end+3 <= len(text) && text[end:end+3] == "..." {
+		return true
+	}
+	if isLineWrappedDefinedTestName(text, end, name, defined) {
 		return true
 	}
 	pipeAdjacent := (end < len(text) && text[end] == '|') || (start > 0 && text[start-1] == '|')
@@ -355,22 +432,116 @@ func collectDefinedGoTestFuncs(t *testing.T, roots []string) map[string]bool {
 	return defined
 }
 
-// issueCitationSectionHeaders are the two headers this guard resolves
-// citations under, per #0265's acceptance criteria. "## Plan" is not
-// included even though the issue's own Description names a false "(existing)"
-// citation found there — the acceptance criteria scope this guard to the two
-// sections that assert a test was run, not one that proposes running it; a
-// planned test naturally may not exist yet.
+// issueCitationSectionHeaders are the level-2 sections this guard resolves
+// citations under, keyed by *normalized* title (see issueSectionTitle) so a
+// dated or annotated heading matches the same entry as a bare one.
+//
+// # Which sections, decided from a measurement — #0268
+//
+// #0265 shipped this guard admitting exactly two headings, and #0268 measured
+// what that missed. Counting dangling citations per section across the 23
+// open/in-progress issue files at b12fed1, rolled up to the enclosing level-2
+// heading:
+//
+//	dangling  raw tokens  section
+//	       5          26  ## Fix pass
+//	       4          10  ## Description
+//	       2          23  ## Review notes
+//	       0          11  ## Verification          (already scanned)
+//	       0           2  ## Implementation notes  (already scanned)
+//
+// Every other level-2 heading present in an open or in-progress file —
+// ## Relation, ## Notes, ## Acceptance criteria, ## Work log, ## Open
+// questions, ## Files changed, ## Root cause, ## Fix and a scattering of
+// one-off narrative headings — carries no Test-shaped token at all there.
+//
+// So the guard was enforcing a rule over the two cleanest sections in the
+// corpus while the sections where implementers and reviewers actually assert
+// evidence went unchecked. Both of the factual defects that bounced #0265 a
+// second time, and the dangling citation one of them was about, sat in those
+// unscanned sections. That is what drives the additions below; the sections
+// with a measured zero are not admitted on the strength of a guess.
+//
+// A fix pass writes its evidence under a `### Verification` *nested inside*
+// `## Fix pass` — three hashes, so the old level-2 match never saw it. There
+// is deliberately no separate rule for that nesting: a section runs from its
+// heading to the next level-2 heading, so admitting `## Fix pass` admits
+// everything nested under it, which is also what has always happened for
+// `## Verification`.
+//
+// # What stays out, and why it is not an oversight
+//
+//   - **## Description and ## Notes.** These *quote* fabricated names as
+//     subject matter. #0126's six false citations are reproduced verbatim in
+//     several issue files precisely so the defect can be discussed, and four
+//     of the eleven dangling citations measured above are exactly that, in
+//     this guard's own motivating issue. Scanning them would fail the guard
+//     on the very text that documents why the guard exists. The line #0268
+//     draws is between prose that *asserts* evidence and prose that
+//     *discusses* it.
+//
+//   - **## Plan and ## Acceptance criteria.** These propose work. A planned
+//     or required test may legitimately not exist yet — #0265's original
+//     reasoning for excluding ## Plan, unchanged.
+//
+//   - **## Fix, ## Root cause, ## Files changed, ## Gotchas.** Zero dangling
+//     and zero tokens in the enforced scope today, so the measurement gives
+//     no support for admitting them; and the resolved corpus shows each
+//     carrying legitimate quotes of deleted scratch tests and pre-rename
+//     names (a ## Root cause naming a SIGTERM reproduction file that was
+//     created, run once and deleted; a ## Gotchas naming a pre-rename
+//     construction-seam test). Admitting them would import exactly the
+//     day-one noise #0265 scoped away from. Revisit if a measurement ever
+//     says otherwise.
+//
+//   - **## Manual verification required.** Zero in the enforced scope. Its
+//     two dangling citations in resolved files are both a bare `-run` prefix
+//     standing in for a real family — a shape the pipe rule does not cover
+//     because it is not pipe-adjacent (see the residual noted there).
+//
+//   - **## Work log.** Token and cost accounting, not evidence about tests.
 var issueCitationSectionHeaders = map[string]bool{
-	"## Verification":         true,
-	"## Implementation notes": true,
+	"verification":          true,
+	"implementation notes":  true,
+	"fix pass":              true, // #0268: 5 of the 11 measured dangling citations
+	"review notes":          true, // #0268: 2 of the 11
+	"review verification":   true, // earlier passes' spelling of "review notes"
+	"review findings":       true, // ditto
+	"bounce fix":            true, // earlier passes' spelling of "fix pass"
+	"bounce-fix completion": true, // ditto
 }
 
-// extractNamedSections returns, for each occurrence of a level-2 heading in
-// issueCitationSectionHeaders, the heading and the text between it and the
-// next level-2 heading (or EOF) — plus startLine, the 1-based line number of
-// the first line of that body, so a citation's position inside the returned
-// text can be translated back into a real line number in the source file.
+// issueSectionTitle normalizes a level-2 heading line to the bare section
+// title used as the key in issueCitationSectionHeaders: it strips the "## "
+// marker, drops any trailing annotation introduced by an em-dash or an
+// opening parenthesis (whichever comes first), trims, and lowercases. That is
+// what lets one entry match every real spelling in the corpus — for example a
+// review-notes heading carrying a phase and a date, or a fix-pass heading
+// carrying a date and a parenthetical. It returns "" for a line that is not a
+// level-2 heading.
+func issueSectionTitle(line string) string {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "## ") {
+		return ""
+	}
+	title := strings.TrimSpace(line[len("## "):])
+	cut := len(title)
+	if i := strings.Index(title, " — "); i >= 0 && i < cut {
+		cut = i
+	}
+	if i := strings.Index(title, " ("); i >= 0 && i < cut {
+		cut = i
+	}
+	return strings.ToLower(strings.TrimSpace(title[:cut]))
+}
+
+// extractNamedSections returns, for each level-2 heading whose normalized
+// title is in issueCitationSectionHeaders, the heading and the text between it
+// and the next level-2 heading (or EOF) — plus startLine, the 1-based line
+// number of the first line of that body, so a citation's position inside the
+// returned text can be translated back into a real line number in the source
+// file. Nested level-3 headings are part of the section they sit under, which
+// is how a fix pass's nested Verification subsection gets scanned.
 func extractNamedSections(fileText string) []struct {
 	header    string
 	startLine int
@@ -384,7 +555,7 @@ func extractNamedSections(fileText string) []struct {
 	}
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimSpace(lines[i])
-		if !issueCitationSectionHeaders[line] {
+		if !issueCitationSectionHeaders[issueSectionTitle(line)] {
 			continue
 		}
 		start := i + 1
@@ -416,9 +587,10 @@ func issueStatus(fileText string) string {
 }
 
 // scanIssueDirForDanglingTestCitations resolves every Test… identifier
-// cited in dir's *.md files' `## Verification`/`## Implementation notes`
-// sections against defined, restricted to files whose `**Status**` row
-// satisfies includeStatus. It returns one formatted "path:line: Identifier"
+// cited in dir's *.md files' evidence-asserting sections — those named in
+// issueCitationSectionHeaders, including everything nested under them —
+// against defined, restricted to files whose `**Status**` row satisfies
+// includeStatus. It returns one formatted "path:line: Identifier"
 // string per dangling citation, sorted for a stable, pasteable report.
 func scanIssueDirForDanglingTestCitations(t *testing.T, dir string, defined map[string]bool, includeStatus func(status string) bool) []string {
 	t.Helper()
@@ -485,9 +657,11 @@ func itoa(n int) string {
 
 // TestNoOpenIssueVerificationCitesUndefinedTestFunction is this guard's
 // real-corpus run: every open or in-progress issues/NNNN.md file's
-// `## Verification` and `## Implementation notes` sections must cite only
-// Test… identifiers the tree actually defines. See the file-level comment
-// for why resolved/closed/wontfix files are out of scope.
+// evidence-asserting sections (issueCitationSectionHeaders, and everything
+// nested under them) must cite only Test… identifiers the tree actually
+// defines. See the file-level comment for why resolved/closed/wontfix files
+// are out of scope, and for the per-section measurement #0268 used to decide
+// which sections those are.
 func TestNoOpenIssueVerificationCitesUndefinedTestFunction(t *testing.T) {
 	defined := collectDefinedGoTestFuncs(t, issueGuardScanRoots)
 	failures := scanIssueDirForDanglingTestCitations(t, "../../issues", defined, func(status string) bool {
@@ -539,7 +713,7 @@ func TestIssueVerificationCitationGuardCatchesPlantedFalseCitation(t *testing.T)
 }
 
 // TestIssueVerificationCitationGuardExcludesResolvedFilesByDefault proves
-// the status filter is what keeps the 94-citation resolved-file corpus (see
+// the status filter is what keeps the 161-citation resolved-file corpus (see
 // the file-level comment) from failing this guard: a fixture with a
 // dangling citation and Status resolved is not reported when includeStatus
 // only admits open/in-progress, and the exact same fixture with Status
@@ -672,5 +846,161 @@ func TestIssueCitationExcludedDiscountRulesAreEachLoadBearing(t *testing.T) {
 	}
 	if issueCitationExcluded(plain, loc[0], loc[1], nil) {
 		t.Errorf("plain citation %q must not be excluded by any discount rule", plain)
+	}
+}
+
+// TestIssueSectionTitleNormalizesRealCorpusHeadings pins issueSectionTitle
+// against the heading spellings the tracker actually uses. Every "want"
+// below that is non-empty is a key in issueCitationSectionHeaders, so this
+// test is what makes the map's eight entries cover the corpus's many
+// decorated variants rather than only their bare forms. The inputs are
+// transcribed from real headings; a bare-form-only matcher would have missed
+// every one of the decorated ones, which is how a fix pass's evidence went
+// unscanned in the first place (#0268).
+func TestIssueSectionTitleNormalizesRealCorpusHeadings(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"## Verification", "verification"},
+		{"## Implementation notes", "implementation notes"},
+		{"## Fix pass — 2026-08-25 (addressing the phase-3 bounce)", "fix pass"},
+		{"## Review notes — phase 3 (Opus, 2026-08-24)", "review notes"},
+		{"## Review notes — phase 3, second pass (Opus, 2026-08-25)", "review notes"},
+		{"## Review verification — 2026-08-19 (phase 3, approved)", "review verification"},
+		{"## Review findings (2026-08-18) — approved, with one correction", "review findings"},
+		{"## Bounce fix (2026-08-23, claude-sonnet-5)", "bounce fix"},
+		{"## Bounce-fix completion (third pass, 2026-08-19 — escalated to Opus)", "bounce-fix completion"},
+		// Deliberately not admitted — see the file-level comment.
+		{"## Description", "description"},
+		{"## Notes", "notes"},
+		{"## Plan", "plan"},
+		{"## Manual verification required", "manual verification required"},
+		// Not a level-2 heading at all.
+		{"### Verification", ""},
+		{"# 0265 — Issue files can cite tests that do not exist", ""},
+		{"some prose", ""},
+	}
+	for _, c := range cases {
+		if got := issueSectionTitle(c.in); got != c.want {
+			t.Errorf("issueSectionTitle(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	for _, c := range cases {
+		admitted := issueCitationSectionHeaders[issueSectionTitle(c.in)]
+		switch c.want {
+		case "description", "notes", "plan", "manual verification required", "":
+			if admitted {
+				t.Errorf("%q must not be scanned", c.in)
+			}
+		default:
+			if !admitted {
+				t.Errorf("%q must be scanned", c.in)
+			}
+		}
+	}
+}
+
+// TestIssueCitationGuardScansEvidenceSectionsNotSubjectMatter is #0268's
+// mechanism proof, on an isolated t.TempDir() fixture (CLAUDE.md §8a: never
+// plant a failure into a shared file another agent may be mid-edit on). It
+// asserts the two halves of #0268's scope decision at once:
+//
+//   - a fabricated name in a `### Verification` nested inside `## Fix pass`,
+//     and one in a dated `## Review notes`, are both reported — neither was
+//     visible to the guard before #0268;
+//   - fabricated names in `## Description`, `## Notes` and `## Plan` are not
+//     reported, because those sections quote and propose rather than assert.
+//     Real issue files reproduce #0126's six false citations verbatim in
+//     exactly that way.
+func TestIssueCitationGuardScansEvidenceSectionsNotSubjectMatter(t *testing.T) {
+	dir := t.TempDir()
+	defined := map[string]bool{}
+
+	fixture := "# 9997 — scratch fixture for #0268\n\n" +
+		"| | |\n|---|---|\n| **Status** | in-progress |\n\n" +
+		"## Description\n\nQuoting the bad citation as subject matter: `TestRv0268SubjectMatter`.\n\n" +
+		"## Plan\n\nWill add `TestRv0268Proposed`, which does not exist yet.\n\n" +
+		"## Fix pass — 2026-08-25 (a dated heading)\n\n" +
+		"### Verification\n\nRan `TestRv0268NestedUnderFixPass` and it passed.\n\n" +
+		"## Review notes — phase 3 (Opus, 2026-08-25)\n\nRe-ran `TestRv0268InReviewNotes` myself.\n\n" +
+		"## Notes\n\nSee also `TestRv0268InNotes`.\n"
+	if err := os.WriteFile(filepath.Join(dir, "9997.md"), []byte(fixture), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	failures := scanIssueDirForDanglingTestCitations(t, dir, defined, func(status string) bool {
+		return status == "open" || status == "in-progress"
+	})
+	joined := strings.Join(failures, "\n")
+	for _, want := range []string{"TestRv0268NestedUnderFixPass", "TestRv0268InReviewNotes"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("expected %s to be reported, got:\n%s", want, joined)
+		}
+	}
+	for _, unwanted := range []string{"TestRv0268SubjectMatter", "TestRv0268Proposed", "TestRv0268InNotes"} {
+		if strings.Contains(joined, unwanted) {
+			t.Errorf("%s sits in an unscanned section and must not be reported, got:\n%s", unwanted, joined)
+		}
+	}
+	if len(failures) != 2 {
+		t.Fatalf("expected exactly 2 dangling citations, got %d:\n%s", len(failures), joined)
+	}
+}
+
+// TestIssueCitationLineWrappedNameResolvesOnlyWhenJoinedNameIsDefined pins
+// isLineWrappedDefinedTestName in both directions: a name broken across a
+// line is discounted when its halves join into a real function, and is still
+// reported when they do not. The second half is what keeps the rule from
+// being a hole — a wrapped fabrication stays visible.
+func TestIssueCitationLineWrappedNameResolvesOnlyWhenJoinedNameIsDefined(t *testing.T) {
+	defined := map[string]bool{"TestRv0268Wrapped_SecondHalfExists": true}
+
+	cases := []struct {
+		name         string
+		text         string
+		target       string
+		wantExcluded bool
+	}{
+		{
+			name:         "wrapped, joined name is defined",
+			text:         "ran `TestRv0268Wrapped_\n  SecondHalfExists` and it passed",
+			target:       "TestRv0268Wrapped_",
+			wantExcluded: true,
+		},
+		{
+			name:         "wrapped inside a blockquote, joined name is defined",
+			text:         "> ran `TestRv0268Wrapped_\n>   SecondHalfExists` and it passed",
+			target:       "TestRv0268Wrapped_",
+			wantExcluded: true,
+		},
+		{
+			name:         "wrapped, joined name is NOT defined",
+			text:         "ran `TestRv0268Wrapped_\n  SomethingElseEntirely` and it passed",
+			target:       "TestRv0268Wrapped_",
+			wantExcluded: false,
+		},
+		{
+			name:         "not wrapped at all",
+			text:         "ran `TestRv0268Wrapped_` and it passed",
+			target:       "TestRv0268Wrapped_",
+			wantExcluded: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			start := strings.Index(c.text, c.target)
+			if start < 0 {
+				t.Fatalf("fixture does not contain %q", c.target)
+			}
+			end := start + len(c.target)
+			loc := issueTestCitationPattern.FindStringIndex(c.text[start:])
+			if loc == nil || loc[0] != 0 || start+loc[1] != end {
+				t.Fatalf("pattern does not match %q at the expected span in %q", c.target, c.text)
+			}
+			if got := issueCitationExcluded(c.text, start, end, defined); got != c.wantExcluded {
+				t.Errorf("issueCitationExcluded = %v, want %v", got, c.wantExcluded)
+			}
+		})
 	}
 }
