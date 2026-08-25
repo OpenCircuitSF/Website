@@ -89,6 +89,12 @@ runpipe() { run bash -o pipefail -c "$1"; }
 # match below, since that is this script's own option, not a call site), or
 # any other bash/sh invocation carrying a "-c" flag (a bypass that lost the
 # flag entirely wouldn't otherwise show up as a second "pipefail").
+#
+# Known, accepted gap (#0208's review, recorded by #0251): `run "$SHELL" -c
+# "… | tail"` would evade every check here — it spells neither a literal
+# "pipefail" nor a literal "bash"/"sh" token, and adding it as a new step
+# leaves the runpipe() call count unchanged. Contrived; no realistic edit to
+# this file produces it. Not closed.
 step "self-check: pipefail funnel guard (#0208)"
 # The four sed patterns below are each built from two concatenated pieces
 # (no separator between the closing and opening quotes) rather than spelled
@@ -127,6 +133,32 @@ fi
 RUNPIPE_CALLS="$(printf '%s\n' "$SCAN" | grep -c 'runpipe "' || true)"
 if [ "${RUNPIPE_CALLS:-0}" -lt 9 ]; then
   printf '\033[31mPIPEFAIL REGRESSION (#0208): expected at least 9 runpipe() call sites (one per go build/vet/test and npm check/test step); found %s. A step may have reverted to spelling a shell invocation directly instead of calling runpipe().\033[0m\n' "$RUNPIPE_CALLS" >&2
+  exit 2
+fi
+
+# #0251: everything above is a NEGATIVE assertion over $SCAN — a copy of
+# this file with runpipe()'s own definition (the RUNPIPE-0208 block) already
+# deleted, precisely so the checks above can't flag their own necessary
+# mention of "pipefail" and "-c". That makes the guard structurally BLIND to
+# the one line that actually carries the property: whether runpipe() itself
+# still spells "-o pipefail". Strip that one flag from runpipe()'s
+# definition and every check above still passes — no stray "pipefail", no
+# stray shell "-c", still >= 9 "runpipe \"" call sites — while the property
+# this whole self-check exists to guarantee is gone. Demonstrated in
+# issues/0251.md: with the flag stripped, a failing test produced
+# VERIFICATION PASSED and exit 0.
+#
+# This is the missing POSITIVE half: extract runpipe()'s definition block
+# directly from "$0" (between the RUNPIPE-0208 markers, comments stripped)
+# — NOT from $SCAN, which has that block deleted — and assert it still
+# spells the funnel it exists to own. Scoping the extraction to exactly
+# that marker-delimited block (rather than grepping the whole file) is what
+# makes this un-satisfiable by "-o pipefail" merely appearing somewhere
+# else: only the actual definition can produce a match here.
+RUNPIPE_DEF="$(sed -n "/${BR}/,/${ER}/p" "$0" | grep -vE '^[[:space:]]*#')"
+if ! printf '%s\n' "$RUNPIPE_DEF" | grep -qE 'run[[:space:]]+bash[[:space:]]+-o[[:space:]]+pipefail[[:space:]]+-c'; then
+  printf '\033[31mPIPEFAIL REGRESSION (#0208/#0251): runpipe()'"'"'s own definition no longer spells "run bash -o pipefail -c" — the funnel this self-check exists to guarantee has lost the flag it is supposed to hold. Definition block as found in the running script:\033[0m\n' >&2
+  printf '%s\n' "$RUNPIPE_DEF" >&2
   exit 2
 fi
 # END GUARD-0208
