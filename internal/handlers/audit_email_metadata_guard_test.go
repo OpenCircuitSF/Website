@@ -45,26 +45,67 @@ import (
 // hope" — it is "read this failure, update this fixture to match the tree,
 // and update the policy to match the fixture."
 //
-// A Metadata expression this guard cannot classify statically (a call to
-// anything other than the one known-safe local helper below, a value built
-// outside the enclosing function, etc.) is treated as a FAILURE, not a
-// silent pass — the conservative direction, since an unresolvable site could
-// be hiding an email the guard would otherwise miss entirely. Widening what
-// this guard can resolve should always be a deliberate, reviewed change to
-// this file, not a byproduct of the guard giving up quietly.
+// A call this guard genuinely cannot resolve — an unlisted helper, a method
+// call (h.buildMetadata(...)), a package-qualified call (maps.Clone(...)),
+// or a bare identifier that no recognized assignment form (see below) ever
+// touches in its enclosing function — is treated as a FAILURE, not a silent
+// pass. That is the conservative direction, and #0237's third phase-3
+// review confirmed it holds for exactly those shapes by running them
+// through scanAuditEntrySites directly.
 //
-// One narrow, checked exception to that blanket rule: a composite-literal
-// key that is not itself a string literal (an identifier constant, an
-// integer, any other expression) is silently SKIPPED by
-// compositeLitStringKeys rather than flagged unresolved — #0237's second
-// phase-3 review ran this directly (map[string]any{emailKeyConst: addr})
-// and got hasEmail=false, unresolved="", not a failure. Every Metadata key
-// literal actually written in this tree today is a plain double-quoted
-// string (verified while writing this guard, and again by the census
-// behind the token widening above), so this exception is unencountered in
-// practice, not exercised — narrowing the promise to say so is the fix
-// here, since no real site needs the code changed and doing so would add
-// complexity for a shape nothing in the tree uses.
+// The real boundary is narrower than "cannot classify ⇒ FAILURE" reads at a
+// glance, and stating it required running eight synthetic Metadata shapes
+// through scanAuditEntrySites, not reading the code (#0237's third phase-3
+// review — the first two drafts of this paragraph each asserted a boundary
+// that turned out false the moment it was actually run). A bare identifier
+// is resolved ENTIRELY from two assignment forms collectLocalMapKeys looks
+// for, anywhere in the enclosing function body: `x := map[string]any{...}`
+// (composite-literal keys) and `x["literal"] = ...` (an index assignment
+// whose index is itself a string literal). The instant either form is seen
+// for that identifier, it is treated as resolved using ONLY what those
+// forms reveal — nothing else about the identifier's value is considered,
+// including how it was first obtained. That produces four silent passes
+// (hasEmail=false, unresolved=""), not the single one this header used to
+// name:
+//
+//   - a composite-literal key that is not itself a string literal (an
+//     identifier constant, an integer, any other expression) — SKIPPED by
+//     compositeLitStringKeys: map[string]any{emailKeyConst: addr}. This is
+//     the one this header previously documented alone.
+//   - an index assignment whose index key is itself not a string literal —
+//     x[k] = addr, k a variable — collectLocalMapKeys's IndexExpr case only
+//     matches a literal index, so the assignment contributes no key at all.
+//   - a call that mutates the map in place rather than assigning it —
+//     addEmailTo(metadata, addr) is not an *ast.AssignStmt, so
+//     collectLocalMapKeys never sees it regardless of what it does.
+//   - the sharpest one: an identifier first assigned from an unresolvable
+//     call (metadata := buildMeta(sub)) is correctly FAILURE while nothing
+//     else touches it — see the "e" row below — but the instant one more
+//     string-literal index assignment is added anywhere in the function
+//     (metadata["reason"] = r, including via a `var` declaration instead of
+//     `:=`), the identifier becomes "resolved" from that one visible key
+//     alone, and whatever buildMeta itself put into the map — an "email"
+//     key included — is invisible. This shape directly contradicts the "a
+//     value built outside the enclosing function ... is treated as a
+//     FAILURE" framing an earlier draft of this header used as its
+//     canonical example of what fails: it is, right up until one more line
+//     is added.
+//
+// None of these four shapes is exercised by any site in this tree today —
+// checked directly while writing this correction (the same 45-site,
+// 87-key census below), not assumed: the only non-inline Metadata
+// identifiers in the tree are credentialMetadata's two call sites (resolved
+// through the helper's own return, by name, in
+// auditEmailMetadataKnownSafeHelpers) and admin_subscribers.go:694 /
+// admin_subscribers_export.go:327, both `metadata := map[string]any{...}`
+// literals whose only further mutation is a string-literal index
+// assignment — the one case this guard reads completely. So the code is
+// fine and only this description was overstated; the four shapes are
+// pinned as documented, unfixed gaps by
+// TestAuditEmailMetadataGuardDocumentedSilentPassShapes below, the same
+// treatment the camelCase key gap gets. Widening what this guard resolves
+// should always be a deliberate, reviewed change to this file, not a
+// byproduct of loosening this description.
 
 // auditEmailMetadataScanRoots is deliberately narrower than
 // citedTestScanRoots (#0196/#0220's comment-citation guards): the privacy
@@ -394,8 +435,13 @@ func compositeLitStringKeys(cl *ast.CompositeLit) []string {
 // claimed that site already carried two suspect keys when, before this
 // change, it carried exactly one ("recipient_email"; "to" did not match).
 // Dumped every Metadata key literal actually used in internal/ and cmd/
-// (86 distinct keys, the same census the review ran) before adding
-// anything: no key in the tree contains "to", "mail", or "contact" as an
+// (87 distinct keys across the 45 non-test audit.Entry sites — recomputed
+// independently during #0237's fourth pass with a from-scratch walker that
+// resolves credentialMetadata's return the same way classifyMetadataExpr
+// does, matching the third phase-3 review's own independent count exactly;
+// an earlier pass had written 86 here, which no independent recount
+// reproduces) before adding anything: no key in the tree contains "to",
+// "mail", or "contact" as an
 // underscore-delimited token today (the closest near-miss, "topic_arn",
 // splits to "topic"/"arn" — neither collides), so all three are free:
 // "to" newly matches the one real "to" key above (already pinned via
@@ -407,7 +453,7 @@ func compositeLitStringKeys(cl *ast.CompositeLit) []string {
 // "recipientEmail" (camelCase) is deliberately NOT covered. This split is
 // underscore-only, so a camelCase key is invisible to it by construction —
 // closing that gap would need a second, camelCase-aware tokenizer, not a
-// one-line token addition. Every one of the 86 real Metadata keys in this
+// one-line token addition. Every one of the 87 real Metadata keys in this
 // tree is snake_case or a single lowercase word; none is camelCase. Given
 // zero real benefit today against genuine added complexity (and a second
 // place for that complexity to itself go stale), the deliberate choice is
@@ -759,6 +805,120 @@ func recordSomething() {
 	}
 	if sites[0].hasEmail {
 		t.Fatal("expected hasEmail=false: \"recipientEmail\" has no \"_\" so the token split never sees it — this is the documented gap, not a bug; if this now fails, the gap was closed and this test (and the doc comment above auditEmailMetadataSuspectKeyTokens) should be updated to say so")
+	}
+}
+
+// TestAuditEmailMetadataGuardDocumentedSilentPassShapes pins the four
+// silent-pass shapes named in this file's header comment — found by #0237's
+// third phase-3 review running eight synthetic Metadata expressions through
+// scanAuditEntrySites rather than reading the code, and reproduced again
+// during the header's own correction. Each subtest asserts hasEmail=false,
+// unresolved="" (a silent pass, not a FAILURE) for a shape the header now
+// says is unresolved but not caught. None is exercised by any real site in
+// this tree (see the header comment and the 45-site/87-key census it
+// cites), so this is the same treatment
+// TestAuditEmailMetadataGuardCamelCaseKeyNotCaught gives the camelCase gap:
+// a deliberate, unfixed gap pinned as a named, asserted behavior rather than
+// a silent absence of coverage. If any of these starts failing, either the
+// gap was closed (update this test and the header to say so) or something
+// about collectLocalMapKeys/classifyMetadataExpr regressed.
+func TestAuditEmailMetadataGuardDocumentedSilentPassShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			// The one exception this header used to document alone: a
+			// composite-literal key that is not itself a string literal.
+			name: "composite literal, non-string-literal key",
+			src: `package fixture
+
+const emailKeyConst = "email"
+
+func recordSomething() {
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{emailKeyConst: addr},
+	})
+}
+`,
+		},
+		{
+			// A traced local's index assignment whose index key is itself
+			// not a string literal — collectLocalMapKeys's IndexExpr case
+			// only matches a literal index, so this assignment contributes
+			// no key at all.
+			name: "traced local, non-literal index key",
+			src: `package fixture
+
+func recordSomething() {
+	metadata := map[string]any{"reason": reason}
+	k := "email"
+	metadata[k] = addr
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: metadata,
+	})
+}
+`,
+		},
+		{
+			// A traced local later mutated by a helper CALL rather than an
+			// assignment statement — collectLocalMapKeys only inspects
+			// *ast.AssignStmt, so a call that mutates the map in place is
+			// invisible to it regardless of what it does.
+			name: "traced local, mutated by a call rather than an assignment",
+			src: `package fixture
+
+func recordSomething() {
+	metadata := map[string]any{"reason": reason}
+	addEmailTo(metadata, addr)
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: metadata,
+	})
+}
+`,
+		},
+		{
+			// The sharpest one: an identifier first assigned from an
+			// unresolvable call is FAILURE alone (see
+			// TestAuditEmailMetadataGuardFailsOnUnresolvableMetadata's
+			// sibling shape without the second line below) but becomes a
+			// silent pass the instant one more string-literal index
+			// assignment touches it — whatever the helper itself put in the
+			// map, including an "email" key, is invisible.
+			name: "helper-built local plus one further literal index assignment",
+			src: `package fixture
+
+func recordSomething() {
+	metadata := buildMeta(sub)
+	metadata["reason"] = r
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: metadata,
+	})
+}
+`,
+		},
+	}
+
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSyntheticGoFile(t, dir, "fixture.go", c.src)
+			sites := scanAuditEntrySites(t, []string{dir})
+			if len(sites) != 1 {
+				t.Fatalf("expected exactly one audit.Entry site, found %d", len(sites))
+			}
+			if sites[0].unresolved != "" {
+				t.Fatalf("expected this documented gap to resolve cleanly (not unresolved) — if it is now unresolved, the gap was closed in the opposite direction from expected; update this test and the header comment: %s", sites[0].unresolved)
+			}
+			if sites[0].hasEmail {
+				t.Fatal("expected hasEmail=false: this is the documented silent-pass gap, not a bug — if this now fails, the gap was closed; update this test and the header comment to say so")
+			}
+		})
 	}
 }
 
