@@ -192,8 +192,17 @@ type Subscriber struct {
 	UTMCampaign             *string
 	UnsubscribedAt          *time.Time
 	UnsubscribeSource       *string
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
+	// SoftBounceStreak, LastBounceAt, LastDeliveryAt are #0124's delivery
+	// health columns (migration 000010, PRD §6.9): the consecutive count of
+	// Transient/Undetermined bounces since the last successful Delivery.
+	// Zeroed by RecordDeliveryTx and by ResetSoftBounceStreakByEmail (a
+	// suppression removed, or an admin's explicit reset) — see this file's
+	// doc comment on those methods.
+	SoftBounceStreak int
+	LastBounceAt     *time.Time
+	LastDeliveryAt   *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 	// Synthetic is migration 000019's flag — see the package doc comment.
 	// True only for #0046's per-admin test-send recipient rows.
 	Synthetic bool
@@ -275,7 +284,8 @@ type welcomePayload struct {
 const subscriberColumns = `id, email, status, confirm_token, confirm_sent_at,
 	confirm_expires_at, confirmed_at, already_subscribed_sent_at, manage_token,
 	host(signup_ip), signup_user_agent, utm_source, utm_medium, utm_campaign,
-	unsubscribed_at, unsubscribe_source, created_at, updated_at, synthetic`
+	unsubscribed_at, unsubscribe_source, soft_bounce_streak, last_bounce_at,
+	last_delivery_at, created_at, updated_at, synthetic`
 
 func scanSubscriber(row pgx.Row) (Subscriber, error) {
 	var sub Subscriber
@@ -283,7 +293,8 @@ func scanSubscriber(row pgx.Row) (Subscriber, error) {
 		&sub.ID, &sub.Email, &sub.Status, &sub.ConfirmToken, &sub.ConfirmSentAt,
 		&sub.ConfirmExpiresAt, &sub.ConfirmedAt, &sub.AlreadySubscribedSentAt, &sub.ManageToken,
 		&sub.SignupIP, &sub.SignupUserAgent, &sub.UTMSource, &sub.UTMMedium, &sub.UTMCampaign,
-		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.CreatedAt, &sub.UpdatedAt, &sub.Synthetic,
+		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.SoftBounceStreak, &sub.LastBounceAt,
+		&sub.LastDeliveryAt, &sub.CreatedAt, &sub.UpdatedAt, &sub.Synthetic,
 	)
 	if err != nil {
 		return Subscriber{}, err
@@ -1159,6 +1170,110 @@ func (s *Store) setStatusTx(ctx context.Context, q querier, id int64, status str
 	return sub, nil
 }
 
+// IncrementSoftBounceStreakTx is #0124's transactional counterpart to
+// MarkBouncedTx: it increments subscribers.soft_bounce_streak by one and
+// stamps last_bounce_at, run against q so ses_notifications.go's Transient/
+// Undetermined bounce branch can commit it atomically with its own
+// email_events insert and suppressions.AddTx call, exactly like
+// MarkBouncedTx's own atomicity requirement (see that method's doc
+// comment). Returns the streak value AFTER this bounce — the caller
+// compares it against soft_bounce_threshold_count in the same call, with no
+// second query — not the whole row, since nothing else the caller needs
+// changed.
+//
+// Deliberately does NOT consult statusLockedFromNonAdmin: streak tracking
+// is orthogonal to the status guard that protects `complained` (CLAUDE.md
+// §9). A complained subscriber accumulating a streak is harmless — they are
+// already suppressed and mail has already stopped regardless of what this
+// number does — and refusing to increment it here would just make the
+// history less complete for no protective effect. What matters is that
+// nothing in this package ever uses a streak, high or low, to move a
+// subscriber OUT of complained; nothing does (see RecordDeliveryTx and
+// ResetSoftBounceStreakByEmail below, neither of which touches status).
+func (s *Store) IncrementSoftBounceStreakTx(ctx context.Context, q querier, id int64, now time.Time) (streak int, err error) {
+	err = q.QueryRow(ctx,
+		`UPDATE subscribers
+		    SET soft_bounce_streak = soft_bounce_streak + 1,
+		        last_bounce_at     = $2,
+		        updated_at         = $2
+		  WHERE id = $1
+		 RETURNING soft_bounce_streak`,
+		id, now,
+	).Scan(&streak)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return 0, ErrNotFound
+	case err != nil:
+		return 0, fmt.Errorf("subscribers: incrementing soft bounce streak for %d: %w", id, err)
+	}
+	return streak, nil
+}
+
+// RecordDeliveryTx is #0124's Delivery-event write: a SES Delivery report
+// for this address zeroes soft_bounce_streak and stamps last_delivery_at —
+// the "reset on success" half of the consecutive-streak rule (PRD §6.9),
+// which is the entire reason a streak, unlike the rolling window it
+// replaces, has a notion of "the address recovered". Run against q for the
+// same atomicity reason as IncrementSoftBounceStreakTx. Also does not
+// consult statusLockedFromNonAdmin — a Delivery event never changes status,
+// only the streak, so there is nothing here that could move a subscriber
+// out of complained.
+func (s *Store) RecordDeliveryTx(ctx context.Context, q querier, id int64, now time.Time) error {
+	tag, err := q.Exec(ctx,
+		`UPDATE subscribers
+		    SET soft_bounce_streak = 0,
+		        last_delivery_at   = $2,
+		        updated_at         = $2
+		  WHERE id = $1`,
+		id, now,
+	)
+	if err != nil {
+		return fmt.Errorf("subscribers: recording delivery for %d: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ResetSoftBounceStreakByEmail zeroes soft_bounce_streak (through the
+// shared pool) for the subscriber matching email. Two callers, both #0124
+// criteria:
+//
+//   - SuppressionStore.Remove (suppressions.go): "removing a suppression
+//     resets the streak to 0 — a re-enabled address gets a fresh runway,
+//     not one bounce from re-suppression." Keyed by email, not id, because
+//     suppressions themselves are keyed by email (see suppressions.go's
+//     package doc comment) and Remove has no subscriber id to hand in.
+//   - POST /admin/deliverability/{email}/reset-streak (an explicit admin
+//     action, audited by its handler).
+//
+// A no-op (0 rows affected, no error) when no subscribers row exists for
+// email — a suppression can predate or outlive any subscribers row for the
+// same address (suppressions.go's own doc comment) — so callers that need
+// to know whether a row existed check GetByID/FindByEmail themselves rather
+// than infer it from this method's return.
+func (s *Store) ResetSoftBounceStreakByEmail(ctx context.Context, q querier, email string, now time.Time) error {
+	return resetSoftBounceStreakByEmail(ctx, q, email, now)
+}
+
+// resetSoftBounceStreakByEmail is the free-function implementation shared
+// by Store.ResetSoftBounceStreakByEmail and SuppressionStore.Remove
+// (suppressions.go) — the latter has no *Store handle (it is deliberately
+// its own type; see that file's package doc comment) but needs the
+// identical reset, so this is a package-level function rather than
+// forcing SuppressionStore to hold a *Store just to reach one method.
+func resetSoftBounceStreakByEmail(ctx context.Context, q querier, email string, now time.Time) error {
+	_, err := q.Exec(ctx,
+		`UPDATE subscribers SET soft_bounce_streak = 0, updated_at = $2 WHERE email = lower(trim($1))`,
+		email, now,
+	)
+	if err != nil {
+		return fmt.Errorf("subscribers: resetting soft bounce streak for %q: %w", email, err)
+	}
+	return nil
+}
+
 // GetByID looks up a subscriber by primary key. Exported for #0032's admin
 // screen (subscriber detail view, and the before/after reads Suppress and
 // ClearComplaint need to tell an admin whether their action actually took
@@ -1361,7 +1476,8 @@ const qualifiedSubscriberColumns = `subscribers.id, subscribers.email, subscribe
 	subscribers.confirmed_at, subscribers.already_subscribed_sent_at, subscribers.manage_token,
 	host(subscribers.signup_ip), subscribers.signup_user_agent, subscribers.utm_source,
 	subscribers.utm_medium, subscribers.utm_campaign, subscribers.unsubscribed_at,
-	subscribers.unsubscribe_source, subscribers.created_at, subscribers.updated_at,
+	subscribers.unsubscribe_source, subscribers.soft_bounce_streak, subscribers.last_bounce_at,
+	subscribers.last_delivery_at, subscribers.created_at, subscribers.updated_at,
 	subscribers.synthetic`
 
 // StatusCounts returns the number of subscribers in each status, keyed by

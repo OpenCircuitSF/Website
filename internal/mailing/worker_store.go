@@ -45,10 +45,35 @@ type SettingsReader interface {
 // settingPhysicalAddress and settingDefaultFromName are the settings keys
 // this issue reads. settingMaxSendRate is read once per batch by the
 // worker's rate limiter (worker.go).
+//
+// settingSendHealthMinSample/BouncePct/ComplaintPct (#0124, PRD §6.9) are
+// the circuit breaker's own settings — seeded by migrations/000015
+// alongside physical_address/max_send_rate's precedent. Exported (not just
+// package-private consts) so internal/handlers/settings.go's
+// validSettingValue can validate PATCH /admin/settings against the exact
+// same keys the worker reads, with no risk of the two drifting — the same
+// reason internal/handlers/soft_bounce.go's settingSoftBounceThresholdCount
+// is shared between ses_notifications.go and admin_subscribers.go.
 const (
 	settingPhysicalAddress = "physical_address"
 	settingDefaultFromName = "default_from_name"
 	settingMaxSendRate     = "max_send_rate"
+
+	SettingSendHealthMinSample    = "send_health_min_sample"
+	SettingSendHealthBouncePct    = "send_health_bounce_pct"
+	SettingSendHealthComplaintPct = "send_health_complaint_pct"
+)
+
+// Defaults for the circuit breaker settings above, matching PRD §6.9's
+// table and migrations/000015's seed exactly. Used as the in-code fallback
+// when a row is missing or holds a value that fails to parse — the same
+// degrade-gracefully convention as defaultSoftBounceThresholdCount
+// (internal/handlers/soft_bounce.go) and settingMaxSendRate's own fallback
+// to MAX_SEND_RATE.
+const (
+	DefaultSendHealthMinSample    = 50
+	DefaultSendHealthBouncePct    = 5.0
+	DefaultSendHealthComplaintPct = 0.1
 )
 
 // claimedCampaign is one email_campaigns row plus its targeting, as

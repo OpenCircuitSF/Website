@@ -397,20 +397,37 @@ func (h *SESNotificationsHandler) applyRecipient(ctx context.Context, tx pgx.Tx,
 		return h.applyBounce(ctx, tx, ev, recipient, hasSub, sub, now)
 	case sesnotify.EventTypeComplaint:
 		return h.applyComplaint(ctx, tx, ev, recipient, hasSub, sub, now)
+	case sesnotify.EventTypeDelivery:
+		return h.applyDelivery(ctx, tx, recipient, hasSub, sub, now)
 	case sesnotify.EventTypeRenderingFailure:
 		h.log.Error("ses_notifications: SES reported a rendering failure", "recipient", recipient, "message_id", ev.Mail.MessageID)
 		return nil
 	default:
-		// Delivery, Reject, DeliveryDelay, Send, and anything SES adds
-		// later: already recorded above (InsertTx), nothing else changes.
+		// Reject, DeliveryDelay, Send, and anything SES adds later: already
+		// recorded above (InsertTx), nothing else changes.
 		return nil
+	}
+}
+
+// isSenderFaultBounceSubtype reports whether subtype is one of the three
+// #0109 excludes from ever incrementing the streak (MessageTooLarge,
+// ContentRejected, AttachmentRejected — see sesnotify's doc comment on
+// those constants).
+func isSenderFaultBounceSubtype(subtype string) bool {
+	switch subtype {
+	case sesnotify.BounceSubTypeMessageTooLarge, sesnotify.BounceSubTypeContentRejected, sesnotify.BounceSubTypeAttachmentRejected:
+		return true
+	default:
+		return false
 	}
 }
 
 // applyBounce is #0038 §4's Bounce mapping, extended by #0039's repeated-
 // soft-bounce threshold (the combined Transient/Undetermined arm below),
-// itself widened by #0109 to count Undetermined bounces and exclude the
-// sender-fault Transient subtypes.
+// widened by #0109 to count Undetermined bounces and exclude the
+// sender-fault Transient subtypes, and rebuilt by #0124 to track a
+// consecutive streak (subscribers.soft_bounce_streak) instead of a
+// rolling-window count.
 func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev sesnotify.SESEvent, recipient string, hasSub bool, sub subscribers.Subscriber, now time.Time) error {
 	switch ev.BounceType() {
 	case sesnotify.BounceTypePermanent:
@@ -467,31 +484,62 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 		}
 		return nil
 	case sesnotify.BounceTypeTransient, sesnotify.BounceTypeUndetermined:
-		// #0039, widened by #0109: this bounce's own email_events row is
-		// already recorded above, in this same transaction — so the count
-		// below includes it, and evaluating the threshold is therefore never
-		// one bounce stale (see CountRecentSoftBounces' doc comment).
+		// #0124 replaces #0039/#0109's rolling-window count
+		// (CountRecentSoftBounces, computed by re-querying email_events)
+		// with a CONSECUTIVE STREAK on subscribers.soft_bounce_streak,
+		// incremented here and reset to 0 only by a Delivery event
+		// (applyDelivery below) — see issues/0124.md's Notes for why a
+		// streak, unlike a window, has a notion of "the address recovered".
 		//
-		// #0109 decided Undetermined counts alongside Transient, and #0112
-		// amended PRD §6.7 step 4 to define a soft bounce that way (see
-		// issues/0109.md, issues/0112.md), so both bounce types share this
-		// arm. The count query itself excludes the sender-fault Transient
-		// subtypes (MessageTooLarge, ContentRejected, AttachmentRejected) —
-		// a fault in OUR message is not evidence this address is bad, so a
-		// bounce of one of those subtypes is still recorded but never
-		// contributes to or crosses the threshold, even when this call
-		// happens to be triggered by one.
-		threshold, window := softBounceThreshold(ctx, h.settings, h.log)
-		count, err := h.events.CountRecentSoftBounces(ctx, tx, recipient, now.Add(-window))
-		if err != nil {
-			return fmt.Errorf("counting recent soft bounces for %q: %w", recipient, err)
-		}
-		if count < threshold {
+		// The streak lives on a subscribers row, so — unlike the Permanent
+		// case above and applyComplaint below, both of which suppress
+		// unconditionally because a single event is enough evidence — this
+		// branch requires hasSub: an address with no subscribers row (never
+		// signed up, or already GDPR-erased) has no streak to increment and
+		// nothing here suppresses it. The bounce's own email_events row is
+		// still recorded regardless (InsertTx above, unconditional) — only
+		// the streak side is skipped.
+		if !hasSub {
 			return nil
 		}
 
-		note := fmt.Sprintf("SES repeated soft bounce (%d in the last %d days, threshold %d)",
-			count, int(window.Hours()/24), threshold)
+		// #0109's decision (Undetermined counts alongside Transient; the
+		// sender-fault Transient subtypes MessageTooLarge/ContentRejected/
+		// AttachmentRejected do not — a fault in OUR message is not
+		// evidence this address is bad) moves from a SQL predicate to a Go
+		// guard here, since the streak is no longer computed by
+		// re-querying email_events.
+		if isSenderFaultBounceSubtype(ev.BounceSubType()) {
+			return nil
+		}
+
+		streak, err := h.subs.IncrementSoftBounceStreakTx(ctx, tx, sub.ID, now)
+		if err != nil {
+			return fmt.Errorf("incrementing soft bounce streak for %q: %w", recipient, err)
+		}
+		threshold := softBounceThreshold(ctx, h.settings, h.log)
+
+		// #0126: bounced_soft is written for EVERY soft bounce that reaches
+		// this point — matching PRD §6.11's table verbatim ("SES reported a
+		// Transient / Permanent bounce"), not only the occurrence that
+		// crosses the threshold. This is a deliberate correction made while
+		// implementing #0124 (the prior implementation gated this write on
+		// the same condition as the suppression, which under-reported the
+		// address's history) — see issues/0124.md's Implementation notes.
+		if err := subscribers.RecordEventTx(ctx, tx, subscribers.Event{
+			SubscriberID: &sub.ID,
+			Email:        recipient,
+			Action:       subscribers.ActionBouncedSoft,
+			Detail:       map[string]any{"soft_bounce_streak": streak, "soft_bounce_threshold": threshold},
+		}); err != nil {
+			return fmt.Errorf("recording bounced_soft event for %q: %w", recipient, err)
+		}
+
+		if streak < threshold {
+			return nil
+		}
+
+		note := fmt.Sprintf("SES repeated soft bounce (streak %d, threshold %d)", streak, threshold)
 		// AddTx runs unconditionally once the threshold is crossed, exactly
 		// like the Permanent case above: suppressions are reason-scoped
 		// (#0100), so a coexisting hard_bounce or complaint row is never at
@@ -501,9 +549,6 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 			Email: recipient, Reason: subscribers.SuppressionReasonRepeatedSoftBounce, Note: note,
 		}, now); err != nil {
 			return fmt.Errorf("adding repeated_soft_bounce suppression for %q: %w", recipient, err)
-		}
-		if !hasSub {
-			return nil
 		}
 		// setStatusTx (via MarkBouncedTx) preserves complained against every
 		// non-admin write (CLAUDE.md §9) — the same guarantee the Permanent
@@ -520,27 +565,13 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 				Metadata: map[string]any{
 					"email": recipient, "source": "ses",
 					"bounce_type": ev.BounceType(), "bounce_subtype": ev.BounceSubType(),
-					"reason":                  subscribers.SuppressionReasonRepeatedSoftBounce,
-					"soft_bounce_count":       count,
-					"soft_bounce_window_days": int(window.Hours() / 24),
-					"soft_bounce_threshold":   threshold,
+					"reason":                subscribers.SuppressionReasonRepeatedSoftBounce,
+					"soft_bounce_streak":    streak,
+					"soft_bounce_threshold": threshold,
 				},
 			}); err != nil {
 				return fmt.Errorf("writing repeated-soft-bounce audit row for %q: %w", recipient, err)
 			}
-		}
-		// #0126: bounced_soft — written only when the threshold is crossed
-		// (the same gate MarkBouncedTx above uses), matching PRD §6.11's
-		// "SES reported a Transient/Undetermined bounce" reading at the
-		// point this handler actually acts on it, not on every individual
-		// soft bounce email_events already records regardless.
-		if err := subscribers.RecordEventTx(ctx, tx, subscribers.Event{
-			SubscriberID: &sub.ID,
-			Email:        recipient,
-			Action:       subscribers.ActionBouncedSoft,
-			Detail:       map[string]any{"soft_bounce_count": count, "soft_bounce_threshold": threshold},
-		}); err != nil {
-			return fmt.Errorf("recording bounced_soft event for %q: %w", recipient, err)
 		}
 		return nil
 	default:
@@ -551,10 +582,10 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 		// Transient or Undetermined, excluding the sender-fault Transient
 		// subtypes — that wording lives in the PRD, not just in this
 		// comment. #0109 settled the open question #0038 §8 and #0039 left
-		// behind: Undetermined bounces now share the case above and count
-		// toward the threshold, via a widened partial index
-		// (migrations/000016) — so nothing reaches this arm except a
-		// classification SES hasn't documented yet.
+		// behind: Undetermined bounces now share the case above and
+		// increment the streak (#0124) exactly like Transient — so nothing
+		// reaches this arm except a classification SES hasn't documented
+		// yet.
 		return nil
 	}
 }
@@ -600,6 +631,37 @@ func (h *SESNotificationsHandler) applyComplaint(ctx context.Context, tx pgx.Tx,
 		Action:       subscribers.ActionComplained,
 	}); err != nil {
 		return fmt.Errorf("recording complained event for %q: %w", recipient, err)
+	}
+	return nil
+}
+
+// applyDelivery is #0124's Delivery mapping (PRD §6.9: "A SES Delivery
+// event for the address sets [soft_bounce_streak] back to 0 and stamps
+// last_delivery_at"). Requires hasSub for the same reason applyBounce's
+// Transient/Undetermined arm does — the streak lives on a subscribers row,
+// and an address with none has nothing to reset.
+//
+// Deliberately unconditional otherwise, with no complained/bounced status
+// check: a Delivery report is unambiguous evidence THIS message reached the
+// mailbox, regardless of the subscriber's current status.
+// RecordDeliveryTx never touches status — only soft_bounce_streak and
+// last_delivery_at — so this can never resurrect a complained subscriber
+// (CLAUDE.md §9's rule is about status, and status is untouched here) or
+// silently reverse an admin's or SES's hard-bounce/complaint suppression.
+func (h *SESNotificationsHandler) applyDelivery(ctx context.Context, tx pgx.Tx, recipient string, hasSub bool, sub subscribers.Subscriber, now time.Time) error {
+	if !hasSub {
+		return nil
+	}
+	if err := h.subs.RecordDeliveryTx(ctx, tx, sub.ID, now); err != nil {
+		return fmt.Errorf("recording delivery for %q: %w", recipient, err)
+	}
+	// #0124: delivered — PRD §6.11: "this is what resets the streak."
+	if err := subscribers.RecordEventTx(ctx, tx, subscribers.Event{
+		SubscriberID: &sub.ID,
+		Email:        recipient,
+		Action:       subscribers.ActionDelivered,
+	}); err != nil {
+		return fmt.Errorf("recording delivered event for %q: %w", recipient, err)
 	}
 	return nil
 }

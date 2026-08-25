@@ -103,9 +103,8 @@ func seedEmailSendRow(t *testing.T, pool *pgxpool.Pool, campaignID, subscriberID
 	return id
 }
 
-// seedEmailEventRow inserts one email_events row directly, mirroring
-// admin_subscribers_test.go's TestAdminSubscribers_Get_IncludesSoftBounceCount
-// fixture shape.
+// seedEmailEventRow inserts one email_events row directly, the same
+// direct-INSERT fixture shape used throughout this package's own tests.
 func seedEmailEventRow(t *testing.T, pool *pgxpool.Pool, snsMessageID, sesMessageID, eventType, recipient string) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(),

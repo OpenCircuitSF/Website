@@ -9,6 +9,7 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
@@ -172,13 +173,32 @@ func validSettingValue(key, value string) bool {
 	switch key {
 	case "registrations_enabled":
 		return value == "true" || value == "false"
-	case settingSoftBounceThresholdCount, settingSoftBounceThresholdWindowDays:
-		// #0039: both the repeated-soft-bounce count and its window (days)
-		// must be positive integers — soft_bounce.go's fallback exists for a
-		// row that's missing or already-invalid, not as license to let a
-		// fresh PATCH write garbage through this endpoint.
+	case settingSoftBounceThresholdCount:
+		// #0039 (corrected by #0124: this key now gates the consecutive
+		// streak, not a window count — soft_bounce_threshold_window_days
+		// was retired). Must be a positive integer — soft_bounce.go's
+		// fallback exists for a row that's missing or already-invalid, not
+		// as license to let a fresh PATCH write garbage through this
+		// endpoint.
 		n, err := strconv.Atoi(value)
 		return err == nil && n > 0
+	case mailing.SettingSendHealthMinSample:
+		// #0124: below this many campaign sends, the circuit breaker never
+		// trips (PRD §6.9 — "rates are too noisy to act on"). A positive
+		// integer, same shape as the soft-bounce threshold above.
+		n, err := strconv.Atoi(value)
+		return err == nil && n > 0
+	case mailing.SettingSendHealthBouncePct, mailing.SettingSendHealthComplaintPct:
+		// #0124: the running bounce/complaint rate (percent, 0 < pct <= 100)
+		// that pauses a send in flight. Bounded above at 100 — a rate can
+		// never exceed 100%, and a value above that is definitely an
+		// operator typo (e.g. "50" meant as "5.0"), not a deliberately wide
+		// threshold; bounded below at >0 because a zero or negative
+		// threshold would trip the breaker on the very first sample once
+		// send_health_min_sample sends have gone out, defeating the "advisory
+		// past a real problem" purpose the breaker exists for.
+		f, err := strconv.ParseFloat(value, 64)
+		return err == nil && f > 0 && f <= 100
 	case "max_send_rate":
 		// #0045: the send worker's rate limiter reads this fresh every
 		// batch and falls back to MAX_SEND_RATE's env-level ceiling on

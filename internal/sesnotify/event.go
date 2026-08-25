@@ -46,13 +46,15 @@ const (
 
 // Sender-fault Transient bounceSubType values (#0109): SES's Transient
 // classification also covers faults in OUR message rather than evidence
-// that the recipient's address is bad. Store.CountRecentSoftBounces
-// excludes rows carrying any of these three from the repeated-soft-bounce
-// count — a too-large or rejected message must not suppress a live
-// subscriber. Not referenced by production code (the exclusion lives in
-// SQL, matching migrations/000016's partial index verbatim); exported so
-// tests and callers building fixtures don't have to duplicate the literal
-// strings.
+// that the recipient's address is bad. #0124's applyBounce
+// (internal/handlers/ses_notifications.go) excludes rows carrying any of
+// these three from incrementing subscribers.soft_bounce_streak — a
+// too-large or rejected message must not suppress a live subscriber. The
+// exclusion originally lived in SQL (matching migrations/000016's now-
+// folded partial index verbatim, per #0039/#0109); #0124 moved it to Go
+// alongside the streak increment it now guards, since the streak is no
+// longer computed by re-querying this table. Exported so tests and callers
+// building fixtures don't have to duplicate the literal strings.
 const (
 	BounceSubTypeMessageTooLarge    = "MessageTooLarge"
 	BounceSubTypeContentRejected    = "ContentRejected"

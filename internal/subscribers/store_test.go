@@ -1317,7 +1317,8 @@ func coldConfirmationSubscriber(t *testing.T, pool *pgxpool.Pool, now time.Time)
 		&sub.ID, &sub.Email, &sub.Status, &sub.ConfirmToken, &sub.ConfirmSentAt,
 		&sub.ConfirmExpiresAt, &sub.ConfirmedAt, &sub.AlreadySubscribedSentAt, &sub.ManageToken,
 		&sub.SignupIP, &sub.SignupUserAgent, &sub.UTMSource, &sub.UTMMedium, &sub.UTMCampaign,
-		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.CreatedAt, &sub.UpdatedAt, &sub.Synthetic,
+		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.SoftBounceStreak, &sub.LastBounceAt,
+		&sub.LastDeliveryAt, &sub.CreatedAt, &sub.UpdatedAt, &sub.Synthetic,
 	)
 	if err != nil {
 		t.Fatalf("seed cold-confirmation subscriber: %v", err)

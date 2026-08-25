@@ -334,5 +334,15 @@ func (s *SuppressionStore) Remove(ctx context.Context, email, reason string) (Su
 	}); err != nil {
 		return sup, fmt.Errorf("subscribers: recording unsuppressed event for %q: %w", email, err)
 	}
+
+	// #0124 criterion: "Removing a suppression resets the streak to 0 — a
+	// re-enabled address gets a fresh runway, not one bounce from
+	// re-suppression." Best-effort against the pool like the event write
+	// just above (the DELETE already committed either way) and a no-op if
+	// no subscribers row exists for this address — see
+	// ResetSoftBounceStreakByEmail's own doc comment.
+	if err := resetSoftBounceStreakByEmail(ctx, s.pool, sup.Email, time.Now()); err != nil {
+		return sup, fmt.Errorf("subscribers: resetting soft bounce streak for %q: %w", email, err)
+	}
 	return sup, nil
 }

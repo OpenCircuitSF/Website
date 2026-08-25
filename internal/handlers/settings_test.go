@@ -105,10 +105,10 @@ var settingsSeedStmtRe = regexp.MustCompile(`(?ims)^[ \t]*INSERT INTO settings\b
 // statement out of every *.up.sql file in settingsMigrationsDir, in
 // filename order, and returns them verbatim.
 //
-// #0132: resetSettings used to restate the migration seed as six
-// hand-typed INSERTs (registrations_enabled from 000004, physical_address
-// from 000008, the two soft_bounce_threshold_* rows from 000015,
-// max_send_rate and default_from_name from 000018) — a second,
+// #0132: resetSettings used to restate the migration seed as hand-typed
+// INSERTs (registrations_enabled from 000004, physical_address from 000008,
+// soft_bounce_threshold_count and #0124's three send_health_* rows from
+// 000015, max_send_rate and default_from_name from 000018) — a second,
 // hand-maintained copy of what migrations/ already seeds. #0130 had to fix
 // that copy once already when it silently dropped two of the six; the
 // duplication itself was still there and would silently drop the *next*
@@ -580,10 +580,11 @@ func TestAdminSettings_PatchUnknownKey(t *testing.T) {
 	}
 }
 
-// TestAdminSettings_SoftBounceThresholdRoundTrip is #0039's "both numbers
-// must be configurable" acceptance criterion: an admin can PATCH either
-// soft-bounce setting through the same envelope as any other setting, and
-// the new value round-trips through the response and a fresh DB read.
+// TestAdminSettings_SoftBounceThresholdRoundTrip is #0039's "the threshold
+// must be configurable" acceptance criterion (#0124 retired the companion
+// window setting — see that test below): an admin can PATCH the streak
+// threshold through the same envelope as any other setting, and the new
+// value round-trips through the response and a fresh DB read.
 func TestAdminSettings_SoftBounceThresholdRoundTrip(t *testing.T) {
 	pool := settingsTestPool(t)
 	store := auth.NewStore(pool)
@@ -596,9 +597,6 @@ func TestAdminSettings_SoftBounceThresholdRoundTrip(t *testing.T) {
 	// Seeded by migrations/000015.
 	if got := settingValue(t, pool, "soft_bounce_threshold_count"); got != "5" {
 		t.Fatalf("seeded soft_bounce_threshold_count = %q, want 5", got)
-	}
-	if got := settingValue(t, pool, "soft_bounce_threshold_window_days"); got != "30" {
-		t.Fatalf("seeded soft_bounce_threshold_window_days = %q, want 30", got)
 	}
 
 	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/admin/settings",
@@ -625,10 +623,48 @@ func TestAdminSettings_SoftBounceThresholdRoundTrip(t *testing.T) {
 	}
 }
 
-// TestAdminSettings_SoftBounceThresholdRejectsNonPositiveValue asserts both
-// soft-bounce settings keys reject "0", a negative number, and a
-// non-numeric value with 400, leaving the seeded row unchanged — the same
-// shape guard registrations_enabled already gets for its own value space.
+// TestAdminSettings_SoftBounceThresholdWindowDaysRetired is #0124's
+// regression guard for the retirement itself: soft_bounce_threshold_count's
+// old companion window setting no longer exists as a row, so PATCHing it
+// must be rejected the same way any other unknown key is (400,
+// ErrSettingNotFound) — not silently accepted into a row that would then
+// exist with no code ever reading it again.
+func TestAdminSettings_SoftBounceThresholdWindowDaysRetired(t *testing.T) {
+	pool := settingsTestPool(t)
+	store := auth.NewStore(pool)
+	srv := httptest.NewServer(adminMux(store))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin@example.com")
+	seedSession(t, pool, admin, "admin-token")
+
+	var exists bool
+	if err := pool.QueryRow(context.Background(),
+		`SELECT EXISTS (SELECT 1 FROM settings WHERE key = 'soft_bounce_threshold_window_days')`,
+	).Scan(&exists); err != nil {
+		t.Fatalf("checking for a retired row: %v", err)
+	}
+	if exists {
+		t.Fatal("soft_bounce_threshold_window_days row still exists, want retired by #0124")
+	}
+
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/admin/settings",
+		jsonBody(`{"key":"soft_bounce_threshold_window_days","value":"30"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(withCookie(req, "admin-token"))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (unknown setting key)", resp.StatusCode)
+	}
+}
+
+// TestAdminSettings_SoftBounceThresholdRejectsNonPositiveValue asserts the
+// streak threshold key rejects "0", a negative number, and a non-numeric
+// value with 400, leaving the seeded row unchanged — the same shape guard
+// registrations_enabled already gets for its own value space.
 func TestAdminSettings_SoftBounceThresholdRejectsNonPositiveValue(t *testing.T) {
 	pool := settingsTestPool(t)
 	store := auth.NewStore(pool)
@@ -645,9 +681,6 @@ func TestAdminSettings_SoftBounceThresholdRejectsNonPositiveValue(t *testing.T) 
 		{"soft_bounce_threshold_count", "0"},
 		{"soft_bounce_threshold_count", "-1"},
 		{"soft_bounce_threshold_count", "five"},
-		{"soft_bounce_threshold_window_days", "0"},
-		{"soft_bounce_threshold_window_days", "-30"},
-		{"soft_bounce_threshold_window_days", "thirty"},
 	} {
 		req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/admin/settings",
 			jsonBody(`{"key":"`+tc.key+`","value":"`+tc.value+`"}`))
@@ -665,8 +698,95 @@ func TestAdminSettings_SoftBounceThresholdRejectsNonPositiveValue(t *testing.T) 
 	if got := settingValue(t, pool, "soft_bounce_threshold_count"); got != "5" {
 		t.Errorf("soft_bounce_threshold_count = %q after rejected PATCHes, want unchanged 5", got)
 	}
-	if got := settingValue(t, pool, "soft_bounce_threshold_window_days"); got != "30" {
-		t.Errorf("soft_bounce_threshold_window_days = %q after rejected PATCHes, want unchanged 30", got)
+}
+
+// TestAdminSettings_SendHealthSettingsRoundTrip is #0124's "all three
+// circuit-breaker settings are admin-configurable" criterion: each seeded
+// by migrations/000015, each PATCH-able, each round-tripping through the
+// response and a fresh DB read.
+func TestAdminSettings_SendHealthSettingsRoundTrip(t *testing.T) {
+	pool := settingsTestPool(t)
+	store := auth.NewStore(pool)
+	srv := httptest.NewServer(adminMux(store))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin@example.com")
+	seedSession(t, pool, admin, "admin-token")
+
+	for _, tc := range []struct {
+		key, seeded, newValue string
+	}{
+		{"send_health_min_sample", "50", "100"},
+		{"send_health_bounce_pct", "5.0", "7.5"},
+		{"send_health_complaint_pct", "0.1", "0.2"},
+	} {
+		if got := settingValue(t, pool, tc.key); got != tc.seeded {
+			t.Fatalf("seeded %s = %q, want %q", tc.key, got, tc.seeded)
+		}
+
+		req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/admin/settings",
+			jsonBody(`{"key":"`+tc.key+`","value":"`+tc.newValue+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := srv.Client().Do(withCookie(req, "admin-token"))
+		if err != nil {
+			t.Fatalf("request(%s): %v", tc.key, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("read body(%s): %v", tc.key, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200; body: %s", tc.key, resp.StatusCode, body)
+		}
+		settings := decodeSettings(t, body)
+		if settings[tc.key] != tc.newValue {
+			t.Errorf("response %s = %q, want %q", tc.key, settings[tc.key], tc.newValue)
+		}
+		if got := settingValue(t, pool, tc.key); got != tc.newValue {
+			t.Errorf("DB %s = %q, want %q", tc.key, got, tc.newValue)
+		}
+	}
+}
+
+// TestAdminSettings_SendHealthSettingsRejectInvalidValues is the boundary
+// guard for #0124's three settings: send_health_min_sample must be a
+// positive integer; the two percentages must be in (0, 100].
+func TestAdminSettings_SendHealthSettingsRejectInvalidValues(t *testing.T) {
+	pool := settingsTestPool(t)
+	store := auth.NewStore(pool)
+	srv := httptest.NewServer(adminMux(store))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin@example.com")
+	seedSession(t, pool, admin, "admin-token")
+
+	for _, tc := range []struct {
+		key   string
+		value string
+	}{
+		{"send_health_min_sample", "0"},
+		{"send_health_min_sample", "-1"},
+		{"send_health_min_sample", "fifty"},
+		{"send_health_bounce_pct", "0"},
+		{"send_health_bounce_pct", "-1"},
+		{"send_health_bounce_pct", "100.1"},
+		{"send_health_bounce_pct", "not-a-number"},
+		{"send_health_complaint_pct", "0"},
+		{"send_health_complaint_pct", "-0.1"},
+		{"send_health_complaint_pct", "101"},
+	} {
+		req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/admin/settings",
+			jsonBody(`{"key":"`+tc.key+`","value":"`+tc.value+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := srv.Client().Do(withCookie(req, "admin-token"))
+		if err != nil {
+			t.Fatalf("request(%s=%s): %v", tc.key, tc.value, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s=%q status = %d, want 400", tc.key, tc.value, resp.StatusCode)
+		}
 	}
 }
 

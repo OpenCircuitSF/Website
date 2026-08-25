@@ -82,6 +82,11 @@ func TestSubscriberEventActions_EveryConstantHasCallSiteOrOwner(t *testing.T) {
 		ActionSuppressed:       true,
 		ActionUnsuppressed:     true,
 		ActionAdminEdited:      true,
+		// ActionDelivered (#0124): written by
+		// internal/handlers.SESNotificationsHandler's Delivery-event branch
+		// — see ses_notifications.go's applyRecipient, which now dispatches
+		// EventTypeDelivery to applyDelivery.
+		ActionDelivered: true,
 		// ActionWelcomeSent (#0127): written by
 		// internal/mailing.OutboxWorker.sendOne's MarkSent branch, the
 		// same "written when the message actually LEAVES the queue"
@@ -95,7 +100,6 @@ func TestSubscriberEventActions_EveryConstantHasCallSiteOrOwner(t *testing.T) {
 	// issue is responsible for adding one. See events.go's package doc
 	// comment and #0126's plan §6 table.
 	ownedByLaterIssue := map[Action]string{
-		ActionDelivered:           "#0124",
 		ActionConfirmationExpired: "#0128",
 		ActionImported:            "#0125",
 		ActionImportRevoked:       "#0125",

@@ -200,13 +200,15 @@ func servePostgres(cfg *config.Config) error {
 		suppressionsStore, auditLogger, cfg.BaseURL, slog.Default(),
 	)
 
-	// sesEventsStore (internal/sesnotify, #0038) is constructed here, ahead of
-	// sesNotifyH below, because adminSubscribersH (#0039) also needs it — the
-	// admin subscriber detail view's soft-bounce count reads through the same
-	// pool-only CountRecentSoftBouncesPool method the SES ingestion
-	// handler's transaction-scoped CountRecentSoftBounces mirrors (renamed
-	// from …TransientBounces by #0109, which widened the count to include
-	// Undetermined bounces).
+	// sesEventsStore (internal/sesnotify, #0038) is constructed here, ahead
+	// of sesNotifyH below. #0124 retired the windowed soft-bounce count
+	// (CountRecentSoftBounces/…Pool) that used to give adminSubscribersH a
+	// second reason to hold this store — the admin detail view's streak now
+	// reads straight off the subscribers row (subscribers.Store, already
+	// wired below) with no query through sesnotify at all. sesEventsStore
+	// is still constructed here, ahead of sesNotifyH, because #0124's new
+	// admin deliverability screen needs it too — see adminDeliverabilityH
+	// below.
 	sesEventsStore := sesnotify.NewStore(pool)
 
 	// Admin-only interest taxonomy CRUD (#0024, PRD §5.2/§6.1): reuses the
@@ -255,7 +257,7 @@ func servePostgres(cfg *config.Config) error {
 	// lets its Create dispatch through the exact same newSignup/existingSignup
 	// path #0026's public endpoint uses — see
 	// internal/handlers/admin_subscribers.go's package doc comment.
-	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, subscribeH, suppressionsStore, sesEventsStore, store, auditLogger)
+	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, subscribeH, suppressionsStore, store, auditLogger)
 
 	// Admin pending-subscriber screen (#0128, PRD §5.2/§6.3): who signed up
 	// but never confirmed, and a per-subscriber resend — see

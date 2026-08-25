@@ -140,61 +140,43 @@ func (s *Store) InsertTx(ctx context.Context, q querier, in NewEmailEvent) (id i
 	return id, true, nil
 }
 
-// CountRecentSoftBounces counts the email_events rows that count toward
-// #0039's repeated-soft-bounce threshold for recipient with received_at >=
-// since, run inside q. #0039's applyBounce
-// (internal/handlers/ses_notifications.go) calls this INSIDE the same
-// transaction that just inserted the current bounce's own row, so that row
-// is already counted — evaluating this from the pool instead would be one
-// bounce stale, since the pool cannot see the transaction's own
-// uncommitted insert (see FindByEmailTx's doc comment in
-// internal/subscribers/store.go for the identical precedent this copies).
+// ByRecipient returns every email_events row for one normalized recipient
+// address, newest first — #0124's GET /admin/deliverability/{email}: the
+// full per-address bounce/complaint/delivery history an admin reads. Served
+// by idx_email_events_recipient_time (migrations/000014, edited directly by
+// #0124 — see that migration's comment).
 //
-// Named CountRecentSoftBounces, not …TransientBounces (its #0039 name),
-// because #0109 widened what counts and #0112 amended PRD §6.7 step 4 to
-// define it: a soft bounce is bounce_type Transient or Undetermined,
-// except a Transient bounce whose bounce_subtype is one of the
-// sender-fault subtypes (MessageTooLarge, ContentRejected,
-// AttachmentRejected) — those describe a fault in OUR message, not
-// evidence the recipient's address is bad, and must never suppress a live
-// subscriber. See issues/0109.md and issues/0112.md for the reasoning
-// behind both decisions.
-//
-// Windowed on received_at (NOT the nullable event_at) and its WHERE clause
-// is written to match migrations/000016's idx_email_events_soft_bounce
-// partial index verbatim, so the query is served by an index scan rather
-// than a sequential one (confirmed by EXPLAIN — see issues/0109.md
-// ## Verification).
-func (s *Store) CountRecentSoftBounces(ctx context.Context, q querier, recipient string, since time.Time) (int, error) {
-	var count int
-	err := q.QueryRow(ctx,
-		`SELECT COUNT(*) FROM email_events
-		 WHERE event_type = 'Bounce'
-		   AND bounce_type IN ('Transient', 'Undetermined')
-		   AND (bounce_subtype IS NULL
-		        OR bounce_subtype NOT IN ('MessageTooLarge', 'ContentRejected', 'AttachmentRejected'))
-		   AND recipient = lower(trim($1))
-		   AND received_at >= $2`,
-		recipient, since,
-	).Scan(&count)
+// This replaces #0039/#0109's CountRecentSoftBounces(Pool), which counted
+// rows within a rolling window to decide whether to suppress. #0124 retires
+// that rule (the suppression decision is now a consecutive streak on
+// subscribers.soft_bounce_streak, counted incrementally rather than
+// re-queried from this table — see ses_notifications.go's applyBounce) —
+// this table's only remaining job is the immutable history behind that
+// decision, which is exactly what ByRecipient reads.
+func (s *Store) ByRecipient(ctx context.Context, recipient string) ([]EmailEvent, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+emailEventColumns+` FROM email_events
+		  WHERE recipient = lower(trim($1))
+		  ORDER BY received_at DESC, id DESC`,
+		recipient,
+	)
 	if err != nil {
-		return 0, fmt.Errorf("sesnotify: counting recent soft bounces for %q: %w", recipient, err)
+		return nil, fmt.Errorf("sesnotify: listing email events for recipient %q: %w", recipient, err)
 	}
-	return count, nil
-}
+	defer rows.Close()
 
-// CountRecentSoftBouncesPool is CountRecentSoftBounces's pool-only twin, for
-// a read-only caller with no open transaction to join — the admin
-// subscriber detail view (internal/handlers/admin_subscribers.go, #0039's
-// "admin can see the current soft-bounce count" criterion), which has no
-// staleness concern to guard against (it's a point-in-time read, not part of
-// a write's atomicity). Taking no querier parameter makes it usable behind a
-// genuine narrow interface in another package (mirrors ByMessageID below) —
-// unlike CountRecentSoftBounces itself, whose querier parameter is this
-// package's unexported type (see ses_notifications.go's package doc comment
-// on why the Tx-taking stores are held concretely instead).
-func (s *Store) CountRecentSoftBouncesPool(ctx context.Context, recipient string, since time.Time) (int, error) {
-	return s.CountRecentSoftBounces(ctx, s.pool, recipient, since)
+	var out []EmailEvent
+	for rows.Next() {
+		ev, err := scanEmailEvent(rows)
+		if err != nil {
+			return nil, fmt.Errorf("sesnotify: scanning email event row: %w", err)
+		}
+		out = append(out, ev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sesnotify: listing email events for recipient %q: %w", recipient, err)
+	}
+	return out, nil
 }
 
 // ByMessageID returns every row recorded for one SNS MessageId, newest

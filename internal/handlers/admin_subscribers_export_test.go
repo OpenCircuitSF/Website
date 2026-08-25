@@ -17,7 +17,6 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
-	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
@@ -478,8 +477,7 @@ func adminSubscribersExportDisconnectMux(pool *pgxpool.Pool) http.Handler {
 	subStore := subscribers.NewStore(pool)
 	interestsStore := interests.NewStore(pool)
 	suppressionsStore := subscribers.NewSuppressionStore(pool)
-	sesEventsStore := sesnotify.NewStore(pool)
-	h := NewAdminSubscribersHandler(subStore, interestsStore, nil, suppressionsStore, sesEventsStore, authStore, audit.New(pool))
+	h := NewAdminSubscribersHandler(subStore, interestsStore, nil, suppressionsStore, authStore, audit.New(pool))
 	requireSession := middleware.RequireSession(authStore)
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))

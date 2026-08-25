@@ -107,18 +107,6 @@ type adminSuppressionWriter interface {
 	ListByEmail(ctx context.Context, email string) ([]subscribers.Suppression, error)
 }
 
-// softBounceCounter is the narrow read dependency #0039's "admin can see the
-// current soft-bounce count on the subscriber detail screen" criterion
-// needs. *sesnotify.Store satisfies it via CountRecentSoftBouncesPool (#0109
-// renamed this from CountRecentTransientBouncesPool when the count widened
-// to include Undetermined bounces) — see that method's doc comment for why
-// it, not the querier-taking CountRecentSoftBounces
-// ses_notifications.go's transaction uses, is the one usable behind a
-// genuine narrow interface here.
-type softBounceCounter interface {
-	CountRecentSoftBouncesPool(ctx context.Context, recipient string, since time.Time) (int, error)
-}
-
 // AdminSubscribersHandler serves the admin-only subscriber routes (PRD
 // §5.2; #0032):
 //
@@ -148,13 +136,12 @@ type AdminSubscribersHandler struct {
 	// suppressions-table write/removal when nil rather than dereferencing it,
 	// matching the rest of this handler's nil-tolerance.
 	suppressions adminSuppressionWriter
-	// bounces backs #0039's soft-bounce count on the detail view. May be
-	// nil (same STORAGE=json gap as manualAdd/suppressions); Get skips the
-	// count computation when nil rather than dereferencing it.
-	bounces softBounceCounter
-	// settings resolves #0039's threshold/window pair for the count above.
-	// May be nil; treated the same as a nil bounces (both must be present
-	// to compute the count, since the window comes from settings).
+	// settings resolves #0039's soft_bounce_threshold_count for the
+	// streak/threshold pair Get renders (#0124: SoftBounceStreak itself is
+	// always populated straight off the subscribers row — see
+	// toSubscriberView — so this is only needed for the threshold half). May
+	// be nil (STORAGE=json dev mode); Get omits SoftBounceThreshold when nil
+	// rather than dereferencing it.
 	settings softBounceSettingsReader
 	// auditor records subscriber.suppressed / .complaint_cleared /
 	// .manual_add. May be nil in tests that don't assert audit rows.
@@ -168,12 +155,13 @@ type AdminSubscribersHandler struct {
 // manualAdd disables POST /admin/subscribers (Create returns 503); a nil
 // suppressions skips the suppressions-table write/removal in Suppress/
 // ClearComplaint (they still perform their subscribers-table effect); a nil
-// bounces or settings disables #0039's soft-bounce count on the detail view
-// (the JSON fields are simply omitted); a nil auditor disables audit writes.
-func NewAdminSubscribersHandler(store adminSubscriberStore, il adminInterestByIDReader, manualAdd *SubscribeHandler, suppressions adminSuppressionWriter, bounces softBounceCounter, settings softBounceSettingsReader, auditor *audit.Logger) *AdminSubscribersHandler {
+// settings disables #0124's SoftBounceThreshold field on the detail view
+// (SoftBounceStreak itself is always populated regardless — see
+// toSubscriberView); a nil auditor disables audit writes.
+func NewAdminSubscribersHandler(store adminSubscriberStore, il adminInterestByIDReader, manualAdd *SubscribeHandler, suppressions adminSuppressionWriter, settings softBounceSettingsReader, auditor *audit.Logger) *AdminSubscribersHandler {
 	return &AdminSubscribersHandler{
 		store: store, interests: il, manualAdd: manualAdd, suppressions: suppressions,
-		bounces: bounces, settings: settings, auditor: auditor, now: time.Now,
+		settings: settings, auditor: auditor, now: time.Now,
 	}
 }
 
@@ -207,35 +195,36 @@ type interestRef struct {
 // ingestion into email_events) lands — see this issue's Notes: "build the
 // section now and let it fill in."
 //
-// SoftBounceCount/SoftBounceThreshold/SoftBounceWindowDays are #0039's
-// "admin can see the current soft-bounce count" criterion (widened by
-// #0109): the count of Transient- and Undetermined-bounce email_events rows
-// for this address within the currently configured window, excluding the
-// sender-fault Transient subtypes (MessageTooLarge, ContentRejected,
-// AttachmentRejected), plus the threshold/window themselves so the admin
-// screen can show "N of THRESHOLD in the last WINDOW days" rather than a
-// bare number. Like Interests, populated by Get only (List omits them to
-// avoid a query per row); all three are nil together when the handler was
-// constructed with a nil bounces/settings dependency (STORAGE=json dev mode).
+// SoftBounceStreak/SoftBounceThreshold are #0039's "admin can see the
+// current soft-bounce count" criterion, corrected by #0124 to describe the
+// STREAK, not a windowed count: #0039/#0109's rolling-window rule
+// (soft_bounce_count/soft_bounce_window_days) is retired — see
+// issues/0124.md's Notes and PRD §6.9. SoftBounceStreak is
+// subscribers.soft_bounce_streak read directly off the row (no query, no
+// dependency — it's always populated, on List as well as Get, unlike the
+// fields it replaces). SoftBounceThreshold is still populated by Get only,
+// since resolving it needs a settings read (softBounceSettingsReader) that
+// List has no reason to pay for every row.
 type subscriberView struct {
-	ID                   int64                 `json:"id"`
-	Email                string                `json:"email"`
-	Status               string                `json:"status"`
-	SignupIP             *string               `json:"signup_ip,omitempty"`
-	SignupUserAgent      *string               `json:"signup_user_agent,omitempty"`
-	UTMSource            *string               `json:"utm_source,omitempty"`
-	UTMMedium            *string               `json:"utm_medium,omitempty"`
-	UTMCampaign          *string               `json:"utm_campaign,omitempty"`
-	CreatedAt            string                `json:"created_at"` // signup timestamp
-	ConfirmedAt          *string               `json:"confirmed_at,omitempty"`
-	UnsubscribedAt       *string               `json:"unsubscribed_at,omitempty"`
-	UnsubscribeSource    *string               `json:"unsubscribe_source,omitempty"`
-	Interests            []interestRef         `json:"interests,omitempty"`               // populated by Get only
-	EmailEvents          []any                 `json:"email_events"`                      // always [] until #0038
-	SoftBounceCount      *int                  `json:"soft_bounce_count,omitempty"`       // populated by Get only
-	SoftBounceThreshold  *int                  `json:"soft_bounce_threshold,omitempty"`   // populated by Get only
-	SoftBounceWindowDays *int                  `json:"soft_bounce_window_days,omitempty"` // populated by Get only
-	Events               []subscriberEventView `json:"events,omitempty"`                  // populated by Get only (#0126)
+	ID                  int64                 `json:"id"`
+	Email               string                `json:"email"`
+	Status              string                `json:"status"`
+	SignupIP            *string               `json:"signup_ip,omitempty"`
+	SignupUserAgent     *string               `json:"signup_user_agent,omitempty"`
+	UTMSource           *string               `json:"utm_source,omitempty"`
+	UTMMedium           *string               `json:"utm_medium,omitempty"`
+	UTMCampaign         *string               `json:"utm_campaign,omitempty"`
+	CreatedAt           string                `json:"created_at"` // signup timestamp
+	ConfirmedAt         *string               `json:"confirmed_at,omitempty"`
+	UnsubscribedAt      *string               `json:"unsubscribed_at,omitempty"`
+	UnsubscribeSource   *string               `json:"unsubscribe_source,omitempty"`
+	Interests           []interestRef         `json:"interests,omitempty"`             // populated by Get only
+	EmailEvents         []any                 `json:"email_events"`                    // always [] until #0038
+	SoftBounceStreak    int                   `json:"soft_bounce_streak"`              // always populated (#0124)
+	LastBounceAt        *string               `json:"last_bounce_at,omitempty"`        // always populated (#0124)
+	LastDeliveryAt      *string               `json:"last_delivery_at,omitempty"`      // always populated (#0124)
+	SoftBounceThreshold *int                  `json:"soft_bounce_threshold,omitempty"` // populated by Get only
+	Events              []subscriberEventView `json:"events,omitempty"`                // populated by Get only (#0126)
 }
 
 // subscriberEventView is one subscriber_events row (#0126, PRD §6.11),
@@ -272,11 +261,14 @@ func toSubscriberView(sub subscribers.Subscriber, refs []interestRef) subscriber
 		UnsubscribeSource: sub.UnsubscribeSource,
 		Interests:         refs,
 		EmailEvents:       []any{},
+		SoftBounceStreak:  sub.SoftBounceStreak,
+		LastBounceAt:      formatTimePtr(sub.LastBounceAt),
+		LastDeliveryAt:    formatTimePtr(sub.LastDeliveryAt),
 	}
 }
 
-// intPtr is a small helper so Get can set SoftBounceCount/Threshold/
-// WindowDays from local ints without a named variable per field.
+// intPtr is a small helper so Get can set SoftBounceThreshold from a local
+// int without a named variable.
 func intPtr(n int) *int { return &n }
 
 // statusCountsView is the {pending, active, unsubscribed, bounced,
@@ -448,21 +440,15 @@ func (h *AdminSubscribersHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	view := toSubscriberView(sub, refs)
 
-	// #0039: the current soft-bounce count, alongside the threshold/window it
-	// is being measured against. Both dependencies must be present — the
-	// window comes from settings, so a nil settings reader would make the
-	// count meaningless — matching this handler's existing nil-tolerance for
-	// STORAGE=json dev mode (manualAdd, suppressions).
-	if h.bounces != nil && h.settings != nil {
-		threshold, window := softBounceThreshold(r.Context(), h.settings, nil)
-		count, err := h.bounces.CountRecentSoftBouncesPool(r.Context(), sub.Email, h.now().Add(-window))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
-		}
-		view.SoftBounceCount = intPtr(count)
+	// #0124: the threshold SoftBounceStreak (always populated — see
+	// toSubscriberView) is being measured against. Unlike the retired
+	// windowed count, no query is needed for the streak itself; only the
+	// threshold needs a settings read, so this is the sole remaining
+	// dependency-gated piece of the detail view. Matches this handler's
+	// existing nil-tolerance for STORAGE=json dev mode.
+	if h.settings != nil {
+		threshold := softBounceThreshold(r.Context(), h.settings, nil)
 		view.SoftBounceThreshold = intPtr(threshold)
-		view.SoftBounceWindowDays = intPtr(int(window.Hours() / 24))
 	}
 
 	// #0126: the address's activity log, newest first — #0032's own

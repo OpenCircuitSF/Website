@@ -37,11 +37,12 @@
 //
 // # The closed action set cannot all be written by #0126 alone
 //
-// PRD §6.11's table lists 22 actions. Roughly nine have no point of
-// occurrence anywhere in this tree yet — delivered needs #0124's SES
-// delivery-event handler, confirmation_expired needs #0128's expiry sweep,
-// welcome_sent needs #0127, imported/import_revoked/invite_* need #0125/
-// #0129. This package defines the WHOLE closed set now (that is the
+// PRD §6.11's table lists 22 actions. A handful still have no point of
+// occurrence anywhere in this tree — confirmation_expired needs #0128's
+// expiry sweep, imported/import_revoked/invite_* need #0125/#0129.
+// (delivered was in this list too, until #0124's SES delivery-event handler
+// gave it one — see ses_notifications.go's applyDelivery.) This package
+// defines the WHOLE closed set now (that is the
 // contract those later issues code against) but only WRITES the actions
 // whose call site already exists — see TestSubscriberEventActions_
 // EveryConstantHasCallSiteOrOwner, which maps every constant to either a
@@ -85,7 +86,7 @@ const (
 	ActionBouncedSoft         Action = "bounced_soft"
 	ActionBouncedHard         Action = "bounced_hard"
 	ActionComplained          Action = "complained"
-	ActionDelivered           Action = "delivered" // owner: #0124
+	ActionDelivered           Action = "delivered" // #0124: written by handlers.applyDelivery
 	ActionSuppressed          Action = "suppressed"
 	ActionUnsuppressed        Action = "unsuppressed"
 	ActionAdminEdited         Action = "admin_edited"

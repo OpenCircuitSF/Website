@@ -24,7 +24,6 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
-	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
@@ -130,8 +129,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// than actually dispatching a signup, which is still proof enough that
 	// RequireAdmin let the request through (neither 401 nor 403); see the
 	// "admin session" case's comment.
-	sesEventsStore := sesnotify.NewStore(pool)
-	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, nil, nil, sesEventsStore, store, auditLogger)
+	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, nil, nil, store, auditLogger)
 	// #0128: exercised the same way as adminSubscribersH above.
 	adminPendingH := handlers.NewAdminPendingHandler(subscribersStore, outbox.NewStore(pool), auditLogger)
 	// #0100: exercised the same way as adminSubscribersH above.
