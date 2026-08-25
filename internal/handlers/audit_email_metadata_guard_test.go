@@ -52,6 +52,19 @@ import (
 // be hiding an email the guard would otherwise miss entirely. Widening what
 // this guard can resolve should always be a deliberate, reviewed change to
 // this file, not a byproduct of the guard giving up quietly.
+//
+// One narrow, checked exception to that blanket rule: a composite-literal
+// key that is not itself a string literal (an identifier constant, an
+// integer, any other expression) is silently SKIPPED by
+// compositeLitStringKeys rather than flagged unresolved — #0237's second
+// phase-3 review ran this directly (map[string]any{emailKeyConst: addr})
+// and got hasEmail=false, unresolved="", not a failure. Every Metadata key
+// literal actually written in this tree today is a plain double-quoted
+// string (verified while writing this guard, and again by the census
+// behind the token widening above), so this exception is unencountered in
+// practice, not exercised — narrowing the promise to say so is the fix
+// here, since no real site needs the code changed and doing so would add
+// complexity for a shape nothing in the tree uses.
 
 // auditEmailMetadataScanRoots is deliberately narrower than
 // citedTestScanRoots (#0196/#0220's comment-citation guards): the privacy
@@ -370,11 +383,47 @@ func compositeLitStringKeys(cl *ast.CompositeLit) []string {
 // value this guard cannot read statically, so the conservative, correct
 // answer is to always treat a "*query*" key as a possible carrier rather
 // than guess at its content.
+//
+// "to", "mail", "contact" were added after #0237's SECOND phase-3 review
+// (the one after the widening above) demonstrated a residual hole by
+// injecting eight key shapes into a real handler's audit.Entry: "to",
+// "mail", "contact", "user_mail", and "recipientEmail" all passed the
+// four-token set above silently, and "to" is not hypothetical —
+// internal/handlers/admin_campaign_preview.go:419 writes
+// "to": actor.Email TODAY, and the guard's own ## Gotchas note had wrongly
+// claimed that site already carried two suspect keys when, before this
+// change, it carried exactly one ("recipient_email"; "to" did not match).
+// Dumped every Metadata key literal actually used in internal/ and cmd/
+// (86 distinct keys, the same census the review ran) before adding
+// anything: no key in the tree contains "to", "mail", or "contact" as an
+// underscore-delimited token today (the closest near-miss, "topic_arn",
+// splits to "topic"/"arn" — neither collides), so all three are free:
+// "to" newly matches the one real "to" key above (already pinned via
+// "recipient_email", so no NEW site to add to
+// auditEmailMetadataKnownSites — see TestAuditEntryEmailMetadataMatchesKnownSites),
+// and "mail"/"contact" match nothing in the tree today but close the
+// "user_mail"/"contact"-shaped gap the review named for free.
+//
+// "recipientEmail" (camelCase) is deliberately NOT covered. This split is
+// underscore-only, so a camelCase key is invisible to it by construction —
+// closing that gap would need a second, camelCase-aware tokenizer, not a
+// one-line token addition. Every one of the 86 real Metadata keys in this
+// tree is snake_case or a single lowercase word; none is camelCase. Given
+// zero real benefit today against genuine added complexity (and a second
+// place for that complexity to itself go stale), the deliberate choice is
+// to leave this gap and say so here, rather than either silently ignoring
+// it or building an underused code path. If a camelCase Metadata key is
+// ever added to this tree, this guard will NOT catch it under a suspect
+// token unless it is also snake_case, or this comment (and the tokenizer)
+// are revisited.
 var auditEmailMetadataSuspectKeyTokens = map[string]bool{
 	"email":     true,
 	"address":   true,
 	"recipient": true,
 	"query":     true,
+	"to":        true,
+	"mail":      true,
+	"contact":   true,
 }
 
 // metadataKeyIsSuspectedEmailCarrier reports whether key, split on "_",
@@ -630,6 +679,86 @@ func recordSomething() {
 	}
 	if !sites[0].hasIP {
 		t.Fatal("expected hasIP=true: this fixture sets an IP field")
+	}
+}
+
+// TestAuditEmailMetadataGuardCatchesWidenedSuspectTokens is the committed
+// regression test #0237's second phase-3 review asked for: it proved the
+// hole (the four-token set missed "to", "mail", "contact", "user_mail",
+// "recipientEmail") by injecting keys into a real handler in a throwaway
+// worktree and deleting the probe afterward, so nothing pinned the widened
+// rule down. This fixture is that pin. It covers the three tokens actually
+// added ("to", "mail", "contact" — see auditEmailMetadataSuspectKeyTokens's
+// doc comment for why those three and not the other two) in one synthetic
+// site so a future narrowing of the token set fails here first, not only
+// via a drift in auditEmailMetadataKnownSites.
+func TestAuditEmailMetadataGuardCatchesWidenedSuspectTokens(t *testing.T) {
+	dir := t.TempDir()
+	writeSyntheticGoFile(t, dir, "fixture.go", `package fixture
+
+func recordToSite() {
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionEmailCampaignTestSent,
+		Metadata: map[string]any{"to": actorEmail, "kind": "test"},
+	})
+}
+
+func recordMailSite() {
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{"user_mail": addr},
+	})
+}
+
+func recordContactSite() {
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionSubscriberManualAdd,
+		Metadata: map[string]any{"contact": addr},
+	})
+}
+`)
+	sites := scanAuditEntrySites(t, []string{dir})
+	if len(sites) != 3 {
+		t.Fatalf("expected exactly three audit.Entry sites, found %d", len(sites))
+	}
+	for _, s := range sites {
+		if s.unresolved != "" {
+			t.Fatalf("expected %s to resolve cleanly, got unresolved: %s", s.action, s.unresolved)
+		}
+		if !s.hasEmail {
+			t.Fatalf("expected hasEmail=true for %s (a %q/%q/%q-shaped key), the widened token set this test pins", s.action, "to", "mail", "contact")
+		}
+	}
+}
+
+// TestAuditEmailMetadataGuardCamelCaseKeyNotCaught documents, rather than
+// hides, the accepted gap auditEmailMetadataSuspectKeyTokens's doc comment
+// states: this guard's token match splits only on "_", so a camelCase key
+// is invisible to it. If this test starts failing, either a camelCase
+// tokenizer was added (update this test to match) or the underscore split
+// was changed in some other way that now happens to catch this shape
+// (same). It is not itself a passing guard against anything — it is a
+// pinned record of a known, deliberate blind spot.
+func TestAuditEmailMetadataGuardCamelCaseKeyNotCaught(t *testing.T) {
+	dir := t.TempDir()
+	writeSyntheticGoFile(t, dir, "fixture.go", `package fixture
+
+func recordSomething() {
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{"recipientEmail": addr},
+	})
+}
+`)
+	sites := scanAuditEntrySites(t, []string{dir})
+	if len(sites) != 1 {
+		t.Fatalf("expected exactly one audit.Entry site, found %d", len(sites))
+	}
+	if sites[0].unresolved != "" {
+		t.Fatalf("expected the camelCase-keyed literal to resolve cleanly (not unresolved), got: %s", sites[0].unresolved)
+	}
+	if sites[0].hasEmail {
+		t.Fatal("expected hasEmail=false: \"recipientEmail\" has no \"_\" so the token split never sees it — this is the documented gap, not a bug; if this now fails, the gap was closed and this test (and the doc comment above auditEmailMetadataSuspectKeyTokens) should be updated to say so")
 	}
 }
 
