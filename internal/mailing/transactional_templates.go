@@ -1,19 +1,29 @@
 package mailing
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // The non-campaign messages the system sends: #0028's original four
 // (confirmation, already-subscribed, registration, recovery) plus
 // SendSessionsRevoked, themed consistently with the other three
-// internal/auth mails by #0076. None of these carry List-Unsubscribe /
-// List-Unsubscribe-Post / List-Id headers — those are RFC 8058 one-click
-// headers for CAMPAIGN mail only (#0035, #0043). Adding them here would be
-// wrong even though two of these templates are mailing-list-related: the
-// published privacy policy (#0075) commits to "every campaign email"
-// carrying one-click unsubscribe, precisely because a double opt-in
-// confirmation is not a campaign, and Path 2 (the in-body footer link) is
-// what covers every email, campaign or not — see ShowListFooter on
-// emailContent and PRD §6.5.
+// internal/auth mails by #0076, plus #0126's admin_alert and #0127's
+// welcome. None of confirmation/already-subscribed/registration/recovery/
+// sessions_revoked/admin_alert carry List-Unsubscribe / List-Unsubscribe-Post
+// / List-Id headers — those are RFC 8058 one-click headers, historically
+// CAMPAIGN mail only (#0035, #0043). Adding them there would be wrong even
+// though two of those five are mailing-list-related: the published privacy
+// policy (#0075) commits to "every campaign email" carrying one-click
+// unsubscribe, precisely because a double opt-in confirmation is not a
+// campaign, and Path 2 (the in-body footer link) is what covers every
+// email, campaign or not — see ShowListFooter on emailContent and PRD §6.5.
+//
+// BuildWelcomeEmail (#0127) is a deliberate, disclosed exception to "campaign
+// mail only": it carries the RFC 8058 header set too, because #0127's
+// acceptance criteria name it explicitly and the privacy policy's sentence
+// is a floor ("every campaign email..."), not an exclusivity claim. See
+// that function's own doc comment.
 
 // BuildConfirmationEmail builds the double opt-in confirmation email sent
 // immediately after a new (or previously-unsubscribed) signup. The button
@@ -197,6 +207,95 @@ func BuildSessionsRevokedEmail(to, baseURL string, at time.Time) Message {
 // link). No manage/unsubscribe footer, no physical address: this is
 // operational mail to staff, not mailing-list mail to a subscriber (same
 // ShowListFooter=false reasoning as BuildSessionsRevokedEmail).
+// BuildWelcomeEmail builds the message sent once a subscriber confirms via
+// double opt-in (#0127, PRD §6.3) — internal/subscribers.Store.Confirm
+// enqueues it (kind='welcome') inside the same transaction that activates
+// the row, so a committed confirmation can never leave the welcome unsent
+// (mirroring #0126's "committed signup can never have an unsent
+// confirmation" property one step later in the flow).
+//
+// Unlike every template above, this one carries the RFC 8058 one-click
+// List-Unsubscribe / List-Unsubscribe-Post / List-Id header set (#0035) via
+// the same CampaignHeaders helper #0043's campaign sends use — a
+// deliberate, disclosed departure from this file's package doc comment
+// ("None of these carry List-Unsubscribe... for CAMPAIGN mail only"):
+// #0127's acceptance criteria name the headers explicitly for this one
+// message. It does not contradict the privacy policy's "every campaign
+// email carries a one-click unsubscribe link" (PrivacyPolicy.svelte) —
+// that sentence is a floor commitment, not a claim that no other message
+// ever carries the header — and TestNoTransactionalMessageCarriesCampaignHeaders
+// (templates_test.go) is updated to assert this positively for "welcome"
+// going forward, the same way it already does for "campaign".
+//
+// interestNames is the subscriber's selected interest names AT CONFIRM TIME
+// (internal/subscribers.Store.Confirm reads them inside its own
+// transaction, not re-read at send time) — a later preference change does
+// not retroactively rewrite what this one email already said. An empty
+// slice renders a general-announcements sentence instead of a list.
+//
+// No /archive link: #0127 depends on #0123 (the public campaign archive),
+// which had not landed when this was implemented — issues/0127.md's own
+// Notes say to ship the welcome without the link rather than point it at a
+// page that does not exist yet, rather than block on #0123. Add the link
+// once #0123 lands.
+func BuildWelcomeEmail(to, baseURL, listDomain, manageToken string, interestNames []string, physicalAddress string) Message {
+	manageURL := baseURL + "/preferences?token=" + manageToken
+	unsubscribeURL := baseURL + "/unsubscribe?token=" + manageToken
+	workshopsURL := baseURL + "/workshops"
+
+	interestLine := "You didn't pick any specific topics, so you'll get general announcements about upcoming workshops."
+	if len(interestNames) > 0 {
+		interestLine = "You picked: " + joinWithAnd(interestNames) + "."
+	}
+
+	c := emailContent{
+		Subject:   "Welcome to Open Circuit SF",
+		Preheader: "You're confirmed — here's what to expect.",
+		Eyebrow:   "$ opencircuit/welcome",
+		Heading:   "You're on the list",
+		IntroParagraphs: []string{
+			"Open Circuit SF is a San Francisco group running hands-on electronics workshops — soldering, microcontrollers, homelab, home automation, and whatever the room wants to build next. You're confirmed, and we're glad you're here.",
+			interestLine,
+			// "Roughly once a month" is a deliberately soft estimate, not a
+			// contractual cadence: PRD §4.1's own reference layout example
+			// ("[ OK ] monthly · beginners") is the only cadence figure
+			// anywhere in this project's source (see web/src/views/About.svelte's
+			// identical flag on the same number) — replace this sentence if
+			// the group ever settles on a firmer answer.
+			"Expect an email roughly once a month when a new workshop goes up — we don't send more than that.",
+		},
+		ButtonText: "See upcoming workshops",
+		ButtonURL:  workshopsURL,
+		NoteParagraphs: []string{
+			"Change what you get, or leave the list entirely, any time from the preference center below.",
+		},
+		ShowListFooter:  true,
+		ManageURL:       manageURL,
+		UnsubscribeURL:  unsubscribeURL,
+		PhysicalAddress: physicalAddress,
+	}
+	msg := Message{To: to, Subject: c.Subject, HTMLBody: c.renderHTML(), TextBody: c.renderText()}
+	msg.Headers = CampaignHeaders(baseURL, listDomain, manageToken)
+	return msg
+}
+
+// joinWithAnd renders a list of names the way a person would say them:
+// "a", "a and b", "a, b, and c". No dependency pulled in for this — the
+// project has no other prose-list joiner, and the golden tests below pin
+// exact output for one- two- and three-item cases.
+func joinWithAnd(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		return items[0] + " and " + items[1]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + ", and " + items[len(items)-1]
+	}
+}
+
 func BuildAdminAlertEmail(to, baseURL, subject string, lines []string) Message {
 	c := emailContent{
 		Subject:         subject,

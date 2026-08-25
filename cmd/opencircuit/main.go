@@ -601,6 +601,7 @@ func newOutboxWorker(pool *pgxpool.Pool, mailer mailing.Mailer, settings mailing
 		Mailer:         mailer,
 		Settings:       settings,
 		BaseURL:        cfg.BaseURL,
+		ListDomain:     cfg.EmailListDomain,
 		EnvMaxSendRate: cfg.MaxSendRate,
 		Log:            log,
 	})

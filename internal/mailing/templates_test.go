@@ -89,6 +89,13 @@ const (
 	testAddress  = "Open Circuit SF, PO Box 1234, San Francisco, CA 94110"
 )
 
+// testWelcomeInterests is the fixed interest-name fixture #0127's golden and
+// property tests build BuildWelcomeEmail with — two names, so joinWithAnd's
+// "a and b" branch (not the longer Oxford-comma branch) is what the golden
+// file locks in. TestBuildWelcomeEmail_NoInterestsFallsBackToGeneralAnnouncement
+// below covers the zero-name branch separately.
+var testWelcomeInterests = []string{"Soldering", "Home Automation"}
+
 // testRevokedAt is the fixed timestamp used by every SendSessionsRevoked
 // golden/property test, so the rendered output (and the golden fixture) is
 // stable across runs rather than depending on wall-clock time.
@@ -147,6 +154,14 @@ func TestBuildAdminAlertEmail_Golden(t *testing.T) {
 	goldenFile(t, "admin_alert.txt", msg.TextBody)
 }
 
+// TestBuildWelcomeEmail_Golden covers #0127's seventh template — the
+// message sent once a subscriber confirms via double opt-in.
+func TestBuildWelcomeEmail_Golden(t *testing.T) {
+	msg := BuildWelcomeEmail(testTo, testBaseURL, testListDomain, testManage, testWelcomeInterests, testAddress)
+	goldenFile(t, "welcome.html", msg.HTMLBody)
+	goldenFile(t, "welcome.txt", msg.TextBody)
+}
+
 // --- Property tests: the things that actually break in the wild ---
 // (per the brief: "contains the word Confirm" proves nothing.)
 
@@ -165,12 +180,14 @@ func mustBuildCampaignMessage() Message {
 }
 
 // allMessages returns every message this package builds: #0028's original
-// four transactional templates, #0076's SendSessionsRevoked, and (since
-// #0043) the campaign builder — six total. Every property test below that
-// loops over allMessages() therefore also exercises campaign mail, unless a
-// test specifically opts a name out (see, e.g.,
+// four transactional templates, #0076's SendSessionsRevoked, #0126's
+// BuildAdminAlertEmail, #0127's BuildWelcomeEmail, and (since #0043) the
+// campaign builder — eight total. Every property test below that loops over
+// allMessages() therefore also exercises campaign mail, unless a test
+// specifically opts a name out (see, e.g.,
 // TestNoTransactionalMessageCarriesCampaignHeaders, which asserts the
-// OPPOSITE property for "campaign": that it DOES carry headers).
+// OPPOSITE property for "campaign" AND "welcome": that they DO carry
+// headers).
 func allMessages() map[string]Message {
 	return map[string]Message{
 		"confirmation":       BuildConfirmationEmail(testTo, testBaseURL, testConfirm, testManage, 7*24*time.Hour, testAddress),
@@ -179,6 +196,7 @@ func allMessages() map[string]Message {
 		"recovery":           BuildRecoveryEmail(testTo, testBaseURL, testRecToken, 15*time.Minute),
 		"sessions_revoked":   BuildSessionsRevokedEmail(testTo, testBaseURL, testRevokedAt),
 		"admin_alert":        BuildAdminAlertEmail(testTo, testBaseURL, testAdminAlertSubject, testAdminAlertLines),
+		"welcome":            BuildWelcomeEmail(testTo, testBaseURL, testListDomain, testManage, testWelcomeInterests, testAddress),
 		"campaign":           mustBuildCampaignMessage(),
 	}
 }
@@ -482,35 +500,41 @@ func TestConfirmationAndAlreadySubscribed_CarryFooterLink(t *testing.T) {
 }
 
 // TestNoTransactionalMessageCarriesCampaignHeaders proves that NONE of the
-// five transactional templates attaches List-Unsubscribe /
-// List-Unsubscribe-Post / List-Id — those are RFC 8058 one-click headers
-// for CAMPAIGN mail (#0035, #0043) only. This is #0035's own acceptance
-// criterion ("headers applied to campaign mail only — not to transactional
-// confirmation or auth mail"), so it covers all five: confirmation and
-// already-subscribed (mailing-list transactional mail) plus registration,
-// recovery, and sessions_revoked (auth mail) — not just the first two, which
-// is all the predecessor version of this test (renamed from
+// SIX purely-transactional templates attaches List-Unsubscribe /
+// List-Unsubscribe-Post / List-Id — those are RFC 8058 one-click headers,
+// historically CAMPAIGN mail (#0035, #0043) only. This is #0035's own
+// acceptance criterion ("headers applied to campaign mail only — not to
+// transactional confirmation or auth mail"), so it covers confirmation and
+// already-subscribed (mailing-list transactional mail), registration,
+// recovery, and sessions_revoked (auth mail), and admin_alert (#0126,
+// operational mail to staff) — not just the first two, which is all the
+// predecessor version of this test (renamed from
 // TestConfirmationAndAlreadySubscribed_NoCampaignHeaders) checked. The
-// privacy policy (#0075) deliberately narrows its one-click commitment to
-// "every campaign email" for exactly this reason: none of these five is a
-// campaign send.
+// privacy policy (#0075) commits to "every campaign email" carrying the
+// header as a FLOOR, not an exclusivity claim — see BuildWelcomeEmail's own
+// doc comment (transactional_templates.go) for why #0127 is a deliberate,
+// disclosed exception rather than a violation of that sentence.
 //
-// Since #0043 added "campaign" to allMessages(), this test now asserts BOTH
-// directions in one place: the five transactional entries carry zero custom
-// headers (as always), and "campaign" — the one entry that IS a campaign
-// send — positively carries the RFC 8058 set. Before this, #0035's headers
-// landing on campaign mail was proven only by campaign_headers_test.go's
-// direct calls to CampaignHeaders; this is the same property proven again at
-// the point a real campaign Message is assembled (BuildCampaignMessage),
-// which is what a mutation dropping the `Headers:` field from that
-// assembly — as opposed to a mutation inside CampaignHeaders itself — would
-// actually miss without this. Mutation proof: comment out `Headers:
-// CampaignHeaders(...)` in BuildCampaignMessage (campaign_render.go) and
-// this test's "campaign" case fails on "want List-Unsubscribe header,
-// campaign message carries 0 header(s)".
+// Since #0043 added "campaign" (and #0127 added "welcome") to
+// allMessages(), this test now asserts BOTH directions in one place: the
+// six purely-transactional entries carry zero custom headers (as always),
+// and "campaign"/"welcome" — the two entries that ARE addressed to a real,
+// consenting list member and DO carry the set — positively carry the RFC
+// 8058 headers. Before #0043, #0035's headers landing on campaign mail was
+// proven only by campaign_headers_test.go's direct calls to CampaignHeaders;
+// this is the same property proven again at the point a real Message is
+// assembled (BuildCampaignMessage / BuildWelcomeEmail), which is what a
+// mutation dropping the `Headers:` assignment from either assembly — as
+// opposed to a mutation inside CampaignHeaders itself — would actually miss
+// without this. Mutation proof: comment out `Headers: CampaignHeaders(...)`
+// in BuildCampaignMessage (campaign_render.go) or the equivalent line in
+// BuildWelcomeEmail (transactional_templates.go) and the corresponding case
+// below fails on "want List-Unsubscribe header, ... message carries 0
+// header(s)".
 func TestNoTransactionalMessageCarriesCampaignHeaders(t *testing.T) {
+	oneClickNames := map[string]bool{"campaign": true, "welcome": true}
 	for name, msg := range allMessages() {
-		if name == "campaign" {
+		if oneClickNames[name] {
 			continue
 		}
 		if len(msg.Headers) != 0 {
@@ -518,15 +542,17 @@ func TestNoTransactionalMessageCarriesCampaignHeaders(t *testing.T) {
 		}
 	}
 
-	campaign := allMessages()["campaign"]
-	hasListUnsubscribe := false
-	for _, h := range campaign.Headers {
-		if h.Name == "List-Unsubscribe" {
-			hasListUnsubscribe = true
+	for name := range oneClickNames {
+		msg := allMessages()[name]
+		hasListUnsubscribe := false
+		for _, h := range msg.Headers {
+			if h.Name == "List-Unsubscribe" {
+				hasListUnsubscribe = true
+			}
 		}
-	}
-	if !hasListUnsubscribe {
-		t.Errorf("campaign: want a List-Unsubscribe header, campaign message carries %d header(s): %+v", len(campaign.Headers), campaign.Headers)
+		if !hasListUnsubscribe {
+			t.Errorf("%s: want a List-Unsubscribe header, message carries %d header(s): %+v", name, len(msg.Headers), msg.Headers)
+		}
 	}
 }
 
@@ -797,6 +823,102 @@ func TestAllTemplates_TextBodyUsesCRLF(t *testing.T) {
 		// and confirm no \n remains.
 		if strings.Contains(strings.ReplaceAll(msg.TextBody, "\r\n", ""), "\n") {
 			t.Errorf("%s: TextBody contains a bare \\n not paired with \\r", name)
+		}
+	}
+}
+
+// TestWelcomeEmail_CarriesFooterLink extends
+// TestConfirmationAndAlreadySubscribed_CarryFooterLink's property to
+// welcome mail (#0127 criterion: "a link to the preference center, and a
+// working unsubscribe link"). A separate test, not an addition to that
+// one's name list, because welcome's footer-link requirement comes from a
+// different issue with its own acceptance criteria.
+func TestWelcomeEmail_CarriesFooterLink(t *testing.T) {
+	msg := allMessages()["welcome"]
+	if !strings.Contains(msg.HTMLBody, "Manage your interests") {
+		t.Errorf("welcome: HTML missing 'Manage your interests' footer text")
+	}
+	if !strings.Contains(msg.HTMLBody, "Unsubscribe from everything") {
+		t.Errorf("welcome: HTML missing 'Unsubscribe from everything' footer text")
+	}
+	if !strings.Contains(msg.TextBody, "Manage your interests:") {
+		t.Errorf("welcome: text missing 'Manage your interests:' footer line")
+	}
+	if !strings.Contains(msg.TextBody, "Unsubscribe from everything:") {
+		t.Errorf("welcome: text missing 'Unsubscribe from everything:' footer line")
+	}
+}
+
+// TestBuildWelcomeEmail_ListsSelectedInterests proves the "which interests
+// they selected" acceptance criterion (#0127) is actually driven by the
+// interestNames argument, not hard-coded copy. Mutation proof: hard-code a
+// fixed interest sentence in BuildWelcomeEmail instead of joining
+// interestNames and this test's second case (different names) fails.
+func TestBuildWelcomeEmail_ListsSelectedInterests(t *testing.T) {
+	msg := BuildWelcomeEmail(testTo, testBaseURL, testListDomain, testManage, []string{"Home Automation", "KiCad Night"}, testAddress)
+	if !strings.Contains(msg.HTMLBody, "Home Automation") || !strings.Contains(msg.HTMLBody, "KiCad Night") {
+		t.Errorf("welcome HTML missing one or both selected interest names")
+	}
+	if !strings.Contains(msg.TextBody, "Home Automation") || !strings.Contains(msg.TextBody, "KiCad Night") {
+		t.Errorf("welcome text missing one or both selected interest names")
+	}
+	// A different two-name set must render differently from
+	// testWelcomeInterests's fixture, proving this isn't a fixed string.
+	other := allMessages()["welcome"] // built from testWelcomeInterests
+	if msg.TextBody == other.TextBody {
+		t.Errorf("welcome text body identical for two different interest sets — interestNames is not actually driving the copy")
+	}
+}
+
+// TestBuildWelcomeEmail_NoInterestsFallsBackToGeneralAnnouncement proves the
+// empty-interestNames branch: a subscriber who picked nothing still gets a
+// coherent sentence, not an empty list or a leaked "You picked: ." Mutation
+// proof: remove the len(interestNames) > 0 guard in BuildWelcomeEmail and
+// this test fails on the "You picked:" assertion (it would appear with
+// nothing after it).
+func TestBuildWelcomeEmail_NoInterestsFallsBackToGeneralAnnouncement(t *testing.T) {
+	msg := BuildWelcomeEmail(testTo, testBaseURL, testListDomain, testManage, nil, testAddress)
+	if strings.Contains(msg.TextBody, "You picked:") {
+		t.Errorf("welcome text unexpectedly contains 'You picked:' with no interests selected")
+	}
+	if !strings.Contains(msg.TextBody, "general announcements") {
+		t.Errorf("welcome text missing the general-announcements fallback sentence for zero interests")
+	}
+}
+
+// TestBuildWelcomeEmail_NoArchiveLink documents and pins the disclosed
+// scope decision in issues/0127.md's Notes: #0127 depends on #0123 (the
+// public campaign archive), which had not landed when this was
+// implemented, so the welcome mail ships without an /archive link rather
+// than one pointing at a page that does not exist. Update this test (and
+// add the link) once #0123 lands.
+func TestBuildWelcomeEmail_NoArchiveLink(t *testing.T) {
+	msg := allMessages()["welcome"]
+	if strings.Contains(msg.HTMLBody, "/archive") {
+		t.Errorf("welcome HTML unexpectedly links to /archive — #0123 had not landed; see issues/0127.md Notes")
+	}
+	if strings.Contains(msg.TextBody, "/archive") {
+		t.Errorf("welcome text unexpectedly links to /archive — #0123 had not landed; see issues/0127.md Notes")
+	}
+}
+
+// TestBuildWelcomeEmail_ListUnsubscribeHeadersMatchCampaignHeaders proves
+// welcome's one-click header set is byte-identical to what CampaignHeaders
+// would build for the same manageToken — not just "carries a
+// List-Unsubscribe header of some kind" (already proven generically by
+// TestNoTransactionalMessageCarriesCampaignHeaders), but the exact RFC 8058
+// set, including List-Unsubscribe-Post and List-Id. Mutation proof: hand-rol
+// a partial header set in BuildWelcomeEmail instead of calling
+// CampaignHeaders and this test fails on a length or value mismatch.
+func TestBuildWelcomeEmail_ListUnsubscribeHeadersMatchCampaignHeaders(t *testing.T) {
+	msg := BuildWelcomeEmail(testTo, testBaseURL, testListDomain, testManage, testWelcomeInterests, testAddress)
+	want := CampaignHeaders(testBaseURL, testListDomain, testManage)
+	if len(msg.Headers) != len(want) {
+		t.Fatalf("welcome: got %d header(s), want %d: got=%+v want=%+v", len(msg.Headers), len(want), msg.Headers, want)
+	}
+	for i := range want {
+		if msg.Headers[i] != want[i] {
+			t.Errorf("welcome: header %d = %+v, want %+v", i, msg.Headers[i], want[i])
 		}
 	}
 }

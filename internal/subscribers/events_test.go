@@ -66,7 +66,7 @@ func TestSubscriberEvents_RecordsKnownAction(t *testing.T) {
 // constant in knownActions has been assigned to one bucket or the other,
 // not to re-verify the write itself.
 func TestSubscriberEventActions_EveryConstantHasCallSiteOrOwner(t *testing.T) {
-	// hasCallSite: written by code in this repo today (#0126).
+	// hasCallSite: written by code in this repo today (#0126, #0127).
 	hasCallSite := map[Action]bool{
 		ActionSignupRequested:  true,
 		ActionConfirmationSent: true,
@@ -82,6 +82,14 @@ func TestSubscriberEventActions_EveryConstantHasCallSiteOrOwner(t *testing.T) {
 		ActionSuppressed:       true,
 		ActionUnsuppressed:     true,
 		ActionAdminEdited:      true,
+		// ActionWelcomeSent (#0127): written by
+		// internal/mailing.OutboxWorker.sendOne's MarkSent branch, the
+		// same "written when the message actually LEAVES the queue"
+		// precedent confirmation_sent already established — see
+		// TestOutboxWorker_MarkSent_RecordsWelcomeSent
+		// (internal/mailing/outbox_worker_test.go) for the call-site
+		// proof this map only asserts the bookkeeping for.
+		ActionWelcomeSent: true,
 	}
 	// ownedByLaterIssue: no call site yet in this tree; a specific later
 	// issue is responsible for adding one. See events.go's package doc
@@ -89,7 +97,6 @@ func TestSubscriberEventActions_EveryConstantHasCallSiteOrOwner(t *testing.T) {
 	ownedByLaterIssue := map[Action]string{
 		ActionDelivered:           "#0124",
 		ActionConfirmationExpired: "#0128",
-		ActionWelcomeSent:         "#0127",
 		ActionImported:            "#0125",
 		ActionImportRevoked:       "#0125",
 		ActionInviteSent:          "#0129",

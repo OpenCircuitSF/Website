@@ -1,0 +1,19 @@
+$ opencircuit/welcome
+
+You're on the list
+
+Open Circuit SF is a San Francisco group running hands-on electronics workshops — soldering, microcontrollers, homelab, home automation, and whatever the room wants to build next. You're confirmed, and we're glad you're here.
+
+You picked: Soldering and Home Automation.
+
+Expect an email roughly once a month when a new workshop goes up — we don't send more than that.
+
+See upcoming workshops: https://www.opencircuitsf.com/workshops
+
+Change what you get, or leave the list entirely, any time from the preference center below.
+
+--
+Manage your interests: https://www.opencircuitsf.com/preferences?token=MANAGE-TOKEN-BBB
+Unsubscribe from everything: https://www.opencircuitsf.com/unsubscribe?token=MANAGE-TOKEN-BBB
+Open Circuit SF, PO Box 1234, San Francisco, CA 94110
+Open Circuit SF - opencircuitsf.com

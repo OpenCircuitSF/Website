@@ -231,6 +231,20 @@ type alreadySubscribedPayload struct {
 	ManageToken string `json:"manage_token"`
 }
 
+// welcomePayload is outbound_queue.payload's shape for outbox.KindWelcome
+// (#0127) — mirrors internal/mailing.welcomePayload field-for-field (see
+// internal/outbox's package doc comment: producer and consumer are matched
+// by JSON field name, not a shared Go type, since they live in different
+// packages and outbox.Item.Payload is deliberately `any`). InterestNames is
+// captured HERE, inside Confirm's own transaction, not re-read by the
+// worker at send time — see BuildWelcomeEmail's doc comment
+// (internal/mailing/transactional_templates.go) for why a later preference
+// change must not retroactively rewrite this one email.
+type welcomePayload struct {
+	ManageToken   string   `json:"manage_token"`
+	InterestNames []string `json:"interest_names"`
+}
+
 const subscriberColumns = `id, email, status, confirm_token, confirm_sent_at,
 	confirm_expires_at, confirmed_at, already_subscribed_sent_at, manage_token,
 	host(signup_ip), signup_user_agent, utm_source, utm_medium, utm_campaign,
@@ -570,6 +584,37 @@ func (s *Store) FindByManageToken(ctx context.Context, token string) (Subscriber
 // stamping confirmed_at and clearing the token (single-use — a cleared token
 // can never be replayed). Runs inside a transaction with SELECT ... FOR
 // UPDATE so a concurrent double-click on the same link can't both succeed.
+//
+// #0127: since #0127, Confirm ALSO enqueues the welcome email
+// (outbox.KindWelcome) inside this SAME transaction, immediately after
+// recording the confirmed event — mirroring #0126's "committed signup can
+// never have an unsent confirmation" property one step later in the flow:
+// a committed confirmation can never have an unsent welcome. Two guards run
+// first, inside the transaction, so neither race window is observable:
+//
+//   - The token is single-use (cleared to NULL by the UPDATE above), so a
+//     second Confirm call with the same, now-stale token returns
+//     ErrTokenInvalid before ever reaching here — "a second confirmation of
+//     an already-confirmed address does not re-send" (#0127 criterion) is
+//     true by construction, not by a separate check.
+//   - A suppressed address never gets a welcome "even if a confirmation
+//     somehow lands" (#0127 criterion): this method checks suppressions
+//     directly (same package, same tx) rather than importing
+//     SuppressionStore, so the check commits atomically with the
+//     confirmation instead of racing a separate round trip.
+//
+// welcome_sent is deliberately NOT written here — see
+// internal/mailing.OutboxWorker.sendOne's comment: it is written when the
+// message actually LEAVES the queue (MarkSent), the same precedent
+// confirmation_sent already established (#0126's plan §6), so the event
+// log reflects delivery, not intent.
+//
+// A subscriber who unsubscribes and later resubscribes (RestartSignup) gets
+// a fresh confirm_token and, on that later Confirm, a SECOND welcome email.
+// This is a deliberate reading, not an oversight: the acceptance criterion
+// is about TOKEN REPLAY on an already-confirmed address, and someone
+// genuinely rejoining the list after leaving it is arguably owed a welcome
+// again — flagged here for the reviewer since #0127 does not say either way.
 func (s *Store) Confirm(ctx context.Context, token string, now time.Time) (Subscriber, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -615,10 +660,80 @@ func (s *Store) Confirm(ctx context.Context, token string, now time.Time) (Subsc
 		return Subscriber{}, fmt.Errorf("subscribers: recording confirmed event for %d: %w", updated.ID, err)
 	}
 
+	// #0127: suppressed addresses never receive the welcome email "even if
+	// a confirmation somehow lands" (acceptance criterion) — checked here,
+	// inside this same transaction, rather than via SuppressionStore (a
+	// separate type in this package — see suppressions.go's package doc
+	// comment on why — but the query itself is trivial to inline, and
+	// inlining it means this check commits atomically with the
+	// confirmation instead of racing a second round trip against the
+	// pool). A suppressed subscriber still confirms normally; only the
+	// welcome enqueue is skipped.
+	var suppressed bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM suppressions WHERE email = $1)`, updated.Email,
+	).Scan(&suppressed); err != nil {
+		return Subscriber{}, fmt.Errorf("subscribers: checking suppression for %d: %w", updated.ID, err)
+	}
+
+	if !suppressed {
+		interestNames, err := selectedInterestNamesTx(ctx, tx, updated.ID)
+		if err != nil {
+			return Subscriber{}, fmt.Errorf("subscribers: loading interests for welcome mail, subscriber %d: %w", updated.ID, err)
+		}
+		if _, err := s.outbox.EnqueueTx(ctx, tx, outbox.Item{
+			Kind:         outbox.KindWelcome,
+			Recipient:    updated.Email,
+			SubscriberID: &updated.ID,
+			Payload: welcomePayload{
+				ManageToken:   updated.ManageToken,
+				InterestNames: interestNames,
+			},
+		}); err != nil {
+			return Subscriber{}, fmt.Errorf("subscribers: enqueueing welcome for %d: %w", updated.ID, err)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return Subscriber{}, fmt.Errorf("subscribers: committing confirm tx: %w", err)
 	}
 	return updated, nil
+}
+
+// selectedInterestNamesTx returns subscriberID's currently-selected
+// interest NAMES (not ids), ordered by interests.sort_order then name — a
+// raw join against the interests table this package does not otherwise
+// touch (see InterestIDs above for the ids-only equivalent), used only to
+// populate the welcome email's payload at confirm time (#0127). Querying by
+// name here, rather than importing internal/interests, keeps this package a
+// leaf (see this file's own package doc comment: "internal/subscribers
+// imports nothing internal at all" other than internal/outbox).
+func selectedInterestNamesTx(ctx context.Context, q outbox.Querier, subscriberID int64) ([]string, error) {
+	rows, err := q.Query(ctx,
+		`SELECT i.name
+		   FROM subscriber_interests si
+		   JOIN interests i ON i.id = si.interest_id
+		  WHERE si.subscriber_id = $1
+		  ORDER BY i.sort_order, i.name`,
+		subscriberID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("subscribers: querying selected interest names for %d: %w", subscriberID, err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("subscribers: scanning interest name: %w", err)
+		}
+		out = append(out, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("subscribers: iterating selected interest names for %d: %w", subscriberID, err)
+	}
+	return out, nil
 }
 
 // Unsubscribe transitions a subscriber to unsubscribed, stamping

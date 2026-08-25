@@ -72,11 +72,17 @@ var outboxOrphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 // NewOutboxWorker; call Run in its own goroutine, Stop to shut down.
 type OutboxWorker struct {
 	store    *outbox.Store
-	events   *subscribers.Store // RecordEvent for confirmation_sent — nil-tolerant, matching every other handler
+	events   *subscribers.Store // RecordEvent for confirmation_sent/welcome_sent — nil-tolerant, matching every other handler
 	mailer   Mailer
 	settings SettingsReader
 
-	baseURL        string
+	baseURL string
+	// listDomain is config.Config.EmailListDomain, threaded through to
+	// BuildWelcomeEmail (#0127) for the RFC 8058 List-Id/mailto: form —
+	// see CampaignHeaders' own doc comment for why a blank value degrades
+	// to the HTTPS-only header form rather than emitting an invalid
+	// mailto: URI.
+	listDomain     string
 	envMaxSendRate int
 	batchSize      int
 
@@ -92,11 +98,15 @@ type OutboxWorker struct {
 // OutboxWorkerDeps is NewOutboxWorker's construction argument.
 type OutboxWorkerDeps struct {
 	Store    *outbox.Store
-	Events   *subscribers.Store // nil disables subscriber_events writes (confirmation_sent)
+	Events   *subscribers.Store // nil disables subscriber_events writes (confirmation_sent/welcome_sent)
 	Mailer   Mailer
 	Settings SettingsReader
 
 	BaseURL string
+	// ListDomain is config.Config.EmailListDomain (#0127) — see
+	// OutboxWorker.listDomain's doc comment. Empty is tolerated the same
+	// way CampaignHeaders tolerates it.
+	ListDomain string
 	// EnvMaxSendRate is the same MAX_SEND_RATE ceiling worker.go's Worker
 	// reads — see effectiveSendRate/outboxEffectiveSendRate.
 	EnvMaxSendRate int
@@ -143,6 +153,7 @@ func NewOutboxWorker(deps OutboxWorkerDeps) (*OutboxWorker, error) {
 		mailer:         deps.Mailer,
 		settings:       deps.Settings,
 		baseURL:        deps.BaseURL,
+		listDomain:     deps.ListDomain,
 		envMaxSendRate: envMaxSendRate,
 		batchSize:      batchSize,
 		pollInterval:   pollInterval,
@@ -274,20 +285,29 @@ func (w *OutboxWorker) sendOne(row outbox.Row) {
 	}
 
 	// #0126's plan §6: confirmation_sent is written here — "a confirmation
-	// message LEFT the outbound queue" — not at enqueue time. Only for
-	// kind=confirmation with a subscriber to attribute it to; every other
-	// kind either has no subscriber_events action yet (welcome, admin
-	// alerts, auth mail) or isn't in the closed set at all
-	// (already_subscribed — see events.go's package doc comment, #0126's
-	// plan §9 item 6).
-	if w.events != nil && row.Kind == outbox.KindConfirmation && row.SubscriberID != nil {
+	// message LEFT the outbound queue" — not at enqueue time. #0127 adds
+	// welcome_sent on the identical precedent ("a welcome message LEFT the
+	// outbound queue"), not at Confirm's enqueue time — see
+	// internal/subscribers.Store.Confirm's own comment on why it does NOT
+	// write welcome_sent itself. Every other kind either has no
+	// subscriber_events action yet (admin alerts, auth mail) or isn't in
+	// the closed set at all (already_subscribed — see events.go's package
+	// doc comment, #0126's plan §9 item 6).
+	var sentAction subscribers.Action
+	switch row.Kind {
+	case outbox.KindConfirmation:
+		sentAction = subscribers.ActionConfirmationSent
+	case outbox.KindWelcome:
+		sentAction = subscribers.ActionWelcomeSent
+	}
+	if w.events != nil && sentAction != "" && row.SubscriberID != nil {
 		eventCtx, eventCancel := context.WithTimeout(context.Background(), writeStatusTimeout)
 		if err := w.events.RecordEvent(eventCtx, subscribers.Event{
 			SubscriberID: row.SubscriberID,
 			Email:        row.Recipient,
-			Action:       subscribers.ActionConfirmationSent,
+			Action:       sentAction,
 		}); err != nil {
-			w.log.Error("mailing: recording confirmation_sent event failed", "id", row.ID, "subscriber_id", *row.SubscriberID, "err", err)
+			w.log.Error("mailing: recording sent event failed", "id", row.ID, "action", sentAction, "subscriber_id", *row.SubscriberID, "err", err)
 		}
 		eventCancel()
 	}
@@ -385,6 +405,17 @@ type adminAlertPayload struct {
 	Lines   []string `json:"lines"`
 }
 
+// welcomePayload is outbound_queue.payload's shape for outbox.KindWelcome
+// (#0127) — mirrors internal/subscribers.welcomePayload field-for-field
+// (matched by JSON field name, not a shared Go type, per this file's own
+// "producer and consumer live in different packages" convention above).
+// InterestNames is the subscriber's selection AT CONFIRM TIME, not re-read
+// at send time — see BuildWelcomeEmail's doc comment.
+type welcomePayload struct {
+	ManageToken   string   `json:"manage_token"`
+	InterestNames []string `json:"interest_names"`
+}
+
 // render resolves physical_address at SEND time (not enqueue time) — #0126's
 // plan §3: "a small improvement: an address set between enqueue and send
 // now produces a correct footer, where today it would not." This worker
@@ -437,9 +468,16 @@ func (w *OutboxWorker) render(ctx context.Context, row outbox.Row) (Message, err
 		}
 		return BuildAdminAlertEmail(row.Recipient, w.baseURL, p.Subject, p.Lines), nil
 
+	case outbox.KindWelcome:
+		var p welcomePayload
+		if err := json.Unmarshal(row.Payload, &p); err != nil {
+			return Message{}, err
+		}
+		return BuildWelcomeEmail(row.Recipient, w.baseURL, w.listDomain, p.ManageToken, p.InterestNames, w.physicalAddress(ctx)), nil
+
 	default:
-		// welcome (#0127), goodbye (no producer), import_invite (#0129):
-		// no renderer yet. Returning an error routes through the ordinary
+		// goodbye (no producer), import_invite (#0129): no renderer yet.
+		// Returning an error routes through the ordinary
 		// MarkRetryOrAbandon path — it will retry a few times, then land
 		// on 'abandoned' with this error retained, rather than crashing
 		// the worker or silently dropping the row.

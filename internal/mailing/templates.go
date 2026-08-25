@@ -1,8 +1,11 @@
 // Templates for the transactional emails (#0028): confirm-subscription,
 // already-subscribed, passkey-registration magic link, and account-recovery
-// magic link. These are NOT campaign mail (#0043) — no List-Unsubscribe
-// headers, no audience substitution loop — but they share one design
-// constraint with campaign mail: email clients are not browsers (PRD §6.6).
+// magic link, plus later additions (sessions-revoked, admin alert, welcome).
+// These are NOT campaign mail (#0043) — no audience substitution loop — and
+// none but BuildWelcomeEmail (#0127, a disclosed exception — see its own doc
+// comment in transactional_templates.go) carries List-Unsubscribe headers.
+// They share one design constraint with campaign mail: email clients are not
+// browsers (PRD §6.6).
 //
 // Every template renders from a single emailContent value (see below): the
 // four Build* functions in transactional_templates.go populate one struct

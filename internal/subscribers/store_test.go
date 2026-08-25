@@ -2,6 +2,7 @@ package subscribers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -299,6 +300,222 @@ func TestConfirm_Success(t *testing.T) {
 	_, err = store.Confirm(context.Background(), *created.ConfirmToken, now.Add(2*time.Minute))
 	if !errors.Is(err, ErrTokenInvalid) {
 		t.Errorf("second Confirm with same token: got err=%v, want ErrTokenInvalid", err)
+	}
+}
+
+// TestConfirm_EnqueuesWelcomeAtomicallyWithActivation is #0127's load-bearing
+// property, mirroring #0126's TestCreate_ClaimsAndEnqueuesConfirmationAtomically:
+// a committed Confirm call always has BOTH the subscriber activated AND a
+// welcome row queued for it — Confirm's own transaction enqueues welcome
+// right alongside recording the confirmed event, so the two either commit
+// together or (on any error before Commit) roll back together.
+//
+// The second half proves "sent exactly once per subscriber": retrying
+// Confirm with the same (now single-use, cleared) token — the shape a
+// double-click or a page reload produces — returns ErrTokenInvalid and
+// leaves the welcome row count at exactly 1, not 2.
+func TestConfirm_EnqueuesWelcomeAtomicallyWithActivation(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+
+	created, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	confirmed, err := store.Confirm(context.Background(), *created.ConfirmToken, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if confirmed.Status != StatusActive {
+		t.Fatalf("Status = %q, want %q", confirmed.Status, StatusActive)
+	}
+
+	welcomeCount := func() int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(context.Background(),
+			`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'welcome' AND status = 'queued'`,
+			confirmed.ID,
+		).Scan(&n); err != nil {
+			t.Fatalf("counting welcome rows: %v", err)
+		}
+		return n
+	}
+
+	if n := welcomeCount(); n != 1 {
+		t.Fatalf("queued welcome rows immediately after Confirm = %d, want 1", n)
+	}
+
+	// Retry: same (now cleared) token. Must fail, and must not double-enqueue.
+	if _, err := store.Confirm(context.Background(), *created.ConfirmToken, now.Add(2*time.Minute)); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("retry Confirm with stale token: got err=%v, want ErrTokenInvalid", err)
+	}
+	if n := welcomeCount(); n != 1 {
+		t.Fatalf("queued welcome rows after a retried Confirm = %d, want still 1 (not sent twice)", n)
+	}
+}
+
+// TestConfirm_SuppressedAddressNeverGetsWelcome proves the #0127 criterion
+// "a suppressed address never receives it, even if a confirmation somehow
+// lands": a subscriber whose address is suppressed AFTER Create but BEFORE
+// the confirm link is clicked still confirms normally (status -> active),
+// but Confirm's transaction skips the welcome enqueue entirely.
+func TestConfirm_SuppressedAddressNeverGetsWelcome(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	suppressions := NewSuppressionStore(pool)
+	now := time.Now()
+
+	created, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := suppressions.Add(context.Background(), NewSuppression{
+		Email: created.Email, Reason: SuppressionReasonManual, Note: "test",
+	}, now); err != nil {
+		t.Fatalf("Add suppression: %v", err)
+	}
+
+	confirmed, err := store.Confirm(context.Background(), *created.ConfirmToken, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if confirmed.Status != StatusActive {
+		t.Fatalf("Status = %q, want %q (suppression must not block confirming, only the welcome mail)", confirmed.Status, StatusActive)
+	}
+
+	var n int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'welcome'`, confirmed.ID,
+	).Scan(&n); err != nil {
+		t.Fatalf("counting welcome rows: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("welcome rows for a suppressed address = %d, want 0", n)
+	}
+}
+
+// TestConfirm_ComplainedSubscriberNeverGetsWelcome is
+// TestConfirm_ComplainedNeverAutoResubscribes's #0127 companion: a
+// complained subscriber's Confirm call fails outright (ErrComplainedLocked,
+// already proven), so it follows by construction that no welcome is ever
+// enqueued for it — this test makes that explicit rather than leaving it
+// implicit in "the whole call failed."
+func TestConfirm_ComplainedSubscriberNeverGetsWelcome(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+
+	created, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE subscribers SET status = $2 WHERE id = $1`, created.ID, StatusComplained,
+	); err != nil {
+		t.Fatalf("forcing complained status: %v", err)
+	}
+
+	if _, err := store.Confirm(context.Background(), *created.ConfirmToken, now.Add(time.Minute)); !errors.Is(err, ErrComplainedLocked) {
+		t.Fatalf("got err=%v, want ErrComplainedLocked", err)
+	}
+
+	var n int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'welcome'`, created.ID,
+	).Scan(&n); err != nil {
+		t.Fatalf("counting welcome rows: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("welcome rows for a complained subscriber = %d, want 0", n)
+	}
+}
+
+// TestConfirm_WelcomePayloadCarriesSelectedInterestNames proves the "which
+// interests they selected" content requirement is actually driven by the
+// subscriber's real subscriber_interests rows at confirm time, read inside
+// Confirm's own transaction (selectedInterestNamesTx) — not a hard-coded or
+// empty payload. The welcome row is inspected BEFORE any worker drains it,
+// so its payload has not yet been scrubbed by MarkSent.
+func TestConfirm_WelcomePayloadCarriesSelectedInterestNames(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+
+	created, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	soldering := seededInterestID(t, pool, "soldering")
+	robotics := seededInterestID(t, pool, "robotics")
+	if err := store.SetInterests(context.Background(), created.ID, []int64{soldering, robotics}); err != nil {
+		t.Fatalf("SetInterests: %v", err)
+	}
+	var solderingName, roboticsName string
+	if err := pool.QueryRow(context.Background(), `SELECT name FROM interests WHERE id = $1`, soldering).Scan(&solderingName); err != nil {
+		t.Fatalf("resolve soldering name: %v", err)
+	}
+	if err := pool.QueryRow(context.Background(), `SELECT name FROM interests WHERE id = $1`, robotics).Scan(&roboticsName); err != nil {
+		t.Fatalf("resolve robotics name: %v", err)
+	}
+
+	confirmed, err := store.Confirm(context.Background(), *created.ConfirmToken, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	var payloadText string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT payload::text FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'welcome'`, confirmed.ID,
+	).Scan(&payloadText); err != nil {
+		t.Fatalf("select welcome payload: %v", err)
+	}
+	if !strings.Contains(payloadText, solderingName) || !strings.Contains(payloadText, roboticsName) {
+		t.Errorf("welcome payload = %s, want it to contain both selected interest names (%q, %q)", payloadText, solderingName, roboticsName)
+	}
+	if !strings.Contains(payloadText, created.ManageToken) {
+		t.Errorf("welcome payload = %s, want it to contain the subscriber's manage_token", payloadText)
+	}
+}
+
+// TestConfirm_NoInterestsSelected_WelcomePayloadHasEmptyInterestList proves
+// the zero-interest branch: a subscriber who picked nothing still gets a
+// welcome row, with an empty (not missing, not erroring) interest_names
+// list.
+func TestConfirm_NoInterestsSelected_WelcomePayloadHasEmptyInterestList(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now()
+
+	created, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	confirmed, err := store.Confirm(context.Background(), *created.ConfirmToken, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	var payloadText string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT payload::text FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'welcome'`, confirmed.ID,
+	).Scan(&payloadText); err != nil {
+		t.Fatalf("select welcome payload: %v", err)
+	}
+	// jsonb::text round-trips through Postgres's own pretty-printer, which
+	// inserts a space after the colon — compare the parsed value, not a
+	// hand-rolled substring, so this doesn't depend on that formatting.
+	var decoded struct {
+		InterestNames []string `json:"interest_names"`
+	}
+	if err := json.Unmarshal([]byte(payloadText), &decoded); err != nil {
+		t.Fatalf("unmarshalling welcome payload %s: %v", payloadText, err)
+	}
+	if len(decoded.InterestNames) != 0 {
+		t.Errorf("welcome payload interest_names = %v, want empty for a subscriber with no interests", decoded.InterestNames)
 	}
 }
 
