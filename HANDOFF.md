@@ -1,6 +1,16 @@
 # Handoff — Open Circuit SF website
 
-**Written:** 2026-08-18 · **Repo:** `github.com/brennanMKE/Website` · **Live:** <https://www.opencircuitsf.com>
+**Written:** 2026-08-18 · **Repo:** `github.com/OpenCircuitSF/Website` · **Live:** <https://www.opencircuitsf.com>
+
+> **Stale as of 2026-08-25 — read `CLAUDE.md` §7/§10 and `docs/deployment.md`
+> first.** This file describes the state on 2026-08-18, when there was no
+> application code and the live site was the static placeholder. Both have
+> changed: the app is built, and **the real site was deployed on 2026-08-25**,
+> replacing the placeholder. §5 below ("Live deployment — what is known") and
+> its §5.2 list of unknowns are the most out-of-date parts — every one of
+> those questions is now answered in `CLAUDE.md` §7. Kept as written because
+> §6's findings and §3's non-code blockers are still accurate and still cost
+> real time to rediscover.
 
 Everything needed to pick this up on another machine. Read this first, then
 [`PRD.md`](PRD.md) for the plan and [`issues/Issues.md`](issues/Issues.md) for
@@ -162,15 +172,28 @@ These are **not** interchangeable. A mismatch between `RP_ORIGIN` and the real
 origin fails passkey ceremonies with an opaque error. Check this first if a
 ceremony fails in Phase 1.
 
-### 5.2 Gaps to fill in on the Mac mini
+### 5.2 Gaps to fill in on the Mac mini — **all answered 2026-08-25**
 
-Write these into `docs/deployment.md` (issue `#0064`) while they are still fresh:
+These were the open questions. They were answered by doing the deploy, and the
+answers live in `CLAUDE.md` §7 and `docs/deployment.md`'s production-facts
+table. Summarised here so this section is not misleading:
 
-- What is the EC2 instance ID / size / region, and how do you SSH in?
-- Where does Apache serve the placeholder from (`DocumentRoot`)?
-- Which vhost config file, and is certbot auto-renewal actually scheduled?
-- Is PostgreSQL installed on this box, and is it the target for the Go service?
-- Is the ShortLinks install for `go.opencircuitsf.com` on this same instance?
+- **Instance / SSH** — `i-0e3bd89e87d1c2364`, a `t4g.nano` (arm64) in
+  `us-east-1`, hostname `bluesky.sstools.co`, IP `44.222.209.183`. `ssh ec2`
+  (`ec2.sstools.co`, user `ec2-user`, key `~/.ssh/sstools-ec2.pem`).
+- **`DocumentRoot`** — was `/var/www/vhosts/www.opencircuitsf.com`. The Go
+  service now answers `/`; that directory survives only to serve
+  `/.well-known/`, which holds the Bluesky DID. See `CLAUDE.md` §7.
+- **vhost / certbot** — `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf`
+  (plus the `002-…` pair that redirects the apex). Renewal is scheduled and
+  working: `certbot-renew.timer`, `dns-route53` authenticator, one ECDSA
+  wildcard cert; a scoped `--dry-run` succeeded after the vhost was rewritten.
+- **PostgreSQL** — yes, on the box, and yes, it is the target: one **15.18**
+  cluster now holding `opencircuit` alongside `shortlinks` and
+  `shortlinks_ocsf`. Note 15, not the 16 the PRD assumes.
+- **ShortLinks** — yes, same instance, and in fact *two* instances of it:
+  `:8081` for `go.sstools.co` and `:8083` for `go.opencircuitsf.com`. A third
+  service holds `:8082`. This project took `:8080`.
 
 ### 5.3 Deferred hardening
 

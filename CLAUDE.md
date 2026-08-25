@@ -440,10 +440,12 @@ message sent to a segment) share a word and nothing else.
 | | |
 |---|---|
 | Canonical host | **`https://www.opencircuitsf.com`** — the apex and plain HTTP both 301 to it |
-| Server | Apache 2.4.68, Amazon Linux, OpenSSL 3.5.7 |
-| TLS | Let's Encrypt, valid to 2026-11-16 |
-| Already on the box | PostgreSQL and Apache |
-| Currently served | the static placeholder |
+| Server | `i-0e3bd89e87d1c2364`, a **`t4g.nano`** (arm64) in **`us-east-1`**, hostname `bluesky.sstools.co`, public IP `44.222.209.183`. Apache 2.4.68 on Amazon Linux 2023, OpenSSL 3.5.7. `ssh ec2` gets you there. |
+| TLS | Let's Encrypt **wildcard** (`opencircuitsf.com` + `*.opencircuitsf.com`), ECDSA, valid to 2026-11-16, renewed by `certbot-renew.timer` via the **`dns-route53`** authenticator — so renewal never touches a vhost or an ACME webroot |
+| Already on the box | PostgreSQL **15.18** (one cluster, also holding `shortlinks` and `shortlinks_ocsf`) and Apache. Ports `:8081`/`:8083` are two ShortLinks instances, `:8082` is prototypes; this project owns **`:8080`**. |
+| Currently served | **This project, since 2026-08-25.** `opencircuit.service` on `127.0.0.1:8080` behind `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf`. The static placeholder is gone. |
+| The one static exception | **`/.well-known/` is still served from disk**, out of `/var/www/vhosts/www.opencircuitsf.com/.well-known/`, via `ProxyPass /.well-known/ !` + `Alias` ahead of the proxy rules. It holds `atproto-did` — this domain's Bluesky DID. **The Go service 404s that path**, so removing the exception silently breaks Bluesky handle verification. Verify by hash, not by status code, after any Apache change: `curl -s https://www.opencircuitsf.com/.well-known/atproto-did \| shasum -a 256` → `4198e742…5948d`. |
+| Machine size is real | 418 MB RAM plus swap on the `t4g.nano`, shared with Apache, PostgreSQL, and three other Go services. `go build` is the memory-hungry step of a deploy. |
 
 ```env
 WEBAUTHN_RP_ID=opencircuitsf.com                   # apex — one passkey covers apex and www
@@ -813,12 +815,30 @@ assume during that window that *nothing* is protecting the data underneath it.
 
 ## 10. Open items blocking later phases
 
-**Deployment is deliberately deferred** (user, 2026-08-23): no live site until
-enough features are ready. Develop and verify against **localhost with mocked
-services** — SES especially. An issue that can only be proved against real
-infrastructure is not blocked work to be attempted anyway; it is work to be
-built against a mock now and validated on the box later. Say which of the two a
-verification claim rests on.
+**Deployment happened on 2026-08-25** — the 2026-08-23 deferral is spent, and
+`www.opencircuitsf.com` now serves this project (§7). **SES was deliberately
+left out of it**, so the "develop against mocks" rule still holds for anything
+that sends email, and only for that: an issue that can only be proved against
+real SES is still work to be built against a mock now and validated on the box
+later. Say which of the two a verification claim rests on.
+
+Two things about the live box that a mock will not tell you, both learned the
+hard way on deploy day:
+
+- **`MAILER_NOOP=true` cannot be used in production at all.**
+  `cmd/opencircuit/main.go`'s `checkMailerNoOp` refuses to start unless
+  `BASE_URL`'s host is `localhost`/`127.0.0.1`. That guard is correct and must
+  not be weakened — it is what stops a production host silently swallowing
+  every outbound email. "Turn SES off in production" is expressed as
+  `SEND_WORKER_ENABLED=false` plus an unconfigured SES, not as `MAILER_NOOP`.
+- **`SES_CONFIGURATION_SET` is required, not optional.**
+  `docs/configuration.md` lists it as optional; `mailing.NewSESMailer` refuses
+  to construct without it and the service will not boot. The doc is wrong.
+
+Anything now queued for send accumulates in `outbound_queue` and retries on
+the six-step backoff up to `queue_max_retries` (8) before going `abandoned`,
+so a magic link requested before SES exists is simply burned — request it
+after.
 
 Started on other people's clocks, not code. Track them; do not let a phase
 stall silently on one.
@@ -826,11 +846,11 @@ stall silently on one.
 | # | Item | Blocks | Status |
 |---|---|---|---|
 | 1 | Rename the GitHub repo to `OpenCircuitSF` | `#0001` housekeeping | not done |
-| 2 | SES: verify domain in `us-west-2`, Easy DKIM, custom MAIL FROM, DMARC at `p=none`, request production access | real sends from Phase 3 | **deferred to deployment (user, 2026-08-23).** SES will be configured on the EC2 box and tested there. Until then **develop against mocks** — do not block an issue on SES existing, and do not attempt live SES calls: the credentials on this machine are `certbot-dns-updater`, which cannot even `ses:ListEmailIdentities` |
+| 2 | SES: verify domain in `us-west-2`, Easy DKIM, custom MAIL FROM, DMARC at `p=none`, request production access — **and first, attach an IAM role to the instance** | real sends from Phase 3; **first admin sign-in**, which mails a magic link | **the next thing to do.** The site is live without it. Measured on the box 2026-08-25: **no IAM instance role is attached at all** (the metadata service 404s `iam/security-credentials/`), so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false and no SES call could authenticate even with a verified domain. Order: attach a role with `ses:SendEmail`/`ses:SendRawEmail` → verify the domain in `us-west-2` (SES region is independent of the instance's `us-east-1`) → DKIM/MAIL FROM/DMARC → production access → set `SES_CONFIGURATION_SET`'s named set up → flip `SES_SANDBOX=false` and `SEND_WORKER_ENABLED=true` in `/etc/opencircuit/config.env`. Until then still **develop against mocks**, and do not attempt live SES calls from this laptop: its credentials are `certbot-dns-updater`, which cannot even `ses:ListEmailIdentities` |
 | 3 | Physical mailing address (PO box) | `#0045` refuses to start a campaign without it — Phase 5 | not started |
 | 4 | Sending identity and **who reads that inbox** | Phase 3 — **but load-bearing now** | **address decided 2026-08-25: `contact@opencircuitsf.com`** (`#0271`). Who reads it is still open. `#0075` published a privacy policy routing erasure and data-export requests to `hello@opencircuitsf.com`. The page is honest either way, but the commitment only works if someone reads that mailbox from the day it ships |
 | 5 | Whether the domain needs human mailboxes — determines apex MX | Phase 0 DNS | undecided; PRD §14 Q3 |
-| 6 | Server-side details: instance ID/size/region, SSH access, `DocumentRoot`, vhost file, certbot renewal schedule, whether the existing Postgres is the target | `#0064` | undocumented — capture as encountered |
+| 6 | Server-side details: instance ID/size/region, SSH access, `DocumentRoot`, vhost file, certbot renewal schedule, whether the existing Postgres is the target | `#0064` | **done, 2026-08-25.** All captured and recorded in §7 above and in `docs/deployment.md`'s production-facts table, measured on the box rather than guessed. Three of them contradicted what the PRD assumed: the instance is a `t4g.nano`, not `t4g.small`; it is in `us-east-1`, not `us-west-2`; and its PostgreSQL is **15**, not 16 |
 | 7 | SES account-level suppression list (`aws sesv2 put-account-suppression-attributes --suppressed-reasons BOUNCE COMPLAINT`) — the second layer alongside `suppressions`, PRD §6.7 | `#0038` criterion 8; belt-and-suspenders once the SES account exists | not started — runbook step in `docs/email-setup.md`, gated on item 2 (the SES account doesn't exist yet) |
 
 `issues/model-pricing.json` does not exist yet. Create it on the first dispatch

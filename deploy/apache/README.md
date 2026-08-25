@@ -9,6 +9,13 @@ any request that didn't arrive on `www` before it reaches the proxy rules —
 
 Tested on **Amazon Linux 2023** with `httpd` and `mod_ssl`.
 
+## Files here
+
+| File | What it is |
+|---|---|
+| `opencircuitsf.com.conf` | The **reference** vhost: one self-contained `:443` vhost doing apex→www, the `/.well-known/` exclusion, the proxy, and the security headers. Use it when standing up a fresh box. |
+| `installed-001-www.opencircuitsf.com-le-ssl.conf` | A **verbatim copy of what is actually running** on the production box as `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf`, captured 2026-08-25. It differs from the reference: no apex→www redirect (the box's `002-…` file does that), a short-ramp HSTS `max-age`, and the box's real log paths. Keep it in sync by hand when the live file changes — nothing enforces that. |
+
 ## Install
 
 On AL2023, drop the file into `/etc/httpd/conf.d/` — all `.conf` files in that
@@ -49,9 +56,23 @@ sudo certbot --apache -d opencircuitsf.com -d www.opencircuitsf.com
   for scripts) are set with `Header always set …`, which needs `mod_headers`.
   It ships in AL2023's `httpd` package and is loaded by default — if the
   headers don't appear in a response, confirm with `httpd -M | grep
-  headers_module` before assuming the directive is wrong. Syntax-checked
-  locally with a real Apache 2.4.67 (`httpd -t`, self-signed cert standing in
-  for the Let's Encrypt paths) — **not** yet checked against AL2023's `httpd`
-  or against a real running instance. See `docs/deployment.md`'s "Security
-  headers" section for how the one script-src hash was computed and why
-  style-src still needs `unsafe-inline`.
+  headers_module` before assuming the directive is wrong. **Now checked
+  against the real AL2023 `httpd` 2.4.68** during the 2026-08-25 deploy —
+  every module this vhost needs (`ssl`, `proxy`, `proxy_http`, `rewrite`,
+  `headers`, `alias`) is loaded by default there, and the equivalent config
+  passes `httpd -t` and serves correctly. The `script-src` hash is likewise
+  now verified against a real `npm run build` output and against the bytes
+  Apache serves. See `docs/deployment.md`'s "Security headers" section, and
+  why style-src still needs `unsafe-inline`.
+- **`/.well-known/` is excluded from the proxy on purpose.**
+  `/.well-known/atproto-did` holds the domain's Bluesky DID and is served from
+  disk; the Go service answers `404` on that path, so removing the
+  `ProxyPass /.well-known/ !` line silently breaks Bluesky handle
+  verification. Verify it by hash after any change to this file, not by status
+  code alone.
+- **The installed vhost on the real box is not a copy of this file.** That box
+  already had a certbot-managed `001-www.…-le-ssl.conf` / `002-…` pair, where
+  the `002` file does the apex→www redirect this file does inline. Adding this
+  file verbatim would duplicate `ServerName www.opencircuitsf.com`. Treat it
+  as the reference for the proxy / header / CSP block; edit the installed
+  files. `CLAUDE.md` §7 names them.

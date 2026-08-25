@@ -1,15 +1,54 @@
 # Deployment & Operations
 
-**Deployment is deliberately deferred** (user, 2026-08-23; `CLAUDE.md` §10).
-No EC2 instance has been provisioned for this codebase, no AWS account exists
-for SES, and nothing below has been followed end to end on a real host. This
-is a **runbook written and syntax-checked against local tooling**, not a
-record of a deploy that happened. Every step says which of the two it rests
-on, per `CLAUDE.md` §10's honesty requirement, and the acceptance criterion
-"the whole runbook followed once on a clean instance and corrected where it
-was wrong" (`#0064`) is explicitly **not met** — it cannot be, until a real
-instance exists to run it against. `PRD.md` §10 and `CLAUDE.md` §7/§10 remain
-authoritative wherever this document is silent or wrong.
+**The site is deployed.** Since **2026-08-25**, `www.opencircuitsf.com` is
+served by `opencircuit.service` — the Go binary with the Svelte SPA embedded —
+behind Apache on the existing EC2 instance, replacing the static placeholder.
+The deferral recorded here previously (user, 2026-08-23) is spent.
+
+Read the rest of this document knowing **which parts that deploy actually
+exercised**, because it did not exercise all of them:
+
+| Section | Status |
+|---|---|
+| Production facts, prerequisites, PostgreSQL, migrations, systemd, Apache, TLS, verification | **Followed on the real host** and corrected where it was wrong. The corrections are inline. |
+| SES setup, DNS records for DKIM / MAIL FROM / inbound, IAM policy, the account-level suppression list | **Still not followed.** SES was deliberately left unconfigured for this deploy so it could be set up afterwards — see "SES is not configured yet" below. No AWS SES identity exists, and **the instance has no IAM role attached at all**. |
+| Backups (`opencircuit-backup.timer` and friends) | **Not installed yet.** The units exist in `deploy/systemd/`; nothing on the box runs them. |
+
+So `#0064`'s acceptance criterion — "the whole runbook followed once on a
+clean instance and corrected where it was wrong" — is now **partly** met: the
+serving path is proven, the email path is not. `PRD.md` §10 and `CLAUDE.md`
+§7/§10 remain authoritative wherever this document is silent or wrong.
+
+### SES is not configured yet
+
+Deliberate, at the user's direction: bring the site up first, configure SES
+after. Two things follow that are easy to get wrong.
+
+**`MAILER_NOOP=true` is not the way to express this in production.**
+`cmd/opencircuit/main.go`'s `checkMailerNoOp` refuses to start unless
+`BASE_URL`'s host is `localhost` or `127.0.0.1`, so a production host can
+never silently disable outbound email. Setting it here just crash-loops the
+service. `/etc/opencircuit/config.env` therefore leaves it unset and
+constructs the real SES v2 mailer, with `SEND_WORKER_ENABLED=false` so no
+campaign send worker starts.
+
+**`SES_CONFIGURATION_SET` is required, despite `docs/configuration.md`
+listing it as optional.** `mailing.NewSESMailer` returns `cannot construct SES
+mailer: missing SES_CONFIGURATION_SET` and the service will not boot without
+it. The named set does not have to exist in SES yet.
+
+What this costs until SES is live:
+
+- Every outbound message goes through the durable `outbound_queue` (`#0126`),
+  so nothing is lost in flight — it is enqueued, the send fails, and the outbox
+  worker retries on the six-step backoff up to `queue_max_retries` (8) before
+  marking the row `abandoned`.
+- **The seeded admin cannot sign in.** `opencircuit seed` created the
+  `ADMIN_EMAIL` user with no passkey, so first sign-in is "Recover account",
+  which mails a magic link. Request it *after* SES works, not before, or the
+  queue row just burns its retries.
+- A visitor who subscribes still gets the uniform `202` (`#0026`) but no
+  confirmation mail.
 
 ## Current production facts (`CLAUDE.md` §7)
 
@@ -22,29 +61,60 @@ authoritative wherever this document is silent or wrong.
 | Currently served | the static placeholder (`placeholder/`) |
 
 **A box already exists and already runs Apache and PostgreSQL** — the
-production facts above are measured, not aspirational. What is missing is
-this project's own configuration on it, and, per `CLAUDE.md` §10 item 6, the
-specific operational details of that box: instance ID, size, region, SSH
-access, `DocumentRoot`, the vhost file actually installed, the certbot
-renewal schedule, and whether the Postgres already running there is the
-target for this project's `opencircuit` database or a separate instance is
-needed. None of that is documented anywhere available to this agent, and
-none of it is guessed at here — every place below that would need one of
-those facts is marked `[PLACEHOLDER: CLAUDE.md §10 item 6]` rather than
-invented. **Capture the real values into this table the first time someone
-with access to the box reads this file**, then delete the placeholder
-markers.
+production facts above are measured, not aspirational. **This project's own
+configuration now exists on that box too**: `opencircuit.service` has served
+`www.opencircuitsf.com` since **2026-08-25**, replacing the static
+placeholder. The operational details `CLAUDE.md` §10 item 6 asked for were
+captured during that deploy and are recorded below — measured on the box, not
+guessed.
 
 | Fact | Value |
 |---|---|
-| Instance ID | `[PLACEHOLDER: CLAUDE.md §10 item 6]` |
-| Instance size / type | `[PLACEHOLDER: CLAUDE.md §10 item 6 — PRD §10.1 assumes t4g.small, Amazon Linux 2023, unconfirmed]` |
-| Region | `[PLACEHOLDER: CLAUDE.md §10 item 6 — PRD §10.3 specifies us-west-2 for SES; confirm the EC2 instance is in the same region]` |
-| SSH access | `[PLACEHOLDER: CLAUDE.md §10 item 6 — key pair / bastion / SSM, whichever applies]` |
-| `DocumentRoot` (current, static placeholder) | `[PLACEHOLDER: CLAUDE.md §10 item 6]` |
-| Installed vhost file(s) | `[PLACEHOLDER: CLAUDE.md §10 item 6 — confirm against deploy/apache/opencircuitsf.com.conf before assuming they match]` |
-| certbot renewal schedule | `[PLACEHOLDER: CLAUDE.md §10 item 6 — certbot installs its own systemd timer/cron by default; confirm which]` |
-| Is the existing Postgres the target for `opencircuit`? | `[PLACEHOLDER: CLAUDE.md §10 item 6 — if it already hosts a `shortlinks` database, `opencircuit` is a second database on the same cluster, not a second cluster]` |
+| Instance ID | `i-0e3bd89e87d1c2364`, hostname `bluesky.sstools.co` |
+| Instance size / type | `t4g.nano` (ARM/Graviton, Amazon Linux 2023, kernel 6.1 aarch64) — **not** the `t4g.small` PRD §10.1 assumes. 418 MB RAM, backed by a 418 MB zram device plus a 2 GB swapfile; 20 GB root, 53% used. `opencircuit` itself sits at ~14 MB RSS, so the box is tight rather than strained — but it also runs Apache, PostgreSQL, two ShortLinks instances and a prototypes service. `go build` is the memory-hungry step; it succeeds, but it is the thing to suspect if a deploy is ever OOM-killed. |
+| Region | **`us-east-1`** (az `us-east-1b`) — **not** `us-west-2`. PRD §10.3 picks `us-west-2` for *SES*, which is a separate choice from where the instance lives: sending goes over the SES v2 API and works cross-region. Inbound receiving (PRD §6.5 path 3) is the region-pinned part, and it pins to the SES region, not this one. |
+| Public IP / DNS | `44.222.209.183`. `www.opencircuitsf.com` and `opencircuitsf.com` are A records to it; `go.opencircuitsf.com` is a CNAME to `ec2.smallsharptools.com`, which resolves to the same address. |
+| SSH access | `ssh ec2` from the maintainer's Mac — host `ec2.sstools.co`, user `ec2-user`, key `~/.ssh/sstools-ec2.pem`. `ssh ec2-db` is the same host plus a `LocalForward 15432 → localhost:5432` Postgres tunnel (port 15432, not 5432, because a local PostgreSQL already owns 5432 on the Mac). |
+| IAM instance role | **None attached** — the instance metadata service 404s `iam/security-credentials/`. This is the reason SES cannot work yet even after the domain is verified: the AWS SDK's default credential chain has nothing to find, so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false. Attaching a role with `ses:SendEmail`/`ses:SendRawEmail` is a prerequisite for `CLAUDE.md` §10 item 2, not an afterthought. certbot's renewal does **not** depend on it — see the certbot row. |
+| `DocumentRoot` (former static placeholder) | `/var/www/vhosts/www.opencircuitsf.com`. The placeholder HTML is no longer reachable — the Go service answers `/` — but the directory stays, because `/.well-known/` is still served from disk out of it. See "The `/.well-known/` exception" below. |
+| Installed vhost file(s) | `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf` (the proxy vhost) and `001-www.opencircuitsf.com.conf` (port 80 → HTTPS). The apex and every other `*.opencircuitsf.com` name is redirected to `www` by `002-opencircuitsf.com{,-le-ssl}.conf`, which sort *after* the 001 files. **These are not copies of `deploy/apache/opencircuitsf.com.conf`.** That file is one self-contained vhost that does its own apex→www redirect; the box splits the same behaviour across the certbot-managed 001/002 pair it already had, and adding the repo file verbatim would duplicate `ServerName www.opencircuitsf.com`. Edit the installed files; treat the repo file as the reference for the proxy / header / CSP block only. |
+| certbot renewal schedule | `certbot-renew.timer` (systemd), firing twice daily at 00:00 and 12:00 UTC. The cert named `opencircuitsf.com` is a single ECDSA **wildcard** covering `opencircuitsf.com` and `*.opencircuitsf.com`, so one cert serves `www`, `go`, and any future subdomain. The authenticator is **`dns-route53`**, not `--apache`: renewal proves control over the domain through a Route 53 TXT record and never reads the vhosts or `/.well-known/acme-challenge`, so no Apache change in this project can break it. Expiry at deploy time: 2026-11-16. |
+| Is the existing Postgres the target for `opencircuit`? | **Yes.** One PostgreSQL **15.18** cluster on `127.0.0.1:5432` now holds `shortlinks`, `shortlinks_ocsf`, and `opencircuit` (owner: login role `opencircuit`, password auth over TCP). Note the major version: PRD §10.1 and this document's Prerequisites say 16, and `#0062`/`#0228`'s drills ran on 16.14. All 22 migrations applied cleanly on 15.18 and the whole Go suite passes against PostgreSQL 15.14, so 15 is proven for this schema — but nothing in the tree pins it, so do not introduce 16-only syntax without upgrading the box first. |
+
+### The `/.well-known/` exception
+
+`https://www.opencircuitsf.com/.well-known/atproto-did` holds this domain's
+Bluesky DID (`did:plc:olbggqhj2rwqv56ik53kvwfx`) and **must keep working
+across this and every future deploy.** The Go service has no `/.well-known/`
+route and answers `404` there, so the vhost carries an explicit exclusion
+ahead of its proxy rules:
+
+```apache
+ProxyPass /.well-known/ !
+Alias /.well-known/ /var/www/vhosts/www.opencircuitsf.com/.well-known/
+<Directory "/var/www/vhosts/www.opencircuitsf.com/.well-known">
+    AllowOverride None
+    Options -Indexes +FollowSymLinks
+    Require all granted
+</Directory>
+```
+
+Two things about this are load-bearing:
+
+- **Order.** Apache evaluates `ProxyPass` top-to-bottom, so the `!` exclusion
+  has to precede `ProxyPass /`. The same rule is why `/api/events` sits above
+  it.
+- **On disk, not in the app.** Serving the DID from the filesystem means a
+  redeploy, a crashed binary, or a deliberately stopped `opencircuit.service`
+  cannot take Bluesky handle verification offline with it.
+
+Verify it after any Apache or deploy change — a byte comparison, not just a
+`200`:
+
+```bash
+curl -s https://www.opencircuitsf.com/.well-known/atproto-did | shasum -a 256
+# 4198e742e721856d6832f926be55b916b14ad70ddd47a750adb566774cb5948d
+```
 
 ## Planned topology (`PRD.md` §10.1)
 
@@ -84,9 +154,13 @@ markers.
 One EC2 instance hosts **both** this service and the separate ShortLinks
 deploy (`go.opencircuitsf.com`), behind **one** Apache instance with **two**
 vhosts. They share nothing on the box but the host itself, the Apache
-process, and (if `[PLACEHOLDER: CLAUDE.md §10 item 6]` confirms it) the
-PostgreSQL server process — never a database, a service account, a config
-file, or a port:
+process, and — confirmed on 2026-08-25 — the PostgreSQL server process, a
+single 15.18 cluster on `127.0.0.1:5432`. Never a database, a service
+account, a config file, or a port. Note that `go.opencircuitsf.com` is served
+by a *second* ShortLinks instance (`shortlinks-ocsf.service` on `:8083`,
+database `shortlinks_ocsf`); the original `shortlinks.service` on `:8081`
+serves `go.sstools.co`. A third service, `prototypes`, holds `:8082`. So the
+free port this project took, `:8080`, is the only one it may bind:
 
 | | `opencircuit` (this project) | `shortlinks` |
 |---|---|---|
@@ -132,10 +206,11 @@ production facts above, it likely does) or is provisioned fresh. Confirm what
 is already installed before reinstalling anything — Apache and PostgreSQL are
 already on the box per `CLAUDE.md` §7.
 
-- **EC2 instance**, Amazon Linux 2023, sized per `[PLACEHOLDER: CLAUDE.md §10
-  item 6]` (PRD §10.1 assumes `t4g.small` — an ARM/Graviton instance; confirm
-  the architecture before downloading arch-specific tarballs below, since
-  Graviton needs `arm64` builds and an Intel/AMD instance needs `amd64`).
+- **EC2 instance**, Amazon Linux 2023. The real one is a **`t4g.nano`** in
+  `us-east-1` — ARM/Graviton, so every arch-specific tarball below needs the
+  `arm64` build, not `amd64`. PRD §10.1's `t4g.small` assumption is one size
+  too large; the box has 418 MB of RAM plus swap, which is enough but leaves
+  little headroom during `go build`.
 - **Apache (`httpd`) with `mod_ssl`, `mod_proxy`, `mod_proxy_http`,
   `mod_rewrite`, and `mod_headers`.** Already on the box per `CLAUDE.md` §7;
   if provisioning fresh:
@@ -691,9 +766,10 @@ HTTP→HTTPS redirect if one doesn't already exist for these names — **accept
 that offer** (or add one by hand) so plain-HTTP requests aren't served
 insecurely; `deploy/apache/opencircuitsf.com.conf` as committed only defines
 a `:443` vhost. Certbot also installs its own renewal timer/cron entry
-automatically; confirm which (`systemctl list-timers | grep certbot` on a
-systemd-managed renewal) and record it in the production-facts table above —
-`[PLACEHOLDER: CLAUDE.md §10 item 6]`.
+automatically. On this box that is **`certbot-renew.timer`**, firing at 00:00
+and 12:00 UTC, using the **`dns-route53`** authenticator against a wildcard
+cert — so renewal never reads a vhost or an ACME webroot, and no Apache change
+here can break it. Recorded in the production-facts table above.
 
 Reload once more if certbot didn't already:
 
@@ -753,9 +829,9 @@ link to stdout — that is the closest thing to a proof this step has.
 
 | Name | Type | Value | Purpose |
 |---|---|---|---|
-| `www.opencircuitsf.com` | A | `[PLACEHOLDER: the EC2 instance's Elastic IP — CLAUDE.md §10 item 6]` | **Canonical host** |
-| `opencircuitsf.com` | A | `[PLACEHOLDER: same Elastic IP]` | 301 → `www` |
-| `go.opencircuitsf.com` | A | `[PLACEHOLDER: same Elastic IP — ShortLinks shares the box]` | ShortLinks |
+| `www.opencircuitsf.com` | A | `44.222.209.183` | **Canonical host** |
+| `opencircuitsf.com` | A | `44.222.209.183` | 301 → `www` |
+| `go.opencircuitsf.com` | CNAME | `ec2.smallsharptools.com` (same box) | ShortLinks — a CNAME in practice, not the A record PRD §10.2 planned |
 | `<sel1..3>._domainkey.opencircuitsf.com` | CNAME | `[PLACEHOLDER: issued by SES on domain verification, PRD §10.2/§10.4]` | DKIM |
 | `mail.opencircuitsf.com` | MX | `10 feedback-smtp.us-west-2.amazonses.com` | Custom MAIL FROM |
 | `mail.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF alignment |
@@ -1834,10 +1910,48 @@ Tracked so a phase doesn't stall silently on one of these — none are code:
 
 ## What this document is, and is not, verified against
 
-This is a **documentation deliverable**, verified by local inspection,
-syntax-checking, and cross-referencing against the repo's actual files and
-issue history — not by following it end to end on a real instance, which
-does not exist. Concretely, for this pass:
+Originally a documentation deliverable verified only by local inspection. The
+2026-08-25 deploy replaced part of that with measurement on the real host.
+What the deploy actually established, each item measured rather than assumed:
+
+- **Serving path, end to end.** All 22 migrations applied to a fresh
+  `opencircuit` database on the box's PostgreSQL **15.18**; `opencircuit
+  seed` created the admin; `opencircuit.service` came up under systemd,
+  `enabled` at boot, listening on `127.0.0.1:8080` with `/health` returning
+  `{"status":"ok","db":"ok"}`.
+- **PostgreSQL 15 is proven for this schema**, contradicting this document's
+  own "PostgreSQL 16" prerequisite. The migrations applied cleanly on 15.18,
+  and the whole Go suite passes against 15.14 locally with `TEST_DATABASE_URL`
+  set and zero skips.
+- **The `script-src` CSP hash is now verified against a real build** — the
+  limitation stated in earlier versions of this section is closed. The hash
+  was recomputed from `web/dist/index.html` after an actual `npm run build`,
+  using Python's `html.parser` rather than a regex (`CLAUDE.md` §8 records
+  that regex getting this wrong twice), and then re-verified against the bytes
+  Apache actually serves. The live page contains exactly two `<script>`
+  elements — one inline, whose hash matches the CSP, and one external module.
+- **The Apache vhost syntax-checks and runs on the real AL2023 httpd 2.4.68**,
+  not just a local 2.4.67. `mod_ssl`, `mod_proxy`, `mod_proxy_http`,
+  `mod_rewrite`, `mod_headers`, and `mod_alias` are all loaded by default
+  there, as this document assumed.
+- **The SPA builds on the box's Node 18.20.8** despite the "Node.js 20+"
+  prerequisite, and produces byte-identical hashed assets to a local build on
+  Node 25 (`index-VSjBgT9l.js`, `index-q9ezqpg5.css` on both).
+- **`/.well-known/atproto-did` survived the cutover byte-for-byte** —
+  same SHA-256, same `ETag`, same `Last-Modified` before and after.
+- **certbot needs no change.** The wildcard cert already in place covers
+  `www`, and renewal runs off `dns-route53`, which cannot be affected by any
+  vhost edit.
+
+Still **not** verified against anything real, unchanged from the original pass:
+
+- The SES, DKIM/MAIL FROM/inbound DNS, and IAM sections. No SES identity
+  exists and the instance has no IAM role, so none of it has been run.
+- The backup timer and its alert unit — the files exist, nothing installs them
+  on the box yet.
+
+The original local-inspection claims, which still stand for the parts above
+that the deploy did not touch:
 
 - Every artifact path cited (`scripts/db/{create,drop}.sql`,
   `.env.example`, `deploy/apache/opencircuitsf.com.conf`,
@@ -1850,9 +1964,9 @@ does not exist. Concretely, for this pass:
   `mod_proxy_http`, `mod_rewrite`, `mod_ssl`, and `mod_headers` loaded — see
   the Apache step above for exactly what that does and does not prove.
 - The `script-src` CSP hash was computed programmatically (not hand-typed,
-  `CLAUDE.md` §8) from `web/index.html`'s source, with the limitation that
-  it was never checked against a real `npm run build` output — stated
-  inline where the hash appears, with the exact recompute command.
+  `CLAUDE.md` §8) from `web/index.html`'s source. **That limitation is now
+  closed** — see the verified list above; the committed hash turned out to be
+  correct against a real build and against the live response.
 - `deploy/systemd/opencircuit.service`'s hardening directives were confirmed
   present by reading the file directly, not by running it — there is no
   systemd on this development machine.
@@ -1861,11 +1975,11 @@ does not exist. Concretely, for this pass:
   `docs/configuration.md` for internal consistency (variable names, default
   values), not validated against a real AWS account, which does not exist.
 - `CLAUDE.md` §10 item 6's unknowns (instance ID, size, region, SSH access,
-  `DocumentRoot`, installed vhost, certbot schedule, target Postgres) are
-  left as explicit `[PLACEHOLDER: ...]` markers throughout, not invented.
-- The acceptance criterion "the whole runbook followed once on a clean
-  instance and corrected where it was wrong" is **not met** and cannot be
-  until a real instance exists — see the top of this document.
+  `DocumentRoot`, installed vhost, certbot schedule, target Postgres) were
+  **all captured on 2026-08-25** and are in the production-facts table at the
+  top. The `[PLACEHOLDER: ...]` markers that remain are the ones that depend
+  on SES or on an AWS account detail nobody has supplied yet — the DKIM CNAME
+  selectors and the account ID — not on access to the box.
 
 ## Where to look
 
