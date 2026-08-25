@@ -483,7 +483,7 @@ Strict-Transport-Security: max-age=31536000; includeSubDomains
 X-Content-Type-Options: nosniff
 X-Frame-Options: DENY
 Referrer-Policy: strict-origin-when-cross-origin
-Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-dwSwJdScBQq2rtRDgx+PNrnX/IUc7TDIKGH+8kn188Y='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'
+Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-KLoCdoLOAQC6Tl5qFMi7s/7fwSxANUdbZFjnX7Vhau8='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'
 ```
 
 **`script-src` has no `unsafe-inline`**, which is the criterion's actual
@@ -495,24 +495,99 @@ own Notes ("Vite emits hashable assets, so `unsafe-inline` is genuinely
 avoidable here").
 
 **How the hash above was computed, and its real limitation:** it is
-`base64(sha256(<the exact bytes between <script> and </script> in the
-*source* web/index.html>))`, computed directly (Python's `hashlib`/`base64`,
-not typed by hand — `CLAUDE.md` §8 warns that hand-typed escapes can land as
-the literal bytes rather than describing them). **This was computed from the
-unminified source, not from a real `npm run build` output.** `web/dist/` is
-explicitly out of this pass's scope (`CLAUDE.md` §8b flags it as a shared
-mutable resource other concurrent agents may be building into, and the
-dispatch instructions for this pass named `web/` as off-limits), so this
-hash was never checked against what Vite's HTML/JS minifier actually emits —
-minification can reformat inline-script whitespace and change the hash.
-**Before enabling this CSP against a real deploy, recompute and compare:**
+`base64(sha256(<the child text content of web/index.html's one bare
+<script> element, i.e. everything between the '>' that closes its opening
+tag and its '</script>', exactly as the browser sees it>))`, computed
+directly (Python's `hashlib`/`base64`, not typed by hand — `CLAUDE.md` §8
+warns that hand-typed escapes can land as the literal bytes rather than
+describing them). **This was computed from the unminified source, not from
+a real `npm run build` output.** `web/dist/` is explicitly out of this
+pass's scope (`CLAUDE.md` §8b flags it as a shared mutable resource other
+concurrent agents may be building into, and the dispatch instructions for
+this pass named `web/` as off-limits), so this hash was never checked
+against what Vite's HTML/JS minifier actually emits — minification can
+reformat inline-script whitespace and change the hash.
+
+**Corrected 2026-08-24 (`#0064` bounce).** Two prior recompute attempts both
+produced the wrong hash, from two different bugs in the same family — a text
+search for the literal substring `<script>` is not the same thing as finding
+the actual `<script>` *element*:
+
+- The value that shipped in `ccf134d`
+  (`sha256-dwSwJdScBQq2rtRDgx+PNrnX/IUc7TDIKGH+8kn188Y=`) came from a regex
+  anchored on `r'<script>\n(.*?)</script>'` — it stripped the element's
+  leading newline, which CSP does not ignore.
+- The phase-3 review's own "browser-verified" replacement
+  (`sha256-aV6Z5Fp2xyBUYGmN3Q9e0BQeIOKsDdCa35MPtxT7byg=`) is *also* wrong.
+  `web/index.html` line 38 contains the literal four-character-plus-brackets
+  substring `<script>` **inside prose, inside an HTML comment**
+  ("...embedding it verbatim inside `<script>` is safe..." — describing the
+  JSON-LD substitution, not tagging real markup). A plain text search for the
+  first occurrence of `<script>` in the file finds *that* substring, 16 lines
+  before the real bootstrap tag, and then reads forward to the next
+  `</script>` — the real one on line 63 — capturing a ~1.5 KB blob of
+  comment prose, three `<link>` tags, and the real script's own opening tag
+  as literal text, none of which is what the browser hashes. Re-verified in
+  a real browser for this pass (Chromium via Playwright, §10): setting that
+  hash in the CSP still blocks the script, and Chromium's own console
+  violation message names the *actual* correct hash below whenever a wrong
+  one is supplied — that message is not derived from any Python regex and is
+  the ground truth used here.
+- The correct value, `sha256-KLoCdoLOAQC6Tl5qFMi7s/7fwSxANUdbZFjnX7Vhau8=`
+  (shipped in the vhost above as of this pass), was confirmed two ways in a
+  real browser: (1) Chromium's CSP violation message, when served the page
+  under a deliberately wrong hash, names this exact value as the one that
+  would be required; (2) served under a CSP that allows only this hash, the
+  script actually executes with zero `script-src` violations — proven by
+  seeding `localStorage.theme = 'dark'` before navigation and observing
+  `document.documentElement.getAttribute('data-theme') === 'dark'` after
+  load, which only the guard script itself can produce.
+
+**Before enabling this CSP against a real deploy, recompute and compare** —
+using an HTML parser rather than a text/regex search, specifically *because*
+a text search for `<script>` can match prose inside a comment before it
+reaches the real tag, as just happened twice:
 
 ```bash
 python3 - <<'PYEOF'
-import re, hashlib, base64
+import hashlib, base64
+from html.parser import HTMLParser
+
+class ScriptExtractor(HTMLParser):
+    """Finds the one <script> element with no type= and no src= attribute
+    (the pre-paint theme guard) — this correctly ignores HTML comments
+    entirely (handle_data is never called for comment text), unlike a text
+    search for the substring '<script>', and correctly skips the
+    type="module" bundle-entry script and any injected
+    type="application/ld+json" block."""
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self._in_target = False
+        self._buf = []
+        self.captured = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'script' and self.captured is None:
+            attrs_dict = dict(attrs)
+            if 'src' not in attrs_dict and 'type' not in attrs_dict:
+                self._in_target = True
+                self._buf = []
+
+    def handle_data(self, data):
+        if self._in_target:
+            self._buf.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == 'script' and self._in_target:
+            self.captured = ''.join(self._buf)
+            self._in_target = False
+
 html = open('web/dist/index.html', encoding='utf-8').read()   # the REAL build output
-m = re.search(r'<script>\n(.*?)</script>', html, re.S)
-h = hashlib.sha256(m.group(1).encode('utf-8')).digest()
+p = ScriptExtractor()
+p.feed(html)
+if p.captured is None:
+    raise SystemExit("no bare <script> element found — did the markup change?")
+h = hashlib.sha256(p.captured.encode('utf-8')).digest()
 print("sha256-" + base64.b64encode(h).decode())
 PYEOF
 ```
@@ -521,7 +596,12 @@ If the printed hash differs from the one in the vhost file, update the vhost
 and reload — a stale hash here doesn't fail open, it fails **closed**: the
 browser blocks the inline script and the pre-paint theme flash guard simply
 stops running (a cosmetic flash-of-wrong-theme on load), not a security
-regression, but worth fixing rather than leaving broken.
+regression, but worth fixing rather than leaving broken. **Do not accept the
+new value on the printed hash alone** — the last two rounds show a wrong
+extraction can be internally consistent with itself. Confirm it in a real
+browser: serve the file with the candidate CSP and either watch for zero
+`script-src` console violations, or deliberately supply a wrong hash first
+and read the correct one back out of Chromium's own violation message.
 
 **`style-src` keeps `'unsafe-inline'` — a real, load-bearing gap against the
 criterion, not an oversight.** Several Svelte components use plain
