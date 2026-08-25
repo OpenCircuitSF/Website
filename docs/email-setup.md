@@ -102,11 +102,21 @@ sandbox is enough to develop against; it is not enough to launch.
 
 ## IAM
 
-> **This is the open blocker.** The instance has **no IAM role attached at
-> all** — the metadata service 404s `iam/security-credentials/`. Every other
-> piece below works, and none of it can send a byte until this is fixed.
-> [`aws-iam-setup.md`](aws-iam-setup.md) has the exact policies and the
-> console steps.
+> **Done 2026-08-25.** Role `opencircuit-instance` (inline policy
+> `opencircuit-ses-send`) is attached to `i-0e3bd89e87d1c2364`; the service
+> user resolves to
+> `assumed-role/opencircuit-instance/i-0e3bd89e87d1c2364` and sends
+> successfully. See [`aws-iam-setup.md`](aws-iam-setup.md).
+>
+> **One trap, recorded because it cost a live debugging round:** the policy's
+> `Resource` must be `identity/*`, not just the sending domain's identity.
+> While the account is in the **sandbox**, SES authorizes `SendEmail` against
+> the *recipient's* identity ARN as well as the sender's, so a policy naming
+> only `identity/mailing.opencircuitsf.com` fails every real send with
+> `AccessDeniedException` on the recipient ARN — while a send to
+> `success@simulator.amazonses.com` still succeeds, because simulator addresses
+> are not identities. Verify an SES IAM policy against a real verified
+> recipient, never only the simulator.
 
 The EC2 instance role provides SES send permissions — **no static SMTP
 credentials** should ever live in the config file or environment (`PRD.md`

@@ -209,14 +209,14 @@ PRD §10.5's "scoped tightly: no `ses:*`, no wildcard resources":
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "SendThroughVerifiedIdentityAndConfigSet",
+      "Sid": "SendThroughAccountIdentitiesAndConfigSet",
       "Effect": "Allow",
       "Action": [
         "ses:SendEmail",
         "ses:SendRawEmail"
       ],
       "Resource": [
-        "arn:aws:ses:us-west-2:378152330719:identity/mailing.opencircuitsf.com",
+        "arn:aws:ses:us-west-2:378152330719:identity/*",
         "arn:aws:ses:us-west-2:378152330719:configuration-set/opencircuit-transactional"
       ]
     }
@@ -226,10 +226,39 @@ PRD §10.5's "scoped tightly: no `ses:*`, no wildcard resources":
 
 Both ARNs are required, not one or the other. `internal/mailing`'s SES mailer
 calls the **v2** `SendEmail` with `ConfigurationSetName` always set
-(`ses_mailer.go`), and SES authorizes that call against the identity **and**
+(`ses_mailer.go`), and SES authorizes that call against an identity **and**
 the configuration set as two separate resources. Omitting the configuration-set
 ARN produces an `AccessDenied` that reads as though the identity were the
 problem.
+
+### Why `identity/*` and not just the sending domain
+
+This policy originally named `identity/mailing.opencircuitsf.com` — the
+identity mail is sent *from* — which looks tighter and is wrong. **While the
+account is in the SES sandbox, SES also authorizes the call against the
+RECIPIENT's identity ARN.** Every send to the admin address failed with:
+
+```
+AccessDeniedException: ... is not authorized to perform 'ses:SendEmail'
+on resource 'arn:aws:ses:us-west-2:378152330719:identity/brennan@opencircuitsf.com'
+```
+
+Naming recipients in an IAM policy is not viable for a mailing list, so the
+resource has to be the wildcard. It is still confined to SES identities in one
+account and one region, and still requires this one configuration set — a long
+way from `ses:*` on `*`.
+
+**The way this was missed is worth more than the fix.** The smoke test that
+"proved" the role worked sent to `success@simulator.amazonses.com`. Simulator
+addresses are *not* SES identities, so no recipient-resource check happened and
+the narrow policy passed. The test exercised every part of the path except the
+one that was broken. **Test a send to a real verified address**, not only the
+simulator, before believing an SES IAM policy.
+
+What saved it was `#0126`'s durable queue: the recovery emails sat in
+`outbound_queue` retrying on backoff for ~14 minutes and delivered on the next
+attempt after the policy was corrected. Nothing was lost, and the failure was
+fully legible in the journal and the `error` column.
 
 `ses:SendRawEmail` is included because the v2 API maps onto it for MIME
 content; the mailer sends `multipart/alternative` for HTML campaigns.
