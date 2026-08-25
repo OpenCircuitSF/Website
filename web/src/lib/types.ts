@@ -119,6 +119,24 @@ export interface Subscriber {
   soft_bounce_count?: number;
   soft_bounce_threshold?: number;
   soft_bounce_window_days?: number;
+  /** The address's activity log (#0126, PRD §6.11), newest first, populated by the detail endpoint only. */
+  events?: SubscriberEvent[];
+}
+
+/**
+ * One subscriber_events row (#0126) — a single meaningful thing that
+ * happened to an address (signup, confirmation, interest change,
+ * unsubscribe, bounce, suppression, admin edit, erasure, ...). `detail` is
+ * an opaque, action-specific JSON object rendered generically (or omitted)
+ * rather than parsed per-action, since the closed action set already lives
+ * server-side (internal/subscribers.Action) and the drawer's job is to show
+ * a timeline, not re-implement that vocabulary.
+ */
+export interface SubscriberEvent {
+  action: string;
+  created_at: string;
+  campaign_id?: number;
+  detail?: unknown;
 }
 
 /** The {pending, active, unsubscribed, bounced, complained} header block atop the subscribers list. */

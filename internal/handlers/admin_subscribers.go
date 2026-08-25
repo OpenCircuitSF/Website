@@ -43,6 +43,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -81,6 +82,9 @@ type adminSubscriberStore interface {
 	// two admin_edited writes (ClearComplaint and Create's manual add; see
 	// #0126's plan §9 item 9).
 	RecordEvent(ctx context.Context, e subscribers.Event) error
+	// EventHistory backs the subscriber detail drawer's event history
+	// (#0126, #0032's own criterion): newest first, bounded to 100 rows.
+	EventHistory(ctx context.Context, subscriberID int64) ([]subscribers.SubscriberEventRow, error)
 }
 
 // adminInterestByIDReader is the behavior AdminSubscribersHandler needs from
@@ -214,23 +218,34 @@ type interestRef struct {
 // avoid a query per row); all three are nil together when the handler was
 // constructed with a nil bounces/settings dependency (STORAGE=json dev mode).
 type subscriberView struct {
-	ID                   int64         `json:"id"`
-	Email                string        `json:"email"`
-	Status               string        `json:"status"`
-	SignupIP             *string       `json:"signup_ip,omitempty"`
-	SignupUserAgent      *string       `json:"signup_user_agent,omitempty"`
-	UTMSource            *string       `json:"utm_source,omitempty"`
-	UTMMedium            *string       `json:"utm_medium,omitempty"`
-	UTMCampaign          *string       `json:"utm_campaign,omitempty"`
-	CreatedAt            string        `json:"created_at"` // signup timestamp
-	ConfirmedAt          *string       `json:"confirmed_at,omitempty"`
-	UnsubscribedAt       *string       `json:"unsubscribed_at,omitempty"`
-	UnsubscribeSource    *string       `json:"unsubscribe_source,omitempty"`
-	Interests            []interestRef `json:"interests,omitempty"`               // populated by Get only
-	EmailEvents          []any         `json:"email_events"`                      // always [] until #0038
-	SoftBounceCount      *int          `json:"soft_bounce_count,omitempty"`       // populated by Get only
-	SoftBounceThreshold  *int          `json:"soft_bounce_threshold,omitempty"`   // populated by Get only
-	SoftBounceWindowDays *int          `json:"soft_bounce_window_days,omitempty"` // populated by Get only
+	ID                   int64                 `json:"id"`
+	Email                string                `json:"email"`
+	Status               string                `json:"status"`
+	SignupIP             *string               `json:"signup_ip,omitempty"`
+	SignupUserAgent      *string               `json:"signup_user_agent,omitempty"`
+	UTMSource            *string               `json:"utm_source,omitempty"`
+	UTMMedium            *string               `json:"utm_medium,omitempty"`
+	UTMCampaign          *string               `json:"utm_campaign,omitempty"`
+	CreatedAt            string                `json:"created_at"` // signup timestamp
+	ConfirmedAt          *string               `json:"confirmed_at,omitempty"`
+	UnsubscribedAt       *string               `json:"unsubscribed_at,omitempty"`
+	UnsubscribeSource    *string               `json:"unsubscribe_source,omitempty"`
+	Interests            []interestRef         `json:"interests,omitempty"`               // populated by Get only
+	EmailEvents          []any                 `json:"email_events"`                      // always [] until #0038
+	SoftBounceCount      *int                  `json:"soft_bounce_count,omitempty"`       // populated by Get only
+	SoftBounceThreshold  *int                  `json:"soft_bounce_threshold,omitempty"`   // populated by Get only
+	SoftBounceWindowDays *int                  `json:"soft_bounce_window_days,omitempty"` // populated by Get only
+	Events               []subscriberEventView `json:"events,omitempty"`                  // populated by Get only (#0126)
+}
+
+// subscriberEventView is one subscriber_events row (#0126, PRD §6.11),
+// newest first, bounded to subscribers.Store.EventHistory's own 100-row
+// limit (no pagination — matching that method's own doc comment).
+type subscriberEventView struct {
+	Action     string          `json:"action"`
+	CreatedAt  string          `json:"created_at"`
+	CampaignID *int64          `json:"campaign_id,omitempty"`
+	Detail     json.RawMessage `json:"detail,omitempty"`
 }
 
 func formatTimePtr(t *time.Time) *string {
@@ -448,6 +463,25 @@ func (h *AdminSubscribersHandler) Get(w http.ResponseWriter, r *http.Request) {
 		view.SoftBounceCount = intPtr(count)
 		view.SoftBounceThreshold = intPtr(threshold)
 		view.SoftBounceWindowDays = intPtr(int(window.Hours() / 24))
+	}
+
+	// #0126: the address's activity log, newest first — #0032's own
+	// "event history" criterion for this drawer.
+	history, err := h.store.EventHistory(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if len(history) > 0 {
+		view.Events = make([]subscriberEventView, 0, len(history))
+		for _, e := range history {
+			view.Events = append(view.Events, subscriberEventView{
+				Action:     string(e.Action),
+				CreatedAt:  e.CreatedAt.UTC().Format(time.RFC3339),
+				CampaignID: e.CampaignID,
+				Detail:     json.RawMessage(e.Detail),
+			})
+		}
 	}
 
 	writeJSON(w, http.StatusOK, view)

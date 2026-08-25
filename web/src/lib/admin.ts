@@ -514,6 +514,67 @@ export function softBounceSummary(sub: Subscriber): string {
   return base;
 }
 
+// ── Subscriber activity log (#0126, PRD §6.11) ───────────────────────────────
+
+/**
+ * Human-readable label for a subscriber_events action value. Matches
+ * internal/subscribers.Action's closed set. An unknown value is returned
+ * as-is (the server's own closed-set validation is what actually prevents
+ * an unrecognized action from ever reaching this table — see
+ * internal/subscribers/events.go — so "as-is" here is a display fallback,
+ * not a validation gap).
+ */
+export function subscriberEventActionLabel(action: string): string {
+  switch (action) {
+    case 'signup_requested':
+      return 'Signup requested';
+    case 'confirmation_sent':
+      return 'Confirmation email sent';
+    case 'confirmed':
+      return 'Confirmed';
+    case 'confirmation_expired':
+      return 'Confirmation link expired';
+    case 'welcome_sent':
+      return 'Welcome email sent';
+    case 'interests_changed':
+      return 'Interests changed';
+    case 'unsubscribed':
+      return 'Unsubscribed';
+    case 'resubscribed':
+      return 'Resubscribed';
+    case 'imported':
+      return 'Imported';
+    case 'invite_sent':
+      return 'Import invite sent';
+    case 'invite_accepted':
+      return 'Import invite accepted';
+    case 'invite_expired':
+      return 'Import invite expired';
+    case 'import_revoked':
+      return 'Import revoked';
+    case 'campaign_sent':
+      return 'Campaign email sent';
+    case 'bounced_soft':
+      return 'Soft bounce (repeated)';
+    case 'bounced_hard':
+      return 'Hard bounce';
+    case 'complained':
+      return 'Spam complaint';
+    case 'delivered':
+      return 'Delivered';
+    case 'suppressed':
+      return 'Suppressed';
+    case 'unsuppressed':
+      return 'Suppression removed';
+    case 'admin_edited':
+      return 'Edited by staff';
+    case 'erased':
+      return 'Erased (GDPR/CCPA)';
+    default:
+      return action;
+  }
+}
+
 // ── Admin suppression-list screen (#0100) ────────────────────────────────────
 
 /** The four subscribers.SuppressionReason* values, matching the server's CHECK constraint. */

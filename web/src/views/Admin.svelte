@@ -83,6 +83,7 @@
     validateSuppressNote,
     signupEvidenceSummary,
     softBounceSummary,
+    subscriberEventActionLabel,
     SUPPRESSION_REASONS,
     suppressionReasonLabel,
     validateSuppressionNote,
@@ -1794,6 +1795,20 @@
                     <li>{JSON.stringify(_event)}</li>
                   {/each}
                 </ul>
+              {/if}
+
+              <h3 class="detail-heading">Activity log</h3>
+              {#if viewingSubscriber.events && viewingSubscriber.events.length > 0}
+                <ul class="detail-interest-list">
+                  {#each viewingSubscriber.events as ev, i (i)}
+                    <li>
+                      <span class="mono">{formatDateTime(ev.created_at)}</span>
+                      — {subscriberEventActionLabel(ev.action)}
+                    </li>
+                  {/each}
+                </ul>
+              {:else}
+                <p class="text-muted">No activity recorded yet.</p>
               {/if}
 
               <div class="row" style="margin-top: var(--space-4);">

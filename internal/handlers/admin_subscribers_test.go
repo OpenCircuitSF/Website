@@ -321,6 +321,56 @@ func TestAdminSubscribers_Get_ReturnsConsentEvidenceAndInterests(t *testing.T) {
 	}
 }
 
+// TestAdminSubscribers_Get_IncludesEventHistory is #0126's proof of #0032's
+// "event history" criterion: a real Create (via subscribers.Store, which
+// #0126 makes write signup_requested inside its own transaction) followed
+// by a real Confirm (writes confirmed) shows up in the detail response's
+// events field, newest first.
+func TestAdminSubscribers_Get_IncludesEventHistory(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-subs-events@example.com")
+	seedSession(t, pool, admin, "admin-token-events")
+
+	store := subscribers.NewStore(pool)
+	sub, err := store.Create(context.Background(), subscribers.NewSignup{
+		Email: subscribeUniqueEmail(t), ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Confirm(context.Background(), *sub.ConfirmToken, time.Now()); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	client := srv.Client()
+	resp := doJSON(t, client, "GET", fmt.Sprintf("%s/admin/subscribers/%d", srv.URL, sub.ID), "admin-token-events", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var view struct {
+		Events []struct {
+			Action    string `json:"action"`
+			CreatedAt string `json:"created_at"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(readBody(t, resp), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(view.Events) != 2 {
+		t.Fatalf("events = %+v, want exactly 2 (signup_requested, confirmed)", view.Events)
+	}
+	// Newest first: confirmed happened after signup_requested.
+	if view.Events[0].Action != "confirmed" {
+		t.Errorf("Events[0].Action = %q, want %q (newest first)", view.Events[0].Action, "confirmed")
+	}
+	if view.Events[1].Action != "signup_requested" {
+		t.Errorf("Events[1].Action = %q, want %q", view.Events[1].Action, "signup_requested")
+	}
+}
+
 // TestAdminSubscribers_Get_IncludesSoftBounceCount is #0039's "admin can
 // see the current soft-bounce count on the subscriber detail screen"
 // acceptance criterion. It seeds two Transient-bounce email_events rows

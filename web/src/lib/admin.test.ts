@@ -28,6 +28,7 @@ import {
   reorderSwap,
   hasSubscribers,
   subscriberStatusLabel,
+  subscriberEventActionLabel,
   subscriberStatusBadgeClass,
   canClearComplaint,
   subscribersExportHref,
@@ -396,6 +397,44 @@ describe('subscriberStatusLabel', () => {
 
   it('returns an unknown value as-is', () => {
     expect(subscriberStatusLabel('mystery')).toBe('mystery');
+  });
+});
+
+describe('subscriberEventActionLabel', () => {
+  it('labels every action in the closed set (#0126, PRD §6.11)', () => {
+    const actions = [
+      'signup_requested',
+      'confirmation_sent',
+      'confirmed',
+      'confirmation_expired',
+      'welcome_sent',
+      'interests_changed',
+      'unsubscribed',
+      'resubscribed',
+      'imported',
+      'invite_sent',
+      'invite_accepted',
+      'invite_expired',
+      'import_revoked',
+      'campaign_sent',
+      'bounced_soft',
+      'bounced_hard',
+      'complained',
+      'delivered',
+      'suppressed',
+      'unsuppressed',
+      'admin_edited',
+      'erased',
+    ];
+    for (const action of actions) {
+      const label = subscriberEventActionLabel(action);
+      expect(label, `action ${action} has no distinct label`).not.toBe(action);
+      expect(label.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('returns an unknown value as-is', () => {
+    expect(subscriberEventActionLabel('mystery')).toBe('mystery');
   });
 });
 
