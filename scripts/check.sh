@@ -232,7 +232,15 @@ case "$MODE" in
   *)   step "go build"; runpipe "go build ./... 2>&1 | tail -$TAIL"
        step "go vet";   runpipe "go vet ./... 2>&1 | tail -$TAIL"
        gofmt_check
-       go_test "./internal/... ./cmd/..."; web_check ;;
+       # #0212 review (bounced bfdfe04): this arm used to spell its own
+       # explicit package list ("./internal/... ./cmd/..."), a second source
+       # of truth that go_test()'s default-list edit never reached — so
+       # ./web/... joined the `go` mode's scope but not the BARE default's,
+       # which is the command CLAUDE.md §5 and every issue actually tells
+       # agents to run. Calling go_test with no arguments makes this arm read
+       # the exact same default list `go)` reads when given none, so there is
+       # only one place that list is spelled.
+       go_test; web_check ;;
 esac
 
 step "leftover processes you may have started"
