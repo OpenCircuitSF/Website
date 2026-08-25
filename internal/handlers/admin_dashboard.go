@@ -52,13 +52,12 @@ import (
 // AMBER band (#0227). Crossing it does not degrade inbox placement the way
 // the red band below does; it risks sending stopping altogether, since a
 // re-sandboxed account can't send even confirmation emails. This is NOT
-// send_health_complaint_pct (PRD §6.9's per-campaign circuit breaker, also
-// defaulted to 0.1% but scoped to ONE campaign's own running rate at send
-// time) — that setting doesn't exist as code today; the breaker itself is
-// #0124, unimplemented. Keep the two separate once #0124 lands: conflating
-// them would either weaken the breaker's bound or make this warning read
-// from a per-campaign figure instead of the account-wide one it is defined
-// against.
+// mailing.SettingSendHealthComplaintPct (PRD §6.9's per-campaign circuit
+// breaker, also defaulted to 0.1% but scoped to ONE campaign's own running
+// rate at send time, tripped mid-send by internal/mailing's send worker —
+// #0124, built) — the two stay separate on purpose: conflating them would
+// either weaken the breaker's bound or make this account-wide warning read
+// from a single campaign's figure instead of the one it is defined against.
 const dashboardComplaintReviewThresholdPct = 0.1
 
 // dashboardComplaintRateThresholdPct is the Gmail/Yahoo bulk-sender
@@ -69,9 +68,9 @@ const dashboardComplaintReviewThresholdPct = 0.1
 // which stops sending entirely) — the two are reported as independent
 // booleans, not one escalating color, precisely because the failure modes
 // differ. Like the amber threshold, this is NOT
-// send_health_complaint_pct — see that constant's doc comment; #0124 is the
-// per-campaign circuit breaker this would-be settings-table value belongs
-// to once it exists.
+// mailing.SettingSendHealthComplaintPct — see that constant's doc comment
+// (internal/mailing/worker_store.go) and delivery_health.go's package doc
+// comment for #0124's per-campaign circuit breaker, which reads it.
 const dashboardComplaintRateThresholdPct = 0.3
 
 // dashboardComplaintMinSample: below this many account-wide sends, a

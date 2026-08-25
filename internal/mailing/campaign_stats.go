@@ -134,10 +134,12 @@ func (s *CampaignStatsStore) EventCounts(ctx context.Context, campaignID int64) 
 // (PRD §6.9, PRD §11's RFC 8058). This is a DIFFERENT number from the
 // per-campaign circuit breaker's own running complaint rate (PRD §6.9,
 // default 0.1%, tripped mid-send on ONE campaign): that breaker is #0124,
-// unimplemented — no `send_health_complaint_pct` constant exists in this
-// codebase to conflate this figure with. This one is the account-wide
-// figure an operator watches to keep the whole domain's sender reputation
-// healthy, computed fresh on every dashboard load rather than tracked
+// built — checkDeliveryHealth (delivery_health.go) reads
+// SettingSendHealthComplaintPct via EventCounts/StatusCounts on ONE
+// campaignID, never this account-wide method, so the two figures cannot be
+// conflated by construction. This one is the account-wide figure an
+// operator watches to keep the whole domain's sender reputation healthy,
+// computed fresh on every dashboard load rather than tracked
 // incrementally.
 //
 // LEFT JOIN, deliberately unlike EventCounts' INNER JOIN: a sent row with no

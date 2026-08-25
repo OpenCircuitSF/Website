@@ -12,6 +12,7 @@ import {
   progressHeading,
   progressVerdict,
   remainingForCancel,
+  pausedDeliveryHealthExplanation,
   CAMPAIGN_PROGRESS_EVENT,
   type CampaignProgress,
 } from './campaignProgress';
@@ -54,7 +55,7 @@ describe('isTerminalCampaignStatus', () => {
   });
 
   it('is false for every non-terminal status, and for an unknown/blank one', () => {
-    for (const s of ['draft', 'scheduled', 'sending', '', 'SENT', 'unknown']) {
+    for (const s of ['draft', 'scheduled', 'sending', 'paused_delivery_health', '', 'SENT', 'unknown']) {
       expect(isTerminalCampaignStatus(s)).toBe(false);
     }
   });
@@ -105,6 +106,15 @@ describe('isTerminalSnapshot', () => {
       for (const status of ['draft', 'scheduled']) {
         expect(isTerminalSnapshot(progress({ status, total: 10, remaining: 10 }))).toBe(false);
       }
+    });
+
+    // #0124: the circuit breaker's own status has the identical
+    // "rows deliberately left queued" shape as 'failed' — the worker never
+    // drains the remaining recipients, it just stops.
+    it('is true for a paused_delivery_health campaign with rows still queued', () => {
+      expect(
+        isTerminalSnapshot(progress({ status: 'paused_delivery_health', total: 10, sent: 6, remaining: 4 })),
+      ).toBe(true);
     });
   });
 
@@ -284,6 +294,15 @@ describe('shouldShowProgress', () => {
     expect(shouldShowProgress('canceled', false)).toBe(false);
   });
 
+  // #0124: not in TERMINAL_CAMPAIGN_STATUSES (a paused send can resume),
+  // but it needs the identical "only with a snapshot" treatment terminal
+  // statuses get — an operator who opens a paused campaign wants to see
+  // how far the send got.
+  it('shows paused_delivery_health only when a snapshot arrived, like a terminal status', () => {
+    expect(shouldShowProgress('paused_delivery_health', true)).toBe(true);
+    expect(shouldShowProgress('paused_delivery_health', false)).toBe(false);
+  });
+
   it('never shows for draft/scheduled regardless of snapshot', () => {
     expect(shouldShowProgress('draft', true)).toBe(false);
     expect(shouldShowProgress('scheduled', true)).toBe(false);
@@ -296,12 +315,21 @@ describe('progressHeading', () => {
     expect(progressHeading('sent')).toBe('Send complete');
     expect(progressHeading('failed')).toBe('Send stopped');
     expect(progressHeading('canceled')).toBe('Send canceled');
+    expect(progressHeading('paused_delivery_health')).toBe('Paused — delivery health');
   });
 
   it('is empty for a status the region never shows', () => {
     expect(progressHeading('draft')).toBe('');
     expect(progressHeading('scheduled')).toBe('');
     expect(progressHeading('')).toBe('');
+  });
+});
+
+describe('pausedDeliveryHealthExplanation', () => {
+  it('returns non-empty, stable copy', () => {
+    const msg = pausedDeliveryHealthExplanation();
+    expect(msg.length).toBeGreaterThan(0);
+    expect(pausedDeliveryHealthExplanation()).toBe(msg);
   });
 });
 
@@ -349,5 +377,13 @@ describe('remainingForCancel', () => {
 
   it('returns 0 (not undefined) when remaining is genuinely 0', () => {
     expect(remainingForCancel('sending', 1, progress({ campaign_id: 1, remaining: 0 }))).toBe(0);
+  });
+
+  // #0124: a paused campaign has the same "some sent, some queued" shape
+  // as a sending one, so the same live count applies.
+  it('also returns the live remaining count for paused_delivery_health', () => {
+    expect(
+      remainingForCancel('paused_delivery_health', 1, progress({ campaign_id: 1, status: 'paused_delivery_health', remaining: 42 })),
+    ).toBe(42);
   });
 });

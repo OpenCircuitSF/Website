@@ -258,7 +258,7 @@ export interface Campaign {
   subject: string;
   preheader?: string;
   body_md: string;
-  status: string; // draft | scheduled | sending | sent | canceled | failed
+  status: string; // draft | scheduled | sending | paused_delivery_health | sent | canceled | failed
   audience_mode: string; // all | any_of | all_of | none_selected
   workshop_id?: number;
   interest_ids: number[];
@@ -553,7 +553,7 @@ export interface DashboardInterestRow {
 export interface DashboardCampaignRow {
   id: number;
   name: string;
-  status: string; // draft | scheduled | sending | sent | canceled | failed
+  status: string; // draft | scheduled | sending | paused_delivery_health | sent | canceled | failed
   scheduled_at?: string;
   started_at?: string;
   completed_at?: string;

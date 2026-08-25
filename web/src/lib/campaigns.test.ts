@@ -11,6 +11,7 @@ import {
   canEditCampaign,
   canSendCampaign,
   canCancelCampaign,
+  canResumeCampaign,
   interestsApplyToMode,
   validateCampaignDraft,
   subjectLengthAdvice,
@@ -18,6 +19,9 @@ import {
   wasDemotedAfterScheduling,
   demotionExplanation,
   cancelCopy,
+  resumeCopy,
+  campaignStatusLabel,
+  campaignStatusBadgeClass,
 } from './campaigns';
 import { formatDateTime } from './admin';
 
@@ -41,6 +45,7 @@ describe('canEditCampaign / canSendCampaign / canCancelCampaign', () => {
     draft: { edit: true, send: true, cancel: false },
     scheduled: { edit: true, send: false, cancel: true },
     sending: { edit: false, send: false, cancel: true },
+    paused_delivery_health: { edit: false, send: false, cancel: true },
     sent: { edit: false, send: false, cancel: false },
     canceled: { edit: false, send: false, cancel: false },
     failed: { edit: false, send: false, cancel: false },
@@ -266,5 +271,60 @@ describe('cancelCopy', () => {
 
   it('falls back to the no-digits wording when remaining is undefined', () => {
     expect(cancelCopy('sending', undefined)).toBe(cancelCopy('sending'));
+  });
+
+  // #0124: a paused campaign has already sent some recipients, exactly like
+  // a sending one — "nothing has been sent yet" would be actively wrong.
+  it('treats paused_delivery_health like sending, not like scheduled', () => {
+    expect(cancelCopy('paused_delivery_health')).toBe(cancelCopy('sending'));
+    expect(cancelCopy('paused_delivery_health')).not.toBe(cancelCopy('scheduled'));
+  });
+
+  it('includes the remaining count for paused_delivery_health when supplied', () => {
+    expect(cancelCopy('paused_delivery_health', 42)).toContain('42');
+  });
+});
+
+// #0124: the circuit breaker's recovery path.
+describe('canResumeCampaign', () => {
+  for (const status of CAMPAIGN_STATUSES) {
+    it(`status=${status}`, () => {
+      expect(canResumeCampaign(status)).toBe(status === 'paused_delivery_health');
+    });
+  }
+});
+
+describe('resumeCopy', () => {
+  it('returns non-empty, stable copy', () => {
+    const msg = resumeCopy();
+    expect(msg.length).toBeGreaterThan(0);
+    expect(resumeCopy()).toBe(msg);
+  });
+});
+
+describe('campaignStatusLabel / campaignStatusBadgeClass', () => {
+  it('gives paused_delivery_health a distinct, non-empty label from every other status', () => {
+    const label = campaignStatusLabel('paused_delivery_health');
+    expect(label.length).toBeGreaterThan(0);
+    for (const status of CAMPAIGN_STATUSES) {
+      if (status === 'paused_delivery_health') continue;
+      expect(campaignStatusLabel(status)).not.toBe(label);
+    }
+  });
+
+  it('returns the input verbatim for an unrecognized status', () => {
+    expect(campaignStatusLabel('some_future_status')).toBe('some_future_status');
+  });
+
+  it('badges paused_delivery_health as danger, like failed — both demand operator attention', () => {
+    expect(campaignStatusBadgeClass('paused_delivery_health')).toBe(campaignStatusBadgeClass('failed'));
+    expect(campaignStatusBadgeClass('paused_delivery_health')).toBe('badge-danger');
+  });
+
+  it('every CAMPAIGN_STATUSES value maps to a known badge class', () => {
+    const known = new Set(['badge-success', 'badge-danger', 'badge-muted']);
+    for (const status of CAMPAIGN_STATUSES) {
+      expect(known.has(campaignStatusBadgeClass(status))).toBe(true);
+    }
   });
 });

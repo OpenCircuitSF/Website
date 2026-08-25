@@ -24,11 +24,19 @@ import { formatDateTime } from './admin';
 
 // ── Campaign status vocabulary (migration 000017) ────────────────────────────
 
-/** The six mailing.CampaignStatus* values, in no particular order. */
+/**
+ * The seven mailing.CampaignStatus* values, in no particular order.
+ * `paused_delivery_health` (#0124, PRD §6.9) is the circuit breaker's own
+ * status: a campaign the send worker stopped mid-drain because its running
+ * bounce or complaint rate crossed a configured threshold, distinct from
+ * `failed` — a paused campaign is expected to be resumed, not retried from
+ * scratch.
+ */
 export const CAMPAIGN_STATUSES: readonly string[] = [
   'draft',
   'scheduled',
   'sending',
+  'paused_delivery_health',
   'sent',
   'canceled',
   'failed',
@@ -43,6 +51,8 @@ export function campaignStatusLabel(status: string): string {
       return 'Scheduled';
     case 'sending':
       return 'Sending';
+    case 'paused_delivery_health':
+      return 'Paused — delivery health';
     case 'sent':
       return 'Sent';
     case 'canceled':
@@ -56,7 +66,10 @@ export function campaignStatusLabel(status: string): string {
 
 /**
  * Badge CSS class for a campaign status: green for a completed send, red for
- * a failed one, muted for every in-progress or terminal-but-uneventful state
+ * a failed OR breaker-paused one (both demand operator attention — no
+ * separate amber badge variant exists in app.css, and reusing the danger
+ * color is the correct signal here, not a placeholder), muted for every
+ * other in-progress or terminal-but-uneventful state
  * (draft/scheduled/sending/canceled) — mirrors subscriberStatusBadgeClass's
  * shape in lib/admin.ts.
  */
@@ -65,6 +78,7 @@ export function campaignStatusBadgeClass(status: string): string {
     case 'sent':
       return 'badge-success';
     case 'failed':
+    case 'paused_delivery_health':
       return 'badge-danger';
     default:
       return 'badge-muted';
@@ -117,9 +131,24 @@ export function canSendCampaign(status: string): boolean {
   return status === 'draft';
 }
 
-/** Whether the Cancel control should be shown for a campaign at this status. */
+/**
+ * Whether the Cancel control should be shown for a campaign at this status.
+ * `paused_delivery_health` (#0124) added: an operator who has diagnosed the
+ * underlying problem may cancel a paused campaign directly rather than
+ * being forced through a resume-then-cancel round trip — mirrors
+ * mailing.CampaignStore.Cancel's own accepted source-status set.
+ */
 export function canCancelCampaign(status: string): boolean {
-  return status === 'scheduled' || status === 'sending';
+  return status === 'scheduled' || status === 'sending' || status === 'paused_delivery_health';
+}
+
+/**
+ * Whether the Resume control should be shown — #0124's circuit-breaker
+ * recovery path, the only way to un-trip it. Mirrors
+ * mailing.CampaignStore.Resume's own single accepted source status.
+ */
+export function canResumeCampaign(status: string): boolean {
+  return status === 'paused_delivery_health';
 }
 
 // ── CRUD-save validation (deliberately NOT the Preflight send gate) ─────────
@@ -263,20 +292,23 @@ export function demotionExplanation(c: Campaign): string {
 
 /**
  * Operator-facing copy for the cancel confirmation, keyed by the campaign's
- * CURRENT status (only `scheduled` and `sending` ever offer Cancel — see
- * canCancelCampaign).
+ * CURRENT status (only `scheduled`, `sending`, and `paused_delivery_health`
+ * ever offer Cancel — see canCancelCampaign).
  *
  * `remaining`, added by #0048, is the live remaining-recipient count from
  * lib/campaignProgress.ts's `remainingForCancel` — deliberately optional
  * and `undefined` by default (not a magic 0) so a caller with no live
  * snapshot yet (or none originally, before #0048) gets the same
  * no-digits fallback wording this function always returned: a stale or
- * fabricated number would be worse than none. Only the `sending` case ever
- * uses it — `scheduled` has sent nothing yet, so there is no "remaining out
- * of what" to state.
+ * fabricated number would be worse than none. `sending` and, since #0124,
+ * `paused_delivery_health` both use it — a paused campaign has the
+ * identical "some sent, some still queued" shape a sending one does, so
+ * "nothing has been sent yet" would be actively wrong for it. `scheduled`
+ * alone falls to the empty-audience wording: nothing has been sent yet,
+ * so there is no "remaining out of what" to state.
  */
 export function cancelCopy(status: string, remaining?: number): string {
-  if (status === 'sending') {
+  if (status === 'sending' || status === 'paused_delivery_health') {
     if (remaining != null) {
       const who = remaining === 1 ? '1 recipient' : `${remaining} recipients`;
       return `Messages already sent cannot be recalled. Cancelling stops sending to the ${who} not yet mailed.`;
@@ -284,4 +316,14 @@ export function cancelCopy(status: string, remaining?: number): string {
     return 'Messages already sent cannot be recalled. Cancelling stops sending to anyone not already mailed.';
   }
   return 'Nothing has been sent yet. Cancelling stops the send before it starts.';
+}
+
+/**
+ * Operator-facing copy for the resume confirmation (#0124) — the campaign
+ * is currently paused, and resuming hands it back to the send worker,
+ * which re-evaluates the same circuit breaker on the next batch (never
+ * bypassed).
+ */
+export function resumeCopy(): string {
+  return 'This campaign was paused by the delivery-health circuit breaker. Resuming lets the worker continue sending — it will pause again if the bounce or complaint rate is still over threshold.';
 }

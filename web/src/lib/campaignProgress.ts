@@ -8,6 +8,17 @@
 // #campaign-send-progress region and cancel dialog make about these numbers
 // routes through here, never a comparison/ternary written directly in the
 // component.
+//
+// #0124 added `paused_delivery_health`: the circuit breaker's own status.
+// It is NOT in TERMINAL_CAMPAIGN_STATUSES (a paused send is expected to
+// resume, unlike sent/failed/canceled) but it needs the same "worth a
+// resync" and "still show the numbers" treatment `failed` already has,
+// since the worker publishes its closing snapshot with `remaining > 0`
+// (rows deliberately left `queued`, not drained) — the identical shape
+// `isTerminalSnapshot`'s own doc comment describes for `failed`.
+
+/** email_campaigns.status' circuit-breaker value (#0124, migration 000017). */
+const PAUSED_DELIVERY_HEALTH_STATUS = 'paused_delivery_health';
 
 /**
  * One live snapshot of a campaign's send progress, as published over SSE.
@@ -108,7 +119,7 @@ export function isTerminalCampaignStatus(status: string): boolean {
  * (still-'sending') response from landing last and reinstating the bug.
  */
 export function isTerminalSnapshot(p: CampaignProgress): boolean {
-  return isTerminalCampaignStatus(p.status) || p.remaining === 0;
+  return isTerminalCampaignStatus(p.status) || p.status === PAUSED_DELIVERY_HEALTH_STATUS || p.remaining === 0;
 }
 
 /**
@@ -204,7 +215,7 @@ export function shouldShowProgress(status: string, hasSnapshot: boolean): boolea
   if (status === 'sending') {
     return true;
   }
-  return hasSnapshot && isTerminalCampaignStatus(status);
+  return hasSnapshot && (isTerminalCampaignStatus(status) || status === PAUSED_DELIVERY_HEALTH_STATUS);
 }
 
 /**
@@ -227,9 +238,25 @@ export function progressHeading(status: string): string {
       return 'Send stopped';
     case 'canceled':
       return 'Send canceled';
+    case PAUSED_DELIVERY_HEALTH_STATUS:
+      return 'Paused — delivery health';
     default:
       return '';
   }
+}
+
+/**
+ * The explanatory line shown under progressHeading's "Paused — delivery
+ * health" — #0124's "surface it as a distinct, EXPLAINED state" criterion.
+ * Deliberately generic (no rate/threshold numbers): those live in the
+ * audit log entry the circuit breaker wrote
+ * (audit.ActionEmailCampaignPausedDeliveryHealth) and the campaign's own
+ * stats screen (#0049), neither of which this SSE snapshot carries — restating
+ * a number here that could go stale between polls would be worse than
+ * pointing at the two places that are always current.
+ */
+export function pausedDeliveryHealthExplanation(): string {
+  return 'The send worker paused this campaign because its running bounce or complaint rate crossed a configured safety threshold. Check the campaign stats and audit log for the exact numbers, then resume or cancel below.';
 }
 
 /** Verdict returned by progressVerdict: whether a live send looks like it's still making progress. */
@@ -269,16 +296,22 @@ export function progressVerdict(status: string, lastEventAt: number | null, now:
  * `undefined` when it isn't known/applicable — #0047's cancelCopy('sending')
  * deliberately omits this number because only #0048's live stream knows it;
  * this is where #0048 supplies it. `undefined` (never 0-by-default) whenever
- * status isn't 'sending', or no snapshot for THIS campaign has arrived yet,
- * so cancelCopy's fallback wording (no digits) is used instead of a
- * fabricated or stale number.
+ * status isn't 'sending' or paused_delivery_health (#0124: a paused
+ * campaign has the identical "some sent, some still queued" shape a
+ * sending one does — see cancelCopy), or no snapshot for THIS campaign has
+ * arrived yet, so cancelCopy's fallback wording (no digits) is used instead
+ * of a fabricated or stale number.
  */
 export function remainingForCancel(
   status: string,
   campaignId: number,
   progress: CampaignProgress | null,
 ): number | undefined {
-  if (status !== 'sending' || progress === null || !isProgressForCampaign(progress, campaignId)) {
+  if (
+    (status !== 'sending' && status !== PAUSED_DELIVERY_HEALTH_STATUS) ||
+    progress === null ||
+    !isProgressForCampaign(progress, campaignId)
+  ) {
     return undefined;
   }
   return progress.remaining;
