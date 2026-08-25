@@ -20,6 +20,7 @@ import {
   demotionExplanation,
   cancelCopy,
   resumeCopy,
+  resumeSubjectMatches,
   campaignStatusLabel,
   campaignStatusBadgeClass,
 } from './campaigns';
@@ -299,6 +300,29 @@ describe('resumeCopy', () => {
     const msg = resumeCopy();
     expect(msg.length).toBeGreaterThan(0);
     expect(resumeCopy()).toBe(msg);
+  });
+});
+
+describe('resumeSubjectMatches', () => {
+  it('matches the exact subject', () => {
+    expect(resumeSubjectMatches('Spring Sale', 'Spring Sale')).toBe(true);
+  });
+
+  it('trims surrounding whitespace on the typed value', () => {
+    expect(resumeSubjectMatches('  Spring Sale  ', 'Spring Sale')).toBe(true);
+  });
+
+  it('rejects an empty or whitespace-only typed value even if the subject is also blank', () => {
+    expect(resumeSubjectMatches('', '')).toBe(false);
+    expect(resumeSubjectMatches('   ', '')).toBe(false);
+  });
+
+  it('is case-sensitive', () => {
+    expect(resumeSubjectMatches('spring sale', 'Spring Sale')).toBe(false);
+  });
+
+  it('rejects a mismatched subject', () => {
+    expect(resumeSubjectMatches('Not It', 'Spring Sale')).toBe(false);
   });
 });
 

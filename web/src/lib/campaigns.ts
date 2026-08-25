@@ -327,3 +327,20 @@ export function cancelCopy(status: string, remaining?: number): string {
 export function resumeCopy(): string {
   return 'This campaign was paused by the delivery-health circuit breaker. Resuming lets the worker continue sending — it will pause again if the bounce or complaint rate is still over threshold.';
 }
+
+/**
+ * Whether a typed confirmation matches campaignSubject for the Resume
+ * dialog — POST /admin/campaigns/{id}/resume's own server-side check
+ * (admin_campaigns.go's Resume), restated here ONLY to gate the client's
+ * button as an offer, never as enforcement (CLAUDE.md §9, #0047's
+ * "typed confirmation enforced only in the browser is theatre" — the
+ * server independently re-checks and refuses a mismatch with 400
+ * regardless of what this returns). Trimmed, case-sensitive exact match,
+ * mirroring the server's `strings.TrimSpace` comparison exactly — no
+ * case-folding, so a mistyped case is still caught here before the round
+ * trip, not just server-side.
+ */
+export function resumeSubjectMatches(typed: string, campaignSubject: string): boolean {
+  const t = typed.trim();
+  return t !== '' && t === campaignSubject.trim();
+}

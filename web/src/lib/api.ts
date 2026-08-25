@@ -677,6 +677,19 @@ export function cancelCampaign(id: number): Promise<Campaign> {
 }
 
 /**
+ * POST /admin/campaigns/{id}/resume — #0124's circuit-breaker recovery
+ * path: `paused_delivery_health` -> `scheduled`. `confirmSubject` is the
+ * campaign's own subject, typed back by the operator — the server
+ * independently re-verifies it against the stored row and 400s on a
+ * mismatch (admin_campaigns.go's Resume), so lib/campaigns.ts's
+ * `resumeSubjectMatches` client-side check is an offer gate only, never
+ * trusted on its own.
+ */
+export function resumeCampaign(id: number, confirmSubject: string): Promise<Campaign> {
+  return apiPost<Campaign>(`/admin/campaigns/${id}/resume`, { confirm_subject: confirmSubject });
+}
+
+/**
  * GET /admin/campaigns/{id}/stats — the per-campaign outcome screen (admin
  * only, #0049): counts by send status, bounce/complaint counts reconciled
  * from email_events, and failed sends with their error messages. Read-only;

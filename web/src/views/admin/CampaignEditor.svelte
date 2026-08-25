@@ -32,6 +32,7 @@
     testSendCampaign,
     sendCampaign,
     cancelCampaign,
+    resumeCampaign,
     listInterests,
     ApiError,
   } from '../../lib/api';
@@ -39,6 +40,7 @@
     canEditCampaign,
     canSendCampaign,
     canCancelCampaign,
+    canResumeCampaign,
     interestsApplyToMode,
     AUDIENCE_MODES,
     subjectLengthAdvice,
@@ -46,6 +48,8 @@
     wasDemotedAfterScheduling,
     demotionExplanation,
     cancelCopy,
+    resumeCopy,
+    resumeSubjectMatches,
   } from '../../lib/campaigns';
   import { parseUnmetFromError, fixLocation } from '../../lib/preflight';
   import {
@@ -69,6 +73,7 @@
     formatProgressDetail,
     progressVerdict,
     remainingForCancel,
+    pausedDeliveryHealthExplanation,
     type CampaignProgress,
   } from '../../lib/campaignProgress';
   import type { Campaign, PreflightResponse, AudiencePreviewResponse, CampaignPreviewResponse, UnmetRequirement, Interest } from '../../lib/types';
@@ -138,6 +143,19 @@
   let cancelError = $state<string | null>(null);
   let cancelModalEl = $state<HTMLDivElement | null>(null);
 
+  // ── Resume dialog (#0124) ───────────────────────────────────────────────
+  let resumeDialogOpen = $state(false);
+  let resuming = $state(false);
+  let resumeError = $state<string | null>(null);
+  let resumeModalEl = $state<HTMLDivElement | null>(null);
+  let resumeConfirmRaw = $state('');
+
+  $effect(() => {
+    // Same focus-management fix as the cancel dialog's own effect above
+    // (#0120) — mount into a fresh dialog must not skip it.
+    if (resumeDialogOpen && campaign) void tick().then(() => resumeModalEl?.focus());
+  });
+
   $effect(() => {
     // #0120: move focus into the modal panel itself once it opens, so the
     // panel's own Escape handler (below) is reachable and so the dialog
@@ -176,6 +194,12 @@
   let editable = $derived(campaign ? canEditCampaign(campaign.status) : false);
   let sendOffered = $derived(campaign ? canSendCampaign(campaign.status) : false);
   let cancelOffered = $derived(campaign ? canCancelCampaign(campaign.status) : false);
+  // #0124: the circuit breaker's recovery path.
+  let resumeOffered = $derived(campaign ? canResumeCampaign(campaign.status) : false);
+  let pausedExplanation = $derived(
+    campaign && campaign.status === 'paused_delivery_health' ? pausedDeliveryHealthExplanation() : '',
+  );
+  let resumeMatches = $derived(campaign ? resumeSubjectMatches(resumeConfirmRaw, campaign.subject) : false);
   let interestsEnabled = $derived(interestsApplyToMode(mode));
   let demoted = $derived(campaign ? wasDemotedAfterScheduling(campaign) : false);
   let demotionMessage = $derived(campaign ? demotionExplanation(campaign) : '');
@@ -566,6 +590,32 @@
     }
   }
 
+  // ── Resume (#0124) ────────────────────────────────────────────────────────
+  function openResume(): void {
+    resumeError = null;
+    resumeConfirmRaw = '';
+    resumeDialogOpen = true;
+  }
+
+  function closeResume(): void {
+    if (resuming) return;
+    resumeDialogOpen = false;
+  }
+
+  async function onConfirmResume(): Promise<void> {
+    if (!resumeMatches) return;
+    resuming = true;
+    resumeError = null;
+    try {
+      campaign = await resumeCampaign(campaignId, resumeConfirmRaw);
+      resumeDialogOpen = false;
+    } catch (err) {
+      resumeError = err instanceof ApiError ? err.message : 'Could not resume this campaign.';
+    } finally {
+      resuming = false;
+    }
+  }
+
   function goToFix(section: string): void {
     if (section === 'settings') {
       onGoToSettings();
@@ -802,7 +852,17 @@
       {#if cancelOffered}
         <Button variant="danger" onclick={openCancel}>Cancel campaign</Button>
       {/if}
+      {#if resumeOffered}
+        <Button onclick={openResume}>Resume campaign</Button>
+      {/if}
     </div>
+
+    {#if pausedExplanation}
+      <!-- #0124's "surface it as a distinct, EXPLAINED state" criterion —
+           always visible while paused, not tucked inside the dialog, so an
+           operator sees why before deciding whether to resume or cancel. -->
+      <p class="text-warn" role="status">{pausedExplanation}</p>
+    {/if}
 
     <!-- #0048: live send progress over SSE. The outer div is #0047's named
          region, rendered UNCONDITIONALLY and never wrapped in an {#if} — an
@@ -867,6 +927,59 @@
               {canceling ? 'Cancelling…' : 'Cancel campaign'}
             </Button>
             <Button disabled={canceling} onclick={closeCancel}>Keep it</Button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    {#if resumeDialogOpen && campaign}
+      <div
+        class="modal-backdrop"
+        role="presentation"
+        onclick={closeResume}
+        onkeydown={(e) => {
+          if (isModalEscape(e)) closeResume();
+        }}
+      >
+        <div
+          class="modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Resume campaign"
+          tabindex="-1"
+          bind:this={resumeModalEl}
+          onclick={(e) => e.stopPropagation()}
+          onkeydown={(e) => {
+            if (isModalEscape(e)) closeResume();
+          }}
+        >
+          <h2 class="modal-title">Resume this campaign?</h2>
+          <p>{resumeCopy()}</p>
+          <div class="field">
+            <!-- #0060's Erase pattern: type the resource's own identifying
+                 text back, so this cannot be triggered by a bare click with
+                 no evidence the operator saw which campaign — and which
+                 bounce/complaint rate — they were about to restart. -->
+            <label for="resume-confirm-subject">
+              Type the subject to confirm: <strong class="mono">{campaign.subject}</strong>
+            </label>
+            <input
+              id="resume-confirm-subject"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              bind:value={resumeConfirmRaw}
+              disabled={resuming}
+            />
+          </div>
+          {#if resumeError}
+            <p class="text-error" role="alert">{resumeError}</p>
+          {/if}
+          <div class="row" style="margin-top: var(--space-3);">
+            <Button disabled={resuming || !resumeMatches} onclick={onConfirmResume}>
+              {resuming ? 'Resuming…' : 'Resume campaign'}
+            </Button>
+            <Button disabled={resuming} onclick={closeResume}>Keep it paused</Button>
           </div>
         </div>
       </div>
