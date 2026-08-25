@@ -573,6 +573,26 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   relative `$0`. It holds the same relative string and fails identically once
   the script has `cd`'d. Resolve an absolute path *before* changing directory.
 
+- **A self-check can start measuring the process instead of the file.**
+  `#0258`'s fourth attempt sourced candidate lines into `( source "$tmp";
+  declare -f run )` and hashed the result — a "private subshell". It is a
+  subshell of the *running* `scripts/check.sh`, which already has `run` and
+  `runpipe` defined. So when the extraction contributes nothing, `declare -f`
+  silently falls back to the **live** definition: the check stops measuring the
+  file on disk and starts measuring the program currently executing, which
+  always agrees with itself.
+
+  That is what turned a separate bug into a **fail-open**. An ordinary helper
+  containing a `#` inside a string (`printf '# %s\n'`) broke the comment-strip
+  `sed`, which is not quote-aware, and swallowed every later candidate — and
+  because the fallback then reported the live definition, the digest matched
+  and the guard passed. Measured *outside* a running `check.sh`, the same file
+  hashes the empty string and fails closed.
+
+  Two rules follow. Isolate genuinely (`env -i bash --noprofile --norc`, or
+  `unset -f` the names first), and **assert the extraction produced something**
+  before hashing it — an empty result must be an error, never an input.
+
 - **BSD `grep -P` on this machine matches nothing, silently.** It does not
   error and does not warn — it reports zero hits on a file that demonstrably
   contains the bytes, which reads exactly like "the string isn't there." A
