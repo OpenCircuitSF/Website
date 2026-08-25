@@ -235,65 +235,67 @@ fi
 # sibling check: assert its definition is the UNIQUE line in this file
 # starting "run()" (closing the decoy/duplicate-definition class of
 # evasion — a second definition would either shadow the first at call time
-# or supply a decoy match for the comparison below), then compare that one
-# line — trailing comment and trailing whitespace stripped — against the
-# exact expected text. Never a substring search over a larger block: that
-# scope is exactly what let #0251's pass-1 fix (and, per its own
-# documented residual gaps, a dead-branch or heredoc decoy) slip past a
-# check that wasn't scoped this tightly.
+# or supply a second candidate for the comparison below), then compare
+# that one line — trailing comment and trailing whitespace stripped —
+# against the expected text. Never a substring search over a larger
+# block: that scope is exactly what let #0251's pass-1 fix (and, per its
+# own documented residual gaps, a dead-branch or heredoc decoy) slip past
+# a check that wasn't scoped this tightly.
 #
-# The comparison below is a literal string equality against a quoted
-# heredoc, not a hand-built regex. runpipe()'s definition has no embedded
-# quotes and stayed regex-based; run()'s definition embeds a single-quoted
-# printf format ('\033[31mFAILED (%d): %s\033[0m\n') that would need
-# multiple layers of escaping to express safely as a bash-single-quoted
-# ERE literal — the exact kind of hand-escaping that cost #0251 two review
-# rounds to get right for a simpler line. A quoted heredoc (<<'RUN_EOF')
-# performs no expansion at all, so what sits between the markers is
-# compared byte-for-byte with nothing to escape. This is the "one shared
-# assertion" question the issue raises, answered concretely: the two
-# checks share the same STRUCTURE (unique-line assertion, then a
-# comment/whitespace-stripped exact comparison of that one line) but not
-# one literal code path, because forcing run()'s embedded quotes through
-# runpipe()'s regex machinery would reintroduce exactly the escaping risk
-# the heredoc form avoids. A third critical line should follow this same
-# two-part shape, picking regex or heredoc comparison by whether its own
-# text embeds quotes.
+# This guard's FIRST pass compared run()'s definition against a verbatim
+# copy of that same text sitting in a quoted heredoc a few lines below —
+# and #0258's own review defeated it: one sed replacing the real
+# definition (`s|^run() { "\$@"; local rc=\$?.*|run() { "\$@"; return 0;
+# }|`) also rewrote the heredoc, because heredoc and subject were the same
+# bytes in the same file and could never get out of step. `runpipe()`'s
+# sibling check survived the identical attack only because ITS oracle (a
+# hand-built ERE) is a different REPRESENTATION of the expected text, not
+# a copy of it — CLAUDE.md §8 now names this as the general rule: the
+# question for any oracle is not whether the subject's text embeds quotes,
+# it's whether an edit to the subject can also satisfy the oracle. A
+# hand-built ERE was rejected here in the first pass because run()'s
+# definition embeds a single-quoted printf format
+# ('\033[31mFAILED (%d): %s\033[0m\n') that would need multiple layers of
+# escaping to express safely as a bash-single-quoted ERE literal — the
+# exact hand-escaping mistake that cost #0251 two review rounds on a
+# simpler line. A pinned SHA-256 digest of the expected line gives the
+# same independence as a regex (the check's own text is unrelated bytes to
+# the code it verifies, so a find-and-replace over the code cannot also
+# update it) without any escaping at all: nothing about hex digits needs
+# quoting. Because there is no longer a verbatim copy of the subject
+# anywhere in this file, RUN_DEF_COUNT below scans the WHOLE file with
+# nothing excluded — there is nothing to exclude, and no decoy-block class
+# to close the way GUARD-0208 had to for a second RUNPIPE-0208 marker
+# pair: any second "run()" definition, decoy markers or not, is always
+# counted.
+#
+# To recompute the pinned digest after a legitimate change to run():
+#   sed -n '<line>p' scripts/check.sh \
+#     | sed -E 's/[[:space:]]*#.*$//; s/[[:space:]]+$//' \
+#     | shasum -a 256
 #
 # Known, accepted gap — same shape as #0208's mutant 7 and #0251's
 # documented I/J residuals: an edit that BOTH indents run()'s real
 # definition (so it stops matching ^run\(\)) AND plants a column-0 decoy
-# elsewhere reading the exact expected text would still pass. That needs
-# two coordinated edits to a top-level function, one of which (indenting
-# it) nobody does by accident — an agent willing to do that could delete
-# this guard outright. Not closed; closing it needs a shell parser, not a
-# grep.
+# elsewhere whose SHA-256 happens to collide with the pinned digest would
+# still pass. That needs two coordinated edits to a top-level function
+# plus a hash collision, not a realistic edit — an agent willing to
+# indent the guarded line could delete this guard outright. Not closed;
+# closing it needs a shell parser, not a grep or a hash.
 step "self-check: run() FAILED-accounting guard (#0258)"
-# The expected text below is embedded verbatim in a heredoc for the literal
-# comparison further down — which means it ALSO matches "^run\(\)" at
-# column 0, same as the real definition at the top of this file. Wrapped
-# in its own BEGIN/END marker pair (built the same "two concatenated
-# pieces" way as $BG/$EG/$BR/$ER above, so this line's own source never
-# spells the marker contiguously and can't reopen its own delete range) so
-# the count and extraction below can delete it from "$0" before scanning —
-# otherwise the count would find 2 and every run would report a false
-# regression against the unmutated script.
-BD="# BEGIN"" RUNDATA-0258"; ED="# END"" RUNDATA-0258"
-# BEGIN RUNDATA-0258
-read -r -d '' RUN_EXPECTED <<'RUN_EOF' || true
-run()  { "$@"; local rc=$?; [ $rc -eq 0 ] || { FAILED=1; printf '\033[31mFAILED (%d): %s\033[0m\n' "$rc" "$*"; }; return 0; }
-RUN_EOF
-# END RUNDATA-0258
-RUN_SCAN="$(sed -e "/${BD}/,/${ED}/d" "$0")"
-RUN_DEF_COUNT="$(printf '%s\n' "$RUN_SCAN" | grep -cE '^run\(\)' || true)"
+command -v shasum >/dev/null || { echo "error: shasum not on PATH (needed by GUARD-0258)" >&2; exit 2; }
+RUN_DEF_COUNT="$(grep -cE '^run\(\)' "$0" || true)"
 if [ "${RUN_DEF_COUNT:-0}" -ne 1 ]; then
   printf '\033[31mFAILED-ACCOUNTING REGRESSION (#0258): expected exactly one line starting "run()" in scripts/check.sh; found %s. A duplicate can supply a decoy match for the check below, and zero means run() itself is gone.\033[0m\n' "${RUN_DEF_COUNT:-0}" >&2
   exit 2
 fi
-RUN_LINE="$(printf '%s\n' "$RUN_SCAN" | grep -E '^run\(\)' | sed -E 's/[[:space:]]*#.*$//; s/[[:space:]]+$//')"
-if [ "$RUN_LINE" != "$RUN_EXPECTED" ]; then
-  printf '\033[31mFAILED-ACCOUNTING REGRESSION (#0258): run()'"'"'s own definition no longer matches the expected text (trailing comment and trailing whitespace, if any, stripped before this comparison) — the FAILED=1 accounting this whole script'"'"'s pass/fail report depends on may have been removed. Definition line as found:\033[0m\n' >&2
+RUN_LINE="$(grep -E '^run\(\)' "$0" | sed -E 's/[[:space:]]*#.*$//; s/[[:space:]]+$//')"
+RUN_LINE_SHA256="$(printf '%s\n' "$RUN_LINE" | shasum -a 256 | awk '{print $1}')"
+RUN_EXPECTED_SHA256="805d033eb6d062bfa80002ff75580ce8df6297310f17dad3fc9e6182d1d0df3e"
+if [ "$RUN_LINE_SHA256" != "$RUN_EXPECTED_SHA256" ]; then
+  printf '\033[31mFAILED-ACCOUNTING REGRESSION (#0258): run()'"'"'s own definition no longer matches the pinned SHA-256 digest (trailing comment and trailing whitespace, if any, stripped before hashing) — the FAILED=1 accounting this whole script'"'"'s pass/fail report depends on may have been removed. Definition line as found:\033[0m\n' >&2
   printf '%s\n' "$RUN_LINE" >&2
+  printf 'sha256: %s (expected %s)\n' "$RUN_LINE_SHA256" "$RUN_EXPECTED_SHA256" >&2
   exit 2
 fi
 # END GUARD-0258
