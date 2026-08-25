@@ -62,13 +62,18 @@ const (
 )
 
 // Campaign status constants, verbatim from migration 000017's status CHECK.
+// CampaignStatusPausedDeliveryHealth was added by #0124 (PRD §6.9): the
+// send worker's own mid-send circuit breaker, distinct from
+// CampaignStatusFailed — a paused campaign is expected to be resumed
+// (POST /admin/campaigns/{id}/resume), not retried from scratch.
 const (
-	CampaignStatusDraft     = "draft"
-	CampaignStatusScheduled = "scheduled"
-	CampaignStatusSending   = "sending"
-	CampaignStatusSent      = "sent"
-	CampaignStatusCanceled  = "canceled"
-	CampaignStatusFailed    = "failed"
+	CampaignStatusDraft                = "draft"
+	CampaignStatusScheduled            = "scheduled"
+	CampaignStatusSending              = "sending"
+	CampaignStatusPausedDeliveryHealth = "paused_delivery_health"
+	CampaignStatusSent                 = "sent"
+	CampaignStatusCanceled             = "canceled"
+	CampaignStatusFailed               = "failed"
 )
 
 var (
@@ -569,9 +574,14 @@ func (s *CampaignStore) Cancel(ctx context.Context, id int64) (Campaign, error) 
 	row := s.pool.QueryRow(ctx,
 		`UPDATE email_campaigns
 		    SET status = $2, updated_at = now()
-		  WHERE id = $1 AND status IN ($3, $4)
+		  WHERE id = $1 AND status IN ($3, $4, $5)
 		  RETURNING `+campaignColumns,
-		id, CampaignStatusCanceled, CampaignStatusScheduled, CampaignStatusSending,
+		// #0124: a campaign paused by the delivery-health circuit breaker
+		// is also cancellable directly — an operator who has diagnosed the
+		// underlying problem may decide the campaign should not resume at
+		// all, and forcing a Resume-then-Cancel round trip through the
+		// worker would serve no purpose.
+		id, CampaignStatusCanceled, CampaignStatusScheduled, CampaignStatusSending, CampaignStatusPausedDeliveryHealth,
 	)
 	updated, err := scanCampaign(row)
 	switch {
@@ -588,6 +598,55 @@ func (s *CampaignStore) Cancel(ctx context.Context, id int64) (Campaign, error) 
 		}
 	case err != nil:
 		return Campaign{}, fmt.Errorf("mailing: cancelling campaign %d: %w", id, err)
+	}
+	ids, err := s.interestIDs(ctx, id)
+	if err != nil {
+		return Campaign{}, err
+	}
+	updated.InterestIDs = ids
+	return updated, nil
+}
+
+// Resume transitions a paused_delivery_health campaign back to scheduled
+// (#0124, PRD §6.9) — the same "hand it back to the worker's ordinary
+// scheduled -> sending claim" shape Send uses for a failed-campaign retry,
+// not a dedicated resume-specific worker path. scheduledAt is "now" for an
+// immediate resume; a caller wanting a delay can pass a future time, though
+// internal/handlers/admin_campaigns.go's Resume handler always passes now().
+//
+// The ONLY legal source status is paused_delivery_health — deliberately
+// narrower than Send's draft-or-failed set, since Resume exists to answer
+// one specific question ("this campaign was paused by the circuit breaker;
+// let it continue") and answering it for a draft or a failed campaign would
+// just be Send under a different name and a different (weaker) confirmation
+// shape. drainLoop re-evaluates the circuit breaker fresh on the next pass —
+// resuming does not reset or bypass it (this issue's "not bypassable from
+// the UI" criterion): a campaign whose rate is still over threshold once
+// enough NEW sends accumulate trips again.
+func (s *CampaignStore) Resume(ctx context.Context, id int64, scheduledAt time.Time) (Campaign, error) {
+	if scheduledAt.IsZero() {
+		return Campaign{}, ErrCampaignScheduleTimeRequired
+	}
+	row := s.pool.QueryRow(ctx,
+		`UPDATE email_campaigns
+		    SET status = $2, scheduled_at = $3, updated_at = now()
+		  WHERE id = $1 AND status = $4
+		  RETURNING `+campaignColumns,
+		id, CampaignStatusScheduled, scheduledAt, CampaignStatusPausedDeliveryHealth,
+	)
+	updated, err := scanCampaign(row)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		switch _, gerr := s.GetByID(ctx, id); {
+		case errors.Is(gerr, ErrCampaignNotFound):
+			return Campaign{}, ErrCampaignNotFound
+		case gerr != nil:
+			return Campaign{}, gerr
+		default:
+			return Campaign{}, ErrIllegalStatusTransition
+		}
+	case err != nil:
+		return Campaign{}, fmt.Errorf("mailing: resuming campaign %d: %w", id, err)
 	}
 	ids, err := s.interestIDs(ctx, id)
 	if err != nil {

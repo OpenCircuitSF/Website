@@ -542,6 +542,24 @@ func (s *SendStore) MarkFailedCampaign(ctx context.Context, campaignID int64) (b
 	return tag.RowsAffected() == 1, nil
 }
 
+// MarkPausedDeliveryHealth transitions a 'sending' campaign to
+// 'paused_delivery_health' (#0124, PRD §6.9) — the circuit breaker's own
+// trip action. Guarded by `AND status='sending'` for the identical reason
+// MarkFailedCampaign is: a concurrent completion or failure racing this
+// call is a harmless no-op rather than a double transition. Deliberately a
+// SEPARATE status from 'failed' — see campaigns.go's
+// CampaignStatusPausedDeliveryHealth doc comment for why.
+func (s *SendStore) MarkPausedDeliveryHealth(ctx context.Context, campaignID int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE email_campaigns SET status = 'paused_delivery_health', updated_at = now() WHERE id = $1 AND status = 'sending'`,
+		campaignID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("mailing: pausing campaign %d for delivery health: %w", campaignID, err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // CampaignStatus reads email_campaigns.status for campaignID.
 //
 // This exists for #0048's progress snapshot, and the reason is worth stating

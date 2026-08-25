@@ -86,6 +86,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
@@ -185,6 +186,19 @@ type Worker struct {
 	// SES send. nil-tolerant, matching every other optional dependency in
 	// this file — a nil events simply skips the write.
 	events *subscribers.Store
+	// stats and outbox back #0124's circuit breaker: stats reads the
+	// campaign's running bounce/complaint rate (internal/mailing's own
+	// CampaignStatsStore, campaign_stats.go); outbox enqueues the
+	// admin_alert on trip (#0126's plan §7, built for exactly this
+	// caller). Both nil-tolerant — see checkDeliveryHealth's and
+	// enqueueDeliveryHealthAlert's doc comments for what a nil dependency
+	// degrades to. Deliberately NOT optional in production wiring
+	// (cmd/opencircuit/main.go always supplies both when the worker itself
+	// is constructed) — nil-tolerance here exists for tests that don't
+	// need the breaker, not as a sanctioned way to ship without it.
+	stats      *CampaignStatsStore
+	outbox     *outbox.Store
+	adminEmail string
 
 	baseURL, listDomain, fromAddr, replyTo string
 	envMaxSendRate, batchSize              int
@@ -210,6 +224,15 @@ type WorkerDeps struct {
 	// Events records campaign_sent (#0126). nil disables the write,
 	// matching Audit's own nil-tolerance above.
 	Events *subscribers.Store
+	// Stats and Outbox back #0124's circuit breaker — see Worker's own
+	// field doc comments. AdminEmail is cfg.AdminEmail (ADMIN_EMAIL,
+	// optional per CLAUDE.md §10 item 4); empty disables the alert enqueue
+	// specifically (the breaker still trips and pauses the campaign either
+	// way — the alert is a notification of that fact, not a precondition
+	// for it).
+	Stats      *CampaignStatsStore
+	Outbox     *outbox.Store
+	AdminEmail string
 
 	BaseURL, ListDomain, FromAddr, ReplyTo string
 	// EnvMaxSendRate is MAX_SEND_RATE — the deploy-level ceiling. BatchSize
@@ -292,6 +315,9 @@ func NewWorker(deps WorkerDeps) (*Worker, error) {
 		settings:       deps.Settings,
 		progress:       deps.Progress,
 		events:         deps.Events,
+		stats:          deps.Stats,
+		outbox:         deps.Outbox,
+		adminEmail:     deps.AdminEmail,
 		baseURL:        deps.BaseURL,
 		listDomain:     deps.ListDomain,
 		fromAddr:       deps.FromAddr,
@@ -587,6 +613,25 @@ func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) (bool, error
 		}
 
 		w.publishProgress(ctx, c.ID)
+
+		// #0124's circuit breaker (PRD §6.9), checked once per drained
+		// batch — the same cadence publishProgress already uses, not once
+		// per message: bounce/complaint events arrive asynchronously via
+		// SES's webhook (internal/handlers/ses_notifications.go), often
+		// well after the send that triggered them, so checking more often
+		// than once per batch buys no earlier detection, only more queries
+		// against a rate that hasn't moved.
+		tripped, herr := w.checkDeliveryHealth(ctx, c.ID)
+		if herr != nil {
+			// A health-check failure (a query error) must not silently
+			// disable the breaker — that would turn "the database had a
+			// hiccup" into "safety checking quietly stopped" — but it also
+			// must not crash a send that is otherwise healthy. Log and
+			// keep draining; the next batch tries again.
+			w.log.Error("mailing: delivery-health check failed", "campaign_id", c.ID, "err", herr)
+		} else if tripped.Tripped {
+			return true, w.pauseCampaignDeliveryHealth(ctx, c.ID, c.Subject, tripped)
+		}
 	}
 }
 

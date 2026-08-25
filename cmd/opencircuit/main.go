@@ -321,7 +321,14 @@ func servePostgres(cfg *config.Config) error {
 	// that deliberately doesn't run the worker itself (CLAUDE.md §10 item
 	// 4's "exactly one instance runs the worker" scaling story).
 	sendStore := newSendStoreIfEnabled(cfg, pool, audienceStore, store)
-	sendWorker, err := newSendWorkerIfEnabled(cfg, sendStore, audienceStore, auditLogger, sesSender, store, campaignProgressPub, subscribersStore, slog.Default())
+	// campaignStatsStore and outbox.NewStore(pool) are both cheap, stateless
+	// wrappers over the shared pool (the same instance campaignStatsStore
+	// below, constructed again there for adminCampaignStatsH, and every
+	// other outbox.NewStore(pool) call site in this file) — constructed
+	// inline here rather than hoisting either above this call, since
+	// #0124's breaker is the only reason the worker needs them and neither
+	// carries state that would make sharing one instance matter.
+	sendWorker, err := newSendWorkerIfEnabled(cfg, sendStore, audienceStore, auditLogger, sesSender, store, campaignProgressPub, subscribersStore, mailing.NewCampaignStatsStore(pool), outbox.NewStore(pool), slog.Default())
 	if err != nil {
 		return fmt.Errorf("opencircuit: constructing send worker: %w", err)
 	}
@@ -557,7 +564,7 @@ func newSendStoreIfEnabled(cfg *config.Config, pool *pgxpool.Pool, audienceStore
 // A single slog.Warn records either refusal, since nothing about the
 // request path can otherwise surface "campaigns will not send" to an
 // operator.
-func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, audienceStore *mailing.AudienceStore, auditLogger *audit.Logger, mailer mailing.Mailer, settings mailing.SettingsReader, progress mailing.ProgressPublisher, events *subscribers.Store, log *slog.Logger) (*mailing.Worker, error) {
+func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, audienceStore *mailing.AudienceStore, auditLogger *audit.Logger, mailer mailing.Mailer, settings mailing.SettingsReader, progress mailing.ProgressPublisher, events *subscribers.Store, stats *mailing.CampaignStatsStore, outboxStore *outbox.Store, log *slog.Logger) (*mailing.Worker, error) {
 	if cfg.MailerNoOp {
 		log.Warn("opencircuit: MAILER_NOOP=true — the send worker will not start; scheduled campaigns will not send")
 		return nil, nil
@@ -581,6 +588,9 @@ func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, au
 		Settings:       settings,
 		Progress:       progress, // #0048: the broker-backed implementation, or nil (matching every call site's nil-tolerance) in tests that pass none
 		Events:         events,   // #0126: campaign_sent
+		Stats:          stats,    // #0124: the circuit breaker's own rate read
+		Outbox:         outboxStore,
+		AdminEmail:     cfg.AdminEmail, // #0124: the alert recipient; empty skips the enqueue (CLAUDE.md §10 item 4)
 		BaseURL:        cfg.BaseURL,
 		ListDomain:     cfg.EmailListDomain,
 		FromAddr:       cfg.EmailFrom,

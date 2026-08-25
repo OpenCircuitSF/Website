@@ -310,6 +310,22 @@ const (
 	// carries the reason plus how many rows sent before the stop and how
 	// many remain queued.
 	ActionEmailCampaignSendFailed = "email_campaign.send_failed"
+	// ActionEmailCampaignPausedDeliveryHealth is written by #0124's
+	// circuit breaker (PRD §6.9) when the send worker stops a drain
+	// because the campaign's running bounce or complaint rate crossed its
+	// configured threshold with at least send_health_min_sample messages
+	// sent. Metadata carries the reason ("bounce_rate", "complaint_rate",
+	// or both, comma-joined), the observed rate(s), their threshold(s),
+	// and how many messages had sent so far. actor_id is nil — the worker,
+	// not a person, made this call.
+	ActionEmailCampaignPausedDeliveryHealth = "email_campaign.paused_delivery_health"
+	// ActionEmailCampaignResumed is written by POST
+	// /admin/campaigns/{id}/resume (#0124): an admin's deliberate,
+	// typed-confirmation decision to let a paused_delivery_health campaign
+	// continue sending. Metadata carries from_status (always
+	// "paused_delivery_health") for symmetry with
+	// ActionEmailCampaignScheduled's own from_status field.
+	ActionEmailCampaignResumed = "email_campaign.resumed"
 
 	// Workshop lifecycle (PRD §5.2/§6.2/§8; #0051's workshop CRUD API,
 	// migrations 000020/#0050). ActionWorkshopUpdated covers any
