@@ -593,6 +593,26 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   `unset -f` the names first), and **assert the extraction produced something**
   before hashing it — an empty result must be an error, never an input.
 
+- **A guard inside the file it guards becomes new mutable surface.** `#0258`
+  spent six passes hardening `scripts/check.sh`'s self-checks against decoys
+  added to `scripts/check.sh`. Each pass closed what it was shown; each next
+  review found the adjacent shape — and by pass six the newest mechanism was
+  itself the target: the behavioural probe made load-bearing that pass was
+  pinned to nothing, so shadowing *it* restored the bypass.
+
+  The pattern is structural, not a failure of care. Every mechanism added to
+  defend a file lives in that file, and is therefore one more thing an edit to
+  that file can neutralise. Adding a seventh in-file check buys a seventh
+  bounce.
+
+  **The project already has the right shape for this**:
+  `scripts/db_reset_guard_test.sh` and friends, wired into
+  `scripts/check.sh guards`, mutate a *copy* of the thing under test and assert
+  its exit code and output **from outside**. An external harness cannot be
+  disarmed by editing its subject. Prefer it for anything whose failure mode is
+  "the checker was edited", and keep in-file checks only for the early,
+  line-naming signal they give.
+
 - **BSD `grep -P` on this machine matches nothing, silently.** It does not
   error and does not warn — it reports zero hits on a file that demonstrably
   contains the bytes, which reads exactly like "the string isn't there." A
