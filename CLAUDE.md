@@ -526,6 +526,19 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   output. Quote the delimiter (`<<'SQL'`) unless you specifically want
   expansion. `shellcheck` catches this as SC2006; `bash -n` does not.
 
+- **`bash` here is 3.2.57, so bash-4 syntax fails — and fails quietly.**
+  macOS ships bash 3.2 for licensing reasons, and `/bin/bash` is it. `${var,,}`
+  (lowercase expansion) is bash 4+: it raises `bad substitution`, the assignment
+  **does not take**, and the script carries on with the variable unchanged.
+  `#0248` shipped a `ISSUE="${ISSUE,,}"` normalisation that therefore never ran
+  — the mixed-case trap it was written to close stayed fully open, plus a
+  spurious error line. **`bash -n` and `shellcheck` both pass on it**, which is
+  why the verification could not catch it. Use `tr '[:upper:]' '[:lower:]'`,
+  which `scripts/testdb.sh` already does. Note process substitution is *not* a
+  counter-example: `<(…)` works fine in 3.2, so "we already require bash" does
+  not license bash-4 syntax. The same applies to `${var^^}`, `declare -A`,
+  `mapfile`/`readarray`, and `&>>`.
+
 - **BSD `grep -P` on this machine matches nothing, silently.** It does not
   error and does not warn — it reports zero hits on a file that demonstrably
   contains the bytes, which reads exactly like "the string isn't there." A
