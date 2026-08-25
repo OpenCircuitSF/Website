@@ -255,12 +255,13 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 	// shape, found in the parallel dry run behind citationGuard.test.ts),
 	// "PRD/CLAUDE.md" (campaign_markdown.go:14, meaning "PRD §9 and
 	// CLAUDE.md §9", not a nested path), or admin_workshops.go:25's
-	// own three-segment list citation (not spelled out here as a literal
+	// own FOUR-segment list citation (not spelled out here as a literal
 	// slash-joined token, since this comment is itself scanned by the
 	// guard below — see that file's line 25 for the real text: a
-	// directory prefix, then two real files, seo.go AND sitemap.go; the
-	// excluding segment there is the THIRD list member, "seo.go", not the
-	// first). ANY
+	// directory prefix ("internal", "seo"), then two real files, seo.go
+	// AND sitemap.go — four "/"-separated segments in total. The
+	// excluding segment there is the THIRD of those four, "seo.go", not
+	// the first). ANY
 	// intermediate segment (not the last) already looking like a complete
 	// filename with a recognized extension, OR being one of this repo's own
 	// bare document names, excludes the whole citation — this is a match on
@@ -283,16 +284,17 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 	// flipping this loop to "every"-semantics (requiring every
 	// intermediate segment to qualify, not just the first matching one)
 	// and re-running the tree-wide scan surfaces admin_workshops.go:25's
-	// own three-segment citation above as a failure — a legitimate list
+	// own four-segment citation above as a failure — a legitimate list
 	// citation of two real files that "every" wrongly flags, because its
 	// first two segments ("internal", "seo") are plain directory names,
-	// not filenames. (Deliberately not naming a hit COUNT here: that
-	// citation is never spelled out above as a literal slash-joined
-	// token, for the same reason the AdminDotSvelte example two
-	// paragraphs up is not — this comment is itself scanned by the guard
-	// below, so a reproduction's count would depend on how many times
-	// this prose happens to quote the token, not on how many real
-	// citations exist.) That failure is the positive case for keeping
+	// not filenames. (That citation is never spelled out above as a
+	// literal slash-joined token, for the same reason the AdminDotSvelte
+	// example earlier in this comment is not — this comment is itself
+	// scanned by the guard below, so quoting the literal here would make
+	// any stated count self-referential. With no literal quoted, the
+	// every-semantics hit count IS stable, and it is exactly one:
+	// admin_workshops.go:25's citation, and nothing else in the tree.)
+	// That failure is the positive case for keeping
 	// "any", not evidence against it: it shows "every" produces a false
 	// positive on a real citation. The residual cost of "any" is the
 	// opposite failure mode — a missed detection, not a false alarm: a
