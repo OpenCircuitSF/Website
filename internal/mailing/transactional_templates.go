@@ -207,6 +207,20 @@ func BuildSessionsRevokedEmail(to, baseURL string, at time.Time) Message {
 // link). No manage/unsubscribe footer, no physical address: this is
 // operational mail to staff, not mailing-list mail to a subscriber (same
 // ShowListFooter=false reasoning as BuildSessionsRevokedEmail).
+func BuildAdminAlertEmail(to, baseURL, subject string, lines []string) Message {
+	c := emailContent{
+		Subject:         subject,
+		Preheader:       subject,
+		Eyebrow:         "$ opencircuit/admin-alert",
+		Heading:         subject,
+		IntroParagraphs: lines,
+		ButtonText:      "View admin dashboard",
+		ButtonURL:       baseURL + "/admin",
+		ShowListFooter:  false,
+	}
+	return Message{To: to, Subject: c.Subject, HTMLBody: c.renderHTML(), TextBody: c.renderText()}
+}
+
 // BuildWelcomeEmail builds the message sent once a subscriber confirms via
 // double opt-in (#0127, PRD §6.3) — internal/subscribers.Store.Confirm
 // enqueues it (kind='welcome') inside the same transaction that activates
@@ -294,18 +308,4 @@ func joinWithAnd(items []string) string {
 	default:
 		return strings.Join(items[:len(items)-1], ", ") + ", and " + items[len(items)-1]
 	}
-}
-
-func BuildAdminAlertEmail(to, baseURL, subject string, lines []string) Message {
-	c := emailContent{
-		Subject:         subject,
-		Preheader:       subject,
-		Eyebrow:         "$ opencircuit/admin-alert",
-		Heading:         subject,
-		IntroParagraphs: lines,
-		ButtonText:      "View admin dashboard",
-		ButtonURL:       baseURL + "/admin",
-		ShowListFooter:  false,
-	}
-	return Message{To: to, Subject: c.Subject, HTMLBody: c.renderHTML(), TextBody: c.renderText()}
 }
