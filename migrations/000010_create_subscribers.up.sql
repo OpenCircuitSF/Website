@@ -18,6 +18,19 @@ CREATE TABLE subscribers (
     utm_campaign       TEXT,
     unsubscribed_at    TIMESTAMPTZ,
     unsubscribe_source TEXT,                        -- one_click | preferences | mailto | admin
+    -- Delivery health (#0124, PRD §6.9). The streak is the live decision
+    -- variable the circuit breaker and the repeated-soft-bounce rule read;
+    -- email_events (000014) remains the immutable history behind it.
+    -- soft_bounce_streak counts CONSECUTIVE Transient/Undetermined bounces
+    -- since the last successful Delivery — zeroed by a Delivery event, and
+    -- also zeroed by removing a suppression (a re-enabled address gets a
+    -- fresh runway, not one bounce from re-suppression). This supersedes
+    -- the rolling-30-day-window rule 000015/000016 originally shipped
+    -- (#0039/#0109) — see issues/0124.md's Notes for why a window has no
+    -- notion of "the address recovered" and a streak does.
+    soft_bounce_streak INT NOT NULL DEFAULT 0,
+    last_bounce_at     TIMESTAMPTZ,
+    last_delivery_at   TIMESTAMPTZ,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );

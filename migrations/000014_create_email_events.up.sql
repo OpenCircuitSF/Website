@@ -43,9 +43,15 @@ ALTER TABLE email_events
 CREATE INDEX idx_email_events_message_id ON email_events (ses_message_id);
 CREATE INDEX idx_email_events_recipient  ON email_events (recipient);
 
--- #0039 counts transient bounces per recipient in a sliding window; this is
--- the index that query needs. Added here, not in #0039, so #0039 is a pure
--- read against a table it never has to alter.
-CREATE INDEX idx_email_events_soft_bounce
-    ON email_events (recipient, received_at DESC)
-    WHERE event_type = 'Bounce' AND bounce_type = 'Transient';
+-- #0124 (PRD §6.9): backs GET /admin/deliverability and
+-- /admin/deliverability/{email} — the per-address bounce history, sorted by
+-- recency. This migration originally (000014, then widened by 000016) also
+-- carried a PARTIAL index (idx_email_events_soft_bounce) backing #0039's
+-- rolling-30-day-window soft-bounce count. #0124 replaces that rule with a
+-- consecutive streak counted incrementally on subscribers.soft_bounce_streak
+-- (migration 000010) rather than by re-querying email_events, so the
+-- windowed count query — and the partial index it needed — no longer exist.
+-- 000016 (which only widened that now-removed index) is deleted outright
+-- rather than folded forward, per this issue's acceptance criteria; see
+-- docs/database.md's migration table and issues/0124.md's Notes.
+CREATE INDEX idx_email_events_recipient_time ON email_events (recipient, received_at DESC);

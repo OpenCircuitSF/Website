@@ -18,7 +18,7 @@ CREATE TABLE email_campaigns (
     preheader     TEXT,
     body_md       TEXT NOT NULL,                     -- authored Markdown source
     status        TEXT NOT NULL DEFAULT 'draft',
-                  -- draft | scheduled | sending | sent | canceled | failed
+                  -- draft | scheduled | sending | paused_delivery_health | sent | canceled | failed
     audience_mode TEXT NOT NULL DEFAULT 'any_of',
                   -- all | any_of | all_of | none_selected
     workshop_id   BIGINT,                            -- FK to workshops(id) added by #0050 (Phase 6)
@@ -34,9 +34,16 @@ CREATE TABLE email_campaigns (
 -- subscribers_status_check / suppressions_reason_check precedent: a stray
 -- UPDATE (a future migration, a one-off admin query) can't park a row in a
 -- value no store method upstream expects.
+-- 'paused_delivery_health' (#0124, PRD §6.9): the send worker's own
+-- mid-send circuit breaker, distinct from 'failed' — a paused campaign is
+-- expected to be resumed once an operator has looked at it (POST
+-- /admin/campaigns/{id}/resume), where 'failed' is a terminal-until-retried
+-- SES/worker error. Added directly to this migration's own CHECK rather
+-- than as a later ALTER TABLE — greenfield, CLAUDE.md §1: 000017 has never
+-- been applied to a database anyone cares about.
 ALTER TABLE email_campaigns
     ADD CONSTRAINT email_campaigns_status_check
-    CHECK (status IN ('draft', 'scheduled', 'sending', 'sent', 'canceled', 'failed'));
+    CHECK (status IN ('draft', 'scheduled', 'sending', 'paused_delivery_health', 'sent', 'canceled', 'failed'));
 
 ALTER TABLE email_campaigns
     ADD CONSTRAINT email_campaigns_audience_mode_check
