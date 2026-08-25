@@ -11,7 +11,7 @@
   // refers to, inside the terminal panel itself: the prompt/headline/status/
   // command-line block on the left, the CRT on the right, both inside the
   // same bordered terminal-body -- not a separate element beside the panel.
-  // At >=860px that split is a two-column grid; below it, the image stacks
+  // At >=860px that split is a flex row; below it, the image stacks
   // beneath the text at a smaller size rather than disappearing. At >=860px
   // the image is large enough to become the LCP candidate, displacing the
   // headline; see the issue's Implementation notes for the measured
@@ -161,10 +161,9 @@
    * beside it -- .hero-row is what .terminal-body's single child renders,
    * splitting into text (left) and photo (right). Below 860px it stacks:
    * text first, then the photo at a smaller size. It is never removed from
-   * the DOM at any width, because the <img> always carries a real `src`
-   * (see the script comment) -- a stacked, smaller photo costs no more
-   * bytes than a hidden one would, so hiding it outright would only waste
-   * the download for nothing. */
+   * the DOM at any width -- a stacked, smaller photo costs no more bytes
+   * than a hidden one would, so hiding it outright would only waste the
+   * download for nothing. */
   /* #0231: the hero panel is pinned to the CRT photo's own backdrop, so the
    * photo's background IS the panel's background and no seam, frame, border,
    * or alpha channel is possible. The photo ships fully opaque: a flat
@@ -249,15 +248,29 @@
    * reserves its height before the background loads. A background image has
    * no intrinsic size to fall back on the way an <img> does, so without this
    * the row would collapse and then jump. The 1x/2x pair is selected by
-   * image-set; the plain url() above it is the fallback for engines that do
-   * not support image-set, which get the 1x asset rather than nothing. */
+   * image-set, opted into via @supports below. */
   .crt-frame {
     width: 240px;
     aspect-ratio: 1402 / 1122;
     background-image: var(--crt-photo);
-    background-image: var(--crt-photo-set);
     background-size: 100% 100%;
     background-repeat: no-repeat;
+  }
+
+  /* The 2x asset is opted INTO, rather than the 1x being a fallback beneath
+   * it. The usual two-declaration idiom -- plain url() then image-set(), later
+   * wins where supported -- silently fails through var(): a substituted value
+   * that the property cannot parse is invalid at computed-value time, which
+   * makes background-image `none`, NOT the earlier declaration. Measured in
+   * Chromium: through var() the computed value is "none", written directly it
+   * is the url(). So an engine without image-set() got an empty box, not the
+   * 1x photo the comment here used to claim. @supports asks first, so the
+   * declaration is never attempted where it cannot work. Affects Safari <= 16
+   * and Chrome < 113. */
+  @supports (background-image: image-set(url('/hero-crt-380.webp') 1x)) {
+    .crt-frame {
+      background-image: var(--crt-photo-set);
+    }
   }
 
   @media (min-width: 860px) {
