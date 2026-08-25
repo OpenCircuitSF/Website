@@ -78,14 +78,23 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
     sourceRef: 'internal/subscribers/erase.go doc comment: "email_events rows, untouched"; PRD §6.9\'s delivery-health circuit breaker',
   },
   {
-    key: 'audit_log (per-request IP, erasure entry carries the admin\'s IP)',
+    key: 'audit_log (per-request IP, erasure entry carries the admin\'s IP, confirmation/erasure entries carry the email)',
     // "admin" alone is too weak: the OLD, narrower wording this replaces
     // already said "an internal ADMIN audit log entry" (describing WHO
     // reads it, not whose IP the erasure row carries) -- also caught by
     // this guard's own mutation proof below. The phrases here are unique to
     // the corrected wording.
-    requiredPhrases: ['audit log', 'each entry records the ip address', 'ip of the acting admin'],
-    sourceRef: 'internal/handlers/admin_subscribers.go: audit.Entry{Action: ActionSubscriberErased, ActorID: &actorID, IP: clientIP(r)}',
+    //
+    // 'your email address' was added after #0226's FIRST review pass
+    // (2026-08-24, BOUNCED): that pass widened the IP phrasing but deleted
+    // the item's pre-existing email-address disclosure outright, and this
+    // guard's requiredPhrases at the time had nothing that would have
+    // caught it -- a green guard sitting over an under-disclosing page.
+    // Mutation-proved below (see "fails when the audit-log item drops the
+    // email-address disclosure").
+    requiredPhrases: ['audit log', 'each entry records the ip address', 'ip of the acting admin', 'your email address'],
+    sourceRef:
+      'internal/handlers/admin_subscribers.go: audit.Entry{Action: ActionSubscriberErased, ActorID: &actorID, Metadata: map[string]any{"email": result.Email, ...}, IP: clientIP(r)}; internal/handlers/confirm.go: audit.Entry{Action: ActionSubscriberConfirmed, Metadata: map[string]any{"email": sub.Email}, IP: clientIP(r)}',
   },
 ];
 
@@ -298,6 +307,33 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
 
     const { matchedCategory } = matchItemToCategory(eventsItem ?? '', ERASURE_RETAINED_CATEGORIES);
     expect(matchedCategory, 'weakened deliverability-events item should no longer match ANY category').toBeNull();
+  });
+
+  it('fails when the audit-log item drops the email-address disclosure (#0226 first-review-pass regression, in reverse)', () => {
+    // #0226's first review pass deleted exactly this clause while widening
+    // the IP phrasing, and the guard at the time had no requiredPhrase that
+    // would have caught it. Reproduce that exact deletion against the REAL
+    // current item text and confirm the guard now fires.
+    const items = realItems().map((item) =>
+      item.includes('audit log entry')
+        ? item.replace('; the confirmation entry and the erasure entry itself also record your email address explicitly', '')
+        : item,
+    );
+    const src = fixtureSource(items);
+    const parsedItems = findErasureStatusListItems(src);
+
+    const auditItem = parsedItems.find((i) => i.includes('audit log entry'));
+    expect(auditItem, 'fixture setup: expected an audit-log item').toBeDefined();
+    expect(auditItem, 'fixture setup: the mutation must actually remove the email clause').not.toContain('your email address');
+
+    const auditCategory = ERASURE_RETAINED_CATEGORIES.find((c) => c.key.startsWith('audit_log'));
+    expect(auditCategory, 'fixture setup: expected the audit_log category to exist').toBeDefined();
+    const lower = (auditItem ?? '').toLowerCase();
+    const missingFromOwnCategory = (auditCategory?.requiredPhrases ?? []).filter((p) => !lower.includes(p.toLowerCase()));
+    expect(missingFromOwnCategory).toEqual(['your email address']);
+
+    const { matchedCategory } = matchItemToCategory(auditItem ?? '', ERASURE_RETAINED_CATEGORIES);
+    expect(matchedCategory, 'the audit-log item with the email disclosure dropped should no longer match ANY category').toBeNull();
   });
 
   it('fails when the audit-log item narrows back to only "signup IP" (criterion 5, in reverse)', () => {

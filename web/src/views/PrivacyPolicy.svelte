@@ -50,10 +50,10 @@
   //    `PrivacyPolicy.guard.test.ts` (#0226) asserts this list structurally
   //    against `internal/subscribers/erase.go` and
   //    `internal/handlers/admin_subscribers.go`'s real behavior -- see that
-  //    file for the exact source lines each item is checked against. Two
-  //    accuracy fixes from #0226's own review, both folded into the item
-  //    text above rather than left as a second "the page previously said"
-  //    footnote:
+  //    file for the exact source lines each item is checked against. Three
+  //    accuracy fixes from #0226's two review passes, all folded into the
+  //    item text above rather than left as a second "the page previously
+  //    said" footnote:
   //      - the audit-log item now says "each action" / "each entry records
   //        the IP address of the request that made it", not just "your
   //        signup IP address" -- audit.Entry{IP: clientIP(r)} is written on
@@ -75,6 +75,23 @@
   //        events themselves (bounces, complaints, deliveries) were already
   //        named, but the parenthetical purpose list omitted the reason
   //        PRD §6.9's delivery-health circuit breaker exists at all.
+  //      - #0226's FIRST review pass (2026-08-24) widened the IP disclosure
+  //        above but, in doing so, deleted the email-address disclosure the
+  //        item previously had ("this includes your email address") without
+  //        replacing it -- so the page said less than the code retains,
+  //        which is the more serious direction of drift (CLAUDE.md §9). The
+  //        item now says explicitly that the confirmation entry and the
+  //        erasure entry itself each record the email address:
+  //        confirm.go's audit.Entry sets `Metadata: map[string]any{"email":
+  //        sub.Email}` (internal/handlers/confirm.go), and
+  //        admin_subscribers.go's erasure entry sets `Metadata:
+  //        map[string]any{"email": result.Email, ...}`
+  //        (internal/handlers/admin_subscribers.go) -- verified directly
+  //        against both call sites, not assumed. subscribe.go's,
+  //        unsubscribe.go's, and preferences.go's entries carry
+  //        `kind`/`source`/`interest_count` metadata, not the email, so the
+  //        item does NOT claim every entry carries it -- only that some do,
+  //        naming which.
   //  - "No third-party analytics, ad trackers, external CDNs, or email
   //    open-tracking pixels" is CLAUDE.md §9's binding restriction, stated
   //    here as a fact about how the site is built, not a promise.
@@ -224,7 +241,7 @@
           'a permanent suppression entry, so the address cannot be silently re-added by a future import or signup',
           'anonymized rows in our send history, so historical campaign counts (how many people a given email actually reached) do not silently change',
           'the raw deliverability events (bounces, complaints, deliveries) already logged against your address, kept without the link back to your identity, for spam/abuse forensics and to keep our own bounce/complaint handling accurate',
-          'an internal admin audit log entry for each action on your account (signup, confirmation, any unsubscribe or preference update, and the erasure itself) — each entry records the IP address of the request that made it, a separate mechanism from the single consent-evidence IP described above; the erasure entry itself carries the IP of the acting admin, not yours — kept so we can prove a request was honored and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
+          'an internal admin audit log entry for each action on your account (signup, confirmation, any unsubscribe or preference update, and the erasure itself) — each entry records the IP address of the request that made it, a separate mechanism from the single consent-evidence IP described above; the confirmation entry and the erasure entry itself also record your email address explicitly; the erasure entry itself carries the IP of the acting admin, not yours — kept so we can prove a request was honored and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
         ]}
       />
       <p>
