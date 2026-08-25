@@ -13,6 +13,8 @@ import type {
   Subscriber,
   SubscribersPage,
   Suppression,
+  DeliverabilityListItem,
+  DeliverabilityDetail,
   PublicInterest,
   ConfirmResponse,
   PreferencesResponse,
@@ -563,6 +565,33 @@ export function removeSuppression(
   note: string,
 ): Promise<RemoveSuppressionResult> {
   return apiPost<RemoveSuppressionResult>('/admin/suppressions/remove', { email, reason, note });
+}
+
+// ── Admin deliverability screen (#0124, PRD §6.9) ────────────────────────────
+
+/** GET /admin/deliverability — addresses with bounce activity, sorted by streak then recency. */
+export function listDeliverability(): Promise<{ items: DeliverabilityListItem[] }> {
+  return apiGet<{ items: DeliverabilityListItem[] }>('/admin/deliverability');
+}
+
+/**
+ * GET /admin/deliverability/{email} — one address's full email_events
+ * history. Answers 200 (never 404) for an address with no history at all —
+ * an admin checking an arbitrary address is a normal use of this screen.
+ */
+export function getDeliverabilityDetail(email: string): Promise<DeliverabilityDetail> {
+  return apiGet<DeliverabilityDetail>(`/admin/deliverability/${encodeURIComponent(email)}`);
+}
+
+/**
+ * POST /admin/deliverability/{email}/reset-streak — an explicit, audited
+ * admin override of the address's soft_bounce_streak, distinct from the
+ * automatic resets a Delivery event or a suppression removal perform.
+ */
+export function resetSoftBounceStreak(email: string): Promise<{ email: string; reset: boolean }> {
+  return apiPost<{ email: string; reset: boolean }>(
+    `/admin/deliverability/${encodeURIComponent(email)}/reset-streak`,
+  );
 }
 
 // ── Admin: campaign compose (#0041/#0044/#0045/#0046/#0047) ─────────────────

@@ -105,6 +105,7 @@
   import Workshops from './admin/Workshops.svelte';
   import Dashboard from './admin/Dashboard.svelte';
   import Pending from './admin/Pending.svelte';
+  import Deliverability from './admin/Deliverability.svelte';
 
   type Section =
     | 'overview'
@@ -115,6 +116,7 @@
     | 'subscribers'
     | 'pending'
     | 'suppressions'
+    | 'deliverability'
     | 'campaigns'
     | 'workshops';
   // #0061: the /admin landing screen (PRD §5.2's "Overview — list size,
@@ -1039,6 +1041,13 @@
         aria-current={section === 'suppressions' ? 'page' : undefined}
         onclick={() => (section = 'suppressions')}
       >Suppressions</button>
+      <button
+        type="button"
+        class="subtab"
+        class:active={section === 'deliverability'}
+        aria-current={section === 'deliverability' ? 'page' : undefined}
+        onclick={() => (section = 'deliverability')}
+      >Deliverability</button>
       <button
         type="button"
         class="subtab"
@@ -1998,6 +2007,10 @@
           </div>
         </div>
       {/if}
+    {/if}
+
+    {#if section === 'deliverability'}
+      <Deliverability onGoToSuppressions={() => (section = 'suppressions')} />
     {/if}
 
     {#if section === 'campaigns'}

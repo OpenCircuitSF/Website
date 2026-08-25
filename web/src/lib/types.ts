@@ -211,6 +211,45 @@ export interface Suppression {
   subscriber_status: string | null;
 }
 
+// ── Admin deliverability screen (#0124, PRD §6.9) ────────────────────────────
+
+/**
+ * One row of GET /admin/deliverability — an address with bounce activity,
+ * sorted by streak then recency by the server. Matches
+ * internal/handlers/admin_deliverability.go `deliverabilityListItemView`.
+ */
+export interface DeliverabilityListItem {
+  subscriber_id: number;
+  email: string;
+  status: string; // pending | active | unsubscribed | bounced | complained
+  soft_bounce_streak: number;
+  last_bounce_at?: string;
+  last_delivery_at?: string;
+  suppressed: boolean;
+  suppression_reasons: string[];
+}
+
+/** One email_events row on the per-address history, as returned by GET /admin/deliverability/{email}. */
+export interface DeliverabilityEvent {
+  event_type: string; // Bounce | Complaint | Delivery | Reject | RenderingFailure | DeliveryDelay | Send | ...
+  bounce_type?: string; // Permanent | Transient | Undetermined
+  bounce_subtype?: string;
+  diagnostic_code?: string;
+  campaign_id?: number;
+  timestamp: string;
+}
+
+/** GET /admin/deliverability/{email}'s body. Matches `deliverabilityDetailResponse`. */
+export interface DeliverabilityDetail {
+  email: string;
+  subscriber_id?: number;
+  status?: string;
+  soft_bounce_streak?: number;
+  last_bounce_at?: string;
+  last_delivery_at?: string;
+  events: DeliverabilityEvent[];
+}
+
 // ── Public mailing-list journey (#0029-#0031) ────────────────────────────────
 
 /**
