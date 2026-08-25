@@ -123,7 +123,16 @@ if [ "${PF_HITS:-0}" -ne 0 ]; then
   exit 2
 fi
 
-SHELLC_HITS="$(printf '%s\n' "$SCAN" | grep -nE '\b(bash|sh)\b' | grep -E -- '-c\b' || true)"
+# #0258: the previous pattern was literally '-c\b' — a word-boundary check
+# right after the "c", which a COMBINED short-option cluster defeats, since
+# there is no boundary between adjacent letters. `run bash -cu "$1"` (or
+# -ce, -cx, or the reversed -uc) is valid shell (verified: it runs the
+# command with pipefail off) and evaded this scan entirely. The replacement
+# matches a "-" preceded by start-of-line or whitespace (so it can't fire
+# inside a GNU long option like "--color", where the option-introducing "-"
+# is never preceded by whitespace) followed by any short-option letters
+# containing a "c" anywhere in the cluster, in either order.
+SHELLC_HITS="$(printf '%s\n' "$SCAN" | grep -nE '\b(bash|sh)\b' | grep -E -- '(^|[[:space:]])-[a-zA-Z]*c[a-zA-Z]*\b' || true)"
 if [ -n "$SHELLC_HITS" ]; then
   printf '\033[31mPIPEFAIL REGRESSION (#0208): scripts/check.sh has a shell "-c" invocation outside runpipe() — it could silently lose "-o pipefail" the same way #0140 did. Offending line(s):\033[0m\n' >&2
   printf '%s\n' "$SHELLC_HITS" >&2
@@ -192,13 +201,102 @@ if [ "${RUNPIPE_DEF_TOTAL:-0}" -ne 1 ]; then
   exit 2
 fi
 
-RUNPIPE_LINE="$(sed -n "/${BR}/,/${ER}/p" "$0" | grep -E '^runpipe\(\)' | sed -E 's/[[:space:]]*#.*$//')"
+# #0258: trailing whitespace after the closing "}" used to trip this check
+# — the sed only stripped a trailing "# ..." comment, not trailing
+# whitespace, so a no-op edit (add a trailing space, change nothing else)
+# failed the whole-line grep -x match. Fails safe, but it's a false alarm
+# on a change that means nothing. The second sed expression strips it.
+RUNPIPE_LINE="$(sed -n "/${BR}/,/${ER}/p" "$0" | grep -E '^runpipe\(\)' | sed -E 's/[[:space:]]*#.*$//; s/[[:space:]]+$//')"
 if ! printf '%s\n' "$RUNPIPE_LINE" | grep -qxE 'runpipe\(\) \{ run bash -o pipefail -c "[$]1"; \}'; then
-  printf "\033[31mPIPEFAIL REGRESSION (#0208/#0251): runpipe()'s own definition line no longer reads exactly: runpipe() { run bash -o pipefail -c \"\$1\"; } (trailing comment, if any, stripped before this comparison) — the funnel this self-check exists to guarantee has lost the flag it is supposed to hold. Definition line as found:\033[0m\n" >&2
+  printf "\033[31mPIPEFAIL REGRESSION (#0208/#0251): runpipe()'s own definition line no longer reads exactly: runpipe() { run bash -o pipefail -c \"\$1\"; } (trailing comment and trailing whitespace, if any, stripped before this comparison) — the funnel this self-check exists to guarantee has lost the flag it is supposed to hold. Definition line as found:\033[0m\n" >&2
   printf '%s\n' "$RUNPIPE_LINE" >&2
   exit 2
 fi
 # END GUARD-0208
+
+# BEGIN GUARD-0258
+# #0258: run()'s own FAILED=1 accounting is the entire failure-reporting
+# contract for this whole script — GUARD-0208 above proves the pipefail
+# funnel is intact, but nothing proved run() itself still SETS FAILED=1 on
+# a non-zero exit. Strip that accounting (run() { "$@"; return 0; }) and
+# every failing step passes silently: a --- FAIL prints and this script
+# still reports VERIFICATION PASSED, exit 0 — reproduced end to end
+# (issues/0258.md). GUARD-0208 never catches this: the mutation spells no
+# "bash", no "-c", no "pipefail", so all four checks in that block stay
+# silent, and nothing outside this file asserted anything about run()
+# either (grepped across internal/, cmd/, web/src/, scripts/).
+#
+# run() is not wrapped in its own BEGIN/END marker block the way runpipe()
+# is — it doesn't need one. GUARD-0208's negative scan exists to make sure
+# nothing outside runpipe()'s own definition spells "pipefail" or a bare
+# shell "-c"; run()'s definition text contains neither word, so it was
+# never at risk of being caught by (and never needed excluding from) that
+# scan. What it DOES need, learned from #0251's two review rounds on the
+# sibling check: assert its definition is the UNIQUE line in this file
+# starting "run()" (closing the decoy/duplicate-definition class of
+# evasion — a second definition would either shadow the first at call time
+# or supply a decoy match for the comparison below), then compare that one
+# line — trailing comment and trailing whitespace stripped — against the
+# exact expected text. Never a substring search over a larger block: that
+# scope is exactly what let #0251's pass-1 fix (and, per its own
+# documented residual gaps, a dead-branch or heredoc decoy) slip past a
+# check that wasn't scoped this tightly.
+#
+# The comparison below is a literal string equality against a quoted
+# heredoc, not a hand-built regex. runpipe()'s definition has no embedded
+# quotes and stayed regex-based; run()'s definition embeds a single-quoted
+# printf format ('\033[31mFAILED (%d): %s\033[0m\n') that would need
+# multiple layers of escaping to express safely as a bash-single-quoted
+# ERE literal — the exact kind of hand-escaping that cost #0251 two review
+# rounds to get right for a simpler line. A quoted heredoc (<<'RUN_EOF')
+# performs no expansion at all, so what sits between the markers is
+# compared byte-for-byte with nothing to escape. This is the "one shared
+# assertion" question the issue raises, answered concretely: the two
+# checks share the same STRUCTURE (unique-line assertion, then a
+# comment/whitespace-stripped exact comparison of that one line) but not
+# one literal code path, because forcing run()'s embedded quotes through
+# runpipe()'s regex machinery would reintroduce exactly the escaping risk
+# the heredoc form avoids. A third critical line should follow this same
+# two-part shape, picking regex or heredoc comparison by whether its own
+# text embeds quotes.
+#
+# Known, accepted gap — same shape as #0208's mutant 7 and #0251's
+# documented I/J residuals: an edit that BOTH indents run()'s real
+# definition (so it stops matching ^run\(\)) AND plants a column-0 decoy
+# elsewhere reading the exact expected text would still pass. That needs
+# two coordinated edits to a top-level function, one of which (indenting
+# it) nobody does by accident — an agent willing to do that could delete
+# this guard outright. Not closed; closing it needs a shell parser, not a
+# grep.
+step "self-check: run() FAILED-accounting guard (#0258)"
+# The expected text below is embedded verbatim in a heredoc for the literal
+# comparison further down — which means it ALSO matches "^run\(\)" at
+# column 0, same as the real definition at the top of this file. Wrapped
+# in its own BEGIN/END marker pair (built the same "two concatenated
+# pieces" way as $BG/$EG/$BR/$ER above, so this line's own source never
+# spells the marker contiguously and can't reopen its own delete range) so
+# the count and extraction below can delete it from "$0" before scanning —
+# otherwise the count would find 2 and every run would report a false
+# regression against the unmutated script.
+BD="# BEGIN"" RUNDATA-0258"; ED="# END"" RUNDATA-0258"
+# BEGIN RUNDATA-0258
+read -r -d '' RUN_EXPECTED <<'RUN_EOF' || true
+run()  { "$@"; local rc=$?; [ $rc -eq 0 ] || { FAILED=1; printf '\033[31mFAILED (%d): %s\033[0m\n' "$rc" "$*"; }; return 0; }
+RUN_EOF
+# END RUNDATA-0258
+RUN_SCAN="$(sed -e "/${BD}/,/${ED}/d" "$0")"
+RUN_DEF_COUNT="$(printf '%s\n' "$RUN_SCAN" | grep -cE '^run\(\)' || true)"
+if [ "${RUN_DEF_COUNT:-0}" -ne 1 ]; then
+  printf '\033[31mFAILED-ACCOUNTING REGRESSION (#0258): expected exactly one line starting "run()" in scripts/check.sh; found %s. A duplicate can supply a decoy match for the check below, and zero means run() itself is gone.\033[0m\n' "${RUN_DEF_COUNT:-0}" >&2
+  exit 2
+fi
+RUN_LINE="$(printf '%s\n' "$RUN_SCAN" | grep -E '^run\(\)' | sed -E 's/[[:space:]]*#.*$//; s/[[:space:]]+$//')"
+if [ "$RUN_LINE" != "$RUN_EXPECTED" ]; then
+  printf '\033[31mFAILED-ACCOUNTING REGRESSION (#0258): run()'"'"'s own definition no longer matches the expected text (trailing comment and trailing whitespace, if any, stripped before this comparison) — the FAILED=1 accounting this whole script'"'"'s pass/fail report depends on may have been removed. Definition line as found:\033[0m\n' >&2
+  printf '%s\n' "$RUN_LINE" >&2
+  exit 2
+fi
+# END GUARD-0258
 
 for a in "$@"; do
   case "$a" in
