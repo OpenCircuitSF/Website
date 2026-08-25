@@ -44,6 +44,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -76,6 +77,10 @@ type adminSubscriberStore interface {
 	// internal/subscribers/erase.go's package doc comment for what it does
 	// and why.
 	Erase(ctx context.Context, id int64, now time.Time) (subscribers.ErasureResult, error)
+	// RecordEvent writes a subscriber_events row (#0126) — this handler's
+	// two admin_edited writes (ClearComplaint and Create's manual add; see
+	// #0126's plan §9 item 9).
+	RecordEvent(ctx context.Context, e subscribers.Event) error
 }
 
 // adminInterestByIDReader is the behavior AdminSubscribersHandler needs from
@@ -701,6 +706,20 @@ func (h *AdminSubscribersHandler) ClearComplaint(w http.ResponseWriter, r *http.
 		})
 	}
 
+	// #0126: admin_edited — "A staff member changed the record directly"
+	// (PRD §6.11). Clear-complaint is a direct, admin-only edit of the
+	// subscriber's status; the audit_log entry above is the detailed
+	// staff-facing record, this is the address's own history entry.
+	if err := h.store.RecordEvent(r.Context(), subscribers.Event{
+		SubscriberID: &id,
+		Email:        after.Email,
+		Action:       subscribers.ActionAdminEdited,
+		ActorUserID:  &actor.ID,
+		Detail:       map[string]any{"operation": "clear_complaint"},
+	}); err != nil {
+		slog.Default().Error("admin_subscribers: recording admin_edited event failed", "subscriber_id", id, "err", err)
+	}
+
 	message := "Complaint cleared. Resulting status is \"unsubscribed\", not \"active\" — this does not re-establish double opt-in consent."
 	switch {
 	case suppressionRemoved && len(remainingReasons) == 0:
@@ -847,6 +866,24 @@ func (h *AdminSubscribersHandler) Create(w http.ResponseWriter, r *http.Request)
 			},
 			IP: clientIP(r),
 		})
+	}
+
+	// #0126: admin_edited, alongside (not instead of) the signup_requested/
+	// resubscribed event newSignup/existingSignup's own Create/RestartSignup
+	// call already recorded above — that event captures WHAT happened (a
+	// signup was requested); this one captures WHO caused it (a staff
+	// member, not the subscriber). #0126's plan §9 item 9 flags this
+	// pairing as the one genuinely ambiguous action mapping in this issue;
+	// this is the suggested reading, not a certainty — see that plan
+	// section for the reviewer.
+	if err := h.store.RecordEvent(ctx, subscribers.Event{
+		SubscriberID: &result.ID,
+		Email:        result.Email,
+		Action:       subscribers.ActionAdminEdited,
+		ActorUserID:  &actor.ID,
+		Detail:       map[string]any{"operation": "manual_add"},
+	}); err != nil {
+		slog.Default().Error("admin_subscribers: recording admin_edited event failed", "subscriber_id", result.ID, "err", err)
 	}
 
 	writeJSON(w, http.StatusOK, manualAddResponse{

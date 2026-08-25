@@ -86,6 +86,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
 const (
@@ -180,6 +181,10 @@ type Worker struct {
 	render   CampaignRenderer
 	settings SettingsReader
 	progress ProgressPublisher
+	// events records campaign_sent (#0126, PRD §6.11) after a successful
+	// SES send. nil-tolerant, matching every other optional dependency in
+	// this file — a nil events simply skips the write.
+	events *subscribers.Store
 
 	baseURL, listDomain, fromAddr, replyTo string
 	envMaxSendRate, batchSize              int
@@ -202,6 +207,9 @@ type WorkerDeps struct {
 	Render   CampaignRenderer // nil defaults to MarkdownCampaignRenderer{}
 	Settings SettingsReader
 	Progress ProgressPublisher // nil until #0048; every call site nil-guarded
+	// Events records campaign_sent (#0126). nil disables the write,
+	// matching Audit's own nil-tolerance above.
+	Events *subscribers.Store
 
 	BaseURL, ListDomain, FromAddr, ReplyTo string
 	// EnvMaxSendRate is MAX_SEND_RATE — the deploy-level ceiling. BatchSize
@@ -283,6 +291,7 @@ func NewWorker(deps WorkerDeps) (*Worker, error) {
 		render:         render,
 		settings:       deps.Settings,
 		progress:       deps.Progress,
+		events:         deps.Events,
 		baseURL:        deps.BaseURL,
 		listDomain:     deps.ListDomain,
 		fromAddr:       deps.FromAddr,
@@ -737,6 +746,23 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 		wcancel()
 		if werr != nil {
 			w.log.Error("mailing: marking sent row", "send_id", r.SendID, "err", werr)
+		} else if w.events != nil {
+			// #0126: campaign_sent — "a campaign message was accepted by
+			// SES for this address" (PRD §6.11). Own detached, short
+			// context, matching writeStatusTimeout's own bound; a failure
+			// here is logged, not retried or surfaced to the caller — the
+			// send itself already succeeded and committed.
+			eventCtx, ecancel := context.WithTimeout(context.Background(), writeStatusTimeout)
+			subID := r.SubscriberID
+			if err := w.events.RecordEvent(eventCtx, subscribers.Event{
+				SubscriberID: &subID,
+				Email:        r.Email,
+				Action:       subscribers.ActionCampaignSent,
+				CampaignID:   &c.ID,
+			}); err != nil {
+				w.log.Error("mailing: recording campaign_sent event failed", "send_id", r.SendID, "err", err)
+			}
+			ecancel()
 		}
 		return sendOutcomeSent, nil
 	}

@@ -452,6 +452,19 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 				return fmt.Errorf("writing bounced audit row for %q: %w", recipient, err)
 			}
 		}
+		// #0126: bounced_hard, alongside (not instead of) the audit_log row
+		// above — audit_log records what SES's payload said for staff
+		// review; subscriber_events records it in this project's own
+		// per-address vocabulary. actor_user_id is nil: a webhook, not a
+		// person, caused this.
+		if err := subscribers.RecordEventTx(ctx, tx, subscribers.Event{
+			SubscriberID: &sub.ID,
+			Email:        recipient,
+			Action:       subscribers.ActionBouncedHard,
+			Detail:       map[string]any{"bounce_subtype": ev.BounceSubType()},
+		}); err != nil {
+			return fmt.Errorf("recording bounced_hard event for %q: %w", recipient, err)
+		}
 		return nil
 	case sesnotify.BounceTypeTransient, sesnotify.BounceTypeUndetermined:
 		// #0039, widened by #0109: this bounce's own email_events row is
@@ -516,6 +529,19 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 				return fmt.Errorf("writing repeated-soft-bounce audit row for %q: %w", recipient, err)
 			}
 		}
+		// #0126: bounced_soft — written only when the threshold is crossed
+		// (the same gate MarkBouncedTx above uses), matching PRD §6.11's
+		// "SES reported a Transient/Undetermined bounce" reading at the
+		// point this handler actually acts on it, not on every individual
+		// soft bounce email_events already records regardless.
+		if err := subscribers.RecordEventTx(ctx, tx, subscribers.Event{
+			SubscriberID: &sub.ID,
+			Email:        recipient,
+			Action:       subscribers.ActionBouncedSoft,
+			Detail:       map[string]any{"soft_bounce_count": count, "soft_bounce_threshold": threshold},
+		}); err != nil {
+			return fmt.Errorf("recording bounced_soft event for %q: %w", recipient, err)
+		}
 		return nil
 	default:
 		// Empty string (no bounce classification present) or a bounce_type
@@ -566,6 +592,14 @@ func (h *SESNotificationsHandler) applyComplaint(ctx context.Context, tx pgx.Tx,
 		}); err != nil {
 			return fmt.Errorf("writing complained audit row for %q: %w", recipient, err)
 		}
+	}
+	// #0126: complained.
+	if err := subscribers.RecordEventTx(ctx, tx, subscribers.Event{
+		SubscriberID: &sub.ID,
+		Email:        recipient,
+		Action:       subscribers.ActionComplained,
+	}); err != nil {
+		return fmt.Errorf("recording complained event for %q: %w", recipient, err)
 	}
 	return nil
 }

@@ -313,7 +313,7 @@ func servePostgres(cfg *config.Config) error {
 	// that deliberately doesn't run the worker itself (CLAUDE.md §10 item
 	// 4's "exactly one instance runs the worker" scaling story).
 	sendStore := newSendStoreIfEnabled(cfg, pool, audienceStore, store)
-	sendWorker, err := newSendWorkerIfEnabled(cfg, sendStore, audienceStore, auditLogger, sesSender, store, campaignProgressPub, slog.Default())
+	sendWorker, err := newSendWorkerIfEnabled(cfg, sendStore, audienceStore, auditLogger, sesSender, store, campaignProgressPub, subscribersStore, slog.Default())
 	if err != nil {
 		return fmt.Errorf("opencircuit: constructing send worker: %w", err)
 	}
@@ -546,7 +546,7 @@ func newSendStoreIfEnabled(cfg *config.Config, pool *pgxpool.Pool, audienceStore
 // A single slog.Warn records either refusal, since nothing about the
 // request path can otherwise surface "campaigns will not send" to an
 // operator.
-func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, audienceStore *mailing.AudienceStore, auditLogger *audit.Logger, mailer mailing.Mailer, settings mailing.SettingsReader, progress mailing.ProgressPublisher, log *slog.Logger) (*mailing.Worker, error) {
+func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, audienceStore *mailing.AudienceStore, auditLogger *audit.Logger, mailer mailing.Mailer, settings mailing.SettingsReader, progress mailing.ProgressPublisher, events *subscribers.Store, log *slog.Logger) (*mailing.Worker, error) {
 	if cfg.MailerNoOp {
 		log.Warn("opencircuit: MAILER_NOOP=true — the send worker will not start; scheduled campaigns will not send")
 		return nil, nil
@@ -569,6 +569,7 @@ func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, au
 		Render:         mailing.MarkdownCampaignRenderer{},
 		Settings:       settings,
 		Progress:       progress, // #0048: the broker-backed implementation, or nil (matching every call site's nil-tolerance) in tests that pass none
+		Events:         events,   // #0126: campaign_sent
 		BaseURL:        cfg.BaseURL,
 		ListDomain:     cfg.EmailListDomain,
 		FromAddr:       cfg.EmailFrom,

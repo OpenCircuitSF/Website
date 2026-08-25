@@ -158,6 +158,26 @@ func addSuppression(ctx context.Context, q querier, in NewSuppression, now time.
 	if err != nil {
 		return Suppression{}, fmt.Errorf("subscribers: adding suppression for %q: %w", in.Email, err)
 	}
+
+	// #0126: suppressed. SubscriberID is nil here — suppressions is keyed
+	// by email, not subscriber id, by design (see the package doc
+	// comment), so this layer has no id to attach without an extra lookup
+	// this call doesn't otherwise need. Note this INSERT ... ON CONFLICT
+	// DO UPDATE is idempotent by design (a repeat Add for the same
+	// (email, reason) returns the original row unchanged) — a repeat call
+	// therefore writes a repeat "suppressed" event too, since this layer
+	// cannot cheaply distinguish "inserted" from "already existed" without
+	// an extra round trip this call doesn't otherwise need. Accepted: an
+	// extra history row is harmless (an operator reading the address's
+	// timeline sees "still suppressed," not a false new fact), where
+	// missing a genuine one would not be.
+	if err := RecordEventTx(ctx, q, Event{
+		Email:  sup.Email,
+		Action: ActionSuppressed,
+		Detail: map[string]any{"reason": sup.Reason},
+	}); err != nil {
+		return Suppression{}, fmt.Errorf("subscribers: recording suppressed event for %q: %w", in.Email, err)
+	}
 	return sup, nil
 }
 
@@ -300,6 +320,19 @@ func (s *SuppressionStore) Remove(ctx context.Context, email, reason string) (Su
 		return Suppression{}, ErrSuppressionNotFound
 	case err != nil:
 		return Suppression{}, fmt.Errorf("subscribers: removing suppression for %q reason %q: %w", email, reason, err)
+	}
+
+	// #0126: unsuppressed. The DELETE above already committed (this is a
+	// pool call, not a transaction), so a failure here does not undo the
+	// removal — it only means the removal happened without this row of
+	// evidence, which the caller (admin_suppressions.go) logs rather than
+	// treating as if the removal itself failed.
+	if err := RecordEventTx(ctx, s.pool, Event{
+		Email:  sup.Email,
+		Action: ActionUnsuppressed,
+		Detail: map[string]any{"reason": sup.Reason},
+	}); err != nil {
+		return sup, fmt.Errorf("subscribers: recording unsuppressed event for %q: %w", email, err)
 	}
 	return sup, nil
 }

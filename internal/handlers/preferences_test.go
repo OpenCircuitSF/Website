@@ -635,6 +635,10 @@ func (s *raceComplainingPreferencesStore) Unsubscribe(ctx context.Context, id in
 	return s.subs.Unsubscribe(ctx, id, source, now)
 }
 
+func (s *raceComplainingPreferencesStore) RecordEvent(ctx context.Context, e subscribers.Event) error {
+	return s.subs.RecordEvent(ctx, e)
+}
+
 // TestPreferencesHandler_Patch_ComplainedBetweenLookupAndUnsubscribe_IsNoOp
 // (#0104) proves patchUnsubscribe decides noOp from the row
 // Store.Unsubscribe returns, not from a status read before the call.

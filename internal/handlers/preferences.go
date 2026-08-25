@@ -47,6 +47,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -77,6 +78,12 @@ type preferencesSubscriberStore interface {
 	InterestIDs(ctx context.Context, subscriberID int64) ([]int64, error)
 	SetInterests(ctx context.Context, subscriberID int64, interestIDs []int64) error
 	Unsubscribe(ctx context.Context, id int64, source string, now time.Time) (subscribers.Subscriber, error)
+	// RecordEvent writes a subscriber_events row (#0126) — patchInterests'
+	// interests_changed write. Unsubscribe (above) already records its own
+	// unsubscribed event inside its own transaction (internal/subscribers.
+	// Store.Unsubscribe), so this handler does not call RecordEvent a
+	// second time for that path.
+	RecordEvent(ctx context.Context, e subscribers.Event) error
 }
 
 // preferencesInterestStore is the behavior PreferencesHandler needs from
@@ -306,6 +313,20 @@ func (h *PreferencesHandler) patchInterests(w http.ResponseWriter, r *http.Reque
 	if err := h.subs.SetInterests(r.Context(), sub.ID, ids); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
+	}
+
+	// #0126: interests_changed. Recorded after SetInterests succeeds, via
+	// the pool (not a shared transaction — SetInterests already commits its
+	// own delete-then-insert transaction internally); a failure here is
+	// logged, not surfaced to the visitor, matching audit.Record's own
+	// fire-and-forget convention below.
+	if err := h.subs.RecordEvent(r.Context(), subscribers.Event{
+		SubscriberID: &sub.ID,
+		Email:        sub.Email,
+		Action:       subscribers.ActionInterestsChanged,
+		Detail:       map[string]any{"interest_count": len(ids)},
+	}); err != nil {
+		slog.Default().Error("preferences: recording interests_changed event failed", "subscriber_id", sub.ID, "err", err)
 	}
 
 	if h.auditor != nil {
