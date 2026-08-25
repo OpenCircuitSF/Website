@@ -708,6 +708,20 @@ gofmt -l . | while read -r f; do
 done
 ```
 
+**`git commit -- <paths> -m "<msg>"` silently swallows the message as a
+pathspec.** After `--`, everything is a path — including `-m` and the message.
+The commit does not happen, and git prints `did not match any file(s) known to
+git`. `#0268`'s implementer hit this, and the reason it is dangerous here is
+what came next: **the error printed alongside an unrelated short hash from
+another agent's commit landing concurrently**, so the output read like success
+to anyone checking the hash rather than the words. It was caught with `git show
+--stat HEAD`.
+
+Correct form: `git commit -F <file> -- <paths>`, or put `-m` before the `--`.
+And confirm every commit with `git show --stat HEAD` rather than trusting a
+hash that appeared nearby — with several agents committing, a hash on your
+screen is not necessarily yours.
+
 **Staging narrowly is not enough — the index is shared too.** `git commit` with
 no pathspec commits *whatever is staged*, including files another agent staged
 seconds earlier. This happened twice in one session: two implementers working
