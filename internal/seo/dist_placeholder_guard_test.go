@@ -118,6 +118,17 @@ var distPlaceholderTokens = []string{
 // contain since no built asset exists until npm has run.
 var hashedAssetPattern = regexp.MustCompile(`/assets/[^"'\s]+\.(?:js|css)\b`)
 
+// placeholderMarker is the literal comment text web/dist/index.html carries
+// and no real `npm run build` output does (verified: 1 occurrence in the
+// committed file, 0 in build output). #0212: the hashedAssetPattern check
+// above keys on `/assets/…\.(js|css)`, which is config-dependent -- a build
+// with a non-default `base` or `assetsDir` in web/vite.config.ts
+// (`/static/…`, a relative `assets/…`, or `.mjs`) would slip past it. Neither
+// is set today, so that gap is currently unreachable, but asserting this
+// marker is present catches regeneration regardless of Vite config, for one
+// extra line.
+const placeholderMarker = "This is a MINIMAL PLACEHOLDER, not real build output"
+
 // validateDistPlaceholder returns every problem found in content, or nil if
 // content still looks like the minimal placeholder. Split out from the test
 // function so both TestDistIndexPlaceholder and a mutation proof (run by
@@ -138,6 +149,10 @@ func validateDistPlaceholder(content string) []string {
 
 	if m := hashedAssetPattern.FindAllString(content, -1); len(m) > 0 {
 		problems = append(problems, "references hashed build asset(s): "+strings.Join(m, ", "))
+	}
+
+	if !strings.Contains(content, placeholderMarker) {
+		problems = append(problems, "missing placeholder marker comment: "+placeholderMarker)
 	}
 
 	return problems
@@ -175,6 +190,7 @@ func TestValidateDistPlaceholder(t *testing.T) {
 	const goodPlaceholder = `<!doctype html>
 <html><head>
 <title>%%OC_TITLE%%</title>
+<!-- This is a MINIMAL PLACEHOLDER, not real build output -->
 <meta name="description" content="%%OC_DESCRIPTION%%" />
 <meta property="og:title" content="%%OC_OG_TITLE%%" />
 <meta property="og:description" content="%%OC_OG_DESCRIPTION%%" />
@@ -233,6 +249,43 @@ func TestValidateDistPlaceholder(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("validateDistPlaceholder(tokenFree) = %v, want a missing placeholder token problem", got)
+		}
+	})
+
+	t.Run("rejects a build with tokens but no marker (non-default base/assetsDir)", func(t *testing.T) {
+		// #0212: hashedAssetPattern keys on `/assets/…\.(js|css)`, which is
+		// config-dependent -- a build with a non-default `base` or
+		// `assetsDir` in web/vite.config.ts would emit an asset path this
+		// pattern does not match (e.g. `/static/index-XXXX.js`), while every
+		// %%OC_*%% token still survives (Vite does not touch literal text it
+		// doesn't recognize). Mutation proof that the marker check alone
+		// catches that case: same tokens as goodPlaceholder, no marker
+		// comment, and an asset reference the hashed-asset pattern misses.
+		nonDefaultBase := `<!doctype html>
+<html><head>
+<title>%%OC_TITLE%%</title>
+<meta name="description" content="%%OC_DESCRIPTION%%" />
+<meta property="og:title" content="%%OC_OG_TITLE%%" />
+<meta property="og:description" content="%%OC_OG_DESCRIPTION%%" />
+<meta property="og:image" content="%%OC_OG_IMAGE%%" />
+<meta property="og:url" content="%%OC_OG_URL%%" />
+<meta property="og:type" content="%%OC_OG_TYPE%%" />
+<meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
+%%OC_JSONLD%%
+<script type="module" crossorigin src="/static/index-Cs2-8eM1.js"></script>
+</head><body><div id="app"></div></body></html>`
+		got := validateDistPlaceholder(nonDefaultBase)
+		if len(got) == 0 {
+			t.Fatal("validateDistPlaceholder(nonDefaultBase) = no problems, want the missing-marker signal (hashedAssetPattern does not match a non-default base)")
+		}
+		found := false
+		for _, p := range got {
+			if strings.Contains(p, "missing placeholder marker") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("validateDistPlaceholder(nonDefaultBase) = %v, want a missing placeholder marker problem", got)
 		}
 	})
 }

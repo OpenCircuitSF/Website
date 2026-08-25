@@ -87,7 +87,16 @@ trap cleanup EXIT
 MODE="${1:-default}"; shift || true
 
 go_test() {
-  local pkgs="$*"; [ -n "$pkgs" ] || pkgs="./internal/... ./cmd/..."
+  # #0212: the default package list must include every package that can hold
+  # a Go test, not just the ones that happen to today. ./web/... (web/embed.go,
+  # currently no _test.go) used to be absent here, so a test placed in that
+  # package would compile, pass locally under a bare `go test ./...`, and then
+  # never run again under the command every issue is told to use — exactly
+  # what happened to #0141's first guard placement before it was relocated to
+  # internal/seo. Add a new top-level Go package here when it is created;
+  # don't rely on `scripts/check.sh all`, which CLAUDE.md reserves for a
+  # batch's single review pass.
+  local pkgs="$*"; [ -n "$pkgs" ] || pkgs="./internal/... ./cmd/... ./web/..."
   step "go test $pkgs -p 2"
   run bash -o pipefail -c "go test $pkgs -p 2 -count=1 2>&1 | tail -$TAIL"
   step "skip audit — a package reporting [no test files] or 'no test files' proves nothing"
