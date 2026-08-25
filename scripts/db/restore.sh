@@ -4,11 +4,11 @@
 # database. Handles both formats: custom (.dump → pg_restore) and plain
 # (.sql.gz → gunzip | psql).
 #
-#     # restore the newest shortlinks dump into a scratch DB (a "restore drill")
-#     sudo bash scripts/db/restore.sh /var/backups/postgres/shortlinks/shortlinks-latest.dump shortlinks_restore_test
+#     # restore the newest opencircuit dump into a scratch DB (a "restore drill")
+#     sudo bash scripts/db/restore.sh /var/backups/postgres/opencircuit/opencircuit-latest.dump opencircuit_restore_test
 #
 #     # restore a specific dump over the live database (DANGEROUS — see below)
-#     sudo bash scripts/db/restore.sh /var/backups/postgres/shortlinks/shortlinks-20260625-073001Z.dump shortlinks
+#     sudo bash scripts/db/restore.sh /var/backups/postgres/opencircuit/opencircuit-20260625-073001Z.dump opencircuit
 #
 # Arguments:
 #   $1  path to the dump file (.dump or .sql.gz)

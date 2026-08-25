@@ -1304,6 +1304,24 @@ backed up the wrong project every night or failed against a database that
 isn't there, and either way Open Circuit's own data was never backed up until
 someone noticed.
 
+**Required install step for the offsite leg, same shape (`#0245`): set
+`BACKUP_SSH_HOST` before running `scripts/db/pull-backups.sh` on the Mac
+mini.** That script is not wired into systemd at all — it runs on a separate
+machine — so it needs its own reminder, not just `backup.sh`'s. It used to
+default `BACKUP_SSH_HOST` to `ec2-user@go.sstools.co`, a real ShortLinks
+production hostname inherited from the same `#0001` port; run unmodified with
+the variable unset, the offsite pull opened an SSH connection to another
+project's server rather than this one's — worse than the `BACKUP_DATABASES`
+defect above, because the failure mode there was a wrong local database name
+while this one reaches out over the network to infrastructure this project
+does not own. There is no correct host to substitute yet (this project's own
+EC2 host is not provisioned — `CLAUDE.md` §10 item 6), so the script now
+exits 2 before any network call, naming exactly what's missing:
+
+```bash
+BACKUP_SSH_HOST=ec2-user@<this-project's-host> bash scripts/db/pull-backups.sh
+```
+
 `backup.sh` exiting non-zero on failure was verified working by `#0062`, but
 until `#0229` nothing consumed that exit code. Two systemd units now do:
 `deploy/systemd/opencircuit-backup.timer` fires `opencircuit-backup.service`

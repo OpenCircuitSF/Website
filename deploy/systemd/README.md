@@ -72,6 +72,22 @@ silently defaulting to `shortlinks` (a different project's database,
 inherited from the ShortLinks port). A loud failure here is much cheaper than
 discovering, some night later, that backups were never running.
 
+**The offsite pull is a separate required install step, not covered by these
+units.** `scripts/db/pull-backups.sh` runs on a *different* machine (a Mac
+mini, per its header comment) — it is not wired into systemd at all, so it
+needs its own reminder here. **Set `BACKUP_SSH_HOST` before running it
+(`#0245`)** — the script no longer defaults to a host to pull backups from.
+It used to default to `ec2-user@go.sstools.co`, a real ShortLinks production
+hostname inherited from the same port; run unmodified, that would have opened
+an SSH connection to another project's server instead of this one's. There is
+no correct default to substitute yet (this project's own EC2 host is not
+provisioned — `CLAUDE.md` §10 item 6), so the script now exits 2 naming the
+missing configuration rather than guessing:
+
+```bash
+BACKUP_SSH_HOST=ec2-user@<this-project's-host> bash scripts/db/pull-backups.sh
+```
+
 Install and enable the timer (the `.service` files are triggered, not
 enabled directly — see the "No `[Install]` section" note in
 `opencircuit-backup.service`):

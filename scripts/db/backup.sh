@@ -11,15 +11,15 @@
 #     BACKUP_DATABASES=opencircuit sudo -E bash scripts/db/backup.sh
 #
 #     # back up specific databases, named explicitly
-#     sudo bash scripts/db/backup.sh opencircuit shortlinks
+#     sudo bash scripts/db/backup.sh opencircuit otherdb
 #
 # Each database is dumped with `pg_dump -Fc` (PostgreSQL's compressed custom
 # format, restored with pg_restore) into its own subfolder under BACKUP_ROOT:
 #
 #     /var/backups/postgres/
-#     ├── shortlinks/
-#     │   ├── shortlinks-20260625-073001Z.dump   # timestamped, compressed
-#     │   └── shortlinks-latest.dump -> …          # convenience symlink
+#     ├── opencircuit/
+#     │   ├── opencircuit-20260625-073001Z.dump   # timestamped, compressed
+#     │   └── opencircuit-latest.dump -> …          # convenience symlink
 #     └── otherdb/
 #         └── otherdb-20260625-073002Z.dump
 #
