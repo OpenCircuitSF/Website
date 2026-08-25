@@ -303,6 +303,22 @@ func cascadeClosure(pool *pgxpool.Pool, roots []string) ([]string, error) {
 // alone and reported only whichever relation happened to sort first for
 // that pid, so a session blocking on several of the truncated tables looked
 // like it was blocking on just one, arbitrarily chosen).
+//
+// pg_locks is cluster-wide, not scoped to the caller's database (#0234).
+// scripts/testdb.sh clones each agent's test database from a shared
+// template with CREATE DATABASE ... TEMPLATE, and a template clone carries
+// its relation OIDs over verbatim — audit_log is the same oid in every
+// clone. Without a l.database predicate, a lock held on audit_log in one
+// agent's database is indistinguishable, by oid alone, from one held in
+// ours: the query above would report someone else's session as the culprit
+// for our stuck TRUNCATE. The filter below restricts to locks in the
+// current database, but not by a naive `= current_database()`: shared
+// catalog objects (e.g. pg_shdepend, pg_authid) always record
+// l.database = 0 in pg_locks regardless of which database is doing the
+// locking, so `= current_database()` alone would silently blind this
+// diagnostic to that whole class of lock. `IN (0, <our oid>)` keeps
+// shared-catalog locks visible while still excluding every other agent's
+// per-database lock.
 func diagnoseLockHolders(pool *pgxpool.Pool, tables []string) string {
 	if len(tables) == 0 {
 		return ""
@@ -317,6 +333,7 @@ func diagnoseLockHolders(pool *pgxpool.Pool, tables []string) string {
 		  JOIN pg_stat_activity a ON a.pid = l.pid
 		 WHERE l.granted
 		   AND l.pid <> pg_backend_pid()
+		   AND l.database IN (0, (SELECT oid FROM pg_database WHERE datname = current_database()))
 		   AND l.relation = ANY(
 		         SELECT to_regclass(t)::oid
 		           FROM unnest($1::text[]) AS t

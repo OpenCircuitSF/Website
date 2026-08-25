@@ -468,3 +468,192 @@ func TestDiagnoseLockHolders_SameNameDifferentSchema_NoFalsePositive(t *testing.
 		t.Fatalf("diagnoseLockHolders did not find the actually-locked %s; got:\n%s", formattedLocked, diagLocked)
 	}
 }
+
+// TestDiagnoseLockHolders_IgnoresLocksInOtherDatabase is #0234's
+// reproduction. pg_locks is cluster-wide, and scripts/testdb.sh clones every
+// agent's own test database from a shared template with `CREATE DATABASE
+// ... TEMPLATE`, which carries relation oids over verbatim — audit_log is
+// the same oid in every clone. The pre-#0234 query joined on
+// `l.relation = ANY(...)` alone, with no `l.database` predicate, so a lock
+// held on audit_log in a sibling database was indistinguishable by oid from
+// one held in ours.
+//
+// This first proves the precondition that makes the bug reachable at all
+// (matching oids across a fresh template clone), rather than assuming it,
+// then proves the diagnostic no longer reports the sibling's lock as ours,
+// and — in the same test, so an implementation that always returns "" for
+// everything cannot pass for the wrong reason — that a lock genuinely held
+// in OUR OWN database is still reported.
+func TestDiagnoseLockHolders_IgnoresLocksInOtherDatabase(t *testing.T) {
+	pool := lockDiagPoolOrSkip(t)
+	ctx := context.Background()
+
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse TEST_DATABASE_URL: %v", err)
+	}
+
+	// scripts/testdb.sh's own template name and override variable
+	// (TEMPLATE_DB), matched here so this test creates its sibling exactly
+	// the way every agent's own scratch database is created — a fresh
+	// clone of the shared template, not a clone of our already-connected
+	// scratch database, which Postgres refuses (a database that is a
+	// CREATE DATABASE ... TEMPLATE source must have no other sessions).
+	templateDB := os.Getenv("TEMPLATE_DB")
+	if templateDB == "" {
+		templateDB = "opencircuit_test_template"
+	}
+
+	// Connect to the `postgres` maintenance database to CREATE/DROP a
+	// sibling scratch database — the same operation scripts/testdb.sh
+	// performs for every agent's own test database.
+	adminCfg := cfg.Copy()
+	adminCfg.Database = "postgres"
+	adminConn, err := pgx.ConnectConfig(ctx, adminCfg)
+	if err != nil {
+		t.Fatalf("connect to postgres maintenance db: %v", err)
+	}
+
+	otherDB := fmt.Sprintf("zz_testdb_0234_%d", Unique())
+	if _, err := adminConn.Exec(ctx, "CREATE DATABASE "+otherDB+" TEMPLATE "+templateDB); err != nil {
+		t.Fatalf("CREATE DATABASE %s TEMPLATE %s: %v — does the connecting role have CREATEDB, and does the template exist (scripts/testdb.sh template)? (CLAUDE.md §5b)", otherDB, templateDB, err)
+	}
+	// Registered before adminConn is ever closed: t.Cleanup runs after this
+	// function's own defers, so adminConn is guaranteed still open when
+	// this fires. Do NOT also `defer adminConn.Close` — that would close it
+	// first and leave nothing open to run the DROP with.
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = adminConn.Exec(bg, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()", otherDB)
+		_, _ = adminConn.Exec(bg, "DROP DATABASE IF EXISTS "+otherDB)
+		_ = adminConn.Close(bg)
+	})
+
+	otherCfg := cfg.Copy()
+	otherCfg.Database = otherDB
+	otherConn, err := pgx.ConnectConfig(ctx, otherCfg)
+	if err != nil {
+		t.Fatalf("connect to sibling database %s: %v", otherDB, err)
+	}
+	defer func() { _ = otherConn.Close(ctx) }()
+
+	// The property this bug depends on (Notes: "measured as 12933693 across
+	// ... alike") — proved here rather than assumed, per the acceptance
+	// criteria. If a future change to how test databases are created stops
+	// preserving oids across clones, this assertion is what would catch it.
+	var ourOID, otherOID uint32
+	if err := pool.QueryRow(ctx, "select 'audit_log'::regclass::oid").Scan(&ourOID); err != nil {
+		t.Fatalf("our audit_log oid: %v", err)
+	}
+	if err := otherConn.QueryRow(ctx, "select 'audit_log'::regclass::oid").Scan(&otherOID); err != nil {
+		t.Fatalf("sibling's audit_log oid: %v", err)
+	}
+	if ourOID != otherOID {
+		t.Fatalf("expected audit_log's oid to be identical across a template clone (the precondition that makes #0234 reachable at all), got ours=%d sibling=%d", ourOID, otherOID)
+	}
+
+	// Hold a real lock on audit_log in the SIBLING database.
+	otherTx, err := otherConn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin in sibling db: %v", err)
+	}
+	defer func() { _ = otherTx.Rollback(ctx) }()
+	var otherPID int32
+	if err := otherTx.QueryRow(ctx, "select pg_backend_pid()").Scan(&otherPID); err != nil {
+		t.Fatalf("sibling pg_backend_pid: %v", err)
+	}
+	if _, err := otherTx.Exec(ctx, "LOCK TABLE audit_log IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatalf("LOCK TABLE audit_log in sibling db: %v", err)
+	}
+
+	// diagnoseLockHolders, run against OUR pool, must NOT report the
+	// sibling database's lock — this is #0234's bug.
+	diag := diagnoseLockHolders(pool, []string{"audit_log"})
+	if strings.Contains(diag, fmt.Sprintf("pid %d ", otherPID)) {
+		t.Fatalf("diagnoseLockHolders reported a lock held in a DIFFERENT database (%s, pid %d) as if it were in ours; got:\n%s", otherDB, otherPID, diag)
+	}
+	if diag != "" {
+		t.Fatalf("diagnoseLockHolders reported something despite no lock being held in our own database; got:\n%s", diag)
+	}
+
+	// Converse, in the same test: a lock genuinely held in OUR OWN database
+	// IS reported — proves the empty result above is the cross-database
+	// filter doing its job, not the query silently returning nothing.
+	holderConn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire holder conn: %v", err)
+	}
+	defer holderConn.Release()
+	ourTx, err := holderConn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = ourTx.Rollback(ctx) }()
+	var ourPID int32
+	if err := ourTx.QueryRow(ctx, "select pg_backend_pid()").Scan(&ourPID); err != nil {
+		t.Fatalf("pg_backend_pid: %v", err)
+	}
+	if _, err := ourTx.Exec(ctx, "LOCK TABLE audit_log IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatalf("LOCK TABLE audit_log in our own db: %v", err)
+	}
+
+	diagSame := diagnoseLockHolders(pool, []string{"audit_log"})
+	if !strings.Contains(diagSame, fmt.Sprintf("pid %d ", ourPID)) {
+		t.Fatalf("diagnoseLockHolders did not report a lock genuinely held in OUR OWN database; got:\n%s", diagSame)
+	}
+}
+
+// TestDiagnoseLockHolders_SharedCatalogLockStillReported is the other half
+// of #0234's acceptance criteria: the fix must not filter out shared
+// catalogs, whose pg_locks.database is always 0 regardless of which
+// database is doing the locking — a naive `l.database = current_database()`
+// predicate would drop those silently, blinding the diagnostic to a class
+// of lock it could previously see. pg_database is a real shared catalog
+// (global, not per-database) every session can lock; this takes a real
+// ACCESS SHARE lock on it, confirms pg_locks itself records database = 0
+// for that lock (the precondition, proved rather than assumed), and then
+// confirms the diagnostic still names it.
+func TestDiagnoseLockHolders_SharedCatalogLockStillReported(t *testing.T) {
+	pool := lockDiagPoolOrSkip(t)
+	ctx := context.Background()
+
+	holderConn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire holder conn: %v", err)
+	}
+	defer holderConn.Release()
+
+	tx, err := holderConn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var holderPID int32
+	if err := tx.QueryRow(ctx, "select pg_backend_pid()").Scan(&holderPID); err != nil {
+		t.Fatalf("pg_backend_pid: %v", err)
+	}
+	// pg_database is shared across every database in the cluster; pg_locks
+	// records l.database = 0 for locks on it no matter which database the
+	// locking session is connected to.
+	if _, err := tx.Exec(ctx, "LOCK TABLE pg_database IN ACCESS SHARE MODE"); err != nil {
+		t.Fatalf("LOCK TABLE pg_database: %v", err)
+	}
+
+	var lockDatabase uint32
+	if err := tx.QueryRow(ctx, "select l.database from pg_locks l where l.pid = $1 and l.relation = 'pg_database'::regclass", holderPID).Scan(&lockDatabase); err != nil {
+		t.Fatalf("confirm pg_locks.database for the shared-catalog lock: %v", err)
+	}
+	if lockDatabase != 0 {
+		t.Fatalf("expected pg_locks.database = 0 for a shared-catalog lock (the precondition this test exists to exercise), got %d", lockDatabase)
+	}
+
+	diag := diagnoseLockHolders(pool, []string{"pg_database"})
+	if !strings.Contains(diag, "pg_database") {
+		t.Fatalf("diagnoseLockHolders did not name pg_database — the l.database filter must include 0 for shared catalogs, not just current_database()'s oid; got:\n%s", diag)
+	}
+	if !strings.Contains(diag, fmt.Sprintf("pid %d ", holderPID)) {
+		t.Fatalf("diagnoseLockHolders did not name the actual lock-holder pid %d; got:\n%s", holderPID, diag)
+	}
+}
