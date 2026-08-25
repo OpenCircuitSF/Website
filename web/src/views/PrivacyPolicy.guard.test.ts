@@ -58,7 +58,16 @@ interface RetainedCategory {
 const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
   {
     key: 'suppression',
-    requiredPhrases: ['suppression'],
+    // A bare 'suppression' was too weak: #0237 widened the audit_log item
+    // below to disclose a "suppression removal" audit entry, and that
+    // phrase also contains the substring "suppression" -- so with the old,
+    // single-word phrase, matchItemToCategory (which checks categories in
+    // THIS ARRAY'S order and returns the first fully-satisfied one) claimed
+    // the audit_log item for THIS category before ever reaching audit_log's
+    // own, leaving audit_log unmatched even though its item text was
+    // correct. Caught by the "passes against the real, current four items"
+    // test going from 4/4 matched to 3/4 the moment that wording landed.
+    requiredPhrases: ['permanent suppression entry'],
     sourceRef: 'internal/subscribers/erase.go: addSuppression(... SuppressionReasonManual ...) before the DELETE',
   },
   {
@@ -78,7 +87,7 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
     sourceRef: 'internal/subscribers/erase.go doc comment: "email_events rows, untouched"; PRD §6.9\'s delivery-health circuit breaker',
   },
   {
-    key: 'audit_log (per-request IP, erasure entry carries the admin\'s IP, confirmation/erasure entries carry the email)',
+    key: 'audit_log (subscriber/admin/automated categories, per-request IP except automated SES entries, six actions carry the email)',
     // "admin" alone is too weak: the OLD, narrower wording this replaces
     // already said "an internal ADMIN audit log entry" (describing WHO
     // reads it, not whose IP the erasure row carries) -- also caught by
@@ -92,9 +101,41 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
     // caught it -- a green guard sitting over an under-disclosing page.
     // Mutation-proved below (see "fails when the audit-log item drops the
     // email-address disclosure").
-    requiredPhrases: ['audit log', 'each entry records the ip address', 'ip of the acting admin', 'your email address'],
+    //
+    // #0237 (#0226's own phase-3 review) widened this category again: the
+    // item was still scoped to the five SUBSCRIBER-DRIVEN audit.Entry call
+    // sites #0226 examined, and five more -- admin-initiated (manual add,
+    // suppression removal) and SES-driven (two bounce paths, one complaint)
+    // -- also write the subscriber's email and also survive erasure. The
+    // phrases below are unique to the widened wording: 'admin-initiated
+    // actions' and 'automated entries from our delivery provider' assert
+    // the item now names all three ORIGIN categories a row can come from,
+    // not just the subscriber-driven one; 'no ip at all for the automated
+    // delivery-provider entries' asserts the corrected IP claim (the three
+    // SES entries set no IP field at all -- verified directly against
+    // ses_notifications.go, not assumed); 'suppression removal', 'a
+    // bounce', and 'a complaint' assert three of the newly-disclosed
+    // email-carrying actions by name (manual add is covered by the
+    // pre-existing 'your email address' + the categories phrase together).
+    // The DURABLE version of "did we miss a sixth site" is
+    // internal/handlers/audit_email_metadata_guard_test.go (#0237), which
+    // reads the actual Go source rather than trusting this phrase list to
+    // have been updated -- these phrases catch the PAGE regressing away
+    // from what that guard has already confirmed is true, not the other
+    // direction.
+    requiredPhrases: [
+      'audit log',
+      'admin-initiated actions',
+      'automated entries from our delivery provider',
+      'no ip at all for the automated delivery-provider entries',
+      'ip of the acting admin',
+      'suppression removal',
+      'a bounce',
+      'a complaint',
+      'your email address',
+    ],
     sourceRef:
-      'internal/handlers/admin_subscribers.go: audit.Entry{Action: ActionSubscriberErased, ActorID: &actorID, Metadata: map[string]any{"email": result.Email, ...}, IP: clientIP(r)}; internal/handlers/confirm.go: audit.Entry{Action: ActionSubscriberConfirmed, Metadata: map[string]any{"email": sub.Email}, IP: clientIP(r)}',
+      'internal/handlers/audit_email_metadata_guard_test.go (#0237) pins the full, current set: internal/handlers/confirm.go ActionSubscriberConfirmed, internal/handlers/admin_subscribers.go ActionSubscriberManualAdd and ActionSubscriberErased, internal/handlers/admin_suppressions.go ActionSuppressionRemoved, internal/handlers/ses_notifications.go ActionSubscriberBounced (x2) and ActionSubscriberComplained -- see that file for each one\'s exact line and IP-presence, re-derived from the tree on every run rather than hardcoded here a second time.',
   },
 ];
 
@@ -316,7 +357,10 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     // current item text and confirm the guard now fires.
     const items = realItems().map((item) =>
       item.includes('audit log entry')
-        ? item.replace('; the confirmation entry and the erasure entry itself also record your email address explicitly', '')
+        ? item.replace(
+            '; the confirmation entry, being added manually, a suppression removal, a bounce, a complaint, and the erasure entry itself also record your email address explicitly',
+            '',
+          )
         : item,
     );
     const src = fixtureSource(items);
@@ -330,7 +374,12 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     expect(auditCategory, 'fixture setup: expected the audit_log category to exist').toBeDefined();
     const lower = (auditItem ?? '').toLowerCase();
     const missingFromOwnCategory = (auditCategory?.requiredPhrases ?? []).filter((p) => !lower.includes(p.toLowerCase()));
-    expect(missingFromOwnCategory).toEqual(['your email address']);
+    // This mutation removes the whole trailing clause, which also happens to
+    // be the only place "suppression removal" and "a complaint" (as opposed
+    // to "a spam complaint" in the categories intro) appear -- so three
+    // phrases go missing here, not just the email one; that is a property
+    // of THIS mutation's shape, not a weaker guard.
+    expect(missingFromOwnCategory).toEqual(['suppression removal', 'a complaint', 'your email address']);
 
     const { matchedCategory } = matchItemToCategory(auditItem ?? '', ERASURE_RETAINED_CATEGORIES);
     expect(matchedCategory, 'the audit-log item with the email disclosure dropped should no longer match ANY category').toBeNull();
@@ -344,9 +393,77 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     expect(auditCategory, 'fixture setup: expected the audit_log category to exist').toBeDefined();
     const lower = narrowed.toLowerCase();
     const missingFromOwnCategory = (auditCategory?.requiredPhrases ?? []).filter((p) => !lower.includes(p.toLowerCase()));
-    expect(missingFromOwnCategory).toEqual(['each entry records the ip address', 'ip of the acting admin']);
+    expect(missingFromOwnCategory).toEqual([
+      'admin-initiated actions',
+      'automated entries from our delivery provider',
+      'no ip at all for the automated delivery-provider entries',
+      'ip of the acting admin',
+      'suppression removal',
+      'a bounce',
+      'a complaint',
+    ]);
 
     const { matchedCategory } = matchItemToCategory(narrowed, ERASURE_RETAINED_CATEGORIES);
     expect(matchedCategory, 'the old, narrower audit-log wording should no longer match ANY category').toBeNull();
+  });
+
+  it('fails when the audit-log item drops coverage of the admin-initiated and SES-driven categories (#0237, in reverse)', () => {
+    // #0237's own regression: the item narrows back to naming only the
+    // subscriber-driven actions #0226 examined, silently dropping the
+    // admin-initiated and automated-provider categories this widening
+    // exists to disclose -- reproduced against the REAL current item text,
+    // not a hand-written fixture, per #0237's acceptance criterion that
+    // this be proved against PrivacyPolicy.svelte's actual content.
+    const items = realItems().map((item) =>
+      item.includes('audit log entry')
+        ? item.replace(
+            ' but also the erasure itself, admin-initiated actions (being added to the list manually, or having a suppression removed), and automated entries from our delivery provider (a bounce or a spam complaint registered against your address)',
+            '',
+          )
+        : item,
+    );
+    const src = fixtureSource(items);
+    const parsedItems = findErasureStatusListItems(src);
+
+    const auditItem = parsedItems.find((i) => i.includes('audit log entry'));
+    expect(auditItem, 'fixture setup: expected an audit-log item').toBeDefined();
+    expect(auditItem, 'fixture setup: the mutation must actually remove the widened categories clause').not.toContain('admin-initiated actions');
+
+    const auditCategory = ERASURE_RETAINED_CATEGORIES.find((c) => c.key.startsWith('audit_log'));
+    expect(auditCategory, 'fixture setup: expected the audit_log category to exist').toBeDefined();
+    const lower = (auditItem ?? '').toLowerCase();
+    const missingFromOwnCategory = (auditCategory?.requiredPhrases ?? []).filter((p) => !lower.includes(p.toLowerCase()));
+    expect(missingFromOwnCategory).toEqual(['admin-initiated actions', 'automated entries from our delivery provider']);
+
+    const { matchedCategory } = matchItemToCategory(auditItem ?? '', ERASURE_RETAINED_CATEGORIES);
+    expect(matchedCategory, 'the item with categories coverage dropped should no longer match ANY category').toBeNull();
+  });
+
+  it('fails when the audit-log item drops the corrected IP claim for automated SES entries (#0237, in reverse)', () => {
+    // The other #0237 regression: the categories stay named, but the
+    // exception clause -- the SES-driven entries carry no IP at all -- is
+    // dropped, silently reverting to the false "each entry records the IP"
+    // claim #0237 found untrue for those three entries. Reproduced against
+    // the real current item text.
+    const items = realItems().map((item) =>
+      item.includes('audit log entry')
+        ? item.replace(', and no IP at all for the automated delivery-provider entries, since there is no request behind them', '')
+        : item,
+    );
+    const src = fixtureSource(items);
+    const parsedItems = findErasureStatusListItems(src);
+
+    const auditItem = parsedItems.find((i) => i.includes('audit log entry'));
+    expect(auditItem, 'fixture setup: expected an audit-log item').toBeDefined();
+    expect(auditItem, 'fixture setup: the mutation must actually remove the no-IP exception').not.toContain('no IP at all');
+
+    const auditCategory = ERASURE_RETAINED_CATEGORIES.find((c) => c.key.startsWith('audit_log'));
+    expect(auditCategory, 'fixture setup: expected the audit_log category to exist').toBeDefined();
+    const lower = (auditItem ?? '').toLowerCase();
+    const missingFromOwnCategory = (auditCategory?.requiredPhrases ?? []).filter((p) => !lower.includes(p.toLowerCase()));
+    expect(missingFromOwnCategory).toEqual(['no ip at all for the automated delivery-provider entries']);
+
+    const { matchedCategory } = matchItemToCategory(auditItem ?? '', ERASURE_RETAINED_CATEGORIES);
+    expect(matchedCategory, 'the item with the no-IP exception dropped should no longer match ANY category').toBeNull();
   });
 });

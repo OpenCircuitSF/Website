@@ -92,6 +92,41 @@
   //        `kind`/`source`/`interest_count` metadata, not the email, so the
   //        item does NOT claim every entry carries it -- only that some do,
   //        naming which.
+  //      - #0237 (#0226's own phase-3 review): the audit-log item above was
+  //        still scoped to what #0226 examined -- the five SUBSCRIBER-DRIVEN
+  //        audit.Entry call sites (signup, confirmation, unsubscribe,
+  //        preference update, erasure). Reading every `audit.Entry{`
+  //        construction in internal/ and cmd/ (not just those five) found
+  //        five MORE that write the subscriber's own address into
+  //        `audit_log.metadata` and, like the others, survive erasure:
+  //        `internal/handlers/admin_subscribers.go`'s manual-add entry,
+  //        `internal/handlers/admin_suppressions.go`'s suppression-removal
+  //        entry, and `internal/handlers/ses_notifications.go`'s two bounce
+  //        entries (permanent, and repeated-soft) plus its complaint entry.
+  //        The item now names all three CATEGORIES a row can come from
+  //        (subscriber-initiated, admin-initiated, automated from the
+  //        delivery provider) rather than enumerating only the subscriber
+  //        ones, and lists all six actions that record the email explicitly
+  //        (confirmation, manual add, suppression removal, bounce,
+  //        complaint, erasure) rather than just two. It also corrects the
+  //        IP claim: the three SES-driven entries set NO `IP` field at all
+  //        (verified directly -- `ses_notifications.go`'s three
+  //        `audit.Entry{}` literals for these actions carry no `IP:` key),
+  //        because there is no user request behind an SES notification; the
+  //        previous "each entry records the IP address of the request that
+  //        made it" was true only for the request-driven entries.
+  //        `internal/handlers/audit_email_metadata_guard_test.go` (#0237) is
+  //        the durable version of this check #0226's Notes asked for: it
+  //        walks every production `audit.Entry{` construction in internal/
+  //        and cmd/, classifies whether its Metadata could carry the literal
+  //        key "email" (resolving inline literals, a traced local variable
+  //        built across the function including any conditional index
+  //        assignment, and one known-safe helper call), and fails --
+  //        naming the exact file and action -- if the SET of call sites that
+  //        write an email differs from what it has pinned. Adding a
+  //        seventh such site (or removing one of the current six) fails
+  //        that guard before this page's wording can silently fall behind
+  //        again, the way #0226's phrase-only guard did.
   //  - "No third-party analytics, ad trackers, external CDNs, or email
   //    open-tracking pixels" is CLAUDE.md §9's binding restriction, stated
   //    here as a fact about how the site is built, not a promise.
@@ -241,7 +276,7 @@
           'a permanent suppression entry, so the address cannot be silently re-added by a future import or signup',
           'anonymized rows in our send history, so historical campaign counts (how many people a given email actually reached) do not silently change',
           'the raw deliverability events (bounces, complaints, deliveries) already logged against your address, kept without the link back to your identity, for spam/abuse forensics and to keep our own bounce/complaint handling accurate',
-          'an internal admin audit log entry for each action on your account (signup, confirmation, any unsubscribe or preference update, and the erasure itself) — each entry records the IP address of the request that made it, a separate mechanism from the single consent-evidence IP described above; the confirmation entry and the erasure entry itself also record your email address explicitly; the erasure entry itself carries the IP of the acting admin, not yours — kept so we can prove a request was honored and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
+          'an internal admin audit log entry for actions on your account — not only the ones you take yourself (signup, confirmation, unsubscribe, and preference updates) but also the erasure itself, admin-initiated actions (being added to the list manually, or having a suppression removed), and automated entries from our delivery provider (a bounce or a spam complaint registered against your address); each entry records the IP address behind the request that created it: yours for actions you take, the IP of the acting admin for admin-initiated ones including the erasure, and no IP at all for the automated delivery-provider entries, since there is no request behind them — a separate mechanism from the single consent-evidence IP described above; the confirmation entry, being added manually, a suppression removal, a bounce, a complaint, and the erasure entry itself also record your email address explicitly; kept so we can prove what happened and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
         ]}
       />
       <p>
