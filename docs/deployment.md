@@ -1054,11 +1054,38 @@ migrate -path migrations \
 #    expect the same permission-denied error in that case, deliberately.
 
 # 7. Compare restored against source for every table that existed at both
-#    schema versions (everything except workshops / workshop_interests,
-#    which exist only on the restored side, post-migration): table-by-table
-#    row counts, sequence last_values, schema_migrations, constraint
-#    counts, index counts — all must match exactly (they did, in full, in
-#    this drill).
+#    schema versions — exclude workshops / workshop_interests entirely
+#    (tables, their sequences, their indexes, and their constraints alike;
+#    they exist only on the restored side, post-migration): table-by-table
+#    row counts, sequence last_values, and index counts all must match
+#    exactly.
+#
+#    Two things are EXPECTED to differ here, and a MATCH on either one
+#    would mean step 6 silently no-op'd, not that the drill passed. (#0239
+#    was bounced over exactly this: the old wording asked for these to
+#    match too, which they structurally cannot once step 1b and step 6 are
+#    both doing their job.)
+#
+#      - schema_migrations: source stays at version=19 (nothing ever
+#        migrated it past step 1b's rollback); restored reads version=20
+#        (step 6 applied the pending migration to it, and only it). Already
+#        proven above at step 5 and step 6 — not a new check, just a
+#        reminder not to re-flag it as a mismatch here.
+#      - email_campaigns' constraint count: restored must be EXACTLY ONE
+#        MORE than source's — the re-added `email_campaigns_workshop_id_fkey`
+#        FK that migration 20's up.sql attaches (step 1b's comment names
+#        what its down.sql drops). This is the positive check the old
+#        wording was missing; confirm the actual delta, not "looks close":
+diff <(psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062src?sslmode=disable" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in ('workshops','workshop_interests') group by table_name order by 1") \
+     <(psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?sslmode=disable" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in ('workshops','workshop_interests') group by table_name order by 1")
+#    Expect EXACTLY one pair of lines, both naming email_campaigns,
+#    differing by 1 (e.g. "< email_campaigns|12" / "> email_campaigns|13" —
+#    your own counts depend on what you seeded; the delta of exactly 1 does
+#    not). Any other line in this diff's output — a different table, or a
+#    delta other than 1 on email_campaigns — is a real failure. Row counts,
+#    sequence last_values (excluding workshops_id_seq), and index counts
+#    get the same table-exclusion treatment above but with no exception:
+#    any line of diff output for those is a failure.
 
 # 8. Prove the restore — including the migration that just landed on it —
 #    is actually usable, not just structurally present: insert a new row
