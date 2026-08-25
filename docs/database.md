@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000020`). No ORM — every
+(`migrations/`, numbered `000001`–`000022`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -75,6 +75,18 @@ store packages for the tables above them; `internal/mailing` now owns
 
 `internal/workshops` (`#0051`) is the corresponding Go store package for the
 two tables above.
+
+## Durable outbound mail and the activity log (Phase 8, per `PRD.md` §6.11)
+
+| Migration | Tables / change |
+|---|---|
+| `000021_create_outbound_queue` | `outbound_queue` (`#0126`) — the durable transport for transactional mail (confirmation, already-subscribed, welcome, goodbye, admin alerts, registration, recovery), replacing the in-process goroutine that dispatched it before and lost a signup silently on an SES outage or a process restart. Same shape as `email_sends`: a row per message, claimed by a worker, an orphan sweep for a crashed claim. `status` is CHECK-constrained to `queued \| sending \| sent \| failed \| abandoned` — `sending` is not in PRD §6.2's prose comment but is required by the claim/release state machine; `failed` is reserved and unused by this issue. `payload` stores template inputs, not rendered MIME, so a template fix applies to mail already queued; `internal/outbox.Store.MarkSent` blanks it to `'{}'::jsonb` once sent (an `abandoned` row keeps its payload as the diagnostic). `idx_outbound_queue_due` is a partial index on `(next_attempt_at, id) WHERE status = 'queued'` for the worker's `FOR UPDATE SKIP LOCKED` claim query. Seeds `settings.queue_max_retries = '8'` — the acceptance criterion's literal `queue.max_retries` is not a valid key in this project (every existing key is snake_case with no dots); see `internal/outbox`'s package doc comment |
+| `000022_create_subscriber_events` | `subscriber_events` (`#0126`) — the append-only activity log, one row per meaningful action against an address (PRD §6.11's closed `action` set, validated in Go against `internal/subscribers.Action`, not a CHECK constraint). `email` is snapshotted `NOT NULL` so the row survives erasure of the `subscribers` row; `#0060`'s `Erase` redacts it and lets `subscriber_id` go `NULL` via the FK rather than deleting the row. Carries the three indexes PRD §6.2 specifies: `idx_subscriber_events_subscriber` on `(subscriber_id, created_at DESC)`, `idx_subscriber_events_email` on `(email, created_at DESC)`, `idx_subscriber_events_action` on `(action, created_at DESC)`. **Deliberately omits `import_id`** (PRD §6.2: `BIGINT REFERENCES subscriber_imports(id) ON DELETE SET NULL`) — `subscriber_imports` does not exist yet (`#0125` creates it, and `#0126` blocks `#0125`); `#0125` adds the column and its FK when it creates that table. Guard-safe: `internal/db/prd_index_parity_test.go` runs migrations → PRD only, never the reverse, and its header names this table as a case it tolerates a column arriving late |
+
+`internal/outbox` (`#0126`) owns `outbound_queue`; `internal/subscribers`
+(`events.go`) owns `subscriber_events`, alongside `subscribers`/
+`subscriber_interests`/`suppressions` — see that package's doc comment for
+why the activity log is not a second package of its own.
 
 ## Conventions
 
