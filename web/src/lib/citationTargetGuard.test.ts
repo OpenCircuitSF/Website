@@ -182,12 +182,20 @@ function pathCitationIsExcluded(text: string, start: number, end: number): boole
   // example, "AdminDotSvelte / lib / totallyNonexistentXyzDotTs") is
   // excluded by its first matching segment alone, even if a later segment
   // is a genuinely dangling path. That residual cost is a MISSED
-  // detection, not a false alarm: flipping this loop to "every"-semantics
-  // and re-running the tree-wide scan finds exactly one real hit, and it
-  // argues FOR "any" rather than against it -- a legitimate multi-file
-  // list citation that "every" wrongly flags as unresolved. See that Go
-  // file's own doc comment for the full reasoning and the real probe that
-  // surfaced "any" vs "every" (#0220's phase-3 review).
+  // detection, not a false alarm -- but THIS file's own tree-wide scan
+  // cannot demonstrate it: this guard walks only .ts/.svelte comments
+  // (collectTsCommentBlocks/collectSvelteCommentBlocks below), and the one
+  // real citation in the whole tree that "any" and "every" disagree on
+  // (a legitimate multi-file list citation that "every" wrongly flags as
+  // unresolved) lives in a .go file, admin_workshops.go, which this guard
+  // never opens. Flipping this loop to "every"-semantics and re-running
+  // THIS file's own tree-wide scan therefore stays green -- zero hits,
+  // not one -- which argues nothing either way about the citation itself.
+  // The actual evidence for keeping "any" is the Go guard's reproduction,
+  // cited there, not this file's: see
+  // internal/handlers/citation_target_guard_test.go's own doc comment for
+  // the full reasoning and the real probe that surfaced "any" vs "every"
+  // (#0220's phase-3 review).
   for (const seg of segments.slice(0, -1)) {
     if (citationTargetFileLikeSegmentPattern.test(seg) || citationTargetBareDocNames.has(seg)) return true;
   }
