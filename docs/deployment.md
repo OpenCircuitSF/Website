@@ -1002,50 +1002,96 @@ ISSUE="${ISSUE:-$$}"
 #    characters, so e.g. a hyphen in ISSUE will desync the same way case did:
 ISSUE="$(printf '%s' "$ISSUE" | tr '[:upper:]' '[:lower:]')"
 echo "Running the drill under ISSUE=${ISSUE}"
+
+# 1a. #0256: everything downstream of "which migration is HEAD" used to be
+#    written down as a fixed number (20) and a fixed table name
+#    (email_campaigns) — three passes (#0239, #0248, and the review that
+#    filed #0256) each corrected those numbers as migrations/ grew, and
+#    each correction went stale again the next time a migration landed
+#    (#0126's 000021/000022 invalidated #0248's fix in about twenty
+#    minutes). Derive them instead, from migrations/ itself, so this
+#    section is correct at whatever HEAD happens to be when you run it:
+HEAD_FILE="$(ls migrations/*.up.sql | sort | tail -1)"
+HEAD_VERSION="$(basename "$HEAD_FILE" | sed -E 's/^0*([0-9]+)_.*/\1/')"
+#    NEW_TABLES: every table HEAD's own migration CREATE TABLEs outright —
+#    these exist only on the restored side after step 6 and are excluded
+#    from every step 7 comparison below, the same way workshops/
+#    workshop_interests always were when migration 20 was HEAD. Comments
+#    are stripped first (`grep -vE '^[[:space:]]*--'`) — a prose sentence
+#    like "attached with an ALTER TABLE" would otherwise read as a second
+#    ALTER TABLE statement (caught while building this derivation: 000020's
+#    own comments contain exactly that phrase). The identifier class is
+#    `[a-z_][a-z0-9_]*`, not `[a-z_]+` — a table name containing a digit
+#    (e.g. this section's own proof migration, scratch_probe_0256) was
+#    silently truncated at the first digit under the letters-only class,
+#    which desyncs every exclusion built from it; caught by proving this
+#    section against exactly such a migration, not by inspection:
+NEW_TABLES="$(grep -vE '^[[:space:]]*--' "$HEAD_FILE" | grep -oE 'CREATE TABLE [a-z_][a-z0-9_]*' | awk '{print $3}' | sort -u)"
+#    ALTERED_TABLES: pre-existing tables HEAD's migration modifies via
+#    ALTER TABLE (as opposed to tables it creates outright) — the ONLY
+#    tables step 7's constraint-count diff may legitimately show a
+#    difference for. Empty is a valid, common answer: a migration that only
+#    creates new tables (HEAD's, right now) touches no pre-existing table's
+#    constraints at all.
+ALTERED_TABLES="$(grep -vE '^[[:space:]]*--' "$HEAD_FILE" | grep -oE 'ALTER TABLE [a-z_][a-z0-9_]*' | awk '{print $3}' | sort -u | grep -vxF "$NEW_TABLES" || true)"
+#    EXCLUDE_SQL: NEW_TABLES rendered as a SQL IN-list, quoted and
+#    comma-joined without relying on word-splitting a possibly multi-line
+#    shell variable (fragile — tested and rejected while building this).
+#    '__none__' is a placeholder for "nothing to exclude" — Postgres
+#    rejects a bare `not in ()`, and no real table will ever be named it:
+EXCLUDE_SQL="$(printf '%s\n' "$NEW_TABLES" | sed "s/.*/'&',/" | tr -d '\n')"
+EXCLUDE_SQL="${EXCLUDE_SQL%,}"
+[ -n "$EXCLUDE_SQL" ] || EXCLUDE_SQL="'__none__'"
+echo "HEAD migration: ${HEAD_VERSION} ($(basename "$HEAD_FILE"))"
+echo "Tables it creates outright (excluded from every step 7 comparison): ${NEW_TABLES:-none}"
+echo "Pre-existing tables its up.sql alters (the only ones step 7's constraint diff may legitimately show): ${ALTERED_TABLES:-none}"
+
 #    scripts/testdb.sh clones the fully-migrated template —
-#    check_template_fresh guarantees this is at HEAD (migration 20
-#    applied). Confirm it before relying on it:
+#    check_template_fresh guarantees this is at HEAD. Confirm it before
+#    relying on it:
 DSN="$(scripts/testdb.sh create "${ISSUE}src")"
 psql "$DSN" -c "select version, dirty from schema_migrations"
-#    Expect: version=20, dirty=false. If this isn't HEAD, stop — step 1b
-#    below has nothing real to roll back and the rest of the drill proves
-#    nothing about a pending migration.
+#    Expect: version=${HEAD_VERSION}, dirty=false. If this isn't HEAD, stop
+#    — step 1b below has nothing real to roll back and the rest of the
+#    drill proves nothing about a pending migration.
 
 # 1b. #0239: roll back exactly ONE migration so the source database is
-#    genuinely N-1, not merely described as such. This is what the old
+#    genuinely HEAD-1, not merely described as such. This is what the old
 #    step 4b could never produce on its own — do it here, after creation,
 #    with the real down migration, not a synthetic approximation of one:
 migrate -path migrations -database "$DSN" down 1
 psql "$DSN" -c "select version, dirty from schema_migrations"
-#    Expect: version=19, dirty=false. If this still reads 20, STOP — the
-#    rollback didn't take, and everything below would (again) silently
-#    prove nothing. Migration 20 (create_workshops) is what's now missing:
-#    its own down.sql dropped workshop_interests, workshops, and the FK it
-#    had added to email_campaigns.
+#    Expect: version=$((HEAD_VERSION - 1)), dirty=false. If this still reads
+#    ${HEAD_VERSION}, STOP — the rollback didn't take, and everything below
+#    would (again) silently prove nothing. $HEAD_FILE's own down.sql is what
+#    just ran — read it to see exactly what it removed (for HEAD's current
+#    migration: $NEW_TABLES, plus any constraint its up.sql had attached to
+#    $ALTERED_TABLES).
 
 # 2. Populate the source database with representative data spanning every
-#    table that exists AT THIS SCHEMA VERSION (19) — users, subscribers +
-#    subscriber_interests (referencing interests' existing rows —
-#    migration 000009 already seeded the 12-row taxonomy; don't add more,
-#    #0248 second review), suppressions, audit_log, email_campaigns +
-#    campaign_interests + email_sends, email_events.
-#    workshops / workshop_interests are deliberately NOT seeded here — that
-#    table doesn't exist yet at version 19, which is the entire point.
-#    Coverage for it comes from step 8 below, once migration 20 lands on
-#    the restored target. Seed throwaway rows — never target a literal or
-#    seeded id (CLAUDE.md §8b). The two enums you'll actually need here
-#    (checked against the CHECK constraints in migrations/000012 and
-#    000010, not guessed): suppressions.reason is one of hard_bounce |
-#    complaint | manual | repeated_soft_bounce (NOT "bounce");
-#    subscribers.status is one of pending | active | unsubscribed |
-#    bounced | complained (NOT "confirmed").
+#    table that exists AT THIS SCHEMA VERSION ($((HEAD_VERSION - 1))) —
+#    every table in the schema EXCEPT $NEW_TABLES, which doesn't exist yet
+#    at this version (that's the entire point of step 1b) — users,
+#    subscribers + subscriber_interests (referencing interests' existing
+#    rows — migration 000009 already seeded the 12-row taxonomy; don't add
+#    more, #0248 second review), suppressions, audit_log, email_campaigns +
+#    campaign_interests + email_sends, email_events, and any table a
+#    migration after 000009/000017 has since added to that list.
+#    Coverage for $NEW_TABLES comes from step 8 below, once HEAD's
+#    migration lands on the restored target. Seed throwaway rows — never
+#    target a literal or seeded id (CLAUDE.md §8b). The two enums you'll
+#    actually need here (checked against the CHECK constraints in
+#    migrations/000012 and 000010, not guessed): suppressions.reason is one
+#    of hard_bounce | complaint | manual | repeated_soft_bounce (NOT
+#    "bounce"); subscribers.status is one of pending | active |
+#    unsubscribed | bounced | complained (NOT "confirmed").
 psql "$DSN" -f seed.sql                     # your own INSERT ... RETURNING id
                                              # statements
 
 # 3. Snapshot what "correct" looks like BEFORE backing up: row counts per
-#    table, schema_migrations (version=19, dirty=false), every sequence's
-#    last_value (NOT row count — see "Sequences" below), constraint count
-#    per table, index count per table.
+#    table, schema_migrations (version=$((HEAD_VERSION - 1)), dirty=false),
+#    every sequence's last_value (NOT row count — see "Sequences" below),
+#    constraint count per table, index count per table.
 
 # 4. Back up with the real script, current-user auth for local dev
 #    (BACKUP_RUN_AS="" — see the bug note below; the server run uses the
@@ -1076,10 +1122,11 @@ BACKUP_RUN_AS="" RESTORE_CREATE=1 \
 #    restore completes — see "Roles and ownership" below for why this step
 #    exists and how to prove it, not just trust it.
 psql "$DST_DSN" -c "select version, dirty from schema_migrations"
-#    Expect: version=19, dirty=false — the restored copy is genuinely
-#    missing migration 20 too, carried over faithfully from the source dump.
-#    If this reads 20, the drill has drifted from step 1b again and step 6
-#    below will silently no-op — stop and re-check, don't continue.
+#    Expect: version=$((HEAD_VERSION - 1)), dirty=false — the restored copy
+#    is genuinely missing HEAD's migration too, carried over faithfully
+#    from the source dump. If this reads ${HEAD_VERSION}, the drill has
+#    drifted from step 1b again and step 6 below will silently no-op — stop
+#    and re-check, don't continue.
 
 # 6. #0235's reproduction, reached by FOLLOWING this drill rather than
 #    deviating from it (#0239's whole point): object ownership alone isn't
@@ -1088,12 +1135,13 @@ psql "$DST_DSN" -c "select version, dirty from schema_migrations"
 #    usable by the app role, and this is where that gap showed up. Apply
 #    the genuinely-pending migration:
 migrate -path migrations -database "$DST_DSN" up
-#    Success looks like migration 20 actually applying — migrate's own
-#    output names it ("20/u create_workshops ...") — with no error, and a
-#    following `migrate ... version` reporting 20, not 19. **"no change" or
-#    an unchanged version here is a FAILURE of this drill, not a pass** — it
-#    means nothing was pending, the exact silent-no-op #0239 exists to
-#    close. Don't declare success; go back and check step 1b.
+#    Success looks like HEAD's migration actually applying — migrate's own
+#    output names it ("${HEAD_VERSION}/u <name> ...") — with no error, and
+#    a following `migrate ... version` reporting ${HEAD_VERSION}, not
+#    $((HEAD_VERSION - 1)). **"no change" or an unchanged version here is a
+#    FAILURE of this drill, not a pass** — it means nothing was pending,
+#    the exact silent-no-op #0239 exists to close. Don't declare success;
+#    go back and check step 1b.
 #    A `permission denied for schema public` here means the
 #    schema-ownership step in `restore.sh` did not run or did not reach
 #    `public` — this is the exact failure `#0235` found and fixed;
@@ -1103,11 +1151,10 @@ migrate -path migrations -database "$DST_DSN" up
 #    expect the same permission-denied error in that case, deliberately.
 
 # 7. Compare restored against source for every table that existed at both
-#    schema versions — exclude workshops / workshop_interests entirely
-#    (tables, their sequences, their indexes, and their constraints alike;
-#    they exist only on the restored side, post-migration): table-by-table
-#    row counts, sequence last_values, and index counts all must match
-#    exactly.
+#    schema versions — exclude $NEW_TABLES entirely (the table, its
+#    sequences, its indexes, and its constraints alike; it exists only on
+#    the restored side, post-migration): table-by-table row counts,
+#    sequence last_values, and index counts all must match exactly.
 #
 #    Two things are EXPECTED to differ here, and a MATCH on either one
 #    would mean step 6 silently no-op'd, not that the drill passed. (#0239
@@ -1115,67 +1162,91 @@ migrate -path migrations -database "$DST_DSN" up
 #    match too, which they structurally cannot once step 1b and step 6 are
 #    both doing their job.)
 #
-#      - schema_migrations: source stays at version=19 (nothing ever
-#        migrated it past step 1b's rollback); restored reads version=20
-#        (step 6 applied the pending migration to it, and only it). Already
-#        proven above at step 5 and step 6 — not a new check, just a
-#        reminder not to re-flag it as a mismatch here.
-#      - email_campaigns' constraint count: restored must be EXACTLY ONE
-#        MORE than source's — the re-added `email_campaigns_workshop_id_fkey`
-#        FK that migration 20's up.sql attaches (step 1b's comment names
-#        what its down.sql drops). This is the positive check the old
-#        wording was missing; confirm the actual delta, not "looks close":
-diff <(psql "$DSN" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in ('workshops','workshop_interests') group by table_name order by 1") \
-     <(psql "$DST_DSN" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in ('workshops','workshop_interests') group by table_name order by 1")
-#    Expect EXACTLY one pair of lines, both naming email_campaigns,
-#    differing by 1 (e.g. "< email_campaigns|12" / "> email_campaigns|13" —
-#    your own counts depend on what you seeded; the delta of exactly 1 does
-#    not). Any other line in this diff's output — a different table, or a
-#    delta other than 1 on email_campaigns — is a real failure. diff(1)
-#    itself exits 1 when it finds this expected line, which is correct —
-#    see the note on exit status right after this block, and don't read a
-#    non-zero exit from THIS diff as the drill having failed.
+#      - schema_migrations: source stays at version=$((HEAD_VERSION - 1))
+#        (nothing ever migrated it past step 1b's rollback); restored reads
+#        version=${HEAD_VERSION} (step 6 applied the pending migration to
+#        it, and only it). Already proven above at step 5 and step 6 — not
+#        a new check, just a reminder not to re-flag it as a mismatch here.
+#      - the constraint-count diff below MAY show a difference on whichever
+#        table(s) are in $ALTERED_TABLES — this is the one genuinely
+#        invariant rule (found while correcting #0248's fix a second time,
+#        #0256): the diff is confined to tables the just-reapplied
+#        migration's own up.sql modifies via ALTER TABLE, is caused
+#        entirely by that migration's own down.sql having removed the same
+#        constraint(s), and is EMPTY whenever the migration only creates
+#        new tables and touches nothing pre-existing — which is the case
+#        for HEAD's migration right now. Do not expect a fixed table name
+#        or a fixed line count; expect exactly this rule, checked below:
+diff <(psql "$DSN" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in (${EXCLUDE_SQL}) group by table_name order by 1") \
+     <(psql "$DST_DSN" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in (${EXCLUDE_SQL}) group by table_name order by 1") \
+     > /tmp/constraint-diff-${ISSUE}.txt
+cat /tmp/constraint-diff-${ISSUE}.txt
+if [ -n "$ALTERED_TABLES" ]; then
+  echo "Expect one differing pair per name in ALTERED_TABLES (${ALTERED_TABLES}); nothing else."
+else
+  echo "ALTERED_TABLES is empty for HEAD's migration — expect NO output above. Any output is a real failure."
+fi
+#    Every table name appearing in /tmp/constraint-diff-${ISSUE}.txt must
+#    be a name from $ALTERED_TABLES — a different table, or any output at
+#    all when $ALTERED_TABLES is empty, is a real failure. diff(1) itself
+#    exits 1 whenever it finds a difference, which is expected and correct
+#    whenever $ALTERED_TABLES is non-empty — see the note on exit status
+#    right after this block, and don't read a non-zero exit from THIS diff
+#    as the drill having failed on that basis alone.
+rm -f /tmp/constraint-diff-${ISSUE}.txt
 #
 #    Row counts, sequence last_values, and index counts get the same
 #    table-exclusion treatment but with NO exception — any line of diff
 #    output from any of the three below is a real failure, full stop.
-#    Committed here (#0248) rather than left as prose to translate: two
-#    passes had already written this SQL independently before this one.
-diff <(psql "$DSN" -tAc "select 'users', count(*) from users union all select 'interests', count(*) from interests union all select 'subscribers', count(*) from subscribers union all select 'subscriber_interests', count(*) from subscriber_interests union all select 'suppressions', count(*) from suppressions union all select 'audit_log', count(*) from audit_log union all select 'email_campaigns', count(*) from email_campaigns union all select 'campaign_interests', count(*) from campaign_interests union all select 'email_sends', count(*) from email_sends union all select 'email_events', count(*) from email_events union all select 'settings', count(*) from settings order by 1") \
-     <(psql "$DST_DSN" -tAc "select 'users', count(*) from users union all select 'interests', count(*) from interests union all select 'subscribers', count(*) from subscribers union all select 'subscriber_interests', count(*) from subscriber_interests union all select 'suppressions', count(*) from suppressions union all select 'audit_log', count(*) from audit_log union all select 'email_campaigns', count(*) from email_campaigns union all select 'campaign_interests', count(*) from campaign_interests union all select 'email_sends', count(*) from email_sends union all select 'email_events', count(*) from email_events union all select 'settings', count(*) from settings order by 1")
-#    Expect zero output. workshops / workshop_interests are named nowhere
-#    in this query, not merely filtered out of it — they don't exist on
-#    the source at all.
+#    The table list is every table this schema has (interrogated live, not
+#    typed by hand — #0256), excluding $NEW_TABLES:
+ROWCOUNT_SQL="$(psql "$DSN" -tAc "select 'select ''' || table_name || ''', count(*) from ' || table_name from information_schema.tables where table_schema='public' and table_type='BASE TABLE' and table_name not in (${EXCLUDE_SQL}) and table_name <> 'schema_migrations' order by 1" | paste -sd' ' - | sed 's/ select/ union all select/g; s/^ union all //')"
+diff <(psql "$DSN" -tAc "$ROWCOUNT_SQL order by 1") \
+     <(psql "$DST_DSN" -tAc "$ROWCOUNT_SQL order by 1")
+#    Expect zero output. $NEW_TABLES is named nowhere in this query, not
+#    merely filtered out of it — it doesn't exist on the source at all.
 
-diff <(psql "$DSN" -tAc "select sequencename, last_value from pg_sequences where schemaname='public' and sequencename <> 'workshops_id_seq' order by 1") \
-     <(psql "$DST_DSN" -tAc "select sequencename, last_value from pg_sequences where schemaname='public' and sequencename <> 'workshops_id_seq' order by 1")
+#    $NEW_TABLES' own sequence(s) only exist post-migration, so query them
+#    from $DST_DSN (the restored+migrated side) via pg_get_serial_sequence
+#    rather than assuming a fixed "<table>_id_seq" spelling — every table
+#    in this schema uses a BIGSERIAL id, so this is exact rather than
+#    guessed, and survives a table whose PK sequence is ever named
+#    something else:
+NEW_SEQS="$(for t in $NEW_TABLES; do psql "$DST_DSN" -tAc "select pg_get_serial_sequence('${t}','id')"; done)"
+EXCLUDE_SEQ_SQL="$(printf '%s\n' "$NEW_SEQS" | sed -E "s/^public\.//; s/.*/'&',/" | tr -d '\n')"
+EXCLUDE_SEQ_SQL="${EXCLUDE_SEQ_SQL%,}"
+[ -n "$EXCLUDE_SEQ_SQL" ] || EXCLUDE_SEQ_SQL="'__none__'"
+diff <(psql "$DSN" -tAc "select sequencename, last_value from pg_sequences where schemaname='public' and sequencename not in (${EXCLUDE_SEQ_SQL}) order by 1") \
+     <(psql "$DST_DSN" -tAc "select sequencename, last_value from pg_sequences where schemaname='public' and sequencename not in (${EXCLUDE_SEQ_SQL}) order by 1")
 #    Expect zero output. Never compare with max(id) instead — see
 #    "Sequences" below for why that check would pass on a broken restore.
 
-diff <(psql "$DSN" -tAc "select tablename, count(*) from pg_indexes where schemaname='public' and tablename not in ('workshops','workshop_interests') group by tablename order by 1") \
-     <(psql "$DST_DSN" -tAc "select tablename, count(*) from pg_indexes where schemaname='public' and tablename not in ('workshops','workshop_interests') group by tablename order by 1")
+diff <(psql "$DSN" -tAc "select tablename, count(*) from pg_indexes where schemaname='public' and tablename not in (${EXCLUDE_SQL}) group by tablename order by 1") \
+     <(psql "$DST_DSN" -tAc "select tablename, count(*) from pg_indexes where schemaname='public' and tablename not in (${EXCLUDE_SQL}) group by tablename order by 1")
 #    Expect zero output.
 
 # 8. Prove the restore — including the migration that just landed on it —
 #    is actually usable, not just structurally present: insert a new row
 #    into a pre-existing table and confirm it does not collide with
 #    restored ids, confirm FK/CHECK/UNIQUE constraints still reject bad
-#    data, AND insert a row into `workshops` — the table migration 20 just
-#    created — to prove the app role can actually use what the pending
-#    migration built, not merely that `migrate up` exited 0.
+#    data, AND insert a row into each table in $NEW_TABLES — the table(s)
+#    HEAD's migration just created — to prove the app role can actually use
+#    what the pending migration built, not merely that `migrate up` exited
+#    0.
 
 # 8b. Prove ownership the way that actually catches the defect (#0228): do
 #    NOT just inspect pg_tables.tableowner as the role that ran the restore —
 #    that check passes even when broken, because the restoring role can
 #    always read what it just restored. Connect AS THE APPLICATION ROLE and
-#    issue a real query:
+#    issue a real query, once against a pre-existing table and once against
+#    each table in $NEW_TABLES:
 psql "$DST_DSN" -c "select count(*) from subscribers;"
-psql "$DST_DSN" -c "select count(*) from workshops;"
-#    permission denied on either query means the ownership step did not run
+for t in $NEW_TABLES; do psql "$DST_DSN" -c "select count(*) from ${t};"; done
+#    permission denied on any of these means the ownership step did not run
 #    or did not reach that object/schema — a passing catalog-only check
-#    would not have caught that. The `workshops` query specifically is what
-#    would have caught `#0235`'s gap: it is owned by whichever role's
-#    `ALTER SCHEMA public OWNER TO …` ran (or didn't) during step 6's
+#    would not have caught that. The $NEW_TABLES query specifically is what
+#    would have caught `#0235`'s gap: that table is owned by whichever
+#    role's `ALTER SCHEMA public OWNER TO …` ran (or didn't) during step 6's
 #    `migrate up`, not by anything `restore.sh` touched directly.
 
 # 9. Clean up everything THIS RUN created — never a bare DROP DATABASE on a
@@ -1208,21 +1279,28 @@ rm -rf "/tmp/backup-drill-${ISSUE}"
 ```
 
 **This block deliberately carries no `set -e`, and exit status is not its
-pass signal — read the output (#0248).** One step in it legitimately returns
-non-zero on a run that is working correctly, and `set -e` would abort the
-drill there:
+pass signal — read the output (#0248).** One step in it can legitimately
+return non-zero on a run that is working correctly, and `set -e` would abort
+the drill there:
 
-- **Step 7's constraint-count `diff`** is *expected* to print exactly one
-  differing line (`email_campaigns`) — `diff(1)` exits `1` whenever it finds
-  a difference, which here means the drill passed, not that it failed.
+- **Step 7's constraint-count `diff`** is *expected* to print output —
+  one differing line per table named in `$ALTERED_TABLES` — whenever HEAD's
+  migration modifies a pre-existing table's constraints. It is expected to
+  print **nothing** whenever `$ALTERED_TABLES` is empty, which is the case
+  for HEAD's migration right now (it only creates a new table). Either way,
+  `diff(1)` exits `1` whenever it finds a difference — that is correct
+  exactly when `$ALTERED_TABLES` is non-empty, not a drill failure by
+  itself; read the table names in the diff's output against `$ALTERED_TABLES`
+  to know which.
 
   This applies to the block **as committed**: step 8 above is comment-only
   (its three deliberate rejections — bad FK, bad `subscribers.status`,
   duplicate `subscribers.email` — are prose, not code, in this file), so
   they cannot trip `set -e` today. A follower who writes those `psql`
-  invocations in and then adds `set -e` would be bitten by four non-zero
-  exits, not one — each rejection is a `psql` call failing by design, same
-  as the constraint diff. Don't add `set -e` even after filling step 8 in.
+  invocations in and then adds `set -e` would be bitten by additional
+  non-zero exits — each rejection is a `psql` call failing by design, same
+  as the constraint diff can be. Don't add `set -e` even after filling
+  step 8 in.
 
 **Step 9's `scripts/testdb.sh drop "${ISSUE}dst"` used to be a second
 legitimate non-zero exit here, and no longer is (#0249).** It failed with
@@ -1239,111 +1317,96 @@ twice **concurrently** to completion and taking a census
 after: zero rows matching either run's namespace, both times. That change in
 turn shortened the `set -e` decision above from two exceptions to one — see
 `restore.sh`'s `#0249` comment on the `createdb` call for why `set -e` still
-isn't added here (step 7's diff still isn't a candidate for it).
+isn't added here (step 7's diff still isn't unconditionally a candidate for
+it).
 
-A completed run's real evidence is: step 6 actually applying migration 20
-(its own output names it, not "no change"), step 7's four comparisons
-printing exactly what "What the drill found" below documents, step 8/8b's
-inserts and rejections behaving as documented, and step 9 dropping both
-databases with no manual cleanup — a `testdb.sh drop` failure there is now a
-real failure, not an expected one (the `RESTORE_OWNER=""` opt-out is the one
-documented exception: it still leaves the database, deliberately, owned by
-whoever ran `createdb`, since "leave ownership alone" is what the opt-out
-means). The `${ISSUE}src` drop and the final `rm -rf` remain ordinary — a
-non-zero exit from either is a real failure.
+A completed run's real evidence is: step 1a printing `$HEAD_VERSION`,
+`$NEW_TABLES`, and `$ALTERED_TABLES`; step 6 actually applying HEAD's
+migration (its own output names it, not "no change"); step 7's four
+comparisons behaving as the rule above describes (not against a written-down
+table of numbers — see "Where to find a fresh run's actual figures" below);
+step 8/8b's inserts and rejections behaving as documented; and step 9
+dropping both databases with no manual cleanup — a `testdb.sh drop` failure
+there is now a real failure, not an expected one (the `RESTORE_OWNER=""`
+opt-out is the one documented exception: it still leaves the database,
+deliberately, owned by whoever ran `createdb`, since "leave ownership alone"
+is what the opt-out means). The `${ISSUE}src` drop and the final `rm -rf`
+remain ordinary — a non-zero exit from either is a real failure.
 
 The custom format (`pg_restore`, default) and the plain format
-(`BACKUP_FORMAT=plain`, `gunzip | psql`) were **both** run through this full
-drill for #0248 (`ISSUE=0248` and `ISSUE=0248p`, one full pass each) —
-identical results on every check in both runs, reported below with the
-actual output.
+(`BACKUP_FORMAT=plain`, `gunzip | psql`) have both been run through this full
+drill (most recently for `#0256`, at `HEAD_VERSION=22`, and again with a
+throwaway extra migration stacked on top to prove the derivation itself, not
+just this one migration — see `## Verification` on `issues/0256.md`).
 
-### What the drill found
+### Where to find a fresh run's actual figures
 
-- **Row counts** — every table step 7's row-count `diff` names matched
-  source-to-restored exactly, in both formats — zero output in both the
-  `ISSUE=0248` and `ISSUE=0248p` runs. That list is the nine tables step 2
-  actually seeds (`users`, `subscribers`, `subscriber_interests`,
-  `suppressions`, `audit_log`, `email_campaigns`, `campaign_interests`,
-  `email_sends`, `email_events`) plus `interests` and `settings`, which are
-  not seeded at step 2 at all — both are populated by migrations before
-  step 1 ever runs (`interests` by `000009`'s own `INSERT`, `settings` by
-  `000004`/`000008`/`000015`/`000018`), so their row counts are fixed by
-  the template rather than by whatever a follower seeds. Actual counts from
-  the `0248` run, identical on both sides: `audit_log|2`,
-  `campaign_interests|1`, `email_campaigns|1`, `email_events|2`,
-  `email_sends|2`, `interests|12`, `settings|6`, `subscriber_interests|3`,
-  `subscribers|5`, `suppressions|2`, `users|2`. `settings|6` is not a figure
-  specific to this run — it is constant for every follower who runs
-  `scripts/testdb.sh create` and seeds nothing into `settings`, and was
-  re-measured directly against the live template, a fresh `migrate … up`
-  database, and the `0248` source itself, all three agreeing (`#0248`,
-  review pass). **`workshops` and `workshop_interests` are excluded, not
-  compared** — the step 7 query names neither table. They don't exist on
-  the source at all: step 1b rolls back migration 20, which drops them, so
-  there is nothing on the source side to compare a restored count against.
-  (This section previously claimed these two tables matched
-  source-to-restored — that claim predated `#0239`'s rewrite and was never
-  true of the drill as it exists now; corrected by `#0248`. A later pass
-  found `settings|7` here, one higher than every direct measurement of the
-  table; corrected to `settings|6` and the "every table populated at
-  step 2" wording tightened to say which tables step 2 actually seeds,
-  same review.)
-- **Sequences** — every sequence's `last_value` matched source-to-restored
-  exactly, in both formats — step 7's sequence `diff` printed zero output
-  in both runs, checked with `select sequencename, last_value from
-  pg_sequences where schemaname='public'` (excluding `workshops_id_seq`,
-  which exists only post-migration on the restored side), never with
-  `max(id)`. That distinction matters because sequence advancement in
-  PostgreSQL is never transactional: a `nextval()` call is not undone when
-  the transaction that made it rolls back, so a sequence can run ahead of
-  the highest row actually committed (a failed bulk insert, a retried job).
-  A restore that reset sequences from `max(id)` instead of trusting the
-  dump's own sequence state would collide with a row that used to exist;
-  `pg_dump`/`pg_restore` preserve `last_value` exactly on their own, which
-  the diff above confirms every run, not by trusting the tool in the
-  abstract. Confirmed directly at
-  step 8: inserting a new `users` row into the restored `0248` database
-  landed at `id=3` against a `users_id_seq` last_value of `2` — the next
-  value, zero collision.
-- **`schema_migrations`** — the source stays at `version=19, dirty=false`
-  throughout, in both formats — nothing ever migrates it past step 1b's
-  rollback. The restored copy reads `version=19, dirty=false` immediately
-  after restore (carried over faithfully from the dump, confirmed at step
-  5) and `version=20, dirty=false` after step 6 applies the pending
-  migration (confirmed at step 6: `20/u create_workshops` printed, then a
-  `select version, dirty` read back `20|f`). `version=20` on the source, or
-  `version=19` on the restored copy after step 6 has run, would both be
-  failures, not passes. `migrate` refuses to run against a `dirty=true`
-  database, so this check is not optional. (This section previously
-  claimed `version=20, dirty=false` before and after — that predates
-  `#0239`'s step 1b/step 6 split, under which the drill can no longer
-  produce that result; corrected by `#0248`.)
+**This runbook used to carry a "What the drill found" section recording one
+past run's row counts, sequence values, and table names.** Three separate
+passes (`#0239`, `#0248`, and the review that filed `#0256`) each corrected
+it after `migrations/` grew, and each correction was invalidated again
+within, at most, a few migrations — `#0126`'s `000021`/`000022` invalidated
+`#0248`'s fix in about twenty minutes of ordinary, unrelated work. An
+append-only migration set makes a written-down observation about "what this
+schema currently looks like" wrong by construction, sooner or later, no
+matter how carefully it was measured. Removed rather than corrected a fourth
+time (`#0256`); step 1a's derivation and step 7's comparisons above are the
+part of this drill that *cannot* go stale, because they ask `migrations/`
+and the live database what to expect instead of asserting a number.
+
+To see actual figures for a fresh run — row counts, sequence values,
+constraint deltas — run the drill and read its own output; step 1a echoes
+`$HEAD_VERSION`/`$NEW_TABLES`/`$ALTERED_TABLES` and every step-7 `diff`
+prints whatever it finds (nothing, on a pass). The durable facts below don't
+drift the way a specific run's numbers do, so they stay here:
+
 - **Extensions** — none. `grep -rn "CREATE EXTENSION" migrations/` returns
   nothing, so there is no extension dependency to worry about on restore.
+- **`schema_migrations`** — the source stays at `version=HEAD_VERSION-1,
+  dirty=false` throughout, in both formats — nothing ever migrates it past
+  step 1b's rollback. The restored copy reads the same `HEAD_VERSION-1`
+  immediately after restore (carried over faithfully from the dump,
+  confirmed at step 5) and `HEAD_VERSION, dirty=false` after step 6 applies
+  the pending migration. `HEAD_VERSION` on the source, or `HEAD_VERSION-1`
+  on the restored copy after step 6 has run, would both be failures, not
+  passes. `migrate` refuses to run against a `dirty=true` database, so this
+  check is not optional.
+- **Sequences** — every sequence's `last_value` must match source-to-restored
+  exactly (excluding `$NEW_TABLES`' own sequence(s), which exist only
+  post-migration on the restored side), checked with `select sequencename,
+  last_value from pg_sequences`, never with `max(id)`. That distinction
+  matters because sequence advancement in PostgreSQL is never transactional:
+  a `nextval()` call is not undone when the transaction that made it rolls
+  back, so a sequence can run ahead of the highest row actually committed (a
+  failed bulk insert, a retried job). A restore that reset sequences from
+  `max(id)` instead of trusting the dump's own sequence state would collide
+  with a row that used to exist; `pg_dump`/`pg_restore` preserve `last_value`
+  exactly on their own, which step 7's diff confirms every run, not by
+  trusting the tool in the abstract. (Illustrative, from an earlier run at a
+  since-superseded HEAD, not a claim about the current one: inserting a new
+  `users` row into a freshly restored database landed at the next available
+  id with zero collision, against the sequence's own carried-over
+  `last_value`.)
 - **Roles and ownership (corrected — `#0228`, then `#0235`)** — `backup.sh`
   dumps with `pg_dump --no-owner --no-privileges`, so the dump carries no
   role names or grants at all; without further action, ownership on restore
-  is whichever role ran `pg_restore`/`psql`. **This section previously
-  claimed that matched `opencircuit` before and after — that was true only
-  because the local drill happened to run as the `opencircuit` role, and it
-  is false in general.** `#0062`'s own phase-3 review reproduced the general
-  case: running the restore as a *different* role (as production's
-  documented `sudo -u postgres pg_restore` path does) left every table owned
-  by that role instead, and `opencircuit` got `permission denied` on its
-  first query — the restore reported success while leaving the app unable to
-  read its own data. `restore.sh` closed this (`#0228`): after the restore
-  completes, it reassigns ownership of every table, sequence, and view to
-  `RESTORE_OWNER` (default `opencircuit`, matching `scripts/db/create.sql`'s
-  bootstrap role) — and because ownership implies full privileges on an
-  object, this also replaces what `--no-privileges` stripped, without a
-  separate `GRANT` step. Proven with a real dump/restore round trip on a
-  local scratch database: restoring as a role other than `opencircuit`
-  (simulating the `postgres` production path) left tables owned by that role
-  and the app role locked out (`permission denied for table widgets`);
-  restoring with the fix in place left every table and sequence owned by
-  `opencircuit`, and connecting **as `opencircuit`** — not as the restoring
-  role — both `SELECT`ed and `INSERT`ed successfully.
+  is whichever role ran `pg_restore`/`psql`. `#0062`'s own phase-3 review
+  reproduced the general case: running the restore as a *different* role
+  (as production's documented `sudo -u postgres pg_restore` path does) left
+  every table owned by that role instead, and `opencircuit` got `permission
+  denied` on its first query — the restore reported success while leaving
+  the app unable to read its own data. `restore.sh` closed this (`#0228`):
+  after the restore completes, it reassigns ownership of every table,
+  sequence, and view to `RESTORE_OWNER` (default `opencircuit`, matching
+  `scripts/db/create.sql`'s bootstrap role) — and because ownership implies
+  full privileges on an object, this also replaces what `--no-privileges`
+  stripped, without a separate `GRANT` step. Proven with a real dump/restore
+  round trip on a local scratch database: restoring as a role other than
+  `opencircuit` (simulating the `postgres` production path) left tables
+  owned by that role and the app role locked out (`permission denied for
+  table widgets`); restoring with the fix in place left every table and
+  sequence owned by `opencircuit`, and connecting **as `opencircuit`** — not
+  as the restoring role — both `SELECT`ed and `INSERT`ed successfully.
 
   **`#0228` fixed the objects but not the schema they live in, and `#0235`
   closed that gap.** PostgreSQL 15+ defaults the `public` schema's owner to
@@ -1366,14 +1429,15 @@ actual output.
   on a private scratch database (never the shared `opencircuit_test_*` pool,
   §8b), dropped afterward: seeded a source database with migrations 1–19
   applied (migration 20, `create_workshops`, deliberately withheld so there
-  was a real pending migration to apply, not a synthetic probe), dumped it,
-  restored it as a superuser standing in for `postgres` (reproducing the
-  production path — this machine has no `postgres` OS role, so the local
-  superuser filled that role structurally), and ran `migrate up` as
-  `opencircuit` against it. **Before the fix**: `permission denied for
-  schema public`, migration left `dirty`, reproducing `#0235`'s report
-  exactly. **After the fix**: the same real `migrate up` applied
-  `create_workshops` cleanly and `workshops` came out owned by
+  was a real pending migration to apply, not a synthetic probe — an
+  illustrative migration number from when this was proven, not a claim
+  about current HEAD), dumped it, restored it as a superuser standing in for
+  `postgres` (reproducing the production path — this machine has no
+  `postgres` OS role, so the local superuser filled that role structurally),
+  and ran `migrate up` as `opencircuit` against it. **Before the fix**:
+  `permission denied for schema public`, migration left `dirty`,
+  reproducing `#0235`'s report exactly. **After the fix**: the same real
+  `migrate up` applied cleanly and the new table came out owned by
   `opencircuit`. **`RESTORE_OWNER=""`**: confirmed it opts out of the schema
   reassignment too — `public` stayed owned by `pg_database_owner` and the
   first table stayed owned by the restoring role, exactly as documented.
@@ -1384,24 +1448,8 @@ actual output.
   `pg_restore` topologically order the dump themselves (tables, then data
   via `COPY`, then constraints/indexes/sequences afterward), so FK order
   across `interests` → `subscribers` → `subscriber_interests` →
-  `email_campaigns` → `email_sends`, etc. was handled correctly with no
+  `email_campaigns` → `email_sends`, etc. is handled correctly with no
   manual intervention in either format.
-- **Index presence** — per-table index counts (`pg_indexes`), excluding
-  `workshops`/`workshop_interests`, matched source-to-restored exactly, in
-  both formats — step 7's index-count `diff` printed zero output in both
-  runs.
-- **Constraint presence** — per-table constraint counts
-  (`information_schema.table_constraints`), same exclusion, do **not**
-  match exactly, by design: `email_campaigns` differs by exactly one in
-  both formats — step 7's constraint `diff` printed `< email_campaigns|12`
-  / `> email_campaigns|13` in the `0248` run — the re-added
-  `email_campaigns_workshop_id_fkey` FK migration 20 attaches. No other
-  table differed, in either format. Live enforcement was confirmed by
-  attempting (and getting rejected) a bad FK, a bad CHECK value, and a
-  duplicate UNIQUE email against the restored database. (This section
-  previously described constraint counts as part of a blanket "matched
-  exactly" alongside index counts — they don't, by design, once step 1b
-  and step 6 are both doing their job; corrected by `#0248`.)
 - **A real script bug, found and fixed by this drill**: `backup.sh` and
   `restore.sh` both defaulted `BACKUP_RUN_AS` with `${BACKUP_RUN_AS:-postgres}`,
   which in bash treats an *explicitly empty* value the same as *unset* — so
