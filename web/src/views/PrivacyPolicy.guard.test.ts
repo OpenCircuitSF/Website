@@ -401,7 +401,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     const items = realItems().map((item) =>
       item.includes('audit log entry')
         ? item.replace(
-            '; the confirmation entry, being added manually, a suppression removal, a bounce, a complaint, and the erasure entry itself also record your email address explicitly',
+            "; the confirmation entry, being added manually, a suppression removal, resetting an address's bounce streak, a bounce, a complaint, and the erasure entry itself also record your email address explicitly",
             '',
           )
         : item,
