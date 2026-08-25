@@ -145,11 +145,18 @@ import (
 //     naturally reaches for when an entry needs building across a few
 //     lines — and it is now FIXED, not merely documented: see
 //     collectDeferredMetadataFieldIdents and compositeLitAssignedIdents
-//     below, which connect a bare `audit.Entry{}` literal to any later
+//     below, which connect any `audit.Entry{}` literal assigned to an
+//     identifier — bare, with other fields already set (e.g. Action), or
+//     already carrying its own Metadata key — to any later
 //     `.Metadata = ...` OR `.Metadata[...] = ...` (#0257 widened this from
 //     the field-assignment form alone) on the same identifier and report
 //     the site as unresolved (the guard's existing conservative default
-//     everywhere else) rather than passing it silently.
+//     everywhere else) rather than passing it silently. #0257's review
+//     measured this directly: a bare literal, one with Action set, and one
+//     already carrying an unrelated Metadata key are all connected and all
+//     report unresolved once a later assignment follows — "bare" in an
+//     earlier draft of this paragraph was not just imprecise, it was
+//     factually wrong.
 //     TestAuditEmailMetadataGuardFailsOnDeferredStructFieldAssignment pins
 //     this, mutation-proved against the pre-fix code.
 //
