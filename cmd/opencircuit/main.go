@@ -37,6 +37,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
@@ -317,6 +318,17 @@ func servePostgres(cfg *config.Config) error {
 		return fmt.Errorf("opencircuit: constructing send worker: %w", err)
 	}
 
+	// Outbox worker (#0126, PRD §6.11): drains internal/outbox's
+	// outbound_queue — confirmation/already-subscribed mail from
+	// subscribeH below, and registration/recovery/sessions-revoked mail
+	// from internal/auth, all durable now instead of an in-process
+	// goroutine lost on a crash. See newOutboxWorker's own doc comment for
+	// why this runs unconditionally (no SEND_WORKER_ENABLED-shaped gate).
+	outboxWorker, err := newOutboxWorker(pool, sesSender, store, cfg, slog.Default())
+	if err != nil {
+		return fmt.Errorf("opencircuit: constructing outbox worker: %w", err)
+	}
+
 	adminCampaignsH := handlers.NewAdminCampaignsHandler(campaignsStore, handlers.NewCampaignPreflightChecker(sendStore), audienceStore, auditLogger)
 	adminCampaignAudienceH := handlers.NewAdminCampaignAudienceHandler(audienceStore)
 
@@ -439,7 +451,7 @@ func servePostgres(cfg *config.Config) error {
 
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker, site,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -563,6 +575,30 @@ func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, au
 		ReplyTo:        cfg.EmailReplyTo,
 		EnvMaxSendRate: cfg.MaxSendRate,
 		BatchSize:      cfg.SendBatchSize,
+		Log:            log,
+	})
+}
+
+// newOutboxWorker constructs #0126's transactional-mail worker
+// (internal/mailing.OutboxWorker), draining internal/outbox. Unlike
+// newSendWorkerIfEnabled (the campaign worker), this always runs whenever
+// Postgres is in use — there is no SEND_WORKER_ENABLED-shaped scaling knob
+// here, deliberately: transactional mail (signup confirmations, password
+// recovery) is core functionality with no per-instance drain-order concern
+// the way one campaign's SKIP LOCKED claim has, so every instance running
+// it is the correct topology, not something that needs exactly one
+// instance opted in. mailer is sesSender — the SAME mailing.Mailer the
+// campaign send worker and #0046's test-send handler use, including under
+// MAILER_NOOP=true (the no-op logger), so transactional mail behaves like
+// every other outbound path in this project under that flag.
+func newOutboxWorker(pool *pgxpool.Pool, mailer mailing.Mailer, settings mailing.SettingsReader, cfg *config.Config, log *slog.Logger) (*mailing.OutboxWorker, error) {
+	return mailing.NewOutboxWorker(mailing.OutboxWorkerDeps{
+		Store:          outbox.NewStore(pool),
+		Events:         subscribers.NewStore(pool),
+		Mailer:         mailer,
+		Settings:       settings,
+		BaseURL:        cfg.BaseURL,
+		EnvMaxSendRate: cfg.MaxSendRate,
 		Log:            log,
 	})
 }
@@ -736,10 +772,14 @@ func serveDevMode(cfg *config.Config) error {
 	// skips the worker-stop step, mirroring every other nil-guarded
 	// dev-mode gap.
 	var sendWorker *mailing.Worker
+	// Outbox worker (#0126) has the same devstore gap: no
+	// subscribers/outbound_queue backing under STORAGE=json (see
+	// internal/handlers/subscribe.go's STORAGE=json note, CLAUDE.md §5).
+	var outboxWorker *mailing.OutboxWorker
 
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker, site,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -935,6 +975,7 @@ func mountAndServe(
 	publicWorkshopsH *handlers.PublicWorkshopsHandler,
 	sesNotifyH *handlers.SESNotificationsHandler,
 	sendWorker *mailing.Worker,
+	outboxWorker *mailing.OutboxWorker,
 	site *seo.Site,
 	requireSession func(http.Handler) http.Handler,
 	requireAdmin func(http.Handler) http.Handler,
@@ -1198,6 +1239,12 @@ func mountAndServe(
 	if sendWorker != nil {
 		go sendWorker.Run(context.Background())
 	}
+	// Outbox worker (#0126): same shape as sendWorker above — its own ctx,
+	// stopped by signal through outboxWorker.Stop, never by cancelling
+	// this context.
+	if outboxWorker != nil {
+		go outboxWorker.Run(context.Background())
+	}
 
 	// Graceful shutdown (#0081): before this, mountAndServe ended in a bare
 	// http.ListenAndServe with no signal.Notify anywhere in the repo, so an
@@ -1258,6 +1305,19 @@ func mountAndServe(
 				log.Printf("opencircuit: send worker stop: %v", err)
 			}
 			workerStopCancel()
+		}
+		// outboxWorker.Stop runs alongside sendWorker.Stop above, on its own
+		// independent budget (outboxWorkerCloseTimeout) — same reasoning:
+		// it releases any claimed-but-unsent outbound_queue row back to
+		// 'queued' before returning (see OutboxWorker.Stop's doc comment),
+		// so a restart picks it up immediately rather than waiting out
+		// outboxOrphanStaleAfter.
+		if outboxWorker != nil {
+			outboxStopCtx, outboxStopCancel := context.WithTimeout(context.Background(), outboxWorkerCloseTimeout)
+			if err := outboxWorker.Stop(outboxStopCtx); err != nil {
+				log.Printf("opencircuit: outbox worker stop: %v", err)
+			}
+			outboxStopCancel()
 		}
 
 		// shutdownServerTimeout and subscribeCloseTimeout each bound ONE
@@ -1382,3 +1442,11 @@ var subscribeCloseTimeout = 15 * time.Second
 // var, not const: see shutdownServerTimeout's doc comment above — the
 // wiring test shrinks this to exercise the budget deterministically.
 var workerCloseTimeout = 10 * time.Second
+
+// outboxWorkerCloseTimeout bounds outboxWorker.Stop ALONE (#0126), the same
+// independent-budget shape workerCloseTimeout establishes above. Sized
+// identically: one in-flight message's send (sendMessageTimeout) plus its
+// status write (writeStatusTimeout), the same two constants
+// outboxOrphanStaleAfter (internal/mailing/outbox_worker.go) is itself
+// derived from.
+var outboxWorkerCloseTimeout = 10 * time.Second

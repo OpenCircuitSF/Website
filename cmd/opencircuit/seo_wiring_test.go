@@ -166,6 +166,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 			nil, /* publicWorkshopsH: not exercised by this test -- this test hits the SEO-rendered detail page, not the JSON API */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
+			nil, /* outboxWorker: not exercised */
 			site,
 			requireSession, requireAdmin, nil, ready)
 	}()
