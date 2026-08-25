@@ -79,6 +79,32 @@ FAILURES=0
 BG_PIDS=()        # background processes this script forked (holders, connectors)
 GROUP_LEADERS=()  # dev.sh (or mutant) subprocess pids, each its own process-group leader
 
+# #0253: every port below used to be a fixed literal (54301, 54311, ...,
+# 54381), so two concurrent runs of this script were guaranteed to collide —
+# CLAUDE.md §5a makes concurrent agents the norm. Derive a per-run base
+# instead, using the project's existing ISSUE (falling back to $$, the same
+# convention #0247 used for the restore drill) rather than inventing a second
+# scheme. `cksum` gives a numeric hash regardless of whether ISSUE is
+# numeric, so this never depends on the project's ISSUE=NNNN convention
+# staying purely numeric. Each part still degrades detectably rather than
+# corrupting anything if two runs' bases DO collide (every part checks
+# port_bound first and fails/skips rather than forcing through) — this just
+# makes a collision unlikely instead of certain. :5173 is Vite's own,
+# unavoidable, hardcoded port and is left alone; the parts that reach it
+# already require it free and abort otherwise.
+RUNID="${ISSUE:-$$}"
+RUNHASH="$(printf '%s' "$RUNID" | cksum | awk '{print $1}')"
+PBASE=$(( 40000 + ( (RUNHASH % 200) * 100 ) ))   # 40000..59900, 200 non-overlapping 100-wide buckets
+P1="$((PBASE + 1))"    # part 1
+P2="$((PBASE + 11))"   # part 2
+P3A="$((PBASE + 21))"  # part 3a
+P3B="$((PBASE + 31))"  # part 3b
+P4="$((PBASE + 41))"   # part 4
+P5="$((PBASE + 51))"   # part 5
+P6="$((PBASE + 61))"   # part 6
+P7="$((PBASE + 71))"   # part 7
+P8="$((PBASE + 81))"   # part 8
+
 fail() { FAILURES=$((FAILURES + 1)); printf 'FAIL: %s\n' "$1" >&2; }
 pass() { printf 'PASS: %s\n' "$1"; }
 note() { printf '  [note] %s\n' "$1"; }
@@ -248,7 +274,6 @@ M2='s%^  descendant_pids "\$1"$%  lsof -ti tcp:"$PORT" 2>/dev/null || true   # M
 M3='s%^  current="\$(port_listeners "\$p")"$%  current="$(lsof -ti tcp:"$p" 2>/dev/null || true)"   # MUTATED-M3: unscoped, matches client endpoints too%'
 
 echo "== Part 1: startup refusal — held \$PORT makes dev.sh exit 1, holder survives =="
-P1=54301
 if port_bound "$P1"; then
   fail "part1 setup: port $P1 unexpectedly already bound — pick a different port and rerun"
 else
@@ -273,7 +298,6 @@ else
 fi
 
 echo "== Part 2: RECLAIM_PORTS=1 genuinely reclaims =="
-P2=54311
 if port_bound "$P2"; then
   fail "part2 setup: port $P2 unexpectedly already bound"
 else
@@ -302,7 +326,6 @@ else
 fi
 
 echo "== Part 3a: ordinary shutdown — no interference, own ports released =="
-P3A=54321
 if port_bound "$P3A" || port_bound 5173; then
   fail "part3a setup: port $P3A or 5173 unexpectedly already bound — cannot safely test against a busy shared port"
 else
@@ -387,7 +410,7 @@ run_foreign_survives_scenario() {  # <label> <script-path> <go-port> -> sets RES
 }
 
 echo "== Part 3b: foreign holder survives the EXIT trap (the #0117 review's own repro) =="
-run_foreign_survives_scenario "part3b" "$DEVSH" 54331
+run_foreign_survives_scenario "part3b" "$DEVSH" "$P3B"
 case "$RESULT" in
   survived) pass "a foreign process that took over :\$PORT after dev.sh's Go server died mid-session survived an ordinary Ctrl-C" ;;
   killed)   fail "REGRESSION #0117: the EXIT trap killed a foreign process it never started — this is the issue's own defect, on the shutdown path" ;;
@@ -396,7 +419,7 @@ esac
 
 echo "== Part 4: mutation proof for 3b — revert the EXIT-trap ownership check =="
 if MUT="$(make_mutant 'MUTATED-M1' "$M1")"; then
-  run_foreign_survives_scenario "part4" "$MUT" 54341
+  run_foreign_survives_scenario "part4" "$MUT" "$P4"
   case "$RESULT" in
     killed)   pass "with cleanup()'s ownership check reverted to the old unconditional backstop, the SAME scenario DOES kill the foreign holder — Part 3b is sensitive to the regression, not vacuously true" ;;
     survived) fail "mutation M1 was ineffective: the old unconditional free_port backstop still did not kill the foreign holder — Part 3b would not catch a real regression" ;;
@@ -447,7 +470,7 @@ run_connector_survives_scenario() {  # <label> <script-path> <go-port> -> sets R
 }
 
 echo "== Part 5: repro A — a foreign process merely CONNECTED to \$PORT is not 'ours' =="
-run_connector_survives_scenario "part5" "$DEVSH" 54351
+run_connector_survives_scenario "part5" "$DEVSH" "$P5"
 case "$RESULT" in
   survived)
     pass "a foreign process holding an ESTABLISHED connection to :\$PORT across the ownership capture survived an ordinary Ctrl-C" ;;
@@ -462,7 +485,7 @@ if MUT="$(make_mutant 'MUTATED-M2 MUTATED-M3' "$M2" "$M3")"; then
   attempt=0
   while [ "$attempt" -lt 3 ]; do
     attempt=$((attempt + 1))
-    run_connector_survives_scenario "part6.$attempt" "$MUT" 54361
+    run_connector_survives_scenario "part6.$attempt" "$MUT" "$P6"
     [ "$RESULT" = "killed" ] && break
     [ "$attempt" -lt 3 ] && note "[part6] attempt $attempt did not enrol the connector (sub-millisecond capture race) — retrying"
   done
@@ -526,14 +549,14 @@ run_slow_build_scenario() {  # <label> <script-path> <go-port> -> sets RESULT
 }
 
 echo "== Part 7: repro B — a foreign listener that wins the bind during a slow build is not adopted =="
-run_slow_build_scenario "part7" "$DEVSH" 54371
+run_slow_build_scenario "part7" "$DEVSH" "$P7"
 case "$RESULT" in
   survived)
     pass "a foreign listener that won the bind while \`go run\` was still compiling survived — dev.sh never adopted it"
     if grep -qE 'ERROR: Go server (exited unexpectedly|did not bind)' "$WORKDIR/part7.log"; then
       pass "dev.sh failed loudly instead of silently continuing with nothing of its own bound"
     else
-      fail "part7: dev.sh did not report a startup failure even though it never bound $((54371)) — log tail: $(tail -8 "$WORKDIR/part7.log" | tr '\n' '|')"
+      fail "part7: dev.sh did not report a startup failure even though it never bound $P7 — log tail: $(tail -8 "$WORKDIR/part7.log" | tr '\n' '|')"
     fi ;;
   killed)
     fail "REGRESSION #0117 (repro B): dev.sh kill -9ed the foreign listener that won the bind race — ownership is still being inferred from the port" ;;
@@ -543,7 +566,7 @@ esac
 
 echo "== Part 8: mutation proof for repro B — ownership by port =="
 if MUT="$(make_mutant 'MUTATED-M2' "$M2")"; then
-  run_slow_build_scenario "part8" "$MUT" 54381
+  run_slow_build_scenario "part8" "$MUT" "$P8"
   case "$RESULT" in
     killed)   pass "with ownership taken from the port, the SAME foreign listener IS killed — Part 7 is sensitive to repro B, not vacuously true" ;;
     survived) fail "mutation M2 was ineffective: the foreign listener survived even with ownership-by-port — Part 7 would not catch repro B" ;;

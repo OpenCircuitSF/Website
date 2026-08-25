@@ -30,10 +30,13 @@
 # scratch database too, live-connection or not — running it, even correctly
 # guarded, is still touching shared state we don't own). Instead they run a
 # private COPY of testdb.sh, repointed at a test-only prefix
-# (opencircuit_test_0150gt_) that no real agent's issue id can ever produce
-# (name_for() strips to alnum/underscore, and no real issue is filed under
-# "0150gt"). All destructive work in steps 2 and 3 is scoped to that prefix,
-# so it can only ever touch databases this script itself created.
+# (TESTPREFIX, below — "opencircuit_test_${RUNID}gt_", #0253's per-run
+# namespace, not a fixed string) that no real agent's issue id can ever
+# produce (name_for() strips to alnum/underscore, and no real issue is filed
+# under a "<RUNID>gt" id). All destructive work in steps 2 and 3 is scoped to
+# that prefix, so it can only ever touch databases this script itself
+# created — including from a CONCURRENT run of this same script, since each
+# run's RUNID (and therefore its TESTPREFIX) differs.
 #
 # The "restore, verify byte-identity with shasum -a 256" requirement in
 # #0150's acceptance criteria is satisfied by hashing the real, tracked
@@ -50,7 +53,22 @@ set -uo pipefail  # NOT -e: several commands here are *expected* to fail (that's
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REAL_SCRIPT="$REPO/scripts/testdb.sh"
 PGHOST_URL="${PGHOST_URL:-postgres://opencircuit:opencircuit@localhost:5432}"
-TESTPREFIX="opencircuit_test_0150gt_"   # scoped prefix; never matches a real agent's database
+
+# #0253: TESTPREFIX used to be the fixed "opencircuit_test_0150gt_" for every
+# run, so two concurrent runs collided on it silently (createdb_raw() below
+# swallowed the resulting CREATE DATABASE error) and Part 2's `gc --all`
+# actively swept the other run's databases mid-test, which then misattributed
+# the damage to Part 4's leak census as a false "REGRESSION #0223". Namespace
+# per run using the project's existing ISSUE convention (falling back to $$,
+# the same convention #0247 used for the restore drill) rather than a second
+# scheme. Lower-case and alnum-only, the same fold #0208 applied to
+# testdb.sh's own name_for() — TESTPREFIX is interpolated into raw SQL
+# identifiers the same way, so a new call site here must not reintroduce a
+# mixed-case bug.
+RUNID_RAW="${ISSUE:-$$}"
+RUNID="$(printf '%s' "$RUNID_RAW" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]')"
+[ -n "$RUNID" ] || { echo "error: empty run id (derived from ISSUE=$RUNID_RAW)" >&2; exit 1; }
+TESTPREFIX="opencircuit_test_${RUNID}gt_"   # scoped prefix; never matches a real agent's database
 
 WORKDIR="$(mktemp -d)"
 FAILURES=0
@@ -59,7 +77,22 @@ BG_PIDS=()
 
 psql_admin() { psql "$PGHOST_URL/postgres" "$@"; }
 db_exists() { [ "$(psql_admin -tAc "select 1 from pg_database where datname='$1'" 2>/dev/null)" = "1" ]; }
-createdb_raw() { psql_admin -qc "CREATE DATABASE $1;" >/dev/null 2>&1; CREATED_DBS+=("$1"); }
+# #0253: this used to swallow every error (>/dev/null 2>&1, no exit check),
+# so a CREATE DATABASE collision with a concurrent run sharing the same
+# prefix was silent — run B would carry on against run A's database instead
+# of failing loudly. Namespacing TESTPREFIX above makes that collision
+# unlikely; this makes it impossible to miss if it happens anyway.
+createdb_raw() {
+  local db="$1" out rc
+  out="$(psql_admin -qc "CREATE DATABASE $db;" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FATAL: CREATE DATABASE $db failed (exit $rc) — treating this as a collision with a concurrent run rather than silently continuing against a database this run may not own. psql output:" >&2
+    printf '%s\n' "$out" >&2
+    exit 1
+  fi
+  CREATED_DBS+=("$db")
+}
 dropdb_raw() { psql_admin -qc "DROP DATABASE IF EXISTS $1;" >/dev/null 2>&1 || true; }
 
 fail() {
@@ -171,7 +204,7 @@ dropdb_raw "$A1"; dropdb_raw "$A2"
 echo "== Part 2: live-connection skip (scoped-prefix copy, --all) =="
 
 SCOPED="$WORKDIR/testdb_scoped.sh"
-sed 's/^PREFIX="opencircuit_test_"$/PREFIX="opencircuit_test_0150gt_"/' "$REAL_SCRIPT" > "$SCOPED"
+sed "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" "$REAL_SCRIPT" > "$SCOPED"
 chmod +x "$SCOPED"
 
 # Verify the prefix substitution actually took — if it silently didn't, the
@@ -237,7 +270,7 @@ drop_and_verify "$IDLE_DB"
 echo "== Part 3: mutation proof — remove the guard, confirm bare gc sweeps again =="
 
 MUTANT="$WORKDIR/testdb_mutant.sh"
-sed -e 's/^PREFIX="opencircuit_test_"$/PREFIX="opencircuit_test_0150gt_"/' \
+sed -e "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" \
     -e 's/if \[ "\${1:-}" != "--all" \]; then/if false; then/' \
     "$REAL_SCRIPT" > "$MUTANT"
 chmod +x "$MUTANT"

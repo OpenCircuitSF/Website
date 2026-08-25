@@ -59,13 +59,15 @@
 # 1-3 run against a private COPY of db-reset.sh with its name allowlist
 # WIDENED (by one extra alternative in the same case-arm the real script
 # already has) to also accept a single scoped, throwaway database name that
-# no real issue id or per-agent scratch database can ever produce:
-# 'opencircuit0207gt' — it starts with 'opencircuit' (so it would otherwise
-# need --force under the unmodified script) but has no underscore after
-# 'opencircuit', so it can never collide with testdb.sh's
-# 'opencircuit_test_<id>' naming scheme, and 'gt' (guard test) is not a
-# digit sequence any issue number could produce. All destructive work in
-# Parts 1-3 is scoped to that one name.
+# no real issue id or per-agent scratch database can ever produce: TESTDB
+# (defined below as "opencircuit${RUNID}gt", e.g. 'opencircuit0207gt' when
+# RUNID happens to be '0207gt') — it starts with 'opencircuit' (so it would
+# otherwise need --force under the unmodified script) but has no underscore
+# after 'opencircuit', so it can never collide with testdb.sh's
+# 'opencircuit_test_<id>' naming scheme, and RUNID (#0253: derived per run
+# from ISSUE, falling back to $$) is not a digit sequence any real issue
+# number could collide with while a concurrent run is in flight. All
+# destructive work in Parts 1-3 is scoped to that one name.
 #
 # Mutant copies are written into scripts/ itself (untracked, removed by the
 # EXIT trap) rather than /tmp: db-reset.sh resolves its own repo root from
@@ -87,7 +89,24 @@ set -uo pipefail  # NOT -e: several commands here are *expected* to fail (that's
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REAL_SCRIPT="$REPO/scripts/db-reset.sh"
 PGHOST_URL="${PGHOST_URL:-postgres://opencircuit:opencircuit@localhost:5432}"
-TESTDB="opencircuit0207gt"   # scoped name; no real issue id or per-agent scratch db can ever produce this
+
+# #0253: TESTDB, the demo-db name, and the private mutant/scoped script paths
+# below all used to be fixed, so two concurrent runs of this script collided
+# on all of them — this project's implementer hit exactly that collision
+# while working #0250/#0251. Namespace per run using the project's existing
+# ISSUE convention (falling back to $$, the same convention #0247 used for
+# the restore drill) rather than inventing a second scheme. Lower-case and
+# strip to alnum-only: #0208 fixed testdb.sh's mixed-case identifier fold,
+# and TESTDB is interpolated into raw SQL identifiers the same way, so a new
+# call site here must not reintroduce it — and stripping to alnum-only (no
+# underscore) preserves the invariant the comment below relies on: TESTDB
+# starts with 'opencircuit' but has no underscore right after it, so it can
+# never collide with testdb.sh's 'opencircuit_test_<id>' naming scheme.
+RUNID_RAW="${ISSUE:-$$}"
+RUNID="$(printf '%s' "$RUNID_RAW" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]')"
+[ -n "$RUNID" ] || { echo "error: empty run id (derived from ISSUE=$RUNID_RAW)" >&2; exit 1; }
+TESTDB="opencircuit${RUNID}gt"   # scoped name; no real issue id or per-agent scratch db can ever produce this
+DEMODB="opencircuit_test_${RUNID}gt_demo"   # Part 5's per-agent-shaped name, now namespaced too
 
 WORKDIR="$(mktemp -d)"
 FAILURES=0
@@ -100,8 +119,13 @@ db_exists() { [ "$(psql_admin -tAc "select 1 from pg_database where datname='$1'
 # catches a leak under a name this test never explicitly names (the failure
 # shape #0250 itself reports: the OLD version of this test left
 # opencircuit_test_0207gt_demo behind without ever asserting anything about
-# it).
-census() { psql_admin -tAc "select datname from pg_database where datname like 'opencircuit%' order by 1" 2>/dev/null; }
+# it) — #0253 additionally scopes it to names containing this run's own
+# RUNID, so a concurrent run's own scratch databases (each with a different
+# RUNID) coming and going during this run's before/after window cannot make
+# this census spuriously disagree. Every database this test creates embeds
+# RUNID by construction (TESTDB, DEMODB), so nothing this run could leak
+# falls outside this pattern.
+census() { psql_admin -tAc "select datname from pg_database where datname like 'opencircuit%' and datname like '%${RUNID}%' order by 1" 2>/dev/null; }
 
 fail() { FAILURES=$((FAILURES + 1)); printf 'FAIL: %s\n' "$1" >&2; }
 pass() { printf 'PASS: %s\n' "$1"; }
@@ -158,8 +182,8 @@ cleanup() {
   # but if a future regression ever makes that refusal fail, this closes the
   # leak the old version of this test left behind rather than depending on a
   # human to notice and drop it by hand.
-  terminate_backends "opencircuit_test_0207gt_demo"
-  psql_admin -qc "DROP DATABASE IF EXISTS opencircuit_test_0207gt_demo;" >/dev/null 2>&1 || true
+  terminate_backends "$DEMODB"
+  psql_admin -qc "DROP DATABASE IF EXISTS $DEMODB;" >/dev/null 2>&1 || true
   for m in "${MUTANTS[@]:-}"; do
     [ -n "$m" ] && rm -f "$m"
   done
@@ -179,7 +203,7 @@ CENSUS_BEFORE="$(census)"
 # same one-line case-arm the real script uses -- so Parts 1-3 exercise the
 # CONNECTION guard specifically, without --force ever being needed for the
 # unrelated name-scope guard.
-SCOPED="$REPO/scripts/.db_reset_scoped_0207gt.sh"
+SCOPED="$REPO/scripts/.db_reset_scoped_${RUNID}.sh"
 MUTANTS+=("$SCOPED")
 sed "s/opencircuit|opencircuit_test)/opencircuit|opencircuit_test|${TESTDB})/" "$REAL_SCRIPT" > "$SCOPED"
 chmod +x "$SCOPED"
@@ -240,7 +264,7 @@ kill -9 "$CONN_PID" >/dev/null 2>&1 || true
 wait "$CONN_PID" 2>/dev/null || true
 
 echo "== Part 3: mutation proof -- remove the refusal, confirm bare invocation kills connections again =="
-MUTANT="$REPO/scripts/.db_reset_mutant_0207gt.sh"
+MUTANT="$REPO/scripts/.db_reset_mutant_${RUNID}.sh"
 MUTANTS+=("$MUTANT")
 sed -e "s/opencircuit|opencircuit_test)/opencircuit|opencircuit_test|${TESTDB})/" \
     -e 's/if \[ -n "\$CONNS" \] && \[ "\$FORCE" != "1" \]; then/if false; then/' \
@@ -290,8 +314,8 @@ else
 fi
 
 echo "== Part 5: a per-agent-shaped database name needs --force =="
-if "$REAL_SCRIPT" opencircuit_test_0207gt_demo >/dev/null 2>&1; then
-  fail "REGRESSION #0207: db-reset.sh reset a per-agent-shaped database name (opencircuit_test_0207gt_demo) without --force"
+if "$REAL_SCRIPT" "$DEMODB" >/dev/null 2>&1; then
+  fail "REGRESSION #0207: db-reset.sh reset a per-agent-shaped database name ($DEMODB) without --force"
 else
   pass "a per-agent-shaped database name is refused without --force"
 fi
@@ -393,8 +417,8 @@ echo "== Final cleanup and leaked-database census (#0250 item 5) =="
 terminate_backends "$TESTDB"
 wait_for_disconnect "$TESTDB" 20 || true
 psql_admin -qc "DROP DATABASE IF EXISTS $TESTDB;" >/dev/null 2>&1 || true
-terminate_backends "opencircuit_test_0207gt_demo"
-psql_admin -qc "DROP DATABASE IF EXISTS opencircuit_test_0207gt_demo;" >/dev/null 2>&1 || true
+terminate_backends "$DEMODB"
+psql_admin -qc "DROP DATABASE IF EXISTS $DEMODB;" >/dev/null 2>&1 || true
 CENSUS_AFTER="$(census)"
 if [ "$CENSUS_BEFORE" = "$CENSUS_AFTER" ]; then
   pass "pg_database census (datname like 'opencircuit%') unchanged before/after this run: $(printf '%s' "$CENSUS_BEFORE" | tr '\n' ' ')"
