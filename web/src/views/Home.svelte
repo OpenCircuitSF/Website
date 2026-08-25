@@ -12,11 +12,17 @@
   // command-line block on the left, the CRT on the right, both inside the
   // same bordered terminal-body -- not a separate element beside the panel.
   // At >=860px that split is a flex row; below it, the image stacks
-  // beneath the text at a smaller size rather than disappearing. At >=860px
-  // the image is large enough to become the LCP candidate, displacing the
-  // headline; see the issue's Implementation notes for the measured
-  // before/after numbers and why that still clears PRD §7.6's <2.0s-on-4G
-  // budget.
+  // beneath the text at a smaller size rather than disappearing.
+  //
+  // The headline remains the LCP element -- measured on the shipped build
+  // with a buffered largest-contentful-paint observer, at 1440px (h1,
+  // 65,727 px2) and 390px (h1, 19,089 px2); .crt-frame never appears as a
+  // candidate. An earlier revision of this comment said the image displaced
+  // the headline. That was measured against a different build, when the
+  // photo was an <img>; a CSS background is not the same LCP question, and
+  // the claim was carried forward rather than re-measured. Note that
+  // background-image LCP candidacy is engine-specific, and this figure is
+  // from WebKit only.
   //
   // The photo is a CSS background rather than an <img> because it must swap
   // per theme, and a <picture> cannot: `<source media="(prefers-color-
