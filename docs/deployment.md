@@ -962,11 +962,34 @@ creating the source database, which is both reachable (nothing here fights
 `migrate ... down 1`, not a hand-waved "seed it behind" with no mechanism to
 do so).
 
+**#0247: every database, directory, and filename below is namespaced per
+run, reusing this project's own `ISSUE=NNNN` / `scripts/testdb.sh` convention
+(`CLAUDE.md` §5a) rather than a second scheme invented for this drill.** The
+drill used to hardcode `0062src`, `opencircuit_test_0062dst`, and
+`/tmp/backup-drill` (including a fixed `…-latest.dump` inside it) — fine for
+one person running it alone, but this is also the document most likely to be
+followed by two people at once (an incident, a rehearsal), and it creates
+and **drops** databases: a collision is one run destroying another's target
+mid-restore, not a confusing error message. Step 1 below is where the
+namespace is actually picked, since that is the first place one is needed —
+not here, where it is easy to skip past.
+
 ```bash
-# 1. Create the drill's source database. scripts/testdb.sh clones the
-#    fully-migrated template — check_template_fresh guarantees this is at
-#    HEAD (migration 20 applied). Confirm it before relying on it:
-DSN="$(scripts/testdb.sh create 0062src)"
+# 1. Pick a namespace for this run, then create the drill's source
+#    database. Reuse the project's own ISSUE=NNNN convention
+#    (CLAUDE.md §5a / scripts/testdb.sh) rather than inventing a second
+#    naming scheme — set ISSUE to your own issue number if you have one, or
+#    any short alphanumeric token two concurrent runs are unlikely to pick
+#    in common (your shell's PID, the default below, is a reasonable
+#    choice). Every database, directory, and filename from here on is
+#    derived from it, which is what lets two people run this drill at the
+#    same time without colliding (#0247):
+ISSUE="${ISSUE:-$$}"
+echo "Running the drill under ISSUE=${ISSUE}"
+#    scripts/testdb.sh clones the fully-migrated template —
+#    check_template_fresh guarantees this is at HEAD (migration 20
+#    applied). Confirm it before relying on it:
+DSN="$(scripts/testdb.sh create "${ISSUE}src")"
 psql "$DSN" -c "select version, dirty from schema_migrations"
 #    Expect: version=20, dirty=false. If this isn't HEAD, stop — step 1b
 #    below has nothing real to roll back and the rest of the drill proves
@@ -992,7 +1015,12 @@ psql "$DSN" -c "select version, dirty from schema_migrations"
 #    table doesn't exist yet at version 19, which is the entire point.
 #    Coverage for it comes from step 8 below, once migration 20 lands on
 #    the restored target. Seed throwaway rows — never target a literal or
-#    seeded id (CLAUDE.md §8b).
+#    seeded id (CLAUDE.md §8b). The two enums you'll actually need here
+#    (checked against the CHECK constraints in migrations/000012 and
+#    000010, not guessed): suppressions.reason is one of hard_bounce |
+#    complaint | manual | repeated_soft_bounce (NOT "bounce");
+#    subscribers.status is one of pending | active | unsubscribed |
+#    bounced | complained (NOT "confirmed").
 psql "$DSN" -f seed.sql                     # your own INSERT ... RETURNING id
                                              # statements
 
@@ -1003,18 +1031,24 @@ psql "$DSN" -f seed.sql                     # your own INSERT ... RETURNING id
 
 # 4. Back up with the real script, current-user auth for local dev
 #    (BACKUP_RUN_AS="" — see the bug note below; the server run uses the
-#    default BACKUP_RUN_AS=postgres via sudo peer auth instead):
-BACKUP_ROOT=/tmp/backup-drill BACKUP_RUN_AS="" \
-  bash scripts/db/backup.sh opencircuit_test_0062src
+#    default BACKUP_RUN_AS=postgres via sudo peer auth instead). Namespace
+#    BACKUP_ROOT by ISSUE too (#0247) — backup.sh already names the dump
+#    after the database (opencircuit_test_${ISSUE}src-latest.dump), so this
+#    is a second, independent layer of collision protection rather than
+#    relying on the filename alone:
+BACKUP_ROOT="/tmp/backup-drill-${ISSUE}" BACKUP_RUN_AS="" \
+  bash scripts/db/backup.sh "opencircuit_test_${ISSUE}src"
 #    Success looks like: "ok — <size>" per database and a final
 #    "Done — all databases backed up." with exit 0. Any pg_dump failure
 #    leaves prior dumps untouched and the script exits non-zero.
 
 # 5. Restore into a FRESH, differently-named database — never restore over
 #    the source, so the drill can compare instead of destroying:
+DST_DSN="postgres://opencircuit:<password>@localhost:5432/opencircuit_test_${ISSUE}dst?sslmode=disable"
 BACKUP_RUN_AS="" RESTORE_CREATE=1 \
-  bash scripts/db/restore.sh /tmp/backup-drill/opencircuit_test_0062src/opencircuit_test_0062src-latest.dump \
-    opencircuit_test_0062dst
+  bash scripts/db/restore.sh \
+    "/tmp/backup-drill-${ISSUE}/opencircuit_test_${ISSUE}src/opencircuit_test_${ISSUE}src-latest.dump" \
+    "opencircuit_test_${ISSUE}dst"
 #    Success looks like: "Done. Verify with: psql -d <target> -c '\dt'" with
 #    no pg_restore errors printed above it. pg_restore's --clean --if-exists
 #    makes a re-restore idempotent, but RESTORE_CREATE=1 here creates a
@@ -1023,8 +1057,7 @@ BACKUP_RUN_AS="" RESTORE_CREATE=1 \
 #    sequence, and view to RESTORE_OWNER (default: opencircuit) after the
 #    restore completes — see "Roles and ownership" below for why this step
 #    exists and how to prove it, not just trust it.
-psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?sslmode=disable" \
-  -c "select version, dirty from schema_migrations"
+psql "$DST_DSN" -c "select version, dirty from schema_migrations"
 #    Expect: version=19, dirty=false — the restored copy is genuinely
 #    missing migration 20 too, carried over faithfully from the source dump.
 #    If this reads 20, the drill has drifted from step 1b again and step 6
@@ -1036,9 +1069,7 @@ psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?
 #    SCHEMA a still-pending migration will CREATE TABLE into must also be
 #    usable by the app role, and this is where that gap showed up. Apply
 #    the genuinely-pending migration:
-migrate -path migrations \
-  -database "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?sslmode=disable" \
-  up
+migrate -path migrations -database "$DST_DSN" up
 #    Success looks like migration 20 actually applying — migrate's own
 #    output names it ("20/u create_workshops ...") — with no error, and a
 #    following `migrate ... version` reporting 20, not 19. **"no change" or
@@ -1076,8 +1107,8 @@ migrate -path migrations \
 #        FK that migration 20's up.sql attaches (step 1b's comment names
 #        what its down.sql drops). This is the positive check the old
 #        wording was missing; confirm the actual delta, not "looks close":
-diff <(psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062src?sslmode=disable" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in ('workshops','workshop_interests') group by table_name order by 1") \
-     <(psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?sslmode=disable" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in ('workshops','workshop_interests') group by table_name order by 1")
+diff <(psql "$DSN" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in ('workshops','workshop_interests') group by table_name order by 1") \
+     <(psql "$DST_DSN" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in ('workshops','workshop_interests') group by table_name order by 1")
 #    Expect EXACTLY one pair of lines, both naming email_campaigns,
 #    differing by 1 (e.g. "< email_campaigns|12" / "> email_campaigns|13" —
 #    your own counts depend on what you seeded; the delta of exactly 1 does
@@ -1100,10 +1131,8 @@ diff <(psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0
 #    that check passes even when broken, because the restoring role can
 #    always read what it just restored. Connect AS THE APPLICATION ROLE and
 #    issue a real query:
-psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?sslmode=disable" \
-  -c "select count(*) from subscribers;"
-psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?sslmode=disable" \
-  -c "select count(*) from workshops;"
+psql "$DST_DSN" -c "select count(*) from subscribers;"
+psql "$DST_DSN" -c "select count(*) from workshops;"
 #    permission denied on either query means the ownership step did not run
 #    or did not reach that object/schema — a passing catalog-only check
 #    would not have caught that. The `workshops` query specifically is what
@@ -1111,9 +1140,12 @@ psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?
 #    `ALTER SCHEMA public OWNER TO …` ran (or didn't) during step 6's
 #    `migrate up`, not by anything `restore.sh` touched directly.
 
-# 9. Clean up everything created:
-scripts/testdb.sh drop 0062src
-scripts/testdb.sh drop 0062dst
+# 9. Clean up everything THIS RUN created — never a bare DROP DATABASE on a
+#    fixed name, since a concurrent run's databases sit right next to
+#    yours under the same template-derived naming scheme (#0247):
+scripts/testdb.sh drop "${ISSUE}src"
+scripts/testdb.sh drop "${ISSUE}dst"
+rm -rf "/tmp/backup-drill-${ISSUE}"
 #    `testdb.sh drop` (#0228) now reports a real failure and exits non-zero
 #    instead of silently claiming "does not exist" — see "A real script bug"
 #    below. A database restore.sh created with RESTORE_CREATE=1 is still
@@ -1121,7 +1153,9 @@ scripts/testdb.sh drop 0062dst
 #    only reassigns the TABLES/SEQUENCES/VIEWS inside it, not the database
 #    object itself) — if that is not `opencircuit`, `testdb.sh drop` will now
 #    fail loudly with `ERROR: must be owner of database`, and you drop it by
-#    hand as its actual owner instead of it silently leaking.
+#    hand as its actual owner instead of it silently leaking. The `rm -rf`
+#    above is safe precisely because BACKUP_ROOT was namespaced by ISSUE in
+#    step 4 — it can never reach another run's backup directory.
 ```
 
 The custom format (`pg_restore`, default) and the plain format
