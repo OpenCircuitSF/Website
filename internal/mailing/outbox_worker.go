@@ -211,10 +211,10 @@ func (w *OutboxWorker) Stop(ctx context.Context) error {
 	}
 }
 
-// pass sweeps orphans, claims one batch, and sends it. Returns processed=true
-// if it did any real work (claimed at least one row), so Run can skip the
-// poll wait, matching worker.go's "don't busy-loop on an empty pass"
-// discipline (#0122).
+// pass sweeps orphans, expires overdue pending signups (#0128), claims one
+// batch, and sends it. Returns processed=true if it did any real work
+// (claimed at least one row), so Run can skip the poll wait, matching
+// worker.go's "don't busy-loop on an empty pass" discipline (#0122).
 func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 	sweepCtx, sweepCancel := context.WithTimeout(ctx, writeStatusTimeout)
 	swept, err := w.store.OrphanSweep(sweepCtx, outboxOrphanStaleAfter)
@@ -224,6 +224,27 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 	}
 	if swept > 0 {
 		w.log.Warn("mailing: outbox orphan sweep reclaimed rows", "count", swept)
+	}
+
+	// #0128: expiring pending signups past confirm_expires_at rides this
+	// worker's existing poll loop rather than standing up a fourth
+	// dedicated ticker in main.go — it is cheap (one indexed UPDATE ...
+	// RETURNING per pass, idempotent, near-zero rows in the common case)
+	// and this worker already holds the one *subscribers.Store this
+	// package is given (w.events, also used for confirmation_sent/
+	// welcome_sent). A failure here is logged and does not abort the
+	// pass — mail still needs to go out even if the expiry sweep hiccups.
+	// nil-tolerant: w.events may be nil (see OutboxWorkerDeps' doc
+	// comment), matching every other w.events-gated branch in this file.
+	if w.events != nil {
+		expireCtx, expireCancel := context.WithTimeout(ctx, writeStatusTimeout)
+		expired, expireErr := w.events.ExpirePendingSweep(expireCtx, time.Now())
+		expireCancel()
+		if expireErr != nil {
+			w.log.Error("mailing: expire-pending-signups sweep failed", "err", expireErr)
+		} else if expired > 0 {
+			w.log.Info("mailing: expired pending signups past confirm_expires_at", "count", expired)
+		}
 	}
 
 	rows, err := w.store.ClaimDue(ctx, w.batchSize)

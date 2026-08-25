@@ -147,6 +147,10 @@ type AdminDashboardHandler struct {
 // internal/outbox (#0126). *outbox.Store satisfies it via Counts.
 type dashboardOutboxStore interface {
 	Counts(ctx context.Context) (outbox.Counts, error)
+	// AbandonedCountByKind backs #0128's "count of confirmations abandoned
+	// in the queue" — scoped to kind=confirmation, distinct from Counts'
+	// account-wide total across every outbound_queue kind.
+	AbandonedCountByKind(ctx context.Context, kind outbox.Kind) (int64, error)
 }
 
 // NewAdminDashboardHandler constructs an AdminDashboardHandler over the data
@@ -262,6 +266,12 @@ type dashboardOutboundQueueView struct {
 	Sent                int64 `json:"sent"`
 	Abandoned           int64 `json:"abandoned"`
 	OldestQueuedAgeSecs int64 `json:"oldest_queued_age_seconds"`
+	// AbandonedConfirmations (#0128) is Abandoned's kind=confirmation
+	// subset — the figure that actually answers "how many pending
+	// signups never got their confirmation delivered", where Abandoned
+	// above mixes in every other outbound_queue kind (welcome,
+	// registration, recovery, ...).
+	AbandonedConfirmations int64 `json:"abandoned_confirmations"`
 }
 
 type dashboardOverviewResponse struct {
@@ -336,12 +346,18 @@ func (h *AdminDashboardHandler) Overview(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
+		abandonedConfirmations, err := h.outbox.AbandonedCountByKind(ctx, outbox.KindConfirmation)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
 		outboundQueue = &dashboardOutboundQueueView{
-			Queued:              counts.Queued,
-			Sending:             counts.Sending,
-			Sent:                counts.Sent,
-			Abandoned:           counts.Abandoned,
-			OldestQueuedAgeSecs: counts.OldestQueuedAgeSecs,
+			Queued:                 counts.Queued,
+			Sending:                counts.Sending,
+			Sent:                   counts.Sent,
+			Abandoned:              counts.Abandoned,
+			OldestQueuedAgeSecs:    counts.OldestQueuedAgeSecs,
+			AbandonedConfirmations: abandonedConfirmations,
 		}
 		outboundQueueAbandoned = counts.Abandoned > 0
 	}

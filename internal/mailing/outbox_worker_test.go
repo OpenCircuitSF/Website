@@ -333,6 +333,65 @@ func TestOutboxWorker_MarkSent_RecordsWelcomeSent(t *testing.T) {
 	}
 }
 
+// TestOutboxWorker_Pass_ExpiresPendingSignups proves #0128's sweep
+// integration: OutboxWorker's own poll loop (pass) drives
+// subscribers.Store.ExpirePendingSweep, not just a standalone call to that
+// method (already covered directly in internal/subscribers/pending_test.go)
+// — this is the wiring test for the "ride the existing poll loop" decision
+// disclosed in outbox_worker.go's pass doc comment.
+//
+// The subscriber row is inserted directly via SQL rather than through
+// subscribers.Store.Create — Create also enqueues a 'confirmation' row,
+// and this package's shared test database is NOT truncated between tests
+// (see main_test.go's TestMain doc comment: once per package run). A
+// confirmation row this test never drains would sit 'queued' and be
+// available for the NEXT test's worker to opportunistically claim,
+// corrupting an unrelated test's RecordingMailer assertions — exactly the
+// failure this comment is here to prevent a future edit from
+// reintroducing.
+func TestOutboxWorker_Pass_ExpiresPendingSignups(t *testing.T) {
+	pool := outboxTestPool(t)
+	mailer := &RecordingMailer{}
+	w, _ := newTestOutboxWorker(t, pool, mailer)
+
+	var subscriberID int64
+	if err := pool.QueryRow(context.Background(),
+		`INSERT INTO subscribers (email, status, confirm_token, confirm_sent_at, confirm_expires_at, manage_token, created_at, updated_at)
+		 VALUES ($1, 'pending', $2, $3, $3, $4, $3, $3)
+		 RETURNING id`,
+		uniqueOutboxRecipient(t), "expiry-sweep-test-token", time.Now().Add(-time.Hour), "expiry-sweep-test-manage-token",
+	).Scan(&subscriberID); err != nil {
+		t.Fatalf("inserting a pending subscriber directly: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	deadline := time.Now().Add(2 * time.Second)
+	var tokenCleared bool
+	for time.Now().Before(deadline) {
+		var token *string
+		if err := pool.QueryRow(context.Background(), `SELECT confirm_token FROM subscribers WHERE id = $1`, subscriberID).Scan(&token); err != nil {
+			t.Fatalf("select confirm_token: %v", err)
+		}
+		if token == nil {
+			tokenCleared = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !tokenCleared {
+		t.Fatal("confirm_token was not cleared by the worker's own poll loop within the deadline")
+	}
+
+	var status string
+	if err := pool.QueryRow(context.Background(), `SELECT status FROM subscribers WHERE id = $1`, subscriberID).Scan(&status); err != nil {
+		t.Fatalf("select status: %v", err)
+	}
+	if status != subscribers.StatusPending {
+		t.Errorf("status = %q after sweep, want %q (left pending, not deleted)", status, subscribers.StatusPending)
+	}
+}
+
 // TestOutboxWorker_AbandonsAtMaxRetries_RetainsLastError drives a mailer
 // that always fails and asserts the row reaches 'abandoned' with the last
 // error retained, without hanging or looping forever.

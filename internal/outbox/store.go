@@ -345,6 +345,58 @@ func (s *Store) OrphanSweep(ctx context.Context, staleAfter time.Duration) (int6
 	return tag.RowsAffected(), nil
 }
 
+// LatestByRecipients returns, for every recipient in recipients that has at
+// least one outbound_queue row of kind, that row's MOST RECENT state (by
+// created_at) — one query, not one per address, for #0128's pending-
+// subscriber screen ("the outbound queue state for each pending address").
+// A recipient with no matching row is simply absent from the returned map;
+// the caller renders that as "never queued" rather than treating it as an
+// error. An empty recipients slice returns an empty map without querying.
+func (s *Store) LatestByRecipients(ctx context.Context, kind Kind, recipients []string) (map[string]Row, error) {
+	out := make(map[string]Row)
+	if len(recipients) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT ON (recipient) `+rowColumns+`
+		   FROM outbound_queue
+		  WHERE kind = $1 AND recipient = ANY($2)
+		  ORDER BY recipient, created_at DESC, id DESC`,
+		string(kind), recipients,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("outbox: loading latest rows by recipient: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		r, err := scanRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("outbox: scanning latest-by-recipient row: %w", err)
+		}
+		out[r.Recipient] = r
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("outbox: iterating latest-by-recipient rows: %w", err)
+	}
+	return out, nil
+}
+
+// AbandonedCountByKind returns how many outbound_queue rows of kind have
+// reached the terminal 'abandoned' state — #0128's "count of confirmations
+// abandoned in the queue" on the admin overview, scoped to one kind rather
+// than Counts' account-wide total across every kind.
+func (s *Store) AbandonedCountByKind(ctx context.Context, kind Kind) (int64, error) {
+	var n int64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM outbound_queue WHERE kind = $1 AND status = $2`,
+		string(kind), StatusAbandoned,
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("outbox: counting abandoned rows for kind %q: %w", kind, err)
+	}
+	return n, nil
+}
+
 // Counts returns the queue-depth summary for #0061's admin overview.
 func (s *Store) Counts(ctx context.Context) (Counts, error) {
 	var c Counts

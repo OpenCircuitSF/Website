@@ -27,6 +27,8 @@ import type {
   AdminWorkshopsListResponse,
   WorkshopPreviewResponse,
   DashboardOverview,
+  PendingListResponse,
+  ResendConfirmationResponse,
 } from './types';
 import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
 import type { UnsubscribeResult } from './unsubscribe';
@@ -495,6 +497,33 @@ export function createSubscriber(
     interests,
     note: note || undefined,
   });
+}
+
+// ── Admin: pending-subscriber screen (#0128) ─────────────────────────────────
+
+/**
+ * GET /admin/subscribers/pending — unconfirmed signups, sortable by age
+ * (admin only). `oldestFirst` defaults true (the screen's default view,
+ * matching #0128's own criterion) and maps to `sort=age_asc` /
+ * `sort=age_desc`.
+ */
+export function listPendingSubscribers(oldestFirst = true): Promise<PendingListResponse> {
+  const sp = new URLSearchParams();
+  sp.set('sort', oldestFirst ? 'age_asc' : 'age_desc');
+  return apiGet<PendingListResponse>(`/admin/subscribers/pending?${sp.toString()}`);
+}
+
+/**
+ * POST /admin/subscribers/{id}/resend-confirmation — mints a fresh token,
+ * extends the expiry, and re-enqueues a confirmation email (admin only).
+ * The server answers 429 (ApiError) when the per-subscriber cooldown is
+ * still active and 409 when the address is suppressed or the subscriber is
+ * no longer pending — callers should surface `err.message` for both rather
+ * than inventing their own copy, since the server's message already names
+ * the reason.
+ */
+export function resendConfirmation(id: number): Promise<ResendConfirmationResponse> {
+  return apiPost<ResendConfirmationResponse>(`/admin/subscribers/${id}/resend-confirmation`);
 }
 
 // ── Admin suppression-list screen (#0100) ────────────────────────────────────

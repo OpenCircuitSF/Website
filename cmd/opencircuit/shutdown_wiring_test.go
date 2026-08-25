@@ -147,6 +147,7 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 		errCh <- mountAndServe(cfg, pool,
 			nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised */
 			nil, /* adminSubscribersH: not exercised */
+			nil, /* adminPendingH: not exercised */
 			nil, /* adminSuppressionsH: not exercised */
 			nil, /* adminCampaignsH: not exercised */
 			nil, /* adminCampaignAudienceH: not exercised */

@@ -206,6 +206,17 @@ const (
 	// operator reconstruct its scope, not to become a second place the
 	// data just erased is still sitting in plaintext.
 	ActionSubscriberErased = "subscriber.erased"
+	// ActionSubscriberResendConfirmation is written by POST
+	// /admin/subscribers/{id}/resend-confirmation (#0128, the pending-
+	// subscriber admin screen). Actor is always the requesting admin.
+	// TargetID is the pending subscriber's id. Metadata deliberately omits
+	// the address (see internal/handlers/audit_email_metadata_guard_test.go)
+	// — it records only `rate_limited` (true when the cooldown refused the
+	// resend and nothing was sent) and `previous_confirm_sent_at`
+	// (RFC3339, or omitted/empty when this is the first send), enough for
+	// an operator to reconstruct what happened without a second place the
+	// address sits in the audit trail.
+	ActionSubscriberResendConfirmation = "subscriber.resend_confirmation"
 
 	// Interest taxonomy lifecycle (PRD §6.1, §5.2 — the admin CRUD, #0024).
 	// ActionInterestUpdated covers any field change other than the active

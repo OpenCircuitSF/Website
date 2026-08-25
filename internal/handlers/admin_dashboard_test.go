@@ -74,11 +74,12 @@ type decodedDashboard struct {
 		Status string `json:"status"`
 	} `json:"sending_campaign"`
 	OutboundQueue *struct {
-		Queued              int64 `json:"queued"`
-		Sending             int64 `json:"sending"`
-		Sent                int64 `json:"sent"`
-		Abandoned           int64 `json:"abandoned"`
-		OldestQueuedAgeSecs int64 `json:"oldest_queued_age_seconds"`
+		Queued                 int64 `json:"queued"`
+		Sending                int64 `json:"sending"`
+		Sent                   int64 `json:"sent"`
+		Abandoned              int64 `json:"abandoned"`
+		OldestQueuedAgeSecs    int64 `json:"oldest_queued_age_seconds"`
+		AbandonedConfirmations int64 `json:"abandoned_confirmations"`
 	} `json:"outbound_queue"`
 	Warnings struct {
 		ComplaintRateHigh      bool     `json:"complaint_rate_high"`
@@ -413,6 +414,80 @@ func TestAdminDashboardOverview_OutboundQueue(t *testing.T) {
 	}
 	if !after.Warnings.OutboundQueueAbandoned {
 		t.Error("outbound_queue_abandoned = false, want true after abandoning a row")
+	}
+}
+
+// TestAdminDashboardOverview_AbandonedConfirmationsScopedToKind is #0128's
+// proof: abandoned_confirmations counts only kind=confirmation abandoned
+// rows, not every abandoned outbound_queue row regardless of kind (the
+// generic "abandoned" figure above already covers the account-wide total).
+// Abandons one row of EACH kind and asserts the delta the confirmation-kind
+// abandon produced is at least 1 while comparing it against the delta a
+// registration-kind abandon of the SAME size produces on the generic
+// figure — the confirmation-scoped figure must not move by more than the
+// confirmation-kind abandon alone contributed.
+func TestAdminDashboardOverview_AbandonedConfirmationsScopedToKind(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	admin := seedAdmin(t, pool, "dashboard-outbox-scoped-admin@example.com")
+	seedSession(t, pool, admin, "dashboard-outbox-scoped-admin-token")
+
+	store := outbox.NewStore(pool)
+	ctx := context.Background()
+	srv := httptest.NewServer(adminDashboardMux(pool, false))
+	defer srv.Close()
+
+	abandonOne := func(kind outbox.Kind) {
+		t.Helper()
+		recipient := fmt.Sprintf("dashboard-outbox-scoped-%s-%d@example.com", kind, testdb.Unique())
+		id, err := store.Enqueue(ctx, outbox.Item{Kind: kind, Recipient: recipient})
+		if err != nil {
+			t.Fatalf("Enqueue %s: %v", kind, err)
+		}
+		rows, err := store.ClaimDue(ctx, 100)
+		if err != nil {
+			t.Fatalf("ClaimDue: %v", err)
+		}
+		var attempts int
+		for _, r := range rows {
+			if r.ID == id {
+				attempts = r.Attempts
+			}
+		}
+		if attempts == 0 {
+			t.Fatalf("row %d (kind %s) was not claimed by ClaimDue", id, kind)
+		}
+		if _, err := store.MarkRetryOrAbandon(ctx, id, attempts, "simulated failure", 1); err != nil {
+			t.Fatalf("MarkRetryOrAbandon: %v", err)
+		}
+	}
+
+	before := getDashboard(t, srv.Client(), srv.URL+"/admin/overview", "dashboard-outbox-scoped-admin-token")
+	beforeConfirmations := int64(0)
+	if before.OutboundQueue != nil {
+		beforeConfirmations = before.OutboundQueue.AbandonedConfirmations
+	}
+
+	// Abandon a REGISTRATION row first — must NOT move the confirmation-
+	// scoped figure at all.
+	abandonOne(outbox.KindRegistration)
+	afterRegistration := getDashboard(t, srv.Client(), srv.URL+"/admin/overview", "dashboard-outbox-scoped-admin-token")
+	if afterRegistration.OutboundQueue == nil {
+		t.Fatal("outbound_queue is nil after abandoning a registration row")
+	}
+	if afterRegistration.OutboundQueue.AbandonedConfirmations != beforeConfirmations {
+		t.Errorf("abandoned_confirmations moved from %d to %d after abandoning a REGISTRATION row — it must be scoped to kind=confirmation only",
+			beforeConfirmations, afterRegistration.OutboundQueue.AbandonedConfirmations)
+	}
+
+	// Now abandon a CONFIRMATION row — must move the figure by exactly 1.
+	abandonOne(outbox.KindConfirmation)
+	afterConfirmation := getDashboard(t, srv.Client(), srv.URL+"/admin/overview", "dashboard-outbox-scoped-admin-token")
+	if afterConfirmation.OutboundQueue == nil {
+		t.Fatal("outbound_queue is nil after abandoning a confirmation row")
+	}
+	if afterConfirmation.OutboundQueue.AbandonedConfirmations != beforeConfirmations+1 {
+		t.Errorf("abandoned_confirmations = %d after abandoning one confirmation row, want %d",
+			afterConfirmation.OutboundQueue.AbandonedConfirmations, beforeConfirmations+1)
 	}
 }
 

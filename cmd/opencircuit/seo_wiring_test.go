@@ -153,6 +153,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 		errCh <- mountAndServe(cfg, pool,
 			nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
 			nil, /* adminSubscribersH: not exercised by this test */
+			nil, /* adminPendingH: not exercised by this test */
 			nil, /* adminSuppressionsH: not exercised by this test */
 			nil, /* adminCampaignsH: not exercised by this test */
 			nil, /* adminCampaignAudienceH: not exercised by this test */

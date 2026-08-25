@@ -104,6 +104,7 @@
   import Campaigns from './admin/Campaigns.svelte';
   import Workshops from './admin/Workshops.svelte';
   import Dashboard from './admin/Dashboard.svelte';
+  import Pending from './admin/Pending.svelte';
 
   type Section =
     | 'overview'
@@ -112,6 +113,7 @@
     | 'audit'
     | 'interests'
     | 'subscribers'
+    | 'pending'
     | 'suppressions'
     | 'campaigns'
     | 'workshops';
@@ -1026,6 +1028,13 @@
       <button
         type="button"
         class="subtab"
+        class:active={section === 'pending'}
+        aria-current={section === 'pending' ? 'page' : undefined}
+        onclick={() => (section = 'pending')}
+      >Pending</button>
+      <button
+        type="button"
+        class="subtab"
         class:active={section === 'suppressions'}
         aria-current={section === 'suppressions' ? 'page' : undefined}
         onclick={() => (section = 'suppressions')}
@@ -1874,6 +1883,10 @@
           </div>
         </div>
       {/if}
+    {/if}
+
+    {#if section === 'pending'}
+      <Pending />
     {/if}
 
     {#if section === 'suppressions'}

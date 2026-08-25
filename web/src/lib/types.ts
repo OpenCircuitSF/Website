@@ -158,6 +158,42 @@ export interface SubscribersPage {
 }
 
 /**
+ * One row of GET /admin/subscribers/pending (#0128) — an unconfirmed
+ * signup, with the operator-facing "why didn't they confirm?" figures
+ * #0126's durable queue makes possible. Matches
+ * internal/handlers/admin_pending.go's pendingSubscriberRow. `expired` and
+ * `age_seconds` are computed server-side at response time (not left to the
+ * client to derive from raw timestamps), so a slow-loading tab and a fast
+ * one agree on whether a row reads as expired.
+ */
+export interface PendingSubscriber {
+  id: number;
+  email: string;
+  confirm_sent_at: string | null;
+  confirm_expires_at: string | null;
+  age_seconds: number;
+  expired: boolean;
+  signup_ip?: string;
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  /** The latest outbound_queue row's status for this address's confirmation mail: "queued" | "sending" | "sent" | "abandoned" | "none" (no row exists) | "unknown" (server has no outbound_queue backing, STORAGE=json). */
+  queue_state: string;
+}
+
+/** Envelope returned by GET /admin/subscribers/pending. */
+export interface PendingListResponse {
+  pending: PendingSubscriber[];
+}
+
+/** POST /admin/subscribers/{id}/resend-confirmation success body (#0128). Matches internal/handlers/admin_pending.go's resendConfirmationResponse. */
+export interface ResendConfirmationResponse {
+  id: number;
+  confirm_sent_at: string;
+  confirm_expires_at: string;
+}
+
+/**
  * One row of the suppression list (GET /admin/suppressions item). Matches
  * internal/handlers/admin_suppressions.go `suppressionView` (#0100).
  * `subscriber_status` is null when no subscribers row exists for this
@@ -484,6 +520,8 @@ export interface DashboardOutboundQueue {
   sent: number;
   abandoned: number;
   oldest_queued_age_seconds: number;
+  /** abandoned's kind=confirmation subset (#0128) — how many pending signups never got a confirmation delivered, as opposed to abandoned's account-wide total across every kind. */
+  abandoned_confirmations: number;
 }
 
 export interface DashboardSubscriberCounts {

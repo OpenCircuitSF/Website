@@ -180,6 +180,7 @@
         <li>{oq.sending.toLocaleString()} sending</li>
         <li>{oq.sent.toLocaleString()} sent</li>
         <li>{oq.abandoned.toLocaleString()} abandoned</li>
+        <li>{oq.abandoned_confirmations.toLocaleString()} abandoned confirmations</li>
       </ul>
     {/if}
 

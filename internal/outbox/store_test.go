@@ -463,3 +463,152 @@ func TestOutbox_Counts(t *testing.T) {
 		t.Fatalf("Sent = %d, want at least 1", counts.Sent)
 	}
 }
+
+// TestOutbox_LatestByRecipients_ReturnsMostRecentPerRecipient is #0128's
+// proof: for a recipient with more than one outbound_queue row of the same
+// kind, LatestByRecipients returns the MOST RECENT one (by created_at), not
+// an arbitrary one — the pending-subscriber screen's "outbound queue state
+// for each pending address" depends on this being the row that actually
+// reflects the last attempt, e.g. after an admin resend superseded an
+// earlier abandoned row.
+func TestOutbox_LatestByRecipients_ReturnsMostRecentPerRecipient(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	recipient := uniqueRecipient(t)
+	olderID, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: recipient})
+	if err != nil {
+		t.Fatalf("Enqueue older: %v", err)
+	}
+	// Abandon the older row so it is clearly distinguishable from the newer one.
+	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET status = $2, created_at = created_at - interval '1 hour' WHERE id = $1`, olderID, StatusAbandoned); err != nil {
+		t.Fatalf("backdating/abandoning older row: %v", err)
+	}
+	newerID, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: recipient})
+	if err != nil {
+		t.Fatalf("Enqueue newer: %v", err)
+	}
+
+	byRecipient, err := store.LatestByRecipients(ctx, KindConfirmation, []string{recipient})
+	if err != nil {
+		t.Fatalf("LatestByRecipients: %v", err)
+	}
+	row, ok := byRecipient[recipient]
+	if !ok {
+		t.Fatalf("no row returned for recipient %q", recipient)
+	}
+	if row.ID != newerID {
+		t.Errorf("LatestByRecipients returned row %d (status %q), want the newer row %d (older was %d, abandoned)", row.ID, row.Status, newerID, olderID)
+	}
+	if row.Status != StatusQueued {
+		t.Errorf("returned row status = %q, want %q (the newer, still-queued row)", row.Status, StatusQueued)
+	}
+}
+
+// TestOutbox_LatestByRecipients_AbsentRecipientOmittedNotErrored proves a
+// recipient with no outbound_queue row of the requested kind is simply
+// absent from the returned map, not an error and not a zero-value entry —
+// the handler layer renders that as "never queued" (#0128).
+func TestOutbox_LatestByRecipients_AbsentRecipientOmittedNotErrored(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	neverQueued := uniqueRecipient(t)
+	byRecipient, err := store.LatestByRecipients(ctx, KindConfirmation, []string{neverQueued})
+	if err != nil {
+		t.Fatalf("LatestByRecipients: %v", err)
+	}
+	if _, ok := byRecipient[neverQueued]; ok {
+		t.Errorf("byRecipient unexpectedly contains an entry for a recipient with no rows")
+	}
+}
+
+// TestOutbox_LatestByRecipients_ScopedToKind proves a row of a DIFFERENT
+// kind for the same recipient does not leak into a query for another kind
+// — resend's confirmation-kind lookup must not surface, say, a welcome-kind
+// row for the same address.
+func TestOutbox_LatestByRecipients_ScopedToKind(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	recipient := uniqueRecipient(t)
+	if _, err := store.Enqueue(ctx, Item{Kind: KindWelcome, Recipient: recipient}); err != nil {
+		t.Fatalf("Enqueue welcome: %v", err)
+	}
+
+	byRecipient, err := store.LatestByRecipients(ctx, KindConfirmation, []string{recipient})
+	if err != nil {
+		t.Fatalf("LatestByRecipients: %v", err)
+	}
+	if _, ok := byRecipient[recipient]; ok {
+		t.Errorf("byRecipient unexpectedly contains a kind=welcome row when querying kind=confirmation")
+	}
+}
+
+// TestOutbox_LatestByRecipients_EmptyRecipientsReturnsEmptyMapWithoutQuery
+// proves the empty-slice short circuit both empties correctly and is safe
+// to call (no SQL error from an empty ANY($2) array edge case some
+// Postgres drivers mishandle).
+func TestOutbox_LatestByRecipients_EmptyRecipientsReturnsEmptyMapWithoutQuery(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	byRecipient, err := store.LatestByRecipients(ctx, KindConfirmation, nil)
+	if err != nil {
+		t.Fatalf("LatestByRecipients: %v", err)
+	}
+	if len(byRecipient) != 0 {
+		t.Errorf("byRecipient = %v, want empty for a nil recipients slice", byRecipient)
+	}
+}
+
+// TestOutbox_AbandonedCountByKind_ScopedToKind proves the count is scoped
+// to the requested kind, not an account-wide abandoned total (#0128 — the
+// admin overview's "confirmations abandoned" figure must not move when a
+// DIFFERENT kind abandons).
+func TestOutbox_AbandonedCountByKind_ScopedToKind(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	before, err := store.AbandonedCountByKind(ctx, KindConfirmation)
+	if err != nil {
+		t.Fatalf("AbandonedCountByKind before: %v", err)
+	}
+
+	// Abandon a REGISTRATION row — must not move the confirmation count.
+	regID, err := store.Enqueue(ctx, Item{Kind: KindRegistration, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue registration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET status = $2 WHERE id = $1`, regID, StatusAbandoned); err != nil {
+		t.Fatalf("abandoning registration row: %v", err)
+	}
+	afterRegistration, err := store.AbandonedCountByKind(ctx, KindConfirmation)
+	if err != nil {
+		t.Fatalf("AbandonedCountByKind after registration abandon: %v", err)
+	}
+	if afterRegistration != before {
+		t.Errorf("AbandonedCountByKind(confirmation) moved from %d to %d after abandoning a REGISTRATION row", before, afterRegistration)
+	}
+
+	// Now abandon a CONFIRMATION row — must move the count by exactly 1.
+	confirmID, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue confirmation: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET status = $2 WHERE id = $1`, confirmID, StatusAbandoned); err != nil {
+		t.Fatalf("abandoning confirmation row: %v", err)
+	}
+	afterConfirmation, err := store.AbandonedCountByKind(ctx, KindConfirmation)
+	if err != nil {
+		t.Fatalf("AbandonedCountByKind after confirmation abandon: %v", err)
+	}
+	if afterConfirmation != before+1 {
+		t.Errorf("AbandonedCountByKind(confirmation) = %d after abandoning one confirmation row, want %d", afterConfirmation, before+1)
+	}
+}
