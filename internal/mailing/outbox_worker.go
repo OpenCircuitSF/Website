@@ -97,10 +97,26 @@ type OutboxWorker struct {
 	stopOnce sync.Once
 
 	// claimedMu guards claimed, below. Written only by the goroutine
-	// running Run (via trackClaimed/untrackClaimed); read only by Stop,
-	// and only after <-w.doneCh confirms Run has returned — see Stop's and
-	// releaseAll's doc comments for why that ordering makes the mutex
-	// belt-and-braces rather than load-bearing.
+	// running Run (via trackClaimed/untrackClaimed); read only by Stop
+	// (via releaseAll), and only after <-w.doneCh confirms Run has
+	// returned — see Stop's and releaseAll's doc comments for why that
+	// ordering means Run's own writes can never race a call to releaseAll.
+	//
+	// #0266: that is not the whole story, and calling this mutex
+	// "belt-and-braces" (as an earlier version of this comment did)
+	// understated it. Stop's doc comment promises it is safe to call more
+	// than once, and Stop enforces no first-caller-wins ordering of its
+	// own — stopOnce only makes closing stopCh idempotent, not the rest of
+	// the method. Two goroutines calling Stop concurrently both block on
+	// the same <-w.doneCh and, once it closes, BOTH proceed to call
+	// releaseAll at the same time. Without this mutex, both goroutines
+	// would range over and nil out the same w.claimed map concurrently —
+	// a genuine data race (Go's race detector flags it; see this issue's
+	// mutation proof), not merely a double `store.Release` call. This
+	// mutex is exactly what makes concurrent Stop calls safe, i.e. what
+	// makes Stop's repeat-call promise true — the same class of
+	// undersold guard as #0263's FOR UPDATE on AdminResendConfirmation's
+	// cooldown check.
 	claimedMu sync.Mutex
 	// claimed holds the outbound_queue ids from the most recent batch that
 	// this worker holds claimed ('sending') but has not yet finished
@@ -216,7 +232,9 @@ func (w *OutboxWorker) Run(ctx context.Context) {
 // process currently holds claimed-but-unsent back to 'queued' (so a
 // restart, or another process's worker, picks it up immediately instead of
 // waiting out outboxOrphanStaleAfter), and blocks until Run has returned or
-// ctx's deadline elapses. Safe to call more than once.
+// ctx's deadline elapses. Safe to call more than once — including
+// concurrently: see claimedMu's doc comment for why that specific promise
+// depends on the mutex, not merely on the doneCh ordering below.
 //
 // The release only runs once <-w.doneCh confirms Run has fully returned —
 // deliberately, not from inside pass/Run itself. Run's for loop calls pass
@@ -234,7 +252,7 @@ func (w *OutboxWorker) Stop(ctx context.Context) error {
 	w.stopOnce.Do(func() { close(w.stopCh) })
 	select {
 	case <-w.doneCh:
-		w.releaseAll(ctx)
+		w.releaseAll()
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -243,17 +261,22 @@ func (w *OutboxWorker) Stop(ctx context.Context) error {
 
 // releaseAll releases every row this worker still holds claimed ('sending')
 // back to 'queued', via outbox.Store.Release — called from Stop only, only
-// after <-w.doneCh confirms Run has exited (see Stop's doc comment for why
-// that ordering makes this safe without w.claimed's mutex doing any real
-// work here). Best-effort: a Release failure is logged, not returned —
-// Stop's contract is "Run has stopped," not "every row was released
-// immediately," and a row this misses is still reclaimed by the orphan
-// sweep after outboxOrphanStaleAfter, exactly as it was before this method
-// existed. Uses a context independent of ctx (which may be at or near its
-// own deadline by the time Stop's doneCh case fires) bounded by
-// writeStatusTimeout, matching every other post-send status write in this
-// file.
-func (w *OutboxWorker) releaseAll(ctx context.Context) {
+// after <-w.doneCh confirms Run has exited (see Stop's and claimedMu's doc
+// comments for what that ordering does and does not make safe on its own).
+// Best-effort: a Release failure is logged, not returned — Stop's contract
+// is "Run has stopped," not "every row was released immediately," and a row
+// this misses is still reclaimed by the orphan sweep after
+// outboxOrphanStaleAfter, exactly as it was before this method existed.
+//
+// #0266: takes no context. An earlier version accepted one from Stop and
+// never used it — every Store.Release call below already builds its own
+// bounded context, independent of the caller's (which may be at or near its
+// own deadline by the time Stop's doneCh case fires), matching every other
+// post-send status write in this file. Dropped the parameter rather than
+// leaving it unread: `go vet` does not flag an unused parameter, and a
+// reader passing a context here expecting it to bound something, or to
+// carry cancellation through, would be wrong.
+func (w *OutboxWorker) releaseAll() {
 	w.claimedMu.Lock()
 	ids := make([]int64, 0, len(w.claimed))
 	for id := range w.claimed {
@@ -331,6 +354,23 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 		}
 	}
 
+	// #0266 item 4, pre-existing and unchanged by this issue: ClaimDue is a
+	// single `UPDATE ... RETURNING` (internal/outbox/store.go), which
+	// commits server-side as soon as Postgres executes it — before this
+	// process has scanned a single row of the result set. If scanning the
+	// RETURNING rows then fails (a network error mid-stream, a decode
+	// error), ClaimDue returns (nil, err) here: the rows it just claimed
+	// are genuinely 'sending' in the database, but w.trackClaimed is never
+	// called for them, because there is nothing in `rows` to pass it. This
+	// worker cannot release what it was never told it claimed. Nothing is
+	// lost: OrphanSweep (this pass's first step, above) reclaims any row
+	// stuck at 'sending' past outboxOrphanStaleAfter regardless of whether
+	// this process's own w.claimed ever knew about it — the same safety
+	// net that covers a hard crash mid-batch. Recorded here so this gap is
+	// not rediscovered as new; fixing it would mean ClaimDue running the
+	// UPDATE and the scan inside one explicit transaction it can still roll
+	// back, which is a change to internal/outbox/store.go's shared claim
+	// path, out of this issue's scope.
 	rows, err := w.store.ClaimDue(ctx, w.batchSize)
 	if err != nil {
 		return false, fmt.Errorf("mailing: claiming outbound_queue batch: %w", err)

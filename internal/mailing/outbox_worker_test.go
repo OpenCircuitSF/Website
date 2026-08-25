@@ -824,6 +824,52 @@ func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
 	}
 }
 
+// TestOutboxWorker_ReleaseAll_ConcurrentCallsDoNotRace is #0266 item 3's
+// mutation proof: claimedMu's doc comment now says the mutex is what makes
+// Stop's "safe to call more than once" promise hold under CONCURRENT calls,
+// not merely belt-and-braces once <-w.doneCh has fired. This exercises that
+// directly — two goroutines calling releaseAll() at the same instant,
+// against a populated w.claimed — rather than through the fuller Run/Stop
+// timing dance TestOutboxWorker_Stop_ReleasesClaimedRow above already
+// covers for the single-caller case.
+//
+// The ids in w.claimed are fabricated (never enqueued), so both calls to
+// store.Release resolve to "0 rows affected, no error" — this test is about
+// the race on w.claimed itself, not on any real outbound_queue row, and
+// leaves nothing to clean up.
+//
+// Run under `go test -race`: with the mutex removed from releaseAll (proved
+// by hand while writing this test — see issues/0266.md's ## Verification
+// for the reinstatement), this fails with "DATA RACE" on the w.claimed
+// field, both goroutines' stacks pointing at the same range/assignment this
+// method makes. With the mutex in place, it is clean.
+func TestOutboxWorker_ReleaseAll_ConcurrentCallsDoNotRace(t *testing.T) {
+	pool := outboxTestPool(t)
+	w, _ := newTestOutboxWorker(t, pool, &RecordingMailer{})
+
+	w.claimed = map[int64]struct{}{
+		-9001: {}, -9002: {}, -9003: {}, -9004: {}, -9005: {},
+	}
+
+	start := make(chan struct{})
+	done := make(chan struct{}, 2)
+	for range 2 {
+		go func() {
+			<-start
+			w.releaseAll()
+			done <- struct{}{}
+		}()
+	}
+	close(start)
+	for range 2 {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("releaseAll goroutine never returned")
+		}
+	}
+}
+
 // TestOutbox_Enqueue_AdminAlert_DrainsAndSends is #0126's plan §7 proof for
 // #0124's alert path: an admin_alert row enqueues and drains like any
 // other kind, rendering with BuildAdminAlertEmail.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -431,6 +432,136 @@ func TestErase_RedactsSubscriberEvents_PreservesRows(t *testing.T) {
 	}
 	if stillLinked != 0 {
 		t.Fatalf("subscriber_events rows still carrying subscriber_id after erase = %d, want 0 (DELETE's ON DELETE SET NULL should have nulled it)", stillLinked)
+	}
+}
+
+// TestErase_RedactsSubscriberEvents_NormalizesMixedCaseWhitespacePaddedAddress
+// is #0266 item 1: TestErase_RedactsSubscriberEvents_PreservesRows above
+// uses uniqueEmail(), which is already lower-cased and unpadded, so it never
+// exercises the `lower(trim($3))` normalization erase.go's redaction
+// predicate depends on — it would pass identically if that call were
+// deleted from the SQL entirely. #0126's phase-3 re-review wrote the real
+// probe (issues/0126.md, "Blocker 1"): submit the address mixed-case and
+// whitespace-padded at every entry point that can write a NULL-subscriber_id
+// subscriber_events row — SuppressionStore.Add, SuppressionStore.Remove, and
+// Store.Create — then erase, then hunt for a leak three ways (exact,
+// case-insensitive, substring on the local part), plus census the `detail`
+// JSONB column directly. This commits that probe as a real test rather than
+// leaving it as a one-off review artifact.
+//
+// The raw address is fed to Add/Remove/Create verbatim, never
+// pre-normalized by the test itself — the whole point is to prove the
+// SQL-level lower(trim(...)) call is what's doing the work, not the test's
+// own setup accidentally already matching.
+func TestErase_RedactsSubscriberEvents_NormalizesMixedCaseWhitespacePaddedAddress(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	sup := NewSuppressionStore(pool)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	raw := fmt.Sprintf("  ZZ-Review-%d@Example.COM  ", testdb.Unique())
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	localPart := strings.SplitN(normalized, "@", 2)[0]
+
+	// Entry point 1: a pre-existing suppression, BEFORE any subscribers row
+	// exists — writes a `suppressed` event with subscriber_id NULL (the
+	// exact shape #0126's defect 1 missed).
+	if _, err := sup.Add(context.Background(), NewSuppression{
+		Email: raw, Reason: SuppressionReasonComplaint, Note: "mixed-case, whitespace-padded, pre-signup",
+	}, now); err != nil {
+		t.Fatalf("seed pre-existing complaint suppression: %v", err)
+	}
+
+	// Entry point 2: Remove, exercising ActionUnsuppressed — the second
+	// NULL-subscriber_id action type — using the same raw, unnormalized
+	// address.
+	if _, err := sup.Remove(context.Background(), raw, SuppressionReasonComplaint); err != nil {
+		t.Fatalf("remove complaint suppression: %v", err)
+	}
+
+	// Re-add so the address is suppressed again going into Create/Erase,
+	// matching the reviewer's probe (both NULL-subscriber_id action types
+	// exercised, address left suppressed throughout — same as
+	// TestErase_RedactsSubscriberEvents_PreservesRows above).
+	if _, err := sup.Add(context.Background(), NewSuppression{
+		Email: raw, Reason: SuppressionReasonComplaint, Note: "mixed-case, whitespace-padded, re-added",
+	}, now); err != nil {
+		t.Fatalf("re-add complaint suppression: %v", err)
+	}
+
+	// Entry point 3: Create — the raw address, still unnormalized. store.go's
+	// INSERT applies its own lower(trim(...)) and returns the DB-normalized
+	// value, which is what the rest of this test (and Erase's own $3) reads
+	// back — proving Create's write path normalizes independently of this
+	// test having done it by hand.
+	sub, err := store.Create(context.Background(), NewSignup{Email: raw, ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sub.Email != normalized {
+		t.Fatalf("Create did not normalize the raw address: got %q, want %q", sub.Email, normalized)
+	}
+
+	var beforeCount, beforeNullSubID int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE email = $1`, normalized,
+	).Scan(&beforeCount); err != nil {
+		t.Fatalf("counting subscriber_events before erase: %v", err)
+	}
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE email = $1 AND subscriber_id IS NULL`, normalized,
+	).Scan(&beforeNullSubID); err != nil {
+		t.Fatalf("counting NULL-subscriber_id subscriber_events before erase: %v", err)
+	}
+	// suppressed, unsuppressed, suppressed (NULL subscriber_id) + signup_requested (subscriber_id = sub.ID) = 4 minimum.
+	if beforeCount < 4 || beforeNullSubID < 3 {
+		t.Fatalf("subscriber_events before erase = %d (nullSubID=%d), want >= 4 (nullSubID >= 3) — test setup invalid", beforeCount, beforeNullSubID)
+	}
+
+	if _, err := store.Erase(context.Background(), sub.ID, now); err != nil {
+		t.Fatalf("Erase: %v", err)
+	}
+
+	// Leak hunted three ways, per #0126's review-only probe — none may find
+	// a row.
+	assertNoRowsMatch := func(label, query string, args ...any) {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(context.Background(), query, args...).Scan(&n); err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if n != 0 {
+			t.Fatalf("%s: found %d row(s) still holding the address, want 0", label, n)
+		}
+	}
+	assertNoRowsMatch("exact match",
+		`SELECT count(*) FROM subscriber_events WHERE email = $1`, normalized)
+	assertNoRowsMatch("case-insensitive match",
+		`SELECT count(*) FROM subscriber_events WHERE lower(email) = lower($1)`, normalized)
+	assertNoRowsMatch("substring on local part",
+		`SELECT count(*) FROM subscriber_events WHERE email ILIKE '%' || $1 || '%'`, localPart)
+	// The `detail` JSONB column: suppressed/unsuppressed events store
+	// {"reason": ...}, never the address, but census it directly rather
+	// than taking that on report — a future write site adding the address
+	// to Detail would leak here even with the email column itself clean.
+	assertNoRowsMatch("detail JSONB",
+		`SELECT count(*) FROM subscriber_events WHERE detail::text ILIKE '%' || $1 || '%'`, localPart)
+
+	// The rows are preserved, redacted — same shape as
+	// TestErase_RedactsSubscriberEvents_PreservesRows above.
+	placeholder := erasedEventPlaceholder(sub.ID)
+	var afterCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE email = $1`, placeholder,
+	).Scan(&afterCount); err != nil {
+		t.Fatalf("counting redacted subscriber_events rows: %v", err)
+	}
+	// beforeCount rows redacted + the manual suppression's own `suppressed`
+	// event (written seconds before the redaction UPDATE inside Erase) +
+	// the `erased` event itself.
+	wantAfter := beforeCount + 2
+	if afterCount != wantAfter {
+		t.Fatalf("redacted subscriber_events rows for placeholder %q = %d, want %d", placeholder, afterCount, wantAfter)
 	}
 }
 
