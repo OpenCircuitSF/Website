@@ -69,9 +69,14 @@ const (
 const ComplaintFeedbackTypeNotSpam = "not-spam"
 
 // SESRecipient is one entry of bounce.bouncedRecipients or
-// complaint.complainedRecipients.
+// complaint.complainedRecipients. DiagnosticCode (#0124) is bounce-only —
+// SES's complaint object carries no per-recipient diagnostic text — and is
+// omitted from the struct's other use (Recipients() below only ever reads
+// EmailAddress), but is what GET /admin/deliverability/{email} (PRD §6.9)
+// surfaces alongside each history row.
 type SESRecipient struct {
-	EmailAddress string `json:"emailAddress"`
+	EmailAddress   string `json:"emailAddress"`
+	DiagnosticCode string `json:"diagnosticCode,omitempty"`
 }
 
 // SESMail is the "mail" object every SES event carries: metadata about the
@@ -190,6 +195,25 @@ func (e SESEvent) BounceSubType() string {
 		return ""
 	}
 	return e.Bounce.BounceSubType
+}
+
+// DiagnosticCodeFor returns the bounce.bouncedRecipients entry's
+// diagnosticCode matching recipient (case-sensitive on the raw stored
+// value — callers should normalize both sides the same way this package
+// already normalizes recipient elsewhere), or "" when this isn't a Bounce
+// event, carries no bounce object, or no entry matches. #0124's per-address
+// deliverability history (GET /admin/deliverability/{email}) surfaces this
+// alongside each row.
+func (e SESEvent) DiagnosticCodeFor(recipient string) string {
+	if e.Bounce == nil {
+		return ""
+	}
+	for _, r := range e.Bounce.BouncedRecipients {
+		if r.EmailAddress == recipient {
+			return r.DiagnosticCode
+		}
+	}
+	return ""
 }
 
 // ComplaintFeedbackType returns the event's complaint.complaintFeedbackType,

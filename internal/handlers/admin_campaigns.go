@@ -10,11 +10,13 @@
 // Two dedicated routes own the only two operator-triggered status moves:
 //
 //	POST /admin/campaigns/{id}/send   draft|failed -> scheduled
-//	POST /admin/campaigns/{id}/cancel scheduled|sending -> canceled
+//	POST /admin/campaigns/{id}/cancel scheduled|sending|paused_delivery_health -> canceled
+//	POST /admin/campaigns/{id}/resume paused_delivery_health -> scheduled (#0124)
 //
-// scheduled -> sending and sending -> sent/failed belong to #0045's send
-// worker and are never written here. Every illegal transition attempt is a
-// 409 with a clear message, not a silent no-op — see
+// scheduled -> sending, sending -> sent/failed, and sending ->
+// paused_delivery_health (#0124's circuit breaker, PRD §6.9) belong to
+// #0045's send worker and are never written here. Every illegal transition
+// attempt is a 409 with a clear message, not a silent no-op — see
 // mailing.ErrIllegalStatusTransition's call sites below.
 //
 // # The advisory Preflight seam (carried in from #0045's plan, 2026-08-21)
@@ -76,6 +78,10 @@ type campaignStore interface {
 	Update(ctx context.Context, id int64, in mailing.CampaignUpdate) (mailing.Campaign, error)
 	Send(ctx context.Context, id int64, scheduledAt time.Time) (mailing.Campaign, error)
 	Cancel(ctx context.Context, id int64) (mailing.Campaign, error)
+	// Resume is #0124's circuit-breaker recovery path:
+	// paused_delivery_health -> scheduled. See mailing.CampaignStore.Resume's
+	// own doc comment for why this is a narrower transition than Send's.
+	Resume(ctx context.Context, id int64, scheduledAt time.Time) (mailing.Campaign, error)
 }
 
 // campaignPreflightFailure mirrors the eventual shape of #0045's
@@ -198,7 +204,8 @@ type campaignAudienceCounter interface {
 //	GET    /admin/campaigns/{id}        — one campaign, with its interest_ids
 //	PATCH  /admin/campaigns/{id}        — content-only edit (draft/scheduled only)
 //	POST   /admin/campaigns/{id}/send   — draft|failed -> scheduled
-//	POST   /admin/campaigns/{id}/cancel — scheduled|sending -> canceled
+//	POST   /admin/campaigns/{id}/cancel — scheduled|sending|paused_delivery_health -> canceled
+//	POST   /admin/campaigns/{id}/resume — paused_delivery_health -> scheduled (#0124)
 //
 // All routes MUST be mounted behind middleware.RequireSession then
 // middleware.RequireAdmin, exactly like every other admin handler — see
@@ -800,6 +807,112 @@ func (h *AdminCampaignsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, toCampaignView(canceled))
+}
+
+// ── POST /admin/campaigns/{id}/resume ────────────────────────────────────────
+
+// resumeCampaignRequest is POST /admin/campaigns/{id}/resume's body.
+// ConfirmSubject is #0124's typed confirmation, "requiring typed
+// confirmation like #0045's send confirmation" (this issue's acceptance
+// criterion) — but Resume has no audience count to re-verify (the audience
+// was already materialized before the breaker tripped), so it borrows
+// #0060's Erase pattern instead: the operator types the campaign's own
+// subject back, the same "type the resource's identifying text to confirm"
+// shape GitHub-like consoles use for a consequential action, rather than a
+// bare boolean a client could send with no evidence an operator saw which
+// campaign — and which bounce/complaint rate — they were about to restart.
+type resumeCampaignRequest struct {
+	ConfirmSubject string `json:"confirm_subject"`
+}
+
+// Resume handles POST /admin/campaigns/{id}/resume (#0124, PRD §6.9): the
+// only way to un-trip the delivery-health circuit breaker. Accepts a
+// campaign currently paused_delivery_health only — deliberately narrower
+// than Send's draft-or-failed set, since this route exists to answer one
+// specific question (see mailing.CampaignStore.Resume's own doc comment).
+//
+// The breaker is NOT bypassed by resuming: CampaignStore.Resume moves the
+// campaign back to 'scheduled', and the worker's ordinary claim picks it up
+// from there — checkDeliveryHealth evaluates the same cumulative rate again
+// on the very next batch, so a campaign resumed into a still-bad rate trips
+// again rather than draining unchecked. This is the acceptance criterion
+// "the breaker is not bypassable from the UI" made concrete: there is no
+// request shape this handler accepts that skips the worker's own check.
+func (h *AdminCampaignsHandler) Resume(w http.ResponseWriter, r *http.Request) {
+	actor, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	id, ok := parseCampaignID(w, r)
+	if !ok {
+		return
+	}
+
+	var req resumeCampaignRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	confirmSubject := strings.TrimSpace(req.ConfirmSubject)
+	if confirmSubject == "" {
+		writeError(w, http.StatusBadRequest, "confirm_subject is required")
+		return
+	}
+
+	// Loaded (and its subject compared against the typed confirmation)
+	// BEFORE calling Resume — same ordering Erase uses, and for the same
+	// reason: a 400 for a mistyped confirmation must not have mutated
+	// anything.
+	current, err := h.store.GetByID(r.Context(), id)
+	switch {
+	case err == nil:
+	case errors.Is(err, mailing.ErrCampaignNotFound):
+		writeError(w, http.StatusNotFound, "campaign not found")
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if confirmSubject != strings.TrimSpace(current.Subject) {
+		writeError(w, http.StatusBadRequest, "confirm_subject does not match this campaign's subject")
+		return
+	}
+	if current.Status != mailing.CampaignStatusPausedDeliveryHealth {
+		writeError(w, http.StatusConflict, "this campaign cannot be resumed from its current status; only a campaign paused by the delivery-health circuit breaker can be resumed")
+		return
+	}
+
+	resumed, err := h.store.Resume(r.Context(), id, time.Now())
+	switch {
+	case err == nil:
+	case errors.Is(err, mailing.ErrCampaignNotFound):
+		writeError(w, http.StatusNotFound, "campaign not found")
+		return
+	case errors.Is(err, mailing.ErrIllegalStatusTransition):
+		writeError(w, http.StatusConflict, "this campaign cannot be resumed from its current status; only a campaign paused by the delivery-health circuit breaker can be resumed")
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	if h.auditor != nil {
+		actorID := actor.ID
+		targetID := resumed.ID
+		h.auditor.Record(r.Context(), audit.Entry{
+			ActorID:    &actorID,
+			Action:     audit.ActionEmailCampaignResumed,
+			TargetType: audit.TargetEmailCampaign,
+			TargetID:   &targetID,
+			Metadata: map[string]any{
+				"from_status": current.Status,
+			},
+			IP: clientIP(r),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, toCampaignView(resumed))
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────

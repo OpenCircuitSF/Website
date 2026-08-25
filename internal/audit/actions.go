@@ -86,6 +86,17 @@ const (
 	// second one, since both mean "this subscriber moved to bounced".
 	ActionSubscriberBounced    = "subscriber.bounced"
 	ActionSubscriberComplained = "subscriber.complained"
+	// ActionSubscriberSoftBounceStreakReset is written by POST
+	// /admin/deliverability/{email}/reset-streak (#0124, PRD §6.9): an
+	// explicit admin override of subscribers.soft_bounce_streak, distinct
+	// from the automatic resets a Delivery event or a suppression removal
+	// perform (neither of which goes through this handler, so neither
+	// writes this action — see internal/subscribers/events.go's
+	// ActionDelivered/ActionUnsuppressed for those). Metadata carries the
+	// email (target_id is omitted when no subscribers row exists for the
+	// address, since GET /admin/deliverability/{email} answers 200 for an
+	// arbitrary address with no row).
+	ActionSubscriberSoftBounceStreakReset = "subscriber.soft_bounce_streak_reset"
 
 	// SNS subscription-lifecycle events (PRD §6.7; #0038, carrying forward
 	// #0037's plan §5). Actor NULL — pre-auth, the caller is SNS.

@@ -24,6 +24,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
+	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
@@ -135,6 +136,10 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// #0100: exercised the same way as adminSubscribersH above.
 	suppressionsStore := subscribers.NewSuppressionStore(pool)
 	adminSuppressionsH := handlers.NewAdminSuppressionsHandler(suppressionsStore, subscribersStore, auditLogger)
+	// #0124: exercised the same way as adminSuppressionsH above.
+	adminDeliverabilityH := handlers.NewAdminDeliverabilityHandler(
+		subscribersStore, subscribersStore, subscribersStore, sesnotify.NewStore(pool), mailing.NewCampaignStatsStore(pool), auditLogger,
+	)
 	// #0041: exercised the same way as adminSuppressionsH above. preflight is
 	// nil (matching this test's own "not exercised" convention for
 	// not-yet-built seams). The admin-session case sends every route with no
@@ -205,7 +210,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminPendingH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
@@ -345,7 +350,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			return status != http.StatusUnauthorized && status != http.StatusForbidden
 		}},
 	}
-	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminPendingH, adminSuppressionsH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH) {
+	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH) {
 		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID, targetCampaign.ID, targetWorkshop.ID)
 		for _, c := range cases {
 			req, err := http.NewRequest(route.method, baseURL+path, nil)

@@ -1236,25 +1236,24 @@ func (s *Store) RecordDeliveryTx(ctx context.Context, q querier, id int64, now t
 	return nil
 }
 
-// ResetSoftBounceStreakByEmail zeroes soft_bounce_streak (through the
-// shared pool) for the subscriber matching email. Two callers, both #0124
-// criteria:
-//
-//   - SuppressionStore.Remove (suppressions.go): "removing a suppression
-//     resets the streak to 0 — a re-enabled address gets a fresh runway,
-//     not one bounce from re-suppression." Keyed by email, not id, because
-//     suppressions themselves are keyed by email (see suppressions.go's
-//     package doc comment) and Remove has no subscriber id to hand in.
-//   - POST /admin/deliverability/{email}/reset-streak (an explicit admin
-//     action, audited by its handler).
+// ResetSoftBounceStreakByEmail zeroes soft_bounce_streak through the shared
+// pool for the subscriber matching email. Pool-only (not a q querier
+// parameter) so it can sit behind a genuine narrow interface in
+// internal/handlers (CLAUDE.md §1) — its one external caller, POST
+// /admin/deliverability/{email}/reset-streak (an explicit, audited admin
+// action). suppressions.go's SuppressionStore.Remove has the identical
+// #0124 criterion ("removing a suppression resets the streak to 0") but
+// calls the unexported resetSoftBounceStreakByEmail directly instead of
+// this method, since it is a pool call in the same package with no need to
+// cross a package boundary.
 //
 // A no-op (0 rows affected, no error) when no subscribers row exists for
 // email — a suppression can predate or outlive any subscribers row for the
-// same address (suppressions.go's own doc comment) — so callers that need
-// to know whether a row existed check GetByID/FindByEmail themselves rather
+// same address (suppressions.go's own doc comment) — so a caller that needs
+// to know whether a row existed checks GetByID/FindByEmail itself rather
 // than infer it from this method's return.
-func (s *Store) ResetSoftBounceStreakByEmail(ctx context.Context, q querier, email string, now time.Time) error {
-	return resetSoftBounceStreakByEmail(ctx, q, email, now)
+func (s *Store) ResetSoftBounceStreakByEmail(ctx context.Context, email string, now time.Time) error {
+	return resetSoftBounceStreakByEmail(ctx, s.pool, email, now)
 }
 
 // resetSoftBounceStreakByEmail is the free-function implementation shared

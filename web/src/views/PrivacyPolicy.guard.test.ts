@@ -87,7 +87,17 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
     sourceRef: 'internal/subscribers/erase.go doc comment: "email_events rows, untouched"; PRD §6.9\'s delivery-health circuit breaker',
   },
   {
-    key: 'audit_log (subscriber/admin/automated categories, per-request IP except automated SES entries, six actions carry the email plus one contingent on admin search text)',
+    key: 'audit_log (subscriber/admin/automated categories, per-request IP except automated SES entries, seven actions carry the email plus one contingent on admin search text)',
+    // #0124 added the seventh structural site: POST
+    // /admin/deliverability/{email}/reset-streak
+    // (ActionSubscriberSoftBounceStreakReset) — an admin-initiated action
+    // on the subscriber's own address, IP set to the acting admin's, the
+    // identical shape as the six sites #0237 already disclosed. The page's
+    // email-address enumeration was widened to name it
+    // ("resetting an address's bounce streak"); the "seventh disclosure"
+    // language a few paragraphs below refers to the DIFFERENT, contingent
+    // export-search-text site — that one is now the eighth email-carrying
+    // site overall, still the only CONDITIONAL one.
     // "admin" alone is too weak: the OLD, narrower wording this replaces
     // already said "an internal ADMIN audit log entry" (describing WHO
     // reads it, not whose IP the erasure row carries) -- also caught by
@@ -153,7 +163,7 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
       'search text is recorded',
     ],
     sourceRef:
-      'internal/handlers/audit_email_metadata_guard_test.go (#0237) pins the full, current set: internal/handlers/confirm.go ActionSubscriberConfirmed, internal/handlers/admin_subscribers.go ActionSubscriberManualAdd and ActionSubscriberErased, internal/handlers/admin_suppressions.go ActionSuppressionRemoved, internal/handlers/ses_notifications.go ActionSubscriberBounced (x2) and ActionSubscriberComplained, plus (pinned but NOT part of the "six actions" disclosure -- neither is a real subscriber\'s own address) internal/handlers/admin_campaign_preview.go ActionEmailCampaignTestSent and internal/handlers/admin_subscribers_export.go ActionSubscriberExported -- see that file for each one\'s exact line and IP-presence, re-derived from the tree on every run rather than hardcoded here a second time.',
+      'internal/handlers/audit_email_metadata_guard_test.go (#0237, widened by #0124) pins the full, current set: internal/handlers/confirm.go ActionSubscriberConfirmed, internal/handlers/admin_subscribers.go ActionSubscriberManualAdd and ActionSubscriberErased, internal/handlers/admin_suppressions.go ActionSuppressionRemoved, internal/handlers/ses_notifications.go ActionSubscriberBounced (x2) and ActionSubscriberComplained, internal/handlers/admin_deliverability.go ActionSubscriberSoftBounceStreakReset, plus (pinned but NOT part of the "seven actions" disclosure -- neither is a real subscriber\'s own address) internal/handlers/admin_campaign_preview.go ActionEmailCampaignTestSent and internal/handlers/admin_subscribers_export.go ActionSubscriberExported -- see that file for each one\'s exact line and IP-presence, re-derived from the tree on every run rather than hardcoded here a second time.',
   },
   {
     // #0126: subscriber_events is a NEW table (migrations/000022) added by

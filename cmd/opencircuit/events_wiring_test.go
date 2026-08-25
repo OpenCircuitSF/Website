@@ -93,6 +93,7 @@ func TestMountAndServe_EventsRequiresSessionAndAdmin(t *testing.T) {
 			nil,               /* adminSubscribersH: not exercised */
 			nil,               /* adminPendingH: not exercised */
 			nil,               /* adminSuppressionsH: not exercised */
+			nil,               /* adminDeliverabilityH: not exercised */
 			nil,               /* adminCampaignsH: not exercised */
 			nil,               /* adminCampaignAudienceH: not exercised */
 			nil,               /* adminCampaignPreviewH: not exercised */

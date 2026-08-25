@@ -206,3 +206,41 @@ func (s *CampaignStatsStore) FailedSends(ctx context.Context, campaignID int64) 
 	}
 	return out, nil
 }
+
+// CampaignIDsByMessageIDs resolves ses_message_id -> campaign_id for
+// #0124's GET /admin/deliverability/{email}: the "originating campaign" a
+// bounce/complaint history row names is email_sends' campaign_id, joined by
+// the same key (ses_message_id) EventCounts above uses. A ses_message_id
+// with no matching email_sends row (transactional mail — confirmation,
+// registration, recovery — never touches this table) is simply absent from
+// the returned map; callers treat a missing entry as "not from a
+// campaign", not as an error. Batched (one query for every id the caller
+// needs) rather than one query per history row, matching this file's own
+// "one query per figure, not N" convention (see the admin_dashboard.go
+// package doc comment for the sibling precedent).
+func (s *CampaignStatsStore) CampaignIDsByMessageIDs(ctx context.Context, sesMessageIDs []string) (map[string]int64, error) {
+	out := make(map[string]int64, len(sesMessageIDs))
+	if len(sesMessageIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT ses_message_id, campaign_id FROM email_sends WHERE ses_message_id = ANY($1)`,
+		sesMessageIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("mailing: resolving campaign ids for %d message ids: %w", len(sesMessageIDs), err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var msgID string
+		var campaignID int64
+		if err := rows.Scan(&msgID, &campaignID); err != nil {
+			return nil, fmt.Errorf("mailing: scanning campaign id row: %w", err)
+		}
+		out[msgID] = campaignID
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("mailing: iterating campaign id rows: %w", err)
+	}
+	return out, nil
+}

@@ -386,6 +386,13 @@ var auditEmailMetadataKnownSites = []auditEmailMetadataKnownSite{
 	{file: "internal/handlers/admin_suppressions.go", action: "ActionSuppressionRemoved", count: 1, hasIP: true},
 	{file: "internal/handlers/ses_notifications.go", action: "ActionSubscriberBounced", count: 2, hasIP: false},
 	{file: "internal/handlers/ses_notifications.go", action: "ActionSubscriberComplained", count: 1, hasIP: false},
+	// #0124: ActionSubscriberSoftBounceStreakReset (POST
+	// /admin/deliverability/{email}/reset-streak) is a seventh
+	// SUBSCRIBER'S-OWN-ADDRESS site, the same shape as the six above (an
+	// explicit, admin-initiated action on the address itself, IP set to
+	// the acting admin's) — PrivacyPolicy.svelte's audit-log item's email
+	// enumeration was widened to name it in the same commit.
+	{file: "internal/handlers/admin_deliverability.go", action: "ActionSubscriberSoftBounceStreakReset", count: 1, hasIP: true},
 	{file: "internal/handlers/admin_campaign_preview.go", action: "ActionEmailCampaignTestSent", count: 1, hasIP: true},
 	{file: "internal/handlers/admin_subscribers_export.go", action: "ActionSubscriberExported", count: 1, hasIP: true},
 }

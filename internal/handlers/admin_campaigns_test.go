@@ -40,6 +40,7 @@ func adminCampaignsMux(pool *pgxpool.Pool, preflight campaignPreflightChecker) h
 	mux.Handle("PATCH /admin/campaigns/{id}", requireAdmin(http.HandlerFunc(h.Patch)))
 	mux.Handle("POST /admin/campaigns/{id}/send", requireAdmin(http.HandlerFunc(h.Send)))
 	mux.Handle("POST /admin/campaigns/{id}/cancel", requireAdmin(http.HandlerFunc(h.Cancel)))
+	mux.Handle("POST /admin/campaigns/{id}/resume", requireAdmin(http.HandlerFunc(h.Resume)))
 	return mux
 }
 
@@ -876,4 +877,143 @@ func TestAdminCampaigns_Cancel_NotFound(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
+}
+
+// ── #0124: POST /admin/campaigns/{id}/resume ─────────────────────────────────
+
+// seedPausedCampaign creates a campaign, sends it, then moves it directly to
+// paused_delivery_health via SQL (mirroring what the circuit breaker itself
+// does — internal/mailing's MarkPausedDeliveryHealth — without needing a
+// live worker/mailer in this handler-level test).
+func seedPausedCampaign(t *testing.T, pool *pgxpool.Pool, subject string) int64 {
+	t.Helper()
+	store := mailing.NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: subject, BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, c.ID)
+	if _, err := store.Send(context.Background(), c.ID, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE email_campaigns SET status = 'paused_delivery_health', updated_at = now() WHERE id = $1`, c.ID,
+	); err != nil {
+		t.Fatalf("pause campaign: %v", err)
+	}
+	return c.ID
+}
+
+func TestAdminCampaigns_Resume_PausedToScheduled_Success(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-resume@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-resume")
+
+	campaignID := seedPausedCampaign(t, pool, "Paused Subject")
+
+	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/campaigns/%d/resume", srv.URL, campaignID),
+		"admin-token-campaigns-resume", `{"confirm_subject":"Paused Subject"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+	updated := decodeCampaign(t, readBody(t, resp))
+	if updated.Status != mailing.CampaignStatusScheduled {
+		t.Errorf("Status = %q, want %q", updated.Status, mailing.CampaignStatusScheduled)
+	}
+
+	actions := auditActionsForCampaign(t, pool, campaignID)
+	if len(actions) != 1 || actions[0] != audit.ActionEmailCampaignResumed {
+		t.Errorf("audit actions = %v, want [%s]", actions, audit.ActionEmailCampaignResumed)
+	}
+}
+
+// TestAdminCampaigns_Resume_RequiresConfirmSubject is the "typed
+// confirmation enforced only in the browser is theatre" mutation check
+// (#0047's carried-in reasoning, restated for Resume): a missing, empty, or
+// mismatched confirm_subject must all fail with 400 and must NOT transition
+// the campaign — only the exact, current subject succeeds.
+func TestAdminCampaigns_Resume_RequiresConfirmSubject(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-resumeconfirm@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-resumeconfirm")
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"missing field", `{}`},
+		{"empty string", `{"confirm_subject":""}`},
+		{"whitespace only", `{"confirm_subject":"   "}`},
+		{"wrong subject", `{"confirm_subject":"Not The Subject"}`},
+		{"case mismatch", `{"confirm_subject":"paused subject"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			campaignID := seedPausedCampaign(t, pool, "Paused Subject")
+			resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/campaigns/%d/resume", srv.URL, campaignID),
+				"admin-token-campaigns-resumeconfirm", tc.body)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body=%s)", resp.StatusCode, readBody(t, resp))
+			}
+			if got := campaignStatusForTest(t, pool, campaignID); got != mailing.CampaignStatusPausedDeliveryHealth {
+				t.Errorf("campaign status = %q after a rejected resume, want unchanged %q", got, mailing.CampaignStatusPausedDeliveryHealth)
+			}
+		})
+	}
+}
+
+func TestAdminCampaigns_Resume_IllegalFromDraft(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-resumeillegal@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-resumeillegal")
+
+	store := mailing.NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "Draft Subject", BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, c.ID)
+
+	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/campaigns/%d/resume", srv.URL, c.ID),
+		"admin-token-campaigns-resumeillegal", `{"confirm_subject":"Draft Subject"}`)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (a draft campaign is not resumable) (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+}
+
+func TestAdminCampaigns_Resume_NotFound(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-resumenf@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-resumenf")
+
+	resp := doJSON(t, srv.Client(), "POST", srv.URL+"/admin/campaigns/99999999/resume",
+		"admin-token-campaigns-resumenf", `{"confirm_subject":"whatever"}`)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// campaignStatusForTest reads one campaign's current status directly.
+func campaignStatusForTest(t *testing.T, pool *pgxpool.Pool, campaignID int64) string {
+	t.Helper()
+	var status string
+	if err := pool.QueryRow(context.Background(), `SELECT status FROM email_campaigns WHERE id = $1`, campaignID).Scan(&status); err != nil {
+		t.Fatalf("read campaign %d status: %v", campaignID, err)
+	}
+	return status
 }
