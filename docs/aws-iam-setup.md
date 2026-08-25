@@ -20,10 +20,12 @@ inline policy called `cli-admin-iam-support` that grants IAM **read** plus
 management of `ses-smtp-*` **users** — but nothing that touches **roles** or
 **instance profiles**.
 
-**One statement added to that existing inline policy unblocks everything.** It
-is in [Part 1](#part-1-widen-cli-admin). If you would rather not widen
-`cli-admin` at all, [Part 3](#part-3-alternative--build-the-role-yourself)
-builds the same role by hand instead.
+**A small, name-scoped policy unblocks everything.** It is in
+[Part 1](#part-1-widen-cli-admin), given both as a complete standalone
+document (paste-and-go) and as bare statements for merging into the existing
+policy. If you would rather not widen `cli-admin` at all,
+[Part 3](#part-3-alternative--build-the-role-yourself) builds the same role by
+hand instead.
 
 ---
 
@@ -74,44 +76,83 @@ the world treats your Google Workspace mail.
 
 ### What to add
 
-In the console: **IAM → Users → `cli-admin` → Permissions → the inline policy
-`cli-admin-iam-support` → Edit → JSON**, and add these two statements to the
-existing `Statement` array. Leave everything already in that policy alone.
+There are two routes through the console and they need **differently shaped
+JSON**, which is the easy thing to get wrong. Both end in the same place.
+
+#### Route A — a new inline policy (simplest)
+
+**IAM → Users → `cli-admin` → Add permissions → Create inline policy**, then
+click the **JSON** toggle at the top right of the Policy editor. Select
+everything already in the editor and replace it with this **complete
+document** — `Version` and all:
 
 ```json
 {
-  "Sid": "ManageOpenCircuitInstanceRole",
-  "Effect": "Allow",
-  "Action": [
-    "iam:CreateRole",
-    "iam:DeleteRole",
-    "iam:TagRole",
-    "iam:UntagRole",
-    "iam:PutRolePolicy",
-    "iam:DeleteRolePolicy",
-    "iam:AttachRolePolicy",
-    "iam:DetachRolePolicy",
-    "iam:UpdateAssumeRolePolicy",
-    "iam:CreateInstanceProfile",
-    "iam:DeleteInstanceProfile",
-    "iam:AddRoleToInstanceProfile",
-    "iam:RemoveRoleFromInstanceProfile"
-  ],
-  "Resource": [
-    "arn:aws:iam::378152330719:role/opencircuit-*",
-    "arn:aws:iam::378152330719:instance-profile/opencircuit-*"
-  ]
-},
-{
-  "Sid": "PassOpenCircuitRoleToEC2Only",
-  "Effect": "Allow",
-  "Action": "iam:PassRole",
-  "Resource": "arn:aws:iam::378152330719:role/opencircuit-*",
-  "Condition": {
-    "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" }
-  }
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "ManageOpenCircuitInstanceRole",
+            "Effect": "Allow",
+            "Action": [
+                "iam:CreateRole",
+                "iam:DeleteRole",
+                "iam:TagRole",
+                "iam:UntagRole",
+                "iam:PutRolePolicy",
+                "iam:DeleteRolePolicy",
+                "iam:AttachRolePolicy",
+                "iam:DetachRolePolicy",
+                "iam:UpdateAssumeRolePolicy",
+                "iam:CreateInstanceProfile",
+                "iam:DeleteInstanceProfile",
+                "iam:AddRoleToInstanceProfile",
+                "iam:RemoveRoleFromInstanceProfile"
+            ],
+            "Resource": [
+                "arn:aws:iam::378152330719:role/opencircuit-*",
+                "arn:aws:iam::378152330719:instance-profile/opencircuit-*"
+            ]
+        },
+        {
+            "Sid": "PassOpenCircuitRoleToEC2Only",
+            "Effect": "Allow",
+            "Action": "iam:PassRole",
+            "Resource": "arn:aws:iam::378152330719:role/opencircuit-*",
+            "Condition": {
+                "StringEquals": {
+                    "iam:PassedToService": "ec2.amazonaws.com"
+                }
+            }
+        }
+    ]
 }
 ```
+
+**Next** → name it `opencircuit-instance-role-setup` → **Create policy**.
+
+Ignore the **Edit statement** panel on the right of that screen; it belongs to
+the Visual editor. Pasting into the JSON pane is the whole job.
+
+Two console warnings are expected and correct to dismiss: one that the policy
+grants `iam:PassRole` (it does, conditioned to EC2 alone), and one about
+wildcards in the resource ARNs (the `opencircuit-*` scoping is precisely what
+makes this narrower than `IAMFullAccess`).
+
+#### Route B — extend the existing `cli-admin-iam-support` policy
+
+**IAM → Users → `cli-admin` → Permissions → `cli-admin-iam-support` → Edit →
+JSON.** Here you are editing a document that already exists, so do **not**
+paste the whole thing above — take just the two statement objects from inside
+its `Statement` array (`ManageOpenCircuitInstanceRole` and
+`PassOpenCircuitRoleToEC2Only`, without `Version` and without the outer
+braces) and add them to the *existing* `Statement` array, after the last
+statement and separated from it by a comma. Leave everything already in that
+policy alone — it carries the IAM read grant, `ses-smtp-*` user management,
+and the `support:CreateCase` permission used to request SES production
+access.
+
+Route A is easier to get right and easier to remove afterwards. Route B keeps
+all of `cli-admin`'s IAM grants in one document.
 
 ### Why it is shaped that way
 
@@ -131,8 +172,8 @@ existing `Statement` array. Leave everything already in that policy alone.
 
 ### Removing it afterwards
 
-This is a one-time setup grant. Once the role exists and is attached, both
-statements can be deleted again — the running instance keeps its role, and
+This is a one-time setup grant. Once the role exists and is attached, the
+whole policy (Route A) or both statements (Route B) can be deleted again — the running instance keeps its role, and
 nothing in the deploy path needs to create roles a second time. Keep them only
 if you would rather manage the role from the CLI going forward.
 
