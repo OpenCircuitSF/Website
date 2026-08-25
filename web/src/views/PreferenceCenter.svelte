@@ -336,8 +336,12 @@
            role="status"/aria-live="polite". An {#if} that creates the
            element fresh, with its text already in it, is not reliably
            announced (console-wide decision, issues/0063.md). -->
-      <p class="text-error" aria-live="polite">{saveError ?? ''}</p>
-      <p class="text-notice" role="status">{saveMessage ?? ''}</p>
+      <!-- #0063: class swaps to sr-only when empty (matching
+           SubscribeForm.svelte's #subscribe-form-error) so the empty,
+           unconditionally-rendered node doesn't leave a permanent gap from
+           .text-error/.text-notice's own top margin. -->
+      <p class={saveError ? 'text-error' : 'sr-only'} aria-live="polite">{saveError ?? ''}</p>
+      <p class={saveMessage ? 'text-notice' : 'sr-only'} role="status">{saveMessage ?? ''}</p>
       <Button type="button" variant="primary" disabled={saving} onclick={onSave}>
         {saving ? 'Saving…' : 'Save preferences'}
       </Button>
@@ -349,8 +353,9 @@
         This stops every email from us, including general announcements — different from
         unchecking topics above, which keeps you on the list for general announcements only.
       </p>
-      <!-- #0063: same reasoning as saveError/saveMessage above. -->
-      <p class="text-error" aria-live="polite">{unsubscribeError ?? ''}</p>
+      <!-- #0063: same reasoning as saveError/saveMessage above -- sr-only
+           when empty avoids a permanent gap from .text-error's own margin. -->
+      <p class={unsubscribeError ? 'text-error' : 'sr-only'} aria-live="polite">{unsubscribeError ?? ''}</p>
       <Button type="button" variant="danger" disabled={unsubscribing} onclick={onUnsubscribeEverything}>
         {unsubscribing ? 'Unsubscribing…' : 'Unsubscribe from everything'}
       </Button>

@@ -1077,9 +1077,11 @@
               {togglingRegistrations ? 'Saving…' : regEnabled ? 'On' : 'Off'}
             </button>
           </div>
-          {#if settingsNotice}
-            <p class="text-notice" role="status">{settingsNotice}</p>
-          {/if}
+          <!-- #0063: unconditionally rendered (empty when nothing to
+               announce) -- an {#if}-created element with its text already
+               in it is not reliably announced. Console-wide decision; see
+               issues/0063.md. -->
+          <p class="text-notice" role="status">{settingsNotice ?? ''}</p>
 
           <div class="setting-row address-row">
             <div class="setting-info">
@@ -1107,9 +1109,9 @@
               {#if addressError}
                 <p class="text-error" role="alert">{addressError}</p>
               {/if}
-              {#if addressNotice}
-                <p class="text-notice" role="status">{addressNotice}</p>
-              {/if}
+              <!-- #0063: unconditionally rendered (empty when nothing to
+                   announce). Console-wide decision; see issues/0063.md. -->
+              <p class="text-notice" role="status">{addressNotice ?? ''}</p>
               <Button
                 variant="primary"
                 disabled={savingAddress || !addressDirty}
@@ -1608,9 +1610,9 @@
           {#if createSubError}
             <p class="text-error" role="alert">{createSubError}</p>
           {/if}
-          {#if createSubNotice}
-            <p class="text-notice" role="status">{createSubNotice}</p>
-          {/if}
+          <!-- #0063: unconditionally rendered (empty when nothing to
+               announce). Console-wide decision; see issues/0063.md. -->
+          <p class="text-notice" role="status">{createSubNotice ?? ''}</p>
           <Button type="submit" variant="primary" disabled={creatingSub}>
             {creatingSub ? 'Adding…' : 'Add subscriber'}
           </Button>
@@ -1844,9 +1846,9 @@
               {#if suppressError}
                 <p class="text-error" role="alert">{suppressError}</p>
               {/if}
-              {#if suppressNotice}
-                <p class="text-notice" role="status">{suppressNotice}</p>
-              {/if}
+              <!-- #0063: unconditionally rendered (empty when nothing to
+                   announce). Console-wide decision; see issues/0063.md. -->
+              <p class="text-notice" role="status">{suppressNotice ?? ''}</p>
               <div class="row" style="margin-top: var(--space-3);">
                 <Button type="submit" variant="danger" disabled={suppressSubmitting}>
                   {suppressSubmitting ? 'Suppressing…' : 'Suppress'}

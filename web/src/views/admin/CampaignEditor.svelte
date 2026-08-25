@@ -781,9 +781,9 @@
       <Button disabled={testSending} onclick={onTestSend}>
         {testSending ? 'Sending…' : 'Send test to myself'}
       </Button>
-      {#if testSendMessage}
-        <p role="status">{testSendMessage}</p>
-      {/if}
+      <!-- #0063: unconditionally rendered (empty when nothing to announce).
+           Console-wide decision; see issues/0063.md. -->
+      <p role="status">{testSendMessage ?? ''}</p>
     </Panel>
 
     <div class="action-row" role="status" aria-live="polite">
@@ -1048,6 +1048,14 @@
     height: 100%;
     background: var(--accent);
     transition: width 0.3s ease;
+  }
+  /* #0063: this bar's width is bound to live SSE send progress and updates
+     on every tick for the whole duration of a send — repeatedly-animating
+     motion is exactly what prefers-reduced-motion exists for. */
+  @media (prefers-reduced-motion: reduce) {
+    .progress-bar-fill {
+      transition: none;
+    }
   }
   .btn {
     font-family: var(--font);

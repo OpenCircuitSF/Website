@@ -21,7 +21,7 @@
   (the server's response never reveals whether the address is registered).
 -->
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { currentUser } from '../lib/stores';
   import { currentRoute, navigate } from '../lib/router';
   import {
@@ -51,6 +51,13 @@
   let registering = $state(false);
   let registerError = $state<string | null>(null);
   let registerSent = $state(false);
+  // #0063: the register/recover sub-forms swap out entirely for a
+  // role="status" notice (a whole-panel replacement, not a text mutation
+  // on a persistent node) -- same class as Unsubscribe.svelte's
+  // confirm->done swap, so it gets that pattern's fix: move focus to the
+  // new notice after it mounts, rather than trying to make role="status"
+  // announce an element inserted together with its content.
+  let registerSentNotice = $state<HTMLParagraphElement | null>(null);
 
   // Recovery sub-form state.
   let showRecover = $state(false);
@@ -58,6 +65,7 @@
   let recovering = $state(false);
   let recoverError = $state<string | null>(null);
   let recoverSent = $state(false);
+  let recoverSentNotice = $state<HTMLParagraphElement | null>(null);
 
   // AbortController for the background conditional-UI get(); aborted on unmount
   // (or when an explicit Sign in starts) so we never leave a dangling ceremony.
@@ -152,6 +160,8 @@
     try {
       await registerStart(registerEmail);
       registerSent = true;
+      await tick();
+      registerSentNotice?.focus();
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 403) {
@@ -179,6 +189,8 @@
     try {
       await recoverStart(recoverEmail);
       recoverSent = true;
+      await tick();
+      recoverSentNotice?.focus();
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 429) {
@@ -255,7 +267,7 @@
           Need an account? Register
         </Button>
       {:else if registerSent}
-        <p class="text-notice" role="status">
+        <p class="text-notice" role="status" tabindex="-1" bind:this={registerSentNotice}>
           Check your email for a link to finish setting up your account.
         </p>
       {:else}
@@ -309,7 +321,7 @@
           Lost your passkey? Recover account
         </Button>
       {:else if recoverSent}
-        <p class="text-notice" role="status">
+        <p class="text-notice" role="status" tabindex="-1" bind:this={recoverSentNotice}>
           If that email is registered, a recovery link has been sent.
         </p>
       {:else}
@@ -381,6 +393,15 @@
   }
   .sub-section {
     margin-top: var(--space-3);
+  }
+  /* #0063: registerSentNotice / recoverSentNotice receive programmatic
+     focus() once their sub-form swaps to the sent state (a whole-panel
+     replacement, matching Unsubscribe.svelte's .headline:focus) --
+     explicit :focus, not :focus-visible, guarantees the ring shows
+     regardless of a browser's heuristics for programmatic focus. */
+  .sub-section p.text-notice:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   @media (max-width: 480px) {

@@ -584,9 +584,9 @@
     {#if saveError}
       <p class="text-error" role="alert">{saveError}</p>
     {/if}
-    {#if saveNotice}
-      <p class="text-notice" role="status">{saveNotice}</p>
-    {/if}
+    <!-- #0063: unconditionally rendered (empty when nothing to announce).
+         Console-wide decision; see issues/0063.md. -->
+    <p class="text-notice" role="status">{saveNotice ?? ''}</p>
 
     <div class="row save-row">
       <Button type="submit" variant="primary" disabled={saving}>
@@ -625,7 +625,18 @@
     interest checkbox only mutates its text, which is what a screen reader
     reliably announces from a role="status" region. An {#if} that created this
     element fresh, with its text already in it, is not reliably announced.
-    Console-wide decision, applied at all four sites #0063 names.
+    Console-wide decision. #0063's phase-3 review found six more sites with
+    the identical defect that the first pass missed by scoping its sweep to
+    the files it was already editing rather than the whole tree
+    (`web/src/views/Admin.svelte` x4, this file's `saveNotice`,
+    `CampaignEditor.svelte`'s `testSendMessage`) -- all now converted the
+    same way. `Login.svelte`'s two panel-swap notices are the OTHER
+    documented pattern (whole-panel replacement -> focus movement, per
+    `Unsubscribe.svelte`), not this one. A further ~10 `{#if loading}<p
+    role="status">Loading…</p>{/if}` placeholders across the console were
+    reported, not converted, in #0063.md's fix pass -- they announce an
+    initial-load state rather than the result of a user action, a smaller
+    instance of the same defect class.
   -->
   <Panel title="Announce">
     <p class="text-muted">
