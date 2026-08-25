@@ -1113,10 +1113,30 @@ diff <(psql "$DSN" -tAc "select table_name, count(*) from information_schema.tab
 #    differing by 1 (e.g. "< email_campaigns|12" / "> email_campaigns|13" —
 #    your own counts depend on what you seeded; the delta of exactly 1 does
 #    not). Any other line in this diff's output — a different table, or a
-#    delta other than 1 on email_campaigns — is a real failure. Row counts,
-#    sequence last_values (excluding workshops_id_seq), and index counts
-#    get the same table-exclusion treatment above but with no exception:
-#    any line of diff output for those is a failure.
+#    delta other than 1 on email_campaigns — is a real failure. diff(1)
+#    itself exits 1 when it finds this expected line, which is correct —
+#    see the note on exit status right after this block, and don't read a
+#    non-zero exit from THIS diff as the drill having failed.
+#
+#    Row counts, sequence last_values, and index counts get the same
+#    table-exclusion treatment but with NO exception — any line of diff
+#    output from any of the three below is a real failure, full stop.
+#    Committed here (#0248) rather than left as prose to translate: two
+#    passes had already written this SQL independently before this one.
+diff <(psql "$DSN" -tAc "select 'users', count(*) from users union all select 'interests', count(*) from interests union all select 'subscribers', count(*) from subscribers union all select 'subscriber_interests', count(*) from subscriber_interests union all select 'suppressions', count(*) from suppressions union all select 'audit_log', count(*) from audit_log union all select 'email_campaigns', count(*) from email_campaigns union all select 'campaign_interests', count(*) from campaign_interests union all select 'email_sends', count(*) from email_sends union all select 'email_events', count(*) from email_events union all select 'settings', count(*) from settings order by 1") \
+     <(psql "$DST_DSN" -tAc "select 'users', count(*) from users union all select 'interests', count(*) from interests union all select 'subscribers', count(*) from subscribers union all select 'subscriber_interests', count(*) from subscriber_interests union all select 'suppressions', count(*) from suppressions union all select 'audit_log', count(*) from audit_log union all select 'email_campaigns', count(*) from email_campaigns union all select 'campaign_interests', count(*) from campaign_interests union all select 'email_sends', count(*) from email_sends union all select 'email_events', count(*) from email_events union all select 'settings', count(*) from settings order by 1")
+#    Expect zero output. workshops / workshop_interests are named nowhere
+#    in this query, not merely filtered out of it — they don't exist on
+#    the source at all.
+
+diff <(psql "$DSN" -tAc "select sequencename, last_value from pg_sequences where schemaname='public' and sequencename <> 'workshops_id_seq' order by 1") \
+     <(psql "$DST_DSN" -tAc "select sequencename, last_value from pg_sequences where schemaname='public' and sequencename <> 'workshops_id_seq' order by 1")
+#    Expect zero output. Never compare with max(id) instead — see
+#    "Sequences" below for why that check would pass on a broken restore.
+
+diff <(psql "$DSN" -tAc "select tablename, count(*) from pg_indexes where schemaname='public' and tablename not in ('workshops','workshop_interests') group by tablename order by 1") \
+     <(psql "$DST_DSN" -tAc "select tablename, count(*) from pg_indexes where schemaname='public' and tablename not in ('workshops','workshop_interests') group by tablename order by 1")
+#    Expect zero output.
 
 # 8. Prove the restore — including the migration that just landed on it —
 #    is actually usable, not just structurally present: insert a new row
@@ -1158,33 +1178,92 @@ rm -rf "/tmp/backup-drill-${ISSUE}"
 #    step 4 — it can never reach another run's backup directory.
 ```
 
+**This block deliberately carries no `set -e`, and exit status is not its
+pass signal — read the output (#0248).** Two of its steps legitimately
+return non-zero on a run that is working correctly, and `set -e` would abort
+the drill on both:
+
+- **Step 7's constraint-count `diff`** is *expected* to print exactly one
+  differing line (`email_campaigns`) — `diff(1)` exits `1` whenever it finds
+  a difference, which here means the drill passed, not that it failed.
+- **Step 9's `scripts/testdb.sh drop "${ISSUE}dst"`** fails with `ERROR:
+  must be owner of database` every time this drill is followed on a local
+  Homebrew cluster with `BACKUP_RUN_AS=""`, confirmed by running the drill
+  twice for #0248 (once per backup format) and hitting the identical failure
+  both times: `RESTORE_CREATE=1`'s `createdb` in `restore.sh` runs as
+  whichever OS user is connecting (`restore.sh`'s `runner` array is empty
+  when `BACKUP_RUN_AS` is unset, so no `sudo -u` wraps it), not as
+  `opencircuit` — so the target database ends up owned by that OS user, not
+  `opencircuit`, while `testdb.sh drop` always connects as `opencircuit` and
+  cannot drop what it doesn't own. This is the documented ownership gotcha
+  step 9's own comment already names; it is not an occasional flake, it is
+  the deterministic outcome of following this drill locally as written.
+
+A completed run's real evidence is: step 6 actually applying migration 20
+(its own output names it, not "no change"), step 7's four comparisons
+printing exactly what "What the drill found" below documents, step 8/8b's
+inserts and rejections behaving as documented, and — at step 9 — either
+`testdb.sh drop` succeeding for both databases, or it reporting the
+not-owner failure above and the database then dropped by hand as its actual
+owner (`psql -d postgres -c 'DROP DATABASE "${ISSUE}dst";'`, run as the OS
+user `restore.sh` created it as). The `${ISSUE}src` drop and the final
+`rm -rf` are ordinary — a non-zero exit from either one is a real failure,
+unlike the two exceptions above.
+
 The custom format (`pg_restore`, default) and the plain format
 (`BACKUP_FORMAT=plain`, `gunzip | psql`) were **both** run through this full
-drill — identical results on every check.
+drill for #0248 (`ISSUE=0248` and `ISSUE=0248p`, one full pass each) —
+identical results on every check in both runs, reported below with the
+actual output.
 
 ### What the drill found
 
-- **Row counts** — every table (`users`, `interests`, `subscribers`,
-  `subscriber_interests`, `suppressions`, `audit_log`, `workshops`,
-  `workshop_interests`, `email_campaigns`, `campaign_interests`,
-  `email_sends`, `email_events`, `settings`) matched source-to-restored
-  exactly, in both formats.
-- **Sequences** — this is the one that actually bites people. In this
-  drill, `subscribers_id_seq` had advanced to `10` while only `5` rows
-  existed (an earlier, unrelated seed attempt failed mid-transaction and
-  rolled back — but the `nextval()` calls it made were **not** rolled back,
-  because sequence advancement in PostgreSQL is never transactional). A
-  naive restore approach that reset sequences from `max(id)` would have
-  restored the sequence back down to `5` and the very next insert would
-  have collided with a row that used to exist. `pg_dump`/`pg_restore`
-  handle this correctly on their own — every sequence's `last_value`
-  matched exactly after restore, in both formats — and inserting a new row
-  post-restore got id `11` with zero collision, confirmed directly. Verify
-  this yourself with `select sequencename, last_value from pg_sequences
-  where schemaname='public'` before and after, never with `max(id)`.
-- **`schema_migrations`** — `version=20, dirty=false` before and after, in
-  both formats. `migrate` will refuse to run against a `dirty=true`
-  database, so this check is not optional.
+- **Row counts** — every table populated at step 2 (`users`, `interests`,
+  `subscribers`, `subscriber_interests`, `suppressions`, `audit_log`,
+  `email_campaigns`, `campaign_interests`, `email_sends`, `email_events`,
+  `settings`) matched source-to-restored exactly, in both formats — step
+  7's row-count `diff` printed zero output in both the `ISSUE=0248` and
+  `ISSUE=0248p` runs. Actual counts from the `0248` run, identical on both
+  sides: `audit_log|2`, `campaign_interests|1`, `email_campaigns|1`,
+  `email_events|2`, `email_sends|2`, `interests|12`, `settings|7`,
+  `subscriber_interests|3`, `subscribers|5`, `suppressions|2`, `users|2`.
+  **`workshops` and `workshop_interests` are excluded, not compared** — the
+  step 7 query names neither table. They don't exist on the source at all:
+  step 1b rolls back migration 20, which drops them, so there is nothing on
+  the source side to compare a restored count against. (This section
+  previously claimed these two tables matched source-to-restored — that
+  claim predated `#0239`'s rewrite and was never true of the drill as it
+  exists now; corrected by `#0248`.)
+- **Sequences** — every sequence's `last_value` matched source-to-restored
+  exactly, in both formats — step 7's sequence `diff` printed zero output
+  in both runs, checked with `select sequencename, last_value from
+  pg_sequences where schemaname='public'` (excluding `workshops_id_seq`,
+  which exists only post-migration on the restored side), never with
+  `max(id)`. That distinction matters because sequence advancement in
+  PostgreSQL is never transactional: a `nextval()` call is not undone when
+  the transaction that made it rolls back, so a sequence can run ahead of
+  the highest row actually committed (a failed bulk insert, a retried job).
+  A restore that reset sequences from `max(id)` instead of trusting the
+  dump's own sequence state would collide with a row that used to exist;
+  `pg_dump`/`pg_restore` preserve `last_value` exactly on their own, which
+  the diff above confirms every run, not by trusting the tool in the
+  abstract. Confirmed directly at
+  step 8: inserting a new `users` row into the restored `0248` database
+  landed at `id=3` against a `users_id_seq` last_value of `2` — the next
+  value, zero collision.
+- **`schema_migrations`** — the source stays at `version=19, dirty=false`
+  throughout, in both formats — nothing ever migrates it past step 1b's
+  rollback. The restored copy reads `version=19, dirty=false` immediately
+  after restore (carried over faithfully from the dump, confirmed at step
+  5) and `version=20, dirty=false` after step 6 applies the pending
+  migration (confirmed at step 6: `20/u create_workshops` printed, then a
+  `select version, dirty` read back `20|f`). `version=20` on the source, or
+  `version=19` on the restored copy after step 6 has run, would both be
+  failures, not passes. `migrate` refuses to run against a `dirty=true`
+  database, so this check is not optional. (This section previously
+  claimed `version=20, dirty=false` before and after — that predates
+  `#0239`'s step 1b/step 6 split, under which the drill can no longer
+  produce that result; corrected by `#0248`.)
 - **Extensions** — none. `grep -rn "CREATE EXTENSION" migrations/` returns
   nothing, so there is no extension dependency to worry about on restore.
 - **Roles and ownership (corrected — `#0228`, then `#0235`)** — `backup.sh`
@@ -1252,11 +1331,22 @@ drill — identical results on every check.
   across `interests` → `subscribers` → `subscriber_interests` →
   `email_campaigns` → `email_sends`, etc. was handled correctly with no
   manual intervention in either format.
-- **Constraint and index presence** — per-table counts
-  (`information_schema.table_constraints`, `pg_indexes`) matched exactly,
-  and live enforcement was confirmed by attempting (and getting rejected)
-  a bad FK, a bad CHECK value, and a duplicate UNIQUE email against the
-  restored database.
+- **Index presence** — per-table index counts (`pg_indexes`), excluding
+  `workshops`/`workshop_interests`, matched source-to-restored exactly, in
+  both formats — step 7's index-count `diff` printed zero output in both
+  runs.
+- **Constraint presence** — per-table constraint counts
+  (`information_schema.table_constraints`), same exclusion, do **not**
+  match exactly, by design: `email_campaigns` differs by exactly one in
+  both formats — step 7's constraint `diff` printed `< email_campaigns|12`
+  / `> email_campaigns|13` in the `0248` run — the re-added
+  `email_campaigns_workshop_id_fkey` FK migration 20 attaches. No other
+  table differed, in either format. Live enforcement was confirmed by
+  attempting (and getting rejected) a bad FK, a bad CHECK value, and a
+  duplicate UNIQUE email against the restored database. (This section
+  previously described constraint counts as part of a blanket "matched
+  exactly" alongside index counts — they don't, by design, once step 1b
+  and step 6 are both doing their job; corrected by `#0248`.)
 - **A real script bug, found and fixed by this drill**: `backup.sh` and
   `restore.sh` both defaulted `BACKUP_RUN_AS` with `${BACKUP_RUN_AS:-postgres}`,
   which in bash treats an *explicitly empty* value the same as *unset* — so
