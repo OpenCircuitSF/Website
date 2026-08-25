@@ -945,31 +945,63 @@ item 2), and the user deferred all AWS work to deployment, same as SES.
 once that account exists, rather than a redesign — nothing about the
 local-dump/offsite-pull shape needs to change to add it later.
 
-### Restore drill — exact commands run, in order
-
 Run locally against a disposable PostgreSQL 16 cluster (Homebrew, macOS),
 never against a database anyone depends on. Every database name below is
 throwaway and none collides with `scripts/testdb.sh`'s per-agent pool.
 
+**#0239: this drill used to be unfollowable as written.** The old step 4b
+asked for the source database to be seeded "one migration behind HEAD"
+*before* step 1 — but step 1 was `scripts/testdb.sh create`, whose
+`check_template_fresh` guarantees the template (and therefore every clone of
+it) is at HEAD. Followed literally, step 4b had nothing pending to apply: it
+silently no-op'd and the drill reported success having proved nothing about
+a real restore-then-migrate path — exactly the failure `#0235` needed a real
+drill to catch. The fix is step 1b below: roll back one migration *after*
+creating the source database, which is both reachable (nothing here fights
+`check_template_fresh`) and honest about what's happening (a real
+`migrate ... down 1`, not a hand-waved "seed it behind" with no mechanism to
+do so).
+
 ```bash
-# 1. Populate a scratch source database with representative data spanning
-#    every table that matters: users, interests, subscribers +
-#    subscriber_interests, suppressions, audit_log, workshops +
-#    workshop_interests, email_campaigns + campaign_interests + email_sends,
-#    email_events. Seed throwaway rows — never target a literal or seeded id
-#    (CLAUDE.md §8b).
-DSN="$(scripts/testdb.sh create 0062src)"   # captured ONCE — create a seed.sql
-psql "$DSN" -f seed.sql                     # of your own INSERT ... RETURNING id
-                                             # statements first; testdb.sh create
-                                             # drops-then-recreates, so it must run
-                                             # exactly once before you seed, not twice
+# 1. Create the drill's source database. scripts/testdb.sh clones the
+#    fully-migrated template — check_template_fresh guarantees this is at
+#    HEAD (migration 20 applied). Confirm it before relying on it:
+DSN="$(scripts/testdb.sh create 0062src)"
+psql "$DSN" -c "select version, dirty from schema_migrations"
+#    Expect: version=20, dirty=false. If this isn't HEAD, stop — step 1b
+#    below has nothing real to roll back and the rest of the drill proves
+#    nothing about a pending migration.
 
-# 2. Snapshot what "correct" looks like BEFORE backing up: row counts per
-#    table, schema_migrations (version + dirty), every sequence's last_value
-#    (NOT row count — see "Sequences" below), constraint count per table,
-#    index count per table.
+# 1b. #0239: roll back exactly ONE migration so the source database is
+#    genuinely N-1, not merely described as such. This is what the old
+#    step 4b could never produce on its own — do it here, after creation,
+#    with the real down migration, not a synthetic approximation of one:
+migrate -path migrations -database "$DSN" down 1
+psql "$DSN" -c "select version, dirty from schema_migrations"
+#    Expect: version=19, dirty=false. If this still reads 20, STOP — the
+#    rollback didn't take, and everything below would (again) silently
+#    prove nothing. Migration 20 (create_workshops) is what's now missing:
+#    its own down.sql dropped workshop_interests, workshops, and the FK it
+#    had added to email_campaigns.
 
-# 3. Back up with the real script, current-user auth for local dev
+# 2. Populate the source database with representative data spanning every
+#    table that exists AT THIS SCHEMA VERSION (19) — users, interests,
+#    subscribers + subscriber_interests, suppressions, audit_log,
+#    email_campaigns + campaign_interests + email_sends, email_events.
+#    workshops / workshop_interests are deliberately NOT seeded here — that
+#    table doesn't exist yet at version 19, which is the entire point.
+#    Coverage for it comes from step 8 below, once migration 20 lands on
+#    the restored target. Seed throwaway rows — never target a literal or
+#    seeded id (CLAUDE.md §8b).
+psql "$DSN" -f seed.sql                     # your own INSERT ... RETURNING id
+                                             # statements
+
+# 3. Snapshot what "correct" looks like BEFORE backing up: row counts per
+#    table, schema_migrations (version=19, dirty=false), every sequence's
+#    last_value (NOT row count — see "Sequences" below), constraint count
+#    per table, index count per table.
+
+# 4. Back up with the real script, current-user auth for local dev
 #    (BACKUP_RUN_AS="" — see the bug note below; the server run uses the
 #    default BACKUP_RUN_AS=postgres via sudo peer auth instead):
 BACKUP_ROOT=/tmp/backup-drill BACKUP_RUN_AS="" \
@@ -978,7 +1010,7 @@ BACKUP_ROOT=/tmp/backup-drill BACKUP_RUN_AS="" \
 #    "Done — all databases backed up." with exit 0. Any pg_dump failure
 #    leaves prior dumps untouched and the script exits non-zero.
 
-# 4. Restore into a FRESH, differently-named database — never restore over
+# 5. Restore into a FRESH, differently-named database — never restore over
 #    the source, so the drill can compare instead of destroying:
 BACKUP_RUN_AS="" RESTORE_CREATE=1 \
   bash scripts/db/restore.sh /tmp/backup-drill/opencircuit_test_0062src/opencircuit_test_0062src-latest.dump \
@@ -991,53 +1023,68 @@ BACKUP_RUN_AS="" RESTORE_CREATE=1 \
 #    sequence, and view to RESTORE_OWNER (default: opencircuit) after the
 #    restore completes — see "Roles and ownership" below for why this step
 #    exists and how to prove it, not just trust it.
+psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?sslmode=disable" \
+  -c "select version, dirty from schema_migrations"
+#    Expect: version=19, dirty=false — the restored copy is genuinely
+#    missing migration 20 too, carried over faithfully from the source dump.
+#    If this reads 20, the drill has drifted from step 1b again and step 6
+#    below will silently no-op — stop and re-check, don't continue.
 
-# 4b. #0235: object ownership is not sufficient on its own — prove the
-#    SCHEMA itself is usable by the app role too, with a REAL migration,
-#    not a synthetic `CREATE TABLE` probe standing in for one. This step
-#    exists because `SELECT`/`INSERT` on already-restored tables succeed
-#    even when this is broken (each existing table is individually owned by
-#    RESTORE_OWNER already), which is exactly what let the gap hide behind
-#    a drill that only checked existing data — the failure only shows up at
-#    the next deploy's `migrate up`, against `public`, which resolves to
-#    `pg_database_owner` (whoever owns the *database*, i.e. the restoring
-#    superuser) unless `restore.sh` reassigns the schema too. Seed the
-#    drill's source database one migration behind HEAD (`migrate ... up N-1`)
-#    before step 1, so this step has a real pending migration to apply
-#    rather than silently no-op'ing against an already-current database:
+# 6. #0235's reproduction, reached by FOLLOWING this drill rather than
+#    deviating from it (#0239's whole point): object ownership alone isn't
+#    sufficient — restore.sh reassigns every table/sequence/view, but the
+#    SCHEMA a still-pending migration will CREATE TABLE into must also be
+#    usable by the app role, and this is where that gap showed up. Apply
+#    the genuinely-pending migration:
 migrate -path migrations \
   -database "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?sslmode=disable" \
   up
-#    Success looks like the pending migration applying with no error and
-#    `migrate ... version` reporting the new version, not `(dirty)`. A
-#    `permission denied for schema public` here means the schema-ownership
-#    step in `restore.sh` did not run or did not reach `public` — this is
-#    the exact failure `#0235` found and fixed; `restore.sh` now reassigns
-#    the schema itself (`ALTER SCHEMA public OWNER TO …`), not just the
-#    objects inside it. `RESTORE_OWNER=""` skips this step along with the
-#    object-level one — expect the same permission-denied error in that
-#    case, deliberately.
+#    Success looks like migration 20 actually applying — migrate's own
+#    output names it ("20/u create_workshops ...") — with no error, and a
+#    following `migrate ... version` reporting 20, not 19. **"no change" or
+#    an unchanged version here is a FAILURE of this drill, not a pass** — it
+#    means nothing was pending, the exact silent-no-op #0239 exists to
+#    close. Don't declare success; go back and check step 1b.
+#    A `permission denied for schema public` here means the
+#    schema-ownership step in `restore.sh` did not run or did not reach
+#    `public` — this is the exact failure `#0235` found and fixed;
+#    `restore.sh` now reassigns the schema itself
+#    (`ALTER SCHEMA public OWNER TO …`), not just the objects inside it.
+#    `RESTORE_OWNER=""` skips this step along with the object-level one —
+#    expect the same permission-denied error in that case, deliberately.
 
-# 5. Compare restored against source: table-by-table row counts, sequence
-#    last_values, schema_migrations, constraint counts, index counts — all
-#    must match exactly (they did, in full, in this drill).
+# 7. Compare restored against source for every table that existed at both
+#    schema versions (everything except workshops / workshop_interests,
+#    which exist only on the restored side, post-migration): table-by-table
+#    row counts, sequence last_values, schema_migrations, constraint
+#    counts, index counts — all must match exactly (they did, in full, in
+#    this drill).
 
-# 6. Prove the restore is actually usable, not just structurally present:
-#    insert a new row and confirm it does not collide with restored ids,
-#    and confirm FK / CHECK / UNIQUE constraints still reject bad data.
+# 8. Prove the restore — including the migration that just landed on it —
+#    is actually usable, not just structurally present: insert a new row
+#    into a pre-existing table and confirm it does not collide with
+#    restored ids, confirm FK/CHECK/UNIQUE constraints still reject bad
+#    data, AND insert a row into `workshops` — the table migration 20 just
+#    created — to prove the app role can actually use what the pending
+#    migration built, not merely that `migrate up` exited 0.
 
-# 6b. Prove ownership the way that actually catches the defect (#0228): do
+# 8b. Prove ownership the way that actually catches the defect (#0228): do
 #    NOT just inspect pg_tables.tableowner as the role that ran the restore —
 #    that check passes even when broken, because the restoring role can
 #    always read what it just restored. Connect AS THE APPLICATION ROLE and
 #    issue a real query:
 psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?sslmode=disable" \
   -c "select count(*) from subscribers;"
-#    permission denied here means the ownership step did not run or did not
-#    reach this table — a passing catalog-only check would not have caught
-#    that.
+psql "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?sslmode=disable" \
+  -c "select count(*) from workshops;"
+#    permission denied on either query means the ownership step did not run
+#    or did not reach that object/schema — a passing catalog-only check
+#    would not have caught that. The `workshops` query specifically is what
+#    would have caught `#0235`'s gap: it is owned by whichever role's
+#    `ALTER SCHEMA public OWNER TO …` ran (or didn't) during step 6's
+#    `migrate up`, not by anything `restore.sh` touched directly.
 
-# 7. Clean up everything created:
+# 9. Clean up everything created:
 scripts/testdb.sh drop 0062src
 scripts/testdb.sh drop 0062dst
 #    `testdb.sh drop` (#0228) now reports a real failure and exits non-zero
@@ -1186,7 +1233,7 @@ drill — identical results on every check.
     safe rather than partially applying, but the two formats are not
     interchangeable here — always restore into a fresh target
     (`RESTORE_CREATE=1`), which both the script header and this runbook's
-    step 4 already say to do.
+    step 5 already say to do.
 
 ### Before restoring over anything live
 
