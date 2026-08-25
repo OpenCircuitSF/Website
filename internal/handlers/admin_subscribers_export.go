@@ -290,6 +290,21 @@ func (h *AdminSubscribersHandler) Export(w http.ResponseWriter, r *http.Request)
 
 	if h.auditor != nil {
 		actorID := actor.ID
+		// "filter_query" is logged verbatim, deliberately: this row is the
+		// anti-exfiltration control described below, so knowing exactly what
+		// an admin searched for before exporting is the point. The
+		// consequence, found and pinned by #0237's phase-3 review: if that
+		// search happened to be a subscriber's own address, this Metadata
+		// now carries it, and it survives erasure the same way the other
+		// email-carrying audit rows do (nothing in
+		// internal/subscribers/erase.go touches audit_log). Do not redact
+		// or drop this to "fix" that — it would defeat the control — the
+		// privacy page (PrivacyPolicy.svelte's audit-log item) discloses it
+		// as a possibility instead, and
+		// internal/handlers/audit_email_metadata_guard_test.go pins this
+		// exact site (ActionSubscriberExported,
+		// metadataKeyIsSuspectedEmailCarrier's "query" token) so a future
+		// change here cannot silently drop that disclosure's premise.
 		metadata := map[string]any{
 			"row_count":          rowCount,
 			"filter_status":      status,

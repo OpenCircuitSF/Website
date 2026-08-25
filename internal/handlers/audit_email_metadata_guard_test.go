@@ -18,25 +18,32 @@ import (
 // guard, PrivacyPolicy.guard.test.ts) pins the SET OF CATEGORIES the page
 // promises against a hardcoded fixture, checked with requiredPhrases. That
 // caught drift in the page's own wording, but it has no way to notice that
-// the underlying Go code grew a SIXTH place that writes a subscriber's email
-// address into audit_log.metadata: #0226 examined the five subscriber-driven
-// audit.Entry call sites (signup, confirmation, unsubscribe, preference
-// update, erasure) and missed five more — admin-initiated (manual add,
+// the underlying Go code writes a subscriber's email address into
+// audit_log.metadata at more places than #0226 checked: #0226 examined five
+// subscriber-driven audit.Entry call sites (signup, confirmation,
+// unsubscribe, preference update, erasure) and found only two of them
+// (confirmation, erasure) actually carry the email — the other three carry
+// `kind`/`source`/`interest_count` metadata, not the address. This file
+// widens that to five MORE real sites — admin-initiated (manual add,
 // suppression removal) and SES-driven (two bounce paths, one complaint) —
-// because nothing was keyed to the actual SET OF CALL SITES that write an
-// email. This file is that guard: it walks every audit.Entry{...} composite
-// literal in production Go source (internal/ and cmd/; _test.go files are
-// excluded because a test fixture never becomes a real inserted row) and
-// classifies whether its Metadata could carry the literal key "email",
-// resolving both inline map literals and the "built the map in a local
-// variable, sometimes with a conditional index assignment" shape several
-// real call sites use (see classifyMetadataExpr). The result is compared
-// against auditEmailMetadataKnownSites below; drift in EITHER direction (a
-// new site appears, a known site disappears, or a site's IP-presence
-// changes — the other half of what the privacy page claims about this same
-// set) fails with the exact file:line, so the fix is never "reword the
-// policy and hope" — it is "read this failure, update this fixture to match
-// the tree, and update the policy to match the fixture."
+// bringing the confirmed total to seven, because nothing was keyed to the
+// actual SET OF CALL SITES that write an email. This file is that guard: it
+// walks every audit.Entry{...} composite literal in production Go source
+// (internal/ and cmd/; _test.go files are excluded because a test fixture
+// never becomes a real inserted row) and classifies whether its Metadata
+// could carry an email-shaped value under any of a fixed set of suspect key
+// tokens (see metadataKeyIsSuspectedEmailCarrier — not just the literal key
+// "email"; #0237's own phase-3 review found that exact-match blind to
+// {"recipient_email": addr}), resolving inline map literals, the "built the
+// map in a local variable, sometimes with a conditional index assignment"
+// shape several real call sites use, and the query-string-shaped free-text
+// case (see classifyMetadataExpr). The result is compared against
+// auditEmailMetadataKnownSites below; drift in EITHER direction (a new site
+// appears, a known site disappears, or a site's IP-presence changes — the
+// other half of what the privacy page claims about this same set) fails
+// with the exact file:line, so the fix is never "reword the policy and
+// hope" — it is "read this failure, update this fixture to match the tree,
+// and update the policy to match the fixture."
 //
 // A Metadata expression this guard cannot classify statically (a call to
 // anything other than the one known-safe local helper below, a value built
@@ -71,8 +78,9 @@ var auditEmailMetadataKnownSafeHelpers = map[string]bool{
 }
 
 // auditEmailMetadataKnownSite is one audit.Entry{} call site whose Metadata
-// this guard has determined DOES carry the literal key "email" — the
-// tree-wide ground truth this test pins and re-derives every run. Identified
+// this guard has determined DOES carry an email-shaped value under one of
+// metadataKeyIsSuspectedEmailCarrier's recognized keys — the tree-wide
+// ground truth this test pins and re-derives every run. Identified
 // by (repo-relative file, Action constant name) rather than by line number:
 // a line number shifts on any unrelated edit above it in the same file,
 // which would fail this guard for a reason that has nothing to do with what
@@ -99,6 +107,33 @@ type auditEmailMetadataKnownSite struct {
 //   - admin_suppressions.go: ActionSuppressionRemoved — IP set (the acting admin's)
 //   - ses_notifications.go: ActionSubscriberBounced (×2, permanent + repeated-soft) — no IP (no request; the event is Amazon's)
 //   - ses_notifications.go: ActionSubscriberComplained — no IP (same reason)
+//
+// The six above are the SUBSCRIBER'S OWN address, and are what
+// PrivacyPolicy.svelte's audit-log item discloses by name (#0237's original
+// scope). Two more sites are pinned below because
+// metadataKeyIsSuspectedEmailCarrier — widened after #0237's own phase-3
+// review found the old exact-"email"-key match blind to
+// {"recipient_email": addr} — now correctly flags them, but NEITHER is a
+// real subscriber's own address, so pinning them here is not the same as
+// disclosing them the same way:
+//   - admin_campaign_preview.go: ActionEmailCampaignTestSent — IP set (the
+//     acting admin's). Metadata carries "to": actor.Email (the ADMIN's own
+//     address, sending a test message to themselves) and "recipient_email":
+//     sub.Email, where sub is h.ensureTestRecipient's synthetic
+//     campaign-test+admin-<id>@<ReservedTestEmailDomain> address — never a
+//     real subscriber (traced by #0237's phase-3 review). Pinned so a
+//     future edit that starts writing a REAL subscriber's address here is
+//     caught; the privacy page does not name this site, because it never
+//     touches subscriber data.
+//   - admin_subscribers_export.go: ActionSubscriberExported — IP set (the
+//     acting admin's). Metadata carries "filter_query": query, the raw text
+//     of an admin's search box when running a CSV export of the list —
+//     unbounded free text this guard cannot read, so if an admin happened
+//     to search BY a subscriber's address, that address lands in this row.
+//     Unlike the test-send site above, this one CAN carry a real
+//     subscriber's own address, so the privacy page's audit-log item does
+//     disclose it (as a possibility contingent on what the admin typed, not
+//     a certainty like the six structural sites above).
 var auditEmailMetadataKnownSites = []auditEmailMetadataKnownSite{
 	{file: "internal/handlers/confirm.go", action: "ActionSubscriberConfirmed", count: 1, hasIP: true},
 	{file: "internal/handlers/admin_subscribers.go", action: "ActionSubscriberManualAdd", count: 1, hasIP: true},
@@ -106,6 +141,8 @@ var auditEmailMetadataKnownSites = []auditEmailMetadataKnownSite{
 	{file: "internal/handlers/admin_suppressions.go", action: "ActionSuppressionRemoved", count: 1, hasIP: true},
 	{file: "internal/handlers/ses_notifications.go", action: "ActionSubscriberBounced", count: 2, hasIP: false},
 	{file: "internal/handlers/ses_notifications.go", action: "ActionSubscriberComplained", count: 1, hasIP: false},
+	{file: "internal/handlers/admin_campaign_preview.go", action: "ActionEmailCampaignTestSent", count: 1, hasIP: true},
+	{file: "internal/handlers/admin_subscribers_export.go", action: "ActionSubscriberExported", count: 1, hasIP: true},
 }
 
 // auditEntrySite is one audit.Entry{...} composite literal found by the
@@ -309,16 +346,61 @@ func compositeLitStringKeys(cl *ast.CompositeLit) []string {
 	return keys
 }
 
+// auditEmailMetadataSuspectKeyTokens is the set of underscore-delimited
+// Metadata-key tokens this guard treats as carrying an address-shaped
+// value — widened from a literal "email"-only match after #0237's phase-3
+// review proved the hole: Probe C, a synthetic
+// map[string]any{"recipient_email": addr, "subscriber_address": addr}
+// site, passed the old exact-match check silently even though
+// "recipient_email" is the SAME key style
+// internal/handlers/admin_campaign_preview.go:419 already uses in
+// production. Token-based (split the key on "_", lowercase, EXACT token
+// match) rather than a bare substring test on purpose: a substring test on
+// "recipient" would also fire on internal/mailing/worker.go's "recipients"
+// key, which holds an int64 COUNT of recipients, never an address — a
+// false positive this guard must not manufacture. Splitting on "_" and
+// requiring an exact token match keeps "recipient_email" (tokens
+// "recipient", "email") and "subscriber_address" (tokens "subscriber",
+// "address") caught while leaving "recipients" (one token, "recipients",
+// not "recipient") alone — checked against every Metadata key actually
+// used in this tree while writing this change, not assumed. "query" is
+// included because internal/handlers/admin_subscribers_export.go:312's
+// "filter_query" key holds unbounded admin-typed search text that MAY be a
+// subscriber's own address if that is what the admin searched by — a
+// value this guard cannot read statically, so the conservative, correct
+// answer is to always treat a "*query*" key as a possible carrier rather
+// than guess at its content.
+var auditEmailMetadataSuspectKeyTokens = map[string]bool{
+	"email":     true,
+	"address":   true,
+	"recipient": true,
+	"query":     true,
+}
+
+// metadataKeyIsSuspectedEmailCarrier reports whether key, split on "_",
+// contains a token this guard treats as address-shaped. See
+// auditEmailMetadataSuspectKeyTokens for the exact set and why each token
+// is there.
+func metadataKeyIsSuspectedEmailCarrier(key string) bool {
+	for _, tok := range strings.Split(strings.ToLower(key), "_") {
+		if auditEmailMetadataSuspectKeyTokens[tok] {
+			return true
+		}
+	}
+	return false
+}
+
 // classifyMetadataExpr determines whether a Metadata: <expr> value could
-// carry the literal key "email", returning (hasEmail, unresolved):
-// unresolved is non-empty exactly when expr's shape is not one this guard
-// can prove either way, and hasEmail is only meaningful when unresolved ==
-// "".
+// carry an email-shaped value under any key
+// metadataKeyIsSuspectedEmailCarrier recognizes, returning (hasEmail,
+// unresolved): unresolved is non-empty exactly when expr's shape is not one
+// this guard can prove either way, and hasEmail is only meaningful when
+// unresolved == "".
 func classifyMetadataExpr(expr ast.Expr, dir string, localKeys map[string]map[string]bool, helperFuncs map[funcKey]*ast.FuncDecl) (hasEmail bool, unresolved string) {
 	switch e := expr.(type) {
 	case *ast.CompositeLit:
 		for _, k := range compositeLitStringKeys(e) {
-			if k == "email" {
+			if metadataKeyIsSuspectedEmailCarrier(k) {
 				return true, ""
 			}
 		}
@@ -331,7 +413,12 @@ func classifyMetadataExpr(expr ast.Expr, dir string, localKeys map[string]map[st
 		if !ok {
 			return false, fmt.Sprintf("Metadata is identifier %q with no traceable map-literal or index assignment in its enclosing function", e.Name)
 		}
-		return keys["email"], ""
+		for k := range keys {
+			if metadataKeyIsSuspectedEmailCarrier(k) {
+				return true, ""
+			}
+		}
+		return false, ""
 	case *ast.CallExpr:
 		callee, ok := e.Fun.(*ast.Ident)
 		if !ok {
@@ -366,7 +453,7 @@ func classifyHelperReturnsForEmail(body *ast.BlockStmt) (hasEmail bool, unresolv
 		switch r := ret.Results[0].(type) {
 		case *ast.CompositeLit:
 			for _, k := range compositeLitStringKeys(r) {
-				if k == "email" {
+				if metadataKeyIsSuspectedEmailCarrier(k) {
 					hasEmail = true
 				}
 			}
@@ -548,11 +635,23 @@ func recordSomething() {
 
 // TestAuditEmailMetadataGuardCatchesTracedLocalVariable proves the
 // identifier-tracing branch: a Metadata built in a local variable, with
-// "email" added by a conditional index assignment — the exact shape
-// internal/handlers/admin_subscribers.go:694's Complaint-clearing entry and
-// internal/handlers/admin_suppressions.go:274's suppression-removal entry
-// use, and the shape #0226's phase-3 review flagged as the most plausible
-// place for a future email addition to slip past a phrase-keyed guard.
+// "email" added by a conditional index assignment. No real call site in
+// this tree carries "email" this way today — checked directly, not
+// assumed: internal/handlers/admin_suppressions.go:274's suppression-
+// removal entry builds Metadata as an INLINE composite literal (its
+// "email" key is written directly in the literal, no local variable or
+// index assignment involved), and internal/handlers/admin_subscribers.go:694's
+// Complaint-clearing entry DOES use a traced local with conditional index
+// assignments — but for "suppression_removed_note" and
+// "suppression_removed_created_at", never "email" (an earlier draft of
+// this comment claimed both sites used this exact shape for "email"; #0237's
+// phase-3 review found that false for both — see that review for the full
+// reproduction). This fixture exists because the general "traced local +
+// conditional index assignment" pattern IS real in this tree
+// (admin_subscribers.go:694 above is that real instance), so a future site
+// that adds "email" the same way — the shape #0226's phase-3 review flagged
+// as the most plausible place for a future email addition to slip past a
+// phrase-keyed guard — must still be caught even though no site does it yet.
 func TestAuditEmailMetadataGuardCatchesTracedLocalVariable(t *testing.T) {
 	dir := t.TempDir()
 	writeSyntheticGoFile(t, dir, "fixture.go", `package fixture

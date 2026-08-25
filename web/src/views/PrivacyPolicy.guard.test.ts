@@ -87,7 +87,7 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
     sourceRef: 'internal/subscribers/erase.go doc comment: "email_events rows, untouched"; PRD §6.9\'s delivery-health circuit breaker',
   },
   {
-    key: 'audit_log (subscriber/admin/automated categories, per-request IP except automated SES entries, six actions carry the email)',
+    key: 'audit_log (subscriber/admin/automated categories, per-request IP except automated SES entries, six actions carry the email plus one contingent on admin search text)',
     // "admin" alone is too weak: the OLD, narrower wording this replaces
     // already said "an internal ADMIN audit log entry" (describing WHO
     // reads it, not whose IP the erasure row carries) -- also caught by
@@ -123,6 +123,23 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
     // have been updated -- these phrases catch the PAGE regressing away
     // from what that guard has already confirmed is true, not the other
     // direction.
+    //
+    // #0237's own phase-3 review bounced the first pass for a real hole in
+    // that Go guard (it matched only the literal key "email", missing the
+    // "recipient_email"/"subscriber_address" shape a real site already
+    // used) -- fixed by widening the guard's key match, which surfaced two
+    // MORE real sites. Neither is added to the "six actions" list above
+    // (neither is a subscriber's own address: one is the admin's own
+    // address plus a synthetic test recipient, never disclosed here), but
+    // one -- an export's audit entry, whose Metadata carries the raw text
+    // of an admin's search box -- genuinely CAN carry a subscriber's own
+    // address if that is what was searched for, so the item now discloses
+    // it too, contingently rather than as a certainty. 'search text is
+    // recorded' asserts that clause is still present; it is deliberately
+    // NOT one of the "six actions" phrases above, since this seventh
+    // disclosure is conditional, not structural, and the item's wording
+    // says so ("if a staff member ever searches ... that search text is
+    // recorded too", not "an export always records your address").
     requiredPhrases: [
       'audit log',
       'admin-initiated actions',
@@ -133,9 +150,10 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
       'a bounce',
       'a complaint',
       'your email address',
+      'search text is recorded',
     ],
     sourceRef:
-      'internal/handlers/audit_email_metadata_guard_test.go (#0237) pins the full, current set: internal/handlers/confirm.go ActionSubscriberConfirmed, internal/handlers/admin_subscribers.go ActionSubscriberManualAdd and ActionSubscriberErased, internal/handlers/admin_suppressions.go ActionSuppressionRemoved, internal/handlers/ses_notifications.go ActionSubscriberBounced (x2) and ActionSubscriberComplained -- see that file for each one\'s exact line and IP-presence, re-derived from the tree on every run rather than hardcoded here a second time.',
+      'internal/handlers/audit_email_metadata_guard_test.go (#0237) pins the full, current set: internal/handlers/confirm.go ActionSubscriberConfirmed, internal/handlers/admin_subscribers.go ActionSubscriberManualAdd and ActionSubscriberErased, internal/handlers/admin_suppressions.go ActionSuppressionRemoved, internal/handlers/ses_notifications.go ActionSubscriberBounced (x2) and ActionSubscriberComplained, plus (pinned but NOT part of the "six actions" disclosure -- neither is a real subscriber\'s own address) internal/handlers/admin_campaign_preview.go ActionEmailCampaignTestSent and internal/handlers/admin_subscribers_export.go ActionSubscriberExported -- see that file for each one\'s exact line and IP-presence, re-derived from the tree on every run rather than hardcoded here a second time.',
   },
 ];
 
@@ -401,6 +419,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
       'suppression removal',
       'a bounce',
       'a complaint',
+      'search text is recorded',
     ]);
 
     const { matchedCategory } = matchItemToCategory(narrowed, ERASURE_RETAINED_CATEGORIES);
@@ -417,7 +436,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     const items = realItems().map((item) =>
       item.includes('audit log entry')
         ? item.replace(
-            ' but also the erasure itself, admin-initiated actions (being added to the list manually, or having a suppression removed), and automated entries from our delivery provider (a bounce or a spam complaint registered against your address)',
+            ' but also the erasure itself, admin-initiated actions (for example, being added to the list manually or having a suppression removed), and automated entries from our delivery provider (a bounce or a spam complaint registered against your address)',
             '',
           )
         : item,
@@ -465,5 +484,40 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
 
     const { matchedCategory } = matchItemToCategory(auditItem ?? '', ERASURE_RETAINED_CATEGORIES);
     expect(matchedCategory, 'the item with the no-IP exception dropped should no longer match ANY category').toBeNull();
+  });
+
+  it('fails when the audit-log item drops the export-search-text disclosure (#0237 fix pass, in reverse)', () => {
+    // #0237's phase-3 review found the widened
+    // metadataKeyIsSuspectedEmailCarrier Go guard now (correctly) pins
+    // internal/handlers/admin_subscribers_export.go's "filter_query" key --
+    // an admin's raw search text, which MAY be a subscriber's own address
+    // if that is what was searched for while exporting the list. The item
+    // discloses this contingently ("if a staff member ever searches ...
+    // that search text is recorded too"). Dropping that clause silently
+    // reverts to the earlier under-disclosure this issue exists to fix --
+    // reproduced against the real current item text.
+    const items = realItems().map((item) =>
+      item.includes('audit log entry')
+        ? item.replace(
+            ', and if a staff member ever searches the subscriber list by your address while exporting it, that search text is recorded too',
+            '',
+          )
+        : item,
+    );
+    const src = fixtureSource(items);
+    const parsedItems = findErasureStatusListItems(src);
+
+    const auditItem = parsedItems.find((i) => i.includes('audit log entry'));
+    expect(auditItem, 'fixture setup: expected an audit-log item').toBeDefined();
+    expect(auditItem, 'fixture setup: the mutation must actually remove the export-search clause').not.toContain('search text is recorded');
+
+    const auditCategory = ERASURE_RETAINED_CATEGORIES.find((c) => c.key.startsWith('audit_log'));
+    expect(auditCategory, 'fixture setup: expected the audit_log category to exist').toBeDefined();
+    const lower = (auditItem ?? '').toLowerCase();
+    const missingFromOwnCategory = (auditCategory?.requiredPhrases ?? []).filter((p) => !lower.includes(p.toLowerCase()));
+    expect(missingFromOwnCategory).toEqual(['search text is recorded']);
+
+    const { matchedCategory } = matchItemToCategory(auditItem ?? '', ERASURE_RETAINED_CATEGORIES);
+    expect(matchedCategory, 'the item with the export-search disclosure dropped should no longer match ANY category').toBeNull();
   });
 });

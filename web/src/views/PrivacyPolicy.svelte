@@ -123,10 +123,39 @@
   //        built across the function including any conditional index
   //        assignment, and one known-safe helper call), and fails --
   //        naming the exact file and action -- if the SET of call sites that
-  //        write an email differs from what it has pinned. Adding a
-  //        seventh such site (or removing one of the current six) fails
-  //        that guard before this page's wording can silently fall behind
-  //        again, the way #0226's phrase-only guard did.
+  //        write an email differs from what it has pinned.
+  //      - #0237's own phase-3 review BOUNCED the first pass: its guard
+  //        matched only the literal key "email", so a real production shape
+  //        it had just excluded as a near-miss --
+  //        `admin_campaign_preview.go`'s `"recipient_email": sub.Email` --
+  //        proved the exact hole (a synthetic
+  //        `{"recipient_email": addr, "subscriber_address": addr}` site
+  //        passed the guard silently). The guard now matches any
+  //        underscore-token of "email", "address", "recipient", or "query"
+  //        (`metadataKeyIsSuspectedEmailCarrier`), not just the exact string
+  //        "email" -- token-based, not substring, so it does not also flag
+  //        `internal/mailing/worker.go`'s unrelated "recipients" (a COUNT,
+  //        not an address). That widening surfaced two more real sites,
+  //        pinned in `auditEmailMetadataKnownSites` but NEITHER added to the
+  //        "six actions" list above, because neither is a subscriber's own
+  //        address: `admin_campaign_preview.go`'s test-send entry (the
+  //        acting admin's own address, and a synthetic
+  //        `campaign-test+admin-<id>@` test recipient -- never a real
+  //        subscriber), and `admin_subscribers_export.go`'s export entry,
+  //        whose "filter_query" key holds the raw text of an admin's search
+  //        box -- unbounded free text this guard cannot read, so it MAY
+  //        contain a subscriber's own address if that is what was searched
+  //        for. That second one genuinely can carry your address, so this
+  //        item's last clause now discloses it explicitly ("if a staff
+  //        member ever searches ... that search text is recorded too"),
+  //        contingently rather than as a certainty like the six structural
+  //        actions. The "admin-initiated actions" parenthetical also gained
+  //        "for example" -- the review separately noted it read as an
+  //        exhaustive list of admin actions on a subscriber's record when it
+  //        is not (two more exist, `ActionSubscriberSuppressed` and
+  //        `ActionSubscriberComplaintCleared`, neither carrying an email);
+  //        softening it to an example list is honest without enumerating
+  //        two more actions that touch nothing this bullet is about.
   //  - "No third-party analytics, ad trackers, external CDNs, or email
   //    open-tracking pixels" is CLAUDE.md §9's binding restriction, stated
   //    here as a fact about how the site is built, not a promise.
@@ -276,7 +305,7 @@
           'a permanent suppression entry, so the address cannot be silently re-added by a future import or signup',
           'anonymized rows in our send history, so historical campaign counts (how many people a given email actually reached) do not silently change',
           'the raw deliverability events (bounces, complaints, deliveries) already logged against your address, kept without the link back to your identity, for spam/abuse forensics and to keep our own bounce/complaint handling accurate',
-          'an internal admin audit log entry for actions on your account — not only the ones you take yourself (signup, confirmation, unsubscribe, and preference updates) but also the erasure itself, admin-initiated actions (being added to the list manually, or having a suppression removed), and automated entries from our delivery provider (a bounce or a spam complaint registered against your address); each entry records the IP address behind the request that created it: yours for actions you take, the IP of the acting admin for admin-initiated ones including the erasure, and no IP at all for the automated delivery-provider entries, since there is no request behind them — a separate mechanism from the single consent-evidence IP described above; the confirmation entry, being added manually, a suppression removal, a bounce, a complaint, and the erasure entry itself also record your email address explicitly; kept so we can prove what happened and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
+          'an internal admin audit log entry for actions on your account — not only the ones you take yourself (signup, confirmation, unsubscribe, and preference updates) but also the erasure itself, admin-initiated actions (for example, being added to the list manually or having a suppression removed), and automated entries from our delivery provider (a bounce or a spam complaint registered against your address); each entry records the IP address behind the request that created it: yours for actions you take, the IP of the acting admin for admin-initiated ones including the erasure, and no IP at all for the automated delivery-provider entries, since there is no request behind them — a separate mechanism from the single consent-evidence IP described above; the confirmation entry, being added manually, a suppression removal, a bounce, a complaint, and the erasure entry itself also record your email address explicitly, and if a staff member ever searches the subscriber list by your address while exporting it, that search text is recorded too; kept so we can prove what happened and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
         ]}
       />
       <p>
