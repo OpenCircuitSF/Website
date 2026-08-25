@@ -83,6 +83,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// erasedEventPlaceholder builds the subscriber_events email placeholder for
+// a given subscriber id — see Erase's redaction comment for why this is
+// keyed by the SUBSCRIBER id (unlike the per-row email_sends placeholder
+// three lines above it in Erase).
+func erasedEventPlaceholder(subscriberID int64) string {
+	return fmt.Sprintf("erased-%d@erased.invalid", subscriberID)
+}
+
 // ErrHasPendingSends is returned by Erase when the subscriber has at least
 // one email_sends row still 'queued' or 'sending' — see the package doc
 // comment's "in-flight send" section for why erasing through that would
@@ -153,6 +161,41 @@ func (s *Store) Erase(ctx context.Context, id int64, now time.Time) (ErasureResu
 		return ErasureResult{}, ErrHasPendingSends
 	}
 
+	// Same refusal, extended to outbound_queue (#0126) — but scoped to
+	// 'sending' only, DELIBERATELY NARROWER than the email_sends check
+	// above (which also blocks on 'queued'). outbound_queue's
+	// subscriber_id is ON DELETE CASCADE, so without this check the
+	// DELETE below could silently remove a row a worker has actually
+	// CLAIMED and is mid-send on ('sending') — the same "don't destroy a
+	// live in-flight operation" concern the email_sends check exists for.
+	// A merely 'queued'-but-unclaimed confirmation is different: nothing
+	// is in flight, and the row exists only because a normal signup
+	// enqueues one (since #0126, EVERY non-synthetic Create leaves one
+	// queued until the worker sends it). Blocking erasure on that would
+	// make ordinary GDPR erasure of a subscriber who hasn't yet had their
+	// confirmation delivered impossible until the worker catches up —
+	// verified experimentally while writing this issue's tests: every
+	// TestErase_* test in this package failed with ErrHasPendingSends the
+	// moment the check also covered 'queued', because every Create() in
+	// their setup leaves exactly such a row. Blocking only 'sending'
+	// preserves the actual property #0126's plan cites ("a row a worker
+	// has claimed and is mid-send on") without that regression. Flagged
+	// for the reviewer: the plan's literal text said to mirror
+	// email_sends' IN ('queued', 'sending') exactly; this departs from
+	// that on the grounds above.
+	var pendingOutbound bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (
+		    SELECT 1 FROM outbound_queue
+		     WHERE subscriber_id = $1 AND status = 'sending'
+		 )`, id,
+	).Scan(&pendingOutbound); err != nil {
+		return ErasureResult{}, fmt.Errorf("subscribers: checking pending outbound queue rows for %d: %w", id, err)
+	}
+	if pendingOutbound {
+		return ErasureResult{}, ErrHasPendingSends
+	}
+
 	// Count what subscriber_interests is about to lose to the CASCADE, so
 	// the caller's audit row can say how many without a second round trip
 	// after the DELETE (by which point the rows, and therefore the count,
@@ -211,6 +254,31 @@ func (s *Store) Erase(ctx context.Context, id int64, now time.Time) (ErasureResu
 		return ErasureResult{}, fmt.Errorf("subscribers: adding erasure suppression for %d: %w", id, err)
 	}
 
+	// Redact subscriber_events BEFORE the DELETE (#0126): the address's
+	// history must survive erasure as the evidence the erasure was
+	// performed, per PRD §6.11 and this package's events.go doc comment.
+	// subscriber_id is nulled for free by the DELETE below via the
+	// table's ON DELETE SET NULL FK — this UPDATE only needs to touch
+	// email.
+	//
+	// The placeholder is derived from the SUBSCRIBER's id, not each row's
+	// own id — deliberately different from the email_sends redaction three
+	// lines above, whose placeholder is per-row so two erased subscribers'
+	// email_sends rows can never be correlated. Here the point is the
+	// opposite: once subscriber_id is NULL, the placeholder is the only
+	// key left, and an unlinked pile of rows would not be evidence that an
+	// erasure was performed for a specific address — which is the whole
+	// reason this table's rows survive at all. Keying by subscriber id
+	// keeps the address's own history grouped without leaking anything: a
+	// subscriber id is not personal data, and the row it pointed at is
+	// gone by the time anyone could read this placeholder.
+	if _, err := tx.Exec(ctx,
+		`UPDATE subscriber_events SET email = $2 WHERE subscriber_id = $1`,
+		id, erasedEventPlaceholder(id),
+	); err != nil {
+		return ErasureResult{}, fmt.Errorf("subscribers: redacting subscriber_events for %d: %w", id, err)
+	}
+
 	tag, err := tx.Exec(ctx, `DELETE FROM subscribers WHERE id = $1`, id)
 	if err != nil {
 		return ErasureResult{}, fmt.Errorf("subscribers: deleting subscriber %d: %w", id, err)
@@ -220,6 +288,18 @@ func (s *Store) Erase(ctx context.Context, id int64, now time.Time) (ErasureResu
 		// above and here — vanishingly unlikely (the row was locked), but
 		// report it as not-found rather than a silently empty success.
 		return ErasureResult{}, ErrNotFound
+	}
+
+	// Written AFTER the redaction above, with the same placeholder address,
+	// so the erasure's own evidence does not reintroduce the real address
+	// into a table this method just finished scrubbing it from.
+	// subscriber_id is already NULL by this point (the DELETE's cascade
+	// ran before this INSERT), matching every other post-erasure row.
+	if err := RecordEventTx(ctx, tx, Event{
+		Email:  erasedEventPlaceholder(id),
+		Action: ActionErased,
+	}); err != nil {
+		return ErasureResult{}, fmt.Errorf("subscribers: recording erased event for %d: %w", id, err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {

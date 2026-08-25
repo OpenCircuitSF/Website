@@ -21,33 +21,41 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
-	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
-// delayedMailer models a mailer send that takes real, deterministic wall-clock
-// time to complete and — deliberately — does NOT react to context
-// cancellation, matching the one case Close's own doc comment (subscribe.go)
-// calls out as "expected" to exceed its budget: "the mailer itself ignores
-// context cancellation". entered is closed the instant Send is invoked, so a
-// test can confirm the send has genuinely started (been dequeued by a worker)
-// before proceeding — the same synchronization idiom shutdown_wiring_test.go's
-// blockingTestMailer uses.
+// delayedSubscriberStore models a subscription mutation that takes real,
+// deterministic wall-clock time to complete and — deliberately — does NOT
+// react to context cancellation, matching the one case Close's own doc
+// comment (subscribe.go) calls out as "expected" to exceed its budget: work
+// that ignores context cancellation. Before #0126 this test used an
+// equivalent delayedMailer wrapping mailer.Send, since that was the async
+// work SubscribeHandler.Close waited on; #0126 removed SubscribeHandler's
+// mailer entirely (sending moved to internal/mailing.OutboxWorker, a
+// separate process this test does not exercise) and made Create itself the
+// last async DB write processMutateJob performs for a brand-new signup — so
+// this delays Create instead, preserving the exact "Close must wait out
+// slow, context-ignoring async work with its OWN budget, independent of
+// Shutdown's" property this test proves. entered is closed the instant
+// Create is invoked, so a test can confirm the mutation has genuinely
+// started (been dequeued by processMutateJob) before proceeding — the same
+// synchronization idiom shutdown_wiring_test.go's blockingTestMailer uses.
 //
-// trueStart records the wall-clock instant Send itself begins, on the worker
-// goroutine, BEFORE entered is closed. This is deliberately not the same
-// moment the test goroutine observes via <-entered: the test goroutine only
-// runs after the scheduler gets around to it, which under load can lag the
-// real Send entry by hundreds of ms (measured directly during #0087's review:
-// lags of 177-327ms were routine). Using the test's own receive time as the
-// send-start reference systematically UNDERcounts elapsed time by that lag,
-// which is what made the old version of this test false-fail on healthy code
-// — see issues/0087.md's review notes. Reading trueStart instead measures
-// from where the work actually starts, not from where a different goroutine
-// happens to notice it did.
-type delayedMailer struct {
+// trueStart records the wall-clock instant the delay itself begins, on the
+// mutate-worker goroutine, BEFORE entered is closed. This is deliberately
+// not the same moment the test goroutine observes via <-entered: the test
+// goroutine only runs after the scheduler gets around to it, which under
+// load can lag the real entry by hundreds of ms (measured directly during
+// #0087's review: lags of 177-327ms were routine). Using the test's own
+// receive time as the start reference systematically UNDERcounts elapsed
+// time by that lag, which is what made the old version of this test
+// false-fail on healthy code under load — see issues/0087.md's review
+// notes. Reading trueStart instead measures from where the work actually
+// starts, not from where a different goroutine happens to notice it did.
+type delayedSubscriberStore struct {
+	*subscribers.Store
 	delay   time.Duration
 	entered chan struct{}
 
@@ -55,20 +63,23 @@ type delayedMailer struct {
 	trueStart time.Time
 }
 
-func (m *delayedMailer) Send(_ context.Context, _ mailing.Message) (string, error) {
+func (m *delayedSubscriberStore) Create(ctx context.Context, in subscribers.NewSignup, now time.Time) (subscribers.Subscriber, error) {
 	m.mu.Lock()
 	m.trueStart = time.Now()
 	m.mu.Unlock()
 	close(m.entered)
-	time.Sleep(m.delay)
-	return "delayed-sent", nil
+	time.Sleep(m.delay) // deliberately ignores ctx — see the type's doc comment
+	return m.Store.Create(ctx, in, now)
 }
 
-// SendStart returns the instant Send began, valid only after entered has
-// been observed closed (the mu guards the write in Send against this read
-// racing it before that happens; callers are expected to synchronize via
-// entered first, exactly as this test does).
-func (m *delayedMailer) SendStart() time.Time {
+// SendStart returns the instant the delay began, valid only after entered
+// has been observed closed (the mu guards the write in Create against this
+// read racing it before that happens; callers are expected to synchronize
+// via entered first, exactly as this test does). Named SendStart (not
+// CreateStart) to keep this test's own prose below, which still talks in
+// terms of "the send" for readability, self-consistent without a wider
+// rename.
+func (m *delayedSubscriberStore) SendStart() time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.trueStart
@@ -79,7 +90,7 @@ func (m *delayedMailer) SendStart() time.Time {
 // forces srv.Shutdown to consume its ENTIRE budget (http.Server.Shutdown
 // does not cancel in-flight request contexts, and Stream — events.go —
 // returns only on client disconnect), and a concurrently in-flight
-// POST /api/subscribe send (via delayedMailer, sendDelay above) needs real
+// POST /api/subscribe send (via delayedSubscriberStore, sendDelay above) needs real
 // time of its own to finish after that.
 //
 // The observable signal is TIMING of mountAndServe's own return (via errCh),
@@ -88,13 +99,13 @@ func (m *delayedMailer) SendStart() time.Time {
 // test process actually exits when mountAndServe returns (unlike
 // production, where returning from mountAndServe means the process is about
 // to exit and anything Close didn't wait for can be cut short). Elapsed
-// time since the send worker actually started delayedMailer.Send (mailer.entered,
+// time since the mutate worker actually started delayedSubscriberStore.Create (mailer.entered,
 // which happens moments before SIGTERM is sent below) is the one thing that
 // directly reveals whether Close was given its own real budget:
 //
 //   - With shutdownServerTimeout and subscribeCloseTimeout as independent
 //     contexts (the fix): Shutdown consumes its own dedicated budget (the
-//     SSE stream never goes idle) while delayedMailer's sleep runs
+//     SSE stream never goes idle) while delayedSubscriberStore's sleep runs
 //     concurrently in the background (it is a separate goroutine, not
 //     something Shutdown or Close start), then Close is called with a
 //     FRESH budget and genuinely waits out however much of sendDelay is
@@ -108,7 +119,7 @@ func (m *delayedMailer) SendStart() time.Time {
 //     transcript): Shutdown consumes the ENTIRE shared budget (same
 //     reason), leaving Close's ctx already expired the instant it is
 //     called. Close's own select hits ctx.Done() immediately, returning
-//     WITHOUT waiting for delayedMailer at all — regardless of how much of
+//     WITHOUT waiting for delayedSubscriberStore at all — regardless of how much of
 //     its sleep has actually elapsed. Total elapsed lands close to just
 //     testShutdownServerTimeout, well short of sendDelay.
 //
@@ -177,10 +188,10 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 	eventsH := handlers.NewEventsHandler(broker)
 
 	const sendDelay = 600 * time.Millisecond
-	mailer := &delayedMailer{delay: sendDelay, entered: make(chan struct{})}
+	mailer := &delayedSubscriberStore{Store: subscribers.NewStore(pool), delay: sendDelay, entered: make(chan struct{})}
 	subscribeH := handlers.NewSubscribeHandler(
-		subscribers.NewStore(pool), interests.NewStore(pool), mailer,
-		handlers.NoSuppressions{}, nil, audit.New(pool), cfg.BaseURL, slog.Default(),
+		mailer, interests.NewStore(pool),
+		handlers.NoSuppressions{}, audit.New(pool), cfg.BaseURL, slog.Default(),
 	)
 
 	// Test-only override of the production budgets (#0087's shutdownServerTimeout
@@ -274,7 +285,7 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 		t.Fatalf("subscribe status = %d, want 202", subResp.StatusCode)
 	}
 
-	// sendStart marks the moment delayedMailer's sendDelay clock actually
+	// sendStart marks the moment delayedSubscriberStore's sendDelay clock actually
 	// starts — used below instead of "time since SIGTERM" because the send
 	// worker starts sleeping the instant it dequeues the job (moments
 	// before SIGTERM is sent, not after Close is called), so measuring from
@@ -289,11 +300,11 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 	// up to ~330ms during #0087's review). That lag was subtracted straight
 	// out of the elapsed measurement below, which is exactly what made the
 	// old version of this test false-fail on healthy code under load. See
-	// delayedMailer's doc comment and issues/0087.md's review notes.
+	// delayedSubscriberStore's doc comment and issues/0087.md's review notes.
 	select {
 	case <-mailer.entered:
 	case <-time.After(2 * time.Second):
-		t.Fatal("delayedMailer.Send was never entered — nothing in flight; test invalid")
+		t.Fatal("delayedSubscriberStore.Create was never entered — nothing in flight; test invalid")
 	}
 	sendStart := mailer.SendStart()
 

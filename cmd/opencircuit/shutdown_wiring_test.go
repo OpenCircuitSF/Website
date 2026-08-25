@@ -21,28 +21,35 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
-	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
-// blockingTestMailer blocks Send until either release is closed (by the
-// test) or ctx is cancelled, closing entered the instant Send is called. A
-// package-local twin of internal/handlers' own unexported blockingMailer
-// test double (unreachable from here) — this package only needs the one
-// property it proves: a send genuinely caught in flight.
-type blockingTestMailer struct {
+// blockingTestSubscriberStore blocks Create until either release is closed
+// (by the test) or ctx is cancelled, closing entered the instant Create is
+// called. A package-local twin of internal/handlers' own unexported
+// blockingSubscriberStore test double (unreachable from here) — this
+// package only needs the one property it proves: a subscription mutation
+// genuinely caught in flight. Before #0126 this file used an equivalent
+// blockingTestMailer wrapping mailer.Send, since that was the async work
+// SubscribeHandler.Close waited on; #0126 removed the mailer entirely
+// (sending moved to internal/mailing.OutboxWorker, a separate process this
+// test does not exercise) and made Create the last async DB write
+// processMutateJob performs for a brand-new signup, so this blocks Create
+// instead.
+type blockingTestSubscriberStore struct {
+	*subscribers.Store
 	entered chan struct{}
 	release chan struct{}
 }
 
-func (m *blockingTestMailer) Send(ctx context.Context, _ mailing.Message) (string, error) {
-	close(m.entered)
+func (b *blockingTestSubscriberStore) Create(ctx context.Context, in subscribers.NewSignup, now time.Time) (subscribers.Subscriber, error) {
+	close(b.entered)
 	select {
-	case <-m.release:
-		return "blocked-then-sent", nil
+	case <-b.release:
+		return b.Store.Create(ctx, in, now)
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return subscribers.Subscriber{}, ctx.Err()
 	}
 }
 
@@ -50,13 +57,19 @@ func (m *blockingTestMailer) Send(ctx context.Context, _ mailing.Message) (strin
 // proof that mountAndServe's graceful-shutdown wiring works against a REAL
 // os.Signal — not merely a direct h.Close(ctx) call, which
 // internal/handlers' own
-// TestSubscribeHandler_Close_ReleasesInFlightClaimAndRetrySendsImmediately
-// already covers at the unit level. This drives a real HTTP listener via
+// TestSubscribeHandler_Close_InterruptsInFlightMutationPromptly already
+// covers at the unit level. This drives a real HTTP listener via
 // mountAndServe (the exact function servePostgres calls), sends the
-// process a genuine SIGTERM while a confirmation send is caught inside
-// mailer.Send, and confirms mountAndServe returns promptly with the claim
-// released — matching issues/0081.md's ## Root cause reproduction, except
-// this time the graceful-shutdown wiring is exercised instead of skipped.
+// process a genuine SIGTERM while a brand-new signup's Create is caught in
+// flight, and confirms mountAndServe returns promptly with no half-created
+// row left behind — matching issues/0081.md's ## Root cause reproduction,
+// except this time the graceful-shutdown wiring is exercised instead of
+// skipped. #0126 note: before #0126, this scenario left a STAMPED-BUT-
+// UNSENT confirm_sent_at claim that had to be explicitly released; since
+// Create now claims-and-enqueues atomically in one transaction, an
+// interrupted Create never reaches the database at all (blockingTestSubscriberStore
+// returns ctx.Err() BEFORE delegating), so there is no claim to release —
+// the row simply does not exist yet, a stronger property than "released".
 //
 // Sending SIGTERM to this test's own process is safe and does not
 // terminate the test binary: mountAndServe registers
@@ -101,10 +114,10 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 		WebAuthnRPOrigin: baseURL,
 	}
 
-	blocked := &blockingTestMailer{entered: make(chan struct{}), release: make(chan struct{})}
+	blocked := &blockingTestSubscriberStore{Store: subscribers.NewStore(pool), entered: make(chan struct{}), release: make(chan struct{})}
 	subscribeH := handlers.NewSubscribeHandler(
-		subscribers.NewStore(pool), interests.NewStore(pool), blocked,
-		handlers.NoSuppressions{}, nil, audit.New(pool), cfg.BaseURL, slog.Default(),
+		blocked, interests.NewStore(pool),
+		handlers.NoSuppressions{}, audit.New(pool), cfg.BaseURL, slog.Default(),
 	)
 
 	// mountAndServe calls requireSession/requireAdmin immediately while
@@ -177,19 +190,18 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 		t.Fatalf("status = %d, want 202", resp.StatusCode)
 	}
 
-	// Wait for the send to actually be in flight — the moment a real
+	// Wait for the mutation to actually be in flight — the moment a real
 	// SIGTERM (about to be sent below) needs to interrupt.
 	select {
 	case <-blocked.entered:
 	case <-time.After(2 * time.Second):
-		t.Fatal("mailer.Send was never entered — nothing in flight to interrupt; test invalid")
+		t.Fatal("Create was never entered — nothing in flight to interrupt; test invalid")
 	}
 
-	confirmSentAt := readConfirmSentAt(t, pool, email)
-	if confirmSentAt == nil {
-		t.Fatal("confirm_sent_at = nil before shutdown, want stamped — the claim was never taken; test invalid")
+	if subscriberExistsWiring(t, pool, email) {
+		t.Fatal("a subscriber row already exists before shutdown — Create should still be blocked; test invalid")
 	}
-	t.Logf("before SIGTERM: confirm_sent_at=%v emails actually sent=0", *confirmSentAt)
+	t.Logf("before SIGTERM: Create is blocked, no subscriber row yet")
 
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatalf("kill self: %v", err)
@@ -198,10 +210,9 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 	// mountAndServe should return promptly, well under
 	// shutdownServerTimeout+subscribeCloseTimeout (#0087 split what used to
 	// be one shutdownTimeout): srv.Shutdown is fast (no handler blocks on a
-	// network call), and
-	// subscribeH.Close's sendCtx cancellation interrupts blocked.Send
-	// almost immediately rather than waiting the full sendJobTimeout or
-	// for release (which this test never closes).
+	// network call), and subscribeH.Close's sendCtx cancellation interrupts
+	// the blocked Create almost immediately rather than waiting for
+	// release (which this test never closes).
 	select {
 	case err := <-errCh:
 		if err != nil {
@@ -211,29 +222,25 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 		t.Fatal("mountAndServe did not return within 5s of SIGTERM — graceful shutdown appears to be hanging")
 	}
 
-	confirmSentAt = readConfirmSentAt(t, pool, email)
-	t.Logf("after SIGTERM-driven shutdown: confirm_sent_at=%v", confirmSentAt)
-	if confirmSentAt != nil {
-		t.Fatalf("confirm_sent_at = %v after SIGTERM-driven shutdown, want nil — the claim must be released so a retry is not silenced for subscribeResendCooldown", *confirmSentAt)
+	if subscriberExistsWiring(t, pool, email) {
+		t.Fatal("a subscriber row was created after SIGTERM-driven shutdown — an interrupted Create must not have reached the database")
 	}
+	t.Logf("after SIGTERM-driven shutdown: no half-created row left behind")
 
-	// Retry, immediately, against the same database row: must send for
-	// real now. Driven directly against a fresh handler (not a second real
+	// Retry, immediately, against the same address: must succeed for real
+	// now. Driven directly against a fresh handler (not a second real
 	// listener — that mechanism is already covered by
 	// TestMountAndServe_RateLimitsSubscribe and by the unit-level sibling
 	// test) so this test stays focused on the one thing it's uniquely
 	// proving: the real-signal path.
-	after := &mailing.RecordingMailer{}
 	retryH := handlers.NewSubscribeHandler(
-		subscribers.NewStore(pool), interests.NewStore(pool), after,
-		handlers.NoSuppressions{}, nil, nil, cfg.BaseURL, slog.Default(),
+		subscribers.NewStore(pool), interests.NewStore(pool),
+		handlers.NoSuppressions{}, nil, cfg.BaseURL, slog.Default(),
 	)
 	defer func() {
 		// wiringDBOpTimeout (#0084): Close's own work here is a fast DB
-		// UPDATE releasing the confirmation claim — the same class of
-		// single-statement operation the other wiring tests bound with this
-		// constant, not a long-running send (no mailer.Send blocks this
-		// handler's Close).
+		// transaction (Create's insert+claim+enqueue), not a long-running
+		// network send.
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), wiringDBOpTimeout)
 		defer closeCancel()
 		if err := retryH.Close(closeCtx); err != nil {
@@ -251,26 +258,44 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
-	for len(after.Sent()) == 0 && time.Now().Before(deadline) {
+	for !subscriberExistsWiring(t, pool, email) && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if got := len(after.Sent()); got != 1 {
-		t.Fatalf("retry sent %d emails, want exactly 1 — the released claim must allow an immediate real send", got)
+	if !subscriberExistsWiring(t, pool, email) {
+		t.Fatal("retry: no subscriber row was created — the interrupted first attempt must not have silenced a real retry")
 	}
-	t.Logf("retry: 1 real email sent — the visitor's next attempt is no longer silenced")
+	if got := outboundQueueCountWiring(t, pool, email); got != 1 {
+		t.Fatalf("retry: outbound_queue rows for %q = %d, want exactly 1", email, got)
+	}
+	t.Logf("retry: subscriber created and confirmation enqueued — the visitor's next attempt is no longer silenced")
 }
 
-// readConfirmSentAt reads subscribers.confirm_sent_at for email directly,
-// bypassing internal/handlers/internal/subscribers so this test can observe
-// the claim column from outside either package, the same way an operator's
-// own query would.
-func readConfirmSentAt(t *testing.T, pool *pgxpool.Pool, email string) *time.Time {
+// subscriberExistsWiring reports whether a subscribers row exists for
+// email — this file's own copy of internal/handlers' subscriberExists
+// (unreachable from here), reading directly so this test can observe the
+// row from outside either package, the same way an operator's own query
+// would.
+func subscriberExistsWiring(t *testing.T, pool *pgxpool.Pool, email string) bool {
 	t.Helper()
-	var confirmSentAt *time.Time
+	var n int
 	if err := pool.QueryRow(context.Background(),
-		`SELECT confirm_sent_at FROM subscribers WHERE email = $1`, email,
-	).Scan(&confirmSentAt); err != nil {
-		t.Fatalf("read confirm_sent_at for %s: %v", email, err)
+		`SELECT count(*) FROM subscribers WHERE email = $1`, email,
+	).Scan(&n); err != nil {
+		t.Fatalf("count subscriber %s: %v", email, err)
 	}
-	return confirmSentAt
+	return n > 0
+}
+
+// outboundQueueCountWiring counts outbound_queue rows for recipient — this
+// file's own copy of internal/handlers' outboundQueueCountFor (unreachable
+// from here).
+func outboundQueueCountWiring(t *testing.T, pool *pgxpool.Pool, recipient string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE recipient = $1`, recipient,
+	).Scan(&n); err != nil {
+		t.Fatalf("count outbound_queue for %s: %v", recipient, err)
+	}
+	return n
 }

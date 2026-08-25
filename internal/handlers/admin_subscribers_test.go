@@ -16,7 +16,6 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
-	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
@@ -56,13 +55,15 @@ func testSubscriberEmail(t *testing.T) string {
 }
 
 // newTestSubscribeHandler builds a real *SubscribeHandler over the given
-// pool's subscribers/interests stores, backed by a RecordingMailer (no
-// network) — the same dependency Create (admin_subscribers.go) drives
-// through its unexported newSignup/existingSignup dispatch.
+// pool's subscribers/interests stores — the same dependency Create
+// (admin_subscribers.go) drives through its unexported newSignup/
+// existingSignup dispatch. #0126 removed the mailer parameter entirely:
+// sending now happens out-of-band via internal/mailing.OutboxWorker
+// draining internal/outbox, not through this handler.
 func newTestSubscribeHandler(pool *pgxpool.Pool) *SubscribeHandler {
 	return NewSubscribeHandler(
-		subscribers.NewStore(pool), interests.NewStore(pool), &mailing.RecordingMailer{},
-		NoSuppressions{}, nil, nil, "http://localhost:8080", slog.Default(),
+		subscribers.NewStore(pool), interests.NewStore(pool),
+		NoSuppressions{}, nil, "http://localhost:8080", slog.Default(),
 	)
 }
 

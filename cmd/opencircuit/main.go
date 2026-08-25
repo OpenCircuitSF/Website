@@ -196,8 +196,8 @@ func servePostgres(cfg *config.Config) error {
 	interestsStore := interests.NewStore(pool)
 	suppressionsStore := subscribers.NewSuppressionStore(pool)
 	subscribeH := handlers.NewSubscribeHandler(
-		subscribersStore, interestsStore, sesSender,
-		suppressionsStore, store, auditLogger, cfg.BaseURL, slog.Default(),
+		subscribersStore, interestsStore,
+		suppressionsStore, auditLogger, cfg.BaseURL, slog.Default(),
 	)
 
 	// sesEventsStore (internal/sesnotify, #0038) is constructed here, ahead of

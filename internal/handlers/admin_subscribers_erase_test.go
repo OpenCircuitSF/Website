@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
-	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
@@ -241,7 +240,7 @@ func TestAdminSubscribers_Erase_ThenAddressStaysBlockedFromResubscribing(t *test
 	// real SubscribeHandler wired to a REAL SuppressionStore over the same
 	// pool — the exact production wiring cmd/opencircuit/main.go uses.
 	realSuppression := subscribers.NewSuppressionStore(pool)
-	h, mux := subscribeMux(t, pool, &mailing.RecordingMailer{}, realSuppression)
+	h, mux := subscribeMux(t, pool, realSuppression)
 	subResp := doSubscribe(t, h, mux, subscribeBody(email, nil, time.Now()))
 	defer subResp.Body.Close()
 	if subResp.StatusCode != http.StatusAccepted {

@@ -907,150 +907,227 @@ func TestDB_SubscriberInterestsCascadeDelete(t *testing.T) {
 	}
 }
 
-// TestCreate_LeavesConfirmSentAtNil is the store-layer half of #0026's
-// carried-in "Create stamps confirm_sent_at before the SES call" fix: Create
-// must NOT stamp confirm_sent_at at INSERT time, so a subsequent send
-// failure (handled entirely in the #0026 handler, which never calls
-// MarkConfirmationSent unless mailer.Send actually succeeds) cannot consume
-// the once-per-hour resend window for an email that was never delivered.
-func TestCreate_LeavesConfirmSentAtNil(t *testing.T) {
+// TestCreate_ClaimsAndEnqueuesConfirmationAtomically replaces this
+// package's pre-#0126 test asserting that Create left confirm_sent_at nil
+// (the #0026-era design, where a separate later claim stamped it only
+// after a successful send). #0126 changed that: Create now claims and
+// enqueues the confirmation INSIDE its own transaction (a new row has no
+// cooldown to lose, so the claim there is unconditional), so
+// confirm_sent_at IS stamped by the time Create returns, and a matching
+// outbound_queue row already exists — see this issue's plan §4 for why a
+// two-step Create-then-claim would leave exactly the window "a committed
+// signup can never have an unsent confirmation" forbids.
+func TestCreate_ClaimsAndEnqueuesConfirmationAtomically(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	sub, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sub.ConfirmSentAt == nil || !sub.ConfirmSentAt.Equal(now) {
+		t.Fatalf("ConfirmSentAt = %v, want stamped to %v (Create's own atomic claim)", sub.ConfirmSentAt, now)
+	}
+
+	var queuedCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'confirmation' AND status = 'queued'`,
+		sub.ID,
+	).Scan(&queuedCount); err != nil {
+		t.Fatalf("counting outbound_queue rows: %v", err)
+	}
+	if queuedCount != 1 {
+		t.Fatalf("queued confirmation rows for subscriber %d = %d, want 1", sub.ID, queuedCount)
+	}
+
+	var eventCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE subscriber_id = $1 AND action = 'signup_requested'`,
+		sub.ID,
+	).Scan(&eventCount); err != nil {
+		t.Fatalf("counting subscriber_events rows: %v", err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("signup_requested events for subscriber %d = %d, want 1", sub.ID, eventCount)
+	}
+}
+
+// TestCreate_SyntheticSkipsClaimAndEnqueue proves #0046's dedicated
+// campaign-test recipient row (admin_campaign_preview.go's
+// ensureTestRecipient, NewSignup.Synthetic: true) still never triggers a
+// real confirmation send — the behavior it had before #0126, preserved
+// deliberately rather than incidentally (see Create's doc comment).
+func TestCreate_SyntheticSkipsClaimAndEnqueue(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 
-	sub, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+	sub, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour, Synthetic: true}, time.Now())
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if sub.ConfirmSentAt != nil {
-		t.Fatalf("ConfirmSentAt = %v immediately after Create, want nil (see #0026's confirm_sent_at decision)", *sub.ConfirmSentAt)
+		t.Fatalf("ConfirmSentAt = %v for a synthetic signup, want nil (no real send should ever be claimed)", *sub.ConfirmSentAt)
+	}
+
+	var count int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1`, sub.ID,
+	).Scan(&count); err != nil {
+		t.Fatalf("counting outbound_queue rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("outbound_queue rows for a synthetic subscriber = %d, want 0", count)
 	}
 }
 
-// TestClaimConfirmationSend_ClaimsWhenColdAndStampsConfirmSentAt is the
-// store-layer replacement for the old (unconditional-stamp) test: claiming
-// on a fresh row (ConfirmSentAt nil) must succeed and stamp the column,
-// exactly like MarkConfirmationSent used to, without touching the
-// token/status.
-func TestClaimConfirmationSend_ClaimsWhenColdAndStampsConfirmSentAt(t *testing.T) {
+// coldConfirmationSubscriber inserts a pending subscriber row DIRECTLY
+// (bypassing Create, which since #0126 claims and enqueues a confirmation
+// of its own) with confirm_sent_at NULL and no outbound_queue row, so
+// ClaimAndEnqueueConfirmation's own claim-and-enqueue behavior can be
+// tested in isolation, with a known starting queue-row count of zero.
+func coldConfirmationSubscriber(t *testing.T, pool *pgxpool.Pool, now time.Time) Subscriber {
+	t.Helper()
+	token := fmt.Sprintf("ctok-%d", testdb.Unique())
+	manageToken := fmt.Sprintf("mtok-%d", testdb.Unique())
+	var sub Subscriber
+	err := pool.QueryRow(context.Background(),
+		`INSERT INTO subscribers
+		     (email, status, confirm_token, confirm_sent_at, confirm_expires_at, manage_token, created_at, updated_at)
+		 VALUES (lower(trim($1)), $2, $3, NULL, $4, $5, $6, $6)
+		 RETURNING `+subscriberColumns,
+		uniqueEmail(t), StatusPending, token, now.Add(time.Hour), manageToken, now,
+	).Scan(
+		&sub.ID, &sub.Email, &sub.Status, &sub.ConfirmToken, &sub.ConfirmSentAt,
+		&sub.ConfirmExpiresAt, &sub.ConfirmedAt, &sub.AlreadySubscribedSentAt, &sub.ManageToken,
+		&sub.SignupIP, &sub.SignupUserAgent, &sub.UTMSource, &sub.UTMMedium, &sub.UTMCampaign,
+		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.CreatedAt, &sub.UpdatedAt, &sub.Synthetic,
+	)
+	if err != nil {
+		t.Fatalf("seed cold-confirmation subscriber: %v", err)
+	}
+	return sub
+}
+
+// TestClaimAndEnqueueConfirmation_ClaimsWhenColdAndEnqueues is the
+// store-layer proof that a successful claim both stamps confirm_sent_at and
+// commits a matching outbound_queue row in the same transaction.
+func TestClaimAndEnqueueConfirmation_ClaimsWhenColdAndEnqueues(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
-	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	sub := coldConfirmationSubscriber(t, pool, now)
 
-	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+	sentAt := now.Add(time.Minute)
+	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, sentAt, time.Hour, time.Hour)
 	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	sentAt := time.Now().Add(time.Minute).UTC().Truncate(time.Second)
-	claimed, err := store.ClaimConfirmationSend(ctx, created.ID, sentAt, time.Hour)
-	if err != nil {
-		t.Fatalf("ClaimConfirmationSend: %v", err)
+		t.Fatalf("ClaimAndEnqueueConfirmation: %v", err)
 	}
 	if !claimed {
 		t.Fatal("claimed = false on a fresh (confirm_sent_at = NULL) row, want true")
 	}
 
-	updated, confirmSentAt := readSubscriberByID(t, pool, created.ID)
+	status, confirmSentAt := readSubscriberByID(t, pool, sub.ID)
 	if confirmSentAt == nil || !confirmSentAt.Equal(sentAt) {
 		t.Fatalf("confirm_sent_at = %v, want %v", confirmSentAt, sentAt)
 	}
-	// The token/status themselves must be untouched — this method claims
-	// exactly one column.
-	if updated != StatusPending {
-		t.Errorf("Status = %q, want unchanged %q", updated, StatusPending)
+	if status != StatusPending {
+		t.Errorf("Status = %q, want unchanged %q", status, StatusPending)
+	}
+
+	var queuedCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'confirmation' AND status = 'queued'`,
+		sub.ID,
+	).Scan(&queuedCount); err != nil {
+		t.Fatalf("counting outbound_queue rows: %v", err)
+	}
+	if queuedCount != 1 {
+		t.Fatalf("queued confirmation rows = %d, want 1", queuedCount)
 	}
 }
 
-func TestClaimConfirmationSend_RefusesWithinCooldown(t *testing.T) {
+func TestClaimAndEnqueueConfirmation_RefusesWithinCooldown_EnqueuesNothing(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
-	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
+	sub := coldConfirmationSubscriber(t, pool, now)
 
-	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if claimed, err := store.ClaimConfirmationSend(ctx, created.ID, now, time.Hour); err != nil || !claimed {
+	if claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour); err != nil || !claimed {
 		t.Fatalf("first claim: claimed=%v err=%v, want true, nil", claimed, err)
 	}
 
 	// A second claim attempt 30 minutes later — still within the hour
-	// cooldown — must be refused and must leave confirm_sent_at unchanged.
+	// cooldown — must be refused, leave confirm_sent_at unchanged, and
+	// enqueue nothing.
 	second := now.Add(30 * time.Minute)
-	claimed, err := store.ClaimConfirmationSend(ctx, created.ID, second, time.Hour)
+	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, second, time.Hour, time.Hour)
 	if err != nil {
-		t.Fatalf("second ClaimConfirmationSend: %v", err)
+		t.Fatalf("second ClaimAndEnqueueConfirmation: %v", err)
 	}
 	if claimed {
 		t.Fatal("claimed = true within the cooldown window, want false")
 	}
-	_, confirmSentAt := readSubscriberByID(t, pool, created.ID)
+	_, confirmSentAt := readSubscriberByID(t, pool, sub.ID)
 	if confirmSentAt == nil || !confirmSentAt.Equal(now) {
 		t.Errorf("confirm_sent_at = %v, want unchanged %v", confirmSentAt, now)
 	}
+
+	var queuedCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'confirmation'`, sub.ID,
+	).Scan(&queuedCount); err != nil {
+		t.Fatalf("counting outbound_queue rows: %v", err)
+	}
+	if queuedCount != 1 {
+		t.Fatalf("queued confirmation rows after a refused second claim = %d, want 1 (only the first claim's row)", queuedCount)
+	}
 }
 
-func TestClaimConfirmationSend_SucceedsAgainAfterCooldownExpires(t *testing.T) {
+func TestClaimAndEnqueueConfirmation_SucceedsAgainAfterCooldownExpires(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
-	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
+	sub := coldConfirmationSubscriber(t, pool, now)
 
-	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if claimed, err := store.ClaimConfirmationSend(ctx, created.ID, now, time.Hour); err != nil || !claimed {
+	if claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour); err != nil || !claimed {
 		t.Fatalf("first claim: claimed=%v err=%v, want true, nil", claimed, err)
 	}
 
 	later := now.Add(90 * time.Minute)
-	claimed, err := store.ClaimConfirmationSend(ctx, created.ID, later, time.Hour)
+	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, later, time.Hour, time.Hour)
 	if err != nil {
-		t.Fatalf("second ClaimConfirmationSend: %v", err)
+		t.Fatalf("second ClaimAndEnqueueConfirmation: %v", err)
 	}
 	if !claimed {
 		t.Fatal("claimed = false after the cooldown expired, want true")
 	}
-	_, confirmSentAt := readSubscriberByID(t, pool, created.ID)
+	_, confirmSentAt := readSubscriberByID(t, pool, sub.ID)
 	if confirmSentAt == nil || !confirmSentAt.Equal(later) {
 		t.Errorf("confirm_sent_at = %v, want re-stamped to %v", confirmSentAt, later)
 	}
-}
 
-func TestClaimConfirmationSend_NotFound(t *testing.T) {
-	pool := testPool(t)
-	store := NewStore(pool)
-
-	claimed, err := store.ClaimConfirmationSend(context.Background(), -1, time.Now(), time.Hour)
-	if err != nil {
-		t.Fatalf("ClaimConfirmationSend on a nonexistent id returned an error, want (false, nil): %v", err)
+	var queuedCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'confirmation'`, sub.ID,
+	).Scan(&queuedCount); err != nil {
+		t.Fatalf("counting outbound_queue rows: %v", err)
 	}
-	if claimed {
-		t.Fatal("claimed = true for a nonexistent subscriber id")
+	if queuedCount != 2 {
+		t.Fatalf("queued confirmation rows after two successful claims = %d, want 2", queuedCount)
 	}
 }
 
-// TestClaimConfirmationSend_OnlyOneWinnerUnderConcurrency is the store-layer
-// proof of #0026's review finding 3: N concurrent claim attempts against
-// the SAME cold row must produce exactly one winner, never more — this is
-// what makes the atomic UPDATE...WHERE claim safe against the exact race
-// the read-then-write MarkConfirmationSent design had (8 simultaneous
-// submits of a brand-new address sent 3 confirmation emails; 8 simultaneous
-// submits of a pending address with confirm_sent_at NULL sent 7). See
-// internal/handlers/subscribe_test.go for the end-to-end HTTP-level
-// reproduction of both cases.
-func TestClaimConfirmationSend_OnlyOneWinnerUnderConcurrency(t *testing.T) {
+// TestClaimAndEnqueueConfirmation_OnlyOneWinnerUnderConcurrency is the
+// store-layer proof of #0026's review finding 3, carried forward under
+// #0126's atomic claim-and-enqueue: N concurrent claim attempts against the
+// SAME cold row must produce exactly one winner and exactly one enqueued
+// row, never more.
+func TestClaimAndEnqueueConfirmation_OnlyOneWinnerUnderConcurrency(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
-	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
-
-	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
+	sub := coldConfirmationSubscriber(t, pool, now)
 
 	const concurrency = 8
 	results := make(chan bool, concurrency)
@@ -1059,9 +1136,9 @@ func TestClaimConfirmationSend_OnlyOneWinnerUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			claimed, err := store.ClaimConfirmationSend(ctx, created.ID, now, time.Hour)
+			claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour)
 			if err != nil {
-				t.Errorf("ClaimConfirmationSend: %v", err)
+				t.Errorf("ClaimAndEnqueueConfirmation: %v", err)
 				return
 			}
 			results <- claimed
@@ -1079,89 +1156,55 @@ func TestClaimConfirmationSend_OnlyOneWinnerUnderConcurrency(t *testing.T) {
 	if winners != 1 {
 		t.Fatalf("winners = %d out of %d concurrent claims against one cold row, want exactly 1", winners, concurrency)
 	}
-}
 
-func TestReleaseConfirmationClaim_AllowsImmediateRetry(t *testing.T) {
-	pool := testPool(t)
-	store := NewStore(pool)
-	ctx := context.Background()
-	now := time.Now().UTC().Truncate(time.Second)
-
-	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
+	var queuedCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'confirmation'`, sub.ID,
+	).Scan(&queuedCount); err != nil {
+		t.Fatalf("counting outbound_queue rows: %v", err)
 	}
-	if claimed, err := store.ClaimConfirmationSend(ctx, created.ID, now, time.Hour); err != nil || !claimed {
-		t.Fatalf("first claim: claimed=%v err=%v, want true, nil", claimed, err)
-	}
-
-	// Simulate a failed send: release the claim.
-	if err := store.ReleaseConfirmationClaim(ctx, created.ID, now); err != nil {
-		t.Fatalf("ReleaseConfirmationClaim: %v", err)
-	}
-	_, confirmSentAt := readSubscriberByID(t, pool, created.ID)
-	if confirmSentAt != nil {
-		t.Fatalf("confirm_sent_at = %v after release, want nil", confirmSentAt)
-	}
-
-	// A claim attempt a moment later (well within what would have been the
-	// cooldown had the first send succeeded) must now succeed.
-	retryAt := now.Add(time.Second)
-	claimed, err := store.ClaimConfirmationSend(ctx, created.ID, retryAt, time.Hour)
-	if err != nil {
-		t.Fatalf("retry ClaimConfirmationSend: %v", err)
-	}
-	if !claimed {
-		t.Fatal("claimed = false immediately after releasing a failed send's claim, want true (no hour-long lockout for a message never delivered)")
+	if queuedCount != 1 {
+		t.Fatalf("queued confirmation rows after %d concurrent claims = %d, want exactly 1", concurrency, queuedCount)
 	}
 }
 
-func TestClaimAlreadySubscribedSend_ClaimsOnceThenCoolsDown(t *testing.T) {
+func TestClaimAndEnqueueAlreadySubscribed_ClaimsOnceThenCoolsDown(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
 
 	id := seedActiveSubscriber(t, pool)
-
-	claimed, err := store.ClaimAlreadySubscribedSend(ctx, id, now, time.Hour)
+	sub, err := store.GetByID(ctx, id)
 	if err != nil {
-		t.Fatalf("first ClaimAlreadySubscribedSend: %v", err)
+		t.Fatalf("GetByID: %v", err)
+	}
+
+	claimed, err := store.ClaimAndEnqueueAlreadySubscribed(ctx, sub, now, time.Hour)
+	if err != nil {
+		t.Fatalf("first ClaimAndEnqueueAlreadySubscribed: %v", err)
 	}
 	if !claimed {
 		t.Fatal("claimed = false on a fresh (already_subscribed_sent_at = NULL) row, want true")
 	}
 
 	// A second submit a minute later must be refused.
-	claimed2, err := store.ClaimAlreadySubscribedSend(ctx, id, now.Add(time.Minute), time.Hour)
+	claimed2, err := store.ClaimAndEnqueueAlreadySubscribed(ctx, sub, now.Add(time.Minute), time.Hour)
 	if err != nil {
-		t.Fatalf("second ClaimAlreadySubscribedSend: %v", err)
+		t.Fatalf("second ClaimAndEnqueueAlreadySubscribed: %v", err)
 	}
 	if claimed2 {
 		t.Fatal("claimed = true on the second submit within the cooldown, want false")
 	}
-}
 
-func TestReleaseAlreadySubscribedClaim_AllowsImmediateRetry(t *testing.T) {
-	pool := testPool(t)
-	store := NewStore(pool)
-	ctx := context.Background()
-	now := time.Now().UTC().Truncate(time.Second)
-
-	id := seedActiveSubscriber(t, pool)
-
-	if claimed, err := store.ClaimAlreadySubscribedSend(ctx, id, now, time.Hour); err != nil || !claimed {
-		t.Fatalf("first claim: claimed=%v err=%v, want true, nil", claimed, err)
+	var queuedCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'already_subscribed'`, id,
+	).Scan(&queuedCount); err != nil {
+		t.Fatalf("counting outbound_queue rows: %v", err)
 	}
-	if err := store.ReleaseAlreadySubscribedClaim(ctx, id, now); err != nil {
-		t.Fatalf("ReleaseAlreadySubscribedClaim: %v", err)
-	}
-	claimed, err := store.ClaimAlreadySubscribedSend(ctx, id, now.Add(time.Second), time.Hour)
-	if err != nil {
-		t.Fatalf("retry ClaimAlreadySubscribedSend: %v", err)
-	}
-	if !claimed {
-		t.Fatal("claimed = false immediately after release, want true")
+	if queuedCount != 1 {
+		t.Fatalf("queued already_subscribed rows = %d, want 1 (only the first, successful claim)", queuedCount)
 	}
 }
 

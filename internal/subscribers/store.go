@@ -66,6 +66,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 )
 
 // Status values, matching the subscribers_status_check CHECK constraint.
@@ -192,12 +194,41 @@ type NewSignup struct {
 // Store is the data-access layer over the subscribers and
 // subscriber_interests tables.
 type Store struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	outbox *outbox.Store
 }
 
-// NewStore constructs a Store over the shared connection pool.
+// NewStore constructs a Store over the shared connection pool. It also
+// constructs its own *outbox.Store over the same pool (#0126) — internal/
+// outbox is a leaf package with no dependency back on this one, so wiring
+// it internally here, rather than threading a separate constructor
+// parameter through every caller, keeps NewStore's signature unchanged for
+// the many existing callers (subscribe.go, admin_campaign_preview.go, every
+// test in this package and internal/handlers) while still giving Create/
+// ClaimAndEnqueueConfirmation/ClaimAndEnqueueAlreadySubscribed the ability
+// to enqueue inside their own transactions.
 func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+	return &Store{pool: pool, outbox: outbox.NewStore(pool)}
+}
+
+// confirmationPayload is outbound_queue.payload's shape for
+// outbox.KindConfirmation — template inputs, not rendered MIME (#0126's
+// plan §2), so a template fix in internal/mailing applies to mail already
+// queued. TTLSeconds is the NOMINAL ttl (the caller's ConfirmTTL, e.g. 7
+// days), not a computed remaining-time-until-expiry — internal/handlers/
+// subscribe.go's subscribeConfirmTTL doc comment explains why: a computed
+// remaining time renders a ragged duration ("10079 minutes remaining")
+// instead of a clean "7 days" for a resend.
+type confirmationPayload struct {
+	ConfirmToken string `json:"confirm_token"`
+	ManageToken  string `json:"manage_token"`
+	TTLSeconds   int64  `json:"ttl_seconds"`
+}
+
+// alreadySubscribedPayload is outbound_queue.payload's shape for
+// outbox.KindAlreadySubscribed.
+type alreadySubscribedPayload struct {
+	ManageToken string `json:"manage_token"`
 }
 
 const subscriberColumns = `id, email, status, confirm_token, confirm_sent_at,
@@ -244,6 +275,19 @@ func nullIfEmpty(s string) any {
 // The #0026 handler calls MarkConfirmationSent only after mailer.Send
 // actually succeeds, so the resend cooldown is anchored to a real delivery
 // attempt, not a delivery attempt that may never have left the process.
+//
+// #0126: since #0126, Create ALSO claims the confirmation send and enqueues
+// it on internal/outbox, and records the signup_requested event — all
+// inside this same transaction, unless in.Synthetic is set (ensureTestRecipient's
+// dedicated campaign-test recipient row, internal/handlers/
+// admin_campaign_preview.go — that row's address is never meant to receive
+// a real confirmation email, matching its behavior before #0126). A
+// brand-new row has no cooldown to lose, so the claim here is
+// unconditional — unlike ClaimAndEnqueueConfirmation, which guards a
+// cooldown for an EXISTING row. This makes "a committed signup can never
+// have an unsent confirmation" (this issue's load-bearing property)
+// literally true for the new-signup path: Create either commits with its
+// queue row, or neither exists.
 func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscriber, error) {
 	confirmToken, err := newToken()
 	if err != nil {
@@ -255,10 +299,16 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 	}
 	confirmExpiresAt := now.Add(in.ConfirmTTL)
 
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Subscriber{}, fmt.Errorf("subscribers: beginning create tx for %q: %w", in.Email, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	// email is normalized in SQL (lower(trim($1))), not in Go — see the
 	// package doc comment on why: one engine defines normalization, so it
 	// can never disagree with the subscribers_email_normalized CHECK below.
-	row := s.pool.QueryRow(ctx,
+	row := tx.QueryRow(ctx,
 		`INSERT INTO subscribers
 		     (email, status, confirm_token, confirm_sent_at, confirm_expires_at,
 		      manage_token, signup_ip, signup_user_agent,
@@ -278,107 +328,158 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 		}
 		return Subscriber{}, fmt.Errorf("subscribers: creating %q: %w", in.Email, err)
 	}
+
+	if !in.Synthetic {
+		if _, err := tx.Exec(ctx,
+			`UPDATE subscribers SET confirm_sent_at = $2, updated_at = $2 WHERE id = $1`,
+			sub.ID, now,
+		); err != nil {
+			return Subscriber{}, fmt.Errorf("subscribers: claiming confirmation send for new signup %d: %w", sub.ID, err)
+		}
+		sub.ConfirmSentAt = &now
+
+		if _, err := s.outbox.EnqueueTx(ctx, tx, outbox.Item{
+			Kind:         outbox.KindConfirmation,
+			Recipient:    sub.Email,
+			SubscriberID: &sub.ID,
+			Payload: confirmationPayload{
+				ConfirmToken: confirmToken,
+				ManageToken:  manageToken,
+				TTLSeconds:   int64(in.ConfirmTTL.Seconds()),
+			},
+		}); err != nil {
+			return Subscriber{}, fmt.Errorf("subscribers: enqueueing confirmation for new signup %d: %w", sub.ID, err)
+		}
+
+		if err := RecordEventTx(ctx, tx, Event{
+			SubscriberID: &sub.ID,
+			Email:        sub.Email,
+			Action:       ActionSignupRequested,
+			Detail:       map[string]any{"kind": "new"},
+		}); err != nil {
+			return Subscriber{}, fmt.Errorf("subscribers: recording signup_requested for %d: %w", sub.ID, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Subscriber{}, fmt.Errorf("subscribers: committing create tx for %q: %w", in.Email, err)
+	}
 	return sub, nil
 }
 
-// ClaimConfirmationSend atomically claims the right to send a confirmation
-// email to subscriber id: it stamps confirm_sent_at = now in the same
-// UPDATE that checks the once-per-hour cooldown (PRD §6.3), so the check
-// and the claim can never be split by a race the way a separate read-then-
-// write would be.
+// ClaimAndEnqueueConfirmation atomically claims the right to send a
+// confirmation email to subscriber id AND enqueues it on internal/outbox,
+// inside one transaction (#0126). It stamps confirm_sent_at = now in the
+// same UPDATE that checks the once-per-hour cooldown (PRD §6.3), so the
+// check and the claim can never be split by a race the way a separate
+// read-then-write would be — the property #0026's review (finding 3)
+// required of the pre-#0126 ClaimConfirmationSend, preserved here — and
+// then the enqueue happens in the SAME transaction, so this claim can no
+// longer be stamped for a send that then fails to be queued (the failure
+// mode ReleaseConfirmationClaim used to exist to compensate for; the queue
+// now retries on its own, so that compensating action has no job — see
+// #0126's plan §4).
 //
-// Returns claimed=true (and stamps the row) only if confirm_sent_at is
-// currently NULL or older than now-cooldown; otherwise it changes nothing
-// and returns claimed=false — either because the cooldown is genuinely
-// active, or because a concurrent request already won the claim a moment
-// ago. The caller cannot tell those two cases apart from this return value
-// alone, and does not need to: either way, this request must not send.
+// Returns claimed=true (and both the stamp and the enqueue commit) only if
+// confirm_sent_at is currently NULL or older than now-cooldown; otherwise
+// nothing is changed and claimed=false — either the cooldown is genuinely
+// active, or a concurrent request already won the claim a moment ago. The
+// caller cannot tell those two cases apart from this return value alone,
+// and does not need to: either way, this request must not send.
 //
-// #0026's review (finding 3) found the earlier MarkConfirmationSent — an
-// unconditional stamp, called only after a successful send, with the
-// cooldown decision made by a separate, earlier read of the row — left a
-// window between that read and the eventual write where multiple
-// concurrent requests could all observe "not in cooldown" and all send.
-// Folding the check into the UPDATE's WHERE clause closes that window: at
-// most one concurrent caller can ever see claimed=true for a given
-// cooldown period. See ReleaseConfirmationClaim for what happens if the
-// send this claim was for then fails.
-func (s *Store) ClaimConfirmationSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (claimed bool, err error) {
+// confirmToken/manageToken/ttl are the subscriber's OWN current values
+// (i.e. sub.ConfirmToken/sub.ManageToken and the nominal TTL constant the
+// caller renders with) — this method does not re-read them, so the caller
+// must pass a Subscriber it just obtained from Create/RestartSignup/
+// FindByEmail.
+func (s *Store) ClaimAndEnqueueConfirmation(ctx context.Context, sub Subscriber, now time.Time, cooldown time.Duration, ttl time.Duration) (claimed bool, err error) {
+	if sub.ConfirmToken == nil {
+		return false, fmt.Errorf("subscribers: subscriber %d has no confirm token", sub.ID)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("subscribers: beginning claim-confirmation tx for %d: %w", sub.ID, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	cutoff := now.Add(-cooldown)
-	tag, err := s.pool.Exec(ctx,
+	tag, err := tx.Exec(ctx,
 		`UPDATE subscribers
 		    SET confirm_sent_at = $2, updated_at = $2
 		  WHERE id = $1 AND (confirm_sent_at IS NULL OR confirm_sent_at < $3)`,
-		id, now, cutoff,
+		sub.ID, now, cutoff,
 	)
 	if err != nil {
-		return false, fmt.Errorf("subscribers: claiming confirmation send for %d: %w", id, err)
+		return false, fmt.Errorf("subscribers: claiming confirmation send for %d: %w", sub.ID, err)
 	}
-	return tag.RowsAffected() == 1, nil
+	if tag.RowsAffected() != 1 {
+		return false, nil // cooldown active, or a concurrent request already claimed this send
+	}
+
+	if _, err := s.outbox.EnqueueTx(ctx, tx, outbox.Item{
+		Kind:         outbox.KindConfirmation,
+		Recipient:    sub.Email,
+		SubscriberID: &sub.ID,
+		Payload: confirmationPayload{
+			ConfirmToken: *sub.ConfirmToken,
+			ManageToken:  sub.ManageToken,
+			TTLSeconds:   int64(ttl.Seconds()),
+		},
+	}); err != nil {
+		return false, fmt.Errorf("subscribers: enqueueing confirmation for %d: %w", sub.ID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("subscribers: committing claim-confirmation tx for %d: %w", sub.ID, err)
+	}
+	return true, nil
 }
 
-// ReleaseConfirmationClaim reverts a ClaimConfirmationSend claim whose send
-// then failed, so a later request can retry immediately rather than being
-// blocked by a cooldown anchored to a message that was never delivered —
-// the same "don't get stuck for an hour" property #0025's review required
-// of the original stamp-after-send design, preserved here despite the
-// stamp now happening before the send.
-//
-// Sets confirm_sent_at back to NULL unconditionally, not to whatever value
-// preceded the claim. That is provably equivalent for this column's only
-// purpose (gating the cooldown): ClaimConfirmationSend's WHERE clause
-// guarantees the prior value was either already NULL or already more than
-// cooldown old, and both of those states permit an immediate resend, which
-// is exactly what NULL also permits. No caller of this method needs to
-// distinguish those two "already permits a resend" states from each other.
-//
-// Deliberately does NOT consult statusLockedFromNonAdmin, for the same
-// reason MarkConfirmationSent didn't: this method never writes status.
-func (s *Store) ReleaseConfirmationClaim(ctx context.Context, id int64, now time.Time) error {
-	if _, err := s.pool.Exec(ctx,
-		`UPDATE subscribers SET confirm_sent_at = NULL, updated_at = $2 WHERE id = $1`,
-		id, now,
-	); err != nil {
-		return fmt.Errorf("subscribers: releasing confirmation claim for %d: %w", id, err)
+// ClaimAndEnqueueAlreadySubscribed is ClaimAndEnqueueConfirmation's
+// counterpart for the "you're already subscribed" email (PRD §6.3's active
+// branch). #0026's review (finding 1) measured 20 sequential submits of one
+// active subscriber's address producing 20 emails to that person — this
+// path had no cooldown of any kind, unlike the confirmation email — which
+// is both an unauthenticated mail-amplification vector and half of a
+// two-probe enumeration oracle (see internal/handlers/subscribe.go's
+// package doc comment). Same atomic claim-in-the-WHERE-clause-plus-enqueue
+// shape, same reasoning, a separate column (already_subscribed_sent_at)
+// because the two emails have independent cooldowns.
+func (s *Store) ClaimAndEnqueueAlreadySubscribed(ctx context.Context, sub Subscriber, now time.Time, cooldown time.Duration) (claimed bool, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("subscribers: beginning claim-already-subscribed tx for %d: %w", sub.ID, err)
 	}
-	return nil
-}
+	defer func() { _ = tx.Rollback(ctx) }()
 
-// ClaimAlreadySubscribedSend is ClaimConfirmationSend's counterpart for the
-// "you're already subscribed" email (PRD §6.3's active branch). #0026's
-// review (finding 1) measured 20 sequential submits of one active
-// subscriber's address producing 20 emails to that person — this path had
-// no cooldown of any kind, unlike the confirmation email — which is both an
-// unauthenticated mail-amplification vector and half of a two-probe
-// enumeration oracle (see internal/handlers/subscribe.go's package doc
-// comment). Same atomic claim-in-the-WHERE-clause shape, same reasoning,
-// a separate column (already_subscribed_sent_at) because the two emails
-// have independent cooldowns.
-func (s *Store) ClaimAlreadySubscribedSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (claimed bool, err error) {
 	cutoff := now.Add(-cooldown)
-	tag, err := s.pool.Exec(ctx,
+	tag, err := tx.Exec(ctx,
 		`UPDATE subscribers
 		    SET already_subscribed_sent_at = $2, updated_at = $2
 		  WHERE id = $1 AND (already_subscribed_sent_at IS NULL OR already_subscribed_sent_at < $3)`,
-		id, now, cutoff,
+		sub.ID, now, cutoff,
 	)
 	if err != nil {
-		return false, fmt.Errorf("subscribers: claiming already-subscribed send for %d: %w", id, err)
+		return false, fmt.Errorf("subscribers: claiming already-subscribed send for %d: %w", sub.ID, err)
 	}
-	return tag.RowsAffected() == 1, nil
-}
+	if tag.RowsAffected() != 1 {
+		return false, nil
+	}
 
-// ReleaseAlreadySubscribedClaim is ReleaseConfirmationClaim's counterpart
-// for already_subscribed_sent_at; see that method's doc comment for why
-// reverting to NULL (rather than the pre-claim value) is correct.
-func (s *Store) ReleaseAlreadySubscribedClaim(ctx context.Context, id int64, now time.Time) error {
-	if _, err := s.pool.Exec(ctx,
-		`UPDATE subscribers SET already_subscribed_sent_at = NULL, updated_at = $2 WHERE id = $1`,
-		id, now,
-	); err != nil {
-		return fmt.Errorf("subscribers: releasing already-subscribed claim for %d: %w", id, err)
+	if _, err := s.outbox.EnqueueTx(ctx, tx, outbox.Item{
+		Kind:         outbox.KindAlreadySubscribed,
+		Recipient:    sub.Email,
+		SubscriberID: &sub.ID,
+		Payload:      alreadySubscribedPayload{ManageToken: sub.ManageToken},
+	}); err != nil {
+		return false, fmt.Errorf("subscribers: enqueueing already-subscribed for %d: %w", sub.ID, err)
 	}
-	return nil
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("subscribers: committing claim-already-subscribed tx for %d: %w", sub.ID, err)
+	}
+	return true, nil
 }
 
 // FindByEmail looks up a subscriber by (normalized) email through the
@@ -506,6 +607,14 @@ func (s *Store) Confirm(ctx context.Context, token string, now time.Time) (Subsc
 		return Subscriber{}, fmt.Errorf("subscribers: activating subscriber %d: %w", sub.ID, err)
 	}
 
+	if err := RecordEventTx(ctx, tx, Event{
+		SubscriberID: &updated.ID,
+		Email:        updated.Email,
+		Action:       ActionConfirmed,
+	}); err != nil {
+		return Subscriber{}, fmt.Errorf("subscribers: recording confirmed event for %d: %w", updated.ID, err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return Subscriber{}, fmt.Errorf("subscribers: committing confirm tx: %w", err)
 	}
@@ -542,7 +651,27 @@ func (s *Store) Confirm(ctx context.Context, token string, now time.Time) (Subsc
 // against StatusComplained (or whatever else matters) rather than reaching
 // for a value read earlier in the request.
 func (s *Store) Unsubscribe(ctx context.Context, id int64, source string, now time.Time) (Subscriber, error) {
-	row := s.pool.QueryRow(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Subscriber{}, fmt.Errorf("subscribers: beginning unsubscribe tx for %d: %w", id, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Read the pre-update status inside this same transaction (FOR UPDATE,
+	// so it can't change under us before the UPDATE below runs) purely to
+	// decide whether to write an unsubscribed event — #0126: writing one
+	// on every call, including a repeat call on an already-unsubscribed
+	// row, would put a false "unsubscribed" entry in the address's history
+	// every time a stale footer link is clicked again.
+	var beforeStatus string
+	if err := tx.QueryRow(ctx, `SELECT status FROM subscribers WHERE id = $1 FOR UPDATE`, id).Scan(&beforeStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Subscriber{}, ErrNotFound
+		}
+		return Subscriber{}, fmt.Errorf("subscribers: locking subscriber %d for unsubscribe: %w", id, err)
+	}
+
+	row := tx.QueryRow(ctx,
 		`UPDATE subscribers
 		    SET status             = CASE WHEN status = $5 THEN status             ELSE $2 END,
 		        unsubscribed_at    = CASE WHEN status = $5 THEN unsubscribed_at    ELSE $3 END,
@@ -558,6 +687,21 @@ func (s *Store) Unsubscribe(ctx context.Context, id int64, source string, now ti
 		return Subscriber{}, ErrNotFound
 	case err != nil:
 		return Subscriber{}, fmt.Errorf("subscribers: unsubscribing %d: %w", id, err)
+	}
+
+	if sub.Status == StatusUnsubscribed && beforeStatus != StatusUnsubscribed {
+		if err := RecordEventTx(ctx, tx, Event{
+			SubscriberID: &sub.ID,
+			Email:        sub.Email,
+			Action:       ActionUnsubscribed,
+			Detail:       map[string]any{"source": source},
+		}); err != nil {
+			return Subscriber{}, fmt.Errorf("subscribers: recording unsubscribed event for %d: %w", sub.ID, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Subscriber{}, fmt.Errorf("subscribers: committing unsubscribe tx for %d: %w", id, err)
 	}
 	return sub, nil
 }
@@ -652,7 +796,26 @@ func (s *Store) RestartSignup(ctx context.Context, id int64, in RestartSignupInp
 	}
 	confirmExpiresAt := now.Add(in.ConfirmTTL)
 
-	row := s.pool.QueryRow(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Subscriber{}, fmt.Errorf("subscribers: beginning restart-signup tx for %d: %w", id, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Read the pre-update status inside this same transaction, FOR UPDATE,
+	// purely to decide which events to write below (#0126) — resubscribed
+	// only applies when the prior status was genuinely unsubscribed, not
+	// bounced (existingSignup routes both statuses through this method;
+	// see subscribe.go's own comment on why bounced is routed here too).
+	var beforeStatus string
+	if err := tx.QueryRow(ctx, `SELECT status FROM subscribers WHERE id = $1 FOR UPDATE`, id).Scan(&beforeStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Subscriber{}, ErrNotFound
+		}
+		return Subscriber{}, fmt.Errorf("subscribers: locking subscriber %d for restart-signup: %w", id, err)
+	}
+
+	row := tx.QueryRow(ctx,
 		`UPDATE subscribers
 		    SET status             = CASE WHEN status = $11 THEN status             ELSE $2    END,
 		        confirm_token      = CASE WHEN status = $11 THEN confirm_token      ELSE $3    END,
@@ -678,6 +841,30 @@ func (s *Store) RestartSignup(ctx context.Context, id int64, in RestartSignupInp
 		return Subscriber{}, ErrNotFound
 	case err != nil:
 		return Subscriber{}, fmt.Errorf("subscribers: restarting signup for %d: %w", id, err)
+	}
+
+	if sub.Status == StatusPending && beforeStatus != statusLockedFromNonAdmin {
+		if err := RecordEventTx(ctx, tx, Event{
+			SubscriberID: &sub.ID,
+			Email:        sub.Email,
+			Action:       ActionSignupRequested,
+			Detail:       map[string]any{"kind": "restarted"},
+		}); err != nil {
+			return Subscriber{}, fmt.Errorf("subscribers: recording signup_requested for restart %d: %w", sub.ID, err)
+		}
+		if beforeStatus == StatusUnsubscribed {
+			if err := RecordEventTx(ctx, tx, Event{
+				SubscriberID: &sub.ID,
+				Email:        sub.Email,
+				Action:       ActionResubscribed,
+			}); err != nil {
+				return Subscriber{}, fmt.Errorf("subscribers: recording resubscribed event for %d: %w", sub.ID, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Subscriber{}, fmt.Errorf("subscribers: committing restart-signup tx for %d: %w", id, err)
 	}
 	return sub, nil
 }

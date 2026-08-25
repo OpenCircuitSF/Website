@@ -151,7 +151,6 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
-	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
@@ -203,10 +202,15 @@ type subscriberStore interface {
 	Create(ctx context.Context, in subscribers.NewSignup, now time.Time) (subscribers.Subscriber, error)
 	FindByEmail(ctx context.Context, email string) (subscribers.Subscriber, error)
 	RestartSignup(ctx context.Context, id int64, in subscribers.RestartSignupInput, now time.Time) (subscribers.Subscriber, error)
-	ClaimConfirmationSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (bool, error)
-	ReleaseConfirmationClaim(ctx context.Context, id int64, now time.Time) error
-	ClaimAlreadySubscribedSend(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (bool, error)
-	ReleaseAlreadySubscribedClaim(ctx context.Context, id int64, now time.Time) error
+	// ClaimAndEnqueueConfirmation / ClaimAndEnqueueAlreadySubscribed
+	// (#0126) replace the pre-#0126 Claim*Send/Release*Claim four-method
+	// pair: the claim and the outbound_queue enqueue now happen inside one
+	// internal/subscribers transaction, so a claim can no longer be
+	// stamped for a send that then fails to be queued — the queue itself
+	// retries on its own, so the old release-on-failure compensating
+	// action has no job anymore. See this file's package doc comment.
+	ClaimAndEnqueueConfirmation(ctx context.Context, sub subscribers.Subscriber, now time.Time, cooldown time.Duration, ttl time.Duration) (bool, error)
+	ClaimAndEnqueueAlreadySubscribed(ctx context.Context, sub subscribers.Subscriber, now time.Time, cooldown time.Duration) (bool, error)
 	SetInterests(ctx context.Context, subscriberID int64, interestIDs []int64) error
 }
 
@@ -215,14 +219,6 @@ type subscriberStore interface {
 // it is currently active) before it is ever passed to SetInterests.
 type interestLookup interface {
 	GetBySlug(ctx context.Context, slug string) (interests.Interest, error)
-}
-
-// physicalAddressReader is the behavior SubscribeHandler needs to fill in
-// the confirmation/already-subscribed email's CAN-SPAM footer address.
-// *auth.Store satisfies this via GetSetting; depending on an interface here
-// avoids importing internal/auth's concrete type for a single method.
-type physicalAddressReader interface {
-	GetSetting(ctx context.Context, key string) (string, error)
 }
 
 // SuppressionChecker reports whether an address is on the global
@@ -255,14 +251,7 @@ func (NoSuppressions) IsSuppressed(context.Context, string) (bool, error) { retu
 type SubscribeHandler struct {
 	subs        subscriberStore
 	interests   interestLookup
-	mailer      mailing.Mailer
 	suppression SuppressionChecker
-	// settings supplies the physical_address setting for the CAN-SPAM
-	// footer. May be nil (tests that don't care about the footer address);
-	// a nil settings or any GetSetting error is treated as an empty
-	// address, matching mailing.BuildConfirmationEmail's documented
-	// handling of "" — never fabricated, never fatal to the signup.
-	settings physicalAddressReader
 	// auditor records subscriber.signup. May be nil in tests that don't
 	// assert audit rows.
 	auditor *audit.Logger
@@ -272,94 +261,73 @@ type SubscribeHandler struct {
 	now func() time.Time
 	log *slog.Logger
 
-	// sendQueue and sendWG implement the "mailer.Send off the request path"
-	// fix from #0026's review (finding 1) — see the package doc comment.
-	// enqueueSend hands a built mailing.Message to this channel; a fixed
-	// pool of worker goroutines (started once, in NewSubscribeHandler)
-	// drains it and calls h.mailer.Send on sendCtx (see below), so no HTTP
-	// response ever waits on a network call. sendWG lets tests
-	// deterministically wait for in-flight async sends to finish
-	// (waitForSends) instead of sleeping, and lets Close (#0081) wait for
-	// every queued/in-flight job to finish being processed.
-	sendQueue chan sendJob
-	sendWG    sync.WaitGroup
+	// #0126 removed sendQueue/sendWG/h.mailer entirely: mailer.Send used to
+	// run on a small worker pool drained from a channel this handler owned
+	// (the "mailer.Send off the request path" fix from #0026's review,
+	// finding 1 — see the package doc comment for the history). Sending is
+	// now internal/mailing.OutboxWorker's job, over internal/outbox's
+	// durable queue, wired independently in cmd/opencircuit/main.go — this
+	// handler's entire remaining job past the two fixed reads is enqueueing
+	// a mutateJob and claiming-and-enqueueing on internal/subscribers,
+	// which already commits the outbound_queue row inside its own
+	// transaction (subscribers.Store.ClaimAndEnqueueConfirmation /
+	// ClaimAndEnqueueAlreadySubscribed / Create). Removing sendQueue does
+	// NOT reopen #0026's or #0088's timing-oracle findings: no branch here
+	// gains or loses request-path work by this change, because the
+	// request-path cost was already just the two fixed reads plus a
+	// channel send (mutateQueue, below) before #0126 and still is after.
 
-	// mutateQueue and mutateWG are #0088's equivalent of sendQueue/sendWG,
-	// one layer up: enqueueMutation hands a mutateJob (everything Subscribe
+	// mutateQueue and mutateWG are #0088's async subscription-mutation
+	// queue: enqueueMutation hands a mutateJob (everything Subscribe
 	// learned synchronously — the honeypot/timing-gate verdict, the two
 	// fixed reads' results, the validated email/interests/evidence) to this
 	// channel; a fixed pool of worker goroutines (started once, in
 	// NewSubscribeHandler) drains it and runs processMutateJob, which is
 	// where newSignup/existingSignup/restartSignup — and therefore every
-	// Create/RestartSignup/SetInterests/Claim*/audit call and the mail
-	// enqueue itself — actually happen. See the package doc comment,
-	// "The elapsed-time channel — #0088".
+	// Create/RestartSignup/SetInterests/ClaimAndEnqueue*/audit call — now
+	// actually happen. See the package doc comment, "The elapsed-time
+	// channel — #0088". mutateWG lets tests deterministically wait for
+	// in-flight mutations to finish (waitForSends) instead of sleeping, and
+	// lets Close (#0081) wait for every queued/in-flight job to finish.
 	mutateQueue chan mutateJob
 	mutateWG    sync.WaitGroup
 
-	// sendCtx is the parent context every worker derives its per-job
-	// timeout from (processSendJob: context.WithTimeout(h.sendCtx, ...)),
-	// instead of context.Background(). sendCancel cancels it, which Close
-	// (#0081) uses to interrupt any send that is queued-but-not-yet-started
-	// or actively in flight at shutdown time, rather than letting it run to
-	// completion or timing out on its own. Set once in NewSubscribeHandler.
-	// processMutateJob (#0088) shares this same context and the same
-	// cancel, for the same reason: a subscription-mutation job that is
-	// queued-but-not-started or in flight at shutdown must be interruptible
-	// too, not just the mail send it may go on to enqueue.
+	// sendCtx is the parent context every mutate-worker goroutine derives
+	// its per-job timeout from (processMutateJob: context.WithTimeout(h.sendCtx,
+	// ...)), instead of context.Background(). Named sendCtx from before
+	// #0126 removed the send-worker pool that originally justified the
+	// name — kept rather than renamed so this diff stays reviewable; it is
+	// still exactly what Close (#0081) cancels to interrupt a
+	// queued-but-not-yet-started or actively in-flight mutation job at
+	// shutdown time, rather than letting it run to completion or time out
+	// on its own. Set once in NewSubscribeHandler.
 	sendCtx    context.Context
 	sendCancel context.CancelFunc
 
-	// closeMu/closed guard Close against a concurrent enqueueSend OR
-	// enqueueMutation: once closed is true, neither may attempt to send on
-	// its respective queue (both of which Close has by then closed —
-	// sending on a closed channel panics) and instead falls back to its own
-	// drop-and-release path, the same observable outcome as every other
-	// drop path in this file. See Close's doc comment.
+	// closeMu/closed guard Close against a concurrent enqueueMutation: once
+	// closed is true, it may not send on mutateQueue (which Close has by
+	// then closed — sending on a closed channel panics) and instead falls
+	// back to its own drop path, the same observable outcome as every
+	// other drop path in this file. See Close's doc comment.
 	closeMu sync.Mutex
 	closed  bool
 }
 
-// sendQueueCapacity bounds the async send queue. Sized generously relative
-// to the per-IP rate limit this endpoint sits behind in production
-// (5/min, burst 3, cmd/opencircuit/main.go) — the queue existing at all is
-// a defense against a burst of legitimate concurrent signups outrunning the
-// worker pool for a moment, not a capacity this project expects to fill in
-// steady state.
-const sendQueueCapacity = 256
-
-// sendWorkerCount is the number of goroutines draining sendQueue. A small
-// fixed pool, not one goroutine per request: bounds how many concurrent SES
-// calls this process makes regardless of how many signups arrive at once,
-// which matters because #0026's own rate limit (5/min, burst 3 per IP) does
-// nothing to bound TOTAL concurrency across many different IPs.
-const sendWorkerCount = 4
-
-// sendJob is one outbound email queued by sendConfirmation or
-// sendAlreadySubscribed: the already-built message, plus the compensating
-// action to run if the send fails (releasing the atomic claim that was
-// taken before the job was enqueued, so a later request can retry).
-type sendJob struct {
-	subscriberID int64
-	label        string // "confirmation" | "already-subscribed" — for logs only
-	msg          mailing.Message
-	release      func(ctx context.Context) error
-}
-
-// mutateQueueCapacity bounds the async subscription-mutation queue. Same
-// sizing rationale as sendQueueCapacity: generous relative to the per-IP
-// rate limit this endpoint sits behind (5/min, burst 3), a defense against
+// mutateQueueCapacity bounds the async subscription-mutation queue. Sized
+// generously relative to the per-IP rate limit this endpoint sits behind in
+// production (5/min, burst 3, cmd/opencircuit/main.go) — a defense against
 // a burst of legitimate concurrent signups outrunning the worker pool for a
-// moment, not a capacity expected to fill in steady state. Distinct from
-// sendQueueCapacity because a mutateJob is enqueued for EVERY accepted
-// request (bot traffic included, per #0088), not only the subset that ends
-// up sending mail.
+// moment, not a capacity expected to fill in steady state. A mutateJob is
+// enqueued for EVERY accepted request (bot traffic included, per #0088),
+// not only the subset that ends up sending mail.
 const mutateQueueCapacity = 256
 
-// mutateWorkerCount is the number of goroutines draining mutateQueue. Kept
-// equal to sendWorkerCount: both bound concurrent DB round trips, and there
-// is no reason for this project's traffic shape to weight one pool over the
-// other differently from how it already weights sendWorkerCount.
+// mutateWorkerCount is the number of goroutines draining mutateQueue. A
+// small fixed pool, not one goroutine per request: bounds how many
+// concurrent DB round trips this process makes regardless of how many
+// signups arrive at once, which matters because #0026's own rate limit
+// (5/min, burst 3 per IP) does nothing to bound TOTAL concurrency across
+// many different IPs.
 const mutateWorkerCount = 4
 
 // mutateJob carries everything Subscribe learned synchronously — before
@@ -386,15 +354,20 @@ type mutateJob struct {
 }
 
 // NewSubscribeHandler constructs a SubscribeHandler and starts its async
-// send worker pool (see sendJob and the package doc comment). A nil
+// mutation worker pool (see mutateJob and the package doc comment). A nil
 // suppression checker defaults to NoSuppressions; a nil logger defaults to
 // slog.Default(), matching AuthHandler's nil-tolerance convention.
+//
+// #0126 removed the mailer and settings parameters this constructor used to
+// take: mailer.Send and the physical_address footer lookup both moved to
+// internal/mailing.OutboxWorker, which renders at send time from
+// outbound_queue.payload (template inputs, not rendered MIME) rather than
+// this handler building a mailing.Message inline. Production wires the
+// worker separately in cmd/opencircuit/main.go.
 func NewSubscribeHandler(
 	subs subscriberStore,
 	il interestLookup,
-	mailer mailing.Mailer,
 	suppression SuppressionChecker,
-	settings physicalAddressReader,
 	auditor *audit.Logger,
 	baseURL string,
 	logger *slog.Logger,
@@ -407,16 +380,12 @@ func NewSubscribeHandler(
 	}
 	sendCtx, sendCancel := context.WithCancel(context.Background())
 	h := &SubscribeHandler{
-		subs: subs, interests: il, mailer: mailer, suppression: suppression,
-		settings: settings, auditor: auditor, baseURL: baseURL,
+		subs: subs, interests: il, suppression: suppression,
+		auditor: auditor, baseURL: baseURL,
 		now: time.Now, log: logger,
-		sendQueue:   make(chan sendJob, sendQueueCapacity),
 		mutateQueue: make(chan mutateJob, mutateQueueCapacity),
 		sendCtx:     sendCtx,
 		sendCancel:  sendCancel,
-	}
-	for i := 0; i < sendWorkerCount; i++ {
-		go h.runSendWorker()
 	}
 	for i := 0; i < mutateWorkerCount; i++ {
 		go h.runMutateWorker()
@@ -424,123 +393,10 @@ func NewSubscribeHandler(
 	return h
 }
 
-// sendJobTimeout bounds a single async send attempt so a hung network call
-// can't pin a worker goroutine forever.
-const sendJobTimeout = 30 * time.Second
-
-// runSendWorker drains h.sendQueue until Close (#0081) closes it, at which
-// point the loop exits and this goroutine returns — one of sendWorkerCount
-// goroutines started by NewSubscribeHandler, and the mechanism that makes
-// repeated handler construction (every test in this package, every
-// #0045-shaped future caller) not leak them forever.
-func (h *SubscribeHandler) runSendWorker() {
-	for job := range h.sendQueue {
-		h.processSendJob(job)
-	}
-}
-
-// processSendJob performs one queued send on a context detached from any
-// HTTP request (the request that enqueued this job has already returned)
-// but derived from h.sendCtx, not context.Background() — so Close (#0081)
-// cancelling h.sendCtx interrupts this call rather than letting it run for
-// the full sendJobTimeout, or to completion, during shutdown. A failed send
-// — including one that failed because sendCtx was cancelled — is logged,
-// never silently dropped, and its claim released so a subsequent legitimate
-// request can retry.
-func (h *SubscribeHandler) processSendJob(job sendJob) {
-	defer h.sendWG.Done()
-
-	ctx, cancel := context.WithTimeout(h.sendCtx, sendJobTimeout)
-	defer cancel()
-
-	if _, err := h.mailer.Send(ctx, job.msg); err != nil {
-		h.log.Error("subscribe: async send failed", "subscriber_id", job.subscriberID, "kind", job.label, "err", err)
-		h.releaseSendClaim(job)
-		return
-	}
-}
-
-// releaseSendClaim runs job.release on its own short-lived, detached
-// context — never the (possibly already-expired) context the failed send
-// itself used — so a release attempt is not defeated by the same timeout
-// that may have doomed the send.
-func (h *SubscribeHandler) releaseSendClaim(job sendJob) {
-	if job.release == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := job.release(ctx); err != nil {
-		h.log.Error("subscribe: releasing send claim after failed send failed", "subscriber_id", job.subscriberID, "kind", job.label, "err", err)
-	}
-}
-
-// enqueueSend hands job to the async worker pool without blocking the HTTP
-// response. If the queue is saturated (sendQueueCapacity jobs already
-// waiting — see that constant's doc comment on why this is not expected in
-// steady state) OR the handler is shutting down (#0081's Close has already
-// been called), it does NOT block and does NOT send on sendQueue: blocking
-// here would silently reopen the exact request-latency channel #0026's
-// review closed, and sending on sendQueue after Close has closed it would
-// panic. Instead it logs loudly and releases the claim immediately, exactly
-// as if the send itself had failed, so the drop is both observable (in
-// logs) and retryable (the claim is released, so the next legitimate
-// request tries again — immediately, not after subscribeResendCooldown).
-//
-// closeMu is held from the closed check through sendWG.Add(1) and the
-// select, and Add is only ever called AFTER that check has observed
-// closed==false, so this can never race Close's own
-// sendWG.Wait()/close(h.sendQueue). sync.WaitGroup's documented misuse is
-// "calls with a positive delta that start when the counter is zero must
-// happen before a Wait" — it is not enough for an Add to merely be gated by
-// some condition; it must be sequenced (happens-before, via a shared lock or
-// similar) ahead of the Wait that could observe the counter reaching zero.
-// Here that ordering is real: Close's critical section sets closed=true
-// while holding closeMu, and only spawns its sendWG.Wait() goroutine after
-// releasing closeMu. So either this call's closeMu.Lock() happens entirely
-// before Close's (closed is still false, Add is called, and that Add
-// happens-before Close's own Lock()/closed=true/Unlock()/go-statement/Wait()
-// via the mutex handoff plus the go statement's own happens-before edge —
-// i.e. strictly before Close ever calls Wait), or entirely after (closed is
-// already true, and Add is never called at all — the drop-and-release path
-// below runs without ever touching sendWG, since a job that was never
-// queued was never "in flight" from Close's point of view and needs no
-// WaitGroup accounting). #0081's review reproduced a panic at ~5,500 rounds
-// against an earlier version of this function that called Add(1)
-// unconditionally at entry, before taking closeMu at all: that Add had no
-// happens-before relationship to Close's Wait whatsoever. A version that
-// gated the closed-check's Add/Done pair under closeMu but still called Add
-// before checking closed also failed at ~5,000 rounds, for a subtler
-// reason: the intermediate Add(1)+Done() pair on the closed-drop path still
-// raced Close's Wait() call itself, since Wait() is not called while
-// closeMu is held — only the DECISION to add needs to happen-before Wait,
-// which requires Add to happen only in the branch that runs strictly before
-// Close's critical section, not merely "under the same mutex at some
-// point". This version's Add is called only in the branch that provably
-// precedes Close, so no drop path (closed or queue-full) ever calls
-// Add/Done for a job Close could already be waiting on.
-func (h *SubscribeHandler) enqueueSend(job sendJob) {
-	h.closeMu.Lock()
-	if h.closed {
-		h.closeMu.Unlock()
-		h.log.Error("subscribe: handler is shutting down, dropping send", "subscriber_id", job.subscriberID, "kind", job.label)
-		h.releaseSendClaim(job)
-		return
-	}
-	h.sendWG.Add(1)
-	select {
-	case h.sendQueue <- job:
-		h.closeMu.Unlock()
-	default:
-		h.closeMu.Unlock()
-		h.log.Error("subscribe: send queue full, dropping send", "subscriber_id", job.subscriberID, "kind", job.label)
-		h.releaseSendClaim(job)
-		h.sendWG.Done()
-	}
-}
-
-// runMutateWorker drains h.mutateQueue until Close closes it, mirroring
-// runSendWorker exactly (see that function and mutateWorkerCount).
+// runMutateWorker drains h.mutateQueue until Close closes it — one of
+// mutateWorkerCount goroutines started by NewSubscribeHandler, and the
+// mechanism that makes repeated handler construction (every test in this
+// package) not leak them forever.
 func (h *SubscribeHandler) runMutateWorker() {
 	for job := range h.mutateQueue {
 		h.processMutateJob(job)
@@ -556,8 +412,10 @@ func (h *SubscribeHandler) runMutateWorker() {
 const mutateJobTimeout = 10 * time.Second
 
 // processMutateJob is where #0088 moved every branch-dependent write:
-// Create, RestartSignup, SetInterests, ClaimConfirmationSend/
-// ClaimAlreadySubscribedSend, the mail enqueue, and the audit record. It
+// Create, RestartSignup, SetInterests, ClaimAndEnqueueConfirmation/
+// ClaimAndEnqueueAlreadySubscribed (which, since #0126, commit the
+// outbound_queue enqueue inside the same transaction as the claim itself),
+// and the audit record. It
 // reproduces exactly the dispatch Subscribe used to run inline — suppressed
 // check, then FindByEmail's ErrNotFound/error/found three-way switch — the
 // only difference is it interprets job's ALREADY-CAPTURED suppressed/
@@ -568,8 +426,9 @@ const mutateJobTimeout = 10 * time.Second
 // here instead of by not reaching this code in the first place.
 //
 // ctx is derived from h.sendCtx, not the (already-returned) HTTP request's
-// context, for the same reason sendConfirmation/processSendJob already are:
-// see the package doc comment and Close.
+// context, so Close (#0081) cancelling it interrupts a queued-but-not-yet-
+// started or in-flight mutation job at shutdown — see the package doc
+// comment and Close.
 func (h *SubscribeHandler) processMutateJob(job mutateJob) {
 	defer h.mutateWG.Done()
 
@@ -622,14 +481,27 @@ func (h *SubscribeHandler) processMutateJob(job mutateJob) {
 
 // enqueueMutation hands job to the async mutation worker pool without
 // blocking the HTTP response — the #0088 fix's other half of "two fixed
-// reads plus a channel send is the entire request-path cost". Structurally
-// identical to enqueueSend, including its concurrency-safety argument
-// against Close: closeMu is held from the closed check through
-// mutateWG.Add(1) and the select, Add is only ever called after that check
-// has observed closed==false, so this can never race Close's own
-// mutateWG.Wait()/close(h.mutateQueue). See enqueueSend's doc comment for
-// the full happens-before argument, which applies here verbatim with
-// mutateWG/mutateQueue in place of sendWG/sendQueue.
+// reads plus a channel send is the entire request-path cost". closeMu is
+// held from the closed check through mutateWG.Add(1) and the select, and
+// Add is only ever called after that check has observed closed==false, so
+// this can never race Close's own mutateWG.Wait()/close(h.mutateQueue).
+// sync.WaitGroup's documented misuse is "calls with a positive delta that
+// start when the counter is zero must happen before a Wait" — it is not
+// enough for an Add to merely be gated by some condition; it must be
+// sequenced (happens-before, via a shared lock) ahead of the Wait that
+// could observe the counter reaching zero. Here that ordering is real:
+// Close's critical section sets closed=true while holding closeMu, and
+// only spawns its mutateWG.Wait() goroutine after releasing closeMu. So
+// either this call's closeMu.Lock() happens entirely before Close's
+// (closed is still false, Add is called, and that Add happens-before
+// Close's own Wait() via the mutex handoff plus the go statement's own
+// happens-before edge), or entirely after (closed is already true, and Add
+// is never called at all — the drop path below runs without ever touching
+// mutateWG). #0081's review reproduced a panic against an earlier version
+// of the equivalent send-side function (enqueueSend, removed by #0126 along
+// with the send-worker pool it fed) that called Add(1) unconditionally at
+// entry, before taking closeMu at all — this function was written to the
+// same fixed shape from the start.
 func (h *SubscribeHandler) enqueueMutation(job mutateJob) {
 	h.closeMu.Lock()
 	if h.closed {
@@ -648,84 +520,61 @@ func (h *SubscribeHandler) enqueueMutation(job mutateJob) {
 	}
 }
 
-// waitForSends blocks until every mutation job AND every send job enqueued
-// so far has been fully processed by the async workers. Test-only:
+// waitForSends blocks until every mutation job enqueued so far has been
+// fully processed by the async mutate workers. Test-only:
 // internal/handlers/subscribe_test.go calls this after doSubscribe so
-// assertions on mailer state or subscriber rows are deterministic, without
-// an arbitrary sleep, despite #0026's and #0088's reviews having moved the
-// actual send, and then the actual account mutation, off the request/
-// response path. Waiting mutateWG BEFORE sendWG is required, not
-// incidental: a mutate job's own goroutine calls enqueueSend (sendWG.Add(1))
-// strictly before that same goroutine's processMutateJob returns
-// (mutateWG.Done(), deferred at the top) — ordinary program order within
-// one goroutine is itself a happens-before edge — so by the time
-// mutateWG.Wait() has observed every in-flight mutation job finish, every
-// sendWG.Add(1) any of them was ever going to make has already happened,
-// and the subsequent sendWG.Wait() call is guaranteed to account for it.
-// Waiting in the other order could observe sendWG at zero before a
-// still-running mutate job has even called enqueueSend yet.
+// assertions on subscriber rows / outbound_queue rows are deterministic,
+// without an arbitrary sleep, despite #0088's review having moved the
+// actual account mutation off the request/response path. Named waitForSends
+// from before #0126 removed the separate send-worker pool this used to also
+// wait on (mutateWG then sendWG) — kept for the test-file diff's sake; it
+// now waits on mutateWG alone, which is sufficient because #0126 folded the
+// enqueue itself INTO the same transaction as the mutation
+// (subscribers.Store.ClaimAndEnqueueConfirmation and friends), so by the
+// time a mutate job's goroutine returns, both the mutation and its
+// outbound_queue row (if any) have already committed together.
 func (h *SubscribeHandler) waitForSends() {
 	h.mutateWG.Wait()
-	h.sendWG.Wait()
 }
 
-// Close implements #0081's graceful-shutdown fix: no new send is ever
-// attempted after this is called (enqueueSend's closeMu-guarded check), the
-// shared send context is cancelled so a job that is queued-but-not-yet-
+// Close implements #0081's graceful-shutdown fix: no new mutation is ever
+// attempted after this is called (enqueueMutation's closeMu-guarded check),
+// the shared context is cancelled so a job that is queued-but-not-yet-
 // started or actively in flight is interrupted rather than left to run to
-// completion or its own sendJobTimeout, and h.sendQueue is closed so every
-// runSendWorker goroutine exits once it has drained (fixing the goroutine
-// leak: before Close existed, NewSubscribeHandler's sendWorkerCount
-// goroutines per construction had no way to ever stop).
-//
-// Every interrupted send takes processSendJob's ordinary failed-send path —
-// logged, claim released via releaseSendClaim's own short-lived, detached
-// 5s context (deliberately NOT derived from sendCtx, so a release attempt
-// is never itself defeated by the same cancellation that doomed the send it
-// is compensating for). That is the actual fix for defect 1: a visitor who
-// saw the 202 can retry immediately after a SIGTERM-driven shutdown,
-// instead of being silenced for subscribeResendCooldown by a claim nobody
-// ever released.
+// completion or its own mutateJobTimeout, and h.mutateQueue is closed so
+// every runMutateWorker goroutine exits once it has drained (fixing the
+// goroutine leak: before Close existed, NewSubscribeHandler's
+// mutateWorkerCount goroutines per construction had no way to ever stop).
 //
 // Close is bounded by ctx and idempotent (a second call is a no-op) and
 // safe to call concurrently with in-flight Subscribe requests still calling
-// enqueueSend. It returns ctx.Err() if the bound is exceeded before every
-// queued/in-flight job finishes being processed — expected only if the
-// mailer itself ignores context cancellation, since sendCtx's cancellation
-// otherwise makes every remaining job fail (and release) almost
-// immediately rather than running out its full timeout.
+// enqueueMutation. It returns ctx.Err() if the bound is exceeded before
+// every queued/in-flight job finishes being processed.
 //
 // cmd/opencircuit/main.go's mountAndServe calls this from its
 // SIGTERM/SIGINT handler, after http.Server.Shutdown — that ordering
-// guarantees no request goroutine can still be inside enqueueSend ONLY when
-// Shutdown returns nil (every in-flight handler, including Subscribe,
+// guarantees no request goroutine can still be inside enqueueMutation ONLY
+// when Shutdown returns nil (every in-flight handler, including Subscribe,
 // genuinely returned before Close is called). If Shutdown instead returns
 // context.DeadlineExceeded (its own budget consumed by a still-running
-// handler — e.g. a long-lived SSE stream, which does not block on a send
-// but does keep Shutdown from returning early — see #0087), that guarantee
-// does not hold: a request goroutine may still be executing concurrently
-// with this call. That is harmless, not incidental: enqueueSend's
-// closeMu-guarded check still refuses a send after closed flips true, and
-// Close (below) holds that same lock while setting closed=true, so the two
-// can safely overlap regardless of whether Shutdown finished draining
-// first. #0045's campaign send worker needs the same close-then-bounded-
-// wait shape; reuse this pattern (a cancellable shared context plus a
-// closed work queue plus a WaitGroup) rather than inventing a second one.
+// handler — e.g. a long-lived SSE stream, which does not block on a
+// mutation but does keep Shutdown from returning early — see #0087), that
+// guarantee does not hold: a request goroutine may still be executing
+// concurrently with this call. That is harmless, not incidental:
+// enqueueMutation's closeMu-guarded check still refuses a send after closed
+// flips true, and Close (below) holds that same lock while setting
+// closed=true, so the two can safely overlap regardless of whether Shutdown
+// finished draining first. #0045's campaign send worker needs the same
+// close-then-bounded-wait shape; reuse this pattern (a cancellable shared
+// context plus a closed work queue plus a WaitGroup) rather than inventing
+// a second one — and #0126's OutboxWorker.Stop follows it too, for the
+// worker that took over the actual mail send this handler used to run.
 //
-// #0088 added a second queue/WaitGroup pair (mutateQueue/mutateWG) one
-// layer above sendQueue/sendWG, closed and cancelled together with it here
-// under the same closeMu/closed guard. Closing both channels together
-// before waiting on either WaitGroup is safe for the same reason closing
-// sendQueue alone always was: enqueueMutation and enqueueSend both check
-// h.closed under closeMu before ever sending on their respective channel,
-// so once this critical section has set closed=true, neither can reach a
-// closed channel — a still-running mutate job that goes on to call
-// enqueueSend after sendQueue is already closed takes enqueueSend's
-// drop-and-release path instead, never a send on the closed channel. The
-// two WaitGroups are then waited in the same mutateWG-before-sendWG order
-// waitForSends uses, for the same happens-before reason documented there:
-// waiting mutateWG first guarantees every enqueueSend call any mutate job
-// was going to make has already happened before sendWG.Wait() looks.
+// #0126 removed the send-worker pool (sendQueue/sendWG) this used to also
+// close and wait on alongside mutateQueue/mutateWG — see the struct's field
+// comments for why that removal does not reopen #0081's goroutine-leak
+// fix: mutateQueue/mutateWG is the only pool left, and it is closed/waited
+// exactly as before.
 func (h *SubscribeHandler) Close(ctx context.Context) error {
 	h.closeMu.Lock()
 	if h.closed {
@@ -735,13 +584,11 @@ func (h *SubscribeHandler) Close(ctx context.Context) error {
 	h.closed = true
 	h.sendCancel()
 	close(h.mutateQueue)
-	close(h.sendQueue)
 	h.closeMu.Unlock()
 
 	done := make(chan struct{})
 	go func() {
 		h.mutateWG.Wait()
-		h.sendWG.Wait()
 		close(done)
 	}()
 
@@ -933,7 +780,14 @@ func (h *SubscribeHandler) newSignup(ctx context.Context, email string, interest
 		// all would not be.
 	}
 
-	h.sendConfirmation(ctx, sub, now)
+	// #0126: NOT h.sendConfirmation(ctx, sub, now) here. Create's own
+	// transaction (internal/subscribers.Store.Create) already claimed
+	// confirm_sent_at and enqueued the confirmation atomically with the
+	// INSERT — that is the "a committed signup can never have an unsent
+	// confirmation" property this issue exists to establish. Calling
+	// sendConfirmation here would just find confirm_sent_at already
+	// stamped (cooldown active from the claim Create just made) and
+	// no-op — harmless, but redundant and confusing to read.
 	h.auditSignup(ctx, sub, evidence.SignupIP, "new")
 }
 
@@ -1001,45 +855,38 @@ func (h *SubscribeHandler) restartSignup(ctx context.Context, existing subscribe
 	h.auditSignup(ctx, sub, evidence.SignupIP, "restarted")
 }
 
-// sendConfirmation builds and enqueues the double opt-in confirmation email
-// for a subscriber with a live confirm_token — a brand-new signup, a
-// restarted one, or a resend to an already-pending one; all three call
+// sendConfirmation claims and enqueues the double opt-in confirmation email
+// for a subscriber with a live confirm_token — a restarted signup, or a
+// resend to an already-pending one (a brand-new signup's own confirmation
+// is already claimed and enqueued inside Create's own transaction — see
+// newSignup — so this is never called for that case). Both remaining call
 // sites are identical from this point on, which is deliberate: #0026's
 // review (finding 3) traced a duplicate-send bug to the resend branch
 // having its OWN, separately-timed cooldown check instead of sharing this
 // one atomic claim.
 //
-// The claim (internal/subscribers.ClaimConfirmationSend) is synchronous,
-// fast, and non-network — it is what enforces PRD §6.3's once-per-hour
-// resend limit AND what makes concurrent double-submits of the same
-// address send at most once. Only a successful claim enqueues an actual
-// send; losing the claim (cooldown active, or a concurrent request claimed
-// first) is not an error, just this request declining to send. The mailer
-// call itself happens later, off this goroutine — see enqueueSend and the
-// package doc comment.
+// The claim-and-enqueue (internal/subscribers.Store.
+// ClaimAndEnqueueConfirmation, #0126) is synchronous, fast, and
+// non-network — it is what enforces PRD §6.3's once-per-hour resend limit
+// AND what makes concurrent double-submits of the same address send at
+// most once, and it commits the outbound_queue row in the SAME transaction
+// as the claim, so a claim can no longer be stamped for a send that then
+// fails to be queued. Only a successful claim enqueues an actual send;
+// losing the claim (cooldown active, or a concurrent request claimed
+// first) is not an error, just this request declining to send. Rendering
+// and the actual mailer call happen later, off this goroutine entirely, in
+// internal/mailing.OutboxWorker.
 func (h *SubscribeHandler) sendConfirmation(ctx context.Context, sub subscribers.Subscriber, now time.Time) {
 	if sub.ConfirmToken == nil {
 		h.log.Error("subscribe: subscriber has no confirm token", "subscriber_id", sub.ID)
 		return
 	}
-	claimed, err := h.subs.ClaimConfirmationSend(ctx, sub.ID, now, subscribeResendCooldown)
-	if err != nil {
-		h.log.Error("subscribe: claiming confirmation send failed", "subscriber_id", sub.ID, "err", err)
-		return
+	if _, err := h.subs.ClaimAndEnqueueConfirmation(ctx, sub, now, subscribeResendCooldown, subscribeConfirmTTL); err != nil {
+		h.log.Error("subscribe: claiming/enqueueing confirmation send failed", "subscriber_id", sub.ID, "err", err)
 	}
-	if !claimed {
-		return // cooldown active, or a concurrent request already claimed this send
-	}
-
-	msg := mailing.BuildConfirmationEmail(sub.Email, h.baseURL, *sub.ConfirmToken, sub.ManageToken, subscribeConfirmTTL, h.physicalAddress(ctx))
-	h.enqueueSend(sendJob{
-		subscriberID: sub.ID,
-		label:        "confirmation",
-		msg:          msg,
-		release: func(ctx context.Context) error {
-			return h.subs.ReleaseConfirmationClaim(ctx, sub.ID, h.now())
-		},
-	})
+	// claimed=false is not an error — cooldown active, or a concurrent
+	// request already claimed this send — just this request declining to
+	// send, same as before #0126.
 }
 
 // sendAlreadySubscribed handles the active branch: notify the submitter the
@@ -1053,41 +900,9 @@ func (h *SubscribeHandler) sendConfirmation(ctx context.Context, sub subscribers
 // enumeration oracle once mailer.Send was also off the request path but
 // this branch still sent unconditionally.
 func (h *SubscribeHandler) sendAlreadySubscribed(ctx context.Context, existing subscribers.Subscriber, now time.Time) {
-	claimed, err := h.subs.ClaimAlreadySubscribedSend(ctx, existing.ID, now, subscribeAlreadySubscribedCooldown)
-	if err != nil {
-		h.log.Error("subscribe: claiming already-subscribed send failed", "subscriber_id", existing.ID, "err", err)
-		return
+	if _, err := h.subs.ClaimAndEnqueueAlreadySubscribed(ctx, existing, now, subscribeAlreadySubscribedCooldown); err != nil {
+		h.log.Error("subscribe: claiming/enqueueing already-subscribed send failed", "subscriber_id", existing.ID, "err", err)
 	}
-	if !claimed {
-		return
-	}
-
-	msg := mailing.BuildAlreadySubscribedEmail(existing.Email, h.baseURL, existing.ManageToken, h.physicalAddress(ctx))
-	h.enqueueSend(sendJob{
-		subscriberID: existing.ID,
-		label:        "already-subscribed",
-		msg:          msg,
-		release: func(ctx context.Context) error {
-			return h.subs.ReleaseAlreadySubscribedClaim(ctx, existing.ID, h.now())
-		},
-	})
-}
-
-// physicalAddress reads settings.physical_address for the email footer. A
-// nil settings dependency or any read error is treated as an empty address
-// rather than failing the signup — mailing.BuildConfirmationEmail already
-// documents "" as simply omitting the address line, and #0045's send
-// worker (not this endpoint) is where an empty physical_address is
-// actually enforced (CLAUDE.md §9).
-func (h *SubscribeHandler) physicalAddress(ctx context.Context) string {
-	if h.settings == nil {
-		return ""
-	}
-	value, err := h.settings.GetSetting(ctx, "physical_address")
-	if err != nil {
-		return ""
-	}
-	return value
 }
 
 // auditSignup records subscriber.signup. kind ("new" or "restarted")
