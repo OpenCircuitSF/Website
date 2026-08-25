@@ -1166,49 +1166,65 @@ psql "$DST_DSN" -c "select count(*) from workshops;"
 scripts/testdb.sh drop "${ISSUE}src"
 scripts/testdb.sh drop "${ISSUE}dst"
 rm -rf "/tmp/backup-drill-${ISSUE}"
-#    `testdb.sh drop` (#0228) now reports a real failure and exits non-zero
+#    `testdb.sh drop` (#0228) reports a real failure and exits non-zero
 #    instead of silently claiming "does not exist" — see "A real script bug"
-#    below. A database restore.sh created with RESTORE_CREATE=1 is still
-#    owned, at the DATABASE level, by whoever ran createdb (RESTORE_OWNER
-#    only reassigns the TABLES/SEQUENCES/VIEWS inside it, not the database
-#    object itself) — if that is not `opencircuit`, `testdb.sh drop` will now
-#    fail loudly with `ERROR: must be owner of database`, and you drop it by
-#    hand as its actual owner instead of it silently leaking. The `rm -rf`
-#    above is safe precisely because BACKUP_ROOT was namespaced by ISSUE in
-#    step 4 — it can never reach another run's backup directory.
+#    below. **#0249**: a database restore.sh created with RESTORE_CREATE=1
+#    used to stay owned, at the DATABASE level, by whoever ran createdb —
+#    RESTORE_OWNER only reassigned the TABLES/SEQUENCES/VIEWS inside it, not
+#    the database object itself — so under BACKUP_RUN_AS="" the target ended
+#    up owned by the local OS user while `testdb.sh drop` always connects as
+#    `opencircuit`, and every drill run leaked one database. `restore.sh` now
+#    creates the database with `createdb -O "$RESTORE_OWNER"` when
+#    RESTORE_OWNER is set (both documented paths — `BACKUP_RUN_AS=postgres`
+#    in production, a local Postgres superuser OS role in dev — can set
+#    ownership to another role), so by the time this step runs the target is
+#    already owned by `opencircuit` and this drop succeeds like the one
+#    above it. `RESTORE_OWNER=""` still opts out of database ownership too,
+#    same as it always opted out of the object-level reassignment — that
+#    combination is not exercised by this drill (RESTORE_OWNER is left at
+#    its default here) and still leaks under it, deliberately: the point of
+#    the empty value is "touch nothing," and a database this step cannot
+#    drop is one of the things it is knowingly declining to touch. The
+#    `rm -rf` above is safe precisely because BACKUP_ROOT was namespaced by
+#    ISSUE in step 4 — it can never reach another run's backup directory.
 ```
 
 **This block deliberately carries no `set -e`, and exit status is not its
-pass signal — read the output (#0248).** Two of its steps legitimately
-return non-zero on a run that is working correctly, and `set -e` would abort
-the drill on both:
+pass signal — read the output (#0248).** One step in it legitimately returns
+non-zero on a run that is working correctly, and `set -e` would abort the
+drill there:
 
 - **Step 7's constraint-count `diff`** is *expected* to print exactly one
   differing line (`email_campaigns`) — `diff(1)` exits `1` whenever it finds
   a difference, which here means the drill passed, not that it failed.
-- **Step 9's `scripts/testdb.sh drop "${ISSUE}dst"`** fails with `ERROR:
-  must be owner of database` every time this drill is followed on a local
-  Homebrew cluster with `BACKUP_RUN_AS=""`, confirmed by running the drill
-  twice for #0248 (once per backup format) and hitting the identical failure
-  both times: `RESTORE_CREATE=1`'s `createdb` in `restore.sh` runs as
-  whichever OS user is connecting (`restore.sh`'s `runner` array is empty
-  when `BACKUP_RUN_AS` is unset, so no `sudo -u` wraps it), not as
-  `opencircuit` — so the target database ends up owned by that OS user, not
-  `opencircuit`, while `testdb.sh drop` always connects as `opencircuit` and
-  cannot drop what it doesn't own. This is the documented ownership gotcha
-  step 9's own comment already names; it is not an occasional flake, it is
-  the deterministic outcome of following this drill locally as written.
+
+**Step 9's `scripts/testdb.sh drop "${ISSUE}dst"` used to be a second
+legitimate non-zero exit here, and no longer is (#0249).** It failed with
+`ERROR: must be owner of database` on every local run under
+`BACKUP_RUN_AS=""` — confirmed identically across #0248's two runs and
+#0239's review before it — because `RESTORE_CREATE=1`'s `createdb` in
+`restore.sh` created the target database owned by whichever OS user was
+connecting, not by `RESTORE_OWNER`, while `testdb.sh drop` always connects as
+`opencircuit`. `restore.sh` now creates the database already owned by
+`RESTORE_OWNER` (`createdb -O`) when one is set, so this drop now succeeds
+like the `${ISSUE}src` one beside it — proved by running the full drill
+twice **concurrently** to completion and taking a census
+(`select datname, pg_get_userbyid(datdba) from pg_database`) immediately
+after: zero rows matching either run's namespace, both times. That change in
+turn shortened the `set -e` decision above from two exceptions to one — see
+`restore.sh`'s `#0249` comment on the `createdb` call for why `set -e` still
+isn't added here (step 7's diff still isn't a candidate for it).
 
 A completed run's real evidence is: step 6 actually applying migration 20
 (its own output names it, not "no change"), step 7's four comparisons
 printing exactly what "What the drill found" below documents, step 8/8b's
-inserts and rejections behaving as documented, and — at step 9 — either
-`testdb.sh drop` succeeding for both databases, or it reporting the
-not-owner failure above and the database then dropped by hand as its actual
-owner (`psql -d postgres -c 'DROP DATABASE "${ISSUE}dst";'`, run as the OS
-user `restore.sh` created it as). The `${ISSUE}src` drop and the final
-`rm -rf` are ordinary — a non-zero exit from either one is a real failure,
-unlike the two exceptions above.
+inserts and rejections behaving as documented, and step 9 dropping both
+databases with no manual cleanup — a `testdb.sh drop` failure there is now a
+real failure, not an expected one (the `RESTORE_OWNER=""` opt-out is the one
+documented exception: it still leaves the database, deliberately, owned by
+whoever ran `createdb`, since "leave ownership alone" is what the opt-out
+means). The `${ISSUE}src` drop and the final `rm -rf` remain ordinary — a
+non-zero exit from either is a real failure.
 
 The custom format (`pg_restore`, default) and the plain format
 (`BACKUP_FORMAT=plain`, `gunzip | psql`) were **both** run through this full

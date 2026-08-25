@@ -19,10 +19,18 @@
 #                   Set empty / to the current user to skip sudo (local dev).
 #   RESTORE_CREATE  If "1", create the target database first (must not already
 #                   exist). Default: 0 (assume it exists / restore into it).
-#   RESTORE_OWNER   Role to own every restored table, sequence, and view.
+#                   #0249: when RESTORE_OWNER is non-empty, the database is
+#                   created already owned by RESTORE_OWNER (createdb -O), not
+#                   by whoever ran createdb — otherwise the database object
+#                   itself stays owned by the connecting role even after
+#                   reassign_ownership fixes everything inside it, and
+#                   nothing that connects as RESTORE_OWNER (e.g. testdb.sh
+#                   drop) can drop it.
+#   RESTORE_OWNER   Role to own every restored table, sequence, and view (and,
+#                   per #0249, the database itself when RESTORE_CREATE=1).
 #                   Default: opencircuit (the app role from scripts/db/create.sql).
-#                   Set empty to skip this step and leave ownership as pg_restore
-#                   / psql left it.
+#                   Set empty to skip this step and leave ownership — of the
+#                   database too — as createdb/pg_restore/psql left it.
 #
 # #0228: both dump formats strip ownership and grants (`pg_dump
 # --no-owner --no-privileges` in backup.sh), so after a restore every object is
@@ -201,9 +209,28 @@ SQL
 echo "Restoring '$DUMP' → database '$TARGET' (as ${BACKUP_RUN_AS:-$(id -un)})"
 
 # ${runner[@]+...} guards an empty array against `set -u` on bash 3.2 (macOS).
+#
+# #0249: create the database already owned by RESTORE_OWNER, not by whoever
+# ran createdb. Without this, RESTORE_CREATE=1 under BACKUP_RUN_AS=""
+# (local dev — no sudo, so createdb runs as the connecting OS user) leaves
+# the *database object itself* owned by that OS user even though
+# reassign_ownership below fixes every table/sequence/view/schema inside
+# it — DROP DATABASE checks the database's own owner, not its contents, so
+# `testdb.sh drop` (which always connects as opencircuit) fails with
+# "must be owner of database" on every drill run. -O only works when the
+# connecting role is a superuser or a member of RESTORE_OWNER (true on both
+# documented paths: BACKUP_RUN_AS=postgres in production, and a local
+# Postgres superuser OS role in dev); RESTORE_OWNER="" keeps the prior
+# behavior of not touching ownership at all, so the opt-out still opts out
+# of database ownership too, not just the objects inside it.
 if [ "$RESTORE_CREATE" = "1" ]; then
-  echo "  creating database '$TARGET'"
-  ${runner[@]+"${runner[@]}"} createdb "$TARGET"
+  if [ -n "$RESTORE_OWNER" ]; then
+    echo "  creating database '$TARGET' (owner '$RESTORE_OWNER')"
+    ${runner[@]+"${runner[@]}"} createdb -O "$RESTORE_OWNER" "$TARGET"
+  else
+    echo "  creating database '$TARGET'"
+    ${runner[@]+"${runner[@]}"} createdb "$TARGET"
+  fi
 fi
 
 case "$DUMP" in
