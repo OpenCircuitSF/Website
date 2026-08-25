@@ -13,7 +13,6 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
-	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
@@ -235,26 +234,12 @@ func TestNewAuthHandler_NilLoggerDoesNotPanic(t *testing.T) {
 	}
 }
 
-// failingMailer is a mailing.Mailer whose Send always fails with a fixed,
-// realistic SES-style error containing no recipient address. It is the seam
-// #0027 uses in place of the deleted auth.NewSESMailerWithAddr: that seam
-// pointed the old SMTP transport's dial at a closed local port to force a
-// deterministic, synchronous failure without touching the network. The SES
-// v2 API client has no dial step to fail the same way — there's no address
-// to point anywhere — so the seam moves to the mailing.Mailer interface
-// SESMailer sends through instead.
-type failingMailer struct{ err error }
-
-func (f failingMailer) Send(context.Context, mailing.Message) (string, error) {
-	return "", f.err
-}
-
 // TestAuthHandler_MailerErrorDoesNotLeakEmail is the guard the reviewer asked
 // for: a subtest whose injected error is not a synthetic string handed
 // directly to the fake registrar/recoverer, but the real error
-// *auth.SESMailer.send produces on a failed delivery. Before a review fixup,
-// that error was built with fmt.Errorf("... sending email to %s: %w",
-// toEmail, err) (internal/auth/ses_mailer.go), so a failed send on the
+// *auth.SESMailer produces on a failed enqueue. Before a review fixup, that
+// error was built with fmt.Errorf("... sending email to %s: %w", toEmail,
+// err) (internal/auth/ses_mailer.go), so a failed send on the
 // unauthenticated /auth/register/start and /auth/recover routes wrote the
 // recipient's full address into the server journal — a PII leak any caller
 // could trigger at will. The forbidden-substring list in the table test
@@ -263,35 +248,42 @@ func (f failingMailer) Send(context.Context, mailing.Message) (string, error) {
 // production code path that leaked, and fails if ses_mailer.go's fix is
 // reverted.
 //
-// No database or network is needed: failingMailer above never dials
-// anything; it is a fake mailing.Mailer injected via
-// auth.NewSESMailerWithSender, so *auth.SESMailer.send — the real production
-// method — still runs and still does the wrapping this test protects.
-//
-// Routing that real error through the fake registrar/recoverer below still
-// proves the production case: registration.go:111 and recovery.go:106 are
-// bare `return s.mailer.SendVerification(...)` / `return
-// s.mailer.SendRecovery(...)`, with no wrapping frame in between, so the
-// error value AuthHandler receives in production is byte-identical to the
-// one injected here — the same fact that made the original leak possible.
+// #0126 changed WHAT the production fix looks like: SESMailer no longer
+// wraps a mailing.Mailer it sends through synchronously — it enqueues onto
+// internal/outbox and, on any failure, returns a single fixed,
+// recipient-free sentinel (errEnqueueFailed) rather than wrapping the
+// underlying cause at all (which, post-#0126, is internal/outbox.Store's
+// own error — and THAT one embeds the recipient via %q, so naively
+// wrapping it with %w would reopen this exact leak one layer down; see
+// ses_mailer.go's own doc comment). This test forces a REAL enqueue
+// failure (a cancelled context, the same mechanism
+// TestSESMailer_ContextCancelled in internal/auth uses) against a live
+// *auth.SESMailer, so the error routed through the fake registrar/
+// recoverer below is byte-identical to what production returns —
+// registration.go:111 and recovery.go:106 are bare `return
+// s.mailer.SendVerification(...)` / `return s.mailer.SendRecovery(...)`,
+// no wrapping frame in between.
 func TestAuthHandler_MailerErrorDoesNotLeakEmail(t *testing.T) {
+	if testDBPool == nil {
+		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
+	}
 	const victimEmail = "victim@example.com"
 
-	mailer := auth.NewSESMailerWithSender(
-		failingMailer{err: errors.New("mailing: sending via SES: api error MessageRejected: Email address is not verified")},
-		&config.Config{
-			EmailFrom: "Open Circuit SF <noreply@example.com>",
-			BaseURL:   "https://example.com",
-		},
-	)
+	mailer := auth.NewSESMailer(testDBPool, &config.Config{
+		EmailFrom: "Open Circuit SF <noreply@example.com>",
+		BaseURL:   "https://example.com",
+	})
 
-	registerErr := mailer.SendVerification(context.Background(), victimEmail, "tok-register")
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	registerErr := mailer.SendVerification(cancelledCtx, victimEmail, "tok-register")
 	if registerErr == nil {
-		t.Fatal("SendVerification: expected a dial failure, got nil")
+		t.Fatal("SendVerification: expected an enqueue failure, got nil")
 	}
-	recoverErr := mailer.SendRecovery(context.Background(), victimEmail, "tok-recover")
+	recoverErr := mailer.SendRecovery(cancelledCtx, victimEmail, "tok-recover")
 	if recoverErr == nil {
-		t.Fatal("SendRecovery: expected a dial failure, got nil")
+		t.Fatal("SendRecovery: expected an enqueue failure, got nil")
 	}
 
 	cases := []struct {
@@ -347,7 +339,7 @@ func TestAuthHandler_MailerErrorDoesNotLeakEmail(t *testing.T) {
 			}
 
 			logged := logBuf.String()
-			if !strings.Contains(logged, "MessageRejected") {
+			if !strings.Contains(logged, "enqueueing email failed") {
 				t.Errorf("log line missing the real send-failure detail (test setup problem?): %s", logged)
 			}
 			if strings.Contains(logged, victimEmail) {

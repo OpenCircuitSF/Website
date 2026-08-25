@@ -143,13 +143,12 @@ func servePostgres(cfg *config.Config) error {
 	// instead, for local development against Postgres before SES domain
 	// verification/DKIM/production access is done (CLAUDE.md §10 item 2).
 	//
-	// sesSender is the shared internal/mailing.Mailer primitive: constructed
-	// once here and used two ways below — wrapped by auth.NewSESMailerWithSender
-	// for the three transactional auth emails, and passed directly to
-	// handlers.NewSubscribeHandler (#0026) for the double opt-in
-	// confirmation and already-subscribed emails. Building it once avoids
-	// two separate SES v2 API clients (and two separate credential
-	// resolutions) for what is the same underlying send primitive.
+	// sesSender is the shared internal/mailing.Mailer primitive, used by
+	// the campaign send worker, #0046's test-send handler, and #0126's
+	// OutboxWorker (which now performs every outbound send in this
+	// process, including the three transactional auth emails
+	// auth.SESMailer used to send directly — see that type's doc comment
+	// for why it now enqueues instead).
 	var sesSender mailing.Mailer
 	var mailer auth.Mailer
 	if cfg.MailerNoOp {
@@ -161,7 +160,7 @@ func servePostgres(cfg *config.Config) error {
 			return fmt.Errorf("opencircuit: constructing SES mailer: %w", err)
 		}
 		sesSender = sender
-		mailer = auth.NewSESMailerWithSender(sender, cfg)
+		mailer = auth.NewSESMailer(pool, cfg)
 	}
 
 	// Append-only audit log writer, shared by every service/handler that
