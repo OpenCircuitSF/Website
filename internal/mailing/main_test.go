@@ -50,9 +50,12 @@ func TestMain(m *testing.M) {
 	// derives any further CASCADE closure itself from pg_constraint, so
 	// this list does not need hand maintenance as the schema grows.
 	if testDBPool != nil {
+		// outbound_queue joins the list for #0126's OutboxWorker tests
+		// (outbox_worker_test.go), following this comment's own
+		// "extend, don't add a second TestMain" rule.
 		testdb.EntryTruncate(testDBPool, release,
-			`TRUNCATE email_sends, campaign_interests, email_campaigns, subscriber_interests, subscribers, suppressions RESTART IDENTITY CASCADE`,
-			[]string{"email_sends", "campaign_interests", "email_campaigns", "subscriber_interests", "subscribers", "suppressions"})
+			`TRUNCATE email_sends, campaign_interests, email_campaigns, subscriber_interests, subscribers, suppressions, outbound_queue RESTART IDENTITY CASCADE`,
+			[]string{"email_sends", "campaign_interests", "email_campaigns", "subscriber_interests", "subscribers", "suppressions", "outbound_queue"})
 	}
 
 	code := m.Run()

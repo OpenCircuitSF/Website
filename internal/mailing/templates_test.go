@@ -94,6 +94,16 @@ const (
 // stable across runs rather than depending on wall-clock time.
 var testRevokedAt = time.Date(2026, 8, 6, 15, 4, 5, 0, time.UTC)
 
+// testAdminAlertSubject/Lines are the fixed inputs BuildAdminAlertEmail's
+// golden test uses — #0126's own generic template; #0124 supplies real
+// alert copy.
+const testAdminAlertSubject = "Delivery health: soft-bounce streak"
+
+var testAdminAlertLines = []string{
+	"An address has soft-bounced 5 times in the last 30 days.",
+	"Review the subscriber detail screen for suppression.",
+}
+
 func TestBuildConfirmationEmail_Golden(t *testing.T) {
 	msg := BuildConfirmationEmail(testTo, testBaseURL, testConfirm, testManage, 7*24*time.Hour, testAddress)
 	goldenFile(t, "confirmation.html", msg.HTMLBody)
@@ -128,6 +138,15 @@ func TestBuildSessionsRevokedEmail_Golden(t *testing.T) {
 	goldenFile(t, "sessions_revoked.txt", msg.TextBody)
 }
 
+// TestBuildAdminAlertEmail_Golden covers #0126's sixth template — the
+// generic operational-alert message #0124's circuit breaker will send via
+// outbox.KindAdminAlert.
+func TestBuildAdminAlertEmail_Golden(t *testing.T) {
+	msg := BuildAdminAlertEmail(testTo, testBaseURL, testAdminAlertSubject, testAdminAlertLines)
+	goldenFile(t, "admin_alert.html", msg.HTMLBody)
+	goldenFile(t, "admin_alert.txt", msg.TextBody)
+}
+
 // --- Property tests: the things that actually break in the wild ---
 // (per the brief: "contains the word Confirm" proves nothing.)
 
@@ -159,6 +178,7 @@ func allMessages() map[string]Message {
 		"registration":       BuildRegistrationEmail(testTo, testBaseURL, testRegToken, 5*time.Minute),
 		"recovery":           BuildRecoveryEmail(testTo, testBaseURL, testRecToken, 15*time.Minute),
 		"sessions_revoked":   BuildSessionsRevokedEmail(testTo, testBaseURL, testRevokedAt),
+		"admin_alert":        BuildAdminAlertEmail(testTo, testBaseURL, testAdminAlertSubject, testAdminAlertLines),
 		"campaign":           mustBuildCampaignMessage(),
 	}
 }

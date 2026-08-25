@@ -1,0 +1,12 @@
+$ opencircuit/admin-alert
+
+Delivery health: soft-bounce streak
+
+An address has soft-bounced 5 times in the last 30 days.
+
+Review the subscriber detail screen for suppression.
+
+View admin dashboard: https://www.opencircuitsf.com/admin
+
+--
+Open Circuit SF - opencircuitsf.com

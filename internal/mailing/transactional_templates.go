@@ -178,3 +178,35 @@ func BuildSessionsRevokedEmail(to, baseURL string, at time.Time) Message {
 	}
 	return Message{To: to, Subject: c.Subject, HTMLBody: c.renderHTML(), TextBody: c.renderText()}
 }
+
+// BuildAdminAlertEmail builds the notification #0124's delivery-health
+// circuit breaker (and any future operational alert) sends to the
+// configured admin address via outbox.KindAdminAlert. Deliberately small
+// and generic: this issue (#0126) supplies only the template, the enqueue
+// path, and a test that drains one — the trigger, the copy, and what
+// counts as alert-worthy are #0124's job (see #0126's plan §3 and §7).
+//
+// subject becomes both the outer Message.Subject and the email's Heading;
+// lines are rendered as separate paragraphs, in order — the caller passes
+// already-composed operator-facing sentences, not raw data, since this
+// function does no formatting of its own beyond one paragraph per line.
+// The button links to the admin console root (baseURL+"/admin") — a real,
+// useful destination for an operator reading this on a phone, and what
+// keeps this template honest against TestAllTemplates_LinksAreAbsolute
+// (every message this package builds must carry at least one absolute
+// link). No manage/unsubscribe footer, no physical address: this is
+// operational mail to staff, not mailing-list mail to a subscriber (same
+// ShowListFooter=false reasoning as BuildSessionsRevokedEmail).
+func BuildAdminAlertEmail(to, baseURL, subject string, lines []string) Message {
+	c := emailContent{
+		Subject:         subject,
+		Preheader:       subject,
+		Eyebrow:         "$ opencircuit/admin-alert",
+		Heading:         subject,
+		IntroParagraphs: lines,
+		ButtonText:      "View admin dashboard",
+		ButtonURL:       baseURL + "/admin",
+		ShowListFooter:  false,
+	}
+	return Message{To: to, Subject: c.Subject, HTMLBody: c.renderHTML(), TextBody: c.renderText()}
+}
