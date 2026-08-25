@@ -985,6 +985,15 @@ not here, where it is easy to skip past.
 #    derived from it, which is what lets two people run this drill at the
 #    same time without colliding (#0247):
 ISSUE="${ISSUE:-$$}"
+#    scripts/testdb.sh lowercases the database name it derives from its
+#    argument (Postgres identifiers are effectively case-folded); every
+#    OTHER ${ISSUE} interpolation below (BACKUP_ROOT, the dump path,
+#    DST_DSN) does not. A mixed-case token — an issue id is fine, but
+#    something like a branch name is not — makes step 4's
+#    opencircuit_test_${ISSUE}src miss the database step 1 actually
+#    created. Normalize once, here, rather than requiring every follower to
+#    remember to type it in lowercase (#0248 review):
+ISSUE="${ISSUE,,}"
 echo "Running the drill under ISSUE=${ISSUE}"
 #    scripts/testdb.sh clones the fully-migrated template —
 #    check_template_fresh guarantees this is at HEAD (migration 20
@@ -1198,6 +1207,14 @@ drill there:
   differing line (`email_campaigns`) — `diff(1)` exits `1` whenever it finds
   a difference, which here means the drill passed, not that it failed.
 
+  This applies to the block **as committed**: step 8 above is comment-only
+  (its three deliberate rejections — bad FK, bad `subscribers.status`,
+  duplicate `subscribers.email` — are prose, not code, in this file), so
+  they cannot trip `set -e` today. A follower who writes those `psql`
+  invocations in and then adds `set -e` would be bitten by four non-zero
+  exits, not one — each rejection is a `psql` call failing by design, same
+  as the constraint diff. Don't add `set -e` even after filling step 8 in.
+
 **Step 9's `scripts/testdb.sh drop "${ISSUE}dst"` used to be a second
 legitimate non-zero exit here, and no longer is (#0249).** It failed with
 `ERROR: must be owner of database` on every local run under
@@ -1234,22 +1251,35 @@ actual output.
 
 ### What the drill found
 
-- **Row counts** — every table populated at step 2 (`users`, `interests`,
-  `subscribers`, `subscriber_interests`, `suppressions`, `audit_log`,
-  `email_campaigns`, `campaign_interests`, `email_sends`, `email_events`,
-  `settings`) matched source-to-restored exactly, in both formats — step
-  7's row-count `diff` printed zero output in both the `ISSUE=0248` and
-  `ISSUE=0248p` runs. Actual counts from the `0248` run, identical on both
-  sides: `audit_log|2`, `campaign_interests|1`, `email_campaigns|1`,
-  `email_events|2`, `email_sends|2`, `interests|12`, `settings|7`,
-  `subscriber_interests|3`, `subscribers|5`, `suppressions|2`, `users|2`.
-  **`workshops` and `workshop_interests` are excluded, not compared** — the
-  step 7 query names neither table. They don't exist on the source at all:
-  step 1b rolls back migration 20, which drops them, so there is nothing on
-  the source side to compare a restored count against. (This section
-  previously claimed these two tables matched source-to-restored — that
-  claim predated `#0239`'s rewrite and was never true of the drill as it
-  exists now; corrected by `#0248`.)
+- **Row counts** — every table step 7's row-count `diff` names matched
+  source-to-restored exactly, in both formats — zero output in both the
+  `ISSUE=0248` and `ISSUE=0248p` runs. That list is the nine tables step 2
+  actually seeds (`users`, `subscribers`, `subscriber_interests`,
+  `suppressions`, `audit_log`, `email_campaigns`, `campaign_interests`,
+  `email_sends`, `email_events`) plus `interests` and `settings`, which are
+  not seeded at step 2 at all — both are populated by migrations before
+  step 1 ever runs (`interests` by `000009`'s own `INSERT`, `settings` by
+  `000004`/`000008`/`000015`/`000018`), so their row counts are fixed by
+  the template rather than by whatever a follower seeds. Actual counts from
+  the `0248` run, identical on both sides: `audit_log|2`,
+  `campaign_interests|1`, `email_campaigns|1`, `email_events|2`,
+  `email_sends|2`, `interests|12`, `settings|6`, `subscriber_interests|3`,
+  `subscribers|5`, `suppressions|2`, `users|2`. `settings|6` is not a figure
+  specific to this run — it is constant for every follower who runs
+  `scripts/testdb.sh create` and seeds nothing into `settings`, and was
+  re-measured directly against the live template, a fresh `migrate … up`
+  database, and the `0248` source itself, all three agreeing (`#0248`,
+  review pass). **`workshops` and `workshop_interests` are excluded, not
+  compared** — the step 7 query names neither table. They don't exist on
+  the source at all: step 1b rolls back migration 20, which drops them, so
+  there is nothing on the source side to compare a restored count against.
+  (This section previously claimed these two tables matched
+  source-to-restored — that claim predated `#0239`'s rewrite and was never
+  true of the drill as it exists now; corrected by `#0248`. A later pass
+  found `settings|7` here, one higher than every direct measurement of the
+  table; corrected to `settings|6` and the "every table populated at
+  step 2" wording tightened to say which tables step 2 actually seeds,
+  same review.)
 - **Sequences** — every sequence's `last_value` matched source-to-restored
   exactly, in both formats — step 7's sequence `diff` printed zero output
   in both runs, checked with `select sequencename, last_value from
