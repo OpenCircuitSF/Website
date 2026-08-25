@@ -11,11 +11,11 @@
 //
 // Deliberately its own file rather than folded into
 // modalFocusWiring.structuralGuard.test.ts's existing per-panel loop: that
-// file's 12 synthetic fixtures assert EXACT violation counts
+// file's 14 synthetic fixtures assert EXACT violation counts
 // (`toHaveLength(1)`, etc.) for a completely different defect
 // (onkeydown/focus-effect wiring), and none of them carries `tabindex="-1"`
 // today -- adding a second violation class to that same loop would either
-// break every one of those counts or require editing all twelve fixtures
+// break every one of those counts or require editing all fourteen fixtures
 // for no benefit to what they are proving. This file reuses the same
 // AST-walk technique (svelte/compiler's parse, RegularElement nodes) but
 // keeps its own, separate violation list, so the two guards can never
