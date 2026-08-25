@@ -992,8 +992,15 @@ ISSUE="${ISSUE:-$$}"
 #    something like a branch name is not — makes step 4's
 #    opencircuit_test_${ISSUE}src miss the database step 1 actually
 #    created. Normalize once, here, rather than requiring every follower to
-#    remember to type it in lowercase (#0248 review):
-ISSUE="${ISSUE,,}"
+#    remember to type it in lowercase (#0248 review). Use `tr`, not
+#    `${ISSUE,,}` — that expansion is bash 4+, this machine's only bash is
+#    3.2.57, and on 3.2 it fails with "bad substitution" and leaves ISSUE
+#    unchanged, silently reopening the exact trap this line exists to close
+#    (#0248, second review pass). scripts/testdb.sh:120 already lowercases
+#    this way; match it. Keep the token alphanumeric — unlike
+#    scripts/testdb.sh's name_for(), this does not also strip other
+#    characters, so e.g. a hyphen in ISSUE will desync the same way case did:
+ISSUE="$(printf '%s' "$ISSUE" | tr '[:upper:]' '[:lower:]')"
 echo "Running the drill under ISSUE=${ISSUE}"
 #    scripts/testdb.sh clones the fully-migrated template —
 #    check_template_fresh guarantees this is at HEAD (migration 20
@@ -1017,9 +1024,11 @@ psql "$DSN" -c "select version, dirty from schema_migrations"
 #    had added to email_campaigns.
 
 # 2. Populate the source database with representative data spanning every
-#    table that exists AT THIS SCHEMA VERSION (19) — users, interests,
-#    subscribers + subscriber_interests, suppressions, audit_log,
-#    email_campaigns + campaign_interests + email_sends, email_events.
+#    table that exists AT THIS SCHEMA VERSION (19) — users, subscribers +
+#    subscriber_interests (referencing interests' existing rows —
+#    migration 000009 already seeded the 12-row taxonomy; don't add more,
+#    #0248 second review), suppressions, audit_log, email_campaigns +
+#    campaign_interests + email_sends, email_events.
 #    workshops / workshop_interests are deliberately NOT seeded here — that
 #    table doesn't exist yet at version 19, which is the entire point.
 #    Coverage for it comes from step 8 below, once migration 20 lands on
