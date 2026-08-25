@@ -176,10 +176,18 @@ function pathCitationIsExcluded(text: string, start: number, end: number): boole
   // that every intermediate segment qualify. Mirrors
   // internal/handlers/citation_target_guard_test.go's own
   // pathCitationIsExcluded exactly, including its cost: a citation shaped
-  // "SomeFile.svelte/dir/gone.ts" is excluded by its first segment alone,
-  // even if a later segment is a genuinely dangling path. See that file's
-  // doc comment for the full reasoning and the real probe that surfaced
-  // "any" vs "every" (#0220's phase-3 review).
+  // like a real file segment followed by a later dangling segment (not
+  // spelled out here as a literal slash-joined token, since this comment is
+  // itself scanned by the guard below -- see that Go file's own synthetic
+  // example, "AdminDotSvelte / lib / totallyNonexistentXyzDotTs") is
+  // excluded by its first matching segment alone, even if a later segment
+  // is a genuinely dangling path. That residual cost is a MISSED
+  // detection, not a false alarm: flipping this loop to "every"-semantics
+  // and re-running the tree-wide scan finds exactly one real hit, and it
+  // argues FOR "any" rather than against it -- a legitimate multi-file
+  // list citation that "every" wrongly flags as unresolved. See that Go
+  // file's own doc comment for the full reasoning and the real probe that
+  // surfaced "any" vs "every" (#0220's phase-3 review).
   for (const seg of segments.slice(0, -1)) {
     if (citationTargetFileLikeSegmentPattern.test(seg) || citationTargetBareDocNames.has(seg)) return true;
   }

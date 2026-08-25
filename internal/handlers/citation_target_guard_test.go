@@ -253,11 +253,15 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 	// campaigns_test.go/audience_test.go's own conventions"),
 	// "Campaigns.svelte/CampaignEditor.svelte" (the equivalent web/
 	// shape, found in the parallel dry run behind citationGuard.test.ts),
-	// or "PRD/CLAUDE.md" (campaign_markdown.go:14, meaning "PRD §9 and
-	// CLAUDE.md §9", not a nested path). ANY intermediate segment (not
-	// the last) already looking like a complete filename with a
-	// recognized extension, OR being one of this repo's own bare
-	// document names, excludes the whole citation — this is a match on
+	// "PRD/CLAUDE.md" (campaign_markdown.go:14, meaning "PRD §9 and
+	// CLAUDE.md §9", not a nested path), or "internal/seo/seo.go/sitemap.go"
+	// (admin_workshops.go:25, "it only clears caches, see
+	// internal/seo/seo.go/sitemap.go" — a directory prefix, "internal/seo",
+	// plus two real files, seo.go AND sitemap.go; the excluding segment
+	// here is the THIRD in the list, "seo.go", not the first). ANY
+	// intermediate segment (not the last) already looking like a complete
+	// filename with a recognized extension, OR being one of this repo's own
+	// bare document names, excludes the whole citation — this is a match on
 	// the FIRST such segment, not a requirement that every intermediate
 	// segment qualify. (`#0220`'s phase-3 review caught this file
 	// documenting "every" while the loop below implements "any" — the
@@ -273,12 +277,20 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 	// "every": a multi-segment citation of the shape "SomeFile.ext/dir/
 	// gone.ext" passes this guard once its FIRST segment alone looks
 	// file-like, even if a later segment is a real,
-	// unresolvable path. No such instance exists in the tree today (the
-	// tree-wide run has zero "any-but-not-every" hits); "any" is kept
-	// rather than tightened to "every" because it is the direct
-	// generalisation of the two- and three-segment real instances above,
-	// which are themselves each exactly two names joined by "/" with no
-	// third, independently-checkable segment.)
+	// unresolvable path. This is a checked, not assumed, tradeoff:
+	// flipping this loop to "every"-semantics (requiring every
+	// intermediate segment to qualify, not just the first matching one)
+	// and re-running the tree-wide scan finds exactly one hit today, not
+	// zero: admin_workshops.go:25's "internal/seo/seo.go/sitemap.go" above
+	// — a legitimate list citation of two real files that "every" wrongly
+	// flags, because its first two segments ("internal", "seo") are plain
+	// directory names, not filenames. That hit is the positive case for
+	// keeping "any", not evidence against it: it shows "every" produces a
+	// false positive on a real citation. The residual cost of "any" is the
+	// opposite failure mode — a missed detection, not a false alarm: a
+	// multi-segment citation whose first segment alone looks file-like
+	// excuses the whole thing even if a later segment is genuinely
+	// dangling.)
 	for _, seg := range segments[:len(segments)-1] {
 		if citationTargetFileLikeSegmentPattern.MatchString(seg) || citationTargetBareDocNames[seg] {
 			return true
