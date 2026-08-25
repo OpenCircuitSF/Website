@@ -24,22 +24,30 @@ import (
 //
 // Before writing the pattern, this guard's `## Verification` was produced by
 // running its candidate extractor (the pattern and discount rules below)
-// against the real corpus: all 266 `issues/NNNN.md` files, both
-// `## Verification` and `## Implementation notes` sections, 1,746 raw
-// `Test…`-shaped tokens. `#0196`'s four rules alone (wildcard family —
-// trailing `*`/`...` — a `renamed from` note, and the `TestSentAt`/
-// `TestPool` allowlist) leave 140 unresolved. Two more rules this corpus
+// against the real corpus. **Every figure in this comment is a point-in-time
+// measurement at commit 03db7ce**, not a constant: 268 `issues/NNNN.md`
+// files, both `## Verification` and `## Implementation notes` sections,
+// 1,766 raw `Test…`-shaped tokens. `#0196`'s four rules alone (wildcard
+// family — trailing `*`/`...` — a `renamed from` note, and the `TestSentAt`/
+// `TestPool` allowlist) leave 146 unresolved. Two more rules this corpus
 // specifically required (below) narrow that further: the `-run`-style
 // regex-alternation-fragment rule (adjacent `|`, scoped to a genuine
-// substring of a defined test name — see below for why) takes it to 108,
-// and the go-test-output-marker rule takes it to 88. **All 88 are in
-// `resolved` issue files. Zero are in `open` or `in-progress` files.**
-// (`#0265`'s fix pass corrected this paragraph: the original read 1,742 /
-// 107 / 87, misattributing the 107 milestone to "`#0196`'s rules alone" when
-// it already included the pipe rule, and disagreeing with a paragraph below
-// that separately, correctly, said "two" new rules. Re-measured independently
-// at the commit each number was current; the arithmetic reported here is not
-// copied from either the original draft or the review that caught it.)
+// substring of a defined test name — see below for why) takes it to 114,
+// and the go-test-output-marker rule takes it to 94. **All 94 are in
+// `resolved` issue files. Zero are in `open` or `in-progress` files** —
+// and the zero, not the 94, is what this guard enforces.
+//
+// The corpus-wide total drifts with ordinary work and is expected to. It
+// read 1,742 / 107 / 87 when this guard was first written, 1,746 / 140 /
+// 108 / 88 after `#0265`'s fix pass corrected a misattributed milestone,
+// and 1,766 / 146 / 114 / 94 here. The last step was not an error in either
+// pass: `#0124` (06fefb3) deleted ten soft-bounce test functions that
+// `issues/0039.md` and `issues/0109.md` cite, and exactly six of those
+// citations thereby became dangling — measured by diffing the set of
+// defined `Test…` functions at the two commits and intersecting it with the
+// dangling set. All six are in `resolved` files; the enforced scope stayed
+// at zero throughout. That is precisely the `resolved`-file drift the scope
+// decision below deliberately declines to police.
 //
 // That is not a coincidence of a small sample; it is the project's own
 // mutation-testing convention (`CLAUDE.md` §8b, §8a: copy a file aside,
@@ -48,7 +56,7 @@ import (
 // others document a scratch or plant test file created to *prove a guard
 // fires*, exercised once, and deleted — its name genuinely does not exist in
 // the tree today, and was never meant to. Scanning `resolved` files
-// unconditionally would fail this guard at introduction on ~88 lines of
+// unconditionally would fail this guard at introduction on ~94 lines of
 // exactly that shape, which is precisely the "a guard everyone disables is
 // worse than none" failure this issue itself warns against (see
 // `issues/0265.md` Notes).
@@ -62,12 +70,12 @@ import (
 // `resolved`. A guard scoped this way would have caught all six the moment
 // `check.sh` next ran against the dirty file, rather than requiring two
 // review passes. `resolved`-file drift (acceptance criterion 3's "true when
-// written, false now") is real — a handful of the 88 are genuine stale
+// written, false now") is real — a handful of the 94 are genuine stale
 // citations surviving a later rename (#0028 cites the pre-rename confirmation
 // test name that #0196's own guard commentary documents as later renamed —
 // not spelled out here, since it is exactly the dangling shape this file
 // itself must not cite in a real comment; see #0196's Notes for the name) —
-// but it is a minority of the 88, buried in scratch-test noise, and catching it
+// but it is a minority of the 94, buried in scratch-test noise, and catching it
 // is not worth the false-positive rate measured above. If it matters later,
 // the fix is a second, opt-in pass over `resolved` files with a stronger
 // discount for the scratch/plant/probe naming convention, not widening this
@@ -123,10 +131,26 @@ import (
 //     (a `resolved`, out-of-scope file). This is the markdown-specific
 //     sibling of the wildcard-family rule above; it discounts the same
 //     intent — "this name stands for a family/fragment, not itself" — but,
-//     unlike the wildcard rule, it can and does check that the claim is
-//     actually true, because unlike a bare trailing `*` a pipe fragment is
-//     cheap to verify against the same `defined` set the guard already
-//     built.
+//     unlike the wildcard rule, it checks *something*, because unlike a
+//     bare trailing `*` a pipe fragment is cheap to verify against the same
+//     `defined` set the guard already built.
+//
+//     **What it checks is weaker than "the claim is true", and the comment
+//     said otherwise until #0265's escalated pass.** The substring test is
+//     **tree-wide**: it asks whether the fragment occurs inside *any*
+//     defined test name anywhere in the repo, not whether it matches
+//     anything in the packages the cited command names. So a command of the
+//     form `go test ./internal/db/... -run 'A|B'`, where A names something
+//     defined only in a different package, is discounted even though that
+//     `-run` matches nothing in `internal/db` and the command exits 0
+//     having run no test at all. Likewise a short fragment that happens to
+//     be a substring of an unrelated name discounts. Both are faithful to
+//     `-run`'s unanchored semantics and to the rule as prescribed, so this
+//     is a residual rather than a defect — but the rule proves only "this
+//     fragment names something real somewhere", never "this command proved
+//     what the issue says it proved". Closing it would mean parsing the
+//     package pattern out of the cited command and resolving the fragment
+//     against only that subtree.
 //
 //   - **A `--- FAIL:`, `--- PASS:` or `=== RUN` marker within 40 bytes
 //     before the match** (go test -v's own three output-line prefixes,
@@ -172,14 +196,28 @@ import (
 //     issue's own `git cat-file`-verified commit, not a narrower regexp —
 //     not something this rule's 40-byte window can provide on its own.
 //
-// Neither new rule is hypothetical — both were added because the measured
-// corpus above required them to reach zero false positives in the
-// unresolved scope this guard actually enforces, and removing either
-// reopens exactly the real line that motivated it (proved directly in
-// TestIssueCitationExcludedDiscountRulesAreEachLoadBearing). The pipe rule
-// is narrow by construction (mechanically checked against `defined`); the
-// marker rule is not narrow, and is not claimed to be — see immediately
-// above for its blind spot and why it stays.
+// Neither new rule is hypothetical — removing either reopens exactly the
+// real corpus line that motivated it (proved directly in
+// TestIssueCitationExcludedDiscountRulesAreEachLoadBearing). But the two
+// rules do **not** carry equal weight in the scope this guard actually
+// enforces, and an earlier draft of this paragraph claimed they did:
+//
+//   - The **marker rule is load-bearing there**. Delete it and the enforced
+//     `open`/`in-progress` scope goes from 0 to 1 — a single in-progress
+//     citation quoting the real output of a scratch proof file that was
+//     created, run once, and deleted (see #0258's `## Verification`).
+//
+//   - The **pipe rule is not**. Delete it outright and the enforced scope
+//     is still 0. Its motivating line lives in #0007, a `resolved` file,
+//     outside the scope. It earns its place by keeping the corpus-wide
+//     count honest and by making `-run` alternations writable at all, not
+//     by preventing any enforced failure today.
+//
+// Both measured at 03db7ce by toggling each rule and re-running the scan.
+// The pipe rule is narrow by construction (mechanically checked against
+// `defined`, with the tree-wide caveat above); the marker rule is not
+// narrow, and is not claimed to be — see immediately above for its blind
+// spot and why it stays.
 
 // issueTestCitationPattern matches a "Test…" identifier as go test itself
 // recognizes one: a word boundary, then "Test", then anything except a
@@ -501,7 +539,7 @@ func TestIssueVerificationCitationGuardCatchesPlantedFalseCitation(t *testing.T)
 }
 
 // TestIssueVerificationCitationGuardExcludesResolvedFilesByDefault proves
-// the status filter is what keeps the 87-citation resolved-file corpus (see
+// the status filter is what keeps the 94-citation resolved-file corpus (see
 // the file-level comment) from failing this guard: a fixture with a
 // dangling citation and Status resolved is not reported when includeStatus
 // only admits open/in-progress, and the exact same fixture with Status
