@@ -539,6 +539,24 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   not license bash-4 syntax. The same applies to `${var^^}`, `declare -A`,
   `mapfile`/`readarray`, and `&>>`.
 
+- **A guard's oracle must not be the same bytes as its subject.** `#0258` added
+  a positive assertion that `run()`'s definition still spells its `FAILED=1`
+  accounting, comparing it against a **quoted heredoc holding the expected
+  text**. One `sed` replacing the definition line rewrote *both* the live
+  definition and the heredoc, so the guard agreed with itself and a failing
+  test still reported `VERIFICATION PASSED`. `runpipe()`'s equivalent survived
+  the same global replace, because its oracle is a **regex** — a different
+  representation of the same fact, which an edit to the subject does not touch.
+  The selection rule is not "does the text contain awkward characters"; it is
+  **can an edit to the subject also satisfy the oracle**. A copy of the answer
+  stored next to the question is not a check.
+
+  The companion rule, from the same review: assert the marker block appears
+  **exactly once**. Leaving the real definition intact and *adding* a second
+  marked block shadows it at runtime while the scan deletes the decoy before
+  counting — `GUARD-0208` closes this with begin/end counts; anything modelled
+  on it must too.
+
 - **BSD `grep -P` on this machine matches nothing, silently.** It does not
   error and does not warn — it reports zero hits on a file that demonstrably
   contains the bytes, which reads exactly like "the string isn't there." A
