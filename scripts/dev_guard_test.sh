@@ -79,6 +79,17 @@ FAILURES=0
 BG_PIDS=()        # background processes this script forked (holders, connectors)
 GROUP_LEADERS=()  # dev.sh (or mutant) subprocess pids, each its own process-group leader
 
+fail() { FAILURES=$((FAILURES + 1)); printf 'FAIL: %s\n' "$1" >&2; }
+pass() { printf 'PASS: %s\n' "$1"; }
+note() { printf '  [note] %s\n' "$1"; }
+
+port_listeners() { lsof -ti tcp:"$1" -sTCP:LISTEN 2>/dev/null || true; }
+port_endpoints() { lsof -ti tcp:"$1" 2>/dev/null || true; }   # listeners AND client connections
+port_bound()     { [ -n "$(port_listeners "$1")" ]; }
+# shellcheck disable=SC2329  # called indirectly as `wait_for N port_free <port>`
+port_free()      { [ -z "$(port_listeners "$1")" ]; }
+port_accepts_connection() { ( exec 3<>"/dev/tcp/127.0.0.1/$1" ) 2>/dev/null; }
+
 # #0253: every port below used to be a fixed literal (54301, 54311, ...,
 # 54381), so two concurrent runs of this script were guaranteed to collide —
 # CLAUDE.md §5a makes concurrent agents the norm. Derive a per-run base
@@ -92,9 +103,63 @@ GROUP_LEADERS=()  # dev.sh (or mutant) subprocess pids, each its own process-gro
 # makes a collision unlikely instead of certain. :5173 is Vite's own,
 # unavoidable, hardcoded port and is left alone; the parts that reach it
 # already require it free and abort otherwise.
+#
+# #0259: the original range (40000 + (hash%200)*100, i.e. 40000..59900)
+# overlapped macOS's ephemeral allocator (net.inet.ip.portrange.first =
+# 49152 on this machine, confirmed via sysctl) AND real listeners observed
+# on this machine (rapportd 49301, LM Studio 41343, lmlink-connect 52714, a
+# VS Code helper 57106) — all inside the old range. Worse, because the base
+# is a DETERMINISTIC hash of the token, whichever token happened to hash
+# into an occupied bucket failed the SAME way on EVERY run, forever, while
+# every other token was fine — a reproducible-for-one, invisible-for-everyone-
+# else failure that reads exactly like a real dev.sh regression (see
+# issues/0259.md; #0253's own review hit this shape as a false "REGRESSION
+# #0117"). Two independent fixes:
+#
+#   1. Moved the range down to 20000..39900 — entirely below the ephemeral
+#      floor (49152) and clear of every real listener named above. Verified
+#      empty on this machine at the time of writing: `lsof -iTCP -sTCP:LISTEN
+#      -P -n` reported zero listeners in [20000,40000). Still 200
+#      non-overlapping 100-wide buckets, same modulus as before, so the
+#      offsets below (P1 = PBASE+1, ..., P8 = PBASE+81) are unchanged.
+#   2. A base that IS occupied (another agent's run, or a real listener
+#      neither of us knew about) is now retried, not fatal. pick_pbase()
+#      below tries the token's own hash first — so the common case is still
+#      the same deterministic, human-diffable base a fixed ISSUE always
+#      produces — and on collision rehashes "$RUNID:$attempt" for a bounded
+#      number of attempts, checking every one of this run's 9 derived ports
+#      (not just the base itself) before accepting a candidate. Only a
+#      pathological run of the RNG exhausting every attempt is fatal, and
+#      that failure is reported as what it is (search exhausted), not as a
+#      silent, permanent per-token wall.
+pick_pbase() {
+  local seed hash base off collision attempt=0
+  local offsets=(1 11 21 31 41 51 61 71 81)
+  while [ "$attempt" -lt 50 ]; do
+    seed="${RUNID}:${attempt}"
+    hash="$(printf '%s' "$seed" | cksum | awk '{print $1}')"
+    base=$(( 20000 + ( (hash % 200) * 100 ) ))   # 20000..39900, 200 non-overlapping 100-wide buckets
+    collision=0
+    for off in "${offsets[@]}"; do
+      if port_bound "$((base + off))"; then
+        collision=1
+        break
+      fi
+    done
+    if [ "$collision" -eq 0 ]; then
+      printf '%s\n' "$base"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
 RUNID="${ISSUE:-$$}"
-RUNHASH="$(printf '%s' "$RUNID" | cksum | awk '{print $1}')"
-PBASE=$(( 40000 + ( (RUNHASH % 200) * 100 ) ))   # 40000..59900, 200 non-overlapping 100-wide buckets
+PBASE="$(pick_pbase)" || {
+  echo "error: could not find a free port base for this run after 50 attempts — every candidate in 20000..39900 (200 buckets) had at least one of this run's 9 ports already bound. Something unusual is using a very wide swath of that range; investigate rather than widening the search blindly." >&2
+  exit 1
+}
 P1="$((PBASE + 1))"    # part 1
 P2="$((PBASE + 11))"   # part 2
 P3A="$((PBASE + 21))"  # part 3a
@@ -104,17 +169,6 @@ P5="$((PBASE + 51))"   # part 5
 P6="$((PBASE + 61))"   # part 6
 P7="$((PBASE + 71))"   # part 7
 P8="$((PBASE + 81))"   # part 8
-
-fail() { FAILURES=$((FAILURES + 1)); printf 'FAIL: %s\n' "$1" >&2; }
-pass() { printf 'PASS: %s\n' "$1"; }
-note() { printf '  [note] %s\n' "$1"; }
-
-port_listeners() { lsof -ti tcp:"$1" -sTCP:LISTEN 2>/dev/null || true; }
-port_endpoints() { lsof -ti tcp:"$1" 2>/dev/null || true; }   # listeners AND client connections
-port_bound()     { [ -n "$(port_listeners "$1")" ]; }
-# shellcheck disable=SC2329  # called indirectly as `wait_for N port_free <port>`
-port_free()      { [ -z "$(port_listeners "$1")" ]; }
-port_accepts_connection() { ( exec 3<>"/dev/tcp/127.0.0.1/$1" ) 2>/dev/null; }
 
 wait_for() {  # wait_for <timeout_seconds> <command...>  — 1s poll interval
   local timeout="$1" waited=0; shift
