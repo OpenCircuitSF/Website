@@ -49,16 +49,45 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PGHOST_URL="${PGHOST_URL:-postgres://opencircuit:opencircuit@localhost:5432}"
 
+# #0250: flags are recognized in ANY position, not just before the database
+# name. The old option loop broke at the first positional argument, so a
+# flag placed AFTER the database name (`db-reset.sh opencircuit --force`)
+# was silently dropped — bad enough on its own, and worse because the
+# connection-refusal message below tells the user to run exactly that.
+# Looping over every argument instead means order doesn't matter. An
+# unrecognized "--..." flag is now rejected outright rather than silently
+# treated as the database name. And a database-name argument that is the
+# empty string is rejected too, rather than falling through to the
+# "opencircuit" default via bash's "${1:-opencircuit}" — an empty string
+# arriving from an unset variable is exactly how a caller would accidentally
+# target the main database instead of skipping the argument.
 SEED=1
 FORCE=0
-while :; do
-  case "${1:-}" in
-    --no-seed) SEED=0; shift ;;
-    --force)   FORCE=1; shift ;;
-    *) break ;;
+DB=""
+DB_SET=0
+for arg in "$@"; do
+  case "$arg" in
+    --no-seed) SEED=0 ;;
+    --force)   FORCE=1 ;;
+    --*)
+      echo "refusing: unrecognized flag '$arg'" >&2
+      exit 1
+      ;;
+    *)
+      if [ "$DB_SET" = "1" ]; then
+        echo "refusing: multiple positional arguments given ('$DB' and '$arg')" >&2
+        exit 1
+      fi
+      DB="$arg"
+      DB_SET=1
+      ;;
   esac
 done
-DB="${1:-opencircuit}"
+if [ "$DB_SET" = "1" ] && [ -z "$DB" ]; then
+  echo "refusing: empty database name argument — pass a name, or omit the argument entirely to reset the default ('opencircuit')" >&2
+  exit 1
+fi
+[ "$DB_SET" = "1" ] || DB="opencircuit"
 
 case "$PGHOST_URL" in
   *@localhost:*|*@127.0.0.1:*) ;;
@@ -105,10 +134,27 @@ esac
 
 DSN="$PGHOST_URL/$DB?sslmode=disable"
 command -v migrate >/dev/null || { echo "error: golang-migrate not on PATH (brew install golang-migrate)" >&2; exit 1; }
+# #0250 item 2: psql is used below for the live-connection check and for
+# every DROP/CREATE statement — check for it the same way migrate is
+# checked, rather than letting its absence surface later as a confusing
+# failure (or, worse, as a false "no connections" — see item 1 below).
+command -v psql >/dev/null    || { echo "error: psql not on PATH" >&2; exit 1; }
 
 # Refuse to kick another session off '$DB' unless asked. See GUARDS above for
 # why this script's blast radius made this the priority over #0150's gc fix.
-CONNS="$(psql "$PGHOST_URL/postgres" -tAc "select pid || '  ' || coalesce(usename,'?') || '  ' || coalesce(application_name,'') || '  ' || coalesce(client_addr::text,'local') from pg_stat_activity where datname = '$DB' and pid <> pg_backend_pid()" 2>/dev/null || true)"
+#
+# #0250 item 1: this must fail CLOSED, not open. The query used to be
+# wrapped in `2>/dev/null || true`, so ANY psql failure — wrong socket, bad
+# credentials, server down, a transient fault — produced the same empty
+# string as "no connections", and the reset proceeded anyway. The one
+# condition under which a destructive script most needs to stop is the one
+# where it cannot tell what is happening. This check now runs unconditionally,
+# even under --force: --force means "I know someone is connected, proceed
+# anyway," not "proceed even if you can't tell whether anyone is connected."
+if ! CONNS="$(psql "$PGHOST_URL/postgres" -tAc "select pid || '  ' || coalesce(usename,'?') || '  ' || coalesce(application_name,'') || '  ' || coalesce(client_addr::text,'local') from pg_stat_activity where datname = '$DB' and pid <> pg_backend_pid()")"; then
+  echo "refusing: could not determine whether '$DB' has other active connection(s) — the check above failed (see psql's error above this line), so refusing rather than assuming none. This runs even with --force." >&2
+  exit 1
+fi
 if [ -n "$CONNS" ] && [ "$FORCE" != "1" ]; then
   cat >&2 <<EOF
 refusing: '$DB' has other active connection(s) — this may be another agent (CLAUDE.md §5a) or the user's own session:

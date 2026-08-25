@@ -26,6 +26,23 @@
 #      without --force.
 #   6. $DB is never interpolated unquoted into a DROP/CREATE DATABASE
 #      statement in the tracked source.
+#   7. (#0250 item 1) The live-connection check fails CLOSED: when psql
+#      cannot run the query at all (a bad port here), db-reset.sh refuses —
+#      both without --force and, since #0250, WITH --force too.
+#   8. (#0250 item 2) psql absence is checked the way migrate's already is:
+#      with psql hidden from PATH (migrate and bash still reachable), the
+#      script refuses and names psql, rather than compounding item 7's
+#      failure by silently reading "no connections".
+#   9. (#0250 item 3) A --force flag placed AFTER the database name is
+#      honoured, not silently dropped — matching what the connection-refusal
+#      message itself tells the user to do.
+#  10. (#0250 item 4) An empty database-name argument is rejected rather
+#      than silently defaulting to 'opencircuit' via bash's "${1:-default}".
+#
+# A pg_database CENSUS is taken before this script does anything and again
+# after its own cleanup runs (#0250 item 5 — the prior version of this test
+# left opencircuit_test_0207gt_demo behind for a reviewer to drop by hand);
+# the two must match exactly, or the run reports a leak by name.
 #
 # SAFETY DESIGN — read this before changing the test
 #
@@ -79,6 +96,12 @@ MUTANTS=()   # private copies written into scripts/, removed by the EXIT trap
 
 psql_admin() { psql "$PGHOST_URL/postgres" "$@"; }
 db_exists() { [ "$(psql_admin -tAc "select 1 from pg_database where datname='$1'" 2>/dev/null)" = "1" ]; }
+# #0250 item 5: a leaked-database census. Scoped to 'opencircuit%' so it also
+# catches a leak under a name this test never explicitly names (the failure
+# shape #0250 itself reports: the OLD version of this test left
+# opencircuit_test_0207gt_demo behind without ever asserting anything about
+# it).
+census() { psql_admin -tAc "select datname from pg_database where datname like 'opencircuit%' order by 1" 2>/dev/null; }
 
 fail() { FAILURES=$((FAILURES + 1)); printf 'FAIL: %s\n' "$1" >&2; }
 pass() { printf 'PASS: %s\n' "$1"; }
@@ -129,6 +152,14 @@ cleanup() {
   if db_exists "$TESTDB"; then
     echo "warning: cleanup could not confirm $TESTDB was dropped — it may still exist" >&2
   fi
+  # #0250 item 5: defensive drop of the per-agent-shaped name Part 5 (and,
+  # historically, this test's own leak) targets. Part 5 asserts the real
+  # script REFUSES to create it, so under a healthy guard this is a no-op —
+  # but if a future regression ever makes that refusal fail, this closes the
+  # leak the old version of this test left behind rather than depending on a
+  # human to notice and drop it by hand.
+  terminate_backends "opencircuit_test_0207gt_demo"
+  psql_admin -qc "DROP DATABASE IF EXISTS opencircuit_test_0207gt_demo;" >/dev/null 2>&1 || true
   for m in "${MUTANTS[@]:-}"; do
     [ -n "$m" ] && rm -f "$m"
   done
@@ -142,6 +173,7 @@ command -v shasum >/dev/null  || { echo "error: shasum not on PATH" >&2; exit 1;
 [ -f "$REAL_SCRIPT" ] || { echo "error: $REAL_SCRIPT not found" >&2; exit 1; }
 
 SHA_BEFORE="$(shasum -a 256 "$REAL_SCRIPT" | awk '{print $1}')"
+CENSUS_BEFORE="$(census)"
 
 # A private copy with the name allowlist widened to admit TESTDB, via the
 # same one-line case-arm the real script uses -- so Parts 1-3 exercise the
@@ -269,6 +301,105 @@ if grep -qE 'DATABASE (IF EXISTS )?\$DB\b' "$REAL_SCRIPT"; then
   fail "REGRESSION #0207: scripts/db-reset.sh still interpolates \$DB unquoted into a DROP/CREATE DATABASE statement"
 else
   pass "scripts/db-reset.sh does not interpolate \$DB unquoted into DROP/CREATE DATABASE"
+fi
+
+echo "== Part 7: the live-connection check fails CLOSED when psql cannot run the query (#0250 item 1) =="
+# Bad port on localhost still passes the host check but makes the
+# live-connection query itself fail -- exactly the "psql errored" case
+# #0250 item 1 describes. Target 'opencircuit_test' (a name the real script
+# already accepts without --force): the check under test runs and refuses
+# well before anything destructive, so this never touches that database --
+# confirmed below by re-checking it still exists and by the overall census.
+BAD_PGHOST_URL="postgres://opencircuit:opencircuit@localhost:1"
+if PGHOST_URL="$BAD_PGHOST_URL" "$REAL_SCRIPT" opencircuit_test >/dev/null 2>&1; then
+  fail "REGRESSION #0250: db-reset.sh proceeded even though its live-connection check's psql query failed (bad port), without --force"
+else
+  pass "db-reset.sh refuses when the live-connection check's psql query fails (bad port), without --force"
+fi
+if PGHOST_URL="$BAD_PGHOST_URL" "$REAL_SCRIPT" --force opencircuit_test >/dev/null 2>&1; then
+  fail "REGRESSION #0250: db-reset.sh proceeded under --force even though its live-connection check's psql query failed (bad port) -- this must fail closed regardless of --force"
+else
+  pass "db-reset.sh refuses when the live-connection check's psql query fails (bad port), even WITH --force"
+fi
+if db_exists "opencircuit_test"; then
+  pass "opencircuit_test still exists after Part 7 (never reached, as expected)"
+else
+  fail "FATAL: opencircuit_test does not exist after Part 7 -- something touched it unexpectedly"
+fi
+
+echo "== Part 8: psql presence is checked, the way migrate already is (#0250 item 2) =="
+REAL_MIGRATE="$(command -v migrate)"
+FAKEPATH="$WORKDIR/fakepath"
+mkdir -p "$FAKEPATH"
+ln -s "$REAL_MIGRATE" "$FAKEPATH/migrate"
+NOPSQL_PATH="$FAKEPATH:/bin:/usr/bin"
+# hash -r: this script's own process has already hashed psql's real location
+# (every psql_admin call above did that), and a prefix-assigned "PATH=... cmd"
+# does not by itself invalidate bash's hash table -- so "command -v psql"
+# below would report the stale hashed path and silently pass regardless of
+# PATH, proving nothing. The real $REAL_SCRIPT invocation a few lines down is
+# unaffected by this (it execs a brand-new bash process per its shebang, which
+# starts with an empty hash table), but these two diagnostic checks, run
+# in-process, need the table cleared explicitly.
+hash -r
+if PATH="$NOPSQL_PATH" command -v psql >/dev/null 2>&1; then
+  echo "FATAL: psql is reachable under /bin or /usr/bin on this machine -- Part 8's stub PATH does not actually hide it, aborting rather than proving nothing." >&2
+  exit 1
+fi
+if ! PATH="$NOPSQL_PATH" command -v bash >/dev/null 2>&1; then
+  echo "FATAL: bash is not reachable under Part 8's stub PATH ($NOPSQL_PATH) -- the script wouldn't even start, aborting rather than proving nothing." >&2
+  exit 1
+fi
+hash -r
+OUT8="$(PATH="$NOPSQL_PATH" "$REAL_SCRIPT" opencircuit_test 2>&1)"; RC8=$?
+if [ "$RC8" -eq 0 ]; then
+  fail "REGRESSION #0250: db-reset.sh proceeded without psql on PATH"
+elif echo "$OUT8" | grep -qi 'psql'; then
+  pass "db-reset.sh refuses (exit $RC8) and names psql when it is not on PATH"
+else
+  fail "db-reset.sh refused (exit $RC8) without psql on PATH, but the message doesn't mention psql -- output: $OUT8"
+fi
+
+echo "== Part 9: a --force flag placed AFTER the database name is honoured (#0250 item 3) =="
+psql "$PGHOST_URL/$TESTDB" -c "select pg_sleep(20)" >/dev/null 2>&1 &
+CONN3_PID=$!
+BG_PIDS+=("$CONN3_PID")
+if wait_for_connection "$TESTDB" 10; then
+  if "$SCOPED" --no-seed "$TESTDB" --force >"$WORKDIR/part9.log" 2>&1; then
+    pass "a --force flag placed AFTER the database name is honoured (reset succeeded despite a live connection)"
+  else
+    fail "REGRESSION #0250: --force placed after the database name was not honoured -- log: $(tail -20 "$WORKDIR/part9.log" | tr '\n' '|')"
+  fi
+  if kill -0 "$CONN3_PID" 2>/dev/null; then
+    fail "REGRESSION #0250: --force placed after the database name did not terminate the prior connection"
+  else
+    pass "--force placed after the database name terminated the prior connection"
+  fi
+else
+  fail "part9 setup: connection never registered in pg_stat_activity"
+fi
+kill -9 "$CONN3_PID" >/dev/null 2>&1 || true
+wait "$CONN3_PID" 2>/dev/null || true
+
+echo "== Part 10: an empty database-name argument is rejected, not defaulted to 'opencircuit' (#0250 item 4) =="
+if "$REAL_SCRIPT" --force '' >/dev/null 2>&1; then
+  fail "REGRESSION #0250: db-reset.sh accepted an empty database-name argument (it must be rejected, not fall through to the 'opencircuit' default)"
+else
+  pass "an empty database-name argument is refused rather than silently defaulting to 'opencircuit'"
+fi
+
+echo
+echo "== Final cleanup and leaked-database census (#0250 item 5) =="
+terminate_backends "$TESTDB"
+wait_for_disconnect "$TESTDB" 20 || true
+psql_admin -qc "DROP DATABASE IF EXISTS $TESTDB;" >/dev/null 2>&1 || true
+terminate_backends "opencircuit_test_0207gt_demo"
+psql_admin -qc "DROP DATABASE IF EXISTS opencircuit_test_0207gt_demo;" >/dev/null 2>&1 || true
+CENSUS_AFTER="$(census)"
+if [ "$CENSUS_BEFORE" = "$CENSUS_AFTER" ]; then
+  pass "pg_database census (datname like 'opencircuit%') unchanged before/after this run: $(printf '%s' "$CENSUS_BEFORE" | tr '\n' ' ')"
+else
+  fail "REGRESSION #0250: pg_database census changed -- a database was leaked or removed. before=[$(printf '%s' "$CENSUS_BEFORE" | tr '\n' ' ')] after=[$(printf '%s' "$CENSUS_AFTER" | tr '\n' ' ')]"
 fi
 
 echo
