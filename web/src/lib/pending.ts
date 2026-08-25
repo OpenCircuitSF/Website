@@ -8,10 +8,11 @@ import type { PendingSubscriber } from './types';
 
 /**
  * Humanizes age_seconds (server-computed, see PendingSubscriber's doc
- * comment) into the largest whole unit that reads naturally — "45 seconds",
- * "12 minutes", "3 hours", "2 days" — never a fraction, and never negative
- * (a clock-skew or in-flight request landing between reads clamps to "just
- * now" instead of "-3 seconds").
+ * comment) into the largest whole unit that reads naturally — "just now"
+ * (anything under 60 seconds; there is no seconds branch), "12 minutes",
+ * "3 hours", "2 days" — never a fraction, and never negative (a clock-skew
+ * or in-flight request landing between reads clamps to "just now" too,
+ * rather than "-3 seconds").
  */
 export function formatPendingAge(ageSeconds: number): string {
   const s = Math.max(0, Math.floor(ageSeconds));

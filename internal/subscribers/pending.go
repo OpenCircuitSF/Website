@@ -103,15 +103,23 @@ type ResendResult struct {
 // fresh token"), and an admin-triggered resend is a good moment to also
 // invalidate whatever the previous link was, in case it leaked.
 //
-// Guarded, in order, inside the transaction (SELECT ... FOR UPDATE so a
-// concurrent resend or confirm can't race this check):
+// Guarded, in order, inside the transaction (the row is locked with
+// SELECT ... FOR UPDATE below so a concurrent resend or confirm can't race
+// this check — see that query's own comment, and #0263 item 1, for why this
+// doc comment used to credit the wrong mechanism):
 //
 //  1. the subscriber exists and is not synthetic (ErrPendingSubscriberNotFound)
 //  2. status is 'pending' (ErrNotPending) — nothing to resend to otherwise
 //  3. the address is not suppressed (ErrResendSuppressed)
 //  4. confirm_sent_at is NULL or older than now-cooldown (ErrResendCooldownActive)
-//     — the same claim-in-the-WHERE-clause shape ClaimAndEnqueueConfirmation
-//     uses, so a second concurrent admin click can't both win
+//     — checked in Go, against the row FOR UPDATE already locked above, NOT
+//     via a claim-in-the-WHERE-clause UPDATE the way the public
+//     ClaimAndEnqueueConfirmation enforces its own cooldown. The safety
+//     property is the same (a second concurrent admin click can't both
+//     win) but the mechanism differs: here it is the row lock that
+//     serializes concurrent callers, not an atomic conditional UPDATE.
+//     Mutation-proven under eight concurrent calls (#0128's phase-3
+//     review): wins=1 cooldowns=7 queued_delta=1.
 //
 // A cooldown/suppression refusal is a normal outcome, not a system error —
 // callers should not log it as one.
@@ -122,6 +130,15 @@ func (s *Store) AdminResendConfirmation(ctx context.Context, id int64, now time.
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// FOR UPDATE is load-bearing, not decoration (#0263 item 1): the
+	// cooldown check below (guard 4) is an ordinary Go `if`, not a claim
+	// baked into an UPDATE's WHERE clause — this row lock is the ONLY thing
+	// serializing two concurrent AdminResendConfirmation calls against the
+	// same subscriber. Removing it turns the cooldown check into a
+	// read-then-write race: two concurrent callers could both read
+	// confirm_sent_at as "outside the cooldown" before either writes,
+	// producing two resends instead of one. Do not remove it as apparently
+	// redundant with the WHERE clause below — it is not redundant.
 	row := tx.QueryRow(ctx,
 		`SELECT `+subscriberColumns+` FROM subscribers WHERE id = $1 AND synthetic = false FOR UPDATE`, id)
 	sub, err := scanSubscriber(row)
