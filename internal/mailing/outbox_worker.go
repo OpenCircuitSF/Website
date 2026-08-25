@@ -39,8 +39,10 @@ package mailing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -374,6 +376,15 @@ func (w *OutboxWorker) sendOne(row outbox.Row) {
 	msg, err := w.render(sendCtx, row)
 	if err != nil {
 		sendCancel()
+		// #0264: a welcome row refused for a missing physical_address is not
+		// an ordinary render/send failure — it is a policy gate the row must
+		// clear automatically once an admin sets the address, so it takes a
+		// dedicated path that never abandons it. See
+		// deferMissingPhysicalAddress and errWelcomePhysicalAddressRequired.
+		if errors.Is(err, errWelcomePhysicalAddressRequired) {
+			w.deferMissingPhysicalAddress(row)
+			return
+		}
 		w.finishFailed(row, fmt.Errorf("rendering kind %q: %w", row.Kind, err))
 		return
 	}
@@ -436,6 +447,56 @@ func (w *OutboxWorker) finishFailed(row outbox.Row, sendErr error) {
 	} else {
 		w.log.Warn("mailing: outbound_queue send failed, will retry", "id", row.ID, "kind", row.Kind, "attempts", row.Attempts, "err", sendErr)
 	}
+}
+
+// welcomeAddressDeferMaxRetries is the maxRetries deferMissingPhysicalAddress
+// passes to MarkRetryOrAbandon. MarkRetryOrAbandon abandons a row once
+// attempts >= maxRetries; a welcome deferred for a missing physical_address
+// (#0264) must NEVER reach that terminal state on its own — unlike an
+// ordinary send failure, this is a policy gate, and an abandoned row is not
+// automatically retried once the address is set. A value this large keeps
+// the "attempts >= maxRetries" comparison permanently false, so the row
+// always takes MarkRetryOrAbandon's 'queued' branch and backs off along the
+// ordinary schedule (Backoff, clamped to 24h) — reusing that existing,
+// tested mechanism rather than inventing a second requeue path.
+const welcomeAddressDeferMaxRetries = math.MaxInt32
+
+// errWelcomePhysicalAddressRequired is render's signal that a welcome
+// message (outbox.KindWelcome) could not be built because
+// settings.physical_address is unset. #0264: #0127's welcome carries a
+// workshops CTA and RFC 8058 one-click unsubscribe headers — #0127's own
+// phase-3 review judged that this makes it commercial rather than
+// transactional, so CAN-SPAM §7704's physical-address requirement applies
+// to it the same way #0045's CLAUDE.md §9 rule applies to the campaign
+// worker. sendOne recognizes this specific sentinel and routes it to
+// deferMissingPhysicalAddress instead of the ordinary finishFailed path.
+// The literal carries no issue citation (TestNoAdminFacingStringCitesInternalDocs,
+// #0172/#0175/#0178/#0181): this error's text lands in outbound_queue.error,
+// which the admin pending/dashboard screens can surface, and an admin
+// cannot read issues/0264.md.
+var errWelcomePhysicalAddressRequired = errors.New("mailing: welcome email refused: physical_address is not set")
+
+// deferMissingPhysicalAddress requeues row — a welcome message render
+// refused to build because settings.physical_address is unset — using the
+// ordinary backoff schedule and welcomeAddressDeferMaxRetries so it is never
+// abandoned. Logged at Warn, not Error: this is expected operational state
+// (CLAUDE.md §10 item 3 — the physical mailing address is not yet
+// configured), not a bug. The subscriber's confirmation that produced this
+// row already succeeded and is not at risk: internal/subscribers.Store.Confirm
+// does not read physical_address at all, so a refusal here only defers the
+// welcome, never the confirmation.
+func (w *OutboxWorker) deferMissingPhysicalAddress(row outbox.Row) {
+	writeCtx, writeCancel := context.WithTimeout(context.Background(), writeStatusTimeout)
+	defer writeCancel()
+	if _, err := w.store.MarkRetryOrAbandon(writeCtx, row.ID, row.Attempts, errWelcomePhysicalAddressRequired.Error(), welcomeAddressDeferMaxRetries); err != nil {
+		w.log.Error("mailing: deferring welcome for missing physical_address failed", "id", row.ID, "err", err)
+		return
+	}
+	subscriberID := int64(-1)
+	if row.SubscriberID != nil {
+		subscriberID = *row.SubscriberID
+	}
+	w.log.Warn("mailing: welcome deferred pending physical_address configuration", "id", row.ID, "subscriber_id", subscriberID)
 }
 
 // effectiveMaxRetries reads settings.queue_max_retries, falling back to
@@ -527,11 +588,27 @@ type welcomePayload struct {
 // render resolves physical_address at SEND time (not enqueue time) — #0126's
 // plan §3: "a small improvement: an address set between enqueue and send
 // now produces a correct footer, where today it would not." This worker
-// deliberately does NOT refuse to send a confirmation for a missing
+// deliberately does NOT refuse to send confirmation, already_subscribed,
+// registration, recovery, sessions_revoked, or admin_alert for a missing
 // physical_address the way #0045's CAMPAIGN send worker refuses to start a
 // campaign (CLAUDE.md §9's rule is scoped to that worker;
-// BuildConfirmationEmail already documents "" as simply omitting the line)
-// — refusing here would turn a cosmetic gap into a broken signup flow.
+// BuildConfirmationEmail/BuildAlreadySubscribedEmail already document "" as
+// simply omitting the line) — refusing here would turn a cosmetic gap into a
+// broken signup flow, and none of those six messages is commercial.
+//
+// KindWelcome is the one deliberate exception (#0264, correcting the earlier
+// version of this comment that predated the welcome email and did not
+// consider it). #0127's welcome carries a workshops CTA and RFC 8058
+// one-click unsubscribe headers — #0127's own phase-3 review judged that
+// this makes it commercial rather than transactional, so CAN-SPAM §7704's
+// address requirement applies to it the same way it does to a campaign. A
+// blank physical_address there returns errWelcomePhysicalAddressRequired
+// instead of building the message; sendOne recognizes that sentinel and
+// requeues the row indefinitely (deferMissingPhysicalAddress) rather than
+// treating it as an ordinary send failure, so a refusal never costs the
+// subscriber their confirmation — Confirm already committed independently
+// of this check — and the welcome sends automatically once an admin sets
+// the address.
 func (w *OutboxWorker) render(ctx context.Context, row outbox.Row) (Message, error) {
 	switch row.Kind {
 	case outbox.KindConfirmation:
@@ -581,7 +658,14 @@ func (w *OutboxWorker) render(ctx context.Context, row outbox.Row) (Message, err
 		if err := json.Unmarshal(row.Payload, &p); err != nil {
 			return Message{}, err
 		}
-		return BuildWelcomeEmail(row.Recipient, w.baseURL, w.listDomain, p.ManageToken, p.InterestNames, w.physicalAddress(ctx)), nil
+		// #0264: unlike every other kind in this switch, a blank
+		// physical_address here is a refusal, not an omission — see this
+		// function's doc comment.
+		addr := w.physicalAddress(ctx)
+		if strings.TrimSpace(addr) == "" {
+			return Message{}, errWelcomePhysicalAddressRequired
+		}
+		return BuildWelcomeEmail(row.Recipient, w.baseURL, w.listDomain, p.ManageToken, p.InterestNames, addr), nil
 
 	default:
 		// goodbye (no producer), import_invite (#0129): no renderer yet.

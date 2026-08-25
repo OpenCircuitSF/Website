@@ -181,9 +181,13 @@ func TestOutboxWorker_MarkSent_RecordsConfirmationSent(t *testing.T) {
 // TestOutboxWorker_DrainsWelcomeRow is #0127's end-to-end proof, mirroring
 // TestOutboxWorker_DrainsConfirmationRow: a queued welcome row is claimed,
 // rendered with the actual payload (manage_token, interest_names), sent
-// through the mailer, and marked sent with its payload scrubbed.
+// through the mailer, and marked sent with its payload scrubbed. Sets
+// physical_address explicitly (#0264): the seeded default is blank, and a
+// blank address now defers a welcome rather than sending it — see
+// TestOutboxWorker_DefersWelcome_MissingPhysicalAddress for that path.
 func TestOutboxWorker_DrainsWelcomeRow(t *testing.T) {
 	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
 	mailer := &RecordingMailer{}
 	w, store := newTestOutboxWorker(t, pool, mailer)
 
@@ -272,6 +276,10 @@ func TestOutboxWorker_DrainsWelcomeRow(t *testing.T) {
 // side effect.
 func TestOutboxWorker_MarkSent_RecordsWelcomeSent(t *testing.T) {
 	pool := outboxTestPool(t)
+	// #0264: a blank physical_address (the seeded default) now defers a
+	// welcome instead of sending it, which would leave welcome_sent
+	// unwritten and stall this test's whole point.
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
 	mailer := &RecordingMailer{}
 	w, store := newTestOutboxWorker(t, pool, mailer)
 
@@ -331,6 +339,146 @@ func TestOutboxWorker_MarkSent_RecordsWelcomeSent(t *testing.T) {
 	}
 	if status != outbox.StatusSent {
 		t.Errorf("outbound_queue status = %q, want %q", status, outbox.StatusSent)
+	}
+}
+
+// TestOutboxWorker_DefersWelcome_MissingPhysicalAddress is #0264's proof, in
+// both directions: with settings.physical_address unset, a genuine Confirm()
+// call still activates the subscriber and enqueues the welcome row, but the
+// worker never sends it — then, once the address is set, the SAME row sends
+// without being re-enqueued.
+//
+// Confirm() is used deliberately here (unlike
+// TestOutboxWorker_MarkSent_RecordsWelcomeSent's direct Enqueue, which exists
+// precisely to avoid activating a subscriber in this package's shared,
+// truncated-once-per-run test database — see that test's own doc comment):
+// #0264's acceptance criterion is explicit ("confirm with physical_address
+// empty, assert the subscriber is confirmed"), so proving it needs a real
+// Confirm call. The subscriber row this test creates is deleted in
+// t.Cleanup before any other test in this package can observe it via an
+// AudienceAll-scoped query, following audience_test.go's established pattern
+// for the same shared-database constraint.
+func TestOutboxWorker_DefersWelcome_MissingPhysicalAddress(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "")
+
+	mailer := &RecordingMailer{}
+	w, _ := newTestOutboxWorker(t, pool, mailer)
+
+	// subscribers.Store.Create (below) also enqueues an ordinary
+	// 'confirmation' row for the same subscriber/recipient, which the
+	// worker sends normally regardless of physical_address (render's own
+	// doc comment) — so "nothing went out" below is scoped to the WELCOME
+	// message specifically, by subject, not to mailer.Sent()'s raw count.
+	const welcomeSubject = "Welcome to Open Circuit SF"
+	countWelcomeSent := func() int {
+		n := 0
+		for _, m := range mailer.Sent() {
+			if m.Subject == welcomeSubject {
+				n++
+			}
+		}
+		return n
+	}
+
+	subStore := subscribers.NewStore(pool)
+	email := uniqueOutboxRecipient(t)
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: email, ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, sub.ID)
+	})
+	if sub.ConfirmToken == nil {
+		t.Fatal("Create returned a subscriber with no confirm_token")
+	}
+
+	confirmed, err := subStore.Confirm(context.Background(), *sub.ConfirmToken, time.Now())
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if confirmed.Status != subscribers.StatusActive {
+		t.Fatalf("status after Confirm = %q, want %q — a missing physical_address must not block confirmation", confirmed.Status, subscribers.StatusActive)
+	}
+
+	var welcomeID int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT id FROM outbound_queue WHERE recipient = $1 AND kind = 'welcome'`, email,
+	).Scan(&welcomeID); err != nil {
+		t.Fatalf("expected a welcome row enqueued by Confirm: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	// Wait until the worker has claimed and deferred the row at least once
+	// (attempts >= 1), then assert it is queued again — not sent, not
+	// abandoned — and that nothing went out.
+	deadline := time.Now().Add(2 * time.Second)
+	var status string
+	var attempts int
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(context.Background(), `SELECT status, attempts FROM outbound_queue WHERE id = $1`, welcomeID).Scan(&status, &attempts); err != nil {
+			t.Fatalf("select: %v", err)
+		}
+		// Wait for a full claim-then-defer cycle to settle back to
+		// 'queued', not just for attempts to tick up — 'sending' is a
+		// real intermediate state between ClaimDue's UPDATE and
+		// deferMissingPhysicalAddress's, and reading it there is a race
+		// in this test, not a defect in the worker.
+		if attempts >= 1 && status == outbox.StatusQueued {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if attempts < 1 {
+		t.Fatal("worker never attempted the welcome row within the deadline")
+	}
+	if status != outbox.StatusQueued {
+		t.Fatalf("status = %q after a deferred attempt, want %q (deferred, not abandoned/sent)", status, outbox.StatusQueued)
+	}
+	if n := countWelcomeSent(); n != 0 {
+		t.Fatalf("welcome messages sent = %d, want 0 — no welcome should go out with physical_address unset", n)
+	}
+
+	// Now set the address and force the row due immediately — the backoff
+	// schedule's first step is 1 minute (Backoff), which this test should
+	// not have to wait out, the same technique
+	// TestOutboxWorker_AbandonsAtMaxRetries_RetainsLastError uses.
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE outbound_queue SET next_attempt_at = now() WHERE id = $1 AND status = $2`,
+		welcomeID, outbox.StatusQueued,
+	); err != nil {
+		t.Fatalf("forcing due: %v", err)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, welcomeID).Scan(&status); err != nil {
+			t.Fatalf("select status: %v", err)
+		}
+		if status == outbox.StatusSent {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if status != outbox.StatusSent {
+		t.Fatalf("status = %q after setting physical_address, want %q", status, outbox.StatusSent)
+	}
+	var welcomeSent []Message
+	for _, m := range mailer.Sent() {
+		if m.Subject == welcomeSubject {
+			welcomeSent = append(welcomeSent, m)
+		}
+	}
+	if len(welcomeSent) != 1 {
+		t.Fatalf("welcome messages sent after the address was set = %d, want exactly 1 (the same row, not re-enqueued)", len(welcomeSent))
+	}
+	if welcomeSent[0].To != email {
+		t.Errorf("To = %q, want %q", welcomeSent[0].To, email)
 	}
 }
 
@@ -597,21 +745,37 @@ func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
 		t.Fatal("mailer.Send was never called; the worker never claimed the batch")
 	}
 
-	// Both rows are claimed now: row 1 is blocked inside sendOne (past
-	// ClaimDue, past trackClaimed), row 2 is still waiting in pass's loop,
-	// never having reached its own stopCh check yet.
-	var status2 string
+	// Both rows are claimed now: whichever one is NOT the row blocked
+	// inside sendOne (below) is still waiting in pass's loop, never having
+	// reached its own stopCh check yet — ClaimDue's single UPDATE sets
+	// status='sending' for the WHOLE claimed batch atomically, before pass
+	// iterates it, so both id1 and id2 are already 'sending' at this point
+	// regardless of iteration order. That is why this checkpoint asserts
+	// on the PAIR, not on id2 specifically: which of the two rows is the
+	// one blocked in sendOne is NOT guaranteed to be id1 (ClaimDue's
+	// RETURNING order reflects Postgres's row-processing order for the
+	// UPDATE, not the subquery's "ORDER BY next_attempt_at, id" — that
+	// ORDER BY only selects WHICH rows are claimed, not the order
+	// RETURNING emits them in). See the post-Stop assertions below, which
+	// check "exactly one sent, one queued" rather than assuming which id
+	// is which — #0264's review found this test assuming id1 specifically
+	// after a change elsewhere in this file altered the shared test
+	// database's physical layout enough to flip it.
+	var status1, status2 string
+	if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id1).Scan(&status1); err != nil {
+		t.Fatalf("select id1 before stop: %v", err)
+	}
 	if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id2).Scan(&status2); err != nil {
 		t.Fatalf("select id2 before stop: %v", err)
 	}
-	if status2 != outbox.StatusSending {
-		t.Fatalf("row 2 status before Stop = %q, want %q (test setup invalid)", status2, outbox.StatusSending)
+	if status1 != outbox.StatusSending || status2 != outbox.StatusSending {
+		t.Fatalf("status before Stop = (id1=%q, id2=%q), want both %q (test setup invalid)", status1, status2, outbox.StatusSending)
 	}
 
 	// Call Stop concurrently — it must block on <-w.doneCh, which cannot
-	// close until pass returns, which cannot happen until row 1's blocked
-	// Send unblocks. This is the exact ordering the review's proof used:
-	// Stop is already in flight, THEN the send is released.
+	// close until pass returns, which cannot happen until the row blocked
+	// in sendOne unblocks. This is the exact ordering the review's proof
+	// used: Stop is already in flight, THEN the send is released.
 	stopErrCh := make(chan error, 1)
 	go func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -635,19 +799,28 @@ func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
 	}
 	<-runDone
 
-	var status1 string
 	if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id1).Scan(&status1); err != nil {
 		t.Fatalf("select id1 after stop: %v", err)
 	}
-	if status1 != outbox.StatusSent {
-		t.Fatalf("row 1 (unblocked and finished before Stop returned) status = %q, want %q", status1, outbox.StatusSent)
-	}
-
 	if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id2).Scan(&status2); err != nil {
 		t.Fatalf("select id2 after stop: %v", err)
 	}
-	if status2 != outbox.StatusQueued {
-		t.Fatalf("row 2 (claimed but never sent) status after Stop = %q, want %q — Stop must release claimed-but-unsent rows, not leave them for the orphan sweep (defect 2)", status2, outbox.StatusQueued)
+	// Exactly one of the two claimed rows finished (unblocked and sent
+	// before Stop returned) and exactly one was left claimed-but-unsent
+	// for Stop to release back to 'queued' — see the pre-Stop checkpoint's
+	// comment for why this does not assume which id is which.
+	sentCount, queuedCount := 0, 0
+	for _, s := range []string{status1, status2} {
+		switch s {
+		case outbox.StatusSent:
+			sentCount++
+		case outbox.StatusQueued:
+			queuedCount++
+		}
+	}
+	if sentCount != 1 || queuedCount != 1 {
+		t.Fatalf("status after Stop = (id1=%q, id2=%q), want exactly one %q (finished before Stop returned) and one %q (released by Stop, not left for the orphan sweep — defect 2)",
+			status1, status2, outbox.StatusSent, outbox.StatusQueued)
 	}
 }
 
