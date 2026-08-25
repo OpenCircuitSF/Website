@@ -9,8 +9,9 @@
 #     scripts/check.sh all                   # the whole Go suite (a batch's review pass only)
 #     scripts/check.sh guards                # the standalone shell guard tests (see below)
 #
-# `guards` runs scripts/testdb_gc_guard_test.sh, scripts/dev_guard_test.sh,
-# and scripts/db_reset_guard_test.sh — not part of any other mode, since
+# `guards` runs scripts/check_guard_test.sh, scripts/testdb_gc_guard_test.sh,
+# scripts/dev_guard_test.sh, and scripts/db_reset_guard_test.sh — not part of
+# any other mode, since
 # #0117's third review measured dev_guard_test.sh alone at ~48s and binding
 # :5173 in several parts, which does not belong in every ordinary run. #0207
 # named the actual defect this solves: two prior guard tests
@@ -269,6 +270,27 @@ resolve_func_hash() {
   [ -n "$out" ] || return 1
   printf '%s\n' "$out" | shasum -a 256 | awk '{print $1}'
 }
+
+# Prints how many ADMITTED single-line definitions of NAME (arg 1) FILE (arg 2)
+# contains. #0258's SIXTH review found the class this closes, in two pure
+# insertions with nothing existing edited: a decoy definition placed after the
+# first live probe, plus a BYTE-IDENTICAL copy of the real definition line
+# placed before the second one. Both probes then pass -- the helper genuinely
+# IS intact at both moments -- and the digest passes too, because
+# resolve_func_hash hands every admitted candidate to bash in file order and
+# takes whatever wins the shadowing, and the last one is the real definition.
+# Each half of that pair was separately on the sixth pass's own verified
+# no-false-positive list; it is the PAIRING that bypasses. Counting removes
+# the whole class rather than the shape: a guarded name defined twice, in any
+# admitted spelling and anywhere in the file, is an error instead of a
+# shadowing contest whose winner the guard then measures. The name a candidate
+# binds is its leading identifier, after an optional `function` keyword --
+# which is exactly what FUNCDEF_CANDIDATE_RE above already requires it to have.
+funcdef_defcount() {
+  grep -E "^${FUNCDEF_CANDIDATE_RE}\$" "$2" \
+    | sed -E 's/^[[:space:]]*(function[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*).*$/\2/' \
+    | grep -cxF "$1"
+}
 # END FUNCDEF-0258
 
 step "self-check: function-definition scan is complete (#0258/#0262)"
@@ -443,6 +465,15 @@ if [ "${BR_COUNT:-0}" -ne 1 ] || [ "${ER_COUNT:-0}" -ne 1 ]; then
   exit 2
 fi
 
+# #0258 (7th pass): exactly one admitted definition, so the digest below is
+# measuring THE definition rather than the winner of a shadowing contest --
+# see funcdef_defcount's own comment for the two-insertion bypass this closes.
+RUNPIPE_DEFS="$(funcdef_defcount runpipe "$SELF")"
+if [ "${RUNPIPE_DEFS:-0}" -ne 1 ]; then
+  printf '\033[31mPIPEFAIL REGRESSION (#0208/#0251/#0262): expected exactly ONE single-line definition of the runpipe funnel in scripts/check.sh; found %s. A second one shadows the first at runtime while the pinned digest below still agrees, because the digest resolves whichever definition bash ends up with and the LAST one wins. Delete the extra definition; if the funnel genuinely needs to change, change the one definition and recompute its digest.\033[0m\n' "$RUNPIPE_DEFS" >&2
+  exit 2
+fi
+
 # An empty resolution is an ERROR, never an input (CLAUDE.md §8): it means
 # the extraction produced nothing bash could parse, which is exactly the
 # state pass 4 silently mistook for agreement.
@@ -516,10 +547,35 @@ fi
 #     the guarantee no longer depends on recognising how a binding got
 #     there. Everything above stays as defence in depth and as the early,
 #     line-naming signal.
+#   - the sixth review found four more bypasses, three of them in surface
+#     pass 6 had just CREATED: the probe it made load-bearing was itself
+#     pinned to nothing, its alias query went through a shadowable builtin,
+#     a decoy plus a byte-identical restore straddled the two probes, and a
+#     bare `FAILED=0` discarded the verdict. That is the structural point
+#     CLAUDE.md §8 now records: the guard lives inside the file it guards,
+#     so each new mechanism becomes new mutable surface there, and a
+#     seventh in-file check buys a seventh bounce.
+#   - pass 7 therefore stops adding in-file mechanisms as the answer. The
+#     load-bearing check moves OUT, to scripts/check_guard_test.sh, run by
+#     `scripts/check.sh guards`: it copies this file into a sandbox where
+#     the steps genuinely fail and asserts the verdict is honest. Editing
+#     this file cannot disarm an assertion that lives in another one. What
+#     stayed in-file is only what is cheap and early: the probe is pinned
+#     the way the two helpers already were, its own primitives are spelled
+#     with `builtin`, and each guarded name must have exactly the number of
+#     admitted definitions it should have rather than merely a winning one.
 #
 # The recompute recipe for both pinned digests lives in FUNCDEF-0258's
 # comment above, next to the function it drives.
 step "self-check: run FAILED-accounting guard (#0258)"
+# #0258 (7th pass): exactly one admitted definition -- see funcdef_defcount's
+# comment above for the decoy-plus-byte-identical-restore bypass this closes.
+RUN_DEFS="$(funcdef_defcount run "$SELF")"
+if [ "${RUN_DEFS:-0}" -ne 1 ]; then
+  printf '\033[31mFAILED-ACCOUNTING REGRESSION (#0258): expected exactly ONE single-line definition of the run helper in scripts/check.sh; found %s. A second one shadows the first at runtime while the pinned digest below still agrees, because the digest resolves whichever definition bash ends up with and the LAST one wins -- so a decoy followed anywhere later by a byte-identical restore of the real line passes every other check in this file. Delete the extra definition.\033[0m\n' "$RUN_DEFS" >&2
+  exit 2
+fi
+
 # An empty resolution is an ERROR, never an input — see the sibling check
 # in GUARD-0208 above.
 RUN_HASH="$(resolve_func_hash run "$SELF")" || {
@@ -572,8 +628,23 @@ fi
 # accounting_probe's own definition does not affect the `run` calls inside it,
 # while it does affect the dispatch case below, which bash parses later. So
 # the probe would call the real helper and the real steps would call the
-# alias. The alias table is therefore queried directly instead -- also a live
-# measurement, and a complete one for that class.
+# alias. Two live queries cover it instead: whether alias expansion is
+# switched on at all (this script never switches it on, and an alias is inert
+# in a non-interactive script without it), and the alias table itself.
+#
+# WHAT USED TO BE CLAIMED HERE, AND WAS FALSE: that the table query was "a
+# complete one for that class". #0258's SIXTH review falsified it in three
+# lines -- a function named `alias` shadows the builtin, function lookup
+# precedes builtin lookup, and the query then cheerfully reports no alias
+# while the dispatch below gets the aliased helper. Both queries are spelled
+# with `builtin` now, which closes that specific line. NO COMPLETENESS CLAIM
+# IS MADE FOR THEM: a probe reached through shadowable names is not a proof of
+# anything, and `builtin` is itself a name a function can take. That is not a
+# hole to be closed by a further in-file check -- CLAUDE.md §8 records why six
+# passes of those lost -- it is closed from OUTSIDE, by
+# scripts/check_guard_test.sh, which runs THIS FILE in a sandbox where the
+# steps genuinely fail and asserts the verdict is honest. An edit to this file
+# cannot disarm that.
 #
 # WHY TWICE. The probe is exact only about the moment it runs. Called once
 # before the dispatch, it proves the helpers are intact when the work starts
@@ -582,22 +653,44 @@ fi
 # verdict was computed, which closes anything introduced by, or after, the
 # dispatch. Between those two points the run is covered by the pair.
 #
-# WHAT REMAINS OPEN, named rather than glossed:
+# WHAT REMAINS OPEN HERE, named rather than glossed. The sixth review found
+# the first of these by shadowing the probe itself, and it was right to: every
+# mechanism added to defend this file lives IN this file and is therefore one
+# more thing an edit to this file can neutralise (CLAUDE.md §8). What follows
+# is what an IN-FILE check cannot close, and the reason
+# scripts/check_guard_test.sh exists.
+#   * This probe is reached through a name, and so are the primitives it
+#     calls. The name is pinned to a digest at both call sites below, which
+#     closes replacing or removing the probe; shadowing `builtin`, `shasum` or
+#     `declare` around that pin is not closed and cannot be.
+#   * The verdict's own inputs. A single appended `FAILED=0` before the
+#     verdict discards it, with the FAILED lines still printed above --
+#     measured by the sixth review, and worse than #0208's accepted mutant 7,
+#     which at least still routes through the run helper. It is NOT an
+#     accepted gap: no in-file check can stop an assignment to the variable
+#     the verdict reads, so it is closed from outside instead, by
+#     scripts/check_guard_test.sh Part 1, which runs THIS FILE against
+#     genuinely failing steps and fails if the verdict comes back PASSED. That
+#     harness carries it as an explicit sensitivity row.
 #   * A decoy scoped to exactly the dispatch and undone before the second
-#     probe -- e.g. wrapping the case below in a construct that redefines a
-#     helper only inside it. That is an edit to the dispatch itself, not a
-#     line added beside it, and is the same cost as deleting this block.
-#   * The verdict's own inputs. Anything that assigns FAILED directly, or
-#     edits the verdict, is outside what a probe of the helpers can see; so is
-#     a line inserted between the second probe and the verdict.
+#     probe. The insertion-only form of that -- a decoy after the first probe
+#     plus a byte-identical restore before the second -- IS closed, by
+#     funcdef_defcount's one-definition rule above; an edit to the dispatch
+#     itself is not, and costs the same as deleting this block.
 #   * A helper that terminates the script is not silent, but it is not a
 #     verdict either -- that is what EXIT_ACCOUNTED and the EXIT trap below
-#     turn into a loud NO VERDICT report.
-# None of these is reachable by reformatting, which is the property the five
-# earlier bypasses all had and is what made them worth closing.
+#     turn into a loud NO VERDICT report. (Correction to the sixth pass's
+#     note: the dot-sourced `exit 0` mutant it measured is caught EARLIER than
+#     that, by the widened "." pattern in FUNCDEF-0258, so it exits 2 via SCAN
+#     INCOMPLETE rather than via NO VERDICT. The backstop is real and was
+#     verified separately with a bare `exit 0` after the EXIT trap; the
+#     mechanism attributed to that one mutant was wrong.)
 accounting_probe() {
   local when="$1" saved="$FAILED" why=""
-  if alias run >/dev/null 2>&1 || alias runpipe >/dev/null 2>&1; then
+  if builtin shopt -q expand_aliases; then
+    why="alias expansion is switched ON. This script never switches it on, and an alias is INERT in a non-interactive script without it, so this is either a caller passing -O expand_aliases or a line in this file turning it on -- and an alias is the one binding this behavioural probe cannot observe for itself (see the parse-time note in LIVEBIND-0258 above)"
+  fi
+  if [ -z "$why" ] && { builtin alias run >/dev/null 2>&1 || builtin alias runpipe >/dev/null 2>&1; }; then
     why="an alias named run or runpipe is defined; alias expansion precedes function lookup, so the steps that go through it would not be calling the helper this script defines"
   fi
   if [ -z "$why" ]; then
@@ -624,7 +717,47 @@ accounting_probe() {
 }
 # END LIVEBIND-0258
 
+# #0258 (7th pass): the probe above is the load-bearing check, and until this
+# pass it was pinned to NOTHING. run and runpipe are each pinned to a digest;
+# the thing that measures them was one added line away from being replaced by
+# `accounting_probe() { :; }` -- which no scan objects to (it binds neither
+# guarded name, so both digests still agree, and `accounting_probe(` matches no
+# suspect pattern) and which leaves the alias route wide open. This is the
+# issue's own shape one function over, for the third time: "the property
+# everyone cared about was one line away from the property that was actually
+# checked."
+#
+# The pin is a LIVE measurement, like the probe itself: it hashes bash's own
+# rendering of whatever the name is bound to at that moment, so it is
+# indifferent to how a replacement got there. It is spelled INLINE at both call
+# sites rather than factored into a function on purpose -- a helper doing this
+# job would be reachable through a name too, and shadowable by exactly the
+# insertion it exists to catch.
+#
+# funcdef_defcount above independently refuses any single-line definition of
+# this name (count must be 0 -- the real one is multi-line, inside the marker
+# block), so the plainest spelling is caught earlier and by name.
+#
+# To recompute after a legitimate change to the block above:
+#   sed -n '/^# BEGIN LIVEBIND-0258/,/^# END LIVEBIND-0258/p' scripts/check.sh \
+#     > /tmp/livebind.sh \
+#     && bash -c '. /tmp/livebind.sh; declare -f accounting_probe' \
+#        | shasum -a 256
+PROBE_EXPECTED_SHA256="621524a9099d3779d3d44b89e70efb0d412233fc2c7ee3ac317b4dd524edd9ed"
+PROBE_DEFS="$(funcdef_defcount accounting_probe "$SELF")"
+if [ "${PROBE_DEFS:-0}" -ne 0 ]; then
+  printf '\033[31mLIVE-PROBE REGRESSION (#0258/#0262): expected NO single-line definition of the live accounting probe in scripts/check.sh; found %s. Its real definition is the multi-line one inside the LIVEBIND-0258 marker block, so a single-line one is a decoy that shadows it at runtime.\033[0m\n' "$PROBE_DEFS" >&2
+  exit 2
+fi
+
 step "self-check: live run/runpipe behaviour (#0258/#0262)"
+PROBE_HASH="$(builtin declare -f accounting_probe | shasum -a 256 | awk '{print $1}')"
+if [ "$PROBE_HASH" != "$PROBE_EXPECTED_SHA256" ]; then
+  printf '\033[31mLIVE-PROBE REGRESSION (#0258/#0262): the live accounting probe is no longer the function LIVEBIND-0258 defines. Bash'"'"'s own "declare -f" rendering of whatever that name is bound to AT THIS MOMENT does not match the pinned SHA-256 digest, so the probe has been replaced, removed or shadowed. That matters more than it looks: the probe is what closes every binding shape this file'"'"'s text scans cannot name, so a one-line stub in its place leaves both scans agreeing with themselves while nothing measures the helpers at all -- #0258'"'"'s sixth review'"'"'s first bypass, three added lines, VERIFICATION PASSED over three steps that exited 127. See the recompute recipe next to PROBE_EXPECTED_SHA256 above if this change is legitimate.\033[0m\n' >&2
+  printf 'sha256: %s (expected %s)\n' "$PROBE_HASH" "$PROBE_EXPECTED_SHA256" >&2
+  EXIT_ACCOUNTED=1
+  exit 2
+fi
 accounting_probe "before the dispatch"
 
 for a in "$@"; do
@@ -722,6 +855,15 @@ case "$MODE" in
        # mode rather than folded into go/all/default. Each script manages
        # its own scratch database(s) and prints its own PASS/FAIL lines;
        # `run` here only needs to observe the exit code.
+       # #0258 (7th pass): first, because it is the cheapest (~4s) and because
+       # it is the one that tests THIS script. It copies this file into a
+       # sandbox where the steps genuinely fail and asserts the verdict is
+       # honest -- from outside, so no edit to this file can disarm it. Note
+       # the circularity and what it does and does not buy: `run` here is the
+       # same run it is testing, so a check.sh whose verdict is already
+       # compromised cannot honestly report its own guard test either. The
+       # guard test's OWN exit code and its FAIL: lines are the authority.
+       step "scripts/check_guard_test.sh (#0258/#0262)"; run scripts/check_guard_test.sh
        step "scripts/testdb_gc_guard_test.sh (#0150)"; run scripts/testdb_gc_guard_test.sh
        step "scripts/dev_guard_test.sh (#0117)";        run scripts/dev_guard_test.sh
        step "scripts/db_reset_guard_test.sh (#0207)";   run scripts/db_reset_guard_test.sh
@@ -751,6 +893,13 @@ pgrep -fl 'go test|\.test ' || echo "(none)"
 # below is backed by helpers proved intact at the moment it is computed -- not
 # only at the moment the run started. See LIVEBIND-0258 above.
 step "self-check: live run/runpipe behaviour, re-measured (#0258/#0262)"
+PROBE_HASH="$(builtin declare -f accounting_probe | shasum -a 256 | awk '{print $1}')"
+if [ "$PROBE_HASH" != "$PROBE_EXPECTED_SHA256" ]; then
+  printf '\033[31mLIVE-PROBE REGRESSION (#0258/#0262): the live accounting probe is no longer the function LIVEBIND-0258 defines. Bash'"'"'s own "declare -f" rendering of whatever that name is bound to AT THIS MOMENT does not match the pinned SHA-256 digest, so the probe has been replaced, removed or shadowed. That matters more than it looks: the probe is what closes every binding shape this file'"'"'s text scans cannot name, so a one-line stub in its place leaves both scans agreeing with themselves while nothing measures the helpers at all -- #0258'"'"'s sixth review'"'"'s first bypass, three added lines, VERIFICATION PASSED over three steps that exited 127. See the recompute recipe next to PROBE_EXPECTED_SHA256 above if this change is legitimate.\033[0m\n' >&2
+  printf 'sha256: %s (expected %s)\n' "$PROBE_HASH" "$PROBE_EXPECTED_SHA256" >&2
+  EXIT_ACCOUNTED=1
+  exit 2
+fi
 accounting_probe "after the dispatch, immediately before the verdict"
 
 EXIT_ACCOUNTED=1
