@@ -13,7 +13,10 @@
 #
 #   URL          URL to open in Simulator Safari (default: http://localhost:8080)
 #   DEVICE_NAME  Simulator device name to use  (default: "iPhone 17")
-#   OUTPUT_PATH  Where to write the screenshot  (default: /tmp/opencircuit-sim.png)
+#   OUTPUT_PATH  Where to write the screenshot  (default: /tmp/opencircuit-sim-$$.png,
+#                namespaced by this run's own pid -- #0207: two agents running
+#                sim.sh with default arguments used to silently overwrite each
+#                other's screenshot at the same fixed /tmp path)
 #
 # Examples:
 #   ./scripts/sim.sh
@@ -32,7 +35,11 @@ case "${1:-}" in -h|--help) sed -n '2,36p' "$0"; exit 0 ;; esac
 
 URL="${1:-http://localhost:8080}"
 DEVICE_NAME="${2:-iPhone 17}"
-OUT="${3:-/tmp/opencircuit-sim.png}"
+# #0207: namespaced by this run's own pid so two concurrent agents running
+# sim.sh with default arguments (docs/obstacles.md §4's port-8099 hazard
+# class) don't silently overwrite each other's screenshot at the same fixed
+# /tmp path. Pass an explicit OUTPUT_PATH to override.
+OUT="${3:-/tmp/opencircuit-sim-$$.png}"
 
 step()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 ok()    { printf '    \033[32m✓\033[0m %s\n' "$*"; }

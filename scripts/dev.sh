@@ -302,7 +302,7 @@ GO_FP="$GO_PID:$(proc_start "$GO_PID")"   # pins the fork itself, so a recycled 
 OWNED_PIDS=""   # "pid:start-time" for every pid THIS run forked; the EXIT trap kills nothing outside this set (#0117)
 
 cleanup() {
-  local live=""
+  local live="" go_start
   printf '\n'
   step "Shutting down…"
   # Gather the lineage evidence BEFORE signalling anything: once $GO_PID is
@@ -310,7 +310,16 @@ cleanup() {
   # longer be walked. Skip the whole thing if $GO_PID is no longer the process
   # we forked — `pkill -P` against a recycled pid would kill another program's
   # children, which is this issue's defect wearing a different hat.
-  if [ "$GO_PID:$(proc_start "$GO_PID")" = "$GO_FP" ]; then
+  #
+  # #0207: an empty start time must be rejected explicitly, matching
+  # is_owned()'s `[ -n "$s" ] || return 1` above. Without this, if `go run`
+  # died between `GO_PID=$!` and `GO_FP=…` being captured, GO_FP becomes
+  # "<pid>:" (empty start-time half) — and if proc_start also currently
+  # returns empty for that same pid (process gone, or not yet reporting),
+  # "<pid>:" = "<pid>:" matches even though neither side names a real
+  # process, so kill/pkill -P would run against a pid that is no longer ours.
+  go_start="$(proc_start "$GO_PID")"
+  if [ -n "$go_start" ] && [ "$GO_PID:$go_start" = "$GO_FP" ]; then
     live="$(own_fingerprints "$GO_PID")"
     kill "$GO_PID" 2>/dev/null || true
     pkill -P "$GO_PID" 2>/dev/null || true    # the go-run child server (go run leaks it otherwise)

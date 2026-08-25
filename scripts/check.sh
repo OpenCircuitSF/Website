@@ -7,6 +7,18 @@
 #     scripts/check.sh go ./internal/mailing/...   # just those Go packages
 #     scripts/check.sh web                   # just npm run check + npm test
 #     scripts/check.sh all                   # the whole Go suite (a batch's review pass only)
+#     scripts/check.sh guards                # the standalone shell guard tests (see below)
+#
+# `guards` runs scripts/testdb_gc_guard_test.sh, scripts/dev_guard_test.sh,
+# and scripts/db_reset_guard_test.sh — not part of any other mode, since
+# #0117's third review measured dev_guard_test.sh alone at ~48s and binding
+# :5173 in several parts, which does not belong in every ordinary run. #0207
+# named the actual defect this solves: two prior guard tests
+# (testdb_gc_guard_test.sh from #0150, dev_guard_test.sh from #0117) existed
+# but nothing ran them automatically, so a safety property only held when
+# someone remembered the guard existed. This is that "something someone
+# actually runs" — it is not wired into `go`/`web`/`all`/the default, so it
+# costs nothing on the common path.
 #
 # WHAT IT ENFORCES, so you cannot forget:
 #
@@ -203,6 +215,16 @@ case "$MODE" in
        gofmt_check
        go_test "$@" ;;
   web) web_check ;;
+  guards)
+       # #0207: the "something someone actually runs" for the standalone
+       # shell guard tests — see the header comment for why this is its own
+       # mode rather than folded into go/all/default. Each script manages
+       # its own scratch database(s) and prints its own PASS/FAIL lines;
+       # `run` here only needs to observe the exit code.
+       step "scripts/testdb_gc_guard_test.sh (#0150)"; run scripts/testdb_gc_guard_test.sh
+       step "scripts/dev_guard_test.sh (#0117)";        run scripts/dev_guard_test.sh
+       step "scripts/db_reset_guard_test.sh (#0207)";   run scripts/db_reset_guard_test.sh
+       ;;
   all) step "go build"; runpipe "go build ./... 2>&1 | tail -$TAIL"
        step "go vet";   runpipe "go vet ./... 2>&1 | tail -$TAIL"
        gofmt_check

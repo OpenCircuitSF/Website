@@ -2,9 +2,10 @@
 #
 # db-reset.sh — rebuild a LOCAL database from migrations/ and seed the admin.
 #
-#     scripts/db-reset.sh                # reset the dev database (opencircuit)
+#     scripts/db-reset.sh                     # reset the dev database (opencircuit)
 #     scripts/db-reset.sh opencircuit_test
 #     scripts/db-reset.sh --no-seed opencircuit
+#     scripts/db-reset.sh --force opencircuit_test_0055   # explicit opt-in — see GUARDS
 #
 # WHY THIS IS SAFE TO HAVE, AND WHEN IT STOPS BEING SAFE
 #
@@ -18,9 +19,30 @@
 # that, migrations are append-only and this script must never be pointed at
 # anything but a local scratch database.
 #
-# GUARDS: refuses any host that is not localhost/127.0.0.1, and refuses a
-# database whose name does not start with 'opencircuit'. Both are deliberate —
-# a reset script that can reach production is a loaded gun.
+# GUARDS (#0207): refuses any host that is not localhost/127.0.0.1 — that
+# guard is unconditional, no override exists, because a reset script that can
+# reach production is a loaded gun. Two further guards default to refusing
+# and require the explicit opt-in --force to bypass, the same shape #0150
+# settled on for `testdb.sh gc` (a script that assumes it's alone is what
+# caused that incident):
+#
+#   * NAME SCOPE — this script manages exactly two databases, opencircuit and
+#     opencircuit_test. Anything else starting with "opencircuit" (including
+#     a per-agent scratch database like opencircuit_test_0055, which the old
+#     'opencircuit*' glob also admitted) is refused without --force — that
+#     name shape belongs to scripts/testdb.sh (drop/reset/gc), not here.
+#   * LIVE CONNECTIONS — a bare invocation used to pg_terminate_backend EVERY
+#     other connection to the target database unconditionally. Now it
+#     refuses and reports who holds it unless --force is given. This matters
+#     more here than it did for testdb.sh gc: 'opencircuit'/'opencircuit_test'
+#     are the databases every agent falls back to sharing when it cannot get
+#     its own (CLAUDE.md §5a), and 'opencircuit' is also the user's own dev
+#     database — one agent's reflexive reset can destroy another agent's
+#     in-flight work and whatever the user had loaded.
+#
+# $DB is validated against a strict identifier charset (letters, digits,
+# underscore) before anything else runs, and is always double-quoted when it
+# appears in a DROP/CREATE DATABASE statement — never interpolated raw.
 
 set -euo pipefail
 
@@ -28,25 +50,80 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PGHOST_URL="${PGHOST_URL:-postgres://opencircuit:opencircuit@localhost:5432}"
 
 SEED=1
-[ "${1:-}" = "--no-seed" ] && { SEED=0; shift; }
+FORCE=0
+while :; do
+  case "${1:-}" in
+    --no-seed) SEED=0; shift ;;
+    --force)   FORCE=1; shift ;;
+    *) break ;;
+  esac
+done
 DB="${1:-opencircuit}"
 
 case "$PGHOST_URL" in
   *@localhost:*|*@127.0.0.1:*) ;;
   *) echo "refusing: PGHOST_URL is not localhost — this script only resets local databases" >&2; exit 1 ;;
 esac
+
+# Strict identifier charset first: this is what makes it safe to embed $DB in
+# a DDL statement below. A Postgres identifier can't be bound as a query
+# parameter the way a literal can, so a charset allowlist plus a quoted
+# identifier is the standard way to make that safe. Anything outside
+# [A-Za-z0-9_] is rejected outright rather than silently stripped — silently
+# editing the name could point this script at a DIFFERENT database than the
+# caller meant.
 case "$DB" in
-  opencircuit*) ;;
-  *) echo "refusing: '$DB' does not start with 'opencircuit'" >&2; exit 1 ;;
+  *[!A-Za-z0-9_]*)
+    echo "refusing: '$DB' contains a character other than letters, digits, or underscore — not a safe database identifier" >&2
+    exit 1
+    ;;
+esac
+
+case "$DB" in
+  opencircuit|opencircuit_test) ;;
+  opencircuit*)
+    if [ "$FORCE" != "1" ]; then
+      cat >&2 <<EOF
+refusing: '$DB' is not one of the two databases this script manages (opencircuit, opencircuit_test).
+
+It looks like a per-agent scratch database (CLAUDE.md §5a) — those belong to
+scripts/testdb.sh, not this script:
+
+    scripts/testdb.sh drop <id>     # drop your own
+    scripts/testdb.sh list          # see what exists
+
+If you really mean to reset '$DB' with this script, pass --force.
+EOF
+      exit 1
+    fi
+    ;;
+  *)
+    echo "refusing: '$DB' does not start with 'opencircuit'" >&2
+    exit 1
+    ;;
 esac
 
 DSN="$PGHOST_URL/$DB?sslmode=disable"
 command -v migrate >/dev/null || { echo "error: golang-migrate not on PATH (brew install golang-migrate)" >&2; exit 1; }
 
+# Refuse to kick another session off '$DB' unless asked. See GUARDS above for
+# why this script's blast radius made this the priority over #0150's gc fix.
+CONNS="$(psql "$PGHOST_URL/postgres" -tAc "select pid || '  ' || coalesce(usename,'?') || '  ' || coalesce(application_name,'') || '  ' || coalesce(client_addr::text,'local') from pg_stat_activity where datname = '$DB' and pid <> pg_backend_pid()" 2>/dev/null || true)"
+if [ -n "$CONNS" ] && [ "$FORCE" != "1" ]; then
+  cat >&2 <<EOF
+refusing: '$DB' has other active connection(s) — this may be another agent (CLAUDE.md §5a) or the user's own session:
+
+$(echo "$CONNS" | sed 's/^/  pid /')
+
+If you're certain it's safe to disconnect them, pass --force.
+EOF
+  exit 1
+fi
+
 echo "resetting $DB"
 psql "$PGHOST_URL/postgres" -qc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$DB' AND pid <> pg_backend_pid();" >/dev/null
-psql "$PGHOST_URL/postgres" -qc "DROP DATABASE IF EXISTS $DB;"
-psql "$PGHOST_URL/postgres" -qc "CREATE DATABASE $DB;"
+psql "$PGHOST_URL/postgres" -qc "DROP DATABASE IF EXISTS \"$DB\";"
+psql "$PGHOST_URL/postgres" -qc "CREATE DATABASE \"$DB\";"
 migrate -path "$REPO/migrations" -database "$DSN" up
 echo "$DB is at migration $(psql "$DSN" -tAc 'select version from schema_migrations')"
 

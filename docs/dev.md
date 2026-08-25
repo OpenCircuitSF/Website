@@ -104,8 +104,9 @@ loop as marketing and mailing-list views land in later phases.
 # 2. In a second terminal, boot the simulator and open the app
 ./scripts/sim.sh
 
-# 3. The script prints the screenshot path; open it to review
-open /tmp/opencircuit-sim.png
+# 3. The script prints the screenshot path (it names the actual file written,
+#    e.g. /tmp/opencircuit-sim-12345.png — see OUTPUT_PATH below); open that
+open /tmp/opencircuit-sim-<pid>.png
 ```
 
 ### `scripts/sim.sh` options
@@ -118,7 +119,7 @@ open /tmp/opencircuit-sim.png
 |----------|---------|-------------|
 | `URL` | `http://localhost:8080` | URL to open in Safari |
 | `DEVICE_NAME` | `iPhone 17` | Simulator device name |
-| `OUTPUT_PATH` | `/tmp/opencircuit-sim.png` | Where to save the screenshot |
+| `OUTPUT_PATH` | `/tmp/opencircuit-sim-$$.png` | Where to save the screenshot — namespaced by the run's own pid (#0207) so two concurrent agents running `sim.sh` with default arguments don't overwrite each other's screenshot |
 
 Examples:
 
