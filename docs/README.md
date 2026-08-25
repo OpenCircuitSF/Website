@@ -26,7 +26,8 @@ later.
 ## Mailing list
 
 - [Mailing list](mailing-list.md) — interest taxonomy, subscription flow, campaigns, sending engine
-- [Email setup (AWS SES)](email-setup.md) — SES domain verification, DKIM, DMARC, production access
+- [Email setup (AWS SES)](email-setup.md) — the `mailing.` sending subdomain, DKIM, custom MAIL FROM, DMARC, event ingestion, production access
+- [AWS IAM setup for SES](aws-iam-setup.md) — the instance role the service needs to reach SES, and the console steps to create it
 - [Unsubscribe & list hygiene](unsubscribe.md) — the three required unsubscribe paths, suppression, bounce/complaint handling
 
 ## Frontend & brand
