@@ -25,6 +25,7 @@ function warnings(overrides: Partial<DashboardWarnings> = {}): DashboardWarnings
     physical_address_unset: false,
     ses_sandbox_active: false,
     inbound_mail_unavailable: false,
+    outbound_queue_abandoned: false,
     ...overrides,
   };
 }
@@ -83,6 +84,13 @@ describe('buildWarnings', () => {
     expect(rows[0].alert).toBe(false);
   });
 
+  it('includes outbound_queue_abandoned as an alert when true (#0126)', () => {
+    const rows = buildWarnings(warnings({ outbound_queue_abandoned: true }));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].key).toBe('outbound-queue-abandoned');
+    expect(rows[0].alert).toBe(true);
+  });
+
   it('includes the red complaint-rate row as an alert only when BOTH high is true AND a percentage is present', () => {
     // High with no percentage (should not happen server-side, but the
     // client must not fabricate one) — omitted.
@@ -116,7 +124,7 @@ describe('buildWarnings', () => {
     expect(rows.every((r) => r.alert)).toBe(true);
   });
 
-  it('orders physical address first, then amber complaint review, then red complaint high, then SES sandbox, then inbound mail', () => {
+  it('orders physical address first, then amber complaint review, then red complaint high, then SES sandbox, then inbound mail, then outbound queue abandoned', () => {
     const rows = buildWarnings(
       warnings({
         physical_address_unset: true,
@@ -125,6 +133,7 @@ describe('buildWarnings', () => {
         complaint_rate_high: true,
         ses_sandbox_active: true,
         inbound_mail_unavailable: true,
+        outbound_queue_abandoned: true,
       }),
     );
     expect(rows.map((r) => r.key)).toEqual([
@@ -133,6 +142,7 @@ describe('buildWarnings', () => {
       'complaint-rate-high',
       'ses-sandbox',
       'inbound-mail',
+      'outbound-queue-abandoned',
     ]);
   });
 });

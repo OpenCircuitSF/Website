@@ -364,8 +364,11 @@ func servePostgres(cfg *config.Config) error {
 	// every figure it reads is already a single aggregate query on an
 	// existing store. cfg.SESSandbox is the manually-set operational flag
 	// that field's own doc comment (internal/config/config.go) explains.
+	// outbox.NewStore(pool) (#0126) is a stateless wrapper over the shared
+	// pool, like every other store here — safe to construct a second
+	// instance alongside newOutboxWorker's own.
 	adminDashboardH := handlers.NewAdminDashboardHandler(
-		subscribersStore, interestsStore, campaignsStore, campaignStatsStore, store, cfg.SESSandbox,
+		subscribersStore, interestsStore, campaignsStore, campaignStatsStore, store, outbox.NewStore(pool), cfg.SESSandbox,
 	)
 
 	// Admin campaign preview and test send (#0046, PRD §5.2/§6.6): POST

@@ -52,6 +52,7 @@ function emptyOverview(): DashboardOverview {
       physical_address_unset: false,
       ses_sandbox_active: false,
       inbound_mail_unavailable: true,
+      outbound_queue_abandoned: false,
     },
   };
 }
@@ -79,6 +80,7 @@ function populatedOverview(): DashboardOverview {
       physical_address_unset: true,
       ses_sandbox_active: true,
       inbound_mail_unavailable: true,
+      outbound_queue_abandoned: false,
     },
   };
 }

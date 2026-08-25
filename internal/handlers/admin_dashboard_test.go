@@ -15,6 +15,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
@@ -30,7 +31,8 @@ func adminDashboardMux(pool *pgxpool.Pool, sesSandbox bool) http.Handler {
 	interestsStore := interests.NewStore(pool)
 	campaignsStore := mailing.NewCampaignStore(pool)
 	statsStore := mailing.NewCampaignStatsStore(pool)
-	h := NewAdminDashboardHandler(subsStore, interestsStore, campaignsStore, statsStore, authStore, sesSandbox)
+	outboxStore := outbox.NewStore(pool)
+	h := NewAdminDashboardHandler(subsStore, interestsStore, campaignsStore, statsStore, authStore, outboxStore, sesSandbox)
 	requireSession := middleware.RequireSession(authStore)
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
@@ -71,6 +73,13 @@ type decodedDashboard struct {
 		Name   string `json:"name"`
 		Status string `json:"status"`
 	} `json:"sending_campaign"`
+	OutboundQueue *struct {
+		Queued              int64 `json:"queued"`
+		Sending             int64 `json:"sending"`
+		Sent                int64 `json:"sent"`
+		Abandoned           int64 `json:"abandoned"`
+		OldestQueuedAgeSecs int64 `json:"oldest_queued_age_seconds"`
+	} `json:"outbound_queue"`
 	Warnings struct {
 		ComplaintRateHigh      bool     `json:"complaint_rate_high"`
 		ComplaintRatePct       *float64 `json:"complaint_rate_pct"`
@@ -78,6 +87,7 @@ type decodedDashboard struct {
 		PhysicalAddressUnset   bool     `json:"physical_address_unset"`
 		SESSandboxActive       bool     `json:"ses_sandbox_active"`
 		InboundMailUnavailable bool     `json:"inbound_mail_unavailable"`
+		OutboundQueueAbandoned bool     `json:"outbound_queue_abandoned"`
 	} `json:"warnings"`
 }
 
@@ -339,6 +349,71 @@ func TestAdminDashboardOverview_Warnings(t *testing.T) {
 			t.Error("ses_sandbox_active = true, want false (constructed with sesSandbox=false)")
 		}
 	})
+}
+
+// TestAdminDashboardOverview_OutboundQueue is #0126's proof: the overview
+// response's outbound_queue figure reflects real outbound_queue rows, and
+// the outbound_queue_abandoned warning flips true once at least one row has
+// reached the terminal 'abandoned' state.
+func TestAdminDashboardOverview_OutboundQueue(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	admin := seedAdmin(t, pool, "dashboard-outbox-admin@example.com")
+	seedSession(t, pool, admin, "dashboard-outbox-admin-token")
+
+	store := outbox.NewStore(pool)
+	ctx := context.Background()
+
+	// A queued row.
+	queuedRecipient := fmt.Sprintf("dashboard-outbox-queued-%d@example.com", testdb.Unique())
+	if _, err := store.Enqueue(ctx, outbox.Item{Kind: outbox.KindConfirmation, Recipient: queuedRecipient}); err != nil {
+		t.Fatalf("Enqueue queued: %v", err)
+	}
+
+	srv := httptest.NewServer(adminDashboardMux(pool, false))
+	defer srv.Close()
+
+	before := getDashboard(t, srv.Client(), srv.URL+"/admin/overview", "dashboard-outbox-admin-token")
+	if before.OutboundQueue == nil {
+		t.Fatal("outbound_queue is nil, want a populated figure")
+	}
+	if before.OutboundQueue.Queued < 1 {
+		t.Errorf("Queued = %d, want at least 1 (the row just seeded)", before.OutboundQueue.Queued)
+	}
+
+	// Now drive a second row all the way to 'abandoned' — claim, then
+	// force max_retries=1 so a single MarkRetryOrAbandon terminates it.
+	abandonedRecipient := fmt.Sprintf("dashboard-outbox-abandoned-%d@example.com", testdb.Unique())
+	abandonedID, err := store.Enqueue(ctx, outbox.Item{Kind: outbox.KindConfirmation, Recipient: abandonedRecipient})
+	if err != nil {
+		t.Fatalf("Enqueue abandoned: %v", err)
+	}
+	rows, err := store.ClaimDue(ctx, 100)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	var attempts int
+	for _, r := range rows {
+		if r.ID == abandonedID {
+			attempts = r.Attempts
+		}
+	}
+	if attempts == 0 {
+		t.Fatalf("row %d was not claimed by ClaimDue", abandonedID)
+	}
+	if _, err := store.MarkRetryOrAbandon(ctx, abandonedID, attempts, "simulated failure", 1); err != nil {
+		t.Fatalf("MarkRetryOrAbandon: %v", err)
+	}
+
+	after := getDashboard(t, srv.Client(), srv.URL+"/admin/overview", "dashboard-outbox-admin-token")
+	if after.OutboundQueue == nil {
+		t.Fatal("outbound_queue is nil on second read")
+	}
+	if after.OutboundQueue.Abandoned < 1 {
+		t.Errorf("Abandoned = %d, want at least 1", after.OutboundQueue.Abandoned)
+	}
+	if !after.Warnings.OutboundQueueAbandoned {
+		t.Error("outbound_queue_abandoned = false, want true after abandoning a row")
+	}
 }
 
 // TestAdminDashboardOverview_ComplaintRateHighAboveThreshold seeds enough

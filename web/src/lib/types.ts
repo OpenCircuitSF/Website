@@ -450,7 +450,22 @@ export interface DashboardOverview {
   recent_campaigns: DashboardCampaignRow[];
   /** Absent (undefined) when no campaign is currently mid-send. */
   sending_campaign?: DashboardCampaignRow;
+  /** Absent (undefined) when the server has no outbound_queue backing (STORAGE=json). */
+  outbound_queue?: DashboardOutboundQueue;
   warnings: DashboardWarnings;
+}
+
+/**
+ * The transactional-mail queue depth (#0126, PRD §6.11) — confirmation,
+ * registration, recovery, and every other outbound_queue kind combined.
+ * oldest_queued_age_seconds is 0 when queued is 0.
+ */
+export interface DashboardOutboundQueue {
+  queued: number;
+  sending: number;
+  sent: number;
+  abandoned: number;
+  oldest_queued_age_seconds: number;
 }
 
 export interface DashboardSubscriberCounts {
@@ -511,4 +526,6 @@ export interface DashboardWarnings {
   physical_address_unset: boolean;
   ses_sandbox_active: boolean;
   inbound_mail_unavailable: boolean;
+  /** At least one outbound_queue row has reached the terminal 'abandoned' state (#0126). */
+  outbound_queue_abandoned: boolean;
 }

@@ -42,6 +42,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 )
 
 // dashboardComplaintReviewThresholdPct is AWS's account-wide complaint-rate
@@ -129,6 +130,10 @@ type AdminDashboardHandler struct {
 	campaigns dashboardCampaignStore
 	stats     dashboardStatsStore
 	settings  dashboardSettingsStore
+	// outbox reports queue depth/abandoned count (#0126). May be nil
+	// (STORAGE=json has no outbound_queue backing); Overview omits the
+	// figure and its warning rather than dereferencing it.
+	outbox dashboardOutboxStore
 	// sesSandbox mirrors config.Config.SESSandbox — see that field's doc
 	// comment for why this is a manually-set flag, not a live query.
 	sesSandbox bool
@@ -138,19 +143,27 @@ type AdminDashboardHandler struct {
 	now func() time.Time
 }
 
+// dashboardOutboxStore is the behavior AdminDashboardHandler needs from
+// internal/outbox (#0126). *outbox.Store satisfies it via Counts.
+type dashboardOutboxStore interface {
+	Counts(ctx context.Context) (outbox.Counts, error)
+}
+
 // NewAdminDashboardHandler constructs an AdminDashboardHandler over the data
-// layer. sesSandbox is config.Config.SESSandbox.
+// layer. sesSandbox is config.Config.SESSandbox. outboxStore may be nil
+// (STORAGE=json dev mode).
 func NewAdminDashboardHandler(
 	subs dashboardSubscriberStore,
 	interestsStore dashboardInterestStore,
 	campaigns dashboardCampaignStore,
 	stats dashboardStatsStore,
 	settings dashboardSettingsStore,
+	outboxStore dashboardOutboxStore,
 	sesSandbox bool,
 ) *AdminDashboardHandler {
 	return &AdminDashboardHandler{
 		subs: subs, interests: interestsStore, campaigns: campaigns,
-		stats: stats, settings: settings, sesSandbox: sesSandbox,
+		stats: stats, settings: settings, outbox: outboxStore, sesSandbox: sesSandbox,
 		now: time.Now,
 	}
 }
@@ -230,12 +243,32 @@ type dashboardWarnings struct {
 	PhysicalAddressUnset   bool     `json:"physical_address_unset"`
 	SESSandboxActive       bool     `json:"ses_sandbox_active"`
 	InboundMailUnavailable bool     `json:"inbound_mail_unavailable"`
+	// OutboundQueueAbandoned (#0126): at least one outbound_queue row has
+	// reached the terminal 'abandoned' state — a transactional message
+	// (confirmation, registration, recovery, ...) that exhausted its
+	// retries and was never delivered. False when outbox is nil
+	// (STORAGE=json).
+	OutboundQueueAbandoned bool `json:"outbound_queue_abandoned"`
+}
+
+// dashboardOutboundQueueView is #0126's queue-depth figure — the admin
+// overview's answer to "is transactional mail actually flowing". Omitted
+// (nil) from the response when outbox is nil (STORAGE=json), matching
+// SendingCampaign's own omitempty convention above, rather than reporting
+// fabricated zeros.
+type dashboardOutboundQueueView struct {
+	Queued              int64 `json:"queued"`
+	Sending             int64 `json:"sending"`
+	Sent                int64 `json:"sent"`
+	Abandoned           int64 `json:"abandoned"`
+	OldestQueuedAgeSecs int64 `json:"oldest_queued_age_seconds"`
 }
 
 type dashboardOverviewResponse struct {
-	Subscribers     dashboardSubscribersView `json:"subscribers"`
-	Interests       []dashboardInterestRow   `json:"interests"`
-	RecentCampaigns []dashboardCampaignRow   `json:"recent_campaigns"`
+	Subscribers     dashboardSubscribersView    `json:"subscribers"`
+	Interests       []dashboardInterestRow      `json:"interests"`
+	RecentCampaigns []dashboardCampaignRow      `json:"recent_campaigns"`
+	OutboundQueue   *dashboardOutboundQueueView `json:"outbound_queue,omitempty"`
 	// SendingCampaign is nil (omitted) when no campaign is currently
 	// mid-send — the client's "any campaign currently sending, with live
 	// progress" region shows nothing in that case rather than a
@@ -292,6 +325,30 @@ func (h *AdminDashboardHandler) Overview(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// #0126: nil-guarded like every other STORAGE=json gap in this handler
+	// — outbox is nil in dev mode, so the figure and its warning are
+	// simply omitted rather than dereferencing it.
+	var outboundQueue *dashboardOutboundQueueView
+	var outboundQueueAbandoned bool
+	if h.outbox != nil {
+		counts, err := h.outbox.Counts(ctx)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		outboundQueue = &dashboardOutboundQueueView{
+			Queued:              counts.Queued,
+			Sending:             counts.Sending,
+			Sent:                counts.Sent,
+			Abandoned:           counts.Abandoned,
+			OldestQueuedAgeSecs: counts.OldestQueuedAgeSecs,
+		}
+		outboundQueueAbandoned = counts.Abandoned > 0
+	}
+
+	warnings := h.buildWarnings(complained, sent, settings)
+	warnings.OutboundQueueAbandoned = outboundQueueAbandoned
+
 	writeJSON(w, http.StatusOK, dashboardOverviewResponse{
 		Subscribers: dashboardSubscribersView{
 			Counts: dashboardSubscriberCounts{
@@ -309,8 +366,9 @@ func (h *AdminDashboardHandler) Overview(w http.ResponseWriter, r *http.Request)
 		},
 		Interests:       interestRows,
 		RecentCampaigns: recent,
+		OutboundQueue:   outboundQueue,
 		SendingCampaign: sending,
-		Warnings:        h.buildWarnings(complained, sent, settings),
+		Warnings:        warnings,
 	})
 }
 

@@ -172,6 +172,17 @@
       </div>
     {/if}
 
+    {#if overview.outbound_queue}
+      {@const oq = overview.outbound_queue}
+      <div class="stat-block-title">Outbound queue</div>
+      <ul class="warnings-list">
+        <li>{oq.queued.toLocaleString()} queued</li>
+        <li>{oq.sending.toLocaleString()} sending</li>
+        <li>{oq.sent.toLocaleString()} sent</li>
+        <li>{oq.abandoned.toLocaleString()} abandoned</li>
+      </ul>
+    {/if}
+
     <div class="stat-block-title">Recent campaigns</div>
     {#if overview.recent_campaigns.length === 0}
       <p class="text-muted">No campaigns yet.</p>

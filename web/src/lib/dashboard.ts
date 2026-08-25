@@ -101,6 +101,15 @@ export function buildWarnings(w: DashboardWarnings): DashboardWarning[] {
     });
   }
 
+  if (w.outbound_queue_abandoned) {
+    rows.push({
+      key: 'outbound-queue-abandoned',
+      message:
+        'At least one transactional email (confirmation, registration, or recovery) exhausted its retries and was never delivered. Check the outbound queue.',
+      alert: true,
+    });
+  }
+
   return rows;
 }
 

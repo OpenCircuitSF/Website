@@ -23,6 +23,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
@@ -181,7 +182,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// other admin handlers in this test (subscribersStore, interestsStore,
 	// campaignsStore, campaignStatsStore, store).
 	adminDashboardH := handlers.NewAdminDashboardHandler(
-		subscribersStore, interestsStore, campaignsStore, campaignStatsStore, store, cfg.SESSandbox,
+		subscribersStore, interestsStore, campaignsStore, campaignStatsStore, store, outbox.NewStore(pool), cfg.SESSandbox,
 	)
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
