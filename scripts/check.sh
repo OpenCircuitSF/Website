@@ -148,17 +148,54 @@ fi
 # issues/0251.md: with the flag stripped, a failing test produced
 # VERIFICATION PASSED and exit 0.
 #
-# This is the missing POSITIVE half: extract runpipe()'s definition block
-# directly from "$0" (between the RUNPIPE-0208 markers, comments stripped)
-# — NOT from $SCAN, which has that block deleted — and assert it still
-# spells the funnel it exists to own. Scoping the extraction to exactly
-# that marker-delimited block (rather than grepping the whole file) is what
-# makes this un-satisfiable by "-o pipefail" merely appearing somewhere
-# else: only the actual definition can produce a match here.
-RUNPIPE_DEF="$(sed -n "/${BR}/,/${ER}/p" "$0" | grep -vE '^[[:space:]]*#')"
-if ! printf '%s\n' "$RUNPIPE_DEF" | grep -qE 'run[[:space:]]+bash[[:space:]]+-o[[:space:]]+pipefail[[:space:]]+-c'; then
-  printf '\033[31mPIPEFAIL REGRESSION (#0208/#0251): runpipe()'"'"'s own definition no longer spells "run bash -o pipefail -c" — the funnel this self-check exists to guarantee has lost the flag it is supposed to hold. Definition block as found in the running script:\033[0m\n' >&2
-  printf '%s\n' "$RUNPIPE_DEF" >&2
+# #0251's first fix (bounced on re-review) extracted the whole RUNPIPE-0208
+# marker BLOCK and grepped it for "-o pipefail" — not the definition LINE.
+# The review demonstrated three one-line fakes that all still produced
+# VERIFICATION PASSED on a real failing test while the flag was genuinely
+# gone, and all three are invisible to the checks above too, since $SCAN
+# deletes the same ranges:
+#   A) strip the flag, leave it in a TRAILING COMMENT on the same line
+#      (e.g. `# was: run bash -o pipefail -c`) — a whole-line comment strip
+#      does not touch a comment that trails real code on the same line.
+#   B) strip the flag, add a SECOND RUNPIPE-0208 marker pair elsewhere
+#      wrapping an unused decoy that still spells the flag — sed
+#      range-printing reopens on every later start-pattern match, so both
+#      blocks were concatenated and the decoy supplied the match.
+#   C) strip the flag, add a NON-DEFINITION line inside the real block that
+#      happens to spell the phrase (e.g. a variable assignment) — matching
+#      against the whole block's text, rather than only a line that is
+#      actually the function definition, let that line stand in.
+# Fixed by narrowing in three steps, each closing one fake:
+#   1. Assert the RUNPIPE-0208 marker pair appears exactly once in "$0" —
+#      closes (B), and is worth having regardless, since a duplicate block
+#      would silently change what EVERY check in this guard scans.
+#   2. Assert exactly one line anywhere in "$0" starts "runpipe()" — a
+#      second definition later in the file would shadow the first at call
+#      time, and nothing here previously noticed.
+#   3. Extract ONLY that one definition line (not the surrounding block),
+#      strip a trailing "# ..." comment from it, and require what remains
+#      to match the expected definition across the WHOLE line (grep -x) —
+#      closes (A), since the trailing comment is removed before matching
+#      rather than relied on to be the line's only content, and closes (C),
+#      since a non-definition line is filtered out before matching even
+#      starts.
+BR_COUNT="$(grep -cxF "$BR" "$0")"
+ER_COUNT="$(grep -cxF "$ER" "$0")"
+if [ "${BR_COUNT:-0}" -ne 1 ] || [ "${ER_COUNT:-0}" -ne 1 ]; then
+  printf '\033[31mPIPEFAIL REGRESSION (#0208/#0251): expected the RUNPIPE-0208 marker pair exactly once in scripts/check.sh; found %s BEGIN and %s END. A duplicate marker block can supply a decoy match for every check in this guard, not just this one.\033[0m\n' "$BR_COUNT" "$ER_COUNT" >&2
+  exit 2
+fi
+
+RUNPIPE_DEF_TOTAL="$(grep -cE '^runpipe\(\)' "$0" || true)"
+if [ "${RUNPIPE_DEF_TOTAL:-0}" -ne 1 ]; then
+  printf '\033[31mPIPEFAIL REGRESSION (#0208/#0251): expected exactly one top-level "runpipe()" definition in scripts/check.sh; found %s. A second definition later in the file would shadow the first at call time.\033[0m\n' "${RUNPIPE_DEF_TOTAL:-0}" >&2
+  exit 2
+fi
+
+RUNPIPE_LINE="$(sed -n "/${BR}/,/${ER}/p" "$0" | grep -E '^runpipe\(\)' | sed -E 's/[[:space:]]*#.*$//')"
+if ! printf '%s\n' "$RUNPIPE_LINE" | grep -qxE 'runpipe\(\) \{ run bash -o pipefail -c "[$]1"; \}'; then
+  printf "\033[31mPIPEFAIL REGRESSION (#0208/#0251): runpipe()'s own definition line no longer reads exactly: runpipe() { run bash -o pipefail -c \"\$1\"; } (trailing comment, if any, stripped before this comparison) — the funnel this self-check exists to guarantee has lost the flag it is supposed to hold. Definition line as found:\033[0m\n" >&2
+  printf '%s\n' "$RUNPIPE_LINE" >&2
   exit 2
 fi
 # END GUARD-0208
