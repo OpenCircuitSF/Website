@@ -989,8 +989,34 @@ BACKUP_RUN_AS="" RESTORE_CREATE=1 \
 #    database that must not already exist — it errors loudly if it does.
 #    restore.sh (#0228) also reassigns ownership of every restored table,
 #    sequence, and view to RESTORE_OWNER (default: opencircuit) after the
-#    restore completes — see "Ownership" below for why this step exists and
-#    how to prove it, not just trust it.
+#    restore completes — see "Roles and ownership" below for why this step
+#    exists and how to prove it, not just trust it.
+
+# 4b. #0235: object ownership is not sufficient on its own — prove the
+#    SCHEMA itself is usable by the app role too, with a REAL migration,
+#    not a synthetic `CREATE TABLE` probe standing in for one. This step
+#    exists because `SELECT`/`INSERT` on already-restored tables succeed
+#    even when this is broken (each existing table is individually owned by
+#    RESTORE_OWNER already), which is exactly what let the gap hide behind
+#    a drill that only checked existing data — the failure only shows up at
+#    the next deploy's `migrate up`, against `public`, which resolves to
+#    `pg_database_owner` (whoever owns the *database*, i.e. the restoring
+#    superuser) unless `restore.sh` reassigns the schema too. Seed the
+#    drill's source database one migration behind HEAD (`migrate ... up N-1`)
+#    before step 1, so this step has a real pending migration to apply
+#    rather than silently no-op'ing against an already-current database:
+migrate -path migrations \
+  -database "postgres://opencircuit:<password>@localhost:5432/opencircuit_test_0062dst?sslmode=disable" \
+  up
+#    Success looks like the pending migration applying with no error and
+#    `migrate ... version` reporting the new version, not `(dirty)`. A
+#    `permission denied for schema public` here means the schema-ownership
+#    step in `restore.sh` did not run or did not reach `public` — this is
+#    the exact failure `#0235` found and fixed; `restore.sh` now reassigns
+#    the schema itself (`ALTER SCHEMA public OWNER TO …`), not just the
+#    objects inside it. `RESTORE_OWNER=""` skips this step along with the
+#    object-level one — expect the same permission-denied error in that
+#    case, deliberately.
 
 # 5. Compare restored against source: table-by-table row counts, sequence
 #    last_values, schema_migrations, constraint counts, index counts — all
@@ -1053,18 +1079,18 @@ drill — identical results on every check.
   database, so this check is not optional.
 - **Extensions** — none. `grep -rn "CREATE EXTENSION" migrations/` returns
   nothing, so there is no extension dependency to worry about on restore.
-- **Roles and ownership (corrected — `#0228`)** — `backup.sh` dumps with
-  `pg_dump --no-owner --no-privileges`, so the dump carries no role names or
-  grants at all; without further action, ownership on restore is whichever
-  role ran `pg_restore`/`psql`. **This section previously claimed that
-  matched `opencircuit` before and after — that was true only because the
-  local drill happened to run as the `opencircuit` role, and it is false in
-  general.** `#0062`'s own phase-3 review reproduced the general case: running
-  the restore as a *different* role (as production's documented
-  `sudo -u postgres pg_restore` path does) left every table owned by that
-  role instead, and `opencircuit` got `permission denied` on its first query
-  — the restore reported success while leaving the app unable to read its own
-  data. `restore.sh` now closes this itself (`#0228`): after the restore
+- **Roles and ownership (corrected — `#0228`, then `#0235`)** — `backup.sh`
+  dumps with `pg_dump --no-owner --no-privileges`, so the dump carries no
+  role names or grants at all; without further action, ownership on restore
+  is whichever role ran `pg_restore`/`psql`. **This section previously
+  claimed that matched `opencircuit` before and after — that was true only
+  because the local drill happened to run as the `opencircuit` role, and it
+  is false in general.** `#0062`'s own phase-3 review reproduced the general
+  case: running the restore as a *different* role (as production's
+  documented `sudo -u postgres pg_restore` path does) left every table owned
+  by that role instead, and `opencircuit` got `permission denied` on its
+  first query — the restore reported success while leaving the app unable to
+  read its own data. `restore.sh` closed this (`#0228`): after the restore
   completes, it reassigns ownership of every table, sequence, and view to
   `RESTORE_OWNER` (default `opencircuit`, matching `scripts/db/create.sql`'s
   bootstrap role) — and because ownership implies full privileges on an
@@ -1075,8 +1101,43 @@ drill — identical results on every check.
   and the app role locked out (`permission denied for table widgets`);
   restoring with the fix in place left every table and sequence owned by
   `opencircuit`, and connecting **as `opencircuit`** — not as the restoring
-  role — both `SELECT`ed and `INSERT`ed successfully. Set `RESTORE_OWNER=""`
-  to skip this step and inspect raw restore ownership instead.
+  role — both `SELECT`ed and `INSERT`ed successfully.
+
+  **`#0228` fixed the objects but not the schema they live in, and `#0235`
+  closed that gap.** PostgreSQL 15+ defaults the `public` schema's owner to
+  `pg_database_owner`, a pseudo-role that resolves to whoever owns the
+  *database* — the restoring superuser on the documented production path,
+  not `opencircuit` — and `#0228`'s fix never touched it. `SELECT`/`INSERT`
+  on the already-restored tables kept working (each table's *own* ownership
+  was correct), so this passed every check the drill ran at the time; it
+  only surfaces as `permission denied for schema public` on `CREATE TABLE`,
+  i.e. at the *next deploy's* `migrate up` — after a restore that looked
+  completely successful. `restore.sh` now also reassigns every non-system
+  **schema** (`ALTER SCHEMA public OWNER TO …`) to `RESTORE_OWNER`, in the
+  same pass and under the same `RESTORE_OWNER=""` opt-out as the objects
+  inside it — plus materialized views, standalone types (enums, domains,
+  composite types), and functions/procedures, none of which exist in
+  `migrations/` today but are covered so this class of gap does not
+  reappear the day one is added. (Aggregates and the implicit row types of
+  tables/views are the two things still not covered — see the comment above
+  `reassign_ownership` in `restore.sh` for exactly why.) Proven end to end
+  on a private scratch database (never the shared `opencircuit_test_*` pool,
+  §8b), dropped afterward: seeded a source database with migrations 1–19
+  applied (migration 20, `create_workshops`, deliberately withheld so there
+  was a real pending migration to apply, not a synthetic probe), dumped it,
+  restored it as a superuser standing in for `postgres` (reproducing the
+  production path — this machine has no `postgres` OS role, so the local
+  superuser filled that role structurally), and ran `migrate up` as
+  `opencircuit` against it. **Before the fix**: `permission denied for
+  schema public`, migration left `dirty`, reproducing `#0235`'s report
+  exactly. **After the fix**: the same real `migrate up` applied
+  `create_workshops` cleanly and `workshops` came out owned by
+  `opencircuit`. **`RESTORE_OWNER=""`**: confirmed it opts out of the schema
+  reassignment too — `public` stayed owned by `pg_database_owner` and the
+  first table stayed owned by the restoring role, exactly as documented.
+  Also confirmed `RESTORE_OWNER` is now validated *before* any restore work
+  begins — a malformed value (`RESTORE_OWNER="bad; owner"`) exits 2 with no
+  database created, rather than costing a full restore first.
 - **Order and dependencies** — not a manual concern here: `pg_dump`/
   `pg_restore` topologically order the dump themselves (tables, then data
   via `COPY`, then constraints/indexes/sequences afterward), so FK order
