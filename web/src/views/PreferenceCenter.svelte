@@ -24,7 +24,7 @@
   // "Unsubscribe from everything" is a separate, equally prominent action
   // that PATCHes a distinct payload (unsubscribe: true) rather than being
   // inferred from zero interests.
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { currentRoute, navigate } from '../lib/router';
   import { getPreferences, patchPreferences, ApiError } from '../lib/api';
   import {
@@ -114,6 +114,16 @@
   let unsubscribeNoOp = $state(false);
   let unsubscribeNoOpMessage = $state('');
 
+  // #0063: onUnsubscribeEverything replaces the "Interests" / "Leave the
+  // list" editor with a whole new terminal panel (unsubscribed or
+  // unsubscribeNoOp below) -- there's no single persistent live-region node
+  // to carry the announcement across that swap, so this follows
+  // Unsubscribe.svelte's established pattern instead: move focus to the
+  // result message itself (tabindex="-1") after the swap, so a screen-reader
+  // user is told the page changed rather than left on a button that just
+  // vanished. Bound by both terminal branches below (whichever renders).
+  let resultMessage = $state<HTMLParagraphElement | null>(null);
+
   onMount(() => {
     if (embedded) return;
 
@@ -185,6 +195,14 @@
     } finally {
       unsubscribing = false;
     }
+
+    if (unsubscribed || unsubscribeNoOp) {
+      // #0063: the swap to the terminal panel has just happened above --
+      // move focus to its result message once it exists (see resultMessage's
+      // doc comment).
+      await tick();
+      resultMessage?.focus();
+    }
   }
 
   function goToSubscribe(): void {
@@ -213,7 +231,9 @@
   <div class="pref-content">
     {#if showHeading}<h1>Manage your preferences</h1>{/if}
     <Panel>
-      <p role="status">You've been unsubscribed from everything. You can resubscribe anytime.</p>
+      <p role="status" tabindex="-1" bind:this={resultMessage} class="result-message">
+        You've been unsubscribed from everything. You can resubscribe anytime.
+      </p>
       <button type="button" class="link-button" onclick={goToSubscribe}>Subscribe again</button>
     </Panel>
   </div>
@@ -221,7 +241,9 @@
   <div class="pref-content">
     {#if showHeading}<h1>Manage your preferences</h1>{/if}
     <Panel>
-      <p role="status">{unsubscribeNoOpMessage}</p>
+      <p role="status" tabindex="-1" bind:this={resultMessage} class="result-message">
+        {unsubscribeNoOpMessage}
+      </p>
     </Panel>
   </div>
 {:else if !isActive}
@@ -306,12 +328,16 @@
         If you don't select any topics, you'll still receive general announcements only.
       </p>
 
-      {#if saveError}
-        <p class="text-error" aria-live="polite">{saveError}</p>
-      {/if}
-      {#if saveMessage}
-        <p class="text-notice" role="status">{saveMessage}</p>
-      {/if}
+      <!-- #0063: saveError/saveMessage stay mounted for as long as this
+           section is (i.e. the whole time the subscriber is active), with
+           empty text rather than being absent, so Save can be clicked
+           repeatedly and each result mutates the SAME live-region node's
+           text -- what a screen reader reliably announces from
+           role="status"/aria-live="polite". An {#if} that creates the
+           element fresh, with its text already in it, is not reliably
+           announced (console-wide decision, issues/0063.md). -->
+      <p class="text-error" aria-live="polite">{saveError ?? ''}</p>
+      <p class="text-notice" role="status">{saveMessage ?? ''}</p>
       <Button type="button" variant="primary" disabled={saving} onclick={onSave}>
         {saving ? 'Saving…' : 'Save preferences'}
       </Button>
@@ -323,9 +349,8 @@
         This stops every email from us, including general announcements — different from
         unchecking topics above, which keeps you on the list for general announcements only.
       </p>
-      {#if unsubscribeError}
-        <p class="text-error" aria-live="polite">{unsubscribeError}</p>
-      {/if}
+      <!-- #0063: same reasoning as saveError/saveMessage above. -->
+      <p class="text-error" aria-live="polite">{unsubscribeError ?? ''}</p>
       <Button type="button" variant="danger" disabled={unsubscribing} onclick={onUnsubscribeEverything}>
         {unsubscribing ? 'Unsubscribing…' : 'Unsubscribe from everything'}
       </Button>
@@ -341,6 +366,16 @@
 
   .pref-content > p {
     margin: 0 0 var(--space-4);
+  }
+
+  /* #0063: resultMessage receives programmatic focus() after the
+     unsubscribed/unsubscribeNoOp swap (see the script's doc comment on
+     resultMessage) -- an explicit :focus rule, matching Unsubscribe.svelte's
+     .headline:focus, guarantees the ring shows regardless of a browser's
+     :focus-visible heuristics for programmatic focus. */
+  .result-message:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .pref-content section {

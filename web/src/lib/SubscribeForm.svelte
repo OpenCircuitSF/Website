@@ -190,11 +190,17 @@
     />
   </div>
 
-  {#if errorMessage}
-    <p id={errorId} class="text-error" aria-live="polite">{errorMessage}</p>
-  {:else}
-    <p id={errorId} class="sr-only" aria-live="polite"></p>
-  {/if}
+  <!-- #0063: a single persistent element, not an {#if}/{:else} swap between
+       two <p id={errorId}> tags. Proved live (real Safari, not jsdom) that
+       the previous two-branch version LOOKED like the safe "present from
+       first render" pattern but was not: Svelte destroys and recreates the
+       element crossing an {#if}/{:else} boundary even when both branches
+       render the same tag and id, so the "error" and "empty" paragraphs were
+       two different DOM nodes and every error announcement was, in fact, a
+       freshly-inserted live region -- exactly the class of bug this issue's
+       carried-in finding is about. Toggling only the class and text content
+       of ONE node keeps it the same node across the transition. -->
+  <p id={errorId} class={errorMessage ? 'text-error' : 'sr-only'} aria-live="polite">{errorMessage ?? ''}</p>
 
   <div class="row subscribe-actions">
     <Button type="submit" variant="primary" disabled={submitting}>

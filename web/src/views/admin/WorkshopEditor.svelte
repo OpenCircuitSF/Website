@@ -452,12 +452,22 @@
             {:else if previewError}
               <p class="text-error" role="alert">{previewError}</p>
             {:else if hasPreviewContent}
-              {#if previewStale}
-                <p class="text-warn" role="status">
-                  Showing the last saved version — your edits since then aren't included. Save to
-                  update the preview.
-                </p>
-              {/if}
+              <!-- #0063: this <p> stays mounted for as long as hasPreviewContent
+                   is true (i.e. for the rest of this editing session, once a
+                   body has ever been saved) rather than being created fresh by
+                   an inner {#if previewStale}. A screen reader only reliably
+                   announces a role="status" update when it mutates the TEXT of
+                   an already-present live region -- a freshly-inserted element
+                   (this one used to be exactly that, appearing the instant
+                   previewStale flips true) is not consistently announced. This
+                   is the console-wide pattern #0063 decided on, applied here
+                   and at the other three sites the issue names (see
+                   issues/0063.md). -->
+              <p class="text-warn" role="status">
+                {previewStale
+                  ? "Showing the last saved version — your edits since then aren't included. Save to update the preview."
+                  : ''}
+              </p>
               <!-- eslint-disable-next-line svelte/no-at-html-tags -->
               {@html previewHtml}
             {:else}
@@ -608,6 +618,14 @@
     when what they're saying is a warning (see announceTargetingClass's and
     announceUnsavedInterestsHint's doc comments in lib/workshopAdmin.ts for
     why only the hint also gets role="status").
+
+    #0063: the hint <p> below is unconditionally rendered (unsavedInterestsHint
+    is '' rather than the element being absent) so the SAME live-region node
+    stays mounted for the whole time this panel is visible -- toggling an
+    interest checkbox only mutates its text, which is what a screen reader
+    reliably announces from a role="status" region. An {#if} that created this
+    element fresh, with its text already in it, is not reliably announced.
+    Console-wide decision, applied at all four sites #0063 names.
   -->
   <Panel title="Announce">
     <p class="text-muted">
@@ -617,9 +635,7 @@
     <p class={announceTargetingClass(workshop.interest_ids)}>
       {announceTargetingDescription(workshop.interest_ids)}
     </p>
-    {#if unsavedInterestsHint}
-      <p class="text-warn" role="status">{unsavedInterestsHint}</p>
-    {/if}
+    <p class="text-warn" role="status">{unsavedInterestsHint}</p>
     {#if announceError}
       <p class="text-error" role="alert">{announceError}</p>
     {/if}

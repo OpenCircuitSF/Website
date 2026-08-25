@@ -21,7 +21,7 @@
   // indistinguishable from one that never existed or expired -- the server
   // answers the same 400 for all three. The copy below is worded to cover
   // all three gracefully rather than asserting any one of them.
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { currentRoute, navigate } from '../lib/router';
   import { confirmSubscription, ApiError } from '../lib/api';
   import type { ConfirmResponse } from '../lib/types';
@@ -33,6 +33,18 @@
   let status = $state<Status>('confirming');
   let result = $state<ConfirmResponse | null>(null);
 
+  // #0063: confirming -> success/error happens automatically, seconds after
+  // mount, with no user interaction to prime a screen reader for a change --
+  // unlike Unsubscribe.svelte's/PreferenceCenter's analogous panel swaps,
+  // which follow a button click. A visitor who lands here, has their screen
+  // reader read "Confirming... One moment.", and is still on that text when
+  // the fetch resolves needs to be told the page changed. Same fix as those
+  // two: move focus to the new state's own <h1> (tabindex="-1") once it
+  // exists, rather than leaving focus wherever it was (nowhere, on initial
+  // load -- so this only bites a user who has started exploring by the time
+  // the response lands, but it does bite them).
+  let resultHeading = $state<HTMLHeadingElement | null>(null);
+
   onMount(() => {
     const token = $currentRoute.query.get('token');
     if (!token) {
@@ -41,11 +53,13 @@
     }
 
     confirmSubscription(token)
-      .then((res) => {
+      .then(async (res) => {
         result = res;
         status = 'success';
+        await tick();
+        resultHeading?.focus();
       })
-      .catch(() => {
+      .catch(async () => {
         // Deliberately does not distinguish ApiError branches: unknown,
         // expired, replayed, and complained-locked all render the same
         // friendly copy here, matching the server's own uniform 400 for
@@ -53,6 +67,8 @@
         // fourth the same way rather than confirming a stranger's guess
         // about someone else's subscription state.
         status = 'error';
+        await tick();
+        resultHeading?.focus();
       });
   });
 
@@ -66,7 +82,7 @@
     <h1>Confirming…</h1>
     <p class="text-muted">One moment.</p>
   {:else if status === 'error'}
-    <h1>This link didn't work</h1>
+    <h1 tabindex="-1" bind:this={resultHeading}>This link didn't work</h1>
     <Panel>
       <p>
         This confirmation link is invalid, has expired, or was already used. If you're already
@@ -75,7 +91,7 @@
       <button type="button" class="link-button" onclick={goToSubscribe}>Subscribe again</button>
     </Panel>
   {:else if status === 'success' && result}
-    <h1>You're confirmed</h1>
+    <h1 tabindex="-1" bind:this={resultHeading}>You're confirmed</h1>
     <p class="text-muted confirm-lede">
       Thanks — you're on the list. Pick your topics below, or leave the defaults.
     </p>
@@ -95,6 +111,13 @@
   }
   .confirm-shell h1 {
     margin: 0 0 var(--space-3);
+  }
+  /* #0063: matches Unsubscribe.svelte's .headline:focus -- resultHeading
+     receives programmatic focus() once the confirming->success/error
+     transition lands (see the script's doc comment). */
+  .confirm-shell h1:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
   .confirm-lede {
     margin: 0 0 var(--space-4);

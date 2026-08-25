@@ -1355,11 +1355,16 @@
               placeholder="home-automation"
               oninput={() => (createError = null)}
             />
-            {#if newSlugInvalid}
-              <p class="text-warn" role="status">
-                Lowercase letters, numbers, and single hyphens only (e.g. "home-automation").
-              </p>
-            {/if}
+            <!-- #0063: unconditionally rendered (empty when valid) so this
+                 stays the same live-region node while the admin types --
+                 an {#if}-created element with its text already in it is not
+                 reliably announced. Console-wide decision; see
+                 issues/0063.md. -->
+            <p class="text-warn" role="status">
+              {newSlugInvalid
+                ? 'Lowercase letters, numbers, and single hyphens only (e.g. "home-automation").'
+                : ''}
+            </p>
           </div>
           <div class="field">
             <label for="new-interest-name">Name</label>
@@ -1526,12 +1531,14 @@
                   Active (visible on the public signup form)
                 </label>
               </div>
-              {#if editDeactivating}
-                <p class="text-warn" role="status">
-                  Deactivating removes this interest from the public signup form. Subscribers who
-                  already selected it keep their selection and history.
-                </p>
-              {/if}
+              <!-- #0063: unconditionally rendered (empty when the checkbox
+                   isn't toggling active->inactive) -- same reasoning as the
+                   new-slug hint above. -->
+              <p class="text-warn" role="status">
+                {editDeactivating
+                  ? 'Deactivating removes this interest from the public signup form. Subscribers who already selected it keep their selection and history.'
+                  : ''}
+              </p>
               {#if editError}
                 <p class="text-error" role="alert">{editError}</p>
               {/if}
