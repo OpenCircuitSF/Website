@@ -431,10 +431,10 @@ func TestPreferencesHandler_Patch_UnsubscribeEverything_ComplainedNoOpMessageNam
 	if !resp.NoOp {
 		t.Fatalf("NoOp = false, want true (complained row, this test only makes sense for the no-op branch)")
 	}
-	if !strings.Contains(resp.Message, "hello@opencircuitsf.com") {
+	if !strings.Contains(resp.Message, "contact@opencircuitsf.com") {
 		t.Errorf("Message = %q, want it to contain the contact address (#0090 bounce fix: naming that a human exists isn't enough, the message must say how to reach one)", resp.Message)
 	}
-	if !strings.Contains(resp.Message, "Contact us at hello@opencircuitsf.com") {
+	if !strings.Contains(resp.Message, "Contact us at contact@opencircuitsf.com") {
 		t.Errorf("Message = %q, want the address inline in the \"Contact us at …\" clause, not merely present somewhere in the string", resp.Message)
 	}
 }

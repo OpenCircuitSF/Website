@@ -20,7 +20,7 @@ of problems in one pass.
 | `SESSION_SECRET` | yes (non-dev) | — | HMAC signing key for session cookies. Generate with `openssl rand -hex 32`. `.env.example` ships this **blank** rather than a placeholder string, so a copied template that's never had a real value set fails closed at startup (`config: missing required variable SESSION_SECRET`) instead of silently signing sessions with a key published in a public repository — see `#0067`. |
 | `AWS_REGION` | yes | — | SES region, e.g. `us-west-2`. No static credentials anywhere in configuration — the EC2 instance role supplies them via the AWS SDK's default credential chain; locally the chain falls back to `~/.aws/credentials`. |
 | `SES_CONFIGURATION_SET` | no | — | SES configuration set used for transactional/campaign sends |
-| `EMAIL_FROM` | yes | — | RFC 5322 From header, e.g. `Open Circuit SF <hello@opencircuitsf.com>` |
+| `EMAIL_FROM` | yes | — | RFC 5322 From header, e.g. `Open Circuit SF <contact@opencircuitsf.com>` |
 | `EMAIL_REPLY_TO` | no | — | Reply-To header for outbound mail |
 | `EMAIL_LIST_DOMAIN` | yes | — | Subdomain used for inbound unsubscribe handling, e.g. `lists.opencircuitsf.com`. Interpolated into the `mailto:` form of every campaign's `List-Unsubscribe` header (`mailing.CampaignHeaders`, `#0035`); required with no default (`#0105`) so a misconfigured deploy fails loud at boot instead of emitting a malformed `mailto:unsubscribe@?subject=…` header. Never point the apex MX at SES — see `CLAUDE.md` §9. |
 | `SES_INBOUND_BUCKET` | no | — | S3 bucket SES writes inbound mail to |

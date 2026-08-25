@@ -220,7 +220,7 @@ export function inactiveStatusMessage(status: string): string {
  * `CONTACT_EMAIL` constants and preferences.go's `complainedContactEmail`
  * (#0075 published it for exactly this class of request).
  */
-export const COMPLAINED_CONTACT_EMAIL = 'hello@opencircuitsf.com';
+export const COMPLAINED_CONTACT_EMAIL = 'contact@opencircuitsf.com';
 
 /**
  * The honest copy for a `complained` subscriber, used by

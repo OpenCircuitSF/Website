@@ -16,7 +16,7 @@
   import { APP_NAME } from './branding';
   import { DISCORD_URL, LUMA_URL } from './links';
 
-  const CONTACT_EMAIL = 'hello@opencircuitsf.com';
+  const CONTACT_EMAIL = 'contact@opencircuitsf.com';
   const year = new Date().getFullYear();
 </script>
 

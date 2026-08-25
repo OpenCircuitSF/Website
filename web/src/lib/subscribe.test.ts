@@ -264,11 +264,11 @@ describe('showSubscribeAgainAffordance (#0090 — the dead end)', () => {
 const EXPECTED_COMPLAINED_SENTENCE =
   'This address is marked as having complained about a previous email, and complained addresses ' +
   "can't be unsubscribed or resubscribed from this page. Contact us at " +
-  'hello@opencircuitsf.com if you believe this is a mistake.';
+  'contact@opencircuitsf.com if you believe this is a mistake.';
 
 describe('COMPLAINED_CONTACT_EMAIL (#0090 bounce fix)', () => {
   it('is the published house contact address (#0075)', () => {
-    expect(COMPLAINED_CONTACT_EMAIL).toBe('hello@opencircuitsf.com');
+    expect(COMPLAINED_CONTACT_EMAIL).toBe('contact@opencircuitsf.com');
   });
 
   it('is a plausible mailto target', () => {

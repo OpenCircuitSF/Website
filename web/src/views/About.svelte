@@ -22,7 +22,7 @@
   import { APP_NAME } from '../lib/branding';
   import { DISCORD_URL, LUMA_URL } from '../lib/links';
 
-  const CONTACT_EMAIL = 'hello@opencircuitsf.com';
+  const CONTACT_EMAIL = 'contact@opencircuitsf.com';
 </script>
 
 <main id="main-content" class="app-shell about-shell">

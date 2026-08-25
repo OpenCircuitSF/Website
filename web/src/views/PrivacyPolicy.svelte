@@ -199,7 +199,7 @@
   //  - #0075 answered the five facts that were bracketed "PLACEHOLDER" markers here:
   //    retention after unsubscribe (kept indefinitely, marked `unsubscribed`, no
   //    purge job -- matches the schema as designed), erasure turnaround (30 days),
-  //    the privacy-request contact address (hello@opencircuitsf.com, not a
+  //    the privacy-request contact address (contact@opencircuitsf.com, not a
   //    dedicated alias), and the legal entity ("Open Circuit SF" is an
   //    unincorporated community group, San Francisco -- named as the data
   //    controller; do not imply incorporation anywhere on this page).
@@ -222,7 +222,7 @@
   import TraceDivider from '../lib/TraceDivider.svelte';
   import { APP_NAME } from '../lib/branding';
 
-  const CONTACT_EMAIL = 'hello@opencircuitsf.com';
+  const CONTACT_EMAIL = 'contact@opencircuitsf.com';
   const LAST_UPDATED = '2026-08-19';
 </script>
 

@@ -69,7 +69,7 @@ const maxPreferencesInterests = 64
 // this class of request); this response is plain-text JSON with nowhere to
 // put a clickable link, so the address is spelled out in the sentence
 // itself instead.
-const complainedContactEmail = "hello@opencircuitsf.com"
+const complainedContactEmail = "contact@opencircuitsf.com"
 
 // preferencesSubscriberStore is the behavior PreferencesHandler needs from
 // internal/subscribers.
