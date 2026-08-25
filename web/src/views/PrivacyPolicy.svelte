@@ -35,18 +35,34 @@
   //  - The Consent section names only what §6.2 actually has two of:
   //    `signup_ip` + `confirmed_at`. There is no confirm-time IP column --
   //    don't reintroduce "the confirming click's IP" here.
-  //  - The erasure paragraph under "How to leave" must keep naming all four
-  //    things #0060 retains after a hard delete (suppression entry,
-  //    anonymized `email_sends` rows, raw `email_events` payloads, and the
-  //    internal admin audit log) -- #0060's own acceptance criteria require
-  //    this page to document that, and a bare "we delete your data entirely"
-  //    is false against that design. Do not shrink this back to "three
-  //    things": a Phase 3 review of #0060 walked the real subscribe -> confirm
-  //    -> erase journey and found the audit log still holds the address and
-  //    the signup IP after erasure -- the page previously omitted it. Per the
-  //    "don't close either list with an absolute" note above, if a future
-  //    change adds or removes a retained category, update the count rather
-  //    than re-closing it at a fixed number.
+  //  - The erasure paragraph under "How to leave" must keep naming all five
+  //    things erasure retains after a hard delete (suppression entry,
+  //    anonymized `email_sends` rows, raw `email_events` payloads, the
+  //    internal admin audit log, and -- since #0126 -- the redacted
+  //    `subscriber_events` activity log) -- #0060's own acceptance criteria
+  //    require this page to document that, and a bare "we delete your data
+  //    entirely" is false against that design. Do not shrink this back to
+  //    "four things": a Phase 3 review of #0060 walked the real subscribe ->
+  //    confirm -> erase journey and found the audit log still holds the
+  //    address and the signup IP after erasure -- the page previously
+  //    omitted it. Per the "don't close either list with an absolute" note
+  //    above, if a future change adds or removes a retained category,
+  //    update the count rather than re-closing it at a fixed number.
+  //  - #0126 added the fifth category: `subscriber_events`
+  //    (`internal/subscribers/events.go`) is a new append-only activity log
+  //    -- one row per meaningful thing that happened to an address (signup,
+  //    confirmation, interest changes, unsubscribe, bounces, suppressions,
+  //    the erasure itself). `subscribers.Store.Erase` redacts its `email`
+  //    column (replacing it with a placeholder keyed by the now-deleted
+  //    subscriber's id, grouping the address's history without
+  //    re-identifying it) and lets `subscriber_id` go `NULL` via the
+  //    table's own `ON DELETE SET NULL`, rather than deleting the rows --
+  //    the same "anonymize, don't delete" treatment `email_sends` already
+  //    gets, for the same reason: the erasure's own evidence (an `erased`
+  //    row, written with the same placeholder) must survive being
+  //    performed. See `internal/subscribers/erase.go`'s redaction and
+  //    `PrivacyPolicy.guard.test.ts`'s fifth `ERASURE_RETAINED_CATEGORIES`
+  //    entry, which pins this item's required phrases against that code.
   //    `PrivacyPolicy.guard.test.ts` (#0226) asserts this list structurally
   //    against `internal/subscribers/erase.go` and
   //    `internal/handlers/admin_subscribers.go`'s real behavior -- see that
@@ -318,7 +334,7 @@
       <p>
         <strong>Erasure.</strong> You can request that we delete your personal data
         rather than just unsubscribing. An erasure request hard-deletes your
-        subscriber record — your email, interests, and signup details — but four
+        subscriber record — your email, interests, and signup details — but five
         things are deliberately retained rather than deleted:
       </p>
       <StatusList
@@ -327,6 +343,7 @@
           'anonymized rows in our send history, so historical campaign counts (how many people a given email actually reached) do not silently change',
           'the raw deliverability events (bounces, complaints, deliveries) already logged against your address, kept without the link back to your identity, for spam/abuse forensics and to keep our own bounce/complaint handling accurate',
           'an internal admin audit log entry for actions on your account — not only the ones you take yourself (signup, confirmation, unsubscribe, and preference updates) but also the erasure itself, admin-initiated actions (for example, being added to the list manually or having a suppression removed), and automated entries from our delivery provider (a bounce or a spam complaint registered against your address); each entry records the IP address behind the request that created it: yours for actions you take, the IP of the acting admin for admin-initiated ones including the erasure, and no IP at all for the automated delivery-provider entries, since there is no request behind them — a separate mechanism from the single consent-evidence IP described above; the confirmation entry, being added manually, a suppression removal, a bounce, a complaint, and the erasure entry itself also record your email address explicitly, and if a staff member ever searches the subscriber list by your address while exporting it, that search text is recorded too; kept so we can prove what happened and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
+          'an entry in our address activity log for every meaningful thing that happened to your subscription (signup, confirmation, interest changes, unsubscribe, bounces, suppressions, and the erasure itself) — kept after erasure with your email address replaced by a placeholder, so the history stays grouped as evidence the erasure was performed, but the placeholder no longer identifies you',
         ]}
       />
       <p>

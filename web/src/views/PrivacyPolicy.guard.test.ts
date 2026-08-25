@@ -155,6 +155,18 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
     sourceRef:
       'internal/handlers/audit_email_metadata_guard_test.go (#0237) pins the full, current set: internal/handlers/confirm.go ActionSubscriberConfirmed, internal/handlers/admin_subscribers.go ActionSubscriberManualAdd and ActionSubscriberErased, internal/handlers/admin_suppressions.go ActionSuppressionRemoved, internal/handlers/ses_notifications.go ActionSubscriberBounced (x2) and ActionSubscriberComplained, plus (pinned but NOT part of the "six actions" disclosure -- neither is a real subscriber\'s own address) internal/handlers/admin_campaign_preview.go ActionEmailCampaignTestSent and internal/handlers/admin_subscribers_export.go ActionSubscriberExported -- see that file for each one\'s exact line and IP-presence, re-derived from the tree on every run rather than hardcoded here a second time.',
   },
+  {
+    // #0126: subscriber_events is a NEW table (migrations/000022) added by
+    // #0126's durable-outbound-queue-and-activity-log issue -- a fifth
+    // store of subscriber email addresses that survives erasure, alongside
+    // the four above. Shipping it without this fifth category (and this
+    // guard entry) would reproduce #0237's own finding on this same page:
+    // the page saying LESS than the code retains.
+    key: 'subscriber_events (redacted activity log, grouped by subscriber id, evidence the erasure was performed)',
+    requiredPhrases: ['activity log', 'placeholder', 'evidence the erasure was performed'],
+    sourceRef:
+      "internal/subscribers/erase.go: UPDATE subscriber_events SET email = 'erased-' || $1 || '@erased.invalid' WHERE subscriber_id = $1, before the DELETE; subscriber_id goes NULL via the table's own ON DELETE SET NULL FK",
+  },
 ];
 
 function findAttr(el: SvelteNode, name: string): SvelteNode | undefined {
@@ -300,9 +312,9 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
 
   const realItems = (): string[] => findErasureStatusListItems(readPrivacyPolicySource());
 
-  it('passes against the real, current four items', () => {
+  it('passes against the real, current five items', () => {
     const items = realItems();
-    expect(items).toHaveLength(4);
+    expect(items).toHaveLength(5);
     const matched = new Set<string>();
     for (const item of items) {
       const { matchedCategory } = matchItemToCategory(item, ERASURE_RETAINED_CATEGORIES);
@@ -312,23 +324,26 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     expect(matched.size).toBe(ERASURE_RETAINED_CATEGORIES.length);
   });
 
-  it('fails when a fifth retained thing is added without updating the policy (criterion: adding without updating fails)', () => {
-    const items = [...realItems(), 'a fifth thing nobody told the policy about'];
+  it('fails when a sixth retained thing is added without updating the policy (criterion: adding without updating fails)', () => {
+    const items = [...realItems(), 'a sixth thing nobody told the policy about'];
     const src = fixtureSource(items);
     const parsedItems = findErasureStatusListItems(src);
-    expect(parsedItems).toHaveLength(5);
+    expect(parsedItems).toHaveLength(6);
 
-    const { matchedCategory } = matchItemToCategory(parsedItems[4], ERASURE_RETAINED_CATEGORIES);
-    expect(matchedCategory, 'the fifth, unrecognized item should not match any known category').toBeNull();
+    const { matchedCategory } = matchItemToCategory(parsedItems[5], ERASURE_RETAINED_CATEGORIES);
+    expect(matchedCategory, 'the sixth, unrecognized item should not match any known category').toBeNull();
   });
 
   it('fails when a category the policy still names is removed (criterion: removing a still-retained category fails, in the other direction)', () => {
-    // Drop the audit_log item -- the shape #0060's own bounce found:
-    // over-promising deletion by omission.
-    const items = realItems().slice(0, 3);
+    // Drop the audit_log item (index 3) but keep the subscriber_events item
+    // (index 4) -- the shape #0060's own bounce found: over-promising
+    // deletion by omission, isolated to exactly one category here rather
+    // than dropping everything after audit_log.
+    const all = realItems();
+    const items = [...all.slice(0, 3), all[4]];
     const src = fixtureSource(items);
     const parsedItems = findErasureStatusListItems(src);
-    expect(parsedItems).toHaveLength(3);
+    expect(parsedItems).toHaveLength(4);
 
     const matched = new Set<string>();
     for (const item of parsedItems) {
@@ -353,7 +368,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     const eventsCategory = ERASURE_RETAINED_CATEGORIES.find((c) => c.key.startsWith('email_events'));
     expect(eventsCategory, 'fixture setup: expected the email_events category to exist').toBeDefined();
     // Check the missing phrase against its OWN category directly, not the
-    // tree-wide "closest of all four categories" search matchItemToCategory
+    // tree-wide "closest of all five categories" search matchItemToCategory
     // does for the main test's diagnostic message -- with the purpose
     // clause gone, this item is ALSO missing "suppression" and
     // "anonymized" relative to the other three categories, so the closest
