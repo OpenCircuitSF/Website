@@ -1170,6 +1170,105 @@ func TestCreate_ClaimsAndEnqueuesConfirmationAtomically(t *testing.T) {
 	}
 }
 
+// errPostEnqueueCrash is the sentinel postEnqueueCommitHook returns in the
+// two tests below — never wrapped by Create/ClaimAndEnqueueConfirmation, so
+// errors.Is proves the failure actually came from the hook and not some
+// other path.
+var errPostEnqueueCrash = errors.New("subscribers_test: simulated crash after enqueue, before commit")
+
+// TestCreate_FailureAfterEnqueue_CommitsNeither is #0126's phase-3 review's
+// defect 3 regression test — the load-bearing property's own negative half.
+// Plan §10 named a positive test for this property plus, in its own words,
+// "its negative: a failure injected between them commits neither" — but
+// only the positive half (TestCreate_ClaimsAndEnqueuesConfirmationAtomically,
+// above) was ever written. This is that missing negative half.
+//
+// It injects a failure via postEnqueueCommitHook at the exact point a real
+// crash between the subscribers INSERT and the outbound_queue EnqueueTx
+// would land — after EnqueueTx has run, before tx.Commit — and asserts that
+// NEITHER row exists afterward: the subscribers row must not have been
+// created, and no outbound_queue row must exist for it.
+//
+// Mutation-proved (see issues/0126.md's Fix pass): temporarily moving
+// Create's EnqueueTx call to run AFTER tx.Commit — the exact regression
+// this issue forbids, and the one the phase-3 reviewer demonstrated left
+// the pre-existing suite fully green — makes this test fail, because the
+// subscribers row survives the (now too-late) hook's error while the
+// outbound_queue row never gets created at all: two committed states
+// diverging in exactly the way the criterion forbids.
+func TestCreate_FailureAfterEnqueue_CommitsNeither(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+
+	postEnqueueCommitHook = func() error { return errPostEnqueueCrash }
+	t.Cleanup(func() { postEnqueueCommitHook = nil })
+
+	email := uniqueEmail(t)
+	_, err := store.Create(context.Background(), NewSignup{Email: email, ConfirmTTL: time.Hour}, time.Now())
+	if !errors.Is(err, errPostEnqueueCrash) {
+		t.Fatalf("Create error = %v, want errPostEnqueueCrash", err)
+	}
+
+	var subCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscribers WHERE email = $1`, email,
+	).Scan(&subCount); err != nil {
+		t.Fatalf("counting subscribers: %v", err)
+	}
+	if subCount != 0 {
+		t.Fatalf("subscribers rows for %q after a failure between enqueue and commit = %d, want 0 (Create's insert must have rolled back too)", email, subCount)
+	}
+
+	var queueCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE recipient = $1`, email,
+	).Scan(&queueCount); err != nil {
+		t.Fatalf("counting outbound_queue: %v", err)
+	}
+	if queueCount != 0 {
+		t.Fatalf("outbound_queue rows for %q after a failure between enqueue and commit = %d, want 0", email, queueCount)
+	}
+}
+
+// TestClaimAndEnqueueConfirmation_FailureAfterEnqueue_CommitsNeither is
+// TestCreate_FailureAfterEnqueue_CommitsNeither's counterpart for
+// ClaimAndEnqueueConfirmation, per the plan §10's "Same for
+// ClaimAndEnqueueConfirmation." A failure injected after its EnqueueTx call
+// must leave confirm_sent_at un-stamped (still NULL, the claim rolled back)
+// AND no outbound_queue row — not one without the other.
+func TestClaimAndEnqueueConfirmation_FailureAfterEnqueue_CommitsNeither(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now().UTC().Truncate(time.Second)
+	sub := coldConfirmationSubscriber(t, pool, now)
+
+	postEnqueueCommitHook = func() error { return errPostEnqueueCrash }
+	t.Cleanup(func() { postEnqueueCommitHook = nil })
+
+	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour)
+	if !errors.Is(err, errPostEnqueueCrash) {
+		t.Fatalf("ClaimAndEnqueueConfirmation error = %v, want errPostEnqueueCrash", err)
+	}
+	if claimed {
+		t.Fatal("claimed = true despite the injected post-enqueue failure, want false")
+	}
+
+	_, confirmSentAt := readSubscriberByID(t, pool, sub.ID)
+	if confirmSentAt != nil {
+		t.Fatalf("confirm_sent_at = %v after a failure between enqueue and commit, want nil (the claim must have rolled back too)", *confirmSentAt)
+	}
+
+	var queueCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1`, sub.ID,
+	).Scan(&queueCount); err != nil {
+		t.Fatalf("counting outbound_queue: %v", err)
+	}
+	if queueCount != 0 {
+		t.Fatalf("outbound_queue rows for subscriber %d after a failure between enqueue and commit = %d, want 0", sub.ID, queueCount)
+	}
+}
+
 // TestCreate_SyntheticSkipsClaimAndEnqueue proves #0046's dedicated
 // campaign-test recipient row (admin_campaign_preview.go's
 // ensureTestRecipient, NewSignup.Synthetic: true) still never triggers a

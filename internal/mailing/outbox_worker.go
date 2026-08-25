@@ -93,6 +93,20 @@ type OutboxWorker struct {
 	stopCh   chan struct{}
 	doneCh   chan struct{}
 	stopOnce sync.Once
+
+	// claimedMu guards claimed, below. Written only by the goroutine
+	// running Run (via trackClaimed/untrackClaimed); read only by Stop,
+	// and only after <-w.doneCh confirms Run has returned — see Stop's and
+	// releaseAll's doc comments for why that ordering makes the mutex
+	// belt-and-braces rather than load-bearing.
+	claimedMu sync.Mutex
+	// claimed holds the outbound_queue ids from the most recent batch that
+	// this worker holds claimed ('sending') but has not yet finished
+	// sending (MarkSent/MarkRetryOrAbandon). A row is added the instant
+	// ClaimDue returns it and removed the instant sendOne finishes with
+	// it — so anything still present when Stop reads this set is exactly
+	// the set Stop's doc comment promises to release.
+	claimed map[int64]struct{}
 }
 
 // OutboxWorkerDeps is NewOutboxWorker's construction argument.
@@ -201,14 +215,82 @@ func (w *OutboxWorker) Run(ctx context.Context) {
 // restart, or another process's worker, picks it up immediately instead of
 // waiting out outboxOrphanStaleAfter), and blocks until Run has returned or
 // ctx's deadline elapses. Safe to call more than once.
+//
+// The release only runs once <-w.doneCh confirms Run has fully returned —
+// deliberately, not from inside pass/Run itself. Run's for loop calls pass
+// synchronously and only closes doneCh (via its own defer) after pass has
+// returned, so by the time Stop observes doneCh closed, no goroutine is
+// still mutating w.claimed: trackClaimed/untrackClaimed have finished for
+// this batch, and whatever ids remain are exactly the rows pass's stopCh
+// check left claimed (see pass's own comment). If ctx's deadline elapses
+// first — Run genuinely still mid-send — Stop returns ctx.Err() WITHOUT
+// releasing anything, because a row a live send might still complete for
+// must not be raced back to 'queued' out from under it; the orphan sweep
+// covers that case once outboxOrphanStaleAfter passes, same as before this
+// fix existed.
 func (w *OutboxWorker) Stop(ctx context.Context) error {
 	w.stopOnce.Do(func() { close(w.stopCh) })
 	select {
 	case <-w.doneCh:
+		w.releaseAll(ctx)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// releaseAll releases every row this worker still holds claimed ('sending')
+// back to 'queued', via outbox.Store.Release — called from Stop only, only
+// after <-w.doneCh confirms Run has exited (see Stop's doc comment for why
+// that ordering makes this safe without w.claimed's mutex doing any real
+// work here). Best-effort: a Release failure is logged, not returned —
+// Stop's contract is "Run has stopped," not "every row was released
+// immediately," and a row this misses is still reclaimed by the orphan
+// sweep after outboxOrphanStaleAfter, exactly as it was before this method
+// existed. Uses a context independent of ctx (which may be at or near its
+// own deadline by the time Stop's doneCh case fires) bounded by
+// writeStatusTimeout, matching every other post-send status write in this
+// file.
+func (w *OutboxWorker) releaseAll(ctx context.Context) {
+	w.claimedMu.Lock()
+	ids := make([]int64, 0, len(w.claimed))
+	for id := range w.claimed {
+		ids = append(ids, id)
+	}
+	w.claimed = nil
+	w.claimedMu.Unlock()
+
+	for _, id := range ids {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), writeStatusTimeout)
+		if _, err := w.store.Release(releaseCtx, id); err != nil {
+			w.log.Error("mailing: releasing claimed outbound_queue row on stop failed", "id", id, "err", err)
+		}
+		cancel()
+	}
+}
+
+// trackClaimed records rows' ids as claimed-but-unsent — called the instant
+// ClaimDue returns them, before any row in the batch is sent, so a Stop
+// landing between the claim and the first send still sees every row in
+// w.claimed.
+func (w *OutboxWorker) trackClaimed(rows []outbox.Row) {
+	w.claimedMu.Lock()
+	defer w.claimedMu.Unlock()
+	if w.claimed == nil {
+		w.claimed = make(map[int64]struct{}, len(rows))
+	}
+	for _, r := range rows {
+		w.claimed[r.ID] = struct{}{}
+	}
+}
+
+// untrackClaimed removes id from the claimed set — called the instant
+// sendOne finishes with a row (sent, retried, or abandoned), so a
+// concurrent Stop no longer considers it outstanding.
+func (w *OutboxWorker) untrackClaimed(id int64) {
+	w.claimedMu.Lock()
+	defer w.claimedMu.Unlock()
+	delete(w.claimed, id)
 }
 
 // pass sweeps orphans, expires overdue pending signups (#0128), claims one
@@ -254,6 +336,10 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 	if len(rows) == 0 {
 		return false, nil
 	}
+	// Recorded the instant the claim succeeds, before any row is sent, so
+	// a Stop landing anywhere in the loop below sees every row of this
+	// batch as outstanding — see trackClaimed's doc comment.
+	w.trackClaimed(rows)
 
 	sendRate := w.outboxEffectiveSendRate(ctx)
 	limiter := rate.NewLimiter(rate.Limit(sendRate), 1)
@@ -261,11 +347,11 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 	for _, row := range rows {
 		select {
 		case <-w.stopCh:
-			// Leave this and every remaining row of the batch claimed;
-			// Stop's own Release call (via OutboxWorker.releaseAll, called
-			// from the goroutine that invoked Run — see Stop's doc
-			// comment) or, failing that, the orphan sweep will reclaim
-			// them.
+			// Leave this and every remaining row of the batch claimed in
+			// w.claimed; Stop's own release (releaseAll, called from the
+			// goroutine that invoked Stop, after Run — and therefore this
+			// pass — has fully returned) or, failing that, the orphan
+			// sweep will reclaim them.
 			return true, nil
 		default:
 		}
@@ -273,6 +359,7 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 			return true, nil // context cancelled/deadline — shutdown, not an error to log
 		}
 		w.sendOne(row)
+		w.untrackClaimed(row.ID)
 	}
 	return true, nil
 }

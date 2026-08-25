@@ -37,7 +37,6 @@ package outbox
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -291,13 +290,19 @@ func (s *Store) MarkSent(ctx context.Context, id int64, messageID string) (bool,
 // itself, so Backoff (above) stays the single source of truth for the
 // schedule instead of duplicating it in SQL. Returns done=false on the same
 // "row was not in 'sending'" condition MarkSent documents.
+//
+// next_attempt_at is only recomputed on the 'queued' branch — on the
+// 'abandoned' branch (#0126 phase-3 review, minor finding) a next attempt
+// time is meaningless (nothing retries a terminal row), so that branch
+// leaves the column as-is rather than computing and discarding a backoff
+// step nobody will read.
 func (s *Store) MarkRetryOrAbandon(ctx context.Context, id int64, attempts int, errMsg string, maxRetries int) (bool, error) {
 	delaySecs := Backoff(attempts).Seconds()
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue
 		    SET status = CASE WHEN attempts >= $3 THEN $5 ELSE $6 END,
 		        error = $2,
-		        next_attempt_at = now() + make_interval(secs => $4),
+		        next_attempt_at = CASE WHEN attempts >= $3 THEN next_attempt_at ELSE now() + make_interval(secs => $4) END,
 		        claimed_at = NULL
 		  WHERE id = $1 AND status = $7`,
 		id, nullIfEmpty(errMsg), maxRetries, delaySecs, StatusAbandoned, StatusQueued, StatusSending,
@@ -419,12 +424,6 @@ func (s *Store) Counts(ctx context.Context) (Counts, error) {
 	}
 	return c, nil
 }
-
-// ErrNotFound would be returned by a future by-id lookup; declared here so
-// callers have a stable sentinel to import once one exists. Unused today —
-// no method in this file needs it, since ClaimDue/MarkSent/etc all report
-// "not found or already handled" via a bool rather than an error.
-var ErrNotFound = errors.New("outbox: not found")
 
 // nullIfEmpty maps an empty string to SQL NULL, matching the same helper in
 // internal/subscribers and internal/audit.

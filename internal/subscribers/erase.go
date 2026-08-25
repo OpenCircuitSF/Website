@@ -272,9 +272,29 @@ func (s *Store) Erase(ctx context.Context, id int64, now time.Time) (ErasureResu
 	// keeps the address's own history grouped without leaking anything: a
 	// subscriber id is not personal data, and the row it pointed at is
 	// gone by the time anyone could read this placeholder.
+	//
+	// WIDENED (#0126 phase-3 review, defect 1): "WHERE subscriber_id = $1"
+	// alone missed every subscriber_events row suppressions.go writes with
+	// SubscriberID left nil — ActionSuppressed (suppressions.go's
+	// addSuppression) and ActionUnsuppressed (Remove) are both keyed by
+	// email, not subscriber id, by that package's own design (see its
+	// doc comment). Erase itself creates exactly one of these seconds
+	// earlier, via the addSuppression call directly above: the `manual`
+	// suppression this method always adds writes a `suppressed` event
+	// carrying the real address with subscriber_id NULL, and the old
+	// predicate never matched it — proved by execution in the review
+	// (Create -> Erase left one row still holding the real address). Any
+	// PRE-EXISTING suppressed/unsuppressed row for this address (a prior
+	// hard bounce, complaint, or admin action) leaked the same way. The
+	// second predicate closes both: `email` is compared against the
+	// SAME lower(trim(...)) normalization every write in this package
+	// applies, matching the value `email` above was already read as
+	// (subscribers.email is itself stored lower(trim(...)) at INSERT —
+	// see store.go's Create doc comment) — so this is defense in depth,
+	// not a behavior change for the common case.
 	if _, err := tx.Exec(ctx,
-		`UPDATE subscriber_events SET email = $2 WHERE subscriber_id = $1`,
-		id, erasedEventPlaceholder(id),
+		`UPDATE subscriber_events SET email = $2 WHERE subscriber_id = $1 OR email = lower(trim($3))`,
+		id, erasedEventPlaceholder(id), email,
 	); err != nil {
 		return ErasureResult{}, fmt.Errorf("subscribers: redacting subscriber_events for %d: %w", id, err)
 	}

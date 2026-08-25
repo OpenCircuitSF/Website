@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -450,11 +451,14 @@ func TestOutboxWorker_AbandonsAtMaxRetries_RetainsLastError(t *testing.T) {
 	}
 }
 
-// TestOutboxWorker_Stop_ReleasesClaimedRow proves #0126's plan §4's
-// shutdown property for the outbox worker itself: a row claimed but not
-// yet sent when Stop is called is released back to 'queued' immediately,
-// not left to wait out outboxOrphanStaleAfter.
-func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
+// TestOutbox_Release_RequeuesClaimedRow is the store-level unit test for
+// outbox.Store.Release itself, independent of OutboxWorker — it does not
+// exercise Stop's release path (see TestOutboxWorker_Stop_ReleasesClaimedRow
+// below for that; this issue's phase-3 review, defect 2, found this test
+// under the OutboxWorker_Stop_* name calling Store.Release directly and
+// never constructing a worker or calling Stop at all, so it is renamed to
+// what it actually proves).
+func TestOutbox_Release_RequeuesClaimedRow(t *testing.T) {
 	pool := outboxTestPool(t)
 	store := outbox.NewStore(pool)
 
@@ -463,6 +467,15 @@ func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
+	// This test deliberately ends with the row back in 'queued' — a
+	// due-now row no real worker ever finishes sending. Left behind, it
+	// is claimable by ANY later OutboxWorker in this same package/run
+	// (e.g. TestOutboxWorker_Stop_ReleasesClaimedRow, which depends on
+	// claiming its OWN two rows first) — so it must be removed
+	// explicitly, the same reasoning as that test's own cleanup.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM outbound_queue WHERE id = $1`, id)
+	})
 
 	// Simulate a worker that claimed this row and then the process was
 	// asked to stop before it finished sending — exactly the state
@@ -491,6 +504,150 @@ func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
 	}
 	if status != outbox.StatusQueued {
 		t.Fatalf("status after release = %q, want %q", status, outbox.StatusQueued)
+	}
+}
+
+// blockingMailer is a Mailer whose Send blocks until release is closed,
+// then delegates to an embedded RecordingMailer. It exists only to make
+// TestOutboxWorker_Stop_ReleasesClaimedRow deterministic: a way to hold a
+// real OutboxWorker's pass loop paused mid-send on the FIRST row of a
+// two-row batch, so the SECOND (already claimed, never started) row is
+// still 'sending' at the exact moment Stop is called — no sleeps, no
+// timing luck.
+type blockingMailer struct {
+	inner   *RecordingMailer
+	started chan struct{}
+	release chan struct{}
+
+	mu          sync.Mutex
+	startedOnce bool
+}
+
+func (m *blockingMailer) Send(ctx context.Context, msg Message) (string, error) {
+	m.mu.Lock()
+	if !m.startedOnce {
+		m.startedOnce = true
+		close(m.started)
+	}
+	m.mu.Unlock()
+	<-m.release
+	return m.inner.Send(ctx, msg)
+}
+
+var _ Mailer = (*blockingMailer)(nil)
+
+// TestOutboxWorker_Stop_ReleasesClaimedRow is #0126's phase-3 review defect
+// 2's regression test: it constructs a REAL *OutboxWorker, runs it, and
+// calls Stop — unlike the old same-named test (renamed above to
+// TestOutbox_Release_RequeuesClaimedRow), which never did either. It
+// reproduces the review's executed proof ("after Stop: sending=1
+// queued=0") and then asserts the fix: after Stop returns, the row that
+// was still claimed when it was called is back to 'queued', not left
+// 'sending' for the orphan sweep to find up to outboxOrphanStaleAfter
+// later.
+func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
+	pool := outboxTestPool(t)
+
+	mailer := &blockingMailer{
+		inner:   &RecordingMailer{},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+	w.batchSize = 10
+
+	id1, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind: outbox.KindConfirmation, Recipient: uniqueOutboxRecipient(t),
+		Payload: map[string]any{"confirm_token": "t", "manage_token": "m", "ttl_seconds": 3600},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue 1: %v", err)
+	}
+	id2, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind: outbox.KindConfirmation, Recipient: uniqueOutboxRecipient(t),
+		Payload: map[string]any{"confirm_token": "t", "manage_token": "m", "ttl_seconds": 3600},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue 2: %v", err)
+	}
+	// The whole point of this test is that id2 is deliberately left
+	// 'queued' by Stop's release. A 'queued', due-now confirmation row
+	// left behind after this test returns is picked up by ANY later
+	// OutboxWorker.ClaimDue call sharing this database — including other
+	// tests in this same package/run — so it must be removed explicitly
+	// rather than relying on ending in a terminal status the way every
+	// other test in this file does.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM outbound_queue WHERE id = ANY($1)`, []int64{id1, id2})
+	})
+
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	runDone := make(chan struct{})
+	go func() {
+		w.Run(runCtx)
+		close(runDone)
+	}()
+
+	// Wait for the worker to claim the batch and block mid-send on row 1 —
+	// deterministic, no sleep-and-hope.
+	select {
+	case <-mailer.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("mailer.Send was never called; the worker never claimed the batch")
+	}
+
+	// Both rows are claimed now: row 1 is blocked inside sendOne (past
+	// ClaimDue, past trackClaimed), row 2 is still waiting in pass's loop,
+	// never having reached its own stopCh check yet.
+	var status2 string
+	if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id2).Scan(&status2); err != nil {
+		t.Fatalf("select id2 before stop: %v", err)
+	}
+	if status2 != outbox.StatusSending {
+		t.Fatalf("row 2 status before Stop = %q, want %q (test setup invalid)", status2, outbox.StatusSending)
+	}
+
+	// Call Stop concurrently — it must block on <-w.doneCh, which cannot
+	// close until pass returns, which cannot happen until row 1's blocked
+	// Send unblocks. This is the exact ordering the review's proof used:
+	// Stop is already in flight, THEN the send is released.
+	stopErrCh := make(chan error, 1)
+	go func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		stopErrCh <- w.Stop(stopCtx)
+	}()
+
+	// Give Stop's goroutine a moment to reach <-w.doneCh before unblocking
+	// the send, so the release genuinely happens on Stop's path rather
+	// than by accident before Stop was even called.
+	time.Sleep(50 * time.Millisecond)
+	close(mailer.release)
+
+	select {
+	case err := <-stopErrCh:
+		if err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop never returned")
+	}
+	<-runDone
+
+	var status1 string
+	if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id1).Scan(&status1); err != nil {
+		t.Fatalf("select id1 after stop: %v", err)
+	}
+	if status1 != outbox.StatusSent {
+		t.Fatalf("row 1 (unblocked and finished before Stop returned) status = %q, want %q", status1, outbox.StatusSent)
+	}
+
+	if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id2).Scan(&status2); err != nil {
+		t.Fatalf("select id2 after stop: %v", err)
+	}
+	if status2 != outbox.StatusQueued {
+		t.Fatalf("row 2 (claimed but never sent) status after Stop = %q, want %q — Stop must release claimed-but-unsent rows, not leave them for the orphan sweep (defect 2)", status2, outbox.StatusQueued)
 	}
 }
 

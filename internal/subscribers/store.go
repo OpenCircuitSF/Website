@@ -143,6 +143,33 @@ var ErrNotComplained = errors.New("subscribers: subscriber is not complained; no
 // status unconditionally — see the package doc comment.
 const statusLockedFromNonAdmin = StatusComplained
 
+// postEnqueueCommitHook, when non-nil, is called by Create and
+// ClaimAndEnqueueConfirmation immediately after their own EnqueueTx call
+// succeeds, still inside their transaction and before tx.Commit. Returning
+// a non-nil error makes the caller return it, which — because the
+// transaction has not yet committed — triggers the deferred tx.Rollback()
+// and discards BOTH the subscribers-row mutation and the outbound_queue
+// insert together.
+//
+// This is the mutation-proof seam for #0126's load-bearing property ("a
+// committed signup can never have an unsent confirmation" — a crash between
+// the insert and the enqueue is impossible because they share a
+// transaction): a real crash landing between EnqueueTx and Commit is, from
+// Postgres's point of view, indistinguishable from this hook returning an
+// error at that exact point. See TestCreate_FailureAfterEnqueue_
+// CommitsNeither and TestClaimAndEnqueueConfirmation_
+// FailureAfterEnqueue_CommitsNeither (store_test.go) for the tests that use
+// it, and #0126's phase-3 review (defect 3) for why one was required: a
+// version of Create with the enqueue moved to run AFTER tx.Commit — the
+// exact regression this issue forbids — left the pre-existing suite fully
+// green, because nothing exercised the transaction boundary itself. Under
+// that mutation this hook fires too late to roll anything back (the commit
+// has already happened by the time the moved EnqueueTx call — and this
+// hook right after it — runs), which is exactly how the tests tell the two
+// apart. Always nil in production; matches internal/mailing/worker.go's
+// sendPreCrashHook/claimAndDrainHook precedent for the identical reason.
+var postEnqueueCommitHook func() error
+
 // Subscriber is a single row of the subscribers table.
 type Subscriber struct {
 	ID               int64
@@ -365,6 +392,15 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 			return Subscriber{}, fmt.Errorf("subscribers: enqueueing confirmation for new signup %d: %w", sub.ID, err)
 		}
 
+		// #0126 phase-3 review, defect 3 — see postEnqueueCommitHook's doc
+		// comment: nil in production, a test-only seam right after the
+		// enqueue and before commit.
+		if postEnqueueCommitHook != nil {
+			if err := postEnqueueCommitHook(); err != nil {
+				return Subscriber{}, err
+			}
+		}
+
 		if err := RecordEventTx(ctx, tx, Event{
 			SubscriberID: &sub.ID,
 			Email:        sub.Email,
@@ -442,6 +478,15 @@ func (s *Store) ClaimAndEnqueueConfirmation(ctx context.Context, sub Subscriber,
 		},
 	}); err != nil {
 		return false, fmt.Errorf("subscribers: enqueueing confirmation for %d: %w", sub.ID, err)
+	}
+
+	// #0126 phase-3 review, defect 3 — see postEnqueueCommitHook's doc
+	// comment: nil in production, a test-only seam right after the
+	// enqueue and before commit.
+	if postEnqueueCommitHook != nil {
+		if err := postEnqueueCommitHook(); err != nil {
+			return false, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

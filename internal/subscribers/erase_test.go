@@ -325,3 +325,152 @@ func TestErase_RepeatManualSuppressionIsIdempotent(t *testing.T) {
 		t.Fatalf("suppressions for erased address = %+v, want exactly one row (no duplicate)", rows)
 	}
 }
+
+// TestErase_RedactsSubscriberEvents_PreservesRows is the phase-3 review's
+// defect 1 regression test (issues/0126.md, "Bounced 2026-08-24"). The old
+// redaction in erase.go — matching only WHERE subscriber_id = the id being
+// erased — never caught the subscriber_events rows suppressions.go writes
+// with SubscriberID left nil (ActionSuppressed,
+// ActionUnsuppressed — both keyed by email, not subscriber id, by that
+// package's own design). Erase always adds a `manual` suppression before
+// redacting, so EVERY erasure wrote and then failed to redact one of these
+// itself; a PRE-EXISTING suppressed/unsuppressed row for the address (a
+// prior hard bounce, complaint, or admin action — exercised here) leaked
+// the same way. Proved by execution in the review: Create -> Erase left
+// one row still holding the real address, which made
+// PrivacyPolicy.svelte's "the placeholder no longer identifies you" claim
+// false. This test seeds exactly that pre-existing case — a suppression
+// (and its `suppressed` event) added BEFORE the subscriber ever signs up —
+// and asserts zero subscriber_events rows hold the real address after
+// Erase, while the rows themselves (redacted) survive.
+func TestErase_RedactsSubscriberEvents_PreservesRows(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	sup := NewSuppressionStore(pool)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	email := uniqueEmail(t)
+
+	// Pre-existing suppression for the address, BEFORE any subscribers row
+	// exists for it — suppressions.go's addSuppression writes this
+	// subscriber_events row with SubscriberID nil (the exact shape the old
+	// predicate missed), and Erase's own addSuppression call (the
+	// `manual` reason it always adds) writes a SECOND one identically
+	// shaped, seconds later, inside Erase itself.
+	if _, err := sup.Add(context.Background(), NewSuppression{
+		Email: email, Reason: SuppressionReasonComplaint, Note: "SES complaint, pre-signup",
+	}, now); err != nil {
+		t.Fatalf("seed pre-existing complaint suppression: %v", err)
+	}
+
+	sub, err := store.Create(context.Background(), NewSignup{Email: email, ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Before erasing: at least the pre-existing `suppressed` event
+	// (subscriber_id NULL) and the `signup_requested` event (subscriber_id
+	// = sub.ID) both hold the real, normalized address.
+	var beforeCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE email = $1`, sub.Email,
+	).Scan(&beforeCount); err != nil {
+		t.Fatalf("counting subscriber_events before erase: %v", err)
+	}
+	if beforeCount < 2 {
+		t.Fatalf("subscriber_events rows for %q before erase = %d, want >= 2 (test setup invalid)", sub.Email, beforeCount)
+	}
+
+	if _, err := store.Erase(context.Background(), sub.ID, now); err != nil {
+		t.Fatalf("Erase: %v", err)
+	}
+
+	// The load-bearing assertion: no row anywhere holds the real address
+	// after erasure, regardless of how it was linked (by subscriber_id or
+	// by email alone).
+	var leaked int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE email = $1`, sub.Email,
+	).Scan(&leaked); err != nil {
+		t.Fatalf("counting subscriber_events after erase: %v", err)
+	}
+	if leaked != 0 {
+		t.Fatalf("subscriber_events rows still holding the real address after erase = %d, want 0 (defect 1 regression)", leaked)
+	}
+
+	// The rows themselves are PRESERVED, not deleted — redacted (email
+	// replaced by the subscriber-id-keyed placeholder) and, for the
+	// subscriber_id-linked rows, subscriber_id nulled by the DELETE's own
+	// ON DELETE SET NULL FK. This is the erasure's own evidence, per PRD
+	// §6.11 and PrivacyPolicy.svelte's fifth retained item.
+	//
+	// wantAfter = beforeCount (the rows already counted above, now
+	// redacted) + 1 (the `manual` suppression's OWN `suppressed` event,
+	// which Erase writes seconds before the redaction UPDATE runs — the
+	// exact row defect 1 was about — so it exists only after Erase starts
+	// and is not part of beforeCount) + 1 (the `erased` event itself,
+	// written directly with the placeholder, never holding the real
+	// address at all).
+	placeholder := erasedEventPlaceholder(sub.ID)
+	wantAfter := beforeCount + 2
+	var afterCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE email = $1`, placeholder,
+	).Scan(&afterCount); err != nil {
+		t.Fatalf("counting redacted subscriber_events rows: %v", err)
+	}
+	if afterCount != wantAfter {
+		t.Fatalf("redacted subscriber_events rows for placeholder %q = %d, want %d (beforeCount=%d rows redacted, plus Erase's own manual-suppression event, plus the erased event itself)", placeholder, afterCount, wantAfter, beforeCount)
+	}
+
+	var stillLinked int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE subscriber_id = $1`, sub.ID,
+	).Scan(&stillLinked); err != nil {
+		t.Fatalf("counting subscriber_id-linked rows after erase: %v", err)
+	}
+	if stillLinked != 0 {
+		t.Fatalf("subscriber_events rows still carrying subscriber_id after erase = %d, want 0 (DELETE's ON DELETE SET NULL should have nulled it)", stillLinked)
+	}
+}
+
+// TestErase_RefusesWhileOutboundQueued proves Erase's outbound_queue check
+// (erase.go, "Same refusal, extended to outbound_queue") refuses erasure
+// while a row is genuinely CLAIMED ('sending') — a worker mid-send — but
+// NOT while one is merely 'queued', since #0126, every non-synthetic
+// Create() leaves exactly such a row until the outbox worker sends it, and
+// blocking on 'queued' would make ordinary GDPR erasure of a subscriber
+// who has not yet had their confirmation delivered impossible (see
+// erase.go's own comment on this departure from the plan's literal text).
+func TestErase_RefusesWhileOutboundQueued(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	sub, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Create() leaves the confirmation row 'queued' — Erase must succeed
+	// anyway (the narrower, deliberate scope).
+	if _, err := store.Erase(context.Background(), sub.ID, now); err != nil {
+		t.Fatalf("Erase with a merely 'queued' outbound_queue row = %v, want success", err)
+	}
+
+	// Now the 'sending' (claimed) case, which must refuse. A fresh
+	// subscriber, since the first was just erased.
+	sub2, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create (2nd): %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE outbound_queue SET status = 'sending', claimed_at = now() WHERE subscriber_id = $1`, sub2.ID,
+	); err != nil {
+		t.Fatalf("forcing outbound_queue row to 'sending': %v", err)
+	}
+
+	if _, err := store.Erase(context.Background(), sub2.ID, now); !errors.Is(err, ErrHasPendingSends) {
+		t.Fatalf("Erase with a 'sending' outbound_queue row = %v, want %v", err, ErrHasPendingSends)
+	}
+}
