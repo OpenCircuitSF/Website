@@ -37,20 +37,87 @@ FAILED=0
 step() { printf '\n\033[1m=== %s\033[0m\n' "$*"; }
 run()  { "$@"; local rc=$?; [ $rc -eq 0 ] || { FAILED=1; printf '\033[31mFAILED (%d): %s\033[0m\n' "$rc" "$*"; }; return 0; }
 
-# Regression guard for #0140: every `bash -c "..."` call site in this script
-# must run with `-o pipefail`. Without it, a pipeline like
-# `go test ... | tail -40` reports tail's exit status (always 0) instead of
-# go test's, so a failing build/vet/test/npm run prints its failure output
-# and this script still says VERIFICATION PASSED. This scans the script's own
-# source every time it runs, so the check cannot be silently skipped by a
-# future edit the way a separate, easily-forgotten test file could be.
-step "self-check: pipefail regression guard (#0140)"
-BAD_SITES="$(grep -n 'run bash -c' "$REPO/scripts/check.sh" | grep -v 'pipefail' || true)"
-if [ -n "$BAD_SITES" ]; then
-  printf '\033[31mPIPEFAIL REGRESSION (#0140): scripts/check.sh has a "run bash -c" call site missing "-o pipefail". That silently discards the piped command'"'"'s exit status (it becomes tail'"'"'s, which is always 0), so a failing build/vet/test/npm run would print FAILED output and still report VERIFICATION PASSED. See issues/0140.md. Offending line(s):\033[0m\n' >&2
-  echo "$BAD_SITES" >&2
+# #0208: every build/vet/test/npm step below that pipes into `tail` (so the
+# piped command's real exit code isn't discarded — see #0140: without
+# -o pipefail, `go test ... | tail -40` reports tail's exit status, which is
+# always 0, so a failing run prints FAILED output and this script still says
+# VERIFICATION PASSED) funnels through this ONE function, the single place
+# that spells the flag. #0140's original fix was a source grep asserting
+# every "run bash -c" call site individually said "-o pipefail" — reformatted
+# per CLAUDE.md §5's example set, that guard was shown (issues/0208.md) to
+# miss `/bin/bash -c`, `env bash -c`, `$SH -c`, a bare `bash -c` outside
+# `run`, and a `bash \`-newline-`-c` split across two lines, plus a false
+# "clean" reading from a trailing `# pipefail` comment. Structure removes the
+# whole evasion surface: there is now nowhere else in this file to spell (or
+# lose) the flag, so none of those forms is expressible as a way to lose it —
+# a call site either goes through runpipe() or it doesn't run through a shell
+# pipe at all.
+# BEGIN RUNPIPE-0208
+runpipe() { run bash -o pipefail -c "$1"; }
+# END RUNPIPE-0208
+
+# BEGIN GUARD-0208
+# Self-check: confirms the funnel above hasn't been bypassed by a later edit.
+# #0140's original guard was a same-line textual match: a call site excluded
+# itself from its own "missing -o pipefail" search only because that same
+# source line ALSO happened to contain the word "pipefail" elsewhere on it
+# (in a `grep -v 'pipefail'` clause). Reformatting either of the two lines
+# that coincidence depended on made the guard match its OWN source and exit 2
+# on every invocation, permanently (issues/0208.md). This guard cannot repeat
+# that failure by construction: it deletes its own block (between the
+# BEGIN/END GUARD-0208 markers, right here, which is also why the `step` call
+# announcing this check lives inside them) and runpipe()'s own definition
+# block (BEGIN/END RUNPIPE-0208, above) from a scratch copy of this file
+# before scanning anything — so no wording inside either block, however it's
+# laid out or reformatted, can ever be mistaken for a violation of itself.
+# What must NOT appear anywhere else in the file: the word "pipefail" (a
+# second spelling means either a call site is spelling the flag directly
+# instead of going through runpipe(), or runpipe() itself was duplicated —
+# the script's OWN top-of-file `set -uo pipefail` is excluded by exact line
+# match below, since that is this script's own option, not a call site), or
+# any other bash/sh invocation carrying a "-c" flag (a bypass that lost the
+# flag entirely wouldn't otherwise show up as a second "pipefail").
+step "self-check: pipefail funnel guard (#0208)"
+# The four sed patterns below are each built from two concatenated pieces
+# (no separator between the closing and opening quotes) rather than spelled
+# as one literal token — so THIS line's own source text never contains a
+# contiguous "# BEGIN GUARD-0208" (etc.) substring. That matters because sed
+# range-deletion reopens a range if a LATER line matches the start pattern
+# again: had this line spelled the markers whole, it would itself re-trigger
+# the very ranges it exists to close, deleting everything from here to EOF —
+# exactly the self-referential trap this design otherwise avoids.
+BG="# BEGIN"" GUARD-0208"; EG="# END"" GUARD-0208"
+BR="# BEGIN"" RUNPIPE-0208"; ER="# END"" RUNPIPE-0208"
+# Scans "$0" (however THIS invocation was actually run), not a hardcoded
+# "$REPO/scripts/check.sh" — the latter would let a mutated copy of this
+# script (used to mutation-test this very guard, per CLAUDE.md §8a: never
+# edit the shared tracked file to prove a guard catches a regression) scan
+# straight past its own mutation and check the untouched tracked file
+# instead, silently proving nothing.
+SCAN="$(sed -e "/${BG}/,/${EG}/d" -e "/${BR}/,/${ER}/d" "$0" \
+    | grep -vE '^[[:space:]]*#' \
+    | grep -vxF 'set -uo pipefail')"
+
+PF_HITS="$(printf '%s\n' "$SCAN" | grep -c 'pipefail' || true)"
+if [ "${PF_HITS:-0}" -ne 0 ]; then
+  printf '\033[31mPIPEFAIL REGRESSION (#0208): "pipefail" appears in scripts/check.sh outside runpipe()'"'"'s definition. A call site may be spelling the flag directly instead of calling runpipe(), or runpipe() was duplicated. Offending line(s):\033[0m\n' >&2
+  printf '%s\n' "$SCAN" | grep -n 'pipefail' >&2
   exit 2
 fi
+
+SHELLC_HITS="$(printf '%s\n' "$SCAN" | grep -nE '\b(bash|sh)\b' | grep -E -- '-c\b' || true)"
+if [ -n "$SHELLC_HITS" ]; then
+  printf '\033[31mPIPEFAIL REGRESSION (#0208): scripts/check.sh has a shell "-c" invocation outside runpipe() — it could silently lose "-o pipefail" the same way #0140 did. Offending line(s):\033[0m\n' >&2
+  printf '%s\n' "$SHELLC_HITS" >&2
+  exit 2
+fi
+
+RUNPIPE_CALLS="$(printf '%s\n' "$SCAN" | grep -c 'runpipe "' || true)"
+if [ "${RUNPIPE_CALLS:-0}" -lt 9 ]; then
+  printf '\033[31mPIPEFAIL REGRESSION (#0208): expected at least 9 runpipe() call sites (one per go build/vet/test and npm check/test step); found %s. A step may have reverted to spelling a shell invocation directly instead of calling runpipe().\033[0m\n' "$RUNPIPE_CALLS" >&2
+  exit 2
+fi
+# END GUARD-0208
 
 for a in "$@"; do
   case "$a" in
@@ -98,14 +165,14 @@ go_test() {
   # batch's single review pass.
   local pkgs="$*"; [ -n "$pkgs" ] || pkgs="./internal/... ./cmd/... ./web/..."
   step "go test $pkgs -p 2"
-  run bash -o pipefail -c "go test $pkgs -p 2 -count=1 2>&1 | tail -$TAIL"
+  runpipe "go test $pkgs -p 2 -count=1 2>&1 | tail -$TAIL"
   step "skip audit — a package reporting [no test files] or 'no test files' proves nothing"
   go test $pkgs -p 2 -count=1 2>&1 | grep -E 'no test files|SKIP|--- SKIP' | head -20 || echo "(no skips)"
 }
 
 web_check() {
-  step "npm run check"; run bash -o pipefail -c "cd web && npm run check 2>&1 | tail -$TAIL"
-  step "npm test";      run bash -o pipefail -c "cd web && npm test 2>&1 | tail -$TAIL"
+  step "npm run check"; runpipe "cd web && npm run check 2>&1 | tail -$TAIL"
+  step "npm test";      runpipe "cd web && npm test 2>&1 | tail -$TAIL"
 }
 
 # #0161: gofmt drift is otherwise invisible — `go vet` does not check
@@ -131,17 +198,17 @@ gofmt_check() {
 }
 
 case "$MODE" in
-  go)  step "go build"; run bash -o pipefail -c "go build ./... 2>&1 | tail -$TAIL"
-       step "go vet";   run bash -o pipefail -c "go vet ./... 2>&1 | tail -$TAIL"
+  go)  step "go build"; runpipe "go build ./... 2>&1 | tail -$TAIL"
+       step "go vet";   runpipe "go vet ./... 2>&1 | tail -$TAIL"
        gofmt_check
        go_test "$@" ;;
   web) web_check ;;
-  all) step "go build"; run bash -o pipefail -c "go build ./... 2>&1 | tail -$TAIL"
-       step "go vet";   run bash -o pipefail -c "go vet ./... 2>&1 | tail -$TAIL"
+  all) step "go build"; runpipe "go build ./... 2>&1 | tail -$TAIL"
+       step "go vet";   runpipe "go vet ./... 2>&1 | tail -$TAIL"
        gofmt_check
        go_test "./..."; web_check ;;
-  *)   step "go build"; run bash -o pipefail -c "go build ./... 2>&1 | tail -$TAIL"
-       step "go vet";   run bash -o pipefail -c "go vet ./... 2>&1 | tail -$TAIL"
+  *)   step "go build"; runpipe "go build ./... 2>&1 | tail -$TAIL"
+       step "go vet";   runpipe "go vet ./... 2>&1 | tail -$TAIL"
        gofmt_check
        go_test "./internal/... ./cmd/..."; web_check ;;
 esac

@@ -108,7 +108,16 @@ EOF
 
 name_for() {
   [ -n "${1:-}" ] || { echo "error: need an id (usually the issue number, e.g. 0123)" >&2; exit 1; }
-  echo "${PREFIX}$(echo "$1" | tr -cd '[:alnum:]_')"
+  # #0208: Postgres folds an unquoted identifier to lowercase, so a mixed-case
+  # token like "0140revX" used to make `create` hand back a DSN naming
+  # "...0140revX" while the database Postgres actually created was
+  # "...0140revx". Every DB-backed test then failed with SQLSTATE 3D000
+  # (database does not exist) -- which reads exactly like a real test
+  # failure and cost #0140's reviewer a false alarm mid-review -- and `drop`
+  # silently failed to find the differently-cased name, leaking the real
+  # database. Lower-case the token here so the name this function returns
+  # always matches what Postgres actually created or will create.
+  echo "${PREFIX}$(echo "$1" | tr -cd '[:alnum:]_' | tr '[:upper:]' '[:lower:]')"
 }
 
 cmd="${1:-}"; shift || true
