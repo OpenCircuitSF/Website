@@ -146,9 +146,10 @@ import (
 //     lines — and it is now FIXED, not merely documented: see
 //     collectDeferredMetadataFieldIdents and compositeLitAssignedIdents
 //     below, which connect a bare `audit.Entry{}` literal to any later
-//     `.Metadata = ...` on the same identifier and report the site as
-//     unresolved (the guard's existing conservative default everywhere
-//     else) rather than passing it silently.
+//     `.Metadata = ...` OR `.Metadata[...] = ...` (#0257 widened this from
+//     the field-assignment form alone) on the same identifier and report
+//     the site as unresolved (the guard's existing conservative default
+//     everywhere else) rather than passing it silently.
 //     TestAuditEmailMetadataGuardFailsOnDeferredStructFieldAssignment pins
 //     this, mutation-proved against the pre-fix code.
 //
@@ -228,6 +229,67 @@ import (
 // (compositeLitStringKeys/collectLocalMapKeys), not assumed, because this
 // pass touches only the deferred-assignment resolution gate, not any
 // key-extraction or token-matching code.
+//
+// #0255's review found an eighth shape, the same class one level deeper:
+// `e := audit.Entry{Metadata: map[string]any{"slug": s}}` followed by
+// `e.Metadata["email"] = addr` — SEEN but a SILENT PASS (hasEmail=false,
+// unresolved=""), because collectDeferredMetadataFieldIdents matched only a
+// bare `ident.Metadata = ...` *ast.SelectorExpr assignment; this LHS is an
+// *ast.IndexExpr (`e.Metadata["email"]`) whose X happens to BE that same
+// SelectorExpr, one syntactic layer further down, and nothing was looking
+// there. What made this one worth closing rather than pinning: the IDENTICAL
+// mutation through a bare local variable — `m := map[string]any{"slug": s};
+// m["email"] = addr; e := audit.Entry{Metadata: m}` — was ALREADY caught, by
+// collectLocalMapKeys's own *ast.IndexExpr case; the two shapes express the
+// same intent and differ only by whether the map sits behind one more level
+// of indirection (a struct field vs. a bare identifier), not by anything
+// about what a developer is doing. Now FIXED: collectDeferredMetadataFieldIdents
+// recognizes both `ident.Metadata = ...` and `ident.Metadata[...] = ...`,
+// treating either as a deferred mutation this guard cannot see into — the
+// index itself is deliberately not inspected, so the fix triggers on ANY
+// key, not just "email" (TestAuditEmailMetadataGuardFailsOnDeferredIndexAssignment
+// pins both an "email" and an unrelated-key case, to prove it is not
+// special-cased to the one string this issue happened to use as an
+// example). No production site uses this form today (checked directly:
+// `grep -rn '\.Metadata\[' internal cmd --include='*.go'`, excluding
+// _test.go, returns nothing), so the 45-site/87-key/0-unresolved census
+// below is unaffected by this fix — re-derived, not assumed.
+//
+// #0257 also asked a design question worth answering directly, since seven
+// review rounds finding one adjacent AST shape after another is itself a
+// signal: instead of a ninth node type someday, should ANY Metadata write
+// this guard cannot fully resolve report unresolved by default, rather than
+// enumerating recognized shapes and defaulting to pass? Two things are worth
+// separating in that question. On the READ side — classifyMetadataExpr,
+// where a Metadata: <expr> value's own shape is examined — this is ALREADY
+// the design: an unrecognized *ast.Ident, *ast.CallExpr, or any other
+// expression type returns unresolved, not hasEmail=false (see the switch's
+// default case, and classifyHelperReturnsForEmail's own default). Every
+// silent pass this file's history documents, #0257 included, was never a
+// case of the reader defaulting to "pass" on an unrecognized shape; it was
+// the WALK failing to notice a mutation had happened at all, because
+// collectDeferredMetadataFieldIdents pattern-matches specific *ast.AssignStmt
+// LHS shapes rather than asking a general question like "was this
+// identifier's Metadata touched anywhere, by any means". That is not a
+// default to invert — there is no dispatch point where "unrecognized ⇒ fail"
+// already lives for this half of the problem; each new shape needs a new
+// pattern taught to the walk, the same way this fix teaches it one more.
+// Widening the pattern to something maximal — e.g. flag ANY assignment
+// anywhere in the function whose LHS is an *ast.SelectorExpr or *ast.IndexExpr
+// matching an audit.Entry-holding identifier's name, regardless of which
+// FIELD is touched — was considered and rejected: it would flag ordinary,
+// unrelated field writes (`e.Action = "..."`) as if they were Metadata
+// mutations, and it would multiply the ALREADY-accepted same-name false-
+// positive class documented two paragraphs above (a same-named variable of
+// an unrelated type gets flagged today only when its OWN Metadata field is
+// touched; matching on any field of any same-named identifier would catch
+// far more innocent code doing nothing related to Metadata at all). The fix
+// above is the narrow form of "invert the default" that this shape actually
+// calls for: it recognizes the one further AST shape (index-on-selector)
+// that mutates Metadata specifically, checks nothing about WHICH key or
+// value, and reports unresolved unconditionally once seen — conservative
+// exactly where #0252/#0255's precedent already is, without widening what
+// counts as "touches Metadata" to fields that are not Metadata.
 
 // auditEmailMetadataScanRoots is deliberately narrower than
 // citedTestScanRoots (#0196/#0220's comment-citation guards): the privacy
@@ -485,13 +547,30 @@ func scanAuditEntrySites(t *testing.T, roots []string) []auditEntrySite {
 }
 
 // collectDeferredMetadataFieldIdents returns the set of identifier names that
-// have Metadata set via a struct-field assignment (`ident.Metadata = ...`)
-// somewhere in body, rather than inside the identifier's own audit.Entry{}
-// composite literal. Paired with compositeLitAssignedIdents below to catch
-// `e := audit.Entry{}` followed by `e.Metadata = ...` (#0252) — a literal
-// that carries no Metadata key of its own and would otherwise resolve as
-// "nothing to see" with nothing reported wrong, even though the site plainly
-// does carry Metadata a statement later.
+// have Metadata set OUTSIDE the identifier's own audit.Entry{} composite
+// literal, in either of two shapes: a struct-field assignment
+// (`ident.Metadata = ...`, #0252) or an index assignment directly on that
+// field (`ident.Metadata["key"] = ...`, #0257 — any key, not just "email";
+// this check does not read the index at all, matching the field-assignment
+// case above, which does not read the assigned value either). Paired with
+// compositeLitAssignedIdents below to catch `e := audit.Entry{}` followed by
+// either form — a literal that carries no Metadata key of its own (or only
+// an unrelated one) and would otherwise resolve as "nothing to see" with
+// nothing reported wrong, even though the site plainly does carry Metadata a
+// statement later.
+//
+// #0257: `e.Metadata["email"] = addr` is an *ast.AssignStmt whose LHS is an
+// *ast.IndexExpr — X is the *ast.SelectorExpr `e.Metadata`, Index is the
+// string literal "email" — not an *ast.SelectorExpr itself, so the
+// SelectorExpr-only case above never matched it: the literal's own "slug"-
+// only Metadata (or no Metadata key at all) resolved as hasEmail=false,
+// unresolved="" while an email landed in the map a statement later. The
+// identical mutation through a bare local variable — `m := map[string]any{
+// "slug": s}; m["email"] = addr; e := audit.Entry{Metadata: m}` — was
+// already caught, by collectLocalMapKeys's own *ast.IndexExpr case (its `l.X
+// .(*ast.Ident)` matches `m` directly); the difference is one level of
+// indirection, `e.Metadata` being a *ast.SelectorExpr rather than a bare
+// identifier, not a different kind of mutation.
 func collectDeferredMetadataFieldIdents(body *ast.BlockStmt) map[string]bool {
 	result := map[string]bool{}
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -500,8 +579,24 @@ func collectDeferredMetadataFieldIdents(body *ast.BlockStmt) map[string]bool {
 			return true
 		}
 		for _, lhs := range assign.Lhs {
-			sel, ok := lhs.(*ast.SelectorExpr)
-			if !ok {
+			var sel *ast.SelectorExpr
+			switch l := lhs.(type) {
+			case *ast.SelectorExpr:
+				// ident.Metadata = ...
+				sel = l
+			case *ast.IndexExpr:
+				// ident.Metadata[...] = ... — #0257. The index itself is
+				// deliberately not inspected, the same way the field-
+				// assignment case above never reads what it's assigned:
+				// either shape means this guard cannot prove which keys
+				// the running code ends up with, so both are reported
+				// unresolved regardless of the specific key or value.
+				s, ok := l.X.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+				sel = s
+			default:
 				continue
 			}
 			ident, ok := sel.X.(*ast.Ident)
@@ -1379,6 +1474,70 @@ func recordSomething() {
 	}
 	if sites[0].unresolved == "" {
 		t.Fatal("expected the site to be reported as unresolved — the literal's own \"slug\"-only Metadata is not what the running code uses; the later e.Metadata = ... assignment is, and this guard cannot read its content. Silently passing this as hasEmail=false is the #0255 shape-1 hole this test pins closed")
+	}
+}
+
+// TestAuditEmailMetadataGuardFailsOnDeferredIndexAssignment proves the fix
+// for #0257, the eighth shape found in this file: `e.Metadata["email"] =
+// addr` — an index assignment directly on the struct field, LHS an
+// *ast.IndexExpr wrapping the *ast.SelectorExpr `e.Metadata` — used to
+// resolve as hasEmail=false, unresolved="" (a silent pass), because
+// collectDeferredMetadataFieldIdents only recognized a bare
+// `ident.Metadata = ...` *ast.SelectorExpr assignment, not this one level of
+// indirection. The identical mutation through a bare local variable (`m :=
+// map[string]any{"slug": s}; m["email"] = addr; e := audit.Entry{Metadata:
+// m}`) was already caught, by collectLocalMapKeys's own *ast.IndexExpr case
+// — see TestAuditEmailMetadataGuardCatchesTracedLocalVariable, which pins
+// that shape stays caught. Both fixtures below use the SAME "slug"-only
+// literal immediately mutated by an "email"-carrying index assignment, on a
+// second, unrelated key ("phone") too, proving the fix is not keyed to the
+// literal string "email" — any index triggers it, matching
+// collectDeferredMetadataFieldIdents' field-assignment case, which likewise
+// never reads what it's assigned.
+func TestAuditEmailMetadataGuardFailsOnDeferredIndexAssignment(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "email key",
+			src: `package fixture
+
+func recordSomething() {
+	e := audit.Entry{Metadata: map[string]any{"slug": s}}
+	e.Metadata["email"] = addr
+	auditor.Record(ctx, e)
+}
+`,
+		},
+		{
+			// Proves the fix is general-purpose, not special-cased to the
+			// literal "email" — an unrelated key must be caught identically,
+			// since this guard cannot prove WHICH keys a deferred index
+			// assignment ends up contributing, only that one occurred.
+			name: "unrelated key",
+			src: `package fixture
+
+func recordSomething() {
+	e := audit.Entry{Metadata: map[string]any{"slug": s}}
+	e.Metadata["phone"] = p
+	auditor.Record(ctx, e)
+}
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSyntheticGoFile(t, dir, "fixture.go", tc.src)
+			sites := scanAuditEntrySites(t, []string{dir})
+			if len(sites) != 1 {
+				t.Fatalf("expected exactly one audit.Entry site (the literal itself), found %d", len(sites))
+			}
+			if sites[0].unresolved == "" {
+				t.Fatal("expected the site to be reported as unresolved — the literal's own \"slug\"-only Metadata is not what the running code uses; the later e.Metadata[...] = ... index assignment is, and this guard cannot read its content. Silently passing this as hasEmail=false is the #0257 hole this test pins closed")
+			}
+		})
 	}
 }
 
