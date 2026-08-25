@@ -78,88 +78,167 @@ runpipe() { run bash -o pipefail -c "$1"; }
 # END RUNPIPE-0208
 
 # BEGIN FUNCDEF-0258
-# #0258 (3rd bounce) / #0262: the checks below used to anchor on the
-# literal column-0 spelling "^run()" / "^runpipe()" — a per-spelling
-# regex. Bash accepts several OTHER spellings of the same top-level
-# definition (a leading space, the "function" keyword, a space before
-# the parens, a tab), each of which shadows the real definition at call
-# time exactly the same way a caught decoy would, while the narrow
-# anchor stayed at 1 and never noticed. Three review rounds on this
-# guard each closed the shape they were shown and the next found the
-# adjacent one (issues/0258.md) — the fix is not a wider enumeration,
-# it is to stop enumerating spellings at all.
+# #0258 / #0262 — what `run` and `runpipe` are actually BOUND TO when this
+# script runs, decided by bash rather than guessed at by a regex, and
+# FAILING CLOSED on anything the scan cannot account for.
 #
-# resolve_func_hash NAME FILE lets bash's OWN parser decide what NAME
-# resolves to — the same way running FILE for real would — instead of a
-# grep guessing at spelling:
-#   1. Extract every line in FILE that is a COMPLETE, single-line
-#      function definition (optional "function" keyword, optional
-#      "()", any leading whitespace, PROVIDED the opening brace's
-#      match closes on the same line). This describes "a function
-#      definition sits on this line", not "the function is named
-#      run/runpipe" — it does not care what the function is called, so
-#      there is nothing left to enumerate per name.
-#   2. Source those candidate lines, and only those lines, into a
-#      private bash subshell, in file order. Sourcing a "name() { ...
-#      }" construct only ever REGISTERS the function; it never
-#      executes the body — so this is safe even though the candidate
-#      set includes functions this check doesn't care about (step,
-#      cleanup) and, in a mutated copy, an attacker-planted decoy:
-#      nothing in either its header or its body runs merely by being
-#      defined. Sourcing in file order means bash's own shadowing rule
-#      (last definition wins) resolves a duplicate/decoy exactly the
-#      way running the real script would — no separate "count the
-#      definitions" step is needed, because the property that matters
-#      is not how many spellings of NAME appear, it's what NAME ends
-#      up bound to.
-#   3. `declare -f NAME` prints bash's own canonical, reformatted
-#      rendering of whatever won the shadowing — measured to be
-#      byte-identical regardless of the source spelling's leading
-#      whitespace, "function" keyword, or indentation (leading space,
-#      "function run {", "run () {", and a tab-indented copy all
-#      produced the same declare -f output for the same body).
-#      Hashing THAT, rather than a copy of the source line, is what
-#      makes the oracle spelling-independent: bash's parser does the
-#      recognition, not this script's regex, and CLAUDE.md §8's rule
-#      still holds — the pinned hex digest is unrelated bytes to the
-#      code it verifies, so no edit to the code can also rewrite it.
+# Four passes tried to answer this with a recogniser, and each failed OPEN
+# on the shapes it had not been shown. Pass 3 anchored on the literal
+# column-0 spelling "^run\(\)" and missed a leading space, the `function`
+# keyword, a space before the parens, and a tab. Pass 4 widened that to a
+# general one-line shape and missed a trailing ";", a subshell body
+# `run() ( ... )`, a group command `{ run() { ...; }; }`, and
+# `if true; then run() { ...; }; fi`. All four are valid bash 3.2.57, all
+# four shadow the real definition at call time, and all four made the
+# pass-4 script report `VERIFICATION PASSED`, exit 0, over steps that had
+# genuinely failed (the first of them re-confirmed end to end against a
+# real failing Go test: `--- FAIL` printed, exit 0). Widening a fifth
+# time would lose to a sixth shape; the recogniser itself is the problem,
+# so this pass makes an unrecognised shape a HARD ERROR instead.
 #
-# What this does NOT close, by design, because closing it needs
-# executing untrusted code rather than merely defining functions: a
-# definition built at runtime (eval, sourcing another file, unset -f
-# then a later indirect define) is invisible to a scan that only looks
-# at literal "name() { ... }" text — verified: an eval-built run()
-# ADDED alongside the real definition is not caught (only an eval that
-# REPLACES the real line is, since the scan then finds nothing else to
-# shadow it with — narrower than a prior draft of this fix claimed).
-# #0208's mutant 7 (`run "$SHELL" -c`, an unrelated shell invocation,
-# not a redefinition of run) is a separate, already-accepted gap
-# elsewhere in GUARD-0208, unaffected by this check. A definition split
-# across multiple lines (the brace on its own line) is likewise outside
-# a one-line candidate scan; nothing in this file is written that way
-# today. Closing either needs an actual shell parser reading the WHOLE
-# file's control flow, not a grep over single lines.
+# Two parts:
+#
+#   1. resolve_func_hash NAME FILE — take the lines that ARE recognised as
+#      complete single-line definitions, hand ONLY those to a real bash in
+#      file order, and hash bash's own `declare -f NAME` rendering of
+#      whatever won the shadowing. Bash's parser decides what the text
+#      means; last definition wins, exactly as it would when the script
+#      runs. One deliberate over-approximation: a candidate nested inside
+#      another function's body is treated as if it took effect, even
+#      though it would only bind when that outer function is called.
+#      Measured — a `run() { ...; }` line inside `go_test`'s body is
+#      CAUGHT. That errs towards firing, which is the safe direction.
+#      `declare -f` canonicalises away non-semantic differences
+#      only — #0258's fourth review measured ten pairs and found collisions
+#      solely on inter-token whitespace and `;`-vs-newline, while every
+#      meaning-bearing pair stayed distinct (`[ $r -eq 0 ]` vs
+#      `[ "$r" -eq 0 ]`, `'a b'` vs `"a b"`, `a; b` vs `a && b`, `"$@"` vs
+#      `$@`). The pinned digests the two guards below compare against are
+#      unrelated bytes to the code they verify, so CLAUDE.md §8's
+#      oracle-independence rule still holds.
+#
+#   2. funcdef_unexplained FILE — assert that the recognised set EXPLAINS
+#      THE WHOLE FILE. Any line that could bind, rebind or unbind either
+#      name must be one of the admitted candidate lines, or else be a
+#      whole-line comment. Anything else is a hard error. "Could bind" is
+#      spelled out as: the name followed by "(" (covers `run()`,
+#      `run ()`, the trailing-";" / subshell-body / group-command /
+#      `if`-wrapped shapes above, a multi-line `run() {` header, and
+#      `eval 'run() { ... }'`); the `function` keyword followed by the
+#      name (covers `function run {` in any position); or an
+#      `eval`/`source`/`unset` anywhere on a code line, since each is a way
+#      to bind a name to text this scan never sees. A shape nobody has
+#      thought of yet is therefore no longer a bypass — it is a loud,
+#      actionable failure naming the line.
+#
+# CONSEQUENCES for maintaining this file — real constraints, not caveats:
+#   * run() and runpipe() must stay ONE-LINE definitions. Reformatting
+#     either across several lines is refused by (2) with an explanation.
+#     #0258's fourth review judged that gap MORE reachable than #0208's
+#     accepted mutant 7, precisely because multi-line is the ordinary way
+#     to write a function; it is now a loud error rather than a silent
+#     hole.
+#   * This file may not spell `eval`, `source` or `unset` outside a
+#     whole-line comment. None appears today. This is also what makes (2)'s
+#     comment exclusion sound: a line whose first non-blank character is
+#     "#" is a comment, and in the only other place such a line could
+#     appear — inside a heredoc or a quoted string — it is inert data,
+#     because nothing in this file evaluates data as code.
+#   * A mention of "run(" or "runpipe(" inside a STRING on a code line is
+#     refused too: (2) reads lines, not bash's grammar, and cannot tell a
+#     string from code. The guard messages below say "the run helper" and
+#     "the runpipe funnel" for exactly this reason.
+#
+# WHAT REMAINS OPEN, named rather than glossed: a definition assembled from
+# text that spells none of the above on any single line — building the name
+# by concatenation or decoding it — and reached by an indirection this scan
+# cannot name. That takes deliberate obfuscation that no reformatting
+# produces, and anyone willing to write it could delete this block instead.
+#
+# ISOLATION (CLAUDE.md §8, from #0258's fourth review). The candidate lines
+# run in `env -i "$BASH" --noprofile --norc FILE` — a separate process with
+# an EMPTY environment — NOT in a `( ... )` subshell of this script. A
+# subshell inherits this script's own run/runpipe/step/cleanup, so whenever
+# the extraction contributed nothing, `declare -f` fell back to the LIVE
+# definition and the guard silently stopped measuring the file and started
+# measuring the running process, which always agrees with itself. Measured
+# both ways: with an empty candidate file the old subshell printed the live
+# run(); this form prints nothing and returns 1. An empty result is an
+# ERROR, never an input to the hash — both callers below exit 2 on it.
+#
+# NO COMMENT-STRIPPING SED. Pass 4 ran the candidates through
+# `sed -E 's/[[:space:]]*#.*$//'`, which is not quote-aware: an ordinary
+# helper such as `hdr() { printf '# %s\n' "$1"; }` was truncated mid-string
+# and its unterminated quote swallowed every later candidate, blinding both
+# digests with no signal at all. bash discards comments itself and
+# `declare -f` never renders them, so the sed was unnecessary as well as
+# harmful. Measured after removing it: that helper is now an ordinary
+# candidate that parses fine and changes nothing (adding it alone fires no
+# check), and helper-plus-decoy — the combination that produced a silent
+# `VERIFICATION PASSED` under pass 4 — is caught by the digest, because the
+# decoy now actually reaches bash and wins the shadowing. The empty-result
+# assertion below is the backstop for every OTHER way the extraction can
+# come back with nothing.
+#
+# Why a FILE and not `bash -c '...'`: GUARD-0208's shell-"-c" scan below
+# exists to prove the runpipe funnel is the only place in this file that
+# runs a shell with a command string, and a literal `bash ... -c` here
+# would trip it. Passing a file avoids the flag entirely.
+#
+# To recompute either pinned digest after a legitimate change (a marker
+# range, not a line number, so it does not drift as the file grows):
+#   sed -n '/^# BEGIN FUNCDEF-0258/,/^# END FUNCDEF-0258/p' scripts/check.sh \
+#     > /tmp/funcdef.sh \
+#     && bash -c '. /tmp/funcdef.sh; resolve_func_hash run scripts/check.sh'
 command -v shasum >/dev/null || { echo "error: shasum not on PATH (needed by FUNCDEF-0258)" >&2; exit 2; }
 command -v mktemp >/dev/null || { echo "error: mktemp not on PATH (needed by FUNCDEF-0258)" >&2; exit 2; }
-FUNCDEF_CANDIDATE_RE='^[[:space:]]*(function[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(\(\))?[[:space:]]*\{.*\}[[:space:]]*(#.*)?$'
+command -v env >/dev/null || { echo "error: env not on PATH (needed by FUNCDEF-0258)" >&2; exit 2; }
+FUNCDEF_CANDIDATE_RE='[[:space:]]*(function[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]]*\(\))?|[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\))[[:space:]]*\{.*\}[[:space:]]*(#.*)?'
+# The "()" is REQUIRED unless the `function` keyword is present. Pass 4 made
+# it optional, which admitted `NAME { ...; }` — and for a shell keyword that
+# takes a brace group that is a COMMAND, not a definition: `time { touch X; }`
+# matched, and sourcing it ran and created the file. Requiring one of the two
+# definition markers is what makes "sourcing a candidate only registers a
+# function" true rather than merely asserted.
+# Built from concatenated pieces (no separator between the closing and
+# opening quotes) so THIS line's own text does not match the pattern it
+# defines — the same trick BG/EG use in GUARD-0208 below.
+FUNCDEF_BIND_KEYWORDS="ev""al|sou""rce|un""set"
+FUNCDEF_SUSPECT_RE="(^|[^A-Za-z0-9_])(run|runpipe)[[:space:]]*\\(|(^|[^A-Za-z0-9_])function[[:space:]]+(run|runpipe)([^A-Za-z0-9_]|\$)|(^|[^A-Za-z0-9_])($FUNCDEF_BIND_KEYWORDS)([^A-Za-z0-9_]|\$)"
+
+# Prints every line of FILE that could bind one of the guarded names and was
+# NOT admitted as a candidate, "N:text". Empty output means the candidate
+# set explains the whole file.
+funcdef_unexplained() {
+  grep -nE "$FUNCDEF_SUSPECT_RE" "$1" \
+    | grep -vE '^[0-9]+:[[:space:]]*#' \
+    | grep -vE "^[0-9]+:${FUNCDEF_CANDIDATE_RE}\$"
+}
+
+# Prints the SHA-256 of bash's own `declare -f NAME` rendering of whatever
+# the candidate lines of FILE bind NAME to. Returns 1 — printing nothing —
+# if that is empty, so a broken extraction can never be mistaken for a
+# matching one.
 resolve_func_hash() {
-  local name="$1" file="$2" tmp
+  local name="$1" file="$2" tmp out
+  [ -n "${BASH:-}" ] || return 1
   tmp="$(mktemp)" || return 1
-  grep -E "$FUNCDEF_CANDIDATE_RE" "$file" | sed -E 's/[[:space:]]*#.*$//' > "$tmp"
-  # A forked (), not a new "bash -c" interpreter: sourcing candidates
-  # only needs an isolated function table, not a separate process, and a
-  # literal "bash ... -c" here would itself trip GUARD-0208's shell-"-c"
-  # scan below (that scan exists to make sure the ONLY place this file
-  # loses "-o pipefail" is runpipe() — this subshell has nothing to do
-  # with the pipefail funnel at all, so it must not spell "-c" and get
-  # dragged into that check).
-  # shellcheck disable=SC1090 # $tmp is our own mktemp scratch file, populated
-  # two lines up from a grep/sed of $file — nothing for shellcheck to follow.
-  ( source "$tmp" >/dev/null 2>&1; declare -f "$name" 2>/dev/null ) \
-    | shasum -a 256 | awk '{print $1}'
+  grep -E "^${FUNCDEF_CANDIDATE_RE}\$" "$file" > "$tmp"
+  printf 'declare -f %s\n' "$name" >> "$tmp"
+  out="$(env -i "$BASH" --noprofile --norc "$tmp" 2>/dev/null)"
   rm -f "$tmp"
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out" | shasum -a 256 | awk '{print $1}'
 }
 # END FUNCDEF-0258
+
+step "self-check: function-definition scan is complete (#0258/#0262)"
+FUNCDEF_UNEXPLAINED="$(funcdef_unexplained "$SELF")"
+if [ -n "$FUNCDEF_UNEXPLAINED" ]; then
+  printf '\033[31mFUNCTION-DEFINITION SCAN INCOMPLETE (#0258/#0262): scripts/check.sh has line(s) that could bind, rebind or unbind the run helper or the runpipe funnel, which the single-line candidate scan above did not admit. This guard fails CLOSED rather than skipping them, because every previous silent skip turned out to be a live bypass. Fix the line, or (if it is genuinely inert) move the mention into a whole-line comment. Offending line(s):\033[0m\n' >&2
+  printf '%s\n' "$FUNCDEF_UNEXPLAINED" >&2
+  exit 2
+fi
 
 # BEGIN GUARD-0208
 # Self-check: confirms the funnel above hasn't been bypassed by a later edit.
@@ -223,7 +302,7 @@ SCAN="$(sed -e "/${BG}/,/${EG}/d" -e "/${BR}/,/${ER}/d" "$SELF" \
 
 PF_HITS="$(printf '%s\n' "$SCAN" | grep -c 'pipefail' || true)"
 if [ "${PF_HITS:-0}" -ne 0 ]; then
-  printf '\033[31mPIPEFAIL REGRESSION (#0208): "pipefail" appears in scripts/check.sh outside runpipe()'"'"'s definition. A call site may be spelling the flag directly instead of calling runpipe(), or runpipe() was duplicated. Offending line(s):\033[0m\n' >&2
+  printf '\033[31mPIPEFAIL REGRESSION (#0208): "pipefail" appears in scripts/check.sh outside the runpipe funnel'"'"'s own definition. A call site may be spelling the flag directly instead of calling the funnel, or the funnel was duplicated. Offending line(s):\033[0m\n' >&2
   printf '%s\n' "$SCAN" | grep -n 'pipefail' >&2
   exit 2
 fi
@@ -239,14 +318,14 @@ fi
 # containing a "c" anywhere in the cluster, in either order.
 SHELLC_HITS="$(printf '%s\n' "$SCAN" | grep -nE '\b(bash|sh)\b' | grep -E -- '(^|[[:space:]])-[a-zA-Z]*c[a-zA-Z]*\b' || true)"
 if [ -n "$SHELLC_HITS" ]; then
-  printf '\033[31mPIPEFAIL REGRESSION (#0208): scripts/check.sh has a shell "-c" invocation outside runpipe() — it could silently lose "-o pipefail" the same way #0140 did. Offending line(s):\033[0m\n' >&2
+  printf '\033[31mPIPEFAIL REGRESSION (#0208): scripts/check.sh has a shell "-c" invocation outside the runpipe funnel — it could silently lose "-o pipefail" the same way #0140 did. Offending line(s):\033[0m\n' >&2
   printf '%s\n' "$SHELLC_HITS" >&2
   exit 2
 fi
 
 RUNPIPE_CALLS="$(printf '%s\n' "$SCAN" | grep -c 'runpipe "' || true)"
 if [ "${RUNPIPE_CALLS:-0}" -lt 9 ]; then
-  printf '\033[31mPIPEFAIL REGRESSION (#0208): expected at least 9 runpipe() call sites (one per go build/vet/test and npm check/test step); found %s. A step may have reverted to spelling a shell invocation directly instead of calling runpipe().\033[0m\n' "$RUNPIPE_CALLS" >&2
+  printf '\033[31mPIPEFAIL REGRESSION (#0208): expected at least 9 runpipe call sites (one per go build/vet/test and npm check/test step); found %s. A step may have reverted to spelling a shell invocation directly instead of calling the funnel.\033[0m\n' "$RUNPIPE_CALLS" >&2
   exit 2
 fi
 
@@ -300,8 +379,20 @@ fi
 # working the moment a decoy dropped "-o pipefail" without also dropping
 # "bash -c" (SHELLC_HITS only fires on a bare "-c" flag, not on a missing
 # "pipefail"). FUNCDEF-0258's resolve_func_hash below closes this
-# directly, on its own, independent of SHELLC_HITS or any other check in
-# this file — the masking dependency is removed, not just documented.
+# independently of SHELLC_HITS: the four shapes were re-measured with
+# bodies reaching the shell through a variable, so SHELLC_HITS could not
+# supply the catch, and the digest caught all four on its own.
+#
+# #0258 (4th bounce): that is the whole truth only for shapes the
+# candidate scan admits. Four MORE one-line spellings (a trailing ";",
+# a subshell body, a group command, an `if`-wrapper) were admitted by
+# neither, and each silently lost "-o pipefail". They are not closed by
+# widening the recogniser — they are closed by funcdef_unexplained above,
+# which refuses to let ANY unadmitted line that could bind these names
+# pass. So the masking dependency is removed for every static one-line
+# shape: an admitted one is caught by the digest, an unadmitted one is a
+# hard error. The residual is named in FUNCDEF-0258's own comment, not
+# here.
 BR_COUNT="$(grep -cxF "$BR" "$SELF")"
 ER_COUNT="$(grep -cxF "$ER" "$SELF")"
 if [ "${BR_COUNT:-0}" -ne 1 ] || [ "${ER_COUNT:-0}" -ne 1 ]; then
@@ -309,10 +400,16 @@ if [ "${BR_COUNT:-0}" -ne 1 ] || [ "${ER_COUNT:-0}" -ne 1 ]; then
   exit 2
 fi
 
-RUNPIPE_HASH="$(resolve_func_hash runpipe "$SELF")"
+# An empty resolution is an ERROR, never an input (CLAUDE.md §8): it means
+# the extraction produced nothing bash could parse, which is exactly the
+# state pass 4 silently mistook for agreement.
+RUNPIPE_HASH="$(resolve_func_hash runpipe "$SELF")" || {
+  printf '\033[31mPIPEFAIL REGRESSION (#0208/#0251/#0262): could not resolve the runpipe funnel from scripts/check.sh at all — the candidate extraction produced nothing bash could parse and bind. Failing closed; see FUNCDEF-0258 above.\033[0m\n' >&2
+  exit 2
+}
 RUNPIPE_EXPECTED_SHA256="546fb9901c1dff71af78735fcfa14427eaea0f2d7bc8a2a0b5e977111e5a5c3a"
 if [ "$RUNPIPE_HASH" != "$RUNPIPE_EXPECTED_SHA256" ]; then
-  printf '\033[31mPIPEFAIL REGRESSION (#0208/#0251/#0262): runpipe()'"'"'s resolved definition (bash'"'"'s own "declare -f runpipe" rendering, hashed — see FUNCDEF-0258 above) no longer matches the pinned SHA-256 digest. The funnel this self-check exists to guarantee may have lost the -o pipefail flag, or been shadowed by a later redefinition in any spelling bash accepts. See the recompute recipe in GUARD-0258 below (substitute runpipe for run) if this change is legitimate.\033[0m\n' >&2
+  printf '\033[31mPIPEFAIL REGRESSION (#0208/#0251/#0262): the runpipe funnel'"'"'s resolved definition (bash'"'"'s own "declare -f runpipe" rendering, hashed — see FUNCDEF-0258 above) no longer matches the pinned SHA-256 digest. The funnel this self-check exists to guarantee may have lost the -o pipefail flag, or been shadowed by a later redefinition in any spelling bash accepts. See the recompute recipe in FUNCDEF-0258 above (substitute runpipe for run) if this change is legitimate.\033[0m\n' >&2
   printf 'sha256: %s (expected %s)\n' "$RUNPIPE_HASH" "$RUNPIPE_EXPECTED_SHA256" >&2
   exit 2
 fi
@@ -331,13 +428,14 @@ fi
 # either (grepped across internal/, cmd/, web/src/, scripts/).
 #
 # run() is not wrapped in its own BEGIN/END marker block the way runpipe()
-# is — it doesn't need one: FUNCDEF-0258's candidate scan already covers
-# the whole file unconditionally, so there is no decoy-marker-block class
-# to close here the way GUARD-0208 needed BR_COUNT/ER_COUNT for a second
+# is — it doesn't need one: FUNCDEF-0258's candidate scan reads the whole
+# file with nothing excluded, so there is no decoy-marker-block class to
+# close here the way GUARD-0208 needed BR_COUNT/ER_COUNT for a second
 # RUNPIPE-0208 pair.
 #
-# This guard has been through three review rounds (issues/0258.md), each
-# closing the specific bypass it was shown, and this pass is the fourth:
+# This guard has been through four review rounds (issues/0258.md), each
+# closing the specific bypass it was shown and each losing to the next
+# shape. This pass is the fifth, and it stops closing shapes:
 #   - pass 1 compared run()'s definition against a verbatim copy of that
 #     text sitting in a quoted heredoc a few lines below — defeated by a
 #     single sed rewriting both the real line AND the heredoc at once,
@@ -350,30 +448,36 @@ fi
 #     decoys (leading space, "function run {", "run () {", a tab) that
 #     each shadow run() at runtime while the narrow anchor stayed at 1 —
 #     #0251's own decoy/duplicate class, one function over, again.
+#   - pass 4 replaced the narrow anchor with a general one-line shape
+#     recogniser feeding bash's own parser, keeping the pinned digest.
+#     The fourth review found four MORE one-line spellings it did not
+#     recognise (`run() { ...; };`, `run() ( ... )`,
+#     `{ run() { ...; }; }`, `if true; then run() { ...; }; fi`), plus
+#     two structural defects: the extraction ran in a subshell of THIS
+#     script, so a failed extraction measured the live process instead
+#     of the file, and its comment-stripping sed was not quote-aware, so
+#     one ordinary helper containing a "#" inside a string blinded both
+#     digests at once.
 #   - this pass keeps the pinned digest — CLAUDE.md §8's rule was already
-#     satisfied and should not be re-litigated — and replaces the narrow
-#     anchor with FUNCDEF-0258's resolve_func_hash, which lets bash's own
-#     parser resolve what "run" is bound to instead of a per-spelling
-#     regex. See FUNCDEF-0258 above for the mechanism, what it closes
-#     (all four decoy shapes, verified end to end), and what it still
-#     doesn't (an eval-built definition, or one split across multiple
-#     lines — narrower gaps than "any unrecognized spelling", and named
-#     as such rather than glossed over the way "any second run() line,
-#     decoy-marked or not, is always counted" glossed over C1–C4 in the
-#     pass-2 comment this replaces).
+#     satisfied and should not be re-litigated — keeps bash as the
+#     recogniser, fixes both structural defects, and makes the scan FAIL
+#     CLOSED: an unadmitted line that could bind either name is now a
+#     hard error rather than a silent skip. See FUNCDEF-0258 above for
+#     the mechanism, the constraints it puts on this file, and the one
+#     residual it does not close.
 #
-# To recompute the pinned digest after a legitimate change to run() (or,
-# substituting runpipe for run, to runpipe() in GUARD-0208 above) — the
-# marker range, not a line number, so this recipe doesn't drift as the
-# file grows:
-#   sed -n '/^# BEGIN FUNCDEF-0258/,/^# END FUNCDEF-0258/p' scripts/check.sh \
-#     > /tmp/funcdef.sh && source /tmp/funcdef.sh \
-#     && resolve_func_hash run scripts/check.sh
-step "self-check: run() FAILED-accounting guard (#0258)"
-RUN_HASH="$(resolve_func_hash run "$SELF")"
+# The recompute recipe for both pinned digests lives in FUNCDEF-0258's
+# comment above, next to the function it drives.
+step "self-check: run FAILED-accounting guard (#0258)"
+# An empty resolution is an ERROR, never an input — see the sibling check
+# in GUARD-0208 above.
+RUN_HASH="$(resolve_func_hash run "$SELF")" || {
+  printf '\033[31mFAILED-ACCOUNTING REGRESSION (#0258): could not resolve the run helper from scripts/check.sh at all — the candidate extraction produced nothing bash could parse and bind. Failing closed; see FUNCDEF-0258 above.\033[0m\n' >&2
+  exit 2
+}
 RUN_EXPECTED_SHA256="b5ca2df355ef7f7c518968a3d77eff626b48ce546cde2c8a820d62c38a2f9a24"
 if [ "$RUN_HASH" != "$RUN_EXPECTED_SHA256" ]; then
-  printf '\033[31mFAILED-ACCOUNTING REGRESSION (#0258): run()'"'"'s resolved definition (bash'"'"'s own "declare -f run" rendering, hashed — see FUNCDEF-0258 above) no longer matches the pinned SHA-256 digest. The FAILED=1 accounting this whole script'"'"'s pass/fail report depends on may have been removed, or shadowed by a later redefinition in any spelling bash accepts. See the recompute recipe above if this change is legitimate.\033[0m\n' >&2
+  printf '\033[31mFAILED-ACCOUNTING REGRESSION (#0258): the run helper'"'"'s resolved definition (bash'"'"'s own "declare -f run" rendering, hashed — see FUNCDEF-0258 above) no longer matches the pinned SHA-256 digest. The FAILED=1 accounting this whole script'"'"'s pass/fail report depends on may have been removed, or shadowed by a later redefinition in any spelling bash accepts. See the recompute recipe in FUNCDEF-0258 above if this change is legitimate.\033[0m\n' >&2
   printf 'sha256: %s (expected %s)\n' "$RUN_HASH" "$RUN_EXPECTED_SHA256" >&2
   exit 2
 fi
