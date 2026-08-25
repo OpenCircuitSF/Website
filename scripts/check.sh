@@ -54,6 +54,13 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 cd "$REPO"
 TAIL="${TAIL:-40}"
 FAILED=0
+# #0258 (6th pass): set to 1 only where this script accounts for its own
+# exit -- the verdict at the bottom, or a self-check that deliberately
+# exits 2. The EXIT trap installed further down turns any OTHER exit into
+# a loud NO VERDICT report, so a shadowed helper that simply calls `exit 0`
+# cannot end the run with a success status and no verdict line. An
+# interrupted run (Ctrl-C) reports NO VERDICT too, which is accurate.
+EXIT_ACCOUNTED=0
 
 step() { printf '\n\033[1m=== %s\033[0m\n' "$*"; }
 run()  { "$@"; local rc=$?; [ $rc -eq 0 ] || { FAILED=1; printf '\033[31mFAILED (%d): %s\033[0m\n' "$rc" "$*"; }; return 0; }
@@ -78,9 +85,26 @@ runpipe() { run bash -o pipefail -c "$1"; }
 # END RUNPIPE-0208
 
 # BEGIN FUNCDEF-0258
-# #0258 / #0262 — what `run` and `runpipe` are actually BOUND TO when this
-# script runs, decided by bash rather than guessed at by a regex, and
-# FAILING CLOSED on anything the scan cannot account for.
+# #0258 / #0262 — a TEXT SCAN over this file, in two parts, that fails
+# CLOSED on the shapes it recognises. Read LIVEBIND-0258 further down first:
+# that block holds the check that does not have to recognise anything, and it
+# is what makes this one a defence-in-depth early warning rather than the
+# thing the guarantee rests on.
+#
+# BE CLEAR ABOUT WHAT THIS IS. Part 2 below inverted the failure direction —
+# an unrecognised line is an error rather than a silent skip — and that was
+# the right move. But the test for "could this line bind a name" is ITSELF a
+# recogniser, spelled as a list of keywords, so the guard is sound only for
+# the binding constructs that list enumerates. #0258's fifth review proved
+# the point at once: the list read eval/source/unset and omitted ".", the
+# POSIX spelling of source, which is what any script that splits into
+# libraries uses; one `. lib.sh` line bound a decoy the scan never saw and
+# the run reported success over a failed step. "." and an adjacent
+# builtin/command are in the list now. THAT DOES NOT MAKE THE LIST COMPLETE,
+# and no edit to it ever will — this is a maintained enumeration, not a
+# proof. It is worth keeping because it fires EARLY (before any database or
+# test) and because it names the offending line, but the completeness
+# argument lives in LIVEBIND-0258, not here.
 #
 # Four passes tried to answer this with a recogniser, and each failed OPEN
 # on the shapes it had not been shown. Pass 3 anchored on the literal
@@ -125,11 +149,14 @@ runpipe() { run bash -o pipefail -c "$1"; }
 #      `run ()`, the trailing-";" / subshell-body / group-command /
 #      `if`-wrapped shapes above, a multi-line `run() {` header, and
 #      `eval 'run() { ... }'`); the `function` keyword followed by the
-#      name (covers `function run {` in any position); or an
-#      `eval`/`source`/`unset` anywhere on a code line, since each is a way
-#      to bind a name to text this scan never sees. A shape nobody has
-#      thought of yet is therefore no longer a bypass — it is a loud,
-#      actionable failure naming the line.
+#      name (covers `function run {` in any position); a "." in COMMAND
+#      POSITION; or one of FUNCDEF_BIND_KEYWORDS, or a builtin/command
+#      adjacent to either, anywhere on a code line — each being a way to
+#      bind a name to text this scan never sees. A shape this list DOES
+#      name is a loud, actionable failure rather than a silent skip. A
+#      binding construct it does not name is still invisible here; that is
+#      the residual LIVEBIND-0258 exists to cover, and an alias is the
+#      standing example of one deliberately left out of this list.
 #
 # CONSEQUENCES for maintaining this file — real constraints, not caveats:
 #   * run() and runpipe() must stay ONE-LINE definitions. Reformatting
@@ -138,8 +165,8 @@ runpipe() { run bash -o pipefail -c "$1"; }
 #     accepted mutant 7, precisely because multi-line is the ordinary way
 #     to write a function; it is now a loud error rather than a silent
 #     hole.
-#   * This file may not spell `eval`, `source` or `unset` outside a
-#     whole-line comment. None appears today. This is also what makes (2)'s
+#   * This file may not spell `eval`, `source`, `unset`, or a "." in
+#     command position, outside a whole-line comment. None appears today. This is also what makes (2)'s
 #     comment exclusion sound: a line whose first non-blank character is
 #     "#" is a comment, and in the only other place such a line could
 #     appear — inside a heredoc or a quoted string — it is inert data,
@@ -149,11 +176,13 @@ runpipe() { run bash -o pipefail -c "$1"; }
 #     string from code. The guard messages below say "the run helper" and
 #     "the runpipe funnel" for exactly this reason.
 #
-# WHAT REMAINS OPEN, named rather than glossed: a definition assembled from
-# text that spells none of the above on any single line — building the name
-# by concatenation or decoding it — and reached by an indirection this scan
-# cannot name. That takes deliberate obfuscation that no reformatting
-# produces, and anyone willing to write it could delete this block instead.
+# WHAT REMAINS OPEN HERE: any binding construct the suspect list does not
+# name. Five passes established there is always another one — the list is a
+# best effort, not a boundary. This is stated rather than argued away
+# because the previous four passes each argued the opposite and were each
+# proved wrong by the next review. What closes the residual is not a wider
+# list; it is LIVEBIND-0258, which measures the binding instead of
+# predicting it.
 #
 # ISOLATION (CLAUDE.md §8, from #0258's fourth review). The candidate lines
 # run in `env -i "$BASH" --noprofile --norc FILE` — a separate process with
@@ -204,7 +233,17 @@ FUNCDEF_CANDIDATE_RE='[[:space:]]*(function[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[
 # opening quotes) so THIS line's own text does not match the pattern it
 # defines — the same trick BG/EG use in GUARD-0208 below.
 FUNCDEF_BIND_KEYWORDS="ev""al|sou""rce|un""set"
-FUNCDEF_SUSPECT_RE="(^|[^A-Za-z0-9_])(run|runpipe)[[:space:]]*\\(|(^|[^A-Za-z0-9_])function[[:space:]]+(run|runpipe)([^A-Za-z0-9_]|\$)|(^|[^A-Za-z0-9_])($FUNCDEF_BIND_KEYWORDS)([^A-Za-z0-9_]|\$)"
+# #0258 (6th pass): "." -- the POSIX spelling of the source builtin -- was
+# missing from the list above, and it is the spelling a script that splits
+# into libraries ordinarily uses. It CANNOT join the alternation as a
+# word-boundary keyword: as one it matches 54 lines of this file (./internal/...,
+# 2>&1, ordinary prose), which is unusable. It is matched in COMMAND POSITION
+# instead -- start of line, or straight after a ";", "&", "|" or "{". Measured
+# on this file: catches ". f", a leading-space ". f" and "true; . f", with no
+# false positive. "builtin" and "command" cannot join as bare words either --
+# they collide with this file's own `command -v shasum|mktemp|env` lines -- so
+# they are matched only when ADJACENT to a binding word.
+FUNCDEF_SUSPECT_RE="(^|[^A-Za-z0-9_])(run|runpipe)[[:space:]]*\\(|(^|[^A-Za-z0-9_])function[[:space:]]+(run|runpipe)([^A-Za-z0-9_]|\$)|(^|[^A-Za-z0-9_])($FUNCDEF_BIND_KEYWORDS)([^A-Za-z0-9_]|\$)|(^|[;&|{][[:space:]]*)[[:space:]]*\\.[[:space:]]|(^|[^A-Za-z0-9_])(builtin|command)[[:space:]]+(\\.|$FUNCDEF_BIND_KEYWORDS)([^A-Za-z0-9_]|\$)"
 
 # Prints every line of FILE that could bind one of the guarded names and was
 # NOT admitted as a candidate, "N:text". Empty output means the candidate
@@ -235,7 +274,7 @@ resolve_func_hash() {
 step "self-check: function-definition scan is complete (#0258/#0262)"
 FUNCDEF_UNEXPLAINED="$(funcdef_unexplained "$SELF")"
 if [ -n "$FUNCDEF_UNEXPLAINED" ]; then
-  printf '\033[31mFUNCTION-DEFINITION SCAN INCOMPLETE (#0258/#0262): scripts/check.sh has line(s) that could bind, rebind or unbind the run helper or the runpipe funnel, which the single-line candidate scan above did not admit. This guard fails CLOSED rather than skipping them, because every previous silent skip turned out to be a live bypass. Fix the line, or (if it is genuinely inert) move the mention into a whole-line comment. Offending line(s):\033[0m\n' >&2
+  printf '\033[31mFUNCTION-DEFINITION SCAN INCOMPLETE (#0258/#0262): scripts/check.sh has line(s) matching this scan'"'"'s SUSPECT pattern that its single-line candidate scan did not admit. THAT IS ALL IT DETECTED. The scan reads lines, not bash'"'"'s grammar, so it cannot tell whether such a line really touches the run helper or the runpipe funnel and does not claim to -- it fails CLOSED because every silent skip in this guard'"'"'s history turned out to be a live bypass. The pattern matches either helper name before a "(", the "function" keyword before either name, a "." in command position, or any of: %s. Keeping those out of code in this file is a real maintenance constraint (see FUNCDEF-0258 above) and it applies even when the line is innocent: an unrelated variable being cleared has to be written as an empty assignment instead, and an unrelated file being read in has to move. So: rewrite the line, or -- only when the mention is purely illustrative -- move it into a whole-line comment. Offending line(s):\033[0m\n' "$FUNCDEF_BIND_KEYWORDS" >&2
   printf '%s\n' "$FUNCDEF_UNEXPLAINED" >&2
   exit 2
 fi
@@ -323,9 +362,13 @@ if [ -n "$SHELLC_HITS" ]; then
   exit 2
 fi
 
+# 11 = the 9 real call sites (one per go build/vet/test and npm check/test
+# step) plus the 2 in accounting_probe below, which are load-bearing: the live
+# probe is what closes every binding shape this file's patterns cannot name, so
+# deleting it must fail this floor rather than quietly reduce the coverage.
 RUNPIPE_CALLS="$(printf '%s\n' "$SCAN" | grep -c 'runpipe "' || true)"
-if [ "${RUNPIPE_CALLS:-0}" -lt 9 ]; then
-  printf '\033[31mPIPEFAIL REGRESSION (#0208): expected at least 9 runpipe call sites (one per go build/vet/test and npm check/test step); found %s. A step may have reverted to spelling a shell invocation directly instead of calling the funnel.\033[0m\n' "$RUNPIPE_CALLS" >&2
+if [ "${RUNPIPE_CALLS:-0}" -lt 11 ]; then
+  printf '\033[31mPIPEFAIL REGRESSION (#0208): expected at least 11 runpipe call sites (9 real steps + 2 in the live accounting probe); found %s. A step may have reverted to spelling a shell invocation directly instead of calling the funnel, or the live probe was removed.\033[0m\n' "$RUNPIPE_CALLS" >&2
   exit 2
 fi
 
@@ -458,13 +501,21 @@ fi
 #     of the file, and its comment-stripping sed was not quote-aware, so
 #     one ordinary helper containing a "#" inside a string blinded both
 #     digests at once.
-#   - this pass keeps the pinned digest — CLAUDE.md §8's rule was already
-#     satisfied and should not be re-litigated — keeps bash as the
-#     recogniser, fixes both structural defects, and makes the scan FAIL
-#     CLOSED: an unadmitted line that could bind either name is now a
-#     hard error rather than a silent skip. See FUNCDEF-0258 above for
-#     the mechanism, the constraints it puts on this file, and the one
-#     residual it does not close.
+#   - pass 5 kept the pinned digest — CLAUDE.md §8's rule was already
+#     satisfied and should not be re-litigated — kept bash as the
+#     recogniser, fixed both structural defects, and made the scan FAIL
+#     CLOSED: an unadmitted line that could bind either name became a
+#     hard error rather than a silent skip. The fifth review then showed
+#     that the "could bind" test is itself a recogniser: its keyword list
+#     omitted "." (source) and could not see an alias at all, and each
+#     was a live bypass.
+#   - pass 6 stops trying to make that list complete. It widens it once
+#     more, honestly labelled as an enumeration, and adds LIVEBIND-0258
+#     below: a probe that EXERCISES whatever the two helpers are bound to
+#     — before the dispatch and again immediately before the verdict — so
+#     the guarantee no longer depends on recognising how a binding got
+#     there. Everything above stays as defence in depth and as the early,
+#     line-naming signal.
 #
 # The recompute recipe for both pinned digests lives in FUNCDEF-0258's
 # comment above, next to the function it drives.
@@ -482,6 +533,99 @@ if [ "$RUN_HASH" != "$RUN_EXPECTED_SHA256" ]; then
   exit 2
 fi
 # END GUARD-0258
+
+# BEGIN LIVEBIND-0258
+# #0258 / #0262 -- the check that does not have to recognise anything, and
+# the reason the two scans above no longer have to be complete.
+#
+# Everything above this point PREDICTS. It reads this file's text and asks
+# "could this line rebind the run helper or the runpipe funnel?" Five review
+# rounds established that the question cannot be answered by reading lines.
+# Pass 3 lost to four spellings of a definition; pass 4 to four more; pass 5
+# to "." -- the POSIX spelling of the source builtin, which needs no
+# obfuscation, is what any script that splits into libraries uses, and spells
+# neither guarded name anywhere -- and to a two-line alias. Each pass closed
+# the shapes it had been shown and the next review found the adjacent one.
+# The suspect list above is the fourth generation of that same enumeration and
+# it is still an enumeration; widening it again would only move the treadmill.
+#
+# So the load-bearing check is not up there. It is here, and it is a
+# MEASUREMENT rather than a prediction: do not ask what could have changed the
+# binding, EXERCISE the binding and observe what it does.
+#
+#   * `run false` must set FAILED to 1, and `run true` must not. That is the
+#     entire contract #0258 is about, stated as behaviour.
+#   * A pipeline through the funnel whose FIRST stage exits non-zero must set
+#     FAILED to 1, and one that succeeds must not. That is #0140's property
+#     and #0262's, stated as behaviour.
+#
+# This does not care HOW the name got its current meaning. A definition in any
+# spelling bash accepts, a multi-line definition, one built by eval, one read
+# in from another file by either spelling of source, an unset, a PATH or hash
+# shadow: all of them change what the two probes observe, and every one of the
+# shapes in this issue's five-round history is caught by the same four lines.
+#
+# THE ONE THING BEHAVIOUR ALONE CANNOT SEE is an alias, and the reason is
+# worth writing down because it is not obvious: alias expansion happens when a
+# command is PARSED, not when it runs, and a function body is parsed when its
+# definition is read. Measured under bash 3.2.57: `alias run=true` set after
+# accounting_probe's own definition does not affect the `run` calls inside it,
+# while it does affect the dispatch case below, which bash parses later. So
+# the probe would call the real helper and the real steps would call the
+# alias. The alias table is therefore queried directly instead -- also a live
+# measurement, and a complete one for that class.
+#
+# WHY TWICE. The probe is exact only about the moment it runs. Called once
+# before the dispatch, it proves the helpers are intact when the work starts
+# and fails before any database is created or any test runs; called again
+# immediately before the verdict, it proves they were still intact when the
+# verdict was computed, which closes anything introduced by, or after, the
+# dispatch. Between those two points the run is covered by the pair.
+#
+# WHAT REMAINS OPEN, named rather than glossed:
+#   * A decoy scoped to exactly the dispatch and undone before the second
+#     probe -- e.g. wrapping the case below in a construct that redefines a
+#     helper only inside it. That is an edit to the dispatch itself, not a
+#     line added beside it, and is the same cost as deleting this block.
+#   * The verdict's own inputs. Anything that assigns FAILED directly, or
+#     edits the verdict, is outside what a probe of the helpers can see; so is
+#     a line inserted between the second probe and the verdict.
+#   * A helper that terminates the script is not silent, but it is not a
+#     verdict either -- that is what EXIT_ACCOUNTED and the EXIT trap below
+#     turn into a loud NO VERDICT report.
+# None of these is reachable by reformatting, which is the property the five
+# earlier bypasses all had and is what made them worth closing.
+accounting_probe() {
+  local when="$1" saved="$FAILED" why=""
+  if alias run >/dev/null 2>&1 || alias runpipe >/dev/null 2>&1; then
+    why="an alias named run or runpipe is defined; alias expansion precedes function lookup, so the steps that go through it would not be calling the helper this script defines"
+  fi
+  if [ -z "$why" ]; then
+    FAILED=0; run true >/dev/null 2>&1
+    [ "$FAILED" -eq 0 ] || why="the run helper recorded a failure for a command that SUCCEEDED"
+  fi
+  if [ -z "$why" ]; then
+    FAILED=0; run false >/dev/null 2>&1
+    [ "$FAILED" -eq 1 ] || why="the run helper did NOT record a failure for a command that exited non-zero -- with that accounting gone every failing step passes silently and this script reports success over a --- FAIL, which is the whole of #0258"
+  fi
+  if [ -z "$why" ]; then
+    FAILED=0; runpipe "true | tail -1" >/dev/null 2>&1
+    [ "$FAILED" -eq 0 ] || why="the runpipe funnel recorded a failure for a pipeline that succeeded"
+  fi
+  if [ -z "$why" ]; then
+    FAILED=0; runpipe "false | tail -1" >/dev/null 2>&1
+    [ "$FAILED" -eq 1 ] || why="the runpipe funnel did NOT record a failure for a pipeline whose FIRST stage exited non-zero -- the flag the funnel exists to carry is not in force and #0140 is back"
+  fi
+  FAILED="$saved"
+  [ -z "$why" ] && return 0
+  EXIT_ACCOUNTED=1
+  printf '\033[31mLIVE-ACCOUNTING REGRESSION (#0258/#0262), measured %s: %s. This check exercises whatever the two helpers are bound to at this moment, so unlike the scans above it depends on no pattern recognising how they got that way. Something in scripts/check.sh, or in a file it reads in, has replaced, shadowed or removed them.\033[0m\n' "$when" "$why" >&2
+  exit 2
+}
+# END LIVEBIND-0258
+
+step "self-check: live run/runpipe behaviour (#0258/#0262)"
+accounting_probe "before the dispatch"
 
 for a in "$@"; do
   case "$a" in
@@ -512,7 +656,12 @@ else
   export TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgres://opencircuit:opencircuit@localhost:5432/opencircuit_test?sslmode=disable}"
   echo "TEST_DATABASE_URL=$TEST_DATABASE_URL  (shared — set ISSUE=NNNN for your own)"
 fi
-cleanup() { [ -n "$OWN_DB" ] && scripts/testdb.sh drop "$OWN_DB" >/dev/null 2>&1; }
+# #0258 (6th pass): also the NO VERDICT backstop. A helper shadowed by a decoy
+# that simply terminates the script would otherwise end the run with status 0
+# and no verdict line at all -- which a caller reading only the exit code reads
+# as success. Every exit this script makes on purpose sets EXIT_ACCOUNTED first;
+# any other one lands here and is reported.
+cleanup() { [ -n "$OWN_DB" ] && scripts/testdb.sh drop "$OWN_DB" >/dev/null 2>&1; [ "${EXIT_ACCOUNTED:-0}" -eq 1 ] || { printf '\033[31mNO VERDICT (#0258): scripts/check.sh exited without reporting VERIFICATION PASSED or VERIFICATION FAILED. Treat this as a failure: either the run was interrupted, or something ended it early -- a helper shadowed by a decoy that terminates instead of reporting would look exactly like this.\033[0m\n' >&2; exit 2; }; }
 trap cleanup EXIT
 
 MODE="${1:-default}"; shift || true
@@ -598,5 +747,12 @@ esac
 step "leftover processes you may have started"
 pgrep -fl 'go test|\.test ' || echo "(none)"
 
+# Re-measured HERE, immediately before the verdict, so that the pass/fail line
+# below is backed by helpers proved intact at the moment it is computed -- not
+# only at the moment the run started. See LIVEBIND-0258 above.
+step "self-check: live run/runpipe behaviour, re-measured (#0258/#0262)"
+accounting_probe "after the dispatch, immediately before the verdict"
+
+EXIT_ACCOUNTED=1
 if [ "$FAILED" -ne 0 ]; then printf '\n\033[31mVERIFICATION FAILED\033[0m\n'; exit 1; fi
 printf '\n\033[32mVERIFICATION PASSED\033[0m\n'
