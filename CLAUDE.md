@@ -369,7 +369,7 @@ contend at all. `scripts/testdb.sh` clones a fully-migrated template database in
   `--force`. It also only manages those two names: a per-agent scratch
   database (`opencircuit_test_NNNN`) is refused too, even with a name
   starting `opencircuit*` — that pool belongs to `scripts/testdb.sh`
-  (drop/reset/gc), not this script. Three standalone shell guard tests now
+  (drop/reset/gc), not this script. Four standalone shell guard tests now
   exist for exactly this class of regression — `scripts/testdb_gc_guard_test.sh`
   (#0150), `scripts/dev_guard_test.sh` (#0117), `scripts/db_reset_guard_test.sh`
   (#0207) — run all of them with `scripts/check.sh guards` (not part of
