@@ -254,8 +254,12 @@
        live region. It is also styled as an ordinary link, not `text-muted`
        -- it occupies the slot the "Subscribe again" button used to fill.
 
-       Both surfaces render the same words, but nothing mechanical keeps
-       them equal; #0095 tracks the parity guard. -->
+       Both surfaces render the same words -- enforced mechanically by
+       internal/handlers/complained_copy_parity_test.go's
+       TestComplainedCopyParity_LeadTailComposeToServerMessage (#0095), which
+       reads web/src/lib/subscribe.ts's LEAD/TAIL constants and
+       preferences.go's no-op message directly and fails if either is edited
+       alone. -->
   <div class="pref-content">
     {#if showHeading}<h1>Manage your preferences</h1>{/if}
     <Panel>

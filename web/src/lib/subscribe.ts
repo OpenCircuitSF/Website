@@ -247,10 +247,14 @@ export const COMPLAINED_CONTACT_EMAIL = 'hello@opencircuitsf.com';
  *
  *   server === "No change: " + lowerFirst(COMPLAINED_NO_RESUBSCRIBE_MESSAGE)
  *
- * Nothing mechanical enforces that today: this comment is a promise, and an
- * earlier edit to the server string broke the promise an earlier version of
- * this comment made. #0095 tracks replacing it with a test that reads both
- * files. Until that lands, edit the two strings in the same change.
+ * Enforced mechanically by
+ * internal/handlers/complained_copy_parity_test.go's
+ * TestComplainedCopyParity_LeadTailComposeToServerMessage (#0095), which
+ * reads both files and fails in either direction if this composition and
+ * preferences.go's no-op message diverge. An earlier edit to the server
+ * string once broke the promise an earlier version of this comment made
+ * with nothing to catch it; that test is what catches it now. Still edit the
+ * two strings in the same change -- the test tells you if you forgot.
  */
 export const COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD =
   'This address is marked as having complained about a previous email, and complained addresses ' +

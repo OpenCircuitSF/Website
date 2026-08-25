@@ -255,7 +255,12 @@ describe('showSubscribeAgainAffordance (#0090 — the dead end)', () => {
 // The whole sentence, written out once here so the assertions below have
 // something independent to compare the composed parts against. Keep it in
 // step with internal/handlers/preferences.go's no-op message minus its
-// leading "No change: " clause (#0095 tracks making that mechanical).
+// leading "No change: " clause -- enforced mechanically now by
+// internal/handlers/complained_copy_parity_test.go's
+// TestComplainedCopyParity_LeadTailComposeToServerMessage (#0095), which
+// reads preferences.go directly and fails if this drifts out of step with
+// it. This file's tests below only check the TypeScript side is internally
+// consistent with itself; they cannot see the Go string.
 const EXPECTED_COMPLAINED_SENTENCE =
   'This address is marked as having complained about a previous email, and complained addresses ' +
   "can't be unsubscribed or resubscribed from this page. Contact us at " +
@@ -312,7 +317,9 @@ describe('COMPLAINED_CONTACT_EMAIL (#0090 bounce fix)', () => {
   // dropping it entails. This asserts the client half of that claim -- that
   // the message is a standalone sentence starting with a capital and does
   // not carry the server's PATCH-context lead-in. It cannot see the Go
-  // string; #0095 tracks the guard that reads both files.
+  // string; internal/handlers/complained_copy_parity_test.go's
+  // TestComplainedCopyParity_LeadTailComposeToServerMessage (#0095) is what
+  // reads both files and checks the two sides actually agree.
   it('drops the server no-op message\'s "No change: " lead-in and recapitalises', () => {
     expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE).not.toContain('No change:');
     expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE.startsWith('This address is marked')).toBe(true);
