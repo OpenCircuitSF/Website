@@ -42,6 +42,13 @@
   // WorkshopCard is the same card component WorkshopsIndex.svelte uses so
   // Home and /workshops render a next-up workshop identically.
   import { onMount } from 'svelte';
+  import {
+    CRT_SRC_W,
+    CRT_SRC_H,
+    CRT_SESSION,
+    crtMatrix3d,
+    visibleLines,
+  } from '../lib/crtScreen';
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
   import StatusList from '../lib/StatusList.svelte';
@@ -59,6 +66,156 @@
 
   let upcomingStatus = $state<UpcomingStatus>('loading');
   let upcoming = $state<PublicWorkshop[]>([]);
+
+  let crtFrame: HTMLDivElement | undefined = $state();
+  let screenPlane: HTMLDivElement | undefined = $state();
+  let termCanvas: HTMLCanvasElement | undefined = $state();
+  let glowCanvas: HTMLCanvasElement | undefined = $state();
+
+  // #0270. The screen is decorative, so every cost it adds must be optional:
+  // it stops entirely under prefers-reduced-motion, when the tab is hidden,
+  // and when the hero scrolls out of view. #0233 measured ~11 canvas repaints
+  // a second while visible and 0 while hidden; the scroll case was the gap
+  // that measurement exposed, and IntersectionObserver closes it.
+  onMount(() => {
+    if (!termCanvas || !glowCanvas || !crtFrame || !screenPlane) return;
+    const term: HTMLCanvasElement = termCanvas;
+    const glow: HTMLCanvasElement = glowCanvas;
+    const frame: HTMLDivElement = crtFrame;
+    const plane: HTMLDivElement = screenPlane;
+    const ctx0 = term.getContext('2d');
+    const gctx0 = glow.getContext('2d');
+    if (!ctx0 || !gctx0) return;
+    // Annotated rather than inferred: paint() is a hoisted function
+    // declaration, so TypeScript will not carry the null-narrowing above into
+    // it on its own.
+    const ctx: CanvasRenderingContext2D = ctx0;
+    const gctx: CanvasRenderingContext2D = gctx0;
+
+    const PHOS = '#3dff86';
+    const HOT = '#d5ffe2';
+    const FONT_PX = 26;
+    const LINE_H = 33;
+    const LEFT = 40;
+    const TOP = 38;
+    const PAUSE_MS = 3000;
+
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let lines: string[] = [];
+    let cursorOn = true;
+    let generation = 0;
+    let onScreen = true;
+    let timers: ReturnType<typeof setTimeout>[] = [];
+    let blink: ReturnType<typeof setInterval> | undefined;
+
+    const wait = (ms: number) => new Promise<void>((r) => { timers.push(setTimeout(r, ms)); });
+    const idle = () => document.hidden || !onScreen;
+
+    function fit() {
+      plane.style.transform = crtMatrix3d(frame.clientWidth, frame.clientHeight);
+    }
+
+    function paint() {
+      if (idle()) return;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.shadowBlur = 0;
+      // Cleared, not filled: the photograph's own screen -- texture, curvature,
+      // corner falloff -- shows through, and only the glyphs are drawn on top.
+      ctx.clearRect(0, 0, CRT_SRC_W, CRT_SRC_H);
+      ctx.textBaseline = 'top';
+      ctx.font = FONT_PX + "px 'JetBrains Mono', ui-monospace, Menlo, monospace";
+      ctx.fillStyle = PHOS;
+      ctx.shadowColor = PHOS;
+      ctx.shadowBlur = 3;
+      const vis = visibleLines(lines);
+      vis.forEach((l, i) => ctx.fillText(l, LEFT, TOP + i * LINE_H));
+      if (cursorOn && vis.length) {
+        const last = vis[vis.length - 1];
+        ctx.save();
+        ctx.fillStyle = HOT;
+        ctx.shadowColor = PHOS;
+        ctx.shadowBlur = 9;
+        ctx.fillRect(LEFT + ctx.measureText(last).width + 4, TOP + (vis.length - 1) * LINE_H + 3, 13, FONT_PX - 3);
+        ctx.restore();
+      }
+      gctx.setTransform(1, 0, 0, 1, 0, 0);
+      gctx.globalCompositeOperation = 'source-over';
+      gctx.clearRect(0, 0, CRT_SRC_W, CRT_SRC_H);
+      gctx.drawImage(term, 0, 0);
+    }
+
+    const push = (t: string) => { lines.push(t); paint(); };
+
+    async function typeLine(gen: number, text: string) {
+      lines.push('');
+      for (const ch of text) {
+        if (gen !== generation) return false;
+        lines[lines.length - 1] += ch;
+        paint();
+        await wait(42 + Math.random() * 30);
+      }
+      return gen === generation;
+    }
+
+    async function session() {
+      const gen = ++generation;
+      if (reduce.matches) {
+        const step = CRT_SESSION[0];
+        lines = ['open circuit sf // sf, ca', '', '> ' + step.cmd, ...step.out];
+        paint();
+        return;
+      }
+      lines = [];
+      paint();
+      await wait(240);
+      if (gen !== generation) return;
+      push('open circuit sf // sf, ca');
+      await wait(300);
+      push('memory ok. phosphor ok.');
+      await wait(420);
+      for (let i = 0; gen === generation; i++) {
+        const step = CRT_SESSION[i % CRT_SESSION.length];
+        push('');
+        if (!(await typeLine(gen, '> ' + step.cmd))) return;
+        await wait(260);
+        for (const line of step.out) {
+          if (gen !== generation) return;
+          push(line);
+          await wait(150);
+        }
+        await wait(PAUSE_MS);
+      }
+    }
+
+    fit();
+    const onResize = () => fit();
+    window.addEventListener('resize', onResize);
+    const onVis = () => { if (!document.hidden) paint(); };
+    document.addEventListener('visibilitychange', onVis);
+
+    const io = new IntersectionObserver((entries) => {
+      onScreen = entries[0]?.isIntersecting ?? true;
+      if (onScreen) paint();
+    });
+    io.observe(frame);
+
+    if (!reduce.matches) {
+      blink = setInterval(() => { cursorOn = !cursorOn; paint(); }, 530);
+    }
+    void session();
+
+    return () => {
+      generation++;
+      timers.forEach(clearTimeout);
+      timers = [];
+      if (blink) clearInterval(blink);
+      io.disconnect();
+      window.removeEventListener('resize', onResize);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  });
 
   onMount(() => {
     listPublicWorkshops()
@@ -91,7 +248,20 @@
         </div>
 
         <div class="hero-crt">
-          <div class="crt-frame"></div>
+          <div class="crt-frame" bind:this={crtFrame}>
+            <!-- #0270: the live screen. aria-hidden because it repeats what the
+                 headline and command line beside it already say (#0233's
+                 decision: illustrative copy, never the workshops API — real
+                 dates would be information, and hiding information is wrong).
+                 With JS off this stays empty and the photograph alone shows,
+                 which is exactly #0231's correct still hero. -->
+            <div class="screen-plane" bind:this={screenPlane} aria-hidden="true">
+              <canvas bind:this={glowCanvas} width={CRT_SRC_W} height={CRT_SRC_H} class="crt-glow"></canvas>
+              <canvas bind:this={termCanvas} width={CRT_SRC_W} height={CRT_SRC_H}></canvas>
+              <div class="crt-scanlines"></div>
+              <div class="crt-glass"></div>
+            </div>
+          </div>
         </div>
       </div>
     </TerminalPanel>
@@ -203,10 +373,10 @@
     --bg-panel: #e8eee5;
     --bg-header: #dae3d6;
     --border: #c6d1c2;
-    --crt-photo: url('/hero-crt-light-380.webp');
+    --crt-photo: url('/hero-crt-blank-light-760.webp');
     --crt-photo-set: image-set(
-      url('/hero-crt-light-380.webp') 1x,
-      url('/hero-crt-light-760.webp') 2x
+      url('/hero-crt-blank-light-760.webp') 1x,
+      url('/hero-crt-blank-light-760.webp') 2x
     );
   }
 
@@ -215,10 +385,10 @@
       --bg-panel: #191c17;
       --bg-header: #1b231c;
       --border: #243028;
-      --crt-photo: url('/hero-crt-380.webp');
+      --crt-photo: url('/hero-crt-blank-760.webp');
       --crt-photo-set: image-set(
-        url('/hero-crt-380.webp') 1x,
-        url('/hero-crt-760.webp') 2x
+        url('/hero-crt-blank-760.webp') 1x,
+        url('/hero-crt-blank-760.webp') 2x
       );
     }
   }
@@ -227,10 +397,10 @@
     --bg-panel: #191c17;
     --bg-header: #1b231c;
     --border: #243028;
-    --crt-photo: url('/hero-crt-380.webp');
+    --crt-photo: url('/hero-crt-blank-760.webp');
     --crt-photo-set: image-set(
-      url('/hero-crt-380.webp') 1x,
-      url('/hero-crt-760.webp') 2x
+      url('/hero-crt-blank-760.webp') 1x,
+      url('/hero-crt-blank-760.webp') 2x
     );
   }
 
@@ -256,6 +426,7 @@
    * the row would collapse and then jump. The 1x/2x pair is selected by
    * image-set, opted into via @supports below. */
   .crt-frame {
+    position: relative;
     width: 240px;
     aspect-ratio: 1402 / 1122;
     background-image: var(--crt-photo);
@@ -273,7 +444,7 @@
    * 1x photo the comment here used to claim. @supports asks first, so the
    * declaration is never attempted where it cannot work. Affects Safari <= 16
    * and Chrome < 113. */
-  @supports (background-image: image-set(url('/hero-crt-380.webp') 1x)) {
+  @supports (background-image: image-set(url('/hero-crt-blank-760.webp') 1x)) {
     .crt-frame {
       background-image: var(--crt-photo-set);
     }
@@ -323,5 +494,57 @@
 
   .next-up-note {
     margin: var(--space-3) 0 0;
+  }
+
+  /* #0270: the live screen. An ordinary rectangle that JS warps onto the four
+   * calibrated corners of the photographed glass with a projective matrix3d.
+   * transform-origin MUST be 0 0 or the homography is wrong. */
+  .screen-plane {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 640px;
+    height: 512px;
+    transform-origin: 0 0;
+    overflow: hidden;
+    border-radius: 8% / 6%;
+    /* No background: the canvas is cleared rather than filled, so the
+     * photograph's own screen shows through and only the glyphs sit on top. */
+    background: transparent;
+    will-change: transform;
+    pointer-events: none;
+  }
+
+  .screen-plane :global(canvas),
+  .crt-scanlines,
+  .crt-glass {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .screen-plane :global(canvas) {
+    display: block;
+  }
+
+  .screen-plane :global(.crt-glow) {
+    filter: blur(9px);
+    opacity: 0.42;
+    mix-blend-mode: screen;
+  }
+
+  /* Both overlays are far lighter than they would need to be over a flat fill:
+   * the photographed screen already carries its own scan texture and corner
+   * falloff, and doubling either reads as moire or crushed corners. */
+  .crt-scanlines {
+    background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px 3px);
+    opacity: 0.22;
+  }
+
+  .crt-glass {
+    background:
+      radial-gradient(ellipse at center, transparent 62%, rgba(0, 0, 0, 0.06) 80%, rgba(0, 0, 0, 0.26) 100%),
+      linear-gradient(150deg, rgba(255, 255, 255, 0.03), transparent 26%, transparent 74%, rgba(95, 255, 145, 0.02));
   }
 </style>
