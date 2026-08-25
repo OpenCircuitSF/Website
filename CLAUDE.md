@@ -490,6 +490,26 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   prove the result is stable by running `gofmt -w` and confirming the hash does
   not change.
 
+- **A regex that hunts for a tag finds the one inside a comment.** `#0064`'s
+  CSP `script-src` hash was wrong twice — the second time computed by a
+  reviewer who believed they had verified it in a browser. Both wrong values
+  have the same cause: `web/index.html` line 38 contains the literal text
+  `<` + `script` + `>` inside prose inside an HTML comment, so a search for the
+  first occurrence lands there rather than on the real bootstrap tag, then
+  reads forward to the real closing tag and hashes ~1.5 KB of the wrong span.
+  Two different regexes over that same wrong span produced two different
+  plausible-looking hashes. Parse markup with a parser (`html.parser`, which
+  never visits comments) rather than searching it, and take ground truth from
+  the browser: a CSP violation names the exact hash it expected, which no
+  extraction bug of yours can affect.
+
+- **Backticks inside an unquoted heredoc are command substitution.** An
+  implementer wrote `` `migrate up` `` into a SQL comment inside
+  `restore.sh`'s `<<SQL` heredoc; bash executed it on every run, emitting a
+  stray `error: failed to parse scheme from source URL` into otherwise-clean
+  output. Quote the delimiter (`<<'SQL'`) unless you specifically want
+  expansion. `shellcheck` catches this as SC2006; `bash -n` does not.
+
 - **BSD `grep -P` on this machine matches nothing, silently.** It does not
   error and does not warn — it reports zero hits on a file that demonstrably
   contains the bytes, which reads exactly like "the string isn't there." A
