@@ -48,6 +48,9 @@
     CRT_SESSION,
     crtMatrix3d,
     visibleLines,
+    crtWorkshopLines,
+    crtListLines,
+    type CrtWorkshop,
   } from '../lib/crtScreen';
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
@@ -162,7 +165,7 @@
     async function session() {
       const gen = ++generation;
       if (reduce.matches) {
-        const step = CRT_SESSION[0];
+        const step = script[0];
         lines = ['open circuit sf // sf, ca', '', '> ' + step.cmd, ...step.out];
         paint();
         return;
@@ -176,7 +179,7 @@
       push('memory ok. phosphor ok.');
       await wait(420);
       for (let i = 0; gen === generation; i++) {
-        const step = CRT_SESSION[i % CRT_SESSION.length];
+        const step = script[i % script.length];
         push('');
         if (!(await typeLine(gen, '> ' + step.cmd))) return;
         await wait(260);
@@ -186,6 +189,40 @@
           await wait(150);
         }
         await wait(PAUSE_MS);
+      }
+    }
+
+    // #0274: replace the illustrative first and last commands with real data
+    // when both fetches succeed. Either failing leaves that command's
+    // illustrative copy untouched -- the screen is decorative and must never
+    // degrade to a blank block or an error string. One fetch on mount, not a
+    // poll: the counts are cached server-side for 60s anyway.
+    const script = CRT_SESSION.map((c) => ({ cmd: c.cmd, out: [...c.out] }));
+
+    async function loadLiveData() {
+      try {
+        const res = await fetch('/api/workshops', { headers: { accept: 'application/json' } });
+        if (res.ok) {
+          const body = (await res.json()) as { upcoming?: CrtWorkshop[] };
+          const lines = crtWorkshopLines(body.upcoming ?? []);
+          if (lines.length) script[0] = { cmd: script[0].cmd, out: lines };
+        }
+      } catch {
+        // keep the illustrative copy
+      }
+      try {
+        const res = await fetch('/api/list-stats', { headers: { accept: 'application/json' } });
+        if (res.ok) {
+          const body = (await res.json()) as { confirmed?: number; pending?: number };
+          if (typeof body.confirmed === 'number') {
+            const idx = script.findIndex((c) => c.cmd.startsWith('subscribe'));
+            if (idx >= 0) {
+              script[idx] = { cmd: script[idx].cmd, out: crtListLines(body.confirmed, body.pending ?? 0) };
+            }
+          }
+        }
+      } catch {
+        // keep the illustrative copy
       }
     }
 
@@ -204,7 +241,7 @@
     if (!reduce.matches) {
       blink = setInterval(() => { cursorOn = !cursorOn; paint(); }, 530);
     }
-    void session();
+    void loadLiveData().then(() => session());
 
     return () => {
       generation++;

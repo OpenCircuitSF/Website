@@ -89,3 +89,52 @@ export const CRT_MAX_LINES = 13;
 export function visibleLines(lines: readonly string[]): string[] {
   return lines.slice(-CRT_MAX_LINES);
 }
+
+/** #0274: the screen now shows real data when it can. These builders take
+ *  already-fetched values so they stay pure and testable without a DOM. */
+export type CrtWorkshop = {
+  title: string;
+  starts_at: string;
+  location_name?: string | null;
+};
+
+/** The glass fits roughly 36 characters at the rendered font size. Longer
+ *  titles are truncated with an ellipsis rather than overflowing the tube --
+ *  the screen is decorative, and a line running off the glass reads as a bug. */
+export const CRT_LINE_CHARS = 36;
+
+export function crtTruncate(text: string, max = CRT_LINE_CHARS): string {
+  if (text.length <= max) return text;
+  if (max <= 1) return text.slice(0, Math.max(max, 0));
+  return text.slice(0, max - 1).trimEnd() + '\u2026';
+}
+
+/** "sat 12:30" style, matching the illustrative copy's register. Invalid or
+ *  missing dates yield '' rather than "Invalid Date". */
+export function crtShortDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const day = d.toLocaleDateString('en-US', { weekday: 'short' }).toLowerCase();
+  const mon = d.toLocaleDateString('en-US', { month: 'short' }).toLowerCase();
+  return day + ' ' + mon + ' ' + d.getDate();
+}
+
+export function crtWorkshopLines(workshops: readonly CrtWorkshop[]): string[] {
+  const rows = workshops.slice(0, 3).map((w) => {
+    const when = crtShortDate(w.starts_at);
+    return crtTruncate(when ? w.title + ' — ' + when : w.title);
+  });
+  if (!rows.length) return [];
+  const n = workshops.length;
+  rows.push(n === 1 ? '1 scheduled.' : n + ' scheduled.');
+  return rows;
+}
+
+export function crtListLines(confirmed: number, pending: number): string[] {
+  const lines = [confirmed === 1 ? '1 confirmed subscriber' : confirmed + ' confirmed subscribers'];
+  // pending is bucketed server-side (#0274), so report it as approximate --
+  // stating a rounded number as exact would be a small lie on a public page.
+  if (pending > 0) lines.push('~' + pending + ' awaiting confirmation');
+  lines.push('double opt-in. leave anytime.');
+  return lines;
+}
