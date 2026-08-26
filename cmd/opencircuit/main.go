@@ -251,6 +251,8 @@ func servePostgres(cfg *config.Config) error {
 	}
 	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, campaignsStore, auditLogger, cfg.BaseURL)
 	publicWorkshopsH := handlers.NewPublicWorkshopsHandler(workshopsStore, interestsStore)
+	// #0274: aggregate list counts for the home page's live CRT screen.
+	publicListStatsH := handlers.NewPublicListStatsHandler(subscribersStore)
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,
 	// manual suppress, clear-complaint, and manual add. manualAdd (subscribeH)
@@ -483,7 +485,7 @@ func servePostgres(cfg *config.Config) error {
 
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker, outboxWorker, site,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -786,6 +788,9 @@ func serveDevMode(cfg *config.Config) error {
 	// nil-guard.
 	var adminWorkshopsH *handlers.AdminWorkshopsHandler
 	var publicWorkshopsH *handlers.PublicWorkshopsHandler
+	// #0274: nil in dev mode for the same reason -- internal/devstore has no
+	// subscribers-table backing, so there are no counts to report.
+	var publicListStatsH *handlers.PublicListStatsHandler
 
 	// Admin overview dashboard (#0061) has the same devstore gap as
 	// adminCampaignStatsH/adminWorkshopsH above -- it reads subscribers,
@@ -829,7 +834,7 @@ func serveDevMode(cfg *config.Config) error {
 
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, sesNotifyH, sendWorker, outboxWorker, site,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -1054,6 +1059,7 @@ func mountAndServe(
 	confirmH *handlers.ConfirmHandler,
 	unsubscribeH *handlers.UnsubscribeHandler,
 	publicWorkshopsH *handlers.PublicWorkshopsHandler,
+	publicListStatsH *handlers.PublicListStatsHandler,
 	sesNotifyH *handlers.SESNotificationsHandler,
 	sendWorker *mailing.Worker,
 	outboxWorker *mailing.OutboxWorker,
@@ -1176,6 +1182,14 @@ func mountAndServe(
 	// see serveDevMode's comment).
 	if publicWorkshopsH != nil {
 		mux.Handle("GET /api/workshops", http.HandlerFunc(publicWorkshopsH.List))
+		// #0274: aggregate mailing-list counts for the home page's live CRT.
+		// Public because it exposes no PII -- two integers, no addresses, no
+		// ids. `pending` is bucketed and the response cached; see the
+		// handler's doc comment for why that is the uniform-202 oracle
+		// mitigation rather than mere politeness.
+	}
+	if publicListStatsH != nil {
+		mux.Handle("GET /api/list-stats", http.HandlerFunc(publicListStatsH.Stats))
 		mux.Handle("GET /api/workshops/{slug}", http.HandlerFunc(publicWorkshopsH.GetBySlug))
 	}
 
