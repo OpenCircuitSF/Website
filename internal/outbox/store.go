@@ -422,12 +422,35 @@ func (s *Store) Release(ctx context.Context, id int64) (bool, error) {
 // to un-claim a row a live worker was still mid-send on and mail it twice —
 // see that method's doc comment for the full incident. Copying the fix, not
 // the defect that preceded it, is #0126's plan §2's explicit instruction.
-func (s *Store) OrphanSweep(ctx context.Context, staleAfter time.Duration) (int64, error) {
+//
+// kinds optionally restricts the sweep to those Kind values, mirroring
+// ClaimDue's own kinds filter above — pass none to sweep across every kind
+// (the prior, unfiltered behavior). #0254's review bounce is why this
+// parameter exists: that commit added a kinds filter to ClaimDue but not to
+// OrphanSweep, and gave OrphanSweep a second caller —
+// internal/handlers.SubscribeHandler's recovery poller, sweeping every 5s
+// with a 20s staleness window sized for ITS OWN fast path
+// (intakeOrphanStaleAfter). internal/mailing.OutboxWorker legitimately
+// holds a mail row 'sending' for up to ~35s (sendMessageTimeout +
+// writeStatusTimeout, outboxOrphanStaleAfter=70s), so the unfiltered 20s
+// sweep could — and, proven in that review, did — release a live mail
+// claim mid-send. The eventual MarkSent then affects zero rows (the row is
+// no longer 'sending'; sendOne discards that bool), the row stays
+// 'queued', and the next mailing pass claims and sends it AGAIN: a
+// duplicate confirmation, registration magic link, or recovery link.
+// Exactly like ClaimDue, neither of outbound_queue's two independent
+// consumers may sweep a row it does not own.
+func (s *Store) OrphanSweep(ctx context.Context, staleAfter time.Duration, kinds ...Kind) (int64, error) {
+	kindStrs := make([]string, len(kinds))
+	for i, k := range kinds {
+		kindStrs[i] = string(k)
+	}
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue SET status = $1, claimed_at = NULL
 		  WHERE status = $2
-		    AND (claimed_at IS NULL OR claimed_at < now() - $3::interval)`,
-		StatusQueued, StatusSending, staleAfter,
+		    AND (claimed_at IS NULL OR claimed_at < now() - $3::interval)
+		    AND (cardinality($4::text[]) = 0 OR kind = ANY($4::text[]))`,
+		StatusQueued, StatusSending, staleAfter, kindStrs,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("outbox: sweeping orphaned rows: %w", err)

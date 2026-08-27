@@ -171,3 +171,77 @@ func TestSubscribeIntakeWorker_RecoversRowTheFastPathNeverProcessed(t *testing.T
 		t.Errorf("intake row status = %q, want %q", intakeStatus, outbox.StatusSent)
 	}
 }
+
+// TestSubscribeIntakeWorker_OrphanSweepDoesNotTouchOtherKinds is #0254's
+// review-bounce regression test (issues/0254.md ## Review notes). Commit
+// 4af0ea3 added a kinds filter to outbox.Store.ClaimDue but NOT to
+// OrphanSweep, and gave OrphanSweep a second caller — this file's own
+// intakePass — with a much shorter staleness window (intakeOrphanStaleAfter
+// = 20s) than internal/mailing.OutboxWorker's own sweep uses for the SAME
+// method (outboxOrphanStaleAfter = 70s, sized for that worker's legitimate
+// hold: sendMessageTimeout 30s + writeStatusTimeout 5s, doubled).
+//
+// Before the fix, intakePass's unfiltered OrphanSweep(20s) reclaimed ANY
+// row stuck 'sending' past 20s — including a confirmation row internal/
+// mailing's worker was still legitimately holding mid-send at 25s, well
+// inside ITS OWN 70s window. Releasing that live claim is not cosmetic:
+// the in-flight send's eventual MarkSent requires status='sending', so it
+// affects zero rows (silently discarded by sendOne pre-#0254-review-fix),
+// the row stays 'queued', and the next mailing pass claims and sends it a
+// SECOND time — a duplicate confirmation, registration magic link, or
+// recovery link.
+//
+// This seeds a confirmation row, puts it into 'sending' with a claimed_at
+// 25 seconds old (past intake's 20s window, comfortably inside mailing's
+// 70s one — the exact reachable gap the review proved, not an edge case),
+// and calls h.intakePass() directly — a deliberate, documented exception to
+// this file's usual "poll for the background worker's outcome" discipline
+// (see TestSubscribeIntakeWorker_RecoversRowTheFastPathNeverProcessed's own
+// doc comment for why that discipline exists for ClaimDue races). It does
+// not apply here: OrphanSweep's UPDATE is idempotent and scoped by kind, so
+// a concurrent background pass performing the identical, correctly-scoped
+// sweep cannot change this test's outcome — there is no row for it to
+// race over, only a property ("this row is never touched") to falsify.
+//
+// A raw SQL UPDATE puts the row into 'sending' directly, rather than
+// h.intake.ClaimDue, so this test claims only the ONE row it created and
+// cannot interact with any other test's rows in the shared per-agent
+// database (this package's tests run sequentially within the package, but
+// leftover queued confirmation rows from earlier tests are common and must
+// not be disturbed).
+func TestSubscribeIntakeWorker_OrphanSweepDoesNotTouchOtherKinds(t *testing.T) {
+	pool := subscribeTestPool(t)
+	h, _ := subscribeMux(t, pool, nil)
+	ctx := context.Background()
+
+	recipient := subscribeUniqueEmail(t)
+	id, err := h.intake.Enqueue(ctx, outbox.Item{
+		Kind:      outbox.KindConfirmation,
+		Recipient: recipient,
+	})
+	if err != nil {
+		t.Fatalf("seeding a confirmation row: %v", err)
+	}
+
+	// Simulate internal/mailing.OutboxWorker having claimed this row 25s
+	// ago and still being mid-send — a live claim well inside its own 70s
+	// staleness window.
+	if _, err := pool.Exec(ctx,
+		`UPDATE outbound_queue SET status = $2, claimed_at = now() - interval '25 seconds' WHERE id = $1`,
+		id, outbox.StatusSending,
+	); err != nil {
+		t.Fatalf("backdating claimed_at to simulate a live mailing claim: %v", err)
+	}
+
+	if _, err := h.intakePass(); err != nil {
+		t.Fatalf("intakePass: %v", err)
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM outbound_queue WHERE id = $1`, id).Scan(&status); err != nil {
+		t.Fatalf("reading status back: %v", err)
+	}
+	if status != outbox.StatusSending {
+		t.Fatalf("status = %q, want %q — the intake poller's OrphanSweep reclaimed a live mail claim it has no business touching (kind=confirmation, not KindSubscribeIntake); this is #0254's review-bounce regression: OrphanSweep must filter by kind exactly as ClaimDue already does, or one poller's staleness window can release the other's in-flight send and cause a duplicate email", status, outbox.StatusSending)
+	}
+}

@@ -74,11 +74,22 @@ var outboxOrphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 // build a message for — i.e. every Kind EXCEPT outbox.KindSubscribeIntake
 // (#0254), which is not an email and is claimed separately by
 // internal/handlers.SubscribeHandler's own recovery poller. Passed to
-// outbox.Store.ClaimDue's kinds filter in pass, below, so this worker never
-// claims a row it cannot render. Deliberately an explicit list rather than
-// "every Kind except intake": a future Kind added here without updating
-// render's switch should fail loudly in render's default case, not be
-// silently excluded from this worker's claim by omission.
+// outbox.Store.ClaimDue's and OrphanSweep's kinds filters in pass, below,
+// so this worker never claims OR sweeps a row it cannot render.
+//
+// A hand-maintained list, deliberately, and #0254's review bounce corrected
+// an earlier version of this comment that overstated what that buys: it
+// claimed a Kind added here without updating render's switch would "fail
+// loudly in render's default case" — true only of a Kind mistakenly ADDED
+// to this list, whose render call reaches the default case and abandons
+// after retries. It says nothing about the opposite mistake — a Kind added
+// to internal/outbox and forgotten HERE — and that omission is silent, not
+// loud: ClaimDue(mailKinds...) never claims such a row at all, so render's
+// default case never runs; the row simply stalls in 'queued' forever, with
+// no error anywhere to notice. TestMailKindsCoversEveryOutboxKind
+// (outbox_worker_kinds_guard_test.go) closes that gap by parsing
+// internal/outbox's Kind constants and failing on any constant that is
+// neither in this list nor outbox.KindSubscribeIntake.
 var mailKinds = []outbox.Kind{
 	outbox.KindConfirmation,
 	outbox.KindAlreadySubscribed,
@@ -344,8 +355,13 @@ func (w *OutboxWorker) untrackClaimed(id int64) {
 // (claimed at least one row), so Run can skip the poll wait, matching
 // worker.go's "don't busy-loop on an empty pass" discipline (#0122).
 func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
+	// #0254's review bounce: scoped to mailKinds, the same set ClaimDue
+	// below is scoped to, so this sweep can never release a live claim
+	// belonging to internal/handlers.SubscribeHandler's own recovery
+	// poller (KindSubscribeIntake) — see OrphanSweep's doc comment for the
+	// duplicate-send chain an unfiltered sweep produced.
 	sweepCtx, sweepCancel := context.WithTimeout(ctx, writeStatusTimeout)
-	swept, err := w.store.OrphanSweep(sweepCtx, outboxOrphanStaleAfter)
+	swept, err := w.store.OrphanSweep(sweepCtx, outboxOrphanStaleAfter, mailKinds...)
 	sweepCancel()
 	if err != nil {
 		return false, fmt.Errorf("mailing: outbox orphan sweep: %w", err)
@@ -467,9 +483,23 @@ func (w *OutboxWorker) sendOne(row outbox.Row) {
 
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), writeStatusTimeout)
 	defer writeCancel()
-	if _, err := w.store.MarkSent(writeCtx, row.ID, messageID); err != nil {
+	sentOK, err := w.store.MarkSent(writeCtx, row.ID, messageID)
+	if err != nil {
 		w.log.Error("mailing: marking outbound_queue row sent failed", "id", row.ID, "kind", row.Kind, "err", err)
 		return
+	}
+	if !sentOK {
+		// #0254's review bounce: MarkSent requires status='sending', so
+		// affecting zero rows means something else already moved this row
+		// out from under this send — an id that no longer exists, a
+		// concurrent claim, or (the proven case) an orphan sweep that had
+		// no business touching it. The message was already accepted by SES
+		// at this point; this is not a reason to retry or abandon it, only
+		// to say so loudly. Logged rather than silently discarded, because
+		// discarding it silently is exactly what let #0254's sweep bug
+		// masquerade as a healthy pass instead of surfacing the duplicate
+		// send it was producing.
+		w.log.Warn("mailing: MarkSent affected no rows — this row's claim was lost before the send it just completed was recorded; the row may be re-sent by a later pass", "id", row.ID, "kind", row.Kind)
 	}
 
 	// #0126's plan §6: confirmation_sent is written here — "a confirmation
