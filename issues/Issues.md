@@ -163,6 +163,21 @@ Edit the file in place. The Mac app picks up changes automatically — no follow
 
 When status moves to `resolved` or `closed`, add a `**Closed**` row with the date. When the move to `resolved` was driven by a fix commit, also add a `**Commit**` row with the short hash. For any move toward `resolved`, `closed`, or `wontfix`, the "Critical rule" near the top of this file applies — those transitions require explicit user confirmation, not inference.
 
+### Correcting text that later events made wrong
+
+**A paragraph superseded by later events keeps its exact original wording, struck through inline, immediately followed by a dated `**Correction (#NNNN, date).**` note — never a paraphrase, never a silent deletion.**
+
+This applies to acceptance criteria, `## Notes`, and any prose an issue asserts as fact. The record of what was believed, and when, is what lets a later reader tell a mistake from a change of circumstances.
+
+It is not a style preference. `#0125` was bounced because its acceptance criterion instructed editing an already-shipped migration — a criterion written on 2026-08-21, correct then, and invalidated by the 2026-08-25 deploy. Reconstructing that took reading the issue against the deployment history. Then the correction itself was written as a *paraphrase* claiming to be "left in place, uncorrected", which was untrue; `#0293` recovered the verbatim original from commit `e762488` and restored it. The same text was mishandled twice, which is why the rule is written down rather than assumed.
+
+Two practical points:
+
+- Strike the **original bytes** and add `~~` around them, nothing else. A "restored verbatim" claim that is itself a paraphrase is the same defect one layer down, and it is checkable: the struck span with its `~~` removed must be byte-identical to the pre-correction text.
+- Inline sentence continuations may use `**corrected <date> (#NNNN)**` instead of the block form, which reads badly mid-sentence. Both are the convention; a paraphrase is not.
+
+Do **not** correct settled history in `resolved` issues. Their criteria describe what was done and why, and rewriting them destroys that. The rule is for text that still reads as a live instruction.
+
 ## The standard workflow (plan → implement → review)
 
 Issues move from filed to resolved through a **three-phase pipeline**. Each phase runs in a **fresh subagent** dispatched by the orchestrator, on the model that fits the work:
