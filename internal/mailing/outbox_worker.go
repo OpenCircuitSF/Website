@@ -104,27 +104,46 @@ const (
 // derivation entirely; charging it was the defect, not the fix.
 //
 // The bound instead charges every one of the outboxDefaultBatchSize rows
-// in a full batch — including the last row itself — its own worst-case
-// send time, sendMessageTimeout + writeStatusTimeout:
+// in a full batch — including the last row itself — the full delay a
+// predecessor contributes to the NEXT row's start, not just the time it
+// holds its own claim. A row holds its claim for sendMessageTimeout +
+// writeStatusTimeout = 35s, released at MarkSent, but RecordEvent (see
+// sendOne below) runs AFTER MarkSent and still delays when the next row's
+// send can begin — so a predecessor's real contribution to the next row's
+// wait is sendMessageTimeout + 2*writeStatusTimeout = 40s, not 35s. This
+// bound charges that 40s figure to every row in the batch, tail row
+// included:
 //
-//	outboxDefaultBatchSize * (sendMessageTimeout + writeStatusTimeout)
-//	= 20 * (30s + 5s) = 700s today.
+//	outboxDefaultBatchSize * (sendMessageTimeout + 2*writeStatusTimeout)
+//	= 20 * (30s + 2*5s) = 800s today.
 //
-// This is deliberately simple rather than the tightest possible bound (a
-// fully precise worst case also has to account for RecordEvent running
-// AFTER MarkSent inside sendOne, which still delays when the NEXT row's
-// send can start even though the claim itself is released at MarkSent —
-// see sendOne below). The asymmetry is why simple-and-generous is the
-// right choice here, not a tighter fit: this window being too LARGE only
-// costs recovery latency on the crash path — Stop already releases every
-// claim on a graceful shutdown, so OrphanSweep exists purely for a hard
-// kill — while too SMALL costs a duplicate send, #0254's failure mode.
-// Choose too large. If this margin is ever judged insufficient, the
-// correct fix is not a bigger multiplier here; it is making claimed_at
-// mean what a per-row window assumes, by re-stamping it immediately
-// before each row's own send (or claiming one row at a time) in
-// internal/outbox's shared claim path — a separate, larger change, not
-// built as part of this issue.
+// The true worst case is 19 predecessors at 40s each plus the tail row's
+// own 35s claim-hold: 19*40s + 35s = 795s. Charging every row — tail
+// included — the full 40s predecessor rate rather than trying to be exact
+// about the tail's shorter 35s contribution leaves 5s of real slack
+// instead of none. That is what this bound is: one that charges each
+// predecessor its full delay contribution, including the RecordEvent
+// tail — not a "deliberately simple" or "generous" figure relative to
+// some tighter one, since the previous 700s value here was BELOW the 795s
+// true worst case, not above it. What does still justify a larger window
+// over a smaller one is the cost asymmetry, unchanged from before: this
+// window being too LARGE only costs recovery latency on the crash path —
+// Stop already releases every claim on a graceful shutdown, so
+// OrphanSweep exists purely for a hard kill — while too SMALL costs a
+// duplicate send, #0254's failure mode. Choose too large.
+//
+// Even 800s is not, and cannot be made, a STRICT upper bound from these
+// constants alone. OutboxWorker.Run is started as
+// `go outboxWorker.Run(context.Background())` (cmd/opencircuit/main.go),
+// and pass's calls to store.ClaimDue and outboxEffectiveSendRate both run
+// on that context with no deadline of their own — including ClaimDue's
+// RETURNING scan, which executes after its UPDATE has already committed
+// claimed_at server-side. That is real, unbounded elapsed time between
+// the stamp and row 1's send even starting, so no expression over
+// outboxDefaultBatchSize, sendMessageTimeout, and writeStatusTimeout can
+// ever be a strict bound on claim age. Closing that gap is #0297's
+// territory (a per-row claimed_at re-stamp in internal/outbox's shared
+// claim path), not a bigger multiplier here.
 //
 // Expressed from the real package constants, not a hand-computed
 // literal, so raising outboxDefaultBatchSize or either timeout moves this
@@ -134,7 +153,7 @@ const (
 //
 // A var, not a const, so a test can shrink it; NOT sized against measured
 // machine load (CLAUDE.md §5).
-var outboxOrphanStaleAfter = time.Duration(outboxDefaultBatchSize) * (sendMessageTimeout + writeStatusTimeout)
+var outboxOrphanStaleAfter = time.Duration(outboxDefaultBatchSize) * (sendMessageTimeout + 2*writeStatusTimeout)
 
 // mailKinds is every outbox.Kind this worker's render switch knows how to
 // build a message for — i.e. every Kind EXCEPT outbox.KindSubscribeIntake

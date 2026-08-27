@@ -55,13 +55,13 @@ func outboxWorstCaseFullBatchAge(batchSize int, perRowBound time.Duration) time.
 // Proof this fails against reversion: pointing `got` at the pre-fix
 // formula, time.Duration(outboxDefaultBatchSize)*(time.Second/1) +
 // sendMessageTimeout + writeStatusTimeout (55s), against today's oracle
-// (700s) fails immediately — 55s does not exceed 700s. Verified by hand
+// (800s) fails immediately — 55s does not exceed 800s. Verified by hand
 // in a scratch copy before this file was committed; not left in the
 // tree, since a permanent copy of the reverted formula would itself be
 // another "same premise" oracle risk.
 func TestOutboxOrphanStaleAfterCoversFullBatch(t *testing.T) {
 	got := outboxOrphanStaleAfter
-	want := outboxWorstCaseFullBatchAge(outboxDefaultBatchSize, sendMessageTimeout+writeStatusTimeout)
+	want := outboxWorstCaseFullBatchAge(outboxDefaultBatchSize, sendMessageTimeout+2*writeStatusTimeout)
 	if got < want {
 		t.Fatalf("outboxOrphanStaleAfter (%s) does not cover the worst-case age of the last row in a full %d-row batch (%s) — OrphanSweep could release a still-live claim, leading to a duplicate send (#0254)",
 			got, outboxDefaultBatchSize, want)
