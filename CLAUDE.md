@@ -146,6 +146,23 @@ Implementation is Sonnet by default and stays Sonnet. Escalate an
 implementation pass to Opus only after the reviewer has bounced the same issue
 twice, and record the escalation in `## Work log`.
 
+**Read that trigger as two bounces on the same *design* problem, not two
+bounces of any kind** (settled 2026-08-27, over `#0284` and `#0285`). The
+distinguishing question is whether the next pass has to **decide** something or
+merely **apply** something. A pass handed the replacement expression, the target
+number, and a proved-green verification is transcription, and Sonnet is the
+right tool for it at a fraction of the cost — measured twice that day, both
+third attempts landing complete in about three minutes at roughly half the
+tokens of the passes before them.
+
+The corollary matters as much: **a bounce that specifies the remedy precisely
+enough is itself what keeps the next pass on Sonnet.** A reviewer that ends with
+"figure out the right value" has effectively chosen to escalate. Reviewers
+should write the remedy they want when they know it.
+
+Record the decision either way — a decision *not* to escalate after two bounces
+is worth the same `## Work log` line as a decision to escalate.
+
 ### Planning is selective, not automatic
 
 `Issues.md` describes planning as happening at filing time. These 64 issues were
