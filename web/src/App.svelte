@@ -105,9 +105,19 @@
     // while its fetch is still in flight -- see pageTitle.ts's "fallback"
     // entries) simply gets no focus move for this navigation; a disclosed
     // gap, not a silent one -- see issues/0238.md's `## Verification`.
+    // #0238 review (2afea58): heading?.focus() with the default
+    // preventScroll: false scrolled the heading into view AFTER
+    // restoreScroll() had already put the page back where the user was on a
+    // Back navigation -- and the throttled scroll listener then stamped
+    // that bogus offset into history.state.scrollY, destroying the saved
+    // position rather than merely overriding it for one paint (measured in
+    // real Safari: window.scrollY/history.state.scrollY went from 1200/1200
+    // to 0/0 after Back). preventScroll: true keeps the focus move purely
+    // an accessibility signal -- it does not touch scroll position -- so it
+    // composes with router.ts's restoreScroll instead of racing it.
     void tick().then(() => {
       const heading = document.querySelector('h1[tabindex="-1"]') as HTMLElement | null;
-      heading?.focus();
+      heading?.focus({ preventScroll: true });
     });
   });
 </script>
