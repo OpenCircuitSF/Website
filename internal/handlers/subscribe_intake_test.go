@@ -176,26 +176,38 @@ func TestSubscribeIntakeWorker_RecoversRowTheFastPathNeverProcessed(t *testing.T
 // review-bounce regression test (issues/0254.md ## Review notes). Commit
 // 4af0ea3 added a kinds filter to outbox.Store.ClaimDue but NOT to
 // OrphanSweep, and gave OrphanSweep a second caller — this file's own
-// intakePass — with a much shorter staleness window (intakeOrphanStaleAfter
-// = 20s) than internal/mailing.OutboxWorker's own sweep uses for the SAME
-// method (outboxOrphanStaleAfter = 70s, sized for that worker's legitimate
-// hold: sendMessageTimeout 30s + writeStatusTimeout 5s, doubled).
+// intakePass. At the time of that bug, intakePass's staleness window
+// (intakeOrphanStaleAfter) was 20s, much shorter than
+// internal/mailing.OutboxWorker's own sweep window for the SAME method
+// (outboxOrphanStaleAfter, 70s then). #0294 has since raised
+// intakeOrphanStaleAfter to (intakeBatchSize+1)*intakeRowTimeout = 210s
+// and #0284 raised outboxOrphanStaleAfter to 800s, for unrelated reasons
+// (both windows were derived from one row's bound rather than a batch's)
+// — see intakeOrphanStaleAfter's own doc comment (subscribe_intake.go).
+// The numbers below are historical, describing the reachable gap as it
+// existed at the time of the #0254 bug; the mechanism this test guards —
+// OrphanSweep must filter by kind, because ClaimDue already does — does
+// not depend on either window's current value, only on kind filtering,
+// which is what this test actually exercises.
 //
 // Before the fix, intakePass's unfiltered OrphanSweep(20s) reclaimed ANY
 // row stuck 'sending' past 20s — including a confirmation row internal/
 // mailing's worker was still legitimately holding mid-send at 25s, well
-// inside ITS OWN 70s window. Releasing that live claim is not cosmetic:
-// the in-flight send's eventual MarkSent requires status='sending', so it
-// affects zero rows (silently discarded by sendOne pre-#0254-review-fix),
-// the row stays 'queued', and the next mailing pass claims and sends it a
-// SECOND time — a duplicate confirmation, registration magic link, or
-// recovery link.
+// inside ITS OWN then-70s window. Releasing that live claim is not
+// cosmetic: the in-flight send's eventual MarkSent requires
+// status='sending', so it affects zero rows (silently discarded by
+// sendOne pre-#0254-review-fix), the row stays 'queued', and the next
+// mailing pass claims and sends it a SECOND time — a duplicate
+// confirmation, registration magic link, or recovery link.
 //
-// This seeds a confirmation row, puts it into 'sending' with a claimed_at
-// 25 seconds old (past intake's 20s window, comfortably inside mailing's
-// 70s one — the exact reachable gap the review proved, not an edge case),
-// and calls h.intakePass() directly — a deliberate, documented exception to
-// this file's usual "poll for the background worker's outcome" discipline
+// This seeds a confirmation row and puts it into 'sending' with a
+// claimed_at 25 seconds old — the same backdate the original review used,
+// kept for continuity with the bug's own reproduction rather than any
+// current relationship to either window's value (25s is now comfortably
+// inside BOTH windows; the fix under test is the kind filter, not the
+// staleness comparison) — and calls h.intakePass() directly, a deliberate,
+// documented exception to this file's usual "poll for the background
+// worker's outcome" discipline
 // (see TestSubscribeIntakeWorker_RecoversRowTheFastPathNeverProcessed's own
 // doc comment for why that discipline exists for ClaimDue races). It does
 // not apply here: OrphanSweep's UPDATE is idempotent and scoped by kind, so

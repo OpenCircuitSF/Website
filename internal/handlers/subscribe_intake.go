@@ -93,17 +93,103 @@ const (
 	// suppression/FindByEmail reads plus dispatchMutation), the same role
 	// mutateJobTimeout plays for the fast path.
 	intakeRowTimeout = mutateJobTimeout
-
-	// intakeOrphanStaleAfter mirrors internal/mailing's
-	// outboxOrphanStaleAfter derivation shape (a small multiple of the
-	// worker's own per-row bound) — sized against intakeRowTimeout, not
-	// against measured load (CLAUDE.md §5). A row this poller claims but
-	// never finishes (this process killed mid-batch) is released back to
-	// 'queued' by OrphanSweep once claimed_at is this stale, the same
-	// safety net #0122 established for internal/mailing.SendStore and
-	// #0126 copied for internal/outbox generally.
-	intakeOrphanStaleAfter = 2 * intakeRowTimeout
 )
+
+// intakeOrphanStaleAfter bounds how long a claimed-but-unfinished
+// KindSubscribeIntake row is treated as still legitimately in flight
+// before OrphanSweep (#0122) releases it back to 'queued'. Releasing a row
+// that is still genuinely being reprocessed is the #0254 failure mode: a
+// sweep releases a live claim, and the recovery poller then reprocesses
+// the row a second time while the first pass is still running on it.
+//
+// #0294: the original derivation, 2 * intakeRowTimeout, sized itself
+// against ONE row's worst case. But intakePass claims a whole batch (up to
+// intakeBatchSize rows) with ONE outbox.Store.ClaimDue call — the same
+// batch-stamping mechanism #0284 found in internal/mailing's own worker —
+// and intakePass then reprocesses that batch serially, one row at a time,
+// so the last row's claim age when it finishes includes however long
+// every row ahead of it took, not just its own bound.
+//
+// Verified before deriving anything (per this issue's own instruction,
+// since #0295 found a sibling issue's identical-looking premise was
+// false): subscribe_intake.go's poller uses outbox.Store.ClaimDue, the
+// SAME batch-stamping method internal/mailing/outbox_worker.go's pass
+// uses — not internal/mailing/worker.go's SendStore.ClaimRow, which
+// stamps claimed_at per recipient and is why #0295 found no batching flaw
+// there. So this file is #0284's family, confirmed by reading
+// intakePass's own ClaimDue call below, not assumed from the issue title.
+//
+// Unlike #0284's fix, there is no rate limiter here at all to rule out as
+// a term: intakePass's loop calls processIntakeRow back-to-back with
+// nothing pacing it. Each row's ENTIRE reprocessing — the fresh
+// IsSuppressed and FindByEmail reads, dispatchMutation, and the final
+// MarkSent — runs inside one context.WithTimeout(h.sendCtx,
+// intakeRowTimeout) (processIntakeRow, below), so intakeRowTimeout is
+// both a row's failure ceiling AND, under normal operation, an upper
+// bound on how long that row can occupy the loop before control passes to
+// the next row. This bound charges every row in a full batch, tail row
+// included, that full intakeRowTimeout:
+//
+//	intakeBatchSize * intakeRowTimeout = 20 * 10s = 200s
+//
+// for the batch's own row-by-row processing — plus one more
+// intakeRowTimeout for intakePass's ClaimDue call itself (claimCtx
+// below), which is where the batch's shared claimed_at is actually
+// stamped. outbox.Store.ClaimDue's single `UPDATE ... RETURNING` sets
+// claimed_at = now() near the start of that one statement (an implicit,
+// single-statement transaction — now() is that transaction's start time),
+// but the call does not return control to intakePass until the RETURNING
+// rows have been scanned back over the wire: real elapsed time that
+// happens BEFORE row 1's own intakeRowTimeout clock even starts, and that
+// is charged to no row above.
+//
+// Unlike #0284's equivalent gap — outbox_worker.go's pass calls ClaimDue
+// on ctx from `go outboxWorker.Run(context.Background())`, an entirely
+// undeadlined context, so THAT gap is unbounded and #0284's own doc
+// comment says explicitly no formula over its constants can ever close
+// it — THIS gap is bounded: intakePass's ClaimDue call runs inside
+// claimCtx, context.WithTimeout(h.sendCtx, intakeRowTimeout), so it
+// cannot exceed intakeRowTimeout without the call itself failing and
+// returning no rows (and therefore no batch) at all. A real but
+// CLOSEABLE term, so it is charged here rather than left as an unclosed
+// residual:
+//
+//	intakeOrphanStaleAfter = (intakeBatchSize + 1) * intakeRowTimeout
+//	                       = 21 * 10s = 210s
+//
+// Even 210s is not a claim that context cancellation is instantaneous.
+// It assumes pgx and the network underneath it honor ctx's deadline
+// promptly enough that a stuck suppression/FindByEmail/dispatchMutation/
+// MarkSent/ClaimDue call actually returns at or near intakeRowTimeout
+// rather than materially later — a TCP read the OS cannot be made to
+// abandon on cancellation is a residual no Go-level constant formula
+// closes. That is the same CLASS of caveat #0284's final comment names
+// for outboxOrphanStaleAfter (context.Background() there is a stronger,
+// unconditional version of the same underlying assumption); not fixed
+// here, and not this file's gap to close.
+//
+// Considered and rejected: re-stamping claimed_at per row — as
+// internal/mailing/worker.go's SendStore.ClaimRow already does, per #0295
+// — would make a per-row window honest and small instead of this
+// batch-wide one. That is a change to internal/outbox's shared ClaimDue
+// path, tracked separately (#0297), not built here. #0284 made the same
+// call for outboxOrphanStaleAfter, for the same reason: this window being
+// too LARGE only costs recovery latency on the crash path (h.sendCtx
+// cancelling on a graceful Close lets intakePass finish or abandon its
+// current batch in an orderly way; OrphanSweep exists for a hard kill),
+// while too SMALL risks a duplicate mutation dispatch, #0254's failure
+// mode. Choose too large.
+//
+// Expressed from the real package constants, not a hand-computed
+// literal, so raising intakeBatchSize or intakeRowTimeout moves this
+// window automatically. See
+// TestIntakeOrphanStaleAfterCoversFullBatch
+// (subscribe_intake_orphan_stale_after_test.go) for the invariant this
+// maintains, checked against an independently expressed worst case.
+//
+// A var, not a const, so a test can shrink it; NOT sized against measured
+// machine load (CLAUDE.md §5).
+var intakeOrphanStaleAfter = time.Duration(intakeBatchSize+1) * intakeRowTimeout
 
 // subscribeIntakePayload is a KindSubscribeIntake row's payload — the
 // request-shape facts Subscribe learned synchronously (subscribe.go) and
