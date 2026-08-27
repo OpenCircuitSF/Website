@@ -268,8 +268,9 @@ func TestOutbox_AbandonsAtMaxRetries_RetainsLastError(t *testing.T) {
 
 	// #0285: scoped to a kind unique to this test so the ClaimDue calls
 	// below — which assert an exact claimed count — cannot observe a row
-	// another package's concurrently-running test wrote to this same
-	// shared outbound_queue table.
+	// enqueued under a real, shared Kind by this package's own future
+	// tests or by another package's tests against this same
+	// outbound_queue table (see distinctKind's doc comment).
 	kind := distinctKind(t)
 	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
@@ -334,9 +335,10 @@ func TestOutbox_MarkRetryOrAbandon_RetriesBeforeMax(t *testing.T) {
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	// #0285: scoped to a kind unique to this test — see distinctKind's
-	// doc comment for why an unscoped/shared-kind ClaimDue here can
-	// observe another package's concurrently-running test.
+	// #0285: scoped to a kind unique to this test; see distinctKind's
+	// doc comment for why a real, shared Kind is surface this package
+	// does not own and an unscoped ClaimDue here should not claim
+	// against it.
 	kind := distinctKind(t)
 	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
@@ -394,9 +396,10 @@ func TestOutbox_MarkSent_ClearsErrorFromFailedAttempt(t *testing.T) {
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	// #0285: scoped to a kind unique to this test — see distinctKind's
-	// doc comment for why an unscoped/shared-kind ClaimDue here can
-	// observe another package's concurrently-running test.
+	// #0285: scoped to a kind unique to this test; see distinctKind's
+	// doc comment for why a real, shared Kind is surface this package
+	// does not own and an unscoped ClaimDue here should not claim
+	// against it.
 	kind := distinctKind(t)
 	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
@@ -481,9 +484,9 @@ func TestOutbox_MarkDone_ClearsErrorFromSupersededAttempt(t *testing.T) {
 	// #0285: a distinct kind, not the real KindSubscribeIntake — Store's
 	// ClaimDue/MarkRetryOrAbandon/MarkDone never branch on Kind, so this
 	// loses no coverage while making the exact claimed-row count below
-	// immune to internal/handlers' own concurrently-running
-	// KindSubscribeIntake tests against this same shared table (see
-	// distinctKind's doc comment).
+	// immune to real KindSubscribeIntake rows internal/handlers' own
+	// tests enqueue into this same shared table (see distinctKind's doc
+	// comment).
 	kind := distinctKind(t)
 	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
@@ -614,9 +617,10 @@ func TestOutbox_MarkSent_RecordsSendAfterClaimReleasedMidSend(t *testing.T) {
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	// #0285: scoped to a kind unique to this test — see distinctKind's
-	// doc comment for why an unscoped ClaimDue here can observe another
-	// package's concurrently-running test.
+	// #0285: scoped to a kind unique to this test; see distinctKind's
+	// doc comment for why a real, shared Kind is surface this package
+	// does not own and an unscoped ClaimDue here should not claim
+	// against it.
 	kind := distinctKind(t)
 	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
@@ -702,9 +706,10 @@ func TestOutbox_MarkSent_DoesNotResurrectAbandonedRow(t *testing.T) {
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	// #0285: scoped to a kind unique to this test — see distinctKind's
-	// doc comment for why an unscoped ClaimDue here can observe another
-	// package's concurrently-running test.
+	// #0285: scoped to a kind unique to this test; see distinctKind's
+	// doc comment for why a real, shared Kind is surface this package
+	// does not own and an unscoped ClaimDue here should not claim
+	// against it.
 	kind := distinctKind(t)
 	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
@@ -815,15 +820,17 @@ func TestOutbox_Release_RequeuesImmediately(t *testing.T) {
 // one whose claim predates staleAfter.
 //
 // #0285: the sweep and its exact swept-count assertion are scoped to a
-// kind unique to this test (see distinctKind's doc comment) — the table is
-// shared across packages within a test run, and an earlier version of this
-// test asserted swept==1 from an UNSCOPED sweep, which counted every stale
-// 'sending' row in the whole table, including ones a different package's
-// concurrently-running test had left behind. That is not the CLAUDE.md §5
-// "machine is busy" class of flake: it fails on an idle machine too, given
-// the wrong interleaving, because it asserts a count over state this test
-// does not own. TestOutbox_OrphanSweep_Unscoped_SweepsAcrossKinds below
-// keeps the unscoped code path covered without depending on an exact total.
+// kind unique to this test (see distinctKind's doc comment). An earlier
+// version of this test asserted swept==1 from an UNSCOPED sweep, which
+// counted every stale 'sending' row in the whole table — a real Kind, or a
+// future test in this same package, is shared surface this test does not
+// own. No concrete failing interleaving of the old unscoped assertion has
+// been demonstrated, and internal/testdb's locking model rules out the
+// cross-package one an earlier draft of this comment claimed (see
+// distinctKind's doc comment). This scoping is defence in depth against
+// that bad assertion shape, not a fix for an observed flake.
+// TestOutbox_OrphanSweep_Unscoped_SweepsAcrossKinds below keeps the
+// unscoped code path covered without depending on an exact total.
 func TestOutbox_OrphanSweep_DoesNotUnclaimLiveRow(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
@@ -878,15 +885,14 @@ func TestOutbox_OrphanSweep_DoesNotUnclaimLiveRow(t *testing.T) {
 // path, since it remains documented behaviour that #0281 may formalise.
 //
 // This does NOT assert an exact swept count — an unscoped sweep by
-// definition affects rows this test does not own, in any concurrently
-// running package's test against the same shared database, so an exact
-// total is exactly the assertion #0285 removed above. Instead it proves
-// the two properties that matter and belong to this test's own rows: its
-// stale row is included in an unscoped sweep (swept >= 1 is too weak on
-// its own — a concurrent sweep from another package's test could
-// coincidentally produce a nonzero count without ever having touched this
-// row — so the row's own resulting status is checked directly), and its
-// live row is not.
+// definition affects every stale 'sending' row in the table, not just
+// this test's own two, so an exact total is exactly the assertion #0285
+// removed above. Instead it proves the two properties that matter and
+// belong to this test's own rows: its stale row is included in an
+// unscoped sweep (swept >= 1 is too weak on its own — some other stale
+// row already in the table could coincidentally produce a nonzero count
+// without ever having touched this row — so the row's own resulting
+// status is checked directly), and its live row is not.
 func TestOutbox_OrphanSweep_Unscoped_SweepsAcrossKinds(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
@@ -1071,11 +1077,11 @@ func TestOutbox_LatestByRecipients_EmptyRecipientsReturnsEmptyMapWithoutQuery(t 
 // KindRegistration) and a relative before/after delta rather than an
 // absolute count, which is why it was not the primary fix target — but
 // internal/mailing's own outbox_worker_test.go abandons real
-// KindConfirmation rows too, so a concurrently-running test in that
-// package could still land inside this test's before/after window and
-// move the "before" baseline out from under it. Two kinds unique to this
-// test close that window entirely, the same way distinctKind does for the
-// exact-claimed-count tests above.
+// KindConfirmation rows too, and a real Kind is shared surface this
+// package does not own (see distinctKind's doc comment), so the "before"
+// baseline is not this test's alone to reason about. Two kinds unique to
+// this test close that gap entirely, the same way distinctKind does for
+// the exact-claimed-count tests above.
 func TestOutbox_AbandonedCountByKind_ScopedToKind(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
