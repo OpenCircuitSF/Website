@@ -22,18 +22,29 @@
 // outboxOrphanStaleAfter is its own var, not shared with worker.go's
 // orphanStaleAfter — a future change to one worker's timeout budget must
 // not silently retune the other's staleness window. The two derivations
-// are NOT identical (#0284): worker.go's still sizes itself against one
-// campaign row's worst case (tracked separately as #0295 — the same
-// batching flaw #0284 fixed here), but this worker's claimed_at is
-// stamped ONCE per whole batch (ClaimDue's single UPDATE) while pass
-// sends that batch SERIALLY, one row at a time. A predecessor's real
-// contribution to how long the last row has waited is bounded by ITS OWN
-// worst-case send time, not by the rate limiter's interval — the limiter
-// only ever makes a send wait LONGER than the interval, never shorter, so
-// it cannot be the dominant term once a single row's own bound exceeds a
-// second (it does: 35s). outboxOrphanStaleAfter's own doc comment, below,
-// has the batch-aware arithmetic and says why the rate limiter drops out
-// of it entirely.
+// are NOT identical (#0284), and #0295 checked why in detail rather than
+// assuming the two workers match: this worker's claimed_at is stamped
+// ONCE per whole batch (ClaimDue's single UPDATE) while pass sends that
+// batch SERIALLY, one row at a time, so a predecessor's real processing
+// time genuinely delays how long the LAST row's claim has been held. A
+// predecessor's contribution is bounded by ITS OWN worst-case send time,
+// not by the rate limiter's interval — the limiter only ever makes a send
+// wait LONGER than the interval, never shorter, so it cannot be the
+// dominant term once a single row's own bound exceeds a second (it does:
+// 35s). outboxOrphanStaleAfter's own doc comment, below, has the
+// batch-aware arithmetic and says why the rate limiter drops out of it
+// entirely.
+//
+// worker.go's *Worker does NOT share this shape, and #0295's finding —
+// checked against the code, not assumed from this worker's defect — is
+// that it never did: *Worker's ClaimBatch never claims a row or touches
+// claimed_at at all; SendStore.ClaimRow performs the atomic claim
+// per-recipient, individually, at the exact moment that recipient's own
+// send begins (worker.go's orphanStaleAfter doc comment has the full
+// story). So batch size never enters worker.go's bound, and there was no
+// batching flaw there for #0295 to fix — the two orphanStaleAfter
+// derivations differ because the two workers' claim mechanisms differ,
+// not because one implementer's judgment call diverged from the other's.
 //
 // # Rate limiting is this worker's own, not shared with *Worker's
 //

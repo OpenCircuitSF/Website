@@ -346,6 +346,73 @@ func TestSendStore_ClaimBatch_GroupsSkipsByReason(t *testing.T) {
 	}
 }
 
+// TestSendStore_ClaimBatch_LeavesRowsQueuedUntilClaimRow is #0295's
+// regression guard, not a test of #0049's skip grouping (that is
+// TestSendStore_ClaimBatch_GroupsSkipsByReason above). It proves the
+// architectural fact worker.go's orphanStaleAfter doc comment now rests
+// on: ClaimBatch never claims a row — it only SELECTs and rechecks
+// eligibility, and every still-eligible row it returns is left exactly as
+// it found it, status='queued' and claimed_at NULL. The atomic claim
+// (status='sending', claimed_at=now()) happens separately, per row, in
+// ClaimRow — proved by TestSendStore_ClaimRow_LeavesQueuedExactlyOnce
+// above.
+//
+// This is what makes #0295's finding — that worker.go does NOT have
+// outbox_worker.go's #0284 batch-claim defect — a checked fact rather than
+// an assumption: outbox.Store.ClaimDue stamps claimed_at once for a whole
+// batch (the defect #0284 fixed); this store's ClaimBatch stamps nothing
+// at all. If ClaimBatch is ever changed to claim atomically the way
+// outbox's ClaimDue does — reintroducing the very flaw #0295 was filed to
+// check for — this test fails immediately, which is the signal that
+// worker.go's orphanStaleAfter would then need #0284/#0294's batch-aware
+// treatment instead of the single-row bound it uses today.
+func TestSendStore_ClaimBatch_LeavesRowsQueuedUntilClaimRow(t *testing.T) {
+	pool := testPool(t)
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	forceSending(t, pool, campaignID)
+	store := NewSendStore(pool, NewAudienceStore(pool), dbSettings{pool: pool}, nil, testWorkerBaseURL, testWorkerListDomain, testWorkerReplyTo)
+
+	sendID, _, email := seedQueuedSend(t, pool, campaignID)
+
+	recipients, err := store.ClaimBatch(context.Background(), campaignID, 10)
+	if err != nil {
+		t.Fatalf("ClaimBatch: %v", err)
+	}
+	if len(recipients) != 1 || recipients[0].SendID != sendID || recipients[0].Email != email {
+		t.Fatalf("ClaimBatch() recipients = %+v, want exactly [%d]", recipients, sendID)
+	}
+
+	if got := sendRowStatus(t, pool, sendID); got != "queued" {
+		t.Fatalf("status after ClaimBatch = %q, want queued — ClaimBatch must not claim rows itself (worker.go's orphanStaleAfter doc comment depends on this)", got)
+	}
+	var claimedAt *time.Time
+	if err := pool.QueryRow(context.Background(),
+		`SELECT claimed_at FROM email_sends WHERE id = $1`, sendID,
+	).Scan(&claimedAt); err != nil {
+		t.Fatalf("read claimed_at: %v", err)
+	}
+	if claimedAt != nil {
+		t.Fatalf("claimed_at after ClaimBatch = %v, want NULL — ClaimBatch must not stamp a batch-wide claim; only ClaimRow may", claimedAt)
+	}
+
+	// ClaimRow is the ONLY thing that claims — and it does so per row,
+	// individually, exactly as sendOne calls it.
+	if _, claimed, err := store.ClaimRow(context.Background(), sendID); err != nil || !claimed {
+		t.Fatalf("ClaimRow after ClaimBatch: claimed=%v err=%v", claimed, err)
+	}
+	if got := sendRowStatus(t, pool, sendID); got != "sending" {
+		t.Fatalf("status after ClaimRow = %q, want sending", got)
+	}
+	if err := pool.QueryRow(context.Background(),
+		`SELECT claimed_at FROM email_sends WHERE id = $1`, sendID,
+	).Scan(&claimedAt); err != nil {
+		t.Fatalf("read claimed_at after ClaimRow: %v", err)
+	}
+	if claimedAt == nil {
+		t.Fatal("claimed_at after ClaimRow = NULL, want stamped")
+	}
+}
+
 func TestSendStore_GatherPreflight_ReadsCampaignAndSettings(t *testing.T) {
 	pool := testPool(t)
 	workerTestFixture(t, pool)

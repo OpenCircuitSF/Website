@@ -112,17 +112,76 @@ const (
 
 // orphanStaleAfter bounds how long a row may legitimately sit in 'sending'
 // before OrphanSweep treats it as abandoned by a crashed worker rather than
-// held by a live one (#0122). A live worker can hold a row in 'sending' for
-// at most sendMessageTimeout (the SES call's own detached-context bound)
-// plus writeStatusTimeout (the status write immediately after it) before
-// something — success, a retryable failure, or a terminal failure — moves
-// the row back out of 'sending'. orphanStaleAfter doubles that legitimate
-// window rather than adding a flat margin, so ordinary scheduling jitter
-// right at the boundary can never be mistaken for a crash. A var, not a
-// const, so a test can shrink it; NOT sized against measured machine load
-// (CLAUDE.md §5) — it is sized against the two hard timeouts that already
-// bound one send attempt, the same way workerCloseTimeout is sized against
-// one in-flight message rather than a benchmark.
+// held by a live one (#0122).
+//
+// # No batch flaw here — claimed_at is stamped per row, not per batch (#0295)
+//
+// #0284 found that outbox_worker.go's outboxOrphanStaleAfter was sized
+// against ONE message's worst case while outbox.Store.ClaimDue stamps
+// claimed_at ONCE for a WHOLE batch that then sends serially — so the last
+// row in a batch had really been held far longer than the single-message
+// derivation accounted for. #0295 was filed to check whether this worker's
+// own orphanStaleAfter has the identical defect.
+//
+// It does not, checked directly rather than assumed: SendStore.ClaimBatch
+// (worker_store.go) never changes a row's status or touches claimed_at at
+// all — its SELECT ... FOR UPDATE SKIP LOCKED + RecheckEligibleTx commits
+// with every still-eligible row still 'queued'. The actual atomic claim —
+// status='sending', claimed_at=now() — is SendStore.ClaimRow, and it is the
+// FIRST statement inside sendOne (below), called once per recipient,
+// individually, at the exact moment that recipient's own processing
+// begins. So batch size never enters this bound at all: each row's
+// claimed_at reflects when ITS OWN send started, never an earlier
+// batch-wide stamp, regardless of how many predecessors already ran ahead
+// of it in drainLoop's serial loop. This is, architecturally, the per-row
+// claimed_at re-stamp #0284's own doc comment names as the alternative to
+// a large batch-derived window — worker.go has simply always worked this
+// way, for the orthogonal reason ClaimBatch's own doc comment gives:
+// holding one transaction open across a batch's SES calls would roll back
+// every status update on a mid-batch crash, turning a one-message
+// duplicate window into a batch-sized one.
+// TestSendStore_ClaimBatch_LeavesRowsQueuedUntilClaimRow
+// (worker_store_test.go) is the regression guard: if ClaimBatch is ever
+// changed to claim atomically the way outbox's ClaimDue does, that test
+// fails immediately — the signal this var would then need #0284/#0294's
+// batch-aware treatment instead of the single-row one below.
+//
+// # The single-row bound
+//
+// A live worker can hold ONE row in 'sending' for at most
+// sendMessageTimeout (the SES call's own detached, bounded sendCtx) plus
+// writeStatusTimeout (MarkSent's own detached, bounded writeCtx
+// immediately after) = 35s today, before MarkSent's UPDATE moves the row
+// OUT of 'sending' — unlike outbox_worker.go, RecordEvent here runs AFTER
+// that transition has already committed (sendOne, below: MarkSent then
+// RecordEvent), so RecordEvent's own writeStatusTimeout cannot make this
+// row look more stale than it is, and — because there is no batch-wide
+// claim — it cannot delay a "next row" either, the way it does in
+// outbox_worker.go. orphanStaleAfter doubles that legitimate 35s window
+// rather than adding a flat margin, so ordinary scheduling jitter right at
+// the boundary can never be mistaken for a crash: a full extra 35s of
+// margin, not the ~1s (and, briefly, negative) margin
+// outboxOrphanStaleAfter's now-superseded early attempts left themselves.
+//
+// # Still not a STRICT bound
+//
+// Worker.Run is started as `go sendWorker.Run(context.Background())`
+// (cmd/opencircuit/main.go), and drainLoop's calls to ClaimRow itself, and
+// — on the retryable/terminal-row failure paths — MarkFailedRow and
+// MarkRetryOrFailed, all run on that plain ctx rather than a bounded
+// detached context the way the success path's sendCtx/writeCtx are. A slow
+// or hanging round trip on any of THOSE calls is therefore not
+// deadline-bound at all — the same undeadlined-context residual #0284
+// named for outboxOrphanStaleAfter. No expression over sendMessageTimeout
+// and writeStatusTimeout is ever a strict bound for that reason;
+// tightening it would mean giving those calls their own detached,
+// timeout-bounded contexts, which is a real, separate change outside this
+// doc comment's scope — worth its own issue if it is ever wanted.
+//
+// A var, not a const, so a test can shrink it; NOT sized against measured
+// machine load (CLAUDE.md §5) — it is sized against the two hard timeouts
+// that already bound one send attempt, the same way workerCloseTimeout is
+// sized against one in-flight message rather than a benchmark.
 var orphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 
 // CampaignProgress is one snapshot of a campaign's send progress — the seam

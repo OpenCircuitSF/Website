@@ -627,8 +627,10 @@ func TestOutbox_Release_RequeuesClaimedRow(t *testing.T) {
 
 	// Simulate a worker that claimed this row and then the process was
 	// asked to stop before it finished sending — exactly the state
-	// OutboxWorker.Stop's release path exists for.
-	if _, err := store.ClaimDue(context.Background(), 10); err != nil {
+	// OutboxWorker.Stop's release path exists for. Scoped to the one kind
+	// enqueued above (#0281) — an unscoped ClaimDue outside internal/outbox
+	// claims every kind by default, #0254's failure mode.
+	if _, err := store.ClaimDue(context.Background(), 10, outbox.KindConfirmation); err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
 	var status string

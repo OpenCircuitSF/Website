@@ -180,8 +180,10 @@ func TestAdminPending_List_ReflectsRealOutboundQueueState(t *testing.T) {
 		t.Fatalf("Enqueue: %v", err)
 	}
 	// MarkSent only transitions a CLAIMED (status='sending') row — claim it
-	// first, mirroring the outbox package's own worker-drain tests.
-	if _, err := outboxStore.ClaimDue(context.Background(), 100); err != nil {
+	// first, mirroring the outbox package's own worker-drain tests. Scoped
+	// to the one kind enqueued above (#0281) — an unscoped ClaimDue outside
+	// internal/outbox claims every kind by default, #0254's failure mode.
+	if _, err := outboxStore.ClaimDue(context.Background(), 100, outbox.KindConfirmation); err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
 	if done, err := outboxStore.MarkSent(context.Background(), queueID, "msg-id"); err != nil {
