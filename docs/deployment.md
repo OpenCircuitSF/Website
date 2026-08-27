@@ -445,8 +445,12 @@ export DATABASE_URL='postgres://opencircuit:<password>@localhost:5432/opencircui
 migrate -path migrations -database "$DATABASE_URL" up
 ```
 
-This repo currently ships migrations `000001`–`000020`, applied in order.
-Run this again on every deploy that adds new migration files — check first:
+The current on-disk migration range lives in one place, guarded against
+drift by `internal/db/docs_parity_test.go`'s `TestDatabaseDocMigrationParity`:
+see `docs/database.md`'s migration table — do not restate the range here, it
+went three migrations stale the last time it was a second copy (`#0301`).
+Apply them in order. Run this again on every deploy that adds new migration
+files — check first:
 
 ```bash
 git diff --name-only <last-deployed-sha>..HEAD -- migrations/   # any output => a migration is needed

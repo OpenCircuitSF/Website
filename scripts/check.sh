@@ -10,8 +10,9 @@
 #     scripts/check.sh guards                # the standalone shell guard tests (see below)
 #
 # `guards` runs scripts/check_guard_test.sh, scripts/testdb_gc_guard_test.sh,
-# scripts/dev_guard_test.sh, and scripts/db_reset_guard_test.sh — not part of
-# any other mode, since
+# scripts/dev_guard_test.sh, scripts/db_reset_guard_test.sh, and
+# scripts/go_file_visit_floor_guard_test.sh (#0300) — not part of any other
+# mode, since
 # #0117's third review measured dev_guard_test.sh alone at ~48s and binding
 # :5173 in several parts, which does not belong in every ordinary run. #0207
 # named the actual defect this solves: two prior guard tests
@@ -867,6 +868,11 @@ case "$MODE" in
        step "scripts/testdb_gc_guard_test.sh (#0150)"; run scripts/testdb_gc_guard_test.sh
        step "scripts/dev_guard_test.sh (#0117)";        run scripts/dev_guard_test.sh
        step "scripts/db_reset_guard_test.sh (#0207)";   run scripts/db_reset_guard_test.sh
+       # #0300: an external oracle for the internal/handlers guard family's
+       # "plausible file count" floor constants (#0275) -- pure filesystem
+       # reads, no database, sub-second. See its own header for why a Go
+       # test reading its own floor constant cannot do this job.
+       step "scripts/go_file_visit_floor_guard_test.sh (#0300)"; run scripts/go_file_visit_floor_guard_test.sh
        ;;
   all) step "go build"; runpipe "go build ./... 2>&1 | tail -$TAIL"
        step "go vet";   runpipe "go vet ./... 2>&1 | tail -$TAIL"
