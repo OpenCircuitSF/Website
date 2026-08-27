@@ -14,19 +14,35 @@ func uniqueRecipient(t *testing.T) string {
 	return fmt.Sprintf("outbox-test-%d@example.com", testdb.Unique())
 }
 
-// distinctKind returns a Kind unique to this test run (#0285). Test
-// databases are per-agent but shared ACROSS PACKAGES within a run
-// (scripts/check.sh forces -p 2), and internal/mailing and
-// internal/handlers both enqueue real rows — including outbox.KindConfirmation
+// distinctKind returns a Kind unique to this test run (#0285).
+//
+// This is NOT defence against internal/mailing or internal/handlers running
+// concurrently with this package's tests — they cannot. Every DB-backed
+// package's TestMain calls internal/testdb.Lock() on the same fixed
+// advisory-lock key, and that package's own doc comment says plainly that
+// "only one package can hold the lock at a time, so they run one-at-a-time
+// even under `go test ./...`" — measured directly during #0285's review by
+// launching two `go test` binaries against one database and polling
+// pg_locks: one holder, one blocked waiter, never overlapping. This
+// package's own main_test.go also TRUNCATEs outbound_queue on entry while
+// holding that lock, so even sequential residue from an earlier package's
+// run is gone before this package's first test executes.
+//
+// The real reason to scope by a distinct kind: it makes each assertion
+// about rows the test itself created, independent of anything else that
+// might be in the table — a future test added to THIS package, a future run
+// that stops truncating on entry, or any other change to the locking or
+// truncation model above. outbound_queue.kind carries no CHECK constraint
+// (see the package doc comment), so a value no production code ever
+// enqueues is exactly as valid a row as any real Kind, and nothing but this
+// test's own Enqueue calls can ever produce one. internal/mailing and
+// internal/handlers do enqueue real rows — including outbox.KindConfirmation
 // and outbox.KindSubscribeIntake — into this same outbound_queue table from
-// their own concurrently-running tests. An assertion that depends on an
-// exact affected-row count from an operation scoped only by one of the real
-// Kind values (or not scoped by kind at all) can therefore observe rows a
-// different package's test wrote a moment earlier, and fail for a reason
-// that has nothing to do with this package. outbound_queue.kind carries no
-// CHECK constraint (see the package doc comment), so a value no production
-// code ever enqueues is exactly as valid a row as any real Kind, and
-// nothing but this test's own Enqueue calls can ever produce one.
+// their own DB-backed tests (confirmed by grep), which is exactly why a
+// test in THIS package must never claim or count against those real Kind
+// values: not because those other packages' tests could be running at the
+// same moment, but because a real Kind is shared surface this package does
+// not own, and scoping to it alone is not scoping at all.
 func distinctKind(t *testing.T) Kind {
 	t.Helper()
 	return Kind(fmt.Sprintf("test-outbox-%d", testdb.Unique()))
@@ -541,11 +557,21 @@ func TestOutbox_MarkDone_ClearsErrorFromSendingState(t *testing.T) {
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	id, err := store.Enqueue(ctx, Item{Kind: KindSubscribeIntake, Recipient: uniqueRecipient(t)})
+	// #0285 review, finding 2: a distinct kind, not the real
+	// KindSubscribeIntake — Store's ClaimDue/MarkDone never branch on Kind,
+	// so this loses no coverage. An unscoped-by-id ClaimDue(ctx, 10,
+	// KindSubscribeIntake) over the real Kind can claim another test's
+	// deliberately-seeded due intake row out from under it (see
+	// distinctKind's doc comment on why a real Kind is shared surface this
+	// package does not own) — exactly the sibling shape
+	// TestOutbox_MarkDone_ClearsErrorFromSupersededAttempt's own comment,
+	// three functions earlier, already warns against.
+	kind := distinctKind(t)
+	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	if _, err := store.ClaimDue(ctx, 10, KindSubscribeIntake); err != nil {
+	if _, err := store.ClaimDue(ctx, 10, kind); err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
 	// Simulate a stray error already sitting on a 'sending' row (defensive

@@ -339,13 +339,25 @@ func (s *Store) ClaimDue(ctx context.Context, limit int, kinds ...Kind) ([]Row, 
 //
 // # #0283 — the WHERE predicate admits 'sending' OR 'queued', not just 'sending'
 //
-// The call site (OutboxWorker.sendOne) always calls MarkSent synchronously,
-// immediately after a real SES call that just succeeded for THIS row — so
-// every invocation follows a genuine send, never a stale or speculative one.
-// The only question is what status the row is allowed to be in by the time
-// this UPDATE runs, since something else may have moved it between the
-// ClaimDue that handed sendOne this row and the MarkSent that records the
-// outcome.
+// There are TWO call sites, and the safety argument below rests on both, not
+// just the first one found by grep:
+//
+//   - internal/mailing.OutboxWorker.sendOne calls MarkSent synchronously,
+//     immediately after a real SES call that just succeeded for THIS row.
+//   - internal/handlers.SubscribeHandler.processIntakeRow
+//     (subscribe_intake.go) calls MarkSent for KindSubscribeIntake rows,
+//     which are NOT email and involve no SES call at all — see that Kind's
+//     doc comment above. There, "sent" means "dispatchMutation ran to
+//     completion for this row", not "SES accepted a message".
+//
+// What both call sites actually guarantee, and what this predicate depends
+// on, is narrower than "a real SES call": every invocation follows an
+// operation that genuinely completed for this row — a successful
+// mailer.Send for the email kinds, or a finished dispatchMutation call for
+// KindSubscribeIntake — never a stale or speculative one. The only question
+// is what status the row is allowed to be in by the time this UPDATE runs,
+// since something else may have moved it between the ClaimDue that handed
+// the caller this row and the MarkSent that records the outcome.
 //
 // #0283 was filed because the strict original guard (status='sending' only)
 // meant a lost claim produced a genuine duplicate send: the message had
@@ -368,15 +380,36 @@ func (s *Store) ClaimDue(ctx context.Context, limit int, kinds ...Kind) ([]Row, 
 //   - 'sending' — the expected case: this row is still claimed by the
 //     goroutine that is calling MarkSent. Admitted, unchanged from before.
 //   - 'queued' — the claim was released or stolen back to 'queued' while the
-//     send this call just completed was still in flight (Release, or a
+//     operation this call just completed was still in flight (Release, or a
 //     same-kind OrphanSweep racing a still-live claim — the residual,
-//     intra-kind version of #0254's now-fixed cross-kind race). SES already
-//     has the message; recording 'sent' here is what stops a second pass
-//     from claiming and sending it again. Newly admitted by #0283.
+//     intra-kind version of #0254's now-fixed cross-kind race). Newly
+//     admitted by #0283. What recording 'sent' here means differs by kind.
+//     For the email kinds: SES already has the message; recording 'sent'
+//     here is what stops a second pass from claiming and sending it again.
+//     For KindSubscribeIntake: dispatchMutation already ran to completion;
+//     recording 'sent' here stops a second pass from reprocessing the same
+//     row. Reprocessing it would in fact be SAFE to repeat, not just
+//     wasteful — verified against the actual code, not assumed:
+//     processIntakeRow re-reads IsSuppressed/FindByEmail fresh rather than
+//     trusting anything captured earlier (subscribe_intake.go's own doc
+//     comment and its "Why reprocessing is safe even if it races the fast
+//     path" section), and dispatchMutation is idempotent by construction —
+//     newSignup's ErrEmailExists branch (subscribe.go) makes a raced Create
+//     a safe no-op, and ClaimAndEnqueueConfirmation/
+//     ClaimAndEnqueueAlreadySubscribed (internal/subscribers.Store) are
+//     atomic, cooldown-gated claims where a second attempt to send the same
+//     mail is already a required no-op for ordinary concurrent requests
+//     (two tabs, a double-submit), not a new property added for this
+//     predicate. Admitting 'queued' here still avoids the redundant work of
+//     re-running a dispatch whose outcome is already durable.
 //   - 'sent' — a second MarkSent call for the same id (e.g. a duplicate
 //     invocation racing itself) would otherwise re-stamp sent_at and
 //     ses_message_id. Excluded, so this stays a no-op — the same idempotency
-//     TestOutbox_MarkSent_ScrubsPayload already asserts.
+//     TestOutbox_MarkSent_ScrubsPayload already asserts. For
+//     KindSubscribeIntake, 'sent' here means "durably processed", not
+//     "delivered by SES" (see that Kind's doc comment), but the exclusion is
+//     identical either way: a second call for an already-processed row must
+//     stay a no-op regardless of what 'sent' means for that kind.
 //   - 'abandoned' — this row already reached the terminal state that
 //     MarkRetryOrAbandon uses to mean "exhausted its retries", keeping its
 //     error and payload as the diagnostic (see MarkRetryOrAbandon's doc
@@ -428,7 +461,7 @@ func (s *Store) MarkSent(ctx context.Context, id int64, messageID string) (bool,
 // signup attempt was durably processed", not that mail went out.
 //
 // error is cleared in the same UPDATE (#0288 — the identical fix #0272
-// applied to MarkSent, mirrored here because MarkDone has the exact same
+// applied to MarkSent), mirrored here because MarkDone has the exact same
 // shape and the exact same reachable convergence: the recovery poller
 // claims a row, fails it via MarkRetryOrAbandon (which writes error and
 // puts the row back to 'queued'), and the request's own fast path then
