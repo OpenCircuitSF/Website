@@ -23,12 +23,15 @@ const PAUSED_DELIVERY_HEALTH_STATUS = 'paused_delivery_health';
 /**
  * One live snapshot of a campaign's send progress, as published over SSE.
  * Matches internal/mailing.CampaignProgress's JSON tags exactly — see that
- * struct's own doc comment (worker.go) for why the two must be kept in sync
- * by hand. Total is fixed at materialization so it never moves backwards;
- * Remaining is queued+sending (email_sends' SEVENTH status, migration
- * 000018); Skipped is its own bucket, distinct from Failed — "the list
- * shrank under us" (an unsubscribe/suppression between materialization and
- * send) is correct behavior, not an error.
+ * struct's own doc comment (worker.go) for why the two must be kept in
+ * sync. Checked, not just asserted: internal/handlers/
+ * campaign_progress_parity_test.go's TestCampaignProgressParity_KeySet
+ * (#0241) fails if this interface's fields and that struct's json tags
+ * ever disagree in either direction. Total is fixed at materialization so
+ * it never moves backwards; Remaining is queued+sending (email_sends'
+ * SEVENTH status, migration 000018); Skipped is its own bucket, distinct
+ * from Failed — "the list shrank under us" (an unsubscribe/suppression
+ * between materialization and send) is correct behavior, not an error.
  */
 export interface CampaignProgress {
   campaign_id: number;

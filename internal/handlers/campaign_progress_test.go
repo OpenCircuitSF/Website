@@ -69,9 +69,16 @@ func TestCampaignProgressPublisher_PublishesJSONFrameToBroker(t *testing.T) {
 
 	// Decoded as `any`, not int64: `status` is a string, and the point of
 	// this assertion is the exact wire shape web/src/lib/campaignProgress.ts's
-	// CampaignProgress interface is hand-kept in sync with (#0095 — nothing
-	// mechanically enforces that agreement; #0093 — two handlers once
-	// serialised one concept under two schemas).
+	// CampaignProgress interface must agree with (#0093 — two handlers once
+	// serialised one concept under two schemas). The key-set check right
+	// below only ever catches a field added here without a matching `want`
+	// entry — it is Go-only, by construction, since `want` is hand-typed
+	// from this same struct. TestCampaignProgressParity_KeySet
+	// (campaign_progress_parity_test.go, #0241) is the guard that also
+	// catches a field added only to campaignProgress.ts's interface; keep
+	// both, they cover different things (this one proves the real marshal
+	// output for concrete values, that one proves the two declared shapes
+	// agree in both directions).
 	var decoded map[string]any
 	if err := json.Unmarshal(got.Payload, &decoded); err != nil {
 		t.Fatalf("payload did not decode as JSON: %v", err)
@@ -90,9 +97,12 @@ func TestCampaignProgressPublisher_PublishesJSONFrameToBroker(t *testing.T) {
 			t.Errorf("payload[%q] = %#v, want %#v (full payload: %s)", k, decoded[k], v, got.Payload)
 		}
 	}
-	// No extra and no missing keys: a field added on the Go side without its
-	// TypeScript counterpart is exactly the drift #0095 describes, so the key
-	// set is pinned rather than only spot-checked.
+	// No extra and no missing keys against `want` — but `want` is hand-typed
+	// from mailing.CampaignProgress a few lines up, so this only ever catches
+	// a Go-side addition. It does NOT catch a field added only to
+	// campaignProgress.ts's interface; TestCampaignProgressParity_KeySet
+	// (#0241) is what covers that direction, by reading both sides from
+	// source instead of from a hand-typed map.
 	if len(decoded) != len(want) {
 		t.Errorf("payload has %d keys, want exactly %d (%s)", len(decoded), len(want), got.Payload)
 	}

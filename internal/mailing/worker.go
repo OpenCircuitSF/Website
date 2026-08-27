@@ -132,8 +132,13 @@ var orphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 // struct is marshaled verbatim (internal/handlers/campaign_progress.go, via
 // encoding/json) into the SSE frame's data field, and web/src/lib/
 // campaignProgress.ts's CampaignProgress type is keyed off these exact
-// snake_case names. #0095 exists because nothing mechanically enforces that
-// agreement — when a field is added here, add it there in the same commit.
+// snake_case names. When a field is added here, add it there in the same
+// commit —
+// internal/handlers/campaign_progress_parity_test.go's
+// TestCampaignProgressParity_KeySet (#0241) fails the build if you don't,
+// in either direction: it reads this struct's json tags via reflection and
+// campaignProgress.ts's interface from source, so a field added to only one
+// side is caught rather than merely documented.
 //
 // # Why Status is carried in the snapshot
 //
