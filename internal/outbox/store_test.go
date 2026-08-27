@@ -14,6 +14,24 @@ func uniqueRecipient(t *testing.T) string {
 	return fmt.Sprintf("outbox-test-%d@example.com", testdb.Unique())
 }
 
+// distinctKind returns a Kind unique to this test run (#0285). Test
+// databases are per-agent but shared ACROSS PACKAGES within a run
+// (scripts/check.sh forces -p 2), and internal/mailing and
+// internal/handlers both enqueue real rows — including outbox.KindConfirmation
+// and outbox.KindSubscribeIntake — into this same outbound_queue table from
+// their own concurrently-running tests. An assertion that depends on an
+// exact affected-row count from an operation scoped only by one of the real
+// Kind values (or not scoped by kind at all) can therefore observe rows a
+// different package's test wrote a moment earlier, and fail for a reason
+// that has nothing to do with this package. outbound_queue.kind carries no
+// CHECK constraint (see the package doc comment), so a value no production
+// code ever enqueues is exactly as valid a row as any real Kind, and
+// nothing but this test's own Enqueue calls can ever produce one.
+func distinctKind(t *testing.T) Kind {
+	t.Helper()
+	return Kind(fmt.Sprintf("test-outbox-%d", testdb.Unique()))
+}
+
 // TestOutbox_EnqueueTx_RollbackLeavesNoRow is the load-bearing property
 // #0126 exists to establish: a transaction rolled back after EnqueueTx
 // leaves no outbound_queue row at all. Enqueueing after the commit (rather
@@ -232,7 +250,12 @@ func TestOutbox_AbandonsAtMaxRetries_RetainsLastError(t *testing.T) {
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	id, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: uniqueRecipient(t)})
+	// #0285: scoped to a kind unique to this test so the ClaimDue calls
+	// below — which assert an exact claimed count — cannot observe a row
+	// another package's concurrently-running test wrote to this same
+	// shared outbound_queue table.
+	kind := distinctKind(t)
+	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -242,7 +265,7 @@ func TestOutbox_AbandonsAtMaxRetries_RetainsLastError(t *testing.T) {
 		if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE id = $1`, id); err != nil {
 			t.Fatalf("forcing due: %v", err)
 		}
-		rows, err := store.ClaimDue(ctx, 10)
+		rows, err := store.ClaimDue(ctx, 10, kind)
 		if err != nil {
 			t.Fatalf("ClaimDue attempt %d: %v", attempt, err)
 		}
@@ -295,11 +318,15 @@ func TestOutbox_MarkRetryOrAbandon_RetriesBeforeMax(t *testing.T) {
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	id, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: uniqueRecipient(t)})
+	// #0285: scoped to a kind unique to this test — see distinctKind's
+	// doc comment for why an unscoped/shared-kind ClaimDue here can
+	// observe another package's concurrently-running test.
+	kind := distinctKind(t)
+	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	rows, err := store.ClaimDue(ctx, 10)
+	rows, err := store.ClaimDue(ctx, 10, kind)
 	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
@@ -351,13 +378,17 @@ func TestOutbox_MarkSent_ClearsErrorFromFailedAttempt(t *testing.T) {
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	id, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: uniqueRecipient(t)})
+	// #0285: scoped to a kind unique to this test — see distinctKind's
+	// doc comment for why an unscoped/shared-kind ClaimDue here can
+	// observe another package's concurrently-running test.
+	kind := distinctKind(t)
+	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
 	// Attempt 1: claim and fail, leaving error populated on a 'queued' row.
-	rows, err := store.ClaimDue(ctx, 10)
+	rows, err := store.ClaimDue(ctx, 10, kind)
 	if err != nil {
 		t.Fatalf("ClaimDue (attempt 1): %v", err)
 	}
@@ -380,7 +411,7 @@ func TestOutbox_MarkSent_ClearsErrorFromFailedAttempt(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE id = $1`, id); err != nil {
 		t.Fatalf("forcing due: %v", err)
 	}
-	rows2, err := store.ClaimDue(ctx, 10)
+	rows2, err := store.ClaimDue(ctx, 10, kind)
 	if err != nil {
 		t.Fatalf("ClaimDue (attempt 2): %v", err)
 	}
@@ -416,6 +447,289 @@ func TestOutbox_MarkSent_ClearsErrorFromFailedAttempt(t *testing.T) {
 	}
 	if sentAt == nil {
 		t.Fatalf("sent_at not stamped")
+	}
+}
+
+// TestOutbox_MarkDone_ClearsErrorFromSupersededAttempt is #0288: it drives
+// the real convergence subscribe.go's own comment anticipates — the
+// recovery poller claims an intake row and fails it via
+// MarkRetryOrAbandon (writing error, putting the row back to 'queued'),
+// and the request's own fast path then MarkDones that same row. The row
+// must land 'sent' with error cleared, not carrying the error from the
+// attempt that was subsequently superseded.
+func TestOutbox_MarkDone_ClearsErrorFromSupersededAttempt(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	// #0285: a distinct kind, not the real KindSubscribeIntake — Store's
+	// ClaimDue/MarkRetryOrAbandon/MarkDone never branch on Kind, so this
+	// loses no coverage while making the exact claimed-row count below
+	// immune to internal/handlers' own concurrently-running
+	// KindSubscribeIntake tests against this same shared table (see
+	// distinctKind's doc comment).
+	kind := distinctKind(t)
+	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// The recovery poller claims the row and fails it, leaving it 'queued'
+	// with error populated.
+	rows, err := store.ClaimDue(ctx, 10, kind)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != id {
+		t.Fatalf("expected to claim row %d, got %+v", id, rows)
+	}
+	if _, err := store.MarkRetryOrAbandon(ctx, id, rows[0].Attempts, "recovery poller: transient failure", 8); err != nil {
+		t.Fatalf("MarkRetryOrAbandon: %v", err)
+	}
+
+	var statusAfterFail string
+	var errAfterFail *string
+	if err := pool.QueryRow(ctx, `SELECT status, error FROM outbound_queue WHERE id = $1`, id).Scan(&statusAfterFail, &errAfterFail); err != nil {
+		t.Fatalf("select after failed attempt: %v", err)
+	}
+	if statusAfterFail != StatusQueued {
+		t.Fatalf("status after failed attempt = %q, want %q", statusAfterFail, StatusQueued)
+	}
+	if errAfterFail == nil || *errAfterFail != "recovery poller: transient failure" {
+		t.Fatalf("error after failed attempt = %v, want it populated", errAfterFail)
+	}
+
+	// The request's fast path converges on the same row and marks it done.
+	done, err := store.MarkDone(ctx, id)
+	if err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+	if !done {
+		t.Fatalf("MarkDone reported done=false")
+	}
+
+	var status string
+	var lastErr *string
+	var sentAt *time.Time
+	var payload string
+	if err := pool.QueryRow(ctx,
+		`SELECT status, error, sent_at, payload::text FROM outbound_queue WHERE id = $1`, id,
+	).Scan(&status, &lastErr, &sentAt, &payload); err != nil {
+		t.Fatalf("select after MarkDone: %v", err)
+	}
+	if status != StatusSent {
+		t.Fatalf("status = %q, want %q", status, StatusSent)
+	}
+	if lastErr != nil {
+		t.Fatalf("error = %v, want NULL — a done row must not carry a stale error from a superseded attempt", *lastErr)
+	}
+	if sentAt == nil {
+		t.Fatalf("sent_at not stamped")
+	}
+	if payload != "{}" {
+		t.Fatalf("payload = %q, want scrubbed to {}", payload)
+	}
+}
+
+// TestOutbox_MarkDone_ClearsErrorFromSendingState covers MarkDone's other
+// admitted source state directly (#0288 criterion 2): a row still
+// 'sending' — the recovery poller claimed it but had not yet failed or
+// completed it — must also clear on MarkDone, not just a row that
+// round-tripped through 'queued'.
+func TestOutbox_MarkDone_ClearsErrorFromSendingState(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	id, err := store.Enqueue(ctx, Item{Kind: KindSubscribeIntake, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := store.ClaimDue(ctx, 10, KindSubscribeIntake); err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	// Simulate a stray error already sitting on a 'sending' row (defensive
+	// — nothing in this codebase writes error without also changing
+	// status, but MarkDone's SET clause must clear it regardless of how it
+	// got there).
+	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET error = $2 WHERE id = $1`, id, "stray error"); err != nil {
+		t.Fatalf("seeding stray error: %v", err)
+	}
+
+	done, err := store.MarkDone(ctx, id)
+	if err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+	if !done {
+		t.Fatalf("MarkDone reported done=false")
+	}
+
+	var status string
+	var lastErr *string
+	if err := pool.QueryRow(ctx, `SELECT status, error FROM outbound_queue WHERE id = $1`, id).Scan(&status, &lastErr); err != nil {
+		t.Fatalf("select after MarkDone: %v", err)
+	}
+	if status != StatusSent {
+		t.Fatalf("status = %q, want %q", status, StatusSent)
+	}
+	if lastErr != nil {
+		t.Fatalf("error = %v, want NULL after MarkDone from 'sending'", *lastErr)
+	}
+}
+
+// TestOutbox_MarkSent_RecordsSendAfterClaimReleasedMidSend is #0283's
+// criterion 4: it drives the actual scenario the issue describes — claim a
+// row, release the claim underneath the sender (simulating a same-kind
+// OrphanSweep or similar racing a still-live claim), complete the send, and
+// assert the row is recorded 'sent' rather than left 'queued' to be sent
+// again by a later pass.
+func TestOutbox_MarkSent_RecordsSendAfterClaimReleasedMidSend(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	// #0285: scoped to a kind unique to this test — see distinctKind's
+	// doc comment for why an unscoped ClaimDue here can observe another
+	// package's concurrently-running test.
+	kind := distinctKind(t)
+	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	rows, err := store.ClaimDue(ctx, 10, kind)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != id {
+		t.Fatalf("expected to claim row %d, got %+v", id, rows)
+	}
+
+	// The claim is released back to 'queued' while the (simulated) send is
+	// still in flight — the exact race #0283 describes.
+	released, err := store.Release(ctx, id)
+	if err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if !released {
+		t.Fatalf("Release reported done=false")
+	}
+	var statusAfterRelease string
+	if err := pool.QueryRow(ctx, `SELECT status FROM outbound_queue WHERE id = $1`, id).Scan(&statusAfterRelease); err != nil {
+		t.Fatalf("select after release: %v", err)
+	}
+	if statusAfterRelease != StatusQueued {
+		t.Fatalf("status after release = %q, want %q", statusAfterRelease, StatusQueued)
+	}
+
+	// The send that was already in flight now completes — SES already has
+	// the message by this point in the real scenario.
+	done, err := store.MarkSent(ctx, id, "ses-message-id-after-release")
+	if err != nil {
+		t.Fatalf("MarkSent: %v", err)
+	}
+	if !done {
+		t.Fatalf("MarkSent reported done=false — the send would be silently lost and the row re-sent later")
+	}
+
+	var status string
+	var sesID *string
+	var sentAt *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT status, ses_message_id, sent_at FROM outbound_queue WHERE id = $1`, id,
+	).Scan(&status, &sesID, &sentAt); err != nil {
+		t.Fatalf("select after MarkSent: %v", err)
+	}
+	if status != StatusSent {
+		t.Fatalf("status = %q, want %q", status, StatusSent)
+	}
+	if sesID == nil || *sesID != "ses-message-id-after-release" {
+		t.Fatalf("ses_message_id = %v, want ses-message-id-after-release", sesID)
+	}
+	if sentAt == nil {
+		t.Fatalf("sent_at not stamped")
+	}
+
+	// Not sent twice: a later pass must not be able to reclaim and resend
+	// the row now that it is recorded 'sent'.
+	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE id = $1`, id); err != nil {
+		t.Fatalf("forcing due: %v", err)
+	}
+	rows2, err := store.ClaimDue(ctx, 10)
+	if err != nil {
+		t.Fatalf("ClaimDue after MarkSent: %v", err)
+	}
+	for _, r := range rows2 {
+		if r.ID == id {
+			t.Fatalf("a sent row was reclaimed — the row would be sent twice")
+		}
+	}
+}
+
+// TestOutbox_MarkSent_DoesNotResurrectAbandonedRow is #0283 criterion 2: a
+// row that already reached the terminal 'abandoned' state must not
+// silently become 'sent'. MarkSent's widened predicate deliberately
+// excludes 'abandoned' — this proves it stays excluded and the row's
+// diagnostic state (status, error) survives untouched.
+func TestOutbox_MarkSent_DoesNotResurrectAbandonedRow(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	// #0285: scoped to a kind unique to this test — see distinctKind's
+	// doc comment for why an unscoped ClaimDue here can observe another
+	// package's concurrently-running test.
+	kind := distinctKind(t)
+	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	rows, err := store.ClaimDue(ctx, 10, kind)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != id {
+		t.Fatalf("expected to claim row %d, got %+v", id, rows)
+	}
+	// Abandon immediately (maxRetries=1 so attempts=1 hits the abandon
+	// branch) rather than looping through the full schedule.
+	if _, err := store.MarkRetryOrAbandon(ctx, id, rows[0].Attempts, "exhausted retries", 1); err != nil {
+		t.Fatalf("MarkRetryOrAbandon: %v", err)
+	}
+	var statusAfterAbandon string
+	if err := pool.QueryRow(ctx, `SELECT status FROM outbound_queue WHERE id = $1`, id).Scan(&statusAfterAbandon); err != nil {
+		t.Fatalf("select after abandon: %v", err)
+	}
+	if statusAfterAbandon != StatusAbandoned {
+		t.Fatalf("status after abandon = %q, want %q", statusAfterAbandon, StatusAbandoned)
+	}
+
+	// A delayed MarkSent for the same id (e.g. a very late-arriving call
+	// from the attempt that led to abandonment) must not resurrect it.
+	done, err := store.MarkSent(ctx, id, "should-not-be-recorded")
+	if err != nil {
+		t.Fatalf("MarkSent: %v", err)
+	}
+	if done {
+		t.Fatalf("MarkSent reported done=true against an abandoned row — it must not resurrect it")
+	}
+
+	var status string
+	var lastErr *string
+	var sesID *string
+	if err := pool.QueryRow(ctx,
+		`SELECT status, error, ses_message_id FROM outbound_queue WHERE id = $1`, id,
+	).Scan(&status, &lastErr, &sesID); err != nil {
+		t.Fatalf("select after MarkSent attempt: %v", err)
+	}
+	if status != StatusAbandoned {
+		t.Fatalf("status = %q, want %q (unchanged)", status, StatusAbandoned)
+	}
+	if lastErr == nil || *lastErr != "exhausted retries" {
+		t.Fatalf("error = %v, want the abandon reason retained", lastErr)
+	}
+	if sesID != nil {
+		t.Fatalf("ses_message_id = %v, want NULL — MarkSent must not have written anything", *sesID)
 	}
 }
 
@@ -473,21 +787,33 @@ func TestOutbox_Release_RequeuesImmediately(t *testing.T) {
 // TestWorker_TwoWorkersOneCampaign_OrphanSweepDuringLiveClaim_NoDuplicate):
 // a row claimed moments ago by a still-alive worker must not be swept, only
 // one whose claim predates staleAfter.
+//
+// #0285: the sweep and its exact swept-count assertion are scoped to a
+// kind unique to this test (see distinctKind's doc comment) — the table is
+// shared across packages within a test run, and an earlier version of this
+// test asserted swept==1 from an UNSCOPED sweep, which counted every stale
+// 'sending' row in the whole table, including ones a different package's
+// concurrently-running test had left behind. That is not the CLAUDE.md §5
+// "machine is busy" class of flake: it fails on an idle machine too, given
+// the wrong interleaving, because it asserts a count over state this test
+// does not own. TestOutbox_OrphanSweep_Unscoped_SweepsAcrossKinds below
+// keeps the unscoped code path covered without depending on an exact total.
 func TestOutbox_OrphanSweep_DoesNotUnclaimLiveRow(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	liveID, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: uniqueRecipient(t)})
+	kind := distinctKind(t)
+	liveID, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
 		t.Fatalf("Enqueue live: %v", err)
 	}
-	staleID, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: uniqueRecipient(t)})
+	staleID, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
 	if err != nil {
 		t.Fatalf("Enqueue stale: %v", err)
 	}
 
-	if _, err := store.ClaimDue(ctx, 10); err != nil {
+	if _, err := store.ClaimDue(ctx, 10, kind); err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
 	// Backdate only the "stale" row's claim.
@@ -495,7 +821,7 @@ func TestOutbox_OrphanSweep_DoesNotUnclaimLiveRow(t *testing.T) {
 		t.Fatalf("backdating claimed_at: %v", err)
 	}
 
-	swept, err := store.OrphanSweep(ctx, 5*time.Minute)
+	swept, err := store.OrphanSweep(ctx, 5*time.Minute, kind)
 	if err != nil {
 		t.Fatalf("OrphanSweep: %v", err)
 	}
@@ -515,6 +841,64 @@ func TestOutbox_OrphanSweep_DoesNotUnclaimLiveRow(t *testing.T) {
 	}
 	if staleStatus != StatusQueued {
 		t.Fatalf("stale row status = %q, want %q", staleStatus, StatusQueued)
+	}
+}
+
+// TestOutbox_OrphanSweep_Unscoped_SweepsAcrossKinds keeps OrphanSweep's
+// unscoped default (no kinds argument — "sweep across every kind",
+// documented on OrphanSweep and exercised by every caller before #0254)
+// covered, per #0285 criterion 3: the fix for the flaky exact-count
+// assertion above is to scope it, not to delete coverage of the unscoped
+// path, since it remains documented behaviour that #0281 may formalise.
+//
+// This does NOT assert an exact swept count — an unscoped sweep by
+// definition affects rows this test does not own, in any concurrently
+// running package's test against the same shared database, so an exact
+// total is exactly the assertion #0285 removed above. Instead it proves
+// the two properties that matter and belong to this test's own rows: its
+// stale row is included in an unscoped sweep (swept >= 1 is too weak on
+// its own — a concurrent sweep from another package's test could
+// coincidentally produce a nonzero count without ever having touched this
+// row — so the row's own resulting status is checked directly), and its
+// live row is not.
+func TestOutbox_OrphanSweep_Unscoped_SweepsAcrossKinds(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	kind := distinctKind(t)
+	liveID, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue live: %v", err)
+	}
+	staleID, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue stale: %v", err)
+	}
+
+	if _, err := store.ClaimDue(ctx, 10, kind); err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET claimed_at = now() - interval '1 hour' WHERE id = $1`, staleID); err != nil {
+		t.Fatalf("backdating claimed_at: %v", err)
+	}
+
+	if _, err := store.OrphanSweep(ctx, 5*time.Minute); err != nil {
+		t.Fatalf("OrphanSweep (unscoped): %v", err)
+	}
+
+	var liveStatus, staleStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM outbound_queue WHERE id = $1`, liveID).Scan(&liveStatus); err != nil {
+		t.Fatalf("select live: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM outbound_queue WHERE id = $1`, staleID).Scan(&staleStatus); err != nil {
+		t.Fatalf("select stale: %v", err)
+	}
+	if liveStatus != StatusSending {
+		t.Fatalf("live row status = %q, want %q (an unscoped sweep must still respect staleness)", liveStatus, StatusSending)
+	}
+	if staleStatus != StatusQueued {
+		t.Fatalf("stale row status = %q, want %q (an unscoped sweep must still catch a stale row of any kind)", staleStatus, StatusQueued)
 	}
 }
 
@@ -656,45 +1040,61 @@ func TestOutbox_LatestByRecipients_EmptyRecipientsReturnsEmptyMapWithoutQuery(t 
 // to the requested kind, not an account-wide abandoned total (#0128 — the
 // admin overview's "confirmations abandoned" figure must not move when a
 // DIFFERENT kind abandons).
+//
+// #0285 audit: this used real Kind constants (KindConfirmation,
+// KindRegistration) and a relative before/after delta rather than an
+// absolute count, which is why it was not the primary fix target — but
+// internal/mailing's own outbox_worker_test.go abandons real
+// KindConfirmation rows too, so a concurrently-running test in that
+// package could still land inside this test's before/after window and
+// move the "before" baseline out from under it. Two kinds unique to this
+// test close that window entirely, the same way distinctKind does for the
+// exact-claimed-count tests above.
 func TestOutbox_AbandonedCountByKind_ScopedToKind(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	before, err := store.AbandonedCountByKind(ctx, KindConfirmation)
+	targetKind := distinctKind(t)
+	otherKind := distinctKind(t)
+
+	before, err := store.AbandonedCountByKind(ctx, targetKind)
 	if err != nil {
 		t.Fatalf("AbandonedCountByKind before: %v", err)
 	}
-
-	// Abandon a REGISTRATION row — must not move the confirmation count.
-	regID, err := store.Enqueue(ctx, Item{Kind: KindRegistration, Recipient: uniqueRecipient(t)})
-	if err != nil {
-		t.Fatalf("Enqueue registration: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET status = $2 WHERE id = $1`, regID, StatusAbandoned); err != nil {
-		t.Fatalf("abandoning registration row: %v", err)
-	}
-	afterRegistration, err := store.AbandonedCountByKind(ctx, KindConfirmation)
-	if err != nil {
-		t.Fatalf("AbandonedCountByKind after registration abandon: %v", err)
-	}
-	if afterRegistration != before {
-		t.Errorf("AbandonedCountByKind(confirmation) moved from %d to %d after abandoning a REGISTRATION row", before, afterRegistration)
+	if before != 0 {
+		t.Fatalf("AbandonedCountByKind(targetKind) before = %d, want 0 for a freshly-minted kind", before)
 	}
 
-	// Now abandon a CONFIRMATION row — must move the count by exactly 1.
-	confirmID, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: uniqueRecipient(t)})
+	// Abandon an OTHER-kind row — must not move the target count.
+	otherID, err := store.Enqueue(ctx, Item{Kind: otherKind, Recipient: uniqueRecipient(t)})
 	if err != nil {
-		t.Fatalf("Enqueue confirmation: %v", err)
+		t.Fatalf("Enqueue other: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET status = $2 WHERE id = $1`, confirmID, StatusAbandoned); err != nil {
-		t.Fatalf("abandoning confirmation row: %v", err)
+	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET status = $2 WHERE id = $1`, otherID, StatusAbandoned); err != nil {
+		t.Fatalf("abandoning other-kind row: %v", err)
 	}
-	afterConfirmation, err := store.AbandonedCountByKind(ctx, KindConfirmation)
+	afterOther, err := store.AbandonedCountByKind(ctx, targetKind)
 	if err != nil {
-		t.Fatalf("AbandonedCountByKind after confirmation abandon: %v", err)
+		t.Fatalf("AbandonedCountByKind after other-kind abandon: %v", err)
 	}
-	if afterConfirmation != before+1 {
-		t.Errorf("AbandonedCountByKind(confirmation) = %d after abandoning one confirmation row, want %d", afterConfirmation, before+1)
+	if afterOther != before {
+		t.Errorf("AbandonedCountByKind(targetKind) moved from %d to %d after abandoning an OTHER-kind row", before, afterOther)
+	}
+
+	// Now abandon a target-kind row — must move the count by exactly 1.
+	targetID, err := store.Enqueue(ctx, Item{Kind: targetKind, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue target: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET status = $2 WHERE id = $1`, targetID, StatusAbandoned); err != nil {
+		t.Fatalf("abandoning target-kind row: %v", err)
+	}
+	afterTarget, err := store.AbandonedCountByKind(ctx, targetKind)
+	if err != nil {
+		t.Fatalf("AbandonedCountByKind after target-kind abandon: %v", err)
+	}
+	if afterTarget != before+1 {
+		t.Errorf("AbandonedCountByKind(targetKind) = %d after abandoning one target-kind row, want %d", afterTarget, before+1)
 	}
 }

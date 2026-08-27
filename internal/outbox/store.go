@@ -325,26 +325,84 @@ func (s *Store) ClaimDue(ctx context.Context, limit int, kinds ...Kind) ([]Row, 
 	return out, nil
 }
 
-// MarkSent transitions a claimed (status='sending') row to 'sent', stamping
-// ses_message_id and sent_at, blanking payload to '{}'::jsonb — see the
-// package doc comment's "payload is template inputs" section for why — and
-// clearing error in the SAME UPDATE (#0272). error exists to diagnose a
-// live fault: MarkRetryOrAbandon deliberately keeps it for a 'queued' row
-// awaiting retry and for a terminal 'abandoned' row (that row IS the
-// diagnostic), but a row that went on to succeed has no live fault left to
-// describe, and a populated error next to status='sent' reads as a failure
-// to anyone scanning the table by eye — which is exactly what happened with
+// MarkSent transitions a claimed row to 'sent', stamping ses_message_id and
+// sent_at, blanking payload to '{}'::jsonb — see the package doc comment's
+// "payload is template inputs" section for why — and clearing error in the
+// SAME UPDATE (#0272). error exists to diagnose a live fault:
+// MarkRetryOrAbandon deliberately keeps it for a 'queued' row awaiting retry
+// and for a terminal 'abandoned' row (that row IS the diagnostic), but a row
+// that went on to succeed has no live fault left to describe, and a
+// populated error next to status='sent' reads as a failure to anyone
+// scanning the table by eye — which is exactly what happened with
 // production ids 1 and 2 (see #0272). This does not change when a row is
 // clearable, only what a 'sent' row carries once it gets there.
-// Returns done=false if the row was not in 'sending' (already handled by a
-// concurrent claim, or an id that does not exist) — the caller must not
-// treat that as an error.
+//
+// # #0283 — the WHERE predicate admits 'sending' OR 'queued', not just 'sending'
+//
+// The call site (OutboxWorker.sendOne) always calls MarkSent synchronously,
+// immediately after a real SES call that just succeeded for THIS row — so
+// every invocation follows a genuine send, never a stale or speculative one.
+// The only question is what status the row is allowed to be in by the time
+// this UPDATE runs, since something else may have moved it between the
+// ClaimDue that handed sendOne this row and the MarkSent that records the
+// outcome.
+//
+// #0283 was filed because the strict original guard (status='sending' only)
+// meant a lost claim produced a genuine duplicate send: the message had
+// already gone to SES, but because the row was no longer 'sending', MarkSent
+// affected zero rows, the row stayed 'queued', and a later pass claimed and
+// sent it again — a duplicate confirmation, registration, or recovery link,
+// which is exactly what this subsystem exists to prevent. The proven cause
+// (an unscoped OrphanSweep stealing a claim across outbound_queue's two
+// independent consumers) is now structurally impossible: #0254 scoped both
+// ClaimDue and OrphanSweep by kind, and its reviewer verified neither
+// consumer's sweep can touch the other's rows in either direction. So this
+// predicate is defence in depth against a race that is no longer reachable
+// by the route that motivated it — not a live bug — which is why the fix
+// widens the guard just enough to close the failure mode rather than going
+// fully unconditional.
+//
+// Every source status this predicate can see, and what admitting or
+// excluding it means:
+//
+//   - 'sending' — the expected case: this row is still claimed by the
+//     goroutine that is calling MarkSent. Admitted, unchanged from before.
+//   - 'queued' — the claim was released or stolen back to 'queued' while the
+//     send this call just completed was still in flight (Release, or a
+//     same-kind OrphanSweep racing a still-live claim — the residual,
+//     intra-kind version of #0254's now-fixed cross-kind race). SES already
+//     has the message; recording 'sent' here is what stops a second pass
+//     from claiming and sending it again. Newly admitted by #0283.
+//   - 'sent' — a second MarkSent call for the same id (e.g. a duplicate
+//     invocation racing itself) would otherwise re-stamp sent_at and
+//     ses_message_id. Excluded, so this stays a no-op — the same idempotency
+//     TestOutbox_MarkSent_ScrubsPayload already asserts.
+//   - 'abandoned' — this row already reached the terminal state that
+//     MarkRetryOrAbandon uses to mean "exhausted its retries", keeping its
+//     error and payload as the diagnostic (see MarkRetryOrAbandon's doc
+//     comment). Silently flipping that to 'sent' would erase a decision an
+//     operator can currently see, in exchange for closing a race that, per
+//     the analysis above, the architecture no longer produces. #0283
+//     criterion 2 is explicit that resurrecting an abandoned row must be a
+//     deliberate, tested choice, not a side effect of a broader predicate —
+//     so it stays excluded here. Revisit only alongside a concrete scenario
+//     that reaches it, not speculatively.
+//   - 'failed' — reserved, unused by any writer (see the Status block above).
+//     Excluded for the same reason as 'abandoned': nothing should silently
+//     overwrite a status this method's own callers never produce.
+//
+// Returns done=false if the row was not in 'sending' or 'queued' (already
+// 'sent', already 'abandoned', or an id that does not exist) — the caller
+// must not treat that as an error; OutboxWorker.sendOne logs it as a Warn
+// (#0254), which stays exactly as it was regardless of this decision
+// (#0283 criterion 5) — it is the signal that something took a claim, and
+// that remains worth knowing even now that the outcome is handled.
 func (s *Store) MarkSent(ctx context.Context, id int64, messageID string) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue
 		    SET status = $2, ses_message_id = $3, sent_at = now(), payload = '{}'::jsonb, error = NULL
-		  WHERE id = $1 AND status = $4`,
-		id, StatusSent, nullIfEmpty(messageID), StatusSending,
+		  WHERE id = $1 AND status IN ($4, $5)`,
+		id, StatusSent, nullIfEmpty(messageID), StatusSending, StatusQueued,
 	)
 	if err != nil {
 		return false, fmt.Errorf("outbox: marking %d sent: %w", id, err)
@@ -368,10 +426,20 @@ func (s *Store) MarkSent(ctx context.Context, id int64, messageID string) (bool,
 // No messageID: KindSubscribeIntake rows are not email, so ses_message_id
 // stays NULL — see that Kind's doc comment for why "sent" here means "the
 // signup attempt was durably processed", not that mail went out.
+//
+// error is cleared in the same UPDATE (#0288 — the identical fix #0272
+// applied to MarkSent, mirrored here because MarkDone has the exact same
+// shape and the exact same reachable convergence: the recovery poller
+// claims a row, fails it via MarkRetryOrAbandon (which writes error and
+// puts the row back to 'queued'), and the request's own fast path then
+// MarkDones that same row. Without this, the row lands 'sent' carrying the
+// error from an attempt that was subsequently superseded — indistinguishable
+// from a live fault to anyone scanning the table, exactly the failure mode
+// #0272 closed for MarkSent.
 func (s *Store) MarkDone(ctx context.Context, id int64) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue
-		    SET status = $2, sent_at = now(), payload = '{}'::jsonb, claimed_at = NULL
+		    SET status = $2, sent_at = now(), payload = '{}'::jsonb, claimed_at = NULL, error = NULL
 		  WHERE id = $1 AND status IN ($3, $4)`,
 		id, StatusSent, StatusQueued, StatusSending,
 	)
@@ -395,6 +463,25 @@ func (s *Store) MarkDone(ctx context.Context, id int64) (bool, error) {
 // time is meaningless (nothing retries a terminal row), so that branch
 // leaves the column as-is rather than computing and discarding a backoff
 // step nobody will read.
+//
+// #0283 re-check: this method's own WHERE clause (status = 'sending') is
+// unchanged by that issue's widening of MarkSent's predicate. The two
+// cannot race each other productively — MarkRetryOrAbandon only ever fires
+// from OutboxWorker.finishFailed, on the SAME row a SES send just failed
+// for, so a given claim's lifecycle calls at most one of MarkSent or
+// MarkRetryOrAbandon, never both. The only cross-claim interaction is a
+// stolen-claim race (see MarkSent's #0283 comment): if a second actor
+// reclaims a released row and calls MarkRetryOrAbandon on it (status
+// 'sending' from that actor's own claim), and the first actor's delayed
+// MarkSent then arrives, MarkSent's widened predicate no longer sees
+// 'sending' or 'queued' once MarkRetryOrAbandon has moved the row to
+// 'abandoned' — so it correctly affects zero rows and logs the Warn rather
+// than resurrecting an abandoned row, exactly as MarkSent's own comment
+// requires. If instead MarkRetryOrAbandon's 'queued' branch ran (attempts
+// still under maxRetries), a subsequent MarkSent still finds the row
+// 'queued' and correctly records the send that in fact reached SES,
+// clearing the error that retry attempt had written — the intended
+// behaviour, not a side effect.
 func (s *Store) MarkRetryOrAbandon(ctx context.Context, id int64, attempts int, errMsg string, maxRetries int) (bool, error) {
 	delaySecs := Backoff(attempts).Seconds()
 	tag, err := s.pool.Exec(ctx,
