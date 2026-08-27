@@ -17,6 +17,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
@@ -63,6 +64,7 @@ func newTestSubscribeHandler(pool *pgxpool.Pool) *SubscribeHandler {
 	return NewSubscribeHandler(
 		subscribers.NewStore(pool), interests.NewStore(pool),
 		NoSuppressions{}, nil, "http://localhost:8080", slog.Default(),
+		outbox.NewStore(pool),
 	)
 }
 

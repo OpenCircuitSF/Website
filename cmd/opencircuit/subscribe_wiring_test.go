@@ -17,6 +17,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
@@ -71,6 +72,7 @@ func TestMountAndServe_RateLimitsSubscribe(t *testing.T) {
 	subscribeH := handlers.NewSubscribeHandler(
 		subscribers.NewStore(pool), interests.NewStore(pool),
 		handlers.NoSuppressions{}, audit.New(pool), cfg.BaseURL, slog.Default(),
+		outbox.NewStore(pool),
 	)
 
 	// mountAndServe calls requireSession/requireAdmin immediately while

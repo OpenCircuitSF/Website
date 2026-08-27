@@ -70,6 +70,27 @@ const (
 // against measured machine load (CLAUDE.md §5).
 var outboxOrphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 
+// mailKinds is every outbox.Kind this worker's render switch knows how to
+// build a message for — i.e. every Kind EXCEPT outbox.KindSubscribeIntake
+// (#0254), which is not an email and is claimed separately by
+// internal/handlers.SubscribeHandler's own recovery poller. Passed to
+// outbox.Store.ClaimDue's kinds filter in pass, below, so this worker never
+// claims a row it cannot render. Deliberately an explicit list rather than
+// "every Kind except intake": a future Kind added here without updating
+// render's switch should fail loudly in render's default case, not be
+// silently excluded from this worker's claim by omission.
+var mailKinds = []outbox.Kind{
+	outbox.KindConfirmation,
+	outbox.KindAlreadySubscribed,
+	outbox.KindWelcome,
+	outbox.KindGoodbye,
+	outbox.KindAdminAlert,
+	outbox.KindRegistration,
+	outbox.KindRecovery,
+	outbox.KindSessionsRevoked,
+	outbox.KindImportInvite,
+}
+
 // OutboxWorker drains internal/outbox's outbound_queue. Construct with
 // NewOutboxWorker; call Run in its own goroutine, Stop to shut down.
 type OutboxWorker struct {
@@ -371,7 +392,15 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 	// UPDATE and the scan inside one explicit transaction it can still roll
 	// back, which is a change to internal/outbox/store.go's shared claim
 	// path, out of this issue's scope.
-	rows, err := w.store.ClaimDue(ctx, w.batchSize)
+	// #0254: mailKinds (below) scopes this claim to the email kinds this
+	// worker's render switch actually knows how to build — outbound_queue
+	// now also holds outbox.KindSubscribeIntake rows, a non-email kind
+	// internal/handlers.SubscribeHandler's own recovery poller claims and
+	// processes separately (see that Kind's doc comment). Without this
+	// filter this worker would occasionally claim an intake row it cannot
+	// render, hitting render's default case and eventually abandoning a row
+	// that has nothing to do with mail.
+	rows, err := w.store.ClaimDue(ctx, w.batchSize, mailKinds...)
 	if err != nil {
 		return false, fmt.Errorf("mailing: claiming outbound_queue batch: %w", err)
 	}

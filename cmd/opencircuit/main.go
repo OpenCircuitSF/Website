@@ -195,9 +195,15 @@ func servePostgres(cfg *config.Config) error {
 	subscribersStore := subscribers.NewStore(pool)
 	interestsStore := interests.NewStore(pool)
 	suppressionsStore := subscribers.NewSuppressionStore(pool)
+	// outbox.NewStore(pool) (#0254) is the same stateless wrapper every
+	// other outbox.NewStore(pool) call site in this file constructs — it
+	// is what makes an accepted 202 from POST /api/subscribe durably mean
+	// a committed signup attempt: see internal/handlers/subscribe_intake.go's
+	// package doc comment.
 	subscribeH := handlers.NewSubscribeHandler(
 		subscribersStore, interestsStore,
 		suppressionsStore, auditLogger, cfg.BaseURL, slog.Default(),
+		outbox.NewStore(pool),
 	)
 
 	// sesEventsStore (internal/sesnotify, #0038) is constructed here, ahead

@@ -21,6 +21,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
@@ -118,6 +119,7 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 	subscribeH := handlers.NewSubscribeHandler(
 		blocked, interests.NewStore(pool),
 		handlers.NoSuppressions{}, audit.New(pool), cfg.BaseURL, slog.Default(),
+		outbox.NewStore(pool),
 	)
 
 	// mountAndServe calls requireSession/requireAdmin immediately while
@@ -239,6 +241,7 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 	retryH := handlers.NewSubscribeHandler(
 		subscribers.NewStore(pool), interests.NewStore(pool),
 		handlers.NoSuppressions{}, nil, cfg.BaseURL, slog.Default(),
+		outbox.NewStore(pool),
 	)
 	defer func() {
 		// wiringDBOpTimeout (#0084): Close's own work here is a fast DB
@@ -289,14 +292,19 @@ func subscriberExistsWiring(t *testing.T, pool *pgxpool.Pool, email string) bool
 	return n > 0
 }
 
-// outboundQueueCountWiring counts outbound_queue rows for recipient — this
-// file's own copy of internal/handlers' outboundQueueCountFor (unreachable
-// from here).
+// outboundQueueCountWiring counts MAIL outbound_queue rows for recipient —
+// this file's own copy of internal/handlers' outboundQueueCountFor
+// (unreachable from here). #0254: excludes outbox.KindSubscribeIntake, the
+// same way and for the same reason internal/handlers' own copy does — see
+// that function's doc comment. Every caller of this helper predates #0254
+// and means "how many messages got queued", not "how many outbound_queue
+// rows of any kind exist".
 func outboundQueueCountWiring(t *testing.T, pool *pgxpool.Pool, recipient string) int {
 	t.Helper()
 	var n int
 	if err := pool.QueryRow(context.Background(),
-		`SELECT count(*) FROM outbound_queue WHERE recipient = $1`, recipient,
+		`SELECT count(*) FROM outbound_queue WHERE recipient = $1 AND kind <> $2`,
+		recipient, string(outbox.KindSubscribeIntake),
 	).Scan(&n); err != nil {
 		t.Fatalf("count outbound_queue for %s: %v", recipient, err)
 	}

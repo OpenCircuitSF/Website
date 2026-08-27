@@ -22,6 +22,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
@@ -192,6 +193,7 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 	subscribeH := handlers.NewSubscribeHandler(
 		mailer, interests.NewStore(pool),
 		handlers.NoSuppressions{}, audit.New(pool), cfg.BaseURL, slog.Default(),
+		outbox.NewStore(pool),
 	)
 
 	// Test-only override of the production budgets (#0087's shutdownServerTimeout

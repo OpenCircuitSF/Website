@@ -62,6 +62,32 @@ const (
 	KindRecovery          Kind = "recovery"
 	KindSessionsRevoked   Kind = "sessions_revoked" // existed pre-#0126 (#0076); moved onto the queue here
 	KindImportInvite      Kind = "import_invite"    // producer lands in #0129
+
+	// KindSubscribeIntake (#0254) is NOT an email — it is not one of the
+	// kinds internal/mailing.OutboxWorker's render switch knows how to
+	// build a message for. It is this queue's mechanism reused (per
+	// CLAUDE.md's "reuse #0126's queue rather than build a second one") for
+	// a different durability gap: #0126 made "committed signup ⇒ queued
+	// confirmation" durable (Store.Create/ClaimAndEnqueueConfirmation
+	// commit the outbound_queue INSERT in the same transaction as the
+	// state change), but internal/handlers.SubscribeHandler's *inbound*
+	// mutation — the honeypot/timing verdict, the two fixed reads, and
+	// which of Create/RestartSignup/SetInterests/ClaimAndEnqueue* to call —
+	// still lived only in an in-memory channel (mutateQueue) that a
+	// process kill or a full queue silently dropped, after the client had
+	// already received its 202. A row of this kind is the durable record
+	// of "a 202 was returned for this address" — written synchronously,
+	// before the response — and internal/handlers.SubscribeHandler's own
+	// recovery poller (not internal/mailing.OutboxWorker — see
+	// ClaimDue's kinds filter below) claims and reprocesses any row still
+	// 'queued' once the fast in-memory path's own generous grace window has
+	// passed, exactly reusing ClaimDue/OrphanSweep/MarkSent and nothing
+	// else. "sent" for a row of this kind means "the signup attempt was
+	// durably processed", not that any mail went out from THIS row —
+	// whatever mail results (confirmation, already_subscribed, or none)
+	// is a SEPARATE outbound_queue row, enqueued the ordinary way inside
+	// internal/subscribers.Store's own transactions.
+	KindSubscribeIntake Kind = "subscribe_intake"
 )
 
 // Status values, matching outbound_queue_status_check.
@@ -100,6 +126,17 @@ type Item struct {
 	// A nil Payload stores '{}'::jsonb (outbound_queue.payload is NOT
 	// NULL), never SQL NULL.
 	Payload any
+	// Delay pushes the row's initial next_attempt_at into the future by
+	// this much (zero, the default, means "due immediately" — identical to
+	// every caller before #0254). #0254's SubscribeHandler is the one user:
+	// its fast, in-memory processing path normally finishes a
+	// KindSubscribeIntake row in well under a second, so giving it a
+	// generous head start before SubscribeHandler's own recovery poller
+	// becomes eligible to reclaim the SAME row avoids routine double
+	// processing under normal operation — reprocessing is safe either way
+	// (idempotent, see subscribe_intake.go's package doc comment), this
+	// purely reduces needless duplicate work.
+	Delay time.Duration
 }
 
 // Row is one outbound_queue row, as returned by ClaimDue.
@@ -185,12 +222,15 @@ func (s *Store) EnqueueTx(ctx context.Context, q Querier, it Item) (int64, error
 		return 0, fmt.Errorf("outbox: marshalling payload for kind %q: %w", it.Kind, err)
 	}
 
+	// it.Delay's zero value yields now() + 0 seconds, identical to the
+	// column's own DEFAULT now() every caller before #0254 relied on
+	// implicitly.
 	var id int64
 	err = q.QueryRow(ctx,
-		`INSERT INTO outbound_queue (kind, recipient, subscriber_id, payload)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO outbound_queue (kind, recipient, subscriber_id, payload, next_attempt_at)
+		 VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))
 		 RETURNING id`,
-		string(it.Kind), it.Recipient, it.SubscriberID, body,
+		string(it.Kind), it.Recipient, it.SubscriberID, body, it.Delay.Seconds(),
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("outbox: enqueueing kind %q for %q: %w", it.Kind, it.Recipient, err)
@@ -231,18 +271,34 @@ func scanRow(row pgx.Row) (Row, error) {
 // worker is single and serial per campaign, this queue may in principle be
 // polled by more than one worker goroutine, so this is free insurance
 // rather than a strict requirement with today's single OutboxWorker.
-func (s *Store) ClaimDue(ctx context.Context, limit int) ([]Row, error) {
+//
+// kinds optionally restricts the claim to those Kind values — pass none to
+// claim across every kind (every caller before #0254 did, and still may).
+// #0254 added this because outbound_queue now has TWO independent
+// consumers, each polling with its own ClaimDue call:
+// internal/mailing.OutboxWorker (every email Kind) and
+// internal/handlers.SubscribeHandler's recovery poller (KindSubscribeIntake
+// only, which is not an email — see that Kind's doc comment). Without a
+// filter, either consumer could claim a row it has no idea how to process:
+// OutboxWorker's render switch has no case for subscribe_intake, and the
+// intake poller doesn't render or send mail at all.
+func (s *Store) ClaimDue(ctx context.Context, limit int, kinds ...Kind) ([]Row, error) {
+	kindStrs := make([]string, len(kinds))
+	for i, k := range kinds {
+		kindStrs[i] = string(k)
+	}
 	rows, err := s.pool.Query(ctx,
 		`UPDATE outbound_queue
 		    SET status = $2, attempts = attempts + 1, claimed_at = now()
 		  WHERE id IN (
 		          SELECT id FROM outbound_queue
 		           WHERE status = $3 AND next_attempt_at <= now()
+		             AND (cardinality($4::text[]) = 0 OR kind = ANY($4::text[]))
 		           ORDER BY next_attempt_at, id
 		           LIMIT $1
 		           FOR UPDATE SKIP LOCKED)
 		RETURNING `+rowColumns,
-		limit, StatusSending, StatusQueued,
+		limit, StatusSending, StatusQueued, kindStrs,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("outbox: claiming due rows: %w", err)
@@ -278,6 +334,35 @@ func (s *Store) MarkSent(ctx context.Context, id int64, messageID string) (bool,
 	)
 	if err != nil {
 		return false, fmt.Errorf("outbox: marking %d sent: %w", id, err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// MarkDone transitions a row STRAIGHT to 'sent' from either 'queued' or
+// 'sending' — unlike MarkSent, which requires the row to already be
+// 'sending' (i.e. already claimed via ClaimDue). #0254 added this for
+// KindSubscribeIntake's fast, in-memory processing path
+// (internal/handlers.SubscribeHandler.markIntakeDone), which finishes a row
+// without ever calling ClaimDue on it: under normal operation nothing else
+// has touched the row, so it is still exactly 'queued'. Accepting 'sending'
+// too covers the case where SubscribeHandler's own recovery poller
+// (subscribe_intake.go) raced in and claimed the row first — both paths
+// converging on the same row is expected and safe (see that file's package
+// doc comment), and whichever call loses the race simply affects zero
+// rows, which this method's callers must not treat as an error, exactly as
+// MarkSent's own doc comment already establishes for its equivalent case.
+// No messageID: KindSubscribeIntake rows are not email, so ses_message_id
+// stays NULL — see that Kind's doc comment for why "sent" here means "the
+// signup attempt was durably processed", not that mail went out.
+func (s *Store) MarkDone(ctx context.Context, id int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE outbound_queue
+		    SET status = $2, sent_at = now(), payload = '{}'::jsonb, claimed_at = NULL
+		  WHERE id = $1 AND status IN ($3, $4)`,
+		id, StatusSent, StatusQueued, StatusSending,
+	)
+	if err != nil {
+		return false, fmt.Errorf("outbox: marking %d done: %w", id, err)
 	}
 	return tag.RowsAffected() == 1, nil
 }

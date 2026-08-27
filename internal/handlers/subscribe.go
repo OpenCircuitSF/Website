@@ -151,6 +151,7 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
@@ -311,6 +312,30 @@ type SubscribeHandler struct {
 	// other drop path in this file. See Close's doc comment.
 	closeMu sync.Mutex
 	closed  bool
+
+	// intake is #0254's durability backstop for mutateQueue, which is
+	// still in-memory and still lossy (queue-full, or a job dropped or
+	// interrupted at shutdown) — see the package doc comment's "Non-goal"
+	// paragraph, which #0126 wrote precisely to flag this as the remaining
+	// gap. Subscribe writes a KindSubscribeIntake row through intake
+	// SYNCHRONOUSLY, before the response, unconditionally for every
+	// accepted request (the same "fixed cost every branch pays" shape as
+	// the suppression/FindByEmail reads — see subscribe_intake.go's
+	// package doc comment for the full design and why that keeps the
+	// uniform-202 timing property intact). intakeDoneCh/intakeStopped
+	// track the recovery poller runIntakeWorker starts in
+	// NewSubscribeHandler (subscribe_intake.go) — stopped by the same
+	// h.sendCtx cancellation Close already uses for the mutate workers, so
+	// no separate Stop method or shutdown call site is needed.
+	//
+	// nil-tolerant, matching auditor: a nil intake disables the durability
+	// write entirely (Subscribe falls back to exactly its pre-#0254
+	// behavior) and NewSubscribeHandler does not start the recovery
+	// poller. Every production and test call site passes a real
+	// *outbox.Store; nil exists only as a safety default, the same role
+	// NoSuppressions plays for suppression.
+	intake       *outbox.Store
+	intakeDoneCh chan struct{}
 }
 
 // mutateQueueCapacity bounds the async subscription-mutation queue. Sized
@@ -351,12 +376,23 @@ type mutateJob struct {
 	suppErr    error
 	existing   subscribers.Subscriber
 	findErr    error
+
+	// intakeID is the outbound_queue row #0254's synchronous durability
+	// write created for this same request (0 if that write failed, or if
+	// h.intake is nil) — see subscribe_intake.go. processMutateJob marks it
+	// done once this job has been dispatched, so SubscribeHandler's own
+	// recovery poller never reprocesses a job the fast path already
+	// finished.
+	intakeID int64
 }
 
-// NewSubscribeHandler constructs a SubscribeHandler and starts its async
-// mutation worker pool (see mutateJob and the package doc comment). A nil
-// suppression checker defaults to NoSuppressions; a nil logger defaults to
-// slog.Default(), matching AuthHandler's nil-tolerance convention.
+// NewSubscribeHandler constructs a SubscribeHandler, starts its async
+// mutation worker pool (see mutateJob and the package doc comment), and —
+// if intake is non-nil — starts #0254's recovery poller (subscribe_intake.go).
+// A nil suppression checker defaults to NoSuppressions; a nil logger
+// defaults to slog.Default(), matching AuthHandler's nil-tolerance
+// convention; a nil intake disables the durability write and the recovery
+// poller both (see the intake field's own doc comment).
 //
 // #0126 removed the mailer and settings parameters this constructor used to
 // take: mailer.Send and the physical_address footer lookup both moved to
@@ -371,6 +407,7 @@ func NewSubscribeHandler(
 	auditor *audit.Logger,
 	baseURL string,
 	logger *slog.Logger,
+	intake *outbox.Store,
 ) *SubscribeHandler {
 	if suppression == nil {
 		suppression = NoSuppressions{}
@@ -383,12 +420,19 @@ func NewSubscribeHandler(
 		subs: subs, interests: il, suppression: suppression,
 		auditor: auditor, baseURL: baseURL,
 		now: time.Now, log: logger,
-		mutateQueue: make(chan mutateJob, mutateQueueCapacity),
-		sendCtx:     sendCtx,
-		sendCancel:  sendCancel,
+		mutateQueue:  make(chan mutateJob, mutateQueueCapacity),
+		sendCtx:      sendCtx,
+		sendCancel:   sendCancel,
+		intake:       intake,
+		intakeDoneCh: make(chan struct{}),
 	}
 	for i := 0; i < mutateWorkerCount; i++ {
 		go h.runMutateWorker()
+	}
+	if intake != nil {
+		go h.runIntakeWorker()
+	} else {
+		close(h.intakeDoneCh) // nothing to wait for — see Close.
 	}
 	return h
 }
@@ -434,8 +478,37 @@ func (h *SubscribeHandler) processMutateJob(job mutateJob) {
 
 	ctx, cancel := context.WithTimeout(h.sendCtx, mutateJobTimeout)
 	defer cancel()
+	// #0254: mark the durable intake row (if any) processed once dispatch
+	// returns, regardless of which branch ran or whether it succeeded —
+	// see dispatchMutation's doc comment and subscribe_intake.go's package
+	// doc comment for why "processed" does not mean "succeeded" here, the
+	// same convention every branch below already follows (log and move on,
+	// never retried at this layer). Ordered after `defer cancel()` so it
+	// runs BEFORE cancel (LIFO) — ctx must still be valid when this fires.
+	defer h.markIntakeDone(ctx, job.intakeID)
 
-	if job.isBot {
+	h.dispatchMutation(ctx, job.isBot, job.email, job.interestIDs, job.evidence, job.now,
+		job.suppressed, job.suppErr, job.existing, job.findErr)
+}
+
+// dispatchMutation is processMutateJob's body, factored out so #0254's
+// recovery poller (subscribe_intake.go's processIntakeRow) can run the
+// IDENTICAL dispatch against a freshly re-read suppressed/existing/findErr
+// rather than a second, drifting copy of this logic. Every parameter here
+// is exactly what processMutateJob used to read off job directly.
+func (h *SubscribeHandler) dispatchMutation(
+	ctx context.Context,
+	isBot bool,
+	email string,
+	interestIDs []int64,
+	evidence subscribers.RestartSignupInput,
+	now time.Time,
+	suppressed bool,
+	suppErr error,
+	existing subscribers.Subscriber,
+	findErr error,
+) {
+	if isBot {
 		// Honeypot or timing gate. Deliberately no action and no log line
 		// distinguishing this from any other silently-dropped branch below
 		// — logging it differently would just move the oracle from
@@ -444,7 +517,7 @@ func (h *SubscribeHandler) processMutateJob(job mutateJob) {
 		return
 	}
 
-	if subscribers.IsReservedTestEmail(job.email) {
+	if subscribers.IsReservedTestEmail(email) {
 		// #0046's review, finding B: campaign-test+admin-<id>@
 		// internal.opencircuitsf.test is the deterministic, now-public
 		// test-send recipient anchor admin_campaign_preview.go creates.
@@ -453,29 +526,50 @@ func (h *SubscribeHandler) processMutateJob(job mutateJob) {
 		// enumerable admin ids make it trivially probeable. Silently
 		// no-op, exactly like isBot/suppressed above — Subscribe already
 		// wrote the uniform 202 to the (long-since-returned) HTTP response
-		// before this async job ever ran, so this check cannot introduce
-		// any observable branch in the endpoint's behavior. Checked
-		// regardless of whether a subscribers row already exists at this
-		// address (findErr/existing below), since the enumeration risk is
-		// in the domain itself, not in any particular row's state.
+		// before this job ever ran, so this check cannot introduce any
+		// observable branch in the endpoint's behavior. Checked regardless
+		// of whether a subscribers row already exists at this address
+		// (findErr/existing below), since the enumeration risk is in the
+		// domain itself, not in any particular row's state.
 		return
 	}
 
-	if job.suppErr != nil {
-		h.log.Error("subscribe: suppression check failed", "err", job.suppErr)
+	if suppErr != nil {
+		h.log.Error("subscribe: suppression check failed", "err", suppErr)
 		return
 	}
-	if job.suppressed {
+	if suppressed {
 		return
 	}
 
 	switch {
-	case errors.Is(job.findErr, subscribers.ErrNotFound):
-		h.newSignup(ctx, job.email, job.interestIDs, job.evidence, job.now)
-	case job.findErr != nil:
-		h.log.Error("subscribe: lookup failed", "err", job.findErr)
+	case errors.Is(findErr, subscribers.ErrNotFound):
+		h.newSignup(ctx, email, interestIDs, evidence, now)
+	case findErr != nil:
+		h.log.Error("subscribe: lookup failed", "err", findErr)
 	default:
-		h.existingSignup(ctx, job.existing, job.interestIDs, job.evidence, job.now)
+		h.existingSignup(ctx, existing, interestIDs, evidence, now)
+	}
+}
+
+// markIntakeDone marks #0254's durable intake row processed, once
+// dispatchMutation has returned. A no-op if h.intake is nil or intakeID is
+// 0 (the synchronous durability write in Subscribe never ran, or failed —
+// see that call site's own comment). MarkDone matches status IN
+// ('queued', 'sending') rather than requiring a prior claim: under normal
+// operation the fast, in-memory path (this method's only caller before
+// #0254's recovery poller exists) is always first, so the row is still
+// 'queued'; if the recovery poller happened to claim it first (only
+// possible once intakeGraceDelay has elapsed — see subscribe_intake.go),
+// 'sending' also matches, and whichever of the two finishes last simply
+// finds MarkDone/MarkSent affecting zero rows, which both treat as
+// harmless (see MarkDone's and MarkSent's own doc comments).
+func (h *SubscribeHandler) markIntakeDone(ctx context.Context, intakeID int64) {
+	if h.intake == nil || intakeID == 0 {
+		return
+	}
+	if _, err := h.intake.MarkDone(ctx, intakeID); err != nil {
+		h.log.Error("subscribe: marking intake row processed failed", "intake_id", intakeID, "err", err)
 	}
 }
 
@@ -575,6 +669,15 @@ func (h *SubscribeHandler) waitForSends() {
 // comments for why that removal does not reopen #0081's goroutine-leak
 // fix: mutateQueue/mutateWG is the only pool left, and it is closed/waited
 // exactly as before.
+//
+// #0254 added a second goroutine to wait for: runIntakeWorker (started by
+// NewSubscribeHandler whenever intake is non-nil). It has no queue of its
+// own to close — it polls outbound_queue directly — so h.sendCancel()
+// alone is what stops it; it observes ctx.Done() the same way
+// processMutateJob already does and closes h.intakeDoneCh on return. When
+// intake is nil, NewSubscribeHandler pre-closes h.intakeDoneCh, so this
+// wait is a no-op in every test/dev configuration that passes a nil
+// intake.
 func (h *SubscribeHandler) Close(ctx context.Context) error {
 	h.closeMu.Lock()
 	if h.closed {
@@ -589,6 +692,7 @@ func (h *SubscribeHandler) Close(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		h.mutateWG.Wait()
+		<-h.intakeDoneCh
 		close(done)
 	}()
 
@@ -732,6 +836,50 @@ func (h *SubscribeHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		ConfirmTTL:      subscribeConfirmTTL,
 	}
 
+	// #0254: the third and last fixed-cost step every accepted request
+	// pays — see subscribe_intake.go's package doc comment for the full
+	// design. This is what makes the 202 below durably true: by the time
+	// it is written, a KindSubscribeIntake row already exists in
+	// outbound_queue (committed — this is a plain, unconditional INSERT,
+	// not wrapped in the mutateQueue send below), so even if enqueueMutation
+	// drops this job (queue-full) or the process is killed before
+	// mutateQueue ever drains it, SubscribeHandler's own recovery poller
+	// will still find and reprocess it. Unconditional and identical in
+	// shape for every branch (isBot included, exactly like the two reads
+	// above), so it does not reopen #0088's timing-oracle finding: no
+	// branch here gains or loses request-path work by this write existing.
+	//
+	// An enqueue failure is logged, not surfaced — this endpoint's
+	// contract (CLAUDE.md §9) is a byte-identical 202 regardless of any
+	// internal failure. It leaves intakeID at its zero value, which
+	// markIntakeDone (called once dispatchMutation finishes, either by the
+	// fast path below or never at all if enqueueMutation also drops the
+	// job) treats as "nothing to mark" — the same degrade-to-pre-#0254-
+	// behavior a nil h.intake already produces.
+	var intakeID int64
+	if h.intake != nil {
+		id, err := h.intake.Enqueue(ctx, outbox.Item{
+			Kind:      outbox.KindSubscribeIntake,
+			Recipient: email,
+			Payload: subscribeIntakePayload{
+				InterestIDs:       interestIDs,
+				IsBot:             isBot,
+				SignupIP:          evidence.SignupIP,
+				SignupUserAgent:   evidence.SignupUserAgent,
+				UTMSource:         evidence.UTMSource,
+				UTMMedium:         evidence.UTMMedium,
+				UTMCampaign:       evidence.UTMCampaign,
+				ConfirmTTLSeconds: int64(evidence.ConfirmTTL.Seconds()),
+			},
+			Delay: intakeGraceDelay,
+		})
+		if err != nil {
+			h.log.Error("subscribe: durably recording signup attempt failed", "err", err)
+		} else {
+			intakeID = id
+		}
+	}
+
 	h.enqueueMutation(mutateJob{
 		isBot:       isBot,
 		email:       email,
@@ -742,6 +890,7 @@ func (h *SubscribeHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		suppErr:     suppErr,
 		existing:    existing,
 		findErr:     findErr,
+		intakeID:    intakeID,
 	})
 
 	writeSubscribeUniform202(w)

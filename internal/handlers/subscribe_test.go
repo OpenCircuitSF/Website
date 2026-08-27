@@ -18,6 +18,7 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
@@ -193,6 +194,7 @@ func subscribeMux(t *testing.T, pool *pgxpool.Pool, suppression SuppressionCheck
 	h := NewSubscribeHandler(
 		subscribers.NewStore(pool), interests.NewStore(pool),
 		suppression, audit.New(pool), "https://example.test", nil,
+		outbox.NewStore(pool),
 	)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -373,13 +375,23 @@ type outboundQueueTestRow struct {
 	Payload      string // raw JSONB text
 }
 
-// outboundQueueRowsFor reads every outbound_queue row for recipient,
+// outboundQueueRowsFor reads every MAIL outbound_queue row for recipient,
 // oldest first.
+//
+// #0254 excludes outbox.KindSubscribeIntake explicitly: Subscribe now
+// writes exactly one such row, synchronously, for every accepted request
+// regardless of branch (the durability backstop subscribe_intake.go
+// documents) — it is not mail, and every caller of this helper (and of
+// outboundQueueCountFor) predates #0254 and means "what mail got queued for
+// this recipient", not "every outbound_queue row of any kind". Without this
+// filter, every one of this file's "exactly N messages" assertions would be
+// off by exactly one intake row per accepted request.
 func outboundQueueRowsFor(t *testing.T, pool *pgxpool.Pool, recipient string) []outboundQueueTestRow {
 	t.Helper()
 	rows, err := pool.Query(context.Background(),
 		`SELECT kind, recipient, status, subscriber_id, payload::text
-		   FROM outbound_queue WHERE recipient = $1 ORDER BY id`, recipient,
+		   FROM outbound_queue WHERE recipient = $1 AND kind <> $2 ORDER BY id`,
+		recipient, string(outbox.KindSubscribeIntake),
 	)
 	if err != nil {
 		t.Fatalf("querying outbound_queue for %q: %v", recipient, err)
@@ -1336,6 +1348,7 @@ func TestSubscribe_AsyncSendDoesNotBlockResponse(t *testing.T) {
 	h := NewSubscribeHandler(
 		blocked, interests.NewStore(pool),
 		NoSuppressions{}, audit.New(pool), "https://example.test", nil,
+		outbox.NewStore(pool),
 	)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1407,6 +1420,7 @@ func TestSubscribeHandler_Close_InterruptsInFlightMutationPromptly(t *testing.T)
 	h := NewSubscribeHandler(
 		blocked, interests.NewStore(pool),
 		NoSuppressions{}, audit.New(pool), "https://example.test", nil,
+		outbox.NewStore(pool),
 	)
 
 	email := subscribeUniqueEmail(t)
@@ -1481,6 +1495,7 @@ func TestNewSubscribeHandler_NoGoroutineLeakAcrossConstruction(t *testing.T) {
 		h := NewSubscribeHandler(
 			subscribers.NewStore(pool), interests.NewStore(pool),
 			NoSuppressions{}, nil, "https://example.test", nil,
+			outbox.NewStore(pool),
 		)
 		func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1657,6 +1672,7 @@ func subscribeCountingMux(t *testing.T, pool *pgxpool.Pool, suppression Suppress
 	h := NewSubscribeHandler(
 		subs, interests.NewStore(pool),
 		supp, audit.New(pool), "https://example.test", nil,
+		outbox.NewStore(pool),
 	)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1828,6 +1844,7 @@ func TestSubscribe_MutationDeferredDoesNotBlockResponse(t *testing.T) {
 			h := NewSubscribeHandler(
 				blocked, interests.NewStore(pool),
 				NoSuppressions{}, audit.New(pool), "https://example.test", nil,
+				outbox.NewStore(pool),
 			)
 			t.Cleanup(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
