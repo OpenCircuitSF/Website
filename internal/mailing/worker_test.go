@@ -1601,7 +1601,13 @@ func (m *ctxAwareMailer) Send(ctx context.Context, _ Message) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sent++
-	return "ctx-ok-1", nil
+	// #0289: this id lands in email_sends.ses_message_id via MarkSent, the
+	// same join key CampaignStatsStore.CampaignIDsByMessageIDs and
+	// EventCounts use (idx_email_sends_message_id, idx_email_events_message_id
+	// — both non-unique). A hardcoded literal here is exactly #0269 item 2's
+	// shape: two test runs sharing a database (§5a's fallback case) would
+	// both write "ctx-ok-1" against different campaigns.
+	return fmt.Sprintf("ctx-ok-%d", testdb.Unique()), nil
 }
 
 func (m *ctxAwareMailer) count() int {

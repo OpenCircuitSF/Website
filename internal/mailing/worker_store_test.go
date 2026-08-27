@@ -2,10 +2,12 @@ package mailing
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
 func TestSendStore_ClaimStart_TransitionsScheduledToSending(t *testing.T) {
@@ -206,7 +208,11 @@ func TestSendStore_MarkSentAndMarkFailedRow(t *testing.T) {
 	if _, _, err := store.ClaimRow(context.Background(), sentID); err != nil {
 		t.Fatalf("claim sentID: %v", err)
 	}
-	ok, err := store.MarkSent(context.Background(), sentID, "ses-message-1")
+	// Per CLAUDE.md §8b, never target a literal or seeded id in a test — a
+	// hardcoded "ses-message-1" is a value another concurrently running test
+	// (or process, #0269 item 2) could also mint. Generate one instead.
+	sesMessageID := fmt.Sprintf("ses-message-%d", testdb.Unique())
+	ok, err := store.MarkSent(context.Background(), sentID, sesMessageID)
 	if err != nil || !ok {
 		t.Fatalf("MarkSent: ok=%v err=%v", ok, err)
 	}
