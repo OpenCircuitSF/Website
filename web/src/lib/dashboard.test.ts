@@ -11,6 +11,7 @@ import {
   formatComplaintRatePct,
   buildWarnings,
   hasAlertWarning,
+  statusWarningsAnnouncement,
 } from './dashboard';
 
 function growth(overrides: Partial<DashboardGrowth> = {}): DashboardGrowth {
@@ -155,5 +156,34 @@ describe('hasAlertWarning', () => {
     expect(hasAlertWarning(buildWarnings(warnings({ physical_address_unset: true, ses_sandbox_active: true })))).toBe(
       true,
     );
+  });
+});
+
+describe('statusWarningsAnnouncement (#0279)', () => {
+  it('is empty when there are no warnings at all', () => {
+    expect(statusWarningsAnnouncement(buildWarnings(warnings()))).toBe('');
+  });
+
+  it('is empty when every warning is alert-severity -- alert already announces reliably on its own', () => {
+    const rows = buildWarnings(warnings({ physical_address_unset: true, outbound_queue_abandoned: true }));
+    expect(rows.every((r) => r.alert)).toBe(true);
+    expect(statusWarningsAnnouncement(rows)).toBe('');
+  });
+
+  it('joins only the non-alert warnings, excluding any alert-severity ones present at the same time', () => {
+    const rows = buildWarnings(
+      warnings({ physical_address_unset: true, ses_sandbox_active: true, inbound_mail_unavailable: true }),
+    );
+    const text = statusWarningsAnnouncement(rows);
+    expect(text).not.toContain('No physical mailing address is set');
+    expect(text).toContain('This environment is configured for SES sandbox mode');
+    expect(text).toContain('Inbound mailto: unsubscribe processing is not built yet');
+  });
+
+  it('changes when the set of non-alert warnings changes, so a persistent region\'s text genuinely mutates', () => {
+    const before = statusWarningsAnnouncement(buildWarnings(warnings({ ses_sandbox_active: true })));
+    const after = statusWarningsAnnouncement(buildWarnings(warnings({ ses_sandbox_active: false })));
+    expect(before).not.toBe(after);
+    expect(after).toBe('');
   });
 });

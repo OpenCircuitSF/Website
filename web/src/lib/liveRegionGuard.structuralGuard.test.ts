@@ -139,14 +139,16 @@
 //
 // ## "Cannot classify" (#0242 criterion 5, #0243's dynamic-role finding)
 //
-// Two sites in the tree carry a NON-STATIC role or aria-live attribute
-// value (a `role={...}` or `aria-live={...}` expression, not a plain string)
-// -- this guard cannot statically prove what role such a site resolves to
-// at runtime, so it refuses to guess. Any such site fails loudly, by name,
+// A site carrying a NON-STATIC role or aria-live attribute value (a
+// `role={...}` or `aria-live={...}` expression, not a plain string) --
+// this guard cannot statically prove what role such a site resolves to at
+// runtime, so it refuses to guess. Any such site fails loudly, by name,
 // rather than being silently skipped by the (necessarily string-matching)
-// classifier below. See KNOWN_DYNAMIC_ROLE_SITES for the one currently in
-// the tree (Dashboard.svelte's per-warning list item) and why it is named
-// rather than fixed here.
+// classifier below. KNOWN_DYNAMIC_ROLE_SITES held exactly one entry
+// (Dashboard.svelte's per-warning list item, `role={w.alert ? 'alert' :
+// 'status'}`) until #0279 converted it to two statically-rolled branches
+// plus a persistent announcer, emptying the set; see that set's own
+// comment for why it stays declared rather than deleted.
 //
 // ## Instrument
 //
@@ -525,12 +527,16 @@ interface AllowlistEntry {
  * a NEW dynamic-role site anywhere in the tree fails this guard until it is
  * either made static or added here by name -- it can never silently pass. */
 const KNOWN_DYNAMIC_ROLE_SITES: AllowlistEntry[] = [
-  {
-    file: 'web/src/views/admin/Dashboard.svelte',
-    match: "role={w.alert ? 'alert' : 'status'}",
-    reason:
-      "Dashboard.svelte's per-warning list item toggles between the two roles this decision governs, inside a KEYED {#each} -- Svelte reuses the same DOM node for an existing key across a re-render (mutating its role/text in place), but a warning appearing for the FIRST time is a genuine insertion. For 'alert' that's the sound, relied-upon case (#0243's decision); for 'status' it is the same initial-appearance gap the loading placeholders already carry. Reported here rather than redesigned, matching #0063's own treatment of that shape; #0279 fixes this properly and empties this set.",
-  },
+  // #0279 converted Dashboard.svelte's per-warning list item -- the only
+  // entry this set has ever held -- to two statically-rolled {#if w.alert}
+  // branches plus a persistent role="status" announcer outside the
+  // {#each}, so this set is empty as of that issue. Left declared, not
+  // deleted: the mechanism above (ANY dynamic role/aria-live site anywhere
+  // in the tree fails loudly unless named here) stays live and generally
+  // useful, and an empty array correctly expresses "no exception is
+  // currently justified" -- #0280's justification + staleness checks
+  // already govern whatever gets added here next, so #0279 criterion 2's
+  // "remove the set outright" alternative is not needed.
 ];
 
 /** Governing-branch-dynamic, no swap target, but purely static text --
@@ -764,16 +770,24 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
     // Enumeration floors (#0243 criterion 1: "derived from the tree"), not
     // magic totals -- if any of these drops, either a site was converted
     // (update the count/allowlist deliberately) or the scan itself broke.
-    // Re-derived 2026-08-27 (#0242 review) against the WIDENED scan (whole
-    // of web/src, not just web/src/views): alertSites 56 (unchanged --
-    // no role="alert" sites exist outside web/src/views), statusSites 30
-    // (was 29 over views only; SubscribeForm.svelte's persistent
-    // aria-live="polite" error region -- this issue's own motivating
-    // example, previously invisible to this guard -- adds the 30th),
-    // loadingPlaceholders 20 (unchanged -- no loading-placeholder shape
-    // exists outside web/src/views either).
-    expect(alertSites.length).toBeGreaterThanOrEqual(56);
-    expect(statusSites.length).toBeGreaterThanOrEqual(30);
+    // Re-derived 2026-08-27 (#0279), by running this exact test with a
+    // temporary throw reporting the live counts, both BEFORE and AFTER
+    // #0279's change (each measured by swapping Dashboard.svelte, and this
+    // file's own KNOWN_DYNAMIC_ROLE_SITES entry, back to their prior
+    // committed content -- git-hash-verified restored afterwards, per
+    // CLAUDE.md §8a). BEFORE (i.e. the tree as #0242's review last measured
+    // it, PLUS whatever unrelated work landed since -- #0244, and the
+    // #0233/#0270/#0274 session): alertSites 60, statusSites 31 -- already
+    // 4 and 1 higher than the "56"/"30" this comment previously recorded,
+    // confirming these are living floors that drift upward with ordinary
+    // work, not fixed totals. AFTER #0279 (Dashboard.svelte's per-warning
+    // `role={w.alert ? 'alert' : 'status'}` split into a static
+    // role="alert" branch -- +1 alertSites -- plus a new persistent
+    // role="status" announcer outside the {#each} -- +1 statusSites):
+    // alertSites 61, statusSites 32. loadingPlaceholders 20, unchanged by
+    // #0279 (Dashboard.svelte's two existing placeholders are untouched).
+    expect(alertSites.length).toBeGreaterThanOrEqual(61);
+    expect(statusSites.length).toBeGreaterThanOrEqual(32);
     expect(loadingPlaceholders.length).toBeGreaterThanOrEqual(20);
   });
 });

@@ -105,7 +105,11 @@ describe('Dashboard — empty state', () => {
 
     // The one warning a fresh install always carries (#0058 unbuilt) shows
     // as an informational note, not an alert.
-    const inboundNote = screen.getByText(/Inbound mailto: unsubscribe processing is not built yet/);
+    // #0279: this non-alert warning's text now also appears (deliberately)
+    // in the persistent sr-only role="status" announcer outside the list,
+    // so scope the query to the visible <li> to keep matching exactly one
+    // element -- see statusWarningsAnnouncement's own doc comment.
+    const inboundNote = screen.getByText(/Inbound mailto: unsubscribe processing is not built yet/, { selector: 'li' });
     expect(inboundNote.closest('li')?.classList.contains('alert')).toBe(false);
 
     // No sending campaign panel at all when none is in flight.
@@ -141,7 +145,9 @@ describe('Dashboard — populated payload', () => {
     const highWarning = screen.getByText(/Gmail\/Yahoo's published 0.3% bulk-sender limit/);
     expect(highWarning.closest('li')?.classList.contains('alert')).toBe(true);
 
-    const sandboxWarning = screen.getByText(/configured for SES sandbox mode/);
+    // #0279: same reasoning as inboundNote above -- also present in the
+    // persistent status announcer, so scope to the <li>.
+    const sandboxWarning = screen.getByText(/configured for SES sandbox mode/, { selector: 'li' });
     expect(sandboxWarning.closest('li')?.classList.contains('alert')).toBe(false);
   });
 
@@ -179,5 +185,61 @@ describe('Dashboard — load error', () => {
     retry.click();
 
     await waitFor(() => expect(screen.getByText('No campaigns yet.')).toBeTruthy());
+  });
+});
+
+describe('Dashboard — persistent status announcer (#0279)', () => {
+  // These assertions are STRUCTURAL (element presence, role/aria-live
+  // attributes, text content) under jsdom -- not a claim that a real screen
+  // reader actually spoke anything (CLAUDE.md §5: jsdom is not a browser).
+  // What they prove is the shape #0279's fix relies on: the announcer node
+  // is present in the DOM from the very first render (before the fetch
+  // resolves), so its later text change is a genuine MUTATION of an
+  // already-present node -- the announce-reliably-on-insertion pattern
+  // #0063 decided on and SubscribeForm.svelte's #subscribe-form-error
+  // already uses -- rather than a role="status" node created fresh
+  // alongside its first content, which #0063's own decision (and this
+  // issue) treats as unreliable.
+  function findAnnouncer(container: HTMLElement): HTMLElement {
+    const el = container.querySelector('[role="status"][aria-live="polite"]');
+    if (!el) throw new Error('expected the persistent status announcer to be in the DOM');
+    return el as HTMLElement;
+  }
+
+  it('is present, empty, and unconditional BEFORE the overview fetch resolves (not created alongside the first warning)', () => {
+    // A promise that never resolves during this test -- `loading` stays
+    // true, so this proves the announcer is not gated behind {#if overview}.
+    getOverview.mockReturnValue(new Promise<DashboardOverview>(() => {}));
+    const { container } = render(Dashboard, { props: { onOpenCampaign: vi.fn() } });
+
+    const announcer = findAnnouncer(container);
+    expect(announcer.textContent).toBe('');
+    expect(screen.getByText('Loading overview…')).toBeTruthy();
+  });
+
+  it('mutates to include only the non-alert warnings once loaded, never the alert-severity ones (no double announcement)', async () => {
+    getOverview.mockResolvedValue(populatedOverview());
+    const { container } = render(Dashboard, { props: { onOpenCampaign: vi.fn() } });
+
+    await waitFor(() => expect(screen.getByText('Home Automation')).toBeTruthy());
+
+    const announcer = findAnnouncer(container);
+    expect(announcer.textContent).toContain('configured for SES sandbox mode');
+    expect(announcer.textContent).not.toContain('No physical mailing address is set');
+    expect(announcer.textContent).not.toContain("AWS's 0.1% account-wide threshold");
+  });
+
+  it('stays empty when every warning is alert-severity (role="alert" already announces reliably on its own)', async () => {
+    const overview = populatedOverview();
+    overview.warnings = {
+      ...overview.warnings,
+      ses_sandbox_active: false,
+      inbound_mail_unavailable: false,
+    };
+    getOverview.mockResolvedValue(overview);
+    const { container } = render(Dashboard, { props: { onOpenCampaign: vi.fn() } });
+
+    await waitFor(() => expect(screen.getByText('Home Automation')).toBeTruthy());
+    expect(findAnnouncer(container).textContent).toBe('');
   });
 });

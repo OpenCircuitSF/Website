@@ -117,3 +117,33 @@ export function buildWarnings(w: DashboardWarnings): DashboardWarning[] {
 export function hasAlertWarning(warnings: DashboardWarning[]): boolean {
   return warnings.some((w) => w.alert);
 }
+
+/**
+ * #0279: the text Dashboard.svelte's persistent `role="status"` announcer
+ * mutates into. Dashboard.svelte used to render each warning's role with
+ * `role={w.alert ? 'alert' : 'status'}` inside a keyed `{#each}` — a
+ * dynamic role expression the live-region guard (`#0242`) cannot classify,
+ * AND (independent of that) unreliable for the `'status'` half specifically:
+ * a keyed `{#each}` mutates the SAME DOM node in place for an existing key
+ * across a re-render, but a warning appearing for the first time is a
+ * genuine insertion, which `role="status"` does not announce reliably (the
+ * same gap the loading placeholders carry). `role="alert"` doesn't have
+ * this problem — #0243 established it announces reliably even when
+ * `{#if}`/`{#each}`-created — so alert-severity warnings keep their own
+ * static `role="alert"` list item and are deliberately NOT included here
+ * (including them would double-announce the same text through two live
+ * regions at once).
+ *
+ * Only the non-alert (status-severity) warnings' messages are joined into
+ * one string; the persistent region carrying this text already exists
+ * before `warnings` first has content (unconditionally rendered, per
+ * `#0063`'s decision that a live region must be a node that MUTATES, not
+ * one created fresh alongside its first content), so setting this from ''
+ * to a real value is a genuine node mutation, not an insertion.
+ */
+export function statusWarningsAnnouncement(warnings: DashboardWarning[]): string {
+  return warnings
+    .filter((w) => !w.alert)
+    .map((w) => w.message)
+    .join(' ');
+}

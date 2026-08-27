@@ -25,7 +25,13 @@
   } from '../../lib/campaignProgress';
   import { campaignStatusLabel, campaignStatusBadgeClass } from '../../lib/campaigns';
   import { formatDateTime, subscriberStatusLabel, subscriberStatusBadgeClass, SUBSCRIBER_STATUSES } from '../../lib/admin';
-  import { formatNetGrowth, formatGrowthDetail, buildWarnings, hasAlertWarning } from '../../lib/dashboard';
+  import {
+    formatNetGrowth,
+    formatGrowthDetail,
+    buildWarnings,
+    hasAlertWarning,
+    statusWarningsAnnouncement,
+  } from '../../lib/dashboard';
   import type { DashboardOverview, DashboardSubscriberCounts } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
@@ -101,6 +107,25 @@
 </script>
 
 <Panel title="Overview">
+  <!-- #0279: a persistent role="status" region, unconditionally rendered
+       (sr-only, empty when there is nothing to announce) rather than a
+       role="status" node created fresh per-item inside the {#each} below.
+       #0242's live-region guard found this list used to set
+       role={w.alert ? 'alert' : 'status'} on each <li> -- a dynamic role
+       expression it could not classify at all, and independently unsound
+       for the 'status' half: a keyed {#each} mutates the SAME DOM node in
+       place for an EXISTING key, but a warning's first appearance is a
+       genuine insertion, which role="status" does not announce reliably
+       (the same gap the loading placeholders carry). role="alert" doesn't
+       share that problem (#0243: sound even when {#if}/{#each}-created),
+       so w.alert warnings keep their own static role="alert" list item
+       below and are deliberately excluded from this region's text (see
+       statusWarningsAnnouncement's own doc comment) to avoid announcing
+       the same message twice through two live regions at once. Composed
+       in lib/dashboard.ts, per this file's own markup/wiring-only
+       convention. -->
+  <p class="sr-only" role="status" aria-live="polite">{statusWarningsAnnouncement(warnings)}</p>
+
   {#if loading}
     <p class="text-muted" role="status">Loading overview…</p>
   {:else if loadError}
@@ -112,7 +137,11 @@
         <h3 class="warnings-title">Needs attention</h3>
         <ul class="warnings-list">
           {#each warnings as w (w.key)}
-            <li class:alert={w.alert} role={w.alert ? 'alert' : 'status'}>{w.message}</li>
+            {#if w.alert}
+              <li class="alert" role="alert">{w.message}</li>
+            {:else}
+              <li>{w.message}</li>
+            {/if}
           {/each}
         </ul>
       </div>
