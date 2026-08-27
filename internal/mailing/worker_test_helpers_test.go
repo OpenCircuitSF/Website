@@ -83,9 +83,7 @@ func workerTestFixture(t *testing.T, pool *pgxpool.Pool) {
 	setSetting(t, pool, settingMaxSendRate, "100000")
 }
 
-// newTestWorker constructs a Worker wired to pool/mailer/progress with fast
-// defaults (no real waiting), and its own SendStore. baseURL/listDomain are
-// fixed test constants shared by every worker test.
+// baseURL/listDomain are fixed test constants shared by every worker test.
 const (
 	testWorkerBaseURL    = "https://www.example-oc-test.com"
 	testWorkerListDomain = "lists.example-oc-test.com"
@@ -93,6 +91,8 @@ const (
 	testWorkerFromAddr   = "hello@example-oc-test.com"
 )
 
+// newTestWorker constructs a Worker wired to pool/mailer/progress with fast
+// defaults (no real waiting), and its own SendStore.
 func newTestWorker(t *testing.T, pool *pgxpool.Pool, mailer Mailer) *Worker {
 	t.Helper()
 	audienceStore := NewAudienceStore(pool)

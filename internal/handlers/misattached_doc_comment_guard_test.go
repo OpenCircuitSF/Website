@@ -74,6 +74,20 @@ import (
 //   - misattachedDocKnownBenignPairs (below) closes the one single-spec
 //     case the dry run found that isn't a grouped block: see its own
 //     comment.
+//
+// What this exclusion currently costs (#0276): the
+// worker_test_helpers_test.go instance listed above was not actually benign
+// — "newTestWorker constructs a Worker ..." described func newTestWorker,
+// not the const block it sat on, leaving newTestWorker itself undocumented.
+// That is #0267's real defect shape (an undocumented declaration whose doc
+// went to its neighbour instead), just low-stakes: an unexported test
+// helper, not production code, and #0267's review chose to record it rather
+// than bounce that issue or narrow this exclusion. #0276 moved the sentence
+// onto func newTestWorker. The exclusion itself was not narrowed and still
+// cannot distinguish this shape from the five genuinely benign group
+// captions beside it — so a future group-level doc that actually
+// misattributes a declaration this way will again pass silently until a
+// human reads it, exactly as this one did.
 var misattachedDocFirstWordPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*`)
 
 // misattachedDocKnownBenignPairs is a small, individually-verified allowlist
