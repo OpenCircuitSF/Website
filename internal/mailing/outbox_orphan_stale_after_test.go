@@ -6,85 +6,64 @@ import (
 )
 
 // outbox_orphan_stale_after_test.go is #0284's regression coverage:
-// outboxOrphanStaleAfter (outbox_worker.go) must exceed the worst-case age
-// of the LAST row in a full outboxDefaultBatchSize batch, not just one
-// message's own worst case — see that var's doc comment for the full
-// derivation this file checks.
-
-// outboxWorstCaseFullBatchAge independently computes how old the last row
-// in a full batch of batchSize can legitimately be by the time its own
-// send finishes: (batchSize-1) rate-limiter intervals at minSendRate,
-// waiting behind every predecessor, plus that row's own worst-case send
-// (sendMessageTimeout + writeStatusTimeout).
+// outboxOrphanStaleAfter (outbox_worker.go) must cover (be >=) the
+// worst-case age of the LAST row in a full outboxDefaultBatchSize batch,
+// not just one message's own worst case — see that var's doc comment for
+// the full derivation this file checks. The window and the worst case are
+// equal at today's constants by design (outboxOrphanStaleAfter charges
+// every row in the batch its own full worst-case bound, with no
+// additional margin term), so the assertion is >=, not a strict >.
 //
-// Deliberately a DIFFERENT arithmetic expression from
-// outboxOrphanStaleAfter's (batchSize-1 here, batchSize in
-// outbox_worker.go) rather than a call into shared production code: an
-// oracle built from the same expression as its subject agrees with the
-// subject by construction and proves nothing (CLAUDE.md's "a guard's
-// oracle must not be the same bytes as its subject", from #0258). If a
-// future edit collapses outboxOrphanStaleAfter's own formula to also use
-// batchSize-1 (removing the deliberate one-interval margin), this
-// function's independently-written "-1" no longer differs from the
-// subject's, TestOutboxOrphanStaleAfterCoversFullBatch's `>` becomes `==`,
-// and the test correctly fails.
-func outboxWorstCaseFullBatchAge(batchSize, minSendRate int) time.Duration {
-	interval := time.Second / time.Duration(minSendRate)
-	return time.Duration(batchSize-1)*interval + sendMessageTimeout + writeStatusTimeout
+// #0284's review bounced a first version of this file: its oracle charged
+// each of (batchSize-1) predecessors the SAME per-predecessor term the
+// subject did (a rate-limiter interval), so it was the subject's own
+// formula minus one term rather than an independent check, and it could
+// not catch the defect the subject actually had (CLAUDE.md's "a guard's
+// oracle must not be the same bytes as its subject", from #0258). The
+// oracle below is built the opposite way round from the subject: the
+// subject is one flat multiplication (batchSize * perRowBound); the
+// oracle is a sum of batchSize individual per-row terms, computed in a
+// loop rather than folded into one multiplication. Different code shape,
+// same arithmetic result when the subject is correct — which is exactly
+// what makes it able to catch a subject that goes back to charging
+// something other than a full per-row bound per predecessor (e.g. a
+// rate-limiter interval): the loop's answer would then diverge from the
+// subject's instead of agreeing with it by construction.
+func outboxWorstCaseFullBatchAge(batchSize int, perRowBound time.Duration) time.Duration {
+	var total time.Duration
+	for i := 0; i < batchSize; i++ {
+		total += perRowBound
+	}
+	return total
 }
 
 // TestOutboxOrphanStaleAfterCoversFullBatch is the invariant #0284
 // criterion 3 asks for: the orphan window must exceed the worst-case age
 // of the last row in a full batch, computed from the REAL package
-// constants (outboxDefaultBatchSize, outboxMinSendRate,
-// sendMessageTimeout, writeStatusTimeout) rather than copied literals — so
-// it is sensitive to exactly the regression the issue describes. If a
-// future change raises outboxDefaultBatchSize (or lowers
-// outboxMinSendRate, or raises either timeout) without outboxOrphanStale
-// After's derivation picking that change up automatically — e.g. someone
-// "simplifies" it back to a hand-computed literal — this test recomputes
-// the worst case with the NEW real constant and the invariant breaks,
-// because it is reading the same source of truth outboxOrphanStaleAfter
-// itself is supposed to be reading.
+// constants (outboxDefaultBatchSize, sendMessageTimeout,
+// writeStatusTimeout) rather than copied literals — so it is sensitive to
+// exactly the regression the issue describes. If a future change raises
+// outboxDefaultBatchSize (or raises either timeout) without
+// outboxOrphanStaleAfter's derivation picking that change up
+// automatically — e.g. someone "simplifies" it back to a hand-computed
+// literal, or reintroduces a rate-limiter term that lets the window fall
+// below a full per-row multiple — this test recomputes the worst case
+// with the NEW real constants and the invariant breaks, because it is
+// reading the same source of truth outboxOrphanStaleAfter itself is
+// supposed to be reading.
+//
+// Proof this fails against reversion: pointing `got` at the pre-fix
+// formula, time.Duration(outboxDefaultBatchSize)*(time.Second/1) +
+// sendMessageTimeout + writeStatusTimeout (55s), against today's oracle
+// (700s) fails immediately — 55s does not exceed 700s. Verified by hand
+// in a scratch copy before this file was committed; not left in the
+// tree, since a permanent copy of the reverted formula would itself be
+// another "same premise" oracle risk.
 func TestOutboxOrphanStaleAfterCoversFullBatch(t *testing.T) {
 	got := outboxOrphanStaleAfter
-	want := outboxWorstCaseFullBatchAge(outboxDefaultBatchSize, outboxMinSendRate)
-	if got <= want {
-		t.Fatalf("outboxOrphanStaleAfter (%s) does not exceed the worst-case age of the last row in a full %d-row batch at the %d msg/sec floor (%s) — OrphanSweep could release a still-live claim, leading to a duplicate send (#0254)",
-			got, outboxDefaultBatchSize, outboxMinSendRate, want)
+	want := outboxWorstCaseFullBatchAge(outboxDefaultBatchSize, sendMessageTimeout+writeStatusTimeout)
+	if got < want {
+		t.Fatalf("outboxOrphanStaleAfter (%s) does not cover the worst-case age of the last row in a full %d-row batch (%s) — OrphanSweep could release a still-live claim, leading to a duplicate send (#0254)",
+			got, outboxDefaultBatchSize, want)
 	}
-}
-
-// TestNonBatchAwareWindowFailsAsBatchGrows is #0284 criterion 3's second
-// half: proof that a FIXED, non-batch-aware window — exactly the shape of
-// the pre-#0284 derivation, 2 * (sendMessageTimeout + writeStatusTimeout) —
-// is not a safe substitute for outboxOrphanStaleAfter's batch-derived
-// formula, regardless of what number it starts at. It happens to still
-// cover TODAY's worst case (the "accidental margin" #0284's description
-// calls out — the pre-#0284 70s did cover the actual ~54s worst case, by
-// luck rather than by derivation), but a window that does not move when
-// the batch size does is not actually protected by that margin: it erodes
-// silently as soon as the batch grows enough. This test raises the batch
-// size (not the window) and shows the naive constant stops covering the
-// worst case, which is exactly "must fail if someone raises the batch
-// size without touching the window" (#0284 criterion 3) — demonstrated
-// directly rather than argued.
-func TestNonBatchAwareWindowFailsAsBatchGrows(t *testing.T) {
-	naiveWindow := 2 * (sendMessageTimeout + writeStatusTimeout)
-
-	todaysWorstCase := outboxWorstCaseFullBatchAge(outboxDefaultBatchSize, outboxMinSendRate)
-	if naiveWindow <= todaysWorstCase {
-		t.Fatalf("test setup invariant broken: the naive pre-#0284 window (%s) no longer covers today's worst case (%s) on its own — the 'accidental margin' this test demonstrates the fragility of no longer holds, so this test can't demonstrate what it's meant to; re-derive grownBatch's multiplier", naiveWindow, todaysWorstCase)
-	}
-
-	const grownBatch = outboxDefaultBatchSize * 10
-	grownWorstCase := outboxWorstCaseFullBatchAge(grownBatch, outboxMinSendRate)
-	if naiveWindow > grownWorstCase {
-		t.Fatalf("naive, non-batch-aware window (%s) still covers the worst case for a %d-row batch (%s) — strengthen grownBatch so this test actually exercises the silent erosion #0284 closes", naiveWindow, grownBatch, grownWorstCase)
-	}
-	// naiveWindow has now failed to cover a grown batch's worst case,
-	// confirming a fixed constant is not a safe substitute for deriving
-	// the window from the batch size — which is exactly why
-	// outboxOrphanStaleAfter is a formula over outboxDefaultBatchSize,
-	// not a literal.
 }
