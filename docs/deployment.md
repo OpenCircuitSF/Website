@@ -333,9 +333,16 @@ already exists" error on that one statement.
 > `scripts/db-reset.sh` does the local dev-loop version of this (drop,
 > recreate, migrate, seed) and refuses to run against anything but
 > localhost/127.0.0.1 and a database name starting with `opencircuit` — it is
-> a development convenience, not a production tool, and per `CLAUDE.md` §1
+> a development convenience, not a production tool, ~~and per `CLAUDE.md` §1
 > this project's greenfield exception for rewriting migrations ends at the
-> first production deploy.
+> first production deploy.~~
+>
+> **Correction (`#0293`, 2026-08-27).** That exception ended on **2026-08-25**,
+> the day `www.opencircuitsf.com` first served this project and production's
+> PostgreSQL applied migrations through `schema_migrations.version = 22`.
+> `CLAUDE.md` §1 now treats `migrations/000001`–`000022` as append-only,
+> without qualification — no in-place rewrite is legitimate against any of
+> them any more.
 
 **Syntax-checked, not run against a production instance:** `psql --version`
 confirms local PostgreSQL 16 syntax-accepts `scripts/db/create.sql` and
@@ -446,10 +453,17 @@ git diff --name-only <last-deployed-sha>..HEAD -- migrations/   # any output => 
 migrate -path migrations -database "$DATABASE_URL" version       # or compare against the DB's applied version
 ```
 
-Per `CLAUDE.md` §1, this project is greenfield until the **first** production
+~~Per `CLAUDE.md` §1, this project is greenfield until the **first** production
 deploy — after that, migrations become append-only and must never be edited
 in place again. The first real run of this step, against a database that
-matters, is the event that ends the greenfield exception.
+matters, is the event that ends the greenfield exception.~~
+
+**Correction (`#0293`, 2026-08-27).** That first real run happened on
+**2026-08-25**, when this exact `migrate ... up` step was applied to
+production's PostgreSQL and left it at `schema_migrations.version = 22`. The
+greenfield exception is over: `CLAUDE.md` §1 now treats
+`migrations/000001`–`000022` as append-only, without qualification, and any
+new schema change is a new migration file above `000022`.
 
 **Verified locally, not on a real box:** `#0062`'s and `#0228`'s restore
 drills both ran this exact `migrate ... up` invocation repeatedly against

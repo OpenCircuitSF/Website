@@ -726,24 +726,34 @@ Plus the copied auth tables: `users`, `passkey_credentials`,
 > `000010`, so the column and its FK arrive by `ALTER TABLE` after
 > `subscriber_imports` is created, never by editing `000010`.
 
-> **Greenfield until first deploy — decided 2026-08-21.** Nothing is in
+> ~~**Greenfield until first deploy — decided 2026-08-21.** Nothing is in
 > production but the static placeholder. There is no PostgreSQL instance on the
 > EC2 box holding real data, no subscriber has ever signed up, and no campaign
 > has ever been sent. Until the first real release ships, the migration set is
 > **not** append-only in practice: `migrations/` may be squashed, renumbered, or
 > rewritten as a deliberate act, and the development database may be dropped and
-> recreated from scratch. No backfill logic is owed to data that does not exist.
+> recreated from scratch. No backfill logic is owed to data that does not exist.~~
 >
-> This is a scoped, temporary exception to CLAUDE.md §1's append-only rule, and
+> ~~This is a scoped, temporary exception to CLAUDE.md §1's append-only rule, and
 > it expires the moment the first production deploy applies a migration to a
 > database anyone cares about. After that, append-only is absolute again —
 > `migrations/000007` exists because ShortLinks broke it once. An issue that
 > adds a column before that line is allowed to say "add it to `000010`" instead
-> of "add an `ALTER TABLE` in `000020`"; one filed after it is not.
+> of "add an `ALTER TABLE` in `000020`"; one filed after it is not.~~
 >
-> The corollary that actually matters day to day: when a Phase 8 issue wants a
+> ~~The corollary that actually matters day to day: when a Phase 8 issue wants a
 > column on `subscribers`, the cheap and correct answer today is to edit
-> `000010`, reset the dev database, and move on.
+> `000010`, reset the dev database, and move on.~~
+>
+> **Correction (`#0293`, 2026-08-27).** The exception above expired on
+> **2026-08-25**: that is the day `www.opencircuitsf.com` first served this
+> project and production's PostgreSQL applied migrations up to
+> `schema_migrations.version = 22`. Migrations `000001`–`000022` are now frozen
+> and append-only, without qualification — see CLAUDE.md §1. Any schema change
+> from here on, including one that would once have gone straight into `000010`
+> or another already-shipped file, belongs in a new migration. The three
+> paragraphs above are struck through rather than deleted, as the record of
+> what was true from 2026-08-21 to 2026-08-25.
 
 **Email normalization.** Store `lower(trim(email))`. Do **not** strip Gmail dots
 or `+tag` suffixes — they are distinct addresses per RFC and users legitimately
