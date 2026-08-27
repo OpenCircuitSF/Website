@@ -298,6 +298,72 @@ import (
 // exactly where #0252/#0255's precedent already is, without widening what
 // counts as "touches Metadata" to fields that are not Metadata.
 
+// #0261: #0257's own review reported, without filing, a ninth shape: `e :=
+// &audit.Entry{...}` followed by either `e.Metadata = ...` or
+// `e.Metadata[...] = ...` was a silent pass (hasEmail=false, unresolved="")
+// — the pointer form of #0252's and #0257's own fixes, both of which only
+// ever handled a VALUE-typed identifier. Reproduced directly before fixing:
+// both deferred-mutation forms on a pointer-held entry resolved cleanly with
+// no warning. The break was NOT in collectDeferredMetadataFieldIdents — Go's
+// selector syntax `e.Metadata = ...` is the identical *ast.SelectorExpr
+// whether e holds a *audit.Entry or an audit.Entry, and the parser never
+// resolves types, so that half already saw the deferred assignment
+// correctly. It was entirely in compositeLitAssignedIdents, which required
+// an *ast.AssignStmt's RHS to be an *ast.CompositeLit directly; `&audit.Entry
+// {...}` is an *ast.UnaryExpr (Op == token.AND) wrapping one, so the type
+// assertion failed and the literal was never connected to the identifier
+// that held it — `literalIdents[cl]` had no entry, so the lookup in
+// scanAuditEntrySites never fired regardless of what
+// collectDeferredMetadataFieldIdents already knew. Now FIXED: unwrap a
+// single leading `&` before the *ast.CompositeLit type assertion, so both
+// pointer forms (`ident := &audit.Entry{...}` and `ident = &audit.Entry
+// {...}`) are connected the same way the value forms already are. See
+// compositeLitAssignedIdents below for the fix itself.
+//
+// The same review's follow-on observation — mutation of a Metadata map is
+// not only assignment; maps.Copy(e.Metadata, src) and delete(e.Metadata, k)
+// both change the map through a plain function call, with no *ast.AssignStmt
+// anywhere for either deferred-mutation helper to match — is also FIXED
+// here, not merely pinned: collectDeferredMetadataFieldIdents now also
+// recognizes both calls (matched by call shape alone — callee name "delete"
+// or "maps.Copy", first argument's selector naming "Metadata" — with
+// neither call's arguments read, the same conservative non-inspection its
+// existing assignment cases already use) and reports the identifier's
+// Metadata as an unresolved deferred mutation. Reproduced directly before
+// fixing: a "slug"-only literal followed by `maps.Copy(e.Metadata, extra)`
+// resolved hasEmail=false, unresolved="" — the consequential direction this
+// issue named, since `extra` could carry an email this guard never
+// inspects. `delete` cannot itself introduce a key, so its risk runs the
+// opposite way (a stale hasEmail=true, if a delete call removes the very key
+// that made the literal look risky) — but this guard's established answer
+// to "cannot prove what the running code ends up with" is unresolved
+// regardless of which direction the specific gap points, so both calls are
+// treated identically rather than reasoned about case by case. The failure
+// message previously said "a struct-field assignment"; it now says "a
+// Metadata mutation" and enumerates all four recognized shapes, so it stays
+// true now that two of them are calls, not assignments.
+//
+// No production site uses any of these four shapes today (checked directly:
+// `grep -rn '&audit\.Entry{' internal cmd --include='*.go'`,
+// `grep -rn 'maps\.Copy(' internal cmd --include='*.go'`, and
+// `grep -rn 'delete(' internal cmd --include='*.go' | grep -i metadata`,
+// each excluding _test.go, all return nothing), so this pass changes
+// detection capability only — it adds and removes no site from
+// auditEmailMetadataKnownSites, and TestAuditEntryEmailMetadataMatchesKnownSites
+// (which fails on ANY newly-unresolved site) passed unchanged against the
+// real tree. The site/key census itself has moved since the 45-site/87-key
+// figure earlier paragraphs cite, but not because of this pass: #0126 has
+// been landing new audit.Entry call sites concurrently with this one, and
+// re-deriving both figures directly against the real tree (scanAuditEntrySites
+// over auditEmailMetadataScanRoots, plus an independent walker reusing only
+// this file's key-extraction primitives — compositeLitStringKeys and
+// collectLocalMapKeys, not its classification decisions) finds **49 sites,
+// 95 distinct keys, 0 unresolved** as of this pass. The invariant this issue
+// actually cares about — no site newly reports unresolved, and
+// auditEmailMetadataKnownSites' set of email-carrying sites is unchanged —
+// holds; the raw site/key counts are expected to keep moving as #0126 adds
+// call sites and are not, by themselves, evidence of a regression here.
+
 // auditEmailMetadataScanRoots is deliberately narrower than
 // citedTestScanRoots (#0196/#0220's comment-citation guards): the privacy
 // policy's claim is about what internal/ and cmd/ ACTUALLY WRITE to
@@ -540,16 +606,24 @@ func scanAuditEntrySites(t *testing.T, roots []string) []auditEntrySite {
 				// precedes the literal it gets attributed to. Both still fail
 				// closed (unresolved, never a silent pass), which is the safe
 				// direction, so the message below is written to describe what
-				// was actually found — a same-named struct-field assignment
+				// was actually found — a same-named Metadata mutation
 				// somewhere in this function — rather than asserting a
 				// same-variable runtime override this lookup has not
 				// established.
+				//
+				// #0261 widened deferredMetadataIdents to also fire on
+				// delete(ident.Metadata, ...) and maps.Copy(ident.Metadata, ...),
+				// neither of which is an assignment, so this message was reworded
+				// from "a struct-field assignment" (once the only possibility) to
+				// "a Metadata mutation" to stay accurate for all four shapes it now
+				// covers: ident.Metadata = ..., ident.Metadata[...] = ...,
+				// delete(ident.Metadata, ...), and maps.Copy(ident.Metadata, ...).
 				if identName, ok := literalIdents[cl]; ok && deferredMetadataIdents[identName] {
 					literalNote := ""
 					if metadataKeyFound {
-						literalNote = " (this literal also sets its own Metadata, which that assignment may or may not override)"
+						literalNote = " (this literal also sets its own Metadata, which that mutation may or may not override)"
 					}
-					site.unresolved = fmt.Sprintf("a struct-field assignment (%s.Metadata = ...) appears somewhere in this function%s — possibly before or after this audit.Entry{} literal, and possibly on an unrelated variable of the same name, since this guard matches by identifier name only and has no scope or statement-order awareness — so it cannot prove which value the running code actually uses; move Metadata into the literal exclusively, or extend this guard deliberately", identName, literalNote)
+					site.unresolved = fmt.Sprintf("a Metadata mutation (%s.Metadata = ..., %s.Metadata[...] = ..., delete(%s.Metadata, ...), or maps.Copy(%s.Metadata, ...)) appears somewhere in this function%s — possibly before or after this audit.Entry{} literal, and possibly on an unrelated variable of the same name, since this guard matches by identifier name only and has no scope or statement-order awareness — so it cannot prove which value the running code actually uses; move Metadata into the literal exclusively, or extend this guard deliberately", identName, identName, identName, identName, literalNote)
 				}
 				sites = append(sites, site)
 				return true
@@ -585,54 +659,128 @@ func scanAuditEntrySites(t *testing.T, roots []string) []auditEntrySite {
 // .(*ast.Ident)` matches `m` directly); the difference is one level of
 // indirection, `e.Metadata` being a *ast.SelectorExpr rather than a bare
 // identifier, not a different kind of mutation.
+//
+// #0261 adds a third shape, and it is not an *ast.AssignStmt at all: a
+// second review of #0257 observed that mutation of a Metadata map is not
+// only assignment — `maps.Copy(e.Metadata, src)` and `delete(e.Metadata, k)`
+// both change the map through a plain function call, with no assignment
+// statement anywhere for either case above to match. `maps.Copy` is the
+// consequential direction (it can introduce an "email" key from a variable
+// this guard never inspects — reproduced directly: a literal carrying only
+// "slug" followed by `maps.Copy(e.Metadata, extra)` resolved hasEmail=false,
+// unresolved="" before this change); `delete` cannot itself introduce a key,
+// only remove one, so its risk runs the other way (a stale hasEmail=true
+// from the literal, when a delete call actually removed that key before the
+// row is inserted) — but the guard's own established answer to "cannot
+// prove what the running code ends up with" is unresolved either way, not a
+// judgment call on which direction is safer per call, so both are treated
+// identically here. Matched the same way #0257 treats an index assignment:
+// the arguments are deliberately NOT inspected (which key, which source map)
+// — recognizing that the mutating call happened at all is enough to know
+// this guard cannot resolve the identifier's Metadata from its literal
+// alone.
 func collectDeferredMetadataFieldIdents(body *ast.BlockStmt) map[string]bool {
 	result := map[string]bool{}
-	ast.Inspect(body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
+	markMetadataField := func(expr ast.Expr) {
+		sel, ok := expr.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Metadata" {
+			return
 		}
-		for _, lhs := range assign.Lhs {
-			var sel *ast.SelectorExpr
-			switch l := lhs.(type) {
-			case *ast.SelectorExpr:
-				// ident.Metadata = ...
-				sel = l
-			case *ast.IndexExpr:
-				// ident.Metadata[...] = ... — #0257. The index itself is
-				// deliberately not inspected, the same way the field-
-				// assignment case above never reads what it's assigned:
-				// either shape means this guard cannot prove which keys
-				// the running code ends up with, so both are reported
-				// unresolved regardless of the specific key or value.
-				s, ok := l.X.(*ast.SelectorExpr)
-				if !ok {
-					continue
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return
+		}
+		result[ident.Name] = true
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range node.Lhs {
+				switch l := lhs.(type) {
+				case *ast.SelectorExpr:
+					// ident.Metadata = ...
+					markMetadataField(l)
+				case *ast.IndexExpr:
+					// ident.Metadata[...] = ... — #0257. The index itself is
+					// deliberately not inspected, the same way the field-
+					// assignment case above never reads what it's assigned:
+					// either shape means this guard cannot prove which keys
+					// the running code ends up with, so both are reported
+					// unresolved regardless of the specific key or value.
+					markMetadataField(l.X)
 				}
-				sel = s
-			default:
-				continue
 			}
-			ident, ok := sel.X.(*ast.Ident)
-			if !ok || sel.Sel.Name != "Metadata" {
-				continue
+		case *ast.CallExpr:
+			// #0261: delete(ident.Metadata, k) and maps.Copy(ident.Metadata,
+			// src) both mutate the map with no *ast.AssignStmt anywhere —
+			// see the function doc above for why both are matched by call
+			// shape alone, with neither argument inspected.
+			if isBuiltinDeleteCall(node) && len(node.Args) >= 1 {
+				markMetadataField(node.Args[0])
 			}
-			result[ident.Name] = true
+			if isMapsCopyCall(node) && len(node.Args) >= 1 {
+				markMetadataField(node.Args[0])
+			}
 		}
 		return true
 	})
 	return result
 }
 
+// isBuiltinDeleteCall reports whether call invokes the builtin delete(...).
+// Matched by the literal identifier name "delete" with no scope resolution —
+// the same approximation isAuditEntryType makes for the "audit" package
+// identifier below, acceptable for the same reason: nothing in this tree
+// shadows the builtin with a local function or import named "delete"
+// (checked: `grep -rn 'func delete(\|delete :=' internal cmd --include='*.go'`
+// finds nothing).
+func isBuiltinDeleteCall(call *ast.CallExpr) bool {
+	ident, ok := call.Fun.(*ast.Ident)
+	return ok && ident.Name == "delete"
+}
+
+// isMapsCopyCall reports whether call invokes maps.Copy(...) from the
+// standard library "maps" package. Matched by the literal package
+// identifier "maps" and selector name "Copy", the same approximation
+// isAuditEntryType makes for "audit.Entry" — this tree imports "maps"
+// unaliased everywhere it appears today (checked the same way).
+func isMapsCopyCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Copy" {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "maps"
+}
+
 // compositeLitAssignedIdents maps each audit.Entry composite literal in body
-// that is the direct right-hand side of `ident := audit.Entry{...}` or
-// `ident = audit.Entry{...}` to that identifier's name, so a later
+// that is the direct right-hand side of `ident := audit.Entry{...}`,
+// `ident = audit.Entry{...}`, `ident := &audit.Entry{...}`, or
+// `ident = &audit.Entry{...}` to that identifier's name, so a later
 // struct-field assignment on the same identifier
 // (collectDeferredMetadataFieldIdents) can be connected back to the literal
 // that produced it. A literal that is never assigned to a bare identifier —
 // built directly inline as a call argument, the common shape in this tree —
 // has no entry here, which is correct: there is no later statement that
 // could mutate a value nothing holds a reference to.
+//
+// #0261: the pointer forms (`&audit.Entry{...}`) used to be invisible here —
+// this function required the RHS to be an *ast.CompositeLit directly, and
+// `&audit.Entry{...}` is an *ast.UnaryExpr (Op == token.AND) wrapping one, so
+// the RHS type assertion failed and no entry was ever recorded for `e := &
+// audit.Entry{...}`. collectDeferredMetadataFieldIdents was NOT the affected
+// half: `e.Metadata = ...` is the identical *ast.SelectorExpr whether e holds
+// a *audit.Entry or an audit.Entry — Go's selector syntax does not
+// distinguish, and the parser never resolves types — so it already saw the
+// deferred assignment correctly. The break was entirely in this function's
+// literal-to-identifier mapping, which is why `literalIdents[cl]` in
+// scanAuditEntrySites never found the pointer-held literal even though
+// deferredMetadataIdents[identName] was already true: the lookup key itself
+// was never populated. Reproduced directly before fixing: `e := &audit.Entry
+// {Action: ...}` followed by either `e.Metadata = map[string]any{"email":
+// addr}` or `e.Metadata["email"] = addr` both resolved hasEmail=false,
+// unresolved="" — a silent pass carrying an email, the same class as every
+// prior round in this file.
 func compositeLitAssignedIdents(body *ast.BlockStmt) map[*ast.CompositeLit]string {
 	result := map[*ast.CompositeLit]string{}
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -645,7 +793,14 @@ func compositeLitAssignedIdents(body *ast.BlockStmt) map[*ast.CompositeLit]strin
 			if !ok {
 				continue
 			}
-			cl, ok := assign.Rhs[i].(*ast.CompositeLit)
+			rhs := assign.Rhs[i]
+			if u, ok := rhs.(*ast.UnaryExpr); ok && u.Op == token.AND {
+				// #0261: unwrap a single leading `&` around the literal
+				// (`&audit.Entry{...}`) so the pointer form is connected the
+				// same way the value form already is.
+				rhs = u.X
+			}
+			cl, ok := rhs.(*ast.CompositeLit)
 			if !ok || !isAuditEntryType(cl.Type) {
 				continue
 			}
@@ -944,6 +1099,39 @@ func actionShortName(s string) string {
 	return s
 }
 
+// auditEmailMetadataMinPlausibleFileCount is #0261's answer, scoped to just
+// this guard, to the #0275 fail-open shape: a tree-walking guard whose pass
+// condition is "the findings slice is empty" cannot distinguish "the tree is
+// clean" from "the walk visited nothing", so an emptied or narrowed
+// auditEmailMetadataScanRoots would silently disarm this guard while the
+// suite stays green — sites would read 0, unresolved would read 0, and
+// TestAuditEntryEmailMetadataMatchesKnownSites would pass having checked
+// nothing. #0275 is the dedicated issue for fixing this across all five
+// guards sharing walkGoFiles/citedTestScanRoots; this constant and
+// countVisitedGoFiles below are NOT that fix — they are a guard-local floor
+// so this file does not ship a sixth instance of the hole while #0275 is
+// still open. 150 is chosen, not the literal "at least 1" #0275 warns
+// against: `find internal cmd -name '*.go' | wc -l` counts 249 files under
+// this guard's real roots today, and the single largest subdirectory
+// (internal/handlers itself) has 95 — so a floor of 150 is comfortably
+// below the real total (room for the tree to shrink without a false alarm)
+// while still tripping if the roots were narrowed to any one package,
+// which is the "a real narrowing would trip it" bar #0275 sets.
+const auditEmailMetadataMinPlausibleFileCount = 150
+
+// countVisitedGoFiles walks roots the same way scanAuditEntrySites does
+// (reusing the same walkGoFiles helper) and returns how many .go files it
+// visited. Deliberately independent of scanAuditEntrySites' own return
+// value: an empty []auditEntrySite is what BOTH "the tree is clean" and
+// "the walk visited nothing" look like, so counting files is the only way
+// to tell them apart — see auditEmailMetadataMinPlausibleFileCount above.
+func countVisitedGoFiles(t *testing.T, roots []string) int {
+	t.Helper()
+	n := 0
+	walkGoFiles(t, roots, func(path string) { n++ })
+	return n
+}
+
 // TestAuditEntryEmailMetadataMatchesKnownSites is the guard (#0237): every
 // audit.Entry{} construction in internal/ and cmd/ production Go source
 // whose Metadata could carry the subscriber's email address must be exactly
@@ -962,6 +1150,17 @@ func TestAuditEntryEmailMetadataMatchesKnownSites(t *testing.T) {
 	var roots []string
 	for _, rel := range auditEmailMetadataScanRoots {
 		roots = append(roots, filepath.Join(baseDir, rel))
+	}
+
+	// #0261/#0275: assert the walk actually visited a plausible number of
+	// files BEFORE trusting anything scanAuditEntrySites reports below — an
+	// empty or narrowed roots list must be a hard failure here, never
+	// silently read as "0 unresolved, 0 email sites, all clear".
+	if len(auditEmailMetadataScanRoots) == 0 {
+		t.Fatal("auditEmailMetadataScanRoots is empty — this guard would silently check nothing (#0275)")
+	}
+	if got := countVisitedGoFiles(t, roots); got < auditEmailMetadataMinPlausibleFileCount {
+		t.Fatalf("this guard's walk visited only %d .go file(s) under %v — expected at least %d; auditEmailMetadataScanRoots may have been emptied or narrowed, which would silently disarm this guard rather than fail it (#0275)", got, auditEmailMetadataScanRoots, auditEmailMetadataMinPlausibleFileCount)
 	}
 
 	sites := scanAuditEntrySites(t, roots)
@@ -1550,6 +1749,147 @@ func recordSomething() {
 			}
 			if sites[0].unresolved == "" {
 				t.Fatal("expected the site to be reported as unresolved — the literal's own \"slug\"-only Metadata is not what the running code uses; the later e.Metadata[...] = ... index assignment is, and this guard cannot read its content. Silently passing this as hasEmail=false is the #0257 hole this test pins closed")
+			}
+		})
+	}
+}
+
+// TestAuditEmailMetadataGuardFailsOnPointerHeldEntry proves the fix for
+// #0261's primary shape: an audit.Entry taken by pointer
+// (`e := &audit.Entry{...}`) followed by either deferred-mutation form —
+// `e.Metadata = ...` (the #0252 shape) or `e.Metadata[...] = ...` (the
+// #0257 shape) — one indirection out from what those two fixes covered.
+// Before this fix, both resolved hasEmail=false, unresolved="": the break
+// was in compositeLitAssignedIdents, which required an *ast.AssignStmt's
+// RHS to be an *ast.CompositeLit directly and so never connected
+// `&audit.Entry{...}`'s *ast.UnaryExpr-wrapped literal back to the
+// identifier holding it.
+func TestAuditEmailMetadataGuardFailsOnPointerHeldEntry(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "pointer-held, struct-field assignment",
+			src: `package fixture
+
+func recordSomething() {
+	e := &audit.Entry{Action: audit.ActionSubscriberSuppressed}
+	e.Metadata = map[string]any{"email": addr}
+	auditor.Record(ctx, *e)
+}
+`,
+		},
+		{
+			name: "pointer-held, index assignment",
+			src: `package fixture
+
+func recordSomething() {
+	e := &audit.Entry{Action: audit.ActionSubscriberSuppressed}
+	e.Metadata["email"] = addr
+	auditor.Record(ctx, *e)
+}
+`,
+		},
+		{
+			// Proves the fix handles `ident = &audit.Entry{...}` (plain
+			// assignment), not only `:=`, since compositeLitAssignedIdents
+			// matches both forms for the value-typed case and must for the
+			// pointer form too.
+			name: "pointer-held via plain assignment, not :=",
+			src: `package fixture
+
+func recordSomething() {
+	var e *audit.Entry
+	e = &audit.Entry{Action: audit.ActionSubscriberSuppressed}
+	e.Metadata = map[string]any{"email": addr}
+	auditor.Record(ctx, *e)
+}
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSyntheticGoFile(t, dir, "fixture.go", tc.src)
+			sites := scanAuditEntrySites(t, []string{dir})
+			if len(sites) != 1 {
+				t.Fatalf("expected exactly one audit.Entry site (the pointer literal itself), found %d", len(sites))
+			}
+			if sites[0].unresolved == "" {
+				t.Fatal("expected the site to be reported as unresolved — a pointer-held audit.Entry whose Metadata is set after construction is exactly as unreadable to this guard as the value-typed form #0252/#0257 already cover. Silently passing this as hasEmail=false is the #0261 hole this test pins closed")
+			}
+		})
+	}
+}
+
+// TestAuditEmailMetadataGuardFailsOnMetadataMapMutatingCalls proves the fix
+// for #0261's second finding: maps.Copy(e.Metadata, src) and
+// delete(e.Metadata, k) both mutate a Metadata map through a plain function
+// call, with no *ast.AssignStmt anywhere for collectDeferredMetadataFieldIdents'
+// pre-#0261 cases to match — so neither was visible to this guard at all.
+// maps.Copy is the consequential subtest: it can introduce an "email" key
+// from a variable this guard never inspects, and before this fix a
+// "slug"-only literal followed by maps.Copy(e.Metadata, extra) resolved
+// hasEmail=false, unresolved="" — a silent pass carrying whatever extra
+// happened to hold. delete cannot itself introduce a key (it can only
+// remove one), so it is included for completeness against the issue's own
+// acceptance criteria rather than because it can smuggle an email past this
+// guard; both are treated identically because this guard's answer to
+// "cannot prove what the running code ends up with" does not depend on
+// which direction a specific gap points.
+func TestAuditEmailMetadataGuardFailsOnMetadataMapMutatingCalls(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "maps.Copy",
+			src: `package fixture
+
+func recordSomething() {
+	e := audit.Entry{Metadata: map[string]any{"slug": s}}
+	maps.Copy(e.Metadata, extra)
+	auditor.Record(ctx, e)
+}
+`,
+		},
+		{
+			name: "delete",
+			src: `package fixture
+
+func recordSomething() {
+	e := audit.Entry{Metadata: map[string]any{"slug": s, "email": addr}}
+	delete(e.Metadata, "slug")
+	auditor.Record(ctx, e)
+}
+`,
+		},
+		{
+			// Both forms should be caught on a pointer-held entry too — the
+			// same shape #0261's primary finding closes, composed with the
+			// call-based mutation this test's other subtests pin.
+			name: "maps.Copy on a pointer-held entry",
+			src: `package fixture
+
+func recordSomething() {
+	e := &audit.Entry{Metadata: map[string]any{"slug": s}}
+	maps.Copy(e.Metadata, extra)
+	auditor.Record(ctx, *e)
+}
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSyntheticGoFile(t, dir, "fixture.go", tc.src)
+			sites := scanAuditEntrySites(t, []string{dir})
+			if len(sites) != 1 {
+				t.Fatalf("expected exactly one audit.Entry site (the literal itself), found %d", len(sites))
+			}
+			if sites[0].unresolved == "" {
+				t.Fatal("expected the site to be reported as unresolved — a call that mutates the Metadata map in place (maps.Copy or delete) is exactly as unreadable to this guard as a deferred assignment; silently classifying it from the literal's own Metadata alone is the #0261 hole this test pins closed")
 			}
 		})
 	}
