@@ -185,6 +185,19 @@ function toRepoRelativePath(globKey: string): string {
   return resolved.join('/');
 }
 
+/** #0298 criterion 4: the real union of scanned files, computed the same
+ * way the real-tree test computes it, so a fixture proving "the current
+ * real entries must all still pass" exercises the actual scan result rather
+ * than a hand-typed stand-in for it. */
+function scannedFileSet(): Set<string> {
+  const s = new Set<string>();
+  for (const globKey of Object.keys(SOURCE_FILES)) {
+    if (globKey.endsWith('.test.ts')) continue;
+    s.add(toRepoRelativePath(globKey));
+  }
+  return s;
+}
+
 // ---------------------------------------------------------------------------
 // Template-side helpers
 // ---------------------------------------------------------------------------
@@ -479,6 +492,19 @@ function collectFocusedVars(node: unknown, out: Set<string>, seen = new Set<unkn
 // KNOWN, NAMED exceptions -- not silently skipped (#0242 criterion 5)
 // ---------------------------------------------------------------------------
 //
+// #0298: unjustifiedEntryViolations and staleEntryViolations below are both
+// scoped to ONE file at a time (`e.file === fileName`, called once per file
+// in the real-tree test's own loop), which means neither ever runs at all
+// for an entry naming a file the scan never visits -- a typo'd path, or a
+// component that was renamed or deleted out from under its allowlist entry.
+// unscannedFileViolations (defined near findAllowlistEntry, just above
+// checkFile) closes that: it runs ONCE PER RUN, after the scan loop
+// completes, against the UNION of every file actually scanned, and checks
+// both rules together for anything it finds -- an unscanned-file entry
+// fails regardless of its reason, and if that reason is ALSO empty, that is
+// reported as a second, separate violation, so a bogus path can never
+// substitute for a real justification.
+//
 // #0280: these used to be `Set<string>` keyed by `file:line`. A line number
 // shifts on ANY edit above it, so ordinary editing produced allowlist
 // failures unrelated to the change -- #0125's own diff was 7 deletions + 7
@@ -673,6 +699,61 @@ function findAllowlistEntry(list: AllowlistEntry[], file: string, match: string)
   return list.find((e) => e.file === file && e.match === match);
 }
 
+/** #0298: unjustifiedEntryViolations and staleEntryViolations above both
+ * filter on `e.file === fileName`, so each only ever runs for entries whose
+ * file the CALLER happens to be scanning at that moment. An entry naming a
+ * file the scan never visits at all -- a typo'd path, a deleted/renamed
+ * component -- is therefore examined by NEITHER check, for any fileName in
+ * the loop: it is not inert by design, it is a hole in coverage. Measured
+ * (#0298's Description): an entry with an empty `reason` and a bogus path
+ * left the whole suite green.
+ *
+ * This runs ONCE PER RUN (per allowlist, called after the scan loop
+ * completes -- not per file) against `scannedFiles`, the UNION of every
+ * file the scan actually visited. An entry whose `file` is not in that set
+ * fails here, by name, regardless of its `reason` -- and (criterion 2) an
+ * entry that ALSO carries an empty/missing reason gets a SECOND, separate
+ * violation for that, so a bogus path can never smuggle in an unjustified
+ * entry merely by also being stale in a way nothing was checking.
+ *
+ * Fails closed (criterion 5, #0275's lesson on the Go side) if
+ * `scannedFiles` is empty: an empty set most likely means the scan itself
+ * collapsed to zero files (the SOURCE_FILES glob broke, or the caller
+ * forgot to build the set), and treating that as "every entry passes" would
+ * hide exactly the failure this function exists to catch. */
+function unscannedFileViolations(
+  list: AllowlistEntry[],
+  allowlistName: string,
+  scannedFiles: ReadonlySet<string>,
+): Violation[] {
+  if (scannedFiles.size === 0) {
+    return [
+      {
+        file: '(no files scanned)',
+        line: 0,
+        reason: `${allowlistName}: the scanned-file set passed to unscannedFileViolations is empty -- cannot validate any entry's file against it, so this fails rather than silently treating every entry as fine (#0298 criterion 5, #0275's lesson)`,
+      },
+    ];
+  }
+  const violations: Violation[] = [];
+  for (const e of list) {
+    if (scannedFiles.has(e.file)) continue;
+    violations.push({
+      file: e.file,
+      line: 0,
+      reason: `${allowlistName} entry match=${JSON.stringify(e.match)} names a file the scan never visited (${e.file}) -- an entry naming a nonexistent or unscanned path is examined by neither the justification nor the staleness check (both are keyed on the file being scanned), so it must fail here instead (#0298)`,
+    });
+    if (e.reason.trim().length === 0) {
+      violations.push({
+        file: e.file,
+        line: 0,
+        reason: `${allowlistName} entry match=${JSON.stringify(e.match)} ALSO carries no justification text -- an unscanned file must not become a way to smuggle in an unjustified entry (#0298 criterion 2)`,
+      });
+    }
+  }
+  return violations;
+}
+
 /** The one real implementation. `scriptAst` is optional (undefined ==
  * "this fixture has no <script>, or its script is irrelevant") so the
  * synthetic fixtures below that don't care about focus-wiring can call
@@ -786,11 +867,13 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
     const alertSites: Array<Site & { file: string }> = [];
     const loadingPlaceholders: Array<Site & { file: string }> = [];
     let filesScanned = 0;
+    const scannedFiles = new Set<string>();
 
     for (const [globKey, source] of Object.entries(SOURCE_FILES)) {
       if (globKey.endsWith('.test.ts')) continue;
       filesScanned++;
       const file = toRepoRelativePath(globKey);
+      scannedFiles.add(file);
 
       // Parsed once here (rather than inside checkFile) so the <script> AST
       // is available for the focus-call check -- checkFile's own re-parse of
@@ -805,6 +888,14 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
       alertSites.push(...result.alertSites);
       loadingPlaceholders.push(...result.loadingPlaceholders);
     }
+
+    // #0298: once per run (not once per file, unlike unjustifiedEntryViolations
+    // and staleEntryViolations above, which only ever run for entries whose
+    // file happens to be the one currently being scanned) -- covers every
+    // allowlist the guard carries, per criterion 3.
+    allViolations.push(...unscannedFileViolations(KNOWN_DYNAMIC_ROLE_SITES, 'KNOWN_DYNAMIC_ROLE_SITES', scannedFiles));
+    allViolations.push(...unscannedFileViolations(KNOWN_LOADING_PLACEHOLDERS, 'KNOWN_LOADING_PLACEHOLDERS', scannedFiles));
+    allViolations.push(...unscannedFileViolations(KNOWN_STABLE_BRANCH_SITES, 'KNOWN_STABLE_BRANCH_SITES', scannedFiles));
 
     if (allViolations.length > 0) {
       const detail = allViolations.map((v) => `  ${v.file}:${v.line}: ${v.reason}`).join('\n');
@@ -1035,5 +1126,49 @@ describe('checkFile (synthetic fixtures)', () => {
     // The real "Loading…" site is unnamed and still fails on its own merits
     // (no matching entry); the STALE entry must ALSO be reported separately.
     expect(violations.some((v) => v.reason.includes('stale allowlist entry'))).toBe(true);
+  });
+
+  // #0298: unscannedFileViolations proven directly, distinct from checkFile's
+  // own per-file checks -- this is a once-per-run, cross-file pass, so it
+  // cannot be exercised through checkFile (which only ever sees one file at
+  // a time). Assertions read for independently written substrings (CLAUDE.md
+  // §8: oracle != subject), not a copy of the message the function emits.
+  it('#0298: fails an allowlist entry naming a file the scan never visited, even with a bogus match and an empty reason', () => {
+    const scanned = new Set(['web/src/views/Real.svelte']);
+    const bogus: AllowlistEntry[] = [
+      { file: 'web/src/views/DoesNotExistAnywhere.svelte', match: 'nothing', reason: '' },
+    ];
+    const violations = unscannedFileViolations(bogus, 'TEST_ALLOWLIST', scanned);
+    // Criterion 1: the unscanned-file rule fires, naming the entry and path.
+    expect(violations.some((v) => v.reason.includes('never visited') && v.reason.includes('DoesNotExistAnywhere.svelte'))).toBe(
+      true,
+    );
+    // Criterion 2: the empty-reason rule ALSO fires in the same pass -- a
+    // bogus path is not a way to dodge the justification requirement.
+    expect(violations.some((v) => v.reason.includes('justification'))).toBe(true);
+  });
+
+  it('#0298: an entry naming a scanned file, with a real reason, produces no violation', () => {
+    const scanned = new Set(['web/src/views/Real.svelte']);
+    const ok: AllowlistEntry[] = [{ file: 'web/src/views/Real.svelte', match: 'x', reason: 'a real, non-empty reason' }];
+    expect(unscannedFileViolations(ok, 'TEST_ALLOWLIST', scanned)).toHaveLength(0);
+  });
+
+  it('#0298 criterion 5: fails closed (rather than passing everything) when the scanned-file set is empty', () => {
+    const violations = unscannedFileViolations(KNOWN_LOADING_PLACEHOLDERS, 'KNOWN_LOADING_PLACEHOLDERS', new Set());
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0].reason).toContain('empty');
+  });
+
+  // #0298 criterion 4: every entry in every real allowlist names a file the
+  // real scan actually visits -- proven against the ACTUAL scanned-file set
+  // (scannedFileSet(), the same computation the real-tree test uses), not a
+  // hand-typed stand-in that could drift from it.
+  it('#0298 criterion 4: every real allowlist entry names a file the real scan visits', () => {
+    const scanned = scannedFileSet();
+    expect(scanned.size).toBeGreaterThanOrEqual(35); // sanity: didn't just get an empty set
+    expect(unscannedFileViolations(KNOWN_DYNAMIC_ROLE_SITES, 'KNOWN_DYNAMIC_ROLE_SITES', scanned)).toHaveLength(0);
+    expect(unscannedFileViolations(KNOWN_LOADING_PLACEHOLDERS, 'KNOWN_LOADING_PLACEHOLDERS', scanned)).toHaveLength(0);
+    expect(unscannedFileViolations(KNOWN_STABLE_BRANCH_SITES, 'KNOWN_STABLE_BRANCH_SITES', scanned)).toHaveLength(0);
   });
 });
