@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 )
 
 // registrationTTL is the lifetime of a pending registration and its WebAuthn
@@ -45,17 +47,53 @@ type querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// txEnqueuer is the subset of *outbox.Store this package needs: enqueueing
+// an item through a caller-supplied transaction (or the pool). It is an
+// interface, not a concrete *outbox.Store, for exactly one reason: #0260's
+// atomicity tests inject a failure between the token INSERT and the
+// enqueue by swapping in a poisoned implementation via newStoreWithOutbox
+// (test-only, unexported) — mirroring internal/outbox's own
+// TestOutbox_EnqueueTx_RollbackLeavesNoRow, but proved at this package's
+// boundary rather than re-deriving outbox's own transactional guarantee.
+type txEnqueuer interface {
+	EnqueueTx(ctx context.Context, q outbox.Querier, it outbox.Item) (int64, error)
+}
+
 // Store is the data-access layer for the auth ceremonies. It wraps the shared
 // pgx pool and is reused across registration, authentication, and recovery.
 // Methods take an explicit querier where they may run inside a transaction;
 // the rest use the pool directly.
 type Store struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	outbox txEnqueuer
 }
 
 // NewStore constructs a Store over the shared connection pool.
+//
+// #0260: CreatePendingRegistration and CreateRecoveryToken used to be plain
+// s.pool.Exec calls, with the confirmation mail enqueued afterward — by the
+// Mailer, from RegistrationService.StartRegistration/RecoveryService.
+// StartRecovery — as a SEPARATE statement outside any transaction. A crash
+// in that window left a valid, committed token with no mail ever queued to
+// send it. Store now owns an outbox.Store directly (the same shape
+// internal/subscribers.Store already established after #0126) so the token
+// INSERT and its outbound_queue enqueue commit or roll back together —
+// see CreatePendingRegistration/CreateRecoveryToken below.
+// RegistrationService/RecoveryService no longer call Mailer.SendVerification/
+// SendRecovery themselves (see registration.go's and recovery.go's
+// StartRegistration/StartRecovery doc comments) — calling them would
+// double-enqueue.
 func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+	return &Store{pool: pool, outbox: outbox.NewStore(pool)}
+}
+
+// newStoreWithOutbox is NewStore with an injectable txEnqueuer — test-only
+// (unexported), for #0260's atomicity proofs: a poisoned txEnqueuer that
+// always fails lets a test force a failure between the token row's INSERT
+// and its enqueue, proving CreatePendingRegistration/CreateRecoveryToken
+// roll back both rather than leaving a token with no queued mail.
+func newStoreWithOutbox(pool *pgxpool.Pool, ob txEnqueuer) *Store {
+	return &Store{pool: pool, outbox: ob}
 }
 
 // Pool exposes the underlying pool for callers (e.g. session middleware)
@@ -183,16 +221,50 @@ func (s *Store) EmailRegistered(ctx context.Context, email string) (bool, error)
 }
 
 // CreatePendingRegistration inserts a pending_registrations row with the given
-// token and a 5-minute TTL and returns the expiry. The caller supplies the
-// token so the same value can be emailed and later looked up.
+// token and a 5-minute TTL, enqueues the registration email in the SAME
+// transaction, and returns the expiry. The caller supplies the token so the
+// same value can be emailed and later looked up.
+//
+// #0260: this used to be a plain s.pool.Exec, with the enqueue happening
+// afterward (and outside any transaction) via RegistrationService.
+// StartRegistration calling s.mailer.SendVerification. A crash between the
+// two left a valid, committed token with no mail ever queued — the token
+// row was never at risk (this INSERT already commits durably), only the
+// mail was. Folding the enqueue into this method's own transaction closes
+// that window exactly as #0126 closed it for internal/subscribers.Store.
+// Create: the INSERT and the outbound_queue row now commit or roll back
+// together, so a committed pending registration can never have an unqueued
+// verification email. StartRegistration no longer calls
+// Mailer.SendVerification itself — see that method's doc comment.
 func (s *Store) CreatePendingRegistration(ctx context.Context, email, token string, now time.Time) (time.Time, error) {
 	expiresAt := now.Add(registrationTTL)
-	if _, err := s.pool.Exec(ctx,
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("auth: beginning create-pending-registration tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO pending_registrations (email, token, expires_at)
 		 VALUES ($1, $2, $3)`,
 		email, token, expiresAt,
 	); err != nil {
 		return time.Time{}, fmt.Errorf("auth: creating pending registration: %w", err)
+	}
+
+	// registrationPayload is defined in ses_mailer.go (same package) — the
+	// JSONB contract with internal/mailing/outbox_worker.go's renderer.
+	if _, err := s.outbox.EnqueueTx(ctx, tx, outbox.Item{
+		Kind:      outbox.KindRegistration,
+		Recipient: email,
+		Payload:   registrationPayload{Token: token, TTLSeconds: int64(registrationTTL.Seconds())},
+	}); err != nil {
+		return time.Time{}, fmt.Errorf("auth: enqueueing verification for %q: %w", email, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return time.Time{}, fmt.Errorf("auth: committing pending registration for %q: %w", email, err)
 	}
 	return expiresAt, nil
 }
@@ -343,18 +415,43 @@ const authenticationTTL = 5 * time.Minute
 const recoveryTTL = 15 * time.Minute
 
 // CreateRecoveryToken inserts a pending_registrations row carrying the recovery
-// token with a 15-minute TTL and returns the expiry. The recovery flow reuses
-// the pending_registrations table (email + token + expires_at); the longer TTL
+// token with a 15-minute TTL, enqueues the recovery email in the SAME
+// transaction, and returns the expiry. The recovery flow reuses the
+// pending_registrations table (email + token + expires_at); the longer TTL
 // is what distinguishes a recovery token's lifetime from a registration one,
 // and the endpoint (not the row) disambiguates the flow.
+//
+// #0260: see CreatePendingRegistration's doc comment — the identical fix,
+// for the recovery ceremony. RecoveryService.StartRecovery no longer calls
+// Mailer.SendRecovery itself.
 func (s *Store) CreateRecoveryToken(ctx context.Context, email, token string, now time.Time) (time.Time, error) {
 	expiresAt := now.Add(recoveryTTL)
-	if _, err := s.pool.Exec(ctx,
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("auth: beginning create-recovery-token tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO pending_registrations (email, token, expires_at)
 		 VALUES ($1, $2, $3)`,
 		email, token, expiresAt,
 	); err != nil {
 		return time.Time{}, fmt.Errorf("auth: creating recovery token: %w", err)
+	}
+
+	// recoveryPayload is defined in ses_mailer.go (same package).
+	if _, err := s.outbox.EnqueueTx(ctx, tx, outbox.Item{
+		Kind:      outbox.KindRecovery,
+		Recipient: email,
+		Payload:   recoveryPayload{Token: token, TTLSeconds: int64(recoveryTTL.Seconds())},
+	}); err != nil {
+		return time.Time{}, fmt.Errorf("auth: enqueueing recovery mail for %q: %w", email, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return time.Time{}, fmt.Errorf("auth: committing recovery token for %q: %w", email, err)
 	}
 	return expiresAt, nil
 }

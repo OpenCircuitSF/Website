@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 )
 
 // testRPID / testRPOrigin are the relying-party values used across the auth
@@ -95,15 +96,44 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return testDBPool
 }
 
+// countOutboundQueueKind returns how many outbound_queue rows exist for the
+// given kind+recipient pair — #0260: StartRegistration/StartRecovery no
+// longer call the Mailer directly (the enqueue now happens transactionally
+// inside store.CreatePendingRegistration/CreateRecoveryToken — see those
+// methods' doc comments), so a test that used to assert
+// "mailer.recorded() calls == 0/1" now asserts on outbound_queue directly,
+// the same replacement #0126 made for internal/handlers/subscribe_test.go.
+func countOutboundQueueKind(t *testing.T, pool *pgxpool.Pool, kind, recipient string) int {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM outbound_queue WHERE kind = $1 AND recipient = $2`,
+		kind, recipient,
+	).Scan(&n); err != nil {
+		t.Fatalf("counting outbound_queue rows for kind=%q recipient=%q: %v", kind, recipient, err)
+	}
+	return n
+}
+
 // truncateAuthTables clears every auth-related table (and its dependents) so
 // the database is left clean. RESTART IDENTITY resets the serial sequences.
+//
+// outbound_queue is included as of #0260: store.CreatePendingRegistration/
+// CreateRecoveryToken now enqueue into it directly (rather than this
+// package's tests only ever reading it through ses_mailer_test.go's
+// unique-recipient-per-test convention), and several tests here use fixed,
+// reused email addresses (e.g. "bob@example.com") — without truncating,
+// countOutboundQueueKind's counts would accumulate across this package's
+// own test functions within one run.
 func truncateAuthTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, err := pool.Exec(ctx,
 		`TRUNCATE webauthn_challenges, pending_registrations, sessions,
-		          passkey_credentials, audit_log, users
+		          passkey_credentials, audit_log, users, outbound_queue
 		 RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate auth tables: %v", err)
@@ -368,8 +398,11 @@ func TestStartRegistration_DisabledReturns403(t *testing.T) {
 	if err != ErrRegistrationsDisabled {
 		t.Fatalf("StartRegistration error = %v, want ErrRegistrationsDisabled", err)
 	}
-	if calls, _, _ := mailer.recorded(); calls != 0 {
-		t.Errorf("mailer called %d times, want 0", calls)
+	// #0260: StartRegistration no longer calls the mailer at all — the
+	// enqueue moved into store.CreatePendingRegistration's own transaction —
+	// so this asserts no outbound_queue row exists rather than mailer.calls.
+	if n := countOutboundQueueKind(t, pool, "registration", "alice@example.com"); n != 0 {
+		t.Errorf("outbound_queue registration rows for alice@example.com = %d, want 0", n)
 	}
 	if n := countPending(t, pool, "alice@example.com"); n != 0 {
 		t.Errorf("pending_registrations rows = %d, want 0", n)
@@ -377,7 +410,14 @@ func TestStartRegistration_DisabledReturns403(t *testing.T) {
 }
 
 // TestStartRegistration_EnabledCreatesPendingAndMails confirms the happy start
-// path: a pending row is created and the mailer is invoked with a token.
+// path: a pending row is created and a registration email is durably
+// enqueued with a token.
+//
+// #0260: this used to assert on recordingMailer.recorded() — StartRegistration
+// no longer calls the mailer at all; store.CreatePendingRegistration enqueues
+// the outbound_queue row itself, inside the same transaction as the pending
+// row (see that method's doc comment). Asserting on outbound_queue directly
+// is the same replacement #0126 made for internal/handlers/subscribe_test.go.
 func TestStartRegistration_EnabledCreatesPendingAndMails(t *testing.T) {
 	pool := testPool(t)
 	setRegistrationsEnabled(t, pool, true)
@@ -388,18 +428,24 @@ func TestStartRegistration_EnabledCreatesPendingAndMails(t *testing.T) {
 		t.Fatalf("StartRegistration: %v", err)
 	}
 
-	calls, to, token := mailer.recorded()
-	if calls != 1 {
-		t.Fatalf("mailer calls = %d, want 1", calls)
+	kind, payloadText := outboundQueueRowFor(t, pool, "bob@example.com")
+	if kind != string(outbox.KindRegistration) {
+		t.Errorf("outbound_queue kind = %q, want %q", kind, outbox.KindRegistration)
 	}
-	if to != "bob@example.com" {
-		t.Errorf("mailer recipient = %q, want lowercased bob@example.com", to)
+	var payload registrationPayload
+	if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
+		t.Fatalf("unmarshalling payload %q: %v", payloadText, err)
 	}
-	if token == "" {
-		t.Error("mailer token is empty")
+	if payload.Token == "" {
+		t.Error("outbound_queue payload token is empty")
 	}
 	if n := countPending(t, pool, "bob@example.com"); n != 1 {
 		t.Errorf("pending_registrations rows = %d, want 1", n)
+	}
+	// The mailer itself is never invoked by this path any more (see doc
+	// comment) — confirm that explicitly rather than merely by omission.
+	if calls, _, _ := mailer.recorded(); calls != 0 {
+		t.Errorf("mailer.SendVerification called %d times, want 0 (enqueue is now transactional in the store)", calls)
 	}
 }
 
@@ -416,8 +462,41 @@ func TestStartRegistration_DuplicateEmailNoLeak(t *testing.T) {
 	if err := svc.StartRegistration(context.Background(), "carol@example.com", ""); err != ErrEmailRegistered {
 		t.Fatalf("StartRegistration error = %v, want ErrEmailRegistered", err)
 	}
-	if calls, _, _ := mailer.recorded(); calls != 0 {
-		t.Errorf("mailer called %d times for duplicate, want 0", calls)
+	if n := countOutboundQueueKind(t, pool, "registration", "carol@example.com"); n != 0 {
+		t.Errorf("outbound_queue registration rows for carol@example.com = %d, want 0 for duplicate", n)
+	}
+}
+
+// failingTxEnqueuer is a txEnqueuer that always fails — #0260's atomicity
+// proof: swapped into a Store via newStoreWithOutbox so
+// CreatePendingRegistration's/CreateRecoveryToken's enqueue step fails AFTER
+// the token row's own INSERT has already run on the same transaction,
+// proving the two commit or roll back together rather than the token
+// surviving independently of its mail.
+type failingTxEnqueuer struct{}
+
+func (failingTxEnqueuer) EnqueueTx(context.Context, outbox.Querier, outbox.Item) (int64, error) {
+	return 0, errors.New("injected enqueue failure")
+}
+
+// TestCreatePendingRegistration_EnqueueFailureRollsBackBothRows is #0260's
+// criterion 2 for the registration flow: an injected failure between the
+// pending_registrations INSERT and the outbound_queue enqueue must leave
+// neither row behind — never a token with no queued mail.
+func TestCreatePendingRegistration_EnqueueFailureRollsBackBothRows(t *testing.T) {
+	pool := testPool(t)
+	store := newStoreWithOutbox(pool, failingTxEnqueuer{})
+	const email = "atomic-fail-reg@example.com"
+
+	if _, err := store.CreatePendingRegistration(context.Background(), email, "tok-atomic-reg", time.Now()); err == nil {
+		t.Fatal("CreatePendingRegistration: expected an error from the poisoned enqueuer, got nil")
+	}
+
+	if n := countPending(t, pool, email); n != 0 {
+		t.Errorf("pending_registrations rows for %s = %d, want 0 after rollback", email, n)
+	}
+	if n := countOutboundQueueKind(t, pool, string(outbox.KindRegistration), email); n != 0 {
+		t.Errorf("outbound_queue registration rows for %s = %d, want 0 after rollback", email, n)
 	}
 }
 

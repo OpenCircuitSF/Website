@@ -68,6 +68,16 @@ func NewRegistrationService(store *Store, wa *webauthn.WebAuthn, mailer Mailer, 
 // fresh from the DB), rejects an already-registered email, creates a pending
 // registration with a 5-minute TTL, and emails the magic link. The token is
 // never returned to the caller; it travels only via email.
+//
+// #0260: this used to end with s.mailer.SendVerification(ctx, email, token)
+// as a separate call, after CreatePendingRegistration had already returned —
+// a crash in that window left a committed, valid token with no mail ever
+// queued to send it. store.CreatePendingRegistration now enqueues the
+// verification email in the SAME transaction as the token row (see its doc
+// comment), so this method no longer calls the mailer itself — doing so
+// would enqueue a second, duplicate verification email. s.mailer is kept
+// (used only for SendSessionsRevoked elsewhere in this package's sibling
+// services, and for interface/test compatibility here).
 func (s *RegistrationService) StartRegistration(ctx context.Context, rawEmail, ip string) error {
 	email, err := normalizeEmail(rawEmail)
 	if err != nil {
@@ -108,7 +118,9 @@ func (s *RegistrationService) StartRegistration(ctx context.Context, rawEmail, i
 		})
 	}
 
-	return s.mailer.SendVerification(ctx, email, token)
+	// The verification email is already durably enqueued — see this
+	// method's doc comment and store.CreatePendingRegistration.
+	return nil
 }
 
 // VerifyRegistration is step 2. It validates the magic-link token (existence +

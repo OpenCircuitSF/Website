@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 )
 
 // recoveryRecordingMailer captures SendRecovery calls so a test can assert the
@@ -84,9 +85,15 @@ func TestStartRecovery_UnknownEmailNoLeak(t *testing.T) {
 		t.Fatalf("StartRecovery for unknown email error = %v, want nil (generic success)", err)
 	}
 
+	// #0260: StartRecovery no longer calls the mailer at all — the enqueue
+	// moved into store.CreateRecoveryToken's own transaction — so this
+	// asserts no outbound_queue row exists rather than mailer.recorded().
 	rc, _, _, _ := mailer.recorded()
 	if rc != 0 {
 		t.Errorf("recovery mailer called %d times for unknown email, want 0", rc)
+	}
+	if n := countOutboundQueueKind(t, pool, string(outbox.KindRecovery), "ghost@example.com"); n != 0 {
+		t.Errorf("outbound_queue recovery rows for ghost@example.com = %d, want 0", n)
 	}
 	if n := countPending(t, pool, "ghost@example.com"); n != 0 {
 		t.Errorf("pending_registrations rows = %d, want 0 (no token for unknown email)", n)
@@ -109,13 +116,22 @@ func TestStartRecovery_InactiveUserNoLeak(t *testing.T) {
 	if rc != 0 {
 		t.Errorf("recovery mailer called %d times for inactive user, want 0", rc)
 	}
+	if n := countOutboundQueueKind(t, pool, string(outbox.KindRecovery), "frozen@example.com"); n != 0 {
+		t.Errorf("outbound_queue recovery rows for frozen@example.com = %d, want 0", n)
+	}
 	if n := countPending(t, pool, "frozen@example.com"); n != 0 {
 		t.Errorf("pending_registrations rows = %d, want 0 for inactive user", n)
 	}
 }
 
 // TestStartRecovery_ActiveUserCreatesTokenAndMails confirms the happy start
-// path: an active account yields a token and a recovery email with a link.
+// path: an active account yields a token and a recovery email is durably
+// enqueued with a link.
+//
+// #0260: this used to assert on recoveryRecordingMailer.recorded() —
+// StartRecovery no longer calls the mailer at all; store.CreateRecoveryToken
+// enqueues the outbound_queue row itself, inside the same transaction as the
+// token row (see that method's doc comment).
 func TestStartRecovery_ActiveUserCreatesTokenAndMails(t *testing.T) {
 	pool := testPool(t)
 	insertUser(t, pool, "user@example.com", false)
@@ -126,21 +142,50 @@ func TestStartRecovery_ActiveUserCreatesTokenAndMails(t *testing.T) {
 		t.Fatalf("StartRecovery: %v", err)
 	}
 
-	rc, vc, to, token := mailer.recorded()
-	if rc != 1 {
-		t.Fatalf("recovery mailer calls = %d, want 1", rc)
+	// The mailer itself is never invoked by this path any more.
+	rc, vc, _, _ := mailer.recorded()
+	if rc != 0 {
+		t.Errorf("recovery mailer calls = %d, want 0 (enqueue is now transactional in the store)", rc)
 	}
 	if vc != 0 {
 		t.Errorf("verification mailer calls = %d, want 0 (recovery must not send a verification email)", vc)
 	}
-	if to != "user@example.com" {
-		t.Errorf("recovery recipient = %q, want lowercased user@example.com", to)
+
+	kind, payloadText := outboundQueueRowFor(t, pool, "user@example.com")
+	if kind != string(outbox.KindRecovery) {
+		t.Errorf("outbound_queue kind = %q, want %q", kind, outbox.KindRecovery)
 	}
-	if token == "" {
-		t.Error("recovery mailer token is empty")
+	var payload recoveryPayload
+	if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
+		t.Fatalf("unmarshalling payload %q: %v", payloadText, err)
+	}
+	if payload.Token == "" {
+		t.Error("outbound_queue payload token is empty")
 	}
 	if n := countPending(t, pool, "user@example.com"); n != 1 {
 		t.Errorf("pending_registrations rows = %d, want 1", n)
+	}
+}
+
+// TestCreateRecoveryToken_EnqueueFailureRollsBackBothRows is #0260's
+// criterion 2 for the recovery flow: an injected failure between the
+// pending_registrations INSERT and the outbound_queue enqueue must leave
+// neither row behind. Reuses failingTxEnqueuer from registration_test.go
+// (same package).
+func TestCreateRecoveryToken_EnqueueFailureRollsBackBothRows(t *testing.T) {
+	pool := testPool(t)
+	store := newStoreWithOutbox(pool, failingTxEnqueuer{})
+	const email = "atomic-fail-recovery@example.com"
+
+	if _, err := store.CreateRecoveryToken(context.Background(), email, "tok-atomic-recovery", time.Now()); err == nil {
+		t.Fatal("CreateRecoveryToken: expected an error from the poisoned enqueuer, got nil")
+	}
+
+	if n := countPending(t, pool, email); n != 0 {
+		t.Errorf("pending_registrations rows for %s = %d, want 0 after rollback", email, n)
+	}
+	if n := countOutboundQueueKind(t, pool, string(outbox.KindRecovery), email); n != 0 {
+		t.Errorf("outbound_queue recovery rows for %s = %d, want 0 after rollback", email, n)
 	}
 }
 
@@ -232,9 +277,12 @@ func TestRecoveryEndToEnd_AddsCredentialToExistingUser(t *testing.T) {
 	if err := recSvc.StartRecovery(ctx, email, ""); err != nil {
 		t.Fatalf("StartRecovery: %v", err)
 	}
-	_, _, _, recToken := mailer.recorded()
+	// #0260: the token is enqueued transactionally by store.CreateRecoveryToken
+	// now, not emailed via the mailer — read it back from pending_registrations,
+	// the way lastPendingToken already does for registration tokens.
+	recToken := lastPendingToken(t, pool, email)
 	if recToken == "" {
-		t.Fatalf("recovery token not captured from mailer")
+		t.Fatalf("recovery token not captured")
 	}
 
 	recCreation, err := recSvc.VerifyRecovery(ctx, recToken)
@@ -405,9 +453,11 @@ func TestRecoveryEndToEnd_AdminBootstrap_ZeroCredentials(t *testing.T) {
 	if err := recSvc.StartRecovery(ctx, adminEmail, ""); err != nil {
 		t.Fatalf("StartRecovery: %v", err)
 	}
-	_, _, _, recToken := mailer.recorded()
+	// #0260: read the token back from pending_registrations — see the other
+	// end-to-end test's identical comment above.
+	recToken := lastPendingToken(t, pool, adminEmail)
 	if recToken == "" {
-		t.Fatalf("recovery token not captured from mailer (StartRecovery may have silently skipped)")
+		t.Fatalf("recovery token not captured (StartRecovery may have silently skipped)")
 	}
 
 	// Step 2: verify — must succeed for a zero-credential account.

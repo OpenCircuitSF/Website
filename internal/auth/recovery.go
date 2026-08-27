@@ -61,6 +61,15 @@ func NewRecoveryService(store *Store, wa *webauthn.WebAuthn, mailer Mailer, audi
 // the response identical whether or not the account exists. Genuine
 // infrastructure failures during token creation or mail delivery are surfaced
 // so the handler can return a 500, since those cannot leak account existence.
+//
+// #0260: this used to end with s.mailer.SendRecovery(ctx, email, token) as a
+// separate call, after CreateRecoveryToken had already returned — a crash in
+// that window left a committed, valid token with no mail ever queued.
+// store.CreateRecoveryToken now enqueues the recovery email in the SAME
+// transaction as the token row (see its doc comment), so this method no
+// longer calls the mailer itself — doing so would enqueue a second,
+// duplicate recovery email. s.mailer is kept for SendSessionsRevoked
+// elsewhere and for interface/test compatibility here.
 func (s *RecoveryService) StartRecovery(ctx context.Context, rawEmail, ip string) error {
 	email, err := normalizeEmail(rawEmail)
 	if err != nil {
@@ -103,7 +112,9 @@ func (s *RecoveryService) StartRecovery(ctx context.Context, rawEmail, ip string
 		})
 	}
 
-	return s.mailer.SendRecovery(ctx, email, token)
+	// The recovery email is already durably enqueued — see this method's
+	// doc comment and store.CreateRecoveryToken.
+	return nil
 }
 
 // VerifyRecovery is step 2. It validates the recovery token (existence +
