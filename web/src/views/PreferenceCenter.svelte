@@ -124,6 +124,33 @@
   // vanished. Bound by both terminal branches below (whichever renders).
   let resultMessage = $state<HTMLParagraphElement | null>(null);
 
+  // #0244 (finding 2 of #0063's phase-3 re-review): loadState === 'error' is
+  // the SAME shape as the unsubscribed/unsubscribeNoOp swap above -- the
+  // 'loading' branch's editor-shaped content disappears and this whole-panel
+  // error replaces it, with no persistent node whose text merely mutates.
+  // ConfirmSubscription.svelte's structurally identical confirming -> error
+  // transition already gets focus movement, with the reviewer's own
+  // reasoning restated here: it "happens with no preceding user interaction
+  // to prime a screen reader", which makes leaving focus on <body> worse
+  // here than in a state a user's own click caused. Its own ref (rather than
+  // reusing resultMessage) because this branch is reachable ONLY from
+  // 'loading', never adjacent to the unsubscribed/unsubscribeNoOp branches
+  // resultMessage serves.
+  let errorMessage = $state<HTMLParagraphElement | null>(null);
+
+  // #0242 (live-region structural guard): the !isActive branch below is the
+  // SAME whole-panel-swap shape as errorMessage above -- reached only from
+  // the initial GET resolving (never re-entered afterward within one
+  // session, since nothing here re-fetches), with no persistent node to
+  // carry an announcement across the swap. Both its sub-branches
+  // (showSubscribeAgainAffordance true/false) share this one ref: only one
+  // of them ever renders at a time. Only reachable in standalone mode
+  // (embedded always starts 'active' -- see the doc comment on `embedded`
+  // above), where showHeading is always true, so this doesn't compete with
+  // ConfirmSubscription's own <h1> the way embedded mode's hidden showHeading
+  // does elsewhere in this file.
+  let inactiveNotice = $state<HTMLParagraphElement | null>(null);
+
   onMount(() => {
     if (embedded) return;
 
@@ -135,19 +162,28 @@
     token = t;
 
     getPreferences(t)
-      .then((res) => {
+      .then(async (res) => {
         email = res.email;
         status = res.status;
         selected = new Set(res.interests);
         activeInterests = res.active_interests;
         loadState = 'loaded';
+        if (res.status !== 'active') {
+          await tick();
+          inactiveNotice?.focus();
+        }
       })
-      .catch((err) => {
+      .catch(async (err) => {
         if (err instanceof ApiError && err.status === 404) {
           loadState = 'invalid';
-        } else {
-          loadState = 'error';
+          return;
         }
+        loadState = 'error';
+        // #0244: move focus to the error message itself once it mounts,
+        // matching resultMessage's pattern below and ConfirmSubscription's
+        // confirming -> error transition.
+        await tick();
+        errorMessage?.focus();
       });
   });
 
@@ -214,7 +250,7 @@
   <p class="text-muted">Loading your preferences…</p>
 {:else if loadState === 'invalid'}
   <div class="pref-invalid">
-    {#if showHeading}<h1>Manage your preferences</h1>{/if}
+    {#if showHeading}<h1 tabindex="-1">Manage your preferences</h1>{/if}
     <Panel>
       <p>This link is invalid or has expired.</p>
       <p class="text-muted">
@@ -224,12 +260,12 @@
     </Panel>
   </div>
 {:else if loadState === 'error'}
-  <p class="text-error" role="alert">
+  <p class="text-error result-message" role="alert" tabindex="-1" bind:this={errorMessage}>
     Something went wrong loading your preferences. Please try again in a moment.
   </p>
 {:else if unsubscribed}
   <div class="pref-content">
-    {#if showHeading}<h1>Manage your preferences</h1>{/if}
+    {#if showHeading}<h1 tabindex="-1">Manage your preferences</h1>{/if}
     <Panel>
       <p role="status" tabindex="-1" bind:this={resultMessage} class="result-message">
         You've been unsubscribed from everything. You can resubscribe anytime.
@@ -239,7 +275,7 @@
   </div>
 {:else if unsubscribeNoOp}
   <div class="pref-content">
-    {#if showHeading}<h1>Manage your preferences</h1>{/if}
+    {#if showHeading}<h1 tabindex="-1">Manage your preferences</h1>{/if}
     <Panel>
       <p role="status" tabindex="-1" bind:this={resultMessage} class="result-message">
         {unsubscribeNoOpMessage}
@@ -283,13 +319,13 @@
        preferences.go's no-op message directly and fails if either is edited
        alone. -->
   <div class="pref-content">
-    {#if showHeading}<h1>Manage your preferences</h1>{/if}
+    {#if showHeading}<h1 tabindex="-1">Manage your preferences</h1>{/if}
     <Panel>
       {#if showSubscribeAgainAffordance(status)}
-        <p role="status">{inactiveStatusMessage(status)}</p>
+        <p role="status" class="result-message" tabindex="-1" bind:this={inactiveNotice}>{inactiveStatusMessage(status)}</p>
         <button type="button" class="link-button" onclick={goToSubscribe}>Subscribe again</button>
       {:else}
-        <p role="status">
+        <p role="status" class="result-message" tabindex="-1" bind:this={inactiveNotice}>
           {COMPLAINED_NO_RESUBSCRIBE_MESSAGE_LEAD}<a
             href="mailto:{COMPLAINED_CONTACT_EMAIL}">{COMPLAINED_CONTACT_EMAIL}</a
           >{COMPLAINED_NO_RESUBSCRIBE_MESSAGE_TAIL}
@@ -299,7 +335,7 @@
   </div>
 {:else}
   <div class="pref-content">
-    {#if showHeading}<h1>Manage your preferences</h1>{/if}
+    {#if showHeading}<h1 tabindex="-1">Manage your preferences</h1>{/if}
     <p class="text-muted">Signed in as <strong>{email}</strong></p>
 
     <section aria-labelledby="pref-interests-h">

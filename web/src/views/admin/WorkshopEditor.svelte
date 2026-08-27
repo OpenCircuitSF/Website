@@ -632,11 +632,19 @@
     `CampaignEditor.svelte`'s `testSendMessage`) -- all now converted the
     same way. `Login.svelte`'s two panel-swap notices are the OTHER
     documented pattern (whole-panel replacement -> focus movement, per
-    `Unsubscribe.svelte`), not this one. A further ~10 `{#if loading}<p
+    `Unsubscribe.svelte`), not this one. A further 17 `{#if loading}<p
     role="status">Loading…</p>{/if}` placeholders across the console were
     reported, not converted, in #0063.md's fix pass -- they announce an
     initial-load state rather than the result of a user action, a smaller
-    instance of the same defect class.
+    instance of the same defect class. (#0244: this comment previously said
+    "~10" -- stale even against #0063's own contemporaneous count of 14, and
+    more stale now: `grep -rn 'role="status"' web/src | grep -v
+    '\.test\.ts' | grep -i loading` finds 17 today, one more file
+    (`Dashboard.svelte`'s "Loading overview…") having grown this exact shape
+    since #0063 shipped. Re-derived from the tree rather than copied from
+    #0244's own filing, which still said "roughly fifty" for the sibling
+    `role="alert"` count -- see `liveRegionGuard.structuralGuard.test.ts` for
+    the current exact figures on both.)
   -->
   <Panel title="Announce">
     <p class="text-muted">
