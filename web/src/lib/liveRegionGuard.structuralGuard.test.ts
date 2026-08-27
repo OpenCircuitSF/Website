@@ -64,6 +64,45 @@
 //      of this exact rule); a future one would not be caught by this rule
 //      alone.
 //
+//      ## Disclosed boundary (#0242 review, eba2de9): the fork case gets NO
+//      check at all, not merely an approximate one
+//
+//      The above is understated by calling this "a real, disclosed
+//      approximation" -- the review measured the actual size of the gap and
+//      it is not a narrow edge case. isGoverningBranchDynamic examines a
+//      role="status" site AT ALL only when unwrapping its governing branch
+//      reaches the element itself with no fork along the way. The instant a
+//      branch forks (more than one significant child anywhere on the
+//      unwrap path -- e.g. a heading ALONGSIDE the status paragraph, not
+//      wrapping it), this function returns false and the site is pushed
+//      straight into `statusSites` as if it were unconditionally rendered:
+//      NO persistence check, NO loading-placeholder classification, and NO
+//      focus-swap-target check. On the tree as of this pass that is 24 of
+//      the 47 status/aria-live sites that sit inside a branch at all --
+//      measured by the review, not estimated. This concrete shape passes
+//      today with zero scrutiny:
+//
+//        {#if err}
+//          <div class="wrap"><h2>Oops</h2><p role="status">{err}</p></div>
+//        {/if}
+//
+//      That is criterion 1's literal subject (a role="status" node created
+//      and destroyed by an {#if}, dynamic text, no focus target) and it is
+//      the same gap #0244's own item 1 turned out to be
+//      (PreferenceCenter.svelte's two-child `{#if
+//      showSubscribeAgainAffordance}` branch had no focus management, and
+//      this guard would not have found it either). Judged, on the #0242
+//      re-implementation pass that added this paragraph, to be out of
+//      proportion to a bounce that was solely about criterion 4's glob
+//      scope: closing it means extending isGoverningBranchDynamic to
+//      require a focus-swap target for ANY in-branch status site (not just
+//      the single-child-unwrap case) and building a
+//      KNOWN_LOADING_PLACEHOLDERS-shaped named allowlist for whichever of
+//      the 24 are genuinely stable, multi-purpose branches -- auditing 24
+//      real sites across several files is comparable in size to this
+//      guard's own original construction, not a follow-on fix. Left
+//      open and reported for its own issue rather than folded in here.
+//
 //   2. NOT a legitimate whole-panel swap: scanning that SAME governing
 //      branch's entire subtree (not just ancestors of the status element --
 //      Unsubscribe.svelte's `{doneMessage}` status paragraph is a SIBLING
@@ -127,14 +166,47 @@ import { parse as parseSvelte } from 'svelte/compiler';
 
 type SvelteNode = Record<string, unknown>;
 
-const SOURCE_FILES = import.meta.glob('../views/**/*.svelte', {
+// #0242 review (eba2de9): this used to glob '../views/**/*.svelte', which
+// resolves to web/src/views ONLY -- so the thirteen .svelte files outside
+// it (App.svelte and all twelve of web/src/lib/*.svelte) were never
+// scanned. One of them held a live region: web/src/lib/SubscribeForm.svelte,
+// this issue's OWN motivating example, whose original {#if}/{:else}-created
+// error paragraph "looked correct by inspection" and was only proved broken
+// in a real browser. That component (now converted, #0063) currently
+// passes this guard's rule on its merits, but nothing would have noticed if
+// it silently regressed -- criterion 4 exists verbatim because #0063 was
+// bounced for exactly this shape of scoping error one directory up.
+// Widened to the whole of web/src so every .svelte file in the tree is
+// covered, matching criterion 4's "not a hand-maintained file list".
+const SOURCE_FILES = import.meta.glob('../**/*.svelte', {
   query: '?raw',
   import: 'default',
   eager: true,
 }) as Record<string, string>;
 
+/** `globKey` is import.meta.glob's key: a path relative to THIS file's own
+ * directory (web/src/lib) -- e.g. './Button.svelte' (a lib sibling),
+ * '../App.svelte' (the parent), or '../views/Home.svelte' (a subdirectory
+ * of the parent). A naive `slice('../'.length)` (the review's literal
+ * suggestion) is wrong for the './...' sibling case -- it silently chops
+ * three characters off the FILENAME instead of the prefix, e.g.
+ * './Button.svelte' -> 'utton.svelte'. Resolving each '.'/'..' segment
+ * against 'web/src/lib' by hand (rather than importing 'node:path', which
+ * this project deliberately does without -- see nodeFsShim.d.ts's own doc
+ * comment on why @types/node was removed in favor of hand-declared
+ * ambients) handles all three shapes uniformly. */
 function toRepoRelativePath(globKey: string): string {
-  return `web/src/views/${globKey.slice('../views/'.length)}`;
+  const segments = `web/src/lib/${globKey}`.split('/');
+  const resolved: string[] = [];
+  for (const segment of segments) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      resolved.pop();
+      continue;
+    }
+    resolved.push(segment);
+  }
+  return resolved.join('/');
 }
 
 // ---------------------------------------------------------------------------
@@ -557,14 +629,16 @@ function checkFile(
 }
 
 describe('live-region structural guard (#0242, #0243): role="status" persists or swaps focus; role="alert" is enumerated and always has content', () => {
-  it('every classifiable role="status"/aria-live site in web/src/views is either persistent, a documented loading placeholder, or a wired whole-panel-swap focus target -- and every role="alert" site has real content', () => {
+  it('every classifiable role="status"/aria-live site in web/src (not just web/src/views) is either persistent, a documented loading placeholder, or a wired whole-panel-swap focus target -- and every role="alert" site has real content', () => {
     const allViolations: Violation[] = [];
     const statusSites: Array<Site & { file: string }> = [];
     const alertSites: Array<Site & { file: string }> = [];
     const loadingPlaceholders: Array<Site & { file: string }> = [];
+    let filesScanned = 0;
 
     for (const [globKey, source] of Object.entries(SOURCE_FILES)) {
       if (globKey.endsWith('.test.ts')) continue;
+      filesScanned++;
       const file = toRepoRelativePath(globKey);
 
       // Parsed once here (rather than inside checkFile) so the <script> AST
@@ -587,12 +661,32 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
     }
     expect(allViolations).toHaveLength(0);
 
+    // #0242 review (eba2de9): criterion 4 requires the scan run over the
+    // whole tree, not a hand-maintained (or accidentally re-narrowed) file
+    // list. A COUNT floor on filesScanned makes a future narrowing of the
+    // glob (back to '../views/**/*.svelte', or anything else that drops
+    // App.svelte or web/src/lib's twelve components) fail loudly here
+    // instead of silently passing with fewer files scanned -- the same
+    // failure mode criterion 4 was written to close. 38 is the real count
+    // of every .svelte file in web/src as of this pass (`find web/src -name
+    // '*.svelte' | wc -l`); 35 leaves headroom for a handful of new files
+    // without the floor itself needing to move on every unrelated commit.
+    expect(filesScanned).toBeGreaterThanOrEqual(35);
+
     // Enumeration floors (#0243 criterion 1: "derived from the tree"), not
     // magic totals -- if any of these drops, either a site was converted
     // (update the count/allowlist deliberately) or the scan itself broke.
-    expect(alertSites.length).toBeGreaterThanOrEqual(50);
-    expect(statusSites.length).toBeGreaterThanOrEqual(10);
-    expect(loadingPlaceholders.length).toBeGreaterThanOrEqual(17);
+    // Re-derived 2026-08-27 (#0242 review) against the WIDENED scan (whole
+    // of web/src, not just web/src/views): alertSites 56 (unchanged --
+    // no role="alert" sites exist outside web/src/views), statusSites 30
+    // (was 29 over views only; SubscribeForm.svelte's persistent
+    // aria-live="polite" error region -- this issue's own motivating
+    // example, previously invisible to this guard -- adds the 30th),
+    // loadingPlaceholders 20 (unchanged -- no loading-placeholder shape
+    // exists outside web/src/views either).
+    expect(alertSites.length).toBeGreaterThanOrEqual(56);
+    expect(statusSites.length).toBeGreaterThanOrEqual(30);
+    expect(loadingPlaceholders.length).toBeGreaterThanOrEqual(20);
   });
 });
 
