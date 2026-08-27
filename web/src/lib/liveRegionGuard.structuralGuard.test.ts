@@ -46,30 +46,58 @@
 //      decision in code instead of prose, not to silently relitigate it.
 //
 //   2. WHOLE-PANEL SWAP: scanning the site's nearest-enclosing branch's
-//      ENTIRE subtree (not just ancestors of the status element --
-//      Unsubscribe.svelte's `{doneMessage}` status paragraph is a SIBLING
-//      of the `<h1 tabindex="-1" bind:this={doneHeading}>` that actually
-//      receives focus, inside the same `{:else}` branch, not an ancestor of
-//      it) finds an element carrying BOTH `tabindex="-1"` and
-//      `bind:this={V}`, and the component's <script> calls `V.focus()` /
-//      `V?.focus()` (zero arguments) anywhere -- not required to sit inside
-//      `$effect`, unlike modalFocusWiring's stricter check, because this
-//      codebase's real sites (Login.svelte, Unsubscribe.svelte,
-//      PreferenceCenter.svelte, CampaignEditor.svelte) call it from a plain
-//      `await tick(); V?.focus();` inside an async handler, not a reactive
-//      effect. This is the "legitimate alternative" #0242's criterion 2
-//      asks the guard to distinguish rather than flag: when the whole
-//      branch is fresh (its FIRST appearance, the only time insertion vs.
-//      mutation matters), focus moving to SOME element within it is a real
-//      signal that orients an AT user to the new panel, after which any
-//      role="status" node already inside it mutates normally like any
-//      other live region. Nothing requires the swap target to be
-//      "about" this specific status site -- CampaignEditor.svelte's
-//      `headingEl` (focused once, when a campaign first loads) legitimately
-//      covers half a dozen status/aria-live regions scattered through that
-//      same large `{:else if campaign}` branch, because what's being
-//      verified is "does entering this subtree coincide with a focus
-//      move", not "does this exact node get read aloud".
+//      subtree (not just ancestors of the status element -- Unsubscribe.
+//      svelte's `{doneMessage}` status paragraph is a SIBLING of the
+//      `<h1 tabindex="-1" bind:this={doneHeading}>` that actually receives
+//      focus, inside the same `{:else}` branch, not an ancestor of it)
+//      finds an element carrying BOTH `tabindex="-1"` and `bind:this={V}`,
+//      and the component's <script> calls `V.focus()` / `V?.focus()`
+//      (zero arguments) anywhere -- not required to sit inside `$effect`,
+//      unlike modalFocusWiring's stricter check, because this codebase's
+//      real sites (Login.svelte, Unsubscribe.svelte, PreferenceCenter.svelte,
+//      CampaignEditor.svelte) call it from a plain `await tick();
+//      V?.focus();` inside an async handler, not a reactive effect. This is
+//      the "legitimate alternative" #0242's criterion 2 asks the guard to
+//      distinguish rather than flag: when the whole branch is fresh (its
+//      FIRST appearance, the only time insertion vs. mutation matters),
+//      focus moving to SOME element within it is a real signal that orients
+//      an AT user to the new panel, after which any role="status" node
+//      already inside it mutates normally like any other live region.
+//      Nothing requires the swap target to be "about" this specific status
+//      site -- CampaignEditor.svelte's `headingEl` (focused once, when a
+//      campaign first loads) legitimately covers half a dozen status/
+//      aria-live regions scattered through that same large `{:else if
+//      campaign}` branch, because what's being verified is "does entering
+//      this subtree coincide with a focus move", not "does this exact node
+//      get read aloud".
+//
+//      #0299 TIGHTENED which subtree counts as "the site's nearest-
+//      enclosing branch's subtree": the scan does NOT cross into a NESTED
+//      {#if}/{:else}/{#each} looking for a target. A target reachable only
+//      by first entering some FURTHER, inner conditional -- a modal dialog
+//      gated behind its own `{#if showModal}`, say -- has its OWN, narrower
+//      governing branch, which mounts and unmounts on its own trigger (the
+//      modal opening), not on whatever mounts the outer branch the status
+//      site is actually in. #0286's widening (below) had made this hatch
+//      the largest of the three, and its review measured 5 in-branch sites
+//      passing it for exactly that reason: Admin.svelte's newSlugInvalid
+//      hint, createSubNotice, and the CSV-import notice (all matching a
+//      modal's own tabindex="-1"+bind:this target several conditionals
+//      deeper in the same large per-tab branch), plus WorkshopEditor.
+//      svelte's saveNotice and unsavedInterestsHint (matching
+//      transitionModalEl, similarly nested behind its own `{#if
+//      transitionOpen}`). All five are unconditionally rendered themselves,
+//      inside a large, stable, multi-purpose branch -- the SAME shape as
+//      settingsNotice/addressNotice/CampaignEditor's audience-count in
+//      check 3 below, just previously mis-credited to an unrelated modal
+//      instead of to that persistence argument. All five are now named
+//      KNOWN_STABLE_BRANCH_SITES entries instead (see findFocusTargetVar's
+//      own doc comment, and those sets' own comments, for the full account).
+//      CampaignEditor.svelte's `headingEl` case above is UNAFFECTED: every
+//      status region it covers sits directly in the SAME `{:else if
+//      campaign}` fragment as `headingEl` itself, with no intervening
+//      IfBlock/EachBlock, so "same governing branch" is exactly what that
+//      paragraph was already describing.
 //
 //   3. KNOWN STABLE BRANCH: neither of the above, but the site's file+text
 //      pair is named in KNOWN_STABLE_BRANCH_SITES -- for sites whose OWN
@@ -285,6 +313,35 @@ function significantNodes(fragment: SvelteNode | undefined): SvelteNode[] {
 // fixed properly (made an unconditional, persistent node) rather than
 // allowlisted, since #0280's justification field asks for a REASON, and
 // "this is actually a bug" isn't one.
+//
+// #0286's own review measured the state its widening produced, of 48
+// in-branch sites:
+//
+//   loading placeholders          20
+//   whole-panel-swap targets      21
+//   named stable-branch entries    7
+//   unchecked                      0
+//
+// #0299 found the swap hatch -- now the largest of the three -- loose: a
+// site passed it when a focus move existed ANYWHERE in its governing
+// branch, including behind a nested modal's own separate {#if}, unrelated
+// to the site (see findFocusTargetVar's own doc comment, and the WHOLE-
+// PANEL SWAP section of this header, above, for the full account). 5 of
+// the 21 swap sites were passing that way; all 5 are now named
+// KNOWN_STABLE_BRANCH_SITES entries instead (the persistence argument that
+// was actually true of them all along), with 0 requiring a code change and
+// 0 left over needing allowlisting-without-resolution. Re-measured
+// (`#0299` criterion 4) after the tightening, same 48 sites, same table
+// form -- this is the tally the next widening should start from:
+//
+//   loading placeholders          20
+//   whole-panel-swap targets      16
+//   named stable-branch entries   12
+//   unchecked                      0
+//
+// (alertSites 61, statusSites 32 -- unchanged by this issue, which only
+// reclassifies WITHIN the in-branch role="status" sites; see the real-tree
+// test's own floor comments for those two.)
 
 interface Site {
   file: string;
@@ -427,7 +484,45 @@ function collectSites(
 /** True if `root`'s subtree contains an element with BOTH tabindex="-1" and
  * bind:this={someVar} -- returns that var's name, or undefined. Used to find
  * a swap's focus target anywhere in the governing branch, not just among
- * ancestors of the status element itself (Unsubscribe.svelte's shape). */
+ * ancestors of the status element itself (Unsubscribe.svelte's shape).
+ *
+ * #0299: does NOT descend past a nested {#if}/{:else}/{#each} inside `root`.
+ * `root` is always a site's governingBranch fragment -- the nearest {#if}
+ * (etc.) that the STATUS SITE itself sits in. A tabindex="-1"+bind:this
+ * target reachable only by first entering some FURTHER, inner conditional
+ * (a modal dialog gated behind its own `{#if showModal}`, say) has its own
+ * narrower governing branch, distinct from `root`: that inner branch mounts
+ * and unmounts on its own trigger (opening the modal), not on whatever
+ * mounts `root`. Finding such a target anywhere in a large outer branch is
+ * not evidence that entering THIS branch coincides with that focus move --
+ * only that the branch happens to contain, somewhere deep inside it, a
+ * dialog that manages its own focus for its own reason.
+ *
+ * Measured by #0299's review and confirmed by re-running the enumeration
+ * before this change: the OLD (unrestricted) version let 5 in-branch status
+ * sites -- Admin.svelte's newSlugInvalid hint, createSubNotice, and the
+ * CSV-import notice (matching editInterestModalEl / subscriberDetailModalEl,
+ * a modal several conditionals deeper in the same large per-tab branch, only
+ * reachable via reading past the tab's OWN modal-open {#if}), plus
+ * WorkshopEditor.svelte's saveNotice and unsavedInterestsHint (matching
+ * transitionModalEl, similarly nested behind its own {#if transitionOpen})
+ * -- pass the swap hatch for a reason that has nothing to do with them: an
+ * unrelated modal, opened by an unrelated user action, happens to sit
+ * somewhere else in the same branch. All five are unconditionally rendered
+ * themselves (not gated by their OWN {#if}) inside a large, stable,
+ * multi-purpose branch -- the SAME shape as settingsNotice/addressNotice
+ * below, just previously mis-credited to the wrong mechanism. They are now
+ * named KNOWN_STABLE_BRANCH_SITES entries instead (see that set), which is
+ * what was actually true of them all along.
+ *
+ * Genuinely SAME-branch cases are unaffected, because the target sits
+ * directly in `root`'s own fragment with no intervening IfBlock/EachBlock:
+ * Login.svelte/Unsubscribe.svelte's self-bound or sibling notices, and
+ * CampaignEditor.svelte's `headingEl`, which the file header already
+ * documents as legitimately covering several status regions scattered
+ * through the SAME `{:else if campaign}` fragment (not behind any further
+ * conditional) -- that comment's reasoning is unchanged by this tightening,
+ * because "same governing branch" is exactly what it was already describing. */
 function findFocusTargetVar(root: unknown, seen = new Set<unknown>()): string | undefined {
   if (root === null || typeof root !== 'object') return undefined;
   if (seen.has(root)) return undefined;
@@ -440,6 +535,9 @@ function findFocusTargetVar(root: unknown, seen = new Set<unknown>()): string | 
     return undefined;
   }
   const obj = root as SvelteNode;
+  // #0299: a nested branch has its own, narrower governing branch -- do not
+  // cross into it looking for a target that "belongs" to THIS one.
+  if (obj.type === 'IfBlock' || obj.type === 'EachBlock') return undefined;
   if (obj.type === 'RegularElement' && hasTabIndexNegOne(obj)) {
     const v = findBindThisVar(obj);
     if (v) return v;
@@ -610,6 +708,37 @@ const KNOWN_LOADING_PLACEHOLDERS: AllowlistEntry[] = [
 const KNOWN_STABLE_BRANCH_REASON_TAB_PANEL =
   "Unconditionally rendered itself (not wrapped in its OWN {#if}) inside one of Admin.svelte's per-tab sections -- its governing branch is the whole tab's content (many unrelated fields, forms, and other notices), so switching tabs is what mounts/unmounts it, not anything about this element. Exactly the settingsNotice/audience-count shape #0242's now-removed single-child unwrap used to infer structurally (see this file's header): the branch is stable and multi-purpose far beyond this one notice.";
 
+/** #0299: newSlugInvalid, createSubNotice, and the CSV-import notice used to
+ * pass the swap hatch by matching a modal's tabindex="-1"+bind:this target
+ * (editInterestModalEl / subscriberDetailModalEl) that sits several
+ * conditionals deeper in the SAME tab branch, behind that modal's OWN
+ * `{#if editingInterest}`/`{#if viewingSubscriber || ...}` -- an unrelated
+ * dialog, opened by an unrelated user action (clicking Edit / View), that
+ * happens to be declared somewhere later in the same large tab section. The
+ * tightened findFocusTargetVar (see its own doc comment) no longer credits
+ * that: these three now rest on the SAME persistence argument as
+ * settingsNotice/addressNotice above, which was always the real reason they
+ * are correct, not the modal. The CSV-import notice specifically: this is
+ * the ground #0286 actually made it correct on (an unconditional, persistent
+ * node in a stable branch) -- it previously passed the guard for the wrong
+ * reason (a coincidental modal match), which this entry corrects.*/
+const KNOWN_STABLE_BRANCH_REASON_TAB_PANEL_0299 = `${KNOWN_STABLE_BRANCH_REASON_TAB_PANEL} Previously mis-credited to an unrelated modal's focus target reachable only by reading past that modal's OWN nested {#if} inside this same tab branch -- #0299 tightened the swap hatch to stop crossing that boundary, surfacing that persistence-within-the-stable-branch (not the modal) was the real, and sufficient, argument all along.`;
+
+/** #0299: saveNotice and unsavedInterestsHint used to pass the swap hatch by
+ * matching transitionModalEl, a tabindex="-1"+bind:this target that sits
+ * behind its OWN nested `{#if transitionOpen}` -- a status-change dialog,
+ * opened by an unrelated user action, several conditionals deeper in the
+ * SAME large `{:else if workshop}` branch (the editor's whole main form,
+ * which mounts once when the workshop record loads and stays mounted across
+ * ordinary editing -- the same branch WorkshopEditor's "Rendering preview…"
+ * and previewStale entries above already rest on). Both sites are
+ * unconditionally rendered themselves (no OWN {#if}), so what actually makes
+ * them sound is that stable, multi-purpose branch, not transitionModalEl's
+ * unrelated focus move -- the tightened findFocusTargetVar (see its own doc
+ * comment) no longer credits the latter. */
+const KNOWN_STABLE_BRANCH_REASON_MAIN_FORM =
+  "Unconditionally rendered itself (not wrapped in its OWN {#if}) inside the editor's main form ({:else if workshop}), which mounts once when the workshop record loads and stays mounted across ordinary editing -- the same stable branch this file's \"Rendering preview…\"/previewStale entries above already rest on. Previously mis-credited (#0299) to transitionModalEl, a status-change dialog's own focus target several conditionals deeper behind its OWN {#if transitionOpen} -- an unrelated dialog, not evidence about this branch's own mount. Persistence within the stable main-form branch is the real, sufficient argument.";
+
 const KNOWN_STABLE_BRANCH_SITES: AllowlistEntry[] = [
   {
     file: 'web/src/views/Admin.svelte',
@@ -620,6 +749,22 @@ const KNOWN_STABLE_BRANCH_SITES: AllowlistEntry[] = [
     file: 'web/src/views/Admin.svelte',
     match: "<p class=\"text-notice\" role=\"status\">{addressNotice ?? ''}</p>",
     reason: KNOWN_STABLE_BRANCH_REASON_TAB_PANEL,
+  },
+  {
+    file: 'web/src/views/Admin.svelte',
+    match:
+      "<p class=\"text-warn\" role=\"status\">\n              {newSlugInvalid\n                ? 'Lowercase letters, numbers, and single hyphens only (e.g. \"home-automation\").'\n                : ''}\n            </p>",
+    reason: `${KNOWN_STABLE_BRANCH_REASON_TAB_PANEL_0299} This is the Interests tab's new-slug validation hint.`,
+  },
+  {
+    file: 'web/src/views/Admin.svelte',
+    match: "<p class=\"text-notice\" role=\"status\">{createSubNotice ?? ''}</p>",
+    reason: `${KNOWN_STABLE_BRANCH_REASON_TAB_PANEL_0299} This is the Subscribers tab's create-subscriber notice.`,
+  },
+  {
+    file: 'web/src/views/Admin.svelte',
+    match: "<p class=\"text-notice\" role=\"status\">{importCommitNoticeText(importCommitResult, importRevokedCount)}</p>",
+    reason: `${KNOWN_STABLE_BRANCH_REASON_TAB_PANEL_0299} This is the CSV-import notice #0286 made unconditional -- #0299 criterion 3: it now passes on that persistence ground, not via subscriberDetailModalEl.`,
   },
   {
     file: 'web/src/views/PreferenceCenter.svelte',
@@ -652,6 +797,16 @@ const KNOWN_STABLE_BRANCH_SITES: AllowlistEntry[] = [
       "<p class=\"text-warn\" role=\"status\">\n                {previewStale\n                  ? \"Showing the last saved version — your edits since then aren't included. Save to update the preview.\"\n                  : ''}\n              </p>",
     reason:
       "Unconditionally rendered (not wrapped in its own {#if previewStale} -- only its TEXT is a ternary) inside the editor's main form, which mounts once when the workshop record loads and stays mounted across ordinary editing. Its own doc comment already argues this at length (#0063): this <p> stays mounted for as long as hasPreviewContent is true rather than being created fresh by an inner {#if previewStale}.",
+  },
+  {
+    file: 'web/src/views/admin/WorkshopEditor.svelte',
+    match: "<p class=\"text-notice\" role=\"status\">{saveNotice ?? ''}</p>",
+    reason: KNOWN_STABLE_BRANCH_REASON_MAIN_FORM,
+  },
+  {
+    file: 'web/src/views/admin/WorkshopEditor.svelte',
+    match: '<p class="text-warn" role="status">{unsavedInterestsHint}</p>',
+    reason: KNOWN_STABLE_BRANCH_REASON_MAIN_FORM,
   },
 ];
 
@@ -1030,6 +1185,59 @@ describe('checkFile (synthetic fixtures)', () => {
     expect(statusSites).toHaveLength(1);
   });
 
+  // #0299 criterion 5: proves the tightened rule fires against the shape it
+  // was written to close -- a status site whose ONLY nearby focus move is a
+  // target several conditionals deeper in the same outer branch (a modal
+  // gated behind its own {#if showModal}), not in the site's OWN governing
+  // branch. This is exactly the Admin.svelte/WorkshopEditor.svelte shape
+  // #0299's Description measured: 5 sites passing via an unrelated modal's
+  // .focus() call. Before this change, findFocusTargetVar found `modalEl`
+  // anywhere in the outer branch and this fixture passed; now it must not.
+  it('#0299: flags a status site whose only nearby focus target is behind a NESTED {#if} (an unrelated modal), not in its own governing branch', () => {
+    const src = `<script>
+  let modalEl = $state(null);
+  function openModal() {
+    showModal = true;
+    tick().then(() => modalEl?.focus());
+  }
+</script>
+{#if section === 'tab'}
+  <p class="text-notice" role="status">{notice ?? ''}</p>
+  <button onclick={openModal}>Open</button>
+  {#if showModal}
+    <div class="modal" tabindex="-1" bind:this={modalEl}>...</div>
+  {/if}
+{/if}`;
+    const ast = parseSvelte(src, { filename: 'fixture.svelte', modern: true }) as unknown as SvelteNode;
+    const scriptAst = (ast.instance as SvelteNode | undefined)?.content as SvelteNode | undefined;
+    const { violations, statusSites } = checkFile('fixture.svelte', src, scriptAst);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].reason).toContain('not named in KNOWN_STABLE_BRANCH_SITES');
+    expect(statusSites).toHaveLength(0);
+  });
+
+  // Same shape, but the target is a DIRECT sibling in the SAME governing
+  // branch (no intervening {#if}) -- must still pass. Guards against an
+  // overcorrection that would also reject the legitimate sibling/self-bound
+  // shapes the two tests immediately below (and above) already cover.
+  it('#0299: still recognizes a swap target that is a direct sibling in the SAME governing branch, no nested {#if} in between', () => {
+    const src = `<script>
+  let panelEl = $state(null);
+  function onEnter() {
+    tick().then(() => panelEl?.focus());
+  }
+</script>
+{#if section === 'tab'}
+  <h1 tabindex="-1" bind:this={panelEl}>Tab</h1>
+  <p class="text-notice" role="status">{notice ?? ''}</p>
+{/if}`;
+    const ast = parseSvelte(src, { filename: 'fixture.svelte', modern: true }) as unknown as SvelteNode;
+    const scriptAst = (ast.instance as SvelteNode | undefined)?.content as SvelteNode | undefined;
+    const { violations, statusSites } = checkFile('fixture.svelte', src, scriptAst);
+    expect(violations).toHaveLength(0);
+    expect(statusSites).toHaveLength(1);
+  });
+
   it('still flags a claimed swap when the focus target exists but nothing in <script> ever calls .focus() on it (vacuous binding)', () => {
     const src = `<script>
   // el is bound but never focused anywhere
@@ -1172,3 +1380,4 @@ describe('checkFile (synthetic fixtures)', () => {
     expect(unscannedFileViolations(KNOWN_STABLE_BRANCH_SITES, 'KNOWN_STABLE_BRANCH_SITES', scanned)).toHaveLength(0);
   });
 });
+
