@@ -51,7 +51,10 @@ CREATE INDEX idx_email_events_recipient  ON email_events (recipient);
 -- consecutive streak counted incrementally on subscribers.soft_bounce_streak
 -- (migration 000010) rather than by re-querying email_events, so the
 -- windowed count query — and the partial index it needed — no longer exist.
--- 000016 (which only widened that now-removed index) is deleted outright
--- rather than folded forward, per this issue's acceptance criteria; see
--- docs/database.md's migration table and issues/0124.md's Notes.
+-- 000016 (which only widened that now-removed index) is kept as a
+-- documented no-op rather than deleted outright — removing the file would
+-- force renumbering every migration from 000017 onward to satisfy
+-- verifyContiguous's gap-free sequence requirement (#0083), for no
+-- behavioral gain; see migrations/000016_widen_soft_bounce_counting.up.sql's
+-- comment, docs/database.md's migration table, and issues/0124.md's Notes.
 CREATE INDEX idx_email_events_recipient_time ON email_events (recipient, received_at DESC);

@@ -548,6 +548,18 @@ func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) (bool, error
 		default:
 		}
 
+		// #0269: evaluate the breaker at the TOP of the loop too, not only
+		// at the end of a batch (below). Without this, a Resume that lands
+		// on an already-tripped rate put a full w.batchSize on the wire
+		// before the end-of-batch check ever re-ran — measured: 300
+		// recipients at a 100% bounce rate with batchSize=100 tripped at
+		// 100, then one Resume sent exactly +100 more before re-pausing.
+		// Checking here first means a resume into a still-bad rate sends
+		// zero further messages instead of one more batch.
+		if stopped, err := w.checkAndMaybePauseDeliveryHealth(ctx, c); stopped {
+			return true, err
+		}
+
 		sendRate := w.effectiveSendRate(ctx)
 		limiter := rate.NewLimiter(rate.Limit(sendRate), 1)
 
@@ -614,25 +626,42 @@ func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) (bool, error
 
 		w.publishProgress(ctx, c.ID)
 
-		// #0124's circuit breaker (PRD §6.9), checked once per drained
+		// #0124's circuit breaker (PRD §6.9), also checked once per drained
 		// batch — the same cadence publishProgress already uses, not once
 		// per message: bounce/complaint events arrive asynchronously via
 		// SES's webhook (internal/handlers/ses_notifications.go), often
 		// well after the send that triggered them, so checking more often
 		// than once per batch buys no earlier detection, only more queries
-		// against a rate that hasn't moved.
-		tripped, herr := w.checkDeliveryHealth(ctx, c.ID)
-		if herr != nil {
-			// A health-check failure (a query error) must not silently
-			// disable the breaker — that would turn "the database had a
-			// hiccup" into "safety checking quietly stopped" — but it also
-			// must not crash a send that is otherwise healthy. Log and
-			// keep draining; the next batch tries again.
-			w.log.Error("mailing: delivery-health check failed", "campaign_id", c.ID, "err", herr)
-		} else if tripped.Tripped {
-			return true, w.pauseCampaignDeliveryHealth(ctx, c.ID, c.Subject, tripped)
+		// against a rate that hasn't moved. This end-of-batch check catches
+		// a rate that trips DURING the batch just sent; the top-of-loop
+		// check above catches a rate that was already tripped BEFORE this
+		// batch started (in particular, right after a Resume) — #0269.
+		if stopped, err := w.checkAndMaybePauseDeliveryHealth(ctx, c); stopped {
+			return true, err
 		}
 	}
+}
+
+// checkAndMaybePauseDeliveryHealth runs checkDeliveryHealth once for c and,
+// if it tripped, pauses the campaign — the single call site drainLoop uses
+// both at the top of its loop and at the end of every batch (#0269), so the
+// two call sites can never drift in what "tripped" means or how a trip is
+// handled. stopped=true means drainLoop must return immediately; err then
+// carries pauseCampaignDeliveryHealth's own result (nil on the ordinary
+// path). A health-check query error is deliberately NOT reported as
+// stopped=true: that would turn "the database had a hiccup" into "safety
+// checking quietly stopped" — it is logged and treated as a pass instead,
+// exactly as drainLoop did inline before #0269 split this out.
+func (w *Worker) checkAndMaybePauseDeliveryHealth(ctx context.Context, c *claimedCampaign) (stopped bool, err error) {
+	tripped, herr := w.checkDeliveryHealth(ctx, c.ID)
+	if herr != nil {
+		w.log.Error("mailing: delivery-health check failed", "campaign_id", c.ID, "err", herr)
+		return false, nil
+	}
+	if tripped.Tripped {
+		return true, w.pauseCampaignDeliveryHealth(ctx, c.ID, c.Subject, tripped)
+	}
+	return false, nil
 }
 
 // sendOutcome classifies what happened to one recipient's send attempt, for

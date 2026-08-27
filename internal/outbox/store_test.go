@@ -318,8 +318,9 @@ func TestOutbox_MarkRetryOrAbandon_RetriesBeforeMax(t *testing.T) {
 	var status string
 	var claimedAt *time.Time
 	var nextAttemptAt time.Time
-	if err := pool.QueryRow(ctx, `SELECT status, claimed_at, next_attempt_at FROM outbound_queue WHERE id = $1`, id).
-		Scan(&status, &claimedAt, &nextAttemptAt); err != nil {
+	var lastErr *string
+	if err := pool.QueryRow(ctx, `SELECT status, claimed_at, next_attempt_at, error FROM outbound_queue WHERE id = $1`, id).
+		Scan(&status, &claimedAt, &nextAttemptAt, &lastErr); err != nil {
 		t.Fatalf("select: %v", err)
 	}
 	if status != StatusQueued {
@@ -330,6 +331,91 @@ func TestOutbox_MarkRetryOrAbandon_RetriesBeforeMax(t *testing.T) {
 	}
 	if !nextAttemptAt.After(time.Now()) {
 		t.Fatalf("next_attempt_at = %v, want it pushed into the future", nextAttemptAt)
+	}
+	// #0272 criterion 3: a queued row awaiting retry keeps the error from
+	// its most recent failed attempt — that is the case the column exists
+	// for, and only 'sent' (MarkSent) clears it.
+	if lastErr == nil || *lastErr != "transient failure" {
+		t.Fatalf("error = %v, want the retry's error retained while queued", lastErr)
+	}
+}
+
+// TestOutbox_MarkSent_ClearsErrorFromFailedAttempt is #0272: a row that
+// failed once (error populated, still 'queued' for retry) and then
+// succeeds on a later attempt must read as a clean success, not a row that
+// LOOKS like a failure because status='sent' sits next to a stale error
+// from the attempt before it. MarkSent must clear error in the same UPDATE
+// that sets status='sent', ses_message_id, and sent_at.
+func TestOutbox_MarkSent_ClearsErrorFromFailedAttempt(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	id, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Attempt 1: claim and fail, leaving error populated on a 'queued' row.
+	rows, err := store.ClaimDue(ctx, 10)
+	if err != nil {
+		t.Fatalf("ClaimDue (attempt 1): %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != id {
+		t.Fatalf("expected to claim row %d, got %+v", id, rows)
+	}
+	if _, err := store.MarkRetryOrAbandon(ctx, id, rows[0].Attempts, "transient send failure", 8); err != nil {
+		t.Fatalf("MarkRetryOrAbandon: %v", err)
+	}
+
+	var errAfterFail *string
+	if err := pool.QueryRow(ctx, `SELECT error FROM outbound_queue WHERE id = $1`, id).Scan(&errAfterFail); err != nil {
+		t.Fatalf("select after failed attempt: %v", err)
+	}
+	if errAfterFail == nil || *errAfterFail != "transient send failure" {
+		t.Fatalf("error after failed attempt = %v, want it populated", errAfterFail)
+	}
+
+	// Attempt 2: force due, claim again, and succeed.
+	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE id = $1`, id); err != nil {
+		t.Fatalf("forcing due: %v", err)
+	}
+	rows2, err := store.ClaimDue(ctx, 10)
+	if err != nil {
+		t.Fatalf("ClaimDue (attempt 2): %v", err)
+	}
+	if len(rows2) != 1 || rows2[0].ID != id {
+		t.Fatalf("expected to reclaim row %d, got %+v", id, rows2)
+	}
+
+	done, err := store.MarkSent(ctx, id, "ses-message-id-after-retry")
+	if err != nil {
+		t.Fatalf("MarkSent: %v", err)
+	}
+	if !done {
+		t.Fatalf("MarkSent reported done=false")
+	}
+
+	var status string
+	var lastErr *string
+	var sesID *string
+	var sentAt *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT status, error, ses_message_id, sent_at FROM outbound_queue WHERE id = $1`, id,
+	).Scan(&status, &lastErr, &sesID, &sentAt); err != nil {
+		t.Fatalf("select after MarkSent: %v", err)
+	}
+	if status != StatusSent {
+		t.Fatalf("status = %q, want %q", status, StatusSent)
+	}
+	if lastErr != nil {
+		t.Fatalf("error = %v, want NULL — a sent row must not carry a stale error from a prior attempt", *lastErr)
+	}
+	if sesID == nil || *sesID != "ses-message-id-after-retry" {
+		t.Fatalf("ses_message_id = %v, want ses-message-id-after-retry", sesID)
+	}
+	if sentAt == nil {
+		t.Fatalf("sent_at not stamped")
 	}
 }
 

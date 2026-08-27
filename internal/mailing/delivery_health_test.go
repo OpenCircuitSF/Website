@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -28,23 +29,34 @@ import (
 // checkDeliveryHealth actually reads) sees it the moment the worker's
 // per-batch health check runs after this send commits — no test-only
 // bypass of the read path, only of the (irrelevant here) network send.
+//
+// #0269: prefix is stamped once from testdb.Unique() at construction, so
+// every id this mailer ever returns is globally unique across the whole
+// test binary, not just within one instance. Before this, ids were plain
+// "breaker-1", "breaker-2", ... restarting at 1 in every test — and
+// EventCounts joins on ses_message_id ALONE, so two tests running email_sends
+// through two breakerTestMailers could (and, measured by the reviewer, did:
+// 219 event rows sharing only 100 distinct ids, "breaker-1" appearing six
+// times) collide on the same id and read each other's bounce/complaint
+// counts. Production is unaffected — real SES message ids are unique.
 type breakerTestMailer struct {
 	mu             sync.Mutex
 	pool           *pgxpool.Pool
 	bounceEmails   map[string]bool
 	complainEmails map[string]bool
 	nextID         int
+	prefix         int64
 	sent           []Message
 }
 
 func newBreakerTestMailer(pool *pgxpool.Pool) *breakerTestMailer {
-	return &breakerTestMailer{pool: pool, bounceEmails: map[string]bool{}, complainEmails: map[string]bool{}}
+	return &breakerTestMailer{pool: pool, bounceEmails: map[string]bool{}, complainEmails: map[string]bool{}, prefix: testdb.Unique()}
 }
 
 func (m *breakerTestMailer) Send(ctx context.Context, msg Message) (string, error) {
 	m.mu.Lock()
 	m.nextID++
-	id := fmt.Sprintf("breaker-%d", m.nextID)
+	id := fmt.Sprintf("breaker-%d-%d", m.prefix, m.nextID)
 	m.sent = append(m.sent, msg)
 	m.mu.Unlock()
 
@@ -242,6 +254,75 @@ func TestWorker_CircuitBreaker_BounceRate_AtThresholdTrips(t *testing.T) {
 	}
 	if alertCount < 1 {
 		t.Error("no admin_alert row enqueued for the trip")
+	}
+}
+
+// TestWorker_CircuitBreaker_ResumeIntoStillTrippedRate_SendsZeroMore is
+// #0269 criterion 5: a Resume into a rate that is still over threshold must
+// send ZERO further messages, not one more full batch. Before #0269,
+// checkDeliveryHealth ran only at the END of a batch, so drainLoop's first
+// pass after a resume claimed and sent a full w.batchSize before
+// re-evaluating — measured by the reviewer: 300 recipients at a 100% bounce
+// rate with batchSize=100 tripped at 100, then one Resume sent exactly +100
+// more before re-pausing. This test reproduces exactly that shape and
+// asserts the count stays at 100 across the resume.
+func TestWorker_CircuitBreaker_ResumeIntoStillTrippedRate_SendsZeroMore(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+	setSetting(t, pool, SettingSendHealthMinSample, "100")
+	setSetting(t, pool, SettingSendHealthBouncePct, "5.0")
+	setSetting(t, pool, SettingSendHealthComplaintPct, "0.1")
+
+	// 300 recipients, every one bounces: the first batch of 100 alone is
+	// enough to trip (100% >= 5.0%), and the rate never recovers on its
+	// own — proving a genuine resume-into-a-still-bad-rate, not a rate that
+	// happened to dip below threshold between batches.
+	emails := seedActiveSubscribers(t, pool, 300)
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	resetCampaignAuditRows(t, pool, campaignID)
+
+	mailer := newBreakerTestMailer(pool)
+	for _, e := range emails {
+		mailer.bounceEmails[e] = true
+	}
+
+	w := newTestWorker(t, pool, mailer)
+	w.batchSize = 100 // three batches of 100; only the first should ever run, before AND after the resume
+	w.stats = NewCampaignStatsStore(pool)
+
+	if _, err := w.claimAndDrain(context.Background()); err != nil {
+		t.Fatalf("claimAndDrain (initial): %v", err)
+	}
+	if status := campaignStatus(t, pool, campaignID); status != CampaignStatusPausedDeliveryHealth {
+		t.Fatalf("campaign status after initial drain = %q, want %q", status, CampaignStatusPausedDeliveryHealth)
+	}
+	if got := len(mailer.Sent()); got != 100 {
+		t.Fatalf("messages sent after initial drain = %d, want exactly 100", got)
+	}
+
+	// The admin action: resume, exactly like POST
+	// /admin/campaigns/{id}/resume (internal/handlers/admin_campaigns.go).
+	campaignStore := NewCampaignStore(pool)
+	if _, err := campaignStore.Resume(context.Background(), campaignID, time.Now()); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// The worker's next poll pass claims the now-'scheduled' campaign
+	// (materialization already happened, so drainCampaign goes straight to
+	// drainLoop) and must re-trip at the TOP of the loop, before ClaimBatch
+	// — sending nothing more.
+	if _, err := w.claimAndDrain(context.Background()); err != nil {
+		t.Fatalf("claimAndDrain (after resume): %v", err)
+	}
+
+	if status := campaignStatus(t, pool, campaignID); status != CampaignStatusPausedDeliveryHealth {
+		t.Errorf("campaign status after resume = %q, want %q (still-bad rate must re-trip)", status, CampaignStatusPausedDeliveryHealth)
+	}
+	if got := len(mailer.Sent()); got != 100 {
+		t.Errorf("messages sent after resume = %d, want still exactly 100 (zero further messages)", got)
+	}
+	if queued := countEmailSendsStatus(t, pool, campaignID, "queued"); queued != 200 {
+		t.Errorf("queued email_sends rows after resume = %d, want 200 (both remaining batches, still untouched)", queued)
 	}
 }
 

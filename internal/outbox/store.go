@@ -27,11 +27,17 @@
 // table for as long as the row exists — MarkSent blanks payload to
 // '{}'::jsonb in the same UPDATE that stamps sent_at, so the token's
 // lifetime in this table equals the row's queued lifetime, not its whole
-// retention. attempts/error/ses_message_id/sent_at — everything with
-// forensic value — survive that blank. An 'abandoned' row keeps its
-// payload: that row IS the diagnostic, and the token is dead anyway (the
-// send that would have used it never happened and the caller's own
-// cooldown/claim logic governs whether a fresh one gets issued).
+// retention. attempts/ses_message_id/sent_at — everything with forensic
+// value about how the send happened — survive that blank. error does NOT
+// (#0272): MarkSent clears it in the same UPDATE, because error describes a
+// live fault and a 'sent' row has none — a prior failed attempt's error
+// text sitting next to status='sent' reads as a failure to anyone scanning
+// the table, which is worse than no history. A 'queued' row awaiting retry
+// and a terminal 'abandoned' row both keep error; only 'sent' clears it. An
+// 'abandoned' row also keeps its payload: that row IS the diagnostic, and
+// the token is dead anyway (the send that would have used it never
+// happened and the caller's own cooldown/claim logic governs whether a
+// fresh one gets issued).
 package outbox
 
 import (
@@ -320,15 +326,23 @@ func (s *Store) ClaimDue(ctx context.Context, limit int, kinds ...Kind) ([]Row, 
 }
 
 // MarkSent transitions a claimed (status='sending') row to 'sent', stamping
-// ses_message_id and sent_at and blanking payload to '{}'::jsonb — see the
-// package doc comment's "payload is template inputs" section for why.
+// ses_message_id and sent_at, blanking payload to '{}'::jsonb — see the
+// package doc comment's "payload is template inputs" section for why — and
+// clearing error in the SAME UPDATE (#0272). error exists to diagnose a
+// live fault: MarkRetryOrAbandon deliberately keeps it for a 'queued' row
+// awaiting retry and for a terminal 'abandoned' row (that row IS the
+// diagnostic), but a row that went on to succeed has no live fault left to
+// describe, and a populated error next to status='sent' reads as a failure
+// to anyone scanning the table by eye — which is exactly what happened with
+// production ids 1 and 2 (see #0272). This does not change when a row is
+// clearable, only what a 'sent' row carries once it gets there.
 // Returns done=false if the row was not in 'sending' (already handled by a
 // concurrent claim, or an id that does not exist) — the caller must not
 // treat that as an error.
 func (s *Store) MarkSent(ctx context.Context, id int64, messageID string) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue
-		    SET status = $2, ses_message_id = $3, sent_at = now(), payload = '{}'::jsonb
+		    SET status = $2, ses_message_id = $3, sent_at = now(), payload = '{}'::jsonb, error = NULL
 		  WHERE id = $1 AND status = $4`,
 		id, StatusSent, nullIfEmpty(messageID), StatusSending,
 	)

@@ -41,9 +41,13 @@
 //     could transiently dip below threshold while the underlying list
 //     problem is still there) and a breaker nothing can reset is worse than
 //     none (a bad-but-recoverable send would be stuck forever). Resuming
-//     does not bypass the breaker: the next batch's checkDeliveryHealth
-//     evaluates the SAME running rate again, so a campaign that resumes
-//     into a still-bad rate trips again rather than silently draining.
+//     does not bypass the breaker: drainLoop calls checkDeliveryHealth at
+//     the TOP of its loop as well as at the end of every batch (#0269), so
+//     a resume that lands on a still-tripped rate re-trips before claiming
+//     a single row — not after sending one more full batch, which was the
+//     end-of-batch-only shape's gap. A campaign that resumes into a
+//     genuinely-recovered rate keeps draining; one that resumes into a
+//     still-bad rate sends zero further messages.
 //   - Who is told: CampaignStore.Resume's own audit row aside, the trip
 //     itself writes ActionEmailCampaignPausedDeliveryHealth to audit_log
 //     (an operator reviewing /admin/audit sees it) AND enqueues an
@@ -120,6 +124,20 @@ func (w *Worker) checkDeliveryHealth(ctx context.Context, campaignID int64) (del
 	}
 	result.Bounced = events.Bounced
 	result.Complained = events.Complained
+	// #0269: the denominator (counts.Sent) grows SYNCHRONOUSLY with sends —
+	// it is exactly how many rows this worker has stamped 'sent' so far —
+	// while the numerator (events.Bounced/Complained) grows ASYNCHRONOUSLY,
+	// via SES's webhook (internal/handlers/ses_notifications.go) landing
+	// sometime after the send that triggered it, often well after. So a
+	// resumed campaign's measured rate is diluted while it sends: real
+	// bounce/complaint events for the batch just sent may not have arrived
+	// yet, understating the true rate for exactly as long as that lag
+	// lasts. This is inherent to measuring a rate against in-flight mail,
+	// not a defect — but it means the breaker is systematically late in
+	// proportion to batch size, which is the other argument (besides the
+	// resume gap, see this file's package doc comment) for evaluating at
+	// the top of drainLoop's loop as well as at the end of a batch: a
+	// smaller window between evaluations is the only lever available here.
 	result.BounceRate = float64(events.Bounced) / float64(counts.Sent) * 100
 	result.ComplaintRate = float64(events.Complained) / float64(counts.Sent) * 100
 
