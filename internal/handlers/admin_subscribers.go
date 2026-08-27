@@ -225,6 +225,18 @@ type subscriberView struct {
 	LastDeliveryAt      *string               `json:"last_delivery_at,omitempty"`      // always populated (#0124)
 	SoftBounceThreshold *int                  `json:"soft_bounce_threshold,omitempty"` // populated by Get only
 	Events              []subscriberEventView `json:"events,omitempty"`                // populated by Get only (#0126)
+	// Source, SourceDetail, ConsentBasis, ImportID are #0125's provenance
+	// fields (PRD §6.10) — always populated (List as well as Get, like
+	// SoftBounceStreak above; no extra query needed, they're columns on the
+	// row itself). ImportID is the "originating import" GET
+	// /admin/subscribers/{id}'s acceptance criterion asks for: the id an
+	// admin can act on via POST /admin/imports/{id}/revoke. InvitedAt is
+	// #0129's marker (always null until that issue lands a producer).
+	Source       string  `json:"source"`
+	SourceDetail *string `json:"source_detail,omitempty"`
+	ConsentBasis *string `json:"consent_basis,omitempty"`
+	ImportID     *int64  `json:"import_id,omitempty"`
+	InvitedAt    *string `json:"invited_at,omitempty"`
 }
 
 // subscriberEventView is one subscriber_events row (#0126, PRD §6.11),
@@ -264,6 +276,11 @@ func toSubscriberView(sub subscribers.Subscriber, refs []interestRef) subscriber
 		SoftBounceStreak:  sub.SoftBounceStreak,
 		LastBounceAt:      formatTimePtr(sub.LastBounceAt),
 		LastDeliveryAt:    formatTimePtr(sub.LastDeliveryAt),
+		Source:            sub.Source,
+		SourceDetail:      sub.SourceDetail,
+		ConsentBasis:      sub.ConsentBasis,
+		ImportID:          sub.ImportID,
+		InvitedAt:         formatTimePtr(sub.InvitedAt),
 	}
 }
 

@@ -267,6 +267,16 @@ func servePostgres(cfg *config.Config) error {
 	// internal/handlers/admin_subscribers.go's package doc comment.
 	adminSubscribersH := handlers.NewAdminSubscribersHandler(subscribersStore, interestsStore, subscribeH, suppressionsStore, store, auditLogger)
 
+	// Admin subscriber import (#0125, PRD §5.2/§6.10): CSV import with
+	// recorded consent provenance and batch revocation. importsStore is
+	// internal/subscribers' third data-access layer over the shared pool,
+	// alongside subscribersStore/suppressionsStore above — see
+	// internal/subscribers/imports.go's package doc comment. Reuses
+	// interestsStore, the same instance subscribeH/adminInterestsH already
+	// share, to resolve an import's optional interest-slug column.
+	importsStore := subscribers.NewImportStore(pool)
+	adminImportsH := handlers.NewAdminImportsHandler(importsStore, interestsStore, auditLogger)
+
 	// Admin pending-subscriber screen (#0128, PRD §5.2/§6.3): who signed up
 	// but never confirmed, and a per-subscriber resend — see
 	// internal/handlers/admin_pending.go's package doc comment.
@@ -490,7 +500,7 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -734,6 +744,14 @@ func serveDevMode(cfg *config.Config) error {
 	// when nil, mirroring adminInterestsH's own nil-guard.
 	var adminSubscribersH *handlers.AdminSubscribersHandler
 
+	// Admin subscriber import (#0125) has the same devstore gap as
+	// adminSubscribersH above — internal/devstore has no
+	// subscribers/subscriber_imports-table backing. Passing nil leaves
+	// every other admin route working in STORAGE=json mode; adminRoutes
+	// omits its three routes when nil, mirroring adminSubscribersH's own
+	// nil-guard.
+	var adminImportsH *handlers.AdminImportsHandler
+
 	// Admin pending-subscriber screen (#0128) has the same devstore gap as
 	// adminSubscribersH above. Passing nil leaves every other admin route
 	// working in STORAGE=json mode; adminRoutes omits its two routes when
@@ -839,7 +857,7 @@ func serveDevMode(cfg *config.Config) error {
 	var outboxWorker *mailing.OutboxWorker
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -864,18 +882,20 @@ type adminRoute struct {
 // automatically exercised — and its guard automatically proven — by that
 // test with no edit to the test itself required.
 //
-// adminInterestsH, adminSubscribersH, adminSuppressionsH, adminCampaignsH,
-// adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH,
-// adminCampaignStatsH, adminWorkshopsH, and adminDashboardH may be nil (dev
-// mode / STORAGE=json has no interests/subscribers-table backing yet — see
-// mountAndServe's comment on the call site); their routes are simply
-// omitted, mirroring mountAndServe's own former nil guard.
+// adminInterestsH, adminSubscribersH, adminImportsH, adminSuppressionsH,
+// adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH,
+// adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, and
+// adminDashboardH may be nil (dev mode / STORAGE=json has no
+// interests/subscribers-table backing yet — see mountAndServe's comment on
+// the call site); their routes are simply omitted, mirroring mountAndServe's
+// own former nil guard.
 func adminRoutes(
 	settingsH *handlers.SettingsHandler,
 	adminUsersH *handlers.AdminUsersHandler,
 	adminAuditH *handlers.AdminAuditHandler,
 	adminInterestsH *handlers.AdminInterestsHandler,
 	adminSubscribersH *handlers.AdminSubscribersHandler,
+	adminImportsH *handlers.AdminImportsHandler,
 	adminPendingH *handlers.AdminPendingHandler,
 	adminSuppressionsH *handlers.AdminSuppressionsHandler,
 	adminDeliverabilityH *handlers.AdminDeliverabilityHandler,
@@ -924,6 +944,24 @@ func adminRoutes(
 			// first, so DELETE /admin/subscribers/{id} coexists safely with
 			// GET /admin/subscribers/{id} on the identical path pattern.
 			adminRoute{http.MethodDelete, "/admin/subscribers/{id}", http.HandlerFunc(adminSubscribersH.Erase)},
+		)
+	}
+	if adminImportsH != nil {
+		routes = append(routes,
+			// #0125: CSV import with recorded consent provenance.
+			// "/admin/subscribers/import/preview" and
+			// "/admin/subscribers/import" are literal segments competing
+			// with "/admin/subscribers/{id}" above, on the same
+			// literal-vs-wildcard footing as "/admin/subscribers/export" —
+			// Go 1.22+'s pattern router prefers the more specific literal
+			// regardless of registration order.
+			adminRoute{http.MethodPost, "/admin/subscribers/import/preview", http.HandlerFunc(adminImportsH.Preview)},
+			adminRoute{http.MethodPost, "/admin/subscribers/import", http.HandlerFunc(adminImportsH.Commit)},
+			// Batch revocation lives under /admin/imports/, not
+			// /admin/subscribers/ — it targets a subscriber_imports row, not
+			// a subscribers row (TargetSubscriberImport vs TargetSubscriber
+			// in the audit trail; see admin_subscribers_import.go).
+			adminRoute{http.MethodPost, "/admin/imports/{id}/revoke", http.HandlerFunc(adminImportsH.Revoke)},
 		)
 	}
 	if adminPendingH != nil {
@@ -1047,6 +1085,7 @@ func mountAndServe(
 	adminAuditH *handlers.AdminAuditHandler,
 	adminInterestsH *handlers.AdminInterestsHandler,
 	adminSubscribersH *handlers.AdminSubscribersHandler,
+	adminImportsH *handlers.AdminImportsHandler,
 	adminPendingH *handlers.AdminPendingHandler,
 	adminSuppressionsH *handlers.AdminSuppressionsHandler,
 	adminDeliverabilityH *handlers.AdminDeliverabilityHandler,
@@ -1134,7 +1173,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 

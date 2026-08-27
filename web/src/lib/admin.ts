@@ -633,3 +633,162 @@ export function suppressionRemovalBlocked(reason: string, hasSubscriber: boolean
   }
   return null;
 }
+
+// ── Subscriber import (#0125, PRD §6.10) ─────────────────────────────────────
+// The CSV import wizard's pure logic: form validation, CSV header parsing
+// for the column-mapping dropdowns, and display labels. The upload/preview/
+// commit calls themselves live in api.ts (importPreview/importCommit/
+// revokeImport) since they are I/O, not logic.
+
+/**
+ * importMaxFileBytes/importMaxDataRows mirror
+ * internal/handlers/admin_subscribers_import.go's importMaxFileBytes/
+ * importMaxDataRows EXACTLY — there is no runtime way to derive one from
+ * the other since client and server are different processes, so both
+ * copies must be kept in sync by hand. Used to reject an oversized upload
+ * before it ever leaves the browser, and to state the bound in the wizard's
+ * own copy (#0125's acceptance criteria: "the bound is stated in the UI").
+ */
+export const IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MiB
+export const IMPORT_MAX_DATA_ROWS = 5000;
+
+/** One option in the import-source dropdown: stored value + label, matching subscriber_imports_source_check. */
+export interface ImportSourceOption {
+  value: string;
+  label: string;
+}
+
+/** The five subscriber_imports.source values, in dropdown order. */
+export const IMPORT_SOURCES: readonly ImportSourceOption[] = [
+  { value: 'manual_csv', label: 'Manual CSV (spreadsheet, sign-in sheet)' },
+  { value: 'eventbrite', label: 'Eventbrite' },
+  { value: 'meetup', label: 'Meetup' },
+  { value: 'luma', label: 'Luma' },
+  { value: 'other', label: 'Other' },
+] as const;
+
+/** Human-readable label for a stored import source value. */
+export function importSourceLabel(value: string): string {
+  const s = IMPORT_SOURCES.find((s) => s.value === value);
+  return s ? s.label : value;
+}
+
+/**
+ * One option in the consent-mode choice: stored value + label + what it
+ * does, plus whether this wizard can offer it. #0125 implements
+ * prior_consent only; invite (#0129) is listed so the wizard's copy can name
+ * it as "coming soon" rather than pretending only one mode exists, but
+ * `available: false` is what stops the UI from silently downgrading a
+ * request for it (#0125's acceptance criteria: "the UI must not offer
+ * invite until #0129 lands, and must never silently downgrade an invite
+ * request to prior_consent").
+ */
+export interface ConsentModeOption {
+  value: string;
+  label: string;
+  description: string;
+  available: boolean;
+}
+
+export const CONSENT_MODES: readonly ConsentModeOption[] = [
+  {
+    value: 'prior_consent',
+    label: 'Prior consent',
+    description:
+      'Asserts consent was already obtained at the source. Lands every new address active immediately and sends nothing — no confirmation, no welcome email.',
+    available: true,
+  },
+  {
+    value: 'invite',
+    label: 'Invite to confirm',
+    description:
+      'Asks: sends one invitation naming where the address came from, and only activates it if they confirm. Coming soon — not yet available in this wizard.',
+    available: false,
+  },
+] as const;
+
+/**
+ * canspamWarning is the CAN-SPAM/GDPR notice #0125's acceptance criteria
+ * requires IN THE INTERFACE, not only in documentation: "importing without
+ * prior consent violates CAN-SPAM and burns the sending domain." The wizard
+ * renders this text directly rather than linking out to it.
+ */
+export const IMPORT_CANSPAM_WARNING =
+  'Importing addresses without genuine prior consent is unlawful under CAN-SPAM and GDPR, and burns this domain’s sending reputation. Only import an audience that clearly opted in at the source, and say how in the note below.';
+
+/**
+ * parseCSVHeaderRow splits a CSV file's first line into column names for
+ * the mapping dropdowns. Deliberately NOT a full CSV parser (no quoted-field
+ * handling, no embedded-comma/newline support) — it exists only to label
+ * columns for a human to pick from, and the actual data rows are parsed
+ * server-side by encoding/csv, a real parser. A header containing a quoted
+ * comma will mislabel a dropdown option; it will never misparse a DATA row,
+ * since this function is never used for those.
+ */
+export function parseCSVHeaderRow(firstLine: string): string[] {
+  return firstLine.split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
+}
+
+/** The import wizard's form fields, before file-reading. */
+export interface ImportFormFields {
+  source: string;
+  sourceDetail: string;
+  consentMode: string;
+  consentNote: string;
+  collectedAt: string; // YYYY-MM-DD
+  emailColumn: number | null;
+  interestColumn: number | null;
+  fileBytes: number; // File.size, for the bound check without re-reading the file
+}
+
+/**
+ * validateImportForm gates the Preview button client-side, mirroring the
+ * server's own validation (internal/subscribers.ImportStore.Commit) so an
+ * invalid submit never round-trips. Returns the trimmed/normalized fields on
+ * success or a message to show.
+ */
+export function validateImportForm(
+  f: ImportFormFields,
+): { source: string; sourceDetail: string; consentMode: string; consentNote: string; collectedAt: string; emailColumn: number; interestColumn: number | null } | { error: string } {
+  if (!IMPORT_SOURCES.some((s) => s.value === f.source)) {
+    return { error: 'Choose where this list came from.' };
+  }
+  const mode = CONSENT_MODES.find((m) => m.value === f.consentMode);
+  if (!mode) {
+    return { error: 'Choose a consent mode.' };
+  }
+  if (!mode.available) {
+    return { error: `${mode.label} is not available yet.` };
+  }
+  const consentNote = f.consentNote.trim();
+  if (consentNote === '') {
+    return { error: 'Explain how consent was obtained — this is required and is recorded on the batch.' };
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f.collectedAt)) {
+    return { error: 'Enter the date the source collected these addresses.' };
+  }
+  if (f.emailColumn === null) {
+    return { error: 'Choose which column holds the email address.' };
+  }
+  if (f.fileBytes > IMPORT_MAX_FILE_BYTES) {
+    return { error: `File is too large — the limit is ${Math.floor(IMPORT_MAX_FILE_BYTES / (1024 * 1024))} MB.` };
+  }
+  return {
+    source: f.source,
+    sourceDetail: f.sourceDetail.trim(),
+    consentMode: f.consentMode,
+    consentNote,
+    collectedAt: f.collectedAt,
+    emailColumn: f.emailColumn,
+    interestColumn: f.interestColumn,
+  };
+}
+
+/**
+ * importRowCountExceeded reports whether a parsed CSV's data-row count (the
+ * file minus its header line) exceeds IMPORT_MAX_DATA_ROWS, for a
+ * client-side warning before the upload is even attempted.
+ */
+export function importRowCountExceeded(dataRowCount: number): boolean {
+  return dataRowCount > IMPORT_MAX_DATA_ROWS;
+}

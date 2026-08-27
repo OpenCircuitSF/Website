@@ -140,6 +140,13 @@ type Event struct {
 	Email      string
 	Action     Action
 	CampaignID *int64
+	// ImportID is non-nil for the two #0125/#0129 actions born of an import
+	// batch (ActionImported, ActionImportRevoked, and #0129's ActionInviteSent/
+	// ActionInviteAccepted/ActionInviteExpired) — it is what lets an operator
+	// trace a subscriber_events row back to the specific subscriber_imports
+	// batch that produced it, alongside CampaignID's identical role for
+	// campaign-driven actions.
+	ImportID *int64
 	// ActorUserID is nil when the subscriber or a webhook (SES) acted,
 	// non-nil only for a staff-driven action (admin_edited).
 	ActorUserID *int64
@@ -172,9 +179,9 @@ func RecordEventTx(ctx context.Context, q querier, e Event) error {
 
 	_, err := q.Exec(ctx,
 		`INSERT INTO subscriber_events
-		     (subscriber_id, email, action, campaign_id, actor_user_id, detail)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		e.SubscriberID, e.Email, string(e.Action), e.CampaignID, e.ActorUserID, detailJSON,
+		     (subscriber_id, email, action, campaign_id, import_id, actor_user_id, detail)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		e.SubscriberID, e.Email, string(e.Action), e.CampaignID, e.ImportID, e.ActorUserID, detailJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("subscribers: recording event %q for %q: %w", e.Action, e.Email, err)

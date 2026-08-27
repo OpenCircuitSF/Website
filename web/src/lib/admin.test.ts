@@ -41,6 +41,15 @@ import {
   suppressionReasonLabel,
   validateSuppressionNote,
   suppressionRemovalBlocked,
+  IMPORT_MAX_FILE_BYTES,
+  IMPORT_MAX_DATA_ROWS,
+  IMPORT_SOURCES,
+  importSourceLabel,
+  CONSENT_MODES,
+  parseCSVHeaderRow,
+  validateImportForm,
+  importRowCountExceeded,
+  type ImportFormFields,
 } from './admin';
 
 function adminUser(overrides: Partial<AdminUser> = {}): AdminUser {
@@ -382,6 +391,7 @@ function subscriber(overrides: Partial<Subscriber> = {}): Subscriber {
     status: 'active',
     created_at: '2026-05-25T12:00:00Z',
     email_events: [],
+    source: 'signup_form',
     ...overrides,
   };
 }
@@ -621,5 +631,129 @@ describe('suppressionRemovalBlocked', () => {
       expect(suppressionRemovalBlocked(reason, true)).toBeNull();
       expect(suppressionRemovalBlocked(reason, false)).toBeNull();
     }
+  });
+});
+
+// ── Subscriber import (#0125) ────────────────────────────────────────────────
+
+function validImportFields(overrides: Partial<ImportFormFields> = {}): ImportFormFields {
+  return {
+    source: 'manual_csv',
+    sourceDetail: 'Intro to Soldering sign-in sheet',
+    consentMode: 'prior_consent',
+    consentNote: 'collected on a paper sign-in sheet at the event',
+    collectedAt: '2026-05-12',
+    emailColumn: 0,
+    interestColumn: null,
+    fileBytes: 1024,
+    ...overrides,
+  };
+}
+
+describe('importSourceLabel', () => {
+  it('labels every known source', () => {
+    for (const s of IMPORT_SOURCES) {
+      expect(importSourceLabel(s.value)).toBe(s.label);
+    }
+  });
+
+  it('returns an unknown value as-is', () => {
+    expect(importSourceLabel('made_up_source')).toBe('made_up_source');
+  });
+});
+
+describe('CONSENT_MODES', () => {
+  it('marks prior_consent available and invite not yet available', () => {
+    const prior = CONSENT_MODES.find((m) => m.value === 'prior_consent');
+    const invite = CONSENT_MODES.find((m) => m.value === 'invite');
+    expect(prior?.available).toBe(true);
+    expect(invite?.available).toBe(false);
+  });
+});
+
+describe('parseCSVHeaderRow', () => {
+  it('splits a comma-separated header into trimmed column names', () => {
+    expect(parseCSVHeaderRow('email, first name , interests')).toEqual([
+      'email',
+      'first name',
+      'interests',
+    ]);
+  });
+
+  it('strips a leading/trailing quote from a quoted header cell', () => {
+    expect(parseCSVHeaderRow('"email","notes"')).toEqual(['email', 'notes']);
+  });
+
+  it('handles a single-column header', () => {
+    expect(parseCSVHeaderRow('email')).toEqual(['email']);
+  });
+});
+
+describe('validateImportForm', () => {
+  it('accepts a complete, valid form', () => {
+    const result = validateImportForm(validImportFields());
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.consentNote).toBe('collected on a paper sign-in sheet at the event');
+      expect(result.emailColumn).toBe(0);
+    }
+  });
+
+  it('rejects an unknown source', () => {
+    const result = validateImportForm(validImportFields({ source: 'not-a-real-source' }));
+    expect('error' in result).toBe(true);
+  });
+
+  it('rejects an unknown consent mode', () => {
+    const result = validateImportForm(validImportFields({ consentMode: 'not-a-real-mode' }));
+    expect('error' in result).toBe(true);
+  });
+
+  it('rejects invite mode — not available in this wizard (#0129)', () => {
+    const result = validateImportForm(validImportFields({ consentMode: 'invite' }));
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toMatch(/not available/i);
+    }
+  });
+
+  it('rejects a blank consent note', () => {
+    const result = validateImportForm(validImportFields({ consentNote: '   ' }));
+    expect('error' in result).toBe(true);
+  });
+
+  it('trims the consent note on success', () => {
+    const result = validateImportForm(validImportFields({ consentNote: '  padded note  ' }));
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.consentNote).toBe('padded note');
+    }
+  });
+
+  it('rejects a malformed collected_at date', () => {
+    expect('error' in validateImportForm(validImportFields({ collectedAt: '' }))).toBe(true);
+    expect('error' in validateImportForm(validImportFields({ collectedAt: '05/12/2026' }))).toBe(true);
+  });
+
+  it('rejects a missing email column', () => {
+    const result = validateImportForm(validImportFields({ emailColumn: null }));
+    expect('error' in result).toBe(true);
+  });
+
+  it('rejects a file exceeding IMPORT_MAX_FILE_BYTES', () => {
+    const result = validateImportForm(validImportFields({ fileBytes: IMPORT_MAX_FILE_BYTES + 1 }));
+    expect('error' in result).toBe(true);
+  });
+
+  it('accepts a file exactly at IMPORT_MAX_FILE_BYTES', () => {
+    const result = validateImportForm(validImportFields({ fileBytes: IMPORT_MAX_FILE_BYTES }));
+    expect('error' in result).toBe(false);
+  });
+});
+
+describe('importRowCountExceeded', () => {
+  it('is false at and under the bound, true over it', () => {
+    expect(importRowCountExceeded(IMPORT_MAX_DATA_ROWS)).toBe(false);
+    expect(importRowCountExceeded(IMPORT_MAX_DATA_ROWS + 1)).toBe(true);
   });
 });

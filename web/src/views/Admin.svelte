@@ -52,6 +52,11 @@
     createSubscriber,
     listSuppressions,
     removeSuppression,
+    importPreview,
+    importCommit,
+    revokeImport,
+    type ImportPreviewResult,
+    type ImportCommitResult,
     logout,
     ApiError,
   } from '../lib/api';
@@ -88,6 +93,15 @@
     suppressionReasonLabel,
     validateSuppressionNote,
     suppressionRemovalBlocked,
+    IMPORT_SOURCES,
+    CONSENT_MODES,
+    IMPORT_CANSPAM_WARNING,
+    IMPORT_MAX_FILE_BYTES,
+    IMPORT_MAX_DATA_ROWS,
+    parseCSVHeaderRow,
+    validateImportForm,
+    importRowCountExceeded,
+    type ImportFormFields,
   } from '../lib/admin';
   import type {
     Setting,
@@ -866,6 +880,196 @@
     }
   }
 
+  // ── Subscriber import (#0125, PRD §6.10) ──────────────────────────────────────
+  // prior_consent only in this wizard — see CONSENT_MODES (lib/admin.ts) and
+  // this issue's Notes: invite mode (#0129) is listed and described, but its
+  // radio is disabled, so a request for it can never reach the server as a
+  // silent downgrade to prior_consent.
+  let importFile = $state<File | null>(null);
+  let importFileHeaders = $state<string[]>([]);
+  let importDataRowCount = $state<number | null>(null);
+  let importSource = $state('manual_csv');
+  let importSourceDetail = $state('');
+  let importConsentMode = $state('prior_consent');
+  let importConsentNote = $state('');
+  let importCollectedAt = $state('');
+  let importEmailColumnRaw = $state('');
+  let importInterestColumnRaw = $state('');
+  let importFormError = $state<string | null>(null);
+  let importPreviewLoading = $state(false);
+  let importPreviewResult = $state<ImportPreviewResult | null>(null);
+  let importCommitLoading = $state(false);
+  let importCommitResult = $state<ImportCommitResult | null>(null);
+  let importCommitError = $state<string | null>(null);
+  let importRevokeReason = $state('');
+  let importRevokeLoading = $state(false);
+  let importRevokeError = $state<string | null>(null);
+  let importRevokedCount = $state<number | null>(null);
+
+  // #0129 note: available consent modes come straight from CONSENT_MODES
+  // (lib/admin.ts) — a mode with available:false renders its radio disabled
+  // below, so this array never needs its own "is invite allowed" branch.
+
+  function resetImportPreviewAndCommit() {
+    importPreviewResult = null;
+    importCommitResult = null;
+    importCommitError = null;
+    importRevokeReason = '';
+    importRevokeError = null;
+    importRevokedCount = null;
+  }
+
+  async function onImportFileChange(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    importFile = file;
+    importFileHeaders = [];
+    importDataRowCount = null;
+    importEmailColumnRaw = '';
+    importInterestColumnRaw = '';
+    importFormError = null;
+    resetImportPreviewAndCommit();
+    if (!file) return;
+    // Read the file once, client-side, purely to label the column-mapping
+    // dropdowns and give an early row-count warning — see
+    // parseCSVHeaderRow's doc comment for why this is deliberately not a
+    // full CSV parser. The server re-reads the actual uploaded bytes with a
+    // real parser (encoding/csv) at preview and commit time.
+    const text = await file.text();
+    const lines = text.split(/\r\n|\n|\r/).filter((l) => l.length > 0);
+    if (lines.length > 0) {
+      importFileHeaders = parseCSVHeaderRow(lines[0]);
+      importDataRowCount = lines.length - 1;
+    }
+  }
+
+  function importFormFields(): ImportFormFields {
+    return {
+      source: importSource,
+      sourceDetail: importSourceDetail,
+      consentMode: importConsentMode,
+      consentNote: importConsentNote,
+      collectedAt: importCollectedAt,
+      emailColumn: importEmailColumnRaw === '' ? null : Number(importEmailColumnRaw),
+      interestColumn: importInterestColumnRaw === '' ? null : Number(importInterestColumnRaw),
+      fileBytes: importFile?.size ?? 0,
+    };
+  }
+
+  async function submitImportPreview(e: SubmitEvent) {
+    e.preventDefault();
+    importFormError = null;
+    resetImportPreviewAndCommit();
+    if (!importFile) {
+      importFormError = 'Choose a CSV file.';
+      return;
+    }
+    const result = validateImportForm(importFormFields());
+    if ('error' in result) {
+      importFormError = result.error;
+      return;
+    }
+    if (importDataRowCount !== null && importRowCountExceeded(importDataRowCount)) {
+      importFormError = `This file has ${importDataRowCount} rows, exceeding the ${IMPORT_MAX_DATA_ROWS}-row import limit.`;
+      return;
+    }
+    importPreviewLoading = true;
+    try {
+      importPreviewResult = await importPreview({
+        file: importFile,
+        source: result.source,
+        sourceDetail: result.sourceDetail,
+        consentMode: result.consentMode,
+        consentNote: result.consentNote,
+        collectedAt: result.collectedAt,
+        emailColumn: result.emailColumn,
+        interestColumn: result.interestColumn ?? undefined,
+      });
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      importFormError =
+        err instanceof ApiError && err.message
+          ? err.message
+          : 'Could not preview this file. Please try again.';
+    } finally {
+      importPreviewLoading = false;
+    }
+  }
+
+  async function submitImportCommit() {
+    if (!importFile || !importPreviewResult) return;
+    const result = validateImportForm(importFormFields());
+    if ('error' in result) {
+      importFormError = result.error;
+      return;
+    }
+    importCommitLoading = true;
+    importCommitError = null;
+    try {
+      importCommitResult = await importCommit({
+        file: importFile,
+        source: result.source,
+        sourceDetail: result.sourceDetail,
+        consentMode: result.consentMode,
+        consentNote: result.consentNote,
+        collectedAt: result.collectedAt,
+        emailColumn: result.emailColumn,
+        interestColumn: result.interestColumn ?? undefined,
+        checksum: importPreviewResult.checksum,
+      });
+      subsPage = 1;
+      void loadSubscribers();
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      importCommitError =
+        err instanceof ApiError && err.message
+          ? err.message
+          : 'Could not commit this import. Please try again — if the file changed since preview, preview it again first.';
+    } finally {
+      importCommitLoading = false;
+    }
+  }
+
+  async function submitRevokeImport(e: SubmitEvent) {
+    e.preventDefault();
+    if (!importCommitResult) return;
+    const note = importRevokeReason.trim();
+    if (note === '') {
+      importRevokeError = 'A reason is required.';
+      return;
+    }
+    importRevokeLoading = true;
+    importRevokeError = null;
+    try {
+      const res = await revokeImport(importCommitResult.import.id, note);
+      importCommitResult = { import: res.import };
+      importRevokedCount = res.revoked_count;
+      subsPage = 1;
+      void loadSubscribers();
+    } catch (err) {
+      if (handleAuthError(err)) return;
+      importRevokeError =
+        err instanceof ApiError && err.message
+          ? err.message
+          : 'Could not revoke this import. Please try again.';
+    } finally {
+      importRevokeLoading = false;
+    }
+  }
+
+  function startNewImport() {
+    importFile = null;
+    importFileHeaders = [];
+    importDataRowCount = null;
+    importSourceDetail = '';
+    importConsentNote = '';
+    importCollectedAt = '';
+    importEmailColumnRaw = '';
+    importInterestColumnRaw = '';
+    importFormError = null;
+    resetImportPreviewAndCommit();
+  }
+
   // ── Suppressions (#0100) ─────────────────────────────────────────────────────
   let suppressions = $state<Suppression[]>([]);
   let suppressionsLoading = $state(true);
@@ -1636,6 +1840,182 @@
             {creatingSub ? 'Adding…' : 'Add subscriber'}
           </Button>
         </form>
+      </Panel>
+
+      <Panel title="Import subscribers from CSV">
+        <p class="text-error">{IMPORT_CANSPAM_WARNING}</p>
+        <p class="text-muted">
+          Secondary, low-volume path — the website is the primary way addresses join this list.
+          Limit: {Math.floor(IMPORT_MAX_FILE_BYTES / (1024 * 1024))} MB, {IMPORT_MAX_DATA_ROWS} rows per file.
+        </p>
+
+        {#if importCommitResult}
+          <p class="text-notice" role="status">
+            Committed: {importCommitResult.import.inserted_count} added, {importCommitResult.import.skipped_count} skipped
+            (already on the list or suppressed). Status: {importCommitResult.import.status}.
+            {#if importRevokedCount !== null}
+              Revoked {importRevokedCount} subscriber(s) from this batch.
+            {/if}
+          </p>
+          {#if importCommitResult.import.status !== 'revoked'}
+            <form class="inline-form" onsubmit={submitRevokeImport}>
+              <label for="import-revoke-reason">Revoke this batch — reason</label>
+              <input
+                id="import-revoke-reason"
+                type="text"
+                bind:value={importRevokeReason}
+                disabled={importRevokeLoading}
+                placeholder="e.g. consent was not actually obtained"
+              />
+              <Button type="submit" disabled={importRevokeLoading}>
+                {importRevokeLoading ? 'Revoking…' : 'Revoke import'}
+              </Button>
+            </form>
+            {#if importRevokeError}
+              <p class="text-error" role="alert">{importRevokeError}</p>
+            {/if}
+          {/if}
+          <Button onclick={startNewImport}>Start a new import</Button>
+        {:else}
+          <form class="interest-create-form" onsubmit={submitImportPreview}>
+            <div class="field">
+              <label for="import-file">CSV file</label>
+              <input id="import-file" type="file" accept=".csv,text/csv" onchange={onImportFileChange} />
+              {#if importDataRowCount !== null}
+                <p class="text-muted">{importDataRowCount} data row(s) detected (excluding the header row).</p>
+              {/if}
+            </div>
+
+            {#if importFileHeaders.length > 0}
+              <div class="field">
+                <label for="import-email-col">Email column</label>
+                <select id="import-email-col" bind:value={importEmailColumnRaw}>
+                  <option value="">Choose a column…</option>
+                  {#each importFileHeaders as h, i (i)}
+                    <option value={String(i)}>{h || `Column ${i + 1}`}</option>
+                  {/each}
+                </select>
+              </div>
+              <div class="field">
+                <label for="import-interest-col">Interest-slug column (optional)</label>
+                <select id="import-interest-col" bind:value={importInterestColumnRaw}>
+                  <option value="">None</option>
+                  {#each importFileHeaders as h, i (i)}
+                    <option value={String(i)}>{h || `Column ${i + 1}`}</option>
+                  {/each}
+                </select>
+                <p class="text-muted">
+                  Semicolon-separated interest slugs; an unknown slug is reported, not silently dropped.
+                </p>
+              </div>
+            {/if}
+
+            <div class="field">
+              <span class="setting-name">Where did this come from?</span>
+              <select bind:value={importSource} aria-label="Source">
+                {#each IMPORT_SOURCES as s (s.value)}
+                  <option value={s.value}>{s.label}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="field">
+              <label for="import-source-detail">Source detail (the specific event or export)</label>
+              <input
+                id="import-source-detail"
+                type="text"
+                bind:value={importSourceDetail}
+                placeholder="e.g. Intro to Soldering, 12 May 2026"
+              />
+            </div>
+            <div class="field">
+              <label for="import-collected-at">Date the source collected these addresses</label>
+              <input id="import-collected-at" type="date" bind:value={importCollectedAt} />
+            </div>
+
+            <div class="field">
+              <span class="setting-name">Consent mode</span>
+              <div class="checkbox-group">
+                {#each CONSENT_MODES as m (m.value)}
+                  <label class="checkbox-label">
+                    <input
+                      type="radio"
+                      name="import-consent-mode"
+                      value={m.value}
+                      checked={importConsentMode === m.value}
+                      disabled={!m.available}
+                      onchange={() => (importConsentMode = m.value)}
+                    />
+                    <strong>{m.label}</strong>{!m.available ? ' (coming soon)' : ''} — {m.description}
+                  </label>
+                {/each}
+              </div>
+            </div>
+            <div class="field">
+              <label for="import-consent-note">
+                How was consent obtained? (required, recorded on the batch)
+              </label>
+              <input id="import-consent-note" type="text" bind:value={importConsentNote} />
+            </div>
+
+            {#if importFormError}
+              <p class="text-error" role="alert">{importFormError}</p>
+            {/if}
+            <Button type="submit" variant="primary" disabled={importPreviewLoading}>
+              {importPreviewLoading ? 'Previewing…' : 'Preview'}
+            </Button>
+          </form>
+
+          {#if importPreviewResult}
+            <div class="status-counts">
+              <div class="status-count">
+                <span class="badge badge-success">New</span>
+                <span class="status-count-num">{importPreviewResult.new_count}</span>
+              </div>
+              <div class="status-count">
+                <span class="badge badge-muted">Duplicate</span>
+                <span class="status-count-num">{importPreviewResult.duplicate_count}</span>
+              </div>
+              <div class="status-count">
+                <span class="badge badge-danger">Suppressed</span>
+                <span class="status-count-num">{importPreviewResult.suppressed_count}</span>
+              </div>
+              <div class="status-count">
+                <span class="badge badge-danger">Malformed</span>
+                <span class="status-count-num">{importPreviewResult.malformed_count}</span>
+              </div>
+            </div>
+            <!-- Samples are plain interpolated text -- Svelte escapes them,
+                 so an address or slug containing markup can never inject
+                 HTML into this admin-only page. -->
+            {#if importPreviewResult.sample_new && importPreviewResult.sample_new.length > 0}
+              <p class="text-muted">New (sample): {importPreviewResult.sample_new.join(', ')}</p>
+            {/if}
+            {#if importPreviewResult.sample_duplicate && importPreviewResult.sample_duplicate.length > 0}
+              <p class="text-muted">Duplicate (sample): {importPreviewResult.sample_duplicate.join(', ')}</p>
+            {/if}
+            {#if importPreviewResult.sample_suppressed && importPreviewResult.sample_suppressed.length > 0}
+              <p class="text-muted">Suppressed (sample): {importPreviewResult.sample_suppressed.join(', ')}</p>
+            {/if}
+            {#if importPreviewResult.sample_malformed && importPreviewResult.sample_malformed.length > 0}
+              <p class="text-muted">Malformed (sample): {importPreviewResult.sample_malformed.join(', ')}</p>
+            {/if}
+            {#if importPreviewResult.unknown_interest_slugs && importPreviewResult.unknown_interest_slugs.length > 0}
+              <p class="text-error" role="alert">
+                Unknown interest slug(s), not linked: {importPreviewResult.unknown_interest_slugs.join(', ')}
+              </p>
+            {/if}
+            {#if importCommitError}
+              <p class="text-error" role="alert">{importCommitError}</p>
+            {/if}
+            <Button
+              variant="primary"
+              onclick={submitImportCommit}
+              disabled={importCommitLoading || importPreviewResult.new_count === 0}
+            >
+              {importCommitLoading ? 'Committing…' : `Commit — add ${importPreviewResult.new_count} subscriber(s)`}
+            </Button>
+          {/if}
+        {/if}
       </Panel>
 
       <Panel title="Search &amp; filter">

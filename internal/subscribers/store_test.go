@@ -1306,20 +1306,18 @@ func coldConfirmationSubscriber(t *testing.T, pool *pgxpool.Pool, now time.Time)
 	t.Helper()
 	token := fmt.Sprintf("ctok-%d", testdb.Unique())
 	manageToken := fmt.Sprintf("mtok-%d", testdb.Unique())
-	var sub Subscriber
-	err := pool.QueryRow(context.Background(),
+	row := pool.QueryRow(context.Background(),
 		`INSERT INTO subscribers
 		     (email, status, confirm_token, confirm_sent_at, confirm_expires_at, manage_token, created_at, updated_at)
 		 VALUES (lower(trim($1)), $2, $3, NULL, $4, $5, $6, $6)
 		 RETURNING `+subscriberColumns,
 		uniqueEmail(t), StatusPending, token, now.Add(time.Hour), manageToken, now,
-	).Scan(
-		&sub.ID, &sub.Email, &sub.Status, &sub.ConfirmToken, &sub.ConfirmSentAt,
-		&sub.ConfirmExpiresAt, &sub.ConfirmedAt, &sub.AlreadySubscribedSentAt, &sub.ManageToken,
-		&sub.SignupIP, &sub.SignupUserAgent, &sub.UTMSource, &sub.UTMMedium, &sub.UTMCampaign,
-		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.SoftBounceStreak, &sub.LastBounceAt,
-		&sub.LastDeliveryAt, &sub.CreatedAt, &sub.UpdatedAt, &sub.Synthetic,
 	)
+	// Scans via scanSubscriber (not a hand-written destination list) so this
+	// helper can never drift out of sync with subscriberColumns the way a
+	// duplicated Scan(...) call did when #0125 widened that column list —
+	// see store.go's scanSubscriber.
+	sub, err := scanSubscriber(row)
 	if err != nil {
 		t.Fatalf("seed cold-confirmation subscriber: %v", err)
 	}

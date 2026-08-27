@@ -229,6 +229,23 @@ const (
 	// address sits in the audit trail.
 	ActionSubscriberResendConfirmation = "subscriber.resend_confirmation"
 
+	// Subscriber import and consent provenance (PRD §6.10, #0125).
+	// ActionSubscriberImportCommitted is written once per POST
+	// /admin/subscribers/import — TargetType is TargetSubscriberImport,
+	// TargetID the new subscriber_imports row's id. Metadata deliberately
+	// carries only aggregate counts and the batch's own declared provenance
+	// (source, source_detail, consent_mode, consent_note, collected_at,
+	// filename, row/inserted/skipped counts) — never the inserted
+	// addresses themselves, which already have their own trail via
+	// subscriber_events' ActionImported rows (one per address, #0126).
+	ActionSubscriberImportCommitted = "subscriber_import.committed"
+	// ActionSubscriberImportRevoked is written by POST
+	// /admin/imports/{id}/revoke. TargetType is TargetSubscriberImport,
+	// TargetID the import's id. Metadata carries the reason and the count
+	// of subscribers moved to unsubscribed — again, not the addresses
+	// themselves (see subscriber_events' ActionImportRevoked rows).
+	ActionSubscriberImportRevoked = "subscriber_import.revoked"
+
 	// Interest taxonomy lifecycle (PRD §6.1, §5.2 — the admin CRUD, #0024).
 	// ActionInterestUpdated covers any field change other than the active
 	// flag's transition; that transition gets its own two actions (mirroring
@@ -396,4 +413,8 @@ const (
 	// TargetWorkshop is the target type for the workshop.* actions above
 	// (#0051).
 	TargetWorkshop = "workshop"
+	// TargetSubscriberImport is the target type for the subscriber_import.*
+	// actions above (#0125) — a batch (subscriber_imports row), distinct
+	// from TargetSubscriber (one subscribers row).
+	TargetSubscriberImport = "subscriber_import"
 )

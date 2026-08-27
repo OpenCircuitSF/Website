@@ -95,6 +95,7 @@ func TestMountAndServe_UnsubscribePost_NeverRateLimited(t *testing.T) {
 		errCh <- mountAndServe(cfg, pool,
 			nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
 			nil, /* adminSubscribersH: not exercised by this test */
+			nil, /* adminImportsH: not exercised */
 			nil, /* adminPendingH: not exercised by this test */
 			nil, /* adminSuppressionsH: not exercised by this test */
 			nil, /* adminDeliverabilityH: not exercised by this test */
@@ -216,6 +217,7 @@ func TestMountAndServe_UnsubscribePost_NoSessionNoCSRF(t *testing.T) {
 		errCh <- mountAndServe(cfg, pool,
 			nil, nil, nil, nil, nil, nil,
 			nil,
+			nil, /* adminImportsH: not exercised */
 			nil, /* adminPendingH: not exercised by this test */
 			nil,
 			nil, /* adminDeliverabilityH: not exercised by this test */

@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000022`). No ORM — every
+(`migrations/`, numbered `000001`–`000023`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -87,6 +87,15 @@ two tables above.
 (`events.go`) owns `subscriber_events`, alongside `subscribers`/
 `subscriber_interests`/`suppressions` — see that package's doc comment for
 why the activity log is not a second package of its own.
+
+## Subscriber import and consent provenance (Phase 8, per `PRD.md` §6.10)
+
+| Migration | Tables / change |
+|---|---|
+| `000023_create_subscriber_imports` | `subscriber_imports` (`#0125`) — one row per CSV import batch: `source`/`source_detail`/`collected_at`/`consent_note` are the mandatory provenance PRD §6.10 requires before any address is inserted; `consent_mode` (`prior_consent` \| `invite`) selects between `#0125`'s prior-consent path (inserts `active`, sends nothing) and `#0129`'s not-yet-built invite path — the CHECK accepts both values today but `internal/subscribers.ImportStore.Commit` refuses `invite` until `#0129` lands. `row_count`/`inserted_count`/`skipped_count` are `#0125`'s; `invited_count`/`confirmed_count` are reserved for `#0129`. `status` (`committed` \| `revoked`) plus `revoked_at`/`revoked_reason` back batch revocation — `POST /admin/imports/{id}/revoke`. This migration also backfills the two forward-referencing FKs `000010` and `000022` were left without once this table exists: `subscribers.import_id` gains its `REFERENCES subscriber_imports(id)` constraint, and `subscriber_events` gains the `import_id` column PRD §6.2 specifies (`BIGINT REFERENCES subscriber_imports(id) ON DELETE SET NULL`) — both were deliberately incomplete before this migration, per those files' own comments. `subscribers` also gains (via `000010` directly, per the greenfield note) `source`/`source_detail`/`consent_basis`/`import_id`/`invited_at`, CHECK-guarded the same way `status`/`unsubscribe_source` are |
+
+`internal/subscribers` (`imports.go`) owns `subscriber_imports`, alongside
+every other table that package already owns — see that file's doc comment.
 
 ## Conventions
 

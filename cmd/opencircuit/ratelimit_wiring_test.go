@@ -104,6 +104,7 @@ func TestMountAndServe_RateLimitsAuthLoginStart(t *testing.T) {
 		errCh <- mountAndServe(cfg, pool,
 			authH, credsH, settingsH, adminUsersH, adminAuditH, nil, /* adminInterestsH: not exercised by this test */
 			nil,               /* adminSubscribersH: not exercised by this test */
+			nil,               /* adminImportsH: not exercised */
 			nil,               /* adminPendingH: not exercised by this test */
 			nil,               /* adminSuppressionsH: not exercised by this test */
 			nil,               /* adminDeliverabilityH: not exercised by this test */

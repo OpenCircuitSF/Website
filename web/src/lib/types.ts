@@ -121,6 +121,18 @@ export interface Subscriber {
   soft_bounce_window_days?: number;
   /** The address's activity log (#0126, PRD §6.11), newest first, populated by the detail endpoint only. */
   events?: SubscriberEvent[];
+  /**
+   * Provenance (#0125, PRD §6.10) — always populated, list as well as
+   * detail. `source` defaults to "signup_form" for a website signup.
+   * `import_id`, when present, is the originating subscriber_imports batch
+   * an admin can act on via POST /admin/imports/{id}/revoke.
+   */
+  source: string; // signup_form | import | admin_manual | api
+  source_detail?: string;
+  consent_basis?: string; // double_opt_in | imported_prior_consent | admin_attested
+  import_id?: number;
+  /** #0129's "one invitation per address, ever" marker; always absent until that issue lands a producer. */
+  invited_at?: string;
 }
 
 /**

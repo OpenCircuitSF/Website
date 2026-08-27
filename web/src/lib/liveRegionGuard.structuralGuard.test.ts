@@ -502,13 +502,13 @@ const KNOWN_DYNAMIC_ROLE_SITES = new Set<string>([
  * text, no focus target) fails this guard until it is either converted or
  * added here by name. */
 const KNOWN_LOADING_PLACEHOLDERS = new Set<string>([
-  'web/src/views/Admin.svelte:1074',
-  'web/src/views/Admin.svelte:1150',
-  'web/src/views/Admin.svelte:1314',
-  'web/src/views/Admin.svelte:1424',
-  'web/src/views/Admin.svelte:1669',
-  'web/src/views/Admin.svelte:1755',
-  'web/src/views/Admin.svelte:1904',
+  'web/src/views/Admin.svelte:1278',
+  'web/src/views/Admin.svelte:1354',
+  'web/src/views/Admin.svelte:1518',
+  'web/src/views/Admin.svelte:1628',
+  'web/src/views/Admin.svelte:2049',
+  'web/src/views/Admin.svelte:2135',
+  'web/src/views/Admin.svelte:2284',
   'web/src/views/Account.svelte:223',
   'web/src/views/admin/Workshops.svelte:168',
   'web/src/views/admin/WorkshopEditor.svelte:402',

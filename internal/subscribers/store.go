@@ -88,6 +88,25 @@ const (
 	SourceAdmin       = "admin"
 )
 
+// Provenance values (#0125, PRD §6.10), matching the subscribers_source_check
+// and subscribers_consent_basis_check CHECK constraints (migrations/000010).
+// Named Subscriber* rather than reusing Source*/Status*-shaped names to keep
+// this column's vocabulary (where an ADDRESS entered the list) unmistakably
+// separate from unsubscribe_source's (why it LEFT) — the two are easy to
+// conflate since both are literally named "source" at the database.
+const (
+	SubscriberSourceSignupForm  = "signup_form"
+	SubscriberSourceImport      = "import"
+	SubscriberSourceAdminManual = "admin_manual"
+	SubscriberSourceAPI         = "api"
+)
+
+const (
+	ConsentBasisDoubleOptIn          = "double_opt_in"
+	ConsentBasisImportedPriorConsent = "imported_prior_consent"
+	ConsentBasisAdminAttested        = "admin_attested"
+)
+
 // ReservedTestEmailDomain is the RFC 2606-reserved domain
 // #0046's ensureTestRecipient anchors every synthetic test-send recipient
 // row to (internal/handlers/admin_campaign_preview.go): guaranteed to never
@@ -192,6 +211,18 @@ type Subscriber struct {
 	UTMCampaign             *string
 	UnsubscribedAt          *time.Time
 	UnsubscribeSource       *string
+	// Source, SourceDetail, ConsentBasis, ImportID, InvitedAt are #0125's
+	// provenance columns (migrations/000010, PRD §6.10): every address must
+	// be able to answer "where did this come from, and when?" without
+	// reading subscriber_events. Source defaults to SourceSignupForm at the
+	// database and is never left empty. InvitedAt is #0129's "one
+	// invitation per address, ever" marker — always nil until that issue
+	// lands a producer.
+	Source       string
+	SourceDetail *string
+	ConsentBasis *string
+	ImportID     *int64
+	InvitedAt    *time.Time
 	// SoftBounceStreak, LastBounceAt, LastDeliveryAt are #0124's delivery
 	// health columns (migration 000010, PRD §6.9): the consecutive count of
 	// Transient/Undetermined bounces since the last successful Delivery.
@@ -284,7 +315,8 @@ type welcomePayload struct {
 const subscriberColumns = `id, email, status, confirm_token, confirm_sent_at,
 	confirm_expires_at, confirmed_at, already_subscribed_sent_at, manage_token,
 	host(signup_ip), signup_user_agent, utm_source, utm_medium, utm_campaign,
-	unsubscribed_at, unsubscribe_source, soft_bounce_streak, last_bounce_at,
+	unsubscribed_at, unsubscribe_source, source, source_detail, consent_basis,
+	import_id, invited_at, soft_bounce_streak, last_bounce_at,
 	last_delivery_at, created_at, updated_at, synthetic`
 
 func scanSubscriber(row pgx.Row) (Subscriber, error) {
@@ -293,7 +325,8 @@ func scanSubscriber(row pgx.Row) (Subscriber, error) {
 		&sub.ID, &sub.Email, &sub.Status, &sub.ConfirmToken, &sub.ConfirmSentAt,
 		&sub.ConfirmExpiresAt, &sub.ConfirmedAt, &sub.AlreadySubscribedSentAt, &sub.ManageToken,
 		&sub.SignupIP, &sub.SignupUserAgent, &sub.UTMSource, &sub.UTMMedium, &sub.UTMCampaign,
-		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.SoftBounceStreak, &sub.LastBounceAt,
+		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.Source, &sub.SourceDetail, &sub.ConsentBasis,
+		&sub.ImportID, &sub.InvitedAt, &sub.SoftBounceStreak, &sub.LastBounceAt,
 		&sub.LastDeliveryAt, &sub.CreatedAt, &sub.UpdatedAt, &sub.Synthetic,
 	)
 	if err != nil {
@@ -1475,7 +1508,9 @@ const qualifiedSubscriberColumns = `subscribers.id, subscribers.email, subscribe
 	subscribers.confirmed_at, subscribers.already_subscribed_sent_at, subscribers.manage_token,
 	host(subscribers.signup_ip), subscribers.signup_user_agent, subscribers.utm_source,
 	subscribers.utm_medium, subscribers.utm_campaign, subscribers.unsubscribed_at,
-	subscribers.unsubscribe_source, subscribers.soft_bounce_streak, subscribers.last_bounce_at,
+	subscribers.unsubscribe_source, subscribers.source, subscribers.source_detail,
+	subscribers.consent_basis, subscribers.import_id, subscribers.invited_at,
+	subscribers.soft_bounce_streak, subscribers.last_bounce_at,
 	subscribers.last_delivery_at, subscribers.created_at, subscribers.updated_at,
 	subscribers.synthetic`
 

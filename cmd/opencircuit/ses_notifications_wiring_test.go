@@ -181,6 +181,7 @@ func sesWiringStartServer(t *testing.T, pool *pgxpool.Pool, sesNotifyH *handlers
 		errCh <- mountAndServe(cfg, pool,
 			nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
 			nil, /* adminSubscribersH: not exercised by this test */
+			nil, /* adminImportsH: not exercised */
 			nil, /* adminPendingH: not exercised by this test */
 			nil, /* adminSuppressionsH: not exercised by this test */
 			nil, /* adminDeliverabilityH: not exercised by this test */

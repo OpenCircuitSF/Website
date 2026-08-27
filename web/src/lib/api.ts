@@ -528,6 +528,136 @@ export function resendConfirmation(id: number): Promise<ResendConfirmationRespon
   return apiPost<ResendConfirmationResponse>(`/admin/subscribers/${id}/resend-confirmation`);
 }
 
+// ── Admin subscriber import (#0125, PRD §6.10) ───────────────────────────────
+// The one pair of endpoints in this file that is NOT JSON: the upload is
+// multipart/form-data (a file plus form fields), so these bypass `request`
+// entirely rather than force the file through JSON.stringify.
+
+/** One subscriber_imports row, as returned by preview/commit/revoke. */
+export interface ImportRecord {
+  id: number;
+  source: string;
+  source_detail?: string;
+  consent_mode: string; // prior_consent | invite — see CONSENT_MODES (admin.ts)
+  consent_note: string;
+  collected_at: string; // YYYY-MM-DD
+  filename?: string;
+  row_count: number;
+  inserted_count: number;
+  skipped_count: number;
+  status: string; // committed | revoked
+  revoked_at?: string;
+  revoked_reason?: string;
+  created_at: string;
+}
+
+/** POST /admin/subscribers/import/preview's response body. */
+export interface ImportPreviewResult {
+  checksum: string;
+  row_count: number;
+  new_count: number;
+  duplicate_count: number;
+  suppressed_count: number;
+  malformed_count: number;
+  sample_new?: string[];
+  sample_duplicate?: string[];
+  sample_suppressed?: string[];
+  sample_malformed?: string[];
+  unknown_interest_slugs?: string[];
+}
+
+/** POST /admin/subscribers/import's response body. */
+export interface ImportCommitResult {
+  import: ImportRecord;
+}
+
+/** POST /admin/imports/{id}/revoke's response body. */
+export interface ImportRevokeResult {
+  import: ImportRecord;
+  revoked_count: number;
+  no_op: boolean;
+}
+
+/** Fields common to preview and commit — see admin.ts's ImportFormFields. */
+export interface ImportUploadFields {
+  file: File;
+  source: string;
+  sourceDetail: string;
+  consentMode: string;
+  consentNote: string;
+  collectedAt: string; // YYYY-MM-DD
+  emailColumn: number;
+  interestColumn?: number;
+  /** commit only; omitted for preview. */
+  checksum?: string;
+}
+
+function importFormData(fields: ImportUploadFields): FormData {
+  const fd = new FormData();
+  fd.set('file', fields.file, fields.file.name);
+  fd.set('source', fields.source);
+  fd.set('source_detail', fields.sourceDetail);
+  fd.set('consent_mode', fields.consentMode);
+  fd.set('consent_note', fields.consentNote);
+  fd.set('collected_at', fields.collectedAt);
+  fd.set('email_column', String(fields.emailColumn));
+  if (fields.interestColumn !== undefined) fd.set('interest_column', String(fields.interestColumn));
+  if (fields.checksum) fd.set('checksum', fields.checksum);
+  return fd;
+}
+
+/** Shared multipart POST — mirrors `request`'s error handling exactly (a
+ * non-2xx response throws a typed ApiError), but never sets Content-Type
+ * itself: the browser sets the multipart boundary that header requires,
+ * which a hand-set `multipart/form-data` header would be missing. */
+async function postMultipart<T>(path: string, fd: FormData): Promise<T> {
+  const res = await fetch(path, { method: 'POST', credentials: 'include', headers: { Accept: 'application/json' }, body: fd });
+  const text = await res.text();
+  let parsed: unknown = undefined;
+  if (text.length > 0) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = text;
+    }
+  }
+  if (!res.ok) {
+    const err = parsed as ErrorBody | undefined;
+    const message = err?.error ?? err?.message ?? `HTTP ${res.status}`;
+    throw new ApiError(res.status, message, parsed);
+  }
+  return parsed as T;
+}
+
+/**
+ * POST /admin/subscribers/import/preview — dry run, writes nothing. Returns
+ * a checksum the caller must resubmit unchanged to importCommit, tying the
+ * commit request back to these exact file bytes (#0125's "the file cannot
+ * change between preview and commit").
+ */
+export function importPreview(fields: Omit<ImportUploadFields, 'checksum'>): Promise<ImportPreviewResult> {
+  return postMultipart<ImportPreviewResult>('/admin/subscribers/import/preview', importFormData(fields));
+}
+
+/**
+ * POST /admin/subscribers/import — commit. `fields.checksum` MUST be the
+ * value `importPreview` returned; the server answers 409 (ApiError) if it
+ * does not match a fresh hash of the resubmitted file.
+ */
+export function importCommit(fields: ImportUploadFields): Promise<ImportCommitResult> {
+  return postMultipart<ImportCommitResult>('/admin/subscribers/import', importFormData(fields));
+}
+
+/**
+ * POST /admin/imports/{id}/revoke — moves every still-active subscriber
+ * from this batch to unsubscribed and marks the import row revoked.
+ * Revoking an already-revoked import is a no-op (`no_op: true`), not an
+ * error.
+ */
+export function revokeImport(id: number, reason: string): Promise<ImportRevokeResult> {
+  return apiPost<ImportRevokeResult>(`/admin/imports/${id}/revoke`, { reason });
+}
+
 // ── Admin suppression-list screen (#0100) ────────────────────────────────────
 
 /**
