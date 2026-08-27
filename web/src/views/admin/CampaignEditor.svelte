@@ -636,12 +636,22 @@
   {:else if campaign}
     <h2 class="editor-heading" tabindex="-1" bind:this={headingEl}>{campaign.name}</h2>
 
-    {#if demoted}
-      <div class="demoted-banner" role="status">
-        <p>{demotionMessage}</p>
+    <!-- #0242/#0243: role="status" now lives on a node that's ALWAYS
+         rendered (sr-only + empty when !demoted) rather than one created by
+         {#if demoted} -- the same console-wide decision as testSendMessage
+         a few Panels down in this file (#0063). `demoted` can flip live
+         (a re-fetch after a scheduled send is skipped), and a node inserted
+         together with its text is not reliably announced; a persistent
+         node whose text/class mutates is. The "View in audit log" button
+         staying {#if demoted}-gated INSIDE the persistent node is fine --
+         that's a child mutation of an already-live region, the same shape
+         CampaignSendDialog.svelte's send-blocked-hint uses. -->
+    <div class={demoted ? 'demoted-banner' : 'sr-only'} role="status">
+      <p>{demoted ? demotionMessage : ''}</p>
+      {#if demoted}
         <Button variant="subtle" onclick={() => onGoToAudit(campaignId)}>View in audit log</Button>
-      </div>
-    {/if}
+      {/if}
+    </div>
 
     <Panel title="Content">
       <div class="field">
@@ -857,12 +867,15 @@
       {/if}
     </div>
 
-    {#if pausedExplanation}
-      <!-- #0124's "surface it as a distinct, EXPLAINED state" criterion —
-           always visible while paused, not tucked inside the dialog, so an
-           operator sees why before deciding whether to resume or cancel. -->
-      <p class="text-warn" role="status">{pausedExplanation}</p>
-    {/if}
+    <!-- #0124's "surface it as a distinct, EXPLAINED state" criterion —
+         always visible while paused, not tucked inside the dialog, so an
+         operator sees why before deciding whether to resume or cancel.
+         #0242/#0243: unconditionally rendered (sr-only + empty when there is
+         no pausedExplanation) rather than {#if}-created, since a send can
+         pause mid-session (the circuit breaker) while this view stays
+         mounted -- same console-wide decision as testSendMessage a few
+         Panels up in this file (#0063). -->
+    <p class={pausedExplanation ? 'text-warn' : 'sr-only'} role="status">{pausedExplanation ?? ''}</p>
 
     <!-- #0048: live send progress over SSE. The outer div is #0047's named
          region, rendered UNCONDITIONALLY and never wrapped in an {#if} — an

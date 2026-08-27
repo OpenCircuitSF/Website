@@ -130,9 +130,12 @@
                 {#if resendErrorByID[row.id]}
                   <p class="text-error" role="alert">{resendErrorByID[row.id]}</p>
                 {/if}
-                {#if resendNoticeByID[row.id]}
-                  <p class="text-muted" role="status">{resendNoticeByID[row.id]}</p>
-                {/if}
+                <!-- #0242/#0243: unconditionally rendered (sr-only + empty
+                     when there is nothing to announce for THIS row) rather
+                     than {#if}-created -- console-wide decision, #0063. -->
+                <p class={resendNoticeByID[row.id] ? 'text-muted' : 'sr-only'} role="status">
+                  {resendNoticeByID[row.id] ?? ''}
+                </p>
               </td>
             </tr>
           {/each}
