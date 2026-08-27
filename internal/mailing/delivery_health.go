@@ -47,7 +47,19 @@
 //     a single row — not after sending one more full batch, which was the
 //     end-of-batch-only shape's gap. A campaign that resumes into a
 //     genuinely-recovered rate keeps draining; one that resumes into a
-//     still-bad rate sends zero further messages.
+//     still-bad rate, with real work still queued, sends zero further
+//     messages. The top-of-loop check is gated on Queued > 0, though
+//     (checkAndMaybePauseDeliveryHealth): a trip observed with nothing left
+//     queued has nothing further to stop, and re-pausing there would strand
+//     the campaign forever — Resume would just re-observe the same
+//     already-fixed rate and re-pause, since no further send ever occurs to
+//     move it. In that case the top-of-loop check stands aside and lets the
+//     loop reach ClaimBatch, which finds nothing and completes the campaign
+//     via CompleteIfDone instead (#0269's review). The end-of-batch check
+//     is NOT gated this way — a trip discovered exactly as the last batch
+//     finishes still pauses and alerts, so the operator learns the list was
+//     bad even though nothing more will be sent; only the top-of-loop
+//     re-check on a later Resume must stand down once nothing remains.
 //   - Who is told: CampaignStore.Resume's own audit row aside, the trip
 //     itself writes ActionEmailCampaignPausedDeliveryHealth to audit_log
 //     (an operator reviewing /admin/audit sees it) AND enqueues an
@@ -85,6 +97,12 @@ type deliveryHealthResult struct {
 	BounceRate, ComplaintRate        float64 // percent, e.g. 5.0 means 5%
 	BounceThreshold, ComplaintThresh float64 // percent, the configured settings values used for this check
 	MinSample                        int
+	// Queued is email_sends.status='queued' for this campaign, read off the
+	// SAME StatusCounts row as Sent — no extra query. #0269's top-of-loop
+	// caller uses this to decide whether a trip is actionable: with nothing
+	// left queued, there is nothing further to stop, and pausing would only
+	// strand the campaign (see checkAndMaybePauseDeliveryHealth).
+	Queued int64
 }
 
 // checkDeliveryHealth evaluates campaignID's running bounce/complaint rate
@@ -107,7 +125,7 @@ func (w *Worker) checkDeliveryHealth(ctx context.Context, campaignID int64) (del
 		return deliveryHealthResult{}, fmt.Errorf("mailing: reading send counts for campaign %d: %w", campaignID, err)
 	}
 	result := deliveryHealthResult{
-		Sent: counts.Sent, MinSample: minSample,
+		Sent: counts.Sent, Queued: counts.Queued, MinSample: minSample,
 		BounceThreshold: bouncePct, ComplaintThresh: complaintPct,
 	}
 	if counts.Sent < int64(minSample) {

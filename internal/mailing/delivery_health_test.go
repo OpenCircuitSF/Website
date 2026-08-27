@@ -326,6 +326,89 @@ func TestWorker_CircuitBreaker_ResumeIntoStillTrippedRate_SendsZeroMore(t *testi
 	}
 }
 
+// TestWorker_CircuitBreaker_TripsOnFinalBatch_ResumeReachesSent is #0269's
+// review-bounce regression: item 3's own fix (checkAndMaybePauseDeliveryHealth
+// running at the TOP of drainLoop as well as at the end of a batch) made a
+// campaign that trips exactly on its LAST batch — nothing left queued —
+// permanently unable to reach 'sent'. The top-of-loop check ran on every
+// iteration, including the one whose only job is to see an empty ClaimBatch
+// and call CompleteIfDone, so Resume could never get past it: it just
+// re-observed the same already-final rate and re-paused, forever.
+//
+// This reproduces the reviewer's exact measurement (100 recipients,
+// batchSize=100, minSample=100, 100% bounce, so the trip lands as the final
+// batch finishes) and asserts the campaign reaches 'sent' on the very first
+// Resume, with zero further messages sent — proving the fix (gating the
+// top-of-loop check on Queued > 0) closes the defect without reopening
+// TestWorker_CircuitBreaker_ResumeIntoStillTrippedRate_SendsZeroMore above
+// (that test still has real queued work at the point of its resume, so its
+// re-trip must still fire).
+func TestWorker_CircuitBreaker_TripsOnFinalBatch_ResumeReachesSent(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+	setSetting(t, pool, SettingSendHealthMinSample, "100")
+	setSetting(t, pool, SettingSendHealthBouncePct, "5.0")
+	setSetting(t, pool, SettingSendHealthComplaintPct, "0.1")
+
+	// 100 recipients, batchSize 100: the entire audience is claimed and sent
+	// in ONE batch, so the trip (evaluated at the end of that batch, per
+	// #0124's original design) lands with nothing left queued — the shape
+	// the issue's own table measures.
+	emails := seedActiveSubscribers(t, pool, 100)
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	resetCampaignAuditRows(t, pool, campaignID)
+
+	mailer := newBreakerTestMailer(pool)
+	for _, e := range emails {
+		mailer.bounceEmails[e] = true
+	}
+
+	w := newTestWorker(t, pool, mailer)
+	w.batchSize = 100
+	w.stats = NewCampaignStatsStore(pool)
+
+	if _, err := w.claimAndDrain(context.Background()); err != nil {
+		t.Fatalf("claimAndDrain (initial): %v", err)
+	}
+	if status := campaignStatus(t, pool, campaignID); status != CampaignStatusPausedDeliveryHealth {
+		t.Fatalf("campaign status after initial drain = %q, want %q", status, CampaignStatusPausedDeliveryHealth)
+	}
+	if got := len(mailer.Sent()); got != 100 {
+		t.Fatalf("messages sent after initial drain = %d, want exactly 100", got)
+	}
+	if queued := countEmailSendsStatus(t, pool, campaignID, "queued"); queued != 0 {
+		t.Fatalf("queued email_sends rows after initial drain = %d, want 0 (this is the whole point of the fixture)", queued)
+	}
+
+	// The admin action: resume, exactly like POST
+	// /admin/campaigns/{id}/resume. Nothing further can ever be sent — the
+	// rate is final — so the campaign must reach 'sent', not re-pause.
+	campaignStore := NewCampaignStore(pool)
+	if _, err := campaignStore.Resume(context.Background(), campaignID, time.Now()); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	if _, err := w.claimAndDrain(context.Background()); err != nil {
+		t.Fatalf("claimAndDrain (after resume): %v", err)
+	}
+
+	if status := campaignStatus(t, pool, campaignID); status != CampaignStatusSent {
+		t.Errorf("campaign status after resume = %q, want %q (nothing left queued — the trip has nothing further to stop)", status, CampaignStatusSent)
+	}
+	if got := len(mailer.Sent()); got != 100 {
+		t.Errorf("messages sent after resume = %d, want still exactly 100 (zero further messages — same guarantee as the still-queued case)", got)
+	}
+
+	// A campaign that has reached 'sent' is terminal: a second Resume must
+	// be rejected, not silently accepted (CampaignStatusSent is not among
+	// Resume's allowed FROM states in campaigns.go). This confirms the fix
+	// did not simply relax Resume's own guard — the earlier trip's pause
+	// really did end, by completing, not by being bypassed.
+	if _, err := campaignStore.Resume(context.Background(), campaignID, time.Now()); err == nil {
+		t.Errorf("Resume on a 'sent' campaign succeeded, want a terminal-state rejection")
+	}
+}
+
 // ── Threshold boundary: min_sample ──────────────────────────────────────────
 
 // TestWorker_CircuitBreaker_BelowMinSample_NeverTrips proves "below

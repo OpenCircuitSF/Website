@@ -556,7 +556,19 @@ func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) (bool, error
 		// 100, then one Resume sent exactly +100 more before re-pausing.
 		// Checking here first means a resume into a still-bad rate sends
 		// zero further messages instead of one more batch.
-		if stopped, err := w.checkAndMaybePauseDeliveryHealth(ctx, c); stopped {
+		//
+		// gateOnQueuedWork=true: this call runs BEFORE ClaimBatch, so it is
+		// the one whose only remaining job on a fully-drained campaign is to
+		// observe an empty batch and call CompleteIfDone below. Without the
+		// gate, a trip that lands exactly on the final batch would re-trip
+		// on every future Resume forever — CompleteIfDone is never reached
+		// because this check always fires first, and nothing further is
+		// ever sent to move the (already-final) rate. Gating on "is
+		// anything still queued" lets that terminal case fall through to
+		// ClaimBatch → empty → CompleteIfDone instead, while a genuine
+		// still-bad rate WITH real work queued still stops here, before
+		// claiming a single row (see delivery_health.go's package doc).
+		if stopped, err := w.checkAndMaybePauseDeliveryHealth(ctx, c, true); stopped {
 			return true, err
 		}
 
@@ -636,32 +648,55 @@ func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) (bool, error
 		// a rate that trips DURING the batch just sent; the top-of-loop
 		// check above catches a rate that was already tripped BEFORE this
 		// batch started (in particular, right after a Resume) — #0269.
-		if stopped, err := w.checkAndMaybePauseDeliveryHealth(ctx, c); stopped {
+		//
+		// gateOnQueuedWork=false, deliberately unlike the top-of-loop call
+		// above: a trip discovered here, right as the batch just sent
+		// happens to be the last one, still pauses and alerts even though
+		// nothing remains queued — the operator needs to see that the send
+		// finished with a bad rate. It is the RESUME afterward that must not
+		// get stuck re-tripping (that is the top-of-loop call's job, and why
+		// it alone is gated) — #0269's review.
+		if stopped, err := w.checkAndMaybePauseDeliveryHealth(ctx, c, false); stopped {
 			return true, err
 		}
 	}
 }
 
 // checkAndMaybePauseDeliveryHealth runs checkDeliveryHealth once for c and,
-// if it tripped, pauses the campaign — the single call site drainLoop uses
-// both at the top of its loop and at the end of every batch (#0269), so the
-// two call sites can never drift in what "tripped" means or how a trip is
-// handled. stopped=true means drainLoop must return immediately; err then
-// carries pauseCampaignDeliveryHealth's own result (nil on the ordinary
-// path). A health-check query error is deliberately NOT reported as
-// stopped=true: that would turn "the database had a hiccup" into "safety
-// checking quietly stopped" — it is logged and treated as a pass instead,
-// exactly as drainLoop did inline before #0269 split this out.
-func (w *Worker) checkAndMaybePauseDeliveryHealth(ctx context.Context, c *claimedCampaign) (stopped bool, err error) {
+// if it tripped, pauses the campaign — the single implementation drainLoop's
+// two call sites (top of the loop, before ClaimBatch; end of every batch)
+// both funnel through, so they can never drift in what "tripped" means or
+// how a trip is handled. stopped=true means drainLoop must return
+// immediately; err then carries pauseCampaignDeliveryHealth's own result
+// (nil on the ordinary path). A health-check query error is deliberately NOT
+// reported as stopped=true: that would turn "the database had a hiccup"
+// into "safety checking quietly stopped" — it is logged and treated as a
+// pass instead, exactly as drainLoop did inline before #0269 split this out.
+//
+// gateOnQueuedWork distinguishes the two call sites (#0269's review, fixing
+// a defect the first version of this split introduced): when true (the
+// top-of-loop call), a trip is only actionable if something is still
+// queued — with Queued==0 there is nothing further this trip could stop,
+// and pausing anyway would strand the campaign forever, because a later
+// Resume would re-observe the very same already-final rate and re-pause
+// without ever sending anything to move it. Standing down here lets
+// drainLoop fall through to ClaimBatch, find nothing, and route to
+// CompleteIfDone instead. When false (the end-of-batch call), a trip pauses
+// unconditionally, even if the batch just sent was the last one queued —
+// the operator still needs to see that the send finished over threshold.
+func (w *Worker) checkAndMaybePauseDeliveryHealth(ctx context.Context, c *claimedCampaign, gateOnQueuedWork bool) (stopped bool, err error) {
 	tripped, herr := w.checkDeliveryHealth(ctx, c.ID)
 	if herr != nil {
 		w.log.Error("mailing: delivery-health check failed", "campaign_id", c.ID, "err", herr)
 		return false, nil
 	}
-	if tripped.Tripped {
-		return true, w.pauseCampaignDeliveryHealth(ctx, c.ID, c.Subject, tripped)
+	if !tripped.Tripped {
+		return false, nil
 	}
-	return false, nil
+	if gateOnQueuedWork && tripped.Queued == 0 {
+		return false, nil
+	}
+	return true, w.pauseCampaignDeliveryHealth(ctx, c.ID, c.Subject, tripped)
 }
 
 // sendOutcome classifies what happened to one recipient's send attempt, for
