@@ -457,10 +457,15 @@ type citationTargetHit struct {
 // Accepted as a residual gap for the same reason #0199 accepted the
 // equivalent one for the Go guard's own seam pass — no real instance
 // exists to motivate the extra machinery.
-func collectCitationTargetHits(t *testing.T, roots []string, paths map[string]bool, sections map[string]bool) []citationTargetHit {
+// collectCitationTargetHits also returns the number of .go files
+// walkGoFiles visited — #0275: this guard applies no further filtering
+// after the walk yields a path, so walkGoFiles' own count already equals
+// what gets parsed, and returning it here lets the caller assert it is
+// plausible without a second walk.
+func collectCitationTargetHits(t *testing.T, roots []string, paths map[string]bool, sections map[string]bool) ([]citationTargetHit, int) {
 	t.Helper()
 	var hits []citationTargetHit
-	walkGoFiles(t, roots, func(path string) {
+	visited := walkGoFiles(t, roots, func(path string) {
 		fset := token.NewFileSet()
 		file, perr := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if perr != nil {
@@ -525,7 +530,7 @@ func collectCitationTargetHits(t *testing.T, roots []string, paths map[string]bo
 			}
 		}
 	})
-	return hits
+	return hits, visited
 }
 
 // TestNoCommentCitesUnresolvedPathOrSection is the guard: it fails if any
@@ -551,7 +556,13 @@ func TestNoCommentCitesUnresolvedPathOrSection(t *testing.T) {
 	if len(sections) == 0 {
 		t.Fatal("loadClaudeMDSections found zero numbered headings in CLAUDE.md — the heading pattern itself is broken, not the tree")
 	}
-	hits := collectCitationTargetHits(t, roots, paths, sections)
+	hits, visited := collectCitationTargetHits(t, roots, paths, sections)
+
+	// #0275: assert the walk actually visited a plausible number of files
+	// BEFORE trusting an empty hits slice below — an empty or narrowed
+	// citedTestScanRoots must be a hard failure here, never silently read
+	// as "no unresolved citations found".
+	assertGoFileVisitCountPlausible(t, "TestNoCommentCitesUnresolvedPathOrSection", citedTestScanRoots, visited, citedTestScanRootsMinPlausibleFileCount)
 
 	if len(hits) == 0 {
 		return

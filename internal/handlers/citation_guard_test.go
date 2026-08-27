@@ -155,6 +155,19 @@ var citationPattern = regexp.MustCompile(`CLAUDE\.md|PRD[\t\n\v\f\r \x{00A0}\x{1
 // package outside internal/ and cmd/ that has a non-test .go file.
 var scanGoRoots = []string{"..", "../../cmd", "../../web"}
 
+// citationGuardMinPlausibleFileCount is the #0275 floor for this guard.
+// Unlike citedTestScanRootsMinPlausibleFileCount's siblings, this guard
+// parses non-test .go files only (scanDirForCitations filters _test.go
+// before parsing, not after — see that function). Measured directly:
+// `find .. ../../cmd ../../web -name '*.go' -not -name '*_test.go' -not
+// -path '*/node_modules/*' -not -path '*/dist/*'` counts 111 files today,
+// and the single largest package under these roots (internal/handlers, this
+// guard's own directory) has 40 non-test files, cmd/ has 3. 80 sits
+// comfortably below the real total while still tripping if the roots were
+// narrowed to any one of the three — the "a real narrowing would trip it"
+// bar #0275 criterion 3 sets.
+const citationGuardMinPlausibleFileCount = 80
+
 type citationViolation struct {
 	pos   token.Position
 	value string
@@ -265,11 +278,23 @@ func TestNoAdminFacingStringCitesInternalDocs(t *testing.T) {
 	baseDir := filepath.Dir(thisFile)
 
 	var all []citationViolation
+	visited := 0
 	for _, rel := range scanGoRoots {
 		dir := filepath.Join(baseDir, rel)
-		v, _ := scanDirForCitations(t, dir)
+		v, collected := scanDirForCitations(t, dir)
 		all = append(all, v...)
+		visited += len(collected)
 	}
+
+	// #0275: assert the walk actually visited a plausible number of files
+	// BEFORE trusting an empty `all` slice below — an empty or narrowed
+	// scanGoRoots must be a hard failure here, never silently read as "no
+	// citations found". collected (summed into visited above) is exactly
+	// what scanDirForCitations parses — non-test .go files only, filtered
+	// before parsing, not after — so unlike the audit-metadata guard this
+	// count needs no separate reconciliation against a raw walk count; it
+	// already IS the parsed population (#0275 criterion 4a).
+	assertGoFileVisitCountPlausible(t, "TestNoAdminFacingStringCitesInternalDocs", scanGoRoots, visited, citationGuardMinPlausibleFileCount)
 
 	if len(all) == 0 {
 		return

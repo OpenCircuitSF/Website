@@ -300,7 +300,13 @@ func TestNoDocCommentNamesADifferentDeclarationInSameFile(t *testing.T) {
 	}
 
 	var found []misattachedDoc
-	walkGoFiles(t, roots, func(path string) {
+	// #0275: walkGoFiles' own return value already counts every file this
+	// guard parses (it applies no further test-file skip after the walk
+	// yields a path — every .go file walkGoFiles visits is one this guard
+	// parses), so no separate counting pass is needed here the way the
+	// audit-metadata guard needs one; using the same call's return avoids
+	// a second, potentially-drifting walk entirely.
+	visited := walkGoFiles(t, roots, func(path string) {
 		fset := token.NewFileSet()
 		file, perr := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if perr != nil {
@@ -314,6 +320,13 @@ func TestNoDocCommentNamesADifferentDeclarationInSameFile(t *testing.T) {
 			found = append(found, m)
 		}
 	})
+
+	// #0275: assert the walk actually visited a plausible number of files
+	// BEFORE trusting an empty found slice below — an empty or narrowed
+	// citedTestScanRoots must be a hard failure here, never silently read
+	// as "no misattached doc comments found".
+	assertGoFileVisitCountPlausible(t, "TestNoDocCommentNamesADifferentDeclarationInSameFile", citedTestScanRoots, visited, citedTestScanRootsMinPlausibleFileCount)
+
 	if len(found) == 0 {
 		return
 	}

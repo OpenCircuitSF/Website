@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -227,6 +228,26 @@ func citationIsExcluded(text string, start, end int) bool {
 // and would only create a collision.
 var citedTestScanRoots = []string{"..", "../../cmd", "../../web"}
 
+// citedTestScanRootsMinPlausibleFileCount is the #0275 floor for every
+// guard that walks citedTestScanRoots and parses everything walkGoFiles
+// yields it (test files included, nothing skipped afterward — unlike the
+// audit-metadata guard, so walkGoFiles' own return value already IS the
+// parsed count for these three; see criterion 4a). Measured directly, not
+// fitted: `find .. ../../cmd ../../web -name '*.go' -not -path
+// '*/node_modules/*' -not -path '*/dist/*'` counts 255 files under these
+// roots today, and the single largest package under them (internal/handlers
+// itself, this guard's own directory) has 96 — cmd/ alone has 18, web/
+// alone has 1. 150 sits comfortably below the real total (room for the
+// tree to shrink without a false alarm) while still tripping if the roots
+// were narrowed to any one of the three, which is the "a real narrowing
+// would trip it" bar #0275 criterion 3 sets. Reproduced directly before
+// adding this floor: emptying citedTestScanRoots made all three guards
+// that share it (TestNoCommentCitesUndefinedTestFunction,
+// TestNoCommentCitesUnresolvedPathOrSection,
+// TestNoDocCommentNamesADifferentDeclarationInSameFile) PASS in under
+// 0.01s each, having examined nothing.
+const citedTestScanRootsMinPlausibleFileCount = 150
+
 // skipVendoredDir reports whether dirName should be pruned from the walk
 // entirely. #0194 is open against #0181's guard for descending into
 // web/node_modules and web/dist, where a parse failure is a t.Fatalf that
@@ -239,9 +260,17 @@ func skipVendoredDir(dirName string) bool {
 
 // walkGoFiles calls fn with the path of every .go file (test files
 // included — the one difference from #0181's scanDirForCitations) under
-// each of roots, recursively, skipping vendored directories.
-func walkGoFiles(t *testing.T, roots []string, fn func(path string)) {
+// each of roots, recursively, skipping vendored directories. It returns the
+// number of .go files it yielded to fn — #0275: a guard whose pass
+// condition is "the findings slice is empty" cannot on its own tell "the
+// tree is clean" apart from "the walk visited nothing" (an empty roots
+// list is not an error to filepath.WalkDir, it is simply nothing to do), so
+// every caller that wants to guard against that must have this count
+// available. See assertGoFileVisitCountPlausible below, which is what
+// actually turns the count into a failure.
+func walkGoFiles(t *testing.T, roots []string, fn func(path string)) int {
 	t.Helper()
+	visited := 0
 	for _, root := range roots {
 		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
@@ -256,12 +285,83 @@ func walkGoFiles(t *testing.T, roots []string, fn func(path string)) {
 			if !strings.HasSuffix(entry.Name(), ".go") {
 				return nil
 			}
+			visited++
 			fn(path)
 			return nil
 		})
 		if err != nil {
 			t.Fatalf("walk %s: %v", root, err)
 		}
+	}
+	return visited
+}
+
+// goFileVisitCountImplausible is the pure #0275 check, deliberately
+// separated from assertGoFileVisitCountPlausible below so it can be tested
+// directly (TestGoFileVisitCountGuardFiresOnEmptyOrLowCount) without a real
+// *testing.T standing in for a synthetic failure: calling t.Fatalf from a
+// helper and then asserting the OUTER test still passed is not something a
+// *testing.T supports cleanly, so the failure decision lives here as an
+// ordinary function returning "" (plausible) or a reason (not plausible),
+// and assertGoFileVisitCountPlausible just reports whatever this returns.
+//
+// Two conditions, matching #0275's two acceptance criteria: roots itself
+// must be non-empty (criterion 4 — an emptied scan-roots variable is a
+// hard failure, not a walk over nothing that reports "no findings"), and
+// got — the number of files the CALLER ACTUALLY EXAMINED, not merely
+// walked past — must clear floor (criterion 3). Per criterion 4a, callers
+// that filter what they parse after walkGoFiles yields a path (today, only
+// the audit-metadata guard, which skips _test.go) must pass the count of
+// what they parsed, not walkGoFiles' own raw yield count, or the floor is
+// sized against a population larger than the coverage it protects — this
+// is exactly the gap #0261's review measured (247 walked vs. 108 parsed)
+// and this issue exists to close.
+func goFileVisitCountImplausible(guardName string, roots []string, got, floor int) string {
+	if len(roots) == 0 {
+		return fmt.Sprintf("%s: scan roots are empty — this guard would silently check nothing (#0275)", guardName)
+	}
+	if got < floor {
+		return fmt.Sprintf("%s: the walk over %v examined only %d .go file(s) — expected at least %d; the scan roots may have been emptied or narrowed, which would silently disarm this guard rather than fail it (#0275)", guardName, roots, got, floor)
+	}
+	return ""
+}
+
+// assertGoFileVisitCountPlausible is the shared #0275 guard every one of
+// this file's five siblings (this guard, TestNoCommentCitesUnresolvedPathOrSection,
+// TestNoDocCommentNamesADifferentDeclarationInSameFile,
+// TestNoAdminFacingStringCitesInternalDocs, and
+// TestAuditEntryEmailMetadataMatchesKnownSites) calls before trusting
+// anything its own scan reports — the one place, per #0275 criterion 4,
+// that a scan-roots variable's emptiness is checked, so five copies of the
+// same check do not drift out of the same shared place the way the walk
+// itself already is shared.
+func assertGoFileVisitCountPlausible(t *testing.T, guardName string, roots []string, got, floor int) {
+	t.Helper()
+	if reason := goFileVisitCountImplausible(guardName, roots, got, floor); reason != "" {
+		t.Fatal(reason)
+	}
+}
+
+// TestGoFileVisitCountGuardFiresOnEmptyOrLowCount is #0275 criterion 5's
+// proof: it calls goFileVisitCountImplausible directly (the "via the
+// helper's parameter" option the criterion names) with an empty roots list
+// and with a plausible-looking roots list paired with a too-low count, and
+// asserts each is reported implausible — then asserts a count that clears
+// the floor is reported plausible, so this test cannot pass by having the
+// function always return a non-empty string. Per CLAUDE.md §8, the oracle
+// here is not a copy of any guard's own floor constant — the numbers below
+// (0, 3, 150) are chosen for this test alone, so a change to e.g.
+// auditEmailMetadataMinPlausibleFileCount cannot make this test agree with
+// itself regardless of whether goFileVisitCountImplausible still works.
+func TestGoFileVisitCountGuardFiresOnEmptyOrLowCount(t *testing.T) {
+	if reason := goFileVisitCountImplausible("ExampleGuard", nil, 0, 150); reason == "" {
+		t.Fatal("expected an empty roots list to be reported implausible, got no reason")
+	}
+	if reason := goFileVisitCountImplausible("ExampleGuard", []string{"../../cmd"}, 3, 150); reason == "" {
+		t.Fatal("expected a visited count under the floor to be reported implausible, got no reason")
+	}
+	if reason := goFileVisitCountImplausible("ExampleGuard", []string{"..", "../../cmd", "../../web"}, 150, 150); reason != "" {
+		t.Fatalf("expected a visited count meeting the floor with non-empty roots to be plausible, got: %s", reason)
 	}
 }
 
@@ -486,6 +586,17 @@ func TestNoCommentCitesUndefinedTestFunction(t *testing.T) {
 	for _, rel := range citedTestScanRoots {
 		roots = append(roots, filepath.Join(baseDir, rel))
 	}
+
+	// #0275: assert the walk actually visited a plausible number of files
+	// BEFORE trusting anything collectDefinedTestFuncs/collectTestCitations
+	// report below — an empty or narrowed citedTestScanRoots must be a hard
+	// failure here, never silently read as "no dangling citations found".
+	// This guard parses every file walkGoFiles yields (no _test.go skip, by
+	// design — see this file's header), so a dedicated counting pass over
+	// the same roots measures exactly the population collectDefinedTestFuncs
+	// and collectTestCitations go on to parse.
+	visited := walkGoFiles(t, roots, func(path string) {})
+	assertGoFileVisitCountPlausible(t, "TestNoCommentCitesUndefinedTestFunction", citedTestScanRoots, visited, citedTestScanRootsMinPlausibleFileCount)
 
 	defined := collectDefinedTestFuncs(t, roots)
 	citations := collectTestCitations(t, roots, defined)

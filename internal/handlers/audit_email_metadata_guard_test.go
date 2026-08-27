@@ -131,11 +131,15 @@ import (
 //     *ast.FuncDecl, and a *ast.FuncLit hanging off a package-level var is
 //     never one.
 //   - an elided-type element of a []audit.Entry{{...}} slice literal —
-//     SITES=0. isAuditEntryType type-asserts a literal's Type field as
-//     *ast.SelectorExpr naming "audit.Entry"; an elided element type
-//     (Go's own syntax for "same type as the slice") leaves that field
-//     nil, so the assertion fails and the element is never recognized as
-//     an audit.Entry site to begin with.
+//     SITES=0 at the time. isAuditEntryType type-asserts a literal's Type
+//     field as *ast.SelectorExpr naming "audit.Entry"; an elided element
+//     type (Go's own syntax for "same type as the slice") leaves that
+//     field nil, so the assertion fails and the element is never
+//     recognized as an audit.Entry site to begin with. #0290 later fixed
+//     this one (elidedAuditEntryLiterals, wired into scanAuditEntrySites'
+//     site-detection predicate) — see
+//     TestAuditEmailMetadataGuardCatchesElidedCompositeLiteral, which is
+//     where its pin moved to.
 //   - `e := audit.Entry{}` followed by `e.Metadata = map[string]any{...}`
 //     — SEEN (the empty literal IS a real site) but, before this pass, a
 //     SILENT PASS (hasEmail=false, unresolved=""): the Metadata-reading
@@ -160,12 +164,14 @@ import (
 //     TestAuditEmailMetadataGuardFailsOnDeferredStructFieldAssignment pins
 //     this, mutation-proved against the pre-fix code.
 //
-// The first three are pinned, unfixed, structural blind spots — the walk
+// The first three were pinned, unfixed, structural blind spots — the walk
 // finds nothing to even classify — by
 // TestAuditEmailMetadataGuardDocumentedInvisibleShapes below, the same
 // documented-gap treatment the camelCase key gap and the four silent-pass
-// shapes above get. None of the three is exercised by any real site in this
-// tree today (checked directly, not assumed: every real audit.Entry{}
+// shapes above get. #0290 fixed the third (the elided-literal shape, see
+// the correction above), so that test now pins the remaining two. None of
+// the three was exercised by any real site in this tree at the time
+// (checked directly, not assumed: every real audit.Entry{}
 // construction in internal/ and cmd/ is either an inline literal inside a
 // named function or reached through the traced-local-variable path this
 // file already resolves).
@@ -352,17 +358,23 @@ import (
 // auditEmailMetadataKnownSites, and TestAuditEntryEmailMetadataMatchesKnownSites
 // (which fails on ANY newly-unresolved site) passed unchanged against the
 // real tree. The site/key census itself has moved since the 45-site/87-key
-// figure earlier paragraphs cite, but not because of this pass: #0126 has
-// been landing new audit.Entry call sites concurrently with this one, and
-// re-deriving both figures directly against the real tree (scanAuditEntrySites
-// over auditEmailMetadataScanRoots, plus an independent walker reusing only
-// this file's key-extraction primitives — compositeLitStringKeys and
-// collectLocalMapKeys, not its classification decisions) finds **49 sites,
-// 95 distinct keys, 0 unresolved** as of this pass. The invariant this issue
-// actually cares about — no site newly reports unresolved, and
+// figure earlier paragraphs cite, but not because of this pass: #0290
+// corrects the attribution the paragraph used to carry here — #0261's
+// review bisected the growth and found it was NOT #0126 alone. The 48→49
+// step came from #0126 (cfc8caa); the 49→52 step — three of the four sites
+// added since — came from #0124 (fce9071, 7703464, the delivery-health
+// breaker and its admin surface), landing concurrently with this pass and
+// with #0126 both. Re-deriving both figures directly against the real tree
+// (scanAuditEntrySites over auditEmailMetadataScanRoots, plus an independent
+// walker reusing only this file's key-extraction primitives —
+// compositeLitStringKeys and collectLocalMapKeys, not its classification
+// decisions) finds **49 sites, 95 distinct keys, 0 unresolved** as of the
+// pass that first wrote this paragraph. The invariant this issue actually
+// cares about — no site newly reports unresolved, and
 // auditEmailMetadataKnownSites' set of email-carrying sites is unchanged —
-// holds; the raw site/key counts are expected to keep moving as #0126 adds
-// call sites and are not, by themselves, evidence of a regression here.
+// holds; the raw site/key counts are expected to keep moving as #0124 and
+// #0126 add call sites and are not, by themselves, evidence of a regression
+// here.
 
 // auditEmailMetadataScanRoots is deliberately narrower than
 // citedTestScanRoots (#0196/#0220's comment-citation guards): the privacy
@@ -509,7 +521,15 @@ type scannedGoFile struct {
 // wherever either appears in that function, regardless of which branch —
 // the conservative, correct reading for "could this call site ever write
 // this key", not "does it on every code path").
-func scanAuditEntrySites(t *testing.T, roots []string) []auditEntrySite {
+// scanAuditEntrySites also returns the number of .go files it actually
+// PARSED — #0275 criterion 4a: this guard skips _test.go files after
+// walkGoFiles yields each path (see skipGoTestFile below), so walkGoFiles'
+// own raw yield count is a larger, wrong population to measure a coverage
+// floor against. len(files) below, taken from the same walk that populates
+// `files`, is the exact population this guard's Metadata classification
+// actually covers — the single source of truth, not a second walk that
+// could drift out of sync with this one's own filtering.
+func scanAuditEntrySites(t *testing.T, roots []string) ([]auditEntrySite, int) {
 	t.Helper()
 
 	helperFuncs := map[funcKey]*ast.FuncDecl{}
@@ -546,9 +566,15 @@ func scanAuditEntrySites(t *testing.T, roots []string) []auditEntrySite {
 			localKeys := collectLocalMapKeys(fn.Body)
 			deferredMetadataIdents := collectDeferredMetadataFieldIdents(fn.Body)
 			literalIdents := compositeLitAssignedIdents(fn.Body)
+			// #0290: elidedSites are composite literals whose own Type is
+			// nil (Go's "same type as the containing literal" syntax) but
+			// that containing literal is a []audit.Entry or map[K]audit.Entry
+			// — see elidedAuditEntryLiterals for why isAuditEntryType(cl.Type)
+			// alone cannot see these.
+			elidedSites := elidedAuditEntryLiterals(fn.Body)
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				cl, ok := n.(*ast.CompositeLit)
-				if !ok || !isAuditEntryType(cl.Type) {
+				if !ok || (!isAuditEntryType(cl.Type) && !elidedSites[cl]) {
 					return true
 				}
 				pos := sf.fset.Position(cl.Pos())
@@ -631,7 +657,7 @@ func scanAuditEntrySites(t *testing.T, roots []string) []auditEntrySite {
 			return true
 		})
 	}
-	return sites
+	return sites, len(files)
 }
 
 // collectDeferredMetadataFieldIdents returns the set of identifier names that
@@ -715,10 +741,31 @@ func collectDeferredMetadataFieldIdents(body *ast.BlockStmt) map[string]bool {
 			// src) both mutate the map with no *ast.AssignStmt anywhere —
 			// see the function doc above for why both are matched by call
 			// shape alone, with neither argument inspected.
+			//
+			// #0290 adds three siblings, all matched the same way — call
+			// shape alone, first argument only, nothing about the call
+			// inspected further: maps.Insert(ident.Metadata, seq) is the
+			// key-INTRODUCING sibling maps.Copy already has (it can add an
+			// "email" key from a seq.Seq2 this guard never inspects — the
+			// consequential direction, same as maps.Copy); maps.DeleteFunc
+			// and clear() are removal-only, the same safe direction delete
+			// already is. Reproduced directly before fixing: a "slug"-only
+			// literal followed by `maps.Insert(e.Metadata, seq)` resolved
+			// hasEmail=false, unresolved="" — the same silent pass
+			// maps.Copy had before #0261.
 			if isBuiltinDeleteCall(node) && len(node.Args) >= 1 {
 				markMetadataField(node.Args[0])
 			}
 			if isMapsCopyCall(node) && len(node.Args) >= 1 {
+				markMetadataField(node.Args[0])
+			}
+			if isMapsInsertCall(node) && len(node.Args) >= 1 {
+				markMetadataField(node.Args[0])
+			}
+			if isMapsDeleteFuncCall(node) && len(node.Args) >= 1 {
+				markMetadataField(node.Args[0])
+			}
+			if isBuiltinClearCall(node) && len(node.Args) >= 1 {
 				markMetadataField(node.Args[0])
 			}
 		}
@@ -753,17 +800,44 @@ func isMapsCopyCall(call *ast.CallExpr) bool {
 	return ok && pkg.Name == "maps"
 }
 
-// compositeLitAssignedIdents maps each audit.Entry composite literal in body
-// that is the direct right-hand side of `ident := audit.Entry{...}`,
-// `ident = audit.Entry{...}`, `ident := &audit.Entry{...}`, or
-// `ident = &audit.Entry{...}` to that identifier's name, so a later
-// struct-field assignment on the same identifier
-// (collectDeferredMetadataFieldIdents) can be connected back to the literal
-// that produced it. A literal that is never assigned to a bare identifier —
-// built directly inline as a call argument, the common shape in this tree —
-// has no entry here, which is correct: there is no later statement that
-// could mutate a value nothing holds a reference to.
-//
+// isMapsInsertCall reports whether call invokes maps.Insert(...) — #0290,
+// the key-INTRODUCING sibling of maps.Copy that #0261 left unmatched
+// despite adding delete "for completeness" alongside it. Matched the same
+// approximate way as isMapsCopyCall, for the same reason (nothing in this
+// tree imports "maps" aliased or dot-imported — checked the same way
+// isMapsCopyCall's own doc comment checked it).
+func isMapsInsertCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Insert" {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "maps"
+}
+
+// isMapsDeleteFuncCall reports whether call invokes maps.DeleteFunc(...) —
+// #0290, the removal-only sibling of the builtin delete matched the same
+// way isMapsCopyCall is.
+func isMapsDeleteFuncCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "DeleteFunc" {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "maps"
+}
+
+// isBuiltinClearCall reports whether call invokes the builtin clear(...) —
+// #0290, the other removal-only shape named alongside maps.DeleteFunc.
+// Matched the same way isBuiltinDeleteCall matches "delete": nothing in
+// this tree shadows the builtin with a local function or import named
+// "clear" (checked: `grep -rn 'func clear(\|clear :=' internal cmd
+// --include='*.go'` finds nothing).
+func isBuiltinClearCall(call *ast.CallExpr) bool {
+	ident, ok := call.Fun.(*ast.Ident)
+	return ok && ident.Name == "clear"
+}
+
 // #0261: the pointer forms (`&audit.Entry{...}`) used to be invisible here —
 // this function required the RHS to be an *ast.CompositeLit directly, and
 // `&audit.Entry{...}` is an *ast.UnaryExpr (Op == token.AND) wrapping one, so
@@ -781,30 +855,87 @@ func isMapsCopyCall(call *ast.CallExpr) bool {
 // addr}` or `e.Metadata["email"] = addr` both resolved hasEmail=false,
 // unresolved="" — a silent pass carrying an email, the same class as every
 // prior round in this file.
+
+// auditEntryLiteralBehindIdent unwraps a single leading `&` (the #0261
+// pointer form) and reports whether what remains is an `audit.Entry{...}`
+// composite literal, returning it if so. Shared by both cases
+// compositeLitAssignedIdents matches below (`:=`/`=` and `var`) so the two
+// forms stay behaviorally identical rather than two hand-written copies of
+// the same unwrap-then-check drifting apart.
+func auditEntryLiteralBehindIdent(rhs ast.Expr) (*ast.CompositeLit, bool) {
+	if u, ok := rhs.(*ast.UnaryExpr); ok && u.Op == token.AND {
+		rhs = u.X
+	}
+	cl, ok := rhs.(*ast.CompositeLit)
+	if !ok || !isAuditEntryType(cl.Type) {
+		return nil, false
+	}
+	return cl, true
+}
+
+// compositeLitAssignedIdents maps each audit.Entry composite literal in
+// body that is the direct right-hand side of `ident := audit.Entry{...}`,
+// `ident = audit.Entry{...}`, `ident := &audit.Entry{...}`,
+// `ident = &audit.Entry{...}`, or — #0290 — `var ident = audit.Entry{...}`
+// / `var ident = &audit.Entry{...}`, to that identifier's name.
+//
+// #0290: a `var` declaration was invisible here entirely — this function
+// only ever inspected *ast.AssignStmt, and `var e = audit.Entry{...}` is a
+// *ast.GenDecl (Tok == token.VAR) holding an *ast.ValueSpec, a different
+// node shape the walk below never matched. That meant the whole
+// #0252/#0257/#0261 deferred-mutation family — connecting a later
+// `e.Metadata = ...` back to the literal that produced e — never engaged
+// for a `var`-declared entry, even though collectDeferredMetadataFieldIdents
+// (the OTHER half of that family) already saw the deferred assignment fine:
+// `e.Metadata = ...` is the identical *ast.SelectorExpr regardless of how e
+// was declared. Reproduced directly before fixing: `var e = audit.Entry{
+// Action: ...}` followed by `e.Metadata = map[string]any{"email": addr}`
+// resolved hasEmail=false, unresolved="" — a silent pass, the same class
+// every prior round in this file closed for `:=`. Now matched the same way
+// #0261 connected the pointer form: a `*ast.ValueSpec` with one Value per
+// Name is walked exactly like an *ast.AssignStmt's paired Lhs/Rhs, reusing
+// auditEntryLiteralBehindIdent so the pointer-unwrap logic is not
+// duplicated. Only a VALUE-initialized var is matched (`var e = ...`, i.e.
+// len(Names) == len(Values)) — a bare `var e audit.Entry` with no
+// initializer has no literal on the right to connect, and Go's ValueSpec
+// already represents that case with an empty Values slice, so the length
+// check excludes it by construction rather than needing a separate case.
 func compositeLitAssignedIdents(body *ast.BlockStmt) map[*ast.CompositeLit]string {
 	result := map[*ast.CompositeLit]string{}
 	ast.Inspect(body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != len(assign.Rhs) {
-			return true
-		}
-		for i, lhs := range assign.Lhs {
-			ident, ok := lhs.(*ast.Ident)
-			if !ok {
-				continue
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			if len(node.Lhs) != len(node.Rhs) {
+				return true
 			}
-			rhs := assign.Rhs[i]
-			if u, ok := rhs.(*ast.UnaryExpr); ok && u.Op == token.AND {
-				// #0261: unwrap a single leading `&` around the literal
-				// (`&audit.Entry{...}`) so the pointer form is connected the
-				// same way the value form already is.
-				rhs = u.X
+			for i, lhs := range node.Lhs {
+				ident, ok := lhs.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				cl, ok := auditEntryLiteralBehindIdent(node.Rhs[i])
+				if !ok {
+					continue
+				}
+				result[cl] = ident.Name
 			}
-			cl, ok := rhs.(*ast.CompositeLit)
-			if !ok || !isAuditEntryType(cl.Type) {
-				continue
+		case *ast.GenDecl:
+			if node.Tok != token.VAR {
+				return true
 			}
-			result[cl] = ident.Name
+			for _, spec := range node.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || len(vs.Names) != len(vs.Values) {
+					continue
+				}
+				for i, name := range vs.Names {
+					cl, ok := auditEntryLiteralBehindIdent(vs.Values[i])
+					if !ok {
+						continue
+					}
+					result[cl] = name.Name
+				}
+			}
 		}
 		return true
 	})
@@ -823,6 +954,89 @@ func isAuditEntryType(t ast.Expr) bool {
 	}
 	pkg, ok := sel.X.(*ast.Ident)
 	return ok && pkg.Name == "audit" && sel.Sel.Name == "Entry"
+}
+
+// isAuditEntrySliceOrArrayType reports whether t is `[]audit.Entry` or
+// `[N]audit.Entry` — an *ast.ArrayType whose element type is audit.Entry.
+// Go represents both a slice (Len == nil) and a fixed-size array (Len set)
+// with the same node shape, and this check does not need to distinguish
+// them: either can hold an elided-type element, the #0290 shape below.
+func isAuditEntrySliceOrArrayType(t ast.Expr) bool {
+	at, ok := t.(*ast.ArrayType)
+	return ok && isAuditEntryType(at.Elt)
+}
+
+// isAuditEntryMapType reports whether t is `map[K]audit.Entry` for any key
+// type K — an *ast.MapType whose value type is audit.Entry.
+func isAuditEntryMapType(t ast.Expr) bool {
+	mt, ok := t.(*ast.MapType)
+	return ok && isAuditEntryType(mt.Value)
+}
+
+// elidedAuditEntryLiterals returns the set of *ast.CompositeLit nodes in
+// body that are an ELIDED-type element of a `[]audit.Entry{{...}}` slice
+// (or fixed-size array) literal, or an elided-type value in a
+// `map[K]audit.Entry{"k": {...}}` map literal — Go's own syntax for
+// "repeat the type the containing literal already established", which
+// leaves the inner literal's own Type field nil.
+//
+// #0290: before this, an elided literal was not a recognized site AT ALL —
+// isAuditEntryType type-asserts cl.Type as *ast.SelectorExpr naming
+// "audit.Entry", and a nil Type fails that assertion the same way any
+// other mismatched type would, so scanAuditEntrySites' own site-detection
+// walk (see the `!isAuditEntryType(cl.Type) && !elided[cl]` check there)
+// skipped the node outright — nothing to classify, not even a wrong
+// classification. This is the sharpest of #0290's three gaps: a direct,
+// inline `"email"` key inside an elided literal escapes with no deferred
+// mutation involved at all, unlike the other two gaps this issue closes.
+// Reproduced directly before fixing: `[]audit.Entry{{Action: ...,
+// Metadata: map[string]any{"email": addr}}}` produced ZERO sites from
+// scanAuditEntrySites — not a silent pass on a found site, an entirely
+// invisible one.
+//
+// Scoped to one level of nesting (a container literal whose OWN Type is
+// explicit, holding elements/values whose Type is elided) — matching
+// exactly the shape #0290 names and the shape
+// TestAuditEmailMetadataGuardDocumentedInvisibleShapes used to pin as
+// invisible (that case is now moved into
+// TestAuditEmailMetadataGuardCatchesElidedCompositeLiteral, since it is no
+// longer invisible). A container whose own type is ALSO elided one level
+// further out (`[][]audit.Entry{{{...}}}`, or an elided literal nested
+// inside another elided literal) is not handled — no real site in this
+// tree uses either shape (checked: `grep -rn '\[\]audit\.Entry\|map\[.*\]
+// audit\.Entry' internal cmd --include='*.go'`, excluding _test.go, finds
+// only the two already-fixed forms this file's own header documents), and
+// widening this to arbitrary nesting depth would need a type-inference
+// pass this file has repeatedly declined to add (see the go/types
+// discussion in this issue's header paragraph and #0282's own decision).
+func elidedAuditEntryLiterals(body *ast.BlockStmt) map[*ast.CompositeLit]bool {
+	result := map[*ast.CompositeLit]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		cl, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		switch {
+		case isAuditEntrySliceOrArrayType(cl.Type):
+			for _, elt := range cl.Elts {
+				if inner, ok := elt.(*ast.CompositeLit); ok && inner.Type == nil {
+					result[inner] = true
+				}
+			}
+		case isAuditEntryMapType(cl.Type):
+			for _, elt := range cl.Elts {
+				kv, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				if inner, ok := kv.Value.(*ast.CompositeLit); ok && inner.Type == nil {
+					result[inner] = true
+				}
+			}
+		}
+		return true
+	})
+	return result
 }
 
 // collectLocalMapKeys walks a function body and returns, for every
@@ -1106,31 +1320,31 @@ func actionShortName(s string) string {
 // auditEmailMetadataScanRoots would silently disarm this guard while the
 // suite stays green — sites would read 0, unresolved would read 0, and
 // TestAuditEntryEmailMetadataMatchesKnownSites would pass having checked
-// nothing. #0275 is the dedicated issue for fixing this across all five
-// guards sharing walkGoFiles/citedTestScanRoots; this constant and
-// countVisitedGoFiles below are NOT that fix — they are a guard-local floor
-// so this file does not ship a sixth instance of the hole while #0275 is
-// still open. 150 is chosen, not the literal "at least 1" #0275 warns
-// against: `find internal cmd -name '*.go' | wc -l` counts 249 files under
-// this guard's real roots today, and the single largest subdirectory
-// (internal/handlers itself) has 95 — so a floor of 150 is comfortably
-// below the real total (room for the tree to shrink without a false alarm)
-// while still tripping if the roots were narrowed to any one package,
-// which is the "a real narrowing would trip it" bar #0275 sets.
-const auditEmailMetadataMinPlausibleFileCount = 150
-
-// countVisitedGoFiles walks roots the same way scanAuditEntrySites does
-// (reusing the same walkGoFiles helper) and returns how many .go files it
-// visited. Deliberately independent of scanAuditEntrySites' own return
-// value: an empty []auditEntrySite is what BOTH "the tree is clean" and
-// "the walk visited nothing" look like, so counting files is the only way
-// to tell them apart — see auditEmailMetadataMinPlausibleFileCount above.
-func countVisitedGoFiles(t *testing.T, roots []string) int {
-	t.Helper()
-	n := 0
-	walkGoFiles(t, roots, func(path string) { n++ })
-	return n
-}
+// nothing.
+//
+// #0275 corrected the population this floor is measured against.
+// #0261's original 150 was sized against countVisitedGoFiles' raw walk
+// count (everything walkGoFiles yields, _test.go included) — but this
+// guard's own scanAuditEntrySites skips _test.go files (skipGoTestFile)
+// AFTER the walk yields them, so the population it actually classifies is
+// smaller: measured directly (#0261's review measured 108, this pass
+// re-measured 110 — the ±2 drift #0261's own review already characterized
+// as concurrent test-file churn, not a fitted constant), against a raw
+// walked count of 255. A floor of 150 sized against the wrong (larger)
+// population would now FAIL against the real tree the moment
+// scanAuditEntrySites' own parsed-file count (len(files), returned
+// alongside its sites) is used instead of a second, mismeasuring walk —
+// which is exactly the fail-open-adjacent hazard #0275 criterion 4a warns
+// about: a floor that reads as headroom while actually measuring nothing
+// about the coverage it claims to protect.
+//
+// 80 is the corrected floor, chosen the same way 150 was: comfortably below
+// the real parsed population (110, room for the tree to shrink without a
+// false alarm) while still tripping if the roots were narrowed to any one
+// package — internal/handlers alone has 40 non-test .go files, cmd/ alone
+// has 3 — which is the "a real narrowing would trip it" bar #0275
+// criterion 3 sets.
+const auditEmailMetadataMinPlausibleFileCount = 80
 
 // TestAuditEntryEmailMetadataMatchesKnownSites is the guard (#0237): every
 // audit.Entry{} construction in internal/ and cmd/ production Go source
@@ -1155,15 +1369,13 @@ func TestAuditEntryEmailMetadataMatchesKnownSites(t *testing.T) {
 	// #0261/#0275: assert the walk actually visited a plausible number of
 	// files BEFORE trusting anything scanAuditEntrySites reports below — an
 	// empty or narrowed roots list must be a hard failure here, never
-	// silently read as "0 unresolved, 0 email sites, all clear".
-	if len(auditEmailMetadataScanRoots) == 0 {
-		t.Fatal("auditEmailMetadataScanRoots is empty — this guard would silently check nothing (#0275)")
-	}
-	if got := countVisitedGoFiles(t, roots); got < auditEmailMetadataMinPlausibleFileCount {
-		t.Fatalf("this guard's walk visited only %d .go file(s) under %v — expected at least %d; auditEmailMetadataScanRoots may have been emptied or narrowed, which would silently disarm this guard rather than fail it (#0275)", got, auditEmailMetadataScanRoots, auditEmailMetadataMinPlausibleFileCount)
-	}
-
-	sites := scanAuditEntrySites(t, roots)
+	// silently read as "0 unresolved, 0 email sites, all clear". parsedFiles
+	// is scanAuditEntrySites' own count of what it PARSED (len(files),
+	// after its _test.go skip) — not a second, independently-filtered walk
+	// that could drift out of sync with the skip logic it is meant to
+	// measure (#0275 criterion 4a).
+	sites, parsedFiles := scanAuditEntrySites(t, roots)
+	assertGoFileVisitCountPlausible(t, "TestAuditEntryEmailMetadataMatchesKnownSites", auditEmailMetadataScanRoots, parsedFiles, auditEmailMetadataMinPlausibleFileCount)
 
 	var unresolved []string
 	type foundKey struct{ file, action string }
@@ -1260,7 +1472,7 @@ func recordSomething() {
 	})
 }
 `)
-	sites := scanAuditEntrySites(t, []string{dir})
+	sites, _ := scanAuditEntrySites(t, []string{dir})
 	if len(sites) != 1 {
 		t.Fatalf("expected exactly one audit.Entry site, found %d", len(sites))
 	}
@@ -1310,7 +1522,7 @@ func recordContactSite() {
 	})
 }
 `)
-	sites := scanAuditEntrySites(t, []string{dir})
+	sites, _ := scanAuditEntrySites(t, []string{dir})
 	if len(sites) != 3 {
 		t.Fatalf("expected exactly three audit.Entry sites, found %d", len(sites))
 	}
@@ -1343,7 +1555,7 @@ func recordSomething() {
 	})
 }
 `)
-	sites := scanAuditEntrySites(t, []string{dir})
+	sites, _ := scanAuditEntrySites(t, []string{dir})
 	if len(sites) != 1 {
 		t.Fatalf("expected exactly one audit.Entry site, found %d", len(sites))
 	}
@@ -1501,6 +1713,173 @@ func recordSomething() {
 }
 `,
 		},
+		{
+			// #0290 ("also worth pinning"): a SECOND pointer alias — `p :=
+			// &e` followed by `p.Metadata = ...` — is a variant of the
+			// already-fixed pointer-held-entry shape (#0261) that still
+			// escapes. compositeLitAssignedIdents maps the literal to "e"
+			// (the identifier that directly holds `audit.Entry{...}`, a
+			// value type here); collectDeferredMetadataFieldIdents marks
+			// "p" (the identifier the LATER `.Metadata = ...` assignment's
+			// selector names), not "e". Since the two names differ,
+			// literalIdents[cl] ("e") is never found in
+			// deferredMetadataIdents ("p" only), so the connection never
+			// fires. Reproduced directly: SILENT PASS (hasEmail=false,
+			// unresolved=""). Deliberately NOT fixed here — closing it
+			// would mean tracking arbitrary pointer aliasing across
+			// assignments, a different and open-ended kind of analysis from
+			// the single-level `&`-unwrap #0261 added; no production site
+			// takes a second reference to an audit.Entry before mutating it
+			// (checked: `grep -rn ':= &e\b' internal cmd --include='*.go'`,
+			// excluding _test.go, finds nothing that touches an audit.Entry).
+			name: "second pointer alias (p := &e; p.Metadata = ...)",
+			src: `package fixture
+
+func recordSomething() {
+	e := audit.Entry{
+		Action: audit.ActionSubscriberSuppressed,
+	}
+	p := &e
+	p.Metadata = map[string]any{"email": addr}
+	auditor.Record(ctx, e)
+}
+`,
+		},
+		{
+			// #0290 ("also worth pinning"): an explicit dereference-then-
+			// select, `(*e).Metadata = ...`, on a pointer-held entry.
+			// collectDeferredMetadataFieldIdents' markMetadataField requires
+			// the assignment's selector base (sel.X) to be a bare *ast.Ident;
+			// `(*e)` is an *ast.ParenExpr wrapping an *ast.StarExpr, not an
+			// *ast.Ident, so the type assertion fails and "e" is never added
+			// to deferredMetadataIdents from this shape — even though the
+			// SAME identifier's bare-selector form (`e.Metadata = ...`,
+			// #0261's own fix) is already caught. Reproduced directly:
+			// SILENT PASS. Not fixed: no production site writes this form
+			// (checked: `grep -rn '(\*[a-zA-Z_][a-zA-Z0-9_]*)\.Metadata'
+			// internal cmd --include='*.go'`, excluding _test.go, finds
+			// nothing) — Go's selector syntax lets `e.Metadata` and
+			// `(*e).Metadata` mean the same thing when e is a pointer, and
+			// every real pointer-held site in this tree uses the shorter,
+			// already-caught form.
+			name: "explicit dereference before selector ((*e).Metadata = ...)",
+			src: `package fixture
+
+func recordSomething() {
+	e := &audit.Entry{
+		Action: audit.ActionSubscriberSuppressed,
+	}
+	(*e).Metadata = map[string]any{"email": addr}
+	auditor.Record(ctx, *e)
+}
+`,
+		},
+		{
+			// #0290 ("also worth pinning") / #0282's own question: an
+			// ALIASED import of "maps" (`import m "maps"`) calling
+			// `m.Copy(...)`. isMapsCopyCall (and its #0290 siblings
+			// isMapsInsertCall/isMapsDeleteFuncCall) match the literal
+			// package identifier "maps" by name, with no import-alias
+			// resolution — go/parser never resolves which package an
+			// identifier refers to, only go/types does, and #0261/#0282
+			// both declined go/types for this file (synthetic single-file
+			// fixtures import nothing and would fail type-checking; #0282
+			// additionally verified empirically that an untyped constant
+			// resolves to "untyped string", not the named type, so type
+			// analysis would not even answer the read-side classification
+			// question). #0290 re-evaluated this decision specifically for
+			// the two NEW matchers (isMapsInsertCall, isMapsDeleteFuncCall)
+			// this issue adds and reached the same answer: nothing in this
+			// tree imports "maps" aliased or dot-imported today (checked
+			// directly: `grep -rn 'maps "maps"\|\. "maps"' internal cmd
+			// --include='*.go'`, excluding _test.go, finds nothing), so
+			// widening the match would buy coverage against a shape that
+			// does not exist here at the cost of every synthetic fixture in
+			// this file needing real imports. Reproduced directly: SILENT
+			// PASS. The false-positive direction stays safe either way — a
+			// LOCAL VARIABLE named "maps" calling .Copy(...) still resolves
+			// "unresolved" (fails closed), since this guard has no scope
+			// awareness in either direction.
+			name: "aliased maps import (import m \"maps\"; m.Copy(...))",
+			src: `package fixture
+
+func recordSomething() {
+	e := audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{"slug": s},
+	}
+	m.Copy(e.Metadata, extra)
+	auditor.Record(ctx, e)
+}
+`,
+		},
+		{
+			// #0290 ("also worth pinning"), the dot-import sibling of the
+			// aliased-import case above: `import . "maps"` makes the call
+			// site read as a bare `Copy(...)`, not a selector at all —
+			// isMapsCopyCall's own type assertion (`call.Fun.(*ast.SelectorExpr)`)
+			// fails outright, a different failure mode than the aliased
+			// case (which IS a selector, just with the wrong package
+			// identifier name) but the same silent-pass outcome. Same
+			// decision as the aliased case: no production site dot-imports
+			// "maps" (checked: `grep -rn '\. "maps"' internal cmd
+			// --include='*.go'` finds nothing), and the false-positive
+			// direction (a same-named local function called bare) still
+			// fails closed via classifyMetadataExpr's unresolved default
+			// for an unrecognized call, not this guard's Metadata-mutation
+			// detection specifically.
+			name: "dot-imported maps (import . \"maps\"; Copy(...))",
+			src: `package fixture
+
+func recordSomething() {
+	e := audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{"slug": s},
+	}
+	Copy(e.Metadata, extra)
+	auditor.Record(ctx, e)
+}
+`,
+		},
+		{
+			// #0290 ("also worth pinning"): a factory function that
+			// CONSTRUCTS the audit.Entry{} literal and returns it BY
+			// POINTER, with the caller mutating Metadata afterward — the
+			// mirror image of "pointer mutation through a helper function"
+			// above (there, the literal is in the caller and the mutation
+			// is in the helper; here, the literal is in the helper and the
+			// mutation is in the caller). newEntry()'s own audit.Entry{}
+			// literal IS found as a site and IS correctly classified in
+			// isolation (its own body sets no Metadata at all, so
+			// hasEmail=false, unresolved="" is the right answer for THAT
+			// literal) — this is not a misclassification of a found site,
+			// it is scanAuditEntrySites' fundamental scope boundary: it
+			// analyzes Metadata mutations only within the SAME top-level
+			// function body an audit.Entry{} literal appears in (stated in
+			// this file's header), and recordSomething's `e.Metadata = ...`
+			// is a different function's body than newEntry's literal. The
+			// running code inserts a row carrying "email" that no site this
+			// guard reports actually flags. Not fixed: doing so would
+			// require inter-procedural analysis this guard has never
+			// attempted at any point in its five prior rounds, and no
+			// production site constructs an audit.Entry via a pointer-
+			// returning factory (checked: every production audit.Entry{} in
+			// this tree is either an inline literal or built and used
+			// within one function — the same census the header cites).
+			name: "factory returning *audit.Entry, caller mutates Metadata",
+			src: `package fixture
+
+func newEntry() *audit.Entry {
+	return &audit.Entry{Action: audit.ActionSubscriberSuppressed}
+}
+
+func recordSomething() {
+	e := newEntry()
+	e.Metadata = map[string]any{"email": addr}
+	auditor.Record(ctx, *e)
+}
+`,
+		},
 	}
 
 	for _, c := range cases {
@@ -1508,7 +1887,7 @@ func recordSomething() {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeSyntheticGoFile(t, dir, "fixture.go", c.src)
-			sites := scanAuditEntrySites(t, []string{dir})
+			sites, _ := scanAuditEntrySites(t, []string{dir})
 			if len(sites) != 1 {
 				t.Fatalf("expected exactly one audit.Entry site, found %d", len(sites))
 			}
@@ -1556,7 +1935,7 @@ func recordSomething(flag bool) {
 	})
 }
 `)
-	sites := scanAuditEntrySites(t, []string{dir})
+	sites, _ := scanAuditEntrySites(t, []string{dir})
 	if len(sites) != 1 {
 		t.Fatalf("expected exactly one audit.Entry site, found %d", len(sites))
 	}
@@ -1565,6 +1944,138 @@ func recordSomething(flag bool) {
 	}
 	if !sites[0].hasEmail {
 		t.Fatal("expected hasEmail=true: the conditional index assignment adds \"email\"")
+	}
+}
+
+// TestAuditEmailMetadataGuardCatchesVarDeclaredEntry proves #0290's first
+// fix: a `var e = audit.Entry{...}` (and the pointer form, `var e =
+// &audit.Entry{...}`) followed by a deferred `e.Metadata = ...` is now
+// reported unresolved, the same way the `:=` form already was. Reproduced
+// as a silent pass (hasEmail=false, unresolved="") before this fix landed.
+func TestAuditEmailMetadataGuardCatchesVarDeclaredEntry(t *testing.T) {
+	dir := t.TempDir()
+	writeSyntheticGoFile(t, dir, "fixture.go", `package fixture
+
+func recordSomething() {
+	var e = audit.Entry{
+		Action: audit.ActionSubscriberSuppressed,
+	}
+	e.Metadata = map[string]any{"email": addr}
+	auditor.Record(ctx, e)
+}
+
+func recordSomethingElse() {
+	var e = &audit.Entry{
+		Action: audit.ActionSubscriberSuppressed,
+	}
+	e.Metadata = map[string]any{"email": addr}
+	auditor.Record(ctx, *e)
+}
+`)
+	sites, _ := scanAuditEntrySites(t, []string{dir})
+	if len(sites) != 2 {
+		t.Fatalf("expected exactly two audit.Entry sites, found %d", len(sites))
+	}
+	for _, s := range sites {
+		if s.unresolved == "" {
+			t.Fatalf("expected a var-declared entry with a deferred Metadata assignment to be reported unresolved, not silently classified as hasEmail=%v — this is the #0290 hole this test pins closed", s.hasEmail)
+		}
+	}
+}
+
+// TestAuditEmailMetadataGuardCatchesElidedCompositeLiteral proves #0290's
+// second fix, the sharpest of the three: an elided-type element inside a
+// []audit.Entry{{...}} slice literal now IS a recognized site, carrying an
+// inline "email" key with no deferred mutation involved at all. Before this
+// fix, scanAuditEntrySites found ZERO sites for this fixture — not a wrong
+// classification of a found site, an entirely invisible one (reproduced
+// directly). This case used to be pinned as a documented, invisible shape
+// in TestAuditEmailMetadataGuardDocumentedInvisibleShapes; it moved here
+// once the gap closed.
+func TestAuditEmailMetadataGuardCatchesElidedCompositeLiteral(t *testing.T) {
+	dir := t.TempDir()
+	writeSyntheticGoFile(t, dir, "fixture.go", `package fixture
+
+func recordSlice() {
+	entries := []audit.Entry{{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{"email": addr},
+	}}
+	auditor.RecordAll(ctx, entries)
+}
+
+func recordMap() {
+	entries := map[string]audit.Entry{
+		"a": {
+			Action:   audit.ActionSubscriberSuppressed,
+			Metadata: map[string]any{"email": addr},
+		},
+	}
+	auditor.RecordMap(ctx, entries)
+}
+`)
+	sites, _ := scanAuditEntrySites(t, []string{dir})
+	if len(sites) != 2 {
+		t.Fatalf("expected exactly two audit.Entry sites (one in the slice literal, one in the map literal), found %d", len(sites))
+	}
+	for _, s := range sites {
+		if s.unresolved != "" {
+			t.Fatalf("expected the elided literal to resolve cleanly, got unresolved: %s", s.unresolved)
+		}
+		if !s.hasEmail {
+			t.Fatal("expected hasEmail=true: the elided literal carries an inline \"email\" key directly — this is the #0290 hole this test pins closed")
+		}
+	}
+}
+
+// TestAuditEmailMetadataGuardCatchesMapsInsertAndFriends proves #0290's
+// third fix: maps.Insert(ident.Metadata, seq) — the key-introducing sibling
+// of maps.Copy that #0261 left unmatched — is now reported unresolved,
+// matching maps.Copy's own treatment. Reproduced directly before fixing: a
+// "slug"-only literal followed by maps.Insert resolved hasEmail=false,
+// unresolved="". maps.DeleteFunc and clear() are also matched (both
+// removal-only, the safe direction delete already is), pinned here too so
+// a future narrowing of any of the three is caught by a fixture, not left
+// to a real site.
+func TestAuditEmailMetadataGuardCatchesMapsInsertAndFriends(t *testing.T) {
+	dir := t.TempDir()
+	writeSyntheticGoFile(t, dir, "fixture.go", `package fixture
+
+func recordInsert() {
+	e := audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{"slug": s},
+	}
+	maps.Insert(e.Metadata, seq)
+	auditor.Record(ctx, e)
+}
+
+func recordDeleteFunc() {
+	e := audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{"slug": s},
+	}
+	maps.DeleteFunc(e.Metadata, pred)
+	auditor.Record(ctx, e)
+}
+
+func recordClear() {
+	e := audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{"slug": s},
+	}
+	clear(e.Metadata)
+	auditor.Record(ctx, e)
+}
+`)
+	sites, _ := scanAuditEntrySites(t, []string{dir})
+	if len(sites) != 3 {
+		t.Fatalf("expected exactly three audit.Entry sites, found %d", len(sites))
+	}
+	for _, s := range sites {
+		if s.unresolved == "" {
+			t.Fatalf("expected %s to be reported unresolved once a maps.Insert/maps.DeleteFunc/clear() call touches its Metadata — this is the #0290 hole this test pins closed", s.action)
+		}
 	}
 }
 
@@ -1587,7 +2098,7 @@ func credentialMetadata(deviceName string, aaguid []byte) map[string]any {
 	return map[string]any{"device_name": deviceName, "aaguid": "x"}
 }
 `)
-	sites := scanAuditEntrySites(t, []string{dir})
+	sites, _ := scanAuditEntrySites(t, []string{dir})
 	if len(sites) != 1 {
 		t.Fatalf("expected exactly one audit.Entry site, found %d", len(sites))
 	}
@@ -1617,7 +2128,7 @@ func recordSomething() {
 	})
 }
 `)
-	sites := scanAuditEntrySites(t, []string{dir})
+	sites, _ := scanAuditEntrySites(t, []string{dir})
 	if len(sites) != 1 {
 		t.Fatalf("expected exactly one audit.Entry site, found %d", len(sites))
 	}
@@ -1651,7 +2162,7 @@ func recordSomething() {
 	auditor.Record(ctx, e)
 }
 `)
-	sites := scanAuditEntrySites(t, []string{dir})
+	sites, _ := scanAuditEntrySites(t, []string{dir})
 	if len(sites) != 1 {
 		t.Fatalf("expected exactly one audit.Entry site (the empty literal itself), found %d", len(sites))
 	}
@@ -1681,7 +2192,7 @@ func recordSomething() {
 	auditor.Record(ctx, e)
 }
 `)
-	sites := scanAuditEntrySites(t, []string{dir})
+	sites, _ := scanAuditEntrySites(t, []string{dir})
 	if len(sites) != 1 {
 		t.Fatalf("expected exactly one audit.Entry site (the literal itself), found %d", len(sites))
 	}
@@ -1743,7 +2254,7 @@ func recordSomething() {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeSyntheticGoFile(t, dir, "fixture.go", tc.src)
-			sites := scanAuditEntrySites(t, []string{dir})
+			sites, _ := scanAuditEntrySites(t, []string{dir})
 			if len(sites) != 1 {
 				t.Fatalf("expected exactly one audit.Entry site (the literal itself), found %d", len(sites))
 			}
@@ -1812,7 +2323,7 @@ func recordSomething() {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeSyntheticGoFile(t, dir, "fixture.go", tc.src)
-			sites := scanAuditEntrySites(t, []string{dir})
+			sites, _ := scanAuditEntrySites(t, []string{dir})
 			if len(sites) != 1 {
 				t.Fatalf("expected exactly one audit.Entry site (the pointer literal itself), found %d", len(sites))
 			}
@@ -1884,7 +2395,7 @@ func recordSomething() {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeSyntheticGoFile(t, dir, "fixture.go", tc.src)
-			sites := scanAuditEntrySites(t, []string{dir})
+			sites, _ := scanAuditEntrySites(t, []string{dir})
 			if len(sites) != 1 {
 				t.Fatalf("expected exactly one audit.Entry site (the literal itself), found %d", len(sites))
 			}
@@ -1957,7 +2468,7 @@ func recordSomething() {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeSyntheticGoFile(t, dir, "fixture.go", c.src)
-			sites := scanAuditEntrySites(t, []string{dir})
+			sites, _ := scanAuditEntrySites(t, []string{dir})
 			if len(sites) != 1 {
 				t.Fatalf("expected exactly one audit.Entry site, found %d", len(sites))
 			}
@@ -1971,17 +2482,21 @@ func recordSomething() {
 	}
 }
 
-// TestAuditEmailMetadataGuardDocumentedInvisibleShapes pins the three
-// structural blind spots #0252 found and this file's header now documents:
-// shapes where scanAuditEntrySites finds ZERO sites at all, so a real
-// audit.Entry{} written this way contradicts neither
+// TestAuditEmailMetadataGuardDocumentedInvisibleShapes pins the remaining
+// two of the three structural blind spots #0252 found and this file's
+// header documents: shapes where scanAuditEntrySites finds ZERO sites at
+// all, so a real audit.Entry{} written this way contradicts neither
 // auditEmailMetadataKnownSites nor the "unresolved" failure path — it is
-// simply never visited. Each subtest asserts len(sites) == 0. None is
+// simply never visited. Each subtest asserts len(sites) == 0. #0290 fixed
+// the third shape this test used to pin (the elided-type slice/map element
+// — see the header's correction and
+// TestAuditEmailMetadataGuardCatchesElidedCompositeLiteral, which now
+// covers it as a caught shape instead). Neither of the two remaining is
 // exercised by any real site in this tree today (checked directly while
 // writing this pin, the same way TestAuditEmailMetadataGuardDocumentedSilentPassShapes'
 // four shapes were): the same treatment given every other documented,
 // deliberate gap in this file — a named, asserted absence rather than a
-// silent one. If any of these starts finding a site, either the walk was
+// silent one. If either of these starts finding a site, either the walk was
 // widened (update this test and the header to say so) or something about
 // how scanAuditEntrySites locates audit.Entry{} literals regressed.
 func TestAuditEmailMetadataGuardDocumentedInvisibleShapes(t *testing.T) {
@@ -2020,25 +2535,6 @@ var recordFn = func() {
 }
 `,
 		},
-		{
-			// An elided-type element of a []audit.Entry{...} slice literal —
-			// `{...}` with no repeated `audit.Entry` on the element itself, a
-			// syntax Go permits for a slice/array composite literal.
-			// isAuditEntryType type-asserts cl.Type as *ast.SelectorExpr; an
-			// elided type leaves cl.Type nil, so the assertion fails and the
-			// element is never recognized as an audit.Entry site at all.
-			name: "elided-type element in []audit.Entry{{...}}",
-			src: `package fixture
-
-func recordSomething() {
-	entries := []audit.Entry{{
-		Action:   audit.ActionSubscriberSuppressed,
-		Metadata: map[string]any{"email": addr},
-	}}
-	auditor.RecordAll(ctx, entries)
-}
-`,
-		},
 	}
 
 	for _, c := range cases {
@@ -2046,7 +2542,7 @@ func recordSomething() {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeSyntheticGoFile(t, dir, "fixture.go", c.src)
-			sites := scanAuditEntrySites(t, []string{dir})
+			sites, _ := scanAuditEntrySites(t, []string{dir})
 			if len(sites) != 0 {
 				t.Fatalf("expected 0 sites (this shape is invisible to the walk, the documented gap this test pins), found %d", len(sites))
 			}
