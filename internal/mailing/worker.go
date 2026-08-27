@@ -135,7 +135,7 @@ var orphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 // snake_case names. When a field is added here, add it there in the same
 // commit —
 // internal/handlers/campaign_progress_parity_test.go's
-// TestCampaignProgressParity_KeySet (#0241) fails the build if you don't,
+// TestCampaignProgressParity_KeySet (#0241) fails a test if you don't,
 // in either direction: it reads this struct's json tags via reflection and
 // campaignProgress.ts's interface from source, so a field added to only one
 // side is caught rather than merely documented.

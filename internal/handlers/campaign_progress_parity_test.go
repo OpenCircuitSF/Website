@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -117,6 +118,16 @@ var campaignProgressFieldLineRe = regexp.MustCompile(`^(\w+)\??:\s*[^;]+;$`)
 // agreement. Failing on the first unrecognized line, and separately failing
 // if the walk finds zero fields at all, closes both the "found the wrong
 // thing" and the "found nothing" (#0275) shapes of that gap.
+//
+// #0241's review bounce: a block comment's open and/or close can share a
+// physical line with real field text --
+// `/** Estimated seconds remaining. */ eta_seconds: number;` or
+// `*/ eta_seconds: number;` -- and the original walk `continue`d on the
+// whole line in both cases, silently dropping the field with no error. Both
+// branches below now take the remainder of the line after the comment
+// closes (the first "*/", since block comments cannot nest) and require it
+// to be empty or a valid field line, same as any other line -- there is no
+// third option that skips it silently.
 func parseCampaignProgressTS(src string) (map[string]bool, error) {
 	block := campaignProgressInterfaceBlockRe.FindStringSubmatch(src)
 	if block == nil {
@@ -131,19 +142,34 @@ func parseCampaignProgressTS(src string) (map[string]bool, error) {
 			continue
 		}
 		if inBlockComment {
-			if strings.Contains(line, "*/") {
-				inBlockComment = false
+			idx := strings.Index(line, "*/")
+			if idx < 0 {
+				// Still inside the comment; nothing on this line to check.
+				continue
 			}
-			continue
-		}
-		if strings.HasPrefix(line, "/**") {
-			if !strings.Contains(line, "*/") {
+			inBlockComment = false
+			line = strings.TrimSpace(line[idx+len("*/"):])
+			if line == "" {
+				continue
+			}
+			// Fall through: whatever follows "*/" on this line is live code
+			// and must be matched or rejected like any other line, not
+			// dropped by the `continue` this branch used to take
+			// unconditionally.
+		} else if strings.HasPrefix(line, "/**") {
+			idx := strings.Index(line, "*/")
+			if idx < 0 {
 				// Opens a comment that does not also close on this line.
 				inBlockComment = true
+				continue
 			}
-			continue
-		}
-		if strings.HasPrefix(line, "//") {
+			line = strings.TrimSpace(line[idx+len("*/"):])
+			if line == "" {
+				continue
+			}
+			// Same fall-through as above: a same-line "/** ... */ field;"
+			// leaves real code after the close that must not be dropped.
+		} else if strings.HasPrefix(line, "//") {
 			continue
 		}
 		m := campaignProgressFieldLineRe.FindStringSubmatch(line)
@@ -249,5 +275,254 @@ func TestCampaignProgressParity_KeySet(t *testing.T) {
 				"add the missing field(s) to web/src/lib/campaignProgress.ts's CampaignProgress interface",
 			len(onlyInGo), campaignProgressTSPath, strings.Join(onlyInGo, ", "),
 		)
+	}
+}
+
+// TestParseCampaignProgressTS is #0241's review-bounce fixture: a
+// table-driven test over parseCampaignProgressTS itself, independent of
+// TestCampaignProgressParity_KeySet's read of the real
+// web/src/lib/campaignProgress.ts. It exists because the two shapes that
+// exposed the silent-drop bug -- a field sharing a physical line with a
+// block comment's open-and-close, or with just its close -- can no longer be
+// demonstrated by mutating the real file once the parser is fixed (the fix
+// makes that mutation fail, which is the point), so the closure has to be
+// pinned here instead. It also locks in every shape the review's own
+// measurement table confirmed already failed closed, so a future edit to
+// this parser can't quietly reopen one of them without tripping a test.
+//
+// Every fixture is built from double-quoted Go string literals joined with
+// explicit "\n" separators, never a backtick multi-line raw string, per
+// CLAUDE.md §8's "a backslash escape you type may land as the real
+// character" / malformed-fixture gotcha: the failure mode there is a
+// fixture that looks right, parses as "0 matches" because it is malformed,
+// and reports a false pass. Building line-by-line with explicit "\n" keeps
+// every fixture's exact bytes visible in the diff and leaves no room for
+// invisible or misplaced whitespace to change which branch of the parser is
+// exercised. The well-formedness of each fixture is enforced by the
+// assertions themselves, not taken on faith: a non-error case's produced key
+// set is compared for exact equality against wantKeys via reflect.DeepEqual,
+// so a fixture that (by construction error) parsed to an empty or partial
+// set fails loudly here rather than silently passing an "at least these
+// keys were found" check.
+func TestParseCampaignProgressTS(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		// wantErr: true if parseCampaignProgressTS must return a
+		// *campaignProgressTSParseError. wantKeys is only checked when
+		// wantErr is false.
+		wantErr  bool
+		wantKeys []string
+	}{
+		{
+			// The exact shape the review bounce demonstrated on the real
+			// file: a JSDoc comment that opens AND closes on the same
+			// physical line as a field. Before the fix this field was
+			// silently dropped with no error; the fix must capture it.
+			name: "same-line JSDoc open-and-close before a field",
+			src: "export interface CampaignProgress {\n" +
+				"  campaign_id: number;\n" +
+				"  /** Estimated seconds remaining. */ eta_seconds: number;\n" +
+				"}\n",
+			wantKeys: []string{"campaign_id", "eta_seconds"},
+		},
+		{
+			// The second shape the review bounce demonstrated: a multi-line
+			// JSDoc whose closing "*/" shares a physical line with a field.
+			// Before the fix the whole line (including the field) was
+			// dropped via the inBlockComment branch's unconditional
+			// continue.
+			name: "multi-line JSDoc closing on the same line as a field",
+			src: "export interface CampaignProgress {\n" +
+				"  campaign_id: number;\n" +
+				"  /**\n" +
+				"   * Estimated seconds remaining.\n" +
+				"   */ eta_seconds: number;\n" +
+				"}\n",
+			wantKeys: []string{"campaign_id", "eta_seconds"},
+		},
+		{
+			// Baseline control: plain field lines, no comments at all.
+			name: "control: plain field lines",
+			src: "export interface CampaignProgress {\n" +
+				"  campaign_id: number;\n" +
+				"  status: string;\n" +
+				"}\n",
+			wantKeys: []string{"campaign_id", "status"},
+		},
+		{
+			// Control for the shape that was already correct: a multi-line
+			// JSDoc whose closing "*/" is alone on its own line (nothing
+			// after it), immediately followed by the field on the next
+			// line -- matches how the real status field is documented in
+			// campaignProgress.ts today.
+			name: "control: multi-line JSDoc closes on its own line, field follows",
+			src: "export interface CampaignProgress {\n" +
+				"  /**\n" +
+				"   * The campaign's status.\n" +
+				"   */\n" +
+				"  status: string;\n" +
+				"  campaign_id: number;\n" +
+				"}\n",
+			wantKeys: []string{"status", "campaign_id"},
+		},
+		{
+			// A plain (non-JSDoc) block comment -- "/*", not "/**" -- is
+			// not recognized as a suppressible comment at all by this
+			// parser (campaignProgress.ts only ever uses "/** ... */"), so
+			// its opening line must fail to match a field line and raise a
+			// parse error rather than being silently absorbed.
+			name: "plain /* */ block comment (not JSDoc) fails closed",
+			src: "export interface CampaignProgress {\n" +
+				"  campaign_id: number;\n" +
+				"  /*\n" +
+				"   ghost: number;\n" +
+				"   */\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			name: "two fields on one physical line",
+			src: "export interface CampaignProgress {\n" +
+				"  campaign_id: number; status: string;\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			name: "multi-line object type",
+			src: "export interface CampaignProgress {\n" +
+				"  meta: {\n" +
+				"    foo: string;\n" +
+				"  };\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			name: "multi-line union type",
+			src: "export interface CampaignProgress {\n" +
+				"  statusish:\n" +
+				"    | 'a'\n" +
+				"    | 'b';\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			name: "comma separator instead of a semicolon",
+			src: "export interface CampaignProgress {\n" +
+				"  campaign_id: number,\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			// The declaration-level regex is anchored on the exact text
+			// "export interface CampaignProgress {" -- an "extends" clause
+			// changes what comes before the brace, so the block regex
+			// itself must fail to find the interface at all.
+			name: "extends clause on the declaration line",
+			src: "export interface CampaignProgress extends Base {\n" +
+				"  campaign_id: number;\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			// A decoy declaration-looking string sitting inside a
+			// preceding block comment. The declaration regex has no
+			// comment-awareness, so it can latch onto the decoy text; the
+			// per-line field walk then fails closed on the resulting
+			// garbage rather than quietly matching the real interface.
+			name: "decoy 'export interface CampaignProgress {' inside a preceding comment",
+			src: "/*\n" +
+				" * See also: export interface CampaignProgress { foo: string; }\n" +
+				" */\n" +
+				"export interface CampaignProgress {\n" +
+				"  campaign_id: number;\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			name: "string-literal key",
+			src: "export interface CampaignProgress {\n" +
+				"  'campaign-id': number;\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			name: "index signature",
+			src: "export interface CampaignProgress {\n" +
+				"  [k: string]: unknown;\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			name: "readonly modifier",
+			src: "export interface CampaignProgress {\n" +
+				"  readonly campaign_id: number;\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			name: "trailing line comment after a field",
+			src: "export interface CampaignProgress {\n" +
+				"  campaign_id: number; // the id\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			name: "missing export keyword",
+			src: "interface CampaignProgress {\n" +
+				"  campaign_id: number;\n" +
+				"}\n",
+			wantErr: true,
+		},
+		{
+			// Optional-field marker control: a plain, already-passing
+			// shape kept here so a regression in the "?" handling would
+			// show up next to the comment-line fixtures it sits beside.
+			name: "control: optional field marker",
+			src: "export interface CampaignProgress {\n" +
+				"  eta_seconds?: number;\n" +
+				"}\n",
+			wantKeys: []string{"eta_seconds"},
+		},
+		{
+			// Full-line "//" comment control: already-correct behavior,
+			// kept as a regression guard next to the block-comment cases.
+			name: "control: full-line // comment is skipped",
+			src: "export interface CampaignProgress {\n" +
+				"  // campaign_id is intentionally omitted here\n" +
+				"  status: string;\n" +
+				"}\n",
+			wantKeys: []string{"status"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseCampaignProgressTS(tt.src)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseCampaignProgressTS(%q) = %v, <nil>; want a *campaignProgressTSParseError", tt.src, got)
+				}
+				var perr *campaignProgressTSParseError
+				if !errors.As(err, &perr) {
+					t.Fatalf("parseCampaignProgressTS(%q) error = %v (%T); want a *campaignProgressTSParseError", tt.src, err, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseCampaignProgressTS(%q) unexpected error: %v", tt.src, err)
+			}
+			gotKeys := make([]string, 0, len(got))
+			for k := range got {
+				gotKeys = append(gotKeys, k)
+			}
+			sort.Strings(gotKeys)
+			wantKeys := append([]string(nil), tt.wantKeys...)
+			sort.Strings(wantKeys)
+			if !reflect.DeepEqual(gotKeys, wantKeys) {
+				t.Fatalf("parseCampaignProgressTS(%q) keys = %v, want %v (a fixture that parsed to fewer/other keys than expected is a broken fixture or a broken parser, not a pass)", tt.src, gotKeys, wantKeys)
+			}
+		})
 	}
 }
