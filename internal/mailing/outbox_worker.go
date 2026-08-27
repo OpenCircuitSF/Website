@@ -19,11 +19,16 @@
 //
 // # orphanStaleAfter is recomputed here, not shared with worker.go's
 //
-// Both use the identical derivation (2 * (sendMessageTimeout +
-// writeStatusTimeout)) because both are bounded by the same two constants,
-// but outboxOrphanStaleAfter is its own var — a future change to one
-// worker's timeout budget must not silently retune the other's staleness
-// window.
+// outboxOrphanStaleAfter is its own var, not shared with worker.go's
+// orphanStaleAfter — a future change to one worker's timeout budget must
+// not silently retune the other's staleness window. The two derivations
+// are NOT identical (#0284): worker.go's still sizes itself against one
+// campaign row's worst case, but this worker's claimed_at is stamped ONCE
+// per whole batch (ClaimDue's single UPDATE) while pass sends that batch
+// SERIALLY behind rate.Limiter, so the last row claimed can already have
+// waited out its predecessors' rate-limited sends before its own send even
+// begins. outboxOrphanStaleAfter's own doc comment, below, has the
+// batch-aware arithmetic.
 //
 // # Rate limiting is this worker's own, not shared with *Worker's
 //
@@ -58,17 +63,64 @@ const (
 	outboxDefaultPollInterval = 2 * time.Second
 	outboxDefaultBatchSize    = 20
 
+	// outboxMinSendRate is the slowest per-message pace
+	// outboxOrphanStaleAfter must plan for (#0284): outboxEffectiveSendRate
+	// treats any settings.max_send_rate <= 0 as invalid and falls back to
+	// envMaxSendRate (see that method's doc comment), so a positive
+	// integer settings value can never go below 1 message/sec — that is
+	// the floor, not a hypothetical extreme. It is also today's actual
+	// deployed configuration: the SES sandbox's rate limit is 1/sec
+	// (CLAUDE.md §10 item 2). Named so outboxOrphanStaleAfter's derivation
+	// reads its "per-message rate limit" term from one place — if a
+	// future change ever lets the effective rate go lower than this, that
+	// change must update this constant too, or outboxOrphanStaleAfter
+	// silently stops covering the real worst case again, the exact #0284
+	// failure mode.
+	outboxMinSendRate = 1
+
 	// settingQueueMaxRetries is migrations/000021's seeded settings row.
 	// #0126's plan §9 item 3: not "queue.max_retries" (dotted keys don't
 	// exist in this project's settings table).
 	settingQueueMaxRetries = "queue_max_retries"
 )
 
-// outboxOrphanStaleAfter mirrors worker.go's orphanStaleAfter derivation —
-// see this file's package doc comment for why it is a separate var rather
-// than a shared one. A var, not a const, so a test can shrink it; NOT sized
-// against measured machine load (CLAUDE.md §5).
-var outboxOrphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
+// outboxOrphanStaleAfter bounds how long a claimed-but-unfinished
+// outbound_queue row is treated as still legitimately in flight before
+// OrphanSweep (#0122) releases it back to 'queued'. Releasing a row that
+// is still genuinely being sent is the #0254 failure mode: the worker
+// finishes the send it still holds, then a later pass reclaims the same
+// row and sends it again.
+//
+// #0284: the original derivation, 2 * (sendMessageTimeout +
+// writeStatusTimeout), sized itself against ONE message's worst case. But
+// ClaimDue's single UPDATE stamps claimed_at ONCE for the WHOLE batch (up
+// to outboxDefaultBatchSize rows), and pass then sends that batch
+// SERIALLY, one at a time, behind rate.Limiter (outboxEffectiveSendRate).
+// So the last row claimed has already sat 'sending' for however long its
+// predecessors took to clear the rate limiter — up to
+// (outboxDefaultBatchSize-1) intervals at the slowest configurable pace,
+// outboxMinSendRate — before its OWN send (bounded by sendMessageTimeout
+// + writeStatusTimeout, "one message's worst case") even begins.
+//
+// The bound below is deliberately outboxDefaultBatchSize intervals, not
+// outboxDefaultBatchSize-1: a full-batch multiple of the slowest
+// configurable per-message pace plus one message's own worst case is a
+// strict, structural upper bound on the real worst case above — using the
+// full batch size rather than one less keeps that margin by construction,
+// with no dependency on measured machine load (CLAUDE.md §5) and no
+// hand-computed literal: raising outboxDefaultBatchSize, lowering
+// outboxMinSendRate, or raising sendMessageTimeout/writeStatusTimeout all
+// move this window automatically. See
+// TestOutboxOrphanStaleAfterCoversFullBatch
+// (outbox_orphan_stale_after_test.go) for the invariant this maintains,
+// checked against an INDEPENDENTLY computed worst case (that test's own
+// oracle uses outboxDefaultBatchSize-1, not outboxDefaultBatchSize, so an
+// edit collapsing the two formulas to the same expression trips it rather
+// than passing by construction).
+//
+// A var, not a const, so a test can shrink it; NOT sized against measured
+// machine load (CLAUDE.md §5).
+var outboxOrphanStaleAfter = time.Duration(outboxDefaultBatchSize)*(time.Second/time.Duration(outboxMinSendRate)) + sendMessageTimeout + writeStatusTimeout
 
 // mailKinds is every outbox.Kind this worker's render switch knows how to
 // build a message for — i.e. every Kind EXCEPT outbox.KindSubscribeIntake
