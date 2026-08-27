@@ -18,24 +18,6 @@ CREATE TABLE subscribers (
     utm_campaign       TEXT,
     unsubscribed_at    TIMESTAMPTZ,
     unsubscribe_source TEXT,                        -- one_click | preferences | mailto | admin
-    -- Provenance (#0125, PRD §6.10). Every address must be able to answer
-    -- "where did this come from, and when?" without reading the event log.
-    -- import_id has no inline REFERENCES here: subscriber_imports does not
-    -- exist until migrations/000023 creates it (this table, 000010, is
-    -- numbered first), so the FK is added there via ALTER TABLE once the
-    -- target exists — see 000023's own comment. The column itself lands
-    -- here, per the greenfield note (PRD §6.2): nothing is in production,
-    -- so a Phase 8 column is added directly to the migration that owns
-    -- subscribers rather than stacked as a later ALTER TABLE.
-    source             TEXT NOT NULL DEFAULT 'signup_form',
-                       -- signup_form | import | admin_manual | api
-    source_detail      TEXT,                         -- e.g. 'luma:oc-soldering-2026-05'
-    consent_basis      TEXT,                         -- double_opt_in | imported_prior_consent | admin_attested
-    import_id          BIGINT,
-    invited_at         TIMESTAMPTZ,                   -- #0129: set once, ever — the presence of
-                                                       -- this column is what makes "one invitation
-                                                       -- per address, ever" enforceable across
-                                                       -- separate imports
     -- Delivery health (#0124, PRD §6.9). The streak is the live decision
     -- variable the circuit breaker and the repeated-soft-bounce rule read;
     -- email_events (000014) remains the immutable history behind it.
@@ -68,17 +50,6 @@ ALTER TABLE subscribers
     ADD CONSTRAINT subscribers_unsubscribe_source_check
     CHECK (unsubscribe_source IS NULL
            OR unsubscribe_source IN ('one_click', 'preferences', 'mailto', 'admin'));
-
--- #0125: guard the provenance vocabulary the same way status/
--- unsubscribe_source are guarded above.
-ALTER TABLE subscribers
-    ADD CONSTRAINT subscribers_source_check
-    CHECK (source IN ('signup_form', 'import', 'admin_manual', 'api'));
-
-ALTER TABLE subscribers
-    ADD CONSTRAINT subscribers_consent_basis_check
-    CHECK (consent_basis IS NULL
-           OR consent_basis IN ('double_opt_in', 'imported_prior_consent', 'admin_attested'));
 
 -- Belt-and-suspenders: the store layer normalizes with lower(trim(...))
 -- before every write, but this CHECK means no code path — including a
