@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { get } from 'svelte/store';
   import { currentUser, pendingVerifyToken } from './lib/stores';
   import { currentRoute, initRouter, navigate } from './lib/router';
   import { getMe } from './lib/api';
+  import { titleForRoute, shouldAnnounceNavigation } from './lib/pageTitle';
   import Login from './views/Login.svelte';
   import Account from './views/Account.svelte';
   import Admin from './views/Admin.svelte';
@@ -60,6 +61,54 @@
       .finally(() => {
         sessionChecked = true;
       });
+  });
+
+  // #0238: client-side navigation used to change no more than the DOM --
+  // document.title stayed whatever the page loaded with, and focus stayed
+  // on <body> (or wherever a previous view left it), so a screen-reader
+  // user was told nothing and a keyboard user's next Tab restarted from the
+  // top of the document. This effect re-runs on every $currentRoute change
+  // -- a link click, a programmatic navigate(), AND a popstate all funnel
+  // through router.ts's currentRoute store the same way, so one effect
+  // covers all three without special-casing any of them.
+  //
+  // shouldAnnounceNavigation() (pageTitle.ts) is what keeps the FIRST
+  // render -- the route the document actually loaded on -- untouched: that
+  // load already got the browser's own navigation announcement, and for a
+  // route internal/seo/seo.go has a real entry for, overwriting its
+  // server-rendered <title> here would be a regression, not a fix (see
+  // pageTitle.ts's module doc comment). Reading `sessionChecked` first
+  // means this effect's first REAL invocation happens once the route is
+  // actually about to render a view (not the `{#if !sessionChecked}`
+  // loading placeholder above), which is also when shouldAnnounceNavigation
+  // correctly spends its one-time flag for the register-verify/
+  // recover-verify redirect case: their replace-navigate happens before
+  // sessionChecked flips true, so it never reaches this effect at all, and
+  // the redirected-to route is what actually spends the flag.
+  $effect(() => {
+    const route = $currentRoute;
+    if (!sessionChecked) return;
+    if (!shouldAnnounceNavigation()) return;
+
+    document.title = titleForRoute(route);
+
+    // Move focus to the new view's own <h1> (every public/auth view's <h1>
+    // now carries tabindex="-1" -- see app.css's h1[tabindex='-1']:focus
+    // rule) once Svelte has actually rendered it. This generalizes the
+    // whole-panel-swap focus pattern Unsubscribe.svelte and
+    // ConfirmSubscription.svelte already used for their OWN internal state
+    // transitions to every route change -- the two are independent and
+    // compose cleanly: this effect fires on ROUTE change, theirs fire on a
+    // later async/user-driven transition within an already-mounted view.
+    //
+    // A route whose <h1> doesn't exist yet at this instant (WorkshopDetail
+    // while its fetch is still in flight -- see pageTitle.ts's "fallback"
+    // entries) simply gets no focus move for this navigation; a disclosed
+    // gap, not a silent one -- see issues/0238.md's `## Verification`.
+    void tick().then(() => {
+      const heading = document.querySelector('h1[tabindex="-1"]') as HTMLElement | null;
+      heading?.focus();
+    });
   });
 </script>
 

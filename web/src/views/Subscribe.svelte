@@ -8,7 +8,7 @@
 </script>
 
 <main id="main-content" class="app-shell subscribe-shell">
-  <h1>Subscribe</h1>
+  <h1 tabindex="-1">Subscribe</h1>
   <p class="text-muted">
     Get notified about new workshops. Pick the topics you care about — nothing else.
   </p>

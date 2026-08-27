@@ -47,7 +47,7 @@
 <main id="main-content" class="app-shell workshops-shell">
   <TerminalPanel title="workshops // open_circuit_sf">
     <Prompt text="ls workshops/" />
-    <h1 class="headline">Workshops</h1>
+    <h1 class="headline" tabindex="-1">Workshops</h1>
   </TerminalPanel>
 
   <TraceDivider />

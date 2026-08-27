@@ -83,7 +83,7 @@
   <TerminalPanel title="unsubscribe // open_circuit_sf">
     <Prompt text="unsubscribe" />
     {#if status !== 'done'}
-      <h1 class="headline">Leave the {APP_NAME} mailing list?</h1>
+      <h1 class="headline" tabindex="-1">Leave the {APP_NAME} mailing list?</h1>
       <p>
         This stops every email from us, including general announcements. If you'd
         rather keep some topics and drop others, the preference center lets you

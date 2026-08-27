@@ -9,7 +9,7 @@
 </script>
 
 <main id="main-content" class="app-shell thanks-shell">
-  <h1>Check your email</h1>
+  <h1 tabindex="-1">Check your email</h1>
   <Panel>
     <p>
       If that address isn't already on our list, we've sent a confirmation link to it.

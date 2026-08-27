@@ -79,7 +79,7 @@
 
 <main id="main-content" class="app-shell confirm-shell">
   {#if status === 'confirming'}
-    <h1>Confirming…</h1>
+    <h1 tabindex="-1">Confirming…</h1>
     <p class="text-muted">One moment.</p>
   {:else if status === 'error'}
     <h1 tabindex="-1" bind:this={resultHeading}>This link didn't work</h1>

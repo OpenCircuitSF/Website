@@ -185,7 +185,7 @@
 
 <div class="app-shell account-shell">
   <header class="app-header">
-    <h1 class="app-title">{APP_NAME}</h1>
+    <h1 class="app-title" tabindex="-1">{APP_NAME}</h1>
     <nav class="nav-tabs" aria-label="Primary">
       <button type="button" class="nav-tab active" aria-current="page">Account</button>
       {#if $currentUser?.is_admin}

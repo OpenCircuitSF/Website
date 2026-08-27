@@ -117,7 +117,7 @@
 
     <TerminalPanel title="workshop // {workshop.slug}">
       <Prompt text="cat workshops/{workshop.slug}.md" />
-      <h1 class="headline">{workshop.title}</h1>
+      <h1 class="headline" tabindex="-1">{workshop.title}</h1>
 
       {#if workshop.cover_image}
         <img

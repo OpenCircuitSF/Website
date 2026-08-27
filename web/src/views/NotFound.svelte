@@ -18,7 +18,7 @@
 <main id="main-content" class="app-shell not-found-shell">
   <TerminalPanel title="404">
     <Prompt text="open_circuit // not_found" />
-    <h1 class="headline">404 // Not Found</h1>
+    <h1 class="headline" tabindex="-1">404 // Not Found</h1>
     <CommandLine command="open {$currentRoute.path}" />
     <p class="error-line">
       bash: <code>{$currentRoute.path}</code>: command not found

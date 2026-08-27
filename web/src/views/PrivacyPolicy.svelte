@@ -229,7 +229,7 @@
 <main id="main-content" class="app-shell privacy-shell">
   <TerminalPanel title="privacy // open_circuit_sf">
     <Prompt text="cat privacy-policy.md" />
-    <h1 class="headline">Privacy Policy</h1>
+    <h1 class="headline" tabindex="-1">Privacy Policy</h1>
     <p>
       {APP_NAME} runs a mailing list so people can hear about upcoming workshops. This
       page explains what that list collects, why, how long it's kept, and how to leave

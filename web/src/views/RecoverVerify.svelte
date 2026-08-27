@@ -133,7 +133,7 @@
 
 <main class="verify-shell">
   <header class="brand">
-    <h1 class="brand-title">{APP_NAME}</h1>
+    <h1 class="brand-title" tabindex="-1">{APP_NAME}</h1>
   </header>
 
   <Panel>

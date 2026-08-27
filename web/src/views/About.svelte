@@ -28,7 +28,7 @@
 <main id="main-content" class="app-shell about-shell">
   <TerminalPanel title="about // open_circuit_sf">
     <Prompt text="whoami" />
-    <h1 class="headline">About {APP_NAME}</h1>
+    <h1 class="headline" tabindex="-1">About {APP_NAME}</h1>
     <p>
       {APP_NAME} is a San Francisco group running hands-on electronics workshops —
       soldering, microcontrollers, homelab, home automation, and whatever the room

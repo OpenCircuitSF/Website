@@ -272,7 +272,7 @@
       <div class="hero-row">
         <div class="hero-text">
           <Prompt text="open_circuit // san_francisco" />
-          <h1 id="home-headline" class="headline">Hands-on electronics workshops</h1>
+          <h1 id="home-headline" class="headline" tabindex="-1">Hands-on electronics workshops</h1>
           <StatusList
             items={[
               'absolute beginners welcome',
