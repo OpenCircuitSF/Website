@@ -48,18 +48,39 @@ belong in this tracker.
 - Handlers depend on **narrow store interfaces**, never a concrete store — that
   is what lets `internal/devstore` stand in for Postgres under `STORAGE=json`.
 - SQL lives in the store package that owns the table, not in handlers.
-- **Migrations are append-only — *after* the first production deploy.** Never
-  edit a migration that has been applied to a database anyone cares about; add a
-  new one. `migrations/000007` exists because ShortLinks broke this rule once.
-  **Until then, this project is greenfield** (decided 2026-08-21): nothing is
-  live but the static placeholder, there is no PostgreSQL instance on AWS
-  holding real data, and no subscriber or campaign has ever existed. So
-  `migrations/` may be squashed, renumbered, or rewritten as a deliberate act,
-  and the dev database may be dropped and recreated. Prefer editing the
-  migration that owns a table over stacking an `ALTER TABLE`, and write no
-  backfill for data that does not exist. The exception expires at the first
-  deploy that applies a migration to production — see PRD §6.2's greenfield
-  note.
+- **Migrations are append-only. The greenfield exception EXPIRED on
+  2026-08-25.** Never edit a migration that has been applied to a database
+  anyone cares about; add a new one. `migrations/000007` exists because
+  ShortLinks broke this rule once.
+
+  The exception was written on 2026-08-21, when nothing was live but the static
+  placeholder. It said `migrations/` could be squashed, renumbered, or rewritten
+  and that you should prefer editing the migration that owns a table over
+  stacking an `ALTER TABLE`. **It ended at the deploy on 2026-08-25**, exactly as
+  it said it would: `www.opencircuitsf.com` now serves this project (§7), and
+  production's PostgreSQL holds a live `opencircuit` database with
+  `schema_migrations.version = 22` and real rows in it — `#0272` is open about
+  two specific `outbound_queue` rows there.
+
+  **So: never edit an existing migration. `000001`–`000022` are frozen.** New
+  work goes in a new numbered migration, and a column added to an existing table
+  is an `ALTER TABLE` in that new file, not an edit to the `CREATE TABLE` that
+  owns it.
+
+  This is not hypothetical, and the stale note is why. `#0125` was filed on
+  2026-08-21 with an acceptance criterion instructing the `000010` edit, its
+  implementer followed that criterion faithfully, and its review bounced it: a
+  scratch database built to production's version 22 and then migrated against
+  the committed tree fails with `column "import_id" referenced in foreign key
+  constraint does not exist` and leaves `schema_migrations` **dirty at 23**. The
+  deploy would have broken, and separately every subscriber query on the new
+  binary would have errored against a production table lacking the five new
+  columns.
+
+  **Check an issue's own greenfield language before following it.** Several
+  issues filed before 2026-08-25 still carry the old note in their acceptance
+  criteria; the criterion is stale, not authoritative. `#0293` tracks correcting
+  the remaining copies in `PRD.md` §6.2 and `docs/deployment.md`.
 - Tests sit beside the code as `_test.go`. DB-backed tests gate on
   `TEST_DATABASE_URL` and skip when it is unset — so a green `go test ./...`
   with that variable unset proves less than it looks like it does.
