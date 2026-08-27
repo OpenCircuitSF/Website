@@ -490,6 +490,42 @@ export function signupEvidenceSummary(sub: Subscriber): string {
 }
 
 /**
+ * Render the subscriber detail view's confirmation line (#0292). Three
+ * cases, in order:
+ *
+ *  1. `confirmed_at` is set — the address genuinely completed double
+ *     opt-in here, so show the timestamp exactly as before.
+ *  2. `confirmed_at` is null AND `consent_basis` is `imported_prior_consent`
+ *     — a prior_consent CSV import (internal/subscribers.ImportStore.Commit
+ *     leaves confirmed_at NULL for exactly this reason, PRD §6.10: "did not
+ *     confirm here"). Showing "Not yet confirmed" for this row would be
+ *     actively wrong — it reads as still-pending, when the row is already
+ *     `active` and simply never went through this list's own confirmation
+ *     flow. Show the consent provenance instead, per #0292's acceptance
+ *     criteria: where it came from and that consent was attested at
+ *     import, not "not yet" anything.
+ *  3. `confirmed_at` is null and consent_basis is anything else — a
+ *     genuinely pending (or never-completed) address; the original message.
+ */
+export function confirmationSummary(sub: Subscriber): string {
+  if (sub.confirmed_at) {
+    return `Confirmed: ${formatDateTime(sub.confirmed_at)}`;
+  }
+  if (sub.consent_basis === 'imported_prior_consent') {
+    // sub.source here is the SUBSCRIBER's own source vocabulary
+    // (signup_form | import | admin_manual | api — always literally
+    // "import" for this branch), not subscriber_imports.source (the
+    // luma/eventbrite/meetup/manual_csv/other batch vocabulary
+    // importSourceLabel maps) — that batch-level field isn't copied onto
+    // the subscriber row, only source_detail is, so source_detail is the
+    // one piece of provenance available here without an extra join.
+    const detail = sub.source_detail ? ` — ${sub.source_detail}` : '';
+    return `Not confirmed here — imported with prior consent attested by an admin${detail}.`;
+  }
+  return 'Not yet confirmed.';
+}
+
+/**
  * Render the #0039 soft-bounce summary line for the subscriber detail view.
  * `soft_bounce_count`/`threshold`/`window_days` are populated by the detail
  * endpoint only (see the Subscriber type's doc comment) — a nil count means
@@ -781,6 +817,14 @@ export function validateImportForm(
   if (!IMPORT_SOURCES.some((s) => s.value === f.source)) {
     return { error: 'Choose where this list came from.' };
   }
+  const sourceDetail = f.sourceDetail.trim();
+  if (sourceDetail === '') {
+    // #0291, PRD §6.10: source_detail is one of the four fields a
+    // subscriber_imports row requires — mirrors the server's own
+    // ErrSourceDetailRequired (internal/subscribers.ImportStore.Commit) so
+    // an invalid submit never round-trips.
+    return { error: 'Name the specific event or export this list came from — this is required and is recorded on the batch.' };
+  }
   const mode = CONSENT_MODES.find((m) => m.value === f.consentMode);
   if (!mode) {
     return { error: 'Choose a consent mode.' };
@@ -803,7 +847,7 @@ export function validateImportForm(
   }
   return {
     source: f.source,
-    sourceDetail: f.sourceDetail.trim(),
+    sourceDetail,
     consentMode: f.consentMode,
     consentNote,
     collectedAt: f.collectedAt,

@@ -96,8 +96,17 @@ const (
 var (
 	ErrInvalidImportSource = errors.New("subscribers: invalid import source")
 	ErrInvalidConsentMode  = errors.New("subscribers: invalid consent mode")
-	ErrConsentNoteRequired = errors.New("subscribers: consent_note is required")
-	ErrCollectedAtRequired = errors.New("subscribers: collected_at is required")
+	// ErrSourceDetailRequired is returned by Commit for a blank source_detail
+	// (#0291, PRD §6.10: "source_detail — the specific event or export it
+	// came from" is one of four fields a subscriber_imports row requires).
+	// Enforced here in addition to migrations/000024's NOT NULL/CHECK, the
+	// same belt-and-suspenders pattern ErrConsentNoteRequired already
+	// follows — the database constraint is the backstop, this is what lets
+	// Commit return a field-naming error instead of a raw constraint
+	// violation.
+	ErrSourceDetailRequired = errors.New("subscribers: source_detail is required")
+	ErrConsentNoteRequired  = errors.New("subscribers: consent_note is required")
+	ErrCollectedAtRequired  = errors.New("subscribers: collected_at is required")
 	// ErrConsentModeNotSupported is returned by Commit for ConsentModeInvite
 	// — #0129 owns that mode's committer; see the package doc comment.
 	ErrConsentModeNotSupported = errors.New("subscribers: this consent mode has no committer yet")
@@ -382,7 +391,10 @@ type CommitResult struct {
 // (status=active, source=SubscriberSourceImport, consent_basis=
 // ConsentBasisImportedPriorConsent, import_id=the new batch, source_detail
 // copied from in.SourceDetail so a single subscriber row is self-sufficient
-// without a join back to this table), links known interest slugs, and
+// without a join back to this table, confirmed_at left NULL — #0292, see
+// the insert's own comment below — since prior_consent's whole point is
+// that this address never went through local confirmation), links known
+// interest slugs, and
 // writes one subscriber_events ActionImported row per inserted address.
 // subscriber_imports.row_count/inserted_count/skipped_count are stamped
 // from what actually happened. A failure anywhere in this rolls back
@@ -398,6 +410,9 @@ func (s *ImportStore) Commit(ctx context.Context, in CommitInput, now time.Time)
 	}
 	if !consentModes[in.ConsentMode] {
 		return CommitResult{}, ErrInvalidConsentMode
+	}
+	if strings.TrimSpace(in.SourceDetail) == "" {
+		return CommitResult{}, ErrSourceDetailRequired
 	}
 	if strings.TrimSpace(in.ConsentNote) == "" {
 		return CommitResult{}, ErrConsentNoteRequired
@@ -425,7 +440,11 @@ func (s *ImportStore) Commit(ctx context.Context, in CommitInput, now time.Time)
 		      filename, row_count, status, imported_by, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 RETURNING `+importColumns,
-		in.Source, nullIfEmpty(in.SourceDetail), in.ConsentMode, in.ConsentNote, in.CollectedAt,
+		// source_detail is passed directly, not through nullIfEmpty: #0291
+		// makes it mandatory, validated non-blank above, so — matching
+		// consent_note's own treatment just after it — there is no empty
+		// case left to map to SQL NULL.
+		in.Source, in.SourceDetail, in.ConsentMode, in.ConsentNote, in.CollectedAt,
 		nullIfEmpty(in.Filename), len(in.Rows), ImportStatusCommitted, in.ImportedBy, now,
 	)
 	imp, err := scanImport(row)
@@ -465,15 +484,37 @@ func (s *ImportStore) Commit(ctx context.Context, in CommitInput, now time.Time)
 			return CommitResult{}, err
 		}
 
+		// confirmed_at is left NULL, not stamped to now (#0292): PRD §6.10
+		// says outright that a prior_consent import's subscribers "did not
+		// confirm here", so a local confirmation timestamp would assert
+		// something that never happened — a person who never saw a
+		// confirmation link cannot have "confirmed" at a moment this
+		// process picked for them. This also keeps confirmed_at's existing
+		// meaning intact everywhere else it's read: NULL already means "no
+		// local double-opt-in confirmation event", exactly as it does for
+		// a pending/unsubscribed/bounced/complained row (see
+		// internal/handlers/admin_subscribers_export.go's formatExportTime
+		// doc comment) — an active-but-never-locally-confirmed row is a
+		// new case for that meaning, not a new meaning for the column.
+		// consent_basis=ConsentBasisImportedPriorConsent (below) is what
+		// records WHY this row is active without one, so nothing about
+		// provenance is lost by leaving this NULL. See #0292's Work log
+		// for the reader-by-reader audit this decision rests on —
+		// Growth30Days (subscribers/store.go) and the SES staleness guard
+		// (internal/handlers/ses_notifications.go) both treat a NULL here
+		// exactly the way they already treat one on a pending subscriber,
+		// so this is consistent with, not a new case for, their existing
+		// null handling.
+		var confirmedAt *time.Time
 		subRow := tx.QueryRow(ctx,
 			`INSERT INTO subscribers
 			     (email, status, manage_token, source, source_detail, consent_basis,
 			      import_id, confirmed_at, created_at, updated_at)
 			 VALUES
-			     (lower(trim($1)), $2, $3, $4, $5, $6, $7, $8, $8, $8)
+			     (lower(trim($1)), $2, $3, $4, $5, $6, $7, $8, $9, $9)
 			 RETURNING id, email`,
 			email, StatusActive, manageToken, SubscriberSourceImport,
-			nullIfEmpty(in.SourceDetail), ConsentBasisImportedPriorConsent, imp.ID, now,
+			in.SourceDetail, ConsentBasisImportedPriorConsent, imp.ID, confirmedAt, now,
 		)
 		var subID int64
 		var normEmail string

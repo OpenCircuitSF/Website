@@ -1556,11 +1556,22 @@ func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 // since (the caller passes now.Add(-30*24*time.Hour); kept as a parameter
 // rather than computed here so the result is deterministic in tests, the
 // same convention every other now-sensitive method on this store follows,
-// e.g. Confirm's own now parameter): how many subscribers were confirmed
-// (became active) since that time, and how many unsubscribed since that
-// time. #0061's admin overview dashboard subtracts the two for a net growth
-// figure; both are returned rather than pre-subtracted so the dashboard can
-// show "N joined, M left" rather than only the net.
+// e.g. Confirm's own now parameter): how many subscribers locally confirmed
+// (completed double opt-in) since that time, and how many unsubscribed
+// since that time. #0061's admin overview dashboard subtracts the two for a
+// net growth figure; both are returned rather than pre-subtracted so the
+// dashboard can show "N joined, M left" rather than only the net.
+//
+// "Confirmed" here means confirmed_at is set — NOT "became active": since
+// #0292, a prior_consent CSV import (internal/subscribers.ImportStore.Commit)
+// lands a subscriber `active` with confirmed_at left NULL, because PRD
+// §6.10 is explicit that such a row "did not confirm here". Counting those
+// rows would inflate this figure with addresses that never went through
+// this list's own confirmation flow — an import of 500 addresses must not
+// read as 500 confirmations on the dashboard. This method's name and
+// return value are unchanged (the dashboard still shows "confirmed_30d");
+// what changed is which subscribers rows can now be active without ever
+// tripping it.
 //
 // Excludes synthetic=true rows unconditionally, same as StatusCounts above
 // — #0061's amendment (issue notes, from #0046's second phase-3 review)

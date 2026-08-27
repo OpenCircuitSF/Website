@@ -89,8 +89,51 @@ func TestImportStore_Commit_InsertsActiveWithProvenance(t *testing.T) {
 	if sub.SourceDetail == nil || *sub.SourceDetail != "test batch" {
 		t.Errorf("SourceDetail = %v, want %q", sub.SourceDetail, "test batch")
 	}
-	if sub.ConfirmedAt == nil {
-		t.Error("ConfirmedAt is nil, want stamped for an imported active subscriber")
+	// #0292: confirmed_at is left NULL for a prior_consent import — PRD
+	// §6.10 says outright that these subscribers "did not confirm here",
+	// so stamping a local confirmation timestamp would assert something
+	// that never happened. consent_basis=imported_prior_consent (asserted
+	// above) is what records why the row is active without one.
+	if sub.ConfirmedAt != nil {
+		t.Errorf("ConfirmedAt = %v, want nil for an imported active subscriber (#0292)", sub.ConfirmedAt)
+	}
+}
+
+// TestImportStore_Commit_DoesNotInflateGrowth30Days is #0292's direct proof
+// that Growth30Days no longer counts an import as a confirmation — for the
+// RIGHT reason (this is the #0266 class the issue names explicitly): the
+// row this test commits is never deleted before Growth30Days is called
+// (unlike uniqueImportEmail's t.Cleanup, which runs at the end of the
+// test), so a passing assertion here cannot be explained by cleanup timing
+// or fixture ordering the way TestGrowth30Days_BoundaryAndSyntheticExclusion's
+// own doc comment describes historically happening. If Commit still
+// stamped confirmed_at = now (the pre-#0292 behavior), this test would fail
+// on the very same run that creates the row — there is no window in which
+// it could pass by accident.
+func TestImportStore_Commit_DoesNotInflateGrowth30Days(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	email := uniqueImportEmail(t)
+	since := time.Now().UTC()
+
+	before, _, err := subStore.Growth30Days(context.Background(), since)
+	if err != nil {
+		t.Fatalf("Growth30Days (before): %v", err)
+	}
+
+	in := validCommitInput(t, []ImportRow{{Email: email}})
+	if _, err := importStore.Commit(context.Background(), in, since.Add(time.Second)); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	after, _, err := subStore.Growth30Days(context.Background(), since)
+	if err != nil {
+		t.Fatalf("Growth30Days (after): %v", err)
+	}
+	if after != before {
+		t.Errorf("confirmed_30d = %d after a prior_consent import, want unchanged from %d — "+
+			"an import must not read as a confirmation on the dashboard (#0292)", after, before)
 	}
 }
 
@@ -274,8 +317,8 @@ func TestImportStore_Commit_RefusesInviteMode(t *testing.T) {
 }
 
 // TestImportStore_Commit_RequiresConsentNoteAndCollectedAt proves an import
-// cannot be committed without source, collected_at, and a non-empty
-// consent_note.
+// cannot be committed without source, source_detail, collected_at, and a
+// non-empty consent_note.
 func TestImportStore_Commit_RequiresConsentNoteAndCollectedAt(t *testing.T) {
 	pool := testPool(t)
 	store := NewImportStore(pool)
@@ -297,6 +340,29 @@ func TestImportStore_Commit_RequiresConsentNoteAndCollectedAt(t *testing.T) {
 	badSource.Source = "not-a-real-source"
 	if _, err := store.Commit(context.Background(), badSource, now); !errors.Is(err, ErrInvalidImportSource) {
 		t.Errorf("Commit with invalid source err = %v, want ErrInvalidImportSource", err)
+	}
+}
+
+// TestImportStore_Commit_RequiresSourceDetail is #0291's acceptance
+// criterion: PRD §6.10 names source_detail as one of the four fields a
+// subscriber_imports row requires (the invitation copy #0129 will send is
+// assembled from it), and blank or whitespace-only must both refuse the
+// same as an empty consent_note does.
+func TestImportStore_Commit_RequiresSourceDetail(t *testing.T) {
+	pool := testPool(t)
+	store := NewImportStore(pool)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	empty := validCommitInput(t, []ImportRow{{Email: uniqueImportEmail(t)}})
+	empty.SourceDetail = ""
+	if _, err := store.Commit(context.Background(), empty, now); !errors.Is(err, ErrSourceDetailRequired) {
+		t.Errorf("Commit with empty source_detail err = %v, want ErrSourceDetailRequired", err)
+	}
+
+	whitespace := validCommitInput(t, []ImportRow{{Email: uniqueImportEmail(t)}})
+	whitespace.SourceDetail = "   "
+	if _, err := store.Commit(context.Background(), whitespace, now); !errors.Is(err, ErrSourceDetailRequired) {
+		t.Errorf("Commit with whitespace-only source_detail err = %v, want ErrSourceDetailRequired", err)
 	}
 }
 

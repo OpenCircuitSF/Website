@@ -36,6 +36,7 @@ import {
   validateManualAddEmail,
   validateSuppressNote,
   signupEvidenceSummary,
+  confirmationSummary,
   softBounceSummary,
   SUPPRESSION_REASONS,
   suppressionReasonLabel,
@@ -559,6 +560,32 @@ describe('signupEvidenceSummary', () => {
   });
 });
 
+describe('confirmationSummary (#0292)', () => {
+  it('shows the confirmation timestamp when confirmed_at is set', () => {
+    const summary = confirmationSummary(subscriber({ confirmed_at: '2026-05-25T12:00:00Z' }));
+    expect(summary).toContain('Confirmed:');
+  });
+
+  it('shows consent provenance, not "Not yet confirmed", for a prior_consent import', () => {
+    const summary = confirmationSummary(
+      subscriber({
+        confirmed_at: undefined,
+        source: 'import',
+        source_detail: 'Intro to Soldering sign-in sheet',
+        consent_basis: 'imported_prior_consent',
+      }),
+    );
+    expect(summary).not.toMatch(/not yet confirmed/i);
+    expect(summary).toContain('imported with prior consent');
+    expect(summary).toContain('Intro to Soldering sign-in sheet');
+  });
+
+  it('falls back to "Not yet confirmed" for a genuinely pending subscriber', () => {
+    const summary = confirmationSummary(subscriber({ confirmed_at: undefined, consent_basis: undefined }));
+    expect(summary).toBe('Not yet confirmed.');
+  });
+});
+
 describe('softBounceSummary', () => {
   it('reports "Not available." when the detail endpoint has not populated the count', () => {
     expect(softBounceSummary(subscriber())).toBe('Not available.');
@@ -722,6 +749,19 @@ describe('validateImportForm', () => {
   it('rejects a blank consent note', () => {
     const result = validateImportForm(validImportFields({ consentNote: '   ' }));
     expect('error' in result).toBe(true);
+  });
+
+  it('rejects a blank source_detail (#0291, PRD §6.10)', () => {
+    const result = validateImportForm(validImportFields({ sourceDetail: '   ' }));
+    expect('error' in result).toBe(true);
+  });
+
+  it('trims source_detail on success', () => {
+    const result = validateImportForm(validImportFields({ sourceDetail: '  Intro to Soldering  ' }));
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.sourceDetail).toBe('Intro to Soldering');
+    }
   });
 
   it('trims the consent note on success', () => {

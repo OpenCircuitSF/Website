@@ -386,6 +386,13 @@ func (h *SESNotificationsHandler) applyRecipient(ctx context.Context, tx pgx.Tx,
 	// (setStatusTx never leaves complained), so the only remaining hazard is
 	// this one, and it only applies when a subscriber row exists to compare
 	// against.
+	//
+	// #0292 audit note: a prior_consent import (internal/subscribers.
+	// ImportStore.Commit) lands `active` with ConfirmedAt left nil, so this
+	// guard is a no-op for such a row — identical to how it already treats
+	// any other subscriber with no local confirmation event (e.g. still
+	// `pending`). That is not a new behavior this issue introduces; it is
+	// the existing nil-skips-the-guard case gaining one more producer.
 	if hasSub && sub.ConfirmedAt != nil {
 		if eventAt, ok := sesnotify.ParseEventTimestamp(ev.Mail.Timestamp); ok && eventAt.Before(*sub.ConfirmedAt) {
 			return nil

@@ -187,7 +187,13 @@ func derefOrEmpty(p *string) string {
 
 // formatExportTime renders a *time.Time as RFC 3339 UTC, or "" when nil
 // (confirmed_at is NULL for a subscriber that never completed double
-// opt-in — pending, or unsubscribed/bounced/complained before confirming).
+// opt-in locally — pending, or unsubscribed/bounced/complained before
+// confirming, or, since #0292, an `active` subscriber a prior_consent CSV
+// import inserted directly: consent_basis=imported_prior_consent on that
+// row is what distinguishes it from a genuinely never-confirmed one, since
+// this export's column set doesn't include consent_basis — see
+// internal/subscribers.Store.Growth30Days' doc comment for the fuller
+// reasoning).
 func formatExportTime(t *time.Time) string {
 	if t == nil {
 		return ""

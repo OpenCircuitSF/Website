@@ -355,6 +355,37 @@ func TestAdminImports_Commit_RequiresConsentNote(t *testing.T) {
 	}
 }
 
+// TestAdminImports_Commit_RequiresSourceDetail is #0291's handler-level
+// proof, mirroring TestAdminImports_Commit_RequiresConsentNote above: a
+// blank source_detail must 400 rather than commit, since PRD §6.10 names it
+// as one of the four mandatory provenance fields.
+func TestAdminImports_Commit_RequiresSourceDetail(t *testing.T) {
+	pool := adminImportsTestPool(t)
+	srv := httptest.NewServer(adminImportsMux(pool))
+	defer srv.Close()
+	admin := seedAdminUser(t, pool, "admin-imports-detail@example.com")
+	seedSession(t, pool, admin, "admin-token-detail")
+	client := srv.Client()
+
+	email := importHTTPEmail(t)
+	csvBody := "email\n" + email + "\n"
+	fields := defaultImportFormFields()
+	fields.sourceDetail = ""
+
+	previewResp := doImportUpload(t, client, srv.URL+"/admin/subscribers/import/preview", "admin-token-detail", csvBody, fields)
+	var preview previewResponse
+	_ = json.NewDecoder(previewResp.Body).Decode(&preview)
+	previewResp.Body.Close()
+
+	fields.checksum = preview.Checksum
+	resp := doImportUpload(t, client, srv.URL+"/admin/subscribers/import", "admin-token-detail", csvBody, fields)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		body := readBody(t, resp)
+		t.Fatalf("commit with no source_detail status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+}
+
 // TestAdminImports_Revoke_UnsubscribesAndAudits commits a batch, revokes
 // it, and verifies the subscriber moved to unsubscribed and one audit_log
 // row was written.

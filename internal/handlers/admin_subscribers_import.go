@@ -402,6 +402,9 @@ func (h *AdminImportsHandler) Commit(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, subscribers.ErrInvalidConsentMode):
 		writeError(w, http.StatusBadRequest, "invalid consent_mode")
 		return
+	case errors.Is(err, subscribers.ErrSourceDetailRequired):
+		writeError(w, http.StatusBadRequest, "source_detail is required")
+		return
 	case errors.Is(err, subscribers.ErrConsentNoteRequired):
 		writeError(w, http.StatusBadRequest, "consent_note is required")
 		return

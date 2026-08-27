@@ -87,6 +87,7 @@
     validateManualAddEmail,
     validateSuppressNote,
     signupEvidenceSummary,
+    confirmationSummary,
     softBounceSummary,
     subscriberEventActionLabel,
     SUPPRESSION_REASONS,
@@ -1924,7 +1925,9 @@
               </select>
             </div>
             <div class="field">
-              <label for="import-source-detail">Source detail (the specific event or export)</label>
+              <label for="import-source-detail">
+                Source detail (the specific event or export) (required)
+              </label>
               <input
                 id="import-source-detail"
                 type="text"
@@ -2150,11 +2153,16 @@
 
               <h3 class="detail-heading">Consent evidence</h3>
               <p class="mono">{signupEvidenceSummary(viewingSubscriber)}</p>
-              {#if viewingSubscriber.confirmed_at}
-                <p>Confirmed: {formatDateTime(viewingSubscriber.confirmed_at)}</p>
-              {:else}
-                <p class="text-muted">Not yet confirmed.</p>
-              {/if}
+              <!-- #0292: confirmationSummary (lib/admin.ts) replaces a bare
+                   confirmed_at/"Not yet confirmed" branch — a prior_consent
+                   import lands `active` with confirmed_at left null (PRD
+                   §6.10: "did not confirm here"), so that plain branch would
+                   show an active subscriber as "Not yet confirmed", reading
+                   as still-pending. The helper shows consent provenance
+                   instead for that case. -->
+              <p class={viewingSubscriber.confirmed_at ? undefined : 'text-muted'}>
+                {confirmationSummary(viewingSubscriber)}
+              </p>
               {#if viewingSubscriber.utm_source || viewingSubscriber.utm_medium || viewingSubscriber.utm_campaign}
                 <p class="text-muted">
                   UTM: {viewingSubscriber.utm_source ?? '—'} / {viewingSubscriber.utm_medium ?? '—'} /
