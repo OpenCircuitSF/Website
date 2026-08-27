@@ -1602,13 +1602,13 @@ func (c *countingSubscriberStore) SetInterests(ctx context.Context, subscriberID
 	return c.inner.SetInterests(ctx, subscriberID, interestIDs)
 }
 
-// snapshot returns a race-safe copy of every counter, for comparison after
-// the async queues have fully drained.
 type subscriberStoreCallCounts struct {
 	create, findByEmail, restartSignup                                          int
 	claimAndEnqueueConfirmation, claimAndEnqueueAlreadySubscribed, setInterests int
 }
 
+// snapshot returns a race-safe copy of every counter, for comparison after
+// the async queues have fully drained.
 func (c *countingSubscriberStore) snapshot() subscriberStoreCallCounts {
 	c.mu.Lock()
 	defer c.mu.Unlock()
