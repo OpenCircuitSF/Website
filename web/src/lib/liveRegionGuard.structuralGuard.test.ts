@@ -312,6 +312,25 @@ interface UnclassifiableSite {
   file: string;
   line: number;
   reason: string;
+  /** #0280: the dynamic role/aria-live attribute's own raw source text
+   * (e.g. `role={w.alert ? 'alert' : 'status'}`) -- KNOWN_DYNAMIC_ROLE_SITES'
+   * stable match key, computed once here so the guard and its synthetic
+   * fixtures derive it identically. Survives line-shifting edits above the
+   * site; only goes stale if the attribute expression itself changes. */
+  matchKey: string;
+}
+
+/** #0280: raw source text of the named attribute on `el`, e.g.
+ * `role={w.alert ? 'alert' : 'status'}` -- used as a stable allowlist match
+ * key instead of a line number. Empty string if the attribute or its
+ * source span is missing (defensive; every Attribute node from svelte's
+ * parser carries start/end in practice). */
+function rawAttrSource(source: string, el: SvelteNode, name: string): string {
+  const attr = findAttr(el, name);
+  const start = attr?.start as number | undefined;
+  const end = attr?.end as number | undefined;
+  if (start === undefined || end === undefined) return '';
+  return source.slice(start, end);
 }
 
 /** Depth-first walk collecting every classifiable/unclassifiable
@@ -373,10 +392,12 @@ function collectSites(
         // Reported loudly (#0242 criterion 5) rather than silently skipped
         // by the string-equality checks below, which would otherwise just
         // never match a non-string value and fall through unnoticed.
+        const dynamicAttrName = roleIsDynamicExpr ? 'role' : 'aria-live';
         unclassifiable.push({
           file: fileName,
           line,
-          reason: `${roleIsDynamicExpr ? 'role' : 'aria-live'} is a dynamic expression, not a static string -- this guard cannot verify which live-region rule (if any) applies`,
+          reason: `${dynamicAttrName} is a dynamic expression, not a static string -- this guard cannot verify which live-region rule (if any) applies`,
+          matchKey: rawAttrSource(source, obj, dynamicAttrName),
         });
       } else {
         const role = roleRaw === 'status' || roleRaw === 'alert' ? roleRaw : undefined;
@@ -473,77 +494,90 @@ function collectFocusedVars(node: unknown, out: Set<string>, seen = new Set<unkn
 // ---------------------------------------------------------------------------
 // KNOWN, NAMED exceptions -- not silently skipped (#0242 criterion 5)
 // ---------------------------------------------------------------------------
+//
+// #0280: these used to be `Set<string>` keyed by `file:line`. A line number
+// shifts on ANY edit above it, so ordinary editing produced allowlist
+// failures unrelated to the change -- #0125's own diff was 7 deletions + 7
+// insertions of the SAME 7 KNOWN_LOADING_PLACEHOLDERS entries, renumbered,
+// nothing else. Both sets are now `AllowlistEntry[]`, keyed on the site's
+// own stable content (its static text, or its dynamic attribute's raw
+// source) rather than its position, plus a REQUIRED, runtime-checked
+// `reason` field -- criterion 2 asks for a mechanism, not a comment beside
+// the entry that nothing enforces. `checkFile` below both validates every
+// entry's justification and tracks which entries actually matched a real
+// site, so a stale entry (naming a site that no longer exists, or whose
+// text/attribute changed) still fails loudly -- criterion 3's requirement
+// that fixing the churn not trade away the staleness check.
+
+/** One allowlist row. `match` is the stable key (see each set's own
+ * comment for what it is); `reason` is validated non-empty by
+ * unjustifiedEntryViolations below, not merely documentation. */
+interface AllowlistEntry {
+  file: string;
+  match: string;
+  reason: string;
+}
 
 /** Sites with a dynamic role/aria-live expression this guard cannot resolve
- * statically -- see the file header's "cannot classify" section. Keyed by
- * `file:line` as reported by collectSites/unclassifiable above. Adding a
- * NEW dynamic-role site anywhere in the tree fails this guard until it is
+ * statically -- see the file header's "cannot classify" section. `match` is
+ * the dynamic attribute's own raw source text (e.g. `role={w.alert ? 'alert'
+ * : 'status'}`), computed identically by collectSites' rawAttrSource. Adding
+ * a NEW dynamic-role site anywhere in the tree fails this guard until it is
  * either made static or added here by name -- it can never silently pass. */
-const KNOWN_DYNAMIC_ROLE_SITES = new Set<string>([
-  // Dashboard.svelte's per-warning list item toggles between the two roles
-  // this decision governs (`role={w.alert ? 'alert' : 'status'}`), inside a
-  // KEYED {#each} -- Svelte reuses the same DOM node for an existing key
-  // across a re-render (mutating its role/text in place), but a warning
-  // appearing for the FIRST time is a genuine insertion. For 'alert' that's
-  // exactly the relied-upon, sound case (#0243's decision); for 'status'
-  // it is the same gap the 17 Loading… placeholders already carry
-  // (initial-appearance, not user-action-driven) -- reported here rather
-  // than redesigned, matching #0063's own treatment of that shape. Not a
-  // KNOWN_LOADING_PLACEHOLDER (its text is a dynamic `{w.message}`, not a
-  // static "Loading…" string) and not fixable by this pass's scope.
-  'web/src/views/admin/Dashboard.svelte:115',
-]);
+const KNOWN_DYNAMIC_ROLE_SITES: AllowlistEntry[] = [
+  {
+    file: 'web/src/views/admin/Dashboard.svelte',
+    match: "role={w.alert ? 'alert' : 'status'}",
+    reason:
+      "Dashboard.svelte's per-warning list item toggles between the two roles this decision governs, inside a KEYED {#each} -- Svelte reuses the same DOM node for an existing key across a re-render (mutating its role/text in place), but a warning appearing for the FIRST time is a genuine insertion. For 'alert' that's the sound, relied-upon case (#0243's decision); for 'status' it is the same initial-appearance gap the loading placeholders already carry. Reported here rather than redesigned, matching #0063's own treatment of that shape; #0279 fixes this properly and empties this set.",
+  },
+];
 
 /** Governing-branch-dynamic, no swap target, but purely static text --
  * the shape #0063's fix pass explicitly enumerated and deliberately left
  * unconverted ("they announce an initial-load state rather than the result
- * of a user action, a smaller instance of the same defect class"). Keyed by
- * `file:line`. A NEW site of this exact shape (single-child branch, static
- * text, no focus target) fails this guard until it is either converted or
- * added here by name. */
-const KNOWN_LOADING_PLACEHOLDERS = new Set<string>([
-  'web/src/views/Admin.svelte:1278',
-  'web/src/views/Admin.svelte:1354',
-  'web/src/views/Admin.svelte:1518',
-  'web/src/views/Admin.svelte:1628',
-  'web/src/views/Admin.svelte:2049',
-  'web/src/views/Admin.svelte:2135',
-  'web/src/views/Admin.svelte:2284',
-  'web/src/views/Account.svelte:223',
-  'web/src/views/admin/Workshops.svelte:168',
-  'web/src/views/admin/WorkshopEditor.svelte:402',
-  // WorkshopEditor.svelte's SECOND placeholder -- "Rendering preview…", not
-  // named anywhere in issues/0063.md (its enumeration only counted the
-  // "Loading…"-worded ones) but structurally identical: a single-child
-  // `{#if previewLoading}` branch with static, unvarying text and no swap
-  // target. Discovered by this guard's own development run, not by #0063 --
-  // named here rather than restructured, for the same reason the other 17
-  // weren't: it announces an on-demand-render's in-flight state, not a
-  // user-action result, and converting it means reworking the four-branch
-  // previewLoading/previewError/hasPreviewContent/else chain it sits in,
-  // out of proportion to #0242/#0243's own scope.
-  'web/src/views/admin/WorkshopEditor.svelte:451',
-  'web/src/views/admin/CampaignEditor.svelte:632',
-  // CampaignEditor.svelte's SECOND placeholder, same reasoning as
-  // WorkshopEditor.svelte:451 above -- "Rendering…" is the sole content of
-  // `{:else}` (of the previewError/preview/else preview-tab chain), static,
-  // no swap target, and reworking that three-branch chain to a persistent
-  // node is out of proportion to this pass's scope.
-  'web/src/views/admin/CampaignEditor.svelte:741',
-  'web/src/views/admin/Deliverability.svelte:111',
-  'web/src/views/admin/Deliverability.svelte:174',
-  'web/src/views/admin/Campaigns.svelte:196',
-  'web/src/views/admin/CampaignStats.svelte:81',
-  'web/src/views/admin/Dashboard.svelte:105',
-  // Dashboard.svelte's SECOND placeholder -- not worded "Loading…" (it's
-  // the empty-state "Nothing needs attention right now.", the {:else} of
-  // `{#if warnings.length > 0}`) but the identical shape: single-child
-  // branch, static unvarying text, reached only from the same async
-  // overview fetch as "Loading overview…" above. Same category, different
-  // wording -- named here for the same reason.
-  'web/src/views/admin/Dashboard.svelte:120',
-  'web/src/views/admin/Pending.svelte:83',
-]);
+ * of a user action, a smaller instance of the same defect class"). `match`
+ * is the element's own static text (verified unique per file below -- two
+ * placeholders in the same file always carry different copy). A NEW site of
+ * this exact shape (single-child branch, static text, no focus target)
+ * fails this guard until it is either converted or added here by name. */
+const KNOWN_LOADING_PLACEHOLDER_REASON =
+  "Single-child {#if}/{:each} branch whose sole content is this static, unvarying text (no {expression} children) -- #0063's own fix pass named this shape a deliberate, smaller-severity remainder: it announces an initial-load state, not the result of a user action, so #0063 exempted the Loading… family rather than restructuring every one into a persistent node (issues/0063.md). Not a defect; documented here so a NEW site of this exact shape must be named too, not silently pass.";
+
+const KNOWN_LOADING_PLACEHOLDERS: AllowlistEntry[] = [
+  { file: 'web/src/views/Admin.svelte', match: 'Loading settings…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/Admin.svelte', match: 'Loading users…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/Admin.svelte', match: 'Loading audit log…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/Admin.svelte', match: 'Loading interests…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/Admin.svelte', match: 'Loading subscribers…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/Admin.svelte', match: 'Loading…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/Admin.svelte', match: 'Loading suppressions…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/Account.svelte', match: 'Loading passkeys…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/admin/Workshops.svelte', match: 'Loading workshops…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/admin/WorkshopEditor.svelte', match: 'Loading workshop…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  {
+    file: 'web/src/views/admin/WorkshopEditor.svelte',
+    match: 'Rendering preview…',
+    reason: `${KNOWN_LOADING_PLACEHOLDER_REASON} This is WorkshopEditor.svelte's SECOND placeholder -- not named anywhere in issues/0063.md (its enumeration only counted the "Loading…"-worded ones) but structurally identical, discovered by this guard's own development run; converting it means reworking the four-branch previewLoading/previewError/hasPreviewContent/else chain it sits in, out of proportion to #0242/#0243's own scope.`,
+  },
+  { file: 'web/src/views/admin/CampaignEditor.svelte', match: 'Loading campaign…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  {
+    file: 'web/src/views/admin/CampaignEditor.svelte',
+    match: 'Rendering…',
+    reason: `${KNOWN_LOADING_PLACEHOLDER_REASON} CampaignEditor.svelte's SECOND placeholder, same reasoning as WorkshopEditor.svelte's "Rendering preview…" above -- the sole content of a three-branch previewError/preview/else preview-tab chain, and reworking that chain is out of proportion to this pass's scope.`,
+  },
+  { file: 'web/src/views/admin/Deliverability.svelte', match: 'Loading deliverability data…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/admin/Deliverability.svelte', match: 'Loading history…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/admin/Campaigns.svelte', match: 'Loading campaigns…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/admin/CampaignStats.svelte', match: 'Loading stats…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/admin/Dashboard.svelte', match: 'Loading overview…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  {
+    file: 'web/src/views/admin/Dashboard.svelte',
+    match: 'Nothing needs attention right now.',
+    reason: `${KNOWN_LOADING_PLACEHOLDER_REASON} Dashboard.svelte's SECOND placeholder -- not worded "Loading…" (it's the empty-state copy, the {:else} of {#if warnings.length > 0}) but the identical shape: single-child branch, static unvarying text, reached only from the same async overview fetch as "Loading overview…" above.`,
+  },
+  { file: 'web/src/views/admin/Pending.svelte', match: 'Loading pending signups…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+];
 
 // ---------------------------------------------------------------------------
 // The guard itself
@@ -555,23 +589,71 @@ interface Violation {
   reason: string;
 }
 
+/** #0280 criterion 2: every entry in `list` whose `file` is the one being
+ * checked must carry non-empty justification text -- validated at runtime,
+ * not merely documented. Scoped to `fileName` so checkFile (called once per
+ * scanned file by the real-tree test's own loop) reports each malformed
+ * entry once, not once per file in the tree. */
+function unjustifiedEntryViolations(list: AllowlistEntry[], fileName: string): Violation[] {
+  return list
+    .filter((e) => e.file === fileName && e.reason.trim().length === 0)
+    .map((e) => ({
+      file: e.file,
+      line: 0,
+      reason: `allowlist entry match=${JSON.stringify(e.match)} carries no justification text -- a non-empty reason is a required field of an entry, not a comment beside it (#0280)`,
+    }));
+}
+
+/** #0280 criterion 3: an entry that named `fileName` but never matched any
+ * real site while that file was scanned is stale -- it must still fail
+ * loudly rather than silently doing nothing, the same as before the
+ * file:line churn fix, just keyed differently now. `used` is built by the
+ * caller as it walks this file's sites/unclassifiable list. */
+function staleEntryViolations(list: AllowlistEntry[], fileName: string, used: Set<AllowlistEntry>): Violation[] {
+  return list
+    .filter((e) => e.file === fileName && !used.has(e))
+    .map((e) => ({
+      file: e.file,
+      line: 0,
+      reason: `stale allowlist entry -- no site in ${e.file} matches match=${JSON.stringify(e.match)} (#0280); its recorded justification was: ${e.reason}`,
+    }));
+}
+
+function findAllowlistEntry(list: AllowlistEntry[], file: string, match: string): AllowlistEntry | undefined {
+  return list.find((e) => e.file === file && e.match === match);
+}
+
 /** The one real implementation. `scriptAst` is optional (undefined ==
  * "this fixture has no <script>, or its script is irrelevant") so the
  * synthetic fixtures below that don't care about focus-wiring can call
  * `checkFile(name, source)` without extracting it themselves; fixtures that
  * DO need the focus-call check pass it explicitly via `checkFile(name,
- * source, scriptAst)`. The real-tree enumeration test always passes it. */
+ * source, scriptAst)`. The real-tree enumeration test always passes it.
+ * `dynamicRoleAllowlist`/`loadingPlaceholderAllowlist` default to the real
+ * KNOWN_* sets above but are overridable (#0280 criterion 4) so the
+ * synthetic fixtures proving the justification/staleness rules can supply
+ * their own small, throwaway entries instead of mutating the real ones. */
 function checkFile(
   fileName: string,
   source: string,
   scriptAst?: SvelteNode,
+  dynamicRoleAllowlist: AllowlistEntry[] = KNOWN_DYNAMIC_ROLE_SITES,
+  loadingPlaceholderAllowlist: AllowlistEntry[] = KNOWN_LOADING_PLACEHOLDERS,
 ): { violations: Violation[]; statusSites: Site[]; alertSites: Site[]; loadingPlaceholders: Site[] } {
   const { sites, unclassifiable } = collectSites(fileName, source);
   const violations: Violation[] = [];
 
+  violations.push(...unjustifiedEntryViolations(dynamicRoleAllowlist, fileName));
+  violations.push(...unjustifiedEntryViolations(loadingPlaceholderAllowlist, fileName));
+
+  const usedDynamicRoleEntries = new Set<AllowlistEntry>();
+  const usedLoadingPlaceholderEntries = new Set<AllowlistEntry>();
+
   for (const u of unclassifiable) {
-    const key = `${u.file}:${u.line}`;
-    if (!KNOWN_DYNAMIC_ROLE_SITES.has(key)) {
+    const entry = findAllowlistEntry(dynamicRoleAllowlist, u.file, u.matchKey);
+    if (entry) {
+      usedDynamicRoleEntries.add(entry);
+    } else {
       violations.push({ file: u.file, line: u.line, reason: `UNCLASSIFIABLE: ${u.reason}` });
     }
   }
@@ -604,10 +686,13 @@ function checkFile(
       continue;
     }
 
-    const key = `${site.file}:${site.line}`;
-    if (site.isStaticOnly && KNOWN_LOADING_PLACEHOLDERS.has(key)) {
-      loadingPlaceholders.push(site);
-      continue;
+    if (site.isStaticOnly) {
+      const entry = findAllowlistEntry(loadingPlaceholderAllowlist, site.file, site.text);
+      if (entry) {
+        usedLoadingPlaceholderEntries.add(entry);
+        loadingPlaceholders.push(site);
+        continue;
+      }
     }
 
     const focusVar = findFocusTargetVar(site.governingBranch);
@@ -624,6 +709,9 @@ function checkFile(
       } no sibling element in the same branch carries tabindex="-1" + bind:this with a matching .focus() call in <script> (the whole-panel-swap alternative)`,
     });
   }
+
+  violations.push(...staleEntryViolations(dynamicRoleAllowlist, fileName, usedDynamicRoleEntries));
+  violations.push(...staleEntryViolations(loadingPlaceholderAllowlist, fileName, usedLoadingPlaceholderEntries));
 
   return { violations, statusSites, alertSites, loadingPlaceholders };
 }
@@ -812,5 +900,48 @@ describe('checkFile (synthetic fixtures)', () => {
     const { violations } = checkFile('fixture.svelte', src);
     expect(violations).toHaveLength(1);
     expect(violations[0].reason).toContain('UNCLASSIFIABLE');
+  });
+
+  // #0280 criterion 4: both new allowlist rules proven with their own
+  // throwaway entries, distinct bytes from checkFile's own violation-message
+  // template (CLAUDE.md §8) -- these fixtures assert on independently
+  // written expectation text, not a copy of the string checkFile emits.
+  it('#0280: fails a dynamic-role allowlist entry that carries no justification text, even though it matches a real site', () => {
+    const src = `{#each items as it}<li role={it.alert ? 'alert' : 'status'}>{it.message}</li>{/each}`;
+    const unjustified: AllowlistEntry[] = [
+      { file: 'fixture.svelte', match: "role={it.alert ? 'alert' : 'status'}", reason: '   ' },
+    ];
+    const { violations } = checkFile('fixture.svelte', src, undefined, unjustified, []);
+    expect(violations.some((v) => v.reason.includes('no justification text'))).toBe(true);
+    // The entry DID match the real site -- this must be the justification
+    // rule firing, not a fallback "unclassifiable, no matching entry" report.
+    expect(violations.some((v) => v.reason.startsWith('UNCLASSIFIABLE'))).toBe(false);
+  });
+
+  it('#0280: fails a loading-placeholder allowlist entry that carries no justification text', () => {
+    const src = `{#if loading}<p role="status">Loading…</p>{/if}`;
+    const unjustified: AllowlistEntry[] = [{ file: 'fixture.svelte', match: 'Loading…', reason: '' }];
+    const { violations } = checkFile('fixture.svelte', src, undefined, [], unjustified);
+    expect(violations.some((v) => v.reason.includes('no justification text'))).toBe(true);
+  });
+
+  it('#0280: fails a stale dynamic-role entry whose match no longer corresponds to any site in the file', () => {
+    const src = `<p role="status">{msg}</p>`; // no dynamic-role attribute anywhere
+    const stale: AllowlistEntry[] = [
+      { file: 'fixture.svelte', match: "role={x ? 'alert' : 'status'}", reason: 'a real, non-empty reason' },
+    ];
+    const { violations } = checkFile('fixture.svelte', src, undefined, stale, []);
+    expect(violations.some((v) => v.reason.includes('stale allowlist entry'))).toBe(true);
+  });
+
+  it('#0280: fails a stale loading-placeholder entry whose text no longer appears in the file', () => {
+    const src = `{#if loading}<p role="status">Loading…</p>{/if}`;
+    const stale: AllowlistEntry[] = [
+      { file: 'fixture.svelte', match: 'This text does not appear anywhere above', reason: 'a real, non-empty reason' },
+    ];
+    const { violations } = checkFile('fixture.svelte', src, undefined, [], stale);
+    // The real "Loading…" site is unnamed and still fails on its own merits
+    // (no matching entry); the STALE entry must ALSO be reported separately.
+    expect(violations.some((v) => v.reason.includes('stale allowlist entry'))).toBe(true);
   });
 });
