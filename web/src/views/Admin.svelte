@@ -101,6 +101,7 @@
     parseCSVHeaderRow,
     validateImportForm,
     importRowCountExceeded,
+    importCommitNoticeText,
     type ImportFormFields,
   } from '../lib/admin';
   import type {
@@ -1849,14 +1850,18 @@
           Limit: {Math.floor(IMPORT_MAX_FILE_BYTES / (1024 * 1024))} MB, {IMPORT_MAX_DATA_ROWS} rows per file.
         </p>
 
+        <!-- #0286: unconditionally rendered (empty when nothing to
+             announce) rather than {#if importCommitResult}-created
+             alongside several siblings (the revoke form, "Start a new
+             import" button below) -- the exact "created and destroyed,
+             dynamic text, no swap target" shape #0286's guard extension
+             caught here; a real remaining defect, not a false positive, so
+             it is fixed rather than allowlisted. Matches this file's own
+             settingsNotice/addressNotice pattern; text composed in
+             lib/admin.ts per this file's markup/wiring-only convention. -->
+        <p class="text-notice" role="status">{importCommitNoticeText(importCommitResult, importRevokedCount)}</p>
+
         {#if importCommitResult}
-          <p class="text-notice" role="status">
-            Committed: {importCommitResult.import.inserted_count} added, {importCommitResult.import.skipped_count} skipped
-            (already on the list or suppressed). Status: {importCommitResult.import.status}.
-            {#if importRevokedCount !== null}
-              Revoked {importRevokedCount} subscriber(s) from this batch.
-            {/if}
-          </p>
           {#if importCommitResult.import.status !== 'revoked'}
             <form class="inline-form" onsubmit={submitRevokeImport}>
               <label for="import-revoke-reason">Revoke this batch — reason</label>

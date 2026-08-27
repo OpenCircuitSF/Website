@@ -24,118 +24,92 @@
 // on insertion either way, so that check has real teeth despite the
 // decision.
 //
-// ## The role="status" rule (#0242)
+// ## The role="status" rule (#0242, extended by #0286)
 //
 // A role="status" (or an explicit aria-live="polite"/"assertive" with no
-// role="alert") element is a violation if it is BOTH:
+// role="alert") element that sits inside ANY {#if}/{:else}/{#each} branch
+// at all (site.governingBranch !== undefined -- a fully unconditional
+// element, governingBranch undefined, is never checked: that is the sound
+// "persistent node whose text mutates" case #0063 decided on) is a
+// violation unless it clears ONE of three escape hatches, tried in order:
 //
-//   1. "governing-branch dynamic" (isGoverningBranchDynamic): the NEAREST
-//      enclosing {#if}/{:else}/{#each} branch exists, and UNWRAPPING it
-//      through a chain of containers that each have exactly ONE significant
-//      child (whitespace-only Text and HTML comments don't count) leads all
-//      the way down to the element itself, with no fork along the way --
-//      i.e. the branch's entire reason for existing IS this one node (or a
-//      chain of single-purpose containers around only it, e.g. the
-//      demoted-banner shape this issue's implementation pass converted:
-//      `{#if demoted}<div role="status">...</div>{/if}`, where the branch
-//      IS the div, so unwrapping stops immediately).
+//   1. LOADING PLACEHOLDER: the element is STATICALLY-worded (no
+//      {expression} children at all -- the text never varies) and its
+//      file+text pair is named in KNOWN_LOADING_PLACEHOLDERS. #0063's own
+//      fix pass explicitly enumerated 17 (at the time of writing; see
+//      pageTitle.ts's sibling comment on drift and WorkshopEditor.svelte's
+//      own doc comment for today's count) of exactly this shape --
+//      `{#if loading}<p role="status">Loading…</p>{/if}` -- and reported
+//      them as a deliberate, smaller-severity remainder rather than
+//      converting them ("they announce an initial-load state rather than
+//      the result of a user action"). This guard's job is to hold that
+//      decision in code instead of prose, not to silently relitigate it.
 //
-//      The unwrap step is NOT optional. Every branch of a multi-state view
-//      like PreferenceCenter.svelte's loadState if/else chain wraps its
-//      ENTIRE content in one `<div class="...-content">`, so a NAIVE "does
-//      the branch's own immediate child count equal 1" check is true for
-//      EVERY branch regardless of size -- it would misclassify
-//      `settingsNotice` (nested three container-levels inside a large,
-//      stable `{:else}`) and CampaignEditor's `audience-count` (nested
-//      inside a `<Panel>` inside `{:else if campaign}`, which renders the
-//      whole rest of the editor) as governed by that huge branch, when
-//      neither notice's OWN presence is what makes it mount or unmount.
-//      Unwrapping single-child containers FIRST, and stopping the instant a
-//      level has more than one significant child (a fork -- these are the
-//      "counterexamples in the tree" #0242's title names) or zero, finds
-//      the actual smallest branch whose sole purpose is this one element.
-//      #0063's own fix commits already established the "unconditionally
-//      rendered" characterization for exactly the sites this correctly
-//      excludes. This is a real, disclosed approximation, not a proof: a
-//      two-sibling branch that toggles in lockstep with the notice would
-//      still slip past it. None exist in the tree today (verified by
-//      inspecting every violation this guard's development run produced
-//      before landing, including working through two prior, broken versions
-//      of this exact rule); a future one would not be caught by this rule
-//      alone.
-//
-//      ## Disclosed boundary (#0242 review, eba2de9): the fork case gets NO
-//      check at all, not merely an approximate one
-//
-//      The above is understated by calling this "a real, disclosed
-//      approximation" -- the review measured the actual size of the gap and
-//      it is not a narrow edge case. isGoverningBranchDynamic examines a
-//      role="status" site AT ALL only when unwrapping its governing branch
-//      reaches the element itself with no fork along the way. The instant a
-//      branch forks (more than one significant child anywhere on the
-//      unwrap path -- e.g. a heading ALONGSIDE the status paragraph, not
-//      wrapping it), this function returns false and the site is pushed
-//      straight into `statusSites` as if it were unconditionally rendered:
-//      NO persistence check, NO loading-placeholder classification, and NO
-//      focus-swap-target check. On the tree as of this pass that is 24 of
-//      the 47 status/aria-live sites that sit inside a branch at all --
-//      measured by the review, not estimated. This concrete shape passes
-//      today with zero scrutiny:
-//
-//        {#if err}
-//          <div class="wrap"><h2>Oops</h2><p role="status">{err}</p></div>
-//        {/if}
-//
-//      That is criterion 1's literal subject (a role="status" node created
-//      and destroyed by an {#if}, dynamic text, no focus target) and it is
-//      the same gap #0244's own item 1 turned out to be
-//      (PreferenceCenter.svelte's two-child `{#if
-//      showSubscribeAgainAffordance}` branch had no focus management, and
-//      this guard would not have found it either). Judged, on the #0242
-//      re-implementation pass that added this paragraph, to be out of
-//      proportion to a bounce that was solely about criterion 4's glob
-//      scope: closing it means extending isGoverningBranchDynamic to
-//      require a focus-swap target for ANY in-branch status site (not just
-//      the single-child-unwrap case) and building a
-//      KNOWN_LOADING_PLACEHOLDERS-shaped named allowlist for whichever of
-//      the 24 are genuinely stable, multi-purpose branches -- auditing 24
-//      real sites across several files is comparable in size to this
-//      guard's own original construction, not a follow-on fix. Left
-//      open and reported for its own issue rather than folded in here.
-//
-//   2. NOT a legitimate whole-panel swap: scanning that SAME governing
-//      branch's entire subtree (not just ancestors of the status element --
+//   2. WHOLE-PANEL SWAP: scanning the site's nearest-enclosing branch's
+//      ENTIRE subtree (not just ancestors of the status element --
 //      Unsubscribe.svelte's `{doneMessage}` status paragraph is a SIBLING
 //      of the `<h1 tabindex="-1" bind:this={doneHeading}>` that actually
 //      receives focus, inside the same `{:else}` branch, not an ancestor of
-//      it) for an element carrying BOTH `tabindex="-1"` and `bind:this={V}`,
-//      and the component's <script> for a `V.focus()` / `V?.focus()` call
-//      (zero arguments) anywhere -- not required to sit inside `$effect`,
-//      unlike modalFocusWiring's stricter check, because this codebase's
-//      real sites (Login.svelte, Unsubscribe.svelte, PreferenceCenter.svelte)
-//      call it from a plain `await tick(); V?.focus();` inside an async
-//      handler, not a reactive effect. This is the "legitimate alternative"
-//      #0242's criterion 2 asks the guard to distinguish rather than flag --
-//      a whole-panel swap that moves focus somewhere in its own branch
-//      instead of trying to make an inserted role="status" node announce
-//      itself.
+//      it) finds an element carrying BOTH `tabindex="-1"` and
+//      `bind:this={V}`, and the component's <script> calls `V.focus()` /
+//      `V?.focus()` (zero arguments) anywhere -- not required to sit inside
+//      `$effect`, unlike modalFocusWiring's stricter check, because this
+//      codebase's real sites (Login.svelte, Unsubscribe.svelte,
+//      PreferenceCenter.svelte, CampaignEditor.svelte) call it from a plain
+//      `await tick(); V?.focus();` inside an async handler, not a reactive
+//      effect. This is the "legitimate alternative" #0242's criterion 2
+//      asks the guard to distinguish rather than flag: when the whole
+//      branch is fresh (its FIRST appearance, the only time insertion vs.
+//      mutation matters), focus moving to SOME element within it is a real
+//      signal that orients an AT user to the new panel, after which any
+//      role="status" node already inside it mutates normally like any
+//      other live region. Nothing requires the swap target to be
+//      "about" this specific status site -- CampaignEditor.svelte's
+//      `headingEl` (focused once, when a campaign first loads) legitimately
+//      covers half a dozen status/aria-live regions scattered through that
+//      same large `{:else if campaign}` branch, because what's being
+//      verified is "does entering this subtree coincide with a focus
+//      move", not "does this exact node get read aloud".
 //
-// A role="status"/aria-live element whose governing branch has exactly one
-// significant child, has NO swap target, but is STATICALLY-worded (no
-// {expression} children at all -- the text never varies) is classified
-// separately as a LOADING PLACEHOLDER rather than a violation: #0063's own
-// fix pass explicitly enumerated 17 (at the time of writing; see
-// pageTitle.ts's sibling comment on drift and WorkshopEditor.svelte:636 for
-// today's count) of exactly this shape -- `{#if loading}<p role="status">
-// Loading…</p>{/if}` -- and reported them as a deliberate, smaller-severity
-// remainder rather than converting them ("they announce an initial-load
-// state rather than the result of a user action"). This guard's job is to
-// hold that decision in code instead of prose (#0242's own Description
-// makes exactly this argument about "a console-wide decision" living only
-// in comments), not to silently relitigate it -- but a STATIC-worded
-// element inside a single-child branch is categorically the shape #0063
-// already reviewed and named, so it is counted (KNOWN_LOADING_PLACEHOLDER
-// floor below) and reported, not silently passed.
+//   3. KNOWN STABLE BRANCH: neither of the above, but the site's file+text
+//      pair is named in KNOWN_STABLE_BRANCH_SITES -- for sites whose OWN
+//      presence is not what makes their governing branch mount or unmount
+//      (settingsNotice, nested three container-levels inside Admin.svelte's
+//      large, stable Settings-tab branch; CampaignEditor's audience-count,
+//      nested inside a <Panel> inside `{:else if campaign}`, which renders
+//      the whole rest of the editor -- the guard's own former calibration
+//      examples for why a naive "does this branch have exactly one child"
+//      rule was wrong) and which also have no focus-swap target nearby.
+//      Each entry's `reason` restates that same argument for its own site,
+//      per #0280's justification requirement -- see that set's own comment.
+//
+// #0242 originally reached checks 1 and 2 only for a site whose governing
+// branch was "single-purpose" (found by unwrapping single-child containers
+// down to the element itself, stopping at the first fork -- a fork being
+// more than one significant child anywhere on the path, e.g. a heading
+// ALONGSIDE the status paragraph rather than wrapping it). Any FORKED
+// branch bypassed both checks entirely and passed unconditionally --
+// #0242's own review measured that gap at 24 of 47 in-branch sites, this
+// concrete shape included:
+//
+//   {#if err}
+//     <div class="wrap"><h2>Oops</h2><p role="status">{err}</p></div>
+//   {/if}
+//
+// That is the same gap #0244's own item 1 turned out to be
+// (PreferenceCenter.svelte's two-child `{#if showSubscribeAgainAffordance}`
+// branch had no focus management, and the old guard would not have found
+// it either). #0286 closes it by running checks 1 and 2 for EVERY in-branch
+// site regardless of fork shape -- both were already branch-scoped, not
+// target-scoped or fork-shape-scoped, so nothing about their mechanics
+// needed to change -- with check 3 as the named escape hatch for the sites
+// that legitimately need one. This makes the single-child unwrap itself
+// (what used to be isGoverningBranchDynamic) dead code: it never controlled
+// WHAT got scanned, only WHETHER scanning happened, and now scanning always
+// happens. Removed rather than kept as an inert second mechanism sitting
+// beside the real one (CLAUDE.md §8's warning about two overlapping,
+// unexplained mechanisms) -- see the removal note in its old location,
+// just above the `Site` interface, for the fuller history.
 //
 // ## "Cannot classify" (#0242 criterion 5, #0243's dynamic-role finding)
 //
@@ -260,45 +234,44 @@ function significantNodes(fragment: SvelteNode | undefined): SvelteNode[] {
   return nodes.filter((n) => n.type !== 'Comment' && !isWhitespaceOnlyText(n));
 }
 
-/**
- * True iff `branch` (the target's nearest enclosing {#if}/{:else}/{#each}
- * fragment, or undefined for "unconditional") exists is "single-purpose":
- * unwrapping `branch` through a chain of container elements that each have
- * EXACTLY ONE significant child leads all the way down to `target` itself,
- * with no fork (a level with >1 significant children, or 0) along the way.
- *
- * This is NOT the same as "branch's own top-level child count === 1" --
- * that naive version breaks on real markup, because every branch of
- * PreferenceCenter.svelte's loadState if/else chain (and most of this
- * project's other multi-state views) wraps its ENTIRE content in one
- * `<div class="...-content">`, so the branch's OWN immediate child count is
- * always 1 regardless of how much unrelated content that div holds --
- * `settingsNotice`-shaped sites nested three levels deeper inside would be
- * wrongly flagged. Unwrapping single-child containers first (stopping the
- * instant we hit `target` itself, or a fork) finds the actual smallest
- * conditional whose entire purpose is this one element -- see the two
- * calibration cases in this file's header comment (demoted-banner: branch
- * IS `target`, stops immediately, dynamic; settingsNotice: branch unwraps
- * through div.pref-content-like wrappers into a 3+-child fork before
- * reaching the target, not dynamic).
- */
-function isGoverningBranchDynamic(target: SvelteNode, branch: SvelteNode | undefined): boolean {
-  if (!branch) return false;
-  let current: SvelteNode | undefined = branch;
-  const seen = new Set<SvelteNode>();
-  while (current) {
-    if (seen.has(current)) return false; // defensive: never loop forever
-    seen.add(current);
-    const kids = significantNodes(current);
-    if (kids.length !== 1) return false;
-    const only = kids[0];
-    if (only === target) return true;
-    const childFragment = only.fragment as SvelteNode | undefined;
-    if (!childFragment || !Array.isArray(childFragment.nodes)) return false;
-    current = childFragment;
-  }
-  return false;
-}
+// #0286 removed isGoverningBranchDynamic (the single-child-container-unwrap
+// classifier that used to live here) as no longer needed -- CLAUDE.md §8:
+// "the single-child unwrap is either removed as no longer needed or
+// retained with its reasoning restated." It computed whether a status
+// site's governing branch was "single-purpose" (unwrapping single-child
+// containers reaches the element itself with no fork), and checkFile used
+// that boolean to decide whether to run ANY check at all: single-purpose
+// branches got the placeholder/swap-target check; the instant a branch
+// forked (more than one significant child anywhere on the unwrap path --
+// e.g. a heading ALONGSIDE the status paragraph, not wrapping it), the
+// site was pushed straight into statusSites with NO check whatsoever. On
+// the tree as of #0242's review that was 24 of 47 in-branch sites getting
+// zero scrutiny -- the "disclosed boundary" this issue closes.
+//
+// The fix is not a bigger classifier; it's applying the SAME check
+// checkFile already ran for single-purpose sites to every in-branch site,
+// fork or not. That check was ALREADY branch-scoped, not target-scoped:
+// findFocusTargetVar(site.governingBranch) always scanned the site's
+// nearest-enclosing branch's WHOLE subtree (that's what let it find
+// Unsubscribe.svelte's doneHeading, a SIBLING of the status paragraph, not
+// an ancestor of it), and the placeholder lookup was always keyed on
+// site.file + site.text, never on fork-ness. So isGoverningBranchDynamic
+// never controlled WHAT got scanned -- only WHETHER scanning happened at
+// all. Once that gate is removed and every in-branch site runs the same
+// two checks, a third escape hatch (KNOWN_STABLE_BRANCH_SITES, #0280-
+// shaped) covers what's left: sites whose OWN presence isn't what makes
+// their branch mount/unmount (settingsNotice, CampaignEditor's
+// audience-count -- the guard's own former calibration examples for why
+// the naive "immediate child count" rule was wrong) but which also have no
+// focus-swap target nearby. Those two examples, and the others found
+// auditing every real violation this change produced, are now individual,
+// justified entries instead of being silently inferred by branch shape.
+// One genuine defect turned up in the same audit (not a false positive):
+// Admin.svelte's CSV-import-commit notice really was created fresh by
+// {#if importCommitResult} alongside siblings, dynamic text, no swap --
+// fixed properly (made an unconditional, persistent node) rather than
+// allowlisted, since #0280's justification field asks for a REASON, and
+// "this is actually a bug" isn't one.
 
 interface Site {
   file: string;
@@ -307,7 +280,8 @@ interface Site {
   text: string; // best-effort human-readable label for reporting/dedup
   isStaticOnly: boolean; // no ExpressionTag children at all
   governingBranch: SvelteNode | undefined; // the branch fragment, if any
-  node: SvelteNode; // the element itself -- needed by isGoverningBranchDynamic
+  node: SvelteNode; // the element itself
+  rawSource: string; // #0286: the element's own raw source -- KNOWN_STABLE_BRANCH_SITES' match key
 }
 
 interface UnclassifiableSite {
@@ -414,7 +388,15 @@ function collectSites(
             .map((k) => (k.type === 'Text' ? (k.data as string) : '{…}'))
             .join('')
             .trim();
-          sites.push({ file: fileName, line, role: kind, text, isStaticOnly, governingBranch, node: obj });
+          // #0286: the element's own raw source (opening tag through
+          // closing tag) -- KNOWN_STABLE_BRANCH_SITES' match key. `text`
+          // collapses every expression to the literal string '{…}', so two
+          // purely-dynamic sites in the SAME file (e.g. Admin.svelte's
+          // settingsNotice and addressNotice, both `{x ?? ''}`-shaped)
+          // would collide on it; the raw source -- which differs by
+          // variable name, class, etc. -- doesn't.
+          const rawSource = obj.start !== undefined && obj.end !== undefined ? source.slice(obj.start as number, obj.end as number) : '';
+          sites.push({ file: fileName, line, role: kind, text, isStaticOnly, governingBranch, node: obj, rawSource });
         }
       }
     }
@@ -585,6 +567,68 @@ const KNOWN_LOADING_PLACEHOLDERS: AllowlistEntry[] = [
   { file: 'web/src/views/admin/Pending.svelte', match: 'Loading pending signups…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
 ];
 
+/** #0286: an in-branch role="status"/aria-live site with dynamic text, no
+ * KNOWN_LOADING_PLACEHOLDERS match, and no focus-swap target -- but whose
+ * OWN presence is not what makes its governing branch mount or unmount
+ * (the branch is stable/multi-purpose far beyond this one element; this
+ * element's own creation is effectively unconditional relative to it).
+ * `match` is the element's own RAW SOURCE (Site.rawSource), not its text --
+ * `site.text` collapses every {expression} to the literal string '{…}', so
+ * two purely-dynamic sites in the same file (e.g. Admin.svelte's
+ * settingsNotice and addressNotice, both `{x ?? ''}`-shaped) would collide
+ * on it; the raw source differs by variable name, class, etc. and doesn't.
+ * Each entry restates, for its own site, the same argument #0242's now-
+ * removed single-child unwrap used to infer structurally: see this file's
+ * header for the two calibration examples (settingsNotice, audience-count)
+ * this restates. */
+const KNOWN_STABLE_BRANCH_REASON_TAB_PANEL =
+  "Unconditionally rendered itself (not wrapped in its OWN {#if}) inside one of Admin.svelte's per-tab sections -- its governing branch is the whole tab's content (many unrelated fields, forms, and other notices), so switching tabs is what mounts/unmounts it, not anything about this element. Exactly the settingsNotice/audience-count shape #0242's now-removed single-child unwrap used to infer structurally (see this file's header): the branch is stable and multi-purpose far beyond this one notice.";
+
+const KNOWN_STABLE_BRANCH_SITES: AllowlistEntry[] = [
+  {
+    file: 'web/src/views/Admin.svelte',
+    match: "<p class=\"text-notice\" role=\"status\">{settingsNotice ?? ''}</p>",
+    reason: `${KNOWN_STABLE_BRANCH_REASON_TAB_PANEL} This is settingsNotice itself -- #0242's ORIGINAL calibration example for why a naive "branch's own immediate child count" rule was wrong.`,
+  },
+  {
+    file: 'web/src/views/Admin.svelte',
+    match: "<p class=\"text-notice\" role=\"status\">{addressNotice ?? ''}</p>",
+    reason: KNOWN_STABLE_BRANCH_REASON_TAB_PANEL,
+  },
+  {
+    file: 'web/src/views/PreferenceCenter.svelte',
+    match: "<p class={saveError ? 'text-error' : 'sr-only'} aria-live=\"polite\">{saveError ?? ''}</p>",
+    reason:
+      "Unconditionally rendered (not wrapped in its own {#if}) inside the 'active' branch of loadState's if/else chain -- a large, stable branch covering the whole preference-management section (topic checkboxes, save button, leave-the-list section), not created/destroyed on account of this one error paragraph. Its own doc comment already argues this at length (#0063).",
+  },
+  {
+    file: 'web/src/views/PreferenceCenter.svelte',
+    match: "<p class={saveMessage ? 'text-notice' : 'sr-only'} role=\"status\">{saveMessage ?? ''}</p>",
+    reason:
+      "Same 'active' branch as saveError immediately above it, same reasoning: unconditional within a large, stable, multi-purpose branch.",
+  },
+  {
+    file: 'web/src/views/PreferenceCenter.svelte',
+    match: "<p class={unsubscribeError ? 'text-error' : 'sr-only'} aria-live=\"polite\">{unsubscribeError ?? ''}</p>",
+    reason:
+      "Same 'active' branch as saveError/saveMessage above (the pref-leave section within it), same reasoning: unconditional within a large, stable, multi-purpose branch, not created/destroyed by this element's own presence.",
+  },
+  {
+    file: 'web/src/views/admin/Pending.svelte',
+    match:
+      "<p class={resendNoticeByID[row.id] ? 'text-muted' : 'sr-only'} role=\"status\">\n                  {resendNoticeByID[row.id] ?? ''}\n                </p>",
+    reason:
+      "Unconditionally rendered per row (not wrapped in an inner {#if}) inside a keyed {#each pendingRows as row}'s <td> -- its own comment already states this (#0242/#0243). A brand-new row's copy of this node starts empty/sr-only (nothing to announce yet); it only becomes non-empty later via a genuine already-present-node mutation after a resend action, so a fresh row's insertion never needs to announce anything on its own.",
+  },
+  {
+    file: 'web/src/views/admin/WorkshopEditor.svelte',
+    match:
+      "<p class=\"text-warn\" role=\"status\">\n                {previewStale\n                  ? \"Showing the last saved version — your edits since then aren't included. Save to update the preview.\"\n                  : ''}\n              </p>",
+    reason:
+      "Unconditionally rendered (not wrapped in its own {#if previewStale} -- only its TEXT is a ternary) inside the editor's main form, which mounts once when the workshop record loads and stays mounted across ordinary editing. Its own doc comment already argues this at length (#0063): this <p> stays mounted for as long as hasPreviewContent is true rather than being created fresh by an inner {#if previewStale}.",
+  },
+];
+
 // ---------------------------------------------------------------------------
 // The guard itself
 // ---------------------------------------------------------------------------
@@ -645,15 +689,18 @@ function checkFile(
   scriptAst?: SvelteNode,
   dynamicRoleAllowlist: AllowlistEntry[] = KNOWN_DYNAMIC_ROLE_SITES,
   loadingPlaceholderAllowlist: AllowlistEntry[] = KNOWN_LOADING_PLACEHOLDERS,
+  stableBranchAllowlist: AllowlistEntry[] = KNOWN_STABLE_BRANCH_SITES,
 ): { violations: Violation[]; statusSites: Site[]; alertSites: Site[]; loadingPlaceholders: Site[] } {
   const { sites, unclassifiable } = collectSites(fileName, source);
   const violations: Violation[] = [];
 
   violations.push(...unjustifiedEntryViolations(dynamicRoleAllowlist, fileName));
   violations.push(...unjustifiedEntryViolations(loadingPlaceholderAllowlist, fileName));
+  violations.push(...unjustifiedEntryViolations(stableBranchAllowlist, fileName));
 
   const usedDynamicRoleEntries = new Set<AllowlistEntry>();
   const usedLoadingPlaceholderEntries = new Set<AllowlistEntry>();
+  const usedStableBranchEntries = new Set<AllowlistEntry>();
 
   for (const u of unclassifiable) {
     const entry = findAllowlistEntry(dynamicRoleAllowlist, u.file, u.matchKey);
@@ -684,10 +731,12 @@ function checkFile(
       continue;
     }
 
-    // role === 'status'
-    const governingDynamic = isGoverningBranchDynamic(site.node, site.governingBranch);
-
-    if (!governingDynamic) {
+    // role === 'status'. #0286: EVERY in-branch site runs the same checks
+    // below, not just the ones whose branch used to unwrap to a single
+    // purpose -- see this file's header for why that gate is gone. A site
+    // with no governing branch at all (unconditional) is the sound
+    // "persistent node" case and needs no check.
+    if (site.governingBranch === undefined) {
       statusSites.push(site);
       continue;
     }
@@ -707,17 +756,25 @@ function checkFile(
       continue;
     }
 
+    const stableBranchEntry = findAllowlistEntry(stableBranchAllowlist, site.file, site.rawSource);
+    if (stableBranchEntry) {
+      usedStableBranchEntries.add(stableBranchEntry);
+      statusSites.push(site); // named, justified: own presence doesn't govern the branch
+      continue;
+    }
+
     violations.push({
       file: site.file,
       line: site.line,
-      reason: `role="status" element is the sole content of an {#if}/{:each} branch (created and destroyed with it)${
+      reason: `role="status" element sits inside an {#if}/{:each} branch${
         site.isStaticOnly ? ' -- not a KNOWN_LOADING_PLACEHOLDER, and' : ', with dynamic text --'
-      } no sibling element in the same branch carries tabindex="-1" + bind:this with a matching .focus() call in <script> (the whole-panel-swap alternative)`,
+      } no sibling element in the same branch carries tabindex="-1" + bind:this with a matching .focus() call in <script> (the whole-panel-swap alternative), and it is not named in KNOWN_STABLE_BRANCH_SITES`,
     });
   }
 
   violations.push(...staleEntryViolations(dynamicRoleAllowlist, fileName, usedDynamicRoleEntries));
   violations.push(...staleEntryViolations(loadingPlaceholderAllowlist, fileName, usedLoadingPlaceholderEntries));
+  violations.push(...staleEntryViolations(stableBranchAllowlist, fileName, usedStableBranchEntries));
 
   return { violations, statusSites, alertSites, loadingPlaceholders };
 }
@@ -804,22 +861,43 @@ describe('checkFile (synthetic fixtures)', () => {
     const src = `{#if loadState === 'error'}<p role="status">{errorMessage}</p>{/if}`;
     const { violations } = checkFile('fixture.svelte', src);
     expect(violations).toHaveLength(1);
-    expect(violations[0].reason).toContain('created and destroyed');
+    expect(violations[0].reason).toContain('sits inside an {#if}/{:each} branch');
   });
 
-  it('does not flag a role="status" node in a branch with multiple significant siblings (the settingsNotice/audience-count shape)', () => {
-    const src = `{:else}
+  // #0286 criterion 4: proves the guard NOW catches the shape it used to
+  // wave through unconditionally -- a role="status" site inside a branch
+  // with multiple significant siblings (a fork), which used to bypass
+  // every check (the "disclosed boundary" this file's header describes).
+  // This is the PreferenceCenter.svelte item-1 shape #0244 fixed and
+  // #0242's own guard would not have caught (its own Description).
+  it('#0286: flags a role="status" node in a forked branch (multiple significant siblings) that has neither a swap target nor a KNOWN_STABLE_BRANCH_SITES entry', () => {
+    const src = `{#if x}<p>other</p>{:else}
       <div class="row-a"></div>
       <p role="status">{notice ?? ''}</p>
       <div class="row-b"></div>
     {/if}`;
-    // {:else} alone isn't valid Svelte outside an {#if}; wrap it properly:
-    const wrapped = `{#if x}<p>other</p>{:else}
+    const { violations, statusSites } = checkFile('fixture.svelte', src);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].reason).toContain('not named in KNOWN_STABLE_BRANCH_SITES');
+    expect(statusSites).toHaveLength(0);
+  });
+
+  // Same shape, but now WITH a stable-branch allowlist entry naming this
+  // exact site's raw source -- proves the escape hatch itself works, and
+  // (CLAUDE.md §8) that its oracle isn't just "any non-empty entry": a
+  // stale/mismatched match still fails (proved separately, #0280-style,
+  // below), matching the settingsNotice/audience-count shape #0242's now-
+  // removed single-child unwrap used to infer structurally instead.
+  it('#0286: does not flag the same forked-branch role="status" node once it is named in KNOWN_STABLE_BRANCH_SITES', () => {
+    const src = `{#if x}<p>other</p>{:else}
       <div class="row-a"></div>
       <p role="status">{notice ?? ''}</p>
       <div class="row-b"></div>
     {/if}`;
-    const { violations, statusSites } = checkFile('fixture.svelte', wrapped);
+    const stable: AllowlistEntry[] = [
+      { file: 'fixture.svelte', match: `<p role="status">{notice ?? ''}</p>`, reason: 'settingsNotice/audience-count-shaped: this element is not what makes the {:else} branch mount or unmount.' },
+    ];
+    const { violations, statusSites } = checkFile('fixture.svelte', src, undefined, undefined, undefined, stable);
     expect(violations).toHaveLength(0);
     expect(statusSites).toHaveLength(1);
   });

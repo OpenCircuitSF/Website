@@ -49,8 +49,10 @@ import {
   parseCSVHeaderRow,
   validateImportForm,
   importRowCountExceeded,
+  importCommitNoticeText,
   type ImportFormFields,
 } from './admin';
+import type { ImportCommitResult } from './api';
 
 function adminUser(overrides: Partial<AdminUser> = {}): AdminUser {
   return {
@@ -755,5 +757,43 @@ describe('importRowCountExceeded', () => {
   it('is false at and under the bound, true over it', () => {
     expect(importRowCountExceeded(IMPORT_MAX_DATA_ROWS)).toBe(false);
     expect(importRowCountExceeded(IMPORT_MAX_DATA_ROWS + 1)).toBe(true);
+  });
+});
+
+describe('importCommitNoticeText (#0286)', () => {
+  function commitResult(overrides: Partial<ImportCommitResult['import']> = {}): ImportCommitResult {
+    return {
+      import: {
+        id: 1,
+        source: 'other',
+        consent_mode: 'prior_consent',
+        consent_note: 'opted in at the source',
+        collected_at: '2026-08-01',
+        row_count: 10,
+        inserted_count: 8,
+        skipped_count: 2,
+        status: 'committed',
+        created_at: '2026-08-27T00:00:00Z',
+        ...overrides,
+      },
+    };
+  }
+
+  it('is empty when there is no commit result yet', () => {
+    expect(importCommitNoticeText(null, null)).toBe('');
+  });
+
+  it('reports inserted/skipped counts and status', () => {
+    const text = importCommitNoticeText(commitResult({ inserted_count: 8, skipped_count: 2, status: 'committed' }), null);
+    expect(text).toBe('Committed: 8 added, 2 skipped (already on the list or suppressed). Status: committed.');
+  });
+
+  it('appends the revoked-count sentence only when a revocation has happened', () => {
+    const withoutRevoke = importCommitNoticeText(commitResult(), null);
+    expect(withoutRevoke).not.toContain('Revoked');
+
+    const withRevoke = importCommitNoticeText(commitResult({ status: 'revoked' }), 8);
+    expect(withRevoke).toContain('Revoked 8 subscriber(s) from this batch.');
+    expect(withRevoke).toContain('Status: revoked.');
   });
 });

@@ -6,6 +6,7 @@
 // a DOM — see admin.test.ts.
 
 import type { AdminUser, AuditEntry, Interest, Subscriber } from './types';
+import type { ImportCommitResult } from './api';
 
 // ── Deactivation reasons (user management) ───────────────────────────────────
 // The six account.deactivated reason values from the PRD "Deactivation reasons"
@@ -715,6 +716,33 @@ export const CONSENT_MODES: readonly ConsentModeOption[] = [
  */
 export const IMPORT_CANSPAM_WARNING =
   'Importing addresses without genuine prior consent is unlawful under CAN-SPAM and GDPR, and burns this domain’s sending reputation. Only import an audience that clearly opted in at the source, and say how in the note below.';
+
+/**
+ * #0286: composes the CSV import commit result's screen-reader
+ * announcement text. Moved out of Admin.svelte's template so the
+ * `role="status"` paragraph that shows it can be an unconditionally
+ * rendered, persistent node (mutating from '' to this text) rather than
+ * one created fresh by `{#if importCommitResult}` alongside several
+ * siblings (the revoke form, "Start a new import" button) -- the exact
+ * "created and destroyed, dynamic text, no swap target" shape #0286's own
+ * guard extension started catching, and a real remaining instance of it
+ * (not a false positive requiring an allowlist entry, unlike this file's
+ * settingsNotice/addressNotice, which stay allowlisted because THEY really
+ * are unconditional already). Empty string when there's nothing to report
+ * yet.
+ */
+export function importCommitNoticeText(
+  result: ImportCommitResult | null,
+  revokedCount: number | null,
+): string {
+  if (!result) return '';
+  const { inserted_count, skipped_count, status } = result.import;
+  let text = `Committed: ${inserted_count} added, ${skipped_count} skipped (already on the list or suppressed). Status: ${status}.`;
+  if (revokedCount !== null) {
+    text += ` Revoked ${revokedCount} subscriber(s) from this batch.`;
+  }
+  return text;
+}
 
 /**
  * parseCSVHeaderRow splits a CSV file's first line into column names for
