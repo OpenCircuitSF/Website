@@ -636,13 +636,22 @@ func (s *CampaignStore) Update(ctx context.Context, id int64, in CampaignUpdate)
 	// merges-then-calls-Update without touching this field never trips the
 	// check; a genuinely different slug is refused unless status is still
 	// draft.
+	//
+	// An empty in.Slug is treated as "keep current" rather than as a value
+	// to write (review of #0123, 2026-08-27): AdminCampaignsHandler.Patch
+	// once built CampaignUpdate without a Slug field at all, so every PATCH
+	// carried the zero value and blanked the column outright, tripping
+	// email_campaigns' UNIQUE(slug) on the second draft edited and hitting
+	// ErrCampaignSlugNotEditable (unmapped to any HTTP status, so a 500) on
+	// any scheduled campaign's edit. The handler is fixed to pass the
+	// current value through explicitly, but this guard makes the same
+	// omission by any future caller harmless rather than destructive.
 	slug := in.Slug
-	if slug != current.Slug {
-		if current.Status != CampaignStatusDraft {
-			return Campaign{}, ErrCampaignSlugNotEditable
-		}
-	} else {
+	if slug == "" {
 		slug = current.Slug
+	}
+	if slug != current.Slug && current.Status != CampaignStatusDraft {
+		return Campaign{}, ErrCampaignSlugNotEditable
 	}
 
 	// See the "test_sent_at" doc comment above: a subject or body_md change

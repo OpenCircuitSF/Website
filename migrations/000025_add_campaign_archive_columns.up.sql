@@ -22,6 +22,21 @@
 -- column lands in, not whether a backfill is needed.
 ALTER TABLE email_campaigns ADD COLUMN slug TEXT UNIQUE NOT NULL;
 
+-- NOT NULL alone does not stop an empty string, and "slug is never blank" is
+-- an invariant the worker (CompleteIfDone), the SEO adapter, and the email
+-- renderer's "View this email in your browser" link (which gates on
+-- Slug != "") all rely on. Added in review of #0123 (2026-08-27) after
+-- AdminCampaignsHandler.Patch was found to construct mailing.CampaignUpdate
+-- without a Slug field, silently writing '' through Update on every PATCH.
+-- The application-level fixes (the handler now passes the current slug
+-- through; CampaignStore.Update treats an empty CampaignUpdate.Slug as
+-- "keep current") make that specific bug impossible, but this constraint is
+-- the backstop that makes ANY future caller's omission fail loudly at the
+-- database instead of storing an empty slug.
+ALTER TABLE email_campaigns
+    ADD CONSTRAINT email_campaigns_slug_not_blank_check
+    CHECK (btrim(slug) <> '');
+
 -- archive_status: 'pending' until the campaign is actually sent (the
 -- worker's CompleteIfDone stamps 'published' + archived_at in the same
 -- UPDATE that flips status to 'sent' -- see internal/mailing/worker_store.go).

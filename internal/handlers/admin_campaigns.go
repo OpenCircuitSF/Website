@@ -470,6 +470,13 @@ type patchCampaignRequest struct {
 	BodyMD       *string  `json:"body_md,omitempty"`
 	AudienceMode *string  `json:"audience_mode,omitempty"`
 	InterestIDs  *[]int64 `json:"interest_ids,omitempty"`
+	// Slug is #0123, PRD §6.8: the campaign's archive-page slug. Nil leaves
+	// it unchanged (mailing.CampaignStore.Update also treats an empty Slug
+	// as "keep current" as defence in depth — see CampaignUpdate.Slug's own
+	// doc comment — but this handler must still pass the *current* value
+	// through on every request, not the zero value, or a caller that omits
+	// this field blanks the column outright).
+	Slug *string `json:"slug,omitempty"`
 }
 
 // Patch handles PATCH /admin/campaigns/{id}: loads the current row, merges
@@ -543,6 +550,15 @@ func (h *AdminCampaignsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	if req.InterestIDs != nil {
 		interestIDs = *req.InterestIDs
 	}
+	slug := current.Slug
+	if req.Slug != nil {
+		trimmed := strings.TrimSpace(*req.Slug)
+		if trimmed == "" {
+			writeError(w, http.StatusBadRequest, "slug cannot be empty")
+			return
+		}
+		slug = trimmed
+	}
 
 	updated, err := h.store.Update(r.Context(), id, mailing.CampaignUpdate{
 		Name:         name,
@@ -551,6 +567,7 @@ func (h *AdminCampaignsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		BodyMD:       bodyMD,
 		AudienceMode: audienceMode,
 		InterestIDs:  interestIDs,
+		Slug:         slug,
 	})
 	switch {
 	case err == nil:
@@ -559,6 +576,12 @@ func (h *AdminCampaignsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, mailing.ErrCampaignNotEditable):
 		writeError(w, http.StatusConflict, "a campaign can only be edited while draft or scheduled")
+		return
+	case errors.Is(err, mailing.ErrCampaignSlugNotEditable):
+		writeError(w, http.StatusConflict, "a campaign slug can only be changed while it is a draft")
+		return
+	case errors.Is(err, mailing.ErrCampaignSlugTaken):
+		writeError(w, http.StatusConflict, "that slug is already in use")
 		return
 	case errors.Is(err, mailing.ErrUnknownAudienceMode), errors.Is(err, mailing.ErrCampaignInterestsRequired):
 		writeError(w, http.StatusBadRequest, campaignAudienceErrorMessage(err))

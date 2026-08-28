@@ -180,6 +180,56 @@ func TestCampaignStore_Update_SlugCollisionReturnsTypedError(t *testing.T) {
 	}
 }
 
+// TestCampaignStore_Update_ZeroValueSlugKeepsCurrent is the store-level half
+// of the review-of-#0123 fix (2026-08-27): AdminCampaignsHandler.Patch used
+// to build a mailing.CampaignUpdate with no Slug field at all, so every
+// PATCH sent the zero value and Update wrote "" straight into the column --
+// destroying a draft's archive URL on an ordinary content edit, and 500ing
+// on a scheduled campaign's edit (ErrCampaignSlugNotEditable, unmapped by
+// the handler) or a second draft's edit (the UNIQUE(slug) constraint, two
+// rows both wanting an empty slug). Update now treats an empty in.Slug as
+// "keep current" rather than as a value to write -- this proves that directly,
+// bypassing the handler entirely, so the guard holds even if some future
+// caller repeats the handler's old omission.
+func TestCampaignStore_Update_ZeroValueSlugKeepsCurrent(t *testing.T) {
+	pool := testPool(t)
+	store := NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), CampaignInput{
+		Name: uniqueCampaignName(t), Subject: "Subject", BodyMD: "b", AudienceMode: AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	cleanupCampaign(t, pool, c.ID)
+	if c.Slug == "" {
+		t.Fatalf("seeded campaign has empty slug, precondition failed")
+	}
+
+	updated, err := store.Update(context.Background(), c.ID, CampaignUpdate{
+		Name: c.Name, Subject: "new subject", BodyMD: c.BodyMD, AudienceMode: c.AudienceMode,
+		// Slug deliberately omitted -- the zero value, exactly what the
+		// pre-fix handler sent on every PATCH.
+	})
+	if err != nil {
+		t.Fatalf("Update with zero-value Slug: %v", err)
+	}
+	if updated.Slug != c.Slug {
+		t.Errorf("Slug = %q after zero-value-Slug Update, want unchanged %q", updated.Slug, c.Slug)
+	}
+	if updated.Subject != "new subject" {
+		t.Errorf("Subject = %q, want %q (other fields must still apply)", updated.Subject, "new subject")
+	}
+
+	// Read back from the database, not just the returned struct.
+	reloaded, err := store.GetByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("GetByID after update: %v", err)
+	}
+	if reloaded.Slug != c.Slug {
+		t.Errorf("stored Slug = %q, want unchanged %q", reloaded.Slug, c.Slug)
+	}
+}
+
 // ── GetBySlug ─────────────────────────────────────────────────────────────────
 
 func TestCampaignStore_GetBySlug_Found(t *testing.T) {

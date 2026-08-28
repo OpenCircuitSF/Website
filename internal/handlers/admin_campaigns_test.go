@@ -465,6 +465,212 @@ func TestAdminCampaigns_Patch_NotEditableWhenSending(t *testing.T) {
 	}
 }
 
+// The six tests below are the review-of-#0123 remedy (2026-08-27):
+// AdminCampaignsHandler.Patch built mailing.CampaignUpdate with no Slug
+// field, so every PATCH sent the zero value straight through to Update,
+// which used to write it unconditionally. Three user-visible failures fell
+// out of that one omission -- an ordinary content edit blanked a draft's
+// slug (destroying its archive URL), editing a *scheduled* campaign 500'd
+// (ErrCampaignSlugNotEditable was unmapped), and a second draft edited in
+// the same run 500'd on the UNIQUE(slug) collision (ErrCampaignSlugTaken
+// was also unmapped). All six tests below go through the real mux and a
+// real database, per the reviewer's own methodology -- a store-level test
+// that hand-builds CampaignUpdate cannot catch a caller that builds it
+// wrong, which is exactly how this shipped the first time.
+
+// TestAdminCampaigns_Patch_RoundTripsSlugOnOrdinaryEdit is the core
+// regression: an ordinary content-only PATCH of a draft must not touch the
+// slug at all.
+func TestAdminCampaigns_Patch_RoundTripsSlugOnOrdinaryEdit(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-slug-roundtrip@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-slug-roundtrip")
+
+	store := mailing.NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "roundtrip subject", BodyMD: "old body", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, c.ID)
+	if c.Slug == "" {
+		t.Fatalf("seeded campaign has empty slug, precondition failed")
+	}
+
+	body := `{"body_md":"new body"}`
+	resp := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, c.ID), "admin-token-campaigns-slug-roundtrip", body)
+	respBody := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, respBody)
+	}
+	updated := decodeCampaign(t, respBody)
+	if updated.Slug != c.Slug {
+		t.Errorf("Slug = %q in PATCH response, want unchanged %q", updated.Slug, c.Slug)
+	}
+
+	// Read back from the database, not just the response body.
+	reloaded, err := store.GetByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("GetByID after patch: %v", err)
+	}
+	if reloaded.Slug != c.Slug {
+		t.Errorf("stored Slug = %q, want unchanged %q", reloaded.Slug, c.Slug)
+	}
+}
+
+// TestAdminCampaigns_Patch_ScheduledCampaignEditSucceeds proves the second
+// failure the review found -- PATCH of a scheduled campaign with no slug in
+// the body used to 500 (ErrCampaignSlugNotEditable was unmapped in Patch's
+// error switch) -- is fixed. Editing a scheduled campaign is a supported
+// operation (ErrCampaignNotEditable only fires outside draft|scheduled).
+func TestAdminCampaigns_Patch_ScheduledCampaignEditSucceeds(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-slug-scheduled@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-slug-scheduled")
+
+	store := mailing.NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "scheduled subject", BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, c.ID)
+	forceAdminCampaignStatus(t, pool, c.ID, mailing.CampaignStatusScheduled)
+
+	body := `{"subject":"scheduled subject, edited"}`
+	resp := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, c.ID), "admin-token-campaigns-slug-scheduled", body)
+	respBody := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, respBody)
+	}
+	updated := decodeCampaign(t, respBody)
+	if updated.Slug != c.Slug {
+		t.Errorf("Slug = %q, want unchanged %q", updated.Slug, c.Slug)
+	}
+	if updated.Subject != "scheduled subject, edited" {
+		t.Errorf("Subject = %q, want %q", updated.Subject, "scheduled subject, edited")
+	}
+}
+
+// TestAdminCampaigns_Patch_TwoDraftsInSequenceBothSucceed is the third
+// failure the review found -- only one row can hold slug=” under the
+// UNIQUE constraint, so the second of two drafts PATCHed in a run used to
+// 500 once the first PATCH had already blanked its own slug.
+func TestAdminCampaigns_Patch_TwoDraftsInSequenceBothSucceed(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-slug-twodrafts@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-slug-twodrafts")
+
+	store := mailing.NewCampaignStore(pool)
+	a, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "draft a " + uniqueAdminCampaignName(t), BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign a: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, a.ID)
+	b, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "draft b " + uniqueAdminCampaignName(t), BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign b: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, b.ID)
+
+	respA := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, a.ID), "admin-token-campaigns-slug-twodrafts", `{"body_md":"a edited"}`)
+	if respA.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH draft a status = %d, want 200 (body=%s)", respA.StatusCode, readBody(t, respA))
+	}
+	respB := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, b.ID), "admin-token-campaigns-slug-twodrafts", `{"body_md":"b edited"}`)
+	bodyB := readBody(t, respB)
+	if respB.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH draft b status = %d, want 200 (body=%s)", respB.StatusCode, bodyB)
+	}
+	updatedB := decodeCampaign(t, bodyB)
+	if updatedB.Slug != b.Slug {
+		t.Errorf("draft b Slug = %q, want unchanged %q", updatedB.Slug, b.Slug)
+	}
+	if updatedB.Slug == a.Slug {
+		t.Errorf("draft b Slug collided with draft a's slug %q", a.Slug)
+	}
+}
+
+// TestAdminCampaigns_Patch_ScheduledCampaignSlugChangeReturns409 proves an
+// explicit slug change on a scheduled campaign is a 409 (the correct,
+// documented refusal), not the 500 the unmapped ErrCampaignSlugNotEditable
+// used to produce.
+func TestAdminCampaigns_Patch_ScheduledCampaignSlugChangeReturns409(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-slug-409@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-slug-409")
+
+	store := mailing.NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "subject", BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, c.ID)
+	forceAdminCampaignStatus(t, pool, c.ID, mailing.CampaignStatusScheduled)
+
+	body := fmt.Sprintf(`{"slug":%q}`, c.Slug+"-different")
+	resp := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, c.ID), "admin-token-campaigns-slug-409", body)
+	respBody := readBody(t, resp)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", resp.StatusCode, respBody)
+	}
+}
+
+// TestAdminCampaigns_Patch_SlugCollisionReturns409 proves a genuine slug
+// collision on a draft is a 409, not the 500 the unmapped
+// ErrCampaignSlugTaken used to produce.
+func TestAdminCampaigns_Patch_SlugCollisionReturns409(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-slug-collision@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-slug-collision")
+
+	store := mailing.NewCampaignStore(pool)
+	a, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "collision a " + uniqueAdminCampaignName(t), BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign a: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, a.ID)
+	b, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "collision b " + uniqueAdminCampaignName(t), BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign b: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, b.ID)
+
+	body := fmt.Sprintf(`{"slug":%q}`, a.Slug)
+	resp := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, b.ID), "admin-token-campaigns-slug-collision", body)
+	respBody := readBody(t, resp)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", resp.StatusCode, respBody)
+	}
+}
+
 // ── Send ─────────────────────────────────────────────────────────────────────
 
 func TestAdminCampaigns_Send_DraftToScheduled(t *testing.T) {
