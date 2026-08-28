@@ -1752,6 +1752,112 @@ func TestWorker_SendOne_SESCallAndStatusWriteSurviveAmbientCancellation(t *testi
 	}
 }
 
+// TestWorker_SendOne_ClaimRowTimesOutRatherThanHangingIndefinitely is #0302
+// criterion 4's DB-backed proof: sendOne's ClaimRow call (the first
+// statement it runs, per its own doc comment) must not be able to hold a
+// row in an in-between state indefinitely if the underlying round trip
+// hangs.
+//
+// A genuinely stuck network read is not reproducible on demand, so this
+// simulates "hung" the way it actually manifests to a caller: a
+// competing, deliberately never-committed transaction holds email_sends'
+// row lock on the target send from a SEPARATE connection, so ClaimRow's
+// own `UPDATE ... WHERE id = $1 AND status = 'queued'` genuinely blocks at
+// the database level, exactly as it would against a slow query ahead of
+// it. failureWriteTimeout is shrunk for this test only (restored via
+// t.Cleanup, CLAUDE.md's "a var, not a const, so a test can shrink it"
+// convention) so the assertion does not have to wait out the real
+// production value to prove the point.
+//
+// Before #0302, sendOne's ClaimRow call ran on whatever ctx its caller
+// passed — here, context.Background(), with no deadline of its own — so
+// against this same row lock it would block until the lock is released,
+// which this test never does until cleanup: mutating ClaimRow's call site
+// in sendOne back to context.WithTimeout(ctx, …) (i.e. deriving from the
+// parameter instead of a fresh context.Background()) reproduces that:
+// verified by hand in a throwaway worktree (git worktree add, own scratch
+// database, `go test -timeout 15s -run
+// TestWorker_SendOne_ClaimRowTimesOutRatherThanHangingIndefinitely`),
+// where the mutated version hits the 15s test-runner timeout rather than
+// returning — the row lock in that run is held open only by the test
+// process's own cleanup never running (the test never got a chance to
+// finish), so the hang is real, not simulated. Worktree removed and
+// pruned afterward; not left in this tree, since a permanently-hanging
+// mutation fixture is worse than a documented manual proof (CLAUDE.md's
+// "an oracle must not share its method with its subject" spirit applied
+// to a liveness proof rather than a value comparison).
+func TestWorker_SendOne_ClaimRowTimesOutRatherThanHangingIndefinitely(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	forceSending(t, pool, campaignID)
+	sendID, _, _ := seedQueuedSend(t, pool, campaignID)
+
+	origTimeout := failureWriteTimeout
+	failureWriteTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { failureWriteTimeout = origTimeout })
+
+	w := newTestWorker(t, pool, &RecordingMailer{})
+
+	c, err := w.store.ClaimResume(context.Background())
+	if err != nil || c == nil {
+		t.Fatalf("ClaimResume: c=%+v err=%v", c, err)
+	}
+	recipients, err := w.store.ClaimBatch(context.Background(), c.ID, 10)
+	if err != nil || len(recipients) != 1 {
+		t.Fatalf("ClaimBatch: recipients=%+v err=%v", recipients, err)
+	}
+
+	// Hold email_sends' row lock on sendID from a separate connection,
+	// released only at this test's cleanup — well after every assertion
+	// below has run.
+	conn, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("acquiring a lock-holder connection: %v", err)
+	}
+	t.Cleanup(conn.Release)
+	lockTx, err := conn.Begin(context.Background())
+	if err != nil {
+		t.Fatalf("beginning lock-holder tx: %v", err)
+	}
+	t.Cleanup(func() { _ = lockTx.Rollback(context.Background()) })
+	if _, err := lockTx.Exec(context.Background(), `SELECT id FROM email_sends WHERE id = $1 FOR UPDATE`, sendID); err != nil {
+		t.Fatalf("locking send row %d: %v", sendID, err)
+	}
+
+	physicalAddress, err := w.settings.GetSetting(context.Background(), settingPhysicalAddress)
+	if err != nil {
+		t.Fatalf("read physical_address: %v", err)
+	}
+	fromHeader := w.resolveFromHeader(context.Background())
+
+	start := time.Now()
+	outcome, sendErr := w.sendOne(context.Background(), c, recipients[0], physicalAddress, fromHeader)
+	elapsed := time.Since(start)
+
+	// A generous upper bound — the point is proving sendOne returned via
+	// ClaimRow's own deadline, not by waiting out the row lock (which this
+	// test holds open for the rest of its lifetime, well past this
+	// bound).
+	if elapsed > 3*time.Second {
+		t.Fatalf("sendOne took %s to return while ClaimRow's target row was locked — failureWriteTimeout (%s) did not bound it (#0302)", elapsed, failureWriteTimeout)
+	}
+	if sendErr != nil {
+		t.Fatalf("sendOne err = %v, want nil (a lost/failed claim is reported via outcome, not an error)", sendErr)
+	}
+	if outcome != sendOutcomeSkipped {
+		t.Fatalf("outcome = %v, want sendOutcomeSkipped (ClaimRow could not complete against the locked row within its bound)", outcome)
+	}
+
+	// The row itself must be untouched: ClaimRow's UPDATE never committed
+	// (its context expired before the lock was available), so the row is
+	// still exactly as seedQueuedSend left it.
+	if got := sendRowStatus(t, pool, sendID); got != "queued" {
+		t.Fatalf("send row status = %q, want queued (ClaimRow's blocked UPDATE must not have partially applied)", got)
+	}
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 func auditLoggerForTest(t *testing.T, pool *pgxpool.Pool) *audit.Logger {

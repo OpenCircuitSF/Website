@@ -110,6 +110,26 @@ const (
 	backoffCap = 30 * time.Second
 )
 
+// failureWriteTimeout bounds each of sendOne's failure-path writes — ClaimRow,
+// MarkFailedRow, MarkRetryOrFailed — and drainLoop's ReleaseRow on the
+// sendOutcomeTerminalCampaign path (#0302). Each of those calls now runs on
+// its own detached context.WithTimeout(context.Background(), …), the same
+// pattern the success path's sendCtx/writeCtx/eventCtx already use, rather
+// than on the caller's ambient ctx — which, before #0302, had no deadline of
+// its own at all (Worker.Run is started as
+// `go sendWorker.Run(context.Background())`).
+//
+// A separate var initialized FROM writeStatusTimeout (#0302 criterion 2: "the
+// same constants the success path uses, not a new hand-picked number"), not
+// writeStatusTimeout itself — every one of these calls is a single-row
+// UPDATE, the exact shape writeStatusTimeout already bounds for MarkSent. Kept
+// as its own var, not a straight reuse of writeStatusTimeout at each call
+// site, so a test can shrink JUST the failure-path bound (to prove a hung
+// write cannot hold 'sending' past it — see
+// TestWorker_SendOne_ClaimRowTimesOutRatherThanHangingIndefinitely,
+// worker_test.go) without also perturbing the success path's own timing.
+var failureWriteTimeout = writeStatusTimeout
+
 // orphanStaleAfter bounds how long a row may legitimately sit in 'sending'
 // before OrphanSweep treats it as abandoned by a crashed worker rather than
 // held by a live one (#0122).
@@ -163,20 +183,50 @@ const (
 // margin, not the ~1s (and, briefly, negative) margin
 // outboxOrphanStaleAfter's now-superseded early attempts left themselves.
 //
-// # Still not a STRICT bound
+// # #0302 — the failure path is bounded too, now
 //
 // Worker.Run is started as `go sendWorker.Run(context.Background())`
-// (cmd/opencircuit/main.go), and drainLoop's calls to ClaimRow itself, and
-// — on the retryable/terminal-row failure paths — MarkFailedRow and
-// MarkRetryOrFailed, all run on that plain ctx rather than a bounded
-// detached context the way the success path's sendCtx/writeCtx are. A slow
-// or hanging round trip on any of THOSE calls is therefore not
-// deadline-bound at all — the same undeadlined-context residual #0284
-// named for outboxOrphanStaleAfter. No expression over sendMessageTimeout
-// and writeStatusTimeout is ever a strict bound for that reason;
-// tightening it would mean giving those calls their own detached,
-// timeout-bounded contexts, which is a real, separate change outside this
-// doc comment's scope — worth its own issue if it is ever wanted.
+// (cmd/opencircuit/main.go). Through #0295, drainLoop's calls to ClaimRow
+// itself, and — on the retryable/terminal-row failure paths —
+// MarkFailedRow and MarkRetryOrFailed, all ran on that plain ctx, with no
+// deadline of its own, rather than a bounded detached context the way the
+// success path's sendCtx/writeCtx already were. A slow or hanging round
+// trip on any of THOSE calls was therefore not deadline-bound at all — the
+// same undeadlined-context residual #0284 named for
+// outboxOrphanStaleAfter.
+//
+// #0302 closed that: sendOne's ClaimRow/MarkFailedRow/MarkRetryOrFailed
+// calls, and drainLoop's ReleaseRow on the sendOutcomeTerminalCampaign
+// path, now each run on their own detached
+// context.WithTimeout(context.Background(), failureWriteTimeout) — see
+// failureWriteTimeout's own doc comment (above this var) — exactly
+// mirroring the success path's sendCtx/writeCtx/eventCtx precedent
+// instead of the ambient ctx. The fuller worst case, now that EVERY DB
+// round trip in a claimed row's lifecycle is bounded on some path or
+// another: ClaimRow's own round trip (failureWriteTimeout, if the
+// RETURNING scan alone hangs after claimed_at has already committed
+// server-side) plus one attempt's worst case (sendMessageTimeout, render +
+// send or the equivalent failed attempt) plus one status write
+// (writeStatusTimeout on the success path, or failureWriteTimeout — the
+// same value — on every failure path) = 5s + 30s + 5s = 40s.
+// orphanStaleAfter's 70s still covers that with 30s of margin, unchanged
+// from before (the single-row figure this var doubles, 35s, was already
+// the SIMPLER of the two terms; #0297's outboxOrphanStaleAfter carries the
+// identical relationship — see that var's own doc comment for why doubling
+// the simpler term rather than the fuller one is not a shortfall).
+//
+// # Still not a STRICT bound
+//
+// What remains unclosed is not a missing timeout any more, but the same
+// CLASS of caveat #0284's and #0294's final comments name for their own
+// windows: a bounded context assumes pgx and the network underneath it
+// honor its deadline promptly — a TCP read the OS cannot be made to
+// abandon on cancellation is a residual no Go-level constant formula
+// closes. One further named residual, from #0295's review: w.render.Campaign
+// runs between ClaimRow and sendCtx, in-process and CPU-only (no I/O) —
+// unbounded by any context, but not worth widening anything for, since it
+// is pure Markdown-to-HTML work over one campaign body, not a network
+// round trip that can hang indefinitely.
 //
 // A var, not a const, so a test can shrink it; NOT sized against measured
 // machine load (CLAUDE.md §5) — it is sized against the two hard timeouts
@@ -723,7 +773,16 @@ func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) (bool, error
 					backoff = backoffCap
 				}
 			case sendOutcomeTerminalCampaign:
-				if _, rerr := w.store.ReleaseRow(ctx, r.SendID); rerr != nil {
+				// #0302: its own detached, bounded context — not ctx, which
+				// may already be near/at the deadline that PRODUCED this
+				// terminal-campaign error in the first place — so this
+				// release write still completes rather than racing whatever
+				// made the campaign fail. See failureWriteTimeout's doc
+				// comment.
+				releaseCtx, releaseCancel := context.WithTimeout(context.Background(), failureWriteTimeout)
+				_, rerr := w.store.ReleaseRow(releaseCtx, r.SendID)
+				releaseCancel()
+				if rerr != nil {
 					w.log.Error("mailing: releasing row after terminal campaign error", "send_id", r.SendID, "err", rerr)
 				}
 				return didWork, w.failCampaignSES(ctx, c.ID, sendErr)
@@ -859,8 +918,26 @@ var (
 // leaves the row in a terminal-or-requeued state (or, for
 // sendOutcomeTerminalCampaign, leaves it 'sending' for the caller to
 // release) — never returns with the row silently stuck.
+//
+// #0302: ctx is no longer read anywhere in this function's body. Every
+// write below — the claim, both success-path calls (already true before
+// #0302), and every failure-path call — now runs on its own detached,
+// bounded context (failureWriteTimeout's doc comment has the full
+// reasoning), so a caller's ambient context can no longer affect what this
+// function does at all. The parameter is kept, not dropped: drainLoop
+// still has a genuine ctx of its own to pass (needed for its OTHER calls —
+// ClaimBatch, checkAndMaybePauseDeliveryHealth, limiter.Wait), and
+// TestWorker_SendOne_SESCallAndStatusWriteSurviveAmbientCancellation
+// (worker_test.go) exercises this call site directly with a deliberately
+// cancelled context specifically to prove sendOne is now immune to it —
+// removing the parameter would remove the seam that test uses to prove
+// that. Contrast outbox_worker.go's sendOne(row), which never took a ctx
+// parameter to begin with (#0266) — this file's history is different, so
+// dropping it here is not free the way it was there.
 func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, physicalAddress, fromHeader string) (sendOutcome, error) {
-	_, claimed, err := w.store.ClaimRow(ctx, r.SendID)
+	claimCtx, claimCancel := context.WithTimeout(context.Background(), failureWriteTimeout)
+	_, claimed, err := w.store.ClaimRow(claimCtx, r.SendID)
+	claimCancel()
 	if err != nil {
 		w.log.Error("mailing: claiming send row", "send_id", r.SendID, "err", err)
 		return sendOutcomeSkipped, nil
@@ -897,7 +974,10 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 		// admin-facing string deliberately carries no diagnostic detail
 		// (#0182).
 		w.log.Error("mailing: recipient row has empty manage token from eligibility recheck", "send_id", r.SendID)
-		if _, err := w.store.MarkFailedRow(ctx, r.SendID, adminEligibilityFailureMessage); err != nil {
+		writeCtx, writeCancel := context.WithTimeout(context.Background(), failureWriteTimeout)
+		_, err := w.store.MarkFailedRow(writeCtx, r.SendID, adminEligibilityFailureMessage)
+		writeCancel()
+		if err != nil {
 			w.log.Error("mailing: marking empty-token row failed", "send_id", r.SendID, "err", err)
 		}
 		return sendOutcomeTerminalRow, nil
@@ -924,7 +1004,10 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 		// an engineer too, not just to the admin reading CampaignStats.svelte
 		// (#0182).
 		w.log.Error("mailing: rendering campaign for recipient", "send_id", r.SendID, "err", rerr)
-		if _, err := w.store.MarkFailedRow(ctx, r.SendID, adminRenderFailureMessage(rerr)); err != nil {
+		writeCtx, writeCancel := context.WithTimeout(context.Background(), failureWriteTimeout)
+		_, err := w.store.MarkFailedRow(writeCtx, r.SendID, adminRenderFailureMessage(rerr))
+		writeCancel()
+		if err != nil {
 			w.log.Error("mailing: marking render-failed row failed", "send_id", r.SendID, "err", err)
 		}
 		return sendOutcomeTerminalRow, nil
@@ -990,12 +1073,18 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 		// however the caller chooses to release it.
 		return sendOutcomeTerminalCampaign, sendErr
 	case sendClassTerminalRow:
-		if _, err := w.store.MarkFailedRow(ctx, r.SendID, adminSendErrorMessage(w.log, r.SendID, sendErr)); err != nil {
+		writeCtx, writeCancel := context.WithTimeout(context.Background(), failureWriteTimeout)
+		_, err := w.store.MarkFailedRow(writeCtx, r.SendID, adminSendErrorMessage(w.log, r.SendID, sendErr))
+		writeCancel()
+		if err != nil {
 			w.log.Error("mailing: marking rejected row failed", "send_id", r.SendID, "err", err)
 		}
 		return sendOutcomeTerminalRow, nil
 	default: // retryable
-		if _, err := w.store.MarkRetryOrFailed(ctx, r.SendID, adminSendErrorMessage(w.log, r.SendID, sendErr)); err != nil {
+		writeCtx, writeCancel := context.WithTimeout(context.Background(), failureWriteTimeout)
+		_, err := w.store.MarkRetryOrFailed(writeCtx, r.SendID, adminSendErrorMessage(w.log, r.SendID, sendErr))
+		writeCancel()
+		if err != nil {
 			w.log.Error("mailing: retry-or-fail on send row", "send_id", r.SendID, "err", err)
 		}
 		if isThrottlingError(sendErr) {
