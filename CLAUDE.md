@@ -762,6 +762,35 @@ And confirm every commit with `git show --stat HEAD` rather than trusting a
 hash that appeared nearby — with several agents committing, a hash on your
 screen is not necessarily yours.
 
+**`git commit -- <paths>` commits the WORKING TREE state of those paths, not
+the index.** This is `--only` semantics and it is documented git behaviour, but
+it is the opposite of what "I staged narrowly, so only my work is committed"
+implies — and this whole file has been recommending that form. Naming a pathspec
+makes git commit the *files*, including **unstaged** changes another agent has
+in them.
+
+`#0305`'s implementer hit it exactly that way: it isolated its own hunks with
+`git apply --cached`, verified the index, then `git commit -- <paths>` swept in
+`#0129`'s unstaged edits to the same three files. It caught this from
+`git show --stat HEAD` — the diff was far larger than what it had staged — and
+recovered with a second commit removing precisely the swept-in hunks, verifying
+the working tree byte-identical to its pre-mistake state. Nothing was lost, and
+only because it checked the size rather than the exit code.
+
+**So in a tree other agents are editing:**
+
+```bash
+git add <your-specific-paths>          # stage narrowly
+git diff --cached --name-only          # is anything here not yours? unstage it
+git commit -m "..."                    # NO pathspec — commits exactly the index
+git show --stat HEAD                   # confirm the file list AND the diff size
+```
+
+The pathspec form is safe only when you own the whole tree. `git show --stat`
+after every commit is what catches both this and the shared-index case below:
+check the **line counts**, not just the filenames, because a swept-in hunk lands
+in a file you did legitimately touch.
+
 **Staging narrowly is not enough — the index is shared too.** `git commit` with
 no pathspec commits *whatever is staged*, including files another agent staged
 seconds earlier. This happened twice in one session: two implementers working
