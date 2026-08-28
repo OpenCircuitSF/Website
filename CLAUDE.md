@@ -590,6 +590,22 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   not license bash-4 syntax. The same applies to `${var^^}`, `declare -A`,
   `mapfile`/`readarray`, and `&>>`.
 
+- **Where a guard's proof belongs: ask whether the mutation leaves the assertion
+  falsifiable by the thing it measures.** Settled by `#0304`'s review, and it
+  generalises. Force a floor constant to `0` and `got < floor` can never fire —
+  the in-package test agrees with itself, so it restates the bug instead of
+  detecting it, and the proof belongs in an **external harness**
+  (`scripts/*_guard_test.sh`, wired into `scripts/check.sh guards`). Mutate the
+  *scan roots* instead and `got` itself changes — the in-package test is a
+  legitimate, non-circular oracle, and the proof belongs in Go.
+
+  Two refinements from the same review: it turns on the **direction of the
+  comparison**, not the kind of thing mutated — a *ceiling* mutated upward needs
+  the harness, while a floor mutated *upward* is observable in Go. And the two
+  homes are **not exclusive**: an in-file observer can be deleted by the same
+  edit it guards, so a constant worth pinning is often worth pinning in both
+  places.
+
 - **A guard's oracle must not be the same bytes as its subject.** `#0258` added
   a positive assertion that `run()`'s definition still spells its `FAILED=1`
   accounting, comparing it against a **quoted heredoc holding the expected
