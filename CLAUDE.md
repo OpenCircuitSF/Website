@@ -797,6 +797,15 @@ else's build.
 The same caution applies to any shared mutable resource — a database, a
 scratch directory, `web/dist/`. Namespace it or verify ownership.
 
+**Redact secrets from verification transcripts.** `#0277`'s implementer proved
+its fix end to end and pasted the log line into the issue's `## Verification` —
+including a live recovery magic link (`token=4g5mVqo…`). Harmless in that
+instance: single-use, a 15-minute TTL, a localhost dev database, and long
+expired before anyone read it. But issue files are committed and this repo is
+going to GitHub, so a token, session cookie, or API key pasted into a
+transcript is published. Show the shape, not the value —
+`http://localhost:8080/recover/verify?token=<redacted>` proves the same thing.
+
 **`./scripts/dev.sh --built` runs a real `npm run build`, which overwrites the
 tracked `web/dist/index.html` placeholder.** Three agents have now hit this, and
 the instinct each time is `git checkout -- web/dist/index.html`, which §8a
