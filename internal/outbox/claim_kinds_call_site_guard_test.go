@@ -81,6 +81,35 @@ var claimKindsGuardScanRoots = []string{"..", "../../cmd"}
 // earns its place (a genuinely empty or broken walk trips it), but it is
 // not sufficient alone; see claimKindsGuardMinPlausibleNonExemptCallSiteCount
 // below, which is.
+//
+// #0323: this Go/AST count (32) is NOT the number
+// scripts/go_file_visit_floor_guard_test.sh's external oracle measures for
+// the identical roots — that harness counts textually with grep rather
+// than parsing Go, and measures 35. This is expected and must stay this
+// way (do not "fix" it by making the oracle parse Go — its independence
+// from go/ast is the entire reason it can catch a regression in THIS
+// file's own parsing logic; CLAUDE.md §8, an oracle must not share its
+// method with its subject). The three extras all sit inside THIS file,
+// inside internal/outbox, so they inflate only the exempt side — the
+// NON-exempt count (12) agrees exactly between grep and go/ast, one for
+// one, because none of the extras is a non-exempt site. All three are the
+// textual-miscount class grep is prone to and go/ast correctly ignores:
+// one is inside nameMatchesGuardedMethod's own doc comment, which quotes
+// the guarded call syntax as prose while describing how that method's
+// population was grep-verified (deliberately NOT reproduced verbatim in
+// THIS sentence, so this paragraph does not become a fourth divergent site
+// of the exact class it is describing); the other two are inside
+// TestClaimKindsGuardFiresOnFixtureWithNoKinds's raw-string fixtures
+// (fixtureSrc and scopedFixtureSrc) — syntactically real-looking Go text
+// living inside a Go string literal, which go/ast never parses as code
+// (they are handed to findOutboxCallSitesInFile as an in-memory `src`
+// argument, not discovered by walking the tree) and grep cannot tell apart
+// from a real call. The error direction is inflation, which only loosens
+// outbox_floor_plausible's floor<=population upper bound and never
+// tightens it — nothing is under-protected by this gap. Also worth
+// knowing generally: grep -c counts matching LINES, not occurrences, so it
+// would under-count (not over-count) if two guarded calls ever shared one
+// source line.
 const claimKindsGuardMinPlausibleCallSiteCount = 5
 
 // claimKindsGuardMinPlausibleNonExemptCallSiteCount is #0304's fix for the

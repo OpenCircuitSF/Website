@@ -405,6 +405,34 @@ OUTBOX_SRC="$REPO/$OUTBOX_GUARD_FILE"
 # §8: "can an edit to the subject also satisfy the oracle" -- a change to
 # findOutboxCallSitesInFile's AST logic cannot touch this grep, and a
 # change to this grep cannot touch that AST logic).
+#
+# #0323: this grep population and the guard's own go/ast population are NOT
+# the same number, on purpose, and that must never be "fixed" by making
+# this oracle parse Go. For the TOTAL population (no exclude), this
+# function measures 35; internal/outbox/claim_kinds_call_site_guard_test.go's
+# own doc comment (claimKindsGuardMinPlausibleCallSiteCount) measures 32 by
+# go/ast, and now records this same divergence and names the three
+# sites. For the NON-EXEMPT population (internal/outbox excluded), both
+# methods agree exactly at 12 -- every non-exempt site matches one for one
+# -- because all three of the divergent sites sit INSIDE internal/outbox
+# (so they only ever affect the total, exempt-inclusive count, never the
+# one claimKindsGuardMinPlausibleNonExemptCallSiteCount is judged against).
+# The three: one is inside a doc comment
+# (nameMatchesGuardedMethod's, which quotes ".ClaimDue(" and
+# ".OrphanSweep(" as prose), and two are inside the raw-string Go-source
+# fixtures TestClaimKindsGuardFiresOnFixtureWithNoKinds builds in memory
+# (fixtureSrc, scopedFixtureSrc) -- text that looks like a real call inside
+# a Go string literal, which this grep cannot distinguish from a real one
+# and go/ast correctly never parses as one, since those fixtures are handed
+# to the parser as an in-memory `src` argument, not discovered by walking
+# the tree. The direction matters: grep only ever INFLATES the total
+# relative to go/ast here, which only loosens outbox_floor_plausible's
+# `floor <= population` upper bound and never tightens it -- nothing is
+# under-protected by the gap. Separately, `grep -c` counts matching LINES,
+# not occurrences, so it would UNDER-count (not over-count) if two guarded
+# calls ever shared a single source line -- a different risk from the one
+# above, recorded here because both are ways this population can diverge
+# from a true occurrence count, in opposite directions.
 count_outbox_call_sites() {
   local exclude="$1"; shift
   local total=0 f n
