@@ -143,11 +143,21 @@ export interface Subscriber {
  * rather than parsed per-action, since the closed action set already lives
  * server-side (internal/subscribers.Action) and the drawer's job is to show
  * a timeline, not re-implement that vocabulary.
+ *
+ * `import_id` (#0316) is this EVENT's own batch link — present on
+ * `imported`/`invite_sent`/`invite_accepted`/`invite_expired`/
+ * `import_revoked` rows — and is distinct from `Subscriber.import_id`
+ * (top-level), which #0129 clears once the subscriber's CURRENT
+ * subscription no longer derives from that batch. This field is what keeps
+ * the batch reachable on the detail screen after that clear; it is history,
+ * not a durable subscriber-level fact, so nothing should treat
+ * `Subscriber.import_id` as equivalent to it.
  */
 export interface SubscriberEvent {
   action: string;
   created_at: string;
   campaign_id?: number;
+  import_id?: number;
   detail?: unknown;
 }
 

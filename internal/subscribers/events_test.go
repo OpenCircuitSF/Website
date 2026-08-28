@@ -3,6 +3,7 @@ package subscribers
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestSubscriberEvents_RejectsUnknownAction(t *testing.T) {
@@ -48,6 +49,59 @@ func TestSubscriberEvents_RecordsKnownAction(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("count = %d, want 1", count)
+	}
+}
+
+// TestSubscriberEvents_EventHistory_IncludesImportID is #0316's proof: the
+// `imported` subscriber_events row carries the batch's own ImportID, so the
+// batch stays reachable via EventHistory even after RestartSignup clears
+// subscribers.import_id (#0129). An ordinary website signup's history must
+// come back with ImportID nil on every row — never a fabricated value —
+// since it never touched an import at all (criterion 3).
+func TestSubscriberEvents_EventHistory_IncludesImportID(t *testing.T) {
+	pool := testPool(t)
+	subStore := NewStore(pool)
+	importStore := NewImportStore(pool)
+	email := uniqueImportEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	in := validCommitInput(t, []ImportRow{{Email: email}})
+	result, err := importStore.Commit(context.Background(), in, now)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	sub, err := subStore.FindByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+
+	history, err := subStore.EventHistory(context.Background(), sub.ID)
+	if err != nil {
+		t.Fatalf("EventHistory: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("history = %+v, want exactly 1 (imported)", history)
+	}
+	if history[0].ImportID == nil || *history[0].ImportID != result.Import.ID {
+		t.Errorf("ImportID = %v, want %d", history[0].ImportID, result.Import.ID)
+	}
+
+	ordinary, err := subStore.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	ordinaryHistory, err := subStore.EventHistory(context.Background(), ordinary.ID)
+	if err != nil {
+		t.Fatalf("EventHistory (ordinary): %v", err)
+	}
+	if len(ordinaryHistory) == 0 {
+		t.Fatal("ordinaryHistory is empty, want at least the signup_requested row")
+	}
+	for _, e := range ordinaryHistory {
+		if e.ImportID != nil {
+			t.Errorf("ordinary signup event %q has ImportID = %v, want nil", e.Action, *e.ImportID)
+		}
 	}
 }
 

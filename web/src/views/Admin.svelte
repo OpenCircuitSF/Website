@@ -2232,6 +2232,9 @@
                     <li>
                       <span class="mono">{formatDateTime(ev.created_at)}</span>
                       — {subscriberEventActionLabel(ev.action)}
+                      {#if ev.import_id != null}
+                        <span class="text-muted">(import batch #{ev.import_id})</span>
+                      {/if}
                     </li>
                   {/each}
                 </ul>

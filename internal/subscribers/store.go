@@ -218,6 +218,55 @@ type Subscriber struct {
 	// database and is never left empty. InvitedAt is #0129's "one
 	// invitation per address, ever" marker — always nil until that issue
 	// lands a producer.
+	//
+	// # #0317 — Source and ImportID answer different questions, and may disagree
+	//
+	// Source/SourceDetail are HISTORICAL PROVENANCE: where this address
+	// first entered the list, fixed at INSERT and never rewritten by any
+	// mutator in this package (grep this file for `source\s*=` in an UPDATE
+	// — there isn't one). ImportID is a CURRENT-STATE LINK: which
+	// subscriber_imports batch, if any, this row's PRESENT subscription
+	// still derives its consent from. RestartSignup clears ImportID (see
+	// its own doc comment, "#0129") when a revoked-then-resigned-up row
+	// starts a fresh, self-initiated signup — so a row can end up with
+	// Source == SubscriberSourceImport and ImportID == nil at the same
+	// time. That is not a bug: it means "this address originally came in
+	// through an import, but its CURRENT subscription no longer derives
+	// from that batch" — exactly the state PRD §6.10.1 already carves out
+	// for a confirmed invitee, extended by #0129 to a resigned-up one.
+	//
+	// Do not re-link them — e.g. by having RestartSignup leave ImportID set,
+	// or by having Revoke targeting key off Source instead of ImportID. That
+	// re-introduces #0129's suppression misfire: a person who resigns up
+	// after their invite was revoked would again be mistaken for a live,
+	// unaccepted invitation and could be suppressed by a LATER Revoke of a
+	// batch they no longer have any current relationship to. Nothing is
+	// lost by leaving Source alone when ImportID clears — subscriber_events
+	// keeps ImportID on the original `imported`/`invite_sent` rows, which is
+	// where "why did we ever mail this address" is answered from (see
+	// subscriberEventView / #0316 for surfacing that on the admin screen
+	// after ImportID has been cleared here).
+	//
+	// #0311's imported_30d intentionally keys on Source (`source = 'import'
+	// AND created_at >= since`), not ImportID — it is asking "did an import
+	// batch ever place this address on the list", a historical-provenance
+	// question, not "is this row still linked to that batch". The two
+	// counts would disagree if imported_30d used ImportID instead: a
+	// revoked-then-resigned-up row's original growth would silently vanish
+	// from the historical figure the moment RestartSignup runs, which is
+	// exactly the kind of "growth disappears without a corresponding
+	// departure being counted" defect #0311 exists to close.
+	//
+	// A resigned-up former invitee (Source == SubscriberSourceImport,
+	// ImportID == nil, ConsentBasis == ConsentBasisDoubleOptIn) IS worth
+	// distinguishing from an ordinary website signup in the admin UI — an
+	// operator asking "who actually came from that batch and is still
+	// linked to it" gets that from ImportID directly; an operator asking
+	// "who among today's active subscribers originally came in via an
+	// import, whether or not they're still linked to it" needs Source. Both
+	// questions are real and both fields already answer them; this issue
+	// makes no UI change beyond #0316's event-level surfacing, since no
+	// acceptance criterion asked for a new admin filter on this combination.
 	Source       string
 	SourceDetail *string
 	ConsentBasis *string
@@ -1695,12 +1744,12 @@ func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 // rather than computed here so the result is deterministic in tests, the
 // same convention every other now-sensitive method on this store follows,
 // e.g. Confirm's own now parameter): how many subscribers locally confirmed
-// (completed double opt-in) since that time, how many landed active via an
-// import with no local confirmation event since that time, and how many
-// unsubscribed since that time. #0061's admin overview dashboard sums the
-// first two and subtracts the third for a net growth figure; all three are
-// returned rather than pre-combined so the dashboard can show each
-// direction rather than only the net.
+// (completed double opt-in) since that time, how many entered the list via
+// an import since that time, and how many unsubscribed since that time.
+// #0061's admin overview dashboard sums the first two and subtracts the
+// third for a net growth figure; all three are returned rather than
+// pre-combined so the dashboard can show each direction rather than only
+// the net.
 //
 // "Confirmed" here means confirmed_at is set — NOT "became active": since
 // #0292, a prior_consent CSV import (internal/subscribers.ImportStore.Commit)
@@ -1713,24 +1762,55 @@ func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 // what changed is which subscribers rows can now be active without ever
 // tripping it.
 //
-// "Imported" (#0305) is the other side of that same #0292 change: an
-// active row with confirmed_at still NULL is exactly the shape a
-// prior_consent import produces and a locally-confirmed signup never does
-// (Confirm and RestartSignup are the only other writers of status=active,
-// and both pair it with confirmed_at). Counting `status = active AND
-// confirmed_at IS NULL` rather than `source = 'import'` is deliberate: it
-// tracks the growth #0292 stopped attributing to "confirmed" by the same
-// test that defines "confirmed" (does this row carry a local confirmation
-// event), so an invite-mode import row that later completes a genuine
-// local confirmation (#0129) falls into "confirmed", not here, with no
-// double count either way. Before #0292 this count was always zero, so
-// #0292's own claim that Growth30Days "needed no query change" was true at
-// the time and is superseded by this addition.
+// "Imported" (#0305, revised by #0311) counts `source = 'import' AND
+// confirmed_at IS NULL AND created_at >= since` — an EVENT count (did an
+// import batch ever place this address on the list within the window), not
+// a snapshot of current status. #0305's original form additionally required
+// `status = 'active'`, which made it a CURRENT-STATE count: a subscriber
+// who left inside the window stopped being 'active' and so retracted their
+// own imported_30d contribution AT THE SAME TIME unsubscribed_30d counted
+// their departure, netting -1 for a subscriber who merely joined and left
+// (#0311) — and ImportStore.Revoke makes that reachable in bulk, since a
+// revoked batch's rows all move to 'unsubscribed' together. Dropping the
+// status clause fixes that: once a row is counted as imported, nothing it
+// does later (unsubscribe, get revoked, bounce) removes it from this count,
+// exactly like confirmed_at below never being un-set by a later departure
+// is what keeps a locally-confirmed subscriber's own net contribution at 0
+// rather than -1.
+//
+// `source = 'import'` alone is not enough, though: source is never
+// rewritten after INSERT (see the Subscriber.Source field's own #0317 doc
+// comment), so an accepted import INVITE keeps source='import' forever
+// after Confirm sets its confirmed_at — without the `confirmed_at IS NULL`
+// guard it would count in BOTH imported_30d and confirmed_30d the moment it
+// is accepted inside the same window it was sent, double-counting one join
+// as two. `confirmed_at IS NULL` is exactly the test that already defines
+// "confirmed" for the first return value, so an import row that later
+// completes a genuine local confirmation (#0129's invite-accept path) falls
+// out of "imported" the instant it falls into "confirmed" — the two buckets
+// stay mutually exclusive on the way in, verified by #0305's review and
+// unchanged by this revision (#0311 criterion 4/5): a subscriber is in
+// exactly one of {confirmed, imported, neither (e.g. still-pending
+// website signup)} at any moment, never both.
 //
 // The dashboard's net_30d is confirmed + imported - unsubscribed — the
 // import branch stopped being counted as a confirmation (#0292) but must
-// still show up as growth (#0305), or a month with a large import plus
-// ordinary churn reads as decline while the list actually grew.
+// still show up as growth (#0305), and now stays counted as growth even
+// after the address leaves (#0311), or a month with a large import plus
+// ordinary churn (or a bulk revoke) reads as decline while the list either
+// grew or was merely left flat.
+//
+// #0311 also checked confirmed_30d (`confirmed_at >= $1`) and
+// unsubscribed_30d (`unsubscribed_at >= $1`) for the same class of defect:
+// neither filters on current status at all, so there is no analogous
+// stock-vs-event mismatch in either predicate as written here. confirmed_at
+// is not literally append-only forever — RestartSignup clears it back to
+// NULL when a row that unsubscribed (or bounced) restarts as a fresh
+// self-initiated signup — but Unsubscribe itself never touches confirmed_at,
+// so the ordinary join-then-leave cycle this issue is about (no restart
+// involved) nets 0 exactly as the table above shows. A restart-after-
+// departure sequence is a separate, pre-existing behavior (not introduced
+// by #0129 or #0311) outside this issue's scope.
 //
 // Excludes synthetic=true rows unconditionally, same as StatusCounts above
 // — #0061's amendment (issue notes, from #0046's second phase-3 review)
@@ -1741,10 +1821,10 @@ func (s *Store) Growth30Days(ctx context.Context, since time.Time) (confirmed, i
 	err = s.pool.QueryRow(ctx,
 		`SELECT
 		    count(*) FILTER (WHERE confirmed_at >= $1),
-		    count(*) FILTER (WHERE status = $2 AND confirmed_at IS NULL AND created_at >= $1),
+		    count(*) FILTER (WHERE source = $2 AND confirmed_at IS NULL AND created_at >= $1),
 		    count(*) FILTER (WHERE unsubscribed_at >= $1)
 		 FROM subscribers WHERE synthetic = false`,
-		since, StatusActive,
+		since, SubscriberSourceImport,
 	).Scan(&confirmed, &imported, &unsubscribed)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("subscribers: computing 30-day growth: %w", err)

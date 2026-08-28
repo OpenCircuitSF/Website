@@ -195,11 +195,18 @@ func (s *Store) RecordEvent(ctx context.Context, e Event) error {
 }
 
 // SubscriberEventRow is one row read back for the subscriber detail drawer
-// (#0032).
+// (#0032). ImportID (#0316) is the batch this specific EVENT carries — not
+// to be confused with subscribers.ImportID, which RestartSignup clears when
+// a row's CURRENT subscription no longer derives from that batch (#0129,
+// #0317's own doc comment on Subscriber.ImportID). This row's ImportID is
+// never cleared by anything: subscriber_events is append-only history, so
+// it stays the durable record of "which batch produced this event" even
+// after the subscriber-level column has been reset to nil.
 type SubscriberEventRow struct {
 	Action     Action
 	CreatedAt  time.Time
 	CampaignID *int64
+	ImportID   *int64
 	Detail     []byte // raw JSONB; nil when the row carried no detail
 }
 
@@ -212,7 +219,7 @@ const subscriberEventHistoryLimit = 100
 // drawer's read path, via idx_subscriber_events_subscriber.
 func (s *Store) EventHistory(ctx context.Context, subscriberID int64) ([]SubscriberEventRow, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT action, created_at, campaign_id, detail
+		`SELECT action, created_at, campaign_id, import_id, detail
 		   FROM subscriber_events
 		  WHERE subscriber_id = $1
 		  ORDER BY created_at DESC, id DESC
@@ -228,7 +235,7 @@ func (s *Store) EventHistory(ctx context.Context, subscriberID int64) ([]Subscri
 	for rows.Next() {
 		var r SubscriberEventRow
 		var action string
-		if err := rows.Scan(&action, &r.CreatedAt, &r.CampaignID, &r.Detail); err != nil {
+		if err := rows.Scan(&action, &r.CreatedAt, &r.CampaignID, &r.ImportID, &r.Detail); err != nil {
 			return nil, fmt.Errorf("subscribers: scanning event history row: %w", err)
 		}
 		r.Action = Action(action)

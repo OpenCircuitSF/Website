@@ -354,6 +354,7 @@ func TestAdminSubscribers_Get_IncludesEventHistory(t *testing.T) {
 		Events []struct {
 			Action    string `json:"action"`
 			CreatedAt string `json:"created_at"`
+			ImportID  *int64 `json:"import_id"`
 		} `json:"events"`
 	}
 	if err := json.Unmarshal(readBody(t, resp), &view); err != nil {
@@ -368,6 +369,80 @@ func TestAdminSubscribers_Get_IncludesEventHistory(t *testing.T) {
 	}
 	if view.Events[1].Action != "signup_requested" {
 		t.Errorf("Events[1].Action = %q, want %q", view.Events[1].Action, "signup_requested")
+	}
+	// #0316 criterion 3: an ordinary website signup never touched an
+	// import, so ImportID must be absent on every event — never a
+	// fabricated value.
+	for _, e := range view.Events {
+		if e.ImportID != nil {
+			t.Errorf("event %q has ImportID = %v, want absent for an ordinary signup", e.Action, *e.ImportID)
+		}
+	}
+}
+
+// TestAdminSubscribers_Get_EventHistoryIncludesImportID is #0316's proof
+// that subscriberEventView surfaces import_id alongside campaign_id, so the
+// originating subscriber_imports batch stays reachable on this screen even
+// after #0129's RestartSignup clears subscribers.import_id — the event row
+// itself is never cleared (see subscribers.SubscriberEventRow's own #0316
+// doc comment).
+func TestAdminSubscribers_Get_EventHistoryIncludesImportID(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-subs-import-events@example.com")
+	seedSession(t, pool, admin, "admin-token-import-events")
+
+	importStore := subscribers.NewImportStore(pool)
+	subStore := subscribers.NewStore(pool)
+	email := subscribeUniqueEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	result, err := importStore.Commit(context.Background(), subscribers.CommitInput{
+		Source:       subscribers.ImportSourceManualCSV,
+		SourceDetail: "test batch",
+		ConsentMode:  subscribers.ConsentModePriorConsent,
+		ConsentNote:  "collected via a paper sign-in sheet at an event, attested by the organizer",
+		CollectedAt:  now,
+		Filename:     "attendees.csv",
+		Rows:         []subscribers.ImportRow{{Email: email}},
+	}, now)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscriber_imports WHERE id = $1`, result.Import.ID)
+	})
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE email = $1`, email) })
+
+	sub, err := subStore.FindByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+
+	client := srv.Client()
+	resp := doJSON(t, client, "GET", fmt.Sprintf("%s/admin/subscribers/%d", srv.URL, sub.ID), "admin-token-import-events", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var view struct {
+		Events []struct {
+			Action   string `json:"action"`
+			ImportID *int64 `json:"import_id"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(readBody(t, resp), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(view.Events) != 1 {
+		t.Fatalf("events = %+v, want exactly 1 (imported)", view.Events)
+	}
+	if view.Events[0].Action != "imported" {
+		t.Errorf("Events[0].Action = %q, want %q", view.Events[0].Action, "imported")
+	}
+	if view.Events[0].ImportID == nil || *view.Events[0].ImportID != result.Import.ID {
+		t.Errorf("Events[0].ImportID = %v, want %d", view.Events[0].ImportID, result.Import.ID)
 	}
 }
 

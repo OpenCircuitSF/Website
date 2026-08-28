@@ -26,12 +26,16 @@ export function formatNetGrowth(growth: DashboardGrowth): string {
  * `confirmed_30d` and `imported_30d` are deliberately not folded into one
  * "joined" figure: since #0292, `confirmed_30d` counts only a completed
  * local double opt-in, not "became active", so an import of 500 addresses
- * reads as 0 confirmations. #0305 added `imported_30d` — subscribers that
- * landed active via an import with no local confirmation event in the same
- * window — so that growth is still visible and net_30d doesn't read as a
- * decline in a month the list actually grew. This function and
- * internal/subscribers.Store.Growth30Days' doc comment describe the same
- * three counts; keep them in agreement.
+ * reads as 0 confirmations. #0305 added `imported_30d` — addresses an
+ * import batch placed on the list in the same window, still counted even
+ * if the address has since unsubscribed or been revoked (#0311 — an EVENT
+ * count, not a snapshot of who is currently active) and never double-
+ * counted alongside `confirmed_30d` if the same row later completes a
+ * genuine local confirmation — so that growth is still visible, doesn't
+ * silently retract itself when an import is later revoked, and net_30d
+ * doesn't read as a decline in a month the list actually grew. This
+ * function and internal/subscribers.Store.Growth30Days' doc comment
+ * describe the same three counts; keep them in agreement.
  */
 export function formatGrowthDetail(growth: DashboardGrowth): string {
   return `${growth.confirmed_30d.toLocaleString()} confirmed, ${growth.imported_30d.toLocaleString()} imported, ${growth.unsubscribed_30d.toLocaleString()} left`;

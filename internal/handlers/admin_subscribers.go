@@ -241,11 +241,20 @@ type subscriberView struct {
 
 // subscriberEventView is one subscriber_events row (#0126, PRD §6.11),
 // newest first, bounded to subscribers.Store.EventHistory's own 100-row
-// limit (no pagination — matching that method's own doc comment).
+// limit (no pagination — matching that method's own doc comment). ImportID
+// (#0316) surfaces the originating subscriber_imports batch from the EVENT
+// itself, not from subscribers.import_id — that subscriber-level column is
+// cleared by RestartSignup once a row's current subscription no longer
+// derives from the batch (#0129), so it is a current-state link, not
+// history (see Subscriber.ImportID's own #0317 doc comment). The event row
+// is never cleared, which is what keeps the batch link reachable on this
+// screen after a resigned-up former invitee's subscribers.import_id has
+// gone nil.
 type subscriberEventView struct {
 	Action     string          `json:"action"`
 	CreatedAt  string          `json:"created_at"`
 	CampaignID *int64          `json:"campaign_id,omitempty"`
+	ImportID   *int64          `json:"import_id,omitempty"`
 	Detail     json.RawMessage `json:"detail,omitempty"`
 }
 
@@ -482,6 +491,7 @@ func (h *AdminSubscribersHandler) Get(w http.ResponseWriter, r *http.Request) {
 				Action:     string(e.Action),
 				CreatedAt:  e.CreatedAt.UTC().Format(time.RFC3339),
 				CampaignID: e.CampaignID,
+				ImportID:   e.ImportID,
 				Detail:     json.RawMessage(e.Detail),
 			})
 		}

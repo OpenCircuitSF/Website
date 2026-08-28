@@ -148,6 +148,99 @@ func TestImportStore_Commit_DoesNotInflateGrowth30Days(t *testing.T) {
 	}
 }
 
+// growth30DaysNet is the three-return-value Growth30Days collapsed to the
+// same net figure the admin dashboard computes (confirmed + imported -
+// unsubscribed) — the #0311 tests below measure THIS, not any one of the
+// three counts in isolation, matching the reviewer's own three-step
+// measurement shape (baseline / after import / after departure).
+func growth30DaysNet(t *testing.T, subStore *Store, since time.Time) int64 {
+	t.Helper()
+	confirmed, imported, unsubscribed, err := subStore.Growth30Days(context.Background(), since)
+	if err != nil {
+		t.Fatalf("Growth30Days: %v", err)
+	}
+	return confirmed + imported - unsubscribed
+}
+
+// TestGrowth30Days_ImportedSubscriberLeavingInWindowNetsZero is #0311's
+// direct proof, in the exact three-step shape #0305's reviewer used:
+// baseline, after import, after that same subscriber unsubscribes — all
+// inside the 30-day window. Before this fix, imported_30d required
+// status='active', so the departure retracted the import's own +1 from
+// imported_30d AND added +1 to unsubscribed_30d, netting -1 for someone who
+// merely joined and left. A locally-confirmed subscriber already nets 0
+// (confirmed_at is never cleared by Unsubscribe); this proves an imported
+// one now does too.
+func TestGrowth30Days_ImportedSubscriberLeavingInWindowNetsZero(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	email := uniqueImportEmail(t)
+	since := time.Now().UTC()
+
+	baseline := growth30DaysNet(t, subStore, since)
+
+	in := validCommitInput(t, []ImportRow{{Email: email}})
+	if _, err := importStore.Commit(context.Background(), in, since.Add(time.Second)); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	afterImport := growth30DaysNet(t, subStore, since)
+	if afterImport != baseline+1 {
+		t.Errorf("net_30d after import = %d, want %d (baseline=%d + 1)", afterImport, baseline+1, baseline)
+	}
+
+	sub, err := subStore.FindByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+	if _, err := subStore.Unsubscribe(context.Background(), sub.ID, SourceOneClick, since.Add(2*time.Second)); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+	afterUnsubscribe := growth30DaysNet(t, subStore, since)
+	if afterUnsubscribe != baseline {
+		t.Errorf("net_30d after unsubscribe = %d, want %d (back to baseline, not baseline-1 — #0311)",
+			afterUnsubscribe, baseline)
+	}
+}
+
+// TestGrowth30Days_BulkRevokeDoesNotDriveNetNegative is #0311 criterion 3:
+// ImportStore.Revoke is what makes the single-subscriber defect above
+// reachable in bulk (PRD §6.10's revoke moves every un-escaped row to
+// unsubscribed together). Seeding a 3-address import and revoking it whole
+// must leave net_30d flat (0 relative to baseline), not -3.
+func TestGrowth30Days_BulkRevokeDoesNotDriveNetNegative(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	emails := []string{uniqueImportEmail(t), uniqueImportEmail(t), uniqueImportEmail(t)}
+	since := time.Now().UTC()
+
+	baseline := growth30DaysNet(t, subStore, since)
+
+	rows := make([]ImportRow, len(emails))
+	for i, email := range emails {
+		rows[i] = ImportRow{Email: email}
+	}
+	in := validCommitInput(t, rows)
+	result, err := importStore.Commit(context.Background(), in, since.Add(time.Second))
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	afterImport := growth30DaysNet(t, subStore, since)
+	if afterImport != baseline+int64(len(emails)) {
+		t.Errorf("net_30d after import = %d, want %d (baseline=%d + %d)",
+			afterImport, baseline+int64(len(emails)), baseline, len(emails))
+	}
+
+	if _, _, _, err := importStore.Revoke(context.Background(), result.Import.ID, "bulk revoke test (#0311)", since.Add(2*time.Second)); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	afterRevoke := growth30DaysNet(t, subStore, since)
+	if afterRevoke != baseline {
+		t.Errorf("net_30d after bulk revoke = %d, want %d (flat, not negative — #0311)", afterRevoke, baseline)
+	}
+}
+
 // TestImportStore_Commit_SendsNothing is the load-bearing prior_consent
 // property: the outbound queue must be empty after a committed import — no
 // confirmation, no welcome, nothing.
