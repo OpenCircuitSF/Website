@@ -226,7 +226,7 @@ already on the box per `CLAUDE.md` §7.
 
 - **PostgreSQL 15.18.** Already on the box per `CLAUDE.md` §7 — confirm the
   major version with `psql --version` before assuming anything else. 15 is
-  proven for this schema: all 24 migrations apply cleanly on 15.18 and the
+  proven for this schema: the migrations applied cleanly on 15.18 and the
   whole Go suite passes against PostgreSQL 15.14 (`#0062`/`#0228`'s drills
   ran on 16.14, Homebrew, but that is not what production runs). Nothing in
   the tree pins a major version, so do not introduce 16-only syntax without
