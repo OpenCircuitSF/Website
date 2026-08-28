@@ -43,6 +43,7 @@ package outbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -288,6 +289,28 @@ func scanRow(row pgx.Row) (Row, error) {
 // filter, either consumer could claim a row it has no idea how to process:
 // OutboxWorker's render switch has no case for subscribe_intake, and the
 // intake poller doesn't render or send mail at all.
+//
+// # #0297 — this remains a whole-batch claim; SelectDue/ClaimRow is the
+// per-row alternative
+//
+// This method still stamps ONE claimed_at for the whole returned batch —
+// unchanged, and still exactly right for a caller that genuinely wants "grab
+// up to limit rows right now" in one round trip (this package's own tests
+// use it that way throughout, and it is still the simplest correct choice
+// for a caller with no serial per-row processing loop to interleave a
+// re-stamp into). #0297 added SelectDue and ClaimRow below as a SEPARATE,
+// two-phase path for callers that DO drain their batch serially — one
+// select (no claim at all) followed by an atomic per-row claim issued
+// immediately before that row's own processing begins, mirroring
+// internal/mailing.SendStore's ClaimBatch/ClaimRow split exactly. Both of
+// this package's production callers (internal/mailing.OutboxWorker.pass and
+// internal/handlers.SubscribeHandler.intakePass) were moved onto that path
+// by #0297, precisely because a batch-wide stamp followed by a serial drain
+// is what made their own orphan windows have to be sized against the whole
+// batch's worst case instead of one row's. ClaimDue itself was left alone
+// rather than reimplemented in terms of the new pair, so this method's own
+// well-understood, single-round-trip behavior stays exactly what it was for
+// every caller that still wants it.
 func (s *Store) ClaimDue(ctx context.Context, limit int, kinds ...Kind) ([]Row, error) {
 	kindStrs := make([]string, len(kinds))
 	for i, k := range kinds {
@@ -323,6 +346,107 @@ func (s *Store) ClaimDue(ctx context.Context, limit int, kinds ...Kind) ([]Row, 
 		return nil, fmt.Errorf("outbox: iterating claimed rows: %w", err)
 	}
 	return out, nil
+}
+
+// SelectDue is the first half of #0297's per-row claim path: it returns up
+// to limit ids of rows that are 'queued' and due, scoped to kinds exactly
+// like ClaimDue, but it claims NOTHING — status and claimed_at are left
+// completely untouched. The actual atomic claim is ClaimRow, below, meant
+// to be issued individually, immediately before that specific row's own
+// processing begins, not for the whole returned set at once.
+//
+// A row this returns and that has not yet reached ClaimRow stays 'queued'
+// the entire time it waits its turn in a caller's serial loop — it is never
+// at risk from OrphanSweep, which only ever touches 'sending' rows. That is
+// the entire point: under ClaimDue's whole-batch stamp, a row deep in the
+// batch inherited every predecessor's processing time as its OWN claim age
+// before it was even looked at, which is what forced #0284/#0294/#0295's
+// windows to be sized against a full batch instead of one row. A row
+// selected here and not yet claimed has no claim age at all to inherit.
+//
+// FOR UPDATE SKIP LOCKED inside a transaction that commits immediately
+// after the SELECT (touching nothing) is the same "free insurance" ClaimDue
+// above already relies on, not the actual exclusivity mechanism: two
+// concurrent callers can still both select the same row here (the lock is
+// released at commit, before either one calls ClaimRow), and that is safe,
+// because ClaimRow's own `WHERE status = 'queued'` is what actually decides
+// which one of them — at most one — gets to process it. Mirrors
+// internal/mailing.SendStore's ClaimBatch/ClaimRow split exactly; see that
+// pair's doc comments for the same reasoning applied to email_sends.
+func (s *Store) SelectDue(ctx context.Context, limit int, kinds ...Kind) ([]int64, error) {
+	kindStrs := make([]string, len(kinds))
+	for i, k := range kinds {
+		kindStrs[i] = string(k)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("outbox: beginning select-due tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx,
+		`SELECT id FROM outbound_queue
+		  WHERE status = $2 AND next_attempt_at <= now()
+		    AND (cardinality($3::text[]) = 0 OR kind = ANY($3::text[]))
+		  ORDER BY next_attempt_at, id
+		  LIMIT $1
+		  FOR UPDATE SKIP LOCKED`,
+		limit, StatusQueued, kindStrs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("outbox: selecting due rows: %w", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("outbox: scanning due row id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("outbox: iterating due row ids: %w", err)
+	}
+	rows.Close()
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("outbox: committing select-due tx: %w", err)
+	}
+	return ids, nil
+}
+
+// ClaimRow is the second half of #0297's per-row claim path (see SelectDue
+// above): the atomic per-row claim — status='sending', attempts+1,
+// claimed_at=now() — applied to exactly one row rather than a LIMIT-bounded
+// batch. Meant to be called immediately before that row's own processing
+// starts, so claimed_at reflects when THIS row's own work began, not an
+// earlier batch-wide stamp.
+//
+// WHERE status = 'queued' is the real exclusivity guarantee (SelectDue's
+// FOR UPDATE SKIP LOCKED is only free insurance against wasted attempts,
+// not the guarantee itself): claimed=false means the row was no longer
+// 'queued' by the time this ran — a concurrent caller already claimed it, an
+// OrphanSweep already reset it, or the id is simply gone — and the caller
+// must not process it. Same shape and same convention as
+// internal/mailing.SendStore.ClaimRow's own doc comment.
+func (s *Store) ClaimRow(ctx context.Context, id int64) (Row, bool, error) {
+	row := s.pool.QueryRow(ctx,
+		`UPDATE outbound_queue
+		    SET status = $2, attempts = attempts + 1, claimed_at = now()
+		  WHERE id = $1 AND status = $3
+		RETURNING `+rowColumns,
+		id, StatusSending, StatusQueued,
+	)
+	r, err := scanRow(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Row{}, false, nil
+		}
+		return Row{}, false, fmt.Errorf("outbox: claiming row %d: %w", id, err)
+	}
+	return r, true, nil
 }
 
 // MarkSent transitions a claimed row to 'sent', stamping ses_message_id and

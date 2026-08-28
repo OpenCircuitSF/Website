@@ -425,7 +425,7 @@ func TestOutboxWorker_DefersWelcome_MissingPhysicalAddress(t *testing.T) {
 		}
 		// Wait for a full claim-then-defer cycle to settle back to
 		// 'queued', not just for attempts to tick up — 'sending' is a
-		// real intermediate state between ClaimDue's UPDATE and
+		// real intermediate state between ClaimRow's UPDATE and
 		// deferMissingPhysicalAddress's, and reading it there is a race
 		// in this test, not a defect in the worker.
 		if attempts >= 1 && status == outbox.StatusQueued {
@@ -601,7 +601,7 @@ func TestOutboxWorker_AbandonsAtMaxRetries_RetainsLastError(t *testing.T) {
 
 // TestOutbox_Release_RequeuesClaimedRow is the store-level unit test for
 // outbox.Store.Release itself, independent of OutboxWorker — it does not
-// exercise Stop's release path (see TestOutboxWorker_Stop_ReleasesClaimedRow
+// exercise Stop's release path (see TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued
 // below for that; this issue's phase-3 review, defect 2, found this test
 // under the OutboxWorker_Stop_* name calling Store.Release directly and
 // never constructing a worker or calling Stop at all, so it is renamed to
@@ -618,7 +618,7 @@ func TestOutbox_Release_RequeuesClaimedRow(t *testing.T) {
 	// This test deliberately ends with the row back in 'queued' — a
 	// due-now row no real worker ever finishes sending. Left behind, it
 	// is claimable by ANY later OutboxWorker in this same package/run
-	// (e.g. TestOutboxWorker_Stop_ReleasesClaimedRow, which depends on
+	// (e.g. TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued, which depends on
 	// claiming its OWN two rows first) — so it must be removed
 	// explicitly, the same reasoning as that test's own cleanup.
 	t.Cleanup(func() {
@@ -659,11 +659,11 @@ func TestOutbox_Release_RequeuesClaimedRow(t *testing.T) {
 
 // blockingMailer is a Mailer whose Send blocks until release is closed,
 // then delegates to an embedded RecordingMailer. It exists only to make
-// TestOutboxWorker_Stop_ReleasesClaimedRow deterministic: a way to hold a
-// real OutboxWorker's pass loop paused mid-send on the FIRST row of a
-// two-row batch, so the SECOND (already claimed, never started) row is
-// still 'sending' at the exact moment Stop is called — no sleeps, no
-// timing luck.
+// TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued deterministic: a way to
+// hold a real OutboxWorker's pass loop paused mid-send on the FIRST row it
+// reaches, so the SECOND row (selected but not yet claimed — #0297) is
+// still 'queued' at the exact moment Stop is called — no sleeps, no timing
+// luck.
 type blockingMailer struct {
 	inner   *RecordingMailer
 	started chan struct{}
@@ -686,16 +686,36 @@ func (m *blockingMailer) Send(ctx context.Context, msg Message) (string, error) 
 
 var _ Mailer = (*blockingMailer)(nil)
 
-// TestOutboxWorker_Stop_ReleasesClaimedRow is #0126's phase-3 review defect
-// 2's regression test: it constructs a REAL *OutboxWorker, runs it, and
-// calls Stop — unlike the old same-named test (renamed above to
-// TestOutbox_Release_RequeuesClaimedRow), which never did either. It
-// reproduces the review's executed proof ("after Stop: sending=1
-// queued=0") and then asserts the fix: after Stop returns, the row that
-// was still claimed when it was called is back to 'queued', not left
-// 'sending' for the orphan sweep to find up to outboxOrphanStaleAfter
-// later.
-func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
+// TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued is #0126's phase-3 review
+// defect 2's regression test, rewritten for #0297. It constructs a REAL
+// *OutboxWorker, runs it, and calls Stop, reproducing the review's original
+// scenario: two rows in one batch, the worker mid-send on one when Stop is
+// called. It still asserts the review's outcome — Stop never leaves a row
+// abandoned in 'sending' for the orphan sweep alone to find — but HOW that
+// holds changed.
+//
+// Renamed from TestOutboxWorker_Stop_ReleasesClaimedRow by #0297: before
+// that issue, ClaimDue's single UPDATE claimed the WHOLE batch atomically up front, so
+// the row not yet reached when Stop fired was genuinely 'sending', and
+// Stop's releaseAll (outbox_worker.go) existed to put it back to 'queued'
+// rather than leave it for outboxOrphanStaleAfter to expire.
+//
+// #0297 moved this worker onto internal/outbox's select-then-per-row-claim
+// path (SelectDue/ClaimRow): a row not yet reached is simply still
+// 'queued' — SelectDue never claims anything. pass's own stopCh check
+// (before each row's ClaimRow) is what stops a second row from ever being
+// claimed once Stop has been called, and the one row genuinely mid-send
+// when Stop fires always runs to completion (sendOne has no internal
+// stopCh check of its own) before Run can return and doneCh can close — so
+// w.claimed is provably empty by the time releaseAll would run.
+// releaseAll (and the trackClaimed/untrackClaimed/claimedMu machinery
+// behind it) is kept as a defensive safety net rather than removed — see
+// releaseAll's own doc comment — and
+// TestOutboxWorker_ReleaseAll_ConcurrentCallsDoNotRace (#0266) still
+// exercises it directly against a fabricated w.claimed, so its own
+// correctness stays covered even though THIS test can no longer observe it
+// doing real work.
+func TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued(t *testing.T) {
 	pool := outboxTestPool(t)
 
 	mailer := &blockingMailer{
@@ -747,22 +767,21 @@ func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
 		t.Fatal("mailer.Send was never called; the worker never claimed the batch")
 	}
 
-	// Both rows are claimed now: whichever one is NOT the row blocked
-	// inside sendOne (below) is still waiting in pass's loop, never having
-	// reached its own stopCh check yet — ClaimDue's single UPDATE sets
-	// status='sending' for the WHOLE claimed batch atomically, before pass
-	// iterates it, so both id1 and id2 are already 'sending' at this point
+	// Exactly one of the two rows is claimed now — the one blocked inside
+	// sendOne — and the other is still plain 'queued', never having
+	// reached ClaimRow yet: SelectDue selects both ids up front, but
+	// ClaimRow only claims one row at a time, immediately before ITS OWN
+	// send (#0297), so the second row's claim genuinely has not happened
 	// regardless of iteration order. That is why this checkpoint asserts
 	// on the PAIR, not on id2 specifically: which of the two rows is the
-	// one blocked in sendOne is NOT guaranteed to be id1 (ClaimDue's
-	// RETURNING order reflects Postgres's row-processing order for the
-	// UPDATE, not the subquery's "ORDER BY next_attempt_at, id" — that
-	// ORDER BY only selects WHICH rows are claimed, not the order
-	// RETURNING emits them in). See the post-Stop assertions below, which
-	// check "exactly one sent, one queued" rather than assuming which id
-	// is which — #0264's review found this test assuming id1 specifically
-	// after a change elsewhere in this file altered the shared test
-	// database's physical layout enough to flip it.
+	// one blocked in sendOne is NOT guaranteed to be id1 (SelectDue's
+	// ORDER BY next_attempt_at, id only orders the SELECT; pass's own loop
+	// order over the returned ids is what determines which gets claimed
+	// first). See the post-Stop assertions below, which check "exactly one
+	// sent, one queued" rather than assuming which id is which — #0264's
+	// review found an earlier version of this test assuming id1
+	// specifically after a change elsewhere in this file altered the
+	// shared test database's physical layout enough to flip it.
 	var status1, status2 string
 	if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id1).Scan(&status1); err != nil {
 		t.Fatalf("select id1 before stop: %v", err)
@@ -770,8 +789,18 @@ func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
 	if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id2).Scan(&status2); err != nil {
 		t.Fatalf("select id2 before stop: %v", err)
 	}
-	if status1 != outbox.StatusSending || status2 != outbox.StatusSending {
-		t.Fatalf("status before Stop = (id1=%q, id2=%q), want both %q (test setup invalid)", status1, status2, outbox.StatusSending)
+	sendingBefore, queuedBefore := 0, 0
+	for _, s := range []string{status1, status2} {
+		switch s {
+		case outbox.StatusSending:
+			sendingBefore++
+		case outbox.StatusQueued:
+			queuedBefore++
+		}
+	}
+	if sendingBefore != 1 || queuedBefore != 1 {
+		t.Fatalf("status before Stop = (id1=%q, id2=%q), want exactly one %q (blocked in sendOne) and one %q (not yet reached — test setup invalid)",
+			status1, status2, outbox.StatusSending, outbox.StatusQueued)
 	}
 
 	// Call Stop concurrently — it must block on <-w.doneCh, which cannot
@@ -807,10 +836,15 @@ func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
 	if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id2).Scan(&status2); err != nil {
 		t.Fatalf("select id2 after stop: %v", err)
 	}
-	// Exactly one of the two claimed rows finished (unblocked and sent
-	// before Stop returned) and exactly one was left claimed-but-unsent
-	// for Stop to release back to 'queued' — see the pre-Stop checkpoint's
-	// comment for why this does not assume which id is which.
+	// The row that was mid-send finished normally (unblocked, then sent to
+	// completion — sendOne has no internal stopCh check, so Stop cannot
+	// interrupt it) and the row never reached is still plain 'queued' —
+	// never claimed at all, so there was nothing for Stop to release
+	// (#0297; contrast the pre-#0297 doc comment above). Either way, the
+	// review's original defect — a row abandoned in 'sending' for the
+	// orphan sweep alone to find — does not reproduce. See the pre-Stop
+	// checkpoint's comment for why this does not assume which id is
+	// which.
 	sentCount, queuedCount := 0, 0
 	for _, s := range []string{status1, status2} {
 		switch s {
@@ -821,7 +855,7 @@ func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
 		}
 	}
 	if sentCount != 1 || queuedCount != 1 {
-		t.Fatalf("status after Stop = (id1=%q, id2=%q), want exactly one %q (finished before Stop returned) and one %q (released by Stop, not left for the orphan sweep — defect 2)",
+		t.Fatalf("status after Stop = (id1=%q, id2=%q), want exactly one %q (finished before Stop returned) and one %q (never claimed, not abandoned mid-'sending' — defect 2)",
 			status1, status2, outbox.StatusSent, outbox.StatusQueued)
 	}
 }
@@ -832,7 +866,7 @@ func TestOutboxWorker_Stop_ReleasesClaimedRow(t *testing.T) {
 // not merely belt-and-braces once <-w.doneCh has fired. This exercises that
 // directly — two goroutines calling releaseAll() at the same instant,
 // against a populated w.claimed — rather than through the fuller Run/Stop
-// timing dance TestOutboxWorker_Stop_ReleasesClaimedRow above already
+// timing dance TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued above already
 // covers for the single-caller case.
 //
 // The ids in w.claimed are fabricated (never enqueued), so both calls to
@@ -1118,7 +1152,7 @@ func TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress(t *testing.T) {
 		}
 		// Wait for a full claim-then-defer cycle to settle back to
 		// 'queued', not just for attempts to tick up — 'sending' is a
-		// real intermediate state between ClaimDue's UPDATE and
+		// real intermediate state between ClaimRow's UPDATE and
 		// deferMissingPhysicalAddress's, and reading it there is a race
 		// in this test, not a defect in the worker (mirrors
 		// TestOutboxWorker_DefersWelcome_MissingPhysicalAddress, #0264).

@@ -102,94 +102,63 @@ const (
 // sweep releases a live claim, and the recovery poller then reprocesses
 // the row a second time while the first pass is still running on it.
 //
-// #0294: the original derivation, 2 * intakeRowTimeout, sized itself
-// against ONE row's worst case. But intakePass claims a whole batch (up to
-// intakeBatchSize rows) with ONE outbox.Store.ClaimDue call — the same
-// batch-stamping mechanism #0284 found in internal/mailing's own worker —
-// and intakePass then reprocesses that batch serially, one row at a time,
-// so the last row's claim age when it finishes includes however long
-// every row ahead of it took, not just its own bound.
+// # #0297 — collapsed to a per-row bound
 //
-// Verified before deriving anything (per this issue's own instruction,
-// since #0295 found a sibling issue's identical-looking premise was
-// false): subscribe_intake.go's poller uses outbox.Store.ClaimDue, the
-// SAME batch-stamping method internal/mailing/outbox_worker.go's pass
-// uses — not internal/mailing/worker.go's SendStore.ClaimRow, which
-// stamps claimed_at per recipient and is why #0295 found no batching flaw
-// there. So this file is #0284's family, confirmed by reading
-// intakePass's own ClaimDue call below, not assumed from the issue title.
+// Through #0294, this window was derived from a whole intakeBatchSize
+// batch (210s), because intakePass claimed the batch atomically with ONE
+// outbox.Store.ClaimDue call and then reprocessed it serially — so the
+// LAST row's claim age included every row ahead of it, not just its own
+// bound.
 //
-// Unlike #0284's fix, there is no rate limiter here at all to rule out as
-// a term: intakePass's loop calls processIntakeRow back-to-back with
-// nothing pacing it. Each row's ENTIRE reprocessing — the fresh
-// IsSuppressed and FindByEmail reads, dispatchMutation, and the final
-// MarkSent — runs inside one context.WithTimeout(h.sendCtx,
-// intakeRowTimeout) (processIntakeRow, below), so intakeRowTimeout is
-// both a row's failure ceiling AND, under normal operation, an upper
-// bound on how long that row can occupy the loop before control passes to
-// the next row. This bound charges every row in a full batch, tail row
-// included, that full intakeRowTimeout:
+// #0297 changed intakePass, below, to claim per row instead: SelectDue
+// selects the batch's ids WITHOUT claiming anything, and ClaimRow claims
+// exactly one row, individually, immediately before THAT row's own
+// reprocessing begins — the same select-then-per-row-claim shape
+// internal/mailing.SendStore's ClaimBatch/ClaimRow always had (#0295) and
+// internal/mailing.OutboxWorker.pass was also moved onto (#0297). A row
+// waiting its turn in intakePass's loop is still plain 'queued' until
+// ClaimRow reaches it, so batch size drops out of this bound entirely —
+// there is only ever, at most, ONE row 'sending' under this poller at a
+// time.
 //
-//	intakeBatchSize * intakeRowTimeout = 20 * 10s = 200s
+// The single-row bound: intakePass's own ClaimRow call is wrapped in a
+// detached context.WithTimeout(h.sendCtx, intakeRowTimeout) (claimCtx,
+// below) — if that round trip alone hangs, up to intakeRowTimeout elapses
+// after claimed_at is committed server-side before this process even
+// learns the claim succeeded, which is real elapsed claim age. Then
+// processIntakeRow's entire reprocessing — the fresh IsSuppressed and
+// FindByEmail reads, dispatchMutation, and the final MarkSent — runs
+// inside its own context.WithTimeout(h.sendCtx, intakeRowTimeout). Worst
+// case, both terms:
 //
-// for the batch's own row-by-row processing — plus one more
-// intakeRowTimeout for intakePass's ClaimDue call itself (claimCtx
-// below), which is where the batch's shared claimed_at is actually
-// stamped. outbox.Store.ClaimDue's single `UPDATE ... RETURNING` sets
-// claimed_at = now() near the start of that one statement (an implicit,
-// single-statement transaction — now() is that transaction's start time),
-// but the call does not return control to intakePass until the RETURNING
-// rows have been scanned back over the wire: real elapsed time that
-// happens BEFORE row 1's own intakeRowTimeout clock even starts, and that
-// is charged to no row above.
+//	2 * intakeRowTimeout = 2 * 10s = 20s
 //
-// Unlike #0284's equivalent gap — outbox_worker.go's pass calls ClaimDue
-// on ctx from `go outboxWorker.Run(context.Background())`, an entirely
-// undeadlined context, so THAT gap is unbounded and #0284's own doc
-// comment says explicitly no formula over its constants can ever close
-// it — THIS gap is bounded: intakePass's ClaimDue call runs inside
-// claimCtx, context.WithTimeout(h.sendCtx, intakeRowTimeout), so it
-// cannot exceed intakeRowTimeout without the call itself failing and
-// returning no rows (and therefore no batch) at all. A real but
-// CLOSEABLE term, so it is charged here rather than left as an unclosed
-// residual:
+// intakeOrphanStaleAfter doubles the single row-processing bound
+// (intakeRowTimeout) to cover that same total, matching the "double a
+// single-row term" shape internal/mailing's own orphanStaleAfter and
+// outboxOrphanStaleAfter use (mailing/worker.go, mailing/outbox_worker.go)
+// for an identical reason: a claim round-trip term plus a processing term,
+// each bounded by the same constant.
 //
-//	intakeOrphanStaleAfter = (intakeBatchSize + 1) * intakeRowTimeout
-//	                       = 21 * 10s = 210s
+// Even 20s is not a claim that context cancellation is instantaneous. It
+// assumes pgx and the network underneath it honor ctx's deadline promptly
+// enough that a stuck ClaimRow/suppression/FindByEmail/dispatchMutation/
+// MarkSent call actually returns at or near intakeRowTimeout rather than
+// materially later — a TCP read the OS cannot be made to abandon on
+// cancellation is a residual no Go-level constant formula closes. Same
+// CLASS of caveat #0284's and #0294's final comments name for their own
+// windows; not fixed here.
 //
-// Even 210s is not a claim that context cancellation is instantaneous.
-// It assumes pgx and the network underneath it honor ctx's deadline
-// promptly enough that a stuck suppression/FindByEmail/dispatchMutation/
-// MarkSent/ClaimDue call actually returns at or near intakeRowTimeout
-// rather than materially later — a TCP read the OS cannot be made to
-// abandon on cancellation is a residual no Go-level constant formula
-// closes. That is the same CLASS of caveat #0284's final comment names
-// for outboxOrphanStaleAfter (context.Background() there is a stronger,
-// unconditional version of the same underlying assumption); not fixed
-// here, and not this file's gap to close.
-//
-// Considered and rejected: re-stamping claimed_at per row — as
-// internal/mailing/worker.go's SendStore.ClaimRow already does, per #0295
-// — would make a per-row window honest and small instead of this
-// batch-wide one. That is a change to internal/outbox's shared ClaimDue
-// path, tracked separately (#0297), not built here. #0284 made the same
-// call for outboxOrphanStaleAfter, for the same reason: this window being
-// too LARGE only costs recovery latency on the crash path (h.sendCtx
-// cancelling on a graceful Close lets intakePass finish or abandon its
-// current batch in an orderly way; OrphanSweep exists for a hard kill),
-// while too SMALL risks a duplicate mutation dispatch, #0254's failure
-// mode. Choose too large.
-//
-// Expressed from the real package constants, not a hand-computed
-// literal, so raising intakeBatchSize or intakeRowTimeout moves this
-// window automatically. See
-// TestIntakeOrphanStaleAfterCoversFullBatch
+// Expressed from the real package constant, not a hand-computed literal,
+// so raising intakeRowTimeout moves this window automatically —
+// intakeBatchSize is deliberately NOT a term any more. See
+// TestIntakeOrphanStaleAfterCoversSingleRowHold
 // (subscribe_intake_orphan_stale_after_test.go) for the invariant this
-// maintains, checked against an independently expressed worst case.
+// maintains.
 //
 // A var, not a const, so a test can shrink it; NOT sized against measured
 // machine load (CLAUDE.md §5).
-var intakeOrphanStaleAfter = time.Duration(intakeBatchSize+1) * intakeRowTimeout
+var intakeOrphanStaleAfter = 2 * intakeRowTimeout
 
 // subscribeIntakePayload is a KindSubscribeIntake row's payload — the
 // request-shape facts Subscribe learned synchronously (subscribe.go) and
@@ -239,18 +208,19 @@ func (h *SubscribeHandler) runIntakeWorker() {
 	}
 }
 
-// intakePass sweeps orphaned claims, then claims and reprocesses one batch
-// of due KindSubscribeIntake rows. Returns processed=true if it claimed at
-// least one row, so runIntakeWorker can skip the poll wait — the same
-// "don't busy-loop on an empty pass" discipline internal/mailing.
-// OutboxWorker.pass already establishes (#0122).
+// intakePass sweeps orphaned claims, then selects and reprocesses one batch
+// of due KindSubscribeIntake rows — claiming and reprocessing each row
+// individually (#0297), not the whole batch at once. Returns processed=true
+// if it claimed at least one row, so runIntakeWorker can skip the poll
+// wait — the same "don't busy-loop on an empty pass" discipline
+// internal/mailing.OutboxWorker.pass already establishes (#0122).
 func (h *SubscribeHandler) intakePass() (bool, error) {
 	// #0254's review bounce: scoped to KindSubscribeIntake, the same kind
-	// ClaimDue below is scoped to, so this sweep — which runs every 5s with
+	// SelectDue below is scoped to, so this sweep — which runs every 5s with
 	// a 20s staleness window sized for THIS poller's own fast path — can
 	// never release a live claim belonging to
 	// internal/mailing.OutboxWorker, which legitimately holds a mail row
-	// 'sending' for up to ~35s. An earlier, unfiltered version of this call
+	// 'sending' for up to ~70s. An earlier, unfiltered version of this call
 	// released a live confirmation-email claim mid-send, which led to that
 	// message being sent a second time — see OrphanSweep's doc comment for
 	// the full chain and
@@ -266,28 +236,51 @@ func (h *SubscribeHandler) intakePass() (bool, error) {
 		h.log.Warn("subscribe: intake orphan sweep reclaimed rows", "count", swept)
 	}
 
-	claimCtx, claimCancel := context.WithTimeout(h.sendCtx, intakeRowTimeout)
-	rows, err := h.intake.ClaimDue(claimCtx, intakeBatchSize, outbox.KindSubscribeIntake)
-	claimCancel()
+	// #0297: SelectDue only SELECTs — it claims nothing. The atomic claim
+	// (ClaimRow) happens per id, below, immediately before that row's own
+	// reprocessing begins, so claimed_at reflects when THIS row's own work
+	// started rather than an earlier batch-wide stamp.
+	selectCtx, selectCancel := context.WithTimeout(h.sendCtx, intakeRowTimeout)
+	ids, err := h.intake.SelectDue(selectCtx, intakeBatchSize, outbox.KindSubscribeIntake)
+	selectCancel()
 	if err != nil {
 		return false, err
 	}
-	if len(rows) == 0 {
+	if len(ids) == 0 {
 		return false, nil
 	}
 
-	for _, row := range rows {
+	processed := false
+	for _, id := range ids {
 		select {
 		case <-h.sendCtx.Done():
-			// Leave the rest of this batch claimed ('sending'); OrphanSweep
-			// reclaims it once intakeOrphanStaleAfter passes, the same
-			// shutdown allowance internal/mailing.OutboxWorker.pass makes.
-			return true, nil
+			// Every id not yet reached is still plain 'queued' (SelectDue
+			// claimed nothing) — nothing to leave for the orphan sweep;
+			// only a row genuinely claimed below is ever 'sending', and
+			// processIntakeRow always runs it to completion before this
+			// loop can check h.sendCtx.Done() again.
+			return processed, nil
 		default:
 		}
+
+		claimCtx, claimCancel := context.WithTimeout(h.sendCtx, intakeRowTimeout)
+		row, claimed, err := h.intake.ClaimRow(claimCtx, id)
+		claimCancel()
+		if err != nil {
+			h.log.Error("subscribe: claiming intake row failed", "id", id, "err", err)
+			continue
+		}
+		if !claimed {
+			// Lost the race — a concurrent poller claimed it first, or an
+			// orphan sweep already reclaimed it while it waited its turn
+			// in this batch. Nothing to do; the row is exactly where it
+			// should be.
+			continue
+		}
+		processed = true
 		h.processIntakeRow(row)
 	}
-	return true, nil
+	return processed, nil
 }
 
 // processIntakeRow re-derives the same two fixed reads Subscribe performed

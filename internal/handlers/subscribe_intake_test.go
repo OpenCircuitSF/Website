@@ -95,8 +95,9 @@ func TestSubscribe_MutationDropped_IntakeRowStaysDurablyQueued(t *testing.T) {
 // is unexported precisely because runIntakeWorker already owns polling it on
 // its own ticker, and calling it a second time from the test goroutine would
 // race the very goroutine this test means to prove works, occasionally
-// losing that race (ClaimDue's SKIP LOCKED simply hands the row to whichever
-// caller asks first) and reporting a false negative. Polling for the
+// losing that race (SelectDue's SKIP LOCKED and ClaimRow's atomic claim
+// simply hand the row to whichever caller reaches ClaimRow first — #0297)
+// and reporting a false negative. Polling for the
 // OUTCOME — bounded, well past intakePollInterval — proves the real
 // mechanism instead of a hand-invoked stand-in for it.
 func TestSubscribeIntakeWorker_RecoversRowTheFastPathNeverProcessed(t *testing.T) {

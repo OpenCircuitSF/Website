@@ -21,30 +21,32 @@
 //
 // outboxOrphanStaleAfter is its own var, not shared with worker.go's
 // orphanStaleAfter — a future change to one worker's timeout budget must
-// not silently retune the other's staleness window. The two derivations
-// are NOT identical (#0284), and #0295 checked why in detail rather than
-// assuming the two workers match: this worker's claimed_at is stamped
-// ONCE per whole batch (ClaimDue's single UPDATE) while pass sends that
-// batch SERIALLY, one row at a time, so a predecessor's real processing
-// time genuinely delays how long the LAST row's claim has been held. A
-// predecessor's contribution is bounded by ITS OWN worst-case send time,
-// not by the rate limiter's interval — the limiter only ever makes a send
-// wait LONGER than the interval, never shorter, so it cannot be the
-// dominant term once a single row's own bound exceeds a second (it does:
-// 35s). outboxOrphanStaleAfter's own doc comment, below, has the
-// batch-aware arithmetic and says why the rate limiter drops out of it
-// entirely.
+// not silently retune the other's staleness window, even though (#0297) the
+// two now evaluate to the SAME expression.
 //
-// worker.go's *Worker does NOT share this shape, and #0295's finding —
-// checked against the code, not assumed from this worker's defect — is
-// that it never did: *Worker's ClaimBatch never claims a row or touches
-// claimed_at at all; SendStore.ClaimRow performs the atomic claim
-// per-recipient, individually, at the exact moment that recipient's own
-// send begins (worker.go's orphanStaleAfter doc comment has the full
-// story). So batch size never enters worker.go's bound, and there was no
-// batching flaw there for #0295 to fix — the two orphanStaleAfter
-// derivations differ because the two workers' claim mechanisms differ,
-// not because one implementer's judgment call diverged from the other's.
+// # History: batch-wide claim (#0284), then per-row claim (#0297)
+//
+// Through #0284/#0295, the two workers' derivations genuinely differed:
+// this worker claimed a whole batch atomically in one UPDATE (ClaimDue)
+// and then drained it serially, so the LAST row's claim age included every
+// predecessor's real processing time — #0284's batch-derived window
+// (ultimately 800s). worker.go never had that shape at all: its
+// SendStore.ClaimBatch only selects, and SendStore.ClaimRow claims one
+// recipient at a time, individually, right as that recipient's own send
+// begins (#0295) — which is what let worker.go's orphanStaleAfter stay a
+// simple single-row bound (70s) the whole time.
+//
+// #0297 closed that gap structurally rather than tuning outboxOrphanStaleAfter
+// further: this worker's pass now uses outbox.Store's own SelectDue/ClaimRow
+// pair — select the batch's ids WITHOUT claiming anything, then claim each
+// row individually, immediately before that row's own send begins — the
+// exact shape worker.go's ClaimBatch/ClaimRow already had. A row waiting its
+// turn in pass's loop is therefore still plain 'queued', never 'sending',
+// and is never at risk from OrphanSweep at all; only the row currently being
+// sent is ever claimed. Batch size has dropped out of this bound entirely,
+// the same way it always was out of worker.go's — see
+// outboxOrphanStaleAfter's own doc comment, below, for the resulting
+// arithmetic.
 //
 // # Rate limiting is this worker's own, not shared with *Worker's
 //
@@ -92,79 +94,71 @@ const (
 // finishes the send it still holds, then a later pass reclaims the same
 // row and sends it again.
 //
-// #0284: the original derivation, 2 * (sendMessageTimeout +
-// writeStatusTimeout), sized itself against ONE message's worst case. But
-// ClaimDue's single UPDATE stamps claimed_at ONCE for the WHOLE batch (up
-// to outboxDefaultBatchSize rows), and pass then sends that batch
-// SERIALLY, one at a time, behind rate.Limiter (outboxEffectiveSendRate).
-// So the last row claimed has already sat 'sending' for however long its
-// predecessors took, not just to be rate-limited, but to actually run
-// their own sends to completion — the two are not the same thing.
+// # #0297 — collapsed to a per-row bound
 //
-// A first correction (this issue's first, bounced pass) charged each
-// predecessor the rate limiter's interval alone, reasoning that the
-// limiter enforces a MINIMUM gap between sends. That is true but
-// irrelevant to this bound: the limiter's interval is a floor on pacing,
-// never a ceiling on a row's cost, so it is never the dominant term. A
-// send that takes longer than the interval — which every real send does,
-// since a single row's own worst case (sendMessageTimeout +
-// writeStatusTimeout = 35s) vastly exceeds any interval the enforced
-// >= 1 msg/sec rate floor can produce (<= 1s) — makes the interval
-// disappear from the max(interval, rowCost) that actually governs how
-// long the NEXT row waits. So the rate limiter drops out of this
-// derivation entirely; charging it was the defect, not the fix.
+// Through #0284, this bound was derived from a full outboxDefaultBatchSize
+// batch (ultimately 800s: 20 * (sendMessageTimeout + 2*writeStatusTimeout)),
+// because ClaimDue stamped ONE claimed_at for the whole batch and pass then
+// drained it serially — so the LAST row's claim age included every
+// predecessor's real processing time, not just its own.
 //
-// The bound instead charges every one of the outboxDefaultBatchSize rows
-// in a full batch — including the last row itself — the full delay a
-// predecessor contributes to the NEXT row's start, not just the time it
-// holds its own claim. A row holds its claim for sendMessageTimeout +
-// writeStatusTimeout = 35s, released at MarkSent, but RecordEvent (see
-// sendOne below) runs AFTER MarkSent and still delays when the next row's
-// send can begin — so a predecessor's real contribution to the next row's
-// wait is sendMessageTimeout + 2*writeStatusTimeout = 40s, not 35s. This
-// bound charges that 40s figure to every row in the batch, tail row
-// included:
+// #0297 changed pass, below, to claim per row instead: SelectDue picks the
+// batch's ids without claiming anything, and ClaimRow claims exactly one
+// row, individually, immediately before THAT row's own send begins (the
+// same shape worker.go's SendStore.ClaimBatch/ClaimRow always had — see
+// #0295). A row waiting its turn in pass's loop is still plain 'queued'
+// until ClaimRow reaches it, so it carries no claim age to inherit from its
+// predecessors, and batch size drops out of this bound entirely — there is
+// only ever, at most, ONE row 'sending' under this worker at a time.
 //
-//	outboxDefaultBatchSize * (sendMessageTimeout + 2*writeStatusTimeout)
-//	= 20 * (30s + 2*5s) = 800s today.
+// The single-row bound: a live claim can be held for at most
+// sendMessageTimeout (render + the detached, bounded sendCtx SES call) plus
+// writeStatusTimeout (MarkSent's own detached, bounded writeCtx) = 35s,
+// before MarkSent's UPDATE moves the row OUT of 'sending'. RecordEvent
+// (sendOne, below) runs AFTER that transition has already committed, so it
+// cannot make this row look more stale than it is, and — because there is
+// no batch-wide claim any more — it cannot delay a "next row" either. On
+// top of that, ClaimRow's own round trip is now itself bounded (pass wraps
+// it in a detached context.WithTimeout(ctx, writeStatusTimeout) — see pass,
+// below): if THAT round trip alone hangs, up to writeStatusTimeout elapses
+// after claimed_at is committed server-side before this process even learns
+// the claim succeeded, which is real elapsed claim age too. Worst case:
 //
-// The true worst case is 19 predecessors at 40s each plus the tail row's
-// own 35s claim-hold: 19*40s + 35s = 795s. Charging every row — tail
-// included — the full 40s predecessor rate rather than trying to be exact
-// about the tail's shorter 35s contribution leaves 5s of real slack
-// instead of none. That is what this bound is: one that charges each
-// predecessor its full delay contribution, including the RecordEvent
-// tail — not a "deliberately simple" or "generous" figure relative to
-// some tighter one, since the previous 700s value here was BELOW the 795s
-// true worst case, not above it. What does still justify a larger window
-// over a smaller one is the cost asymmetry, unchanged from before: this
-// window being too LARGE only costs recovery latency on the crash path —
-// Stop already releases every claim on a graceful shutdown, so
-// OrphanSweep exists purely for a hard kill — while too SMALL costs a
-// duplicate send, #0254's failure mode. Choose too large.
+//	sendMessageTimeout + 2*writeStatusTimeout = 30s + 2*5s = 40s.
 //
-// Even 800s is not, and cannot be made, a STRICT upper bound from these
-// constants alone. OutboxWorker.Run is started as
-// `go outboxWorker.Run(context.Background())` (cmd/opencircuit/main.go),
-// and pass's calls to store.ClaimDue and outboxEffectiveSendRate both run
-// on that context with no deadline of their own — including ClaimDue's
-// RETURNING scan, which executes after its UPDATE has already committed
-// claimed_at server-side. That is real, unbounded elapsed time between
-// the stamp and row 1's send even starting, so no expression over
-// outboxDefaultBatchSize, sendMessageTimeout, and writeStatusTimeout can
-// ever be a strict bound on claim age. Closing that gap is #0297's
-// territory (a per-row claimed_at re-stamp in internal/outbox's shared
-// claim path), not a bigger multiplier here.
+// outboxOrphanStaleAfter doubles the legitimate single-row hold
+// (sendMessageTimeout + writeStatusTimeout = 35s), not the 40s figure that
+// also charges the ClaimRow round-trip residual, giving 70s — the same
+// expression and value as worker.go's own orphanStaleAfter. 70s still
+// covers the fuller 40s worst case with 30s of real margin, comfortably
+// more than the 35s margin worker.go's own window carries over its 35s
+// figure, so doubling the simpler term rather than the fuller one is not a
+// shortfall — it happens to land with slightly MORE headroom, not less.
 //
-// Expressed from the real package constants, not a hand-computed
-// literal, so raising outboxDefaultBatchSize or either timeout moves this
-// window automatically. See TestOutboxOrphanStaleAfterCoversFullBatch
-// (outbox_orphan_stale_after_test.go) for the invariant this maintains,
-// checked against an INDEPENDENTLY expressed worst case.
+// # Still not a STRICT bound
+//
+// pass's own SelectDue call, and outboxEffectiveSendRate's settings read,
+// still run on OutboxWorker.Run's ambient ctx
+// (`go outboxWorker.Run(context.Background())`, cmd/opencircuit/main.go) —
+// unbounded. Neither holds any row's claim open (SelectDue claims nothing;
+// outboxEffectiveSendRate runs before a row is claimed), so a hang there
+// delays the NEXT claim rather than extending an existing one — it cannot
+// make outboxOrphanStaleAfter false the way the old batch-wide gap could.
+// What remains unclosed, the same CLASS of residual #0294's final comment
+// names: this assumes context cancellation actually interrupts a stuck
+// DB/network call within its own deadline — a TCP read the OS cannot be
+// made to abandon on cancellation is not something any Go-level constant
+// formula can close.
+//
+// Expressed from the real package constants, not a hand-computed literal,
+// so raising either timeout moves this window automatically — batch size
+// (outboxDefaultBatchSize) is deliberately NOT a term any more; see
+// TestOutboxOrphanStaleAfterCoversSingleRowHold
+// (outbox_orphan_stale_after_test.go) for the invariant this maintains.
 //
 // A var, not a const, so a test can shrink it; NOT sized against measured
 // machine load (CLAUDE.md §5).
-var outboxOrphanStaleAfter = time.Duration(outboxDefaultBatchSize) * (sendMessageTimeout + 2*writeStatusTimeout)
+var outboxOrphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 
 // mailKinds is every outbox.Kind this worker's render switch knows how to
 // build a message for — i.e. every Kind EXCEPT outbox.KindSubscribeIntake
@@ -423,9 +417,12 @@ func (w *OutboxWorker) releaseAll() {
 }
 
 // trackClaimed records rows' ids as claimed-but-unsent — called the instant
-// ClaimDue returns them, before any row in the batch is sent, so a Stop
-// landing between the claim and the first send still sees every row in
-// w.claimed.
+// ClaimRow returns one, before it is sent, so a Stop landing during the send
+// still sees it in w.claimed. Kept as a slice-taking method (rather than
+// narrowed to a single id) for symmetry with untrackClaimed and to leave the
+// map-based implementation below unchanged; #0297 changed every call site to
+// pass a single-row slice, since at most one row is ever claimed-but-unsent
+// under this worker at a time now.
 func (w *OutboxWorker) trackClaimed(rows []outbox.Row) {
 	w.claimedMu.Lock()
 	defer w.claimedMu.Unlock()
@@ -446,10 +443,12 @@ func (w *OutboxWorker) untrackClaimed(id int64) {
 	delete(w.claimed, id)
 }
 
-// pass sweeps orphans, expires overdue pending signups (#0128), claims one
-// batch, and sends it. Returns processed=true if it did any real work
-// (claimed at least one row), so Run can skip the poll wait, matching
-// worker.go's "don't busy-loop on an empty pass" discipline (#0122).
+// pass sweeps orphans, expires overdue pending signups (#0128), selects one
+// batch of candidate ids, and drains it — claiming and sending each row
+// individually (#0297), not the whole batch at once. Returns processed=true
+// if it did any real work (claimed at least one row), so Run can skip the
+// poll wait, matching worker.go's "don't busy-loop on an empty pass"
+// discipline (#0122).
 func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 	// #0254's review bounce: scoped to mailKinds, the same set ClaimDue
 	// below is scoped to, so this sweep can never release a live claim
@@ -487,64 +486,82 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 		}
 	}
 
-	// #0266 item 4, pre-existing and unchanged by this issue: ClaimDue is a
-	// single `UPDATE ... RETURNING` (internal/outbox/store.go), which
-	// commits server-side as soon as Postgres executes it — before this
-	// process has scanned a single row of the result set. If scanning the
-	// RETURNING rows then fails (a network error mid-stream, a decode
-	// error), ClaimDue returns (nil, err) here: the rows it just claimed
-	// are genuinely 'sending' in the database, but w.trackClaimed is never
-	// called for them, because there is nothing in `rows` to pass it. This
-	// worker cannot release what it was never told it claimed. Nothing is
-	// lost: OrphanSweep (this pass's first step, above) reclaims any row
-	// stuck at 'sending' past outboxOrphanStaleAfter regardless of whether
-	// this process's own w.claimed ever knew about it — the same safety
-	// net that covers a hard crash mid-batch. Recorded here so this gap is
-	// not rediscovered as new; fixing it would mean ClaimDue running the
-	// UPDATE and the scan inside one explicit transaction it can still roll
-	// back, which is a change to internal/outbox/store.go's shared claim
-	// path, out of this issue's scope.
-	// #0254: mailKinds (below) scopes this claim to the email kinds this
-	// worker's render switch actually knows how to build — outbound_queue
-	// now also holds outbox.KindSubscribeIntake rows, a non-email kind
-	// internal/handlers.SubscribeHandler's own recovery poller claims and
-	// processes separately (see that Kind's doc comment). Without this
-	// filter this worker would occasionally claim an intake row it cannot
-	// render, hitting render's default case and eventually abandoning a row
-	// that has nothing to do with mail.
-	rows, err := w.store.ClaimDue(ctx, w.batchSize, mailKinds...)
+	// #0297: SelectDue only SELECTs — it claims nothing, so a network error
+	// or decode failure mid-scan here leaves every candidate row exactly as
+	// it was found ('queued'), unlike the old ClaimDue-based version of
+	// this pass, whose UPDATE committed claimed_at server-side before this
+	// process had scanned a single RETURNING row (that residual, and the
+	// #0266 item 4 reasoning about it, now applies to ClaimRow below
+	// instead — one row's worth of blast radius, not a whole batch's).
+	// #0254: mailKinds (below) scopes this selection to the email kinds
+	// this worker's render switch actually knows how to build —
+	// outbound_queue now also holds outbox.KindSubscribeIntake rows, a
+	// non-email kind internal/handlers.SubscribeHandler's own recovery
+	// poller claims and processes separately (see that Kind's doc
+	// comment). Without this filter this worker would occasionally select
+	// an intake row it cannot render, hitting render's default case and
+	// eventually abandoning a row that has nothing to do with mail.
+	selectCtx, selectCancel := context.WithTimeout(ctx, writeStatusTimeout)
+	ids, err := w.store.SelectDue(selectCtx, w.batchSize, mailKinds...)
+	selectCancel()
 	if err != nil {
-		return false, fmt.Errorf("mailing: claiming outbound_queue batch: %w", err)
+		return false, fmt.Errorf("mailing: selecting due outbound_queue rows: %w", err)
 	}
-	if len(rows) == 0 {
+	if len(ids) == 0 {
 		return false, nil
 	}
-	// Recorded the instant the claim succeeds, before any row is sent, so
-	// a Stop landing anywhere in the loop below sees every row of this
-	// batch as outstanding — see trackClaimed's doc comment.
-	w.trackClaimed(rows)
 
 	sendRate := w.outboxEffectiveSendRate(ctx)
 	limiter := rate.NewLimiter(rate.Limit(sendRate), 1)
 
-	for _, row := range rows {
+	processed := false
+	for _, id := range ids {
 		select {
 		case <-w.stopCh:
-			// Leave this and every remaining row of the batch claimed in
-			// w.claimed; Stop's own release (releaseAll, called from the
-			// goroutine that invoked Stop, after Run — and therefore this
-			// pass — has fully returned) or, failing that, the orphan
-			// sweep will reclaim them.
-			return true, nil
+			// Every id not yet reached is still plain 'queued' (SelectDue
+			// claimed nothing) — nothing to release for them; only the row
+			// currently claimed (if any — see below) is w.claimed's
+			// concern, and it is released the same way it always was.
+			return processed, nil
 		default:
 		}
 		if err := limiter.Wait(ctx); err != nil {
-			return true, nil // context cancelled/deadline — shutdown, not an error to log
+			return processed, nil // context cancelled/deadline — shutdown, not an error to log
 		}
+
+		// #0297: the atomic claim happens HERE, immediately before this
+		// row's own send — not once for the whole batch up front — so
+		// claimed_at reflects when THIS row's own work began. A detached,
+		// bounded context (not the caller's ambient ctx) so a hung round
+		// trip cannot hold this claim attempt open indefinitely — see
+		// outboxOrphanStaleAfter's doc comment for the resulting bound.
+		claimCtx, claimCancel := context.WithTimeout(ctx, writeStatusTimeout)
+		row, claimed, err := w.store.ClaimRow(claimCtx, id)
+		claimCancel()
+		if err != nil {
+			w.log.Error("mailing: claiming outbound_queue row failed", "id", id, "err", err)
+			continue
+		}
+		if !claimed {
+			// Lost the race: a concurrent poller claimed it first, or an
+			// orphan sweep already reclaimed it while it waited its turn
+			// in this batch (only possible if it had been sitting
+			// 'sending' from an EARLIER pass — SelectDue itself never
+			// claims). Nothing to release; the row is exactly where it
+			// should be.
+			continue
+		}
+		// Recorded the instant the claim succeeds, before this row is
+		// sent, so a Stop landing anywhere in sendOne still sees it as
+		// outstanding — see trackClaimed's doc comment. At most one row is
+		// ever in this set at a time now (#0297): the rest of the batch is
+		// still 'queued', not this worker's to release.
+		w.trackClaimed([]outbox.Row{row})
+		processed = true
 		w.sendOne(row)
 		w.untrackClaimed(row.ID)
 	}
-	return true, nil
+	return processed, nil
 }
 
 // sendOne renders and sends a single claimed row, on a context detached
