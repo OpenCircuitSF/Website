@@ -79,7 +79,7 @@ guessed.
 | `DocumentRoot` (former static placeholder) | `/var/www/vhosts/www.opencircuitsf.com`. The placeholder HTML is no longer reachable — the Go service answers `/` — but the directory stays, because `/.well-known/` is still served from disk out of it. See "The `/.well-known/` exception" below. |
 | Installed vhost file(s) | `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf` (the proxy vhost) and `001-www.opencircuitsf.com.conf` (port 80 → HTTPS). The apex and every other `*.opencircuitsf.com` name is redirected to `www` by `002-opencircuitsf.com{,-le-ssl}.conf`, which sort *after* the 001 files. **These are not copies of `deploy/apache/opencircuitsf.com.conf`.** That file is one self-contained vhost that does its own apex→www redirect; the box splits the same behaviour across the certbot-managed 001/002 pair it already had, and adding the repo file verbatim would duplicate `ServerName www.opencircuitsf.com`. Edit the installed files; treat the repo file as the reference for the proxy / header / CSP block only. |
 | certbot renewal schedule | `certbot-renew.timer` (systemd), firing twice daily at 00:00 and 12:00 UTC. The cert named `opencircuitsf.com` is a single ECDSA **wildcard** covering `opencircuitsf.com` and `*.opencircuitsf.com`, so one cert serves `www`, `go`, and any future subdomain. The authenticator is **`dns-route53`**, not `--apache`: renewal proves control over the domain through a Route 53 TXT record and never reads the vhosts or `/.well-known/acme-challenge`, so no Apache change in this project can break it. Expiry at deploy time: 2026-11-16. |
-| Is the existing Postgres the target for `opencircuit`? | **Yes.** One PostgreSQL **15.18** cluster on `127.0.0.1:5432` now holds `shortlinks`, `shortlinks_ocsf`, and `opencircuit` (owner: login role `opencircuit`, password auth over TCP). Note the major version: PRD §10.1 and this document's Prerequisites say 16, and `#0062`/`#0228`'s drills ran on 16.14. All 22 migrations applied cleanly on 15.18 and the whole Go suite passes against PostgreSQL 15.14, so 15 is proven for this schema — but nothing in the tree pins it, so do not introduce 16-only syntax without upgrading the box first. |
+| Is the existing Postgres the target for `opencircuit`? | **Yes.** One PostgreSQL **15.18** cluster on `127.0.0.1:5432` now holds `shortlinks`, `shortlinks_ocsf`, and `opencircuit` (owner: login role `opencircuit`, password auth over TCP). Note the major version: PRD §10.1 assumes 16, and `#0062`/`#0228`'s drills ran on 16.14, Homebrew — neither matches what is actually installed here. This document's Prerequisites (§1, below) state 15.18 to agree with what is on the box. All 22 migrations applied cleanly on 15.18 and the whole Go suite passes against PostgreSQL 15.14, so 15 is proven for this schema — but nothing in the tree pins it, so do not introduce 16-only syntax without upgrading the box first. |
 
 ### The `/.well-known/` exception
 
@@ -224,10 +224,15 @@ already on the box per `CLAUDE.md` §7.
   loaded by default — confirm with `httpd -M | grep -E 'ssl|proxy|rewrite|headers'`
   rather than assuming.
 
-- **PostgreSQL 16.** Already on the box per `CLAUDE.md` §7 — confirm the
-  major version with `psql --version` before assuming it matches what this
-  project's migrations were verified against (`#0062`/`#0228`'s drills both
-  ran on PostgreSQL 16.14, Homebrew). If provisioning fresh:
+- **PostgreSQL 15.18.** Already on the box per `CLAUDE.md` §7 — confirm the
+  major version with `psql --version` before assuming anything else. 15 is
+  proven for this schema: all 24 migrations apply cleanly on 15.18 and the
+  whole Go suite passes against PostgreSQL 15.14 (`#0062`/`#0228`'s drills
+  ran on 16.14, Homebrew, but that is not what production runs). Nothing in
+  the tree pins a major version, so do not introduce 16-only syntax without
+  upgrading the box first. If provisioning a **fresh** instance rather than
+  matching this one, 16 is a reasonable choice and this is what that
+  installation looks like — but it is not a description of the current box:
 
   ```bash
   sudo dnf list 'postgresql*server' # confirm the exact package name/version AL2023 offers today
@@ -1937,10 +1942,11 @@ What the deploy actually established, each item measured rather than assumed:
   seed` created the admin; `opencircuit.service` came up under systemd,
   `enabled` at boot, listening on `127.0.0.1:8080` with `/health` returning
   `{"status":"ok","db":"ok"}`.
-- **PostgreSQL 15 is proven for this schema**, contradicting this document's
-  own "PostgreSQL 16" prerequisite. The migrations applied cleanly on 15.18,
-  and the whole Go suite passes against 15.14 locally with `TEST_DATABASE_URL`
-  set and zero skips.
+- **PostgreSQL 15 is proven for this schema.** The Prerequisites above (§1)
+  originally assumed 16, per PRD §10.1; they now state 15.18 to match what is
+  actually installed. The migrations applied cleanly on 15.18, and the whole
+  Go suite passes against 15.14 locally with `TEST_DATABASE_URL` set and zero
+  skips.
 - **The `script-src` CSP hash is now verified against a real build** — the
   limitation stated in earlier versions of this section is closed. The hash
   was recomputed from `web/dist/index.html` after an actual `npm run build`,

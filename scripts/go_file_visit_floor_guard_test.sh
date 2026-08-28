@@ -95,6 +95,26 @@
 #      80/110 = 73%) while still catching a floor that has drifted badly out
 #      of proportion to what it is meant to protect.
 #
+#      GROWTH CEILING, not just a shrink/lower-too-far detector: the same
+#      lower bound also fails if the population grows too far ABOVE a
+#      static floor, with no code change at all. For
+#      citedTestScanRootsMinPlausibleFileCount=150 against today's
+#      population of 258 `internal cmd web` .go files (150/258 = 58%),
+#      `floor_plausible`'s integer-division `half=$((population/2))` trips
+#      once population reaches 302 -- roughly 44 ordinary new .go files away
+#      at today's count, not a distant hypothetical for an actively
+#      developed tree. That is a legitimate, intended trip (the floor
+#      really has drifted out of proportion once the population has grown
+#      that far past it) and not a bug in this script, but it means a
+#      passing run today is not evidence the floor stays passing after a
+#      few dozen ordinary commits -- raising the constant in the guarded Go
+#      source, not loosening this script's margin, is the correct response
+#      when it fires for that reason. This script does not track how close
+#      the ceiling is; if that becomes a recurring nuisance, a WARN band
+#      (e.g. population > 1.5 * floor) reported alongside PASS would be a
+#      reasonable follow-up, but is not implemented here since it is
+#      outside #0300's scope and no such follow-up has been needed yet.
+#
 # This script touches no database and changes nothing under version control
 # -- it only reads the three tracked files (never edits them) and writes
 # mutated copies into a private mktemp(1) directory, removed on exit.
@@ -119,16 +139,31 @@ fail() { FAILURES=$((FAILURES + 1)); printf 'FAIL: %s\n' "$1" >&2; }
 pass() { printf 'PASS: %s\n' "$1"; }
 fatal() { printf 'FATAL: %s\n' "$1" >&2; exit 1; }
 
-command -v find >/dev/null || fatal "find not on PATH"
-command -v grep >/dev/null || fatal "grep not on PATH"
-command -v sed  >/dev/null || fatal "sed not on PATH"
+command -v find   >/dev/null || fatal "find not on PATH"
+command -v grep   >/dev/null || fatal "grep not on PATH"
+command -v sed    >/dev/null || fatal "sed not on PATH"
+command -v shasum >/dev/null || fatal "shasum not on PATH -- required for the byte-identity check at the end of this script; without it, the check would compare two empty strings and PASS having measured nothing (CLAUDE.md §8's fail-open shape)"
+command -v awk    >/dev/null || fatal "awk not on PATH -- required alongside shasum for the byte-identity check"
 
 # extract_const <file> <const-name> -- reads FILE (real or mutated copy,
 # never assumed) and prints the integer value of `const <const-name> = N`.
-# Fails closed (fatal) rather than returning an empty/guessed value if the
-# pattern is not found or is not a plain non-negative integer -- an
-# extraction that silently produced nothing must never be treated as "0
-# files" or "floor 0" by accident (CLAUDE.md §8).
+# Calls fatal() rather than returning an empty/guessed value if the pattern
+# is not found or is not a plain non-negative integer -- an extraction that
+# silently produced nothing must never be treated as "0 files" or "floor 0"
+# by accident (CLAUDE.md §8).
+#
+# CAUTION for every call site: this function is always invoked inside a
+# `$(...)` command substitution (e.g. `x="$(extract_const ...)"`), so its
+# internal `fatal` -> `exit 1` only terminates that subshell, not this
+# script's own process -- bash still propagates the subshell's exit status
+# to the assignment, but only if the caller checks it. A bare
+# `x="$(extract_const ...)"` with no `||` would leave $x empty and let the
+# script carry on, eventually reaching floor_plausible's `-gt`/`-le` on an
+# empty string, which fails closed too (a non-numeric `[` comparison is an
+# error, not a pass) but reports a misleading "REGRESSION" verdict instead
+# of the real FATAL reason. So every call site below is written
+# `x="$(extract_const ...)" || fatal "..."` to make the fatal genuinely
+# fatal for the whole script, not just the subshell.
 extract_const() {
   local file="$1" name="$2" line value
   line="$(grep -E "^const[[:space:]]+${name}[[:space:]]*=[[:space:]]*[0-9]+[[:space:]]*$" "$file")"
@@ -157,6 +192,27 @@ count_go_files() {
     n="$(find "$@" \( -name node_modules -o -name dist \) -prune -o -type f -name '*.go' -print | grep -vc '_test\.go$')"
   fi
   printf '%s' "$n"
+}
+
+# sha_of <file> -- prints a validated sha256 hex digest for FILE. Refuses to
+# return an empty or malformed value: absent `shasum`, `shasum -a 256 ... |
+# awk '{print $1}'` would previously produce an empty string, and comparing
+# two empty strings at the end of this script would PASS having measured
+# nothing (CLAUDE.md §8's "assert the extraction produced something" -- an
+# empty result must be an error, never an input). The preflight `command -v
+# shasum`/`command -v awk` checks above catch the missing-tool case before
+# this ever runs; this function is the second, independent layer that also
+# catches a `shasum` that produced something present but not a real digest.
+sha_of() {
+  local f="$1" digest
+  digest="$(shasum -a 256 "$f" | awk '{print $1}')"
+  case "$digest" in
+    '' | *[!0-9a-fA-F]*) fatal "sha_of: shasum/awk produced an empty or non-hex digest ('${digest}') for $f -- refusing to use it in the byte-identity check." ;;
+  esac
+  if [ "${#digest}" -ne 64 ]; then
+    fatal "sha_of: digest for $f is ${#digest} hex chars, not the 64 a sha256 digest must be ('${digest}') -- refusing to use it in the byte-identity check."
+  fi
+  printf '%s' "$digest"
 }
 
 # floor_plausible <floor> <population> -- this script's own oracle, entirely
@@ -188,7 +244,8 @@ FLOOR_TESTS=(
 SHA_BEFORE=""
 for f in "${FLOOR_FILES[@]}"; do
   [ -f "$REPO/$f" ] || fatal "$f not found -- has it moved? Update FLOOR_FILES."
-  SHA_BEFORE="${SHA_BEFORE}$(shasum -a 256 "$REPO/$f" | awk '{print $1}') "
+  digest="$(sha_of "$REPO/$f")" || fatal "sha_of fatal-exited while hashing $REPO/$f -- see the FATAL line above. Aborting rather than letting an empty digest silently join SHA_BEFORE (sha_of's own fatal only exits its command-substitution subshell, same as extract_const -- see that function's header note -- so this call site must check the exit status itself)."
+  SHA_BEFORE="${SHA_BEFORE}${digest} "
 done
 
 i=0
@@ -213,11 +270,11 @@ while [ "$i" -lt "${#FLOOR_NAMES[@]}" ]; do
     '' | *[!0-9]*) fatal "count_go_files returned a non-numeric population ('${POP}') for ${CONST}" ;;
   esac
 
-  REAL_VALUE="$(extract_const "$SRC" "$CONST")"
+  REAL_VALUE="$(extract_const "$SRC" "$CONST")" || fatal "extract_const fatal-exited while extracting ${CONST} from $SRC -- see the FATAL line above for the reason. Aborting the whole run rather than letting an empty extraction fall through to floor_plausible and print a misleading REGRESSION verdict."
   if floor_plausible "$REAL_VALUE" "$POP"; then
     pass "committed ${CONST}=${REAL_VALUE} is plausible against an externally-measured population of ${POP} (>= half, <= population)"
   else
-    fail "REGRESSION #0300: committed ${CONST}=${REAL_VALUE} is NOT plausible against an externally-measured population of ${POP} -- either it was lowered too far, raised above the real population (#0275's own failure mode), or the tree shrank. Affects: ${TESTS}"
+    fail "REGRESSION #0300: committed ${CONST}=${REAL_VALUE} is NOT plausible against an externally-measured population of ${POP} -- either it was lowered too far, raised above the real population (#0275's own failure mode), the tree shrank, or the tree grew past the floor's margin (floor must stay >= population/2; see the header comment's growth-ceiling note). Affects: ${TESTS}"
   fi
 
   MUTANT="$WORKDIR/$(basename "$REL_FILE")"
@@ -225,7 +282,7 @@ while [ "$i" -lt "${#FLOOR_NAMES[@]}" ]; do
   if ! grep -q "const ${CONST} = 0" "$MUTANT"; then
     fatal "mutation did not take on the copy of ${REL_FILE} for ${CONST} -- aborting before judging anything, rather than judging a copy that is silently identical to the original (CLAUDE.md §8's 'assert the extraction produced something')."
   fi
-  MUT_VALUE="$(extract_const "$MUTANT" "$CONST")"
+  MUT_VALUE="$(extract_const "$MUTANT" "$CONST")" || fatal "extract_const fatal-exited while extracting ${CONST} from the mutated copy $MUTANT -- see the FATAL line above for the reason. Aborting rather than judging a mutation this script cannot even read back."
   if [ "$MUT_VALUE" != "0" ]; then
     fatal "re-extraction from the mutated copy of ${REL_FILE} returned '${MUT_VALUE}', not '0' -- the mutation and the extraction disagree; refusing to judge."
   fi
@@ -240,9 +297,12 @@ done
 
 SHA_AFTER=""
 for f in "${FLOOR_FILES[@]}"; do
-  SHA_AFTER="${SHA_AFTER}$(shasum -a 256 "$REPO/$f" | awk '{print $1}') "
+  digest="$(sha_of "$REPO/$f")" || fatal "sha_of fatal-exited while hashing $REPO/$f -- see the FATAL line above. Aborting rather than letting an empty digest silently join SHA_AFTER."
+  SHA_AFTER="${SHA_AFTER}${digest} "
 done
-if [ "$SHA_BEFORE" = "$SHA_AFTER" ]; then
+if [ -z "$SHA_BEFORE" ] || [ -z "$SHA_AFTER" ]; then
+  fail "CRITICAL: sha256 digest computation produced an empty result (SHA_BEFORE='${SHA_BEFORE}' SHA_AFTER='${SHA_AFTER}') -- refusing to treat two blanks as a match. This is the exact fail-open CLAUDE.md §8 warns against: an empty result must be an error, never an input, and this check must have MEASURED something to pass."
+elif [ "$SHA_BEFORE" = "$SHA_AFTER" ]; then
   pass "all three tracked guard files unchanged across this run -- every mutation happened on a private copy in $WORKDIR, never the tracked file"
 else
   fail "CRITICAL: a tracked guard file's sha256 changed during this run. Investigate immediately with: git diff -- ${FLOOR_FILES[*]}"
