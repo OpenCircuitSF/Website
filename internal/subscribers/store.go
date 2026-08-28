@@ -929,7 +929,12 @@ func selectedInterestNamesTx(ctx context.Context, q outbox.Querier, subscriberID
 // website signup never has import_id set, and a CONFIRMED invitee has
 // consent_basis=ConsentBasisDoubleOptIn — so this can never fire for an
 // ordinary pending website signup or an active subscriber of any
-// provenance.
+// provenance. This depends on RestartSignup clearing import_id when a
+// previously-invited (and since revoked or declined) row is resurrected by
+// a genuine website signup — see that method's own doc comment for the
+// misfire this closes; without it, that exact resignup sequence reached
+// this branch and suppressed an address that had done nothing but sign up
+// and change its mind.
 //
 // When it fires, in the SAME transaction as the status change:
 //
@@ -1087,6 +1092,32 @@ type RestartSignupInput struct {
 // evidence (signup_ip/user_agent/utm_*) to this new signup event, and moves
 // status to pending.
 //
+// # #0129 — also clears import_id, so a revoked-then-resignedup row cannot
+// be mistaken for a live invitation
+//
+// Confirm, Unsubscribe (decline path), AdminResendConfirmation, and
+// ExpirePendingSweep all infer "this row is an unaccepted import
+// invitation" from import_id being set with consent_basis still NULL —
+// deliberately, so acceptance is decided by what the database already
+// knows rather than a flag the caller passes (see Confirm's own doc
+// comment). Before this method cleared import_id, that inference misfired:
+// invite → revoke (Revoke leaves import_id set and consent_basis NULL on a
+// still-pending row) → the SAME address signs up on the website weeks
+// later routes through this method (existingSignup's StatusUnsubscribed
+// branch), which used to leave import_id in place. The row was then a
+// genuine website signup in progress that every one of those four call
+// sites still read as an unaccepted invitation — worst of all, Unsubscribe
+// would SUPPRESS it outright on the person's very next unsubscribe, with no
+// self-service recovery (found in this issue's review). Once this method
+// no longer treats consent as import-derived — the person's own action
+// (visiting the site and submitting the form) is what starts this new
+// signup, not the old import — clearing import_id here is the same
+// reasoning Revoke's own doc comment already uses for a confirmed invitee:
+// "its consent no longer derives from the import." The audit trail is not
+// lost: subscriber_events already carries ImportID on the earlier
+// imported/invite_sent rows, which is where "why did we ever mail this
+// address" is answered from.
+//
 // It guards statusLockedFromNonAdmin exactly like every other status mutator
 // in this package (see the package doc comment): if the subscriber is
 // currently complained, EVERY column this method would otherwise touch —
@@ -1137,7 +1168,8 @@ func (s *Store) RestartSignup(ctx context.Context, id int64, in RestartSignupInp
 		        utm_source         = CASE WHEN status = $11 THEN utm_source         ELSE $7    END,
 		        utm_medium         = CASE WHEN status = $11 THEN utm_medium         ELSE $8    END,
 		        utm_campaign       = CASE WHEN status = $11 THEN utm_campaign       ELSE $9    END,
-		        updated_at         = CASE WHEN status = $11 THEN updated_at         ELSE $10   END
+		        updated_at         = CASE WHEN status = $11 THEN updated_at         ELSE $10   END,
+		        import_id          = CASE WHEN status = $11 THEN import_id         ELSE NULL   END
 		  WHERE id = $1
 		 RETURNING `+subscriberColumns,
 		id, StatusPending, confirmToken, confirmExpiresAt,

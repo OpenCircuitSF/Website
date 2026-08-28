@@ -1057,6 +1057,98 @@ func TestImportStore_Revoke_WidenedForInviteMode(t *testing.T) {
 	}
 }
 
+// TestRestartSignup_AfterRevokedInvite_ClearsImportIDAndNeverSuppresses is
+// this issue's review-Blocker-2 regression: an invited-then-revoked address
+// that later signs up on the website for itself must be treated as a
+// genuine new signup, not a still-live import invitation. Before
+// RestartSignup cleared import_id, this exact sequence — invite → revoke →
+// resignup — left the row `(pending, import_id set, consent_basis NULL)`,
+// which is the SAME state Confirm/Unsubscribe/AdminResendConfirmation infer
+// as "an unaccepted invitation": the resignup's own subsequent unsubscribe
+// wrongly added a suppression (permanently and silently locking the person
+// out, since internal/handlers/subscribe.go refuses any suppressed
+// address), and AdminResendConfirmation wrongly refused to help with
+// ErrResendNotForInvited. Both must no longer misfire.
+func TestRestartSignup_AfterRevokedInvite_ClearsImportIDAndNeverSuppresses(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	suppressions := NewSuppressionStore(pool)
+	email := uniqueImportEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	invited, imp := commitInvite(t, importStore, email, now)
+	if invited.ImportID == nil || *invited.ImportID != imp.ID {
+		t.Fatalf("invited.ImportID = %v, want %d", invited.ImportID, imp.ID)
+	}
+
+	// Step 1: the admin revokes the batch before the invitee ever confirms.
+	if _, revokedEmails, _, err := importStore.Revoke(context.Background(), imp.ID, "consent was not properly obtained", now.Add(time.Minute)); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	} else if len(revokedEmails) != 1 || revokedEmails[0] != email {
+		t.Fatalf("revokedEmails = %v, want [%s]", revokedEmails, email)
+	}
+
+	revoked, err := subStore.FindByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("FindByEmail after revoke: %v", err)
+	}
+	if revoked.Status != StatusUnsubscribed {
+		t.Fatalf("Status after revoke = %q, want %q", revoked.Status, StatusUnsubscribed)
+	}
+	if revoked.ImportID == nil {
+		t.Fatal("ImportID cleared by Revoke — test premise broken, Revoke should leave it set on a revoked-not-confirmed row")
+	}
+
+	// Step 2: weeks later, the SAME person signs up on the website
+	// themselves. subscribe.go's existingSignup routes an unsubscribed row
+	// through RestartSignup exactly like this.
+	restarted, err := subStore.RestartSignup(context.Background(), revoked.ID, RestartSignupInput{
+		SignupIP:   "203.0.113.55",
+		ConfirmTTL: time.Hour,
+	}, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("RestartSignup: %v", err)
+	}
+	if restarted.Status != StatusPending {
+		t.Fatalf("Status after RestartSignup = %q, want %q", restarted.Status, StatusPending)
+	}
+	if restarted.ImportID != nil {
+		t.Errorf("ImportID after RestartSignup = %v, want nil — this is a genuine website signup, not a live invitation", *restarted.ImportID)
+	}
+	if restarted.ConsentBasis != nil {
+		t.Errorf("ConsentBasis after RestartSignup = %v, want nil", *restarted.ConsentBasis)
+	}
+
+	// Step 3: an admin resend must work normally now — not refused as "an
+	// import invitation".
+	if _, err := subStore.AdminResendConfirmation(context.Background(), restarted.ID, now.Add(3*time.Minute), time.Hour, 7*24*time.Hour); errors.Is(err, ErrResendNotForInvited) {
+		t.Error("AdminResendConfirmation refused a genuine website signup as an import invitation")
+	} else if err != nil {
+		t.Fatalf("AdminResendConfirmation: %v", err)
+	}
+
+	// Step 4: the person changes their mind before confirming and clicks
+	// an ordinary unsubscribe — this must NOT suppress them. (Re-fetch
+	// first: AdminResendConfirmation above rotated the confirm token but
+	// left status/import_id/consent_basis untouched.)
+	beforeUnsub, err := subStore.FindByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("FindByEmail before unsubscribe: %v", err)
+	}
+	if _, err := subStore.Unsubscribe(context.Background(), beforeUnsub.ID, SourceOneClick, now.Add(4*time.Minute)); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+
+	sups, err := suppressions.ListByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("ListByEmail: %v", err)
+	}
+	if len(sups) != 0 {
+		t.Errorf("suppressions after a genuine website signup's ordinary unsubscribe = %+v, want none", sups)
+	}
+}
+
 // TestExpirePendingSweep_InvitedRow_RecordsInviteExpired is #0129's
 // distinguishing case for #0128's expiry sweep (pending.go): an invited,
 // never-confirmed row past its TTL is left `pending` (never re-mailed —

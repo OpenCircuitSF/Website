@@ -1091,6 +1091,22 @@ func TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress(t *testing.T) {
 
 	runWorkerUntilStopped(t, w)
 
+	// import_source is the enqueue-time payload key; the invitation
+	// subject is what mailer.Sent() records — scope the "nothing sent"
+	// assertion to it below rather than the raw slice length, since this
+	// package's worker drains the whole shared outbound_queue and other
+	// tests can leave their own rows in it.
+	const inviteSubject = "You're invited to the Open Circuit SF mailing list"
+	countInviteSent := func() int {
+		n := 0
+		for _, m := range mailer.Sent() {
+			if m.Subject == inviteSubject {
+				n++
+			}
+		}
+		return n
+	}
+
 	deadline := time.Now().Add(2 * time.Second)
 	var status string
 	var attempts int
@@ -1100,7 +1116,13 @@ func TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress(t *testing.T) {
 		).Scan(&status, &attempts); err != nil {
 			t.Fatalf("select: %v", err)
 		}
-		if attempts >= 1 {
+		// Wait for a full claim-then-defer cycle to settle back to
+		// 'queued', not just for attempts to tick up — 'sending' is a
+		// real intermediate state between ClaimDue's UPDATE and
+		// deferMissingPhysicalAddress's, and reading it there is a race
+		// in this test, not a defect in the worker (mirrors
+		// TestOutboxWorker_DefersWelcome_MissingPhysicalAddress, #0264).
+		if attempts >= 1 && status == outbox.StatusQueued {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -1111,7 +1133,7 @@ func TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress(t *testing.T) {
 	if status != outbox.StatusQueued {
 		t.Errorf("status = %q, want %q — a missing physical_address must defer, not abandon or send", status, outbox.StatusQueued)
 	}
-	if len(mailer.Sent()) != 0 {
-		t.Errorf("mailer.Sent() = %d messages, want 0 — nothing should go out without a physical_address", len(mailer.Sent()))
+	if n := countInviteSent(); n != 0 {
+		t.Errorf("invitation messages sent = %d, want 0 — nothing should go out without a physical_address", n)
 	}
 }
