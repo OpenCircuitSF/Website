@@ -1465,3 +1465,287 @@ func TestExpirePendingSweep_InvitedRow_RecordsInviteExpired(t *testing.T) {
 		t.Errorf("confirmation_expired events for an invited row = %d, want 0 (invite_expired instead)", confirmationExpiredCount)
 	}
 }
+
+// TestGrowth30Days_TruthTable_0336 rebuilds #0324's review's 18-scenario
+// truth table (rows A-R) against #0336's fix, driving the real store
+// methods exactly as that review did rather than arguing the predicate —
+// criterion 1 requires this, not a copy of the review's own numbers. Rows O
+// and P are the two this issue exists for: before #0336 both read net +1
+// (a restarted row's stale consent_basis kept satisfying imported_30d's old
+// `IS NOT NULL` guard while the row sat merely `pending`); both must now
+// read 0. The other sixteen rows are included too, so criterion 2 — "the
+// other sixteen cells are unchanged" — is demonstrated by the same run, not
+// assumed from #0324's own numbers.
+//
+// Each row is an independent, non-parallel subtest: its own throwaway
+// address(es) (uniqueImportEmail/uniqueEmail), its own `since` captured
+// immediately before its own baseline measurement, and its own sequence of
+// store calls. Subtests never run concurrently with each other (none calls
+// t.Parallel), so one row's actions always complete — including
+// uniqueImportEmail's t.Cleanup, which fires when the subtest returns —
+// before the next row's baseline is captured; no row's table-wide
+// Growth30Days call can observe another row's in-progress state.
+//
+// Test hygiene (criterion 6): every Store.Create / ImportStore.Commit call
+// below passes a real time.Now(), never since.Add(...) — see
+// uniqueImportEmail's own doc comment and
+// TestGrowth30Days_UnacceptedInviteDoesNotCountAsGrowth's comment for why a
+// forward-dated created_at would be reachable by an unrelated, later-running
+// test's Store.List query. Only Confirm/Unsubscribe/RestartSignup/Revoke/
+// MarkBounced/ExpirePendingSweep calls use since.Add(...) offsets — none of
+// those write created_at, and List never orders by the columns they do
+// write (confirmed_at/unsubscribed_at/updated_at). Order-independence
+// across rows is proved by running this test under `go test -shuffle=on`
+// and a fixed non-default seed, not `-count=N` (banned for flake-hunting,
+// CLAUDE.md §5a) — see this issue's Verification section.
+func TestGrowth30Days_TruthTable_0336(t *testing.T) {
+	type scenario struct {
+		row  string
+		name string
+		want int64
+		run  func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time)
+	}
+
+	scenarios := []scenario{
+		{"A", "invite sent, unaccepted", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			email := uniqueImportEmail(t)
+			commitInvite(t, importStore, email, time.Now().UTC())
+		}},
+		{"B", "invite sent, then expired", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			email := uniqueImportEmail(t)
+			commitInvite(t, importStore, email, time.Now().UTC())
+			if _, err := subStore.ExpirePendingSweep(context.Background(), since.Add(importInviteConfirmTTL+time.Minute)); err != nil {
+				t.Fatalf("ExpirePendingSweep: %v", err)
+			}
+		}},
+		{"C", "invite accepted", 1, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			email := uniqueImportEmail(t)
+			invited, _ := commitInvite(t, importStore, email, time.Now().UTC())
+			if _, err := subStore.Confirm(context.Background(), *invited.ConfirmToken, since.Add(2*time.Second)); err != nil {
+				t.Fatalf("Confirm: %v", err)
+			}
+		}},
+		{"D", "invite accepted, then unsubscribed", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			email := uniqueImportEmail(t)
+			invited, _ := commitInvite(t, importStore, email, time.Now().UTC())
+			confirmed, err := subStore.Confirm(context.Background(), *invited.ConfirmToken, since.Add(2*time.Second))
+			if err != nil {
+				t.Fatalf("Confirm: %v", err)
+			}
+			if _, err := subStore.Unsubscribe(context.Background(), confirmed.ID, SourceOneClick, since.Add(3*time.Second)); err != nil {
+				t.Fatalf("Unsubscribe: %v", err)
+			}
+		}},
+		{"E", "invite batch (3) revoked while pending", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			emails := []string{uniqueImportEmail(t), uniqueImportEmail(t), uniqueImportEmail(t)}
+			rows := make([]ImportRow, len(emails))
+			for i, email := range emails {
+				rows[i] = ImportRow{Email: email}
+			}
+			in := validCommitInput(t, rows)
+			in.ConsentMode = ConsentModeInvite
+			result, err := importStore.Commit(context.Background(), in, time.Now().UTC())
+			if err != nil {
+				t.Fatalf("Commit: %v", err)
+			}
+			if _, _, _, err := importStore.Revoke(context.Background(), result.Import.ID, "truth table row E (#0336)", since.Add(2*time.Second)); err != nil {
+				t.Fatalf("Revoke: %v", err)
+			}
+		}},
+		{"F", "invite declined while pending", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			email := uniqueImportEmail(t)
+			invited, _ := commitInvite(t, importStore, email, time.Now().UTC())
+			if _, err := subStore.Unsubscribe(context.Background(), invited.ID, SourceOneClick, since.Add(2*time.Second)); err != nil {
+				t.Fatalf("Unsubscribe (decline): %v", err)
+			}
+		}},
+		{"G", "prior_consent import (no invite mode)", 1, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			email := uniqueImportEmail(t)
+			in := validCommitInput(t, []ImportRow{{Email: email}})
+			if _, err := importStore.Commit(context.Background(), in, time.Now().UTC()); err != nil {
+				t.Fatalf("Commit: %v", err)
+			}
+		}},
+		{"H", "prior_consent import, then unsubscribed", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			email := uniqueImportEmail(t)
+			in := validCommitInput(t, []ImportRow{{Email: email}})
+			if _, err := importStore.Commit(context.Background(), in, time.Now().UTC()); err != nil {
+				t.Fatalf("Commit: %v", err)
+			}
+			sub, err := subStore.FindByEmail(context.Background(), email)
+			if err != nil {
+				t.Fatalf("FindByEmail: %v", err)
+			}
+			if _, err := subStore.Unsubscribe(context.Background(), sub.ID, SourceOneClick, since.Add(2*time.Second)); err != nil {
+				t.Fatalf("Unsubscribe: %v", err)
+			}
+		}},
+		{"I", "prior_consent batch (3) revoked", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			emails := []string{uniqueImportEmail(t), uniqueImportEmail(t), uniqueImportEmail(t)}
+			rows := make([]ImportRow, len(emails))
+			for i, email := range emails {
+				rows[i] = ImportRow{Email: email}
+			}
+			in := validCommitInput(t, rows)
+			result, err := importStore.Commit(context.Background(), in, time.Now().UTC())
+			if err != nil {
+				t.Fatalf("Commit: %v", err)
+			}
+			if _, _, _, err := importStore.Revoke(context.Background(), result.Import.ID, "truth table row I (#0336)", since.Add(2*time.Second)); err != nil {
+				t.Fatalf("Revoke: %v", err)
+			}
+		}},
+		{"J", "website signup, pending only", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			if _, err := subStore.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now()); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+		}},
+		{"K", "website signup confirmed", 1, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			created, err := subStore.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if _, err := subStore.Confirm(context.Background(), *created.ConfirmToken, since.Add(2*time.Second)); err != nil {
+				t.Fatalf("Confirm: %v", err)
+			}
+		}},
+		{"L", "website confirm + unsubscribe", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			created, err := subStore.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			confirmed, err := subStore.Confirm(context.Background(), *created.ConfirmToken, since.Add(2*time.Second))
+			if err != nil {
+				t.Fatalf("Confirm: %v", err)
+			}
+			if _, err := subStore.Unsubscribe(context.Background(), confirmed.ID, SourceOneClick, since.Add(3*time.Second)); err != nil {
+				t.Fatalf("Unsubscribe: %v", err)
+			}
+		}},
+		{"M", "website confirm + unsubscribe + restart", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			created, err := subStore.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			confirmed, err := subStore.Confirm(context.Background(), *created.ConfirmToken, since.Add(2*time.Second))
+			if err != nil {
+				t.Fatalf("Confirm: %v", err)
+			}
+			if _, err := subStore.Unsubscribe(context.Background(), confirmed.ID, SourceOneClick, since.Add(3*time.Second)); err != nil {
+				t.Fatalf("Unsubscribe: %v", err)
+			}
+			if _, err := subStore.RestartSignup(context.Background(), confirmed.ID, RestartSignupInput{ConfirmTTL: time.Hour}, since.Add(4*time.Second)); err != nil {
+				t.Fatalf("RestartSignup: %v", err)
+			}
+		}},
+		{"N", "…then confirms again", 1, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			created, err := subStore.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			confirmed, err := subStore.Confirm(context.Background(), *created.ConfirmToken, since.Add(2*time.Second))
+			if err != nil {
+				t.Fatalf("Confirm: %v", err)
+			}
+			if _, err := subStore.Unsubscribe(context.Background(), confirmed.ID, SourceOneClick, since.Add(3*time.Second)); err != nil {
+				t.Fatalf("Unsubscribe: %v", err)
+			}
+			restarted, err := subStore.RestartSignup(context.Background(), confirmed.ID, RestartSignupInput{ConfirmTTL: time.Hour}, since.Add(4*time.Second))
+			if err != nil {
+				t.Fatalf("RestartSignup: %v", err)
+			}
+			if _, err := subStore.Confirm(context.Background(), *restarted.ConfirmToken, since.Add(5*time.Second)); err != nil {
+				t.Fatalf("second Confirm: %v", err)
+			}
+		}},
+		{"O", "invite accepted + unsubscribe + restart", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			email := uniqueImportEmail(t)
+			invited, _ := commitInvite(t, importStore, email, time.Now().UTC())
+			confirmed, err := subStore.Confirm(context.Background(), *invited.ConfirmToken, since.Add(2*time.Second))
+			if err != nil {
+				t.Fatalf("Confirm: %v", err)
+			}
+			if _, err := subStore.Unsubscribe(context.Background(), confirmed.ID, SourceOneClick, since.Add(3*time.Second)); err != nil {
+				t.Fatalf("Unsubscribe: %v", err)
+			}
+			restarted, err := subStore.RestartSignup(context.Background(), confirmed.ID, RestartSignupInput{ConfirmTTL: time.Hour}, since.Add(4*time.Second))
+			if err != nil {
+				t.Fatalf("RestartSignup: %v", err)
+			}
+			// The #0336 assertion this row exists for: a restarted row
+			// carries no consent_basis forward.
+			if restarted.ConsentBasis != nil {
+				t.Errorf("ConsentBasis after restart = %v, want nil", *restarted.ConsentBasis)
+			}
+		}},
+		{"P", "prior_consent import + unsubscribe + restart", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			email := uniqueImportEmail(t)
+			in := validCommitInput(t, []ImportRow{{Email: email}})
+			if _, err := importStore.Commit(context.Background(), in, time.Now().UTC()); err != nil {
+				t.Fatalf("Commit: %v", err)
+			}
+			sub, err := subStore.FindByEmail(context.Background(), email)
+			if err != nil {
+				t.Fatalf("FindByEmail: %v", err)
+			}
+			if _, err := subStore.Unsubscribe(context.Background(), sub.ID, SourceOneClick, since.Add(2*time.Second)); err != nil {
+				t.Fatalf("Unsubscribe: %v", err)
+			}
+			restarted, err := subStore.RestartSignup(context.Background(), sub.ID, RestartSignupInput{ConfirmTTL: time.Hour}, since.Add(3*time.Second))
+			if err != nil {
+				t.Fatalf("RestartSignup: %v", err)
+			}
+			// The other #0336 assertion this row exists for: narrowing
+			// imported_30d's predicate alone does NOT fix this row (its
+			// consent_basis is exactly ConsentBasisImportedPriorConsent,
+			// which an equality check still matches) — only RestartSignup
+			// withdrawing consent_basis does.
+			if restarted.ConsentBasis != nil {
+				t.Errorf("ConsentBasis after restart = %v, want nil", *restarted.ConsentBasis)
+			}
+		}},
+		{"Q", "invite pending, then bounced", 0, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			email := uniqueImportEmail(t)
+			invited, _ := commitInvite(t, importStore, email, time.Now().UTC())
+			if _, err := subStore.MarkBounced(context.Background(), invited.ID, since.Add(2*time.Second)); err != nil {
+				t.Fatalf("MarkBounced: %v", err)
+			}
+		}},
+		{"R", "prior_consent import, then bounced", 1, func(t *testing.T, subStore *Store, importStore *ImportStore, since time.Time) {
+			email := uniqueImportEmail(t)
+			in := validCommitInput(t, []ImportRow{{Email: email}})
+			if _, err := importStore.Commit(context.Background(), in, time.Now().UTC()); err != nil {
+				t.Fatalf("Commit: %v", err)
+			}
+			sub, err := subStore.FindByEmail(context.Background(), email)
+			if err != nil {
+				t.Fatalf("FindByEmail: %v", err)
+			}
+			if _, err := subStore.MarkBounced(context.Background(), sub.ID, since.Add(2*time.Second)); err != nil {
+				t.Fatalf("MarkBounced: %v", err)
+			}
+		}},
+	}
+
+	if len(scenarios) != 18 {
+		t.Fatalf("scenarios has %d rows, want 18 (A-R) — the table itself was miscounted", len(scenarios))
+	}
+
+	for _, sc := range scenarios {
+		sc := sc
+		t.Run(sc.row+"_"+sc.name, func(t *testing.T) {
+			pool := testPool(t)
+			subStore := NewStore(pool)
+			importStore := NewImportStore(pool)
+			since := time.Now().UTC()
+
+			baseline := growth30DaysNet(t, subStore, since)
+			sc.run(t, subStore, importStore, since)
+			got := growth30DaysNet(t, subStore, since) - baseline
+
+			if got != sc.want {
+				t.Errorf("row %s (%s): net delta = %d, want %d", sc.row, sc.name, got, sc.want)
+			}
+		})
+	}
+}

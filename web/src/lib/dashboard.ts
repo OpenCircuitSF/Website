@@ -42,9 +42,19 @@ export function formatNetGrowth(growth: DashboardGrowth): string {
  * `unsubscribed_30d` either. So that growth is still visible, doesn't
  * silently retract itself when an import is later revoked, and net_30d
  * doesn't read as a decline in a month the list actually grew — or as a
- * decline from an invitation batch nobody has answered yet. This function
- * and internal/subscribers.Store.Growth30Days' doc comment describe the
- * same three counts; keep them in agreement.
+ * decline from an invitation batch nobody has answered yet.
+ *
+ * `imported_30d` requires the row's OWN standing consent to be exactly a
+ * prior_consent import's attestation, not merely "some consent basis is set"
+ * (#0336): an accepted invitation's consent is its own eventual choice
+ * (double opt-in), which belongs to `confirmed_30d`, never this bucket, even
+ * on a row that later unsubscribes and restarts as a fresh signup — a
+ * restart withdraws whatever standing consent came before it (RestartSignup,
+ * internal/subscribers/store.go), so a restarted row counts as neither an
+ * arrival nor a departure until its own next event decides which.
+ *
+ * This function and internal/subscribers.Store.Growth30Days' doc comment
+ * describe the same three counts; keep them in agreement.
  */
 export function formatGrowthDetail(growth: DashboardGrowth): string {
   return `${growth.confirmed_30d.toLocaleString()} confirmed, ${growth.imported_30d.toLocaleString()} imported, ${growth.unsubscribed_30d.toLocaleString()} left`;
