@@ -14,17 +14,21 @@
 // # Cache invalidation (#0051's own acceptance criterion, and carried in
 // from #0073's review, binding on this issue)
 //
-// Every mutation (Create, Patch, Delete) calls invalidator.InvalidateWorkshops()
+// Every mutation (Create, Patch, Delete) calls invalidator.Invalidate()
 // AFTER the store write commits, so a stale title/summary/cover-image never
 // lingers in internal/seo's per-path meta cache or the sitemap past the
 // mutation itself — #0073's review made this explicit and testable
 // (issues/0051.md's carried-in section). A nil invalidator (test-only; every
 // production call site in cmd/opencircuit/main.go passes a real *seo.Site)
-// simply skips the call — *seo.Site.InvalidateWorkshops is safe to call even
-// while its WorkshopSource is nil (it only clears caches, see
+// simply skips the call — *seo.Site.Invalidate is safe to call even while
+// its WorkshopSource is nil (it only clears caches, see
 // internal/seo/seo.go/sitemap.go), so production always passes the real
 // *seo.Site regardless of whether the real WorkshopSource has been wired in
-// yet (#0054's job — see internal/seo/workshop.go's doc comment).
+// yet (#0054's job — see internal/seo/workshop.go's doc comment). The method
+// was named InvalidateWorkshops until #0325 renamed it: since #0319 this
+// same invalidator interface, and the SAME *seo.Site instance passed here,
+// is also what AdminCampaignArchiveHandler (admin_campaign_archive.go) calls
+// for the campaign archive toggle — see that file's own doc comment.
 package handlers
 
 import (
@@ -51,12 +55,16 @@ type workshopStore interface {
 	Delete(ctx context.Context, id int64) error
 }
 
-// workshopCacheInvalidator is the narrow seam over *seo.Site's
-// InvalidateWorkshops method — a local interface (rather than importing
-// internal/seo directly) so this package's tests can supply a fake that
-// counts calls without constructing a real Site. *seo.Site satisfies it.
+// workshopCacheInvalidator is the narrow seam over *seo.Site's Invalidate
+// method (named InvalidateWorkshops until #0325) — a local interface
+// (rather than importing internal/seo directly) so this package's tests can
+// supply a fake that counts calls without constructing a real Site.
+// *seo.Site satisfies it. Despite the type's own name, it is no longer
+// workshop-specific: AdminCampaignArchiveHandler (admin_campaign_archive.go,
+// #0319) reuses this exact interface for the campaign archive toggle,
+// through the same *seo.Site instance this handler holds.
 type workshopCacheInvalidator interface {
-	InvalidateWorkshops()
+	Invalidate()
 }
 
 // announceCampaignStore is the narrow write Announce (admin_workshop_announce.go,
@@ -131,7 +139,7 @@ func NewAdminWorkshopsHandler(store workshopStore, invalidator workshopCacheInva
 
 func (h *AdminWorkshopsHandler) invalidate() {
 	if h.invalidator != nil {
-		h.invalidator.InvalidateWorkshops()
+		h.invalidator.Invalidate()
 	}
 }
 

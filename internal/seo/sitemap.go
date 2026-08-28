@@ -145,8 +145,10 @@ func (s *Sitemap) Render() ([]byte, error) {
 }
 
 // Invalidate clears the cached sitemap so the next request rebuilds it.
-// Called on workshop mutation (#0051), same trigger as
-// Renderer.InvalidateWorkshops.
+// Called alongside Renderer.Invalidate, via Site.Invalidate, which calls
+// both: originally on workshop mutation (#0051), widened by #0319 to also
+// cover the admin campaign archive toggle and the send worker's own
+// archive-publish transition.
 func (s *Sitemap) Invalidate() {
 	s.mu.Lock()
 	s.cached = nil

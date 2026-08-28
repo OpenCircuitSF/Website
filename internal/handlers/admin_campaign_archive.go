@@ -7,19 +7,19 @@
 //
 // # Cache invalidation (#0319)
 //
-// A successful Patch calls invalidator.InvalidateWorkshops() after the
-// store write commits, following AdminWorkshopsHandler's own established
-// pattern (internal/handlers/admin_workshops.go's doc comment) rather than
+// A successful Patch calls invalidator.Invalidate() after the store write
+// commits, following AdminWorkshopsHandler's own established pattern
+// (internal/handlers/admin_workshops.go's doc comment) rather than
 // inventing a second mechanism -- it is the SAME *seo.Site instance and the
-// SAME method, which clears both the per-path meta cache and the sitemap
-// cache regardless of which admin action triggered it. Before #0319 this
-// call didn't exist here at all, so withholding or re-publishing a
-// campaign left sitemap.xml (and the archive page's own meta tags) stale
-// for up to defaultCacheTTL (60s) -- the one window where a delay is least
-// welcome, since an admin withholds a campaign because something in it
-// should not be public. workshopCacheInvalidator (admin_workshops.go) is
-// reused directly rather than redeclared: same package, same shape, same
-// underlying *seo.Site.
+// SAME method (named InvalidateWorkshops until #0325), which clears both
+// the per-path meta cache and the sitemap cache regardless of which admin
+// action triggered it. Before #0319 this call didn't exist here at all, so
+// withholding or re-publishing a campaign left sitemap.xml (and the
+// archive page's own meta tags) stale for up to defaultCacheTTL (60s) --
+// the one window where a delay is least welcome, since an admin withholds
+// a campaign because something in it should not be public.
+// workshopCacheInvalidator (admin_workshops.go) is reused directly rather
+// than redeclared: same package, same shape, same underlying *seo.Site.
 package handlers
 
 import (
@@ -68,7 +68,7 @@ func NewAdminCampaignArchiveHandler(store campaignArchiveStore, auditor *audit.L
 
 func (h *AdminCampaignArchiveHandler) invalidate() {
 	if h.invalidator != nil {
-		h.invalidator.InvalidateWorkshops()
+		h.invalidator.Invalidate()
 	}
 }
 

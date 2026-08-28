@@ -29,8 +29,8 @@ import (
 // mounts at GET /workshops/{slug} and GET /sitemap.xml are the SAME
 // instance, not two independently-constructed ones. A counting fake inside
 // internal/handlers (as admin_workshops_test.go already has) cannot show
-// this -- it only proves InvalidateWorkshops gets CALLED, never that the
-// object it's called on is the one anything actually reads from. This test
+// this -- it only proves Invalidate gets CALLED, never that the object it's
+// called on is the one anything actually reads from. This test
 // runs the real production wiring shape (buildSEOSite -> the same *seo.Site
 // handed to both NewAdminWorkshopsHandler and mountAndServe) through a real
 // HTTP listener, exactly as cmd/opencircuit's other *_wiring_test.go files
@@ -294,7 +294,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 	}
 
 	// Cancel the workshop and confirm the sitemap -- the SECOND cache
-	// InvalidateWorkshops clears -- drops it too, through the same instance.
+	// Invalidate clears -- drops it too, through the same instance.
 	patchWorkshop(t, created.ID, `{"status":"canceled"}`)
 	sitemapAfterCancel := getBody(t, "/sitemap.xml")
 	if strings.Contains(sitemapAfterCancel, "/workshops/"+slug) {
@@ -327,9 +327,9 @@ func (c countingWorkshopSource) Workshops() ([]seo.Workshop, error) {
 // Ruling 1, restated by #0319's review after a first pass shipped only a
 // counting-fake proof inside internal/handlers -- see
 // admin_campaign_archive_test.go's TestAdminCampaignArchive_Patch_InvalidatesSEOCaches,
-// which is a real and separate test but proves only that
-// InvalidateWorkshops gets CALLED, never that the object it's called on is
-// the one anything actually reads from). This test runs the real production
+// which is a real and separate test but proves only that Invalidate gets
+// CALLED, never that the object it's called on is the one anything
+// actually reads from). This test runs the real production
 // wiring shape (buildSEOSite with the real campaignArchiveSEOSource adapter
 // -> the SAME *seo.Site handed to both NewAdminCampaignArchiveHandler and
 // mountAndServe) through a real HTTP listener, exactly as

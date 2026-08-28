@@ -234,8 +234,8 @@ type ProgressPublisher interface {
 	PublishCampaignProgress(ctx context.Context, p CampaignProgress)
 }
 
-// ArchiveCacheInvalidator is the narrow seam over *seo.Site's
-// InvalidateWorkshops method (#0319) — the same method
+// ArchiveCacheInvalidator is the narrow seam over *seo.Site's Invalidate
+// method (#0319; named InvalidateWorkshops until #0325) — the same method
 // internal/handlers.AdminWorkshopsHandler and AdminCampaignArchiveHandler
 // already call, reused here rather than inventing a second mechanism, per
 // this issue's criterion 1. CompleteIfDone (worker_store.go) is the ONLY
@@ -251,7 +251,7 @@ type ProgressPublisher interface {
 // cmd/opencircuit/seo_wiring_test.go's same-instance proof for the
 // existing precedent this extends).
 type ArchiveCacheInvalidator interface {
-	InvalidateWorkshops()
+	Invalidate()
 }
 
 // Worker drains queued campaign sends at a throttled rate, refusing to run
@@ -1474,7 +1474,7 @@ func (w *Worker) invalidateArchiveCache() {
 	if w.archiveCache == nil {
 		return
 	}
-	w.archiveCache.InvalidateWorkshops()
+	w.archiveCache.Invalidate()
 }
 
 func (w *Worker) auditSendCompleted(ctx context.Context, campaignID int64) {

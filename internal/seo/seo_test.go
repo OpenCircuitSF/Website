@@ -580,8 +580,8 @@ func TestRender_CachesWithinTTL(t *testing.T) {
 
 // TestRender_CacheExpiresAfterTTL confirms the OTHER side of the cache
 // contract: once the TTL has elapsed, a stale cached render must NOT keep
-// being served -- this is what makes InvalidateWorkshops' "short TTL"
-// promise real rather than an indefinite cache with a misleading name.
+// being served -- this is what makes Invalidate's "short TTL" promise real
+// rather than an indefinite cache with a misleading name.
 func TestRender_CacheExpiresAfterTTL(t *testing.T) {
 	source := &mutatingWorkshopSource{title: "Original Title"}
 	r := newTestRenderer(source)
@@ -598,12 +598,13 @@ func TestRender_CacheExpiresAfterTTL(t *testing.T) {
 	}
 }
 
-// TestRender_InvalidateWorkshopsBypassesCacheImmediately is the mutation
-// hook itself: even well within the TTL, calling InvalidateWorkshops must
-// force the next Render to reflect a source change immediately, without
-// waiting out the TTL. This is the exact behavior workshop create/update/
-// publish/cancel (#0051) depends on.
-func TestRender_InvalidateWorkshopsBypassesCacheImmediately(t *testing.T) {
+// TestRender_InvalidateBypassesCacheImmediately is the mutation hook
+// itself: even well within the TTL, calling Invalidate must force the next
+// Render to reflect a source change immediately, without waiting out the
+// TTL. This is the exact behavior workshop create/update/publish/cancel
+// (#0051) depends on, and (#0319) the admin campaign archive toggle and the
+// send worker's archive-publish transition depend on too, via Site.Invalidate.
+func TestRender_InvalidateBypassesCacheImmediately(t *testing.T) {
 	source := &mutatingWorkshopSource{title: "Original Title"}
 	r := newTestRenderer(source)
 	clock := &fakeClock{t: time.Unix(0, 0)}
@@ -613,11 +614,11 @@ func TestRender_InvalidateWorkshopsBypassesCacheImmediately(t *testing.T) {
 	source.title = "Changed Title"
 	clock.advance(1 * time.Second) // still well within the TTL
 
-	r.InvalidateWorkshops()
+	r.Invalidate()
 	after := string(r.Render("/workshops/mutable"))
 
 	if !strings.Contains(after, "Changed Title") {
-		t.Errorf("InvalidateWorkshops did not force a fresh render within the TTL window; got: %s", after)
+		t.Errorf("Invalidate did not force a fresh render within the TTL window; got: %s", after)
 	}
 }
 

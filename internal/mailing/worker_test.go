@@ -1588,7 +1588,7 @@ type countingArchiveInvalidator struct {
 	calls int
 }
 
-func (c *countingArchiveInvalidator) InvalidateWorkshops() { c.calls++ }
+func (c *countingArchiveInvalidator) Invalidate() { c.calls++ }
 
 // TestWorker_CompleteIfDone_InvalidatesArchiveCache is #0319's regression
 // test for the send worker's own completion path: CompleteIfDone

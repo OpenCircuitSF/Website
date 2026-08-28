@@ -225,19 +225,21 @@ func extractMetaContent(t *testing.T, html, property string) string {
 	return ""
 }
 
-// TestSite_InvalidateWorkshopsClearsBothCaches confirms Site.
-// InvalidateWorkshops reaches BOTH the meta-tag renderer and the sitemap --
-// a partial wiring (only one of the two) would be easy to introduce and
-// hard to notice, since each half's own cache tests already pass.
+// TestSite_InvalidateClearsBothCaches confirms Site.Invalidate reaches BOTH
+// the meta-tag renderer and the sitemap -- a partial wiring (only one of the
+// two) would be easy to introduce and hard to notice, since each half's own
+// cache tests already pass.
 //
 // An earlier version of this test only ever exercised the renderer half:
 // it read site.renderer.Render but never site.sitemap.Render, so deleting
-// Site.InvalidateWorkshops' `s.sitemap.Invalidate()` call left the suite
-// green despite the guard's name and #0020's commit message both claiming
-// both halves were covered (#0073's review finding). This version drives
-// and asserts BOTH halves against the SAME mutation, so it can't pass while
-// either is unwired.
-func TestSite_InvalidateWorkshopsClearsBothCaches(t *testing.T) {
+// Site.Invalidate's `s.sitemap.Invalidate()` call left the suite green
+// despite the guard's name and #0020's commit message both claiming both
+// halves were covered (#0073's review finding). This version drives and
+// asserts BOTH halves against the SAME mutation, so it can't pass while
+// either is unwired. Site.Invalidate was named InvalidateWorkshops until
+// #0325; this test's own name and assertions were updated in that pass, but
+// the property it proves is unchanged.
+func TestSite_InvalidateClearsBothCaches(t *testing.T) {
 	source := &mutatingWorkshopSource{title: "Original Title", updatedAt: "2026-01-01"}
 	site := NewSite([]byte(testTemplate), testBaseURL, source, nil)
 
@@ -252,7 +254,7 @@ func TestSite_InvalidateWorkshopsClearsBothCaches(t *testing.T) {
 
 	source.title = "Changed Title"
 	source.updatedAt = "2026-08-18"
-	site.InvalidateWorkshops()
+	site.Invalidate()
 
 	afterRenderer := string(site.renderer.Render("/workshops/mutable"))
 	afterSitemap, err := site.sitemap.Render()
@@ -261,9 +263,9 @@ func TestSite_InvalidateWorkshopsClearsBothCaches(t *testing.T) {
 	}
 
 	if !strings.Contains(afterRenderer, "Changed Title") {
-		t.Error("Site.InvalidateWorkshops did not clear the renderer's cache")
+		t.Error("Site.Invalidate did not clear the renderer's cache")
 	}
 	if !strings.Contains(string(afterSitemap), "2026-08-18") {
-		t.Error("Site.InvalidateWorkshops did not clear the sitemap's cache")
+		t.Error("Site.Invalidate did not clear the sitemap's cache")
 	}
 }

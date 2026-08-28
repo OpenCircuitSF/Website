@@ -22,7 +22,9 @@
 //     on eventJSONLD for why that's still safe).
 //  4. Cache the rendered bytes per resolved metadata bucket (not per raw
 //     path -- #0073) with a short TTL and a bounded entry count; invalidate
-//     on workshop mutation (Site.InvalidateWorkshops).
+//     via Site.Invalidate -- originally on workshop mutation, widened by
+//     #0319 to also cover the admin campaign archive toggle and the send
+//     worker's own archive-publish transition.
 //
 // internal/handlers/routes.go remains the single source of truth for "is
 // this path real" (IsKnownRoute) -- this package imports it rather than
@@ -56,9 +58,9 @@ const (
 
 // defaultCacheTTL is the short TTL PRD §7.4 calls for on the rendered
 // index.html cache. Short enough that a workshop edit made without going
-// through Site.InvalidateWorkshops (a manual DB fix, say) is still visible
-// within a minute; long enough that a burst of crawler/bot traffic against
-// one path doesn't re-render on every request.
+// through Site.Invalidate (a manual DB fix, say) is still visible within a
+// minute; long enough that a burst of crawler/bot traffic against one path
+// doesn't re-render on every request.
 const defaultCacheTTL = 60 * time.Second
 
 // maxCacheEntries bounds Renderer.cache regardless of what keying scheme
@@ -83,10 +85,10 @@ const defaultCacheTTL = 60 * time.Second
 //
 // Eviction policy: a write that would grow the cache past the bound flushes
 // the entire cache first, then inserts the new entry. A full flush rather
-// than a partial (e.g. LRU) eviction mirrors InvalidateWorkshops' existing
-// reasoning below: re-rendering is cheap (a string substitution over an
-// in-memory template), so a hard cap that occasionally costs one wasted
-// generation is simpler to reason about than per-entry recency bookkeeping.
+// than a partial (e.g. LRU) eviction mirrors Invalidate's existing reasoning
+// below: re-rendering is cheap (a string substitution over an in-memory
+// template), so a hard cap that occasionally costs one wasted generation is
+// simpler to reason about than per-entry recency bookkeeping.
 const maxCacheEntries = 512
 
 // Cache keys for the two buckets that aren't an exact static-route path.
@@ -524,13 +526,18 @@ func (r *Renderer) substitute(m RouteMeta) []byte {
 	return []byte(replacer.Replace(string(r.template)))
 }
 
-// InvalidateWorkshops clears every cached rendering. Called on workshop
-// mutation (create/update/publish/cancel, #0051) so a stale title or cover
-// image doesn't linger for up to the TTL. Clearing the whole cache rather
-// than just workshop-detail entries is deliberate: it is cheap (re-render is
-// just a string substitution over an in-memory template, no I/O) and simpler
-// to reason about than tracking which cached paths are workshop-derived.
-func (r *Renderer) InvalidateWorkshops() {
+// Invalidate clears every cached rendering. Named InvalidateWorkshops until
+// #0325, back when create/update/publish/cancel (#0051) was its only
+// trigger, called through Site.Invalidate so a stale title or cover image
+// doesn't linger for up to the TTL. #0319 widened Site.Invalidate's own
+// callers to the admin campaign archive toggle and the send worker's
+// archive-publish transition (see Site.Invalidate's doc comment for both),
+// so this method now clears cache entries for those too, through the exact
+// same call. Clearing the whole cache rather than just the mutated entries
+// is deliberate: it is cheap (re-render is just a string substitution over
+// an in-memory template, no I/O) and simpler to reason about than tracking
+// which cached paths are workshop-derived, archive-derived, or otherwise.
+func (r *Renderer) Invalidate() {
 	r.mu.Lock()
 	r.cache = make(map[string]cacheEntry)
 	r.mu.Unlock()

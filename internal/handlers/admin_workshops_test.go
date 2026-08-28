@@ -30,7 +30,7 @@ type countingWorkshopInvalidator struct {
 	calls int
 }
 
-func (c *countingWorkshopInvalidator) InvalidateWorkshops() { c.calls++ }
+func (c *countingWorkshopInvalidator) Invalidate() { c.calls++ }
 
 // adminWorkshopsMux wires the real admin workshops CRUD routes guarded by
 // RequireSession then RequireAdmin, backed by real stores — mirrors

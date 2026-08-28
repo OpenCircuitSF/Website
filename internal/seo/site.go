@@ -31,12 +31,19 @@ func NewSite(indexHTML []byte, baseURL string, source WorkshopSource, archive Ar
 	}
 }
 
-// InvalidateWorkshops clears both the per-path meta cache and the sitemap
-// cache. #0051's workshop mutation handlers (create/update/publish/cancel)
-// call this so a stale title, summary, or cover image doesn't linger for up
-// to the cache TTL after an edit.
-func (s *Site) InvalidateWorkshops() {
-	s.renderer.InvalidateWorkshops()
+// Invalidate clears both the per-path meta cache and the sitemap cache --
+// every cached rendering this Site holds, not only workshop-derived ones.
+// Named InvalidateWorkshops until #0325, back when #0051's workshop mutation
+// handlers (create/update/publish/cancel) were its only callers. #0319 added
+// two more: internal/handlers.AdminCampaignArchiveHandler (the admin
+// campaign archive toggle) and internal/mailing.Worker (the send worker's
+// own archive-publish transition, via the ArchiveCacheInvalidator seam).
+// All three call this SAME method through the SAME *Site instance --
+// cmd/opencircuit/seo_wiring_test.go proves the instance identity -- so a
+// stale title, summary, cover image, or archive entry never lingers past
+// the cache TTL after any of those three actions.
+func (s *Site) Invalidate() {
+	s.renderer.Invalidate()
 	s.sitemap.Invalidate()
 }
 
