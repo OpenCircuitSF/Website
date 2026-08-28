@@ -38,6 +38,27 @@
 #      message itself tells the user to do.
 #  10. (#0250 item 4) An empty database-name argument is rejected rather
 #      than silently defaulting to 'opencircuit' via bash's "${1:-default}".
+#  11. (#0309) A non-client backend (a parallel worker, standing in for
+#      autovacuum, which cannot be constructed on demand) attached to the
+#      target does not fail the run. 11b statically pins that $CLIENT_WHERE
+#      (what may be TERMINATED) and $HOLDER_WHERE (what COUNTS as a holder
+#      for the refusal decision) are two deliberately different fragments,
+#      each defined once and referenced by name at their sites.
+#  12. (#0309 review remedy item 3) A foreign-role holder — a live client
+#      session authenticated as a role other than this script's own — is
+#      still refused without --force, and still reported. This is the
+#      regression case the first #0309 attempt broke: sharing one fragment
+#      between the terminate step and the refusal check made the refusal
+#      check blind to any role but its own.
+#  13. (#0309 review remedy item 4) When the second login role discovered
+#      for #12 is also a superuser, the exact SUPERUSER-only permission
+#      error #0309 diagnosed is reproduced on demand against a mutant that
+#      reverts the terminate step to an unscoped query, and shown NOT to
+#      occur against the real, narrowed $CLIENT_WHERE.
+#
+# Both 12 and 13 discover their second login role at runtime and skip
+# cleanly, without failing the run, if none is reachable — this must not
+# become a machine-specific test.
 #
 # A pg_database CENSUS is taken before this script does anything and again
 # after its own cleanup runs (#0250 item 5 — the prior version of this test
@@ -139,6 +160,18 @@ pass() { printf 'PASS: %s\n' "$1"; }
 terminate_backends() {
   local db="$1"
   psql_admin -tAc "select pg_terminate_backend(pid) from pg_stat_activity where datname='$db' and pid <> pg_backend_pid()" >/dev/null 2>&1 || true
+}
+# Parts 12/13 hold a foreign-role (possibly superuser) session open, and
+# psql_admin (this script's own role, opencircuit) cannot pg_terminate_backend
+# a superuser-owned one -- that permission failure is the exact #0309 bug
+# under test, so terminate_backends() cannot be used to clean these up. A
+# role can always terminate its OWN other backends regardless of superuser
+# status, so open a one-off connection AS that same role and have it signal
+# itself. Note this is a genuinely separate connection attempt, not the held
+# one -- it fails harmlessly (|| true) if that role turns out unreachable.
+terminate_as_role() {
+  local role="$1" db="$2"
+  psql "postgres://${role}@localhost:5432/postgres" -tAc "select pg_terminate_backend(pid) from pg_stat_activity where datname='$db' and usename='$role' and pid <> pg_backend_pid()" >/dev/null 2>&1 || true
 }
 # shellcheck disable=SC2329  # invoked indirectly via the EXIT trap's cleanup()
 wait_for_disconnect() {
@@ -437,12 +470,18 @@ echo "== Part 11: a non-client backend attached to the target does not fail the 
 # by the SAME role the query ran as succeeds without error -- parallel
 # workers are not SUPERUSER-restricted the way autovacuum and other
 # background workers are. So this part cannot reproduce the exact
-# SUPERUSER-permission error #0309 found; it proves the general mechanism
-# (a non-client-backend row is never selected, so it can never trigger
-# ANY permission error a client-owned row wouldn't), not that specific
-# error message. Part 11b below pins the narrowed query's source text as a
-# second, independent check that does not depend on constructing a live
-# row at all -- together the two cover what Part 11 alone cannot.
+# SUPERUSER-permission error #0309 found, and does NOT by itself show that
+# $CLIENT_WHERE's narrowing is what stands between a live row and that
+# error -- a review of this issue ran this same construction against the
+# UNFIXED parent commit and got exit 0 with no "superuser" in the output,
+# so neither of Part 11's two core assertions is sensitive to the terminate
+# narrowing (criterion 1); only the report assertion below is, and it is
+# sensitive to criterion 2's reporting, not criterion 1. Part 11b pins the
+# narrowed query's source text as a second, independent static check that
+# does not depend on constructing a live row at all. Part 13 below supplies
+# the genuinely criterion-1-sensitive case this part cannot: a foreign
+# SUPERUSER-owned CLIENT backend, which the unscoped terminate query really
+# did choke on and $CLIENT_WHERE really does exclude.
 psql "$PGHOST_URL/$TESTDB" -qc "CREATE TABLE IF NOT EXISTS pw_seed AS SELECT g, md5(g::text) h FROM generate_series(1,500000) g;" >/dev/null 2>&1
 psql "$PGHOST_URL/$TESTDB" -qc "ANALYZE pw_seed;" >/dev/null 2>&1
 (
@@ -480,7 +519,7 @@ else
   else
     pass "no superuser-permission error appeared in db-reset.sh's output"
   fi
-  if echo "$OUT11" | grep -q 'non-client or other-role backend'; then
+  if echo "$OUT11" | grep -q 'background backend'; then
     pass "db-reset.sh reported the non-client backend (criterion 2) rather than silently ignoring or choking on it"
   else
     fail "db-reset.sh did not report the non-client backend that was attached during the reset (best-effort: the worker may have already finished by the time the report query ran -- see the timing note in the #0309 report)"
@@ -489,16 +528,22 @@ fi
 kill -9 "$PW_LEADER_PID" >/dev/null 2>&1 || true
 wait "$PW_LEADER_PID" 2>/dev/null || true
 
-echo "== Part 11b: the narrowed WHERE clause is defined once and used by both the connection check and the terminate step (#0309) =="
-# The static counterpart to Part 11, and the fallback the issue asked for if
-# a live non-client backend could not be constructed at all: reads the
-# TRACKED source directly (not a copy of expected text stored in this
+echo "== Part 11b: \$CLIENT_WHERE and \$HOLDER_WHERE are two distinct fragments, each defined once and used only at their own site (#0309) =="
+# The static counterpart to Part 11 and 12, and the fallback the issue asked
+# for if a live non-client backend could not be constructed at all: reads
+# the TRACKED source directly (not a copy of expected text stored in this
 # test -- see CLAUDE.md's GUARD-0208 note on why an oracle must not be the
-# same bytes as its subject), and asserts the narrowing predicate is
-# defined exactly once and that BOTH the connection-refusal check and the
-# terminate step reference that single definition ($CLIENT_WHERE) rather
-# than each spelling their own copy that could drift or be independently
-# reverted.
+# same bytes as its subject).
+#
+# This is where the FIRST #0309 attempt actually broke, per the review on
+# this issue: it shared one fragment ($CLIENT_WHERE, narrowed by
+# usename = current_user) between the terminate step AND the
+# connection-refusal check. Narrowing what may be TERMINATED is safe;
+# narrowing what COUNTS AS A HOLDER is not -- it makes the refusal check
+# blind to any live session authenticated as a role other than this
+# script's own, including the user's own interactive psql. So this part
+# pins that the two fragments are genuinely different, not just that one
+# of them exists.
 CLIENT_WHERE_DEFS="$(grep -c '^CLIENT_WHERE=' "$REAL_SCRIPT")"
 if [ "$CLIENT_WHERE_DEFS" = "1" ]; then
   pass "\$CLIENT_WHERE is defined exactly once in scripts/db-reset.sh"
@@ -512,14 +557,187 @@ else
   fail "REGRESSION #0309: \$CLIENT_WHERE's definition no longer narrows by both backend_type='client backend' and usename=current_user -- found: $CLIENT_WHERE_LINE"
 fi
 if grep -qE 'pg_terminate_backend\(pid\) FROM pg_stat_activity WHERE \$CLIENT_WHERE' "$REAL_SCRIPT"; then
-  pass "the terminate step references \$CLIENT_WHERE (the same narrowed filter as the connection check), not an independent unscoped query"
+  pass "the terminate step references \$CLIENT_WHERE, not an independent unscoped query"
 else
   fail "REGRESSION #0309: the terminate step no longer references \$CLIENT_WHERE -- it may have reverted to an unscoped query"
 fi
-if grep -qE 'from pg_stat_activity where \$CLIENT_WHERE' "$REAL_SCRIPT"; then
-  pass "the connection-refusal check references \$CLIENT_WHERE too"
+
+HOLDER_WHERE_DEFS="$(grep -c '^HOLDER_WHERE=' "$REAL_SCRIPT")"
+if [ "$HOLDER_WHERE_DEFS" = "1" ]; then
+  pass "\$HOLDER_WHERE is defined exactly once in scripts/db-reset.sh"
 else
-  fail "REGRESSION #0309: the connection-refusal check no longer references \$CLIENT_WHERE"
+  fail "REGRESSION #0309: expected exactly one \$HOLDER_WHERE definition, found $HOLDER_WHERE_DEFS"
+fi
+HOLDER_WHERE_LINE="$(grep '^HOLDER_WHERE=' "$REAL_SCRIPT")"
+if echo "$HOLDER_WHERE_LINE" | grep -q "usename is not null"; then
+  pass "\$HOLDER_WHERE's definition narrows by usename is not null"
+else
+  fail "REGRESSION #0309: \$HOLDER_WHERE's definition no longer narrows by usename is not null -- found: $HOLDER_WHERE_LINE"
+fi
+if echo "$HOLDER_WHERE_LINE" | grep -q "usename = current_user"; then
+  fail "REGRESSION #0309: \$HOLDER_WHERE's definition carries usename = current_user -- this is the exact defect the review bounced: it would make the refusal check blind to any live session authenticated as a foreign role -- found: $HOLDER_WHERE_LINE"
+else
+  pass "\$HOLDER_WHERE's definition does NOT narrow by usename = current_user (that predicate belongs only to \$CLIENT_WHERE, the terminate-step fragment)"
+fi
+if grep -qE 'from pg_stat_activity where \$HOLDER_WHERE' "$REAL_SCRIPT"; then
+  pass "the connection-refusal check references \$HOLDER_WHERE"
+else
+  fail "REGRESSION #0309: the connection-refusal check no longer references \$HOLDER_WHERE -- it may have reverted to \$CLIENT_WHERE (the exact regression this issue bounced on) or an independent query"
+fi
+if grep -qE 'from pg_stat_activity where \$CLIENT_WHERE' "$REAL_SCRIPT"; then
+  fail "REGRESSION #0309: the connection-refusal check references \$CLIENT_WHERE -- narrowing the refusal check by the terminate step's OWN-ROLE predicate is exactly what this issue bounced on"
+else
+  pass "the connection-refusal check does not reference \$CLIENT_WHERE"
+fi
+
+echo
+echo "== Part 12: a foreign-role holder is refused without --force, and reported (#0309 review remedy item 3) =="
+# Parts 1/2/3/5/9 all connect as this script's OWN role, so none of them can
+# see the class of failure this issue bounced on: a live client session
+# authenticated as a DIFFERENT role. Discover a second login role at
+# runtime -- order by rolsuper desc so that, when one exists, the SAME role
+# also lets Part 13 below reproduce the exact SUPERUSER error #0309
+# diagnosed from one fixture, per the review's remedy. Skip cleanly,
+# without failing this run, when no second role is reachable over trust
+# auth with no password -- this must not become a machine-specific test.
+SECOND_ROLE="$(psql_admin -tAc "select rolname from pg_roles where rolcanlogin and rolname <> current_user order by rolsuper desc, rolname limit 1" 2>/dev/null)"
+SECOND_ROLE_OK=0
+SECOND_ROLE_SUPER=0
+if [ -n "$SECOND_ROLE" ]; then
+  if PGCONNECT_TIMEOUT=5 psql "postgres://${SECOND_ROLE}@localhost:5432/postgres" -tAc "select 1" >/dev/null 2>&1; then
+    SECOND_ROLE_OK=1
+    [ "$(psql_admin -tAc "select rolsuper from pg_roles where rolname = '$SECOND_ROLE'" 2>/dev/null)" = "t" ] && SECOND_ROLE_SUPER=1
+  fi
+fi
+
+if [ "$SECOND_ROLE_OK" != "1" ]; then
+  echo "SKIP: no second login role reachable without a password over trust auth (discovered: ${SECOND_ROLE:-<none>}) -- Part 12 and Part 13 need one and cannot run on this machine. This is not a failure: it means this machine cannot exercise the foreign-role class of regression, not that the fix is unverified."
+else
+  psql "postgres://${SECOND_ROLE}@localhost:5432/$TESTDB" -c "select pg_sleep(20)" >/dev/null 2>&1 &
+  CONN4_PID=$!
+  BG_PIDS+=("$CONN4_PID")
+  if wait_for_connection "$TESTDB" 10; then
+    OUT12="$("$SCOPED" --no-seed "$TESTDB" 2>&1)"; RC12=$?
+    if [ "$RC12" -eq 0 ]; then
+      fail "REGRESSION #0309: db-reset.sh exited 0 (expected non-zero -- refusal) while $TESTDB had a live connection from foreign role '$SECOND_ROLE'"
+    else
+      pass "db-reset.sh refused (exit $RC12) while $TESTDB had a live connection from foreign role '$SECOND_ROLE'"
+    fi
+    if echo "$OUT12" | grep -q -- "refusing:" && echo "$OUT12" | grep -q "$SECOND_ROLE"; then
+      pass "the refusal names the foreign-role holder ('$SECOND_ROLE')"
+    else
+      fail "REGRESSION #0309: the refusal did not name the foreign-role holder -- output: $(echo "$OUT12" | tr '\n' '|')"
+    fi
+    if kill -0 "$CONN4_PID" 2>/dev/null; then
+      pass "the foreign-role connection survived the refused reset"
+    else
+      fail "REGRESSION #0309: the foreign-role connection did not survive -- it was killed despite the refusal"
+    fi
+  else
+    fail "part12 setup: foreign-role connection never registered in pg_stat_activity"
+  fi
+  kill -9 "$CONN4_PID" >/dev/null 2>&1 || true
+  wait "$CONN4_PID" 2>/dev/null || true
+  # The held session is inside pg_sleep(20) and never polls its socket, so
+  # killing the local client above does not end it server-side (see
+  # terminate_backends' note). Part 13 immediately resets $TESTDB, so
+  # terminate it for real -- as the SAME role, since this script's own role
+  # cannot pg_terminate_backend a superuser-owned one -- and wait for the
+  # server side to actually clear rather than racing it.
+  terminate_as_role "$SECOND_ROLE" "$TESTDB"
+  wait_for_disconnect "$TESTDB" 20 || true
+fi
+
+echo
+echo "== Part 13: the exact SUPERUSER error is reproduced against an unscoped mutant, and absent against the real \$CLIENT_WHERE (#0309 review remedy item 4) =="
+if [ "$SECOND_ROLE_OK" != "1" ] || [ "$SECOND_ROLE_SUPER" != "1" ]; then
+  echo "SKIP: no second SUPERUSER login role reachable (discovered: ${SECOND_ROLE:-<none>}, reachable: $SECOND_ROLE_OK, superuser: $SECOND_ROLE_SUPER) -- the exact SUPERUSER-only error #0309 diagnosed can only be constructed against a superuser-owned backend. Part 12's foreign-role holder coverage above still stands regardless."
+else
+  # Build a mutant: widen the name allowlist for TESTDB (as with $SCOPED),
+  # and revert ONLY the terminate step's $CLIENT_WHERE reference back to the
+  # UNSCOPED pre-#0309 query -- the connection-refusal check and
+  # $HOLDER_WHERE are left untouched, isolating criterion 1 specifically.
+  CLIENT_TERM_OLD="FROM pg_stat_activity WHERE \$CLIENT_WHERE;\" >/dev/null"
+  CLIENT_TERM_NEW="FROM pg_stat_activity WHERE datname = '\$DB' AND pid <> pg_backend_pid();\" >/dev/null"
+  MUTANT2="$REPO/scripts/.db_reset_mutant2_${RUNID}.sh"
+  MUTANTS+=("$MUTANT2")
+  CONTENT="$(cat "$REAL_SCRIPT")"
+  CONTENT="${CONTENT//opencircuit|opencircuit_test)/opencircuit|opencircuit_test|${TESTDB})}"
+  if [[ "$CONTENT" != *"$CLIENT_TERM_OLD"* ]]; then
+    echo "FATAL: could not locate the terminate step's \$CLIENT_WHERE reference to mutate -- aborting before running Part 13." >&2
+    exit 1
+  fi
+  CONTENT="${CONTENT//$CLIENT_TERM_OLD/$CLIENT_TERM_NEW}"
+  printf '%s\n' "$CONTENT" > "$MUTANT2"
+  chmod +x "$MUTANT2"
+  if ! grep -q "${TESTDB})" "$MUTANT2"; then
+    echo "FATAL: name-allowlist widening did not take effect on the criterion-1 mutant -- aborting before running it." >&2
+    exit 1
+  fi
+  if grep -qE 'WHERE \$CLIENT_WHERE;" >/dev/null' "$MUTANT2"; then
+    echo "FATAL: the terminate-step mutation did not take effect -- aborting rather than running an unmutated invocation (that would prove nothing)." >&2
+    exit 1
+  fi
+
+  # Reset TESTDB cleanly via the real (fixed) scoped copy first, so this
+  # part starts from a known-good state whatever Part 12 left behind.
+  psql_admin -qc "DROP DATABASE IF EXISTS $TESTDB;" >/dev/null 2>&1 || true
+  if ! "$SCOPED" --no-seed "$TESTDB" >"$WORKDIR/part13setup.log" 2>&1; then
+    echo "FATAL: could not recreate $TESTDB before Part 13 -- log:" >&2
+    cat "$WORKDIR/part13setup.log" >&2
+    exit 1
+  fi
+
+  psql "postgres://${SECOND_ROLE}@localhost:5432/$TESTDB" -c "select pg_sleep(20)" >/dev/null 2>&1 &
+  CONN5_PID=$!
+  BG_PIDS+=("$CONN5_PID")
+  if wait_for_connection "$TESTDB" 10; then
+    OUT13A="$("$MUTANT2" --no-seed --force "$TESTDB" 2>&1)"; RC13A=$?
+    if [ "$RC13A" -eq 0 ]; then
+      fail "part13: the unscoped-terminate mutant exited 0 against a foreign superuser-owned client backend -- expected it to reproduce #0309's SUPERUSER error"
+    elif echo "$OUT13A" | grep -qi 'superuser'; then
+      pass "criterion-1-sensitive: reverting \$CLIENT_WHERE's terminate-step reference to an unscoped query reproduces the #0309 SUPERUSER-only permission error against a foreign superuser-owned client backend (role '$SECOND_ROLE')"
+    else
+      fail "part13: the unscoped-terminate mutant failed (exit $RC13A) but did not mention 'superuser' -- output: $(echo "$OUT13A" | tr '\n' '|')"
+    fi
+  else
+    fail "part13 setup: foreign superuser-role connection never registered in pg_stat_activity before the mutant run"
+  fi
+  kill -9 "$CONN5_PID" >/dev/null 2>&1 || true
+  wait "$CONN5_PID" 2>/dev/null || true
+  # The mutant's unscoped terminate step errored on this very row (that is
+  # the assertion above), so it did NOT actually end the session -- clean up
+  # for real before the second sub-test below, same reasoning as Part 12.
+  terminate_as_role "$SECOND_ROLE" "$TESTDB"
+  wait_for_disconnect "$TESTDB" 20 || true
+
+  # Same scenario against the REAL, fixed $CLIENT_WHERE: this must NOT
+  # reproduce the superuser error. It is still expected to fail overall --
+  # Postgres itself blocks the DROP because the foreign superuser session
+  # is never terminated ($CLIENT_WHERE only ever targets this script's OWN
+  # role, by design, and correctly leaves a superuser-owned session alone
+  # rather than trying and failing to sign it). What this asserts is the
+  # ABSENCE of the superuser error specifically, not the exit code.
+  psql "postgres://${SECOND_ROLE}@localhost:5432/$TESTDB" -c "select pg_sleep(20)" >/dev/null 2>&1 &
+  CONN6_PID=$!
+  BG_PIDS+=("$CONN6_PID")
+  if wait_for_connection "$TESTDB" 10; then
+    OUT13B="$("$SCOPED" --no-seed --force "$TESTDB" 2>&1)"
+    if echo "$OUT13B" | grep -qi 'superuser'; then
+      fail "REGRESSION #0309: db-reset.sh's real, narrowed \$CLIENT_WHERE terminate step produced a superuser-permission error against a foreign superuser-owned client backend -- the narrowing regressed"
+    else
+      pass "the real, narrowed \$CLIENT_WHERE terminate step does NOT reproduce the superuser error against the same foreign superuser-owned client backend it was run against above -- \$CLIENT_WHERE's narrowing is what stands between this scenario and #0309's bug"
+    fi
+  else
+    fail "part13 setup: foreign superuser-role connection never registered in pg_stat_activity before the fixed-script run"
+  fi
+  kill -9 "$CONN6_PID" >/dev/null 2>&1 || true
+  wait "$CONN6_PID" 2>/dev/null || true
+  # $CLIENT_WHERE correctly never targeted this row either (that is the
+  # point of the assertion above), so it is still connected -- clean up for
+  # real before Final cleanup below tries to drop $TESTDB.
+  terminate_as_role "$SECOND_ROLE" "$TESTDB"
+  wait_for_disconnect "$TESTDB" 20 || true
 fi
 
 echo

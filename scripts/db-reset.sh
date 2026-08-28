@@ -152,28 +152,46 @@ command -v psql >/dev/null    || { echo "error: psql not on PATH" >&2; exit 1; }
 # even under --force: --force means "I know someone is connected, proceed
 # anyway," not "proceed even if you can't tell whether anyone is connected."
 #
-# #0309: both this check and the terminate step below are now scoped to
-# CLIENT backends connected as this script's OWN role, via $CLIENT_WHERE.
-# The unscoped query used to catch every backend attached to '$DB' — most
-# plausibly an autovacuum worker, which runs superuser-owned. That is not a
-# session this script's job is to clear, and a non-superuser role cannot
-# pg_terminate_backend it at all: fed into the terminate SELECT below, one
-# such row made the WHOLE statement raise a SUPERUSER-only permission error,
-# aborting the reset under `set -e` (the failure #0309 tracked, correlated
-# with load only because autovacuum is likelier to attach to a freshly
-# created, freshly written database under concurrent agent activity — not a
-# timing flake). It could also force a bare (non---force) invocation to
-# refuse for no real reason (a bare invocation with no --force), since the
-# OLD version of this same check counted that same row as "another
-# connection". Every legitimate connection this
-# project's tooling makes — an agent, the user's dev session, this script
-# itself — authenticates as the same role $PGHOST_URL names (opencircuit, by
-# convention across every script in scripts/), so `usename = current_user`
-# alongside `backend_type = 'client backend'` narrows to exactly the sessions
-# --force is meant to clear, without widening what this script may terminate
-# (it must never reach for superuser to do so — see GUARDS above).
+# #0309: TWO DELIBERATELY DIFFERENT fragments below, not one shared between
+# them (that was #0309's first attempt, and it was wrong — see the review on
+# this issue for the measurement).
+#
+#   CLIENT_WHERE — what this script may TERMINATE. Scoped to client backends
+#   owned by this script's OWN role ($PGHOST_URL's role, opencircuit by
+#   convention). The unscoped query used to catch every backend attached to
+#   '$DB' — most plausibly an autovacuum worker, which runs superuser-owned:
+#   fed into the terminate SELECT below, one such row made the WHOLE
+#   statement raise a SUPERUSER-only permission error, aborting the reset
+#   under `set -e` (the failure #0309 tracked, correlated with load only
+#   because autovacuum is likelier to attach to a freshly created, freshly
+#   written database under concurrent agent activity — not a timing flake).
+#   A non-superuser role cannot pg_terminate_backend a superuser-owned
+#   backend at all, so this must never widen — it must never reach for
+#   superuser to work around that (see GUARDS above).
+#
+#   HOLDER_WHERE — what COUNTS as a holder for the refusal decision below.
+#   Deliberately NOT the same fragment as CLIENT_WHERE: narrowing what may be
+#   terminated is safe, but narrowing what counts as a holder makes the
+#   script MORE willing to proceed — the opposite of what #0207's refusal
+#   exists to guarantee. pg_stat_activity NULLs backend_type for any backend
+#   the querying role does not own, so `backend_type = 'client backend'`
+#   alone would silently drop a real client session belonging to any OTHER
+#   role — including the user's own interactive psql, which authenticates as
+#   their login role, not 'opencircuit'. `usename IS NOT NULL` is the
+#   distinguisher that actually holds at this privilege level: a background
+#   process (autovacuum, the background writer, checkpointer, …) is never
+#   logged in as anyone, so it is always excluded, while every real client
+#   session — this role's or any other's — always has a usename.
+#   `backend_type IS DISTINCT FROM 'parallel worker'` (not `<>`: backend_type
+#   is NULL for some foreign backends, and `<>` against NULL is NULL, never
+#   true) excludes parallel workers from the holder count, since their
+#   leader session is itself already counted; this is cosmetic, not a safety
+#   requirement. This keeps the same side benefit the narrower fragment gives
+#   the terminate step: autovacuum (usename NULL) still never causes a
+#   spurious refusal.
 CLIENT_WHERE="datname = '$DB' and pid <> pg_backend_pid() and backend_type = 'client backend' and usename = current_user"
-if ! CONNS="$(psql "$PGHOST_URL/postgres" -tAc "select pid || '  ' || coalesce(usename,'?') || '  ' || coalesce(application_name,'') || '  ' || coalesce(client_addr::text,'local') from pg_stat_activity where $CLIENT_WHERE")"; then
+HOLDER_WHERE="datname = '$DB' and pid <> pg_backend_pid() and usename is not null and backend_type is distinct from 'parallel worker'"
+if ! CONNS="$(psql "$PGHOST_URL/postgres" -tAc "select pid || '  ' || coalesce(usename,'?') || '  ' || coalesce(application_name,'') || '  ' || coalesce(client_addr::text,'local') from pg_stat_activity where $HOLDER_WHERE")"; then
   echo "refusing: could not determine whether '$DB' has other active connection(s) — the check above failed (see psql's error above this line), so refusing rather than assuming none. This runs even with --force." >&2
   exit 1
 fi
@@ -188,15 +206,19 @@ EOF
   exit 1
 fi
 
-# #0309: report any OTHER backend attached to '$DB' — non-client (background
-# writer, checkpointer, autovacuum launcher/worker, walsender, …) or a client
-# connected as a different role — purely as information. It is never counted
-# above and never targeted by the terminate step below: this script's job is
-# clearing CLIENT connections, and a backend it cannot (or should not) signal
-# is not an obstacle to that. A failure to run this check is not fatal to the
-# reset — it is a courtesy note, not a gate.
-if OTHER="$(psql "$PGHOST_URL/postgres" -tAc "select pid || '  ' || coalesce(backend_type,'?') || '  ' || coalesce(usename,'?') from pg_stat_activity where datname = '$DB' and pid <> pg_backend_pid() and not (backend_type = 'client backend' and usename = current_user)" 2>/dev/null)" && [ -n "$OTHER" ]; then
-  echo "note: '$DB' also has non-client or other-role backend(s) attached — not something this script needs to (or can) signal, and not counted above:" >&2
+# #0309: report any background backend attached to '$DB' — one HOLDER_WHERE
+# deliberately does NOT count as a holder (autovacuum launcher/worker,
+# background writer, checkpointer, walsender, parallel workers, …) — purely
+# as information. It is never counted above and never targeted by the
+# terminate step below: this script's job is clearing CLIENT connections, and
+# a background process is not an obstacle to that. Unlike the row this note
+# used to also catch, a live user session from a foreign role is now a
+# HOLDER (see above) and will already have refused above, or been reported in
+# $CONNS above under --force — so nothing this note prints is a session the
+# script could have signalled or should have counted. A failure to run this
+# check is not fatal to the reset — it is a courtesy note, not a gate.
+if OTHER="$(psql "$PGHOST_URL/postgres" -tAc "select pid || '  ' || coalesce(backend_type,'?') || '  ' || coalesce(usename,'?') from pg_stat_activity where datname = '$DB' and pid <> pg_backend_pid() and not ($HOLDER_WHERE)" 2>/dev/null)" && [ -n "$OTHER" ]; then
+  echo "note: '$DB' also has background backend(s) attached (autovacuum, parallel workers, etc.) — not something this script can signal, and not counted as a connection above:" >&2
   echo "$OTHER" | sed 's/^/  pid /' >&2
 fi
 
