@@ -37,6 +37,13 @@
 # directly from migrations/ instead of cloning (slower, ~2s instead of ~0.2s,
 # but correct), and says so on stderr. It never rebuilds the shared template
 # on its own; that stays a separate, explicit act. See #0315.
+#
+# The version number alone cannot catch an in-place edit to an existing
+# migration file (same filename, same number, different contents) — #0320.
+# So the freshness check also compares a content digest of migrations/*.sql,
+# stored as the template database's COMMENT ON DATABASE when the template is
+# built. A digest mismatch routes to the same direct-provision fallback as a
+# version mismatch; it still never rebuilds the shared template implicitly.
 
 set -euo pipefail
 
@@ -61,6 +68,63 @@ db_exists() {
 template_version() {
   db_exists "$TEMPLATE" || { echo "none"; return; }
   psql "$PGHOST_URL/$TEMPLATE" -tAc 'select version from schema_migrations' 2>/dev/null || echo "none"
+}
+
+require_shasum() {
+  command -v shasum >/dev/null || { echo "error: shasum not on PATH (needed to fingerprint migrations/, #0320)" >&2; exit 1; }
+}
+
+# #0320: a digest is "valid" only if it is exactly 64 lowercase hex chars —
+# sha256's output shape. #0301 found that a missing preflight let a digest
+# check compare two empty strings and silently report a match having
+# measured nothing; this guard exists so an empty or malformed digest is a
+# hard error, never a quiet false "matches".
+valid_digest() {
+  printf '%s' "$1" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$'
+}
+
+# A digest of every migrations/*.sql file's contents (both .up.sql and
+# .down.sql), keyed by relative filename only (never the absolute path) and
+# sorted byte-wise (LC_ALL=C) so the result is identical across machines and
+# independent of directory listing order. #0320.
+#
+# Hashes the sorted filename list, then the file contents concatenated in
+# that same order (via one batched `xargs cat` rather than a per-file
+# printf+cat loop) — a rename changes the name list, an edit changes the
+# content stream, either changes the digest. The batching matters: an
+# earlier per-file loop forked ~100 processes for 50 migrations and measured
+# ~0.13s on this machine (criterion 6's whole fast-path budget), against
+# ~0.02s batched — the per-`create` cost this function adds must not erase
+# the clone path's advantage over a full `migrate up`.
+disk_digest() {
+  require_shasum
+  local dir="$REPO/migrations" names out
+  [ -d "$dir" ] || { echo "none"; return; }
+  names="$(cd "$dir" && find . -maxdepth 1 -type f -name '*.sql' -print | sed 's|^\./||' | LC_ALL=C sort)"
+  [ -n "$names" ] || { echo "none"; return; }
+  out="$(
+    { printf '%s\n' "$names"
+      printf '%s\n' "$names" | ( cd "$dir" && xargs cat )
+    } | shasum -a 256 | awk '{print $1}'
+  )"
+  if ! valid_digest "$out"; then
+    echo "error: shasum did not produce a valid digest for migrations/ (got: '$out')" >&2
+    exit 1
+  fi
+  echo "$out"
+}
+
+# The digest recorded on the template when it was last built, read from
+# COMMENT ON DATABASE (a cluster-catalog lookup, no connection into the
+# template database itself needed) rather than a table inside it — so it
+# survives regardless of what migrate does to the template's own schema.
+# #0320.
+template_digest() {
+  db_exists "$TEMPLATE" || { echo "none"; return; }
+  local d
+  d="$(psql_admin -tAc "select coalesce(description,'') from pg_shdescription ds join pg_database db on ds.objoid = db.oid where db.datname = '$TEMPLATE'" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$d" ] || { echo "none"; return; }
+  echo "$d"
 }
 
 require_createdb() {
@@ -101,11 +165,24 @@ build_template() {
   psql_admin -qc "DROP DATABASE IF EXISTS $TEMPLATE;"
   psql_admin -qc "CREATE DATABASE $TEMPLATE;"
   migrate -path "$REPO/migrations" -database "$(dsn "$TEMPLATE")" up
-  echo "$TEMPLATE is at migration $(template_version)"
+  # #0320: record a content digest alongside the version, so an in-place
+  # edit to an existing migration (same number, different bytes) is visible
+  # to template_matches_disk even though the version number alone would
+  # look unchanged.
+  local digest
+  digest="$(disk_digest)"
+  psql_admin -qc "COMMENT ON DATABASE $TEMPLATE IS '$digest';"
+  echo "$TEMPLATE is at migration $(template_version), digest ${digest:0:12}..."
 }
 
+# #0320: version alone cannot catch an in-place edit to an existing
+# migration file, since the filename (and therefore the number) does not
+# change. The digest comparison is what catches that case; the version
+# comparison is kept too since it is cheaper to explain in the mismatch
+# message and catches the common case (a migration added or removed) without
+# needing to read every file.
 template_matches_disk() {
-  [ "$(template_version)" = "$(disk_version)" ]
+  [ "$(template_version)" = "$(disk_version)" ] && [ "$(template_digest)" = "$(disk_digest)" ]
 }
 
 # #0315: this used to be check_template_fresh(), which hard-errored the
@@ -147,10 +224,16 @@ EOF
     return
   fi
   local side
-  if [ "$tv" -gt "$dv" ] 2>/dev/null; then
-    side="the shared template ($TEMPLATE) is ahead of this working tree's migrations/ — template is at $tv, migrations/ is at $dv"
+  if [ "$tv" != "$dv" ]; then
+    if [ "$tv" -gt "$dv" ] 2>/dev/null; then
+      side="the shared template ($TEMPLATE) is ahead of this working tree's migrations/ — template is at $tv, migrations/ is at $dv"
+    else
+      side="this working tree's migrations/ is ahead of the shared template ($TEMPLATE) — migrations/ is at $dv, template is at $tv"
+    fi
   else
-    side="this working tree's migrations/ is ahead of the shared template ($TEMPLATE) — migrations/ is at $dv, template is at $tv"
+    # #0320: same version on both sides, but the content digest disagrees —
+    # an existing migration file was edited in place without a number bump.
+    side="the shared template ($TEMPLATE) and this working tree's migrations/ both report migration $dv, but the content digest disagrees — a migration file was likely edited in place without changing its number (#0320)"
   fi
   cat >&2 <<EOF
 note: $side.
