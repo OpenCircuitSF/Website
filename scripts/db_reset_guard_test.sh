@@ -412,6 +412,116 @@ else
   pass "an empty database-name argument is refused rather than silently defaulting to 'opencircuit'"
 fi
 
+echo "== Part 11: a non-client backend attached to the target does not fail the run (#0309) =="
+# #0309: the found bug was an unscoped terminate query catching a
+# non-'client backend' row (most plausibly autovacuum) attached to the
+# target database -- pg_terminate_backend() on such a row raises a
+# SUPERUSER-only permission error that, inside a single SELECT under
+# `set -e`, aborted the whole reset. A REAL autovacuum worker cannot be
+# constructed on demand (it attaches on its own schedule, not this test's).
+# A Postgres PARALLEL WORKER can: it is a genuine, deterministic
+# non-'client backend' row in pg_stat_activity, attached to a specific
+# database, spawned the moment a query needs it -- no special privileges,
+# no fixture, just parallel_setup_cost/parallel_tuple_cost driven to 0 and a
+# join fanout over generate_series() to give a small table enough rows to
+# scan that a handful of workers stay busy for a few seconds.
+#
+# What this DOES prove: with a real, live, non-'client backend' row
+# attached to $TESTDB throughout the run, db-reset.sh --force still
+# completes successfully -- i.e. the `backend_type = 'client backend'`
+# narrowing in $CLIENT_WHERE is exercised against an actual row in
+# pg_stat_activity, not just read as source text.
+#
+# What it does NOT prove: independently verified (outside this test, see
+# the #0309 report) that pg_terminate_backend() on a parallel worker owned
+# by the SAME role the query ran as succeeds without error -- parallel
+# workers are not SUPERUSER-restricted the way autovacuum and other
+# background workers are. So this part cannot reproduce the exact
+# SUPERUSER-permission error #0309 found; it proves the general mechanism
+# (a non-client-backend row is never selected, so it can never trigger
+# ANY permission error a client-owned row wouldn't), not that specific
+# error message. Part 11b below pins the narrowed query's source text as a
+# second, independent check that does not depend on constructing a live
+# row at all -- together the two cover what Part 11 alone cannot.
+psql "$PGHOST_URL/$TESTDB" -qc "CREATE TABLE IF NOT EXISTS pw_seed AS SELECT g, md5(g::text) h FROM generate_series(1,500000) g;" >/dev/null 2>&1
+psql "$PGHOST_URL/$TESTDB" -qc "ANALYZE pw_seed;" >/dev/null 2>&1
+(
+  psql "$PGHOST_URL/$TESTDB" >/dev/null 2>&1 <<'SQL'
+SET min_parallel_table_scan_size = 0;
+SET parallel_setup_cost = 0;
+SET parallel_tuple_cost = 0;
+SET max_parallel_workers_per_gather = 4;
+SELECT count(*) FROM pw_seed, generate_series(1,150) i WHERE md5(pw_seed.h || i::text) LIKE 'zzzz%';
+SQL
+) &
+PW_LEADER_PID=$!
+BG_PIDS+=("$PW_LEADER_PID")
+
+WORKER_PID=""
+for i in $(seq 1 40); do
+  WORKER_PID="$(psql_admin -tAc "select pid from pg_stat_activity where datname='$TESTDB' and backend_type <> 'client backend' limit 1" 2>/dev/null)"
+  [ -n "$WORKER_PID" ] && break
+  sleep 0.2
+done
+
+if [ -z "$WORKER_PID" ]; then
+  fail "part11 setup: no non-client backend (parallel worker) ever appeared for $TESTDB -- this machine/Postgres build may not spawn parallel workers under these settings; Part 11b's static pin still ran"
+else
+  pass "a non-client backend (pid $WORKER_PID, backend_type <> 'client backend') is attached to $TESTDB"
+  OUT11="$("$SCOPED" --no-seed --force "$TESTDB" 2>&1)"
+  RC11=$?
+  if [ "$RC11" -eq 0 ]; then
+    pass "db-reset.sh --force succeeded while a non-client backend was attached to $TESTDB"
+  else
+    fail "REGRESSION #0309: db-reset.sh failed (exit $RC11) while a non-client backend was attached -- output: $(echo "$OUT11" | tr '\n' '|')"
+  fi
+  if echo "$OUT11" | grep -qi 'superuser'; then
+    fail "REGRESSION #0309: db-reset.sh's output mentions a superuser permission error -- the narrowed query is targeting a backend it should not"
+  else
+    pass "no superuser-permission error appeared in db-reset.sh's output"
+  fi
+  if echo "$OUT11" | grep -q 'non-client or other-role backend'; then
+    pass "db-reset.sh reported the non-client backend (criterion 2) rather than silently ignoring or choking on it"
+  else
+    fail "db-reset.sh did not report the non-client backend that was attached during the reset (best-effort: the worker may have already finished by the time the report query ran -- see the timing note in the #0309 report)"
+  fi
+fi
+kill -9 "$PW_LEADER_PID" >/dev/null 2>&1 || true
+wait "$PW_LEADER_PID" 2>/dev/null || true
+
+echo "== Part 11b: the narrowed WHERE clause is defined once and used by both the connection check and the terminate step (#0309) =="
+# The static counterpart to Part 11, and the fallback the issue asked for if
+# a live non-client backend could not be constructed at all: reads the
+# TRACKED source directly (not a copy of expected text stored in this
+# test -- see CLAUDE.md's GUARD-0208 note on why an oracle must not be the
+# same bytes as its subject), and asserts the narrowing predicate is
+# defined exactly once and that BOTH the connection-refusal check and the
+# terminate step reference that single definition ($CLIENT_WHERE) rather
+# than each spelling their own copy that could drift or be independently
+# reverted.
+CLIENT_WHERE_DEFS="$(grep -c '^CLIENT_WHERE=' "$REAL_SCRIPT")"
+if [ "$CLIENT_WHERE_DEFS" = "1" ]; then
+  pass "\$CLIENT_WHERE is defined exactly once in scripts/db-reset.sh"
+else
+  fail "REGRESSION #0309: expected exactly one \$CLIENT_WHERE definition, found $CLIENT_WHERE_DEFS -- a second, independently-spelled copy could drift unnarrowed"
+fi
+CLIENT_WHERE_LINE="$(grep '^CLIENT_WHERE=' "$REAL_SCRIPT")"
+if echo "$CLIENT_WHERE_LINE" | grep -q "backend_type = 'client backend'" && echo "$CLIENT_WHERE_LINE" | grep -q "usename = current_user"; then
+  pass "\$CLIENT_WHERE's definition narrows by both backend_type='client backend' and usename=current_user"
+else
+  fail "REGRESSION #0309: \$CLIENT_WHERE's definition no longer narrows by both backend_type='client backend' and usename=current_user -- found: $CLIENT_WHERE_LINE"
+fi
+if grep -qE 'pg_terminate_backend\(pid\) FROM pg_stat_activity WHERE \$CLIENT_WHERE' "$REAL_SCRIPT"; then
+  pass "the terminate step references \$CLIENT_WHERE (the same narrowed filter as the connection check), not an independent unscoped query"
+else
+  fail "REGRESSION #0309: the terminate step no longer references \$CLIENT_WHERE -- it may have reverted to an unscoped query"
+fi
+if grep -qE 'from pg_stat_activity where \$CLIENT_WHERE' "$REAL_SCRIPT"; then
+  pass "the connection-refusal check references \$CLIENT_WHERE too"
+else
+  fail "REGRESSION #0309: the connection-refusal check no longer references \$CLIENT_WHERE"
+fi
+
 echo
 echo "== Final cleanup and leaked-database census (#0250 item 5) =="
 terminate_backends "$TESTDB"

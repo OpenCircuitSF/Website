@@ -151,7 +151,29 @@ command -v psql >/dev/null    || { echo "error: psql not on PATH" >&2; exit 1; }
 # where it cannot tell what is happening. This check now runs unconditionally,
 # even under --force: --force means "I know someone is connected, proceed
 # anyway," not "proceed even if you can't tell whether anyone is connected."
-if ! CONNS="$(psql "$PGHOST_URL/postgres" -tAc "select pid || '  ' || coalesce(usename,'?') || '  ' || coalesce(application_name,'') || '  ' || coalesce(client_addr::text,'local') from pg_stat_activity where datname = '$DB' and pid <> pg_backend_pid()")"; then
+#
+# #0309: both this check and the terminate step below are now scoped to
+# CLIENT backends connected as this script's OWN role, via $CLIENT_WHERE.
+# The unscoped query used to catch every backend attached to '$DB' — most
+# plausibly an autovacuum worker, which runs superuser-owned. That is not a
+# session this script's job is to clear, and a non-superuser role cannot
+# pg_terminate_backend it at all: fed into the terminate SELECT below, one
+# such row made the WHOLE statement raise a SUPERUSER-only permission error,
+# aborting the reset under `set -e` (the failure #0309 tracked, correlated
+# with load only because autovacuum is likelier to attach to a freshly
+# created, freshly written database under concurrent agent activity — not a
+# timing flake). It could also force a bare (non---force) invocation to
+# refuse for no real reason (a bare invocation with no --force), since the
+# OLD version of this same check counted that same row as "another
+# connection". Every legitimate connection this
+# project's tooling makes — an agent, the user's dev session, this script
+# itself — authenticates as the same role $PGHOST_URL names (opencircuit, by
+# convention across every script in scripts/), so `usename = current_user`
+# alongside `backend_type = 'client backend'` narrows to exactly the sessions
+# --force is meant to clear, without widening what this script may terminate
+# (it must never reach for superuser to do so — see GUARDS above).
+CLIENT_WHERE="datname = '$DB' and pid <> pg_backend_pid() and backend_type = 'client backend' and usename = current_user"
+if ! CONNS="$(psql "$PGHOST_URL/postgres" -tAc "select pid || '  ' || coalesce(usename,'?') || '  ' || coalesce(application_name,'') || '  ' || coalesce(client_addr::text,'local') from pg_stat_activity where $CLIENT_WHERE")"; then
   echo "refusing: could not determine whether '$DB' has other active connection(s) — the check above failed (see psql's error above this line), so refusing rather than assuming none. This runs even with --force." >&2
   exit 1
 fi
@@ -166,8 +188,20 @@ EOF
   exit 1
 fi
 
+# #0309: report any OTHER backend attached to '$DB' — non-client (background
+# writer, checkpointer, autovacuum launcher/worker, walsender, …) or a client
+# connected as a different role — purely as information. It is never counted
+# above and never targeted by the terminate step below: this script's job is
+# clearing CLIENT connections, and a backend it cannot (or should not) signal
+# is not an obstacle to that. A failure to run this check is not fatal to the
+# reset — it is a courtesy note, not a gate.
+if OTHER="$(psql "$PGHOST_URL/postgres" -tAc "select pid || '  ' || coalesce(backend_type,'?') || '  ' || coalesce(usename,'?') from pg_stat_activity where datname = '$DB' and pid <> pg_backend_pid() and not (backend_type = 'client backend' and usename = current_user)" 2>/dev/null)" && [ -n "$OTHER" ]; then
+  echo "note: '$DB' also has non-client or other-role backend(s) attached — not something this script needs to (or can) signal, and not counted above:" >&2
+  echo "$OTHER" | sed 's/^/  pid /' >&2
+fi
+
 echo "resetting $DB"
-psql "$PGHOST_URL/postgres" -qc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$DB' AND pid <> pg_backend_pid();" >/dev/null
+psql "$PGHOST_URL/postgres" -qc "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE $CLIENT_WHERE;" >/dev/null
 psql "$PGHOST_URL/postgres" -qc "DROP DATABASE IF EXISTS \"$DB\";"
 psql "$PGHOST_URL/postgres" -qc "CREATE DATABASE \"$DB\";"
 migrate -path "$REPO/migrations" -database "$DSN" up
