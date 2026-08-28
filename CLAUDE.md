@@ -809,7 +809,17 @@ git show --stat HEAD                   # confirm the file list AND the line coun
 `#0129`'s reviewer got this right against a blanket instruction from the
 orchestrator: it found `#0309`'s files staged in the shared index, recognised
 that a bare commit would sweep them in, and used a pathspec deliberately. Read
-the index; do not follow either form by habit. `git show --stat`
+the index; do not follow either form by habit.
+
+**And the check itself is racy — the window between looking and committing is
+real.** `#0315`'s reviewer ran `git diff --cached --name-only`, saw only its own
+file, and **seconds later** its pathspec-less commit swept in six of `#0123`'s
+files staged in between. It caught this from `git show --stat`, confirmed `HEAD`
+was still its own, recovered with `git reset --soft HEAD~1`, and re-committed
+with a pathspec; the six files returned to the index untouched, because a soft
+reset does not touch content. So: **commit immediately after checking, and always
+verify afterwards with `git show --stat HEAD`.** The check tells you which form
+to use; only the after-the-fact stat tells you what actually happened. `git show --stat`
 after every commit is what catches both this and the shared-index case below:
 check the **line counts**, not just the filenames, because a swept-in hunk lands
 in a file you did legitimately touch.
