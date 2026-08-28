@@ -2,7 +2,11 @@
 #
 # go_file_visit_floor_guard_test.sh — external oracle for the three
 # "plausible file count" floor constants #0275 added to internal/handlers'
-# citation/dangling-citation/audit-metadata guard family, per issue #0300.
+# citation/dangling-citation/audit-metadata guard family, per issue #0300 —
+# PLUS (further down, its own clearly-delimited section) the two "plausible
+# call-site count" floor constants in internal/outbox's claim-kinds guard
+# (#0281, #0304), which #0304 chose to fold in here rather than build as a
+# second script, for the reasons that section's own header explains.
 #
 # THE PROBLEM (#0300)
 #
@@ -306,6 +310,142 @@ elif [ "$SHA_BEFORE" = "$SHA_AFTER" ]; then
   pass "all three tracked guard files unchanged across this run -- every mutation happened on a private copy in $WORKDIR, never the tracked file"
 else
   fail "CRITICAL: a tracked guard file's sha256 changed during this run. Investigate immediately with: git diff -- ${FLOOR_FILES[*]}"
+fi
+
+# ---------------------------------------------------------------------------
+# Outbox claim-kinds guard floors (#0304, folded into this harness rather
+# than a new script)
+#
+# internal/outbox/claim_kinds_call_site_guard_test.go (#0281, hardened by
+# #0304) carries two more floor consts of the EXACT same shape as the three
+# above: claimKindsGuardMinPlausibleCallSiteCount (the original, #0281) and
+# claimKindsGuardMinPlausibleNonExemptCallSiteCount (#0304's addition).
+# Setting either to 0 in the tracked file leaves internal/outbox's own `go
+# test` run green for the identical mathematical reason the header comment
+# above gives for the handlers floors: `got < 0` can never fire for a real,
+# non-negative count, so a `go test` run against a floor-zeroed mutation
+# alone stays green regardless of the real call-site count. #0304's own
+# acceptance criterion 5 asks whether its new floor belongs here instead of
+# becoming a second in-file check -- it does, for the same reason #0300
+# gives for the other three: every helper this needs (extract_const,
+# sha_of) already lives in this file, so a second script would just
+# duplicate them, and CLAUDE.md §8 is explicit that a guard living in the
+# file it protects is new mutable surface, not a second one.
+#
+# #0304's OTHER proof -- that narrowing claimKindsGuardScanRoots to
+# []string{"."} makes the guard fail closed -- is intentionally NOT
+# duplicated here. That is a behavioral claim about `go test`'s real
+# output under a roots mutation (which, unlike a floor-to-0 mutation, DOES
+# change what `go test` reports -- narrowing the walk changes `got`, not
+# just the threshold `got` is compared against), so `go test` is a valid,
+# non-circular oracle for it and it is proved permanently and directly in
+# Go, in internal/outbox/claim_kinds_call_site_guard_test.go's own
+# TestNonExemptFloorCatchesScanRootsNarrowedToSelf -- see that test's doc
+# comment for why a roots mutation and a floor mutation need different
+# oracles. This section covers only the floor-constant class of mutation,
+# which is what actually requires an oracle outside internal/outbox.
+echo
+echo "== outbox claim-kinds guard floors (#0304) =="
+
+OUTBOX_GUARD_FILE="internal/outbox/claim_kinds_call_site_guard_test.go"
+OUTBOX_SRC="$REPO/$OUTBOX_GUARD_FILE"
+[ -f "$OUTBOX_SRC" ] || fatal "$OUTBOX_GUARD_FILE not found -- has it moved? Update OUTBOX_GUARD_FILE."
+
+# count_outbox_call_sites <exclude-dir-abs-or-empty> <root> [root...] --
+# textual population for the two outbox floors: every `.ClaimDue(` /
+# `.OrphanSweep(` occurrence in .go files under roots (skip node_modules/
+# dist), optionally excluding one whole directory tree (used for the
+# non-exempt floor, to exclude internal/outbox itself). Deliberately a raw
+# grep over source text, not an AST parse like the guard itself uses --
+# same looseness as count_go_files above, and for the same reason: this is
+# a plausibility oracle from a different tool and a different data source
+# than go/ast, not a re-implementation of the guard's own parser (CLAUDE.md
+# §8: "can an edit to the subject also satisfy the oracle" -- a change to
+# findOutboxCallSitesInFile's AST logic cannot touch this grep, and a
+# change to this grep cannot touch that AST logic).
+count_outbox_call_sites() {
+  local exclude="$1"; shift
+  local total=0 f n
+  while IFS= read -r f; do
+    if [ -n "$exclude" ]; then
+      case "$f" in
+        "$exclude"/*) continue ;;
+      esac
+    fi
+    n="$(grep -cE '\.(ClaimDue|OrphanSweep)\(' "$f")"
+    total=$((total + n))
+  done < <(find "$@" \( -name node_modules -o -name dist \) -prune -o -type f -name '*.go' -print)
+  printf '%s' "$total"
+}
+
+OUTBOX_SHA_BEFORE="$(sha_of "$OUTBOX_SRC")" || fatal "sha_of fatal-exited hashing $OUTBOX_SRC -- see the FATAL line above."
+
+TOTAL_POP="$(count_outbox_call_sites "" "$REPO/internal" "$REPO/cmd")"
+case "$TOTAL_POP" in '' | *[!0-9]*) fatal "count_outbox_call_sites returned a non-numeric total population ('$TOTAL_POP')" ;; esac
+
+NONEXEMPT_POP="$(count_outbox_call_sites "$REPO/internal/outbox" "$REPO/internal" "$REPO/cmd")"
+case "$NONEXEMPT_POP" in '' | *[!0-9]*) fatal "count_outbox_call_sites returned a non-numeric non-exempt population ('$NONEXEMPT_POP')" ;; esac
+
+# outbox_floor_plausible <floor> <population> -- deliberately NOT
+# floor_plausible() above: that function's `floor >= population/2` margin
+# fits the handlers family's FILE-count populations (in the hundreds,
+# dominated by no single file). A call-site population is an order of
+# magnitude smaller and CAN be dominated by one file (#0304's own Go-side
+# comment measures the worst case at 3, in
+# internal/mailing/worker_store_test.go), so a floor near half the
+# population is not the right bar here. The bar that matters for THIS
+# family: greater than zero (closes the #0300/#0304 fail-open this section
+# exists for) and no greater than the real population (#0275's own failure
+# mode -- a floor raised above the true count, which fails the guard
+# permanently even with nothing wrong).
+outbox_floor_plausible() {
+  local floor="$1" population="$2"
+  [ "$floor" -gt 0 ] || return 1
+  [ "$floor" -le "$population" ] || return 1
+  return 0
+}
+
+for spec in \
+  "claimKindsGuardMinPlausibleCallSiteCount:${TOTAL_POP}:TestNoUnscopedOutboxClaimCallOutsidePackage total-population floor (#0281)" \
+  "claimKindsGuardMinPlausibleNonExemptCallSiteCount:${NONEXEMPT_POP}:TestNoUnscopedOutboxClaimCallOutsidePackage non-exempt floor (#0304)" \
+; do
+  CONST="${spec%%:*}"
+  rest="${spec#*:}"
+  POP="${rest%%:*}"
+  TESTNAME="${rest#*:}"
+
+  echo "-- ${CONST} (protects: ${TESTNAME}) --"
+
+  REAL_VALUE="$(extract_const "$OUTBOX_SRC" "$CONST")" || fatal "extract_const fatal-exited extracting ${CONST} from $OUTBOX_SRC -- see the FATAL line above."
+  if outbox_floor_plausible "$REAL_VALUE" "$POP"; then
+    pass "committed ${CONST}=${REAL_VALUE} is plausible against an externally-measured (grep-based) population of ${POP}"
+  else
+    fail "REGRESSION #0304: committed ${CONST}=${REAL_VALUE} is NOT plausible against an externally-measured population of ${POP} (must be > 0 and <= population). Affects: ${TESTNAME}"
+  fi
+
+  MUTANT="$WORKDIR/$(basename "$OUTBOX_GUARD_FILE").${CONST}"
+  sed "s/const ${CONST} = [0-9][0-9]*/const ${CONST} = 0/" "$OUTBOX_SRC" > "$MUTANT"
+  if ! grep -q "const ${CONST} = 0" "$MUTANT"; then
+    fatal "mutation did not take on the copy of ${OUTBOX_GUARD_FILE} for ${CONST} -- aborting before judging anything."
+  fi
+  MUT_VALUE="$(extract_const "$MUTANT" "$CONST")" || fatal "extract_const fatal-exited extracting ${CONST} from the mutated copy $MUTANT -- see the FATAL line above."
+  if [ "$MUT_VALUE" != "0" ]; then
+    fatal "re-extraction from the mutated copy of ${OUTBOX_GUARD_FILE} returned '${MUT_VALUE}', not '0' -- the mutation and the extraction disagree; refusing to judge."
+  fi
+  if outbox_floor_plausible "$MUT_VALUE" "$POP"; then
+    fail "REGRESSION #0304: this harness judged ${CONST}=0 PLAUSIBLE -- the external oracle failed to catch a zeroed floor. Affects: ${TESTNAME}"
+  else
+    pass "${CONST}=0 (mutated copy) is correctly judged IMPLAUSIBLE by this external oracle, independent of go test (same mathematical-impossibility reasoning as the header comment above: got < 0 can never fire). Affects: ${TESTNAME}"
+  fi
+done
+
+OUTBOX_SHA_AFTER="$(sha_of "$OUTBOX_SRC")" || fatal "sha_of fatal-exited re-hashing $OUTBOX_SRC -- see the FATAL line above."
+if [ -z "$OUTBOX_SHA_BEFORE" ] || [ -z "$OUTBOX_SHA_AFTER" ]; then
+  fail "CRITICAL: outbox guard file sha256 computation produced an empty result -- refusing to treat two blanks as a match."
+elif [ "$OUTBOX_SHA_BEFORE" = "$OUTBOX_SHA_AFTER" ]; then
+  pass "$OUTBOX_GUARD_FILE unchanged across this run -- every mutation happened on a private copy in $WORKDIR, never the tracked file"
+else
+  fail "CRITICAL: $OUTBOX_GUARD_FILE's sha256 changed during this run. Investigate immediately with: git diff -- $OUTBOX_GUARD_FILE"
 fi
 
 echo

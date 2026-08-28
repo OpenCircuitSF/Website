@@ -70,7 +70,53 @@ var claimKindsGuardScanRoots = []string{"..", "../../cmd"}
 // internal/mailing/outbox_worker.go) — so a scan-roots regression that
 // prunes an entire package, not just one file, is what it takes to stay
 // above this floor while still being wrong.
+//
+// #0304: THIS FLOOR ONLY PROVES THE WALK REACHED *A* TREE, NOT THE RIGHT
+// ONE. 20 of the 32 sites it counts sit inside internal/outbox itself,
+// where every call is exempt from the VIOLATION check (inOwnPkg). #0304's
+// reviewer measured that narrowing claimKindsGuardScanRoots to []string{"."}
+// leaves this floor passing (23 sites, all inside internal/outbox, still
+// >= 5) while the walk never reaches a single caller outside the package —
+// zero of the population this guard exists to check. This floor still
+// earns its place (a genuinely empty or broken walk trips it), but it is
+// not sufficient alone; see claimKindsGuardMinPlausibleNonExemptCallSiteCount
+// below, which is.
 const claimKindsGuardMinPlausibleCallSiteCount = 5
+
+// claimKindsGuardMinPlausibleNonExemptCallSiteCount is #0304's fix for the
+// gap claimKindsGuardMinPlausibleCallSiteCount's own comment now documents:
+// a floor on the TOTAL call-site count is satisfied by the exempt
+// (in-package) population alone, so it cannot detect a scan-roots
+// regression that keeps internal/outbox's own tree but drops every actual
+// caller. This floor instead applies to the NON-exempt subset — sites
+// where inOwnPkg is false, exactly the sites the VIOLATION loop below
+// evaluates — so it can only be satisfied by the walk having actually
+// reached code outside this package.
+//
+// Measured the same way as the floor above, from the same scan: 12 sites
+// outside internal/outbox today (internal/handlers/subscribe_intake.go x2,
+// internal/handlers/admin_dashboard_test.go x2,
+// internal/handlers/admin_pending_test.go x1, internal/mailing/worker.go
+// x1, internal/mailing/outbox_worker.go x2,
+// internal/mailing/worker_store_test.go x3 (mailing.SendStore's
+// unrelated same-named OrphanSweep — counted here because
+// nameMatchesGuardedMethod matches on name only, same as the total floor
+// above), internal/mailing/outbox_worker_test.go x1). 6 is chosen rather
+// than the reviewer's suggested 5 so this floor also clears "at least half
+// of today's population" (6/12), the same margin #0300's file-count floor
+// family uses, while staying comfortably above the worst case a
+// single-file narrowing could produce (at most 3, in
+// internal/mailing/worker_store_test.go) — so, as with the floor above, a
+// regression has to prune an entire package's worth of callers, not one
+// file, to stay above this floor while still being wrong. Unlike the floor
+// above, THIS floor is what actually breaks under the {"."} narrowing
+// #0304 measured: with claimKindsGuardScanRoots narrowed to the package's
+// own directory, every site found is inOwnPkg, so the non-exempt count is
+// 0 — well below 6 — and TestNoUnscopedOutboxClaimCallOutsidePackage now
+// fails closed instead of reporting PASS with nothing evaluated. See
+// TestNonExemptFloorCatchesScanRootsNarrowedToSelf below, which proves
+// exactly that, permanently, against the real repo tree.
+const claimKindsGuardMinPlausibleNonExemptCallSiteCount = 6
 
 // outboxCallSite is one ClaimDue or OrphanSweep call site found by the
 // scan: its location, the method named, and how many arguments it passed
@@ -238,10 +284,34 @@ func TestNoUnscopedOutboxClaimCallOutsidePackage(t *testing.T) {
 	// otherwise a broken method-name check or an accidentally-narrowed
 	// root set would report "no violations" for the wrong reason (nothing
 	// was ever examined) and this guard would look green while checking
-	// nothing, the exact #0275 failure mode.
+	// nothing, the exact #0275 failure mode. This floor alone proves only
+	// that the walk reached SOME tree containing ClaimDue/OrphanSweep
+	// calls — see the const's own doc comment and #0304 below for why
+	// that is not the same as reaching the population this guard checks.
 	if len(allSites) < claimKindsGuardMinPlausibleCallSiteCount {
 		t.Fatalf("found only %d ClaimDue/OrphanSweep call site(s) under %v, want at least %d — the scan roots may have been narrowed or the method-name check broken, which would silently disarm this guard rather than fail it (#0275)",
 			len(allSites), claimKindsGuardScanRoots, claimKindsGuardMinPlausibleCallSiteCount)
+	}
+
+	// #0304: a SECOND floor, on the non-exempt subset only (sites outside
+	// internal/outbox — exactly what the VIOLATION loop below evaluates).
+	// The floor above is satisfied by internal/outbox's own store_test.go
+	// sites alone, so it cannot detect a scan-roots regression that keeps
+	// this package's own tree but drops every actual caller — which is
+	// exactly what narrowing claimKindsGuardScanRoots to []string{"."}
+	// does (proven permanently in
+	// TestNonExemptFloorCatchesScanRootsNarrowedToSelf, below). This one
+	// can only be satisfied by the walk having actually left
+	// internal/outbox.
+	nonExemptCount := 0
+	for _, site := range allSites {
+		if !site.inOwnPkg {
+			nonExemptCount++
+		}
+	}
+	if nonExemptCount < claimKindsGuardMinPlausibleNonExemptCallSiteCount {
+		t.Fatalf("found only %d ClaimDue/OrphanSweep call site(s) OUTSIDE internal/outbox under %v (of %d total, the rest exempt as internal/outbox's own), want at least %d — the scan roots may have been narrowed to exclude every real caller while still finding internal/outbox's own exempt sites, which would silently disarm this guard's VIOLATION check rather than fail it (#0304, the same population-mismatch shape #0275 closed for the sibling guards)",
+			nonExemptCount, claimKindsGuardScanRoots, len(allSites), claimKindsGuardMinPlausibleNonExemptCallSiteCount)
 	}
 
 	var violations []string
@@ -336,5 +406,85 @@ func sweepOneKind(ctx context.Context, s *Store) {
 		if !site.inOwnPkg {
 			t.Fatalf("fixture parsed with selfDir matching its own directory was not marked inOwnPkg: %+v", site)
 		}
+	}
+}
+
+// TestNonExemptFloorCatchesScanRootsNarrowedToSelf is #0304 criterion 3's
+// standing proof, run every time `go test` runs rather than argued once
+// and left undemonstrated. It does NOT mutate claimKindsGuardScanRoots
+// (a package-level var read by the real guard test) — instead it walks the
+// real repo tree with roots=[]string{"."} passed directly to
+// walkClaimKindsGuardFiles/findOutboxCallSitesInFile, the exact narrowing
+// #0304's reviewer used, and exercises the SAME production functions the
+// real guard calls, just with roots it controls. Since this test also runs
+// from internal/outbox, "." resolves to this package's own directory —
+// identical to what claimKindsGuardScanRoots={"."} would walk.
+//
+// It proves BOTH halves of #0304's finding, permanently:
+//
+//   - THE BEFORE STATE (what #0281's guard, before this fix, actually did):
+//     the OLD floor alone (claimKindsGuardMinPlausibleCallSiteCount, which
+//     counts every site regardless of inOwnPkg) is satisfied by this
+//     narrowing — proving the population-mismatch bug was real, not just
+//     asserted in the issue.
+//   - THE FIX: the NEW floor (claimKindsGuardMinPlausibleNonExemptCallSiteCount)
+//     is NOT satisfied — the non-exempt count drops to 0, since every site
+//     the narrowed walk finds lives inside internal/outbox itself.
+//
+// If internal/outbox's own call-site count ever drops so low that the old
+// floor stops being satisfied here too, that is fine — it only means this
+// test's "before" assertion needs its own floor lowered to match, not that
+// the finding stops being real; the "fix" assertion (nonExemptCount == 0)
+// holds regardless of internal/outbox's own site count, since {"."} can
+// never reach a file outside this package's directory.
+func TestNonExemptFloorCatchesScanRootsNarrowedToSelf(t *testing.T) {
+	selfDir, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatalf("resolving internal/outbox's own directory: %v", err)
+	}
+
+	fset := token.NewFileSet()
+	var narrowedSites []outboxCallSite
+	visited := walkClaimKindsGuardFiles(t, []string{"."}, func(path string) {
+		sites, err := findOutboxCallSitesInFile(fset, path, nil, selfDir)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		narrowedSites = append(narrowedSites, sites...)
+	})
+	if visited == 0 {
+		t.Fatal("walked zero .go files under \".\" from internal/outbox — this test's own premise (this package has .go files) is broken, not the guard's")
+	}
+
+	// BEFORE: the old, total-count-only floor would have reported PASS —
+	// the exact bug #0304 found. If this assertion itself starts failing,
+	// it means internal/outbox's own call-site count has dropped below
+	// claimKindsGuardMinPlausibleCallSiteCount, not that the finding this
+	// test documents is no longer real.
+	if len(narrowedSites) < claimKindsGuardMinPlausibleCallSiteCount {
+		t.Fatalf("this test's own premise broke: narrowing to \".\" now finds only %d call site(s) inside internal/outbox, below the old floor of %d — the old floor would (correctly, by coincidence) fail here too, so this test can no longer demonstrate the population-mismatch bug; adjust the premise rather than deleting the proof",
+			len(narrowedSites), claimKindsGuardMinPlausibleCallSiteCount)
+	}
+
+	nonExemptCount := 0
+	for _, site := range narrowedSites {
+		if !site.inOwnPkg {
+			nonExemptCount++
+		}
+	}
+
+	// AFTER: the new floor correctly rejects this narrowing — zero sites
+	// outside internal/outbox were ever reached, well below
+	// claimKindsGuardMinPlausibleNonExemptCallSiteCount, which is exactly
+	// what makes TestNoUnscopedOutboxClaimCallOutsidePackage fail closed
+	// under this narrowing instead of reporting PASS with nothing
+	// evaluated (#0304).
+	if nonExemptCount != 0 {
+		t.Fatalf("expected narrowing scan roots to \".\" to find zero call sites outside internal/outbox (every file reachable from this package's own directory is inside it), found %d — this test's assumption about what \".\" resolves to may be stale",
+			nonExemptCount)
+	}
+	if nonExemptCount >= claimKindsGuardMinPlausibleNonExemptCallSiteCount {
+		t.Fatalf("REGRESSION: nonExemptCount=%d unexpectedly satisfies claimKindsGuardMinPlausibleNonExemptCallSiteCount=%d under the \".\" narrowing — the new floor no longer catches the #0304 regression it exists for",
+			nonExemptCount, claimKindsGuardMinPlausibleNonExemptCallSiteCount)
 	}
 }

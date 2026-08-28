@@ -122,6 +122,26 @@ func TestMailKindsCoversEveryOutboxKind(t *testing.T) {
 		t.Fatal("mailKinds parsed to zero elements — the parse likely broke, not a real empty list")
 	}
 
+	// #0308: kindExceptions' reason field was required by convention only
+	// — "KindFoo": "" compiled and silently exempted the kind, exactly the
+	// outcome the exception list exists to make deliberate. This asserts
+	// it independently of the uncovered-kind check below, matching #0298's
+	// enforced form on the web side (KNOWN_STABLE_BRANCH_SITES): an entry
+	// can be BOTH unjustified (empty reason) AND wrong in some other way a
+	// future check might add, and folding this into the loop below would
+	// let one violation mask the other. strings.TrimSpace means whitespace
+	// counts as empty (#0308 criterion 4) — a reason of " " must not pass.
+	var unjustified []string
+	for kind, reason := range kindExceptions {
+		if strings.TrimSpace(reason) == "" {
+			unjustified = append(unjustified, kind)
+		}
+	}
+	sort.Strings(unjustified)
+	if len(unjustified) > 0 {
+		t.Errorf("kindExceptions entr(ies) with an empty or whitespace-only reason: %v — the reason exists to make an exemption deliberate rather than silent; add one, or remove the entry if it no longer applies (#0308)", unjustified)
+	}
+
 	var uncovered []string
 	for kind := range declaredKinds {
 		if _, exempt := kindExceptions[kind]; exempt || claimedByMailKinds[kind] {
