@@ -94,29 +94,76 @@ const claimKindsGuardMinPlausibleCallSiteCount = 5
 // reached code outside this package.
 //
 // Measured the same way as the floor above, from the same scan: 12 sites
-// outside internal/outbox today (internal/handlers/subscribe_intake.go x2,
-// internal/handlers/admin_dashboard_test.go x2,
-// internal/handlers/admin_pending_test.go x1, internal/mailing/worker.go
-// x1, internal/mailing/outbox_worker.go x2,
-// internal/mailing/worker_store_test.go x3 (mailing.SendStore's
-// unrelated same-named OrphanSweep — counted here because
-// nameMatchesGuardedMethod matches on name only, same as the total floor
-// above), internal/mailing/outbox_worker_test.go x1). 6 is chosen rather
-// than the reviewer's suggested 5 so this floor also clears "at least half
-// of today's population" (6/12), the same margin #0300's file-count floor
-// family uses, while staying comfortably above the worst case a
-// single-file narrowing could produce (at most 3, in
-// internal/mailing/worker_store_test.go) — so, as with the floor above, a
-// regression has to prune an entire package's worth of callers, not one
-// file, to stay above this floor while still being wrong. Unlike the floor
-// above, THIS floor is what actually breaks under the {"."} narrowing
-// #0304 measured: with claimKindsGuardScanRoots narrowed to the package's
-// own directory, every site found is inOwnPkg, so the non-exempt count is
-// 0 — well below 6 — and TestNoUnscopedOutboxClaimCallOutsidePackage now
-// fails closed instead of reporting PASS with nothing evaluated. See
+// outside internal/outbox today, broken down by PACKAGE rather than just
+// file, because #0322's review showed the file-level breakdown alone hides
+// the narrowing that matters most:
+//
+//	internal/handlers  5  (subscribe_intake.go x2, admin_dashboard_test.go
+//	                       x2, admin_pending_test.go x1)
+//	internal/mailing   7  (outbox_worker.go x2, worker.go x1,
+//	                       worker_store_test.go x3 — mailing.SendStore's
+//	                       unrelated same-named OrphanSweep, counted here
+//	                       because nameMatchesGuardedMethod matches on name
+//	                       only, same as the total floor above —,
+//	                       outbox_worker_test.go x1)
+//
+// #0304 first set this to 6 (>= population/2, mirroring #0300's file-count
+// margin) and its own review then measured which scan-roots narrowings
+// that actually catches:
+//
+//	narrowing                        non-exempt left   caught by floor 6?
+//	{"."}                             0                 yes
+//	cmd only                          0                 yes
+//	internal/handlers only            5                 yes
+//	worst single file                 3                 yes
+//	internal/mailing only             7                 NO
+//
+// The one 6 misses is the one that matters most: internal/mailing/only
+// drops internal/handlers/subscribe_intake.go — the production caller this
+// guard exists for, since #0254's duplicate-send defect came from exactly
+// that file's unscoped OrphanSweep call. #0322 raised the floor to 8
+// (8 > 7, closing that gap; 8 <= 12, still below the real population) —
+// deliberately, not as an arithmetic default, and re-checked against the
+// same table: 8 catches every row above, including internal/mailing only
+// (7 < 8 now fails, as it must).
+//
+// The #0275 failure mode weighed explicitly, not assumed away: raising a
+// floor above its population makes the guard fail permanently even with
+// nothing wrong (the reason #0300's file-count floors came down from 150 to
+// 80 and from an earlier value to 150). At 8 against 12 there are 4 sites
+// of headroom — but 3 of the 12 are mailing.SendStore's unrelated
+// same-named OrphanSweep, counted only because this guard matches by
+// method name, not by declaring type (see nameMatchesGuardedMethod's doc
+// comment). A rename or removal of that unrelated method — plausible,
+// since it is a different signature on a different type that merely
+// shares a name — would drop the population to 9, leaving only 1 site of
+// headroom before 8 itself becomes unsatisfiable. That risk is accepted
+// here, not hidden: it is smaller than the risk 8 closes (a real,
+// reachable narrowing silently passing), and it is visible the moment it
+// happens, since `go test` fails loudly rather than silently underprotecting.
+//
+// A count-based floor cannot close this robustly in general, and that
+// limit is inherent, not a defect in the number chosen: any single integer
+// threshold is blind to WHICH sites it counted, so a narrowing that
+// coincidentally leaves >= floor non-exempt sites — none of them
+// subscribe_intake.go — would still pass. A stronger check exists and is
+// deliberately NOT built here (scope of #0322 was the floor, not a rework
+// of the guard's shape): assert that specific known production call sites
+// — starting with internal/handlers/subscribe_intake.go's two — are
+// present in the non-exempt population, which is a presence check rather
+// than a count and so cannot be fooled by a narrowing that merely
+// preserves enough OTHER sites. Left as a recommendation, not implemented,
+// per #0322's own acceptance criteria.
+//
+// Unlike the floor above, THIS floor is what actually breaks under the
+// {"."} narrowing #0304 measured: with claimKindsGuardScanRoots narrowed to
+// the package's own directory, every site found is inOwnPkg, so the
+// non-exempt count is 0 — well below 8 — and
+// TestNoUnscopedOutboxClaimCallOutsidePackage now fails closed instead of
+// reporting PASS with nothing evaluated. See
 // TestNonExemptFloorCatchesScanRootsNarrowedToSelf below, which proves
 // exactly that, permanently, against the real repo tree.
-const claimKindsGuardMinPlausibleNonExemptCallSiteCount = 6
+const claimKindsGuardMinPlausibleNonExemptCallSiteCount = 8
 
 // outboxCallSite is one ClaimDue or OrphanSweep call site found by the
 // scan: its location, the method named, and how many arguments it passed
