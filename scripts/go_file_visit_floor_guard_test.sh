@@ -395,34 +395,41 @@ OUTBOX_SRC="$REPO/$OUTBOX_GUARD_FILE"
 
 # count_outbox_call_sites <exclude-dir-abs-or-empty> <root> [root...] --
 # textual population for the two outbox floors: every `.ClaimDue(` /
-# `.OrphanSweep(` occurrence in .go files under roots (skip node_modules/
-# dist), optionally excluding one whole directory tree (used for the
-# non-exempt floor, to exclude internal/outbox itself). Deliberately a raw
-# grep over source text, not an AST parse like the guard itself uses --
-# same looseness as count_go_files above, and for the same reason: this is
-# a plausibility oracle from a different tool and a different data source
-# than go/ast, not a re-implementation of the guard's own parser (CLAUDE.md
-# §8: "can an edit to the subject also satisfy the oracle" -- a change to
+# `.OrphanSweep(` / `.SelectDue(` occurrence in .go files under roots (skip
+# node_modules/dist), optionally excluding one whole directory tree (used
+# for the non-exempt floor, to exclude internal/outbox itself).
+# `.SelectDue(` joined the pattern for #0303: internal/outbox.Store grew
+# that method (#0297, the per-row claim path) with the identical
+# unscoped-default risk ClaimDue/OrphanSweep carry, and #0303 folded it
+# into the Go guard's own nameMatchesGuardedMethod -- this pattern must
+# track that set exactly, or this oracle silently stops covering part of
+# what the real guard now covers. Deliberately a raw grep over source
+# text, not an AST parse like the guard itself uses -- same looseness as
+# count_go_files above, and for the same reason: this is a plausibility
+# oracle from a different tool and a different data source than go/ast,
+# not a re-implementation of the guard's own parser (CLAUDE.md §8: "can an
+# edit to the subject also satisfy the oracle" -- a change to
 # findOutboxCallSitesInFile's AST logic cannot touch this grep, and a
 # change to this grep cannot touch that AST logic).
 #
 # #0323: this grep population and the guard's own go/ast population are NOT
 # the same number, on purpose, and that must never be "fixed" by making
 # this oracle parse Go. For the TOTAL population (no exclude), this
-# function measures 35; internal/outbox/claim_kinds_call_site_guard_test.go's
-# own doc comment (claimKindsGuardMinPlausibleCallSiteCount) measures 32 by
-# go/ast, and now records this same divergence and names the three
-# sites. For the NON-EXEMPT population (internal/outbox excluded), both
-# methods agree exactly at 12 -- every non-exempt site matches one for one
-# -- because all three of the divergent sites sit INSIDE internal/outbox
-# (so they only ever affect the total, exempt-inclusive count, never the
-# one claimKindsGuardMinPlausibleNonExemptCallSiteCount is judged against).
-# The three: one is inside a doc comment
-# (nameMatchesGuardedMethod's, which quotes ".ClaimDue(" and
-# ".OrphanSweep(" as prose), and two are inside the raw-string Go-source
+# function measures 42 (#0303 re-measured; #0323 measured 35 against the
+# pre-#0303 two-method pattern); internal/outbox/claim_kinds_call_site_guard_test.go's
+# own doc comment (claimKindsGuardMinPlausibleCallSiteCount) measures 36 by
+# go/ast (#0323 measured 32), and now records this same divergence and
+# names the six sites. For the NON-EXEMPT population (internal/outbox
+# excluded), both methods agree exactly at 12 -- every non-exempt site
+# matches one for one -- because all six of the divergent sites sit INSIDE
+# internal/outbox (so they only ever affect the total, exempt-inclusive
+# count, never the one claimKindsGuardMinPlausibleNonExemptCallSiteCount is
+# judged against). The six all live inside the raw-string Go-source
 # fixtures TestClaimKindsGuardFiresOnFixtureWithNoKinds builds in memory
-# (fixtureSrc, scopedFixtureSrc) -- text that looks like a real call inside
-# a Go string literal, which this grep cannot distinguish from a real one
+# (#0303 added three new fixtures alongside the original two, one of which
+# -- the AllKinds-sentinel fixture -- itself contains two occurrences) --
+# text that looks like a real call inside a Go string literal, which this
+# grep cannot distinguish from a real one
 # and go/ast correctly never parses as one, since those fixtures are handed
 # to the parser as an in-memory `src` argument, not discovered by walking
 # the tree. The direction matters: grep only ever INFLATES the total
@@ -442,7 +449,7 @@ count_outbox_call_sites() {
         "$exclude"/*) continue ;;
       esac
     fi
-    n="$(grep -cE '\.(ClaimDue|OrphanSweep)\(' "$f")"
+    n="$(grep -cE '\.(ClaimDue|OrphanSweep|SelectDue)\(' "$f")"
     total=$((total + n))
   done < <(find "$@" \( -name node_modules -o -name dist \) -prune -o -type f -name '*.go' -print)
   printf '%s' "$total"

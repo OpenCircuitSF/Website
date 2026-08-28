@@ -136,7 +136,7 @@ func TestOutbox_ClaimDue_OnlyClaimsQueuedAndDue(t *testing.T) {
 		t.Fatalf("pushing notDue into the future: %v", err)
 	}
 
-	rows, err := store.ClaimDue(ctx, 10)
+	rows, err := store.ClaimDue(ctx, 10, AllKinds)
 	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestOutbox_ClaimDue_OnlyClaimsQueuedAndDue(t *testing.T) {
 	}
 
 	// A second claim must not re-claim the row that is now 'sending'.
-	rows2, err := store.ClaimDue(ctx, 10)
+	rows2, err := store.ClaimDue(ctx, 10, AllKinds)
 	if err != nil {
 		t.Fatalf("second ClaimDue: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestOutbox_MarkSent_ScrubsPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	rows, err := store.ClaimDue(ctx, 10)
+	rows, err := store.ClaimDue(ctx, 10, AllKinds)
 	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestOutbox_AbandonsAtMaxRetries_RetainsLastError(t *testing.T) {
 		if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE id = $1`, id); err != nil {
 			t.Fatalf("forcing due: %v", err)
 		}
-		rows, err := store.ClaimDue(ctx, 10, kind)
+		rows, err := store.ClaimDue(ctx, 10, []Kind{kind})
 		if err != nil {
 			t.Fatalf("ClaimDue attempt %d: %v", attempt, err)
 		}
@@ -319,7 +319,7 @@ func TestOutbox_AbandonsAtMaxRetries_RetainsLastError(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE id = $1`, id); err != nil {
 		t.Fatalf("forcing due after abandon: %v", err)
 	}
-	rows, err := store.ClaimDue(ctx, 10)
+	rows, err := store.ClaimDue(ctx, 10, AllKinds)
 	if err != nil {
 		t.Fatalf("ClaimDue after abandon: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestOutbox_MarkRetryOrAbandon_RetriesBeforeMax(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	rows, err := store.ClaimDue(ctx, 10, kind)
+	rows, err := store.ClaimDue(ctx, 10, []Kind{kind})
 	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestOutbox_MarkSent_ClearsErrorFromFailedAttempt(t *testing.T) {
 	}
 
 	// Attempt 1: claim and fail, leaving error populated on a 'queued' row.
-	rows, err := store.ClaimDue(ctx, 10, kind)
+	rows, err := store.ClaimDue(ctx, 10, []Kind{kind})
 	if err != nil {
 		t.Fatalf("ClaimDue (attempt 1): %v", err)
 	}
@@ -430,7 +430,7 @@ func TestOutbox_MarkSent_ClearsErrorFromFailedAttempt(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE id = $1`, id); err != nil {
 		t.Fatalf("forcing due: %v", err)
 	}
-	rows2, err := store.ClaimDue(ctx, 10, kind)
+	rows2, err := store.ClaimDue(ctx, 10, []Kind{kind})
 	if err != nil {
 		t.Fatalf("ClaimDue (attempt 2): %v", err)
 	}
@@ -495,7 +495,7 @@ func TestOutbox_MarkDone_ClearsErrorFromSupersededAttempt(t *testing.T) {
 
 	// The recovery poller claims the row and fails it, leaving it 'queued'
 	// with error populated.
-	rows, err := store.ClaimDue(ctx, 10, kind)
+	rows, err := store.ClaimDue(ctx, 10, []Kind{kind})
 	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
@@ -574,7 +574,7 @@ func TestOutbox_MarkDone_ClearsErrorFromSendingState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	if _, err := store.ClaimDue(ctx, 10, kind); err != nil {
+	if _, err := store.ClaimDue(ctx, 10, []Kind{kind}); err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
 	// Simulate a stray error already sitting on a 'sending' row (defensive
@@ -627,7 +627,7 @@ func TestOutbox_MarkSent_RecordsSendAfterClaimReleasedMidSend(t *testing.T) {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
-	rows, err := store.ClaimDue(ctx, 10, kind)
+	rows, err := store.ClaimDue(ctx, 10, []Kind{kind})
 	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
@@ -685,7 +685,7 @@ func TestOutbox_MarkSent_RecordsSendAfterClaimReleasedMidSend(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE id = $1`, id); err != nil {
 		t.Fatalf("forcing due: %v", err)
 	}
-	rows2, err := store.ClaimDue(ctx, 10)
+	rows2, err := store.ClaimDue(ctx, 10, AllKinds)
 	if err != nil {
 		t.Fatalf("ClaimDue after MarkSent: %v", err)
 	}
@@ -715,7 +715,7 @@ func TestOutbox_MarkSent_DoesNotResurrectAbandonedRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	rows, err := store.ClaimDue(ctx, 10, kind)
+	rows, err := store.ClaimDue(ctx, 10, []Kind{kind})
 	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
@@ -773,7 +773,7 @@ func TestOutbox_Release_RequeuesImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	if _, err := store.ClaimDue(ctx, 10); err != nil {
+	if _, err := store.ClaimDue(ctx, 10, AllKinds); err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
 
@@ -798,7 +798,7 @@ func TestOutbox_Release_RequeuesImmediately(t *testing.T) {
 	}
 
 	// A released row is due again immediately.
-	rows, err := store.ClaimDue(ctx, 10)
+	rows, err := store.ClaimDue(ctx, 10, AllKinds)
 	if err != nil {
 		t.Fatalf("ClaimDue after release: %v", err)
 	}
@@ -846,7 +846,7 @@ func TestOutbox_OrphanSweep_DoesNotUnclaimLiveRow(t *testing.T) {
 		t.Fatalf("Enqueue stale: %v", err)
 	}
 
-	if _, err := store.ClaimDue(ctx, 10, kind); err != nil {
+	if _, err := store.ClaimDue(ctx, 10, []Kind{kind}); err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
 	// Backdate only the "stale" row's claim.
@@ -854,7 +854,7 @@ func TestOutbox_OrphanSweep_DoesNotUnclaimLiveRow(t *testing.T) {
 		t.Fatalf("backdating claimed_at: %v", err)
 	}
 
-	swept, err := store.OrphanSweep(ctx, 5*time.Minute, kind)
+	swept, err := store.OrphanSweep(ctx, 5*time.Minute, []Kind{kind})
 	if err != nil {
 		t.Fatalf("OrphanSweep: %v", err)
 	}
@@ -908,14 +908,14 @@ func TestOutbox_OrphanSweep_Unscoped_SweepsAcrossKinds(t *testing.T) {
 		t.Fatalf("Enqueue stale: %v", err)
 	}
 
-	if _, err := store.ClaimDue(ctx, 10, kind); err != nil {
+	if _, err := store.ClaimDue(ctx, 10, []Kind{kind}); err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET claimed_at = now() - interval '1 hour' WHERE id = $1`, staleID); err != nil {
 		t.Fatalf("backdating claimed_at: %v", err)
 	}
 
-	if _, err := store.OrphanSweep(ctx, 5*time.Minute); err != nil {
+	if _, err := store.OrphanSweep(ctx, 5*time.Minute, AllKinds); err != nil {
 		t.Fatalf("OrphanSweep (unscoped): %v", err)
 	}
 
@@ -947,7 +947,7 @@ func TestOutbox_Counts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue sent: %v", err)
 	}
-	if _, err := store.ClaimDue(ctx, 10); err != nil {
+	if _, err := store.ClaimDue(ctx, 10, AllKinds); err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
 	if _, err := store.MarkSent(ctx, sentID, "msg-id"); err != nil {

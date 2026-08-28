@@ -97,6 +97,37 @@ const (
 	KindSubscribeIntake Kind = "subscribe_intake"
 )
 
+// AllKinds is the explicit sentinel meaning "every kind" — pass it to
+// ClaimDue/OrphanSweep/SelectDue's now-required kinds parameter when
+// sweeping or claiming across every kind is a deliberate act, not an
+// omission (#0303).
+//
+// #0281's guard closed the practical gap this defect keeps reopening
+// (#0254's duplicate-send bug, plus four more unscoped test call sites
+// #0281 itself found) by failing any unscoped call OUTSIDE this package.
+// That guard is necessary but, on its own, leaves the DANGEROUS case as
+// the one a caller reaches by omission and the SAFE case as the one that
+// takes extra effort — exactly backwards. #0303 flips that: kinds is no
+// longer variadic, so a caller that means to scope but forgets the
+// argument now gets a compile error, not a guard failure discovered
+// later. Sweeping every kind still has to be possible (this package's own
+// tests exercise it deliberately, and it remains the correct choice for
+// e.g. an admin tool that genuinely wants every kind), so it is expressed
+// by naming THIS value rather than by passing nil or an empty slice
+// literal — both of which reach the identical SQL behavior
+// (cardinality($n) = 0 in ClaimDue/OrphanSweep/SelectDue's WHERE clauses)
+// but read, at the call site, exactly like a forgotten argument would
+// have under the old variadic shape. #0281's guard (kept, not deleted —
+// #0303 criterion 3) now watches for exactly that: a kinds argument that
+// denotes "no kinds" WITHOUT naming this sentinel.
+//
+// nil, not a non-nil empty slice: ClaimDue/OrphanSweep/SelectDue's own
+// `make([]string, len(kinds))` conversion already normalizes a nil kinds
+// slice to a non-nil, zero-length []string before it reaches pgx, so the
+// SQL sees an empty array (`cardinality('{}') = 0`) either way — nil is
+// simply the zero value, needing no separate composite literal.
+var AllKinds []Kind
+
 // Status values, matching outbound_queue_status_check.
 const (
 	StatusQueued    = "queued"
@@ -279,16 +310,22 @@ func scanRow(row pgx.Row) (Row, error) {
 // polled by more than one worker goroutine, so this is free insurance
 // rather than a strict requirement with today's single OutboxWorker.
 //
-// kinds optionally restricts the claim to those Kind values — pass none to
-// claim across every kind (every caller before #0254 did, and still may).
-// #0254 added this because outbound_queue now has TWO independent
-// consumers, each polling with its own ClaimDue call:
-// internal/mailing.OutboxWorker (every email Kind) and
+// kinds restricts the claim to those Kind values — pass AllKinds to claim
+// across every kind (every caller before #0254 did, and this package's own
+// tests still deliberately may). #0254 added this because outbound_queue
+// now has TWO independent consumers, each polling with its own ClaimDue
+// call: internal/mailing.OutboxWorker (every email Kind) and
 // internal/handlers.SubscribeHandler's recovery poller (KindSubscribeIntake
 // only, which is not an email — see that Kind's doc comment). Without a
 // filter, either consumer could claim a row it has no idea how to process:
 // OutboxWorker's render switch has no case for subscribe_intake, and the
 // intake poller doesn't render or send mail at all.
+//
+// #0303: kinds is a required parameter, not variadic — see AllKinds' own
+// doc comment for why, and #0281's guard
+// (claim_kinds_call_site_guard_test.go) for the standing check that a
+// caller outside this package spells the "every kind" case as AllKinds
+// rather than nil or an empty literal.
 //
 // # #0297 — this remains a whole-batch claim; SelectDue/ClaimRow is the
 // per-row alternative
@@ -311,7 +348,7 @@ func scanRow(row pgx.Row) (Row, error) {
 // rather than reimplemented in terms of the new pair, so this method's own
 // well-understood, single-round-trip behavior stays exactly what it was for
 // every caller that still wants it.
-func (s *Store) ClaimDue(ctx context.Context, limit int, kinds ...Kind) ([]Row, error) {
+func (s *Store) ClaimDue(ctx context.Context, limit int, kinds []Kind) ([]Row, error) {
 	kindStrs := make([]string, len(kinds))
 	for i, k := range kinds {
 		kindStrs[i] = string(k)
@@ -373,7 +410,13 @@ func (s *Store) ClaimDue(ctx context.Context, limit int, kinds ...Kind) ([]Row, 
 // which one of them — at most one — gets to process it. Mirrors
 // internal/mailing.SendStore's ClaimBatch/ClaimRow split exactly; see that
 // pair's doc comments for the same reasoning applied to email_sends.
-func (s *Store) SelectDue(ctx context.Context, limit int, kinds ...Kind) ([]int64, error) {
+//
+// kinds is required (#0303, same as ClaimDue/OrphanSweep — pass AllKinds
+// for the unscoped case); this method was added by #0297, after #0281's
+// guard already existed, so it never had a variadic-with-dangerous-default
+// shape to migrate away from — it launches straight into the shape #0303
+// gives the other two.
+func (s *Store) SelectDue(ctx context.Context, limit int, kinds []Kind) ([]int64, error) {
 	kindStrs := make([]string, len(kinds))
 	for i, k := range kinds {
 		kindStrs[i] = string(k)
@@ -681,9 +724,9 @@ func (s *Store) Release(ctx context.Context, id int64) (bool, error) {
 // see that method's doc comment for the full incident. Copying the fix, not
 // the defect that preceded it, is #0126's plan §2's explicit instruction.
 //
-// kinds optionally restricts the sweep to those Kind values, mirroring
-// ClaimDue's own kinds filter above — pass none to sweep across every kind
-// (the prior, unfiltered behavior). #0254's review bounce is why this
+// kinds restricts the sweep to those Kind values, mirroring ClaimDue's own
+// kinds filter above — pass AllKinds to sweep across every kind (the
+// prior, unfiltered behavior). #0254's review bounce is why this
 // parameter exists: that commit added a kinds filter to ClaimDue but not to
 // OrphanSweep, and gave OrphanSweep a second caller —
 // internal/handlers.SubscribeHandler's recovery poller, sweeping every 5s
@@ -698,7 +741,10 @@ func (s *Store) Release(ctx context.Context, id int64) (bool, error) {
 // duplicate confirmation, registration magic link, or recovery link.
 // Exactly like ClaimDue, neither of outbound_queue's two independent
 // consumers may sweep a row it does not own.
-func (s *Store) OrphanSweep(ctx context.Context, staleAfter time.Duration, kinds ...Kind) (int64, error) {
+//
+// #0303: kinds is required, not variadic — see ClaimDue's and AllKinds'
+// own doc comments for why.
+func (s *Store) OrphanSweep(ctx context.Context, staleAfter time.Duration, kinds []Kind) (int64, error) {
 	kindStrs := make([]string, len(kinds))
 	for i, k := range kinds {
 		kindStrs[i] = string(k)

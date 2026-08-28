@@ -469,7 +469,7 @@ func TestAdminDashboardOverview_OutboundQueue(t *testing.T) {
 	// ClaimDue outside internal/outbox claims every kind by default,
 	// which is #0254's failure mode in production and is now guarded
 	// against by TestNoUnscopedOutboxClaimCallOutsidePackage.
-	rows, err := store.ClaimDue(ctx, 100, outbox.KindConfirmation)
+	rows, err := store.ClaimDue(ctx, 100, []outbox.Kind{outbox.KindConfirmation})
 	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestAdminDashboardOverview_AbandonedConfirmationsScopedToKind(t *testing.T)
 		// Scoped to the SAME kind just enqueued (#0281) — this test's own
 		// point is per-kind isolation, and an unscoped ClaimDue would
 		// claim every other kind's queued rows too.
-		rows, err := store.ClaimDue(ctx, 100, kind)
+		rows, err := store.ClaimDue(ctx, 100, []outbox.Kind{kind})
 		if err != nil {
 			t.Fatalf("ClaimDue: %v", err)
 		}

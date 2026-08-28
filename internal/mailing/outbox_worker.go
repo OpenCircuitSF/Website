@@ -456,7 +456,7 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 	// poller (KindSubscribeIntake) — see OrphanSweep's doc comment for the
 	// duplicate-send chain an unfiltered sweep produced.
 	sweepCtx, sweepCancel := context.WithTimeout(ctx, writeStatusTimeout)
-	swept, err := w.store.OrphanSweep(sweepCtx, outboxOrphanStaleAfter, mailKinds...)
+	swept, err := w.store.OrphanSweep(sweepCtx, outboxOrphanStaleAfter, mailKinds)
 	sweepCancel()
 	if err != nil {
 		return false, fmt.Errorf("mailing: outbox orphan sweep: %w", err)
@@ -502,7 +502,7 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 	// an intake row it cannot render, hitting render's default case and
 	// eventually abandoning a row that has nothing to do with mail.
 	selectCtx, selectCancel := context.WithTimeout(ctx, writeStatusTimeout)
-	ids, err := w.store.SelectDue(selectCtx, w.batchSize, mailKinds...)
+	ids, err := w.store.SelectDue(selectCtx, w.batchSize, mailKinds)
 	selectCancel()
 	if err != nil {
 		return false, fmt.Errorf("mailing: selecting due outbound_queue rows: %w", err)

@@ -630,7 +630,7 @@ func TestOutbox_Release_RequeuesClaimedRow(t *testing.T) {
 	// OutboxWorker.Stop's release path exists for. Scoped to the one kind
 	// enqueued above (#0281) — an unscoped ClaimDue outside internal/outbox
 	// claims every kind by default, #0254's failure mode.
-	if _, err := store.ClaimDue(context.Background(), 10, outbox.KindConfirmation); err != nil {
+	if _, err := store.ClaimDue(context.Background(), 10, []outbox.Kind{outbox.KindConfirmation}); err != nil {
 		t.Fatalf("ClaimDue: %v", err)
 	}
 	var status string

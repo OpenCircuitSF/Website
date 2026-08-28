@@ -1,26 +1,43 @@
-// claim_kinds_call_site_guard_test.go is #0281's guard: nothing else in
-// the compiler or the type system stops a caller from invoking
-// Store.ClaimDue or Store.OrphanSweep with no kinds at all, and both
-// implement an omitted kinds argument as "cardinality($n) = 0 OR kind =
-// ANY(...)" — i.e. EVERY kind, not none. That is exactly the omission
-// #0254 bounced on: the intake sweep's OrphanSweep call started out
-// unscoped, and its 20s sweep released live mail claims held by
-// OutboxWorker, producing a duplicate confirmation email mid-send. #0254's
-// fix scoped both live call sites, and its reviewer then enumerated every
-// call site by hand and confirmed none of the remaining ones were
-// dangerous — but that enumeration was a snapshot, not a standing
-// guarantee, and nothing stops the NEXT call site from forgetting. This
-// file is that standing guarantee.
+// claim_kinds_call_site_guard_test.go is #0281's guard, structurally
+// updated by #0303: nothing else in the compiler or the type system stops
+// a caller from invoking Store.ClaimDue, Store.OrphanSweep, or
+// Store.SelectDue with kinds that reach "no kinds" — and every one of
+// them implements that as "cardinality($n) = 0 OR kind = ANY(...)" — i.e.
+// EVERY kind, not none. That is exactly the omission #0254 bounced on:
+// the intake sweep's OrphanSweep call started out unscoped, and its 20s
+// sweep released live mail claims held by OutboxWorker, producing a
+// duplicate confirmation email mid-send. #0254's fix scoped both live
+// call sites, and its reviewer then enumerated every call site by hand
+// and confirmed none of the remaining ones were dangerous — but that
+// enumeration was a snapshot, not a standing guarantee, and nothing
+// stopped the NEXT call site from forgetting. This file is that standing
+// guarantee.
+//
+// #0303 changed WHAT counts as "no kinds": kinds is now a required
+// parameter (a plain []Kind, not variadic), so omitting the argument
+// entirely — #0254's original defect — is a compile error, not merely a
+// guard failure discovered later. Sweeping every kind is still possible
+// and still legitimate (this package's own tests exercise it, and it
+// remains the correct choice for some callers) but now has to be spelled
+// AllKinds (internal/outbox/store.go) — a named, deliberate act. This
+// file's job shifted accordingly: instead of watching for an omitted
+// argument, it watches for a kinds argument that reaches the same
+// dangerous default WITHOUT naming AllKinds — nil, or an empty slice
+// literal — a signature change and a guard are complementary, not
+// redundant (#0303 criterion 3): the signature stops the omission, this
+// guard stops a future overload, wrapper, or plain nil/empty-literal
+// call site from reintroducing it.
 //
 // # Why internal/outbox and not internal/handlers
 //
-// Store.ClaimDue and Store.OrphanSweep are this package's own methods, and
-// the unscoped default is legitimate and load-bearing WITHIN this
-// package's own tests (store_test.go exercises it deliberately, see e.g.
-// TestOutbox_ClaimDue_OnlyClaimsQueuedAndDue). The danger is specifically a
-// caller OUTSIDE this package forgetting to scope a call — so the guard
-// belongs where the methods are declared, scoping the RULE by caller
-// package rather than forbidding the variadic signature outright
+// Store.ClaimDue, Store.OrphanSweep, and Store.SelectDue are this
+// package's own methods, and the unscoped (AllKinds) default is
+// legitimate and load-bearing WITHIN this package's own tests
+// (store_test.go exercises it deliberately, see e.g.
+// TestOutbox_ClaimDue_OnlyClaimsQueuedAndDue). The danger is specifically
+// a caller OUTSIDE this package reaching that default without naming it —
+// so the guard belongs where the methods are declared, scoping the RULE
+// by caller package rather than forbidding the sentinel's use outright
 // (acceptance criterion 1).
 package outbox
 
@@ -50,61 +67,70 @@ var claimKindsGuardScanRoots = []string{"..", "../../cmd"}
 // #0275, which this mirrors at the granularity of "call sites found"
 // rather than "files visited" — the more direct measurement for THIS
 // guard, since a guard whose subject is "did we find any ClaimDue/
-// OrphanSweep calls" is not protected by a files-visited floor alone: the
-// walk could visit hundreds of files and still find zero matches if the
-// method-name check itself broke).
+// OrphanSweep/SelectDue calls" is not protected by a files-visited floor
+// alone: the walk could visit hundreds of files and still find zero
+// matches if the method-name check itself broke).
 //
 // Measured directly, not fitted (a temporary t.Logf counted allSites
 // before this comment was written, then was removed): a full scan over
-// claimKindsGuardScanRoots today finds 32 call sites named ClaimDue or
-// OrphanSweep in total — roughly 20 inside internal/outbox's own
-// store_test.go (deliberately exercising the unscoped default, excluded
-// from the VIOLATION check by inOwnPkg but still counted here, since they
-// are real evidence the scan reached this package) plus 12 outside it
-// (this package's own methods called from internal/handlers and
-// internal/mailing, and mailing.SendStore's unrelated same-named
-// OrphanSweep — see nameMatchesGuardedMethod's doc comment for why that
-// coincidence does not need resolving). 5 sits comfortably below that and
-// well above what a narrowing to any single file could produce (at most 3,
-// in internal/handlers/subscribe_intake.go or
-// internal/mailing/outbox_worker.go) — so a scan-roots regression that
-// prunes an entire package, not just one file, is what it takes to stay
-// above this floor while still being wrong.
+// claimKindsGuardScanRoots today finds 36 call sites named ClaimDue,
+// OrphanSweep, or SelectDue in total (#0303 re-measured after adding
+// SelectDue to nameMatchesGuardedMethod and adding
+// internal/outbox/select_due_claim_row_test.go, both landing after #0304
+// measured 32) — 24 inside internal/outbox's own tests (store_test.go
+// and select_due_claim_row_test.go, deliberately exercising the unscoped
+// AllKinds default, excluded from the VIOLATION check by inOwnPkg but
+// still counted here, since they are real evidence the scan reached this
+// package) plus 12 outside it (this package's own methods called from
+// internal/handlers and internal/mailing, and mailing.SendStore's
+// unrelated same-named OrphanSweep — see nameMatchesGuardedMethod's doc
+// comment for why that coincidence does not need resolving). 5 sits
+// comfortably below that and well above what a narrowing to any single
+// file could produce (at most 4, in
+// internal/handlers/subscribe_intake.go or
+// internal/mailing/outbox_worker.go, each of which now has one
+// OrphanSweep call plus one SelectDue call) — so a scan-roots regression
+// that prunes an entire package, not just one file, is what it takes to
+// stay above this floor while still being wrong.
 //
 // #0304: THIS FLOOR ONLY PROVES THE WALK REACHED *A* TREE, NOT THE RIGHT
-// ONE. 20 of the 32 sites it counts sit inside internal/outbox itself,
-// where every call is exempt from the VIOLATION check (inOwnPkg). #0304's
-// reviewer measured that narrowing claimKindsGuardScanRoots to []string{"."}
-// leaves this floor passing (23 sites, all inside internal/outbox, still
-// >= 5) while the walk never reaches a single caller outside the package —
-// zero of the population this guard exists to check. This floor still
-// earns its place (a genuinely empty or broken walk trips it), but it is
-// not sufficient alone; see claimKindsGuardMinPlausibleNonExemptCallSiteCount
-// below, which is.
+// ONE. 24 of the 36 sites it counts sit inside internal/outbox itself,
+// where every call is exempt from the VIOLATION check (inOwnPkg). A
+// narrowing of claimKindsGuardScanRoots to []string{"."} leaves this floor
+// passing (well above 5, every site inside internal/outbox) while the walk
+// never reaches a single caller outside the package — zero of the
+// population this guard exists to check
+// (TestNonExemptFloorCatchesScanRootsNarrowedToSelf, below, proves this
+// permanently). This floor still earns its place (a genuinely empty or
+// broken walk trips it), but it is not sufficient alone; see
+// claimKindsGuardMinPlausibleNonExemptCallSiteCount below, which is.
 //
-// #0323: this Go/AST count (32) is NOT the number
+// #0323: this Go/AST count (36) is NOT the number
 // scripts/go_file_visit_floor_guard_test.sh's external oracle measures for
 // the identical roots — that harness counts textually with grep rather
-// than parsing Go, and measures 35. This is expected and must stay this
-// way (do not "fix" it by making the oracle parse Go — its independence
-// from go/ast is the entire reason it can catch a regression in THIS
-// file's own parsing logic; CLAUDE.md §8, an oracle must not share its
-// method with its subject). The three extras all sit inside THIS file,
-// inside internal/outbox, so they inflate only the exempt side — the
-// NON-exempt count (12) agrees exactly between grep and go/ast, one for
-// one, because none of the extras is a non-exempt site. All three are the
-// textual-miscount class grep is prone to and go/ast correctly ignores:
-// one is inside nameMatchesGuardedMethod's own doc comment, which quotes
-// the guarded call syntax as prose while describing how that method's
-// population was grep-verified (deliberately NOT reproduced verbatim in
-// THIS sentence, so this paragraph does not become a fourth divergent site
-// of the exact class it is describing); the other two are inside
+// than parsing Go, and measures 42 (#0303 re-measured; #0323 measured 35
+// against 32 before SelectDue joined both the guard and the harness's own
+// pattern). This is expected and must stay this way (do not "fix" it by
+// making the oracle parse Go — its independence from go/ast is the entire
+// reason it can catch a regression in THIS file's own parsing logic;
+// CLAUDE.md §8, an oracle must not share its method with its subject).
+// The six extras all sit inside THIS file, inside internal/outbox, so
+// they inflate only the exempt side — the NON-exempt count (12) agrees
+// exactly between grep and go/ast, one for one, because none of the
+// extras is a non-exempt site. All six are the textual-miscount class
+// grep is prone to and go/ast correctly ignores: they are inside
 // TestClaimKindsGuardFiresOnFixtureWithNoKinds's raw-string fixtures
-// (fixtureSrc and scopedFixtureSrc) — syntactically real-looking Go text
-// living inside a Go string literal, which go/ast never parses as code
-// (they are handed to findOutboxCallSitesInFile as an in-memory `src`
-// argument, not discovered by walking the tree) and grep cannot tell apart
-// from a real call. The error direction is inflation, which only loosens
+// (#0303 added three new fixtures — nil, an empty slice literal, and the
+// AllKinds sentinel, the last containing two occurrences — alongside the
+// original two) — syntactically real-looking Go text living inside a Go
+// string literal, which go/ast never parses as code (they are handed to
+// findOutboxCallSitesInFile as an in-memory `src` argument, not
+// discovered by walking the tree) and grep cannot tell apart from a real
+// call. Deliberately not written as literal guarded-call-syntax prose in
+// THIS paragraph (unlike an earlier version of this comment, and of
+// nameMatchesGuardedMethod's) — doing so would make this paragraph a
+// seventh divergent site of the exact class it describes. The error
+// direction is inflation, which only loosens
 // outbox_floor_plausible's floor<=population upper bound and never
 // tightens it — nothing is under-protected by this gap. Also worth
 // knowing generally: grep -c counts matching LINES, not occurrences, so it
@@ -125,17 +151,26 @@ const claimKindsGuardMinPlausibleCallSiteCount = 5
 // Measured the same way as the floor above, from the same scan: 12 sites
 // outside internal/outbox today, broken down by PACKAGE rather than just
 // file, because #0322's review showed the file-level breakdown alone hides
-// the narrowing that matters most:
+// the narrowing that matters most. Re-measured for #0303 (which added
+// SelectDue to the guarded set): the count per package is UNCHANGED — each
+// of the two files that used to make one of its two outbox.Store calls
+// via the now-renamed selection method still makes exactly two calls, one
+// old-named and one new-named:
 //
-//	internal/handlers  5  (subscribe_intake.go x2, admin_dashboard_test.go
-//	                       x2, admin_pending_test.go x1)
-//	internal/mailing   7  (outbox_worker.go x2 — outbox.Store's,
-//	                       worker.go x1 and worker_store_test.go x3 —
-//	                       FOUR sites total, all mailing.SendStore's
-//	                       unrelated same-named OrphanSweep, counted
-//	                       here because nameMatchesGuardedMethod matches
-//	                       on name only, same as the total floor above —,
-//	                       outbox_worker_test.go x1 — outbox.Store's)
+//	internal/handlers  5  (subscribe_intake.go x2 — one OrphanSweep, one
+//	                       SelectDue, was one OrphanSweep + one ClaimDue
+//	                       before #0303 — admin_dashboard_test.go x2,
+//	                       admin_pending_test.go x1)
+//	internal/mailing   7  (outbox_worker.go x2 — outbox.Store's, one
+//	                       OrphanSweep + one SelectDue (was ClaimDue
+//	                       before #0303), worker.go x1 and
+//	                       worker_store_test.go x3 — FOUR sites total,
+//	                       all mailing.SendStore's unrelated same-named
+//	                       OrphanSweep, counted here because
+//	                       nameMatchesGuardedMethod matches on name only,
+//	                       same as the total floor above —,
+//	                       outbox_worker_test.go x1 — outbox.Store's
+//	                       ClaimDue, unchanged)
 //
 // #0304 first set this to 6 (>= population/2, mirroring #0300's file-count
 // margin) and its own review then measured which scan-roots narrowings
@@ -185,8 +220,9 @@ const claimKindsGuardMinPlausibleCallSiteCount = 5
 // The growth direction is not loud the same way, and is worth
 // recording for the same reason (measured in a throwaway worktree, not
 // asserted): narrow claimKindsGuardScanRoots to internal/mailing alone
-// and add one ordinary, correctly-scoped ClaimDue call inside
-// internal/mailing — nothing wrong with the call itself — and
+// and add one ordinary, correctly-scoped guarded-method call (ClaimDue,
+// OrphanSweep, or SelectDue) inside internal/mailing — nothing wrong
+// with the call itself — and
 // internal/mailing's own non-exempt count reaches 8, so the
 // mailing-only narrowing passes again with `go test` green, dropping
 // subscribe_intake.go exactly as before with nothing to signal it. So
@@ -224,46 +260,127 @@ const claimKindsGuardMinPlausibleCallSiteCount = 5
 // exactly that, permanently, against the real repo tree.
 const claimKindsGuardMinPlausibleNonExemptCallSiteCount = 8
 
-// outboxCallSite is one ClaimDue or OrphanSweep call site found by the
-// scan: its location, the method named, and how many arguments it passed
-// (the signal for whether kinds was omitted).
+// kindsArgShape classifies the syntactic shape of a guarded call's kinds
+// argument (#0303: ClaimDue/OrphanSweep/SelectDue's third, now-required
+// parameter — call.Args[2]).
+type kindsArgShape int
+
+const (
+	// kindsArgTooFewArgs means the call has fewer than three arguments —
+	// impossible for real code once kinds became a required parameter
+	// (that call site fails to compile, per #0303 criterion 5), but
+	// checked anyway for robustness against a hand-written fixture and
+	// treated the same as the old variadic shape's dangerous default.
+	kindsArgTooFewArgs kindsArgShape = iota
+	// kindsArgSentinel is the bare identifier AllKinds, or a qualified
+	// outbox.AllKinds from outside the package — the sanctioned, deliberate
+	// spelling of "every kind" (#0303).
+	kindsArgSentinel
+	// kindsArgUnnamedEmpty is `nil` or an empty slice composite literal
+	// (`[]Kind{}` / `[]outbox.Kind{}`) — reaches the IDENTICAL "every
+	// kind" SQL behavior as kindsArgSentinel (store.go's
+	// `cardinality($n) = 0` clause treats them the same), but without
+	// naming that as a deliberate act. This is the shape #0303 exists to
+	// flag: the same dangerous default the old variadic shape defaulted
+	// to, reached a different way now that omitting the argument entirely
+	// is a compile error.
+	kindsArgUnnamedEmpty
+	// kindsArgOther is anything else: a named variable, a non-empty slice
+	// literal, a function call, a spread of a named slice, or an argument
+	// belonging to an unrelated same-named method (see
+	// nameMatchesGuardedMethod's doc comment for the SendStore.OrphanSweep
+	// collision this classification cannot mistake for a kinds argument,
+	// because staleAfter's own expressions never happen to look like nil
+	// or an empty composite literal). Presumed scoped — this guard cannot
+	// prove a named variable is non-empty at compile time any more than
+	// the pre-#0303 variadic-count check could prove one was, which is
+	// the same "no marginal precision for real cost" limit
+	// nameMatchesGuardedMethod's own doc comment accepts elsewhere in this
+	// file.
+	kindsArgOther
+)
+
+// classifyKindsArg inspects args[2] — ClaimDue/OrphanSweep/SelectDue's
+// kinds parameter, post-#0303 — and returns its shape. Never resolves an
+// identifier's VALUE (that would need go/types), only its SYNTAX: the
+// bare token AllKinds/outbox.AllKinds is the only spelling this treats as
+// deliberate.
+func classifyKindsArg(args []ast.Expr) kindsArgShape {
+	if len(args) < 3 {
+		return kindsArgTooFewArgs
+	}
+	switch e := args[2].(type) {
+	case *ast.Ident:
+		switch e.Name {
+		case "nil":
+			return kindsArgUnnamedEmpty
+		case "AllKinds":
+			return kindsArgSentinel
+		}
+	case *ast.SelectorExpr:
+		if e.Sel.Name == "AllKinds" {
+			return kindsArgSentinel
+		}
+	case *ast.CompositeLit:
+		if len(e.Elts) == 0 {
+			return kindsArgUnnamedEmpty
+		}
+	}
+	return kindsArgOther
+}
+
+// outboxCallSite is one ClaimDue, OrphanSweep, or SelectDue call site
+// found by the scan: its location, the method named, how many arguments
+// it passed, and the classified shape of its kinds argument.
 type outboxCallSite struct {
 	file     string
 	line     int
 	method   string
 	argc     int
+	kindsArg kindsArgShape
 	inOwnPkg bool
 }
 
-// unscoped reports whether this call site omitted kinds entirely. Both
-// ClaimDue(ctx, limit int, kinds ...Kind) and OrphanSweep(ctx, staleAfter,
-// kinds ...Kind) take exactly two required arguments before the variadic
-// tail, so a two-argument call passed no kinds at all — the dangerous
-// "every kind" default. Three or more arguments means at least one Kind
-// was passed (individually or via a `kinds...` spread — both are exactly
-// one *ast.Expr per element syntactically, indistinguishable from a
-// non-spread argument by count alone, and both are the safe case this
-// guard has no reason to distinguish further).
-func (c outboxCallSite) unscoped() bool { return c.argc == 2 }
+// unscoped reports whether this call site's kinds argument reaches the
+// dangerous "every kind" default WITHOUT naming that as deliberate
+// (#0303) — either the argument is missing outright (kindsArgTooFewArgs,
+// the pre-#0303 shape, now a compile error in real code) or it is present
+// but spelled as nil / an empty slice literal instead of the AllKinds
+// sentinel (kindsArgUnnamedEmpty). kindsArgSentinel (AllKinds, spelled
+// out) and kindsArgOther (anything else — presumed to carry real Kind
+// values) are both scoped, by construction and by the guard's own
+// precision limits respectively — see kindsArgShape's own doc comment.
+func (c outboxCallSite) unscoped() bool {
+	return c.kindsArg == kindsArgTooFewArgs || c.kindsArg == kindsArgUnnamedEmpty
+}
 
 // nameMatchesGuardedMethod reports whether name is one this guard cares
-// about. internal/mailing.SendStore ALSO declares a method named
-// OrphanSweep (worker_store.go) with a completely different signature —
-// OrphanSweep(ctx, campaignID int64, staleAfter time.Duration), no
-// variadic kinds parameter at all, so a call to it always has exactly
-// three required arguments and can never satisfy unscoped() (argc==2).
-// This guard does not need to resolve which OrphanSweep a given call
-// targets (that would need go/types and a full import graph — rejected
-// for the same reason outbox_worker_kinds_guard_test.go's own doc comment
-// gives for a sibling guard: no marginal precision for real cost) because
-// the ONLY method name collision in this codebase happens to be safe by
-// construction: SendStore.OrphanSweep is never callable with kinds
-// omitted, since it has no kinds parameter to omit. Verified directly, not
-// assumed: grepped the whole tree for ".ClaimDue(" and ".OrphanSweep(" —
-// worker.go:575 and worker_store_test.go's three OrphanSweep calls are the
-// only non-outbox occurrences with argc==3, and none has argc==2.
+// about: ClaimDue, OrphanSweep, or SelectDue (#0297 added SelectDue
+// alongside the per-row claim path — see internal/outbox/store.go's own
+// doc comment — and it carries the identical unscoped-default risk, so
+// #0303 folded it into this guard rather than leaving it uncovered).
+// internal/mailing.SendStore ALSO declares a method named OrphanSweep
+// (worker_store.go) with a completely different signature —
+// OrphanSweep(ctx, campaignID int64, staleAfter time.Duration), no kinds
+// parameter of any kind — so a call to it always has exactly three
+// required arguments, matching this guard's own new argument-count
+// expectation, but its third argument is staleAfter (a time.Duration
+// expression), never a value that happens to spell nil or AllKinds or an
+// empty composite literal. This guard does not need to resolve which
+// OrphanSweep a given call targets (that would need go/types and a full
+// import graph — rejected for the same reason
+// outbox_worker_kinds_guard_test.go's own doc comment gives for a sibling
+// guard: no marginal precision for real cost) because the ONLY method
+// name collision in this codebase happens to be safe by construction:
+// every real SendStore.OrphanSweep call site in the tree passes a literal
+// duration, a named duration variable, or a signed duration expression as
+// its third argument — none of the AST shapes classifyKindsArg treats as
+// "no kinds" — verified directly, not assumed, by reading all four real
+// call sites (worker.go:625, worker_store_test.go's three) rather than by
+// re-deriving the same reasoning the pre-#0303 argc-based version of this
+// comment gave.
 func nameMatchesGuardedMethod(name string) bool {
-	return name == "ClaimDue" || name == "OrphanSweep"
+	return name == "ClaimDue" || name == "OrphanSweep" || name == "SelectDue"
 }
 
 // walkClaimKindsGuardFiles calls fn with the path of every .go file
@@ -339,6 +456,7 @@ func findOutboxCallSitesInFile(fset *token.FileSet, path string, src any, selfDi
 			line:     pos.Line,
 			method:   sel.Sel.Name,
 			argc:     len(call.Args),
+			kindsArg: classifyKindsArg(call.Args),
 			inOwnPkg: inOwnPkg,
 		})
 		return true
@@ -347,7 +465,7 @@ func findOutboxCallSitesInFile(fset *token.FileSet, path string, src any, selfDi
 }
 
 // TestNoUnscopedOutboxClaimCallOutsidePackage is #0281's guard proper: a
-// ClaimDue or OrphanSweep call OUTSIDE internal/outbox that passes no
+// ClaimDue, OrphanSweep, or SelectDue call OUTSIDE internal/outbox that passes no
 // kinds is exactly #0254's failure shape waiting to happen again — every
 // kind, claimed or swept, when the caller almost certainly meant one.
 //
@@ -391,11 +509,11 @@ func TestNoUnscopedOutboxClaimCallOutsidePackage(t *testing.T) {
 	// root set would report "no violations" for the wrong reason (nothing
 	// was ever examined) and this guard would look green while checking
 	// nothing, the exact #0275 failure mode. This floor alone proves only
-	// that the walk reached SOME tree containing ClaimDue/OrphanSweep
+	// that the walk reached SOME tree containing ClaimDue/OrphanSweep/SelectDue
 	// calls — see the const's own doc comment and #0304 below for why
 	// that is not the same as reaching the population this guard checks.
 	if len(allSites) < claimKindsGuardMinPlausibleCallSiteCount {
-		t.Fatalf("found only %d ClaimDue/OrphanSweep call site(s) under %v, want at least %d — the scan roots may have been narrowed or the method-name check broken, which would silently disarm this guard rather than fail it (#0275)",
+		t.Fatalf("found only %d ClaimDue/OrphanSweep/SelectDue call site(s) under %v, want at least %d — the scan roots may have been narrowed or the method-name check broken, which would silently disarm this guard rather than fail it (#0275)",
 			len(allSites), claimKindsGuardScanRoots, claimKindsGuardMinPlausibleCallSiteCount)
 	}
 
@@ -416,7 +534,7 @@ func TestNoUnscopedOutboxClaimCallOutsidePackage(t *testing.T) {
 		}
 	}
 	if nonExemptCount < claimKindsGuardMinPlausibleNonExemptCallSiteCount {
-		t.Fatalf("found only %d ClaimDue/OrphanSweep call site(s) OUTSIDE internal/outbox under %v (of %d total, the rest exempt as internal/outbox's own), want at least %d — the scan roots may have been narrowed to exclude every real caller while still finding internal/outbox's own exempt sites, which would silently disarm this guard's VIOLATION check rather than fail it (#0304, the same population-mismatch shape #0275 closed for the sibling guards)",
+		t.Fatalf("found only %d ClaimDue/OrphanSweep/SelectDue call site(s) OUTSIDE internal/outbox under %v (of %d total, the rest exempt as internal/outbox's own), want at least %d — the scan roots may have been narrowed to exclude every real caller while still finding internal/outbox's own exempt sites, which would silently disarm this guard's VIOLATION check rather than fail it (#0304, the same population-mismatch shape #0275 closed for the sibling guards)",
 			nonExemptCount, claimKindsGuardScanRoots, len(allSites), claimKindsGuardMinPlausibleNonExemptCallSiteCount)
 	}
 
@@ -434,22 +552,34 @@ func TestNoUnscopedOutboxClaimCallOutsidePackage(t *testing.T) {
 	}
 }
 
-// TestClaimKindsGuardFiresOnFixtureWithNoKinds is #0281 criterion 3: a
-// fixture call site with no kinds must fail the guard. This calls
-// findOutboxCallSitesInFile directly against an in-memory synthetic source
-// string — never written into any directory the real guard scans — so it
-// proves the DETECTION LOGIC fires on the dangerous shape, independent of
-// anything currently true about the real tree (CLAUDE.md §8: an oracle
-// must not be the same bytes as its subject — this fixture is hand-written
-// prose describing the dangerous call, not a copy of any of the four real
-// violations this issue found and fixed).
+// TestClaimKindsGuardFiresOnFixtureWithNoKinds is #0281 criterion 3 (kept
+// current for #0303's shape change): a fixture call site with no kinds
+// must fail the guard. This calls findOutboxCallSitesInFile directly
+// against in-memory synthetic source strings — never written into any
+// directory the real guard scans — so it proves the DETECTION LOGIC fires
+// on each dangerous shape, independent of anything currently true about
+// the real tree (CLAUDE.md §8: an oracle must not be the same bytes as
+// its subject — these fixtures are hand-written prose describing the
+// dangerous calls, not a copy of any real violation this or #0281 found
+// and fixed).
+//
+// #0303 changed what "no kinds" looks like in real code: omitting the
+// argument entirely is now a compile error (kindsArgTooFewArgs — kept as
+// a fixture below for robustness, since a hand-written or generated
+// source could still produce that shape even though nothing in this repo
+// compiles it), and the LIVE risk shifted to a caller writing `nil` or an
+// empty `[]Kind{}` literal instead of naming the AllKinds sentinel. Both
+// new shapes get their own fixture here, alongside the original.
 func TestClaimKindsGuardFiresOnFixtureWithNoKinds(t *testing.T) {
 	const fixtureSrc = `package fixture
 
 import "context"
 
 func sweepEverything(ctx context.Context, s *Store) {
-	// This call passes no kinds at all — the dangerous default.
+	// This call passes no kinds at all — the dangerous default, and
+	// (post-#0303) not even valid Go against the real signature; kept as
+	// a fixture for robustness against a hand-written source that still
+	// produces this shape.
 	_, _ = s.OrphanSweep(ctx, 0)
 }
 `
@@ -471,15 +601,93 @@ func sweepEverything(ctx context.Context, s *Store) {
 		t.Fatalf("findOutboxCallSitesInFile did not flag the fixture's unscoped OrphanSweep(ctx, 0) call as an outside-package violation: %+v", sites)
 	}
 
-	// Companion check: a SCOPED call in the same shape must NOT be
-	// flagged — otherwise this guard would fail every legitimate call
-	// site in the codebase, not just the dangerous one.
+	// #0303: the two NEW dangerous shapes — nil and an empty slice
+	// literal, spelled instead of the AllKinds sentinel — each real code
+	// CAN produce (unlike the arity-based fixture above, which no longer
+	// compiles).
+	const nilFixtureSrc = `package fixture
+
+import "context"
+
+func sweepEverythingViaNil(ctx context.Context, s *Store) {
+	_, _ = s.OrphanSweep(ctx, 0, nil)
+}
+`
+	nilSites, err := findOutboxCallSitesInFile(fset, "fixture_nil.go", nilFixtureSrc, "/nonexistent/self-dir")
+	if err != nil {
+		t.Fatalf("findOutboxCallSitesInFile (nil fixture): %v", err)
+	}
+	found = false
+	for _, site := range nilSites {
+		if site.unscoped() && !site.inOwnPkg {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("findOutboxCallSitesInFile did not flag the fixture's OrphanSweep(ctx, 0, nil) call as an outside-package violation: %+v", nilSites)
+	}
+
+	const emptyLiteralFixtureSrc = `package fixture
+
+import "context"
+
+func sweepEverythingViaEmptyLiteral(ctx context.Context, s *Store) {
+	_, _ = s.OrphanSweep(ctx, 0, []Kind{})
+}
+`
+	emptyLiteralSites, err := findOutboxCallSitesInFile(fset, "fixture_empty_literal.go", emptyLiteralFixtureSrc, "/nonexistent/self-dir")
+	if err != nil {
+		t.Fatalf("findOutboxCallSitesInFile (empty-literal fixture): %v", err)
+	}
+	found = false
+	for _, site := range emptyLiteralSites {
+		if site.unscoped() && !site.inOwnPkg {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("findOutboxCallSitesInFile did not flag the fixture's OrphanSweep(ctx, 0, []Kind{}) call as an outside-package violation: %+v", emptyLiteralSites)
+	}
+
+	// The sanctioned spelling — AllKinds, named — must NOT be flagged,
+	// even though it reaches the identical SQL behavior as the two shapes
+	// above. This is the entire point of #0303: the safe case is the one
+	// that requires spelling something out.
+	const sentinelFixtureSrc = `package fixture
+
+import "context"
+
+func sweepEverythingDeliberately(ctx context.Context, s *Store) {
+	_, _ = s.OrphanSweep(ctx, 0, AllKinds)
+}
+
+func sweepEverythingDeliberatelyQualified(ctx context.Context, s *outbox.Store) {
+	_, _ = s.OrphanSweep(ctx, 0, outbox.AllKinds)
+}
+`
+	sentinelSites, err := findOutboxCallSitesInFile(fset, "fixture_sentinel.go", sentinelFixtureSrc, "/nonexistent/self-dir")
+	if err != nil {
+		t.Fatalf("findOutboxCallSitesInFile (sentinel fixture): %v", err)
+	}
+	if len(sentinelSites) != 2 {
+		t.Fatalf("findOutboxCallSitesInFile (sentinel fixture) found %d site(s), want 2", len(sentinelSites))
+	}
+	for _, site := range sentinelSites {
+		if site.unscoped() {
+			t.Fatalf("AllKinds-sentinel fixture call was flagged as unscoped: %+v", site)
+		}
+	}
+
+	// Companion check: a SCOPED call — the realistic post-#0303 shape,
+	// kinds wrapped in a slice literal — must NOT be flagged either,
+	// otherwise this guard would fail every legitimate call site in the
+	// codebase, not just the dangerous ones.
 	const scopedFixtureSrc = `package fixture
 
 import "context"
 
 func sweepOneKind(ctx context.Context, s *Store) {
-	_, _ = s.OrphanSweep(ctx, 0, KindConfirmation)
+	_, _ = s.OrphanSweep(ctx, 0, []Kind{KindConfirmation})
 }
 `
 	scopedSites, err := findOutboxCallSitesInFile(fset, "fixture_scoped.go", scopedFixtureSrc, "/nonexistent/self-dir")
@@ -488,7 +696,7 @@ func sweepOneKind(ctx context.Context, s *Store) {
 	}
 	for _, site := range scopedSites {
 		if site.unscoped() {
-			t.Fatalf("scoped fixture call OrphanSweep(ctx, 0, KindConfirmation) was flagged as unscoped: %+v", site)
+			t.Fatalf("scoped fixture call OrphanSweep(ctx, 0, []Kind{KindConfirmation}) was flagged as unscoped: %+v", site)
 		}
 	}
 

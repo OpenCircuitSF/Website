@@ -227,7 +227,7 @@ func (h *SubscribeHandler) intakePass() (bool, error) {
 	// TestSubscribeIntakeWorker_OrphanSweepDoesNotTouchOtherKinds
 	// (subscribe_intake_test.go) for the regression proof.
 	sweepCtx, sweepCancel := context.WithTimeout(h.sendCtx, intakeRowTimeout)
-	swept, err := h.intake.OrphanSweep(sweepCtx, intakeOrphanStaleAfter, outbox.KindSubscribeIntake)
+	swept, err := h.intake.OrphanSweep(sweepCtx, intakeOrphanStaleAfter, []outbox.Kind{outbox.KindSubscribeIntake})
 	sweepCancel()
 	if err != nil {
 		return false, err
@@ -241,7 +241,7 @@ func (h *SubscribeHandler) intakePass() (bool, error) {
 	// reprocessing begins, so claimed_at reflects when THIS row's own work
 	// started rather than an earlier batch-wide stamp.
 	selectCtx, selectCancel := context.WithTimeout(h.sendCtx, intakeRowTimeout)
-	ids, err := h.intake.SelectDue(selectCtx, intakeBatchSize, outbox.KindSubscribeIntake)
+	ids, err := h.intake.SelectDue(selectCtx, intakeBatchSize, []outbox.Kind{outbox.KindSubscribeIntake})
 	selectCancel()
 	if err != nil {
 		return false, err

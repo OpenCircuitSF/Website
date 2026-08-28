@@ -33,7 +33,7 @@ func TestOutbox_SelectDue_LeavesRowsQueuedUntilClaimRow(t *testing.T) {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
-	ids, err := store.SelectDue(ctx, 10, kind)
+	ids, err := store.SelectDue(ctx, 10, []Kind{kind})
 	if err != nil {
 		t.Fatalf("SelectDue: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestOutbox_SelectThenClaimRow_CrashMidBatch(t *testing.T) {
 		ids = append(ids, id)
 	}
 
-	selected, err := store.SelectDue(ctx, 10, kind)
+	selected, err := store.SelectDue(ctx, 10, []Kind{kind})
 	if err != nil {
 		t.Fatalf("SelectDue: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestOutbox_SelectThenClaimRow_CrashMidBatch(t *testing.T) {
 
 	// The row still genuinely being "processed" — a generous staleAfter —
 	// must not be swept.
-	swept, err := store.OrphanSweep(ctx, time.Hour, kind)
+	swept, err := store.OrphanSweep(ctx, time.Hour, []Kind{kind})
 	if err != nil {
 		t.Fatalf("OrphanSweep (fresh claim, generous window): %v", err)
 	}
@@ -197,7 +197,7 @@ func TestOutbox_SelectThenClaimRow_CrashMidBatch(t *testing.T) {
 	// (simulating a real crash: the process that held it is now long
 	// gone), IS reclaimed — proving the mechanism actually protects only a
 	// genuinely live claim, not every claim unconditionally.
-	swept, err = store.OrphanSweep(ctx, 0, kind)
+	swept, err = store.OrphanSweep(ctx, 0, []Kind{kind})
 	if err != nil {
 		t.Fatalf("OrphanSweep (stale window): %v", err)
 	}
