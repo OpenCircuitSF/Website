@@ -459,7 +459,7 @@ case "$NONEXEMPT_POP" in '' | *[!0-9]*) fatal "count_outbox_call_sites returned 
 # outbox_floor_plausible <floor> <population> -- deliberately NOT
 # floor_plausible() above: that function's `floor >= population/2` margin
 # fits the handlers family's FILE-count populations, which are in the
-# hundreds -- today citedTestScanRootsMinPlausibleFileCount sits at
+# hundreds -- today, citedTestScanRootsMinPlausibleFileCount sits at
 # floor=150 against a re-measured population of 267 (#0300 measured 258
 # when it picked this margin; it drifts as the tree grows). At that scale
 # `population/2` gives real headroom before the margin itself needs

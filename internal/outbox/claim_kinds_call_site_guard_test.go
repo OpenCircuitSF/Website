@@ -129,12 +129,13 @@ const claimKindsGuardMinPlausibleCallSiteCount = 5
 //
 //	internal/handlers  5  (subscribe_intake.go x2, admin_dashboard_test.go
 //	                       x2, admin_pending_test.go x1)
-//	internal/mailing   7  (outbox_worker.go x2, worker.go x1,
-//	                       worker_store_test.go x3 — mailing.SendStore's
-//	                       unrelated same-named OrphanSweep, counted here
-//	                       because nameMatchesGuardedMethod matches on name
-//	                       only, same as the total floor above —,
-//	                       outbox_worker_test.go x1)
+//	internal/mailing   7  (outbox_worker.go x2 — outbox.Store's,
+//	                       worker.go x1 and worker_store_test.go x3 —
+//	                       FOUR sites total, all mailing.SendStore's
+//	                       unrelated same-named OrphanSweep, counted
+//	                       here because nameMatchesGuardedMethod matches
+//	                       on name only, same as the total floor above —,
+//	                       outbox_worker_test.go x1 — outbox.Store's)
 //
 // #0304 first set this to 6 (>= population/2, mirroring #0300's file-count
 // margin) and its own review then measured which scan-roots narrowings
@@ -160,16 +161,45 @@ const claimKindsGuardMinPlausibleCallSiteCount = 5
 // floor above its population makes the guard fail permanently even with
 // nothing wrong (the reason #0300's file-count floors came down from 150 to
 // 80 and from an earlier value to 150). At 8 against 12 there are 4 sites
-// of headroom — but 3 of the 12 are mailing.SendStore's unrelated
-// same-named OrphanSweep, counted only because this guard matches by
-// method name, not by declaring type (see nameMatchesGuardedMethod's doc
-// comment). A rename or removal of that unrelated method — plausible,
-// since it is a different signature on a different type that merely
-// shares a name — would drop the population to 9, leaving only 1 site of
-// headroom before 8 itself becomes unsatisfiable. That risk is accepted
-// here, not hidden: it is smaller than the risk 8 closes (a real,
-// reachable narrowing silently passing), and it is visible the moment it
-// happens, since `go test` fails loudly rather than silently underprotecting.
+// of headroom on paper — but FOUR of the 12, not three, are
+// mailing.SendStore's unrelated same-named OrphanSweep: worker.go:575's
+// call to it (through Worker.store, declared *SendStore) plus
+// worker_store_test.go's three, all counted
+// only because this guard matches by method name, not by declaring
+// type (see nameMatchesGuardedMethod's doc comment, which already had
+// this right). A rename or removal of that unrelated method —
+// plausible, since it is a different signature on a different type
+// that merely shares a name — would drop the population to 8, not 9,
+// leaving ZERO sites of headroom, not one: the floor would sit exactly
+// AT the population rather than one below it. Equivalently: 8 is
+// exactly the count of genuine, non-collision outbox call sites
+// outside this package today (internal/handlers' 5 plus
+// internal/mailing's 3 real outbox.Store calls — outbox_worker.go's
+// two and outbox_worker_test.go's one); this floor's entire margin is
+// currently supplied by that name collision, not by real slack. That
+// risk is accepted here, not hidden: it is smaller than the risk 8
+// closes (a real, reachable narrowing silently passing), and a shrink
+// is visible the moment it happens, since `go test` fails loudly
+// rather than silently underprotecting.
+//
+// The growth direction is not loud the same way, and is worth
+// recording for the same reason (measured in a throwaway worktree, not
+// asserted): narrow claimKindsGuardScanRoots to internal/mailing alone
+// and add one ordinary, correctly-scoped ClaimDue call inside
+// internal/mailing — nothing wrong with the call itself — and
+// internal/mailing's own non-exempt count reaches 8, so the
+// mailing-only narrowing passes again with `go test` green, dropping
+// subscribe_intake.go exactly as before with nothing to signal it. So
+// 8 protects against the mailing-only narrowing only while
+// internal/mailing holds exactly 7 non-exempt sites today; growing
+// that package's own legitimate call count by one silently reopens the
+// gap #0322 was filed to close. internal/mailing is the package most
+// likely to gain outbox callers, since it already owns OutboxWorker.
+// This is not a reason to reject 8 — it remains strictly better than
+// 6, which fails today rather than only after a hypothetical future
+// commit — but it sharpens criterion 4's point: the margin above is
+// pinned to a distribution that can change in either direction without
+// anything noticing on the growth side, only on the shrink side.
 //
 // A count-based floor cannot close this robustly in general, and that
 // limit is inherent, not a defect in the number chosen: any single integer
@@ -230,7 +260,7 @@ func (c outboxCallSite) unscoped() bool { return c.argc == 2 }
 // construction: SendStore.OrphanSweep is never callable with kinds
 // omitted, since it has no kinds parameter to omit. Verified directly, not
 // assumed: grepped the whole tree for ".ClaimDue(" and ".OrphanSweep(" —
-// worker.go:543 and worker_store_test.go's three OrphanSweep calls are the
+// worker.go:575 and worker_store_test.go's three OrphanSweep calls are the
 // only non-outbox occurrences with argc==3, and none has argc==2.
 func nameMatchesGuardedMethod(name string) bool {
 	return name == "ClaimDue" || name == "OrphanSweep"
