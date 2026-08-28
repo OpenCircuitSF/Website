@@ -342,6 +342,21 @@ function significantNodes(fragment: SvelteNode | undefined): SvelteNode[] {
 // (alertSites 61, statusSites 32 -- unchanged by this issue, which only
 // reclassifies WITHIN the in-branch role="status" sites; see the real-tree
 // test's own floor comments for those two.)
+//
+// #0307 fixed a latent, silent attribution bug in collectSites' EachBlock
+// arm: `fallback` (the {:else} empty-list fragment) fell through to the
+// generic walk carrying the OUTER governingBranch (or none, at top level,
+// making a role="status" there look fully unconditional and never checked
+// at all). The sibling sweep it asked for found the SAME shape, with no
+// special-casing at all rather than an explicit fall-through, in
+// AwaitBlock's pending/then/catch and KeyBlock's fragment -- both fixed the
+// same way. Zero real sites hit any of the three (checked via a scratch AST
+// scan, not assumed: `{#each...{:else}` with a live-region attribute, the
+// EachBlock else case, has no matches anywhere in web/src; `{#await}` does
+// not appear anywhere in the tree; the two real `{#key activeId}` blocks
+// each wrap only a child component, not a role="status"/"alert" element
+// directly), so filesScanned/alertSites/statusSites/loadingPlaceholders are
+// all UNCHANGED by this fix -- re-measured, not assumed.
 
 interface Site {
   file: string;
@@ -417,11 +432,53 @@ function collectSites(
       return;
     }
     if (obj.type === 'EachBlock') {
+      // #0307: `fallback` (the {:else} empty-list fragment) is ITS OWN
+      // governing branch, independent of `body` -- it mounts/unmounts on
+      // "is the list empty", not on whatever the each's own outer branch
+      // is. The old code walked only `body` explicitly here and let
+      // `fallback` fall through to the generic loop below, which walks
+      // every remaining key with the OUTER governingBranch that was passed
+      // into this EachBlock -- wrong-branch attribution in general, and at
+      // top level (no outer branch) it made a role="status" in an
+      // each-else look FULLY UNCONDITIONAL, so it was never checked at
+      // all. See the file header and #0307/#0306 for the fuller account;
+      // zero real sites hit this today (checked, not assumed -- see the
+      // re-derived counts in the real-tree test's own comment), so fixing
+      // it does not move any count.
       const body = obj.body as SvelteNode | undefined;
+      const fallback = obj.fallback as SvelteNode | undefined;
       walk(body, body, seen);
-      // EachBlock also carries an optional {:else} (empty-list) fragment,
-      // structurally irrelevant to live-region classification -- walked
-      // generically below via the fallthrough.
+      if (fallback) walk(fallback, fallback, seen);
+    }
+    // #0307 sibling sweep (criterion 2): {#if}'s `alternate` is ALREADY
+    // handled above with its own branch, no defect there. Two more block
+    // types had the identical fall-through shape and are fixed the same
+    // way, for the same reason -- neither had ANY branch handling before,
+    // so `pending`/`then`/`catch`/the {#key} fragment all fell through to
+    // the generic loop carrying the OUTER branch (or none, at top level):
+    if (obj.type === 'AwaitBlock') {
+      // `{#await p}{:then}{:catch}{/await}` -- pending/then/catch each
+      // mount and unmount independently of one another and of whatever
+      // encloses the {#await}. `{#await}` does not appear anywhere in
+      // web/src today (grepped), so this was latent, not live -- fixed
+      // anyway rather than left as a second known fall-through.
+      const pending = obj.pending as SvelteNode | undefined;
+      const thenFragment = obj.then as SvelteNode | undefined;
+      const catchFragment = obj.catch as SvelteNode | undefined;
+      if (pending) walk(pending, pending, seen);
+      if (thenFragment) walk(thenFragment, thenFragment, seen);
+      if (catchFragment) walk(catchFragment, catchFragment, seen);
+    }
+    if (obj.type === 'KeyBlock') {
+      // `{#key expr}...{/key}` destroys and recreates its whole fragment
+      // whenever `expr` changes -- a genuine mount/unmount boundary, the
+      // same shape this guard already tracks for {#if}/{#each}, but never
+      // given a governing branch at all. Two real {#key activeId} blocks
+      // exist (Workshops.svelte, Campaigns.svelte); both wrap only a child
+      // component, not a role="status"/"alert" element directly (checked
+      // via the same AST walk, not assumed), so this too was latent.
+      const fragment = obj.fragment as SvelteNode | undefined;
+      walk(fragment, fragment, seen);
     }
 
     if (obj.type === 'RegularElement') {
@@ -1236,6 +1293,108 @@ describe('checkFile (synthetic fixtures)', () => {
     const { violations, statusSites } = checkFile('fixture.svelte', src, scriptAst);
     expect(violations).toHaveLength(0);
     expect(statusSites).toHaveLength(1);
+  });
+
+  // #0307 criterion 3: proves collectSites' EachBlock arm attributes an
+  // {:else} (fallback) site to the EACH'S OWN branch, not the outer one it
+  // sits inside. findFocusTargetVar deliberately does not descend past a
+  // nested {#if}/{#each} (see its own doc comment) -- so if this site were
+  // still (mis-)attributed to the outer {#if outerFlag} branch, the scan
+  // for emptyHeading would hit the EachBlock boundary first and never find
+  // it, and this fixture would fail exactly the way the pre-fix code did.
+  it('#0307: attributes an {#each}\'s {:else} role="status" to the each\'s OWN branch -- a swap target sibling INSIDE the {:else} is found', () => {
+    const src = `<script>
+  let emptyHeading = $state(null);
+  async function onEmpty() {
+    await tick();
+    emptyHeading?.focus();
+  }
+</script>
+{#if outerFlag}
+  <div class="wrap">
+    {#each items as item}
+      <p>{item}</p>
+    {:else}
+      <h2 tabindex="-1" bind:this={emptyHeading}>No items</h2>
+      <p role="status">{emptyNotice}</p>
+    {/each}
+  </div>
+{/if}`;
+    const ast = parseSvelte(src, { filename: 'fixture.svelte', modern: true }) as unknown as SvelteNode;
+    const scriptAst = (ast.instance as SvelteNode | undefined)?.content as SvelteNode | undefined;
+    const { violations, statusSites } = checkFile('fixture.svelte', src, scriptAst);
+    expect(violations).toHaveLength(0);
+    expect(statusSites).toHaveLength(1);
+  });
+
+  // #0307 criterion 3's "violating one must fail" half -- same nested
+  // shape, but no swap target and no allowlist entry: must still flag.
+  it('#0307: a role="status" in an {#each}\'s {:else} with no swap target and dynamic text still violates (nested case)', () => {
+    const src = `{#if outerFlag}
+  {#each items as item}
+    <p>{item}</p>
+  {:else}
+    <p role="status">{emptyNotice}</p>
+  {/each}
+{/if}`;
+    const { violations, statusSites } = checkFile('fixture.svelte', src);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].reason).toContain('sits inside an {#if}/{:each} branch');
+    expect(statusSites).toHaveLength(0);
+  });
+
+  // #0307 criterion 4: the TOP-LEVEL case specifically -- no outer branch at
+  // all, so before this fix `fallback` fell through to the generic loop
+  // carrying governingBranch=undefined, making this site look fully
+  // unconditional (the guard's own "persistent node" exemption) and pass
+  // with 0 violations. This is the silent failure #0307 was filed to close,
+  // distinct from the merely-wrong-attribution case above.
+  it('#0307 criterion 4: a top-level {#each}\'s {:else} role="status" is checked, not silently treated as unconditional', () => {
+    const src = `{#each items as item}
+  <p>{item}</p>
+{:else}
+  <p role="status">{emptyNotice}</p>
+{/each}`;
+    const { violations, statusSites } = checkFile('fixture.svelte', src);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].reason).toContain('sits inside an {#if}/{:each} branch');
+    expect(statusSites).toHaveLength(0);
+  });
+
+  // #0307 criterion 2 (sibling sweep): {#await}'s then/catch had NO branch
+  // handling at all before this fix -- same silent-unconditional shape as
+  // the each-else case, just with zero special-casing rather than a
+  // fall-through past an explicit one. `{#await}` does not appear anywhere
+  // in web/src today (grepped while investigating this criterion), so this
+  // was latent, not live.
+  it('#0307 sibling sweep: a top-level {#await}/{:then} role="status" is checked, not silently unconditional', () => {
+    const src = `{#await p}
+  <p>loading</p>
+{:then val}
+  <p role="status">{val}</p>
+{:catch e}
+  <p role="alert">{e}</p>
+{/await}`;
+    const { violations, statusSites, alertSites } = checkFile('fixture.svelte', src);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].reason).toContain('sits inside an {#if}/{:each} branch');
+    expect(statusSites).toHaveLength(0);
+    expect(alertSites).toHaveLength(1); // role="alert" is fine regardless -- has content
+  });
+
+  // #0307 sibling sweep: {#key} was never given a governing branch at all.
+  // Two real {#key activeId} blocks exist (Workshops.svelte,
+  // Campaigns.svelte) but both wrap only a child component, not a
+  // role="status"/"alert" element directly (checked via the scratch AST
+  // scan used to derive this issue's report, not assumed) -- latent too.
+  it('#0307 sibling sweep: a top-level {#key} block\'s role="status" is checked, not silently unconditional', () => {
+    const src = `{#key k}
+  <p role="status">{val}</p>
+{/key}`;
+    const { violations, statusSites } = checkFile('fixture.svelte', src);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].reason).toContain('sits inside an {#if}/{:each} branch');
+    expect(statusSites).toHaveLength(0);
   });
 
   it('still flags a claimed swap when the focus target exists but nothing in <script> ever calls .focus() on it (vacuous binding)', () => {
