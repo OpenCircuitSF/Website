@@ -320,17 +320,59 @@ fi
 # #0304) carries two more floor consts of the EXACT same shape as the three
 # above: claimKindsGuardMinPlausibleCallSiteCount (the original, #0281) and
 # claimKindsGuardMinPlausibleNonExemptCallSiteCount (#0304's addition).
-# Setting either to 0 in the tracked file leaves internal/outbox's own `go
-# test` run green for the identical mathematical reason the header comment
-# above gives for the handlers floors: `got < 0` can never fire for a real,
-# non-negative count, so a `go test` run against a floor-zeroed mutation
-# alone stays green regardless of the real call-site count. #0304's own
-# acceptance criterion 5 asks whether its new floor belongs here instead of
-# becoming a second in-file check -- it does, for the same reason #0300
-# gives for the other three: every helper this needs (extract_const,
+#
+# WHICH FLOORS `go test` CAN AND CANNOT PIN (#0321, correcting a claim this
+# comment used to make -- "setting EITHER to 0 leaves go test green" -- that
+# #0304's own review measured to be only half true)
+#
+# Zeroing claimKindsGuardMinPlausibleCallSiteCount (the TOTAL floor) in the
+# tracked file DOES leave internal/outbox's own `go test` run green, for the
+# identical mathematical reason the header comment above gives for the
+# handlers floors: `got < 0` can never fire for a real, non-negative count.
+# THIS harness is that floor's only oracle.
+#
+# Zeroing claimKindsGuardMinPlausibleNonExemptCallSiteCount (the NON-EXEMPT
+# floor) does NOT leave `go test` green. #0304's own
+# TestNonExemptFloorCatchesScanRootsNarrowedToSelf, in
+# internal/outbox/claim_kinds_call_site_guard_test.go, permanently asserts
+# (unconditionally, not only when narrowing is applied) that nonExemptCount
+# does NOT satisfy claimKindsGuardMinPlausibleNonExemptCallSiteCount under a
+# {"."} scan-roots narrowing; with the floor forced to 0, that assertion
+# degenerates to the always-true "0 >= 0", which is exactly what its own
+# REGRESSION Fatalf exists to catch, and the standing `go test` run fails.
+# So the standing Go test already pins THIS floor against 0 -- a property of
+# that regression test's own construction, measured (not assumed) by
+# #0304's review, not a designed property of the floor.
+#
+# Neither picture generalizes past 0. Measured across all four combinations
+# (both floors x {0, 1}, real scan roots left intact): NEITHER oracle --
+# not `go test`, not this external harness -- rejects a floor of 1.
+# `outbox_floor_plausible` below only requires `0 < floor <= population`,
+# and `go test`'s own two floor checks are both `got < floor`, unfalsifiable
+# once floor is at or below the smallest real `got` either check will ever
+# see against the real tree.
+#
+# So this section's actual, non-redundant contribution for this family is
+# narrower than "catches any bad floor": for the non-exempt floor it is
+# exactly the single value 0 (redundant with the in-package regression
+# test); for the total floor it is the full `0 < floor <= population` range,
+# which has no in-package protection at all. What earns this section its
+# place regardless, per CLAUDE.md §8's remedy for "a guard inside the file
+# it guards becomes new mutable surface": that protection SURVIVES an edit
+# to the file it guards, which no in-file check -- including
+# TestNonExemptFloorCatchesScanRootsNarrowedToSelf itself -- can do by
+# construction. Zeroing a floor and disabling the in-package regression test
+# that happens to also catch it is a single-file edit; this harness lives in
+# a different file, recomputes its populations independently from source
+# text rather than trusting the guard's own parser, and is what
+# `scripts/check.sh guards` still catches if only
+# claim_kinds_call_site_guard_test.go was touched.
+#
+# #0304's own acceptance criterion 5 asks whether its new floor belongs here
+# instead of becoming a second in-file check -- it does, for the same reason
+# #0300 gives for the other three: every helper this needs (extract_const,
 # sha_of) already lives in this file, so a second script would just
-# duplicate them, and CLAUDE.md §8 is explicit that a guard living in the
-# file it protects is new mutable surface, not a second one.
+# duplicate them.
 #
 # #0304's OTHER proof -- that narrowing claimKindsGuardScanRoots to
 # []string{"."} makes the guard fail closed -- is intentionally NOT
@@ -388,16 +430,41 @@ case "$NONEXEMPT_POP" in '' | *[!0-9]*) fatal "count_outbox_call_sites returned 
 
 # outbox_floor_plausible <floor> <population> -- deliberately NOT
 # floor_plausible() above: that function's `floor >= population/2` margin
-# fits the handlers family's FILE-count populations (in the hundreds,
-# dominated by no single file). A call-site population is an order of
-# magnitude smaller and CAN be dominated by one file (#0304's own Go-side
-# comment measures the worst case at 3, in
-# internal/mailing/worker_store_test.go), so a floor near half the
-# population is not the right bar here. The bar that matters for THIS
-# family: greater than zero (closes the #0300/#0304 fail-open this section
-# exists for) and no greater than the real population (#0275's own failure
-# mode -- a floor raised above the true count, which fails the guard
-# permanently even with nothing wrong).
+# fits the handlers family's FILE-count populations, which are in the
+# hundreds -- today citedTestScanRootsMinPlausibleFileCount sits at
+# floor=150 against a re-measured population of 267 (#0300 measured 258
+# when it picked this margin; it drifts as the tree grows). At that scale
+# `population/2` gives real headroom before the margin itself needs
+# attention: by the same `floor >= population/2` arithmetic, that floor
+# does not fail until the population reaches roughly 302 -- on the order of
+# 35 files of growth, re-measured today (#0300 measured ~44 files of
+# headroom at the time, against the smaller population then; the number is
+# a moving target by design, not a constant to keep in sync).
+#
+# A call-site population is an order of magnitude smaller, so the identical
+# margin behaves completely differently here. #0304's own non-exempt floor
+# is 6 against a population of 12 -- exactly population/2 already -- so
+# reusing floor_plausible()'s margin verbatim would put this floor AT its
+# own failure boundary today, and it would trip after just TWO new
+# non-exempt call sites (population 12 -> 14 fails the identical
+# `floor >= population/2` check the handlers family relies on). That is not
+# "the tree grew enough to warrant a look"; it is "the next two ordinary
+# commits that add a caller." #0304's own comment previously justified the
+# weaker margin here by claiming the population "CAN be dominated by one
+# file (worst case 3, in internal/mailing/worker_store_test.go)" -- but 3 of
+# the 12 non-exempt sites this floor actually governs is 25%, not
+# domination; the population that genuinely is file-dominated (~20 of 32,
+# inside internal/outbox's own store_test.go) belongs to the TOTAL floor
+# above, not this one.
+#
+# So the bar that matters for THIS family is deliberately weaker than
+# floor_plausible()'s: greater than zero (closes the #0300/#0304 fail-open
+# this section exists for) and no greater than the real population (#0275's
+# own failure mode -- a floor raised above the true count, which fails the
+# guard permanently even with nothing wrong) -- WITHOUT floor_plausible()'s
+# additional `>= population/2` bound, because at call-site scale that bound
+# would make this family's margin flap on ordinary growth rather than catch
+# a real regression.
 outbox_floor_plausible() {
   local floor="$1" population="$2"
   [ "$floor" -gt 0 ] || return 1
