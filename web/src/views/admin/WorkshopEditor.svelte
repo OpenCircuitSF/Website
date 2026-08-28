@@ -445,6 +445,27 @@
           bind:value={fields.bodyMd}
           disabled={saving}
         ></textarea>
+        <!-- #0063/#0306: unconditionally rendered (empty when nothing to
+             announce), the same convention saveNotice/unsavedInterestsHint
+             already use below -- the SAME live-region node stays mounted for
+             as long as the main form itself is (governingBranch ==
+             {:else if workshop}), not created fresh by an inner
+             {#if previewOpen}/{#if hasPreviewContent}. This used to sit
+             INSIDE {:else if hasPreviewContent}, whose own branch held
+             nothing else of substance -- #0306's structural check on
+             KNOWN_STABLE_BRANCH_SITES measured that branch at a single
+             element and correctly refused to accept "large, stable,
+             multi-purpose branch" as a description of it (see that entry's
+             history in liveRegionGuard.structuralGuard.test.ts). Hoisted
+             here so the persistence claim is genuinely true of this site's
+             own nearest governing branch, not just of some branch further
+             out that the old comment described but this element didn't
+             actually sit in. -->
+        <p class="text-warn" role="status">
+          {previewOpen && hasPreviewContent && previewStale
+            ? "Showing the last saved version — your edits since then aren't included. Save to update the preview."
+            : ''}
+        </p>
         {#if previewOpen}
           <div class="body-preview" aria-label="Body preview">
             {#if previewLoading}
@@ -452,22 +473,6 @@
             {:else if previewError}
               <p class="text-error" role="alert">{previewError}</p>
             {:else if hasPreviewContent}
-              <!-- #0063: this <p> stays mounted for as long as hasPreviewContent
-                   is true (i.e. for the rest of this editing session, once a
-                   body has ever been saved) rather than being created fresh by
-                   an inner {#if previewStale}. A screen reader only reliably
-                   announces a role="status" update when it mutates the TEXT of
-                   an already-present live region -- a freshly-inserted element
-                   (this one used to be exactly that, appearing the instant
-                   previewStale flips true) is not consistently announced. This
-                   is the console-wide pattern #0063 decided on, applied here
-                   and at the other three sites the issue names (see
-                   issues/0063.md). -->
-              <p class="text-warn" role="status">
-                {previewStale
-                  ? "Showing the last saved version — your edits since then aren't included. Save to update the preview."
-                  : ''}
-              </p>
               <!-- eslint-disable-next-line svelte/no-at-html-tags -->
               {@html previewHtml}
             {:else}

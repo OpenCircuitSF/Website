@@ -275,6 +275,61 @@ function significantNodes(fragment: SvelteNode | undefined): SvelteNode[] {
   return nodes.filter((n) => n.type !== 'Comment' && !isWhitespaceOnlyText(n));
 }
 
+/** #0306: a structural proxy for "how large and multi-purpose is this
+ * governing branch" -- the count of RegularElement nodes ANYWHERE in its
+ * subtree, crossing into any further-nested {#if}/{#each}/{#await}/{#key}
+ * inside it (all of THEIR content still mounts/unmounts as one unit with
+ * the outer branch, so it counts toward "how much does entering this branch
+ * bring with it"). Used only to VALIDATE a KNOWN_STABLE_BRANCH_SITES entry's
+ * claim, never to gate scanning -- see the removal note on
+ * isGoverningBranchDynamic, just below, for why a boolean gate was wrong
+ * and #0286 removed it; this is the same underlying signal (branch size),
+ * reintroduced as a check on an ALREADY-matched allowlist entry instead.
+ * Deliberately does not count Component/HtmlTag/ExpressionTag nodes: a
+ * plain element count is a simple, auditable metric that does not need to
+ * model how "big" a child component or an {@html} blob might render at
+ * runtime -- see the threshold's own comment for why undercounting those is
+ * an argument for FIXING a site whose branch is otherwise small, not for
+ * inflating the metric to paper over it (#0306's WorkshopEditor.svelte
+ * fix). */
+function elementCountInSubtree(root: unknown, seen = new Set<unknown>()): number {
+  if (root === null || typeof root !== 'object') return 0;
+  if (seen.has(root)) return 0;
+  seen.add(root);
+  if (Array.isArray(root)) {
+    let n = 0;
+    for (const item of root) n += elementCountInSubtree(item, seen);
+    return n;
+  }
+  const obj = root as SvelteNode;
+  let count = obj.type === 'RegularElement' ? 1 : 0;
+  for (const key of Object.keys(obj)) {
+    if (key === 'parent') continue;
+    count += elementCountInSubtree(obj[key], seen);
+  }
+  return count;
+}
+
+/** #0306 criterion 3: the threshold a KNOWN_STABLE_BRANCH_SITES entry's own
+ * governing branch must clear, justified independently of what today's
+ * twelve entries happen to measure (criterion 2's own warning: a threshold
+ * picked to admit the current set is not a validation of it). The guard
+ * already has a concrete, real "small, single-purpose branch wrongly
+ * claiming legitimacy" shape on file: the #0286 fixture below (a status
+ * paragraph flanked by two empty sibling divs, `{:else}<div
+ * class="row-a"></div><p role="status">...</p><div class="row-b"></div>`)
+ * measures exactly 3 RegularElements, and is the guard's own canonical
+ * example of a branch that must NOT pass on stable-branch grounds. A real
+ * violation this check exists to catch looks exactly like that: a couple of
+ * trivial sibling elements around the live region, not genuinely
+ * independent content. 8 clears that decoy with more than double its size --
+ * real margin, not "one more than 3" -- while asking nothing close to what
+ * an actual multi-field settings tab or a whole editor form naturally
+ * contains (today's twelve entries range 11-156; see the real-tree test's
+ * own comment for the measured figures, kept there rather than here so this
+ * threshold's number is not read as derived from them). */
+const KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT = 8;
+
 // #0286 removed isGoverningBranchDynamic (the single-child-container-unwrap
 // classifier that used to live here) as no longer needed -- CLAUDE.md §8:
 // "the single-child unwrap is either removed as no longer needed or
@@ -357,6 +412,30 @@ function significantNodes(fragment: SvelteNode | undefined): SvelteNode[] {
 // each wrap only a child component, not a role="status"/"alert" element
 // directly), so filesScanned/alertSites/statusSites/loadingPlaceholders are
 // all UNCHANGED by this fix -- re-measured, not assumed.
+//
+// #0306 made the stable-branch hatch's "large, stable, multi-purpose
+// branch" claim structurally checked (elementCountInSubtree, just below,
+// against KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT) rather than trusted from
+// prose alone -- reintroducing the underlying signal #0286 removed as
+// isGoverningBranchDynamic, but as a validator of an ALREADY-matched
+// allowlist entry rather than a gate on whether scanning happens at all.
+// One of the twelve then-current entries did not clear the new bar on
+// measurement: WorkshopEditor.svelte's previewStale notice sat inside
+// {:else if hasPreviewContent}, a branch whose only other content was an
+// {@html} tag -- one RegularElement, nowhere close to "large". Fixed at the
+// site (hoisted to be a genuine, unconditional sibling directly in the main
+// form, matching saveNotice/unsavedInterestsHint's own placement) rather
+// than allowlisted-anyway or used to loosen the metric; see that entry and
+// KNOWN_STABLE_BRANCH_REASON_MAIN_FORM's own correction note for the fuller
+// account, including a prose comparison-clause error #0299 introduced that
+// this pass corrected under issues/Issues.md's correction convention. The
+// other eleven all cleared the bar non-trivially (measured range 11-156;
+// see the real-tree test's own comment for the up-to-date per-entry
+// figures) -- this promotes KNOWN_LOADING_PLACEHOLDERS to the guard's next
+// least-structurally-verified, load-bearing mechanism: its own "single-child
+// {#if}/{:each} branch whose sole content is this text" claim is still
+// validated only by the site's own isStaticOnly check plus a text match,
+// with nothing checking that the branch itself has no other content.
 
 interface Site {
   file: string;
@@ -787,14 +866,26 @@ const KNOWN_STABLE_BRANCH_REASON_TAB_PANEL_0299 = `${KNOWN_STABLE_BRANCH_REASON_
  * opened by an unrelated user action, several conditionals deeper in the
  * SAME large `{:else if workshop}` branch (the editor's whole main form,
  * which mounts once when the workshop record loads and stays mounted across
- * ordinary editing -- the same branch WorkshopEditor's "Rendering preview…"
- * and previewStale entries above already rest on). Both sites are
- * unconditionally rendered themselves (no OWN {#if}), so what actually makes
- * them sound is that stable, multi-purpose branch, not transitionModalEl's
- * unrelated focus move -- the tightened findFocusTargetVar (see its own doc
- * comment) no longer credits the latter. */
+ * ordinary editing). Both sites are unconditionally rendered themselves (no
+ * OWN {#if}), so what actually makes them sound is that stable, multi-purpose
+ * branch, not transitionModalEl's unrelated focus move -- the tightened
+ * findFocusTargetVar (see its own doc comment) no longer credits the latter.
+ *
+ * **Correction (#0306, 2026-08-27).** This comment used to also claim
+ * WorkshopEditor's "Rendering preview…"/previewStale entries "already rest
+ * on" this same branch. Measured, neither did at the time: "Rendering
+ * preview…" is a KNOWN_LOADING_PLACEHOLDERS entry (a different mechanism) in
+ * the smaller {:else if previewLoading} branch, never a real peer of this
+ * set; previewStale's own {:else if hasPreviewContent} branch measured a
+ * single element -- #0306's structural check on KNOWN_STABLE_BRANCH_SITES
+ * correctly refused to call that "large, multi-purpose". #0306 relocated
+ * previewStale's element to genuinely sit in this SAME {:else if workshop}
+ * branch (see its own entry below), so it now IS a real peer of
+ * saveNotice/unsavedInterestsHint; "Rendering preview…" still is not and the
+ * comparison was removed rather than corrected into truth for a site this
+ * reason doesn't govern. */
 const KNOWN_STABLE_BRANCH_REASON_MAIN_FORM =
-  "Unconditionally rendered itself (not wrapped in its OWN {#if}) inside the editor's main form ({:else if workshop}), which mounts once when the workshop record loads and stays mounted across ordinary editing -- the same stable branch this file's \"Rendering preview…\"/previewStale entries above already rest on. Previously mis-credited (#0299) to transitionModalEl, a status-change dialog's own focus target several conditionals deeper behind its OWN {#if transitionOpen} -- an unrelated dialog, not evidence about this branch's own mount. Persistence within the stable main-form branch is the real, sufficient argument.";
+  "Unconditionally rendered itself (not wrapped in its OWN {#if}) inside the editor's main form ({:else if workshop}), which mounts once when the workshop record loads and stays mounted across ordinary editing -- ~~the same stable branch this file's \"Rendering preview…\"/previewStale entries above already rest on~~ **corrected 2026-08-27 (#0306): measured, neither actually rested there at the time this was written. \"Rendering preview…\" is a KNOWN_LOADING_PLACEHOLDERS entry in the smaller {:else if previewLoading} branch, a different mechanism and never a real peer of this set. previewStale sat in the small, single-element {:else if hasPreviewContent} branch, which #0306's structural check on this set correctly refused to call \"large, multi-purpose\" -- #0306 relocated previewStale's own element to this SAME {:else if workshop} branch, so it is now a genuine peer of saveNotice/unsavedInterestsHint (see its own entry below); \"Rendering preview…\" still is not.** Previously mis-credited (#0299) to transitionModalEl, a status-change dialog's own focus target several conditionals deeper behind its OWN {#if transitionOpen} -- an unrelated dialog, not evidence about this branch's own mount. Persistence within the stable main-form branch is the real, sufficient argument.";
 
 const KNOWN_STABLE_BRANCH_SITES: AllowlistEntry[] = [
   {
@@ -851,9 +942,8 @@ const KNOWN_STABLE_BRANCH_SITES: AllowlistEntry[] = [
   {
     file: 'web/src/views/admin/WorkshopEditor.svelte',
     match:
-      "<p class=\"text-warn\" role=\"status\">\n                {previewStale\n                  ? \"Showing the last saved version — your edits since then aren't included. Save to update the preview.\"\n                  : ''}\n              </p>",
-    reason:
-      "Unconditionally rendered (not wrapped in its own {#if previewStale} -- only its TEXT is a ternary) inside the editor's main form, which mounts once when the workshop record loads and stays mounted across ordinary editing. Its own doc comment already argues this at length (#0063): this <p> stays mounted for as long as hasPreviewContent is true rather than being created fresh by an inner {#if previewStale}.",
+      "<p class=\"text-warn\" role=\"status\">\n          {previewOpen && hasPreviewContent && previewStale\n            ? \"Showing the last saved version — your edits since then aren't included. Save to update the preview.\"\n            : ''}\n        </p>",
+    reason: `${KNOWN_STABLE_BRANCH_REASON_MAIN_FORM} #0306: this element used to sit inside {:else if hasPreviewContent}, a branch whose only other content was an {@html} tag -- measured at a single RegularElement, #0306's structural check correctly refused to accept that as "large, multi-purpose". Hoisted out to be an unconditional sibling directly in the main form (its condition folds in "previewOpen && hasPreviewContent" explicitly, since it is no longer implicitly inside either), matching saveNotice/unsavedInterestsHint's own placement exactly rather than merely being described as sharing their branch.`,
   },
   {
     file: 'web/src/views/admin/WorkshopEditor.svelte',
@@ -1052,7 +1142,22 @@ function checkFile(
     const stableBranchEntry = findAllowlistEntry(stableBranchAllowlist, site.file, site.rawSource);
     if (stableBranchEntry) {
       usedStableBranchEntries.add(stableBranchEntry);
-      statusSites.push(site); // named, justified: own presence doesn't govern the branch
+      // #0306: the entry MATCHED (it names a real site), but matching is not
+      // the same as the claim being TRUE -- validate the branch it names
+      // actually measures as large/multi-purpose, rather than trusting the
+      // prose. A structurally-too-small branch still counts as "used" (it is
+      // not a STALE entry -- it named a real site), but is a separate,
+      // distinct violation: the allowlisting itself is not justified.
+      const branchSize = elementCountInSubtree(site.governingBranch);
+      if (branchSize < KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT) {
+        violations.push({
+          file: site.file,
+          line: site.line,
+          reason: `KNOWN_STABLE_BRANCH_SITES entry match=${JSON.stringify(site.rawSource).slice(0, 80)} claims a "large, multi-purpose" governing branch, but that branch measures only ${branchSize} element(s) (< ${KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT}) -- not structurally supported (#0306)`,
+        });
+        continue;
+      }
+      statusSites.push(site); // named, justified, AND structurally validated
       continue;
     }
 
@@ -1149,6 +1254,34 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
     expect(alertSites.length).toBeGreaterThanOrEqual(61);
     expect(statusSites.length).toBeGreaterThanOrEqual(32);
     expect(loadingPlaceholders.length).toBeGreaterThanOrEqual(20);
+
+    // #0306 criterion 2/6: elementCountInSubtree measured against every
+    // then-current KNOWN_STABLE_BRANCH_SITES entry's actual governing
+    // branch (via a temporary console.log in this loop, since checkFile
+    // does not return per-entry sizes -- removed after measuring, per
+    // CLAUDE.md §8's "prove it, don't leave it running" spirit), file
+    // order matching the array above:
+    //
+    //   Admin.svelte settingsNotice              14
+    //   Admin.svelte addressNotice                14
+    //   Admin.svelte newSlugInvalid hint           57
+    //   Admin.svelte createSubNotice              156
+    //   Admin.svelte CSV-import notice            156
+    //   PreferenceCenter.svelte saveError          19
+    //   PreferenceCenter.svelte saveMessage        19
+    //   PreferenceCenter.svelte unsubscribeError   19
+    //   Pending.svelte resendNotice                11
+    //   WorkshopEditor.svelte previewStale         78  (was 1 before #0306's fix)
+    //   WorkshopEditor.svelte saveNotice           78
+    //   WorkshopEditor.svelte unsavedInterestsHint 78
+    //
+    // All twelve clear KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT (8)
+    // non-trivially -- the smallest margin is Pending.svelte's 11 (3 clear,
+    // 37.5% above the floor), not a knife-edge fit. previewStale is the one
+    // entry that did NOT clear it before #0306 (measured 1, an order of
+    // magnitude under the floor) and was fixed at the site rather than
+    // allowlisted past the check; see this file's header and that entry's
+    // own reason for the account.
   });
 });
 
@@ -1185,17 +1318,19 @@ describe('checkFile (synthetic fixtures)', () => {
     expect(statusSites).toHaveLength(0);
   });
 
-  // Same shape, but now WITH a stable-branch allowlist entry naming this
-  // exact site's raw source -- proves the escape hatch itself works, and
-  // (CLAUDE.md §8) that its oracle isn't just "any non-empty entry": a
-  // stale/mismatched match still fails (proved separately, #0280-style,
+  // Same shape, now WITH a stable-branch allowlist entry naming this exact
+  // site's raw source -- proves the escape hatch's MATCHING mechanism works
+  // (CLAUDE.md §8: its oracle isn't just "any non-empty entry" -- a
+  // stale/mismatched match still fails, proved separately, #0280-style,
   // below), matching the settingsNotice/audience-count shape #0242's now-
   // removed single-child unwrap used to infer structurally instead.
-  it('#0286: does not flag the same forked-branch role="status" node once it is named in KNOWN_STABLE_BRANCH_SITES', () => {
+  it('#0286: does not flag the same forked-branch role="status" node once it is named in KNOWN_STABLE_BRANCH_SITES -- with a genuinely large governing branch', () => {
     const src = `{#if x}<p>other</p>{:else}
-      <div class="row-a"></div>
+      <div class="row-a"><h2>H</h2></div>
+      <div class="row-b"><span>1</span><span>2</span></div>
+      <div class="row-c"><button>Go</button></div>
       <p role="status">{notice ?? ''}</p>
-      <div class="row-b"></div>
+      <div class="row-d"></div>
     {/if}`;
     const stable: AllowlistEntry[] = [
       { file: 'fixture.svelte', match: `<p role="status">{notice ?? ''}</p>`, reason: 'settingsNotice/audience-count-shaped: this element is not what makes the {:else} branch mount or unmount.' },
@@ -1203,6 +1338,31 @@ describe('checkFile (synthetic fixtures)', () => {
     const { violations, statusSites } = checkFile('fixture.svelte', src, undefined, undefined, undefined, stable);
     expect(violations).toHaveLength(0);
     expect(statusSites).toHaveLength(1);
+  });
+
+  // #0306 criterion 4: the SAME forked shape, but a TINY branch (3
+  // RegularElements -- well under KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT) --
+  // an allowlist entry naming this exact site must NOT be enough on its own
+  // anymore. Before #0306, this was the fixture directly above (it used to
+  // assert 0 violations); #0306's whole point is that matching alone was
+  // never sufficient evidence, so this is now a fixture proving the
+  // structural check has real teeth, not just a renamed positive case.
+  it('#0306: a KNOWN_STABLE_BRANCH_SITES entry naming a real site does NOT pass when its governing branch is small (single-purpose), even though it matched', () => {
+    const src = `{#if x}<p>other</p>{:else}
+      <div class="row-a"></div>
+      <p role="status">{notice ?? ''}</p>
+      <div class="row-b"></div>
+    {/if}`;
+    const stable: AllowlistEntry[] = [
+      { file: 'fixture.svelte', match: `<p role="status">{notice ?? ''}</p>`, reason: 'a real, non-empty reason -- but the branch it names is small' },
+    ];
+    const { violations, statusSites } = checkFile('fixture.svelte', src, undefined, undefined, undefined, stable);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].reason).toContain('not structurally supported');
+    expect(statusSites).toHaveLength(0);
+    // Not reported as STALE -- it matched a real site; the violation is
+    // specifically that the match's claim doesn't hold up structurally.
+    expect(violations[0].reason).not.toContain('stale allowlist entry');
   });
 
   it('recognizes a self-bound whole-panel-swap notice (the Login.svelte registerSentNotice shape)', () => {
