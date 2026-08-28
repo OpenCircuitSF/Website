@@ -320,3 +320,223 @@ func (c countingWorkshopSource) WorkshopBySlug(slug string) (seo.Workshop, bool,
 func (c countingWorkshopSource) Workshops() ([]seo.Workshop, error) {
 	return c.inner.Workshops()
 }
+
+// TestMountAndServe_CampaignArchiveMutationInvalidatesSharedSEOSite is
+// #0319's binding proof, modelled directly on
+// TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite above (#0054's
+// Ruling 1, restated by #0319's review after a first pass shipped only a
+// counting-fake proof inside internal/handlers -- see
+// admin_campaign_archive_test.go's TestAdminCampaignArchive_Patch_InvalidatesSEOCaches,
+// which is a real and separate test but proves only that
+// InvalidateWorkshops gets CALLED, never that the object it's called on is
+// the one anything actually reads from). This test runs the real production
+// wiring shape (buildSEOSite with the real campaignArchiveSEOSource adapter
+// -> the SAME *seo.Site handed to both NewAdminCampaignArchiveHandler and
+// mountAndServe) through a real HTTP listener, exactly as
+// TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite does for
+// workshops.
+//
+// How this test was confirmed to actually fail on broken wiring (not just
+// pass on correct wiring, which proves nothing on its own): run once with
+// adminCampaignArchiveH constructed with a nil invalidator (mirroring a
+// literal nil at a call site, as admin_wiring_test.go and
+// worker_wiring_test.go already pass for their own fixtures) -- the
+// post-withhold GET /sitemap.xml below then still lists the withheld
+// campaign's archive URL, and the test fails at that assertion. Run again
+// with mountAndServe handed a SEPARATE *seo.Site (via buildSEOSite called a
+// second time) instead of the one passed to NewAdminCampaignArchiveHandler
+// -- the mutation invalidates a cache nothing reads from, and the same
+// assertion fails the same way. Both were exercised against commit
+// b575867 checked out into a throwaway detached worktree, never the shared
+// tree; see issues/0319.md's Review notes for the transcript.
+//
+// Scope note, carried from #0054 and reaffirmed by #0319's review: this test
+// rebuilds the production wiring shape BY HAND inside the test body --
+// constructing its own site/adminCampaignArchiveH and calling mountAndServe
+// directly -- rather than exercising servePostgres itself. It proves the
+// seam works when the same *seo.Site is threaded to both call sites, but it
+// does not pin servePostgres's own wiring: a future edit that reintroduced a
+// literal nil or a second buildSEOSite call inside main.go's servePostgres
+// would not be caught here. That gap is common to all three call sites
+// (workshops, campaign archive, the send worker) and #0319's review tracked
+// it as #0326 rather than reopening it here. Likewise, the send worker's own
+// completion-path invalidation is proved at TestWorker_CompleteIfDone_InvalidatesArchiveCache
+// (internal/mailing/worker_test.go), not here -- Worker.archiveCache is
+// unexported and the worker cannot be driven from this package's wiring
+// tests.
+func TestMountAndServe_CampaignArchiveMutationInvalidatesSharedSEOSite(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), wiringDBConnectTimeout)
+	defer cancel()
+
+	pool, err := db.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	registerWiringTest(t)
+	t.Cleanup(func() {
+		truncateAdminWiringTables(t, pool)
+		pool.Close()
+	})
+	truncateAdminWiringTables(t, pool)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close probe listener: %v", err)
+	}
+
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	cfg := &config.Config{
+		Port:             port,
+		BaseURL:          baseURL,
+		WebAuthnRPID:     "localhost",
+		WebAuthnRPOrigin: baseURL,
+	}
+
+	store := auth.NewStore(pool)
+	auditLogger := audit.New(pool)
+	campaignsStore := mailing.NewCampaignStore(pool)
+
+	// The production shape (#0319, mirroring #0054 for workshops): the SAME
+	// *seo.Site is handed to AdminCampaignArchiveHandler as its invalidator
+	// AND to mountAndServe below, with the real campaignArchiveSEOSource
+	// adapter (not a fake) as the sitemap's archive data source. No
+	// WorkshopSource is exercised by this test, so nil for that argument --
+	// mirroring the workshop test's own nil for the archive argument.
+	site, err := buildSEOSite(cfg, nil, campaignArchiveSEOSource{store: campaignsStore})
+	if err != nil {
+		t.Fatalf("build seo site: %v", err)
+	}
+	adminCampaignArchiveH := handlers.NewAdminCampaignArchiveHandler(campaignsStore, auditLogger, site)
+
+	requireSession := middleware.RequireSession(store)
+	requireAdmin := func(next http.Handler) http.Handler {
+		return requireSession(middleware.RequireAdmin(next))
+	}
+
+	adminID := seedAdminWiringUser(t, pool, fmt.Sprintf("archive-seo-wiring-admin-%d@example.com", testdb.Unique()), true)
+	seedAdminWiringSession(t, pool, adminID, "archive-seo-wiring-admin-token")
+
+	errCh := make(chan error, 1)
+	ready := make(chan struct{})
+	go func() {
+		errCh <- mountAndServe(cfg, pool,
+			nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
+			nil, /* adminSubscribersH: not exercised by this test */
+			nil, /* adminImportsH: not exercised */
+			nil, /* adminPendingH: not exercised by this test */
+			nil, /* adminSuppressionsH: not exercised by this test */
+			nil, /* adminDeliverabilityH: not exercised by this test */
+			nil, /* adminCampaignsH: not exercised by this test */
+			nil, /* adminCampaignAudienceH: not exercised by this test */
+			nil, /* adminCampaignPreviewH: not exercised by this test */
+			nil, /* adminCampaignPreflightH: not exercised by this test */
+			nil, /* adminCampaignStatsH: not exercised by this test */
+			adminCampaignArchiveH,
+			nil,           /* adminWorkshopsH: not exercised by this test */
+			nil,           /* adminDashboardH: not exercised by this test */
+			nil, nil, nil, /* eventsH, meH, subscribeH: not exercised by this test */
+			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
+			nil, nil, /* publicWorkshopsH, publicListStatsH: not exercised by this test */
+			nil, /* publicArchiveH: not exercised by this test -- this test hits the sitemap route, not the JSON API */
+			nil, /* sesNotifyH: not exercised by this test */
+			nil, /* sendWorker: not exercised by this test */
+			nil, /* outboxWorker: not exercised */
+			site,
+			requireSession, requireAdmin, nil, ready)
+	}()
+
+	client := &http.Client{Timeout: wiringHTTPTimeout}
+	waitForHealthy(t, client, baseURL, errCh, ready)
+
+	// Seed a campaign already sent + published through the real store, then
+	// force it to that state via SQL the same way
+	// admin_campaign_archive_test.go's seedAdminArchiveCampaign does --
+	// #0045's send worker is the only production path that reaches
+	// 'sent'/'published' (via CompleteIfDone), and this test is at the
+	// handler/wiring layer, not the worker's (that path is
+	// TestWorker_CompleteIfDone_InvalidatesArchiveCache, per the scope note
+	// above). Never a literal/seeded id (CLAUDE.md §8b) -- a fresh row via
+	// the real store, cleaned up in t.Cleanup.
+	subject := fmt.Sprintf("SEO Wiring Archive Campaign %d", testdb.Unique())
+	created, err := campaignsStore.Create(context.Background(), mailing.CampaignInput{
+		Name: subject, Subject: subject, BodyMD: "body", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	slug := created.Slug
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM email_campaigns WHERE id = $1`, created.ID)
+	})
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE email_campaigns SET status = $2, archive_status = $3, archived_at = now() WHERE id = $1`,
+		created.ID, mailing.CampaignStatusSent, mailing.ArchiveStatusPublished,
+	); err != nil {
+		t.Fatalf("force campaign %d to sent/published: %v", created.ID, err)
+	}
+
+	getBody := func(t *testing.T, path string) string {
+		t.Helper()
+		resp, err := client.Get(baseURL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("GET %s: read body: %v", path, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: status=%d", path, resp.StatusCode)
+		}
+		return string(body)
+	}
+
+	archiveURL := "/archive/" + slug
+
+	// Prime the sitemap cache and confirm the published campaign is there.
+	sitemapBody := getBody(t, "/sitemap.xml")
+	if !strings.Contains(sitemapBody, archiveURL) {
+		t.Fatalf("sitemap.xml missing published campaign %s right after seeding:\n%s", archiveURL, sitemapBody)
+	}
+
+	// Withhold it through AdminCampaignArchiveHandler over the real mux --
+	// this is the call this whole test exists to prove reaches the SAME
+	// *seo.Site the sitemap route above just read from.
+	adminCookie := &http.Cookie{Name: auth.SessionCookieName, Value: "archive-seo-wiring-admin-token"}
+	req, err := http.NewRequest(http.MethodPatch, fmt.Sprintf("%s/admin/campaigns/%d/archive", baseURL, created.ID), strings.NewReader(`{"status":"withheld"}`))
+	if err != nil {
+		t.Fatalf("build PATCH request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(adminCookie)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH /admin/campaigns/%d/archive: %v", created.ID, err)
+	}
+	patchBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH /admin/campaigns/%d/archive: status=%d body=%s", created.ID, resp.StatusCode, patchBody)
+	}
+
+	// #0319's criterion 4: the sitemap must reflect the withhold
+	// IMMEDIATELY, well inside defaultCacheTTL (60s) -- not after it
+	// expires. If the invalidator handed to AdminCampaignArchiveHandler is
+	// not the SAME *seo.Site instance mountAndServe mounted at
+	// GET /sitemap.xml, this GET keeps serving the stale, pre-withhold
+	// sitemap and the assertion below fails.
+	sitemapAfterWithhold := getBody(t, "/sitemap.xml")
+	if strings.Contains(sitemapAfterWithhold, archiveURL) {
+		t.Fatalf("sitemap.xml still lists withheld campaign %s -- the invalidator and the site the sitemap route reads from are not the same instance:\n%s", archiveURL, sitemapAfterWithhold)
+	}
+}
