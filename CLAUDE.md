@@ -391,6 +391,17 @@ contend at all. `scripts/testdb.sh` clones a fully-migrated template database in
 - **`-count=2` and higher are banned for flake-hunting.** A test that fails only
   under concurrent agent load is not flaky; the machine is busy. Re-running it
   N times just multiplies the load that caused it.
+- **Kill what you start — and `pkill -f` cannot tell what you started.** The
+  pattern is the shared one, so it matches every agent's processes. Record the
+  pids you start and kill those by pid, or resolve each `pgrep` hit with
+  `ps -o pid,ppid,command` and confirm it descends from your own shell before
+  signalling it. **A cleanup that reaches past its owner is indistinguishable
+  from the failure it was meant to clean up.** This happened twice in one
+  session: one agent nearly killed another's `go test` from `check.sh`'s
+  leftover listing, and one stray `pkill` orphaned another agent's `dev.sh`/vite
+  pair, leaving `:5173` bound and failing an unrelated run. The shape is
+  cleanup scoped by **pattern** rather than by **ownership** — the same shape as
+  the `git stash` and pathspec entries in §8a.
 - **Kill what you start.** Before finishing, `pgrep -f 'go test|\.test '` and
   clean up your own processes. Drop any scratch database you created (§8b) —
   `scripts/check.sh` does this for you on exit, and `scripts/testdb.sh drop
@@ -777,16 +788,28 @@ recovered with a second commit removing precisely the swept-in hunks, verifying
 the working tree byte-identical to its pre-mistake state. Nothing was lost, and
 only because it checked the size rather than the exit code.
 
-**So in a tree other agents are editing:**
+**Both forms have a failure mode, and the index tells you which to use.**
+
+| Form | Commits | Fails when |
+|---|---|---|
+| `git commit` (no pathspec) | exactly the index | another agent **staged** their files |
+| `git commit -- <paths>` | the working tree at those paths | another agent has **unstaged** edits in *your* files |
+
+So there is no blanket rule. Look at the index first, then pick:
 
 ```bash
 git add <your-specific-paths>          # stage narrowly
-git diff --cached --name-only          # is anything here not yours? unstage it
-git commit -m "..."                    # NO pathspec — commits exactly the index
-git show --stat HEAD                   # confirm the file list AND the diff size
+git diff --cached --name-only          # LOOK. Whose files are in here?
+#   only yours      -> git commit -m "..."            (no pathspec)
+#   someone else's  -> git commit -m "..." -- <paths> (pathspec, and check the
+#                       named files aren't dirty from them first)
+git show --stat HEAD                   # confirm the file list AND the line counts
 ```
 
-The pathspec form is safe only when you own the whole tree. `git show --stat`
+`#0129`'s reviewer got this right against a blanket instruction from the
+orchestrator: it found `#0309`'s files staged in the shared index, recognised
+that a bare commit would sweep them in, and used a pathspec deliberately. Read
+the index; do not follow either form by habit. `git show --stat`
 after every commit is what catches both this and the shared-index case below:
 check the **line counts**, not just the filenames, because a swept-in hunk lands
 in a file you did legitimately touch.
