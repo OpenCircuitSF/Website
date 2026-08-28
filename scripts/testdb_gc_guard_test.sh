@@ -299,7 +299,95 @@ fi
 # accounted for before the leak census below runs.
 drop_and_verify "$MUT_DB"
 
-echo "== Part 4: leak census — no ${TESTPREFIX}* database survives this run =="
+echo "== Part 4: gc --all does not drop a template under a TEMPLATE_DB override (#0327) =="
+#
+# #0327: `gc --all` used to exclude ONLY the current $TEMPLATE from its
+# sweep. When TEMPLATE_DB is overridden — which #0315/#0320 actively teach
+# agents to do to test template behaviour without disturbing concurrent
+# agents — the REAL default template (unset TEMPLATE_DB's name) was no
+# longer excluded, and got swept. The fix adds two more exclusions:
+# DEFAULT_TEMPLATE (derived from PREFIX, so it always names the real
+# default regardless of any override) and a broad "looks like a template"
+# name pattern. This asserts both the positive behaviour (the real script,
+# under an override, still protects the default-looking database and the
+# overridden one, while still sweeping an ordinary scratch database) and,
+# via mutation, that the assertion is actually sensitive to the #0327
+# regression rather than vacuously true.
+
+DEFAULTISH_DB="${TESTPREFIX}template"          # what DEFAULT_TEMPLATE resolves to under $SCOPED's prefix
+OVERRIDE_TEMPLATE_DB="${TESTPREFIX}other_template"  # what an agent following #0315's advice sets TEMPLATE_DB to
+ORDINARY_TEMPLATE_TEST_DB="${TESTPREFIX}ordinary4"
+
+createdb_raw "$DEFAULTISH_DB"
+createdb_raw "$OVERRIDE_TEMPLATE_DB"
+createdb_raw "$ORDINARY_TEMPLATE_TEST_DB"
+
+TEMPLATE_DB="$OVERRIDE_TEMPLATE_DB" "$SCOPED" gc --all >/dev/null 2>&1
+
+if db_exists "$DEFAULTISH_DB"; then
+  pass "gc --all did not drop the default-looking template ($DEFAULTISH_DB) even though TEMPLATE_DB was overridden to $OVERRIDE_TEMPLATE_DB"
+else
+  fail "REGRESSION #0327: gc --all dropped the default-looking template ($DEFAULTISH_DB) while TEMPLATE_DB was overridden away from it"
+fi
+
+if db_exists "$OVERRIDE_TEMPLATE_DB"; then
+  pass "gc --all did not drop the currently-overridden template ($OVERRIDE_TEMPLATE_DB)"
+else
+  fail "REGRESSION #0327: gc --all dropped the currently-overridden template ($OVERRIDE_TEMPLATE_DB)"
+fi
+
+if db_exists "$ORDINARY_TEMPLATE_TEST_DB"; then
+  fail "gc --all did not drop $ORDINARY_TEMPLATE_TEST_DB, an ordinary scratch database unrelated to any template (feature not working, separate from the #0327 guard itself)"
+else
+  pass "gc --all dropped $ORDINARY_TEMPLATE_TEST_DB, the ordinary scratch database"
+fi
+
+drop_and_verify "$DEFAULTISH_DB"
+drop_and_verify "$OVERRIDE_TEMPLATE_DB"
+drop_and_verify "$ORDINARY_TEMPLATE_TEST_DB"
+
+# Mutation proof: neuter #0327's exclusion clause back to its pre-fix shape
+# (only the currently-selected $TEMPLATE excluded) and confirm the
+# default-looking template WOULD then be swept — proving the assertions
+# above are actually sensitive to the #0327 regression, not vacuously true.
+# Targets the `exclude_clause=` line specifically (a whole-line replace, via
+# a wildcard match on the line's content) rather than reproducing any of
+# its literal SQL text as a comparison oracle.
+MUTANT2="$WORKDIR/testdb_mutant2.sh"
+sed -e "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" \
+    -e "s/^    exclude_clause=.*/    exclude_clause=\"datname <> '\$TEMPLATE'\"/" \
+    "$REAL_SCRIPT" > "$MUTANT2"
+chmod +x "$MUTANT2"
+
+if ! grep -q "^PREFIX=\"${TESTPREFIX}\"\$" "$MUTANT2"; then
+  echo "FATAL: prefix-scoping of the second mutant copy failed — aborting before running it." >&2
+  exit 1
+fi
+if ! grep -Fq "exclude_clause=\"datname <> '\$TEMPLATE'\"" "$MUTANT2"; then
+  echo "FATAL: #0327 guard-removal mutation did not take effect — aborting rather than run an unmutated gc --all (that would prove nothing)." >&2
+  exit 1
+fi
+if grep -q "DEFAULT_TEMPLATE" "$MUTANT2" && grep -q "and datname <> '\$DEFAULT_TEMPLATE'" "$MUTANT2"; then
+  echo "FATAL: mutation left the DEFAULT_TEMPLATE exclusion intact — the mutant does not actually reproduce the pre-#0327 script." >&2
+  exit 1
+fi
+
+MUT2_DEFAULTISH="${TESTPREFIX}template2"
+MUT2_OVERRIDE="${TESTPREFIX}other_template2"
+createdb_raw "$MUT2_DEFAULTISH"
+createdb_raw "$MUT2_OVERRIDE"
+
+TEMPLATE_DB="$MUT2_OVERRIDE" "$MUTANT2" gc --all >/dev/null 2>&1
+
+if db_exists "$MUT2_DEFAULTISH"; then
+  fail "mutation was ineffective: with the #0327 exclusions removed, gc --all still did NOT sweep the default-looking template ($MUT2_DEFAULTISH). This means Part 4's assertions would not actually catch a real #0327 regression."
+else
+  pass "with the #0327 exclusions removed, gc --all under a TEMPLATE_DB override DID sweep the default-looking template — confirms Part 4's assertions are sensitive to the #0327 regression, not vacuously true"
+fi
+drop_and_verify "$MUT2_DEFAULTISH"
+drop_and_verify "$MUT2_OVERRIDE"
+
+echo "== Part 5: leak census — no ${TESTPREFIX}* database survives this run =="
 LEFTOVER="$(psql_admin -tAc "select datname from pg_database where datname like '${TESTPREFIX}%'" 2>/dev/null | tr '\n' ' ' | xargs)"
 if [ -z "$LEFTOVER" ]; then
   pass "no ${TESTPREFIX}* databases remain after cleanup"

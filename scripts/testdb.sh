@@ -49,8 +49,14 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PGHOST_URL="${PGHOST_URL:-postgres://opencircuit:opencircuit@localhost:5432}"
-TEMPLATE="${TEMPLATE_DB:-opencircuit_test_template}"
 PREFIX="opencircuit_test_"
+# #0327: the REAL default template name, independent of any TEMPLATE_DB
+# override. Defined from PREFIX (not a second hardcoded literal) so it
+# always names the actual shared template even when $TEMPLATE below points
+# somewhere else — `gc --all` must never drop this one no matter what an
+# agent has set TEMPLATE_DB to.
+DEFAULT_TEMPLATE="${PREFIX}template"
+TEMPLATE="${TEMPLATE_DB:-$DEFAULT_TEMPLATE}"
 
 psql_admin() { psql "$PGHOST_URL/postgres" "$@"; }
 dsn() { echo "$PGHOST_URL/$1?sslmode=disable"; }
@@ -65,9 +71,35 @@ db_exists() {
   [ "$(psql_admin -tAc "select 1 from pg_database where datname='$1'")" = "1" ]
 }
 
+# #0328: version and digest used to be two separate functions, each
+# preceded by its own db_exists() probe and each opening its own
+# connection — four psql invocations total for what template_matches_disk
+# needs on every `create` (measured by #0320's review: ~0.04s of the
+# digest's ~0.06s added cost was exactly this). schema_migrations lives
+# inside the template database, and pg_shdescription/pg_database are
+# shared catalogs visible from ANY database in the cluster — so both can be
+# read in one query over one connection to the template itself. No
+# up-front existence probe is needed either: connecting to a template that
+# doesn't exist simply fails, and an empty result routes to "none" the same
+# as an explicit nonexistence check would.
+#
+# Sets TSTATE_VERSION and TSTATE_DIGEST as a side effect (this shell is
+# 3.2.57 — no nameref/`local -n` to return two values properly). Fields are
+# joined with ASCII US (chr(31)), which cannot appear in a migration
+# version number or a hex digest, so a real value can never be mistaken for
+# the separator.
+template_state() {
+  local row
+  row="$(psql "$PGHOST_URL/$TEMPLATE" -tAc "select coalesce((select version::text from schema_migrations), 'none') || chr(31) || coalesce((select description from pg_shdescription ds join pg_database db on ds.objoid = db.oid and ds.classoid = 'pg_database'::regclass where db.datname = current_database()), 'none')" 2>/dev/null)"
+  TSTATE_VERSION="${row%%$'\x1f'*}"
+  TSTATE_DIGEST="${row#*$'\x1f'}"
+  [ -n "$TSTATE_VERSION" ] || TSTATE_VERSION="none"
+  [ -n "$TSTATE_DIGEST" ] || TSTATE_DIGEST="none"
+}
+
 template_version() {
-  db_exists "$TEMPLATE" || { echo "none"; return; }
-  psql "$PGHOST_URL/$TEMPLATE" -tAc 'select version from schema_migrations' 2>/dev/null || echo "none"
+  template_state
+  echo "$TSTATE_VERSION"
 }
 
 require_shasum() {
@@ -96,15 +128,36 @@ valid_digest() {
 # ~0.13s on this machine (criterion 6's whole fast-path budget), against
 # ~0.02s batched — the per-`create` cost this function adds must not erase
 # the clone path's advantage over a full `migrate up`.
+#
+# #0328: enumeration and content-reading are NUL-delimited end to end
+# (`find -print0`, `xargs -0 cat`), so a migration filename containing a
+# space or a quote — the #0320 review's fifth stray-file case, which used
+# to abort `xargs` with "unterminated quote" — cannot break word-splitting.
+# Names are collected via a `read -d ''` loop (a bash builtin, no per-file
+# fork) into an array, then that array is sorted by piping it through
+# `sort` newline-delimited — safe for SORTING (not for content-reading)
+# because no migration filename contains a newline, which is a different
+# hazard than the one #0320 found. This machine's bash is 3.2.57, which has
+# no `mapfile`/`readarray` to build an array from a NUL stream directly.
 disk_digest() {
   require_shasum
-  local dir="$REPO/migrations" names out
+  local dir="$REPO/migrations" out
   [ -d "$dir" ] || { echo "none"; return; }
-  names="$(cd "$dir" && find . -maxdepth 1 -type f -name '*.sql' -print | sed 's|^\./||' | LC_ALL=C sort)"
-  [ -n "$names" ] || { echo "none"; return; }
+
+  local names=()
+  while IFS= read -r -d '' f; do
+    names+=("${f#./}")
+  done < <(cd "$dir" && find . -maxdepth 1 -type f -name '*.sql' -print0)
+  [ "${#names[@]}" -gt 0 ] || { echo "none"; return; }
+
+  local sorted=()
+  while IFS= read -r line; do
+    sorted+=("$line")
+  done < <(printf '%s\n' "${names[@]}" | LC_ALL=C sort)
+
   out="$(
-    { printf '%s\n' "$names"
-      printf '%s\n' "$names" | ( cd "$dir" && xargs cat )
+    { printf '%s\n' "${sorted[@]}"
+      printf '%s\0' "${sorted[@]}" | ( cd "$dir" && xargs -0 cat )
     } | shasum -a 256 | awk '{print $1}'
   )"
   if ! valid_digest "$out"; then
@@ -115,14 +168,17 @@ disk_digest() {
 }
 
 # The digest recorded on the template when it was last built, read from
-# COMMENT ON DATABASE (a cluster-catalog lookup, no connection into the
-# template database itself needed) rather than a table inside it — so it
-# survives regardless of what migrate does to the template's own schema.
-# #0320.
+# COMMENT ON DATABASE via template_state() above (#0320, folded into the
+# single combined query by #0328 — this used to open its own second
+# connection into `postgres`, with its own db_exists() probe first, and its
+# pg_shdescription join lacked the classoid qualifier now in
+# template_state()'s query; that catalog is keyed (objoid, classoid) and
+# also holds role/tablespace comments, so an oid collision across catalogs
+# could have matched the wrong row).
 template_digest() {
-  db_exists "$TEMPLATE" || { echo "none"; return; }
+  template_state
   local d
-  d="$(psql_admin -tAc "select coalesce(description,'') from pg_shdescription ds join pg_database db on ds.objoid = db.oid where db.datname = '$TEMPLATE'" 2>/dev/null | tr -d '[:space:]')"
+  d="$(printf '%s' "$TSTATE_DIGEST" | tr -d '[:space:]')"
   [ -n "$d" ] || { echo "none"; return; }
   echo "$d"
 }
@@ -182,7 +238,12 @@ build_template() {
 # message and catches the common case (a migration added or removed) without
 # needing to read every file.
 template_matches_disk() {
-  [ "$(template_version)" = "$(disk_version)" ] && [ "$(template_digest)" = "$(disk_digest)" ]
+  # #0328: one template_state() call (one psql invocation) instead of the
+  # separate template_version() + template_digest() calls this used to
+  # make, each of which re-ran its own existence probe and opened its own
+  # connection.
+  template_state
+  [ "$TSTATE_VERSION" = "$(disk_version)" ] && [ "$TSTATE_DIGEST" = "$(disk_digest)" ]
 }
 
 # #0315: this used to be check_template_fresh(), which hard-errored the
@@ -322,7 +383,15 @@ case "$cmd" in
     # every scratch database belongs to somebody, and a bare `gc` used to drop
     # all of them. It must be asked for explicitly now. Use `drop NNNN` for
     # your own; `gc --all` only when you know you are alone.
-    dbs=$(psql_admin -tAc "select datname from pg_database where datname like '${PREFIX}%' and datname <> '$TEMPLATE'")
+    # #0327: exclude the currently-selected template ($TEMPLATE, which
+    # TEMPLATE_DB may have overridden), the real default template (always,
+    # regardless of the override), and anything that merely looks like a
+    # template by name — an agent following #0315's TEMPLATE_DB advice may
+    # create its own "..._template"-suffixed scratch database of their own.
+    # Kept on one line so the mutation-proof guard in
+    # testdb_gc_guard_test.sh can neuter it precisely.
+    exclude_clause="datname <> '$TEMPLATE' and datname <> '$DEFAULT_TEMPLATE' and datname not ilike '%template%'"
+    dbs=$(psql_admin -tAc "select datname from pg_database where datname like '${PREFIX}%' and $exclude_clause")
     if [ "${1:-}" != "--all" ]; then
       if [ -z "$dbs" ]; then echo "no scratch databases"; exit 0; fi
       echo "refusing to sweep — these belong to somebody, possibly another agent:"
