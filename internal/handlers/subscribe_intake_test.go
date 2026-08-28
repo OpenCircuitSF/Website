@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -256,5 +257,201 @@ func TestSubscribeIntakeWorker_OrphanSweepDoesNotTouchOtherKinds(t *testing.T) {
 	}
 	if status != outbox.StatusSending {
 		t.Fatalf("status = %q, want %q — the intake poller's OrphanSweep reclaimed a live mail claim it has no business touching (kind=confirmation, not KindSubscribeIntake); this is #0254's review-bounce regression: OrphanSweep must filter by kind exactly as ClaimDue already does, or one poller's staleness window can release the other's in-flight send and cause a duplicate email", status, outbox.StatusSending)
+	}
+}
+
+// blockingSuppressionChecker wraps a SuppressionChecker and blocks the
+// FIRST call to IsSuppressed until release is closed, then delegates every
+// call (including that first one, once unblocked) to inner. It exists only
+// to make TestSubscribeIntakeWorker_ClaimsRowsIndividuallyNotAsBatch
+// deterministic — the exact role blockingMailer
+// (internal/mailing/outbox_worker_test.go) plays for
+// TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued, adapted to this
+// package's own natural blocking seam: processIntakeRow calls
+// h.suppression.IsSuppressed fresh, on the real per-row context, before
+// anything else — so blocking it holds ClaimRow's claim open on exactly
+// one row without needing a fake Mailer at all.
+//
+// once, not a counter or channel-close on every call, so only the row
+// racing to be processed FIRST blocks; every row after it (including the
+// second row this test seeds) proceeds at full speed once release is
+// closed, matching how a real suppression lookup never blocks in
+// production.
+type blockingSuppressionChecker struct {
+	inner   SuppressionChecker
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingSuppressionChecker) IsSuppressed(ctx context.Context, email string) (bool, error) {
+	b.once.Do(func() {
+		close(b.started)
+		<-b.release
+	})
+	return b.inner.IsSuppressed(ctx, email)
+}
+
+// TestSubscribeIntakeWorker_ClaimsRowsIndividuallyNotAsBatch is #0297's
+// review-bounce defect 1 fix (issues/0297.md ## Review notes): the
+// decisive gap the review found was that nothing in this package pinned
+// intakePass's per-row claim the way
+// TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued
+// (internal/mailing/outbox_worker_test.go) pins OutboxWorker.pass's. The
+// review proved this by reverting intakePass to a whole-batch ClaimDue,
+// in a throwaway worktree, while leaving intakeOrphanStaleAfter at its new,
+// much smaller per-row-derived window — reinstating #0254's exact failure
+// mode with a window 10.5x under the honest batch-derived bound — and the
+// ENTIRE suite (handlers, outbox, mailing, db, cmd) still passed green.
+//
+// This test closes that gap the same way the outbox worker's own test
+// does: seed two due rows, block the poller mid-processing of the first
+// via a fake dependency (blockingSuppressionChecker, above, standing in
+// for blockingMailer — this package's processIntakeRow has no Mailer to
+// block, but IsSuppressed is called just as early and just as
+// unconditionally), and assert on the PAIR while blocked. Under the
+// real per-row claim model (SelectDue then ClaimRow per id,
+// intakePass, subscribe_intake.go), exactly one row is 'sending' — the
+// one blocked inside processIntakeRow — and the other is still plain
+// 'queued', claimed_at IS NULL, attempts = 0: SelectDue selected both
+// ids up front but claimed neither, and ClaimRow has not yet reached the
+// second one. A whole-batch ClaimDue CANNOT satisfy that assertion: its
+// single UPDATE stamps status='sending', claimed_at=now() on every row in
+// the batch atomically, before either row's own processing begins, so
+// both rows would read 'sending' with a non-NULL claimed_at the instant
+// the batch is claimed — which is exactly why this test fails immediately
+// against the mutation the review used, restoring the exact regression
+// pin criterion 5 asked for.
+//
+// Mutation proof performed for this fix, in a throwaway worktree
+// (`git worktree add`, own scratch database), git-diff confirmed against
+// the main tree afterward with no changes left behind: reverting
+// intakePass's claim loop to one whole-batch outbox.Store.ClaimDue call
+// up front (instead of SelectDue then per-id ClaimRow) made this test FAIL
+// with "status while blocked = (id1=\"sending\", id2=\"sending\"), want
+// exactly one \"sending\" ... and one \"queued\"" — both rows already
+// 'sending' the moment the batch-wide claim committed, before
+// processIntakeRow for either had even started. Restored the mutated
+// files from the worktree's own git history (not copied back into the
+// main tree) and confirmed `git status` in the main tree stayed clean
+// throughout — the main tree's intakePass was never touched by the proof.
+func TestSubscribeIntakeWorker_ClaimsRowsIndividuallyNotAsBatch(t *testing.T) {
+	pool := subscribeTestPool(t)
+	checker := &blockingSuppressionChecker{
+		inner:   NoSuppressions{},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h, _ := subscribeMux(t, pool, checker)
+	ctx := context.Background()
+
+	email1 := subscribeUniqueEmail(t)
+	email2 := subscribeUniqueEmail(t)
+
+	id1, err := h.intake.Enqueue(ctx, outbox.Item{
+		Kind:      outbox.KindSubscribeIntake,
+		Recipient: email1,
+		Payload: subscribeIntakePayload{
+			ConfirmTTLSeconds: int64(subscribeConfirmTTL.Seconds()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("seeding intake row 1: %v", err)
+	}
+	id2, err := h.intake.Enqueue(ctx, outbox.Item{
+		Kind:      outbox.KindSubscribeIntake,
+		Recipient: email2,
+		Payload: subscribeIntakePayload{
+			ConfirmTTLSeconds: int64(subscribeConfirmTTL.Seconds()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("seeding intake row 2: %v", err)
+	}
+	// Both rows must end 'sent' (or be force-cleaned) before this test
+	// returns, or a leftover 'queued' KindSubscribeIntake row would be
+	// claimable by any later test in this package/run — the same
+	// discipline TestSubscribeIntakeWorker_OrphanSweepDoesNotTouchOtherKinds
+	// and TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued both document.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM outbound_queue WHERE id = ANY($1)`, []int64{id1, id2})
+	})
+
+	// Wait for the real background poller (started by NewSubscribeHandler
+	// inside subscribeMux) to reach the first row's IsSuppressed call and
+	// block there — bounded past a full intakePollInterval cycle, since
+	// the poller's very first pass (before these rows existed) found
+	// nothing and is asleep until its next tick.
+	select {
+	case <-checker.started:
+	case <-time.After(intakePollInterval*2 + 5*time.Second):
+		t.Fatal("blockingSuppressionChecker.IsSuppressed was never called; the intake poller never reached either seeded row")
+	}
+
+	// Exactly one of the two rows is claimed now — the one blocked inside
+	// processIntakeRow — and the other is still plain 'queued', never
+	// having reached ClaimRow: SelectDue selected both ids up front but
+	// claimed neither, and ClaimRow only claims one row at a time,
+	// immediately before THAT row's own reprocessing. Assert on the PAIR,
+	// not on a specific id, since SelectDue's ORDER BY next_attempt_at, id
+	// combined with intakePass's own loop order determines which id is
+	// claimed first, not the order these rows were enqueued.
+	var status1, status2 string
+	var claimedAt1, claimedAt2 *time.Time
+	var attempts1, attempts2 int
+	if err := pool.QueryRow(ctx, `SELECT status, claimed_at, attempts FROM outbound_queue WHERE id = $1`, id1).Scan(&status1, &claimedAt1, &attempts1); err != nil {
+		t.Fatalf("select id1 while blocked: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status, claimed_at, attempts FROM outbound_queue WHERE id = $1`, id2).Scan(&status2, &claimedAt2, &attempts2); err != nil {
+		t.Fatalf("select id2 while blocked: %v", err)
+	}
+
+	sendingCount, queuedCount := 0, 0
+	for i, s := range []string{status1, status2} {
+		switch s {
+		case outbox.StatusSending:
+			sendingCount++
+			claimedAt := []*time.Time{claimedAt1, claimedAt2}[i]
+			attempts := []int{attempts1, attempts2}[i]
+			if claimedAt == nil {
+				t.Errorf("row %d status=%q but claimed_at is NULL — ClaimRow's own UPDATE always stamps it", i+1, s)
+			}
+			if attempts != 1 {
+				t.Errorf("row %d status=%q but attempts=%d, want 1 (ClaimRow's single per-row UPDATE)", i+1, s, attempts)
+			}
+		case outbox.StatusQueued:
+			queuedCount++
+			claimedAt := []*time.Time{claimedAt1, claimedAt2}[i]
+			attempts := []int{attempts1, attempts2}[i]
+			if claimedAt != nil {
+				t.Errorf("row %d status=%q but claimed_at is non-NULL — SelectDue must claim nothing", i+1, s)
+			}
+			if attempts != 0 {
+				t.Errorf("row %d status=%q but attempts=%d, want 0 — SelectDue must not touch attempts", i+1, s, attempts)
+			}
+		}
+	}
+	if sendingCount != 1 || queuedCount != 1 {
+		t.Fatalf("status while blocked = (id1=%q, id2=%q), want exactly one %q (blocked in processIntakeRow) and one %q (not yet reached by ClaimRow) — a whole-batch ClaimDue would show both rows %q here, which is the exact regression #0297's review found untested",
+			status1, status2, outbox.StatusSending, outbox.StatusQueued, outbox.StatusSending)
+	}
+
+	close(checker.release)
+
+	// Both rows must reach 'sent' once unblocked — bounded poll, no
+	// arbitrary sleep. Once the first row finishes, intakePass's caller
+	// (runIntakeWorker) sees processed=true and loops immediately without
+	// sleeping, so the second row is claimed and finished promptly too.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s1, ok1 := intakeRowStatus(t, pool, email1)
+		s2, ok2 := intakeRowStatus(t, pool, email2)
+		if ok1 && ok2 && s1 == outbox.StatusSent && s2 == outbox.StatusSent {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("rows never both reached %q after unblocking: id1=%q(ok=%v) id2=%q(ok=%v)", outbox.StatusSent, s1, ok1, s2, ok2)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

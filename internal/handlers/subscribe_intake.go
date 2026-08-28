@@ -47,7 +47,7 @@
 // intakeGraceDelay exists purely to make routine double-processing rare,
 // not to make it safe (it already is): outbox.Item.Delay pushes a newly
 // enqueued intake row's next_attempt_at into the future by this much, so
-// ClaimDue's WHERE next_attempt_at <= now() excludes it until the fast,
+// SelectDue's WHERE next_attempt_at <= now() excludes it until the fast,
 // in-memory path (which normally finishes in low single-digit
 // milliseconds — mutateJobTimeout bounds it at 10s) has had every
 // reasonable chance to get there first and mark it done. The delay only
@@ -122,43 +122,59 @@ const (
 // time.
 //
 // The single-row bound: intakePass's own ClaimRow call is wrapped in a
-// detached context.WithTimeout(h.sendCtx, intakeRowTimeout) (claimCtx,
-// below) — if that round trip alone hangs, up to intakeRowTimeout elapses
-// after claimed_at is committed server-side before this process even
-// learns the claim succeeded, which is real elapsed claim age. Then
-// processIntakeRow's entire reprocessing — the fresh IsSuppressed and
-// FindByEmail reads, dispatchMutation, and the final MarkSent — runs
-// inside its own context.WithTimeout(h.sendCtx, intakeRowTimeout). Worst
-// case, both terms:
+// bounded context.WithTimeout(h.sendCtx, intakeRowTimeout) (claimCtx,
+// below) — deliberately bounded FROM h.sendCtx rather than detached from
+// it the way, e.g., internal/mailing.OutboxWorker.sendOne's terminal
+// writes are detached from their caller: a claim that cannot complete
+// before this handler's own shutdown should not be taken at all, not
+// raced to completion after h.sendCtx is already cancelled. If that round
+// trip alone hangs, up to intakeRowTimeout elapses after claimed_at is
+// committed server-side before this process even learns the claim
+// succeeded, which is real elapsed claim age. Then processIntakeRow's
+// entire reprocessing — the fresh IsSuppressed and FindByEmail reads,
+// dispatchMutation, and the final MarkSent — runs inside its own
+// context.WithTimeout(h.sendCtx, intakeRowTimeout). Worst case, both
+// terms:
 //
 //	2 * intakeRowTimeout = 2 * 10s = 20s
 //
-// intakeOrphanStaleAfter doubles the single row-processing bound
-// (intakeRowTimeout) to cover that same total, matching the "double a
-// single-row term" shape internal/mailing's own orphanStaleAfter and
-// outboxOrphanStaleAfter use (mailing/worker.go, mailing/outbox_worker.go)
-// for an identical reason: a claim round-trip term plus a processing term,
-// each bounded by the same constant.
+// # #0297's review — zero margin, corrected
 //
-// Even 20s is not a claim that context cancellation is instantaneous. It
-// assumes pgx and the network underneath it honor ctx's deadline promptly
-// enough that a stuck ClaimRow/suppression/FindByEmail/dispatchMutation/
-// MarkSent call actually returns at or near intakeRowTimeout rather than
-// materially later — a TCP read the OS cannot be made to abandon on
-// cancellation is a residual no Go-level constant formula closes. Same
-// CLASS of caveat #0284's and #0294's final comments name for their own
-// windows; not fixed here.
+// This fix's first cut set intakeOrphanStaleAfter to exactly
+// 2 * intakeRowTimeout — the derived worst case above, with no slack —
+// unlike outboxOrphanStaleAfter and worker.go's own orphanStaleAfter,
+// which both carry real margin over their own worst cases (30s and 35s
+// respectively; see outboxOrphanStaleAfter's own doc comment,
+// mailing/outbox_worker.go). intakeOrphanStaleAfter now carries the same
+// margin-per-term posture: one additional intakeRowTimeout on top of the
+// two worst-case terms above.
+//
+//	3 * intakeRowTimeout = 3 * 10s = 30s
+//
+// 30s covers the 20s worst case with a full intakeRowTimeout (10s) of
+// real margin — the same "one extra term of margin" shape the other two
+// windows reduce to once expressed in their own constants.
+//
+// Even with that margin, this is not a claim that context cancellation is
+// instantaneous. It assumes pgx and the network underneath it honor ctx's
+// deadline promptly enough that a stuck ClaimRow/suppression/FindByEmail/
+// dispatchMutation/MarkSent call actually returns at or near
+// intakeRowTimeout rather than materially later — a TCP read the OS
+// cannot be made to abandon on cancellation is a residual no Go-level
+// constant formula closes. Same CLASS of caveat #0284's and #0294's final
+// comments name for their own windows; not fixed here.
 //
 // Expressed from the real package constant, not a hand-computed literal,
 // so raising intakeRowTimeout moves this window automatically —
 // intakeBatchSize is deliberately NOT a term any more. See
 // TestIntakeOrphanStaleAfterCoversSingleRowHold
 // (subscribe_intake_orphan_stale_after_test.go) for the invariant this
-// maintains.
+// maintains — the derived 2 * intakeRowTimeout worst case, not the 10s
+// single-term figure an earlier version of that test checked.
 //
 // A var, not a const, so a test can shrink it; NOT sized against measured
 // machine load (CLAUDE.md §5).
-var intakeOrphanStaleAfter = 2 * intakeRowTimeout
+var intakeOrphanStaleAfter = 3 * intakeRowTimeout
 
 // subscribeIntakePayload is a KindSubscribeIntake row's payload — the
 // request-shape facts Subscribe learned synchronously (subscribe.go) and
@@ -289,8 +305,9 @@ func (h *SubscribeHandler) intakePass() (bool, error) {
 // row may be reprocessed long after that request returned (see the package
 // doc comment) — then runs it through dispatchMutation, the exact dispatch
 // the fast path uses. Marks the row done via MarkSent (existing method: the
-// row is already 'sending', this call's own ClaimDue having put it there)
-// regardless of dispatchMutation's outcome, matching markIntakeDone's own
+// row is already 'sending', this call's own ClaimRow — intakePass, above —
+// having put it there) regardless of dispatchMutation's outcome, matching
+// markIntakeDone's own
 // "processed, not necessarily succeeded" convention — see that method's doc
 // comment for why.
 func (h *SubscribeHandler) processIntakeRow(row outbox.Row) {

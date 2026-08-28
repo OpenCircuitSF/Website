@@ -119,7 +119,9 @@ const (
 // cannot make this row look more stale than it is, and — because there is
 // no batch-wide claim any more — it cannot delay a "next row" either. On
 // top of that, ClaimRow's own round trip is now itself bounded (pass wraps
-// it in a detached context.WithTimeout(ctx, writeStatusTimeout) — see pass,
+// it in a bounded context.WithTimeout(ctx, writeStatusTimeout) — deliberately
+// NOT detached from ctx the way sendOne's writes are, since a claim that
+// cannot complete before shutdown should not be taken at all; see pass,
 // below): if THAT round trip alone hangs, up to writeStatusTimeout elapses
 // after claimed_at is committed server-side before this process even learns
 // the claim succeeded, which is real elapsed claim age too. Worst case:
@@ -240,12 +242,14 @@ type OutboxWorker struct {
 	// undersold guard as #0263's FOR UPDATE on AdminResendConfirmation's
 	// cooldown check.
 	claimedMu sync.Mutex
-	// claimed holds the outbound_queue ids from the most recent batch that
-	// this worker holds claimed ('sending') but has not yet finished
-	// sending (MarkSent/MarkRetryOrAbandon). A row is added the instant
-	// ClaimDue returns it and removed the instant sendOne finishes with
-	// it — so anything still present when Stop reads this set is exactly
-	// the set Stop's doc comment promises to release.
+	// claimed holds the outbound_queue id(s) this worker currently holds
+	// claimed ('sending') but has not yet finished sending
+	// (MarkSent/MarkRetryOrAbandon). A row is added the instant ClaimRow
+	// returns it and removed the instant sendOne finishes with it — under
+	// #0297's per-row claim model, at most one id is ever present at a
+	// time. See trackClaimed's and Stop's own doc comments for why
+	// anything still present by the time Stop reads this set (releaseAll)
+	// is a defensive net rather than the ordinary case.
 	claimed map[int64]struct{}
 }
 
@@ -350,26 +354,29 @@ func (w *OutboxWorker) Run(ctx context.Context) {
 	}
 }
 
-// Stop signals Run to stop claiming new work, releases any row this
-// process currently holds claimed-but-unsent back to 'queued' (so a
-// restart, or another process's worker, picks it up immediately instead of
-// waiting out outboxOrphanStaleAfter), and blocks until Run has returned or
-// ctx's deadline elapses. Safe to call more than once — including
-// concurrently: see claimedMu's doc comment for why that specific promise
-// depends on the mutex, not merely on the doneCh ordering below.
+// Stop signals Run to stop claiming new work and blocks until Run has
+// returned or ctx's deadline elapses. Safe to call more than once —
+// including concurrently: see claimedMu's doc comment for why that
+// specific promise depends on the mutex, not merely on the doneCh
+// ordering below.
 //
-// The release only runs once <-w.doneCh confirms Run has fully returned —
-// deliberately, not from inside pass/Run itself. Run's for loop calls pass
-// synchronously and only closes doneCh (via its own defer) after pass has
-// returned, so by the time Stop observes doneCh closed, no goroutine is
-// still mutating w.claimed: trackClaimed/untrackClaimed have finished for
-// this batch, and whatever ids remain are exactly the rows pass's stopCh
-// check left claimed (see pass's own comment). If ctx's deadline elapses
-// first — Run genuinely still mid-send — Stop returns ctx.Err() WITHOUT
-// releasing anything, because a row a live send might still complete for
-// must not be raced back to 'queued' out from under it; the orphan sweep
-// covers that case once outboxOrphanStaleAfter passes, same as before this
-// fix existed.
+// #0297's review: under the per-row claim model (SelectDue then ClaimRow
+// per id, pass, below), releaseAll — called only on the <-w.doneCh
+// branch, after Run has fully returned — provably has nothing to release
+// on every path that reaches it. pass's stopCh check runs before each
+// ClaimRow, so a row not yet reached is still plain 'queued', never
+// claimed; and the one row genuinely mid-send always runs to completion
+// before pass (and therefore Run) can return, because sendOne has no
+// internal stopCh check. So Stop no longer actually releases anything in
+// ordinary operation — releaseAll is kept only as a defensive net, not
+// because the current pass ever leaves it work to do by the time Stop
+// reaches it. See TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued
+// (outbox_worker_test.go) for the proof.
+//
+// If ctx's deadline elapses first — Run genuinely still mid-send — Stop
+// returns ctx.Err() without calling releaseAll at all; the orphan sweep
+// covers recovery in that case once outboxOrphanStaleAfter passes, exactly
+// as if Stop had never been called.
 func (w *OutboxWorker) Stop(ctx context.Context) error {
 	w.stopOnce.Do(func() { close(w.stopCh) })
 	select {
@@ -417,12 +424,20 @@ func (w *OutboxWorker) releaseAll() {
 }
 
 // trackClaimed records rows' ids as claimed-but-unsent — called the instant
-// ClaimRow returns one, before it is sent, so a Stop landing during the send
-// still sees it in w.claimed. Kept as a slice-taking method (rather than
-// narrowed to a single id) for symmetry with untrackClaimed and to leave the
-// map-based implementation below unchanged; #0297 changed every call site to
-// pass a single-row slice, since at most one row is ever claimed-but-unsent
-// under this worker at a time now.
+// ClaimRow returns one, before it is sent. #0297's review: Stop cannot
+// actually observe this mid-send — it blocks on <-w.doneCh, which only
+// closes once Run (and so pass, and so sendOne) has fully returned, so by
+// the time Stop ever reads w.claimed, untrackClaimed (below) has already
+// removed this row on every ordinary path (see Stop's own doc comment).
+// Tracking still happens on this schedule anyway: it is what makes
+// releaseAll's defensive-net role meaningful — a row genuinely still
+// present in w.claimed by the time Stop reaches it, however that comes
+// about, is exactly what releaseAll exists to release. Kept as a
+// slice-taking method (rather than narrowed to a single id) for symmetry
+// with untrackClaimed and to leave the map-based implementation below
+// unchanged; #0297 changed every call site to pass a single-row slice,
+// since at most one row is ever claimed-but-unsent under this worker at a
+// time now.
 func (w *OutboxWorker) trackClaimed(rows []outbox.Row) {
 	w.claimedMu.Lock()
 	defer w.claimedMu.Unlock()
@@ -531,10 +546,13 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 
 		// #0297: the atomic claim happens HERE, immediately before this
 		// row's own send — not once for the whole batch up front — so
-		// claimed_at reflects when THIS row's own work began. A detached,
-		// bounded context (not the caller's ambient ctx) so a hung round
-		// trip cannot hold this claim attempt open indefinitely — see
-		// outboxOrphanStaleAfter's doc comment for the resulting bound.
+		// claimed_at reflects when THIS row's own work began. A bounded
+		// context derived FROM ctx (the caller's ambient one, not
+		// detached from it the way sendOne's writes below are) so a
+		// shutdown in progress stops a new claim from being taken at all,
+		// rather than racing to grab one anyway; a hung round trip still
+		// cannot hold this claim attempt open past writeStatusTimeout —
+		// see outboxOrphanStaleAfter's doc comment for the resulting bound.
 		claimCtx, claimCancel := context.WithTimeout(ctx, writeStatusTimeout)
 		row, claimed, err := w.store.ClaimRow(claimCtx, id)
 		claimCancel()
