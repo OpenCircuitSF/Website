@@ -241,6 +241,165 @@ func TestGrowth30Days_BulkRevokeDoesNotDriveNetNegative(t *testing.T) {
 	}
 }
 
+// TestGrowth30Days_UnacceptedInviteDoesNotCountAsGrowth is #0324 item 1's
+// direct proof: sending an invite-mode import must not move imported_30d or
+// net_30d at all, restoring #0305's recorded decision ("a pending
+// invite-mode row is not growth") that #0311's widened predicate
+// (`source = 'import' AND confirmed_at IS NULL`, with no consent_basis
+// guard) reversed — `3c9eaf8` read this exact scenario as +1.
+func TestGrowth30Days_UnacceptedInviteDoesNotCountAsGrowth(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	email := uniqueImportEmail(t)
+	since := time.Now().UTC()
+
+	baseline := growth30DaysNet(t, subStore, since)
+	baselineConfirmed, baselineImported, _, err := subStore.Growth30Days(context.Background(), since)
+	if err != nil {
+		t.Fatalf("Growth30Days (baseline): %v", err)
+	}
+
+	// commitInvite's own `now` is real wall-clock time, not offset forward
+	// from `since` — a forward-dated created_at would still be "in the
+	// future" by the time an UNRELATED test (e.g.
+	// TestList_PaginationBoundsAndOrdering, which orders strictly by
+	// created_at with no window filter) runs later in the same package's
+	// ~0.5s total suite time, and would then rank ahead of that test's own
+	// real-time rows. since itself is still the correct query boundary: it
+	// was captured before this real Commit, so `created_at >= since` holds.
+	commitInvite(t, importStore, email, time.Now().UTC())
+
+	afterConfirmed, afterImported, _, err := subStore.Growth30Days(context.Background(), since)
+	if err != nil {
+		t.Fatalf("Growth30Days (after invite sent): %v", err)
+	}
+	if afterImported != baselineImported {
+		t.Errorf("imported_30d after an unaccepted invite = %d, want unchanged from %d — "+
+			"an invitation is not an accepted subscription (#0305, restored by #0324)", afterImported, baselineImported)
+	}
+	if afterConfirmed != baselineConfirmed {
+		t.Errorf("confirmed_30d after an unaccepted invite = %d, want unchanged from %d", afterConfirmed, baselineConfirmed)
+	}
+	afterNet := growth30DaysNet(t, subStore, since)
+	if afterNet != baseline {
+		t.Errorf("net_30d after an unaccepted invite = %d, want %d (flat — sending an invitation is not growth)", afterNet, baseline)
+	}
+}
+
+// TestGrowth30Days_ExpiredInviteDoesNotCountAsGrowth is #0324 item 1's
+// second scenario from the same table: an invitation that lapses via
+// ExpirePendingSweep (the row is left pending forever, per that method's own
+// doc comment — never re-mailed, never deleted) must not leave net_30d
+// permanently elevated the way `3c9eaf8` did.
+func TestGrowth30Days_ExpiredInviteDoesNotCountAsGrowth(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	email := uniqueImportEmail(t)
+	since := time.Now().UTC()
+
+	baseline := growth30DaysNet(t, subStore, since)
+
+	// Real wall-clock time for the Commit call — see the same-shaped
+	// comment in TestGrowth30Days_UnacceptedInviteDoesNotCountAsGrowth for
+	// why created_at must never be forward-dated here.
+	commitInvite(t, importStore, email, time.Now().UTC())
+	if _, err := subStore.ExpirePendingSweep(context.Background(), since.Add(importInviteConfirmTTL+time.Minute)); err != nil {
+		t.Fatalf("ExpirePendingSweep: %v", err)
+	}
+
+	afterExpiry := growth30DaysNet(t, subStore, since)
+	if afterExpiry != baseline {
+		t.Errorf("net_30d after an invite expires = %d, want %d (flat, not permanently +1)", afterExpiry, baseline)
+	}
+}
+
+// TestGrowth30Days_AcceptedInviteCountsAsConfirmedNotImported completes
+// #0324 item 1's table: once an invitation IS accepted, it must count as
+// growth — via confirmed_30d, the same bucket a website double opt-in uses,
+// never imported_30d (the two stay mutually exclusive, per Growth30Days'
+// own doc comment).
+func TestGrowth30Days_AcceptedInviteCountsAsConfirmedNotImported(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	email := uniqueImportEmail(t)
+	since := time.Now().UTC()
+
+	baselineConfirmed, baselineImported, _, err := subStore.Growth30Days(context.Background(), since)
+	if err != nil {
+		t.Fatalf("Growth30Days (baseline): %v", err)
+	}
+
+	// Real wall-clock time for the Commit call — see
+	// TestGrowth30Days_UnacceptedInviteDoesNotCountAsGrowth's comment.
+	invited, _ := commitInvite(t, importStore, email, time.Now().UTC())
+	if _, err := subStore.Confirm(context.Background(), *invited.ConfirmToken, since.Add(2*time.Second)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	afterConfirmed, afterImported, _, err := subStore.Growth30Days(context.Background(), since)
+	if err != nil {
+		t.Fatalf("Growth30Days (after accept): %v", err)
+	}
+	if afterConfirmed != baselineConfirmed+1 {
+		t.Errorf("confirmed_30d after invite accepted = %d, want %d (baseline=%d + 1)",
+			afterConfirmed, baselineConfirmed+1, baselineConfirmed)
+	}
+	if afterImported != baselineImported {
+		t.Errorf("imported_30d after invite accepted = %d, want unchanged from %d — "+
+			"an accepted invitation counts as confirmed, not imported", afterImported, baselineImported)
+	}
+}
+
+// TestGrowth30Days_RevokedPendingInviteBatchNetsZero is #0324 criterion 3's
+// bulk case, the last row of the same table: revoking a batch of invitations
+// nobody has accepted must leave net_30d flat, not -N. This is the scenario
+// #0311's reviewer measured at -N against the parent predicate (`status =
+// 'active' AND confirmed_at IS NULL`, which never counted a pending
+// invitation as an arrival but let ImportStore.Revoke's unconditional
+// unsubscribed_at stamp count it as a departure) and #0324 answers by
+// excluding a still-unaccepted invitation's unsubscribed_at from
+// unsubscribed_30d too — the same consent_basis-IS-NULL test used on the
+// arrival side, applied symmetrically.
+func TestGrowth30Days_RevokedPendingInviteBatchNetsZero(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	emails := []string{uniqueImportEmail(t), uniqueImportEmail(t), uniqueImportEmail(t)}
+	since := time.Now().UTC()
+
+	baseline := growth30DaysNet(t, subStore, since)
+
+	rows := make([]ImportRow, len(emails))
+	for i, email := range emails {
+		rows[i] = ImportRow{Email: email}
+	}
+	in := validCommitInput(t, rows)
+	in.ConsentMode = ConsentModeInvite
+	// Real wall-clock time for the Commit call — see
+	// TestGrowth30Days_UnacceptedInviteDoesNotCountAsGrowth's comment.
+	result, err := importStore.Commit(context.Background(), in, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	afterInvite := growth30DaysNet(t, subStore, since)
+	if afterInvite != baseline {
+		t.Errorf("net_30d after sending a %d-address invite batch = %d, want %d (flat — nobody has accepted yet)",
+			len(emails), afterInvite, baseline)
+	}
+
+	if _, _, _, err := importStore.Revoke(context.Background(), result.Import.ID, "bulk pending-invite revoke test (#0324)", since.Add(2*time.Second)); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	afterRevoke := growth30DaysNet(t, subStore, since)
+	if afterRevoke != baseline {
+		t.Errorf("net_30d after revoking an unaccepted invite batch = %d, want %d (flat, not -%d — #0324)",
+			afterRevoke, baseline, len(emails))
+	}
+}
+
 // TestImportStore_Commit_SendsNothing is the load-bearing prior_consent
 // property: the outbound queue must be empty after a committed import — no
 // confirmation, no welcome, nothing.

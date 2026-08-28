@@ -1619,6 +1619,92 @@ func TestRestartSignup_UnsubscribedGetsFreshTokenAndPending(t *testing.T) {
 	}
 }
 
+// TestRestartSignup_ClearsUnsubscribedAtAndSource is #0324 item 2's direct
+// proof at the row level: RestartSignup must clear unsubscribed_at and
+// unsubscribe_source, the same treatment it already gives confirmed_at and
+// confirm_sent_at, so a restarted row carries no stale departure evidence
+// forward — see this method's own #0324 doc comment for why leaving them set
+// left a persistent, unmatched -1 in Growth30Days' unsubscribed_30d.
+func TestRestartSignup_ClearsUnsubscribedAtAndSource(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Unsubscribe(ctx, created.ID, SourceOneClick, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+
+	restarted, err := store.RestartSignup(ctx, created.ID, RestartSignupInput{ConfirmTTL: time.Hour}, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("RestartSignup: %v", err)
+	}
+	if restarted.UnsubscribedAt != nil {
+		t.Errorf("UnsubscribedAt = %v after RestartSignup, want nil", restarted.UnsubscribedAt)
+	}
+	if restarted.UnsubscribeSource != nil {
+		t.Errorf("UnsubscribeSource = %v after RestartSignup, want nil", *restarted.UnsubscribeSource)
+	}
+}
+
+// TestGrowth30Days_ConfirmUnsubscribeRestartNetsZero is #0324 item 2's
+// exact three-step measurement: confirm, unsubscribe, restart, all inside
+// the same 30-day window, on an ordinary website signup (no import
+// involved). Before this fix: after Confirm net_30d was +1, after
+// Unsubscribe it was back to 0 (confirmed_30d's +1 offset by
+// unsubscribed_30d's +1), and after RestartSignup it fell to -1 — the
+// confirmation's own contribution to confirmed_30d vanished the instant
+// confirmed_at was cleared, but unsubscribed_at was never cleared, so
+// unsubscribed_30d's -1 stayed with no matching arrival left in the window.
+func TestGrowth30Days_ConfirmUnsubscribeRestartNetsZero(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	since := time.Now().UTC()
+
+	baseline := growth30DaysNet(t, store, since)
+
+	// Create's `now` is real wall-clock time, not offset forward from
+	// `since` — Create is what stamps created_at, and List's own ordering
+	// (subscribers.created_at DESC, no window filter) would rank a
+	// forward-dated row ahead of a genuinely later real-time row created by
+	// an unrelated test (TestList_PaginationBoundsAndOrdering) running
+	// later in the same package's ~0.5s total suite time. `since`, captured
+	// before this call, is still an earlier instant, so `created_at >=
+	// since` holds regardless.
+	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: 24 * time.Hour}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Confirm(ctx, *created.ConfirmToken, since.Add(2*time.Second)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	afterConfirm := growth30DaysNet(t, store, since)
+	if afterConfirm != baseline+1 {
+		t.Errorf("net_30d after Confirm = %d, want %d (baseline=%d + 1)", afterConfirm, baseline+1, baseline)
+	}
+
+	if _, err := store.Unsubscribe(ctx, created.ID, SourceOneClick, since.Add(3*time.Second)); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+	afterUnsubscribe := growth30DaysNet(t, store, since)
+	if afterUnsubscribe != baseline {
+		t.Errorf("net_30d after Unsubscribe = %d, want %d (back to baseline)", afterUnsubscribe, baseline)
+	}
+
+	if _, err := store.RestartSignup(ctx, created.ID, RestartSignupInput{ConfirmTTL: 24 * time.Hour}, since.Add(4*time.Second)); err != nil {
+		t.Fatalf("RestartSignup: %v", err)
+	}
+	afterRestart := growth30DaysNet(t, store, since)
+	if afterRestart != baseline {
+		t.Errorf("net_30d after RestartSignup = %d, want %d (flat, not baseline-1 — #0324)", afterRestart, baseline)
+	}
+}
+
 func TestRestartSignup_NotFound(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)

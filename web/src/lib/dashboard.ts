@@ -26,16 +26,25 @@ export function formatNetGrowth(growth: DashboardGrowth): string {
  * `confirmed_30d` and `imported_30d` are deliberately not folded into one
  * "joined" figure: since #0292, `confirmed_30d` counts only a completed
  * local double opt-in, not "became active", so an import of 500 addresses
- * reads as 0 confirmations. #0305 added `imported_30d` — addresses an
- * import batch placed on the list in the same window, still counted even
- * if the address has since unsubscribed or been revoked (#0311 — an EVENT
- * count, not a snapshot of who is currently active) and never double-
- * counted alongside `confirmed_30d` if the same row later completes a
- * genuine local confirmation — so that growth is still visible, doesn't
+ * reads as 0 confirmations. #0305 added `imported_30d` for the other case —
+ * an address whose own standing consent (a prior_consent import's
+ * attestation) placed it on the list in the same window, still counted even
+ * if it has since unsubscribed or been revoked (#0311 — an EVENT count, not
+ * a snapshot of who is currently active) — and never double-counted
+ * alongside `confirmed_30d` if the same row later completes a genuine local
+ * confirmation. An INVITED address is deliberately excluded from
+ * `imported_30d` until it is accepted (#0324, restoring #0305's original
+ * decision after #0311 briefly widened the predicate too far): an
+ * invitation asked, it did not place — the address was not yet standing on
+ * the list on anyone's consent but its own eventual choice, so it counts
+ * (as `confirmed_30d`) only once that choice is made, and neither an
+ * unaccepted invitation nor its later revocation or expiry moves
+ * `unsubscribed_30d` either. So that growth is still visible, doesn't
  * silently retract itself when an import is later revoked, and net_30d
- * doesn't read as a decline in a month the list actually grew. This
- * function and internal/subscribers.Store.Growth30Days' doc comment
- * describe the same three counts; keep them in agreement.
+ * doesn't read as a decline in a month the list actually grew — or as a
+ * decline from an invitation batch nobody has answered yet. This function
+ * and internal/subscribers.Store.Growth30Days' doc comment describe the
+ * same three counts; keep them in agreement.
  */
 export function formatGrowthDetail(growth: DashboardGrowth): string {
   return `${growth.confirmed_30d.toLocaleString()} confirmed, ${growth.imported_30d.toLocaleString()} imported, ${growth.unsubscribed_30d.toLocaleString()} left`;
