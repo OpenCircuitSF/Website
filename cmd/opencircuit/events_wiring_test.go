@@ -80,7 +80,7 @@ func TestMountAndServe_EventsRequiresSessionAndAdmin(t *testing.T) {
 	eventsH := handlers.NewEventsHandler(broker)
 
 	// #0054: a real *seo.Site, built the same way production does.
-	site, err := buildSEOSite(cfg, nil)
+	site, err := buildSEOSite(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("build seo site: %v", err)
 	}
@@ -100,10 +100,12 @@ func TestMountAndServe_EventsRequiresSessionAndAdmin(t *testing.T) {
 			nil,               /* adminCampaignPreviewH: not exercised */
 			nil,               /* adminCampaignPreflightH: not exercised */
 			nil,               /* adminCampaignStatsH: not exercised */
+			nil,               /* adminCampaignArchiveH: not exercised */
 			nil,               /* adminWorkshopsH: not exercised */
 			nil,               /* adminDashboardH: not exercised */
 			eventsH, nil, nil, /* meH, subscribeH: not exercised */
 			nil, nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH: not exercised */
+			nil, /* publicArchiveH: not exercised */
 			nil, /* sesNotifyH: not exercised */
 			nil, /* sendWorker: not exercised */
 			nil, /* outboxWorker: not exercised */

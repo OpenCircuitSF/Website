@@ -170,6 +170,44 @@ func TestRenderCampaign_FooterCarriesBothRequiredLabels(t *testing.T) {
 	}
 }
 
+// TestRenderCampaign_ArchiveLinkInBothPartsWhenSlugSet is #0123's own
+// acceptance criterion: "Every campaign email carries a 'View this email
+// in your browser' link to its archive URL, in both the HTML and
+// plain-text parts."
+func TestRenderCampaign_ArchiveLinkInBothPartsWhenSlugSet(t *testing.T) {
+	in := testCampaignInput()
+	in.Slug = "workshop-night-is-back"
+	htmlOut, textOut, err := RenderCampaign(in)
+	if err != nil {
+		t.Fatalf("RenderCampaign: %v", err)
+	}
+	wantURL := testBaseURL + "/archive/workshop-night-is-back"
+	if !strings.Contains(htmlOut, "View this email in your browser") || !strings.Contains(htmlOut, wantURL) {
+		t.Errorf("HTML part missing archive link to %q:\n%s", wantURL, htmlOut)
+	}
+	if !strings.Contains(textOut, "View this email in your browser") || !strings.Contains(textOut, wantURL) {
+		t.Errorf("text part missing archive link to %q:\n%s", wantURL, textOut)
+	}
+}
+
+// TestRenderCampaign_NoArchiveLinkWhenSlugEmpty pins the empty-Slug
+// backward-compatible default (CampaignRenderInput.Slug's own doc
+// comment): every pre-#0123 caller and #0045's preflight dry render must
+// render byte-identically to before this issue, with no archive link at
+// all.
+func TestRenderCampaign_NoArchiveLinkWhenSlugEmpty(t *testing.T) {
+	htmlOut, textOut, err := RenderCampaign(testCampaignInput())
+	if err != nil {
+		t.Fatalf("RenderCampaign: %v", err)
+	}
+	if strings.Contains(htmlOut, "View this email in your browser") {
+		t.Error("HTML part carries an archive link despite an empty Slug")
+	}
+	if strings.Contains(textOut, "View this email in your browser") {
+		t.Error("text part carries an archive link despite an empty Slug")
+	}
+}
+
 // TestRenderCampaign_PhysicalAddressAppendedToBothParts pins the CAN-SPAM
 // §7704 requirement: the address must reach both parts, not just one.
 //

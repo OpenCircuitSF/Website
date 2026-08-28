@@ -90,7 +90,7 @@ func TestMountAndServe_RateLimitsAuthLoginStart(t *testing.T) {
 	}
 
 	// #0054: a real *seo.Site, built the same way production does.
-	site, err := buildSEOSite(cfg, nil)
+	site, err := buildSEOSite(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("build seo site: %v", err)
 	}
@@ -113,10 +113,12 @@ func TestMountAndServe_RateLimitsAuthLoginStart(t *testing.T) {
 			nil,               /* adminCampaignPreviewH: not exercised by this test */
 			nil,               /* adminCampaignPreflightH: not exercised by this test */
 			nil,               /* adminCampaignStatsH: not exercised by this test */
+			nil,               /* adminCampaignArchiveH: not exercised by this test */
 			nil,               /* adminWorkshopsH: not exercised by this test */
 			nil,               /* adminDashboardH: not exercised by this test */
 			eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			nil, nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH: not exercised by this test */
+			nil, /* publicArchiveH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
 			nil, /* outboxWorker: not exercised */

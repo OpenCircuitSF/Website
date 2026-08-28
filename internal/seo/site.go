@@ -19,12 +19,14 @@ type Site struct {
 
 // NewSite constructs a Site from the built index.html template bytes
 // (web.DistFS()'s index.html), the canonical base URL (cfg.BaseURL, e.g.
-// "https://www.opencircuitsf.com" -- no trailing slash), and an optional
-// WorkshopSource (nil until #0051/#0054 land).
-func NewSite(indexHTML []byte, baseURL string, source WorkshopSource) *Site {
+// "https://www.opencircuitsf.com" -- no trailing slash), an optional
+// WorkshopSource (nil until #0051/#0054 land), and an optional ArchiveSource
+// (#0123, nil in any deploy mode that has no campaigns-table backing --
+// mirrors WorkshopSource's own nil-tolerant contract).
+func NewSite(indexHTML []byte, baseURL string, source WorkshopSource, archive ArchiveSource) *Site {
 	return &Site{
-		renderer: NewRenderer(indexHTML, baseURL, source),
-		sitemap:  NewSitemap(baseURL, source),
+		renderer: NewRenderer(indexHTML, baseURL, source, archive),
+		sitemap:  NewSitemap(baseURL, source, archive),
 		robots:   BuildRobotsTxt(baseURL),
 	}
 }

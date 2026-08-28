@@ -101,13 +101,14 @@ func serve() error {
 // the same cache, rather than leaving mountAndServe to build its own,
 // second, never-invalidated Site the way it did before this issue.
 // source is nil on the dev-mode path (STORAGE=json has no workshops-table
-// backing -- see serveDevMode's call site).
-func buildSEOSite(cfg *config.Config, source seo.WorkshopSource) (*seo.Site, error) {
+// backing -- see serveDevMode's call site). archive (#0123) is likewise nil
+// on that path -- STORAGE=json has no email_campaigns-table backing either.
+func buildSEOSite(cfg *config.Config, source seo.WorkshopSource, archive seo.ArchiveSource) (*seo.Site, error) {
 	indexHTML, err := fs.ReadFile(web.DistFS(), "index.html")
 	if err != nil {
 		return nil, fmt.Errorf("buildSEOSite: read embedded index.html: %w", err)
 	}
-	return seo.NewSite(indexHTML, cfg.BaseURL, source), nil
+	return seo.NewSite(indexHTML, cfg.BaseURL, source, archive), nil
 }
 
 // servePostgres is the production path: connects to Postgres, constructs the
@@ -251,7 +252,7 @@ func servePostgres(cfg *config.Config) error {
 	// comment for why that route lives on this handler rather than its own
 	// type.
 	workshopsStore := workshops.NewStore(pool)
-	site, err := buildSEOSite(cfg, workshopSEOSource{store: workshopsStore})
+	site, err := buildSEOSite(cfg, workshopSEOSource{store: workshopsStore}, campaignArchiveSEOSource{store: campaignsStore})
 	if err != nil {
 		return err
 	}
@@ -379,6 +380,17 @@ func servePostgres(cfg *config.Config) error {
 	adminCampaignsH := handlers.NewAdminCampaignsHandler(campaignsStore, handlers.NewCampaignPreflightChecker(sendStore), audienceStore, auditLogger)
 	adminCampaignAudienceH := handlers.NewAdminCampaignAudienceHandler(audienceStore)
 
+	// Public campaign archive read routes (#0123, PRD §6.8): GET
+	// /api/archive and GET /api/archive/{slug} -- reuses the exact same
+	// campaignsStore instance every other campaign handler above does, so
+	// a campaign's slug/archive_status is read from one source of truth.
+	publicArchiveH := handlers.NewPublicArchiveHandler(campaignsStore)
+
+	// Admin archive toggle (#0123): PATCH /admin/campaigns/{id}/archive,
+	// published <-> withheld. Same campaignsStore, same auditLogger every
+	// other admin campaign handler above uses.
+	adminCampaignArchiveH := handlers.NewAdminCampaignArchiveHandler(campaignsStore, auditLogger)
+
 	// Admin campaign read-only preflight (#0047, PRD §5.2/§6.6): GET
 	// .../preflight, the compose UI's dry-run evaluation of #0045's send
 	// gate — same mailing.Preflight function, same SendStore.GatherPreflight
@@ -500,8 +512,8 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, sesNotifyH, sendWorker, outboxWorker, site,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicArchiveH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -690,7 +702,9 @@ func serveDevMode(cfg *config.Config) error {
 	// below), so the WorkshopSource stays nil here, same as before #0054 --
 	// /workshops/{slug} and the sitemap's workshop portion fall back to
 	// their documented generic defaults (seo.WorkshopSource's doc comment).
-	site, err := buildSEOSite(cfg, nil)
+	// The ArchiveSource argument (#0123) is nil for the identical reason --
+	// internal/devstore has no email_campaigns-table backing either.
+	site, err := buildSEOSite(cfg, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -830,6 +844,16 @@ func serveDevMode(cfg *config.Config) error {
 	// nil-guard.
 	var adminWorkshopsH *handlers.AdminWorkshopsHandler
 	var publicWorkshopsH *handlers.PublicWorkshopsHandler
+
+	// Public campaign archive (#0123) has the same devstore gap as
+	// adminCampaignStatsH above -- internal/devstore has no
+	// email_campaigns-table backing. Passing nil leaves every other route
+	// working in STORAGE=json mode; mountAndServe only registers
+	// GET /api/archive and GET /api/archive/{slug} when publicArchiveH is
+	// non-nil, and adminRoutes omits the PATCH .../archive route when
+	// adminCampaignArchiveH is nil, mirroring every other nil-guard above.
+	var publicArchiveH *handlers.PublicArchiveHandler
+	var adminCampaignArchiveH *handlers.AdminCampaignArchiveHandler
 	// #0274: nil in dev mode for the same reason -- internal/devstore has no
 	// subscribers-table backing, so there are no counts to report.
 	var publicListStatsH *handlers.PublicListStatsHandler
@@ -875,8 +899,8 @@ func serveDevMode(cfg *config.Config) error {
 	var outboxWorker *mailing.OutboxWorker
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, sesNotifyH, sendWorker, outboxWorker, site,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicArchiveH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -922,6 +946,7 @@ func adminRoutes(
 	adminCampaignPreviewH *handlers.AdminCampaignPreviewHandler,
 	adminCampaignPreflightH *handlers.AdminCampaignPreflightHandler,
 	adminCampaignStatsH *handlers.AdminCampaignStatsHandler,
+	adminCampaignArchiveH *handlers.AdminCampaignArchiveHandler,
 	adminWorkshopsH *handlers.AdminWorkshopsHandler,
 	adminDashboardH *handlers.AdminDashboardHandler,
 ) []adminRoute {
@@ -1046,6 +1071,11 @@ func adminRoutes(
 			adminRoute{http.MethodGet, "/admin/campaigns/{id}/stats", http.HandlerFunc(adminCampaignStatsH.Stats)},
 		)
 	}
+	if adminCampaignArchiveH != nil {
+		routes = append(routes,
+			adminRoute{http.MethodPatch, "/admin/campaigns/{id}/archive", http.HandlerFunc(adminCampaignArchiveH.Patch)},
+		)
+	}
 	if adminWorkshopsH != nil {
 		routes = append(routes,
 			adminRoute{http.MethodGet, "/admin/workshops", http.HandlerFunc(adminWorkshopsH.List)},
@@ -1112,6 +1142,7 @@ func mountAndServe(
 	adminCampaignPreviewH *handlers.AdminCampaignPreviewHandler,
 	adminCampaignPreflightH *handlers.AdminCampaignPreflightHandler,
 	adminCampaignStatsH *handlers.AdminCampaignStatsHandler,
+	adminCampaignArchiveH *handlers.AdminCampaignArchiveHandler,
 	adminWorkshopsH *handlers.AdminWorkshopsHandler,
 	adminDashboardH *handlers.AdminDashboardHandler,
 	eventsH *handlers.EventsHandler,
@@ -1123,6 +1154,7 @@ func mountAndServe(
 	unsubscribeH *handlers.UnsubscribeHandler,
 	publicWorkshopsH *handlers.PublicWorkshopsHandler,
 	publicListStatsH *handlers.PublicListStatsHandler,
+	publicArchiveH *handlers.PublicArchiveHandler,
 	sesNotifyH *handlers.SESNotificationsHandler,
 	sendWorker *mailing.Worker,
 	outboxWorker *mailing.OutboxWorker,
@@ -1191,7 +1223,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, adminDashboardH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminDashboardH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 
@@ -1254,6 +1286,16 @@ func mountAndServe(
 	if publicListStatsH != nil {
 		mux.Handle("GET /api/list-stats", http.HandlerFunc(publicListStatsH.Stats))
 		mux.Handle("GET /api/workshops/{slug}", http.HandlerFunc(publicWorkshopsH.GetBySlug))
+	}
+
+	// Public campaign archive read routes (#0123, PRD §6.8) — no auth, no
+	// rate limit, same trust level as the workshop reads above: every SENT
+	// campaign is a permanent public web page. publicArchiveH is nil in dev
+	// mode (STORAGE=json — internal/devstore has no email_campaigns-table
+	// backing).
+	if publicArchiveH != nil {
+		mux.Handle("GET /api/archive", http.HandlerFunc(publicArchiveH.List))
+		mux.Handle("GET /api/archive/{slug}", http.HandlerFunc(publicArchiveH.GetBySlug))
 	}
 
 	// Preference center (#0031) and confirmation (#0030) — public,

@@ -20,10 +20,12 @@ import (
 func seedErasureCampaign(t *testing.T, pool *pgxpool.Pool) int64 {
 	t.Helper()
 	var id int64
-	name := fmt.Sprintf("zz-erase-test-campaign-%d", testdb.Unique())
+	unique := testdb.Unique()
+	name := fmt.Sprintf("zz-erase-test-campaign-%d", unique)
+	slug := fmt.Sprintf("zz-erase-test-campaign-%d", unique)
 	if err := pool.QueryRow(context.Background(),
-		`INSERT INTO email_campaigns (name, subject, body_md) VALUES ($1, 'zz test subject', 'zz body')
-		 RETURNING id`, name,
+		`INSERT INTO email_campaigns (name, subject, body_md, slug) VALUES ($1, 'zz test subject', 'zz body', $2)
+		 RETURNING id`, name, slug,
 	).Scan(&id); err != nil {
 		t.Fatalf("seed email_campaigns: %v", err)
 	}

@@ -322,6 +322,17 @@ export interface Campaign {
   created_by?: number;
   created_at: string;
   updated_at: string;
+  /**
+   * The campaign's permanent archive slug (#0123, PRD §6.8) -- minted at
+   * draft time (never blank, unlike every field above), so the compose UI
+   * can show the full future `/archive/{slug}` URL before the campaign is
+   * ever sent. See lib/campaigns.ts's `archiveURL` for how CampaignEditor
+   * builds the displayed URL from this field.
+   */
+  slug: string;
+  /** email_campaigns.archive_status: pending (not sent yet) | published | withheld. */
+  archive_status: string;
+  archived_at?: string;
 }
 
 /**
@@ -471,6 +482,40 @@ export interface PublicWorkshop {
 export interface WorkshopsListResponse {
   upcoming: PublicWorkshop[];
   past: PublicWorkshop[];
+}
+
+/**
+ * One row of GET /api/archive (#0123, PRD §6.8). Matches
+ * internal/handlers/public_archive.go's archiveEntryView — deliberately
+ * narrow: no id, no status, no audience data, nothing from `email_sends`.
+ */
+export interface ArchiveEntry {
+  slug: string;
+  subject: string;
+  preheader?: string;
+  archived_at?: string;
+}
+
+/** GET /api/archive response. Matches public_archive.go's archiveListResponse. */
+export interface ArchiveListResponse {
+  archive: ArchiveEntry[];
+}
+
+/**
+ * GET /api/archive/{slug} response (#0123). Matches public_archive.go's
+ * archiveDetailView. `body_html` is `body_md` rendered server-side through
+ * `mailing.RenderMarkdownHTML` -- the SAME goldmark parse the email pipeline
+ * uses, through the plain web-fragment output (never the mail-client output
+ * template) -- see that handler's own doc comment. ArchiveEntry.svelte
+ * renders this directly with `{@html}`, the same convention
+ * WorkshopDetail.svelte already uses for `body_html`.
+ */
+export interface ArchiveDetail {
+  slug: string;
+  subject: string;
+  preheader?: string;
+  body_html: string;
+  archived_at?: string;
 }
 
 // ── Admin workshops (#0051 API, #0052 admin UI) ──────────────────────────────

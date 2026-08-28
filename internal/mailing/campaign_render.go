@@ -46,6 +46,15 @@ type CampaignRenderInput struct {
 	BaseURL         string
 	ManageToken     string
 	PhysicalAddress string
+	// Slug is the campaign's email_campaigns.slug (migration 000025,
+	// #0123, PRD §6.8) — used to build the "View this email in your
+	// browser" link every campaign email carries per this issue's
+	// acceptance criteria. Empty means "no archive link" (renders
+	// nothing): the zero value for every caller that predates #0123 and
+	// for #0045's preflight dry render (worker_store.go's GatherPreflight,
+	// which only needs to prove the body renders, not the exact bytes),
+	// so this addition never changes those callers' existing behavior.
+	Slug string
 }
 
 // CampaignRenderer is the seam issues/0045.md §5 calls
@@ -129,11 +138,21 @@ func RenderCampaign(in CampaignRenderInput) (htmlOut, textOut string, err error)
 	manageURL := in.BaseURL + "/preferences?token=" + in.ManageToken
 	unsubscribeURL := in.BaseURL + "/unsubscribe?token=" + in.ManageToken
 
+	// archiveURL: the "View this email in your browser" link (#0123, PRD
+	// §6.8 — "Email clients mangle HTML. Every campaign carries a ... link
+	// to its archive page"). Empty in.Slug (every pre-#0123 caller, and
+	// #0045's preflight dry render) means no link is rendered — see
+	// CampaignRenderInput.Slug's doc comment.
+	archiveURL := ""
+	if in.Slug != "" {
+		archiveURL = in.BaseURL + "/archive/" + in.Slug
+	}
+
 	// styleCampaignBodyHTML brands bodyHTML's already-sanitized fragment in
 	// place (inline styles only, no re-sanitization) — see
 	// campaign_body_style.go.
-	htmlOut = wrapCampaignHTML(in.Subject, in.Preheader, styleCampaignBodyHTML(bodyHTML), manageURL, unsubscribeURL, in.PhysicalAddress)
-	textOut = wrapCampaignText(bodyText, manageURL, unsubscribeURL, in.PhysicalAddress)
+	htmlOut = wrapCampaignHTML(in.Subject, in.Preheader, styleCampaignBodyHTML(bodyHTML), manageURL, unsubscribeURL, archiveURL, in.PhysicalAddress)
+	textOut = wrapCampaignText(bodyText, manageURL, unsubscribeURL, archiveURL, in.PhysicalAddress)
 	return htmlOut, textOut, nil
 }
 
@@ -204,7 +223,13 @@ func renderCampaignBodyDefault(md string) (bodyHTML, bodyText string, err error)
 // required PRD §6.5 links plus the physical address via templates.go's
 // shared listFooterHTML — see this file's package doc for the
 // reconciliation this replaces.
-func wrapCampaignHTML(subject, preheader, styledBodyHTML, manageURL, unsubscribeURL, physicalAddress string) string {
+//
+// archiveURL (#0123, PRD §6.8): when non-empty, a small "View this email in
+// your browser" line renders above the card, linking to the campaign's
+// permanent archive page — PRD §6.8's third reason a campaign needs one at
+// all ("Email clients mangle HTML"). Empty renders nothing, unchanged from
+// before #0123.
+func wrapCampaignHTML(subject, preheader, styledBodyHTML, manageURL, unsubscribeURL, archiveURL, physicalAddress string) string {
 	var b strings.Builder
 	b.WriteString("<!DOCTYPE html>\n")
 	b.WriteString(`<html lang="en"><head><meta charset="UTF-8">` + "\n")
@@ -219,6 +244,20 @@ func wrapCampaignHTML(subject, preheader, styledBodyHTML, manageURL, unsubscribe
 
 	b.WriteString(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="` + colorPageBG + `" style="background-color:` + colorPageBG + `;">` + "\n")
 	b.WriteString(`<tr><td align="center" style="padding:24px 16px;">` + "\n")
+
+	if archiveURL != "" {
+		// colorMutedText, not colorLinkText: this line sits directly on
+		// the page canvas (colorPageBG), outside the card, the same
+		// ground the footer below renders its own links against — see
+		// listFooterHTML's call site passing colorMutedText as linkColor.
+		// colorLinkText is documented as "footer links on the dark card"
+		// specifically (templates.go), a different, lighter background
+		// this line never sits on.
+		b.WriteString(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;">` + "\n")
+		b.WriteString(`<tr><td align="center" style="padding:0 0 12px;font-family:` + fontBody + `;font-size:12px;line-height:18px;color:` + colorMutedText + `;">` + "\n")
+		b.WriteString(`<a href="` + html.EscapeString(archiveURL) + `" style="color:` + colorMutedText + `;text-decoration:underline;">View this email in your browser</a>` + "\n")
+		b.WriteString("</td></tr></table>\n")
+	}
 
 	// Card. Explicit color on the <td> (not just bgcolor) — see
 	// templates.go's identical comment on its own card <td> for why this
@@ -252,8 +291,16 @@ func wrapCampaignHTML(subject, preheader, styledBodyHTML, manageURL, unsubscribe
 // templates.go's renderText uses for the transactional templates'
 // ShowListFooter footer, so a recipient sees a consistent pattern across
 // every kind of mail this project sends.
-func wrapCampaignText(bodyText, manageURL, unsubscribeURL, physicalAddress string) string {
+//
+// archiveURL (#0123): when non-empty, a "View this email in your browser:
+// <url>" line renders first, before the body — the plain-text twin of
+// wrapCampaignHTML's own link, required in BOTH parts by this issue's
+// acceptance criteria. Empty renders nothing, unchanged from before #0123.
+func wrapCampaignText(bodyText, manageURL, unsubscribeURL, archiveURL, physicalAddress string) string {
 	var lines []string
+	if archiveURL != "" {
+		lines = append(lines, "View this email in your browser: "+archiveURL, "")
+	}
 	if bodyText != "" {
 		lines = append(lines, strings.TrimRight(bodyText, "\r\n"), "")
 	}

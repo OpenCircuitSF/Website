@@ -25,6 +25,8 @@ import type {
   CampaignStatsResponse,
   WorkshopsListResponse,
   PublicWorkshop,
+  ArchiveListResponse,
+  ArchiveDetail,
   AdminWorkshop,
   AdminWorkshopsListResponse,
   WorkshopPreviewResponse,
@@ -956,6 +958,29 @@ export function listPublicWorkshops(): Promise<WorkshopsListResponse> {
  */
 export function getPublicWorkshop(slug: string): Promise<PublicWorkshop> {
   return apiGet<PublicWorkshop>(`/api/workshops/${encodeURIComponent(slug)}`);
+}
+
+/**
+ * GET /api/archive — the public campaign archive index (#0123, PRD §6.8):
+ * every SENT, published campaign, reverse chronological. Withheld and
+ * unsent campaigns never appear here — see public_archive.go's own doc
+ * comment.
+ */
+export function listArchive(): Promise<ArchiveListResponse> {
+  return apiGet<ArchiveListResponse>('/api/archive');
+}
+
+/**
+ * GET /api/archive/{slug} — one campaign's public web content (#0123). A
+ * campaign that hasn't sent yet, or an unknown slug, both throw
+ * ApiError(404), indistinguishably (public_archive.go's own doc comment).
+ * A withheld campaign throws ApiError(410) — ArchiveEntry.svelte renders a
+ * distinct "no longer available" state for that case, not the generic
+ * not-found one, since it is a different fact (a deliberate retraction, not
+ * "never existed").
+ */
+export function getArchiveEntry(slug: string): Promise<ArchiveDetail> {
+  return apiGet<ArchiveDetail>(`/api/archive/${encodeURIComponent(slug)}`);
 }
 
 /**

@@ -89,6 +89,12 @@ type claimedCampaign struct {
 	TestSentAt     *time.Time
 	MaterializedAt *time.Time
 	CreatedBy      *int64
+	// Slug is email_campaigns.slug (migration 000025, #0123) — threaded
+	// into sendOne's CampaignRenderInput so a real send carries the "View
+	// this email in your browser" link (PRD §6.8). Every campaign has a
+	// non-empty slug by construction (CampaignStore.Create mints one),
+	// so this is never blank for a campaign that reached 'sending'.
+	Slug string
 }
 
 // SendStore is the send worker's data-access layer over email_campaigns and
@@ -123,11 +129,11 @@ func NewSendStore(pool *pgxpool.Pool, audience *AudienceStore, settings Settings
 	}
 }
 
-const claimedCampaignColumns = `id, subject, preheader, body_md, audience_mode, test_sent_at, materialized_at, created_by`
+const claimedCampaignColumns = `id, subject, preheader, body_md, audience_mode, test_sent_at, materialized_at, created_by, slug`
 
 func scanClaimedCampaign(row pgx.Row) (*claimedCampaign, error) {
 	var c claimedCampaign
-	if err := row.Scan(&c.ID, &c.Subject, &c.Preheader, &c.BodyMD, &c.AudienceMode, &c.TestSentAt, &c.MaterializedAt, &c.CreatedBy); err != nil {
+	if err := row.Scan(&c.ID, &c.Subject, &c.Preheader, &c.BodyMD, &c.AudienceMode, &c.TestSentAt, &c.MaterializedAt, &c.CreatedBy, &c.Slug); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -511,9 +517,23 @@ func (s *SendStore) MarkRetryOrFailed(ctx context.Context, sendID int64, errMsg 
 // rows remain. A 'canceled' campaign no longer matches `status='sending'`,
 // so this is a harmless no-op once #0041's Cancel has run — cancel stops
 // further claims; it cannot recall anything already sent.
+//
+// #0123 (PRD §6.8): the same UPDATE also stamps archive_status = 'published'
+// and archived_at = now() — the acceptance criterion "On the campaign's
+// transition to sent, archive_status -> published and archived_at is
+// stamped, in the same transaction as the status change" is satisfied by
+// this being the SAME statement, not a second write: there is no window
+// where a reader could observe status='sent' with archive_status still
+// 'pending'. Unconditional, not guarded by "AND archive_status = 'pending'"
+// — a campaign can only pass through this UPDATE once (it requires
+// status='sending', and no path re-enters 'sending' from 'sent'), so
+// archive_status is always 'pending' here in practice; the unconditional
+// write is simpler and behaves identically.
 func (s *SendStore) CompleteIfDone(ctx context.Context, campaignID int64) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE email_campaigns SET status = 'sent', completed_at = now(), updated_at = now()
+		`UPDATE email_campaigns
+		    SET status = 'sent', completed_at = now(), updated_at = now(),
+		        archive_status = 'published', archived_at = now()
 		  WHERE id = $1 AND status = 'sending'
 		    AND NOT EXISTS (SELECT 1 FROM email_sends
 		                     WHERE campaign_id = $1 AND status IN ('queued', 'sending'))`,

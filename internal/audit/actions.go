@@ -354,6 +354,15 @@ const (
 	// "paused_delivery_health") for symmetry with
 	// ActionEmailCampaignScheduled's own from_status field.
 	ActionEmailCampaignResumed = "email_campaign.resumed"
+	// ActionEmailCampaignArchiveUpdated is written by PATCH
+	// /admin/campaigns/{id}/archive (#0123, PRD §6.8): an admin toggling a
+	// sent campaign's public archive page between published and
+	// withheld. Metadata carries from_status and new_status (both one of
+	// "published"/"withheld" — never "pending", the one value this route
+	// cannot set, see mailing.CampaignStore.SetArchiveStatus's own doc
+	// comment). "new_status", not "to_status" — see this action's handler
+	// (admin_campaign_archive.go) for why.
+	ActionEmailCampaignArchiveUpdated = "email_campaign.archive_updated"
 
 	// Workshop lifecycle (PRD §5.2/§6.2/§8; #0051's workshop CRUD API,
 	// migrations 000020/#0050). ActionWorkshopUpdated covers any

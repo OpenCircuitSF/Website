@@ -1202,10 +1202,12 @@ func TestAdminWorkshops_DeleteBlockedByCampaignReturns409(t *testing.T) {
 	cleanupAdminWorkshop(t, pool, w.ID)
 
 	var campaignID int64
+	unique := testdb.Unique()
 	if err := pool.QueryRow(context.Background(),
-		`INSERT INTO email_campaigns (name, subject, body_md, audience_mode, workshop_id)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		fmt.Sprintf("zz-subtest-campaign-%d", testdb.Unique()), "Subject", "Body", "all", w.ID,
+		`INSERT INTO email_campaigns (name, subject, body_md, audience_mode, workshop_id, slug)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		fmt.Sprintf("zz-subtest-campaign-%d", unique), "Subject", "Body", "all", w.ID,
+		fmt.Sprintf("zz-subtest-campaign-%d", unique),
 	).Scan(&campaignID); err != nil {
 		t.Fatalf("seed referencing campaign: %v", err)
 	}

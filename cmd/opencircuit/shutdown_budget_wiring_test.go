@@ -210,7 +210,7 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 	})
 
 	// #0054: a real *seo.Site, built the same way production does.
-	site, err := buildSEOSite(cfg, nil)
+	site, err := buildSEOSite(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("build seo site: %v", err)
 	}
@@ -230,10 +230,12 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 			nil, /* adminCampaignPreviewH: not exercised */
 			nil, /* adminCampaignPreflightH: not exercised */
 			nil, /* adminCampaignStatsH: not exercised */
+			nil, /* adminCampaignArchiveH: not exercised */
 			nil, /* adminWorkshopsH: not exercised */
 			nil, /* adminDashboardH: not exercised */
 			eventsH, nil, subscribeH,
 			nil, nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH: not exercised */
+			nil, /* publicArchiveH: not exercised */
 			nil, /* sesNotifyH: not exercised */
 			nil, /* sendWorker: not exercised */
 			nil, /* outboxWorker: not exercised */

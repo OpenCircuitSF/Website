@@ -130,7 +130,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 		inner:       workshopSEOSource{store: workshopsStore},
 		bySlugCalls: &bySlugCalls,
 	}
-	site, err := buildSEOSite(cfg, source)
+	site, err := buildSEOSite(cfg, source, nil)
 	if err != nil {
 		t.Fatalf("build seo site: %v", err)
 	}
@@ -162,11 +162,13 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 			nil, /* adminCampaignPreviewH: not exercised by this test */
 			nil, /* adminCampaignPreflightH: not exercised by this test */
 			nil, /* adminCampaignStatsH: not exercised by this test */
+			nil, /* adminCampaignArchiveH: not exercised by this test */
 			adminWorkshopsH,
 			nil,           /* adminDashboardH: not exercised by this test */
 			nil, nil, nil, /* eventsH, meH, subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
 			nil, nil, /* publicWorkshopsH, publicListStatsH: not exercised by this test -- this test hits the SEO-rendered detail page, not the JSON API */
+			nil, /* publicArchiveH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
 			nil, /* outboxWorker: not exercised */

@@ -26,6 +26,8 @@ export type RouteName =
   | 'home'
   | 'workshops'
   | 'workshop-detail'
+  | 'archive'
+  | 'archive-detail'
   | 'about'
   | 'privacy'
   | 'subscribe'
@@ -59,6 +61,7 @@ export interface Route {
 const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
   '/': 'home',
   '/workshops': 'workshops',
+  '/archive': 'archive',
   '/about': 'about',
   '/privacy': 'privacy',
   '/subscribe': 'subscribe',
@@ -73,8 +76,10 @@ const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
   '/admin': 'admin',
 };
 
-/** The one dynamic path parameter the router supports (PRD §7.2). */
+/** The two dynamic path parameters the router supports (PRD §7.2, widened
+ * by #0123 for the campaign archive). */
 const WORKSHOP_DETAIL = /^\/workshops\/([^/]+)$/;
+const ARCHIVE_DETAIL = /^\/archive\/([^/]+)$/;
 
 /**
  * Parse a pathname + query string into a typed Route. Pure function, no DOM
@@ -96,6 +101,11 @@ export function parsePath(pathname: string, search = ''): Route {
   const match = WORKSHOP_DETAIL.exec(path);
   if (match) {
     return { name: 'workshop-detail', path, params: { slug: decodeURIComponent(match[1]) }, query };
+  }
+
+  const archiveMatch = ARCHIVE_DETAIL.exec(path);
+  if (archiveMatch) {
+    return { name: 'archive-detail', path, params: { slug: decodeURIComponent(archiveMatch[1]) }, query };
   }
 
   return { name: 'not-found', path, params: {}, query };

@@ -170,7 +170,7 @@ func sesWiringStartServer(t *testing.T, pool *pgxpool.Pool, sesNotifyH *handlers
 	}
 
 	// #0054: a real *seo.Site, built the same way production does.
-	site, err := buildSEOSite(cfg, nil)
+	site, err := buildSEOSite(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("build seo site: %v", err)
 	}
@@ -190,12 +190,14 @@ func sesWiringStartServer(t *testing.T, pool *pgxpool.Pool, sesNotifyH *handlers
 			nil, /* adminCampaignPreviewH: not exercised by this test */
 			nil, /* adminCampaignPreflightH: not exercised by this test */
 			nil, /* adminCampaignStatsH: not exercised by this test */
+			nil, /* adminCampaignArchiveH: not exercised by this test */
 			nil, /* adminWorkshopsH: not exercised by this test */
 			nil, /* adminDashboardH: not exercised by this test */
 			nil, nil, nil,
 			nil, nil, nil, /* publicInterestsH, preferencesH, confirmH: not exercised by this test */
 			nil,      /* unsubscribeH: not exercised by this test */
 			nil, nil, /* publicWorkshopsH, publicListStatsH: not exercised by this test */
+			nil, /* publicArchiveH: not exercised by this test */
 			sesNotifyH,
 			nil, /* sendWorker: not exercised by this test */
 			nil, /* outboxWorker: not exercised */

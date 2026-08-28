@@ -303,10 +303,14 @@ func (h *AdminCampaignPreviewHandler) Preview(w http.ResponseWriter, r *http.Req
 	}
 
 	htmlBody, textBody, err := h.render.Campaign(mailing.CampaignRenderInput{
-		Subject:         campaign.Subject,
-		Preheader:       campaignPreheader(campaign),
-		BodyMarkdown:    campaign.BodyMD,
-		BaseURL:         h.baseURL,
+		Subject:      campaign.Subject,
+		Preheader:    campaignPreheader(campaign),
+		BodyMarkdown: campaign.BodyMD,
+		BaseURL:      h.baseURL,
+		// Slug (#0123): the preview/test-send must show the same "View
+		// this email in your browser" link a real send would render, so
+		// an operator previewing sees exactly what recipients will get.
+		Slug:            campaign.Slug,
 		ManageToken:     previewManageToken,
 		PhysicalAddress: h.physicalAddress(r.Context()),
 	})
@@ -372,10 +376,14 @@ func (h *AdminCampaignPreviewHandler) Test(w http.ResponseWriter, r *http.Reques
 	}
 
 	htmlBody, textBody, err := h.render.Campaign(mailing.CampaignRenderInput{
-		Subject:         campaign.Subject,
-		Preheader:       campaignPreheader(campaign),
-		BodyMarkdown:    campaign.BodyMD,
-		BaseURL:         h.baseURL,
+		Subject:      campaign.Subject,
+		Preheader:    campaignPreheader(campaign),
+		BodyMarkdown: campaign.BodyMD,
+		BaseURL:      h.baseURL,
+		// Slug (#0123): the preview/test-send must show the same "View
+		// this email in your browser" link a real send would render, so
+		// an operator previewing sees exactly what recipients will get.
+		Slug:            campaign.Slug,
 		ManageToken:     sub.ManageToken,
 		PhysicalAddress: h.physicalAddress(r.Context()),
 	})

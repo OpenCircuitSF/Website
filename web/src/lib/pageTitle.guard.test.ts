@@ -98,9 +98,13 @@ function firstH1Text(file: string): string {
  * the SAME RouteName type pageTitle.ts's table uses, minus the three
  * fallbacks, so removing a route from here without removing it from
  * STATIC_HEADING -- or vice versa -- is a compile error, not a silent gap. */
-const GUARDED_VIEW: Record<Exclude<RouteName, 'workshop-detail' | 'confirm' | 'unsubscribe'>, string> = {
+const GUARDED_VIEW: Record<
+  Exclude<RouteName, 'workshop-detail' | 'archive-detail' | 'confirm' | 'unsubscribe'>,
+  string
+> = {
   home: 'Home.svelte',
   workshops: 'WorkshopsIndex.svelte',
+  archive: 'ArchiveIndex.svelte',
   about: 'About.svelte',
   privacy: 'PrivacyPolicy.svelte',
   subscribe: 'Subscribe.svelte',
@@ -133,6 +137,8 @@ describe('pageTitle guard (#0238): titleForRoute is built from the SAME text as 
       'home',
       'workshops',
       'workshop-detail',
+      'archive',
+      'archive-detail',
       'about',
       'privacy',
       'subscribe',
@@ -147,7 +153,7 @@ describe('pageTitle guard (#0238): titleForRoute is built from the SAME text as 
       'admin',
       'not-found',
     ];
-    const fallbacks = new Set(['workshop-detail', 'confirm', 'unsubscribe']);
+    const fallbacks = new Set(['workshop-detail', 'archive-detail', 'confirm', 'unsubscribe']);
     const guarded = new Set(Object.keys(GUARDED_VIEW));
     for (const name of ALL_ROUTE_NAMES) {
       expect(guarded.has(name) || fallbacks.has(name)).toBe(true);

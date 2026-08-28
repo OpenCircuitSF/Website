@@ -128,6 +128,7 @@ type Renderer struct {
 	notFound RouteMeta
 	fallback RouteMeta
 	workshop WorkshopSource // nilable -- see WorkshopSource doc
+	archive  ArchiveSource  // nilable -- see ArchiveSource doc (#0123)
 
 	ttl time.Duration
 	now func() time.Time // injectable for deterministic tests
@@ -147,13 +148,15 @@ type cacheEntry struct {
 // source may be nil -- until #0051/#0054 wire a real workshop store,
 // /workshops/{slug} requests fall back to the generic default metadata (still
 // served with SPAHandler's own 200, since the path matches the known dynamic
-// pattern regardless of whether the slug exists).
-func NewRenderer(template []byte, baseURL string, source WorkshopSource) *Renderer {
+// pattern regardless of whether the slug exists). archive (#0123) may
+// likewise be nil, with the identical fallback for /archive/{slug}.
+func NewRenderer(template []byte, baseURL string, source WorkshopSource, archive ArchiveSource) *Renderer {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	r := &Renderer{
 		template: template,
 		baseURL:  baseURL,
 		workshop: source,
+		archive:  archive,
 		ttl:      defaultCacheTTL,
 		now:      time.Now,
 		cache:    make(map[string]cacheEntry),
@@ -219,6 +222,19 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGDescription: "Get notified about new workshops and events.",
 			OGImage:       image,
 			OGURL:         baseURL + "/subscribe",
+			OGType:        "website",
+			TwitterCard:   "summary_large_image",
+		},
+		// #0123, PRD §6.8: the archive index -- past campaign emails as a
+		// permanent, indexable page. "the only recurring indexable content
+		// the site will have," per that section's own reasoning.
+		"/archive": {
+			Title:         "Archive — Open Circuit SF",
+			Description:   "Past emails from Open Circuit SF: workshop announcements and updates from San Francisco's hands-on electronics workshop space.",
+			OGTitle:       "Archive — Open Circuit SF",
+			OGDescription: "Past emails from Open Circuit SF.",
+			OGImage:       image,
+			OGURL:         baseURL + "/archive",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
 		},
@@ -293,6 +309,18 @@ func (r *Renderer) resolve(normalizedPath string) (cacheKey string, meta RouteMe
 		// 200), so it gets the generic fallback rather than the 404 default.
 		return cacheKeyFallback, r.fallback
 	}
+	if slug, ok := handlers.ArchiveDetailSlug(normalizedPath); ok {
+		if m, ok := r.archiveRouteMeta(slug); ok {
+			return "archive:" + slug, m
+		}
+		// Matches the dynamic pattern but nothing worth its own cache
+		// entry was found (unknown slug, not yet sent, withheld, or an
+		// ArchiveSource error) -- still a "known" path (SPAHandler serves
+		// 200; the JSON API's own GET /api/archive/{slug} is what
+		// actually answers 404/410), so it gets the generic fallback
+		// rather than the 404 default, mirroring the workshop case above.
+		return cacheKeyFallback, r.fallback
+	}
 	if handlers.IsKnownRoute(normalizedPath) {
 		return cacheKeyFallback, r.fallback
 	}
@@ -361,6 +389,42 @@ func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 		OGType:        "website",
 		TwitterCard:   "summary_large_image",
 		JSONLD:        jsonld,
+	}, true
+}
+
+// archiveRouteMeta looks up slug in the configured ArchiveSource and builds
+// the RouteMeta for an /archive/{slug} request (#0123, PRD §6.8: "<title>
+// from the campaign subject, meta description from the preheader,
+// canonical URL, OG card").
+//
+// ok=false (share the generic fallback bucket, resolve's caller) for: no
+// ArchiveSource configured, an unknown slug, an archive source error, or a
+// campaign that is not yet Published (not sent, or withheld) — mirroring
+// workshopRouteMeta's own "nothing worth its own cache entry" posture for
+// the equivalent states.
+func (r *Renderer) archiveRouteMeta(slug string) (RouteMeta, bool) {
+	if r.archive == nil {
+		return RouteMeta{}, false
+	}
+	e, ok, err := r.archive.ArchiveEntryBySlug(slug)
+	if err != nil || !ok || !e.Published {
+		return RouteMeta{}, false
+	}
+
+	description := e.Preheader
+	if description == "" {
+		description = "Read this email from Open Circuit SF."
+	}
+	title := e.Subject + " — Open Circuit SF"
+	return RouteMeta{
+		Title:         title,
+		Description:   description,
+		OGTitle:       e.Subject,
+		OGDescription: description,
+		OGImage:       r.baseURL + "/og-default.png",
+		OGURL:         r.baseURL + "/archive/" + slug,
+		OGType:        "article",
+		TwitterCard:   "summary_large_image",
 	}, true
 }
 

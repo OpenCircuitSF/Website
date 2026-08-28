@@ -40,7 +40,7 @@ func (h fakeSPAHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // the property is guarded in both directions, not just "some status passes
 // through".
 func TestMiddleware_PreservesUpstreamStatus(t *testing.T) {
-	site := NewSite([]byte(testTemplate), testBaseURL, nil)
+	site := NewSite([]byte(testTemplate), testBaseURL, nil, nil)
 	next := fakeSPAHandler{knownPaths: map[string]bool{"/": true, "/about": true}}
 	mw := site.Middleware(next)
 
@@ -67,7 +67,7 @@ func TestMiddleware_PreservesUpstreamStatus(t *testing.T) {
 // path returns 404 status AND injected default (not blank, not the raw
 // unsubstituted template) metadata in the same response.
 func TestMiddleware_404GetsInjectedMetadata(t *testing.T) {
-	site := NewSite([]byte(testTemplate), testBaseURL, nil)
+	site := NewSite([]byte(testTemplate), testBaseURL, nil, nil)
 	next := fakeSPAHandler{knownPaths: map[string]bool{"/": true}}
 	mw := site.Middleware(next)
 
@@ -93,7 +93,7 @@ func TestMiddleware_404GetsInjectedMetadata(t *testing.T) {
 // response is never touched by the injector -- Content-Type, status, and
 // body all pass through byte-for-byte.
 func TestMiddleware_NonHTMLPassesThroughUnchanged(t *testing.T) {
-	site := NewSite([]byte(testTemplate), testBaseURL, nil)
+	site := NewSite([]byte(testTemplate), testBaseURL, nil, nil)
 	next := fakeSPAHandler{knownPaths: map[string]bool{}}
 	mw := site.Middleware(next)
 
@@ -114,7 +114,7 @@ func TestMiddleware_NonHTMLPassesThroughUnchanged(t *testing.T) {
 // TestSitemapHandler_ContentType covers #0020's "served with correct content
 // types" criterion for sitemap.xml.
 func TestSitemapHandler_ContentType(t *testing.T) {
-	site := NewSite([]byte(testTemplate), testBaseURL, nil)
+	site := NewSite([]byte(testTemplate), testBaseURL, nil, nil)
 	rec := httptest.NewRecorder()
 	site.SitemapHandler()(rec, httptest.NewRequest(http.MethodGet, "/sitemap.xml", nil))
 
@@ -131,7 +131,7 @@ func TestSitemapHandler_ContentType(t *testing.T) {
 
 // TestRobotsHandler_ContentType covers the same criterion for robots.txt.
 func TestRobotsHandler_ContentType(t *testing.T) {
-	site := NewSite([]byte(testTemplate), testBaseURL, nil)
+	site := NewSite([]byte(testTemplate), testBaseURL, nil, nil)
 	rec := httptest.NewRecorder()
 	site.RobotsHandler()(rec, httptest.NewRequest(http.MethodGet, "/robots.txt", nil))
 
@@ -164,7 +164,7 @@ func TestSite_EmittedURLsShareConfiguredHost(t *testing.T) {
 			CoverImage: "/cover.jpg", Status: WorkshopPublished, Published: true, UpdatedAt: "2026-08-01",
 		},
 	}
-	site := NewSite([]byte(testTemplate), configuredBaseURL, source)
+	site := NewSite([]byte(testTemplate), configuredBaseURL, source, nil)
 
 	// og:url and og:image, for both a static route and a workshop-detail route.
 	for _, path := range []string{"/", "/about", "/workshops/solder-101"} {
@@ -239,7 +239,7 @@ func extractMetaContent(t *testing.T, html, property string) string {
 // either is unwired.
 func TestSite_InvalidateWorkshopsClearsBothCaches(t *testing.T) {
 	source := &mutatingWorkshopSource{title: "Original Title", updatedAt: "2026-01-01"}
-	site := NewSite([]byte(testTemplate), testBaseURL, source)
+	site := NewSite([]byte(testTemplate), testBaseURL, source, nil)
 
 	_ = site.renderer.Render("/workshops/mutable")
 	firstSitemap, err := site.sitemap.Render()

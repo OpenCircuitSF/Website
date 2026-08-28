@@ -344,3 +344,62 @@ export function resumeSubjectMatches(typed: string, campaignSubject: string): bo
   const t = typed.trim();
   return t !== '' && t === campaignSubject.trim();
 }
+
+// ── Archive URL (#0123, PRD §6.8) ────────────────────────────────────────────
+
+/**
+ * The campaign's permanent public archive URL, built from the viewer's own
+ * origin (there is no server-injected BASE_URL constant on the client — the
+ * admin console is always browsed from the canonical host) and the
+ * campaign's slug, which is minted at draft time and therefore never blank
+ * (Campaign.slug's own doc comment). CampaignEditor.svelte's copyable field
+ * calls this with `window.location.origin`, passed in rather than read
+ * directly so this stays a pure, DOM-free function (#0094).
+ */
+export function archiveURL(origin: string, campaign: Pick<Campaign, 'slug'>): string {
+  return `${origin.replace(/\/$/, '')}/archive/${encodeURIComponent(campaign.slug)}`;
+}
+
+/**
+ * Whether the archive URL is live yet — true once the campaign has actually
+ * sent (archive_status moves pending -> published in the SAME transaction
+ * as the send, worker_store.go's CompleteIfDone), false for draft/
+ * scheduled/sending/failed/canceled (archive_status still 'pending') and
+ * for a withheld campaign (an admin's deliberate retraction — still not
+ * "live" in the sense this note means).
+ */
+export function isArchiveLive(campaign: Pick<Campaign, 'archive_status'>): boolean {
+  return campaign.archive_status === 'published';
+}
+
+/**
+ * The copyable field's helper note: reserved-but-not-live, live, or
+ * withheld. CampaignEditor.svelte renders this string verbatim rather than
+ * branching on archive_status itself (#0094).
+ */
+export function archiveURLNote(campaign: Pick<Campaign, 'archive_status'>): string {
+  switch (campaign.archive_status) {
+    case 'published':
+      return 'Live — this URL is public.';
+    case 'withheld':
+      return 'Withheld — this page currently answers 410 Gone.';
+    default:
+      return 'Reserved — this URL goes live once the campaign is sent.';
+  }
+}
+
+/** The Copy button's label for the archive-URL field's copy-to-clipboard
+ * state, so CampaignEditor.svelte's markup contains no inline ternary over
+ * `archiveURLCopyState` (#0094 — see this module's own header comment). */
+export type ArchiveURLCopyState = 'idle' | 'copied' | 'error';
+
+export function archiveURLCopyButtonLabel(state: ArchiveURLCopyState): string {
+  switch (state) {
+    case 'copied':
+      return 'Copied';
+    case 'error':
+      return 'Copy failed';
+    default:
+      return 'Copy';
+  }
+}

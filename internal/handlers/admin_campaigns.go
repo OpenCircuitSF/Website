@@ -255,6 +255,15 @@ type campaignView struct {
 	CreatedBy  *int64  `json:"created_by,omitempty"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
+	// Slug, ArchiveStatus, and ArchivedAt back #0123's compose-time
+	// "copyable future archive URL" field (PRD §6.8) and the archive
+	// toggle's own status display. Slug is never empty — Create mints one
+	// at draft time — so it is NOT omitempty, unlike every other field
+	// added here; the compose UI depends on it always being present to
+	// build the URL immediately after a campaign is created.
+	Slug          string  `json:"slug"`
+	ArchiveStatus string  `json:"archive_status"`
+	ArchivedAt    *string `json:"archived_at,omitempty"`
 }
 
 // formatTimePtr is defined in admin_subscribers.go and reused here.
@@ -265,22 +274,25 @@ func toCampaignView(c mailing.Campaign) campaignView {
 		ids = []int64{}
 	}
 	return campaignView{
-		ID:           c.ID,
-		Name:         c.Name,
-		Subject:      c.Subject,
-		Preheader:    c.Preheader,
-		BodyMD:       c.BodyMD,
-		Status:       c.Status,
-		AudienceMode: c.AudienceMode,
-		WorkshopID:   c.WorkshopID,
-		InterestIDs:  ids,
-		ScheduledAt:  formatTimePtr(c.ScheduledAt),
-		StartedAt:    formatTimePtr(c.StartedAt),
-		CompletedAt:  formatTimePtr(c.CompletedAt),
-		TestSentAt:   formatTimePtr(c.TestSentAt),
-		CreatedBy:    c.CreatedBy,
-		CreatedAt:    c.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:    c.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:            c.ID,
+		Name:          c.Name,
+		Subject:       c.Subject,
+		Preheader:     c.Preheader,
+		BodyMD:        c.BodyMD,
+		Status:        c.Status,
+		AudienceMode:  c.AudienceMode,
+		WorkshopID:    c.WorkshopID,
+		InterestIDs:   ids,
+		ScheduledAt:   formatTimePtr(c.ScheduledAt),
+		StartedAt:     formatTimePtr(c.StartedAt),
+		CompletedAt:   formatTimePtr(c.CompletedAt),
+		TestSentAt:    formatTimePtr(c.TestSentAt),
+		CreatedBy:     c.CreatedBy,
+		CreatedAt:     c.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:     c.UpdatedAt.UTC().Format(time.RFC3339),
+		Slug:          c.Slug,
+		ArchiveStatus: c.ArchiveStatus,
+		ArchivedAt:    formatTimePtr(c.ArchivedAt),
 	}
 }
 

@@ -297,6 +297,14 @@ func TestSendStore_CompleteIfDone(t *testing.T) {
 	if got := campaignStatus(t, pool, campaignID); got != CampaignStatusSent {
 		t.Errorf("status = %q, want sent", got)
 	}
+	// #0123: archive_status -> 'published' and archived_at stamped in the
+	// SAME UPDATE that flips status to 'sent' -- this issue's own
+	// acceptance criterion. There is no separate write to observe, so
+	// asserting both here (after the single CompleteIfDone call above)
+	// is the proof: if this passed, the two facts DID land atomically.
+	if archiveStatus, hasArchivedAt := campaignArchiveState(t, pool, campaignID); archiveStatus != ArchiveStatusPublished || !hasArchivedAt {
+		t.Errorf("archive_status = %q, hasArchivedAt = %v, want %q and true", archiveStatus, hasArchivedAt, ArchiveStatusPublished)
+	}
 }
 
 func TestSendStore_ClaimBatch_GroupsSkipsByReason(t *testing.T) {

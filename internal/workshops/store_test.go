@@ -505,10 +505,12 @@ func TestDelete_BlockedByReferencingCampaign(t *testing.T) {
 	w := createTestWorkshop(t, store, uniqueTitle(t))
 
 	var campaignID int64
+	unique := testdb.Unique()
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO email_campaigns (name, subject, body_md, audience_mode, workshop_id)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		fmt.Sprintf("zz-test-campaign-%d", testdb.Unique()), "Subject", "Body", "all", w.ID,
+		`INSERT INTO email_campaigns (name, subject, body_md, audience_mode, workshop_id, slug)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		fmt.Sprintf("zz-test-campaign-%d", unique), "Subject", "Body", "all", w.ID,
+		fmt.Sprintf("zz-test-campaign-%d", unique),
 	).Scan(&campaignID); err != nil {
 		t.Fatalf("seed referencing campaign: %v", err)
 	}

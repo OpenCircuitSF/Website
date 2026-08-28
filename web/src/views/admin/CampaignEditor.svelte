@@ -50,6 +50,10 @@
     cancelCopy,
     resumeCopy,
     resumeSubjectMatches,
+    archiveURL,
+    archiveURLNote,
+    archiveURLCopyButtonLabel,
+    type ArchiveURLCopyState,
   } from '../../lib/campaigns';
   import { parseUnmetFromError, fixLocation } from '../../lib/preflight';
   import {
@@ -268,6 +272,27 @@
   let hasAudienceWarnings = $derived(audienceWarningsList.length > 0);
   let hasAudienceSample = $derived(audienceSampleList.length > 0);
   let preflightUnknown = $derived(unmet === null);
+
+  // ── Archive URL (#0123, PRD §6.8) ──────────────────────────────────────
+  // Reserved at draft time (Campaign.slug is never blank), so this is
+  // always computable once `campaign` has loaded -- the whole point of
+  // minting the slug at Create rather than at send.
+  let archiveURLValue = $derived(campaign ? archiveURL(window.location.origin, campaign) : '');
+  let archiveURLNoteText = $derived(campaign ? archiveURLNote(campaign) : '');
+  let archiveURLCopyState = $state<ArchiveURLCopyState>('idle');
+  let archiveURLCopyLabel = $derived(archiveURLCopyButtonLabel(archiveURLCopyState));
+
+  async function copyArchiveURL(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(archiveURLValue);
+      archiveURLCopyState = 'copied';
+    } catch {
+      archiveURLCopyState = 'error';
+    }
+    setTimeout(() => {
+      archiveURLCopyState = 'idle';
+    }, 2000);
+  }
 
   // ── Loading ─────────────────────────────────────────────────────────────
   async function load(): Promise<void> {
@@ -666,6 +691,16 @@
         />
       </div>
       <div class="field">
+        <label for="campaign-archive-url">Archive URL</label>
+        <div class="archive-url-row">
+          <input id="campaign-archive-url" type="text" value={archiveURLValue} readonly />
+          <Button type="button" variant="subtle" onclick={copyArchiveURL}>
+            {archiveURLCopyLabel}
+          </Button>
+        </div>
+        <p class="length-advice">{archiveURLNoteText}</p>
+      </div>
+      <div class="field">
         <label for="campaign-subject">Subject</label>
         <input
           id="campaign-subject"
@@ -1036,6 +1071,16 @@
     margin: var(--space-1) 0 0;
     font-size: var(--fs-sm);
     color: var(--text-muted);
+  }
+  .archive-url-row {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+  }
+  .archive-url-row input {
+    flex: 1 1 auto;
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-sm);
   }
   .length-advice.warn {
     color: var(--text-notice, var(--success));

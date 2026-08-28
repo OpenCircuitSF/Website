@@ -336,7 +336,11 @@
         {/each}
       </div>
     {/if}
-    <p class="text-muted next-up-note"><a href="/workshops">See all workshops</a></p>
+    <p class="text-muted next-up-note">
+      <a href="/workshops">See all workshops</a>
+      <span aria-hidden="true"> · </span>
+      <a href="/archive">Read the archive</a>
+    </p>
   </section>
 
   <TraceDivider />

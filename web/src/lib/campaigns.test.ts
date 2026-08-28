@@ -37,6 +37,8 @@ function campaign(fields: Partial<Campaign>): Campaign {
     interest_ids: [],
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
+    slug: 'n',
+    archive_status: 'pending',
     ...fields,
   };
 }

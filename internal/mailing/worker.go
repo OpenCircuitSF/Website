@@ -873,6 +873,11 @@ func (w *Worker) sendOne(ctx context.Context, c *claimedCampaign, r Recipient, p
 		BaseURL:         w.baseURL,
 		ManageToken:     r.ManageToken,
 		PhysicalAddress: physicalAddress,
+		// Slug (#0123): every real send carries the "View this email in
+		// your browser" link (PRD §6.8) — c.Slug is never empty for a
+		// campaign that reached 'sending' (CampaignStore.Create mints one
+		// at draft time).
+		Slug: c.Slug,
 	})
 	if rerr != nil {
 		// The admin-facing string is deliberately fixed and generic (see

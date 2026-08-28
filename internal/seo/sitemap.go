@@ -19,7 +19,7 @@ import (
 // is still asserted to be a handlers.IsKnownRoute member in sitemap_test.go,
 // so this curated list can never silently drift into advertising a URL the
 // client router would 404.
-var marketingRoutes = []string{"/", "/about", "/privacy", "/workshops", "/subscribe"}
+var marketingRoutes = []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/archive"}
 
 // urlset / sitemapURL model the sitemaps.org XML schema (only the two
 // elements #0020 requires: loc and lastmod).
@@ -38,6 +38,7 @@ type sitemapURL struct {
 type Sitemap struct {
 	baseURL string
 	source  WorkshopSource // nilable, see WorkshopSource doc
+	archive ArchiveSource  // nilable, see ArchiveSource doc (#0123)
 	built   string         // "today" in RFC 3339 date form, used as the static routes' <lastmod>
 
 	ttl time.Duration
@@ -49,24 +50,28 @@ type Sitemap struct {
 }
 
 // NewSitemap constructs a Sitemap over baseURL (no trailing slash) and an
-// optional WorkshopSource.
-func NewSitemap(baseURL string, source WorkshopSource) *Sitemap {
+// optional WorkshopSource and ArchiveSource (#0123).
+func NewSitemap(baseURL string, source WorkshopSource, archive ArchiveSource) *Sitemap {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	return &Sitemap{
 		baseURL: baseURL,
 		source:  source,
+		archive: archive,
 		built:   time.Now().UTC().Format("2006-01-02"),
 		ttl:     defaultCacheTTL,
 		now:     time.Now,
 	}
 }
 
-// Build generates the sitemap.xml bytes from the marketing route list plus
-// every published workshop, filtering out draft/unpublished/canceled
-// workshops (#0020's carried-in criterion). Every <loc> is verified against
-// handlers.IsKnownRoute by the caller's own construction (marketingRoutes is
-// a curated subset asserted in sitemap_test.go; workshop detail paths always
-// match the dynamic pattern by construction of the URL itself).
+// Build generates the sitemap.xml bytes from the marketing route list
+// (which now includes "/archive" itself), every published workshop
+// (filtering out draft/unpublished/canceled, #0020's carried-in criterion),
+// and every published archive entry (#0123, filtering out pending/withheld
+// — PRD §6.8: "withheld campaigns are excluded from the sitemap"). Every
+// <loc> is verified against handlers.IsKnownRoute by the caller's own
+// construction (marketingRoutes is a curated subset asserted in
+// sitemap_test.go; workshop/archive detail paths always match their
+// dynamic pattern by construction of the URL itself).
 func (s *Sitemap) Build() ([]byte, error) {
 	set := urlset{Xmlns: "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
@@ -89,6 +94,22 @@ func (s *Sitemap) Build() ([]byte, error) {
 			set.URLs = append(set.URLs, sitemapURL{
 				Loc:     s.baseURL + "/workshops/" + w.Slug,
 				LastMod: w.UpdatedAt,
+			})
+		}
+	}
+
+	if s.archive != nil {
+		entries, err := s.archive.ArchiveEntries()
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			if !e.Published {
+				continue // pending (never sent), withheld -- excluded
+			}
+			set.URLs = append(set.URLs, sitemapURL{
+				Loc:     s.baseURL + "/archive/" + e.Slug,
+				LastMod: e.UpdatedAt,
 			})
 		}
 	}

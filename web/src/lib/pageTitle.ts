@@ -78,6 +78,12 @@ const STATIC_HEADING: Record<RouteName, string> = {
   // the workshop has loaded (status === 'loaded'); this is what a fresh
   // navigation shows in the meantime.
   'workshop-detail': 'Workshop',
+  // guarded — web/src/views/ArchiveIndex.svelte
+  archive: 'Archive',
+  // fallback — web/src/views/ArchiveEntry.svelte's <h1> only exists once
+  // the campaign has loaded (status === 'loaded'); this is what a fresh
+  // navigation shows in the meantime.
+  'archive-detail': 'Archive',
   // guarded — web/src/views/About.svelte
   about: `About ${APP_NAME}`,
   // guarded — web/src/views/PrivacyPolicy.svelte

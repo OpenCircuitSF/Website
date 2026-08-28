@@ -29,7 +29,7 @@ const testTemplate = `<!doctype html>
 const testBaseURL = "https://www.opencircuitsf.com"
 
 func newTestRenderer(source WorkshopSource) *Renderer {
-	return NewRenderer([]byte(testTemplate), testBaseURL, source)
+	return NewRenderer([]byte(testTemplate), testBaseURL, source, nil)
 }
 
 // --- Route matching -------------------------------------------------------

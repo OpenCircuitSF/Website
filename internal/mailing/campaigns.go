@@ -43,6 +43,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -74,6 +76,21 @@ const (
 	CampaignStatusSent                 = "sent"
 	CampaignStatusCanceled             = "canceled"
 	CampaignStatusFailed               = "failed"
+)
+
+// Archive status constants (#0123, migration 000025, PRD §6.8). A campaign
+// is minted with 'pending' at Create time (the column default) and the
+// worker's CompleteIfDone (worker_store.go) stamps 'published' +
+// archived_at in the SAME UPDATE that flips status to 'sent' — so a
+// campaign is never observably 'sent' with archive_status still 'pending'.
+// 'withheld' is the admin's own lever (PATCH /admin/campaigns/{id}/archive,
+// admin_campaign_archive.go): the page answers 410 Gone rather than 404,
+// and is dropped from the public index and the sitemap, per PRD §6.8's
+// table ("withheld" is a deliberate retraction, not "never existed").
+const (
+	ArchiveStatusPending   = "pending"
+	ArchiveStatusPublished = "published"
+	ArchiveStatusWithheld  = "withheld"
 )
 
 var (
@@ -120,7 +137,67 @@ var (
 	// internal/handlers/admin_campaigns.go), so this only ever fires as a
 	// defensive check against a caller bypassing that default.
 	ErrCampaignScheduleTimeRequired = errors.New("mailing: scheduled_at is required to schedule a campaign")
+
+	// ErrCampaignSlugNotEditable is returned by Update when the caller
+	// supplies a slug that differs from the campaign's current one while
+	// the campaign's status is anything other than draft (#0123's
+	// acceptance criterion: "editable while the campaign is draft;
+	// immutable once the campaign leaves draft"). The slug is what a
+	// short link or a piece of promotional copy is written against before
+	// the send goes out (PRD §6.8's "load-bearing detail"), so it must not
+	// be able to move out from under promotion that already points at it
+	// once the campaign has scheduled or sent.
+	ErrCampaignSlugNotEditable = errors.New("mailing: campaign slug can only be edited while draft")
+
+	// ErrCampaignSlugTaken is returned by Update when a caller-supplied
+	// slug collides with a different campaign's slug (email_campaigns'
+	// UNIQUE(slug) constraint, migration 000025). Update does not run its
+	// own collision-suffix retry the way Create does — Create's retry
+	// exists because an operator never typed the candidate slug
+	// themselves (it was derived from Subject), so silently trying "-2"
+	// is a reasonable default; here the operator asked for THIS exact
+	// slug, so the correct response is telling them it's taken, not
+	// silently substituting a different one out from under a short link
+	// they may already be about to write against it.
+	ErrCampaignSlugTaken = errors.New("mailing: campaign slug is already in use")
+
+	// errSlugAttemptsExhausted is wrapped into the error Create returns if
+	// maxSlugAttempts consecutive candidates all collide against the
+	// slug's UNIQUE constraint — effectively unreachable in practice, but
+	// a bounded retry loop must still terminate somehow. Mirrors
+	// workshops.errSlugAttemptsExhausted; see slugify's doc comment for
+	// why the two packages each carry their own small copy rather than
+	// sharing one.
+	errSlugAttemptsExhausted = errors.New("mailing: could not generate a unique campaign slug")
 )
+
+// maxSlugAttempts bounds Create's collision-suffix retry loop, mirroring
+// workshops.maxSlugAttempts.
+const maxSlugAttempts = 1000
+
+// campaignSlugNonAlnum matches any run of characters that are not a
+// lowercase ASCII letter or digit, for collapsing into a single hyphen.
+// A byte-for-byte copy of workshops.slugNonAlnum (internal/workshops/store.go)
+// — the two packages don't share an internal/slug helper package because
+// each is the only file in its own package that needs it, and PRD/CLAUDE.md
+// carry no rule requiring code shared this thinly to be factored out.
+var campaignSlugNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
+
+// slugifyCampaign derives a URL slug from a campaign subject: lowercase,
+// every run of non-alphanumeric characters collapsed to one hyphen,
+// leading/trailing hyphens trimmed. An input that slugifies to "" (a
+// subject that is all punctuation/emoji) falls back to "campaign" so
+// Create's INSERT never attempts an empty slug. Mirrors
+// workshops.slugify exactly, including the fallback shape.
+func slugifyCampaign(subject string) string {
+	lower := strings.ToLower(subject)
+	hyphenated := campaignSlugNonAlnum.ReplaceAllString(lower, "-")
+	trimmed := strings.Trim(hyphenated, "-")
+	if trimmed == "" {
+		return "campaign"
+	}
+	return trimmed
+}
 
 // Campaign is a single email_campaigns row plus its campaign_interests
 // targeting, loaded as a side query by GetByID/List/Create/Update/Send/Cancel
@@ -138,6 +215,27 @@ type Campaign struct {
 	ScheduledAt  *time.Time
 	StartedAt    *time.Time
 	CompletedAt  *time.Time
+	// Slug is email_campaigns.slug (migration 000025, #0123, PRD §6.8) —
+	// minted at Create time from Subject (slugifyCampaign), never blank.
+	// It is the permanent public identity of this campaign's archive page
+	// (/archive/{slug}) and is generated up front, at draft time, so
+	// promotion (a go.opencircuitsf.com short link, a Discord post) can be
+	// written against the final URL before the send goes out — see this
+	// package's slugifyCampaign doc comment and Create's own comment for
+	// the collision-retry algorithm. Editable only while Status is draft
+	// (Update returns ErrCampaignSlugNotEditable otherwise).
+	Slug string
+	// ArchiveStatus is email_campaigns.archive_status: 'pending' (not yet
+	// sent), 'published' (sent — stamped atomically by the worker's
+	// CompleteIfDone alongside Status -> 'sent'), or 'withheld' (an admin
+	// deliberately pulled it — PATCH /admin/campaigns/{id}/archive). See
+	// the ArchiveStatus* constants above.
+	ArchiveStatus string
+	// ArchivedAt is email_campaigns.archived_at — nil until the campaign's
+	// ArchiveStatus first becomes 'published', then permanent (never
+	// cleared by a later withhold — a 'withheld' page's ArchivedAt still
+	// records when it first went live).
+	ArchivedAt *time.Time
 	// TestSentAt is email_campaigns.test_sent_at (migration 000018). nil
 	// means no test send has ever been delivered. #0046's
 	// AdminCampaignPreviewHandler.Test is the sole writer (MarkTestSent
@@ -187,6 +285,15 @@ type CampaignUpdate struct {
 	BodyMD       string
 	AudienceMode string
 	InterestIDs  []int64
+	// Slug is the target slug. Callers that don't intend to change it pass
+	// back the campaign's current value (mirroring every other field's
+	// "fully-resolved target value" contract above) — Update only rejects
+	// (ErrCampaignSlugNotEditable) when this differs from the stored slug
+	// AND the campaign's current status is not draft; passing the
+	// unchanged slug is always accepted regardless of status, so a caller
+	// that merges-then-calls-Update without touching the slug field never
+	// has to special-case it.
+	Slug string
 }
 
 // CampaignStore is the data-access layer over email_campaigns and
@@ -201,13 +308,15 @@ func NewCampaignStore(pool *pgxpool.Pool) *CampaignStore {
 }
 
 const campaignColumns = `id, name, subject, preheader, body_md, status, audience_mode,
-	workshop_id, scheduled_at, started_at, completed_at, test_sent_at, created_by, created_at, updated_at`
+	workshop_id, scheduled_at, started_at, completed_at, test_sent_at, created_by, created_at, updated_at,
+	slug, archive_status, archived_at`
 
 func scanCampaign(row pgx.Row) (Campaign, error) {
 	var c Campaign
 	if err := row.Scan(
 		&c.ID, &c.Name, &c.Subject, &c.Preheader, &c.BodyMD, &c.Status, &c.AudienceMode,
 		&c.WorkshopID, &c.ScheduledAt, &c.StartedAt, &c.CompletedAt, &c.TestSentAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&c.Slug, &c.ArchiveStatus, &c.ArchivedAt,
 	); err != nil {
 		return Campaign{}, err
 	}
@@ -255,6 +364,17 @@ func dedupeInt64(ids []int64) []int64 {
 func isForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+// isUniqueViolation reports whether err is a Postgres unique_violation
+// (SQLSTATE 23505) — used by Create's slug-collision retry loop. A copy of
+// workshops.isUniqueViolation (internal/workshops/store.go), which serves
+// the identical purpose for that package's own slug retry; see
+// slugifyCampaign's doc comment for why this package carries its own small
+// copy rather than a shared helper package.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // replaceInterestsTx replaces a campaign's full campaign_interests set with
@@ -390,10 +510,26 @@ func (s *CampaignStore) GetByID(ctx context.Context, id int64) (Campaign, error)
 // Create inserts a new campaign in status='draft' plus its campaign_interests
 // rows, atomically. Rejects an unknown audience_mode or an empty interest set
 // for any_of/all_of before any write (normalizeAudience).
+//
+// # Slug minting (#0123, PRD §6.8)
+//
+// A slug is generated from in.Subject (slugifyCampaign) and uniquified on
+// collision with a numeric suffix ("-2", "-3", ...) exactly the way
+// workshops.Store.Create mints a workshop's slug — see that method's own
+// doc comment for the full reasoning, mirrored here: each candidate is a
+// real INSERT fought out against email_campaigns' UNIQUE(slug) constraint
+// inside its own pgx pseudo-nested transaction (SAVEPOINT / RELEASE
+// SAVEPOINT / ROLLBACK TO SAVEPOINT), never a pre-check-then-insert race,
+// so two concurrent Creates with the same subject can never both win the
+// same slug. The slug is minted here, at draft time, not at send time —
+// PRD §6.8's "load-bearing detail": promotion for a campaign has to be
+// written against a URL that already exists.
 func (s *CampaignStore) Create(ctx context.Context, in CampaignInput) (Campaign, error) {
 	if err := normalizeAudience(in.AudienceMode, in.InterestIDs); err != nil {
 		return Campaign{}, err
 	}
+
+	base := slugifyCampaign(in.Subject)
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -401,15 +537,39 @@ func (s *CampaignStore) Create(ctx context.Context, in CampaignInput) (Campaign,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	row := tx.QueryRow(ctx,
-		`INSERT INTO email_campaigns (name, subject, preheader, body_md, audience_mode, workshop_id, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 RETURNING `+campaignColumns,
-		in.Name, in.Subject, in.Preheader, in.BodyMD, in.AudienceMode, in.WorkshopID, in.CreatedBy,
-	)
-	c, err := scanCampaign(row)
-	if err != nil {
-		return Campaign{}, fmt.Errorf("mailing: creating campaign %q: %w", in.Name, err)
+	var c Campaign
+	var insertErr error
+	for attempt := 0; attempt < maxSlugAttempts; attempt++ {
+		candidate := base
+		if attempt > 0 {
+			candidate = fmt.Sprintf("%s-%d", base, attempt+1)
+		}
+		sp, err := tx.Begin(ctx)
+		if err != nil {
+			return Campaign{}, fmt.Errorf("mailing: starting slug-attempt savepoint for %q: %w", in.Name, err)
+		}
+		row := sp.QueryRow(ctx,
+			`INSERT INTO email_campaigns (name, subject, preheader, body_md, audience_mode, workshop_id, created_by, slug)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			 RETURNING `+campaignColumns,
+			in.Name, in.Subject, in.Preheader, in.BodyMD, in.AudienceMode, in.WorkshopID, in.CreatedBy, candidate,
+		)
+		c, insertErr = scanCampaign(row)
+		if insertErr == nil {
+			if err := sp.Commit(ctx); err != nil {
+				return Campaign{}, fmt.Errorf("mailing: releasing slug-attempt savepoint for %q: %w", in.Name, err)
+			}
+			break
+		}
+		if !isUniqueViolation(insertErr) {
+			return Campaign{}, fmt.Errorf("mailing: creating campaign %q: %w", in.Name, insertErr)
+		}
+		if err := sp.Rollback(ctx); err != nil {
+			return Campaign{}, fmt.Errorf("mailing: rolling back slug-attempt savepoint for %q: %w", in.Name, err)
+		}
+	}
+	if insertErr != nil {
+		return Campaign{}, fmt.Errorf("mailing: creating campaign %q: %w", in.Name, errSlugAttemptsExhausted)
 	}
 
 	interestIDs := dedupeInt64(in.InterestIDs)
@@ -470,21 +630,40 @@ func (s *CampaignStore) Update(ctx context.Context, id int64, in CampaignUpdate)
 		return Campaign{}, ErrCampaignNotEditable
 	}
 
+	// Slug: immutable once the campaign leaves draft (#0123's acceptance
+	// criterion — see ErrCampaignSlugNotEditable's doc comment for why).
+	// Passing back the unchanged slug is always accepted, so a caller that
+	// merges-then-calls-Update without touching this field never trips the
+	// check; a genuinely different slug is refused unless status is still
+	// draft.
+	slug := in.Slug
+	if slug != current.Slug {
+		if current.Status != CampaignStatusDraft {
+			return Campaign{}, ErrCampaignSlugNotEditable
+		}
+	} else {
+		slug = current.Slug
+	}
+
 	// See the "test_sent_at" doc comment above: a subject or body_md change
 	// clears test_sent_at back to NULL so the no_test_send gate re-arms.
 	row := tx.QueryRow(ctx,
 		`UPDATE email_campaigns
 		    SET name = $2, subject = $3, preheader = $4, body_md = $5,
-		        audience_mode = $6, updated_at = now(),
+		        audience_mode = $6, slug = $7, updated_at = now(),
 		        test_sent_at = CASE
 		            WHEN subject IS DISTINCT FROM $3 OR body_md IS DISTINCT FROM $5
 		            THEN NULL ELSE test_sent_at END
 		  WHERE id = $1
 		  RETURNING `+campaignColumns,
-		id, in.Name, in.Subject, in.Preheader, in.BodyMD, in.AudienceMode,
+		id, in.Name, in.Subject, in.Preheader, in.BodyMD, in.AudienceMode, slug,
 	)
 	updated, err := scanCampaign(row)
-	if err != nil {
+	switch {
+	case err == nil:
+	case isUniqueViolation(err):
+		return Campaign{}, ErrCampaignSlugTaken
+	default:
 		return Campaign{}, fmt.Errorf("mailing: updating campaign %d: %w", id, err)
 	}
 

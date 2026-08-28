@@ -214,6 +214,19 @@ func campaignStatus(t *testing.T, pool *pgxpool.Pool, campaignID int64) string {
 	return status
 }
 
+// campaignArchiveState reads a campaign's archive_status and whether
+// archived_at is set (#0123's CompleteIfDone same-transaction stamp).
+func campaignArchiveState(t *testing.T, pool *pgxpool.Pool, campaignID int64) (archiveStatus string, hasArchivedAt bool) {
+	t.Helper()
+	var archivedAt *time.Time
+	if err := pool.QueryRow(context.Background(),
+		`SELECT archive_status, archived_at FROM email_campaigns WHERE id = $1`, campaignID,
+	).Scan(&archiveStatus, &archivedAt); err != nil {
+		t.Fatalf("read campaign %d archive state: %v", campaignID, err)
+	}
+	return archiveStatus, archivedAt != nil
+}
+
 // sendRowStatus reads one email_sends row's status.
 func sendRowStatus(t *testing.T, pool *pgxpool.Pool, sendID int64) string {
 	t.Helper()

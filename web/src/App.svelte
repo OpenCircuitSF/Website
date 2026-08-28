@@ -15,6 +15,8 @@
   import Home from './views/Home.svelte';
   import WorkshopsIndex from './views/WorkshopsIndex.svelte';
   import WorkshopDetail from './views/WorkshopDetail.svelte';
+  import ArchiveIndex from './views/ArchiveIndex.svelte';
+  import ArchiveEntry from './views/ArchiveEntry.svelte';
   import About from './views/About.svelte';
   import PrivacyPolicy from './views/PrivacyPolicy.svelte';
   import Subscribe from './views/Subscribe.svelte';
@@ -147,6 +149,10 @@
     <WorkshopsIndex />
   {:else if $currentRoute.name === 'workshop-detail'}
     <WorkshopDetail />
+  {:else if $currentRoute.name === 'archive'}
+    <ArchiveIndex />
+  {:else if $currentRoute.name === 'archive-detail'}
+    <ArchiveEntry />
   {:else if $currentRoute.name === 'about'}
     <About />
   {:else if $currentRoute.name === 'privacy'}

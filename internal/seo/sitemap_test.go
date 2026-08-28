@@ -26,7 +26,7 @@ func TestSitemap_MarketingRoutesAreKnownRoutes(t *testing.T) {
 // criterion: valid XML with <loc> and <lastmod> for each of the four static
 // marketing routes.
 func TestSitemap_ContainsStaticRoutesWithLastmod(t *testing.T) {
-	s := NewSitemap(testBaseURL, nil)
+	s := NewSitemap(testBaseURL, nil, nil)
 	body, err := s.Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -88,7 +88,7 @@ func TestSitemap_ExcludesUnpublishedWorkshops(t *testing.T) {
 		"canceled-1": {Slug: "canceled-1", Status: WorkshopCanceled},
 		"canceled-2": {Slug: "canceled-2", Status: WorkshopCanceled, Published: true},
 	}
-	s := NewSitemap(testBaseURL, source)
+	s := NewSitemap(testBaseURL, source, nil)
 	body, err := s.Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -110,7 +110,7 @@ func TestSitemap_ExcludesUnpublishedWorkshops(t *testing.T) {
 // source still produces a valid sitemap with just the static routes, rather
 // than erroring.
 func TestSitemap_NoWorkshopSourceOmitsWorkshopSection(t *testing.T) {
-	s := NewSitemap(testBaseURL, nil)
+	s := NewSitemap(testBaseURL, nil, nil)
 	body, err := s.Build()
 	if err != nil {
 		t.Fatalf("Build with nil source: %v", err)
@@ -127,7 +127,7 @@ func TestSitemap_NoWorkshopSourceOmitsWorkshopSection(t *testing.T) {
 // property the way the issue asks -- assert it, don't just rely on it being
 // structurally true.
 func TestSitemap_404PathNeverAppears(t *testing.T) {
-	s := NewSitemap(testBaseURL, nil)
+	s := NewSitemap(testBaseURL, nil, nil)
 	body, err := s.Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -148,7 +148,7 @@ func TestSitemap_404PathNeverAppears(t *testing.T) {
 // refresh.
 func TestSitemap_CachesAndInvalidates(t *testing.T) {
 	source := &mutatingSitemapSource{slug: "workshop-a"}
-	s := NewSitemap(testBaseURL, source)
+	s := NewSitemap(testBaseURL, source, nil)
 	clock := &fakeClock{t: time.Unix(0, 0)}
 	s.now = clock.now
 

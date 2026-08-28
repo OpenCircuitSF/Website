@@ -27,6 +27,8 @@
       <span class="sep" aria-hidden="true">·</span>
       <a href={LUMA_URL} target="_blank" rel="noopener noreferrer">Calendar</a>
       <span class="sep" aria-hidden="true">·</span>
+      <a href="/archive">Archive</a>
+      <span class="sep" aria-hidden="true">·</span>
       <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>
       <span class="sep" aria-hidden="true">·</span>
       <a href="/privacy">Privacy policy</a>

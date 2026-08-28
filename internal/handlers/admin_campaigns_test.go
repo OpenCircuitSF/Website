@@ -108,15 +108,18 @@ func auditActionsForCampaign(t *testing.T, pool *pgxpool.Pool, id int64) []strin
 }
 
 type decodedCampaign struct {
-	ID           int64   `json:"id"`
-	Name         string  `json:"name"`
-	Subject      string  `json:"subject"`
-	BodyMD       string  `json:"body_md"`
-	Status       string  `json:"status"`
-	AudienceMode string  `json:"audience_mode"`
-	InterestIDs  []int64 `json:"interest_ids"`
-	ScheduledAt  *string `json:"scheduled_at"`
-	TestSentAt   *string `json:"test_sent_at"`
+	ID            int64   `json:"id"`
+	Name          string  `json:"name"`
+	Subject       string  `json:"subject"`
+	BodyMD        string  `json:"body_md"`
+	Status        string  `json:"status"`
+	AudienceMode  string  `json:"audience_mode"`
+	InterestIDs   []int64 `json:"interest_ids"`
+	ScheduledAt   *string `json:"scheduled_at"`
+	TestSentAt    *string `json:"test_sent_at"`
+	Slug          string  `json:"slug"`
+	ArchiveStatus string  `json:"archive_status"`
+	ArchivedAt    *string `json:"archived_at"`
 }
 
 func decodeCampaign(t *testing.T, body []byte) decodedCampaign {

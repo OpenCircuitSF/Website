@@ -128,7 +128,7 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 	passthrough := func(next http.Handler) http.Handler { return next }
 
 	// #0054: a real *seo.Site, built the same way production does.
-	site, err := buildSEOSite(cfg, nil)
+	site, err := buildSEOSite(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("build seo site: %v", err)
 	}
@@ -158,10 +158,12 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 			nil, /* adminCampaignPreviewH: not exercised */
 			nil, /* adminCampaignPreflightH: not exercised */
 			nil, /* adminCampaignStatsH: not exercised */
+			nil, /* adminCampaignArchiveH: not exercised */
 			nil, /* adminWorkshopsH: not exercised */
 			nil, /* adminDashboardH: not exercised */
 			nil, nil, subscribeH,
 			nil, nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH: not exercised by this test */
+			nil, /* publicArchiveH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
 			nil, /* outboxWorker: not exercised */
