@@ -797,6 +797,19 @@ else's build.
 The same caution applies to any shared mutable resource — a database, a
 scratch directory, `web/dist/`. Namespace it or verify ownership.
 
+**`./scripts/dev.sh --built` runs a real `npm run build`, which overwrites the
+tracked `web/dist/index.html` placeholder.** Three agents have now hit this, and
+the instinct each time is `git checkout -- web/dist/index.html`, which §8a
+forbids outright. The safe restore, which does not touch anyone else's work:
+
+```bash
+git show HEAD:web/dist/index.html > web/dist/index.html   # restore, no checkout
+git status --porcelain -- web/dist/                        # confirm clean
+```
+
+Better still, run a production build in a throwaway worktree. `scripts/check.sh`
+deliberately does not build, so an ordinary verification never needs this.
+
 **The scratchpad directory is not session-private in practice.** Two agents
 have now had a script pick up a *previous* session's leftover file from it —
 one nearly pasted another issue's review notes into the file it was writing,
