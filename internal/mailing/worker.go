@@ -234,6 +234,26 @@ type ProgressPublisher interface {
 	PublishCampaignProgress(ctx context.Context, p CampaignProgress)
 }
 
+// ArchiveCacheInvalidator is the narrow seam over *seo.Site's
+// InvalidateWorkshops method (#0319) — the same method
+// internal/handlers.AdminWorkshopsHandler and AdminCampaignArchiveHandler
+// already call, reused here rather than inventing a second mechanism, per
+// this issue's criterion 1. CompleteIfDone (worker_store.go) is the ONLY
+// place a campaign's archive_status ever becomes 'published' as a side
+// effect of something other than an admin's own PATCH
+// /admin/campaigns/{id}/archive request — it stamps archive_status =
+// 'published' in the same UPDATE that flips status to 'sent' — so without
+// this call, a just-finished campaign was absent from sitemap.xml for up
+// to defaultCacheTTL (60s) after it became publicly reachable. nil disables
+// the call (test-only; cmd/opencircuit's production wiring always supplies
+// the real *seo.Site — the SAME instance AdminWorkshopsHandler and
+// AdminCampaignArchiveHandler invalidate through, see
+// cmd/opencircuit/seo_wiring_test.go's same-instance proof for the
+// existing precedent this extends).
+type ArchiveCacheInvalidator interface {
+	InvalidateWorkshops()
+}
+
 // Worker drains queued campaign sends at a throttled rate, refusing to run
 // (or continue running) a campaign whose pre-send requirements are unmet.
 // See NewWorker for construction and this file's package doc comment for
@@ -246,6 +266,11 @@ type Worker struct {
 	render   CampaignRenderer
 	settings SettingsReader
 	progress ProgressPublisher
+	// archiveCache clears internal/seo's meta/sitemap caches when
+	// CompleteIfDone publishes a campaign's archive page (#0319). nil-tolerant
+	// like every other optional dependency in this file — see
+	// ArchiveCacheInvalidator's own doc comment.
+	archiveCache ArchiveCacheInvalidator
 	// events records campaign_sent (#0126, PRD §6.11) after a successful
 	// SES send. nil-tolerant, matching every other optional dependency in
 	// this file — a nil events simply skips the write.
@@ -285,6 +310,12 @@ type WorkerDeps struct {
 	Render   CampaignRenderer // nil defaults to MarkdownCampaignRenderer{}
 	Settings SettingsReader
 	Progress ProgressPublisher // nil until #0048; every call site nil-guarded
+	// ArchiveCache clears internal/seo's meta/sitemap caches when
+	// CompleteIfDone publishes a campaign's archive page (#0319). nil
+	// disables the call — test-only, matching every other optional
+	// dependency's nil-tolerance in this struct; cmd/opencircuit's
+	// production wiring always supplies the real *seo.Site.
+	ArchiveCache ArchiveCacheInvalidator
 	// Events records campaign_sent (#0126). nil disables the write,
 	// matching Audit's own nil-tolerance above.
 	Events *subscribers.Store
@@ -378,6 +409,7 @@ func NewWorker(deps WorkerDeps) (*Worker, error) {
 		render:         render,
 		settings:       deps.Settings,
 		progress:       deps.Progress,
+		archiveCache:   deps.ArchiveCache,
 		events:         deps.Events,
 		stats:          deps.Stats,
 		outbox:         deps.Outbox,
@@ -652,6 +684,11 @@ func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) (bool, error
 			if done {
 				w.auditSendCompleted(ctx, c.ID)
 				w.publishProgress(ctx, c.ID)
+				// #0319: CompleteIfDone just stamped archive_status =
+				// 'published' — without this, the campaign's archive page
+				// was absent from sitemap.xml for up to defaultCacheTTL
+				// after becoming publicly reachable.
+				w.invalidateArchiveCache()
 				didWork = true
 			}
 			// done=false here is exactly "resumed and did nothing": nothing
@@ -1426,6 +1463,18 @@ func (w *Worker) auditSendStarted(ctx context.Context, c *claimedCampaign, res M
 			"source":        "send_worker",
 		},
 	})
+}
+
+// invalidateArchiveCache clears internal/seo's meta/sitemap caches (#0319)
+// after CompleteIfDone has stamped a campaign archive_status = 'published'
+// in the same UPDATE that flipped status to 'sent' — see
+// ArchiveCacheInvalidator's doc comment for why this call site is the
+// worker's own equivalent of AdminCampaignArchiveHandler.invalidate().
+func (w *Worker) invalidateArchiveCache() {
+	if w.archiveCache == nil {
+		return
+	}
+	w.archiveCache.InvalidateWorkshops()
 }
 
 func (w *Worker) auditSendCompleted(ctx context.Context, campaignID int64) {

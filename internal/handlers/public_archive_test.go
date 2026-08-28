@@ -92,6 +92,11 @@ func TestPublicArchive_GetBySlug_VisibilityByStatus(t *testing.T) {
 		{"failed", mailing.CampaignStatusFailed, mailing.ArchiveStatusPending, http.StatusNotFound},
 		{"sent+withheld", mailing.CampaignStatusSent, mailing.ArchiveStatusWithheld, http.StatusGone},
 		{"sent+published", mailing.CampaignStatusSent, mailing.ArchiveStatusPublished, http.StatusOK},
+		// #0318: sent+pending is unreachable via any supported write path
+		// today (SetArchiveStatus refuses to write 'pending'), but it is
+		// the exact row shape the old `!= withheld` fallthrough served as
+		// 200. The switch's closed default must 404 it.
+		{"sent+pending", mailing.CampaignStatusSent, mailing.ArchiveStatusPending, http.StatusNotFound},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -134,6 +139,50 @@ func TestPublicArchive_GetBySlug_VisibilityByStatus(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// fakeArchiveStore is an in-process (no DB) publicArchiveStore that returns
+// a fixed campaign for GetBySlug — #0318's closed-default proof. Migration
+// 000025's CHECK constraint already limits a real database row's
+// archive_status to {pending, published, withheld}, so no seeded row can
+// ever exercise a genuinely unknown/future value; this fake sidesteps the
+// constraint the same way a future migration adding a fourth value would.
+type fakeArchiveStore struct {
+	campaign mailing.Campaign
+}
+
+func (f fakeArchiveStore) ListArchived(ctx context.Context) ([]mailing.Campaign, error) {
+	return nil, nil
+}
+
+func (f fakeArchiveStore) GetBySlug(ctx context.Context, slug string) (mailing.Campaign, error) {
+	return f.campaign, nil
+}
+
+// TestPublicArchive_GetBySlug_UnknownArchiveStatusIs404 proves the switch's
+// default branch is closed, not merely "everything currently reachable
+// happens to 404" — a genuinely novel archive_status value (one the CHECK
+// constraint doesn't even allow yet) must still 404, never 200.
+func TestPublicArchive_GetBySlug_UnknownArchiveStatusIs404(t *testing.T) {
+	store := fakeArchiveStore{campaign: mailing.Campaign{
+		Slug:          "zz-future-status",
+		Status:        mailing.CampaignStatusSent,
+		ArchiveStatus: "some-future-status-nobody-has-invented-yet",
+	}}
+	h := NewPublicArchiveHandler(store)
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/archive/{slug}", http.HandlerFunc(h.GetBySlug))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/archive/zz-future-status")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want %d (an unknown archive_status must not serve 200)", resp.StatusCode, http.StatusNotFound)
 	}
 }
 

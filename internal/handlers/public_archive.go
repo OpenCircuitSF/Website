@@ -38,7 +38,14 @@
 //     different fact than "never existed" and told to crawlers as such
 //     (see this issue's "withheld must be 410, not 404" note: 410 tells a
 //     crawler to drop the page; 404 invites it to keep re-checking).
-//   - otherwise 200 with the campaign's public web content.
+//   - 200 with the campaign's public web content when archive_status =
+//     'published'.
+//   - 404 for any other archive_status (#0318) — today only 'pending', a
+//     value SetArchiveStatus can never write and CompleteIfDone only ever
+//     leaves behind for the instant between flipping status to 'sent' and
+//     archive_status to 'published' in the same UPDATE (never separately
+//     observable). The switch's default is closed, not open, so a future
+//     archive_status value 404s rather than leaking as 200.
 //
 // # Privacy (PRD §6.8's own "Privacy" paragraph)
 //
@@ -154,14 +161,37 @@ func (h *PublicArchiveHandler) GetBySlug(w http.ResponseWriter, r *http.Request)
 		// Not sent yet (or never will be — canceled/failed): the page
 		// doesn't exist, same as an unknown slug. Deliberately
 		// indistinguishable from the ErrCampaignNotFound branch above —
-		// see the package doc comment.
+		// see the package doc comment. Independent of the ArchiveStatus
+		// switch below (#0318 criterion 2): a non-sent campaign is
+		// unreachable regardless of what its archive_status happens to be.
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	if c.ArchiveStatus == mailing.ArchiveStatusWithheld {
+
+	// #0318: switch on ArchiveStatus explicitly, with a CLOSED default.
+	// 'published' is the only value that serves 200; 'withheld' is a
+	// deliberate retraction (410 Gone, not 404 — see this file's "withheld
+	// must be 410, not 404" note above); anything else -- today only
+	// 'pending', unreachable via any supported path since SetArchiveStatus
+	// (internal/mailing/campaign_archive.go) refuses to write it, but also
+	// any value a future migration or manual fix might introduce -- 404s.
+	// This is deliberately the same predicate ListArchived (SQL-level
+	// `WHERE archive_status = 'published'`) and the SEO sitemap source
+	// (cmd/opencircuit/campaign_archive_seo_source.go's toSEOArchiveEntry,
+	// `Published: c.ArchiveStatus == mailing.ArchiveStatusPublished`) already
+	// use, so this handler, ListArchived, and the sitemap agree on what
+	// "public" means (#0318 criterion 3) rather than each having its own
+	// half of the rule.
+	switch c.ArchiveStatus {
+	case mailing.ArchiveStatusPublished:
+		// fall through to render below.
+	case mailing.ArchiveStatusWithheld:
 		// A deliberate retraction, not "never existed" — 410 Gone, per
 		// this issue's "withheld must be 410, not 404" note.
 		writeError(w, http.StatusGone, "this campaign is no longer available")
+		return
+	default:
+		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 

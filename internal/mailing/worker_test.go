@@ -1580,6 +1580,48 @@ func TestWorker_SendStartedAuditWrittenOnlyOnFirstClaim(t *testing.T) {
 	}
 }
 
+// countingArchiveInvalidator is a fake ArchiveCacheInvalidator that counts
+// calls — mirrors internal/handlers' countingWorkshopInvalidator
+// (admin_workshops_test.go), the same shape #0319's admin-handler
+// regression test uses.
+type countingArchiveInvalidator struct {
+	calls int
+}
+
+func (c *countingArchiveInvalidator) InvalidateWorkshops() { c.calls++ }
+
+// TestWorker_CompleteIfDone_InvalidatesArchiveCache is #0319's regression
+// test for the send worker's own completion path: CompleteIfDone
+// (worker_store.go) stamps archive_status = 'published' in the SAME UPDATE
+// that flips status to 'sent', so a just-finished campaign's SEO
+// meta/sitemap caches must be cleared the instant that happens — not only
+// on an admin's own PATCH .../archive toggle (see
+// internal/handlers/admin_campaign_archive_test.go's
+// TestAdminCampaignArchive_Patch_InvalidatesSEOCaches for that half).
+func TestWorker_CompleteIfDone_InvalidatesArchiveCache(t *testing.T) {
+	pool := testPool(t)
+	workerTestFixture(t, pool)
+
+	campaignID := seedScheduledCampaign(t, pool, "Subject", "Body", Audience{Mode: AudienceAll})
+	resetCampaignAuditRows(t, pool, campaignID)
+	seedSubscriber(t, pool, subscribers.StatusActive)
+
+	inv := &countingArchiveInvalidator{}
+	w := newTestWorker(t, pool, &RecordingMailer{})
+	w.archiveCache = inv
+
+	if _, err := w.claimAndDrain(context.Background()); err != nil {
+		t.Fatalf("claimAndDrain: %v", err)
+	}
+
+	if got := campaignStatus(t, pool, campaignID); got != CampaignStatusSent {
+		t.Fatalf("status = %q, want sent", got)
+	}
+	if inv.calls != 1 {
+		t.Errorf("archiveCache.calls = %d after CompleteIfDone, want 1", inv.calls)
+	}
+}
+
 // ── 16. Detached-context invariant (#0118) ──────────────────────────────────
 
 // ctxAwareMailer is a Mailer that observes whether the context it is handed

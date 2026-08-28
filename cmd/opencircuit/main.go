@@ -361,7 +361,7 @@ func servePostgres(cfg *config.Config) error {
 	// inline here rather than hoisting either above this call, since
 	// #0124's breaker is the only reason the worker needs them and neither
 	// carries state that would make sharing one instance matter.
-	sendWorker, err := newSendWorkerIfEnabled(cfg, sendStore, audienceStore, auditLogger, sesSender, store, campaignProgressPub, subscribersStore, mailing.NewCampaignStatsStore(pool), outbox.NewStore(pool), slog.Default())
+	sendWorker, err := newSendWorkerIfEnabled(cfg, sendStore, audienceStore, auditLogger, sesSender, store, campaignProgressPub, subscribersStore, mailing.NewCampaignStatsStore(pool), outbox.NewStore(pool), site, slog.Default())
 	if err != nil {
 		return fmt.Errorf("opencircuit: constructing send worker: %w", err)
 	}
@@ -388,8 +388,13 @@ func servePostgres(cfg *config.Config) error {
 
 	// Admin archive toggle (#0123): PATCH /admin/campaigns/{id}/archive,
 	// published <-> withheld. Same campaignsStore, same auditLogger every
-	// other admin campaign handler above uses.
-	adminCampaignArchiveH := handlers.NewAdminCampaignArchiveHandler(campaignsStore, auditLogger)
+	// other admin campaign handler above uses. site (#0319) is the SAME
+	// *seo.Site instance adminWorkshopsH already invalidates through, so a
+	// withhold or re-publish clears the meta/sitemap caches immediately
+	// instead of lingering for up to defaultCacheTTL — see
+	// internal/handlers/admin_campaign_archive.go's package doc comment,
+	// "Cache invalidation (#0319)".
+	adminCampaignArchiveH := handlers.NewAdminCampaignArchiveHandler(campaignsStore, auditLogger, site)
 
 	// Admin campaign read-only preflight (#0047, PRD §5.2/§6.6): GET
 	// .../preflight, the compose UI's dry-run evaluation of #0045's send
@@ -626,7 +631,7 @@ func newSendStoreIfEnabled(cfg *config.Config, pool *pgxpool.Pool, audienceStore
 // A single slog.Warn records either refusal, since nothing about the
 // request path can otherwise surface "campaigns will not send" to an
 // operator.
-func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, audienceStore *mailing.AudienceStore, auditLogger *audit.Logger, mailer mailing.Mailer, settings mailing.SettingsReader, progress mailing.ProgressPublisher, events *subscribers.Store, stats *mailing.CampaignStatsStore, outboxStore *outbox.Store, log *slog.Logger) (*mailing.Worker, error) {
+func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, audienceStore *mailing.AudienceStore, auditLogger *audit.Logger, mailer mailing.Mailer, settings mailing.SettingsReader, progress mailing.ProgressPublisher, events *subscribers.Store, stats *mailing.CampaignStatsStore, outboxStore *outbox.Store, archiveCache mailing.ArchiveCacheInvalidator, log *slog.Logger) (*mailing.Worker, error) {
 	if cfg.MailerNoOp {
 		log.Warn("opencircuit: MAILER_NOOP=true — the send worker will not start; scheduled campaigns will not send")
 		return nil, nil
@@ -648,9 +653,10 @@ func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, au
 		Mailer:         mailer,
 		Render:         mailing.MarkdownCampaignRenderer{},
 		Settings:       settings,
-		Progress:       progress, // #0048: the broker-backed implementation, or nil (matching every call site's nil-tolerance) in tests that pass none
-		Events:         events,   // #0126: campaign_sent
-		Stats:          stats,    // #0124: the circuit breaker's own rate read
+		Progress:       progress,     // #0048: the broker-backed implementation, or nil (matching every call site's nil-tolerance) in tests that pass none
+		ArchiveCache:   archiveCache, // #0319: the same *seo.Site adminWorkshopsH/adminCampaignArchiveH invalidate through
+		Events:         events,       // #0126: campaign_sent
+		Stats:          stats,        // #0124: the circuit breaker's own rate read
 		Outbox:         outboxStore,
 		AdminEmail:     cfg.AdminEmail, // #0124: the alert recipient; empty skips the enqueue (CLAUDE.md §10 item 4)
 		BaseURL:        cfg.BaseURL,

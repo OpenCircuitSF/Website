@@ -4,6 +4,22 @@
 // published). Backed by mailing.CampaignStore.SetArchiveStatus — see that
 // method's own doc comment for why 'pending' is not a reachable target
 // here (a campaign that has never sent has no archive page to toggle).
+//
+// # Cache invalidation (#0319)
+//
+// A successful Patch calls invalidator.InvalidateWorkshops() after the
+// store write commits, following AdminWorkshopsHandler's own established
+// pattern (internal/handlers/admin_workshops.go's doc comment) rather than
+// inventing a second mechanism -- it is the SAME *seo.Site instance and the
+// SAME method, which clears both the per-path meta cache and the sitemap
+// cache regardless of which admin action triggered it. Before #0319 this
+// call didn't exist here at all, so withholding or re-publishing a
+// campaign left sitemap.xml (and the archive page's own meta tags) stale
+// for up to defaultCacheTTL (60s) -- the one window where a delay is least
+// welcome, since an admin withholds a campaign because something in it
+// should not be public. workshopCacheInvalidator (admin_workshops.go) is
+// reused directly rather than redeclared: same package, same shape, same
+// underlying *seo.Site.
 package handlers
 
 import (
@@ -30,13 +46,30 @@ type campaignArchiveStore interface {
 type AdminCampaignArchiveHandler struct {
 	store   campaignArchiveStore
 	auditor *audit.Logger
+	// invalidator clears internal/seo's meta/sitemap caches after a
+	// successful transition (#0319) -- workshopCacheInvalidator
+	// (admin_workshops.go, same package), not a new type. nil disables
+	// the call (test-only; cmd/opencircuit/main.go's production wiring
+	// always passes the real *seo.Site -- see NewAdminCampaignArchiveHandler's
+	// doc comment).
+	invalidator workshopCacheInvalidator
 }
 
 // NewAdminCampaignArchiveHandler constructs an AdminCampaignArchiveHandler.
 // auditor may be nil in tests, matching every other admin campaign
-// handler's own nil-guard convention.
-func NewAdminCampaignArchiveHandler(store campaignArchiveStore, auditor *audit.Logger) *AdminCampaignArchiveHandler {
-	return &AdminCampaignArchiveHandler{store: store, auditor: auditor}
+// handler's own nil-guard convention. invalidator is *seo.Site in
+// production (cmd/opencircuit/main.go passes the SAME instance
+// adminWorkshopsH already uses, so both handlers invalidate through one
+// shared cache) -- see this file's package doc comment, "Cache
+// invalidation (#0319)".
+func NewAdminCampaignArchiveHandler(store campaignArchiveStore, auditor *audit.Logger, invalidator workshopCacheInvalidator) *AdminCampaignArchiveHandler {
+	return &AdminCampaignArchiveHandler{store: store, auditor: auditor, invalidator: invalidator}
+}
+
+func (h *AdminCampaignArchiveHandler) invalidate() {
+	if h.invalidator != nil {
+		h.invalidator.InvalidateWorkshops()
+	}
 }
 
 // patchCampaignArchiveRequest is the PATCH body: the target archive_status,
@@ -99,6 +132,12 @@ func (h *AdminCampaignArchiveHandler) Patch(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+
+	// #0319: after the store write commits, not before -- a cache clear
+	// ahead of a failed write would have nothing to invalidate for and
+	// would just force one extra uncached render/sitemap build for no
+	// reason.
+	h.invalidate()
 
 	if h.auditor != nil {
 		actorID := actor.ID

@@ -180,8 +180,11 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	adminCampaignStatsH := handlers.NewAdminCampaignStatsHandler(campaignStatsStore, campaignsStore)
 	// #0123: exercised the same way as adminCampaignStatsH above — a real
 	// PATCH over the same real campaignsStore, auditor non-nil so this
-	// test's route table proof covers the audited path too.
-	adminCampaignArchiveH := handlers.NewAdminCampaignArchiveHandler(campaignsStore, auditLogger)
+	// test's route table proof covers the audited path too. The invalidator
+	// (#0319) is nil, matching adminWorkshopsH's own nil below — this
+	// test's guard proof is unaffected either way since RequireAdmin runs
+	// before the handler ever calls it.
+	adminCampaignArchiveH := handlers.NewAdminCampaignArchiveHandler(campaignsStore, auditLogger, nil)
 	// #0051: exercised the same way as adminCampaignStatsH above. The
 	// invalidator is nil (matching main.go's own production wiring — see
 	// that call site's comment: *seo.Site is wired in by #0054), which has

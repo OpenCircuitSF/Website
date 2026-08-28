@@ -18,10 +18,10 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
-func adminCampaignArchiveMux(pool *pgxpool.Pool) http.Handler {
+func adminCampaignArchiveMux(pool *pgxpool.Pool, invalidator workshopCacheInvalidator) http.Handler {
 	authStore := auth.NewStore(pool)
 	store := mailing.NewCampaignStore(pool)
-	h := NewAdminCampaignArchiveHandler(store, audit.New(pool))
+	h := NewAdminCampaignArchiveHandler(store, audit.New(pool), invalidator)
 	requireSession := middleware.RequireSession(authStore)
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
@@ -58,7 +58,7 @@ func seedAdminArchiveCampaign(t *testing.T, pool *pgxpool.Pool, status, archiveS
 
 func TestAdminCampaignArchive_Patch_PublishedToWithheld(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminCampaignArchiveMux(pool))
+	srv := httptest.NewServer(adminCampaignArchiveMux(pool, nil))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-archive-withhold@example.com")
@@ -87,7 +87,7 @@ func TestAdminCampaignArchive_Patch_PublishedToWithheld(t *testing.T) {
 
 func TestAdminCampaignArchive_Patch_RefusesWhilePending(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminCampaignArchiveMux(pool))
+	srv := httptest.NewServer(adminCampaignArchiveMux(pool, nil))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-archive-pending@example.com")
@@ -104,7 +104,7 @@ func TestAdminCampaignArchive_Patch_RefusesWhilePending(t *testing.T) {
 
 func TestAdminCampaignArchive_Patch_RejectsUnknownStatus(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminCampaignArchiveMux(pool))
+	srv := httptest.NewServer(adminCampaignArchiveMux(pool, nil))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-archive-badstatus@example.com")
@@ -116,6 +116,57 @@ func TestAdminCampaignArchive_Patch_RejectsUnknownStatus(t *testing.T) {
 		"admin-token-archive-badstatus", `{"status":"pending"}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+}
+
+// TestAdminCampaignArchive_Patch_InvalidatesSEOCaches is #0319's regression
+// test: a successful published<->withheld transition must clear
+// internal/seo's meta/sitemap caches through the SAME workshopCacheInvalidator
+// seam AdminWorkshopsHandler already uses (countingWorkshopInvalidator,
+// admin_workshops_test.go) -- not a second, invented mechanism.
+func TestAdminCampaignArchive_Patch_InvalidatesSEOCaches(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	inv := &countingWorkshopInvalidator{}
+	srv := httptest.NewServer(adminCampaignArchiveMux(pool, inv))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-archive-invalidate@example.com")
+	seedSession(t, pool, admin, "admin-token-archive-invalidate")
+
+	c := seedAdminArchiveCampaign(t, pool, mailing.CampaignStatusSent, mailing.ArchiveStatusPublished)
+
+	resp := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d/archive", srv.URL, c.ID),
+		"admin-token-archive-invalidate", `{"status":"withheld"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+	if inv.calls != 1 {
+		t.Errorf("invalidator.calls = %d after a withhold, want 1", inv.calls)
+	}
+}
+
+// TestAdminCampaignArchive_Patch_RefusedWriteDoesNotInvalidate proves the
+// invalidation call sits after the store write commits, not before or on
+// every request regardless of outcome -- a 409 (never sent, no archive page
+// to toggle) must not clear a cache that holds nothing stale.
+func TestAdminCampaignArchive_Patch_RefusedWriteDoesNotInvalidate(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	inv := &countingWorkshopInvalidator{}
+	srv := httptest.NewServer(adminCampaignArchiveMux(pool, inv))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-archive-noinvalidate@example.com")
+	seedSession(t, pool, admin, "admin-token-archive-noinvalidate")
+
+	c := seedAdminArchiveCampaign(t, pool, mailing.CampaignStatusDraft, mailing.ArchiveStatusPending)
+
+	resp := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d/archive", srv.URL, c.ID),
+		"admin-token-archive-noinvalidate", `{"status":"withheld"}`)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+	if inv.calls != 0 {
+		t.Errorf("invalidator.calls = %d after a refused (409) transition, want 0", inv.calls)
 	}
 }
 
