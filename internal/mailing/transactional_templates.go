@@ -1,8 +1,11 @@
 package mailing
 
 import (
+	"fmt"
 	"strings"
 	"time"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
 // The non-campaign messages the system sends: #0028's original four
@@ -282,6 +285,109 @@ func BuildWelcomeEmail(to, baseURL, listDomain, manageToken string, interestName
 		ButtonURL:  workshopsURL,
 		NoteParagraphs: []string{
 			"Change what you get, or leave the list entirely, any time from the preference center below.",
+		},
+		ShowListFooter:  true,
+		ManageURL:       manageURL,
+		UnsubscribeURL:  unsubscribeURL,
+		PhysicalAddress: physicalAddress,
+	}
+	msg := Message{To: to, Subject: c.Subject, HTMLBody: c.renderHTML(), TextBody: c.renderText()}
+	msg.Headers = CampaignHeaders(baseURL, listDomain, manageToken)
+	return msg
+}
+
+// importSourceLabels renders subscribers.ImportSource* constants into the
+// natural-language phrase importInviteProvenanceSentence needs. The values
+// match subscriber_imports_source_check (migrations/000023) via
+// subscribers.ImportSource* exactly — Commit validates against that same
+// closed set before this template is ever reached, so the map's absent-key
+// fallback below is defensive, not a path this package expects to exercise.
+var importSourceLabels = map[string]string{
+	subscribers.ImportSourceLuma:       "our Luma event list",
+	subscribers.ImportSourceEventbrite: "our Eventbrite export",
+	subscribers.ImportSourceMeetup:     "our Meetup export",
+	subscribers.ImportSourceManualCSV:  "our records",
+	subscribers.ImportSourceOther:      "our records",
+}
+
+// importSourceLabel returns source's natural-language phrase, falling back
+// to "our records" for an unrecognized value rather than panicking or
+// leaving a raw enum value in outbound copy.
+func importSourceLabel(source string) string {
+	if label, ok := importSourceLabels[source]; ok {
+		return label
+	}
+	return "our records"
+}
+
+// importInviteProvenanceSentence builds the sentence PRD §6.10.1 requires
+// and calls "not optional copy": "You gave us this address when you signed
+// up for [source_detail] through our Google Form on 12 May 2026." — built
+// from source, sourceDetail, and collectedAt, the same three fields #0125's
+// review named as "mandatory... for the second reason" this template
+// exists. collectedAt renders as "2 January 2006" (no leading zero on the
+// day), matching the PRD's own example figure.
+func importInviteProvenanceSentence(source, sourceDetail string, collectedAt time.Time) string {
+	return fmt.Sprintf("You gave us this address when you signed up for %s through %s on %s.",
+		sourceDetail, importSourceLabel(source), collectedAt.Format("2 January 2006"))
+}
+
+// BuildImportInviteEmail builds the invitation an admin-only CSV import
+// sends under consent_mode=invite (#0129, PRD §6.10.1): the address was
+// never asked directly, so this message asks, naming exactly where it came
+// from, and its confirm button carries the SAME confirm_token shape and
+// lands on the SAME /confirm route the public double opt-in flow uses —
+// internal/subscribers.Store.Confirm, not a second confirmation path
+// (#0129's acceptance criteria: "same endpoint, same token shape, no second
+// confirmation route").
+//
+// importSource/sourceDetail/collectedAt are captured from the
+// subscriber_imports row AT ENQUEUE TIME
+// (internal/subscribers.ImportStore.Commit's invite branch), not re-read at
+// send time — the same "captured, not re-derived" convention
+// BuildWelcomeEmail's interestNames follows (see that function's own doc
+// comment), so nothing can retroactively rewrite what an already-queued
+// invitation says.
+//
+// Unlike every OTHER template in this file except BuildWelcomeEmail, this
+// message carries the RFC 8058 one-click header set (via CampaignHeaders,
+// same as BuildWelcomeEmail) and — mirroring #0264's welcome gate exactly —
+// treats a blank physicalAddress as commercial mail requiring one: this
+// message solicits consent from someone who never asked for it and carries
+// a one-click decline, which is what makes CAN-SPAM §7704 apply the same
+// way it does to a campaign. This function itself does not refuse on a
+// blank physicalAddress (it simply omits the address line, matching every
+// non-Welcome template's convention) — the refusal lives in
+// outbox_worker.go's render, which is what decides whether to call this
+// function at all; see errImportInviteMissingPhysicalAddress's doc comment.
+//
+// The footer's ManageURL/UnsubscribeURL point at the SAME /preferences and
+// /unsubscribe routes (and therefore the SAME POST /api/unsubscribe
+// handler) every other list email uses — internal/subscribers.Store.
+// Unsubscribe itself is what detects a still-pending, unconfirmed
+// invitation being declined through that shared path and additionally
+// suppresses the address (see that method's own doc comment for why reusing
+// the existing endpoint, rather than building a second one, is the safer
+// choice here).
+func BuildImportInviteEmail(to, baseURL, listDomain, confirmToken, manageToken, importSource, sourceDetail string, collectedAt time.Time, ttl time.Duration, physicalAddress string) Message {
+	confirmURL := baseURL + "/confirm?token=" + confirmToken
+	manageURL := baseURL + "/preferences?token=" + manageToken
+	unsubscribeURL := baseURL + "/unsubscribe?token=" + manageToken
+
+	c := emailContent{
+		Subject:   "You're invited to the Open Circuit SF mailing list",
+		Preheader: "Confirm below, or do nothing and you won't hear from us again.",
+		Eyebrow:   "$ opencircuit/invite",
+		Heading:   "Confirm to join the list",
+		IntroParagraphs: []string{
+			importInviteProvenanceSentence(importSource, sourceDetail, collectedAt),
+			"We're starting an email list for workshop announcements — click the {{cta}} below if you'd like to be on it.",
+		},
+		ButtonText: "Confirm subscription",
+		ButtonURL:  confirmURL,
+		NoteParagraphs: []string{
+			"This link expires in " + formatDuration(ttl) + ".",
+			"If you do nothing, you won't hear from us again — we won't send a reminder.",
 		},
 		ShowListFooter:  true,
 		ManageURL:       manageURL,

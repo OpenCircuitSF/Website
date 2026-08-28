@@ -712,13 +712,13 @@ export function importSourceLabel(value: string): string {
 
 /**
  * One option in the consent-mode choice: stored value + label + what it
- * does, plus whether this wizard can offer it. #0125 implements
- * prior_consent only; invite (#0129) is listed so the wizard's copy can name
- * it as "coming soon" rather than pretending only one mode exists, but
- * `available: false` is what stops the UI from silently downgrading a
- * request for it (#0125's acceptance criteria: "the UI must not offer
- * invite until #0129 lands, and must never silently downgrade an invite
- * request to prior_consent").
+ * does, plus whether this wizard can offer it. #0125 shipped prior_consent;
+ * #0129 implements invite mode's own server-side committer and this wizard
+ * now offers both — `available` stays part of the type (rather than being
+ * removed now that both modes are real) as the same safety net #0125's
+ * acceptance criteria described: a mode with no committer must never be
+ * silently offered, and this field is what a future third mode would flip
+ * to false while its own implementation lands.
  */
 export interface ConsentModeOption {
   value: string;
@@ -727,20 +727,28 @@ export interface ConsentModeOption {
   available: boolean;
 }
 
+/**
+ * invite is listed FIRST (#0129's acceptance criteria: "is selectable in
+ * the import wizard and is the default offered") — PRD §6.10 calls it "the
+ * safer default": prior_consent rests entirely on the admin's own
+ * attestation, while invite asks the address directly. The wizard's default
+ * form state (Admin.svelte's `importConsentMode`) reads CONSENT_MODES[0],
+ * so this ordering IS the default, not merely a display order.
+ */
 export const CONSENT_MODES: readonly ConsentModeOption[] = [
-  {
-    value: 'prior_consent',
-    label: 'Prior consent',
-    description:
-      'Asserts consent was already obtained at the source. Lands every new address active immediately and sends nothing — no confirmation, no welcome email.',
-    available: true,
-  },
   {
     value: 'invite',
     label: 'Invite to confirm',
     description:
-      'Asks: sends one invitation naming where the address came from, and only activates it if they confirm. Coming soon — not yet available in this wizard.',
-    available: false,
+      'Asks: sends one invitation naming where the address came from, and only activates it if they confirm. The safer default — use this unless the source already collected a clear opt-in.',
+    available: true,
+  },
+  {
+    value: 'prior_consent',
+    label: 'Prior consent',
+    description:
+      'Asserts consent was already obtained at the source. Lands every new address active immediately and sends nothing — no confirmation, no welcome email. Use only when the source already collected a clear opt-in.',
+    available: true,
   },
 ] as const;
 

@@ -475,3 +475,85 @@ func TestAdminImports_Revoke_RequiresReason(t *testing.T) {
 		t.Fatalf("revoke with empty reason status = %d, want 400; body: %s", resp.StatusCode, body)
 	}
 }
+
+// TestAdminImports_Commit_InviteMode_InsertsPendingAndQueuesInvitation is
+// #0129's end-to-end proof through the real HTTP handler: an invite-mode
+// commit lands the address pending with a live confirm token and
+// consent_basis still NULL, reports invited_count in the response, and
+// enqueues exactly one outbox.KindImportInvite row — never active, never
+// treated as consenting, until it is separately confirmed.
+func TestAdminImports_Commit_InviteMode_InsertsPendingAndQueuesInvitation(t *testing.T) {
+	pool := adminImportsTestPool(t)
+	srv := httptest.NewServer(adminImportsMux(pool))
+	defer srv.Close()
+	admin := seedAdminUser(t, pool, "admin-imports-invite@example.com")
+	seedSession(t, pool, admin, "admin-token-invite")
+	client := srv.Client()
+
+	email := importHTTPEmail(t)
+	csvBody := "email\n" + email + "\n"
+	fields := defaultImportFormFields()
+	fields.consentMode = subscribers.ConsentModeInvite
+
+	previewResp := doImportUpload(t, client, srv.URL+"/admin/subscribers/import/preview", "admin-token-invite", csvBody, fields)
+	var preview previewResponse
+	if err := json.NewDecoder(previewResp.Body).Decode(&preview); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	previewResp.Body.Close()
+	if preview.NewCount != 1 {
+		t.Fatalf("preview NewCount = %d, want 1", preview.NewCount)
+	}
+
+	fields.checksum = preview.Checksum
+	commitResp := doImportUpload(t, client, srv.URL+"/admin/subscribers/import", "admin-token-invite", csvBody, fields)
+	defer commitResp.Body.Close()
+	if commitResp.StatusCode != http.StatusOK {
+		body := readBody(t, commitResp)
+		t.Fatalf("commit status = %d, want 200; body: %s", commitResp.StatusCode, body)
+	}
+	var got commitResponse
+	if err := json.NewDecoder(commitResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode commit response: %v", err)
+	}
+	if got.Import.InsertedCount != 1 {
+		t.Errorf("InsertedCount = %d, want 1", got.Import.InsertedCount)
+	}
+	if got.Import.InvitedCount != 1 {
+		t.Errorf("InvitedCount = %d, want 1", got.Import.InvitedCount)
+	}
+	if got.Import.ConfirmedCount != 0 {
+		t.Errorf("ConfirmedCount = %d, want 0 (nobody has confirmed yet)", got.Import.ConfirmedCount)
+	}
+
+	var status, source string
+	var consentBasis *string
+	var confirmToken *string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT status, source, consent_basis, confirm_token FROM subscribers WHERE email = $1`, email,
+	).Scan(&status, &source, &consentBasis, &confirmToken); err != nil {
+		t.Fatalf("reading committed subscriber: %v", err)
+	}
+	if status != subscribers.StatusPending {
+		t.Errorf("status = %q, want %q — an invited address must not count as consenting until it confirms", status, subscribers.StatusPending)
+	}
+	if source != subscribers.SubscriberSourceImport {
+		t.Errorf("source = %q, want %q", source, subscribers.SubscriberSourceImport)
+	}
+	if consentBasis != nil {
+		t.Errorf("consent_basis = %v, want nil — asked, not yet consented", *consentBasis)
+	}
+	if confirmToken == nil || *confirmToken == "" {
+		t.Error("confirm_token is nil/empty, want a live token")
+	}
+
+	var queued int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE recipient = $1 AND kind = 'import_invite'`, email,
+	).Scan(&queued); err != nil {
+		t.Fatalf("counting outbound_queue: %v", err)
+	}
+	if queued != 1 {
+		t.Errorf("outbound_queue import_invite rows for %q = %d, want 1", email, queued)
+	}
+}

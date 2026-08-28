@@ -189,7 +189,9 @@ export interface PendingSubscriber {
   utm_source?: string;
   utm_medium?: string;
   utm_campaign?: string;
-  /** The latest outbound_queue row's status for this address's confirmation mail: "queued" | "sending" | "sent" | "abandoned" | "none" (no row exists) | "unknown" (server has no outbound_queue backing, STORAGE=json). */
+  /** #0129: true for a still-pending row an import invited (rather than a website signup awaiting confirmation). */
+  invited: boolean;
+  /** The latest outbound_queue row's status for this address's confirmation (or, for an invited row, invitation) mail: "queued" | "sending" | "sent" | "abandoned" | "none" (no row exists) | "unknown" (server has no outbound_queue backing, STORAGE=json). */
   queue_state: string;
 }
 

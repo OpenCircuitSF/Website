@@ -882,17 +882,20 @@
     }
   }
 
-  // ── Subscriber import (#0125, PRD §6.10) ──────────────────────────────────────
-  // prior_consent only in this wizard — see CONSENT_MODES (lib/admin.ts) and
-  // this issue's Notes: invite mode (#0129) is listed and described, but its
-  // radio is disabled, so a request for it can never reach the server as a
-  // silent downgrade to prior_consent.
+  // ── Subscriber import (#0125, #0129, PRD §6.10) ────────────────────────────────
+  // Both consent modes are implemented and offered — see CONSENT_MODES
+  // (lib/admin.ts). importConsentMode defaults to CONSENT_MODES[0].value
+  // (invite) rather than a hard-coded literal, so the wizard's default is
+  // never one edit away from disagreeing with the array that also decides
+  // display order and the "is this mode available" gate — see
+  // CONSENT_MODES' own doc comment for why invite is listed first and is
+  // the default.
   let importFile = $state<File | null>(null);
   let importFileHeaders = $state<string[]>([]);
   let importDataRowCount = $state<number | null>(null);
   let importSource = $state('manual_csv');
   let importSourceDetail = $state('');
-  let importConsentMode = $state('prior_consent');
+  let importConsentMode = $state(CONSENT_MODES[0].value);
   let importConsentNote = $state('');
   let importCollectedAt = $state('');
   let importEmailColumnRaw = $state('');
@@ -1992,6 +1995,16 @@
                 <span class="status-count-num">{importPreviewResult.malformed_count}</span>
               </div>
             </div>
+            {#if importConsentMode === 'invite'}
+              <!-- #0129's acceptance criteria: "the preview reports how
+                   many invitations an invite commit would send, before
+                   committing" -- every "new" address under invite mode
+                   receives exactly one invitation, so new_count IS that
+                   count. -->
+              <p class="text-muted">
+                This will send {importPreviewResult.new_count} invitation{importPreviewResult.new_count === 1 ? '' : 's'}.
+              </p>
+            {/if}
             <!-- Samples are plain interpolated text -- Svelte escapes them,
                  so an address or slug containing markup can never inject
                  HTML into this admin-only page. -->
@@ -2020,7 +2033,11 @@
               onclick={submitImportCommit}
               disabled={importCommitLoading || importPreviewResult.new_count === 0}
             >
-              {importCommitLoading ? 'Committing…' : `Commit — add ${importPreviewResult.new_count} subscriber(s)`}
+              {importCommitLoading
+                ? 'Committing…'
+                : importConsentMode === 'invite'
+                  ? `Commit — invite ${importPreviewResult.new_count} subscriber(s)`
+                  : `Commit — add ${importPreviewResult.new_count} subscriber(s)`}
             </Button>
           {/if}
         {/if}

@@ -692,11 +692,15 @@ describe('importSourceLabel', () => {
 });
 
 describe('CONSENT_MODES', () => {
-  it('marks prior_consent available and invite not yet available', () => {
+  it('marks both prior_consent and invite available (#0129)', () => {
     const prior = CONSENT_MODES.find((m) => m.value === 'prior_consent');
     const invite = CONSENT_MODES.find((m) => m.value === 'invite');
     expect(prior?.available).toBe(true);
-    expect(invite?.available).toBe(false);
+    expect(invite?.available).toBe(true);
+  });
+
+  it('lists invite first — the wizard default (#0129 acceptance criteria)', () => {
+    expect(CONSENT_MODES[0].value).toBe('invite');
   });
 });
 
@@ -738,11 +742,11 @@ describe('validateImportForm', () => {
     expect('error' in result).toBe(true);
   });
 
-  it('rejects invite mode — not available in this wizard (#0129)', () => {
+  it('accepts invite mode — implemented and offered (#0129)', () => {
     const result = validateImportForm(validImportFields({ consentMode: 'invite' }));
-    expect('error' in result).toBe(true);
-    if ('error' in result) {
-      expect(result.error).toMatch(/not available/i);
+    expect('error' in result).toBe(false);
+    if (!('error' in result)) {
+      expect(result.consentMode).toBe('invite');
     }
   });
 
@@ -812,6 +816,8 @@ describe('importCommitNoticeText (#0286)', () => {
         row_count: 10,
         inserted_count: 8,
         skipped_count: 2,
+        invited_count: 0,
+        confirmed_count: 0,
         status: 'committed',
         created_at: '2026-08-27T00:00:00Z',
         ...overrides,

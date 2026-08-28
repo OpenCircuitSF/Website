@@ -92,6 +92,7 @@ function row(id: number, ageSeconds: number): PendingSubscriber {
     confirm_expires_at: null,
     age_seconds: ageSeconds,
     expired: false,
+    invited: false,
     queue_state: 'queued',
   };
 }

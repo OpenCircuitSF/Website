@@ -5,15 +5,21 @@
 // sign-in sheet), with consent provenance recorded up front and a batch
 // revocable in one action.
 //
-// # Two consent modes, one implemented here
+// # Two consent modes, both implemented here
 //
-// subscriber_imports.consent_mode is either prior_consent (this issue: lands
-// the address `active`, sends nothing — the admin is attesting consent
-// already exists) or invite (#0129: lands `pending`, sends one invitation,
-// only #0129 has a producer for it). Commit refuses ConsentModeInvite with
-// ErrConsentModeNotSupported so the wizard cannot silently downgrade an
-// invite request to prior_consent, and cannot half-implement invite mode
-// either — see issues/0125.md's acceptance criteria.
+// subscriber_imports.consent_mode is either prior_consent (#0125: lands the
+// address `active`, sends nothing — the admin is attesting consent already
+// exists) or invite (#0129: lands the address `pending` with a confirm
+// token, sends exactly one invitation through internal/outbox naming where
+// the address came from, and only moves it to `active` when the recipient
+// follows the SAME confirm link the public double opt-in flow uses —
+// internal/subscribers.Store.Confirm, not a second confirmation path).
+// consent_basis stays NULL until that confirmation happens; #0125's Commit
+// refused ConsentModeInvite outright (ErrConsentModeNotSupported) precisely
+// so the wizard could not silently downgrade an invite request to
+// prior_consent before this issue existed to implement it — see
+// issues/0125.md's acceptance criteria and issues/0129.md for the mode this
+// file now also commits.
 //
 // # Preview does not write; Commit re-derives its own dedupe/suppression sets
 //
@@ -50,6 +56,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 )
 
 // Import source values (subscriber_imports.source — where the BATCH says it
@@ -73,9 +81,8 @@ var importSources = map[string]bool{
 	ImportSourceOther:      true,
 }
 
-// Consent modes, matching subscriber_imports_consent_mode_check. Only
-// ConsentModePriorConsent has a Commit implementation today — see the
-// package doc comment.
+// Consent modes, matching subscriber_imports_consent_mode_check. Both have
+// a Commit implementation — see the package doc comment.
 const (
 	ConsentModePriorConsent = "prior_consent"
 	ConsentModeInvite       = "invite"
@@ -107,10 +114,39 @@ var (
 	ErrSourceDetailRequired = errors.New("subscribers: source_detail is required")
 	ErrConsentNoteRequired  = errors.New("subscribers: consent_note is required")
 	ErrCollectedAtRequired  = errors.New("subscribers: collected_at is required")
-	// ErrConsentModeNotSupported is returned by Commit for ConsentModeInvite
-	// — #0129 owns that mode's committer; see the package doc comment.
-	ErrConsentModeNotSupported = errors.New("subscribers: this consent mode has no committer yet")
 )
+
+// importInviteConfirmTTL is the invitation's confirm-token lifetime — #0129
+// names no different figure than the public double opt-in flow's own
+// (internal/handlers/subscribe.go's subscribeConfirmTTL, 7 days), and an
+// invited address should not face a shorter or longer window than a website
+// signup for the identical action (following the SAME confirm link,
+// internal/subscribers.Store.Confirm). Declared independently rather than
+// imported — internal/handlers depends on this package, not the reverse,
+// and this package "imports nothing internal" beyond internal/outbox (see
+// store.go's package doc comment) — so this is a deliberate, disclosed
+// duplication of one constant's VALUE, not its identity.
+const importInviteConfirmTTL = 7 * 24 * time.Hour
+
+// importInvitePayload is outbound_queue.payload's shape for
+// outbox.KindImportInvite — template inputs, matched by JSON field name
+// with internal/mailing's own importInvitePayload (different Go type, same
+// package boundary internal/outbox's doc comment describes for every other
+// producer/consumer pair in this project). ImportSource/SourceDetail/
+// CollectedAt are captured HERE, from the subscriber_imports row THIS
+// Commit call just created, not re-read by the worker at send time — the
+// same "captured, not re-derived" convention store.go's welcomePayload
+// follows for InterestNames, so a later edit to the import row (there is no
+// such edit path today, but the convention is the same regardless) can
+// never retroactively rewrite what an already-queued invitation says.
+type importInvitePayload struct {
+	ConfirmToken string    `json:"confirm_token"`
+	ManageToken  string    `json:"manage_token"`
+	TTLSeconds   int64     `json:"ttl_seconds"`
+	ImportSource string    `json:"import_source"`
+	SourceDetail string    `json:"source_detail"`
+	CollectedAt  time.Time `json:"collected_at"`
+}
 
 // ErrImportNotFound is returned by GetImport/Revoke when no subscriber_imports
 // row matches the given id.
@@ -317,12 +353,20 @@ func unknownSlugs(rows []ImportRow, knownSlugs map[string]bool) []string {
 // ImportStore is the data-access layer over subscriber_imports, and the
 // committer for the subscribers rows an import produces.
 type ImportStore struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	outbox *outbox.Store
 }
 
 // NewImportStore constructs an ImportStore over the shared connection pool.
+// It also constructs its own *outbox.Store over the same pool (#0129,
+// mirroring NewStore's identical reasoning above it in store.go): invite
+// mode's Commit must enqueue an invitation inside the SAME transaction that
+// inserts the subscriber row, and internal/outbox is a leaf package with no
+// dependency back on this one, so wiring it internally here keeps this
+// constructor's signature unchanged for cmd/opencircuit/main.go's existing
+// call site.
 func NewImportStore(pool *pgxpool.Pool) *ImportStore {
-	return &ImportStore{pool: pool}
+	return &ImportStore{pool: pool, outbox: outbox.NewStore(pool)}
 }
 
 // Preview classifies rows against the CURRENT subscribers/suppressions
@@ -364,8 +408,8 @@ func scanImport(row pgx.Row) (Import, error) {
 }
 
 // CommitInput is Commit's input: the batch's declared provenance plus the
-// rows to insert. ConsentMode must be ConsentModePriorConsent today — see
-// the package doc comment.
+// rows to insert. ConsentMode must be one of ConsentModePriorConsent or
+// ConsentModeInvite — see the package doc comment.
 type CommitInput struct {
 	Source           string
 	SourceDetail     string
@@ -387,23 +431,35 @@ type CommitResult struct {
 // Commit validates in, then — in a single transaction — inserts the
 // subscriber_imports row, re-derives new/duplicate/suppressed against the
 // CURRENT tables (not trusting a prior Preview call's counts; see the
-// package doc comment), inserts one subscribers row per new address
-// (status=active, source=SubscriberSourceImport, consent_basis=
-// ConsentBasisImportedPriorConsent, import_id=the new batch, source_detail
-// copied from in.SourceDetail so a single subscriber row is self-sufficient
-// without a join back to this table, confirmed_at left NULL — #0292, see
-// the insert's own comment below — since prior_consent's whole point is
-// that this address never went through local confirmation), links known
-// interest slugs, and
-// writes one subscriber_events ActionImported row per inserted address.
-// subscriber_imports.row_count/inserted_count/skipped_count are stamped
-// from what actually happened. A failure anywhere in this rolls back
-// EVERYTHING, including the subscriber_imports row itself — "import is
-// transactional" per #0125's acceptance criteria.
+// package doc comment), and inserts one subscribers row per new address,
+// links known interest slugs, and writes one subscriber_events ActionImported
+// row per inserted address. subscriber_imports.row_count/inserted_count/
+// skipped_count/invited_count are stamped from what actually happened. A
+// failure anywhere in this rolls back EVERYTHING, including the
+// subscriber_imports row itself — "import is transactional" per #0125's
+// acceptance criteria.
 //
-// No confirmation, welcome, or any other mail is sent — prior_consent's
-// entire point (PRD §6.10, decided 2026-08-21) — so this method never
-// touches internal/outbox, unlike every mutator in store.go.
+// The two consent modes diverge on exactly what that inserted row looks
+// like:
+//
+//   - prior_consent (#0125): status=active, source=SubscriberSourceImport,
+//     consent_basis=ConsentBasisImportedPriorConsent, import_id=the new
+//     batch, source_detail copied from in.SourceDetail so a single
+//     subscriber row is self-sufficient without a join back to this table,
+//     confirmed_at left NULL (#0292 — see that branch's own comment below).
+//     No mail is sent — prior_consent's entire point (PRD §6.10, decided
+//     2026-08-21) — so this branch never touches internal/outbox.
+//   - invite (#0129): status=pending with a fresh confirm_token/
+//     confirm_expires_at (importInviteConfirmTTL), consent_basis left NULL
+//     (PRD §6.10.1 step 2 — an invited address has been ASKED, not yet
+//     consented), invited_at stamped once, and exactly one
+//     outbox.KindImportInvite message enqueued in this SAME transaction —
+//     the identical "a committed row can never have an unsent invitation"
+//     property #0126 established for Store.Create's confirmation. The
+//     address only becomes active, and consent_basis only becomes
+//     ConsentBasisDoubleOptIn, when Confirm (store.go) is later called with
+//     this SAME confirm_token — the public double opt-in endpoint, not a
+//     second confirmation path (#0129's acceptance criteria).
 func (s *ImportStore) Commit(ctx context.Context, in CommitInput, now time.Time) (CommitResult, error) {
 	if !importSources[in.Source] {
 		return CommitResult{}, ErrInvalidImportSource
@@ -419,13 +475,6 @@ func (s *ImportStore) Commit(ctx context.Context, in CommitInput, now time.Time)
 	}
 	if in.CollectedAt.IsZero() {
 		return CommitResult{}, ErrCollectedAtRequired
-	}
-	if in.ConsentMode != ConsentModePriorConsent {
-		// #0129 owns invite's committer. Validated above (so an invalid
-		// enum value still reports ErrInvalidConsentMode first), refused
-		// here so the wizard cannot silently downgrade an invite request —
-		// see the package doc comment.
-		return CommitResult{}, ErrConsentModeNotSupported
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -470,7 +519,7 @@ func (s *ImportStore) Commit(ctx context.Context, in CommitInput, now time.Time)
 		return CommitResult{}, err
 	}
 
-	var inserted, skipped int
+	var inserted, skipped, invited int
 	var insertedEmails []string
 	for _, email := range candidates {
 		key := strings.ToLower(strings.TrimSpace(email))
@@ -484,42 +533,102 @@ func (s *ImportStore) Commit(ctx context.Context, in CommitInput, now time.Time)
 			return CommitResult{}, err
 		}
 
-		// confirmed_at is left NULL, not stamped to now (#0292): PRD §6.10
-		// says outright that a prior_consent import's subscribers "did not
-		// confirm here", so a local confirmation timestamp would assert
-		// something that never happened — a person who never saw a
-		// confirmation link cannot have "confirmed" at a moment this
-		// process picked for them. This also keeps confirmed_at's existing
-		// meaning intact everywhere else it's read: NULL already means "no
-		// local double-opt-in confirmation event", exactly as it does for
-		// a pending/unsubscribed/bounced/complained row (see
-		// internal/handlers/admin_subscribers_export.go's formatExportTime
-		// doc comment) — an active-but-never-locally-confirmed row is a
-		// new case for that meaning, not a new meaning for the column.
-		// consent_basis=ConsentBasisImportedPriorConsent (below) is what
-		// records WHY this row is active without one, so nothing about
-		// provenance is lost by leaving this NULL. See #0292's Work log
-		// for the reader-by-reader audit this decision rests on —
-		// Growth30Days (subscribers/store.go) and the SES staleness guard
-		// (internal/handlers/ses_notifications.go) both treat a NULL here
-		// exactly the way they already treat one on a pending subscriber,
-		// so this is consistent with, not a new case for, their existing
-		// null handling.
-		var confirmedAt *time.Time
-		subRow := tx.QueryRow(ctx,
-			`INSERT INTO subscribers
-			     (email, status, manage_token, source, source_detail, consent_basis,
-			      import_id, confirmed_at, created_at, updated_at)
-			 VALUES
-			     (lower(trim($1)), $2, $3, $4, $5, $6, $7, $8, $9, $9)
-			 RETURNING id, email`,
-			email, StatusActive, manageToken, SubscriberSourceImport,
-			in.SourceDetail, ConsentBasisImportedPriorConsent, imp.ID, confirmedAt, now,
-		)
 		var subID int64
 		var normEmail string
-		if err := subRow.Scan(&subID, &normEmail); err != nil {
-			return CommitResult{}, fmt.Errorf("subscribers: inserting imported subscriber %q: %w", email, err)
+		// confirmToken/confirmExpiresAt are only set on the invite branch —
+		// EnqueueTx (below, invite-only) reads confirmToken directly, so it
+		// stays a local var rather than round-tripping through the RETURNING
+		// row (the row's own confirm_token column is write-only from this
+		// method's point of view; nothing here needs to read it back).
+		var confirmToken string
+
+		// A switch with an explicit default, not an if/else — #0125's
+		// original ErrConsentModeNotSupported refusal existed precisely so
+		// a mode with no committer could never silently fall through into a
+		// prior_consent-shaped write; consentModes today admits only these
+		// two values (validated above), so the default is unreachable BY
+		// CONSTRUCTION, not by omission — but it stays here, loud, so a
+		// future third consent_mode value added to consentModes without a
+		// corresponding case here fails this Commit call with a named error
+		// instead of silently taking the prior_consent branch (CLAUDE.md §9:
+		// consent provenance is the whole point of this file).
+		switch in.ConsentMode {
+		case ConsentModeInvite:
+			tok, err := newToken()
+			if err != nil {
+				return CommitResult{}, err
+			}
+			confirmToken = tok
+			confirmExpiresAt := now.Add(importInviteConfirmTTL)
+
+			// consent_basis is left NULL (PRD §6.10.1 step 2: "inserted
+			// pending with a confirm_token... consent_basis = NULL") — an
+			// invited address has been ASKED, not yet consented; Confirm
+			// (store.go) is what sets it once the recipient follows this
+			// SAME confirm_token. invited_at is stamped exactly once, here,
+			// at insert — nothing else in this package ever writes it again
+			// (see the package doc comment's "one invitation per address,
+			// ever" note), which is what makes it write-once by
+			// construction rather than by an added constraint.
+			subRow := tx.QueryRow(ctx,
+				`INSERT INTO subscribers
+				     (email, status, confirm_token, confirm_expires_at, manage_token,
+				      source, source_detail, consent_basis, import_id, invited_at,
+				      created_at, updated_at)
+				 VALUES
+				     (lower(trim($1)), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+				 RETURNING id, email`,
+				email, StatusPending, confirmToken, confirmExpiresAt, manageToken,
+				SubscriberSourceImport, in.SourceDetail, nil /* consent_basis */, imp.ID, now, /* invited_at */
+				now,
+			)
+			if err := subRow.Scan(&subID, &normEmail); err != nil {
+				return CommitResult{}, fmt.Errorf("subscribers: inserting invited subscriber %q: %w", email, err)
+			}
+		case ConsentModePriorConsent:
+			// confirmed_at is left NULL, not
+			// stamped to now (#0292): PRD §6.10 says outright that a
+			// prior_consent import's subscribers "did not confirm here", so
+			// a local confirmation timestamp would assert something that
+			// never happened — a person who never saw a confirmation link
+			// cannot have "confirmed" at a moment this process picked for
+			// them. This also keeps confirmed_at's existing meaning intact
+			// everywhere else it's read: NULL already means "no local
+			// double-opt-in confirmation event", exactly as it does for a
+			// pending/unsubscribed/bounced/complained row (see
+			// internal/handlers/admin_subscribers_export.go's
+			// formatExportTime doc comment) — an active-but-never-locally-
+			// confirmed row is a new case for that meaning, not a new
+			// meaning for the column. consent_basis=
+			// ConsentBasisImportedPriorConsent (below) is what records WHY
+			// this row is active without one, so nothing about provenance
+			// is lost by leaving this NULL. See #0292's Work log for the
+			// reader-by-reader audit this decision rests on — Growth30Days
+			// (subscribers/store.go) and the SES staleness guard
+			// (internal/handlers/ses_notifications.go) both treat a NULL
+			// here exactly the way they already treat one on a pending
+			// subscriber, so this is consistent with, not a new case for,
+			// their existing null handling.
+			var confirmedAt *time.Time
+			subRow := tx.QueryRow(ctx,
+				`INSERT INTO subscribers
+				     (email, status, manage_token, source, source_detail, consent_basis,
+				      import_id, confirmed_at, created_at, updated_at)
+				 VALUES
+				     (lower(trim($1)), $2, $3, $4, $5, $6, $7, $8, $9, $9)
+				 RETURNING id, email`,
+				email, StatusActive, manageToken, SubscriberSourceImport,
+				in.SourceDetail, ConsentBasisImportedPriorConsent, imp.ID, confirmedAt, now,
+			)
+			if err := subRow.Scan(&subID, &normEmail); err != nil {
+				return CommitResult{}, fmt.Errorf("subscribers: inserting imported subscriber %q: %w", email, err)
+			}
+		default:
+			// Unreachable today (consentModes admits only the two cases
+			// above, validated at the top of this method) — see this
+			// switch's own opening comment for why this default exists
+			// anyway rather than being omitted.
+			return CommitResult{}, fmt.Errorf("subscribers: commit: unhandled consent mode %q despite passing validation", in.ConsentMode)
 		}
 		inserted++
 		insertedEmails = append(insertedEmails, normEmail)
@@ -548,16 +657,45 @@ func (s *ImportStore) Commit(ctx context.Context, in CommitInput, now time.Time)
 		}); err != nil {
 			return CommitResult{}, fmt.Errorf("subscribers: recording imported event for %d: %w", subID, err)
 		}
+
+		if in.ConsentMode == ConsentModeInvite {
+			invited++
+			// Enqueued in this SAME transaction as the insert above —
+			// #0126's "a committed signup can never have an unsent
+			// confirmation" property, one step earlier in the flow: a
+			// committed invited row can never have an unsent invitation.
+			// ActionInviteSent is NOT written here — it is written when the
+			// message actually LEAVES the queue (mirroring
+			// confirmation_sent/welcome_sent's precedent, see
+			// internal/mailing/outbox_worker.go's sentAction switch), not at
+			// enqueue time.
+			if _, err := s.outbox.EnqueueTx(ctx, tx, outbox.Item{
+				Kind:         outbox.KindImportInvite,
+				Recipient:    normEmail,
+				SubscriberID: &subID,
+				Payload: importInvitePayload{
+					ConfirmToken: confirmToken,
+					ManageToken:  manageToken,
+					TTLSeconds:   int64(importInviteConfirmTTL.Seconds()),
+					ImportSource: in.Source,
+					SourceDetail: in.SourceDetail,
+					CollectedAt:  in.CollectedAt,
+				},
+			}); err != nil {
+				return CommitResult{}, fmt.Errorf("subscribers: enqueueing invite for %d: %w", subID, err)
+			}
+		}
 	}
 
 	if _, err := tx.Exec(ctx,
-		`UPDATE subscriber_imports SET inserted_count = $2, skipped_count = $3 WHERE id = $1`,
-		imp.ID, inserted, skipped,
+		`UPDATE subscriber_imports SET inserted_count = $2, skipped_count = $3, invited_count = $4 WHERE id = $1`,
+		imp.ID, inserted, skipped, invited,
 	); err != nil {
 		return CommitResult{}, fmt.Errorf("subscribers: stamping import counts for %d: %w", imp.ID, err)
 	}
 	imp.InsertedCount = inserted
 	imp.SkippedCount = skipped
+	imp.InvitedCount = invited
 
 	if err := tx.Commit(ctx); err != nil {
 		return CommitResult{}, fmt.Errorf("subscribers: committing import %d: %w", imp.ID, err)
@@ -578,19 +716,40 @@ func (s *ImportStore) GetImport(ctx context.Context, id int64) (Import, error) {
 	return imp, nil
 }
 
-// Revoke moves every subscriber whose import_id matches id AND whose status
-// is still 'active' to 'unsubscribed' (unsubscribe_source='admin'),
-// regardless of whether the address has since engaged (PRD §6.10: "the
-// question is whether we ever had the right to mail them"), writes one
-// ActionImportRevoked subscriber_events row per address moved, and marks
-// the import row 'revoked'. Revoking an already-revoked import is a no-op —
-// alreadyRevoked is true, nothing is written, and the current (already-
-// revoked) row is returned with a nil email slice, not an error.
-// alreadyRevoked is a separate, explicit signal rather than something a
-// caller infers from an empty revokedEmails slice, because "revoked zero
-// addresses because none were active" (a real transition — the import row
-// still moves to status=revoked) and "already revoked, nothing happened"
-// (a true no-op) are different outcomes that both produce an empty slice.
+// Revoke moves every subscriber whose import_id matches id AND that this
+// import batch is still the sole source of that row's consent to
+// 'unsubscribed' (unsubscribe_source='admin'), regardless of whether the
+// address has since engaged (PRD §6.10: "the question is whether we ever
+// had the right to mail them"), writes one ActionImportRevoked
+// subscriber_events row per address moved, and marks the import row
+// 'revoked'. Revoking an already-revoked import is a no-op — alreadyRevoked
+// is true, nothing is written, and the current (already-revoked) row is
+// returned with a nil email slice, not an error. alreadyRevoked is a
+// separate, explicit signal rather than something a caller infers from an
+// empty revokedEmails slice, because "revoked zero addresses because none
+// qualified" (a real transition — the import row still moves to
+// status=revoked) and "already revoked, nothing happened" (a true no-op)
+// are different outcomes that both produce an empty slice.
+//
+// #0129 widened the target set beyond #0125's original "status='active'"
+// (prior_consent's only possible state for a row this import produced):
+//
+//   - status='pending' — an invite that has not been accepted yet. Its
+//     consent has ALWAYS derived from this import (nothing else could have
+//     put it there), so it is always in scope. The UPDATE below also clears
+//     confirm_token/confirm_expires_at for this branch, so a stale
+//     invitation link cannot later reactivate a row this action just
+//     revoked — see the UPDATE's own comment.
+//   - status='active' AND consent_basis=ConsentBasisImportedPriorConsent —
+//     a prior_consent row, whose only consent basis IS this import's
+//     attestation.
+//
+// Deliberately excluded: status='active' with consent_basis=
+// ConsentBasisDoubleOptIn — an invited address that FOLLOWED the confirm
+// link. PRD §6.10.1's own rule: "an address that confirmed is left alone,
+// because its consent no longer derives from the import" — Confirm
+// (store.go) is what stamps that consent_basis, independently of anything
+// this import batch did.
 func (s *ImportStore) Revoke(ctx context.Context, id int64, reason string, now time.Time) (imp Import, revokedEmails []string, alreadyRevoked bool, err error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -620,11 +779,13 @@ func (s *ImportStore) Revoke(ctx context.Context, id int64, reason string, now t
 	}
 
 	rows, err := tx.Query(ctx,
-		`SELECT id, email FROM subscribers WHERE import_id = $1 AND status = $2`,
-		id, StatusActive,
+		`SELECT id, email FROM subscribers
+		  WHERE import_id = $1
+		    AND (status = $2 OR (status = $3 AND consent_basis = $4))`,
+		id, StatusPending, StatusActive, ConsentBasisImportedPriorConsent,
 	)
 	if err != nil {
-		return Import{}, nil, false, fmt.Errorf("subscribers: selecting active imported subscribers for %d: %w", id, err)
+		return Import{}, nil, false, fmt.Errorf("subscribers: selecting revocable imported subscribers for %d: %w", id, err)
 	}
 	type target struct {
 		id    int64
@@ -646,8 +807,16 @@ func (s *ImportStore) Revoke(ctx context.Context, id int64, reason string, now t
 	rows.Close()
 
 	for _, t := range targets {
+		// confirm_token/confirm_expires_at are cleared unconditionally here
+		// (#0129) — a no-op for a former prior_consent row (already NULL,
+		// since that mode never issues a confirm_token), and load-bearing
+		// for a former invite row: without this, a stale invitation link a
+		// recipient still holds would let Confirm (store.go) reactivate a
+		// row this action just revoked.
 		if _, err := tx.Exec(ctx,
-			`UPDATE subscribers SET status = $2, unsubscribed_at = $3, unsubscribe_source = $4, updated_at = $3
+			`UPDATE subscribers
+			    SET status = $2, unsubscribed_at = $3, unsubscribe_source = $4,
+			        confirm_token = NULL, confirm_expires_at = NULL, updated_at = $3
 			  WHERE id = $1`,
 			t.id, StatusUnsubscribed, now, SourceAdmin,
 		); err != nil {

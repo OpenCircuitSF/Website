@@ -57,6 +57,7 @@ function payload(): PendingListResponse {
         confirm_expires_at: '2026-08-31T10:00:00Z',
         age_seconds: 3600,
         expired: false,
+        invited: false,
         utm_source: 'newsletter',
         queue_state: 'queued',
       },
@@ -67,6 +68,7 @@ function payload(): PendingListResponse {
         confirm_expires_at: '2026-08-08T10:00:00Z',
         age_seconds: 86400 * 20,
         expired: true,
+        invited: false,
         queue_state: 'abandoned',
       },
     ],
@@ -116,6 +118,32 @@ describe('Pending — populated list', () => {
     // Signup source: UTM for the first row, "Direct" fallback for the second.
     expect(screen.getByText('newsletter')).toBeTruthy();
     expect(screen.getByText('Direct')).toBeTruthy();
+  });
+
+  it('#0129: marks an invited row with an "Invited" badge and disables its resend button', async () => {
+    listPendingSubscribers.mockResolvedValue({
+      pending: [
+        {
+          id: 3,
+          email: 'invitee@example.com',
+          confirm_sent_at: '2026-08-24T10:00:00Z',
+          confirm_expires_at: '2026-08-31T10:00:00Z',
+          age_seconds: 3600,
+          expired: false,
+          invited: true,
+          queue_state: 'sent',
+        },
+      ],
+    });
+    render(Pending);
+
+    await waitFor(() => {
+      expect(screen.getByText('invitee@example.com')).toBeTruthy();
+    });
+    expect(screen.getByText('Invited')).toBeTruthy();
+
+    const resendButton = screen.getByRole('button', { name: /resend/i }) as HTMLButtonElement;
+    expect(resendButton.disabled).toBe(true);
   });
 
   it('re-fetches with the flipped sort direction when the age header is clicked', async () => {

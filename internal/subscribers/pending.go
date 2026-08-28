@@ -44,6 +44,19 @@ var ErrResendCooldownActive = errors.New("subscribers: resend cooldown active")
 // suppressed address is refused with a clear reason."
 var ErrResendSuppressed = errors.New("subscribers: address is suppressed")
 
+// ErrResendNotForInvited is returned by AdminResendConfirmation for a row
+// this package's own Invited test (import_id set, consent_basis still
+// NULL) identifies as an unaccepted import invitation (#0129). This method
+// mints a NEW outbox.KindConfirmation row — the generic "confirm your
+// subscription" template, which carries none of PRD §6.10.1's mandatory
+// provenance sentence ("not optional copy") — so resending it onto an
+// invited row would replace the person's only copy of WHY they were
+// emailed with one that no longer says. The correct resend for an invited
+// row is a fresh outbox.KindImportInvite, which this method does not build;
+// refusing loudly here is preferred over silently sending the wrong
+// template.
+var ErrResendNotForInvited = errors.New("subscribers: cannot resend a generic confirmation to an import invitation")
+
 // ListPending returns every non-synthetic status='pending' subscriber,
 // ordered by confirm_sent_at — oldestFirst=true (the default the admin
 // screen opens to, per #0128's criterion) sorts ascending (oldest wait
@@ -110,8 +123,11 @@ type ResendResult struct {
 //
 //  1. the subscriber exists and is not synthetic (ErrPendingSubscriberNotFound)
 //  2. status is 'pending' (ErrNotPending) — nothing to resend to otherwise
-//  3. the address is not suppressed (ErrResendSuppressed)
-//  4. confirm_sent_at is NULL or older than now-cooldown (ErrResendCooldownActive)
+//  3. the row is not an unaccepted import invitation (ErrResendNotForInvited,
+//     #0129) — see that error's own doc comment for why resending the
+//     generic confirmation template onto one would be actively wrong
+//  4. the address is not suppressed (ErrResendSuppressed)
+//  5. confirm_sent_at is NULL or older than now-cooldown (ErrResendCooldownActive)
 //     — checked in Go, against the row FOR UPDATE already locked above, NOT
 //     via a claim-in-the-WHERE-clause UPDATE the way the public
 //     ClaimAndEnqueueConfirmation enforces its own cooldown. The safety
@@ -150,6 +166,9 @@ func (s *Store) AdminResendConfirmation(ctx context.Context, id int64, now time.
 	}
 	if sub.Status != StatusPending {
 		return ResendResult{}, ErrNotPending
+	}
+	if sub.ImportID != nil && sub.ConsentBasis == nil {
+		return ResendResult{}, ErrResendNotForInvited
 	}
 
 	var suppressed bool
@@ -206,11 +225,20 @@ func (s *Store) AdminResendConfirmation(ctx context.Context, id int64, now time.
 // ExpirePendingSweep clears confirm_token (and only confirm_token — the row
 // is left status='pending', per #0128's criterion "the row left pending
 // rather than deleted") for every non-synthetic pending subscriber whose
-// confirm_expires_at has passed, and records one confirmation_expired
-// subscriber_events row per address. Returns the number of rows swept.
-// Idempotent: a row with confirm_token already NULL never matches the WHERE
-// clause again, so a repeated sweep (the caller's own poll loop) never
-// double-writes the event for the same expiry.
+// confirm_expires_at has passed, and records one subscriber_events row per
+// address: ActionConfirmationExpired for an ordinary website signup, or
+// ActionInviteExpired (#0129) for a row still carrying an unaccepted import
+// invitation — import_id set and consent_basis still NULL, the same
+// row-state test Confirm and Unsubscribe use elsewhere in this package to
+// recognize an invite without trusting caller intent. Either way the row is
+// left exactly 'pending' — #0129's criterion "leaving the row pending,
+// never re-mailing" is satisfied by construction: nothing in this method or
+// anywhere else re-stamps invited_at or re-enqueues an invitation once
+// invited_at is set (see ImportStore.Commit's doc comment on why that
+// column is write-once). Returns the number of rows swept. Idempotent: a
+// row with confirm_token already NULL never matches the WHERE clause again,
+// so a repeated sweep (the caller's own poll loop) never double-writes the
+// event for the same expiry.
 func (s *Store) ExpirePendingSweep(ctx context.Context, now time.Time) (int64, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -224,20 +252,22 @@ func (s *Store) ExpirePendingSweep(ctx context.Context, now time.Time) (int64, e
 		  WHERE status = $2 AND synthetic = false
 		    AND confirm_token IS NOT NULL
 		    AND confirm_expires_at IS NOT NULL AND confirm_expires_at < $1
-		 RETURNING id, email`,
+		 RETURNING id, email, import_id, consent_basis`,
 		now, StatusPending,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("subscribers: sweeping expired pending signups: %w", err)
 	}
 	type expiredRow struct {
-		id    int64
-		email string
+		id           int64
+		email        string
+		importID     *int64
+		consentBasis *string
 	}
 	var expired []expiredRow
 	for rows.Next() {
 		var r expiredRow
-		if err := rows.Scan(&r.id, &r.email); err != nil {
+		if err := rows.Scan(&r.id, &r.email, &r.importID, &r.consentBasis); err != nil {
 			rows.Close()
 			return 0, fmt.Errorf("subscribers: scanning expired pending row: %w", err)
 		}
@@ -251,12 +281,17 @@ func (s *Store) ExpirePendingSweep(ctx context.Context, now time.Time) (int64, e
 
 	for _, r := range expired {
 		id := r.id
+		action := ActionConfirmationExpired
+		if r.importID != nil && r.consentBasis == nil {
+			action = ActionInviteExpired
+		}
 		if err := RecordEventTx(ctx, tx, Event{
 			SubscriberID: &id,
 			Email:        r.email,
-			Action:       ActionConfirmationExpired,
+			Action:       action,
+			ImportID:     r.importID,
 		}); err != nil {
-			return 0, fmt.Errorf("subscribers: recording confirmation_expired for %d: %w", r.id, err)
+			return 0, fmt.Errorf("subscribers: recording %s for %d: %w", action, r.id, err)
 		}
 	}
 

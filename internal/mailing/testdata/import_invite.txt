@@ -1,0 +1,18 @@
+$ opencircuit/invite
+
+Confirm to join the list
+
+You gave us this address when you signed up for Intro to Soldering through our Luma event list on 12 May 2026.
+
+We're starting an email list for workshop announcements — click the link below if you'd like to be on it.
+
+Confirm subscription: https://www.opencircuitsf.com/confirm?token=CONFIRM-TOKEN-AAA
+
+This link expires in 7 days.
+If you do nothing, you won't hear from us again — we won't send a reminder.
+
+--
+Manage your interests: https://www.opencircuitsf.com/preferences?token=MANAGE-TOKEN-BBB
+Unsubscribe from everything: https://www.opencircuitsf.com/unsubscribe?token=MANAGE-TOKEN-BBB
+Open Circuit SF, PO Box 1234, San Francisco, CA 94110
+Open Circuit SF - opencircuitsf.com

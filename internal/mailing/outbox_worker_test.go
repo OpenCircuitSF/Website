@@ -907,3 +907,211 @@ func TestOutbox_Enqueue_AdminAlert_DrainsAndSends(t *testing.T) {
 		t.Errorf("Subject = %q, want %q", sent[0].Subject, "Test alert")
 	}
 }
+
+// TestOutboxWorker_DrainsImportInviteRow is #0129's end-to-end proof,
+// mirroring TestOutboxWorker_DrainsWelcomeRow: a queued import_invite row is
+// claimed, rendered with the actual payload (confirm_token, provenance
+// fields), sent through the mailer, and marked sent with its payload
+// scrubbed — and, distinctly from every other kind this worker renders,
+// carries the mandatory provenance sentence and the RFC 8058 headers.
+func TestOutboxWorker_DrainsImportInviteRow(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+
+	recipient := uniqueOutboxRecipient(t)
+	id, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:      outbox.KindImportInvite,
+		Recipient: recipient,
+		Payload: map[string]any{
+			"confirm_token": "the-confirm-token",
+			"manage_token":  "the-manage-token",
+			"ttl_seconds":   int64(7 * 24 * 3600),
+			"import_source": "luma",
+			"source_detail": "Intro to Soldering",
+			"collected_at":  "2026-05-12T00:00:00Z",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	deadline := time.Now().Add(2 * time.Second)
+	var status string
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id).Scan(&status); err != nil {
+			t.Fatalf("select: %v", err)
+		}
+		if status == outbox.StatusSent {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if status != outbox.StatusSent {
+		t.Fatalf("status = %q after waiting, want %q", status, outbox.StatusSent)
+	}
+
+	sent := mailer.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("mailer.Sent() = %d messages, want 1", len(sent))
+	}
+	if sent[0].To != recipient {
+		t.Errorf("To = %q, want %q", sent[0].To, recipient)
+	}
+	if !strings.Contains(sent[0].TextBody, "Intro to Soldering") {
+		t.Error("rendered body does not contain source_detail from the payload")
+	}
+	if !strings.Contains(sent[0].TextBody, "the-confirm-token") {
+		t.Error("rendered body does not contain the confirm token from the payload")
+	}
+	hasListUnsubscribe := false
+	for _, h := range sent[0].Headers {
+		if h.Name == "List-Unsubscribe" {
+			hasListUnsubscribe = true
+		}
+	}
+	if !hasListUnsubscribe {
+		t.Error("import invite message rendered by the worker carries no List-Unsubscribe header")
+	}
+
+	var payloadText string
+	if err := pool.QueryRow(context.Background(), `SELECT payload::text FROM outbound_queue WHERE id = $1`, id).Scan(&payloadText); err != nil {
+		t.Fatalf("select payload: %v", err)
+	}
+	if payloadText != "{}" {
+		t.Errorf("payload = %q after send, want scrubbed to {}", payloadText)
+	}
+}
+
+// TestOutboxWorker_MarkSent_RecordsInviteSent proves #0129's mirror of
+// #0127's welcome_sent precedent: invite_sent is written by MarkSent — "an
+// import invitation LEFT the queue" — not at ImportStore.Commit's enqueue
+// time. This is the load-bearing call site
+// TestSubscriberEventActions_EveryConstantHasCallSiteOrOwner
+// (internal/subscribers) checks for ActionInviteSent, closing the gap
+// #0125's groundwork left with #0129 named as the owner.
+func TestOutboxWorker_MarkSent_RecordsInviteSent(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+
+	subStore := subscribers.NewStore(pool)
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: uniqueOutboxRecipient(t), ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// sub stays 'pending' via the ordinary website-signup path — this test
+	// never calls ImportStore.Commit — so it is invisible to any
+	// AudienceAll (status='active') query elsewhere in this package's
+	// shared test database, mirroring TestOutboxWorker_MarkSent_RecordsWelcomeSent's
+	// own reasoning for the identical choice.
+
+	id, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:         outbox.KindImportInvite,
+		Recipient:    sub.Email,
+		SubscriberID: &sub.ID,
+		Payload: map[string]any{
+			"confirm_token": "the-confirm-token",
+			"manage_token":  sub.ManageToken,
+			"ttl_seconds":   int64(7 * 24 * 3600),
+			"import_source": "luma",
+			"source_detail": "Intro to Soldering",
+			"collected_at":  "2026-05-12T00:00:00Z",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	var before int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE subscriber_id = $1 AND action = 'invite_sent'`, sub.ID,
+	).Scan(&before); err != nil {
+		t.Fatalf("count before: %v", err)
+	}
+	if before != 0 {
+		t.Fatalf("invite_sent events before send = %d, want 0", before)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	deadline := time.Now().Add(2 * time.Second)
+	var after int
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(context.Background(),
+			`SELECT count(*) FROM subscriber_events WHERE subscriber_id = $1 AND action = 'invite_sent'`, sub.ID,
+		).Scan(&after); err != nil {
+			t.Fatalf("count after: %v", err)
+		}
+		if after == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if after != 1 {
+		t.Fatalf("invite_sent events after send = %d, want 1", after)
+	}
+	_ = id
+}
+
+// TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress mirrors
+// TestOutboxWorker_DefersWelcome_MissingPhysicalAddress (#0264) for #0129's
+// identical gate: a blank physical_address defers an import_invite row
+// indefinitely (never abandons it) rather than sending it without a
+// required CAN-SPAM §7704 address line.
+func TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "")
+
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+
+	recipient := uniqueOutboxRecipient(t)
+	id, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:      outbox.KindImportInvite,
+		Recipient: recipient,
+		Payload: map[string]any{
+			"confirm_token": "the-confirm-token",
+			"manage_token":  "the-manage-token",
+			"ttl_seconds":   int64(7 * 24 * 3600),
+			"import_source": "luma",
+			"source_detail": "Intro to Soldering",
+			"collected_at":  "2026-05-12T00:00:00Z",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	deadline := time.Now().Add(2 * time.Second)
+	var status string
+	var attempts int
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(context.Background(),
+			`SELECT status, attempts FROM outbound_queue WHERE id = $1`, id,
+		).Scan(&status, &attempts); err != nil {
+			t.Fatalf("select: %v", err)
+		}
+		if attempts >= 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if attempts < 1 {
+		t.Fatal("row was never claimed (attempts stayed 0)")
+	}
+	if status != outbox.StatusQueued {
+		t.Errorf("status = %q, want %q — a missing physical_address must defer, not abandon or send", status, outbox.StatusQueued)
+	}
+	if len(mailer.Sent()) != 0 {
+		t.Errorf("mailer.Sent() = %d messages, want 0 — nothing should go out without a physical_address", len(mailer.Sent()))
+	}
+}

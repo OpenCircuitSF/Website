@@ -1,10 +1,12 @@
 // admin_subscribers_import.go implements the admin-only CSV import path
 // (#0125, PRD §6.10): POST /admin/subscribers/import/preview (dry run,
 // writes nothing), POST /admin/subscribers/import (commit), and POST
-// /admin/imports/{id}/revoke (undo a whole batch in one action). This issue
-// implements consent_mode=prior_consent only — invite mode is #0129; see
-// internal/subscribers/imports.go's package doc comment for why Commit
-// refuses ConsentModeInvite rather than silently downgrading it.
+// /admin/imports/{id}/revoke (undo a whole batch in one action). #0125
+// implemented consent_mode=prior_consent; #0129 added invite mode — this
+// handler is a thin pass-through either way, since ImportStore.Commit
+// (internal/subscribers/imports.go) is what actually branches on
+// consent_mode and this file only maps its typed errors to HTTP status
+// codes.
 //
 // # Column mapping is explicit, never guessed
 //
@@ -116,28 +118,36 @@ type importView struct {
 	RowCount      int     `json:"row_count"`
 	InsertedCount int     `json:"inserted_count"`
 	SkippedCount  int     `json:"skipped_count"`
-	Status        string  `json:"status"`
-	RevokedAt     *string `json:"revoked_at,omitempty"`
-	RevokedReason *string `json:"revoked_reason,omitempty"`
-	CreatedAt     string  `json:"created_at"`
+	// InvitedCount/ConfirmedCount (#0129) are always present but only ever
+	// non-zero for consent_mode=invite — a prior_consent commit sends
+	// nothing, so both stay 0 for it, matching Import.InvitedCount/
+	// ConfirmedCount's own zero-value default (migrations/000023).
+	InvitedCount   int     `json:"invited_count"`
+	ConfirmedCount int     `json:"confirmed_count"`
+	Status         string  `json:"status"`
+	RevokedAt      *string `json:"revoked_at,omitempty"`
+	RevokedReason  *string `json:"revoked_reason,omitempty"`
+	CreatedAt      string  `json:"created_at"`
 }
 
 func toImportView(imp subscribers.Import) importView {
 	return importView{
-		ID:            imp.ID,
-		Source:        imp.Source,
-		SourceDetail:  imp.SourceDetail,
-		ConsentMode:   imp.ConsentMode,
-		ConsentNote:   imp.ConsentNote,
-		CollectedAt:   imp.CollectedAt.Format("2006-01-02"),
-		Filename:      imp.Filename,
-		RowCount:      imp.RowCount,
-		InsertedCount: imp.InsertedCount,
-		SkippedCount:  imp.SkippedCount,
-		Status:        imp.Status,
-		RevokedAt:     formatTimePtr(imp.RevokedAt),
-		RevokedReason: imp.RevokedReason,
-		CreatedAt:     imp.CreatedAt.UTC().Format(time.RFC3339),
+		ID:             imp.ID,
+		Source:         imp.Source,
+		SourceDetail:   imp.SourceDetail,
+		ConsentMode:    imp.ConsentMode,
+		ConsentNote:    imp.ConsentNote,
+		CollectedAt:    imp.CollectedAt.Format("2006-01-02"),
+		Filename:       imp.Filename,
+		RowCount:       imp.RowCount,
+		InsertedCount:  imp.InsertedCount,
+		SkippedCount:   imp.SkippedCount,
+		InvitedCount:   imp.InvitedCount,
+		ConfirmedCount: imp.ConfirmedCount,
+		Status:         imp.Status,
+		RevokedAt:      formatTimePtr(imp.RevokedAt),
+		RevokedReason:  imp.RevokedReason,
+		CreatedAt:      imp.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -410,9 +420,6 @@ func (h *AdminImportsHandler) Commit(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, subscribers.ErrCollectedAtRequired):
 		writeError(w, http.StatusBadRequest, "collected_at is required")
-		return
-	case errors.Is(err, subscribers.ErrConsentModeNotSupported):
-		writeError(w, http.StatusBadRequest, "invite mode is not available yet — use prior_consent")
 		return
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, "internal server error")

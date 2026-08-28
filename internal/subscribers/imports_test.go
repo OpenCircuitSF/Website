@@ -312,18 +312,156 @@ func TestImportStore_Commit_LinksKnownInterestsAndIgnoresUnknown(t *testing.T) {
 	}
 }
 
-// TestImportStore_Commit_RefusesInviteMode proves #0125 does not silently
-// downgrade or half-implement invite mode.
-func TestImportStore_Commit_RefusesInviteMode(t *testing.T) {
+// TestImportStore_Commit_InviteInsertsPendingAndEnqueuesInvitation is
+// #0129's core acceptance criterion: an invite-mode commit lands the new
+// address `pending` with a confirm token, consent_basis left NULL (asked,
+// not yet consented), invited_at stamped, and exactly one
+// outbox.KindImportInvite row enqueued in the SAME transaction.
+func TestImportStore_Commit_InviteInsertsPendingAndEnqueuesInvitation(t *testing.T) {
 	pool := testPool(t)
 	store := NewImportStore(pool)
+	subStore := NewStore(pool)
+	email := uniqueImportEmail(t)
 	now := time.Now().UTC().Truncate(time.Second)
 
-	in := validCommitInput(t, []ImportRow{{Email: uniqueImportEmail(t)}})
+	in := validCommitInput(t, []ImportRow{{Email: email}})
 	in.ConsentMode = ConsentModeInvite
-	_, err := store.Commit(context.Background(), in, now)
-	if !errors.Is(err, ErrConsentModeNotSupported) {
-		t.Errorf("Commit with invite mode err = %v, want ErrConsentModeNotSupported", err)
+	result, err := store.Commit(context.Background(), in, now)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if result.Import.InsertedCount != 1 {
+		t.Errorf("InsertedCount = %d, want 1", result.Import.InsertedCount)
+	}
+	if result.Import.InvitedCount != 1 {
+		t.Errorf("InvitedCount = %d, want 1", result.Import.InvitedCount)
+	}
+
+	sub, err := subStore.FindByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+	if sub.Status != StatusPending {
+		t.Errorf("Status = %q, want %q", sub.Status, StatusPending)
+	}
+	if sub.ConfirmToken == nil || *sub.ConfirmToken == "" {
+		t.Error("ConfirmToken is nil/empty, want a live confirm token")
+	}
+	if sub.ConfirmExpiresAt == nil || !sub.ConfirmExpiresAt.After(now) {
+		t.Errorf("ConfirmExpiresAt = %v, want a time after %v", sub.ConfirmExpiresAt, now)
+	}
+	if sub.ConsentBasis != nil {
+		t.Errorf("ConsentBasis = %v, want nil — an invited address has been asked, not yet consented", sub.ConsentBasis)
+	}
+	if sub.InvitedAt == nil {
+		t.Error("InvitedAt is nil, want stamped")
+	}
+	if sub.ImportID == nil || *sub.ImportID != result.Import.ID {
+		t.Errorf("ImportID = %v, want %d", sub.ImportID, result.Import.ID)
+	}
+	if sub.ConfirmedAt != nil {
+		t.Errorf("ConfirmedAt = %v, want nil — nobody has confirmed yet", sub.ConfirmedAt)
+	}
+
+	var queued int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE recipient = $1 AND kind = $2`,
+		email, "import_invite",
+	).Scan(&queued); err != nil {
+		t.Fatalf("counting outbound_queue: %v", err)
+	}
+	if queued != 1 {
+		t.Errorf("outbound_queue rows for %s = %d, want 1", email, queued)
+	}
+}
+
+// TestImportStore_Commit_InviteSkipsAlreadyInvitedAddress proves the
+// anti-abuse property PRD §6.10.1 requires: an address already present in
+// subscribers (because it was invited by an EARLIER import) is skipped —
+// never invited a second time, in any mode — since dedupe checks
+// subscribers regardless of status, and invited_at is stamped exactly once
+// at insert and never cleared.
+func TestImportStore_Commit_InviteSkipsAlreadyInvitedAddress(t *testing.T) {
+	pool := testPool(t)
+	store := NewImportStore(pool)
+	email := uniqueImportEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	first := validCommitInput(t, []ImportRow{{Email: email}})
+	first.ConsentMode = ConsentModeInvite
+	firstResult, err := store.Commit(context.Background(), first, now)
+	if err != nil {
+		t.Fatalf("first Commit: %v", err)
+	}
+	if firstResult.Import.InvitedCount != 1 {
+		t.Fatalf("first InvitedCount = %d, want 1", firstResult.Import.InvitedCount)
+	}
+
+	second := validCommitInput(t, []ImportRow{{Email: email}})
+	second.ConsentMode = ConsentModeInvite
+	secondResult, err := store.Commit(context.Background(), second, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("second Commit: %v", err)
+	}
+	if secondResult.Import.InsertedCount != 0 || secondResult.Import.InvitedCount != 0 {
+		t.Errorf("second import InsertedCount=%d InvitedCount=%d, want 0/0 (already invited)",
+			secondResult.Import.InsertedCount, secondResult.Import.InvitedCount)
+	}
+	if secondResult.Import.SkippedCount != 1 {
+		t.Errorf("second import SkippedCount = %d, want 1", secondResult.Import.SkippedCount)
+	}
+
+	var queued int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE recipient = $1 AND kind = $2`,
+		email, "import_invite",
+	).Scan(&queued); err != nil {
+		t.Fatalf("counting outbound_queue: %v", err)
+	}
+	if queued != 1 {
+		t.Errorf("outbound_queue rows for %s after two imports = %d, want 1 (never re-invited)", email, queued)
+	}
+}
+
+// TestImportStore_Commit_InviteSkipsSuppressedAddress mirrors
+// TestImportStore_Commit_SkipsSuppressedAddress for invite mode — a
+// suppressed address must never be invited, matching PRD §6.10.1's "skipped
+// as always — they are never invited".
+func TestImportStore_Commit_InviteSkipsSuppressedAddress(t *testing.T) {
+	pool := testPool(t)
+	store := NewImportStore(pool)
+	suppressions := NewSuppressionStore(pool)
+	email := uniqueImportEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	if _, err := suppressions.Add(context.Background(), NewSuppression{
+		Email: email, Reason: SuppressionReasonHardBounce,
+	}, now); err != nil {
+		t.Fatalf("Add suppression: %v", err)
+	}
+
+	in := validCommitInput(t, []ImportRow{{Email: email}})
+	in.ConsentMode = ConsentModeInvite
+	result, err := store.Commit(context.Background(), in, now)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if result.Import.InvitedCount != 0 || result.Import.InsertedCount != 0 {
+		t.Errorf("InsertedCount=%d InvitedCount=%d, want 0/0 (suppressed)", result.Import.InsertedCount, result.Import.InvitedCount)
+	}
+	if result.Import.SkippedCount != 1 {
+		t.Errorf("SkippedCount = %d, want 1", result.Import.SkippedCount)
+	}
+
+	var queued int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE recipient = $1 AND kind = $2`,
+		email, "import_invite",
+	).Scan(&queued); err != nil {
+		t.Fatalf("counting outbound_queue: %v", err)
+	}
+	if queued != 0 {
+		t.Errorf("outbound_queue rows for suppressed %s = %d, want 0", email, queued)
 	}
 }
 
@@ -650,5 +788,336 @@ func TestImportStore_Commit_NeverProducesSyntheticRows(t *testing.T) {
 	}
 	if sub.Synthetic {
 		t.Error("Synthetic = true for an imported subscriber, want false")
+	}
+}
+
+// commitInvite is a small helper for #0129's tests below: commits a single
+// invite-mode row and returns the resulting subscriber and import.
+func commitInvite(t *testing.T, importStore *ImportStore, email string, now time.Time) (Subscriber, Import) {
+	t.Helper()
+	in := validCommitInput(t, []ImportRow{{Email: email}})
+	in.ConsentMode = ConsentModeInvite
+	result, err := importStore.Commit(context.Background(), in, now)
+	if err != nil {
+		t.Fatalf("commitInvite: Commit: %v", err)
+	}
+	subStore := NewStore(importStore.pool)
+	sub, err := subStore.FindByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("commitInvite: FindByEmail: %v", err)
+	}
+	return sub, result.Import
+}
+
+// TestConfirm_InviteAcceptance_SetsConsentBasisSkipsWelcomeAndCounts is
+// #0129's core confirmation-side acceptance criterion (PRD §6.10.1 step 4):
+// following the invitation's confirm link — the SAME Confirm method and
+// SAME token shape the public double opt-in flow uses — activates the
+// subscriber, sets consent_basis=double_opt_in, records invite_accepted (in
+// addition to confirmed), increments the owning import's confirmed_count,
+// and sends NO welcome email ("the invitation was the introduction").
+func TestConfirm_InviteAcceptance_SetsConsentBasisSkipsWelcomeAndCounts(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	email := uniqueImportEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	invited, imp := commitInvite(t, importStore, email, now)
+	if invited.ConfirmToken == nil {
+		t.Fatal("invited subscriber has no confirm token")
+	}
+
+	confirmed, err := subStore.Confirm(context.Background(), *invited.ConfirmToken, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if confirmed.Status != StatusActive {
+		t.Errorf("Status = %q, want %q", confirmed.Status, StatusActive)
+	}
+	if confirmed.ConsentBasis == nil || *confirmed.ConsentBasis != ConsentBasisDoubleOptIn {
+		t.Errorf("ConsentBasis = %v, want %q", confirmed.ConsentBasis, ConsentBasisDoubleOptIn)
+	}
+	if confirmed.ConfirmedAt == nil {
+		t.Error("ConfirmedAt is nil, want set")
+	}
+	// Indistinguishable from a website signup except by source/import_id
+	// (#0129's acceptance criteria): source and import_id are still the
+	// import's, but every OTHER field behaves exactly as a website
+	// confirmation's would — asserted above (status, consent_basis,
+	// confirmed_at) using the SAME assertions TestConfirm_Success uses for
+	// a website signup.
+	if confirmed.Source != SubscriberSourceImport {
+		t.Errorf("Source = %q, want %q (unchanged by confirming)", confirmed.Source, SubscriberSourceImport)
+	}
+
+	// No welcome email — "the invitation was the introduction".
+	var welcomeCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE recipient = $1 AND kind = 'welcome'`, email,
+	).Scan(&welcomeCount); err != nil {
+		t.Fatalf("counting welcome rows: %v", err)
+	}
+	if welcomeCount != 0 {
+		t.Errorf("welcome rows for %s = %d, want 0 (no welcome follows an accepted invitation)", email, welcomeCount)
+	}
+
+	// invite_accepted event recorded, in addition to confirmed.
+	var inviteAcceptedCount, confirmedCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE email = $1 AND action = $2`,
+		email, string(ActionInviteAccepted),
+	).Scan(&inviteAcceptedCount); err != nil {
+		t.Fatalf("counting invite_accepted events: %v", err)
+	}
+	if inviteAcceptedCount != 1 {
+		t.Errorf("invite_accepted events = %d, want 1", inviteAcceptedCount)
+	}
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE email = $1 AND action = $2`,
+		email, string(ActionConfirmed),
+	).Scan(&confirmedCount); err != nil {
+		t.Fatalf("counting confirmed events: %v", err)
+	}
+	if confirmedCount != 1 {
+		t.Errorf("confirmed events = %d, want 1", confirmedCount)
+	}
+
+	// subscriber_imports.confirmed_count incremented.
+	after, err := importStore.GetImport(context.Background(), imp.ID)
+	if err != nil {
+		t.Fatalf("GetImport: %v", err)
+	}
+	if after.ConfirmedCount != 1 {
+		t.Errorf("ConfirmedCount = %d, want 1", after.ConfirmedCount)
+	}
+}
+
+// TestConfirm_InviteAcceptance_NeverCountsAsConsentingUntilConfirmed proves
+// the load-bearing property this whole issue exists for: BEFORE the
+// invitation is accepted, the address is pending with consent_basis still
+// NULL — it does not count as consenting by any of the signals the rest of
+// the system reads (status, consent_basis).
+func TestConfirm_InviteAcceptance_NeverCountsAsConsentingUntilConfirmed(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	email := uniqueImportEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	invited, _ := commitInvite(t, importStore, email, now)
+	if invited.Status != StatusPending {
+		t.Errorf("Status = %q, want %q before confirmation", invited.Status, StatusPending)
+	}
+	if invited.ConsentBasis != nil {
+		t.Errorf("ConsentBasis = %v, want nil before confirmation — invited, not consented", invited.ConsentBasis)
+	}
+	if invited.ConfirmedAt != nil {
+		t.Errorf("ConfirmedAt = %v, want nil before confirmation", invited.ConfirmedAt)
+	}
+}
+
+// TestUnsubscribe_InviteDecline_SuppressesAddressAndClearsToken is #0129's
+// core decline-side acceptance criterion (PRD §6.10.1: "carries... a
+// one-click decline that suppresses the address outright"): unsubscribing a
+// still-pending, unconfirmed import invitation — reached through the SAME
+// Store.Unsubscribe every other unsubscribe path already uses — suppresses
+// the address (so no future import can resurrect it) and clears the confirm
+// token (so a still-live invitation link cannot later reactivate the row).
+func TestUnsubscribe_InviteDecline_SuppressesAddressAndClearsToken(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	suppressions := NewSuppressionStore(pool)
+	email := uniqueImportEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	invited, _ := commitInvite(t, importStore, email, now)
+
+	declined, err := subStore.Unsubscribe(context.Background(), invited.ID, SourceOneClick, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+	if declined.Status != StatusUnsubscribed {
+		t.Errorf("Status = %q, want %q", declined.Status, StatusUnsubscribed)
+	}
+	if declined.ConfirmToken != nil {
+		t.Errorf("ConfirmToken = %v, want nil (cleared on decline)", *declined.ConfirmToken)
+	}
+	if declined.ConfirmExpiresAt != nil {
+		t.Errorf("ConfirmExpiresAt = %v, want nil (cleared on decline)", declined.ConfirmExpiresAt)
+	}
+
+	sups, err := suppressions.ListByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("ListByEmail: %v", err)
+	}
+	if len(sups) != 1 || sups[0].Reason != SuppressionReasonManual {
+		t.Errorf("suppressions for %s = %+v, want exactly one manual-reason row", email, sups)
+	}
+
+	// The stale confirm token — if a caller still held it — must no longer
+	// resolve to anything, so a late click on the (declined) invitation
+	// link can never reactivate this row.
+	if _, err := subStore.FindByConfirmToken(context.Background(), *invited.ConfirmToken); !errors.Is(err, ErrNotFound) {
+		t.Errorf("FindByConfirmToken after decline err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestUnsubscribe_OrdinaryUnsubscribeStillNeverSuppresses proves #0129's
+// decline branch is scoped tightly: an ORDINARY active subscriber's
+// unsubscribe (the vast majority of Unsubscribe calls) must still NOT add a
+// suppression — internal/handlers/unsubscribe.go's own doc comment commits
+// to this ("an unsubscribed... address must still be able to resubscribe
+// through ordinary double opt-in"), and #0129 must not silently break it.
+func TestUnsubscribe_OrdinaryUnsubscribeStillNeverSuppresses(t *testing.T) {
+	pool := testPool(t)
+	subStore := NewStore(pool)
+	suppressions := NewSuppressionStore(pool)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	sub, err := subStore.Create(context.Background(), NewSignup{Email: uniqueImportEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	confirmed, err := subStore.Confirm(context.Background(), *sub.ConfirmToken, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	if _, err := subStore.Unsubscribe(context.Background(), confirmed.ID, SourceOneClick, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+
+	sups, err := suppressions.ListByEmail(context.Background(), sub.Email)
+	if err != nil {
+		t.Fatalf("ListByEmail: %v", err)
+	}
+	if len(sups) != 0 {
+		t.Errorf("suppressions for an ordinary unsubscribe = %+v, want none", sups)
+	}
+}
+
+// TestImportStore_Revoke_WidenedForInviteMode is #0129's Revoke acceptance
+// criterion: revoking an invite-mode import moves still-pending
+// (unaccepted) invitees to unsubscribed, but leaves an address that
+// CONFIRMED alone — "its consent no longer derives from the import".
+func TestImportStore_Revoke_WidenedForInviteMode(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	pendingEmail, confirmedEmail := uniqueImportEmail(t), uniqueImportEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	in := validCommitInput(t, []ImportRow{{Email: pendingEmail}, {Email: confirmedEmail}})
+	in.ConsentMode = ConsentModeInvite
+	committed, err := importStore.Commit(context.Background(), in, now)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	confirmedBefore, err := subStore.FindByEmail(context.Background(), confirmedEmail)
+	if err != nil {
+		t.Fatalf("FindByEmail(confirmedEmail): %v", err)
+	}
+	if _, err := subStore.Confirm(context.Background(), *confirmedBefore.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm(confirmedEmail): %v", err)
+	}
+
+	revoked, revokedEmails, alreadyRevoked, err := importStore.Revoke(context.Background(), committed.Import.ID, "consent was not properly obtained", now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if alreadyRevoked {
+		t.Fatal("alreadyRevoked = true, want false")
+	}
+	if revoked.Status != ImportStatusRevoked {
+		t.Errorf("Import.Status = %q, want %q", revoked.Status, ImportStatusRevoked)
+	}
+	if len(revokedEmails) != 1 || revokedEmails[0] != pendingEmail {
+		t.Errorf("revokedEmails = %v, want [%s] (only the still-pending one)", revokedEmails, pendingEmail)
+	}
+
+	pendingAfter, err := subStore.FindByEmail(context.Background(), pendingEmail)
+	if err != nil {
+		t.Fatalf("FindByEmail(pendingEmail after revoke): %v", err)
+	}
+	if pendingAfter.Status != StatusUnsubscribed {
+		t.Errorf("pendingEmail Status = %q, want %q", pendingAfter.Status, StatusUnsubscribed)
+	}
+	if pendingAfter.ConfirmToken != nil {
+		t.Errorf("pendingEmail ConfirmToken = %v, want nil (cleared by revoke)", *pendingAfter.ConfirmToken)
+	}
+
+	confirmedAfter, err := subStore.FindByEmail(context.Background(), confirmedEmail)
+	if err != nil {
+		t.Fatalf("FindByEmail(confirmedEmail after revoke): %v", err)
+	}
+	if confirmedAfter.Status != StatusActive {
+		t.Errorf("confirmedEmail Status = %q, want %q (left alone — consent no longer derives from the import)", confirmedAfter.Status, StatusActive)
+	}
+}
+
+// TestExpirePendingSweep_InvitedRow_RecordsInviteExpired is #0129's
+// distinguishing case for #0128's expiry sweep (pending.go): an invited,
+// never-confirmed row past its TTL is left `pending` (never re-mailed —
+// invited_at is stamped once and nothing clears it) and records
+// invite_expired, not confirmation_expired — the same row-state test
+// (import_id set, consent_basis still NULL) Confirm and Unsubscribe use
+// elsewhere in this package to recognize an invitation without trusting
+// caller intent.
+func TestExpirePendingSweep_InvitedRow_RecordsInviteExpired(t *testing.T) {
+	pool := testPool(t)
+	importStore := NewImportStore(pool)
+	subStore := NewStore(pool)
+	email := uniqueImportEmail(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	invited, imp := commitInvite(t, importStore, email, now)
+	if invited.InvitedAt == nil {
+		t.Fatal("invited.InvitedAt is nil, want stamped")
+	}
+
+	swept, err := subStore.ExpirePendingSweep(context.Background(), now.Add(importInviteConfirmTTL+time.Minute))
+	if err != nil {
+		t.Fatalf("ExpirePendingSweep: %v", err)
+	}
+	if swept < 1 {
+		t.Fatalf("ExpirePendingSweep swept %d rows, want at least 1", swept)
+	}
+
+	got, err := subStore.GetByID(context.Background(), invited.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Status != StatusPending {
+		t.Errorf("Status = %q after sweep, want %q (left pending, never re-mailed)", got.Status, StatusPending)
+	}
+	if got.ConfirmToken != nil {
+		t.Errorf("ConfirmToken = %v after sweep, want nil (cleared)", *got.ConfirmToken)
+	}
+	// invited_at survives the sweep unchanged — it is the permanent
+	// "already invited, ever" marker, not something a re-sweep or a later
+	// import may clear.
+	if got.InvitedAt == nil {
+		t.Error("InvitedAt is nil after sweep, want still stamped")
+	}
+
+	var inviteExpiredCount, confirmationExpiredCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE subscriber_id = $1 AND action = 'invite_expired' AND import_id = $2`,
+		invited.ID, imp.ID,
+	).Scan(&inviteExpiredCount); err != nil {
+		t.Fatalf("counting invite_expired events: %v", err)
+	}
+	if inviteExpiredCount != 1 {
+		t.Errorf("invite_expired events = %d, want 1", inviteExpiredCount)
+	}
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE subscriber_id = $1 AND action = 'confirmation_expired'`, invited.ID,
+	).Scan(&confirmationExpiredCount); err != nil {
+		t.Fatalf("counting confirmation_expired events: %v", err)
+	}
+	if confirmationExpiredCount != 0 {
+		t.Errorf("confirmation_expired events for an invited row = %d, want 0 (invite_expired instead)", confirmationExpiredCount)
 	}
 }

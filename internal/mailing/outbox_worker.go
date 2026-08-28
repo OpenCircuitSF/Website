@@ -562,8 +562,10 @@ func (w *OutboxWorker) sendOne(row outbox.Row) {
 		// clear automatically once an admin sets the address, so it takes a
 		// dedicated path that never abandons it. See
 		// deferMissingPhysicalAddress and errWelcomePhysicalAddressRequired.
-		if errors.Is(err, errWelcomePhysicalAddressRequired) {
-			w.deferMissingPhysicalAddress(row)
+		// #0129's import invitation is refused on the identical gate — see
+		// errImportInviteMissingPhysicalAddress's own doc comment.
+		if errors.Is(err, errWelcomePhysicalAddressRequired) || errors.Is(err, errImportInviteMissingPhysicalAddress) {
+			w.deferMissingPhysicalAddress(row, err.Error())
 			return
 		}
 		w.finishFailed(row, fmt.Errorf("rendering kind %q: %w", row.Kind, err))
@@ -613,6 +615,13 @@ func (w *OutboxWorker) sendOne(row outbox.Row) {
 		sentAction = subscribers.ActionConfirmationSent
 	case outbox.KindWelcome:
 		sentAction = subscribers.ActionWelcomeSent
+	case outbox.KindImportInvite:
+		// #0129: invite_sent means "an import invitation LEFT the outbound
+		// queue" — the identical precedent confirmation_sent/welcome_sent
+		// already establish, not "was enqueued" (ImportStore.Commit does
+		// NOT write this action at enqueue time — see that method's own
+		// comment).
+		sentAction = subscribers.ActionInviteSent
 	}
 	if w.events != nil && sentAction != "" && row.SubscriberID != nil {
 		eventCtx, eventCancel := context.WithTimeout(context.Background(), writeStatusTimeout)
@@ -671,27 +680,42 @@ const welcomeAddressDeferMaxRetries = math.MaxInt32
 // cannot read issues/0264.md.
 var errWelcomePhysicalAddressRequired = errors.New("mailing: welcome email refused: physical_address is not set")
 
-// deferMissingPhysicalAddress requeues row — a welcome message render
-// refused to build because settings.physical_address is unset — using the
-// ordinary backoff schedule and welcomeAddressDeferMaxRetries so it is never
-// abandoned. Logged at Warn, not Error: this is expected operational state
-// (CLAUDE.md §10 item 3 — the physical mailing address is not yet
-// configured), not a bug. The subscriber's confirmation that produced this
-// row already succeeded and is not at risk: internal/subscribers.Store.Confirm
-// does not read physical_address at all, so a refusal here only defers the
-// welcome, never the confirmation.
-func (w *OutboxWorker) deferMissingPhysicalAddress(row outbox.Row) {
+// errImportInviteMissingPhysicalAddress is render's identical signal for
+// outbox.KindImportInvite (#0129): an import invitation solicits consent
+// from someone who never asked, and carries a one-click decline — the same
+// two facts that make BuildWelcomeEmail commercial rather than
+// transactional under #0264's reasoning apply here too, so CAN-SPAM §7704's
+// physical-address requirement applies the same way. sendOne recognizes
+// this sentinel alongside errWelcomePhysicalAddressRequired and routes both
+// to deferMissingPhysicalAddress. See that sentinel's own doc comment for
+// why the literal carries no issue citation.
+var errImportInviteMissingPhysicalAddress = errors.New("mailing: import invite email refused: physical_address is not set")
+
+// deferMissingPhysicalAddress requeues row — a welcome or import-invite
+// message render refused to build because settings.physical_address is
+// unset — using the ordinary backoff schedule and
+// welcomeAddressDeferMaxRetries so it is never abandoned. Logged at Warn,
+// not Error: this is expected operational state (CLAUDE.md §10 item 3 —
+// the physical mailing address is not yet configured), not a bug. The
+// state that produced this row already succeeded and is not at risk:
+// neither internal/subscribers.Store.Confirm nor ImportStore.Commit reads
+// physical_address, so a refusal here only defers the one email, never the
+// state change that queued it. errMsg is whichever of
+// errWelcomePhysicalAddressRequired / errImportInviteMissingPhysicalAddress
+// render actually returned, so outbound_queue.error names the right
+// message for whichever kind this row is.
+func (w *OutboxWorker) deferMissingPhysicalAddress(row outbox.Row, errMsg string) {
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), writeStatusTimeout)
 	defer writeCancel()
-	if _, err := w.store.MarkRetryOrAbandon(writeCtx, row.ID, row.Attempts, errWelcomePhysicalAddressRequired.Error(), welcomeAddressDeferMaxRetries); err != nil {
-		w.log.Error("mailing: deferring welcome for missing physical_address failed", "id", row.ID, "err", err)
+	if _, err := w.store.MarkRetryOrAbandon(writeCtx, row.ID, row.Attempts, errMsg, welcomeAddressDeferMaxRetries); err != nil {
+		w.log.Error("mailing: deferring send for missing physical_address failed", "id", row.ID, "kind", row.Kind, "err", err)
 		return
 	}
 	subscriberID := int64(-1)
 	if row.SubscriberID != nil {
 		subscriberID = *row.SubscriberID
 	}
-	w.log.Warn("mailing: welcome deferred pending physical_address configuration", "id", row.ID, "subscriber_id", subscriberID)
+	w.log.Warn("mailing: send deferred pending physical_address configuration", "id", row.ID, "kind", row.Kind, "subscriber_id", subscriberID)
 }
 
 // effectiveMaxRetries reads settings.queue_max_retries, falling back to
@@ -780,6 +804,23 @@ type welcomePayload struct {
 	InterestNames []string `json:"interest_names"`
 }
 
+// importInvitePayload is outbound_queue.payload's shape for
+// outbox.KindImportInvite (#0129) — mirrors
+// internal/subscribers.importInvitePayload field-for-field (matched by JSON
+// field name, not a shared Go type, per this file's own "producer and
+// consumer live in different packages" convention above).
+// ImportSource/SourceDetail/CollectedAt are the subscriber_imports row's
+// values AT ENQUEUE TIME, not re-read at send time — see
+// BuildImportInviteEmail's doc comment.
+type importInvitePayload struct {
+	ConfirmToken string    `json:"confirm_token"`
+	ManageToken  string    `json:"manage_token"`
+	TTLSeconds   int64     `json:"ttl_seconds"`
+	ImportSource string    `json:"import_source"`
+	SourceDetail string    `json:"source_detail"`
+	CollectedAt  time.Time `json:"collected_at"`
+}
+
 // render resolves physical_address at SEND time (not enqueue time) — #0126's
 // plan §3: "a small improvement: an address set between enqueue and send
 // now produces a correct footer, where today it would not." This worker
@@ -862,12 +903,26 @@ func (w *OutboxWorker) render(ctx context.Context, row outbox.Row) (Message, err
 		}
 		return BuildWelcomeEmail(row.Recipient, w.baseURL, w.listDomain, p.ManageToken, p.InterestNames, addr), nil
 
+	case outbox.KindImportInvite:
+		var p importInvitePayload
+		if err := json.Unmarshal(row.Payload, &p); err != nil {
+			return Message{}, err
+		}
+		// #0129, mirroring KindWelcome above: a blank physical_address here
+		// is a refusal, not an omission — see BuildImportInviteEmail's and
+		// errImportInviteMissingPhysicalAddress's doc comments.
+		addr := w.physicalAddress(ctx)
+		if strings.TrimSpace(addr) == "" {
+			return Message{}, errImportInviteMissingPhysicalAddress
+		}
+		return BuildImportInviteEmail(row.Recipient, w.baseURL, w.listDomain, p.ConfirmToken, p.ManageToken,
+			p.ImportSource, p.SourceDetail, p.CollectedAt, time.Duration(p.TTLSeconds)*time.Second, addr), nil
+
 	default:
-		// goodbye (no producer), import_invite (#0129): no renderer yet.
-		// Returning an error routes through the ordinary
-		// MarkRetryOrAbandon path — it will retry a few times, then land
-		// on 'abandoned' with this error retained, rather than crashing
-		// the worker or silently dropping the row.
+		// goodbye: no producer yet. Returning an error routes through the
+		// ordinary MarkRetryOrAbandon path — it will retry a few times,
+		// then land on 'abandoned' with this error retained, rather than
+		// crashing the worker or silently dropping the row.
 		return Message{}, fmt.Errorf("mailing: no renderer for outbound_queue kind %q", row.Kind)
 	}
 }

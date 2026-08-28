@@ -98,11 +98,21 @@ type pendingSubscriberRow struct {
 	UTMSource        *string    `json:"utm_source,omitempty"`
 	UTMMedium        *string    `json:"utm_medium,omitempty"`
 	UTMCampaign      *string    `json:"utm_campaign,omitempty"`
+	// Invited is true for a still-pending row an import invited (#0129:
+	// import_id set, consent_basis still NULL — the same row-state test
+	// internal/subscribers.Store.Confirm/Unsubscribe use to recognize an
+	// invitation elsewhere) — #0129's acceptance criterion "the pending
+	// screen distinguishes an invited address from a website signup
+	// awaiting confirmation".
+	Invited bool `json:"invited"`
 	// QueueState is the latest outbound_queue row's status for this
-	// address's confirmation mail — "queued" / "sending" / "sent" /
-	// "abandoned" — or "unknown" when h.outbox is nil (STORAGE=json) or
-	// "none" when no row exists at all (should not happen for a real
-	// signup, but the type does not assume it can't).
+	// address's confirmation/invitation mail — "queued" / "sending" /
+	// "sent" / "abandoned" — or "unknown" when h.outbox is nil
+	// (STORAGE=json) or "none" when no row exists at all (should not
+	// happen for a real signup, but the type does not assume it can't).
+	// Looked up against outbox.KindImportInvite for an Invited row and
+	// outbox.KindConfirmation otherwise — the two kinds are mutually
+	// exclusive per address (see List's own comment).
 	QueueState string `json:"queue_state"`
 }
 
@@ -115,6 +125,7 @@ func toPendingSubscriberRow(sub subscribers.Subscriber, now time.Time, queueStat
 		ID: sub.ID, Email: sub.Email,
 		ConfirmSentAt: sub.ConfirmSentAt, ConfirmExpiresAt: sub.ConfirmExpiresAt,
 		SignupIP: sub.SignupIP, UTMSource: sub.UTMSource, UTMMedium: sub.UTMMedium, UTMCampaign: sub.UTMCampaign,
+		Invited:    sub.ImportID != nil && sub.ConsentBasis == nil,
 		QueueState: queueState,
 	}
 	if sub.ConfirmSentAt != nil {
@@ -138,14 +149,27 @@ func (h *AdminPendingHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queueByRecipient := map[string]outbox.Row{}
+	// Two independent LatestByRecipients calls, one per Kind — #0129: an
+	// invited row's confirmation mail is queued as outbox.KindImportInvite,
+	// never outbox.KindConfirmation, so a single lookup would report
+	// "none" for every invited address regardless of its real queue state.
+	// The two maps never both hold an entry for the same address (a
+	// subscribers row is either import-invited or not, for the lifetime of
+	// its pending status), so merging by "first hit wins" below is safe.
+	confirmationByRecipient := map[string]outbox.Row{}
+	inviteByRecipient := map[string]outbox.Row{}
 	haveOutbox := h.outbox != nil
 	if haveOutbox && len(rows) > 0 {
 		recipients := make([]string, len(rows))
 		for i, sub := range rows {
 			recipients[i] = sub.Email
 		}
-		queueByRecipient, err = h.outbox.LatestByRecipients(r.Context(), outbox.KindConfirmation, recipients)
+		confirmationByRecipient, err = h.outbox.LatestByRecipients(r.Context(), outbox.KindConfirmation, recipients)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		inviteByRecipient, err = h.outbox.LatestByRecipients(r.Context(), outbox.KindImportInvite, recipients)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
@@ -158,7 +182,9 @@ func (h *AdminPendingHandler) List(w http.ResponseWriter, r *http.Request) {
 		state := "unknown"
 		if haveOutbox {
 			state = "none"
-			if r, ok := queueByRecipient[sub.Email]; ok {
+			if r, ok := confirmationByRecipient[sub.Email]; ok {
+				state = r.Status
+			} else if r, ok := inviteByRecipient[sub.Email]; ok {
 				state = r.Status
 			}
 		}
@@ -193,6 +219,9 @@ func (h *AdminPendingHandler) Resend(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, subscribers.ErrNotPending):
 		writeError(w, http.StatusConflict, "subscriber is not pending — nothing to resend")
+		return
+	case errors.Is(err, subscribers.ErrResendNotForInvited):
+		writeError(w, http.StatusConflict, "this address is an unaccepted import invitation — resend is not available for invitations yet")
 		return
 	case errors.Is(err, subscribers.ErrResendSuppressed):
 		writeError(w, http.StatusConflict, "this address is suppressed and cannot be mailed")

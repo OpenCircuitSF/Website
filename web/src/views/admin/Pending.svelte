@@ -106,7 +106,12 @@
         <tbody>
           {#each rows as row (row.id)}
             <tr>
-              <td>{row.email}</td>
+              <td>
+                {row.email}
+                {#if row.invited}
+                  <span class="badge badge-muted" title="This address was invited by a CSV import and has not yet confirmed">Invited</span>
+                {/if}
+              </td>
               <td>
                 {formatPendingAge(row.age_seconds)}
                 {#if row.expired}
@@ -122,7 +127,8 @@
               </td>
               <td class="actions-col">
                 <Button
-                  disabled={resendingID === row.id}
+                  disabled={resendingID === row.id || row.invited}
+                  title={row.invited ? 'Resend is not available for import invitations yet' : undefined}
                   onclick={() => resend(row.id)}
                 >
                   {resendingID === row.id ? 'Resending…' : 'Resend'}

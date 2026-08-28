@@ -545,6 +545,9 @@ export interface ImportRecord {
   row_count: number;
   inserted_count: number;
   skipped_count: number;
+  /** #0129: always present; only ever non-zero for consent_mode=invite. */
+  invited_count: number;
+  confirmed_count: number;
   status: string; // committed | revoked
   revoked_at?: string;
   revoked_reason?: string;

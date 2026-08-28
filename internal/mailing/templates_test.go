@@ -111,6 +111,18 @@ var testAdminAlertLines = []string{
 	"Review the subscriber detail screen for suppression.",
 }
 
+// testImportInviteCollectedAt/testImportSource/testImportSourceDetail are
+// #0129's golden/property test fixture — chosen to match PRD §6.10.1's own
+// worked example ("signed up for Intro to Soldering... on 12 May 2026") so
+// the golden file's provenance sentence is recognizably the spec's example,
+// not an arbitrary string.
+var testImportInviteCollectedAt = time.Date(2026, 5, 12, 0, 0, 0, 0, time.UTC)
+
+const (
+	testImportSource       = "luma"
+	testImportSourceDetail = "Intro to Soldering"
+)
+
 func TestBuildConfirmationEmail_Golden(t *testing.T) {
 	msg := BuildConfirmationEmail(testTo, testBaseURL, testConfirm, testManage, 7*24*time.Hour, testAddress)
 	goldenFile(t, "confirmation.html", msg.HTMLBody)
@@ -162,6 +174,44 @@ func TestBuildWelcomeEmail_Golden(t *testing.T) {
 	goldenFile(t, "welcome.txt", msg.TextBody)
 }
 
+// mustBuildImportInviteMessage adapts BuildImportInviteEmail's fixed
+// argument list to allMessages()' map literal, mirroring
+// mustBuildCampaignMessage's role for BuildCampaignMessage just above it.
+func mustBuildImportInviteMessage() Message {
+	return BuildImportInviteEmail(testTo, testBaseURL, testListDomain, testConfirm, testManage,
+		testImportSource, testImportSourceDetail, testImportInviteCollectedAt, 7*24*time.Hour, testAddress)
+}
+
+// TestBuildImportInviteEmail_Golden covers #0129's eighth template — the
+// invitation an admin-only CSV import sends under consent_mode=invite.
+func TestBuildImportInviteEmail_Golden(t *testing.T) {
+	msg := mustBuildImportInviteMessage()
+	goldenFile(t, "import_invite.html", msg.HTMLBody)
+	goldenFile(t, "import_invite.txt", msg.TextBody)
+}
+
+// TestBuildImportInviteEmail_ProvenanceSentenceNamesSourceAndDate proves the
+// provenance sentence is actually assembled from source/sourceDetail/
+// collectedAt, not hard-coded copy — PRD §6.10.1 calls this "not optional",
+// so a mutation that drops one of the three inputs from the sentence must
+// fail this test. Mutation proof: hard-code "Intro to Soldering" and drop
+// the collectedAt argument from importInviteProvenanceSentence's
+// fmt.Sprintf call, and the second case (different detail/date) fails.
+func TestBuildImportInviteEmail_ProvenanceSentenceNamesSourceAndDate(t *testing.T) {
+	msg := BuildImportInviteEmail(testTo, testBaseURL, testListDomain, testConfirm, testManage,
+		"eventbrite", "Homelab Meetup #3", time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC),
+		7*24*time.Hour, testAddress)
+	if !strings.Contains(msg.TextBody, "Homelab Meetup #3") {
+		t.Error("TextBody does not name source_detail (Homelab Meetup #3)")
+	}
+	if !strings.Contains(msg.TextBody, "3 January 2026") {
+		t.Error("TextBody does not name collected_at (3 January 2026)")
+	}
+	if !strings.Contains(msg.TextBody, "Eventbrite") {
+		t.Error("TextBody does not name the source (Eventbrite)")
+	}
+}
+
 // --- Property tests: the things that actually break in the wild ---
 // (per the brief: "contains the word Confirm" proves nothing.)
 
@@ -181,13 +231,13 @@ func mustBuildCampaignMessage() Message {
 
 // allMessages returns every message this package builds: #0028's original
 // four transactional templates, #0076's SendSessionsRevoked, #0126's
-// BuildAdminAlertEmail, #0127's BuildWelcomeEmail, and (since #0043) the
-// campaign builder — eight total. Every property test below that loops over
-// allMessages() therefore also exercises campaign mail, unless a test
-// specifically opts a name out (see, e.g.,
-// TestNoTransactionalMessageCarriesCampaignHeaders, which asserts the
-// OPPOSITE property for "campaign" AND "welcome": that they DO carry
-// headers).
+// BuildAdminAlertEmail, #0127's BuildWelcomeEmail, #0129's
+// BuildImportInviteEmail, and (since #0043) the campaign builder — nine
+// total. Every property test below that loops over allMessages() therefore
+// also exercises campaign mail, unless a test specifically opts a name out
+// (see, e.g., TestNoTransactionalMessageCarriesCampaignHeaders, which
+// asserts the OPPOSITE property for "campaign", "welcome", AND
+// "import_invite": that they DO carry headers).
 func allMessages() map[string]Message {
 	return map[string]Message{
 		"confirmation":       BuildConfirmationEmail(testTo, testBaseURL, testConfirm, testManage, 7*24*time.Hour, testAddress),
@@ -197,6 +247,7 @@ func allMessages() map[string]Message {
 		"sessions_revoked":   BuildSessionsRevokedEmail(testTo, testBaseURL, testRevokedAt),
 		"admin_alert":        BuildAdminAlertEmail(testTo, testBaseURL, testAdminAlertSubject, testAdminAlertLines),
 		"welcome":            BuildWelcomeEmail(testTo, testBaseURL, testListDomain, testManage, testWelcomeInterests, testAddress),
+		"import_invite":      mustBuildImportInviteMessage(),
 		"campaign":           mustBuildCampaignMessage(),
 	}
 }
@@ -513,26 +564,28 @@ func TestConfirmationAndAlreadySubscribed_CarryFooterLink(t *testing.T) {
 // privacy policy (#0075) commits to "every campaign email" carrying the
 // header as a FLOOR, not an exclusivity claim — see BuildWelcomeEmail's own
 // doc comment (transactional_templates.go) for why #0127 is a deliberate,
-// disclosed exception rather than a violation of that sentence.
+// disclosed exception rather than a violation of that sentence, and
+// BuildImportInviteEmail's own doc comment for #0129's identical exception.
 //
-// Since #0043 added "campaign" (and #0127 added "welcome") to
-// allMessages(), this test now asserts BOTH directions in one place: the
-// six purely-transactional entries carry zero custom headers (as always),
-// and "campaign"/"welcome" — the two entries that ARE addressed to a real,
-// consenting list member and DO carry the set — positively carry the RFC
-// 8058 headers. Before #0043, #0035's headers landing on campaign mail was
-// proven only by campaign_headers_test.go's direct calls to CampaignHeaders;
-// this is the same property proven again at the point a real Message is
-// assembled (BuildCampaignMessage / BuildWelcomeEmail), which is what a
-// mutation dropping the `Headers:` assignment from either assembly — as
+// Since #0043 added "campaign", #0127 added "welcome", and #0129 added
+// "import_invite" to allMessages(), this test now asserts BOTH directions in
+// one place: the six purely-transactional entries carry zero custom headers
+// (as always), and "campaign"/"welcome"/"import_invite" — the three entries
+// that ARE addressed to a real or prospective list member and DO carry the
+// set — positively carry the RFC 8058 headers. Before #0043, #0035's headers
+// landing on campaign mail was proven only by campaign_headers_test.go's
+// direct calls to CampaignHeaders; this is the same property proven again at
+// the point a real Message is assembled (BuildCampaignMessage /
+// BuildWelcomeEmail / BuildImportInviteEmail), which is what a mutation
+// dropping the `Headers:` assignment from any of the three assemblies — as
 // opposed to a mutation inside CampaignHeaders itself — would actually miss
 // without this. Mutation proof: comment out `Headers: CampaignHeaders(...)`
 // in BuildCampaignMessage (campaign_render.go) or the equivalent line in
-// BuildWelcomeEmail (transactional_templates.go) and the corresponding case
-// below fails on "want List-Unsubscribe header, ... message carries 0
-// header(s)".
+// BuildWelcomeEmail/BuildImportInviteEmail (transactional_templates.go) and
+// the corresponding case below fails on "want List-Unsubscribe header, ...
+// message carries 0 header(s)".
 func TestNoTransactionalMessageCarriesCampaignHeaders(t *testing.T) {
-	oneClickNames := map[string]bool{"campaign": true, "welcome": true}
+	oneClickNames := map[string]bool{"campaign": true, "welcome": true, "import_invite": true}
 	for name, msg := range allMessages() {
 		if oneClickNames[name] {
 			continue
