@@ -704,6 +704,35 @@ func (s *Store) FindByManageToken(ctx context.Context, token string) (Subscriber
 // is about TOKEN REPLAY on an already-confirmed address, and someone
 // genuinely rejoining the list after leaving it is arguably owed a welcome
 // again — flagged here for the reviewer since #0127 does not say either way.
+//
+// # #0129 — this is ALSO where an import invitation is accepted
+//
+// PRD §6.10.1's acceptance flow is deliberately "the SAME confirm link the
+// public double opt-in flow uses" — internal/subscribers.ImportStore.Commit's
+// invite branch mints its confirm_token through the identical column this
+// method already reads, so no second confirmation route exists. isInvite
+// (below) is derived from the row's OWN state at the moment it is locked —
+// import_id set, consent_basis still NULL — rather than any flag the caller
+// passes, so a website-originated confirm and an invite-originated confirm
+// are told apart by what the database already knows, not by trusting the
+// HTTP caller's intent:
+//
+//   - consent_basis is stamped ConsentBasisDoubleOptIn on EVERY successful
+//     confirm whose consent_basis is currently NULL — not only invited
+//     rows. A website signup has never had a consent_basis at all before
+//     this change; giving it one here is consistent with PRD §6.10.1's
+//     "From that point the subscriber is indistinguishable from a website
+//     signup, because they are one" — both readings converge on the SAME
+//     value once either confirms, which is the whole point.
+//   - the welcome email is skipped for an invite acceptance — "No welcome
+//     email follows an accepted invitation — the invitation was the
+//     introduction" (#0129's acceptance criteria) — a website-originated
+//     confirm is unaffected and still gets one.
+//   - ActionInviteAccepted is recorded (in addition to ActionConfirmed,
+//     which every confirm already writes), and the owning
+//     subscriber_imports row's confirmed_count is incremented in this SAME
+//     transaction — #0129's "Confirming... increments
+//     subscriber_imports.confirmed_count" criterion.
 func (s *Store) Confirm(ctx context.Context, token string, now time.Time) (Subscriber, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -728,13 +757,20 @@ func (s *Store) Confirm(ctx context.Context, token string, now time.Time) (Subsc
 		return Subscriber{}, ErrComplainedLocked
 	}
 
+	// #0129: an import-invited row that has not yet been accepted is
+	// exactly import_id set + consent_basis still NULL — see this method's
+	// own doc comment for why this is derived from the row rather than
+	// trusted from the caller.
+	isInviteAccept := sub.ImportID != nil && sub.ConsentBasis == nil
+
 	row = tx.QueryRow(ctx,
 		`UPDATE subscribers
 		    SET status = $2, confirmed_at = $3, confirm_token = NULL,
-		        confirm_expires_at = NULL, updated_at = $3
+		        confirm_expires_at = NULL, updated_at = $3,
+		        consent_basis = COALESCE(consent_basis, $4)
 		  WHERE id = $1
 		 RETURNING `+subscriberColumns,
-		sub.ID, StatusActive, now,
+		sub.ID, StatusActive, now, ConsentBasisDoubleOptIn,
 	)
 	updated, err := scanSubscriber(row)
 	if err != nil {
@@ -749,6 +785,23 @@ func (s *Store) Confirm(ctx context.Context, token string, now time.Time) (Subsc
 		return Subscriber{}, fmt.Errorf("subscribers: recording confirmed event for %d: %w", updated.ID, err)
 	}
 
+	if isInviteAccept {
+		if err := RecordEventTx(ctx, tx, Event{
+			SubscriberID: &updated.ID,
+			Email:        updated.Email,
+			Action:       ActionInviteAccepted,
+			ImportID:     updated.ImportID,
+		}); err != nil {
+			return Subscriber{}, fmt.Errorf("subscribers: recording invite_accepted event for %d: %w", updated.ID, err)
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE subscriber_imports SET confirmed_count = confirmed_count + 1 WHERE id = $1`,
+			*updated.ImportID,
+		); err != nil {
+			return Subscriber{}, fmt.Errorf("subscribers: incrementing confirmed_count for import %d: %w", *updated.ImportID, err)
+		}
+	}
+
 	// #0127: suppressed addresses never receive the welcome email "even if
 	// a confirmation somehow lands" (acceptance criterion) — checked here,
 	// inside this same transaction, rather than via SuppressionStore (a
@@ -757,7 +810,9 @@ func (s *Store) Confirm(ctx context.Context, token string, now time.Time) (Subsc
 	// inlining it means this check commits atomically with the
 	// confirmation instead of racing a second round trip against the
 	// pool). A suppressed subscriber still confirms normally; only the
-	// welcome enqueue is skipped.
+	// welcome enqueue is skipped. #0129: an accepted invitation ALSO never
+	// gets a welcome — "the invitation was the introduction" — regardless
+	// of suppression.
 	var suppressed bool
 	if err := tx.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM suppressions WHERE email = $1)`, updated.Email,
@@ -765,7 +820,7 @@ func (s *Store) Confirm(ctx context.Context, token string, now time.Time) (Subsc
 		return Subscriber{}, fmt.Errorf("subscribers: checking suppression for %d: %w", updated.ID, err)
 	}
 
-	if !suppressed {
+	if !suppressed && !isInviteAccept {
 		interestNames, err := selectedInterestNamesTx(ctx, tx, updated.ID)
 		if err != nil {
 			return Subscriber{}, fmt.Errorf("subscribers: loading interests for welcome mail, subscriber %d: %w", updated.ID, err)
@@ -854,6 +909,39 @@ func selectedInterestNamesTx(ctx context.Context, q outbox.Querier, subscriberID
 // updated.Status here instead. Compare the returned Subscriber's Status
 // against StatusComplained (or whatever else matters) rather than reaching
 // for a value read earlier in the request.
+//
+// # #0129 — this is ALSO the invitation decline path
+//
+// PRD §6.10.1 requires an import invitation to "carry a one-click decline
+// that suppresses the address outright" — a materially stronger action than
+// an ordinary unsubscribe, which deliberately does NOT suppress (see this
+// method's package-level "suppression list: deliberately untouched"
+// precedent in internal/handlers/unsubscribe.go's own doc comment: an
+// unsubscribed address must still be able to resubscribe through ordinary
+// double opt-in). Rather than build a second, parallel decline endpoint
+// duplicating this method's RFC 8058 replay/complained-no-op/audit
+// subtleties, invite mode's decline reuses this SAME method — every one of
+// its three existing callers (one-click, preferences, admin) already goes
+// through it — and this method detects, from the row's own state, whether
+// it is unsubscribing a still-pending, never-confirmed import invitation:
+// import_id set AND consent_basis still NULL AND status currently pending.
+// That state is reachable ONLY via ImportStore.Commit's invite branch — a
+// website signup never has import_id set, and a CONFIRMED invitee has
+// consent_basis=ConsentBasisDoubleOptIn — so this can never fire for an
+// ordinary pending website signup or an active subscriber of any
+// provenance.
+//
+// When it fires, in the SAME transaction as the status change:
+//
+//   - confirm_token/confirm_expires_at are cleared, so a still-live
+//     invitation link this person just declined cannot later reactivate the
+//     row via Confirm.
+//   - a suppressions row is added (SuppressionReasonManual) via this
+//     package's own addSuppression — the same function Add/AddTx call —
+//     which also writes the ActionSuppressed event for free.
+//
+// Every OTHER Unsubscribe caller and outcome (active→unsubscribed,
+// complained no-op, an already-unsubscribed repeat call) is unchanged.
 func (s *Store) Unsubscribe(ctx context.Context, id int64, source string, now time.Time) (Subscriber, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -861,29 +949,37 @@ func (s *Store) Unsubscribe(ctx context.Context, id int64, source string, now ti
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Read the pre-update status inside this same transaction (FOR UPDATE,
-	// so it can't change under us before the UPDATE below runs) purely to
-	// decide whether to write an unsubscribed event — #0126: writing one
-	// on every call, including a repeat call on an already-unsubscribed
-	// row, would put a false "unsubscribed" entry in the address's history
-	// every time a stale footer link is clicked again.
-	var beforeStatus string
-	if err := tx.QueryRow(ctx, `SELECT status FROM subscribers WHERE id = $1 FOR UPDATE`, id).Scan(&beforeStatus); err != nil {
+	// Read the pre-update row inside this same transaction (FOR UPDATE, so
+	// it can't change under us before the UPDATE below runs) — the full row,
+	// not just status, since #0129 also needs import_id/consent_basis to
+	// detect an invitation decline (see this method's own doc comment).
+	// beforeStatus alone still decides whether to write an unsubscribed
+	// event — #0126: writing one on every call, including a repeat call on
+	// an already-unsubscribed row, would put a false "unsubscribed" entry
+	// in the address's history every time a stale footer link is clicked
+	// again.
+	beforeRow := tx.QueryRow(ctx, `SELECT `+subscriberColumns+` FROM subscribers WHERE id = $1 FOR UPDATE`, id)
+	before, err := scanSubscriber(beforeRow)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Subscriber{}, ErrNotFound
 		}
 		return Subscriber{}, fmt.Errorf("subscribers: locking subscriber %d for unsubscribe: %w", id, err)
 	}
+	beforeStatus := before.Status
+	isInviteDecline := beforeStatus == StatusPending && before.ImportID != nil && before.ConsentBasis == nil
 
 	row := tx.QueryRow(ctx,
 		`UPDATE subscribers
 		    SET status             = CASE WHEN status = $5 THEN status             ELSE $2 END,
 		        unsubscribed_at    = CASE WHEN status = $5 THEN unsubscribed_at    ELSE $3 END,
 		        unsubscribe_source = CASE WHEN status = $5 THEN unsubscribe_source ELSE $4 END,
+		        confirm_token      = CASE WHEN status = $5 THEN confirm_token      WHEN $6 THEN NULL ELSE confirm_token      END,
+		        confirm_expires_at = CASE WHEN status = $5 THEN confirm_expires_at WHEN $6 THEN NULL ELSE confirm_expires_at END,
 		        updated_at         = CASE WHEN status = $5 THEN updated_at         ELSE $3 END
 		  WHERE id = $1
 		 RETURNING `+subscriberColumns,
-		id, StatusUnsubscribed, now, source, statusLockedFromNonAdmin,
+		id, StatusUnsubscribed, now, source, statusLockedFromNonAdmin, isInviteDecline,
 	)
 	sub, err := scanSubscriber(row)
 	switch {
@@ -901,6 +997,16 @@ func (s *Store) Unsubscribe(ctx context.Context, id int64, source string, now ti
 			Detail:       map[string]any{"source": source},
 		}); err != nil {
 			return Subscriber{}, fmt.Errorf("subscribers: recording unsubscribed event for %d: %w", sub.ID, err)
+		}
+
+		if isInviteDecline {
+			if _, err := addSuppression(ctx, tx, NewSuppression{
+				Email:  sub.Email,
+				Reason: SuppressionReasonManual,
+				Note:   "declined an import invitation before confirming",
+			}, now); err != nil {
+				return Subscriber{}, fmt.Errorf("subscribers: suppressing declined invitee %d: %w", sub.ID, err)
+			}
 		}
 	}
 
@@ -1552,15 +1658,17 @@ func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 	return counts, nil
 }
 
-// Growth30Days returns two counts over the trailing window starting at
+// Growth30Days returns three counts over the trailing window starting at
 // since (the caller passes now.Add(-30*24*time.Hour); kept as a parameter
 // rather than computed here so the result is deterministic in tests, the
 // same convention every other now-sensitive method on this store follows,
 // e.g. Confirm's own now parameter): how many subscribers locally confirmed
-// (completed double opt-in) since that time, and how many unsubscribed
-// since that time. #0061's admin overview dashboard subtracts the two for a
-// net growth figure; both are returned rather than pre-subtracted so the
-// dashboard can show "N joined, M left" rather than only the net.
+// (completed double opt-in) since that time, how many landed active via an
+// import with no local confirmation event since that time, and how many
+// unsubscribed since that time. #0061's admin overview dashboard sums the
+// first two and subtracts the third for a net growth figure; all three are
+// returned rather than pre-combined so the dashboard can show each
+// direction rather than only the net.
 //
 // "Confirmed" here means confirmed_at is set — NOT "became active": since
 // #0292, a prior_consent CSV import (internal/subscribers.ImportStore.Commit)
@@ -1568,28 +1676,48 @@ func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 // §6.10 is explicit that such a row "did not confirm here". Counting those
 // rows would inflate this figure with addresses that never went through
 // this list's own confirmation flow — an import of 500 addresses must not
-// read as 500 confirmations on the dashboard. This method's name and
+// read as 500 confirmations on the dashboard. This method's name and first
 // return value are unchanged (the dashboard still shows "confirmed_30d");
 // what changed is which subscribers rows can now be active without ever
 // tripping it.
+//
+// "Imported" (#0305) is the other side of that same #0292 change: an
+// active row with confirmed_at still NULL is exactly the shape a
+// prior_consent import produces and a locally-confirmed signup never does
+// (Confirm and RestartSignup are the only other writers of status=active,
+// and both pair it with confirmed_at). Counting `status = active AND
+// confirmed_at IS NULL` rather than `source = 'import'` is deliberate: it
+// tracks the growth #0292 stopped attributing to "confirmed" by the same
+// test that defines "confirmed" (does this row carry a local confirmation
+// event), so an invite-mode import row that later completes a genuine
+// local confirmation (#0129) falls into "confirmed", not here, with no
+// double count either way. Before #0292 this count was always zero, so
+// #0292's own claim that Growth30Days "needed no query change" was true at
+// the time and is superseded by this addition.
+//
+// The dashboard's net_30d is confirmed + imported - unsubscribed — the
+// import branch stopped being counted as a confirmation (#0292) but must
+// still show up as growth (#0305), or a month with a large import plus
+// ordinary churn reads as decline while the list actually grew.
 //
 // Excludes synthetic=true rows unconditionally, same as StatusCounts above
 // — #0061's amendment (issue notes, from #0046's second phase-3 review)
 // requires this of any new aggregate that counts subscribers rows directly,
 // for the same reason: a per-admin campaign test-send fixture is not a real
 // signup or a real departure.
-func (s *Store) Growth30Days(ctx context.Context, since time.Time) (confirmed, unsubscribed int64, err error) {
+func (s *Store) Growth30Days(ctx context.Context, since time.Time) (confirmed, imported, unsubscribed int64, err error) {
 	err = s.pool.QueryRow(ctx,
 		`SELECT
 		    count(*) FILTER (WHERE confirmed_at >= $1),
+		    count(*) FILTER (WHERE status = $2 AND confirmed_at IS NULL AND created_at >= $1),
 		    count(*) FILTER (WHERE unsubscribed_at >= $1)
 		 FROM subscribers WHERE synthetic = false`,
-		since,
-	).Scan(&confirmed, &unsubscribed)
+		since, StatusActive,
+	).Scan(&confirmed, &imported, &unsubscribed)
 	if err != nil {
-		return 0, 0, fmt.Errorf("subscribers: computing 30-day growth: %w", err)
+		return 0, 0, 0, fmt.Errorf("subscribers: computing 30-day growth: %w", err)
 	}
-	return confirmed, unsubscribed, nil
+	return confirmed, imported, unsubscribed, nil
 }
 
 // isUniqueViolation reports whether err is a Postgres unique_violation

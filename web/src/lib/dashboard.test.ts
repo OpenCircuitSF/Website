@@ -15,7 +15,7 @@ import {
 } from './dashboard';
 
 function growth(overrides: Partial<DashboardGrowth> = {}): DashboardGrowth {
-  return { confirmed_30d: 0, unsubscribed_30d: 0, net_30d: 0, ...overrides };
+  return { confirmed_30d: 0, imported_30d: 0, unsubscribed_30d: 0, net_30d: 0, ...overrides };
 }
 
 function warnings(overrides: Partial<DashboardWarnings> = {}): DashboardWarnings {
@@ -47,8 +47,34 @@ describe('formatNetGrowth', () => {
 });
 
 describe('formatGrowthDetail', () => {
-  it('reports both directions', () => {
-    expect(formatGrowthDetail(growth({ confirmed_30d: 12, unsubscribed_30d: 3 }))).toBe('12 joined, 3 left');
+  it('reports all three directions, confirmed and imported kept separate', () => {
+    expect(formatGrowthDetail(growth({ confirmed_30d: 12, imported_30d: 0, unsubscribed_30d: 3 }))).toBe(
+      '12 confirmed, 0 imported, 3 left',
+    );
+  });
+
+  // #0305: an import of 500 addresses must not disappear from the
+  // dashboard. #0292 made confirmed_30d mean "locally confirmed" rather
+  // than "became active" — so a month with a large prior_consent import and
+  // ordinary churn is real growth (net_30d positive) only if imported_30d
+  // is counted alongside confirmed_30d, both in the label and in the net
+  // figure the server computed it from. Seeded as if Growth30Days had just
+  // returned this shape after a real import.
+  it('shows import-driven growth via imported_30d, distinct from confirmed_30d', () => {
+    const g = growth({ confirmed_30d: 2, imported_30d: 500, unsubscribed_30d: 10 });
+    expect(formatGrowthDetail(g)).toBe('2 confirmed, 500 imported, 10 left');
+    // The label's three numbers and the net figure must agree: a reader
+    // adding confirmed + imported - left from the label text must land on
+    // the same net_30d the dashboard displays elsewhere (formatNetGrowth).
+    expect(g.confirmed_30d + g.imported_30d - g.unsubscribed_30d).toBe(492);
+  });
+
+  it('does not read a net decline when import-driven growth is seeded alongside churn that alone would look negative', () => {
+    // Without imported_30d counted, confirmed(2) - left(10) = -8: a false
+    // decline. The real net, folding in the import, is +492.
+    const g = growth({ confirmed_30d: 2, imported_30d: 500, unsubscribed_30d: 10, net_30d: 492 });
+    expect(formatNetGrowth(g)).toBe('+492');
+    expect(formatGrowthDetail(g)).toBe('2 confirmed, 500 imported, 10 left');
   });
 });
 

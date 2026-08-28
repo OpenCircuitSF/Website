@@ -408,8 +408,9 @@ const KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT = 8;
 // same way. Zero real sites hit any of the three (checked via a scratch AST
 // scan, not assumed: `{#each...{:else}` with a live-region attribute, the
 // EachBlock else case, has no matches anywhere in web/src; `{#await}` does
-// not appear anywhere in the tree; the two real `{#key activeId}` blocks
-// each wrap only a child component, not a role="status"/"alert" element
+// not appear anywhere in the tree; the three real `{#key activeId}` blocks
+// (Workshops.svelte:162, Campaigns.svelte:186, Campaigns.svelte:190) each
+// wrap only a child component, not a role="status"/"alert" element
 // directly), so filesScanned/alertSites/statusSites/loadingPlaceholders are
 // all UNCHANGED by this fix -- re-measured, not assumed.
 //
@@ -552,10 +553,11 @@ function collectSites(
       // `{#key expr}...{/key}` destroys and recreates its whole fragment
       // whenever `expr` changes -- a genuine mount/unmount boundary, the
       // same shape this guard already tracks for {#if}/{#each}, but never
-      // given a governing branch at all. Two real {#key activeId} blocks
-      // exist (Workshops.svelte, Campaigns.svelte); both wrap only a child
-      // component, not a role="status"/"alert" element directly (checked
-      // via the same AST walk, not assumed), so this too was latent.
+      // given a governing branch at all. Three real {#key activeId} blocks
+      // exist (Workshops.svelte:162, Campaigns.svelte:186,
+      // Campaigns.svelte:190); all three wrap only a child component, not a
+      // role="status"/"alert" element directly (checked via the same AST
+      // walk, not assumed), so this too was latent.
       const fragment = obj.fragment as SvelteNode | undefined;
       walk(fragment, fragment, seen);
     }
@@ -1543,10 +1545,11 @@ describe('checkFile (synthetic fixtures)', () => {
   });
 
   // #0307 sibling sweep: {#key} was never given a governing branch at all.
-  // Two real {#key activeId} blocks exist (Workshops.svelte,
-  // Campaigns.svelte) but both wrap only a child component, not a
-  // role="status"/"alert" element directly (checked via the scratch AST
-  // scan used to derive this issue's report, not assumed) -- latent too.
+  // Three real {#key activeId} blocks exist (Workshops.svelte:162,
+  // Campaigns.svelte:186, Campaigns.svelte:190) but all three wrap only a
+  // child component, not a role="status"/"alert" element directly (checked
+  // via the scratch AST scan used to derive this issue's report, not
+  // assumed) -- latent too.
   it('#0307 sibling sweep: a top-level {#key} block\'s role="status" is checked, not silently unconditional', () => {
     const src = `{#key k}
   <p role="status">{val}</p>

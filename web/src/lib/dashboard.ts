@@ -19,9 +19,22 @@ export function formatNetGrowth(growth: DashboardGrowth): string {
   return `${sign}${n.toLocaleString()}`;
 }
 
-/** "12 joined, 3 left" — the two directions the net figure was computed from. */
+/**
+ * "12 confirmed, 500 imported, 3 left" — the three directions net_30d
+ * (confirmed + imported - left) was computed from.
+ *
+ * `confirmed_30d` and `imported_30d` are deliberately not folded into one
+ * "joined" figure: since #0292, `confirmed_30d` counts only a completed
+ * local double opt-in, not "became active", so an import of 500 addresses
+ * reads as 0 confirmations. #0305 added `imported_30d` — subscribers that
+ * landed active via an import with no local confirmation event in the same
+ * window — so that growth is still visible and net_30d doesn't read as a
+ * decline in a month the list actually grew. This function and
+ * internal/subscribers.Store.Growth30Days' doc comment describe the same
+ * three counts; keep them in agreement.
+ */
 export function formatGrowthDetail(growth: DashboardGrowth): string {
-  return `${growth.confirmed_30d.toLocaleString()} joined, ${growth.unsubscribed_30d.toLocaleString()} left`;
+  return `${growth.confirmed_30d.toLocaleString()} confirmed, ${growth.imported_30d.toLocaleString()} imported, ${growth.unsubscribed_30d.toLocaleString()} left`;
 }
 
 /** Same two-decimal percentage string campaignStats.ts's formatComplaintRate uses, kept consistent across both screens. */

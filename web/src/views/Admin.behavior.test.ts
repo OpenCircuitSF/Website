@@ -144,7 +144,7 @@ function emptyOverview(): DashboardOverview {
   return {
     subscribers: {
       counts: { pending: 0, active: 0, unsubscribed: 0, bounced: 0, complained: 0 },
-      growth_30d: { confirmed_30d: 0, unsubscribed_30d: 0, net_30d: 0 },
+      growth_30d: { confirmed_30d: 0, imported_30d: 0, unsubscribed_30d: 0, net_30d: 0 },
     },
     interests: [],
     recent_campaigns: [],

@@ -53,6 +53,7 @@ type decodedDashboard struct {
 		} `json:"counts"`
 		Growth struct {
 			Confirmed30d    int64 `json:"confirmed_30d"`
+			Imported30d     int64 `json:"imported_30d"`
 			Unsubscribed30d int64 `json:"unsubscribed_30d"`
 			Net30d          int64 `json:"net_30d"`
 		} `json:"growth_30d"`
@@ -204,6 +205,82 @@ func TestAdminDashboardOverview_SubscriberCountsAndGrowthExcludeSynthetic(t *tes
 	if after.Subscribers.Growth.Confirmed30d != before.Subscribers.Growth.Confirmed30d+1 {
 		t.Errorf("confirmed_30d = %d, want %d (before=%d + 1)",
 			after.Subscribers.Growth.Confirmed30d, before.Subscribers.Growth.Confirmed30d+1, before.Subscribers.Growth.Confirmed30d)
+	}
+}
+
+// TestAdminDashboardOverview_GrowthCountsImportSeparateFromConfirmed is
+// #0305's direct proof, through the actual JSON the dashboard renders, that
+// a prior_consent import shows up as imported_30d rather than
+// confirmed_30d (#0292's fix, unweakened) and that net_30d still counts it
+// as growth (#0305's fix) — so a month with a large import cannot render as
+// a decline. Complements TestImportStore_Commit_DoesNotInflateGrowth30Days
+// (subscribers/imports_test.go), which proves the store-level count one
+// layer down; this proves the handler wires it through and computes the
+// same net_30d the label's numbers add up to.
+func TestAdminDashboardOverview_GrowthCountsImportSeparateFromConfirmed(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminDashboardMux(pool, true))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "dashboard-import-admin@example.com")
+	seedSession(t, pool, admin, "dashboard-import-admin-token")
+	url := srv.URL + "/admin/overview"
+
+	before := getDashboard(t, srv.Client(), url, "dashboard-import-admin-token")
+
+	importStore := subscribers.NewImportStore(pool)
+	now := time.Now()
+	email := fmt.Sprintf("zz-dash-import-%d@example.com", testdb.Unique())
+
+	result, err := importStore.Commit(context.Background(), subscribers.CommitInput{
+		Source:       subscribers.ImportSourceManualCSV,
+		SourceDetail: "test batch",
+		ConsentMode:  subscribers.ConsentModePriorConsent,
+		ConsentNote:  "collected via a paper sign-in sheet at an event, attested by the organizer",
+		CollectedAt:  now,
+		Filename:     "attendees.csv",
+		Rows:         []subscribers.ImportRow{{Email: email}},
+	}, now)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	// t.Cleanup runs LIFO: register the parent (subscriber_imports) row's
+	// delete FIRST so it executes LAST, after the child subscribers row
+	// (which FK-references it via import_id, no ON DELETE clause) is
+	// already gone — the reverse order would fail with a foreign-key
+	// violation on the very first cleanup.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscriber_imports WHERE id = $1`, result.Import.ID)
+	})
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE email = $1`, email) })
+
+	after := getDashboard(t, srv.Client(), url, "dashboard-import-admin-token")
+
+	// The import must not read as a confirmation (#0292's fix, unweakened).
+	if after.Subscribers.Growth.Confirmed30d != before.Subscribers.Growth.Confirmed30d {
+		t.Errorf("confirmed_30d = %d, want unchanged from %d — an import must not read as a confirmation",
+			after.Subscribers.Growth.Confirmed30d, before.Subscribers.Growth.Confirmed30d)
+	}
+	// ...but it must still read as growth (#0305's fix).
+	if after.Subscribers.Growth.Imported30d != before.Subscribers.Growth.Imported30d+1 {
+		t.Errorf("imported_30d = %d, want %d (before=%d + 1)",
+			after.Subscribers.Growth.Imported30d, before.Subscribers.Growth.Imported30d+1, before.Subscribers.Growth.Imported30d)
+	}
+	// The label and the net figure must agree: net_30d is exactly
+	// confirmed_30d + imported_30d - unsubscribed_30d, the same sum an
+	// operator would compute reading formatGrowthDetail's rendered text —
+	// this IS criterion 3's invariant, checked against live JSON rather
+	// than read off the doc comment.
+	wantNet := after.Subscribers.Growth.Confirmed30d + after.Subscribers.Growth.Imported30d - after.Subscribers.Growth.Unsubscribed30d
+	if after.Subscribers.Growth.Net30d != wantNet {
+		t.Errorf("net_30d = %d, want %d (confirmed_30d + imported_30d - unsubscribed_30d)",
+			after.Subscribers.Growth.Net30d, wantNet)
+	}
+	// And net_30d must have INCREASED by the import, not stayed flat or
+	// gone negative — the defect #0305 fixes.
+	if after.Subscribers.Growth.Net30d != before.Subscribers.Growth.Net30d+1 {
+		t.Errorf("net_30d = %d, want %d (before=%d + 1 from the import) — a prior_consent import must read as growth",
+			after.Subscribers.Growth.Net30d, before.Subscribers.Growth.Net30d+1, before.Subscribers.Growth.Net30d)
 	}
 }
 

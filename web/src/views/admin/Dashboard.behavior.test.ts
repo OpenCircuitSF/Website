@@ -41,7 +41,7 @@ function emptyOverview(): DashboardOverview {
   return {
     subscribers: {
       counts: { pending: 0, active: 0, unsubscribed: 0, bounced: 0, complained: 0 },
-      growth_30d: { confirmed_30d: 0, unsubscribed_30d: 0, net_30d: 0 },
+      growth_30d: { confirmed_30d: 0, imported_30d: 0, unsubscribed_30d: 0, net_30d: 0 },
     },
     interests: [],
     recent_campaigns: [],
@@ -61,7 +61,11 @@ function populatedOverview(): DashboardOverview {
   return {
     subscribers: {
       counts: { pending: 3, active: 120, unsubscribed: 5, bounced: 2, complained: 1 },
-      growth_30d: { confirmed_30d: 15, unsubscribed_30d: 4, net_30d: 11 },
+      // #0305: imported_30d nonzero so this fixture exercises the
+      // import-driven-growth path, not just the confirmed/left one — net
+      // is confirmed + imported - left (15 + 8 - 4 = 19), not confirmed -
+      // left (11), proving the server-computed net folds imports in.
+      growth_30d: { confirmed_30d: 15, imported_30d: 8, unsubscribed_30d: 4, net_30d: 19 },
     },
     interests: [
       { id: 1, slug: 'home-automation', name: 'Home Automation', subscriber_count: 42 },
@@ -124,8 +128,8 @@ describe('Dashboard — populated payload', () => {
 
     await waitFor(() => expect(screen.getByText('Home Automation')).toBeTruthy());
 
-    expect(screen.getByText('+11')).toBeTruthy(); // net_30d formatted with a leading +
-    expect(screen.getByText(/15 joined, 4 left/)).toBeTruthy();
+    expect(screen.getByText('+19')).toBeTruthy(); // net_30d formatted with a leading + (15 confirmed + 8 imported - 4 left)
+    expect(screen.getByText(/15 confirmed, 8 imported, 4 left/)).toBeTruthy();
 
     expect(screen.getByText('Robotics')).toBeTruthy();
     expect(screen.getByText('42')).toBeTruthy();

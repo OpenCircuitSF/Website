@@ -91,7 +91,7 @@ const dashboardRecentCampaignsLimit = 5
 // needs.
 type dashboardSubscriberStore interface {
 	StatusCounts(ctx context.Context) (map[string]int64, error)
-	Growth30Days(ctx context.Context, since time.Time) (confirmed, unsubscribed int64, err error)
+	Growth30Days(ctx context.Context, since time.Time) (confirmed, imported, unsubscribed int64, err error)
 }
 
 // dashboardInterestStore is the narrow interests.Store seam this handler
@@ -181,11 +181,20 @@ type dashboardSubscriberCounts struct {
 	Complained   int64 `json:"complained"`
 }
 
-// dashboardGrowth reports both directions of the 30-day window rather than a
-// pre-subtracted net — "12 joined, 3 left" and "net +9" read differently to
-// an operator, and the client can compute the net itself from these two.
+// dashboardGrowth reports all three directions of the 30-day window rather
+// than only a pre-subtracted net — "12 confirmed, 500 imported, 3 left" and
+// "net +509" read differently to an operator. Confirmed30d and Imported30d
+// are kept separate deliberately, not folded into one "joined" figure:
+// since #0292, Confirmed30d counts only a completed local double opt-in
+// (confirmed_at set), not "became active", so a prior_consent import
+// wouldn't show up in it at all. Imported30d (#0305) is the other side of
+// that same change — subscribers.Store.Growth30Days' doc comment defines
+// both precisely. Net30d = Confirmed30d + Imported30d - Unsubscribed30d,
+// computed here rather than left to the client so a large import plus
+// ordinary churn cannot read as a decline while the list actually grew.
 type dashboardGrowth struct {
 	Confirmed30d    int64 `json:"confirmed_30d"`
+	Imported30d     int64 `json:"imported_30d"`
 	Unsubscribed30d int64 `json:"unsubscribed_30d"`
 	Net30d          int64 `json:"net_30d"`
 }
@@ -303,7 +312,7 @@ func (h *AdminDashboardHandler) Overview(w http.ResponseWriter, r *http.Request)
 	}
 
 	since := h.now().Add(-30 * 24 * time.Hour)
-	confirmed30d, unsubscribed30d, err := h.subs.Growth30Days(ctx, since)
+	confirmed30d, imported30d, unsubscribed30d, err := h.subs.Growth30Days(ctx, since)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
@@ -375,8 +384,9 @@ func (h *AdminDashboardHandler) Overview(w http.ResponseWriter, r *http.Request)
 			},
 			Growth: dashboardGrowth{
 				Confirmed30d:    confirmed30d,
+				Imported30d:     imported30d,
 				Unsubscribed30d: unsubscribed30d,
-				Net30d:          confirmed30d - unsubscribed30d,
+				Net30d:          confirmed30d + imported30d - unsubscribed30d,
 			},
 		},
 		Interests:       interestRows,

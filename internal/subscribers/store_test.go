@@ -2019,7 +2019,7 @@ func TestGrowth30Days_BoundaryAndSyntheticExclusion(t *testing.T) {
 		t.Fatalf("Confirm A: %v", err)
 	}
 
-	before, _, err := store.Growth30Days(ctx, since)
+	before, _, _, err := store.Growth30Days(ctx, since)
 	if err != nil {
 		t.Fatalf("Growth30Days (before): %v", err)
 	}
@@ -2048,7 +2048,7 @@ func TestGrowth30Days_BoundaryAndSyntheticExclusion(t *testing.T) {
 		t.Fatalf("Confirm C: %v", err)
 	}
 
-	after, _, err := store.Growth30Days(ctx, since)
+	after, _, _, err := store.Growth30Days(ctx, since)
 	if err != nil {
 		t.Fatalf("Growth30Days (after): %v", err)
 	}
@@ -2059,7 +2059,7 @@ func TestGrowth30Days_BoundaryAndSyntheticExclusion(t *testing.T) {
 	// A's confirm predates `since` by only an hour; moving the boundary back
 	// far enough to include it proves the WHERE clause is an exact
 	// comparison, not e.g. always-true.
-	includingA, _, err := store.Growth30Days(ctx, since.Add(-3*time.Hour))
+	includingA, _, _, err := store.Growth30Days(ctx, since.Add(-3*time.Hour))
 	if err != nil {
 		t.Fatalf("Growth30Days (boundary moved back): %v", err)
 	}
@@ -2068,7 +2068,7 @@ func TestGrowth30Days_BoundaryAndSyntheticExclusion(t *testing.T) {
 	}
 
 	// Unsubscribed side of the same figure, same before/after shape.
-	beforeUnsub, unsubBefore, err := store.Growth30Days(ctx, since)
+	beforeUnsub, _, unsubBefore, err := store.Growth30Days(ctx, since)
 	_ = beforeUnsub
 	if err != nil {
 		t.Fatalf("Growth30Days (unsub before): %v", err)
@@ -2076,7 +2076,7 @@ func TestGrowth30Days_BoundaryAndSyntheticExclusion(t *testing.T) {
 	if _, err := store.Unsubscribe(ctx, b.ID, "one_click", since.Add(2*time.Hour)); err != nil {
 		t.Fatalf("Unsubscribe B: %v", err)
 	}
-	_, unsubAfter, err := store.Growth30Days(ctx, since)
+	_, _, unsubAfter, err := store.Growth30Days(ctx, since)
 	if err != nil {
 		t.Fatalf("Growth30Days (unsub after): %v", err)
 	}

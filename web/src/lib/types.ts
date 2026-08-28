@@ -189,7 +189,9 @@ export interface PendingSubscriber {
   utm_source?: string;
   utm_medium?: string;
   utm_campaign?: string;
-  /** The latest outbound_queue row's status for this address's confirmation mail: "queued" | "sending" | "sent" | "abandoned" | "none" (no row exists) | "unknown" (server has no outbound_queue backing, STORAGE=json). */
+  /** #0129: true for a still-pending row an import invited (rather than a website signup awaiting confirmation). */
+  invited: boolean;
+  /** The latest outbound_queue row's status for this address's confirmation (or, for an invited row, invitation) mail: "queued" | "sending" | "sent" | "abandoned" | "none" (no row exists) | "unknown" (server has no outbound_queue backing, STORAGE=json). */
   queue_state: string;
 }
 
@@ -585,6 +587,14 @@ export interface DashboardSubscriberCounts {
 
 export interface DashboardGrowth {
   confirmed_30d: number;
+  /**
+   * #0305: subscribers that landed active via an import with no local
+   * confirmation event, in the same trailing 30-day window. Since #0292,
+   * `confirmed_30d` counts only a local double opt-in, so a prior_consent
+   * import must show up here instead or it vanishes from the dashboard
+   * entirely — see internal/subscribers.Store.Growth30Days' doc comment.
+   */
+  imported_30d: number;
   unsubscribed_30d: number;
   net_30d: number;
 }
