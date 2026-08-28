@@ -29,9 +29,14 @@
 #     scripts/testdb.sh drop 0123
 #
 # The template is opencircuit_test_template, built by applying migrations/ to an
-# empty database. Rebuild it whenever migrations change — `create` refuses to
-# run if the template is behind migrations/, rather than silently handing you a
-# stale schema.
+# empty database. Rebuild it explicitly (`scripts/testdb.sh template`) whenever
+# you add a migration and want the fast clone path back. `create` never hands
+# you a stale schema: if the template's version doesn't match this working
+# tree's migrations/ — in EITHER direction, e.g. because another agent or git
+# worktree moved one side without you — it provisions that one database
+# directly from migrations/ instead of cloning (slower, ~2s instead of ~0.2s,
+# but correct), and says so on stderr. It never rebuilds the shared template
+# on its own; that stays a separate, explicit act. See #0315.
 
 set -euo pipefail
 
@@ -79,6 +84,19 @@ EOF
 build_template() {
   require_createdb
   command -v migrate >/dev/null || { echo "error: golang-migrate not on PATH (brew install golang-migrate)" >&2; exit 1; }
+  # #0315 criterion 5: rebuilding the template doesn't drop or touch anyone
+  # else's scratch database (unlike `gc`, so this is a warning, not a
+  # refusal) but it does move what every FUTURE `create` clones from. An
+  # agent whose migrations/ still matches the OLD template version loses the
+  # fast path the moment this runs and falls back to the slower direct-
+  # provision path above until they catch up or someone rebuilds again.
+  # Surface that instead of leaving it to be discovered as "why did create
+  # suddenly get slower".
+  scratch="$(psql_admin -tAc "select datname from pg_database where datname like '${PREFIX}%' and datname <> '$TEMPLATE'")"
+  if [ -n "$scratch" ]; then
+    echo "note: other scratch databases exist — rebuilding $TEMPLATE does not touch them, but any agent whose migrations/ still matches the current template loses the fast clone path (falls back to direct provisioning, #0315) until they catch up:" >&2
+    echo "$scratch" | sed 's/^/  /' >&2
+  fi
   echo "building $TEMPLATE from migrations/ ..."
   psql_admin -qc "DROP DATABASE IF EXISTS $TEMPLATE;"
   psql_admin -qc "CREATE DATABASE $TEMPLATE;"
@@ -86,24 +104,76 @@ build_template() {
   echo "$TEMPLATE is at migration $(template_version)"
 }
 
-check_template_fresh() {
-  local tv dv
+template_matches_disk() {
+  [ "$(template_version)" = "$(disk_version)" ]
+}
+
+# #0315: this used to be check_template_fresh(), which hard-errored the
+# moment the template's migration version differed from this working tree's
+# migrations/ in EITHER direction, then told you to run `template` to fix it.
+# That "fix" is exactly the thing that must NOT happen implicitly: rebuilding
+# the shared template clobbers it out from under any other agent (or git
+# worktree — each worktree has its own migrations/ directory on disk, so an
+# uncommitted new migration in one worktree never shows up in `ls` from
+# another) that is relying on the version currently there. #0123's
+# migrations/000025 plus a template rebuild did exactly that to #0129's
+# reviewer, and scripts/check.sh aborted before running a single test.
+#
+# The guard's actual job — never test against the wrong schema (acceptance
+# criterion 2) — does not require cloning the template at all. It only
+# requires that whatever database a create hands back was migrated up from
+# THIS working tree's migrations/, exactly. So on a mismatch we stop trying
+# to clone and instead provision directly: create an empty database and run
+# `migrate up` against it from $REPO/migrations, same as build_template does
+# for the template itself. That is correct regardless of which side is ahead,
+# unblocks the agent instead of erroring, and never touches the shared
+# resource — rebuilding it stays a separate, explicit act
+# (`scripts/testdb.sh template`, criterion 4).
+#
+# Slower per creation (a full `migrate up`, not the ~0.2s clone the template
+# exists to give you) but only for as long as the mismatch lasts — once
+# someone rebuilds the template to match, `create` goes back to cloning.
+warn_template_mismatch() {
+  local db="$1" tv dv
   tv="$(template_version)"; dv="$(disk_version)"
   if [ "$tv" = "none" ]; then
-    echo "template $TEMPLATE does not exist — building it once" >&2
-    build_template >&2
-  elif [ "$tv" != "$dv" ]; then
     cat >&2 <<EOF
-error: template $TEMPLATE is at migration $tv but migrations/ is at $dv.
-
-Rebuild it before running tests, or every scratch database you create will
-carry a stale schema and fail for a reason that has nothing to do with your
-change:
+note: template $TEMPLATE does not exist yet — provisioning $db directly from
+migrations/ (this working tree is at $dv). This does not touch the shared
+template; build it once, explicitly, to get the fast clone path for everyone:
 
     scripts/testdb.sh template
 EOF
-    exit 1
+    return
   fi
+  local side
+  if [ "$tv" -gt "$dv" ] 2>/dev/null; then
+    side="the shared template ($TEMPLATE) is ahead of this working tree's migrations/ — template is at $tv, migrations/ is at $dv"
+  else
+    side="this working tree's migrations/ is ahead of the shared template ($TEMPLATE) — migrations/ is at $dv, template is at $tv"
+  fi
+  cat >&2 <<EOF
+note: $side.
+Provisioning $db directly from migrations/ instead of cloning $TEMPLATE, so
+the schema matches THIS working tree exactly (slower: a full 'migrate up'
+instead of the ~0.2s clone, but correct regardless of which side moved — see
+CLAUDE.md §5a and issue #0315).
+
+This is expected, not a broken environment: another agent or git worktree has
+moved migrations/ forward without you (or vice versa). Nothing here rebuilds
+the shared template. If you are the one who moved it and want the fast path
+back for everyone, do that explicitly — only once you are sure it will not
+pull the schema out from under a concurrent agent:
+
+    scripts/testdb.sh template
+EOF
+}
+
+provision_from_migrations() {
+  local db="$1"
+  command -v migrate >/dev/null || { echo "error: golang-migrate not on PATH (brew install golang-migrate)" >&2; exit 1; }
+  psql_admin -qc "CREATE DATABASE $db;" >&2
+  migrate -path "$REPO/migrations" -database "$(dsn "$db")" up >&2
 }
 
 name_for() {
@@ -123,10 +193,17 @@ name_for() {
 cmd="${1:-}"; shift || true
 case "$cmd" in
   create)
-    require_createdb; check_template_fresh
+    require_createdb
     db="$(name_for "${1:-}")"
     db_exists "$db" && psql_admin -qc "DROP DATABASE $db;"
-    psql_admin -qc "CREATE DATABASE $db TEMPLATE $TEMPLATE;"
+    if template_matches_disk; then
+      psql_admin -qc "CREATE DATABASE $db TEMPLATE $TEMPLATE;"
+    else
+      # #0315: no hard error, no implicit rebuild of the shared template —
+      # provision this one database straight from migrations/ instead.
+      warn_template_mismatch "$db"
+      provision_from_migrations "$db"
+    fi
     dsn "$db"                     # stdout is ONLY the DSN, so it is safe to $( ) into a var
     ;;
   drop)
