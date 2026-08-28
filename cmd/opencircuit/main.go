@@ -555,8 +555,26 @@ type noOpMailingMailer struct{}
 // Send logs the message instead of delivering it, returning a fake message
 // ID (never "", so callers can't mistake it for a zero value indicating
 // failure).
+//
+// #0277: this used to log only msg.Subject. Every transactional mail path
+// (registration, recovery, welcome, sessions-revoked, admin alerts) and the
+// campaign send/test-send paths drain through this method under
+// MAILER_NOOP=true — including registration/recovery, which #0260 moved
+// onto outbound_queue and out of auth.SESMailer's own (never-logging)
+// Send. Since the token/magic-link is rendered into the body, not the
+// subject, dropping the body here made MAILER_NOOP=true silently stop
+// doing the one thing local development needs it for: recovering the link
+// without reading outbound_queue by hand in psql. Logged for every kind,
+// unconditionally — a per-kind allowlist would reintroduce this exact bug
+// for the next kind added. Falls back to HTMLBody only in the defensive
+// case TextBody is empty; every Build*Email helper in internal/mailing
+// sets both.
 func (noOpMailingMailer) Send(_ context.Context, msg mailing.Message) (string, error) {
-	log.Printf("MAILER_NOOP: email to %s: %s", msg.To, msg.Subject)
+	body := msg.TextBody
+	if body == "" {
+		body = msg.HTMLBody
+	}
+	log.Printf("MAILER_NOOP: email to %s: %s\n%s", msg.To, msg.Subject, body)
 	return "noop", nil
 }
 

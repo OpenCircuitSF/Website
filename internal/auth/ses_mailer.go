@@ -104,6 +104,16 @@ func logEnqueueFailure(kind outbox.Kind, toEmail string, err error) error {
 // actually stamps the token's expiry with (store.go), so the worker's
 // rendered "expires in" line can't drift from the TTL that's actually
 // enforced.
+//
+// #0278: this method has had no production caller since #0260 — Store.
+// CreatePendingRegistration now enqueues the same outbox.KindRegistration
+// item itself, inside its own transaction (store.go), and
+// RegistrationService.StartRegistration no longer calls s.mailer.
+// SendVerification at all. Retained on Mailer (rather than narrowed off
+// it) per #0278's decision — see that interface's doc comment for why —
+// so this stays implemented, correct, and covered by
+// TestSESMailer_SendVerification_Enqueues even though nothing in
+// cmd/opencircuit calls it today.
 func (m *SESMailer) SendVerification(ctx context.Context, toEmail, token string) error {
 	if _, err := m.outbox.Enqueue(ctx, outbox.Item{
 		Kind:      outbox.KindRegistration,
@@ -117,6 +127,9 @@ func (m *SESMailer) SendVerification(ctx context.Context, toEmail, token string)
 
 // SendRecovery enqueues the single-use account-recovery email. recoveryTTL
 // is the constant Store.CreateRecoveryToken stamps the token's expiry with.
+//
+// #0278: no production caller since #0260, same as SendVerification above
+// — see that method's doc comment.
 func (m *SESMailer) SendRecovery(ctx context.Context, toEmail, token string) error {
 	if _, err := m.outbox.Enqueue(ctx, outbox.Item{
 		Kind:      outbox.KindRecovery,

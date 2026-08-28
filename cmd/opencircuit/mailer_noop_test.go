@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"log"
 	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 )
 
 // TestMailerNoOpAllowed covers the host allowlist carried into #0026 from
@@ -86,5 +89,76 @@ func TestCheckMailerNoOp_WarnsOnceWhenAllowed(t *testing.T) {
 	}
 	if !strings.Contains(out, "level=WARN") {
 		t.Errorf("expected the log line at WARN level, got %q", out)
+	}
+}
+
+// TestNoOpMailingMailer_Send_LogsRenderedBody is #0277's regression test.
+// #0260 removed the only callers of auth.NoOpMailer.SendVerification/
+// SendRecovery (the methods that used to log the magic link), so
+// registration/recovery mail now drains through noOpMailingMailer.Send —
+// which, before this fix, logged only msg.Subject and silently dropped the
+// link. This asserts on the actual log OUTPUT (via log.SetOutput, restored
+// on cleanup) rather than on the mailer's arguments: the defect was that
+// the body stopped being logged at all, which an argument assertion on the
+// call would not have caught (the call was still happening; only the log
+// line was thin).
+func TestNoOpMailingMailer_Send_LogsRenderedBody(t *testing.T) {
+	var buf bytes.Buffer
+	prevOutput := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&buf)
+	t.Cleanup(func() {
+		log.SetOutput(prevOutput)
+		log.SetFlags(prevFlags)
+	})
+
+	const marker = "https://opencircuitsf.com/register/verify?token=super-secret-magic-link-token"
+	msg := mailing.Message{
+		To:       "someone@example.com",
+		Subject:  "Confirm your Open Circuit SF account",
+		HTMLBody: "<p>ignored for this assertion</p>",
+		TextBody: "Click to finish registering:\n\n" + marker + "\n\nThis link expires in 5 minutes.",
+	}
+
+	m := noOpMailingMailer{}
+	if _, err := m.Send(context.Background(), msg); err != nil {
+		t.Fatalf("noOpMailingMailer.Send: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, msg.Subject) {
+		t.Errorf("log output %q does not contain the subject %q", out, msg.Subject)
+	}
+	if !strings.Contains(out, marker) {
+		t.Errorf("log output %q does not contain the rendered magic link %q — the regression #0277 fixes", out, marker)
+	}
+}
+
+// TestNoOpMailingMailer_Send_LogsBodyRegardlessOfKind proves the body is
+// logged unconditionally, not gated on any notion of "kind" — msg carries
+// no kind field at all by the time it reaches the mailer, but this locks in
+// the behavior for a message shaped like a non-auth send (e.g. a welcome or
+// campaign test-send) so a future change can't reintroduce a per-kind
+// allowlist by keying off Subject or some other proxy for kind.
+func TestNoOpMailingMailer_Send_LogsBodyRegardlessOfKind(t *testing.T) {
+	var buf bytes.Buffer
+	prevOutput := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prevOutput) })
+
+	msg := mailing.Message{
+		To:       "subscriber@example.com",
+		Subject:  "Welcome to Open Circuit SF",
+		TextBody: "Thanks for subscribing. Manage your preferences at https://opencircuitsf.com/preferences?token=abc123",
+	}
+
+	m := noOpMailingMailer{}
+	if _, err := m.Send(context.Background(), msg); err != nil {
+		t.Fatalf("noOpMailingMailer.Send: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "abc123") {
+		t.Errorf("log output %q does not contain the welcome email's body content", out)
 	}
 }
