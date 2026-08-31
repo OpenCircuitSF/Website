@@ -80,8 +80,25 @@ db_exists() {
 # shared catalogs visible from ANY database in the cluster — so both can be
 # read in one query over one connection to the template itself. No
 # up-front existence probe is needed either: connecting to a template that
-# doesn't exist simply fails, and an empty result routes to "none" the same
-# as an explicit nonexistence check would.
+# doesn't exist simply fails, and this function's own control flow (the
+# `|| true` on the assignment below, #0331) is what turns that failure into
+# the "none"/"none" pair, unconditionally — not, as an earlier version of
+# this comment claimed, luck of how the caller happens to invoke it.
+#
+# #0331: the assignment below used to have no `|| true`. Under `set -e`, a
+# DIRECT call to this function (not inside an `if` condition, which
+# suspends -e, and not inside a command substitution, where a bash 3.2
+# quirk happens to swallow the failure) aborted the whole script silently
+# the moment $TEMPLATE didn't exist — psql exits 2, and a failing command
+# substitution assigned to a plain `var=$(...)` propagates that exit status
+# to the simple command containing it. The two current call sites
+# (`template_matches_disk`, always used as an `if` condition, and
+# `template_version`/`template_digest`, always reached through their own
+# command substitution) never happened to trigger it, but nothing about
+# `template_state`'s own body guaranteed that for a future caller. The
+# `|| true` makes the function safe by construction: a failed psql call now
+# always leaves `row` empty (never aborts the shell), and the explicit
+# `[ -n ... ] || …="none"` lines below do the rest, exactly as intended.
 #
 # Sets TSTATE_VERSION and TSTATE_DIGEST as a side effect (this shell is
 # 3.2.57 — no nameref/`local -n` to return two values properly). Fields are
@@ -90,7 +107,7 @@ db_exists() {
 # the separator.
 template_state() {
   local row
-  row="$(psql "$PGHOST_URL/$TEMPLATE" -tAc "select coalesce((select version::text from schema_migrations), 'none') || chr(31) || coalesce((select description from pg_shdescription ds join pg_database db on ds.objoid = db.oid and ds.classoid = 'pg_database'::regclass where db.datname = current_database()), 'none')" 2>/dev/null)"
+  row="$(psql "$PGHOST_URL/$TEMPLATE" -tAc "select coalesce((select version::text from schema_migrations), 'none') || chr(31) || coalesce((select description from pg_shdescription ds join pg_database db on ds.objoid = db.oid and ds.classoid = 'pg_database'::regclass where db.datname = current_database()), 'none')" 2>/dev/null)" || true
   TSTATE_VERSION="${row%%$'\x1f'*}"
   TSTATE_DIGEST="${row#*$'\x1f'}"
   [ -n "$TSTATE_VERSION" ] || TSTATE_VERSION="none"
