@@ -86,13 +86,16 @@ var claimKindsGuardScanRoots = []string{"..", "../../cmd"}
 // unrelated same-named OrphanSweep — see nameMatchesGuardedMethod's doc
 // comment for why that coincidence does not need resolving). 5 sits
 // comfortably below that and well above what a narrowing to any single
-// file could produce (at most 3, in internal/mailing/worker_store_test.go
-// — its three mailing.SendStore.OrphanSweep call sites, name-matched the
-// same as this package's own; internal/handlers/subscribe_intake.go and
+// NON-EXEMPT file could produce (at most 3, in
+// internal/mailing/worker_store_test.go — its three
+// mailing.SendStore.OrphanSweep call sites, name-matched the same as this
+// package's own; internal/handlers/subscribe_intake.go and
 // internal/mailing/outbox_worker.go each hold 2, one OrphanSweep call
-// plus one SelectDue call) — so a scan-roots regression that prunes an
-// entire package, not just one file, is what it takes to stay above this
-// floor while still being wrong.
+// plus one SelectDue call). That bound holds only for the non-exempt
+// population: internal/outbox's own store_test.go alone holds 20 exempt
+// sites, so keeping just that one file — not an entire package — already
+// clears this floor while leaving zero non-exempt callers, exactly the
+// gap #0304, next paragraph, closes.
 //
 // #0304: THIS FLOOR ONLY PROVES THE WALK REACHED *A* TREE, NOT THE RIGHT
 // ONE. 24 of the 36 sites it counts sit inside internal/outbox itself,

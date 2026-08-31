@@ -773,17 +773,22 @@ func TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued(t *testing.T) {
 	// sendOne — and the other is still plain 'queued', never having
 	// reached ClaimRow yet: SelectDue selects both ids up front, but
 	// ClaimRow only claims one row at a time, immediately before ITS OWN
-	// send (#0297), so the second row's claim genuinely has not happened
-	// regardless of iteration order. That is why this checkpoint asserts
-	// on the PAIR, not on id2 specifically: which of the two rows is the
-	// one blocked in sendOne is NOT guaranteed to be id1 (SelectDue's
-	// ORDER BY next_attempt_at, id only orders the SELECT; pass's own loop
-	// order over the returned ids is what determines which gets claimed
-	// first). See the post-Stop assertions below, which check "exactly one
-	// sent, one queued" rather than assuming which id is which — #0264's
-	// review found an earlier version of this test assuming id1
-	// specifically after a change elsewhere in this file altered the
-	// shared test database's physical layout enough to flip it.
+	// send (#0297), so the second row's claim genuinely has not happened.
+	// Under #0297's SelectDue (ORDER BY next_attempt_at, id) plus pass's
+	// own in-order loop over the returned ids, which row that is is now
+	// deterministic — id1, sorted first — not a race: contrast the
+	// earlier ClaimDue-based version of this pass, whose UPDATE …
+	// RETURNING gave no ordering guarantee at all. This checkpoint still
+	// asserts on the PAIR, not on id1/id2 by name, because pinning a
+	// specific id would encode the loop's current iteration order rather
+	// than the property this test exists to pin, and a later legitimate
+	// change to claim order should not have to rewrite this assertion.
+	// See the post-Stop assertions below, which check "exactly one sent,
+	// one queued" rather than assuming which id is which — #0264's review
+	// found an earlier version of this test assuming id1 specifically
+	// after a change elsewhere in this file altered the shared test
+	// database's physical layout enough to flip it, back when claim order
+	// genuinely was not guaranteed.
 	var status1, status2 string
 	if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id1).Scan(&status1); err != nil {
 		t.Fatalf("select id1 before stop: %v", err)
