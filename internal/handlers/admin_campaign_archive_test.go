@@ -18,7 +18,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
-func adminCampaignArchiveMux(pool *pgxpool.Pool, invalidator workshopCacheInvalidator) http.Handler {
+func adminCampaignArchiveMux(pool *pgxpool.Pool, invalidator seoCacheInvalidator) http.Handler {
 	authStore := auth.NewStore(pool)
 	store := mailing.NewCampaignStore(pool)
 	h := NewAdminCampaignArchiveHandler(store, audit.New(pool), invalidator)
@@ -121,12 +121,12 @@ func TestAdminCampaignArchive_Patch_RejectsUnknownStatus(t *testing.T) {
 
 // TestAdminCampaignArchive_Patch_InvalidatesSEOCaches is #0319's regression
 // test: a successful published<->withheld transition must clear
-// internal/seo's meta/sitemap caches through the SAME workshopCacheInvalidator
-// seam AdminWorkshopsHandler already uses (countingWorkshopInvalidator,
+// internal/seo's meta/sitemap caches through the SAME seoCacheInvalidator
+// seam AdminWorkshopsHandler already uses (countingCacheInvalidator,
 // admin_workshops_test.go) -- not a second, invented mechanism.
 func TestAdminCampaignArchive_Patch_InvalidatesSEOCaches(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	inv := &countingWorkshopInvalidator{}
+	inv := &countingCacheInvalidator{}
 	srv := httptest.NewServer(adminCampaignArchiveMux(pool, inv))
 	defer srv.Close()
 
@@ -151,7 +151,7 @@ func TestAdminCampaignArchive_Patch_InvalidatesSEOCaches(t *testing.T) {
 // to toggle) must not clear a cache that holds nothing stale.
 func TestAdminCampaignArchive_Patch_RefusedWriteDoesNotInvalidate(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	inv := &countingWorkshopInvalidator{}
+	inv := &countingCacheInvalidator{}
 	srv := httptest.NewServer(adminCampaignArchiveMux(pool, inv))
 	defer srv.Close()
 

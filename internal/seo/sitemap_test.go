@@ -144,8 +144,8 @@ func TestSitemap_404PathNeverAppears(t *testing.T) {
 }
 
 // TestSitemap_CachesAndInvalidates mirrors the Renderer cache tests: within
-// the TTL a mutation is not reflected; Invalidate() forces an immediate
-// refresh.
+// the TTL a mutation is not reflected; invalidate() (unexported since
+// #0337 -- see its own doc comment) forces an immediate refresh.
 func TestSitemap_CachesAndInvalidates(t *testing.T) {
 	source := &mutatingSitemapSource{slug: "workshop-a"}
 	s := NewSitemap(testBaseURL, source, nil)
@@ -169,7 +169,7 @@ func TestSitemap_CachesAndInvalidates(t *testing.T) {
 		t.Error("sitemap cache did not hold within the TTL")
 	}
 
-	s.Invalidate()
+	s.invalidate()
 	third, err := s.Render()
 	if err != nil {
 		t.Fatalf("Render: %v", err)

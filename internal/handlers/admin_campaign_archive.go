@@ -18,8 +18,9 @@
 // archive page's own meta tags) stale for up to defaultCacheTTL (60s) --
 // the one window where a delay is least welcome, since an admin withholds
 // a campaign because something in it should not be public.
-// workshopCacheInvalidator (admin_workshops.go) is reused directly rather
-// than redeclared: same package, same shape, same underlying *seo.Site.
+// seoCacheInvalidator (admin_workshops.go, named workshopCacheInvalidator
+// until #0335) is reused directly rather than redeclared: same package,
+// same shape, same underlying *seo.Site.
 package handlers
 
 import (
@@ -47,12 +48,12 @@ type AdminCampaignArchiveHandler struct {
 	store   campaignArchiveStore
 	auditor *audit.Logger
 	// invalidator clears internal/seo's meta/sitemap caches after a
-	// successful transition (#0319) -- workshopCacheInvalidator
-	// (admin_workshops.go, same package), not a new type. nil disables
-	// the call (test-only; cmd/opencircuit/main.go's production wiring
-	// always passes the real *seo.Site -- see NewAdminCampaignArchiveHandler's
-	// doc comment).
-	invalidator workshopCacheInvalidator
+	// successful transition (#0319) -- seoCacheInvalidator
+	// (admin_workshops.go, same package, named workshopCacheInvalidator
+	// until #0335), not a new type. nil disables the call (test-only;
+	// cmd/opencircuit/main.go's production wiring always passes the real
+	// *seo.Site -- see NewAdminCampaignArchiveHandler's doc comment).
+	invalidator seoCacheInvalidator
 }
 
 // NewAdminCampaignArchiveHandler constructs an AdminCampaignArchiveHandler.
@@ -62,7 +63,7 @@ type AdminCampaignArchiveHandler struct {
 // adminWorkshopsH already uses, so both handlers invalidate through one
 // shared cache) -- see this file's package doc comment, "Cache
 // invalidation (#0319)".
-func NewAdminCampaignArchiveHandler(store campaignArchiveStore, auditor *audit.Logger, invalidator workshopCacheInvalidator) *AdminCampaignArchiveHandler {
+func NewAdminCampaignArchiveHandler(store campaignArchiveStore, auditor *audit.Logger, invalidator seoCacheInvalidator) *AdminCampaignArchiveHandler {
 	return &AdminCampaignArchiveHandler{store: store, auditor: auditor, invalidator: invalidator}
 }
 

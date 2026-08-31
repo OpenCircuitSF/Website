@@ -183,21 +183,32 @@ func TestServePostgres_OneSEOSiteFlowsToEveryConsumer(t *testing.T) {
 	}
 	if len(consumers) == 0 {
 		t.Fatal("found zero *seo.Site-shaped consumer parameters among every call in servePostgres — " +
-			"this scan's type-shape matching is broken (fail closed): as of writing, " +
+			"this scan's type-shape matching is broken (fail closed): as of #0338, " +
 			"NewAdminWorkshopsHandler, NewAdminCampaignArchiveHandler, and newSendWorkerIfEnabled " +
-			"each have one")
+			"each have one, and mountAndServe's own site *seo.Site parameter is a fourth")
 	}
 
-	// Sanity floor, not a hard-coded name list: as of writing there are
-	// three known consumers. This asserts a COUNT, which is allowed to grow
-	// (criterion 4 asks for OPEN-ended coverage of a fourth, not a ceiling)
-	// — it exists only to catch this guard's own resolution silently
-	// starting to miss consumers it used to find, which len(consumers)==0
-	// above would not catch if, say, two of three still resolved.
-	const knownConsumersAsOfWriting = 3
+	// Sanity floor, not a hard-coded name list: as of #0338 there are FOUR
+	// known consumers, measured by temporarily raising this constant far
+	// above the real count and reading the resulting failure's own
+	// enumeration (the same describeConsumers output the failure message
+	// below prints): NewAdminWorkshopsHandler param 1, newSendWorkerIfEnabled
+	// param 10, NewAdminCampaignArchiveHandler param 2, and mountAndServe
+	// param 34 (site) — mountAndServe's own site *seo.Site parameter counts
+	// too (typeRequiresSEOSite's first case, a literal *seo.Site), which
+	// #0326's original count of three missed. This asserts a COUNT, which is
+	// allowed to grow (criterion 4 asks for OPEN-ended coverage of a fifth,
+	// not a ceiling) — it exists only to catch this guard's own resolution
+	// silently starting to miss consumers it used to find: a degradation
+	// from 4 consumers to 3 must FAIL, which a floor of 3 (as #0326 first
+	// wrote it) could not catch. Re-measure this constant the same way
+	// (temporarily set it above the real count, read the failure's own
+	// enumeration) rather than incrementing it by hand, if servePostgres
+	// gains or loses a genuine consumer.
+	const knownConsumersAsOfWriting = 4
 	if len(consumers) < knownConsumersAsOfWriting {
 		t.Fatalf("found %d *seo.Site-shaped consumer parameters in servePostgres, want at least %d "+
-			"(the known count as of #0326) — this scan may have stopped resolving one of them: %s",
+			"(the known count as of #0338) — this scan may have stopped resolving one of them: %s",
 			len(consumers), knownConsumersAsOfWriting, describeConsumers(fset, consumers))
 	}
 
@@ -356,8 +367,9 @@ func findFuncParamTypes(t *testing.T, fset *token.FileSet, dir, funcName string)
 // set is exactly one method, `Invalidate()`, taking no parameters and
 // returning nothing: the exact shape *seo.Site.Invalidate implements
 // (internal/seo/site.go). That second case is what lets this guard
-// recognize handlers.workshopCacheInvalidator (a plain Ident, local to
-// dir=internal/handlers, where the function declaring it lives) and
+// recognize handlers.seoCacheInvalidator (named workshopCacheInvalidator
+// until #0335 — a plain Ident, local to dir=internal/handlers, where the
+// function declaring it lives) and
 // mailing.ArchiveCacheInvalidator (a SelectorExpr, resolved via pkgDirs —
 // newSendWorkerIfEnabled is declared in cmd/opencircuit itself, so its
 // param types are written using the SAME import aliases main.go's own
@@ -408,7 +420,14 @@ func typeRequiresSEOSite(fset *token.FileSet, dir string, pkgDirs map[string]str
 // interfaceIsInvalidateOnly reports whether dir declares
 // `type name interface { Invalidate() }` — exactly one method, named
 // Invalidate, no parameters, no results — searching every non-test .go file
-// in dir.
+// in dir. #0338: until then this checked parameters only, so an interface
+// shaped `Invalidate() error` (which does NOT structurally match
+// *seo.Site.Invalidate's own zero-result signature, and therefore should
+// NOT be mistaken for a *seo.Site-shaped consumer) would have incorrectly
+// passed — no live interface has ever had that shape, so it was never
+// observed, but the doc comment already claimed "no results" was checked.
+// The function now checks results too, closing that gap rather than
+// weakening the comment to match the old behavior.
 func interfaceIsInvalidateOnly(fset *token.FileSet, dir, name string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -445,7 +464,9 @@ func interfaceIsInvalidateOnly(fset *token.FileSet, dir, name string) bool {
 				if !ok {
 					return false
 				}
-				return ft.Params == nil || len(ft.Params.List) == 0
+				noParams := ft.Params == nil || len(ft.Params.List) == 0
+				noResults := ft.Results == nil || len(ft.Results.List) == 0
+				return noParams && noResults
 			}
 		}
 	}

@@ -144,12 +144,27 @@ func (s *Sitemap) Render() ([]byte, error) {
 	return body, nil
 }
 
-// Invalidate clears the cached sitemap so the next request rebuilds it.
+// invalidate clears the cached sitemap so the next request rebuilds it.
 // Called alongside Renderer.Invalidate, via Site.Invalidate, which calls
 // both: originally on workshop mutation (#0051), widened by #0319 to also
 // cover the admin campaign archive toggle and the send worker's own
 // archive-publish transition.
-func (s *Sitemap) Invalidate() {
+//
+// Deliberately unexported (#0337) -- Sitemap already had a method with this
+// exact zero-parameter, zero-result signature before Site.Invalidate was
+// itself named InvalidateWorkshops (#0325's rename target). Shortening that
+// method's name to Invalidate moved handlers.seoCacheInvalidator and
+// mailing.ArchiveCacheInvalidator (both single-method interfaces requiring
+// exactly `Invalidate()`) onto *Sitemap as an accidental, structural
+// satisfier: passing a bare *Sitemap into either seam went from a compile
+// error to a silent half-invalidation (sitemap cache cleared, meta cache
+// left stale -- the exact failure #0319 was filed to fix) with no source
+// change of its own. *Site is the only type meant to satisfy either
+// interface; unexporting this method removes *Sitemap from contention
+// without touching Renderer.Invalidate, which stays exported and remains a
+// (pre-existing, harmless -- see #0337) structural satisfier of both, since
+// nothing in this codebase ever passes a bare *Renderer to either seam.
+func (s *Sitemap) invalidate() {
 	s.mu.Lock()
 	s.cached = nil
 	s.mu.Unlock()

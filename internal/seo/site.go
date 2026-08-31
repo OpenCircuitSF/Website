@@ -41,10 +41,13 @@ func NewSite(indexHTML []byte, baseURL string, source WorkshopSource, archive Ar
 // All three call this SAME method through the SAME *Site instance --
 // cmd/opencircuit/seo_wiring_test.go proves the instance identity -- so a
 // stale title, summary, cover image, or archive entry never lingers past
-// the cache TTL after any of those three actions.
+// the cache TTL after any of those three actions. Calls sitemap.invalidate
+// (unexported since #0337, see its own doc comment) rather than an exported
+// Sitemap.Invalidate -- *Site is the only type meant to satisfy either
+// caller's single-method invalidator interface.
 func (s *Site) Invalidate() {
 	s.renderer.Invalidate()
-	s.sitemap.Invalidate()
+	s.sitemap.invalidate()
 }
 
 // Middleware wraps next (in practice, handlers.NewSPAHandler's catch-all)

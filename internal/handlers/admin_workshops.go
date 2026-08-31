@@ -25,10 +25,14 @@
 // internal/seo/seo.go/sitemap.go), so production always passes the real
 // *seo.Site regardless of whether the real WorkshopSource has been wired in
 // yet (#0054's job — see internal/seo/workshop.go's doc comment). The method
-// was named InvalidateWorkshops until #0325 renamed it: since #0319 this
-// same invalidator interface, and the SAME *seo.Site instance passed here,
-// is also what AdminCampaignArchiveHandler (admin_campaign_archive.go) calls
-// for the campaign archive toggle — see that file's own doc comment.
+// was named InvalidateWorkshops until #0325 renamed it, and the interface
+// holding it (seoCacheInvalidator, below) was named workshopCacheInvalidator
+// until #0335 made the same correction one level up: since #0319 this same
+// invalidator interface, and the SAME *seo.Site instance passed here, is
+// also what AdminCampaignArchiveHandler (admin_campaign_archive.go) calls
+// for the campaign archive toggle, and what internal/mailing.Worker calls
+// (through that package's own ArchiveCacheInvalidator seam) for the send
+// worker's archive-publish transition — see those files' own doc comments.
 package handlers
 
 import (
@@ -55,15 +59,21 @@ type workshopStore interface {
 	Delete(ctx context.Context, id int64) error
 }
 
-// workshopCacheInvalidator is the narrow seam over *seo.Site's Invalidate
-// method (named InvalidateWorkshops until #0325) — a local interface
-// (rather than importing internal/seo directly) so this package's tests can
-// supply a fake that counts calls without constructing a real Site.
-// *seo.Site satisfies it. Despite the type's own name, it is no longer
-// workshop-specific: AdminCampaignArchiveHandler (admin_campaign_archive.go,
-// #0319) reuses this exact interface for the campaign archive toggle,
-// through the same *seo.Site instance this handler holds.
-type workshopCacheInvalidator interface {
+// seoCacheInvalidator is the narrow seam over *seo.Site's Invalidate method
+// (named InvalidateWorkshops until #0325) — a local interface (rather than
+// importing internal/seo directly) so this package's tests can supply a
+// fake that counts calls without constructing a real Site. *seo.Site
+// satisfies it. Named workshopCacheInvalidator until #0335, back when this
+// handler's own workshop mutations (Create, Patch, Delete) were its only
+// caller; it clears internal/seo's per-path meta cache and sitemap cache
+// regardless of what mutated. As of #0335 there are three callers, all
+// through the SAME *seo.Site instance (cmd/opencircuit/seo_wiring_test.go
+// proves the instance identity): this handler's own workshop mutations
+// (#0051), AdminCampaignArchiveHandler's campaign archive toggle
+// (admin_campaign_archive.go, #0319), and internal/mailing.Worker's own
+// archive-publish transition, via that package's own ArchiveCacheInvalidator
+// seam (#0319).
+type seoCacheInvalidator interface {
 	Invalidate()
 }
 
@@ -91,7 +101,7 @@ type announceCampaignStore interface {
 // cmd/opencircuit/main.go's adminRoutes.
 type AdminWorkshopsHandler struct {
 	store       workshopStore
-	invalidator workshopCacheInvalidator // nil disables cache invalidation (test-only — see doc comment above)
+	invalidator seoCacheInvalidator // nil disables cache invalidation (test-only — see doc comment above)
 	// campaigns backs Announce (admin_workshop_announce.go, #0056) — nil
 	// disables that one route's write (test-only; every production call
 	// site passes a real *mailing.CampaignStore, see NewAdminWorkshopsHandler's
@@ -133,7 +143,7 @@ type AdminWorkshopsHandler struct {
 // NewAdminCampaignPreviewHandler's baseURL parameter, so Announce's
 // "view this workshop" link is built from the same canonical host every
 // other outbound link in this codebase uses — never a hardcoded one.
-func NewAdminWorkshopsHandler(store workshopStore, invalidator workshopCacheInvalidator, campaigns announceCampaignStore, auditor *audit.Logger, baseURL string) *AdminWorkshopsHandler {
+func NewAdminWorkshopsHandler(store workshopStore, invalidator seoCacheInvalidator, campaigns announceCampaignStore, auditor *audit.Logger, baseURL string) *AdminWorkshopsHandler {
 	return &AdminWorkshopsHandler{store: store, invalidator: invalidator, campaigns: campaigns, auditor: auditor, baseURL: baseURL}
 }
 

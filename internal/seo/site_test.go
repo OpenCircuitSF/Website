@@ -232,7 +232,8 @@ func extractMetaContent(t *testing.T, html, property string) string {
 //
 // An earlier version of this test only ever exercised the renderer half:
 // it read site.renderer.Render but never site.sitemap.Render, so deleting
-// Site.Invalidate's `s.sitemap.Invalidate()` call left the suite green
+// Site.Invalidate's `s.sitemap.invalidate()` call (unexported since #0337;
+// named Invalidate() at the time of this finding) left the suite green
 // despite the guard's name and #0020's commit message both claiming both
 // halves were covered (#0073's review finding). This version drives and
 // asserts BOTH halves against the SAME mutation, so it can't pass while

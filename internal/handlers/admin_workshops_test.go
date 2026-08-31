@@ -20,22 +20,22 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
 
-// countingWorkshopInvalidator is a fake workshopCacheInvalidator that counts
+// countingCacheInvalidator is a fake seoCacheInvalidator that counts
 // calls — mirrors admin_campaigns_test.go's stubPreflightChecker: the store
 // layer is real (backed by TEST_DATABASE_URL), but *seo.Site itself is not
 // practical to construct in this package's tests (it needs an embedded
 // index.html template), so the narrow local seam is faked instead, exactly
 // the same shape campaignPreflightChecker already established.
-type countingWorkshopInvalidator struct {
+type countingCacheInvalidator struct {
 	calls int
 }
 
-func (c *countingWorkshopInvalidator) Invalidate() { c.calls++ }
+func (c *countingCacheInvalidator) Invalidate() { c.calls++ }
 
 // adminWorkshopsMux wires the real admin workshops CRUD routes guarded by
 // RequireSession then RequireAdmin, backed by real stores — mirrors
 // adminCampaignsMux/adminInterestsMux.
-func adminWorkshopsMux(pool *pgxpool.Pool, invalidator workshopCacheInvalidator) http.Handler {
+func adminWorkshopsMux(pool *pgxpool.Pool, invalidator seoCacheInvalidator) http.Handler {
 	authStore := auth.NewStore(pool)
 	store := workshops.NewStore(pool)
 	h := NewAdminWorkshopsHandler(store, invalidator, mailing.NewCampaignStore(pool), audit.New(pool), "https://example.com")
@@ -173,7 +173,7 @@ func TestAdminWorkshops_Unauthenticated(t *testing.T) {
 
 func TestAdminWorkshops_CreateGeneratesSlugAndAudits(t *testing.T) {
 	pool := interestsTestPool(t)
-	inv := &countingWorkshopInvalidator{}
+	inv := &countingCacheInvalidator{}
 	srv := httptest.NewServer(adminWorkshopsMux(pool, inv))
 	defer srv.Close()
 
@@ -574,7 +574,7 @@ func TestAdminWorkshops_PatchAcceptsSafeSignupURLAndRoundTrips(t *testing.T) {
 
 func TestAdminWorkshops_PatchPublishUnpublishCancel(t *testing.T) {
 	pool := interestsTestPool(t)
-	inv := &countingWorkshopInvalidator{}
+	inv := &countingCacheInvalidator{}
 	srv := httptest.NewServer(adminWorkshopsMux(pool, inv))
 	defer srv.Close()
 
@@ -1187,7 +1187,7 @@ func TestAdminWorkshops_PatchUnknownStatusRejected(t *testing.T) {
 // 500.
 func TestAdminWorkshops_DeleteBlockedByCampaignReturns409(t *testing.T) {
 	pool := interestsTestPool(t)
-	inv := &countingWorkshopInvalidator{}
+	inv := &countingCacheInvalidator{}
 	srv := httptest.NewServer(adminWorkshopsMux(pool, inv))
 	defer srv.Close()
 
@@ -1236,7 +1236,7 @@ func TestAdminWorkshops_DeleteBlockedByCampaignReturns409(t *testing.T) {
 
 func TestAdminWorkshops_DeleteSucceeds(t *testing.T) {
 	pool := interestsTestPool(t)
-	inv := &countingWorkshopInvalidator{}
+	inv := &countingCacheInvalidator{}
 	srv := httptest.NewServer(adminWorkshopsMux(pool, inv))
 	defer srv.Close()
 
