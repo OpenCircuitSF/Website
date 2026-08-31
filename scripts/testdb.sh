@@ -405,9 +405,31 @@ case "$cmd" in
     # regardless of the override), and anything that merely looks like a
     # template by name — an agent following #0315's TEMPLATE_DB advice may
     # create its own "..._template"-suffixed scratch database of their own.
-    # Kept on one line so the mutation-proof guard in
-    # testdb_gc_guard_test.sh can neuter it precisely.
-    exclude_clause="datname <> '$TEMPLATE' and datname <> '$DEFAULT_TEMPLATE' and datname not ilike '%template%'"
+    #
+    # #0332: that third clause used to be `not ilike '%template%'` — an
+    # UNANCHORED substring match. Any scratch database whose name merely
+    # contains "template" anywhere (opencircuit_test_template_probe,
+    # opencircuit_test_0315template) was invisible to BOTH of gc's paths: not
+    # swept by `gc --all`, and not even named in the bare-`gc` refusal
+    # listing, so nobody was told it existed to clean up by hand. A leak, not
+    # a loss (`list` and `drop <id>` still worked on it), but a silent one.
+    # `!~* '_template$'` anchors it to the actual naming shape #0315 teaches
+    # (a "..._template" SUFFIX) using a POSIX regex end-anchor rather than
+    # SQL LIKE, deliberately — LIKE's `_` is a single-character WILDCARD, not
+    # a literal underscore, so `ilike '%\_template'` would need an ESCAPE
+    # clause to mean what it looks like it means; the regex form has no such
+    # trap. Verified against exactly the two leak-shaped names from this
+    # issue's own description: 'opencircuit_test_template_probe' and
+    # 'opencircuit_test_0315template' both now match neither the old nor the
+    # new pattern's PROTECTED set — they are swept, as intended — while
+    # 'opencircuit_test_template' and any "..._template" name still are.
+    #
+    # Kept on one line, and each of the three predicates written so a `sed`
+    # targeting one clause's own literal text cannot also touch another's —
+    # so the mutation-proof guards in testdb_gc_guard_test.sh (Part 4,
+    # #0327's original proof, and Part 6, #0332's) can neuter DEFAULT_TEMPLATE
+    # and the anchored pattern INDEPENDENTLY, not just both at once.
+    exclude_clause="datname <> '$TEMPLATE' and datname <> '$DEFAULT_TEMPLATE' and datname !~* '_template\$'"
     dbs=$(psql_admin -tAc "select datname from pg_database where datname like '${PREFIX}%' and $exclude_clause")
     if [ "${1:-}" != "--all" ]; then
       if [ -z "$dbs" ]; then echo "no scratch databases"; exit 0; fi

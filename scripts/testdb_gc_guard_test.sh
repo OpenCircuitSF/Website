@@ -387,7 +387,187 @@ fi
 drop_and_verify "$MUT2_DEFAULTISH"
 drop_and_verify "$MUT2_OVERRIDE"
 
-echo "== Part 5: leak census — no ${TESTPREFIX}* database survives this run =="
+echo "== Part 5: the anchored '_template\$' exclusion is neither too broad nor too narrow, and its two clauses are independently load-bearing (#0332) =="
+#
+# #0332: #0327's third exclusion clause was `not ilike '%template%'` — an
+# UNANCHORED substring match. Any scratch database whose name merely
+# CONTAINS "template" anywhere was invisible to BOTH of gc's paths (not
+# swept by --all, not even named in the bare refusal listing), which is a
+# silent leak on a pool #0315 explicitly teaches agents to create
+# "..._template"-suffixed scratch databases in. The fix anchors the pattern
+# to a `_template` SUFFIX via a POSIX regex end-anchor (`!~* '_template$'`),
+# which protects the naming shape #0315 actually teaches without swallowing
+# every name containing the word.
+#
+# This part proves three things, using the real script (via $SCOPED, no
+# TEMPLATE_DB override needed):
+#   1. A leak-shaped database (contains "template", does not END in
+#      "_template" — #0332's own two motivating examples) IS swept, not
+#      left invisible to both gc paths.
+#   2. A genuinely template-suffixed database is still protected.
+#   3. #0327's two added exclusion clauses (DEFAULT_TEMPLATE, the anchored
+#      pattern) are independently load-bearing, not just load-bearing
+#      together — the #0327 review's noted weakness, closed by mutating each
+#      alone rather than only both at once (as Part 4's MUTANT2 does).
+
+LEAK_CONTAINS="${TESTPREFIX}template_probe"   # contains "template" mid-string — #0332's own example
+LEAK_SUFFIXLESS="${TESTPREFIX}0332template"   # ends in "...template" but with NO underscore separator
+PROTECTED_SUFFIX="${TESTPREFIX}genuine_template"  # ends in "_template" — must stay protected
+
+createdb_raw "$LEAK_CONTAINS"
+createdb_raw "$LEAK_SUFFIXLESS"
+createdb_raw "$PROTECTED_SUFFIX"
+
+"$SCOPED" gc --all >/dev/null 2>&1
+
+if db_exists "$LEAK_CONTAINS"; then
+  fail "REGRESSION #0332: gc --all left $LEAK_CONTAINS (contains 'template' but does not end in '_template') unswept — exactly the leak #0332 exists to fix"
+else
+  pass "gc --all swept $LEAK_CONTAINS, a scratch database that merely contains 'template'"
+fi
+
+if db_exists "$LEAK_SUFFIXLESS"; then
+  fail "REGRESSION #0332: gc --all left $LEAK_SUFFIXLESS (ends in '...template' with no separator) unswept"
+else
+  pass "gc --all swept $LEAK_SUFFIXLESS"
+fi
+
+if db_exists "$PROTECTED_SUFFIX"; then
+  pass "gc --all still did not drop $PROTECTED_SUFFIX, a genuine '..._template'-suffixed database — the anchor did not over-correct"
+else
+  fail "gc --all dropped $PROTECTED_SUFFIX — the anchored exclusion is too narrow, over-correcting #0332's fix"
+fi
+
+drop_and_verify "$LEAK_CONTAINS"
+drop_and_verify "$LEAK_SUFFIXLESS"
+drop_and_verify "$PROTECTED_SUFFIX"
+
+# --- Mutation proof: reverting ONLY the anchor to the old unanchored shape
+# reproduces the #0332 leak, confirming the assertions above are sensitive
+# to it and not vacuously true.
+MUTANT_UNANCHOR="$WORKDIR/testdb_mutant_unanchor.sh"
+sed -e "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" \
+    -e "s/and datname !~\* '_template\\\\\$'/and datname not ilike '%template%'/" \
+    "$REAL_SCRIPT" > "$MUTANT_UNANCHOR"
+chmod +x "$MUTANT_UNANCHOR"
+
+if ! grep -q "^PREFIX=\"${TESTPREFIX}\"\$" "$MUTANT_UNANCHOR"; then
+  echo "FATAL: prefix-scoping of the unanchor mutant failed — aborting before running it." >&2
+  exit 1
+fi
+# Exact full-line match on the exclude_clause= assignment itself, not a bare
+# substring — this file's own comments above describe both the old and new
+# shapes in prose, so a substring check ("not ilike '%template%'") would
+# match those comments even when the CODE line was never touched, making the
+# check vacuous. §8: the oracle must not be satisfiable by bytes other than
+# the subject it is meant to be checking.
+if ! grep -Fxq "    exclude_clause=\"datname <> '\$TEMPLATE' and datname <> '\$DEFAULT_TEMPLATE' and datname not ilike '%template%'\"" "$MUTANT_UNANCHOR"; then
+  echo "FATAL: #0332 anchor-removal mutation did not take effect — aborting rather than run an unmutated gc --all (that would prove nothing)." >&2
+  exit 1
+fi
+
+MUT_LEAK="${TESTPREFIX}template_probe2"
+createdb_raw "$MUT_LEAK"
+"$MUTANT_UNANCHOR" gc --all >/dev/null 2>&1
+if db_exists "$MUT_LEAK"; then
+  pass "with the anchor reverted to the old unanchored '%template%' shape, gc --all left $MUT_LEAK unswept — confirms the leak-case assertions above are sensitive to the #0332 regression, not vacuously true"
+else
+  fail "mutation was ineffective: reverting to the old unanchored pattern still swept $MUT_LEAK. This means the leak-case assertions above would not actually catch a real #0332 regression."
+fi
+drop_and_verify "$MUT_LEAK"
+
+# --- Separating #0327's two added clauses (the review's noted weakness):
+# removing DEFAULT_TEMPLATE and the anchored pattern TOGETHER (Part 4's
+# MUTANT2) cannot show which one is load-bearing, since the anchored
+# pattern's own definition (PREFIX + "template", and PREFIX always ends in
+# "_") means it always ALSO ends in "_template" and so is always ALSO
+# caught by the pattern clause. Mutating each alone shows this precisely:
+# the pattern clause is independently necessary (protects an ad hoc
+# "..._template" scratch database that is neither $TEMPLATE nor
+# $DEFAULT_TEMPLATE); DEFAULT_TEMPLATE is independently redundant *given*
+# the anchored pattern for the one name it protects, which is why it is
+# still kept — a static, cheap, independent safeguard that does not depend
+# on the pattern's specific shape or on PREFIX continuing to end in "_".
+
+# Mutant A: remove ONLY the anchored pattern clause, keep DEFAULT_TEMPLATE.
+MUTANT_NOPATTERN="$WORKDIR/testdb_mutant_nopattern.sh"
+sed -e "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" \
+    -e "s/ and datname !~\* '_template\\\\\$'//" \
+    "$REAL_SCRIPT" > "$MUTANT_NOPATTERN"
+chmod +x "$MUTANT_NOPATTERN"
+
+if ! grep -q "^PREFIX=\"${TESTPREFIX}\"\$" "$MUTANT_NOPATTERN"; then
+  echo "FATAL: prefix-scoping of the no-pattern mutant failed — aborting." >&2
+  exit 1
+fi
+# Exact full-line match (see the #0332 note above MUTANT_UNANCHOR's check for
+# why a bare substring like "!~*" is not safe here — this script's own
+# comments contain that text too).
+if ! grep -Fxq "    exclude_clause=\"datname <> '\$TEMPLATE' and datname <> '\$DEFAULT_TEMPLATE'\"" "$MUTANT_NOPATTERN"; then
+  echo "FATAL: #0332 pattern-only-removal mutation did not take effect as expected (exclude_clause line does not match 'TEMPLATE + DEFAULT_TEMPLATE only') — aborting rather than run it." >&2
+  exit 1
+fi
+
+NP_DEFAULTISH="${TESTPREFIX}template"            # exactly $DEFAULT_TEMPLATE's value under this prefix
+NP_ADHOC="${TESTPREFIX}someones_own_template"    # ad hoc #0315-style scratch template, NOT the literal default
+createdb_raw "$NP_DEFAULTISH"
+createdb_raw "$NP_ADHOC"
+
+"$MUTANT_NOPATTERN" gc --all >/dev/null 2>&1
+
+if db_exists "$NP_DEFAULTISH"; then
+  pass "with ONLY the anchored pattern removed, gc --all still did not drop the literal default template ($NP_DEFAULTISH) — DEFAULT_TEMPLATE alone protects it"
+else
+  fail "REGRESSION: with only the anchored pattern removed, gc --all dropped the literal default template ($NP_DEFAULTISH) — DEFAULT_TEMPLATE's own exclusion is not doing its job"
+fi
+
+if db_exists "$NP_ADHOC"; then
+  fail "mutation was ineffective: with only the anchored pattern removed, gc --all still did NOT sweep an ad hoc '..._template' scratch database ($NP_ADHOC) that is neither \$TEMPLATE nor \$DEFAULT_TEMPLATE. This means the anchored pattern is not actually the thing protecting it, so removing it alone should have swept it."
+else
+  pass "with only the anchored pattern removed, gc --all swept an ad hoc '..._template' scratch database ($NP_ADHOC) that DEFAULT_TEMPLATE's literal exclusion does not cover — confirms the pattern clause is independently load-bearing for that case"
+fi
+
+drop_and_verify "$NP_DEFAULTISH"
+drop_and_verify "$NP_ADHOC"
+
+# Mutant B: remove ONLY the DEFAULT_TEMPLATE clause, keep the anchored
+# pattern. Expected result: NO regression, because DEFAULT_TEMPLATE's own
+# value always ends in "_template" and so is always also caught by the
+# pattern — this documents, rather than assumes, that DEFAULT_TEMPLATE is
+# presently redundant with the anchored pattern for the literal default
+# name, which is exactly why it is kept as an independent safeguard rather
+# than removed: nothing here should ever start failing if the pattern's
+# shape or PREFIX's trailing underscore ever changes and DEFAULT_TEMPLATE
+# stops being redundant.
+MUTANT_NODEFAULT="$WORKDIR/testdb_mutant_nodefault.sh"
+sed -e "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" \
+    -e "s/ and datname <> '\\\$DEFAULT_TEMPLATE'//" \
+    "$REAL_SCRIPT" > "$MUTANT_NODEFAULT"
+chmod +x "$MUTANT_NODEFAULT"
+
+if ! grep -q "^PREFIX=\"${TESTPREFIX}\"\$" "$MUTANT_NODEFAULT"; then
+  echo "FATAL: prefix-scoping of the no-default mutant failed — aborting." >&2
+  exit 1
+fi
+# Exact full-line match — same rationale as the two checks above.
+if ! grep -Fxq "    exclude_clause=\"datname <> '\$TEMPLATE' and datname !~* '_template\\\$'\"" "$MUTANT_NODEFAULT"; then
+  echo "FATAL: #0332 DEFAULT_TEMPLATE-only-removal mutation did not take effect as expected (exclude_clause line does not match 'TEMPLATE + anchored pattern only') — aborting rather than run it." >&2
+  exit 1
+fi
+
+ND_DEFAULTISH="${TESTPREFIX}template"            # exactly $DEFAULT_TEMPLATE's value under this prefix
+createdb_raw "$ND_DEFAULTISH"
+
+"$MUTANT_NODEFAULT" gc --all >/dev/null 2>&1
+
+if db_exists "$ND_DEFAULTISH"; then
+  pass "with only DEFAULT_TEMPLATE removed, the anchored pattern alone still protected the literal default template ($ND_DEFAULTISH) — confirms DEFAULT_TEMPLATE is presently redundant with the pattern for this one name, and is kept deliberately as an independent safeguard, not because it is the only thing protecting it today"
+else
+  fail "with only DEFAULT_TEMPLATE removed, gc --all swept the literal default template ($ND_DEFAULTISH) even though the anchored pattern should also match it (PREFIX always ends in '_', so DEFAULT_TEMPLATE always ends in '_template') — the pattern clause is not doing what this comment assumes"
+fi
+drop_and_verify "$ND_DEFAULTISH"
+
+echo "== Part 6: leak census — no ${TESTPREFIX}* database survives this run =="
 LEFTOVER="$(psql_admin -tAc "select datname from pg_database where datname like '${TESTPREFIX}%'" 2>/dev/null | tr '\n' ' ' | xargs)"
 if [ -z "$LEFTOVER" ]; then
   pass "no ${TESTPREFIX}* databases remain after cleanup"
