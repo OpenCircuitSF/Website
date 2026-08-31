@@ -181,11 +181,13 @@ func TestSubscribeIntakeWorker_RecoversRowTheFastPathNeverProcessed(t *testing.T
 // intakePass. At the time of that bug, intakePass's staleness window
 // (intakeOrphanStaleAfter) was 20s, much shorter than
 // internal/mailing.OutboxWorker's own sweep window for the SAME method
-// (outboxOrphanStaleAfter, 70s then). #0294 has since raised
-// intakeOrphanStaleAfter to (intakeBatchSize+1)*intakeRowTimeout = 210s
-// and #0284 raised outboxOrphanStaleAfter to 800s, for unrelated reasons
-// (both windows were derived from one row's bound rather than a batch's)
-// — see intakeOrphanStaleAfter's own doc comment (subscribe_intake.go).
+// (outboxOrphanStaleAfter, 70s then). #0294 raised intakeOrphanStaleAfter
+// to (intakeBatchSize+1)*intakeRowTimeout = 210s and #0284 raised
+// outboxOrphanStaleAfter to 800s, for unrelated reasons (both windows
+// were derived from one row's bound rather than a batch's); #0297 has
+// since collapsed both back down to a single-row bound —
+// intakeOrphanStaleAfter is 30s and outboxOrphanStaleAfter is 70s today —
+// see intakeOrphanStaleAfter's own doc comment (subscribe_intake.go).
 // The numbers below are historical, describing the reachable gap as it
 // existed at the time of the #0254 bug; the mechanism this test guards —
 // OrphanSweep must filter by kind, because ClaimDue already does — does

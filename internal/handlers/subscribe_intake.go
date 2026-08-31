@@ -233,13 +233,13 @@ func (h *SubscribeHandler) runIntakeWorker() {
 func (h *SubscribeHandler) intakePass() (bool, error) {
 	// #0254's review bounce: scoped to KindSubscribeIntake, the same kind
 	// SelectDue below is scoped to, so this sweep — which runs every 5s with
-	// a 20s staleness window sized for THIS poller's own fast path — can
-	// never release a live claim belonging to
-	// internal/mailing.OutboxWorker, which legitimately holds a mail row
-	// 'sending' for up to ~70s. An earlier, unfiltered version of this call
-	// released a live confirmation-email claim mid-send, which led to that
-	// message being sent a second time — see OrphanSweep's doc comment for
-	// the full chain and
+	// a 30s staleness window sized for THIS poller's own fast path
+	// (intakeOrphanStaleAfter, #0297) — can never release a live claim
+	// belonging to internal/mailing.OutboxWorker, which legitimately holds
+	// a mail row 'sending' for up to ~70s. An earlier, unfiltered version
+	// of this call released a live confirmation-email claim mid-send,
+	// which led to that message being sent a second time — see
+	// OrphanSweep's doc comment for the full chain and
 	// TestSubscribeIntakeWorker_OrphanSweepDoesNotTouchOtherKinds
 	// (subscribe_intake_test.go) for the regression proof.
 	sweepCtx, sweepCancel := context.WithTimeout(h.sendCtx, intakeRowTimeout)

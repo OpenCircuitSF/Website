@@ -570,10 +570,13 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 			continue
 		}
 		// Recorded the instant the claim succeeds, before this row is
-		// sent, so a Stop landing anywhere in sendOne still sees it as
-		// outstanding — see trackClaimed's doc comment. At most one row is
-		// ever in this set at a time now (#0297): the rest of the batch is
-		// still 'queued', not this worker's to release.
+		// sent. Stop cannot actually observe it here mid-send — it blocks
+		// on <-w.doneCh, which only closes once sendOne has fully
+		// returned, so untrackClaimed below has already removed it on
+		// every ordinary path by the time Stop ever reads w.claimed — see
+		// trackClaimed's doc comment. At most one row is ever in this set
+		// at a time now (#0297): the rest of the batch is still 'queued',
+		// not this worker's to release.
 		w.trackClaimed([]outbox.Row{row})
 		processed = true
 		w.sendOne(row)

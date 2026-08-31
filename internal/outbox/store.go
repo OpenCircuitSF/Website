@@ -729,12 +729,13 @@ func (s *Store) Release(ctx context.Context, id int64) (bool, error) {
 // prior, unfiltered behavior). #0254's review bounce is why this
 // parameter exists: that commit added a kinds filter to ClaimDue but not to
 // OrphanSweep, and gave OrphanSweep a second caller —
-// internal/handlers.SubscribeHandler's recovery poller, sweeping every 5s
-// with a 20s staleness window sized for ITS OWN fast path
-// (intakeOrphanStaleAfter). internal/mailing.OutboxWorker legitimately
-// holds a mail row 'sending' for up to ~35s (sendMessageTimeout +
-// writeStatusTimeout, outboxOrphanStaleAfter=70s), so the unfiltered 20s
-// sweep could — and, proven in that review, did — release a live mail
+// internal/handlers.SubscribeHandler's recovery poller, which at the time
+// swept every 5s with a 20s staleness window sized for ITS OWN fast path
+// (intakeOrphanStaleAfter; #0297 has since raised it to 30s).
+// internal/mailing.OutboxWorker legitimately holds a mail row 'sending'
+// for up to ~35s (sendMessageTimeout + writeStatusTimeout,
+// outboxOrphanStaleAfter=70s today), so the unfiltered 20s sweep could —
+// and, proven in that review, did — release a live mail
 // claim mid-send. The eventual MarkSent then affects zero rows (the row is
 // no longer 'sending'; sendOne discards that bool), the row stays
 // 'queued', and the next mailing pass claims and sends it AGAIN: a
