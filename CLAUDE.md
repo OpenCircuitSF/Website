@@ -691,20 +691,27 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   name matches at any depth and silently excludes `cmd/opencircuit/` source.
   This already bit ShortLinks.
 
-- **Shortening an identifier can silently widen an interface's satisfier
-  set.** `#0325` renamed `(*seo.Sitemap).InvalidateWorkshops` → `Invalidate`.
-  Go interface satisfaction is structural, so that rename alone — no source
-  change at either seam — moved `*seo.Sitemap` onto two unrelated
-  single-method interfaces it was never meant to satisfy,
-  `handlers.seoCacheInvalidator` and `mailing.ArchiveCacheInvalidator`, both
-  requiring exactly `Invalidate()`. Nothing failed to compile and no
-  toolchain diagnostic fired. `#0337` closed that instance by unexporting the
-  method; the check to run before and after a rename like this is
-  `go/types.Implements` over **every** named type in the package, not a
-  hand-picked list of the ones you already suspect — `#0337`'s first guard
-  checked only the three types its author already had in mind, and its
-  review caught the regression precisely by widening the check to the
-  package's full named-type set.
+- **Shortening an identifier can silently widen an interface's satisfier set,
+  and the identifier that moves need not be on the type that gets recruited.**
+  `#0325` (`f7771ed`) renamed `(*seo.Site).InvalidateWorkshops` and
+  `(*seo.Renderer).InvalidateWorkshops` → `Invalidate`, and in the same commit
+  renamed the method their two consuming seams require —
+  `handlers.workshopCacheInvalidator` (now `seoCacheInvalidator`) and
+  `mailing.ArchiveCacheInvalidator` — from `InvalidateWorkshops()` to
+  `Invalidate()`. Go interface satisfaction is structural, so that rename
+  moved both interfaces onto `*seo.Sitemap`, a type the commit never touched:
+  `(*seo.Sitemap).Invalidate` already carried that exact zero-parameter,
+  zero-result name, so passing a bare `*Sitemap` into either seam went from a
+  compile error to a silent half-invalidation. Nothing failed to compile and
+  no toolchain diagnostic fired. Measured with `go/types.Implements` over the
+  package's full named-type set, the satisfiers were `{*Sitemap}` before the
+  rename, `{*Site, *Renderer, *Sitemap}` after it, and `{*Site, *Renderer}`
+  once `#0337` closed the instance by unexporting `Sitemap.invalidate`. That
+  full named-type set is the check to run before and after a rename like this,
+  not a hand-picked list of the ones you already suspect — `#0337`'s first
+  guard checked only the three types its author already had in mind, and its
+  review found the gap precisely by widening the check to every named type in
+  the package.
 
   **Value receivers count, and this is the sharper half.** `*T`'s method set
   includes every value-receiver method declared on `T`, so an AST guard that
