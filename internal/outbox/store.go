@@ -702,7 +702,10 @@ func (s *Store) MarkRetryOrAbandon(ctx context.Context, id int64, attempts int, 
 // Release reverts a claimed-but-unsent row back to 'queued' immediately
 // (next_attempt_at = now()), clearing claimed_at — used by
 // OutboxWorker.Stop at shutdown so a row that was claimed but not yet sent
-// is retried on restart rather than waiting out orphanStaleAfter.
+// is retried on restart rather than waiting out orphanStaleAfter — since
+// #0297 that is a defensive net rather than the ordinary case; see
+// OutboxWorker.Stop's own doc comment for why releaseAll normally finds
+// nothing to release.
 func (s *Store) Release(ctx context.Context, id int64) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE outbound_queue

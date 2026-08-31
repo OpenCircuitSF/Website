@@ -450,8 +450,11 @@ func (w *OutboxWorker) trackClaimed(rows []outbox.Row) {
 }
 
 // untrackClaimed removes id from the claimed set — called the instant
-// sendOne finishes with a row (sent, retried, or abandoned), so a
-// concurrent Stop no longer considers it outstanding.
+// sendOne finishes with a row (sent, retried, or abandoned). A
+// concurrent Stop cannot observe the set before this runs — it blocks
+// on <-w.doneCh — so this is what keeps releaseAll's defensive net
+// accurate, not what prevents a live race; see trackClaimed's and
+// Stop's own doc comments.
 func (w *OutboxWorker) untrackClaimed(id int64) {
 	w.claimedMu.Lock()
 	defer w.claimedMu.Unlock()

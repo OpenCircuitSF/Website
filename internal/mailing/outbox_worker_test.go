@@ -741,12 +741,14 @@ func TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued(t *testing.T) {
 		t.Fatalf("Enqueue 2: %v", err)
 	}
 	// The whole point of this test is that id2 is deliberately left
-	// 'queued' by Stop's release. A 'queued', due-now confirmation row
-	// left behind after this test returns is picked up by ANY later
-	// OutboxWorker.ClaimDue call sharing this database — including other
-	// tests in this same package/run — so it must be removed explicitly
-	// rather than relying on ending in a terminal status the way every
-	// other test in this file does.
+	// 'queued': pass's stopCh check runs before its ClaimRow, so id2 is
+	// never claimed at all (#0297 — see this test's own doc comment
+	// above, and the post-Stop assertions below). A 'queued', due-now
+	// confirmation row left behind after this test returns is picked up
+	// by ANY later OutboxWorker pass sharing this database — including
+	// other tests in this same package/run — so it must be removed
+	// explicitly rather than relying on ending in a terminal status the
+	// way every other test in this file does.
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM outbound_queue WHERE id = ANY($1)`, []int64{id1, id2})
 	})
