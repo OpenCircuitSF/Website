@@ -60,12 +60,19 @@ func TestInvalidatorSatisfierSet(t *testing.T) {
 	fset := token.NewFileSet()
 	methods := invalidateOnlyMethodReceivers(t, fset, ".")
 
-	// Fail closed (CLAUDE.md §8 / #0275's lesson): an empty result is
-	// never legitimate evidence that nothing needs checking -- it means the
-	// scan itself broke (the directory moved, every .go file failed to
-	// parse). At least one receiver type in this package has always had a
-	// method matching this exact shape since before #0325.
-	if len(methods) == 0 {
+	// Fail closed (CLAUDE.md §8 / #0275's lesson): finding zero
+	// Invalidate()-only method receivers is never legitimate evidence that
+	// nothing needs checking -- it means the scan itself broke (the
+	// directory moved, every .go file failed to parse). At least one
+	// receiver type in this package has always had a method matching this
+	// exact shape since before #0325.
+	satisfiers := 0
+	for _, has := range methods {
+		if has {
+			satisfiers++
+		}
+	}
+	if satisfiers == 0 {
 		t.Fatal("found zero Invalidate()-only method receivers in internal/seo -- this scan is broken " +
 			"(fail closed, never treat this as 'nothing to check'): as of #0337, *Site and *Renderer " +
 			"both declare one")
@@ -85,17 +92,38 @@ func TestInvalidatorSatisfierSet(t *testing.T) {
 				typeName, gotSatisfies, wantSatisfies, typeName)
 		}
 	}
+
+	// Criterion 5's actual requirement: fail when an UNINTENDED type joins
+	// the satisfier set. The loop above only re-checks the three types known
+	// when this guard was written, so on its own it cannot see a new type
+	// acquiring Invalidate() -- which is precisely the "the satisfier set
+	// grew, silently" failure #0337 was filed about.
+	for typeName, gotSatisfies := range methods {
+		if !gotSatisfies {
+			continue
+		}
+		if _, known := want[typeName]; known {
+			continue
+		}
+		t.Errorf("%s declares an Invalidate()-only method but is not in this guard's intended "+
+			"satisfier set, so it now structurally satisfies handlers.seoCacheInvalidator and "+
+			"mailing.ArchiveCacheInvalidator -- either it is a deliberate new satisfier (add it "+
+			"to `want` with a comment saying why) or it is #0337's defect regrowing (unexport "+
+			"the method, as Sitemap.invalidate is)", typeName)
+	}
 }
 
 // invalidateOnlyMethodReceivers parses every non-test .go file in dir and
-// returns, for each pointer-receiver type declared there, whether it has a
-// method named exactly "Invalidate" with zero parameters and zero results
-// -- the shape *seo.Site.Invalidate implements (site.go) and every
-// single-method invalidator seam in this codebase requires. Only pointer
-// receivers are considered: every Invalidate-shaped method in this package
-// is declared on a pointer receiver, and every production caller holds a
-// pointer (*seo.Site), so a value-receiver method would not be how an
-// accidental satisfier could arise here.
+// returns, for each receiver type declared there, whether it has a method
+// named exactly "Invalidate" with zero parameters and zero results -- the
+// shape *seo.Site.Invalidate implements (site.go) and every single-method
+// invalidator seam in this codebase requires. Both receiver forms are
+// scanned, pointer and value, because a value-receiver method matters just
+// as much as a pointer-receiver one: Go's method-set rule makes *T's method
+// set include every value-receiver method declared on T, so
+// `func (s Sitemap) Invalidate() {}` would make *Sitemap satisfy both seams
+// exactly as surely as a pointer receiver does (#0337's review proved this
+// with go/types).
 func invalidateOnlyMethodReceivers(t *testing.T, fset *token.FileSet, dir string) map[string]bool {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -118,11 +146,15 @@ func invalidateOnlyMethodReceivers(t *testing.T, fset *token.FileSet, dir string
 			if !ok || fd.Recv == nil || len(fd.Recv.List) != 1 {
 				continue
 			}
-			star, ok := fd.Recv.List[0].Type.(*ast.StarExpr)
-			if !ok {
-				continue
+			// Both receiver forms matter: the method set of *T includes
+			// value-receiver methods, so `func (s Sitemap) Invalidate()` makes
+			// *Sitemap satisfy both seams just as surely as a pointer receiver
+			// does (#0337's review proved this with go/types).
+			recvType := fd.Recv.List[0].Type
+			if star, ok := recvType.(*ast.StarExpr); ok {
+				recvType = star.X
 			}
-			ident, ok := star.X.(*ast.Ident)
+			ident, ok := recvType.(*ast.Ident)
 			if !ok {
 				continue
 			}
