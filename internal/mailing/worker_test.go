@@ -1581,9 +1581,9 @@ func TestWorker_SendStartedAuditWrittenOnlyOnFirstClaim(t *testing.T) {
 }
 
 // countingArchiveInvalidator is a fake ArchiveCacheInvalidator that counts
-// calls — mirrors internal/handlers' countingWorkshopInvalidator
-// (admin_workshops_test.go), the same shape #0319's admin-handler
-// regression test uses.
+// calls — mirrors internal/handlers' countingCacheInvalidator
+// (admin_workshops_test.go; named countingWorkshopInvalidator until
+// #0335), the same shape #0319's admin-handler regression test uses.
 type countingArchiveInvalidator struct {
 	calls int
 }
