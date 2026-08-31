@@ -166,8 +166,11 @@ var outboxOrphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 // build a message for — i.e. every Kind EXCEPT outbox.KindSubscribeIntake
 // (#0254), which is not an email and is claimed separately by
 // internal/handlers.SubscribeHandler's own recovery poller. Passed to
-// outbox.Store.ClaimDue's and OrphanSweep's kinds filters in pass, below,
-// so this worker never claims OR sweeps a row it cannot render.
+// outbox.Store.SelectDue's and OrphanSweep's kinds filters in pass, below
+// — #0254 scoped ClaimDue, which this worker has not called since #0297;
+// ClaimRow takes no kinds and only ever claims an id SelectDue already
+// filtered — so this worker never selects OR sweeps a row it cannot
+// render.
 //
 // A hand-maintained list, deliberately, and #0254's review bounce corrected
 // an earlier version of this comment that overstated what that buys: it
@@ -176,7 +179,8 @@ var outboxOrphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 // to this list, whose render call reaches the default case and abandons
 // after retries. It says nothing about the opposite mistake — a Kind added
 // to internal/outbox and forgotten HERE — and that omission is silent, not
-// loud: ClaimDue(mailKinds...) never claims such a row at all, so render's
+// loud: SelectDue, scoped to mailKinds, never selects such a row at all
+// (#0297; before that it was ClaimDue's own kinds filter), so render's
 // default case never runs; the row simply stalls in 'queued' forever, with
 // no error anywhere to notice. TestMailKindsCoversEveryOutboxKind
 // (outbox_worker_kinds_guard_test.go) closes that gap by parsing
@@ -468,8 +472,9 @@ func (w *OutboxWorker) untrackClaimed(id int64) {
 // poll wait, matching worker.go's "don't busy-loop on an empty pass"
 // discipline (#0122).
 func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
-	// #0254's review bounce: scoped to mailKinds, the same set ClaimDue
-	// below is scoped to, so this sweep can never release a live claim
+	// #0254's review bounce: scoped to mailKinds, the same set SelectDue
+	// below is scoped to (#0254 scoped ClaimDue; this pass has not called
+	// it since #0297), so this sweep can never release a live claim
 	// belonging to internal/handlers.SubscribeHandler's own recovery
 	// poller (KindSubscribeIntake) — see OrphanSweep's doc comment for the
 	// duplicate-send chain an unfiltered sweep produced.

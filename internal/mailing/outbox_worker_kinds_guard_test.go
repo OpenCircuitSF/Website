@@ -32,10 +32,11 @@ var kindExceptions = map[string]string{
 // 3): mailKinds (outbox_worker.go) is a hand-maintained list, and there is
 // no compiler check that it stays in sync with internal/outbox's actual
 // Kind constants. Before #0254, an unrecognised Kind reaching render's
-// switch failed LOUDLY (its default case). After #0254 added ClaimDue's
-// kinds filter, a Kind that exists in internal/outbox but is missing from
-// this list is claimed by NOBODY — not this worker (ClaimDue never returns
-// it), not internal/handlers.SubscribeHandler's recovery poller (which only
+// switch failed LOUDLY (its default case). After #0254 added the kinds
+// filter — to ClaimDue then, to SelectDue since #0297 — a Kind that
+// exists in internal/outbox but is missing from this list is claimed by
+// NOBODY: not this worker (SelectDue never selects it), not
+// internal/handlers.SubscribeHandler's recovery poller (which only
 // claims outbox.KindSubscribeIntake) — so a row of that kind stalls in
 // 'queued' forever, silently, with no error anywhere to notice. See
 // mailKinds' own doc comment for the corrected reasoning.
