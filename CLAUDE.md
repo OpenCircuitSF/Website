@@ -691,6 +691,35 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   name matches at any depth and silently excludes `cmd/opencircuit/` source.
   This already bit ShortLinks.
 
+- **Shortening an identifier can silently widen an interface's satisfier
+  set.** `#0325` renamed `(*seo.Sitemap).InvalidateWorkshops` → `Invalidate`.
+  Go interface satisfaction is structural, so that rename alone — no source
+  change at either seam — moved `*seo.Sitemap` onto two unrelated
+  single-method interfaces it was never meant to satisfy,
+  `handlers.seoCacheInvalidator` and `mailing.ArchiveCacheInvalidator`, both
+  requiring exactly `Invalidate()`. Nothing failed to compile and no
+  toolchain diagnostic fired. `#0337` closed that instance by unexporting the
+  method; the check to run before and after a rename like this is
+  `go/types.Implements` over **every** named type in the package, not a
+  hand-picked list of the ones you already suspect — `#0337`'s first guard
+  checked only the three types its author already had in mind, and its
+  review caught the regression precisely by widening the check to the
+  package's full named-type set.
+
+  **Value receivers count, and this is the sharper half.** `*T`'s method set
+  includes every value-receiver method declared on `T`, so an AST guard that
+  scans only pointer receivers has a hole. This is not hypothetical:
+  `#0337`'s first guard justified a pointer-receiver-only scan in its own doc
+  comment, and a `func (s Sitemap) Invalidate() {}` mutation — a value
+  receiver, not a pointer one — fully restored the original regression while
+  the guard still reported `ok`. Any guard modeled on this one must scan both
+  receiver forms; `go/types` is the sound oracle, since method-set membership
+  is a type-checker rule, not something an AST walk can fully reconstruct on
+  its own (it also can't see a method acquired by embedding a satisfying
+  struct or interface field, or hiding behind a generic receiver — see
+  `internal/seo/invalidator_satisfier_guard_test.go`'s doc comments for how
+  those are handled).
+
 ## 8a. Destructive git operations
 
 **Never run `git checkout --`, `git restore`, `git stash`, `git reset --hard`,
@@ -794,7 +823,9 @@ the index.** This is `--only` semantics and it is documented git behaviour, but
 it is the opposite of what "I staged narrowly, so only my work is committed"
 implies — and this whole file has been recommending that form. Naming a pathspec
 makes git commit the *files*, including **unstaged** changes another agent has
-in them.
+in them. This is the sibling of the `#0268` hazard just above — same `--`
+construct, opposite failure: `#0268` is a commit that does not happen at all;
+this is a commit that happens and contains more than intended.
 
 `#0305`'s implementer hit it exactly that way: it isolated its own hunks with
 `git apply --cached`, verified the index, then `git commit -- <paths>` swept in
@@ -803,6 +834,16 @@ in them.
 recovered with a second commit removing precisely the swept-in hunks, verifying
 the working tree byte-identical to its pre-mistake state. Nothing was lost, and
 only because it checked the size rather than the exit code.
+
+`#0328`'s implementer hit the same construct with no other agent involved: it
+isolated one issue's hunks with `git apply --cached`, ran
+`git commit -F - -- <pathspec>`, and got `34147d4` — a commit titled for
+`#0327` alone but carrying `#0328`'s working-tree changes too, because the
+pathspec bypassed the index it had just staged rather than confirming it. The
+"only my own work is at risk" case fails exactly the same way as the
+concurrent-agent case above. The commit was left in place rather than split
+apart, since a concurrent agent had already built on top of it by the time the
+mistake was found.
 
 **Both forms have a failure mode, and the index tells you which to use.**
 
