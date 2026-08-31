@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -39,11 +40,14 @@ import (
 // an Invalidate()-only interface from its declaration) -- and asks the
 // equivalent question about a METHOD declaration instead of an interface
 // declaration: does *Site / *Renderer / *Sitemap have a method named
-// exactly "Invalidate", taking no parameters and returning nothing? None of
-// the three types embeds another (site.go, seo.go, sitemap.go all declare
-// plain, non-embedding structs), so "has a matching method" and "structurally
-// satisfies any Invalidate()-only interface" are the same fact -- no
-// promoted method could supply Invalidate() some other way. Per CLAUDE.md
+// exactly "Invalidate", taking no parameters and returning nothing? Reading
+// method declarations is equivalent to asking about method SETS only while no
+// type in this package acquires Invalidate() by promotion from an embedded
+// field, which is true today (site.go, seo.go, sitemap.go all declare plain,
+// non-embedding structs) -- and this test no longer merely assumes it: the
+// structTypesWithEmbeddedFields check below fails the moment any struct here
+// grows an embedded field, because a promoted method is invisible to the
+// scan. Per CLAUDE.md
 // §8's placement rule, this is a legitimate in-package oracle rather than
 // one requiring an external harness: the guard's subject is this package's
 // own method declarations, and a mutation to those declarations (renaming,
@@ -111,6 +115,32 @@ func TestInvalidatorSatisfierSet(t *testing.T) {
 			"to `want` with a comment saying why) or it is #0337's defect regrowing (unexport "+
 			"the method, as Sitemap.invalidate is)", typeName)
 	}
+
+	// Fail closed on the one construct this scan cannot model. Everything
+	// above reads METHOD DECLARATIONS, which is a sound proxy for "satisfies
+	// an Invalidate()-only interface" only while no type in this package
+	// acquires the method by PROMOTION. Embedding an existing satisfier
+	// (`struct{ *Site }`) or an interface that has the method
+	// (`struct{ cacheInvalidator }`) gives the outer type Invalidate() with
+	// no method declaration anywhere for the scan to find: #0337's second
+	// review proved go/types then reports the outer type as a satisfier of
+	// both seams while this guard stayed green. Reimplementing Go's
+	// method-set rules here would be a type checker, so instead this refuses
+	// to answer at all once the premise breaks. internal/seo declares no
+	// embedded fields today; a type that grows one must be checked by hand
+	// with go/types.Implements and then listed in embeddingReviewed.
+	embeddingReviewed := map[string]bool{}
+	for _, typeName := range structTypesWithEmbeddedFields(t, fset, ".") {
+		if embeddingReviewed[typeName] {
+			continue
+		}
+		t.Errorf("%s is a struct with an embedded field, so it may satisfy "+
+			"handlers.seoCacheInvalidator and mailing.ArchiveCacheInvalidator through a PROMOTED "+
+			"Invalidate() that this guard's method-declaration scan cannot see -- check it with "+
+			"go/types.Implements against interface{ Invalidate() }, then either remove the "+
+			"embedding, unexport the promoted method's source, or add %q to embeddingReviewed with "+
+			"a comment recording that check", typeName, typeName)
+	}
 }
 
 // invalidateOnlyMethodReceivers parses every non-test .go file in dir and
@@ -154,6 +184,18 @@ func invalidateOnlyMethodReceivers(t *testing.T, fset *token.FileSet, dir string
 			if star, ok := recvType.(*ast.StarExpr); ok {
 				recvType = star.X
 			}
+			// A generic receiver is spelled T[P] or T[P1, P2], which parse as
+			// *ast.IndexExpr / *ast.IndexListExpr wrapping the base type's
+			// identifier. Unwrap to that identifier: *FeedCache[int] satisfies
+			// an Invalidate()-only interface exactly as *FeedCache would
+			// (#0337's second review proved this with types.Instantiate), and
+			// without this unwrap the whole declaration is skipped.
+			switch idx := recvType.(type) {
+			case *ast.IndexExpr:
+				recvType = idx.X
+			case *ast.IndexListExpr:
+				recvType = idx.X
+			}
 			ident, ok := recvType.(*ast.Ident)
 			if !ok {
 				continue
@@ -175,4 +217,56 @@ func invalidateOnlyMethodReceivers(t *testing.T, fset *token.FileSet, dir string
 		}
 	}
 	return result
+}
+
+// structTypesWithEmbeddedFields parses every non-test .go file in dir and
+// returns, sorted, the name of every struct type declared there that has at
+// least one embedded (anonymous) field. It exists because
+// invalidateOnlyMethodReceivers reads method declarations, and an embedded
+// field can supply Invalidate() with no declaration to read: `struct{ *Site }`
+// and `struct{ cacheInvalidator }` both make the outer type satisfy every
+// Invalidate()-only seam. Deciding whether a particular embedding does that
+// needs full type information (the embedded type may come from another
+// package), so this reports the construct rather than trying to resolve it --
+// the caller fails closed on anything not explicitly reviewed. Interface type
+// declarations are deliberately not reported: an interface in this package
+// whose method set is Invalidate() is a declared seam, not a concrete type
+// accidentally joining one.
+func structTypesWithEmbeddedFields(t *testing.T, fset *token.FileSet, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir %s: %v", dir, err)
+	}
+
+	var found []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, dir+string(os.PathSeparator)+name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			ts, ok := node.(*ast.TypeSpec)
+			if !ok {
+				return true
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok || st.Fields == nil {
+				return true
+			}
+			for _, field := range st.Fields.List {
+				if len(field.Names) == 0 {
+					found = append(found, ts.Name.Name)
+					return true
+				}
+			}
+			return true
+		})
+	}
+	sort.Strings(found)
+	return found
 }
