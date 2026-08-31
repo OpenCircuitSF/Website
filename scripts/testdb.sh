@@ -22,6 +22,11 @@
 #     scripts/testdb.sh list             # every scratch database that exists
 #     scripts/testdb.sh gc --all         # drop ALL scratch databases (yours AND other agents')
 #
+# `drop template` (or `drop TEMPLATE`, #0208 lower-cases either way) refuses
+# by default — it names the same database `create` clones from, so dropping
+# it stalls every concurrent agent until someone rebuilds it. Pass --force
+# if you really mean it: `scripts/testdb.sh drop template --force` (#0333).
+#
 # Typical use inside a subagent:
 #
 #     export TEST_DATABASE_URL="$(scripts/testdb.sh create 0123)"
@@ -376,10 +381,59 @@ case "$cmd" in
     # "does not exist" message, and exited 0, leaving the stray database
     # behind. Existence and drop-success are now checked separately, and a
     # real drop failure is reported as a failure with a non-zero exit.
-    db="$(name_for "${1:-}")"
+    #
+    # #0333: flags are recognized in any position (same fix #0250 made for
+    # db-reset.sh), because the natural phrasing is `drop template --force`,
+    # with the flag AFTER the id.
+    force=0
+    id_arg=""
+    for a in "$@"; do
+      case "$a" in
+        --force) force=1 ;;
+        *) [ -n "$id_arg" ] || id_arg="$a" ;;
+      esac
+    done
+    db="$(name_for "$id_arg")"
     if ! db_exists "$db"; then
       echo "$db does not exist"
       exit 0
+    fi
+    # #0333: `name_for template` (and, since #0208's lower-casing, `name_for
+    # TEMPLATE`) resolves to the exact same database `create` clones from —
+    # $TEMPLATE if TEMPLATE_DB is overridden, $DEFAULT_TEMPLATE otherwise.
+    # `drop template` therefore reads exactly like `drop 0324` ("drop MY
+    # scratch database") but destroys the one every concurrent agent's next
+    # `create` depends on. #0327 already guarded `gc --all` against this
+    # exact blast radius; this closes the matching gap in `drop`, same shape
+    # #0150 settled on for gc and #0207 for db-reset.sh: refuse by default,
+    # require an explicit --force to proceed.
+    if [ "$db" = "$TEMPLATE" ] || [ "$db" = "$DEFAULT_TEMPLATE" ]; then
+      if [ "$force" != "1" ]; then
+        cat >&2 <<EOF
+refusing: '$db' is the shared template every 'scripts/testdb.sh create'
+clones from. Dropping it does not lose data by itself, but it stalls every
+concurrent agent's next create (falls back to the slower direct-provision
+path, #0315) until someone rebuilds it.
+
+Rebuild it instead of dropping it:
+    scripts/testdb.sh template
+
+If you really mean to drop it, pass --force.
+EOF
+        exit 1
+      fi
+      # #0333 criterion 4: even under --force, never drop a template that is
+      # actively in use — an agent's `create` may be mid-clone from it right
+      # now. Same shape as gc --all's per-database live-connection skip
+      # (#0150): report the connection count and refuse, rather than
+      # dropping a resource out from under a running agent. --force means "I
+      # know this is the shared template and I mean to drop it," not "drop it
+      # even if someone is using it right now."
+      conns=$(psql_admin -tAc "select count(*) from pg_stat_activity where datname = '$db'")
+      if [ "${conns:-0}" -gt 0 ]; then
+        echo "refusing: '$db' has $conns active connection(s) — someone (possibly another agent's 'create' cloning from it) is using it right now. Wait for it to finish, then retry." >&2
+        exit 1
+      fi
     fi
     if psql_admin -qc "DROP DATABASE $db;"; then
       echo "dropped $db"

@@ -567,7 +567,130 @@ else
 fi
 drop_and_verify "$ND_DEFAULTISH"
 
-echo "== Part 6: leak census — no ${TESTPREFIX}* database survives this run =="
+echo "== Part 6: 'drop template' refuses without --force, and reports live connections even with it (#0333) =="
+#
+# #0333: name_for template (and, since #0208, name_for TEMPLATE) resolves to
+# the exact same database `create` clones from — $TEMPLATE if TEMPLATE_DB is
+# overridden, $DEFAULT_TEMPLATE otherwise. So `drop template` reads exactly
+# like `drop 0324` ("drop my own scratch database") but destroys the shared
+# resource every concurrent agent's next `create` depends on. #0327 already
+# closed this exact blast radius for `gc --all`; this proves the matching
+# fix in `drop` — refuse by default, same shape #0150 settled on for gc and
+# #0207 for db-reset.sh's --force, and even --force never drops a template
+# with a live connection (an agent's `create` may be mid-clone from it).
+
+D_TEMPLATE="${TESTPREFIX}template"   # what $SCOPED's own DEFAULT_TEMPLATE resolves to
+createdb_raw "$D_TEMPLATE"
+
+OUT="$("$SCOPED" drop template 2>&1)"
+RC=$?
+if [ "$RC" -eq 0 ]; then
+  fail "REGRESSION #0333: 'testdb.sh drop template' (no --force) exited 0 — expected a refusal"
+else
+  pass "'drop template' (no --force) refused (exit $RC)"
+fi
+if db_exists "$D_TEMPLATE"; then
+  pass "'drop template' (no --force) did not drop the shared template"
+else
+  fail "REGRESSION #0333: 'testdb.sh drop template' (no --force) dropped the shared template it should have refused to touch"
+fi
+echo "$OUT" | grep -q -- "--force" || fail "'drop template's refusal message doesn't mention --force — a caller reading it won't know how to actually drop it"
+echo "$OUT" | grep -qi "rebuild" || fail "'drop template's refusal message doesn't say how to rebuild the template"
+
+# Same for the uppercase spelling — #0208 folds it to the same database name.
+OUT2="$("$SCOPED" drop TEMPLATE 2>&1)"
+RC2=$?
+if [ "$RC2" -eq 0 ]; then
+  fail "REGRESSION #0333: 'testdb.sh drop TEMPLATE' (uppercase, no --force) exited 0 — expected a refusal"
+else
+  pass "'drop TEMPLATE' (uppercase, no --force) refused too"
+fi
+echo "$OUT2" | grep -q -- "--force" || fail "'drop TEMPLATE's (uppercase) refusal message doesn't mention --force either"
+
+# Criterion 4: --force with a live connection still refuses. See the #0223
+# comment above terminate_backends() for why the connection must be waited
+# for and terminated server-side, not just trusted to close when the local
+# client is killed.
+psql "$PGHOST_URL/$D_TEMPLATE" -c "select pg_sleep(15)" >/dev/null 2>&1 &
+CONN_PID=$!
+BG_PIDS+=("$CONN_PID")
+WAITED=0
+while [ "$(psql_admin -tAc "select count(*) from pg_stat_activity where datname='$D_TEMPLATE'")" -eq 0 ] && [ "$WAITED" -lt 10 ]; do
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+
+OUT3="$("$SCOPED" drop template --force 2>&1)"
+RC3=$?
+if [ "$RC3" -eq 0 ]; then
+  fail "REGRESSION #0333: 'drop template --force' dropped a template with a live connection instead of refusing"
+else
+  pass "'drop template --force' refused while the template had a live connection"
+fi
+if db_exists "$D_TEMPLATE"; then
+  pass "'drop template --force' did not drop the template while it had a live connection"
+else
+  fail "REGRESSION #0333: 'drop template --force' dropped the template while it had a live connection ($D_TEMPLATE gone)"
+fi
+echo "$OUT3" | grep -qi "connection" || fail "'drop template --force's refusal (live-connection case) doesn't mention the connection — not reporting it the way #0150's gc guard does"
+
+terminate_backends "$D_TEMPLATE"
+kill "$CONN_PID" >/dev/null 2>&1 || true
+wait "$CONN_PID" 2>/dev/null || true
+if wait_for_disconnect "$D_TEMPLATE" 20; then
+  pass "connection to $D_TEMPLATE closed before the next step"
+else
+  fail "REGRESSION #0223: connection to $D_TEMPLATE did not close within the poll timeout"
+fi
+
+# Criterion 2: --force with NO connection actually performs the drop.
+"$SCOPED" drop template --force >/dev/null 2>&1
+if db_exists "$D_TEMPLATE"; then
+  fail "'drop template --force' (no connections) did not drop the template — the explicit override doesn't work"
+else
+  pass "'drop template --force' (no connections) dropped the template"
+fi
+
+# Criterion 3: an ordinary `drop <id>` is unaffected and still needs no flag.
+D_ORDINARY="${TESTPREFIX}0333ord"
+createdb_raw "$D_ORDINARY"
+"$SCOPED" drop 0333ord >/dev/null 2>&1
+if db_exists "$D_ORDINARY"; then
+  fail "'drop <ordinary id>' (no flag) failed to drop an ordinary scratch database — #0333's template guard is over-triggering"
+else
+  pass "'drop <ordinary id>' (no flag) still drops an ordinary scratch database, unaffected by the template guard"
+fi
+
+# Mutation proof: neuter the refusal condition (targeting its own line by a
+# wildcard match, not a copy of its literal condition — §8) and confirm
+# 'drop template' (no --force) WOULD then drop it, proving the assertions
+# above are sensitive to the #0333 regression, not vacuously true.
+MUTANT3="$WORKDIR/testdb_mutant3.sh"
+sed -e "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" \
+    -e 's/if \[ "\$force" != "1" \]; then/if false; then/' \
+    "$REAL_SCRIPT" > "$MUTANT3"
+chmod +x "$MUTANT3"
+
+if ! grep -q "^PREFIX=\"${TESTPREFIX}\"\$" "$MUTANT3"; then
+  echo "FATAL: prefix-scoping of the #0333 mutant failed — aborting before running it." >&2
+  exit 1
+fi
+if ! grep -q 'if false; then' "$MUTANT3"; then
+  echo "FATAL: #0333 guard-removal mutation did not take effect — aborting rather than run an unmutated drop (that would prove nothing)." >&2
+  exit 1
+fi
+
+D_MUT="${TESTPREFIX}template"
+createdb_raw "$D_MUT"
+"$MUTANT3" drop template >/dev/null 2>&1   # no --force, but the refusal is neutered
+if db_exists "$D_MUT"; then
+  fail "mutation was ineffective: with the #0333 refusal removed, 'drop template' (no --force) still did NOT drop it. This means the assertions above would not actually catch a real #0333 regression."
+else
+  pass "with the #0333 refusal removed, 'drop template' (no --force) DID drop it — confirms the assertions above are sensitive to the #0333 regression, not vacuously true"
+fi
+drop_and_verify "$D_MUT"
+
+echo "== Part 7: leak census — no ${TESTPREFIX}* database survives this run =="
 LEFTOVER="$(psql_admin -tAc "select datname from pg_database where datname like '${TESTPREFIX}%'" 2>/dev/null | tr '\n' ' ' | xargs)"
 if [ -z "$LEFTOVER" ]; then
   pass "no ${TESTPREFIX}* databases remain after cleanup"
