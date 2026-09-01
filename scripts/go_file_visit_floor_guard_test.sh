@@ -582,42 +582,68 @@ done
 #      floor constants above.
 #   3. Mutates a COPY by textually rewriting every occurrence of
 #      "subscribe_intake.go" to a name the required-list's anchored grep
-#      cannot match (a `sed` substring rewrite, never a `grep -v` of the
-#      detector's own composite-literal pattern) and confirms the SAME
-#      anchored grep, re-run against the mutated copy, finds zero for both
-#      methods -- proving the extraction is genuinely sensitive to the
-#      list's content (falsifiable). #0330's review found the original
-#      `grep -v` form of this mutation could never fail: its pattern
-#      (matching either method via alternation) is a strict SUPERSET of
-#      what each per-method detector invocation matches, so any line the
-#      detector could find was, by construction, already guaranteed to be
-#      deleted -- the "PASS" it printed was true regardless of what the
-#      list actually contained (measured directly: replacing the list with
-#      a present-but-irrelevant decoy left the detector's OWN
-#      list-membership check in item 2 correctly FAILing while this item's
-#      "falsifiable" claim kept printing PASS). The `sed` rewrite here uses
-#      a genuinely different pattern from the detector's, so a mutation
-#      that fails to take (a drifted anchor) leaves the detector still
-#      finding the original line and reports FAIL instead of a vacuous
-#      PASS -- the same shape the floor-to-0 mutations above prove for
-#      their constants.
-#   4. Confirms the tracked guard file's real assertion --
-#      TestNoUnscopedOutboxClaimCallOutsidePackage's loop over
-#      claimKindsGuardRequiredNonExemptCallSites -- still calls
-#      requiredNonExemptSitePresent(allSites, ...) EXACTLY ONCE
+#      cannot match, and confirms the SAME anchored grep, re-run against
+#      the mutated copy, finds zero for both methods.
+#
+#      READ WHAT THIS DOES AND DOES NOT PROVE. It proves the detector is
+#      not hard-wired to report "present": it can return 0, through its
+#      own unmodified code path, on bytes that lack the entries. It does
+#      NOT on its own prove the detector is sensitive to the LIST's
+#      content, and no mutation of this shape can. The detector's pattern
+#      embeds REQUIRED_SITE_FILE, so every line it can match contains
+#      "subscribe_intake.go" and is therefore rewritten by this sed --
+#      MUT_N is 0 by construction, for any content of the file. #0330's
+#      SECOND review measured that directly: replacing the list with a
+#      present-but-irrelevant decoy makes item 2 correctly FAIL twice
+#      while this item still prints PASS twice. That was equally true of
+#      the `grep -v` form this replaced (found by #0330's FIRST review),
+#      and swapping a line-deletion for a substring rewrite did not change
+#      it -- the claim once written here that it did was wrong and has
+#      been removed. What this item does still catch is a mutation that
+#      fails to TAKE (a drifted sed anchor): MUT_N stays at 1 and the
+#      else-branch FAILs. Sensitivity to the list's CONTENT comes from
+#      item 2; the two are informative jointly (tracked >= 1 AND mutant
+#      == 0) and neither carries that claim alone.
+#   4. Confirms the tracked guard file contains the text
+#      "requiredNonExemptSitePresent(allSites," on EXACTLY ONE line
 #      (CLAUDE.md §8, GUARD-0208's marker-block rule). Items 1-3 above
 #      prove the LIST still names both sites; they say nothing about
-#      whether anything still READS it. #0330's review measured directly
+#      whether anything still READS it. #0330's first review measured
 #      that deleting the presence-check loop from
 #      TestNoUnscopedOutboxClaimCallOutsidePackage, while leaving
 #      claimKindsGuardRequiredNonExemptCallSites itself untouched, leaves
 #      BOTH `go test` green (the var stays referenced by
 #      TestPresenceCheckCatchesMailingOnlyNarrowing, so it is not even an
-#      unused-variable error) AND items 1-3 above green -- this item is
-#      what closes that gap. Falsifiable the same way: the mutation (a
-#      `sed` rename of the callee, a different pattern from the detector's
-#      call-site grep) is checked with its own negative control, so a
-#      mutation that fails to take is a FAIL here too, not a vacuous PASS.
+#      unused-variable error) AND items 1-3 green. This item closes that
+#      one mutation: the deletion takes the count to 0 and FAILs.
+#
+#      ITS LIMIT, MEASURED, SO NOBODY RELIES ON MORE THAN IT GIVES. This
+#      is a grep over the whole file. It cannot tell whether the one call
+#      it counted sits inside TestNoUnscopedOutboxClaimCallOutsidePackage,
+#      nor whether it is reachable. #0330's SECOND review defeated it
+#      twice, both times leaving the count at exactly 1 and leaving
+#      gofmt, go vet, `go test ./internal/outbox` and this whole script
+#      green:
+#
+#        - extract the presence block verbatim into a helper --
+#          func assertRequiredSitesPresent(t *testing.T, allSites []outboxCallSite)
+#          -- and never call it; Go does not flag an unused function, so
+#          nothing anywhere notices;
+#        - append [:0] to the loop's range expression, leaving the call
+#          site byte-identical.
+#
+#      DO NOT ADD A FIFTH TEXTUAL CHECK HERE. Scoping this grep to the
+#      function body closes the first of those and does nothing for the
+#      second, and the shape after that is the one CLAUDE.md §8 records as
+#      costing #0258 six passes. A grep cannot establish that a Go
+#      assertion is live; only compiling and running it can. If this gap
+#      is ever judged worth closing, the instrument is a DIFFERENT KIND of
+#      oracle -- mutate claimKindsGuardScanRoots in a copy of the package
+#      and assert `go test` fails naming the required site, which unlike
+#      the floor constants above is mathematically available here (a
+#      narrowing genuinely changes what the walk finds; see this section's
+#      "WHY THIS SECTION EXISTS" note above) -- not one more grep. #0330's
+#      second review judged that not worth its cost and did not ask for it.
 #
 # Deliberately NOT written as a "does go test fail on this mutation"
 # check, for the same header-comment reason the three earlier floors give:
@@ -678,8 +704,10 @@ done
 # TestPresenceCheckCatchesMailingOnlyNarrowing, so it is not even an
 # unused-variable error) AND leaves this script green -- measured in #0330's
 # review, not assumed. So the call site that reads the list gets CLAUDE.md
-# §8's marker-block treatment: assert it appears EXACTLY ONCE, with a
-# mutation whose pattern is not this detector's pattern.
+# §8's marker-block treatment: assert it appears EXACTLY ONCE. This
+# catches outright deletion and nothing more -- see item 4's limit note
+# in the header comment above for the two measured mutations that keep
+# this count at 1 while disarming the assertion.
 count_presence_loop_call() {
   grep -cE 'requiredNonExemptSitePresent\(allSites,' "$1"
 }
@@ -687,7 +715,7 @@ count_presence_loop_call() {
 LOOP_N="$(count_presence_loop_call "$OUTBOX_SRC")"
 case "$LOOP_N" in '' | *[!0-9]*) fatal "count_presence_loop_call returned a non-numeric count ('$LOOP_N') for $OUTBOX_GUARD_FILE" ;; esac
 if [ "$LOOP_N" -eq 1 ]; then
-  pass "tracked ${OUTBOX_GUARD_FILE} still calls requiredNonExemptSitePresent on the REAL walk results (allSites) exactly once -- the presence assertion inside TestNoUnscopedOutboxClaimCallOutsidePackage is still wired up"
+  pass "tracked ${OUTBOX_GUARD_FILE} names requiredNonExemptSitePresent(allSites, ...) on exactly one line -- the presence assertion has not been deleted outright. NOT proof it is live: see item 4's limit note in this section's header comment"
 else
   fail "REGRESSION #0330: tracked ${OUTBOX_GUARD_FILE} calls requiredNonExemptSitePresent(allSites, ...) ${LOOP_N} time(s), want exactly 1 -- 0 means the presence assertion was deleted from TestNoUnscopedOutboxClaimCallOutsidePackage, which leaves both go test AND the required-list checks above green; >1 means a second, possibly shadowing copy was added (CLAUDE.md §8, GUARD-0208's exactly-once rule)"
 fi
@@ -697,7 +725,7 @@ sed 's/requiredNonExemptSitePresent(allSites,/requiredNonExemptSitePresentDISABL
 LOOP_MUT_N="$(count_presence_loop_call "$LOOP_MUTANT")"
 case "$LOOP_MUT_N" in '' | *[!0-9]*) fatal "count_presence_loop_call returned a non-numeric count ('$LOOP_MUT_N') on the presence-loop mutant" ;; esac
 if [ "$LOOP_MUT_N" -eq 0 ]; then
-  pass "mutated copy with the presence-loop call renamed is correctly detected as missing by this external oracle -- and the mutation (sed, renaming the callee) is a DIFFERENT pattern from the detector (grep for the call), so a mutation that failed to take shows up as a FAIL instead of passing vacuously"
+  pass "mutated copy with the presence-loop call renamed is correctly detected as missing by this external oracle -- so a mutation that failed to take shows up as a FAIL instead of passing vacuously"
 else
   fail "REGRESSION #0330: the presence-loop mutation did not take (still ${LOOP_MUT_N} match(es) in the mutant) -- the sed anchor has drifted from the detector's pattern; fix the mutation before trusting the exactly-once check above"
 fi
@@ -708,7 +736,7 @@ for METHOD in $REQUIRED_METHODS; do
   MUT_N="$(count_required_site_line "$REQUIRED_MUTANT" "$METHOD")"
   case "$MUT_N" in '' | *[!0-9]*) fatal "count_required_site_line returned a non-numeric count ('$MUT_N') for ${METHOD} on the mutated copy" ;; esac
   if [ "$MUT_N" -eq 0 ]; then
-    pass "mutated copy with ${REQUIRED_SITE_FILE}'s required-list entries removed is correctly detected as missing ${METHOD} by this external, non-go/ast oracle -- falsifiable, independent of go test"
+    pass "mutated copy with ${REQUIRED_SITE_FILE} rewritten out is correctly detected as missing ${METHOD} -- the detector can return 0 through its own code path, and a mutation that failed to take would FAIL here. Sensitivity to the list's CONTENT comes from the tracked-file check above, not from this one (see item 3 in this section's header comment)"
   else
     fail "REGRESSION #0330: mutation removing ${REQUIRED_SITE_FILE}'s required-list lines did not take (still found ${MUT_N} ${METHOD} line(s) in the mutated copy) -- the mutation itself is broken; aborting judgement of this subsection"
   fi
