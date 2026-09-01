@@ -604,6 +604,15 @@ func findClaimCommentGuardFindings(path string, src any, allPkgTypes map[string]
 				continue // #0347 criterion 3's convention, sentence-scoped -- see the existence axis's identical fix, above
 			}
 			dir := flat[dm[2]:dm[3]]
+			// #0363: claimCommentGuardDirWordRe carries (?i), so dir may be
+			// capitalised ("Below"/"Above"). The resolution comparison below
+			// must be case-insensitive or it can never be satisfied, and the
+			// axis degenerates from "invisible to capitalised direction words"
+			// (the bug this issue fixes) into "flags every capitalised
+			// direction word unconditionally" -- a false positive on CORRECT
+			// prose, which is strictly worse. Pinned by the resolution rows in
+			// claimCommentGuardDirectionalCalibrationCases.
+			dirLower := strings.ToLower(dir)
 			// Anchor on the nearer of (a) 90 chars back, or (b) the last
 			// clause boundary claimCommentGuardLastBoundary finds -- the
 			// SAME boundary set the historical-marker check uses two
@@ -659,10 +668,10 @@ func findClaimCommentGuardFindings(path string, src any, allPkgTypes map[string]
 				offs := facts.identOffsets[im]
 				ok := false
 				for _, o := range offs {
-					if dir == "below" && o > endOff {
+					if dirLower == "below" && o > endOff {
 						ok = true
 					}
-					if dir == "above" && o < startOff {
+					if dirLower == "above" && o < startOff {
 						ok = true
 					}
 				}
@@ -1240,6 +1249,35 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		name:                 "case-insensitivity regression pin: capitalised direction word flags too",
 		src:                  "package outbox\n\n// ClaimDue claims the row Below.\n",
 		wantClaimDueFindings: 1,
+	},
+	// RESOLUTION PIN (#0363, second bounce) -- the pair above proves only
+	// that a capitalised direction word ENTERS the axis; both fixtures carry
+	// no code, so facts.identOffsets["ClaimDue"] is empty and ok stays false
+	// on either the case-sensitive or case-insensitive comparison path. That
+	// leaves the pair blind to a second, opposite-sign bug the first #0363
+	// pass introduced: `dir == "below"`/`dir == "above"` stayed
+	// case-sensitive after `(?i)` was added to the regex, so a capitalised
+	// "Below"/"Above" could never satisfy either comparison and the axis
+	// flagged EVERY target identifier in the window unconditionally --
+	// including on comments that are correct. These three rows carry real
+	// code, so they pin RESOLUTION, not merely entry: a lowercase control
+	// and one pin per comparison line (the "below" and "above" branches are
+	// separate lines, so a partial fix lowercasing only one would still pass
+	// a single combined row).
+	{
+		name:                 "case-insensitivity resolution control: lowercase direction word resolves against a real declaration below",
+		src:                  "package outbox\n\n// ClaimDue claims the row below.\nfunc ClaimDue() {}\n",
+		wantClaimDueFindings: 0,
+	},
+	{
+		name:                 "case-insensitivity resolution pin: capitalised direction word must RESOLVE, not merely enter the axis",
+		src:                  "package outbox\n\n// ClaimDue claims the row Below.\nfunc ClaimDue() {}\n",
+		wantClaimDueFindings: 0,
+	},
+	{
+		name:                 "case-insensitivity resolution pin: capitalised Above must resolve too -- the other, separately-written comparison",
+		src:                  "package outbox\n\nfunc ClaimDue() {}\n\n// ClaimDue is declared Above.\n",
+		wantClaimDueFindings: 0,
 	},
 	// FALSE NEGATIVE -- a clause boundary separates the identifier from the
 	// direction word. TRADE: the boundary set (claimCommentGuardBoundaryRunes
