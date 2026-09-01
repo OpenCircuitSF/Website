@@ -256,22 +256,33 @@ const claimKindsGuardMinPlausibleCallSiteCount = 5
 //
 // #0330 built that presence check
 // (claimKindsGuardRequiredNonExemptCallSites, below) rather than retiring
-// THIS floor. Retained deliberately, per #0330
-// criterion 5: this floor is what fails when the walk finds no non-exempt
-// sites AT ALL (a broken method-name check, an emptied scan-roots list, or
-// every caller genuinely removed) — a state the presence check alone does
-// not distinguish from "the walk never ran," since an empty allSites slice
-// makes every presence lookup above report "not found" for the same
-// reason a broken walk would. The two are complementary, not redundant:
-// this floor is the coarse "did the walk work at all" backstop the
-// #0275/#0304 family already established; the presence check is the
-// precise "did it find the ONE caller that matters" check a count can
-// never express. Ordinary growth that would trip this floor: any change
-// that drops internal/mailing's non-exempt count from 7 to below 1 (e.g.
-// deleting outbox_worker.go's two calls and worker_store_test.go's three
-// without replacement) combined with internal/handlers dropping below 3 —
-// unlikely as an accidental single commit, which is exactly why 8 was
-// judged an acceptable value to leave in place rather than lower.
+// THIS floor. Retained deliberately, per #0330 criterion 5: this floor is
+// what fails when the walk finds no non-exempt sites AT ALL (a broken
+// method-name check, an emptied scan-roots list, or every caller genuinely
+// removed) — a state the presence check alone does not distinguish from
+// "the walk never ran," since an empty allSites slice makes every presence
+// lookup above report "not found" for the same reason a broken walk would.
+// The two are complementary, not redundant: this floor is the coarse "did
+// the walk work at all" backstop the #0275/#0304 family already
+// established; the presence check is the precise "did it find the ONE
+// caller that matters" check a count can never express.
+//
+// Its VALUE (8) is left where #0322 put it, and the headroom is the one
+// measured in the paragraphs above, not a larger one: 12 non-exempt sites
+// today, so this floor trips on the loss of any FIVE of them. The smallest
+// realistic change that does it is the one already named above — renaming
+// or removing mailing.SendStore.OrphanSweep drops four at once
+// (worker.go's call plus worker_store_test.go's three), leaving exactly 8
+// and therefore zero headroom — plus any ONE further ordinary removal,
+// e.g. deleting a single ClaimDue call from admin_dashboard_test.go or
+// admin_pending_test.go. That is two commits' distance from a false
+// failure, not the large deletion it might look like. It is accepted
+// rather than lowered for the reason #0322 gave: 8 is what closes the
+// mailing-only narrowing (7 < 8), and a shrink below the floor fails
+// LOUDLY on the next `go test`, where the growth direction described above
+// expires silently. The presence check below is what makes that trade
+// affordable — it, not this number, is now the thing protecting
+// subscribe_intake.go.
 //
 // Unlike the floor above, THIS floor is what actually breaks under the
 // {"."} narrowing #0304 measured: with claimKindsGuardScanRoots narrowed to
