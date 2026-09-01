@@ -242,7 +242,7 @@ var (
 	claimCommentGuardIdentRe         = regexp.MustCompile(`\b(ClaimDue|SelectDue|OrphanSweep|ClaimRow|ClaimBatch)\b`)
 	claimCommentGuardQualBeforeRe    = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\.\s*$`)
 	claimCommentGuardCallWordAfterRe = regexp.MustCompile("^[`'\"(),.;:\\-\\s]{0,8}(call|calls)\\b")
-	claimCommentGuardDirWordRe       = regexp.MustCompile(`\b(below|above)\b`)
+	claimCommentGuardDirWordRe       = regexp.MustCompile(`(?i)\b(below|above)\b`)
 	claimCommentGuardHistoricalRe    = regexp.MustCompile(`(?i)\b(before #|since #|has not called|no longer|used to|formerly|the old |at the time|was removed|removed by|replaced|predates|pre-#|historical|rather than|instead of|would|reverting|revert(ed)?|cannot|never)\b`)
 
 	// claimCommentGuardDirHistoricalRe is the DIRECTIONAL axis's own,
@@ -1216,22 +1216,30 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		src:                  "package outbox\n\n// The row is claimed below by ClaimDue and marked sending.\n",
 		wantClaimDueFindings: 0,
 	},
-	// FALSE NEGATIVE -- claimCommentGuardDirWordRe is case-SENSITIVE, so a
-	// capitalised, sentence-initial direction word is invisible to the axis
-	// entirely and its window logic is never reached. TRADE: not a
-	// deliberate one -- measured by #0358's review, recorded here rather
-	// than fixed, per this issue's criterion 4. The lowercase control
-	// carries the identical sentence and flags, so this pair pins the
-	// capitalisation surface specifically and nothing else.
+	// REGRESSION PIN (#0363) -- claimCommentGuardDirWordRe used to be
+	// case-SENSITIVE, so a capitalised, sentence-initial direction word
+	// ("Below,"/"Above," -- the natural way to write a forward reference at
+	// the start of a Go sentence) was invisible to the axis entirely and its
+	// window logic was never reached. #0358's review measured this as a
+	// non-deliberate gap (unlike every other row in this table, it buys
+	// nothing against an opposing error) and recorded it rather than fixing
+	// it, per that issue's criterion 4 freeze on the window logic; #0363
+	// added the `(?i)` flag to fix it. This pair now pins the FIXED
+	// behaviour: both rows carry the identical sentence and both must flag,
+	// so the pair specifically pins case-insensitivity and nothing else.
+	// Proved by mutation (#0363): reverting claimCommentGuardDirWordRe to
+	// `\b(below|above)\b` (dropping `(?i)`) makes ONLY the second row below
+	// fail, want 1 got 0 -- nothing else in this table, the db9bff7 sites
+	// test, or the rest of the package moves.
 	{
 		name:                 "case-sensitivity control: lowercase direction word flags",
 		src:                  "package outbox\n\n// ClaimDue claims the row below.\n",
 		wantClaimDueFindings: 1,
 	},
 	{
-		name:                 "capitalised direction word is invisible to the axis",
+		name:                 "case-insensitivity regression pin: capitalised direction word flags too",
 		src:                  "package outbox\n\n// ClaimDue claims the row Below.\n",
-		wantClaimDueFindings: 0,
+		wantClaimDueFindings: 1,
 	},
 	// FALSE NEGATIVE -- a clause boundary separates the identifier from the
 	// direction word. TRADE: the boundary set (claimCommentGuardBoundaryRunes
