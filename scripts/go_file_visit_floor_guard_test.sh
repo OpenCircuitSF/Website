@@ -907,24 +907,37 @@ LINE_GUARD_SHA_BEFORE="$(sha_of "$LINE_GUARD_SRC")" || fatal "sha_of fatal-exite
 # lineCitationIsExempt's real body is a single `return a && b && c` line --
 # exactly two "&&". A mutation that weakens the conjunction (fewer
 # predicates required, or "||" in place of "&&") changes that count. The
-# oracle re-derives "how many conjuncts does the TRACKED file actually
-# require" from the file itself via grep, and compares that re-derived
-# count against a literal "2" that lives here, in this script, not in the
-# tracked file -- CLAUDE.md §8's #0258 lesson: it is the fact that the "2"
-# lives in a DIFFERENT file from the guard it judges (so one `sed` applied
-# to both cannot satisfy both) that is the protection, not the
+# oracle locates the exemption by lineCitationIsExempt's own function
+# SIGNATURE and judges the line immediately after it, so the locator and
+# the judged text are different bytes -- CLAUDE.md §8's question is "can an
+# edit to the subject also satisfy the oracle", and a first version of this
+# check that greped for the return line itself, and then judged that same
+# match, could not tell "weakened in place, decoy elsewhere" from "clean":
+# weakening the real line makes it stop matching, leaving only the decoy to
+# answer for it (#0356's second review, measured). Anchoring on the
+# signature instead means weakening or renaming the body cannot also make
+# the locator miss the real declaration. The re-derived conjunct count is
+# then compared against a literal "2" that lives here, in this script, not
+# in the tracked file -- CLAUDE.md §8's #0258 lesson: it is the fact that
+# the "2" lives in a DIFFERENT file from the guard it judges (so one `sed`
+# applied to both cannot satisfy both) that is the protection, not the
 # re-derivation step alone.
+EXEMPT_FUNC_SIG_PATTERN='^func lineCitationIsExempt\(commentIsIndented, isSelfCitation, groupHasTranscriptMarker bool\) bool \{$'
 EXEMPT_RETURN_PATTERN='^[[:space:]]*return commentIsIndented && isSelfCitation && groupHasTranscriptMarker[[:space:]]*$'
-EXEMPT_RETURN_COUNT="$(grep -cE "$EXEMPT_RETURN_PATTERN" "$LINE_GUARD_SRC" || true)"
-if [ "$EXEMPT_RETURN_COUNT" -ne 1 ]; then
-  fail "REGRESSION #0356: lineCitationIsExempt's three-conjunct return statement appears ${EXEMPT_RETURN_COUNT} time(s) in $LINE_GUARD_FILE, not exactly 1 -- 0 means it was weakened or renamed; >1 means a decoy copy elsewhere in the file shadows the real (possibly weakened) definition for this oracle's grep, which is CLAUDE.md §8's GUARD-0208 begin/end-count rule and #0356 criterion 9's 'appears exactly once'."
+EXEMPT_FUNC_SIG_COUNT="$(grep -cE "$EXEMPT_FUNC_SIG_PATTERN" "$LINE_GUARD_SRC" || true)"
+if [ "$EXEMPT_FUNC_SIG_COUNT" -ne 1 ]; then
+  fail "REGRESSION #0356: lineCitationIsExempt's own function signature appears ${EXEMPT_FUNC_SIG_COUNT} time(s) in $LINE_GUARD_FILE, not exactly 1 -- 0 means it was renamed or its parameter list changed. This oracle locates the exemption by its SIGNATURE and judges the line after it, so the locator and the judged text are different bytes (CLAUDE.md §8's 'can an edit to the subject also satisfy the oracle')."
 else
-  REAL_RETURN_LINE="$(grep -E "$EXEMPT_RETURN_PATTERN" "$LINE_GUARD_SRC")"
-  REAL_AMP_COUNT="$(printf '%s' "$REAL_RETURN_LINE" | grep -o '&&' | wc -l | tr -d ' ')"
-  if [ "$REAL_AMP_COUNT" -eq 2 ]; then
-    pass "tracked lineCitationIsExempt requires all three predicates (2 '&&' in its return statement, i.e. a three-way conjunction)"
+  REAL_RETURN_LINE="$(grep -A1 -E "$EXEMPT_FUNC_SIG_PATTERN" "$LINE_GUARD_SRC" | sed -n '2p')"
+  if ! printf '%s\n' "$REAL_RETURN_LINE" | grep -qE "$EXEMPT_RETURN_PATTERN"; then
+    fail "REGRESSION #0356: the line immediately following lineCitationIsExempt's signature is not the three-conjunct return -- it reads [${REAL_RETURN_LINE}]. The exemption has been weakened or its body restructured in the committed source itself; a decoy copy of the original return line elsewhere in the file can no longer satisfy this oracle."
   else
-    fail "REGRESSION #0356: tracked lineCitationIsExempt's return statement has ${REAL_AMP_COUNT} '&&' occurrence(s), not the 2 a three-way conjunction requires -- the exemption has been weakened in the committed source itself"
+    REAL_AMP_COUNT="$(printf '%s' "$REAL_RETURN_LINE" | grep -o '&&' | wc -l | tr -d ' ')"
+    if [ "$REAL_AMP_COUNT" -eq 2 ]; then
+      pass "tracked lineCitationIsExempt requires all three predicates (2 '&&' in the return statement immediately following its own signature, i.e. a three-way conjunction)"
+    else
+      fail "REGRESSION #0356: tracked lineCitationIsExempt's return statement has ${REAL_AMP_COUNT} '&&' occurrence(s), not the 2 a three-way conjunction requires -- the exemption has been weakened in the committed source itself"
+    fi
   fi
 fi
 
@@ -956,6 +969,17 @@ fi
 # time this harness reported all guards holding. The must-match set
 # exercises different filename/line-number shapes; the must-not-match set
 # pins the .go-only narrowness the census (#0356's plan §3) relied on.
+#
+# Limit, measured (#0356 second review). This oracle establishes that the
+# tracked pattern still matches ordinary <file>.go:<int> shapes and still
+# excludes .md/.ts/.svelte. It does NOT establish that the pattern has not
+# been narrowed: a fixture list is enumerable, and a pattern restricted to
+# a line-number allow-set covering these members and the guard's own
+# in-file fixtures (e.g. `\.go:(1|42|86|107|192|251|625|1234)\b`) passes
+# this oracle AND every in-file Go test while the guard is dead against any
+# citation whose line number isn't on the list. That residue is not
+# closable by adding fixtures -- #0330/#0347's lesson, not a new spiral --
+# so it is recorded here rather than claimed away.
 LINE_CITATION_MUST_MATCH=("internal/mailing/worker.go:625" "sitemap.go:86" "a.go:1" "x_test.go:1234")
 LINE_CITATION_MUST_NOT_MATCH=("PRD.md:671" "citationGuard.test.ts:76" "WorkshopsIndex.svelte:7")
 
