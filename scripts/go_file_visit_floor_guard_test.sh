@@ -922,6 +922,30 @@ LINE_GUARD_SHA_BEFORE="$(sha_of "$LINE_GUARD_SRC")" || fatal "sha_of fatal-exite
 # the "2" lives in a DIFFERENT file from the guard it judges (so one `sed`
 # applied to both cannot satisfy both) that is the protection, not the
 # re-derivation step alone.
+#
+# Limit, measured (#0356 third review, reproduced again for #0361). This
+# oracle establishes that the TEXT located at lineCitationIsExempt's
+# function signature -- found by grepping the tracked file for that
+# literal signature and reading the very next line -- is a three-conjunct
+# return statement. It does NOT establish that this located text is the
+# live function's actual body: the locator is textual, not a parse, so a
+# construction that renames the real lineCitationIsExempt away and then
+# plants a column-0 decoy -- the original signature followed by the
+# original three-conjunct return line -- inside a raw string satisfies
+# it too. This file already carries raw-string Go-source fixtures with
+# declarations at column 0, so the decoy is not exotic. `go vet` stays
+# clean and this sub-check still reports PASS while the live exemption
+# (now under a different name) requires only one predicate. No textual
+# oracle over a Go file can tell a decoy from a declaration -- CLAUDE.md
+# §8's "a regex that hunts for a tag finds the one inside a comment", one
+# language over; its stated remedy is a parser, and this harness
+# deliberately does not use one (see this section's header comment
+# above). That residue is not closable by anchoring on more text --
+# #0330/#0347's terminating move, not a new spiral -- so it is recorded
+# here rather than chased: the in-file Go tests catch this forgery by
+# name (three of TestLineCitationIsExemptRequiresAllThreePredicates's
+# table rows, plus TestCollectLineCitationHitsFixtureExemption's
+# withoutMarker case, all fail against the renamed function).
 EXEMPT_FUNC_SIG_PATTERN='^func lineCitationIsExempt\(commentIsIndented, isSelfCitation, groupHasTranscriptMarker bool\) bool \{$'
 EXEMPT_RETURN_PATTERN='^[[:space:]]*return commentIsIndented && isSelfCitation && groupHasTranscriptMarker[[:space:]]*$'
 EXEMPT_FUNC_SIG_COUNT="$(grep -cE "$EXEMPT_FUNC_SIG_PATTERN" "$LINE_GUARD_SRC" || true)"
@@ -934,7 +958,7 @@ else
   else
     REAL_AMP_COUNT="$(printf '%s' "$REAL_RETURN_LINE" | grep -o '&&' | wc -l | tr -d ' ')"
     if [ "$REAL_AMP_COUNT" -eq 2 ]; then
-      pass "tracked lineCitationIsExempt requires all three predicates (2 '&&' in the return statement immediately following its own signature, i.e. a three-way conjunction)"
+      pass "the text located at lineCitationIsExempt's function signature is followed by a three-conjunct return statement (2 '&&' in the line immediately after it) -- this locates by matching the SIGNATURE's literal text, not by parsing or running Go, so it establishes what is WRITTEN there, not that it is the live function's actual body (see the limit noted in this sub-check's header comment above)"
     else
       fail "REGRESSION #0356: tracked lineCitationIsExempt's return statement has ${REAL_AMP_COUNT} '&&' occurrence(s), not the 2 a three-way conjunction requires -- the exemption has been weakened in the committed source itself"
     fi
