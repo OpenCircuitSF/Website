@@ -201,9 +201,11 @@ const claimKindsGuardMinPlausibleCallSiteCount = 5
 // nothing wrong (the reason #0300's file-count floors came down from 150 to
 // 80 and from an earlier value to 150). At 8 against 12 there are 4 sites
 // of headroom on paper — but FOUR of the 12, not three, are
-// mailing.SendStore's unrelated same-named OrphanSweep: worker.go:575's
+// mailing.SendStore's unrelated same-named OrphanSweep: Worker.drainCampaign's
 // call to it (through Worker.store, declared *SendStore) plus
-// worker_store_test.go's three, all counted
+// worker_store_test.go's three (one in
+// TestSendStore_OrphanSweep_ResetsOnlySendingRows, two in
+// TestSendStore_OrphanSweep_LeavesFreshlyClaimedRowAlone), all counted
 // only because this guard matches by method name, not by declaring
 // type (see nameMatchesGuardedMethod's doc comment, which already had
 // this right). A rename or removal of that unrelated method —
@@ -524,7 +526,10 @@ func (c outboxCallSite) unscoped() bool {
 // duration, a named duration variable, or a signed duration expression as
 // its third argument — none of the AST shapes classifyKindsArg treats as
 // "no kinds" — verified directly, not assumed, by reading all four real
-// call sites (worker.go:625, worker_store_test.go's three) rather than by
+// call sites (Worker.drainCampaign's one call, plus
+// worker_store_test.go's three in
+// TestSendStore_OrphanSweep_ResetsOnlySendingRows and
+// TestSendStore_OrphanSweep_LeavesFreshlyClaimedRowAlone) rather than by
 // re-deriving the same reasoning the pre-#0303 argc-based version of this
 // comment gave.
 func nameMatchesGuardedMethod(name string) bool {
