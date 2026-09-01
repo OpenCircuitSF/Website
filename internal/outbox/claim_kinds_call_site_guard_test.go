@@ -254,6 +254,25 @@ const claimKindsGuardMinPlausibleCallSiteCount = 5
 // preserves enough OTHER sites. Left as a recommendation, not implemented,
 // per #0322's own acceptance criteria.
 //
+// #0330 built that presence check
+// (claimKindsGuardRequiredNonExemptCallSites, below) rather than retiring
+// THIS floor. Retained deliberately, per #0330
+// criterion 5: this floor is what fails when the walk finds no non-exempt
+// sites AT ALL (a broken method-name check, an emptied scan-roots list, or
+// every caller genuinely removed) — a state the presence check alone does
+// not distinguish from "the walk never ran," since an empty allSites slice
+// makes every presence lookup above report "not found" for the same
+// reason a broken walk would. The two are complementary, not redundant:
+// this floor is the coarse "did the walk work at all" backstop the
+// #0275/#0304 family already established; the presence check is the
+// precise "did it find the ONE caller that matters" check a count can
+// never express. Ordinary growth that would trip this floor: any change
+// that drops internal/mailing's non-exempt count from 7 to below 1 (e.g.
+// deleting outbox_worker.go's two calls and worker_store_test.go's three
+// without replacement) combined with internal/handlers dropping below 3 —
+// unlikely as an accidental single commit, which is exactly why 8 was
+// judged an acceptable value to leave in place rather than lower.
+//
 // Unlike the floor above, THIS floor is what actually breaks under the
 // {"."} narrowing #0304 measured: with claimKindsGuardScanRoots narrowed to
 // the package's own directory, every site found is inOwnPkg, so the
@@ -263,6 +282,120 @@ const claimKindsGuardMinPlausibleCallSiteCount = 5
 // TestNonExemptFloorCatchesScanRootsNarrowedToSelf below, which proves
 // exactly that, permanently, against the real repo tree.
 const claimKindsGuardMinPlausibleNonExemptCallSiteCount = 8
+
+// namedCallSite identifies one required call site by where it lives
+// (fileSuffix, matched against the walked file's ABSOLUTE path via
+// strings.HasSuffix — see requiredNonExemptSitePresent) and which method it
+// calls. It exists only to give
+// claimKindsGuardRequiredNonExemptCallSites a named type instead of an
+// inline anonymous struct repeated at every call site.
+type namedCallSite struct {
+	fileSuffix string
+	method     string
+}
+
+// claimKindsGuardRequiredNonExemptCallSites is #0330's structural fix,
+// alongside the two floors above: a PRESENCE check, not a count.
+//
+// #0322 raised claimKindsGuardMinPlausibleNonExemptCallSiteCount to 8
+// specifically to defeat one evading narrowing (scan roots limited to
+// internal/mailing alone, which otherwise leaves 7 non-exempt sites — just
+// under the old floor of 6 — while dropping every internal/handlers site,
+// including subscribe_intake.go). #0322's own review then measured that 8
+// does not close the CLASS of failure, only that one instance: any
+// narrowing that happens to leave >= 8 non-exempt sites standing passes,
+// even if every one of them is a decoy and the real production caller —
+// the one #0254's duplicate-send defect came from — is gone. #0322's own
+// doc comment demonstrates this concretely (adding one ordinary,
+// correctly-scoped call inside internal/mailing brings a mailing-only
+// narrowing back to 8, silently, with subscribe_intake.go still dropped).
+// A count is a proxy for the property actually wanted, which is presence.
+//
+// This list names, BY FILE AND METHOD, the specific production call sites
+// that property requires: internal/handlers/subscribe_intake.go's guarded
+// calls. TestNoUnscopedOutboxClaimCallOutsidePackage checks each entry is
+// present in the real, non-exempt walk — not merely that the walk found
+// "enough" sites somewhere.
+//
+// #0330's own acceptance criterion 1, as filed 2026-08-28, named "ClaimDue
+// and OrphanSweep" — stale by the time this was implemented (2026-08-31):
+// #0297 added the per-row claim path and #0303 moved subscribe_intake.go
+// onto it, so its two guarded calls today are OrphanSweep and SelectDue,
+// not ClaimDue and OrphanSweep. Re-measured directly for this change
+// (independent standalone go/ast census, not copied from #0330, #0345, or
+// any other issue's prose): 269 files visited under claimKindsGuardScanRoots,
+// 36 total call sites, 12 non-exempt, and
+// internal/handlers/subscribe_intake.go holds exactly one OrphanSweep call
+// and one SelectDue call — zero calls to the third guarded method. Every
+// figure matches #0345's independent review census exactly. See #0330's
+// own issue file for the dated correction to its stale criterion text.
+//
+// Deliberately spelled as separate string literals ("OrphanSweep",
+// "SelectDue") rather than as call syntax anywhere in this file or its
+// comments (#0323's lesson, criterion 6 of #0330): neither literal is
+// preceded by a "." or followed by "(", so
+// scripts/go_file_visit_floor_guard_test.sh's grep pattern for a guarded
+// CALL (which requires both) does not match either the struct literal
+// below or this comment, and the population that harness measures does not
+// move because this list exists.
+//
+// Why the assertion using this list can safely live IN this file, unlike
+// the floor constants above (CLAUDE.md §8, "mutate the scan roots instead
+// and got itself changes — the in-package test is a legitimate,
+// non-circular oracle" vs. a static value, which needs an external
+// harness): narrowing claimKindsGuardScanRoots to exclude
+// internal/handlers changes what the walk actually FINDS (got), not just
+// the threshold got is compared against — so `go test` genuinely observes
+// a different result under that mutation, the same reason
+// TestNonExemptFloorCatchesScanRootsNarrowedToSelf above is a legitimate
+// in-package proof for a roots narrowing rather than a floor-to-0 mutation.
+// TestPresenceCheckCatchesMailingOnlyNarrowing below is that proof for this
+// list, permanently.
+//
+// What a Go self-check CANNOT catch is a different mutation class:
+// weakening or emptying THIS list, or the loop that checks it, by editing
+// this very file — an edit to the guard's own subject, which by
+// construction can satisfy any assertion living entirely inside it.
+// scripts/go_file_visit_floor_guard_test.sh's #0330 section is the
+// external oracle for exactly that class: it independently (a) confirms by
+// grep, against the real internal/handlers/subscribe_intake.go source
+// text — never parsing Go — that OrphanSweep and SelectDue calls are
+// really there (the ground truth this list claims), (b) confirms the
+// tracked copy of THIS file textually names both entries, and
+// (c) mutates a COPY of this file removing those two struct-literal lines
+// and confirms that mutation is independently detectable by a
+// non-go/ast tool. Per CLAUDE.md §8, "an edit to the subject must not be
+// able to satisfy the oracle" — and a grep run from a different file, over
+// a different data source, cannot be satisfied by any edit made only to
+// the Go source it is checking.
+var claimKindsGuardRequiredNonExemptCallSites = []namedCallSite{
+	{"internal/handlers/subscribe_intake.go", "OrphanSweep"},
+	{"internal/handlers/subscribe_intake.go", "SelectDue"},
+}
+
+// requiredNonExemptSitePresent reports whether sites contains a non-exempt
+// call site (inOwnPkg false) matching req's method exactly, whose file
+// resolves — via filepath.Abs, since walked paths are relative to the
+// caller's working directory and vary by scan root — to an absolute path
+// ending in req.fileSuffix. This is presence, not count: a file could hold
+// the required call plus a dozen others and this still only asks "is it
+// there at all," which is exactly the property #0330 wants and a count
+// floor cannot express.
+func requiredNonExemptSitePresent(sites []outboxCallSite, req namedCallSite) (bool, error) {
+	for _, site := range sites {
+		if site.inOwnPkg || site.method != req.method {
+			continue
+		}
+		abs, err := filepath.Abs(site.file)
+		if err != nil {
+			return false, fmt.Errorf("resolving absolute path of %s: %w", site.file, err)
+		}
+		if strings.HasSuffix(filepath.ToSlash(abs), req.fileSuffix) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
 
 // kindsArgShape classifies the syntactic shape of a guarded call's kinds
 // argument (#0303: ClaimDue/OrphanSweep/SelectDue's third, now-required
@@ -542,6 +675,29 @@ func TestNoUnscopedOutboxClaimCallOutsidePackage(t *testing.T) {
 			nonExemptCount, claimKindsGuardScanRoots, len(allSites), claimKindsGuardMinPlausibleNonExemptCallSiteCount)
 	}
 
+	// #0330: a THIRD check, presence rather than count. The floor above is
+	// satisfied by ANY 8 non-exempt sites, named or not — #0322's own doc
+	// comment demonstrates a narrowing that keeps exactly 8 while dropping
+	// every site in claimKindsGuardRequiredNonExemptCallSites (see that
+	// var's doc comment for the concrete case). This loop asserts BY NAME
+	// that the specific production call sites #0254's defect came from —
+	// today, subscribe_intake.go's OrphanSweep and SelectDue calls — are
+	// still in the walk, so a narrowing that drops them fails here even
+	// when it happens to leave >= 8 OTHER non-exempt sites standing.
+	if len(claimKindsGuardRequiredNonExemptCallSites) == 0 {
+		t.Fatal("claimKindsGuardRequiredNonExemptCallSites is empty — this presence check would silently verify nothing, the same #0275 fail-open shape the two floor checks above guard against (#0330)")
+	}
+	for _, req := range claimKindsGuardRequiredNonExemptCallSites {
+		present, err := requiredNonExemptSitePresent(allSites, req)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		if !present {
+			t.Fatalf("required non-exempt call site missing: %s's %s call was not found under %v — the scan roots may have been narrowed to exclude it, which a count-based floor alone would not catch if enough OTHER non-exempt sites remained standing (#0330)",
+				req.fileSuffix, req.method, claimKindsGuardScanRoots)
+		}
+	}
+
 	var violations []string
 	for _, site := range allSites {
 		if site.inOwnPkg || !site.unscoped() {
@@ -804,5 +960,64 @@ func TestNonExemptFloorCatchesScanRootsNarrowedToSelf(t *testing.T) {
 	if nonExemptCount >= claimKindsGuardMinPlausibleNonExemptCallSiteCount {
 		t.Fatalf("REGRESSION: nonExemptCount=%d unexpectedly satisfies claimKindsGuardMinPlausibleNonExemptCallSiteCount=%d under the \".\" narrowing — the new floor no longer catches the #0304 regression it exists for",
 			nonExemptCount, claimKindsGuardMinPlausibleNonExemptCallSiteCount)
+	}
+}
+
+// TestPresenceCheckCatchesMailingOnlyNarrowing is #0330 acceptance
+// criterion 2's standing proof, run every time `go test` runs rather than
+// argued once and left undemonstrated: the presence check added to
+// TestNoUnscopedOutboxClaimCallOutsidePackage must fail when scan roots are
+// narrowed to a set excluding
+// internal/handlers/subscribe_intake.go — even under the specific
+// narrowing #0322 already showed clears the COUNT floor
+// (claimKindsGuardMinPlausibleNonExemptCallSiteCount), i.e. this test
+// demonstrates the presence check catches a gap the count floor alone does
+// not.
+//
+// Like TestNonExemptFloorCatchesScanRootsNarrowedToSelf above, this does
+// NOT mutate claimKindsGuardScanRoots (a package-level var the real guard
+// reads) — it walks the real repo tree with roots=[]string{"../mailing"}
+// passed directly to walkClaimKindsGuardFiles/findOutboxCallSitesInFile,
+// exactly #0322's narrowing, and checks the SAME production
+// requiredNonExemptSitePresent function
+// TestNoUnscopedOutboxClaimCallOutsidePackage calls, just against sites
+// found under roots it controls. Since internal/handlers/
+// subscribe_intake.go lives outside internal/mailing entirely, no walk
+// rooted only at "../mailing" can ever reach it, so this test's premise
+// does not depend on today's call-site counts the way the sibling test's
+// "BEFORE" assertion does — it is unconditionally true regardless of how
+// many sites internal/mailing holds.
+func TestPresenceCheckCatchesMailingOnlyNarrowing(t *testing.T) {
+	if len(claimKindsGuardRequiredNonExemptCallSites) == 0 {
+		t.Fatal("claimKindsGuardRequiredNonExemptCallSites is empty — this test's own premise is broken, not the guard's (#0330)")
+	}
+
+	selfDir, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatalf("resolving internal/outbox's own directory: %v", err)
+	}
+
+	fset := token.NewFileSet()
+	var narrowedSites []outboxCallSite
+	visited := walkClaimKindsGuardFiles(t, []string{"../mailing"}, func(path string) {
+		sites, err := findOutboxCallSitesInFile(fset, path, nil, selfDir)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		narrowedSites = append(narrowedSites, sites...)
+	})
+	if visited == 0 {
+		t.Fatal("walked zero .go files under \"../mailing\" — this test's own premise (internal/mailing has .go files) is broken, not the guard's")
+	}
+
+	for _, req := range claimKindsGuardRequiredNonExemptCallSites {
+		present, err := requiredNonExemptSitePresent(narrowedSites, req)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		if present {
+			t.Fatalf("REGRESSION: %s's %s call was found under the {\"../mailing\"} narrowing — this test's premise is that internal/handlers is unreachable from that root set, so it should never turn up; either the premise is stale (subscribe_intake.go moved) or requiredNonExemptSitePresent is broken (#0330)",
+				req.fileSuffix, req.method)
+		}
 	}
 }

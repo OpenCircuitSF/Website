@@ -541,6 +541,114 @@ for spec in \
   fi
 done
 
+# ---------------------------------------------------------------------------
+# #0330's presence check: an external oracle for
+# claimKindsGuardRequiredNonExemptCallSites, the Go-level var
+# internal/outbox/claim_kinds_call_site_guard_test.go added to assert BY
+# NAME that internal/handlers/subscribe_intake.go's guarded calls survive a
+# scan-roots narrowing, rather than merely counting how many non-exempt
+# sites remain (#0322 showed a count floor alone cannot close this: a
+# narrowing that drops every named site while leaving >= floor OTHER sites
+# standing still passes).
+#
+# WHY THIS SECTION EXISTS EVEN THOUGH THE PRESENCE CHECK ALSO HAS AN
+# IN-PACKAGE PROOF (TestPresenceCheckCatchesMailingOnlyNarrowing)
+#
+# CLAUDE.md §8's own distinction applies here, the same one the floor
+# sections above rely on: a MUTATION OF SCAN ROOTS changes what the walk
+# actually finds (got), so an in-package go test proving that is a
+# legitimate, non-circular oracle -- TestPresenceCheckCatchesMailingOnlyNarrowing
+# already is that proof, permanently, and this script does not duplicate
+# it. What an in-package test cannot prove anything about is a DIFFERENT
+# mutation: someone weakening or emptying
+# claimKindsGuardRequiredNonExemptCallSites itself, or deleting the loop
+# that checks it, by editing claim_kinds_call_site_guard_test.go directly --
+# an edit to the guard's own subject, which by construction can satisfy any
+# assertion living entirely inside that same file. This section is the
+# oracle for exactly that class, independent of go/ast and of anything
+# TestNoUnscopedOutboxClaimCallOutsidePackage itself computes:
+#
+#   1. GROUND TRUTH, via grep on the real production file, never on the
+#      guard: confirms internal/handlers/subscribe_intake.go itself still
+#      textually contains an OrphanSweep call and a SelectDue call --
+#      independent evidence the premise this list encodes is still true of
+#      the tree, not merely asserted by the Go var.
+#   2. Confirms the TRACKED copy of the guard file's
+#      claimKindsGuardRequiredNonExemptCallSites literally names both
+#      entries, via an anchored grep over the exact composite-literal shape
+#      -- so an edit that empties or narrows the list is directly visible
+#      to this independent reader, the same shape extract_const gives the
+#      floor constants above.
+#   3. Mutates a COPY with those two struct-literal lines removed and
+#      confirms the SAME anchored grep, re-run against the mutated copy,
+#      finds zero -- proving the extraction is genuinely sensitive to the
+#      list's content (falsifiable), the same shape the floor-to-0
+#      mutations above prove for their constants.
+#
+# Deliberately NOT written as a "does go test fail on this mutation"
+# check, for the same header-comment reason the three earlier floors give:
+# removing entries from claimKindsGuardRequiredNonExemptCallSites in a copy
+# this script writes to $WORKDIR never reaches the real `go test` process at
+# all (this script does not compile or run Go), so there is no `go test`
+# result to chase here in the first place -- the mutation is purely
+# textual, and the oracle judging it must be too.
+echo
+echo "== outbox claim-kinds guard: named required call sites (#0330) =="
+
+REQUIRED_SITE_FILE="internal/handlers/subscribe_intake.go"
+REQUIRED_SITE_SRC="$REPO/$REQUIRED_SITE_FILE"
+[ -f "$REQUIRED_SITE_SRC" ] || fatal "$REQUIRED_SITE_FILE not found -- has it moved? If claimKindsGuardRequiredNonExemptCallSites in $OUTBOX_GUARD_FILE was updated to name a new file, update REQUIRED_SITE_FILE here to match."
+
+# count_required_site_line <file> <method> -- counts lines in FILE matching
+# the exact composite-literal shape
+# {"internal/handlers/subscribe_intake.go", "<method>"}, anchored to the
+# whole line (allowing surrounding whitespace and an optional trailing
+# comma) so this pattern cannot also match prose describing the same file
+# in a doc comment -- only the real Go struct literal has this shape.
+count_required_site_line() {
+  local file="$1" method="$2"
+  grep -cE "^[[:space:]]*\\{\"${REQUIRED_SITE_FILE}\",[[:space:]]*\"${method}\"\\},?[[:space:]]*\$" "$file"
+}
+
+REQUIRED_METHODS="OrphanSweep SelectDue"
+
+GROUND_TRUTH_FAILED=0
+for METHOD in $REQUIRED_METHODS; do
+  N="$(grep -cE "\\.${METHOD}\\(" "$REQUIRED_SITE_SRC")"
+  case "$N" in '' | *[!0-9]*) fatal "grep -c returned a non-numeric count ('$N') measuring ${METHOD} calls in $REQUIRED_SITE_FILE" ;; esac
+  if [ "$N" -ge 1 ]; then
+    pass "ground truth: ${REQUIRED_SITE_FILE} textually contains a ${METHOD} call (grep-measured: ${N}), independent of go/ast and of the guard's own required-site list"
+  else
+    fail "REGRESSION #0330: ${REQUIRED_SITE_FILE} no longer textually contains a ${METHOD} call (grep-measured: ${N}) -- either this file no longer makes that call (the required-site list's premise is stale and should be re-measured against the tree) or something is badly wrong with this check itself"
+    GROUND_TRUTH_FAILED=1
+  fi
+done
+if [ "$GROUND_TRUTH_FAILED" -eq 1 ]; then
+  echo "NOTE: ground-truth failure above means the presence checks below are being judged against a premise that may itself be stale -- read the FAIL line before trusting anything that follows in this subsection." >&2
+fi
+
+for METHOD in $REQUIRED_METHODS; do
+  N="$(count_required_site_line "$OUTBOX_SRC" "$METHOD")"
+  case "$N" in '' | *[!0-9]*) fatal "count_required_site_line returned a non-numeric count ('$N') for ${METHOD} in $OUTBOX_GUARD_FILE" ;; esac
+  if [ "$N" -ge 1 ]; then
+    pass "tracked ${OUTBOX_GUARD_FILE}'s claimKindsGuardRequiredNonExemptCallSites names ${REQUIRED_SITE_FILE} / ${METHOD}"
+  else
+    fail "REGRESSION #0330: tracked ${OUTBOX_GUARD_FILE}'s claimKindsGuardRequiredNonExemptCallSites no longer names ${REQUIRED_SITE_FILE} / ${METHOD} -- the presence check would silently stop protecting this production caller, and go/ast alone (this script's independence is the entire point) would not catch that the list itself was weakened"
+  fi
+done
+
+REQUIRED_MUTANT="$WORKDIR/$(basename "$OUTBOX_GUARD_FILE").required_sites_removed"
+grep -vE "^[[:space:]]*\\{\"${REQUIRED_SITE_FILE}\",[[:space:]]*\"(OrphanSweep|SelectDue)\"\\},?[[:space:]]*\$" "$OUTBOX_SRC" > "$REQUIRED_MUTANT"
+for METHOD in $REQUIRED_METHODS; do
+  MUT_N="$(count_required_site_line "$REQUIRED_MUTANT" "$METHOD")"
+  case "$MUT_N" in '' | *[!0-9]*) fatal "count_required_site_line returned a non-numeric count ('$MUT_N') for ${METHOD} on the mutated copy" ;; esac
+  if [ "$MUT_N" -eq 0 ]; then
+    pass "mutated copy with ${REQUIRED_SITE_FILE}'s required-list entries removed is correctly detected as missing ${METHOD} by this external, non-go/ast oracle -- falsifiable, independent of go test"
+  else
+    fail "REGRESSION #0330: mutation removing ${REQUIRED_SITE_FILE}'s required-list lines did not take (still found ${MUT_N} ${METHOD} line(s) in the mutated copy) -- the mutation itself is broken; aborting judgement of this subsection"
+  fi
+done
+
 OUTBOX_SHA_AFTER="$(sha_of "$OUTBOX_SRC")" || fatal "sha_of fatal-exited re-hashing $OUTBOX_SRC -- see the FATAL line above."
 if [ -z "$OUTBOX_SHA_BEFORE" ] || [ -z "$OUTBOX_SHA_AFTER" ]; then
   fail "CRITICAL: outbox guard file sha256 computation produced an empty result -- refusing to treat two blanks as a match."
