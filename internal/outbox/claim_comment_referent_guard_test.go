@@ -113,13 +113,24 @@
 // of this guard means "no comment misattributes a claim-machinery call or
 // its position", not "the comments are accurate".
 //
-// The directional axis is narrower still: its window runs BACKWARDS from
-// the direction word to the nearest clause boundary, at most 90
-// characters, and stops at an enclosing "(" -- so an identifier named
-// AFTER the direction word, beyond a clause boundary, or outside a
-// parenthetical the direction word sits inside, is not checked. Measured,
-// not assumed. Each was a deliberate trade against a real false positive;
-// none of them fires on HEAD today.
+// The directional axis is narrower still, and its exact limits are NOT
+// enumerated here in prose (#0358). #0347's own C2 doc addition once did
+// that -- four window limits, described in a sentence -- and #0347's own
+// third review found a FIFTH the same day, which is exactly the failure
+// this file's whole subject is about: a sentence claiming more than the
+// code beside it delivers. A list here would go stale the next time the
+// window logic changes and nothing would notice.
+//
+// So the calibration is pinned as FIXTURES instead, each one naming, in
+// its own comment, which trade it pins and against what opposing error:
+// claimCommentGuardDirectionalCalibrationCases, below, and
+// TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping, which
+// pins the real internal/outbox/store.go false positive the parenthesis
+// scoping exists to avoid. Read the table for the current, authoritative
+// account of what this axis catches and what it doesn't -- a green
+// `go test ./internal/outbox/...` after a window-logic change is what
+// proves the calibration still holds; a sentence here could only ever
+// assert it.
 //
 // # Where the oracle lives (criterion 6)
 //
@@ -1158,6 +1169,264 @@ func TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7(t *test
 	}
 	for _, f := range fixedFindings {
 		t.Fatalf("expected the post-fix fixture (HEAD's real wording) to be entirely clean; got: %+v", f)
+	}
+}
+
+// #0358's calibration table (job 1: pin the trade surfaces; job 2: retire
+// the prose list above in favour of this table -- see "What this guard
+// cannot do" above for the reasoning).
+//
+// claimCommentGuardDirectionalCalibrationCase is one measured trade
+// surface of the directional axis. Every fixture's ClaimDue mentions are
+// genuinely FALSE -- none of these source strings ever CALLS or even
+// mentions ClaimDue in code, only in the comment under test -- so
+// wantClaimDueFindings == 0 always means "silently exempt" (a false
+// negative this calibration accepts as the price of closing a real false
+// positive elsewhere), never "correctly recognised as true", and
+// wantClaimDueFindings == 1 always means "flagged" (a false positive this
+// calibration accepts, or the real defect this axis exists to catch).
+type claimCommentGuardDirectionalCalibrationCase struct {
+	name                 string
+	src                  string
+	wantClaimDueFindings int
+}
+
+var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectionalCalibrationCase{
+	// FALSE NEGATIVE -- the direction word sits inside a parenthetical the
+	// identifier is outside of. TRADE: pinned against the OPPOSING error it
+	// exists to prevent -- without claimCommentGuardOpenParen's scoping,
+	// internal/outbox/store.go's ClaimRow doc comment produces a false
+	// positive (see TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping,
+	// below, which pins that side of the SAME trade against the real
+	// file). #0347's review (bounce 1, B1 part 3) measured both sides.
+	{
+		name:                 "paren-scoping false negative, trades against store.go ClaimRow's false positive",
+		src:                  "package outbox\n\n// ClaimDue's kinds filter (applied in pass, below) so this pass narrows what gets claimed.\n",
+		wantClaimDueFindings: 0,
+	},
+	// FALSE NEGATIVE -- the identifier is named AFTER the direction word.
+	// TRADE: the window only ever looks BACKWARDS from a direction word
+	// (flat[lo:dm[0]]), by construction -- looking forward too would
+	// require its own width calibration, symmetric to the 90-char limit
+	// below, for a shape none of #0342's or #0347's reviews ever measured
+	// as a real defect.
+	{
+		name:                 "identifier-after-direction-word false negative",
+		src:                  "package outbox\n\n// Below, ClaimDue claims the row and marks it sending.\n",
+		wantClaimDueFindings: 0,
+	},
+	// FALSE NEGATIVE -- a clause boundary separates the identifier from the
+	// direction word. TRADE: the boundary set (claimCommentGuardBoundaryRunes
+	// plus ASCII "--") is what stops an EARLIER, unrelated clause's
+	// identifier from leaking into a LATER direction word's window (see
+	// claimCommentGuardLastBoundary's own doc comment for the real
+	// outbox_worker_test.go reproduction) -- the same boundary, applied in
+	// the other temporal direction, also cuts off a genuinely related
+	// identifier that happens to sit just before one. Three punctuation
+	// forms, since this codebase uses all three as clause separators.
+	{
+		name:                 "clause-boundary false negative (em dash)",
+		src:                  "package outbox\n\n// ClaimDue narrows the kinds filter — the row is processed below.\n",
+		wantClaimDueFindings: 0,
+	},
+	{
+		name:                 "clause-boundary false negative (colon)",
+		src:                  "package outbox\n\n// ClaimDue narrows the kinds filter: the row is processed below.\n",
+		wantClaimDueFindings: 0,
+	},
+	{
+		name:                 "clause-boundary false negative (ASCII double hyphen)",
+		src:                  "package outbox\n\n// ClaimDue narrows the kinds filter -- the row is processed below.\n",
+		wantClaimDueFindings: 0,
+	},
+	// FALSE NEGATIVE -- more than 90 characters separate the identifier
+	// from the direction word, with no boundary between them. TRADE: the
+	// 90-char cap is what stops the window from reading arbitrarily far
+	// back through an entire multi-sentence comment group looking for a
+	// direction word's true referent; #0347's reviews never measured a
+	// real defect wider than this, and widening the cap re-opens the
+	// existence axis's own "whole group" over-exemption class one level
+	// down (see claimCommentGuardSentence's own doc comment).
+	{
+		name:                 ">90-characters false negative, no boundary",
+		src:                  "package outbox\n\n// ClaimDue determines which due rows this particular render pass considers eligible before the sweep that runs immediately below.\n",
+		wantClaimDueFindings: 0,
+	},
+	// FALSE NEGATIVE -- the marker-exemption surface (#0347's third
+	// review). TRADE: claimCommentGuardDirHistoricalRe's four
+	// non-modal markers ("rather than", "instead of", "would", "has not
+	// called") exempt a genuinely stale directional claim whenever one
+	// appears in the SAME SENTENCE as the direction word -- but dropping
+	// them (as #0347's second bounce briefly did) fails correct prose
+	// internal/mailing/outbox_worker.go writes on HEAD today. The control
+	// row below carries the identical false claim with NO marker, so it
+	// stays flagged -- proving the exemption is about the marker, not
+	// about the sentence shape.
+	{
+		name:                 "marker-exemption control (no marker, same false claim, stays flagged)",
+		src:                  "package outbox\n\n// So ClaimDue below claims the row.\n",
+		wantClaimDueFindings: 1,
+	},
+	{
+		name:                 "marker-exemption: rather than",
+		src:                  "package outbox\n\n// ...rather than a bare loop, so ClaimDue below claims the row.\n",
+		wantClaimDueFindings: 0,
+	},
+	{
+		name:                 "marker-exemption: instead of",
+		src:                  "package outbox\n\n// ...instead of a batch, and ClaimDue below marks it sending.\n",
+		wantClaimDueFindings: 0,
+	},
+	{
+		name:                 "marker-exemption: would",
+		src:                  "package outbox\n\n// A retry would be wasteful here, so ClaimDue below claims the row...\n",
+		wantClaimDueFindings: 0,
+	},
+	{
+		name:                 "marker-exemption: has not called",
+		src:                  "package outbox\n\n// The intake has not called the sweep yet, so ClaimDue below is what claims...\n",
+		wantClaimDueFindings: 0,
+	},
+	// FALSE POSITIVE -- non-positional "above"/"below". TRADE: the axis
+	// cannot tell a positional direction word from an ordinary spatial or
+	// numeric one ("the table below", "stays below eight attempts") --
+	// disambiguating that would require actual sentence parsing, which
+	// this guard deliberately does not attempt (see the top-of-file doc
+	// comment's "what this guard cannot do"). This is the accepted
+	// direction for the error to run: a build break is loud and
+	// rephrasable, unlike a silent miss.
+	{
+		name:                 "false positive: non-positional \"below\" (table)",
+		src:                  "package outbox\n\n// ClaimDue semantics matter here, and the table below explains why.\n",
+		wantClaimDueFindings: 1,
+	},
+	{
+		name:                 "false positive: non-positional \"below\" (numeric)",
+		src:                  "package outbox\n\n// ClaimDue's retry budget stays below eight attempts.\n",
+		wantClaimDueFindings: 1,
+	},
+	// FALSE POSITIVE -- a genuinely historical comment whose ONLY marker is
+	// "never" or "cannot". TRADE: those two words are dropped from
+	// claimCommentGuardDirHistoricalRe (unlike the broader
+	// claimCommentGuardHistoricalRe the existence axis uses) because
+	// they're ordinary present-tense behavioural modals in directional
+	// prose ("X below never does Y") -- which is exactly how #0342 sites A
+	// and C survived under the broader marker set (see
+	// claimCommentGuardDirHistoricalRe's own doc comment). No comment of
+	// this exact shape exists in the tree today; the house convention of
+	// writing "since #NNNN" alongside "never"/"cannot" rescues it, as the
+	// fourth row here shows.
+	{
+		name:                 "false positive: historical comment, only marker is \"never\"",
+		src:                  "package outbox\n\n// ClaimDue below was never used by this worker.\n",
+		wantClaimDueFindings: 1,
+	},
+	{
+		name:                 "false positive: historical comment, \"never\" plus an unrelated #-reference",
+		src:                  "package outbox\n\n// This worker never called ClaimDue below; #0297 removed that path entirely.\n",
+		wantClaimDueFindings: 1,
+	},
+	{
+		name:                 "false positive: historical comment, only marker is \"cannot\"",
+		src:                  "package outbox\n\n// ClaimDue below cannot be reached from here any more.\n",
+		wantClaimDueFindings: 1,
+	},
+	{
+		name:                 "rescued: \"never\" alongside \"since #\" is exempt after all",
+		src:                  "package outbox\n\n// This worker has never called ClaimDue below since #0297.\n",
+		wantClaimDueFindings: 0,
+	},
+}
+
+// TestClaimCommentGuardDirectionalAxisCalibrationTable is #0358 criterion
+// 1: it asserts the CURRENT calibration of every trade surface measured
+// across #0347's three reviews, so a future change to the window logic
+// discovers, in a specific failing sub-test naming the trade, which
+// calibration it moved -- rather than either silently widening a false
+// positive back open or silently narrowing a false negative back into
+// existence with nothing noticing either way (this issue's own root
+// cause). The two real sites this axis exists to catch (#0342 sites A and
+// C) are pinned separately, above, by
+// TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7 --
+// not duplicated here.
+//
+// #0358 criterion 3's mutation proof (run by hand against a throwaway
+// export, per that criterion and CLAUDE.md §8b -- not committed as code,
+// since a test cannot mutate this file's own production logic without
+// becoming exactly the in-file guard CLAUDE.md §8's #0258 entry warns
+// against): reverting the directional marker set to the broad
+// claimCommentGuardHistoricalRe fails both this table's four
+// marker-exemption rows AND
+// TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7;
+// reverting "every distinct identifier" to "nearest identifier only" fails
+// that same falsifiability test (site A drops from 2 findings to 1);
+// removing claimCommentGuardOpenParen's clamp entirely fails this table's
+// paren-scoping row (0 -> 1) AND
+// TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping, below
+// (0 -> 1, reproducing the exact pre-#0347-bounce-1 false positive). All
+// three reproduced and recorded in issue #0358's own ## Verification.
+func TestClaimCommentGuardDirectionalAxisCalibrationTable(t *testing.T) {
+	for _, c := range claimCommentGuardDirectionalCalibrationCases {
+		t.Run(c.name, func(t *testing.T) {
+			findings, err := findClaimCommentGuardFindings("calibration.go", c.src, map[string]map[string]bool{})
+			if err != nil {
+				t.Fatalf("parsing calibration fixture: %v", err)
+			}
+			got := 0
+			for _, f := range findings {
+				if f.axis == "directional" && f.ident == "ClaimDue" {
+					got++
+				}
+			}
+			if got != c.wantClaimDueFindings {
+				t.Fatalf("directional ClaimDue findings = %d, want %d; all findings: %+v", got, c.wantClaimDueFindings, findings)
+			}
+		})
+	}
+}
+
+// TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping is
+// #0358 criterion 2's explicit ask: name store.go's false positive as the
+// reason the parenthesis scoping exists, pinned against the REAL file
+// (extraction, not a retyped fixture -- CLAUDE.md §8), not a frozen copy of
+// it. internal/outbox/store.go's real doc comment for ClaimRow names it as
+// its own sentence's subject, then, in a trailing parenthetical, points a
+// positional word at SelectDue, a second, different identifier declared
+// earlier in this same file -- deliberately paraphrased here, not quoted,
+// since #0347's own history records that quoting a real defect sentence
+// verbatim in a doc comment trips this guard's two tests against
+// themselves (rephrase, don't delete, is that issue's own stated
+// convention). Without claimCommentGuardOpenParen's scoping, ClaimRow --
+// well outside that parenthetical, with zero earlier occurrences anywhere
+// in this file -- would also be checked against the same positional word
+// and falsely fire; #0347's review (bounce 1, B1 part 3) measured exactly
+// this false positive before the scoping existed. Reading the real file,
+// rather than a copy, means a future edit to store.go's own comment is
+// checked against the real trade rather than a fixture that can drift out
+// of sync with it.
+func TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping(t *testing.T) {
+	const path = "store.go"
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v -- this test's premise (a real, checked-in file with the ClaimRow/SelectDue parenthetical comment at :463) no longer holds and must be re-pointed, not skipped", path, err)
+	}
+	if !strings.Contains(string(src), "see SelectDue") {
+		t.Fatal("FAIL-CLOSED: store.go no longer contains the parenthetical \"(see SelectDue above)\" this test pins against -- re-point it at whatever comment now exercises the same paren-scoping trade, or drop it if the shape no longer exists in this file")
+	}
+
+	pkgTypes, visited := claimCommentGuardBuildPackageTypeIndex(t, claimCommentGuardScanRoots)
+	if visited == 0 {
+		t.Fatal("FAIL-CLOSED: package-type index walk visited zero files")
+	}
+
+	findings, err := findClaimCommentGuardFindings(path, nil, pkgTypes)
+	if err != nil {
+		t.Fatalf("scanning %s: %v", path, err)
+	}
+	for _, f := range findings {
+		if f.axis == "directional" && (f.ident == "ClaimRow" || f.ident == "SelectDue") {
+			t.Fatalf("store.go's real ClaimRow parenthetical comment must produce zero directional findings for ClaimRow/SelectDue -- the paren-scoping trade this test pins is broken; got: %+v", f)
+		}
 	}
 }
 
