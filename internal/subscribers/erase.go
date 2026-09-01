@@ -86,7 +86,7 @@ import (
 // erasedEventPlaceholder builds the subscriber_events email placeholder for
 // a given subscriber id — see Erase's redaction comment for why this is
 // keyed by the SUBSCRIBER id (unlike the per-row email_sends placeholder
-// three lines above it in Erase).
+// built inline by Erase's own UPDATE email_sends statement).
 func erasedEventPlaceholder(subscriberID int64) string {
 	return fmt.Sprintf("erased-%d@erased.invalid", subscriberID)
 }
@@ -262,10 +262,10 @@ func (s *Store) Erase(ctx context.Context, id int64, now time.Time) (ErasureResu
 	// email.
 	//
 	// The placeholder is derived from the SUBSCRIBER's id, not each row's
-	// own id — deliberately different from the email_sends redaction three
-	// lines above, whose placeholder is per-row so two erased subscribers'
-	// email_sends rows can never be correlated. Here the point is the
-	// opposite: once subscriber_id is NULL, the placeholder is the only
+	// own id — deliberately different from the UPDATE email_sends redaction
+	// earlier in this method, whose placeholder is per-row so two erased
+	// subscribers' email_sends rows can never be correlated. Here the point
+	// is the opposite: once subscriber_id is NULL, the placeholder is the only
 	// key left, and an unlinked pile of rows would not be evidence that an
 	// erasure was performed for a specific address — which is the whole
 	// reason this table's rows survive at all. Keying by subscriber id
