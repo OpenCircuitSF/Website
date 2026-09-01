@@ -649,6 +649,51 @@ func (s *Store) MarkDone(ctx context.Context, id int64) (bool, error) {
 	return tag.RowsAffected() == 1, nil
 }
 
+// CancelQueuedTx marks any STILL-QUEUED row for (subscriberID, kind) as
+// 'abandoned' — for a later event that supersedes a message before it has
+// even been claimed for sending (#0313: a pending import invitation
+// superseded by that same address's self-initiated signup on the public
+// form). Takes a Querier, not *pgxpool.Pool directly, so a caller that must
+// commit or roll back atomically with the event that caused the
+// cancellation (internal/subscribers.Store.ClaimAndEnqueueConfirmation) can
+// pass its own transaction — the same reason EnqueueTx above is Querier-shaped.
+//
+// Matches status = 'queued' ONLY:
+//
+//   - 'sending' is a row a worker already claimed and is mid-flight; this
+//     method leaves it alone rather than racing the worker for it — the
+//     worker owns a claimed row until it finishes (see ClaimRow/MarkSent/
+//     MarkRetryOrAbandon), and CancelQueuedTx is not another claim path.
+//   - 'sent' has already left; there is nothing to cancel.
+//
+// error is set to reason so `outbound_queue.error` explains why this row
+// was never even attempted — distinct from a row abandoned after
+// exhausting MarkRetryOrAbandon's retries, which keeps whatever failure it
+// last hit. payload is blanked to '{}'::jsonb, the same treatment MarkSent
+// gives a row whose secret (here, a confirm_token) no longer needs to sit
+// in this table — the row IS the diagnostic; the token inside it is not.
+// claimed_at is cleared for the same reason MarkDone clears it: a
+// cancelled row was never claimed by a worker, so nothing should read it as
+// if it had been.
+//
+// Returns the number of rows affected — 0 or 1 for the caller's one
+// (subscriber, kind) pair, since #0126's queue rows are never batched by
+// caller construction, but the method itself does not assume that; a
+// caller that cares only whether anything was cancelled treats a nonzero
+// result as "yes."
+func (s *Store) CancelQueuedTx(ctx context.Context, q Querier, subscriberID int64, kind Kind, reason string) (int64, error) {
+	tag, err := q.Exec(ctx,
+		`UPDATE outbound_queue
+		    SET status = $4, error = $5, claimed_at = NULL, payload = '{}'::jsonb
+		  WHERE subscriber_id = $1 AND kind = $2 AND status = $3`,
+		subscriberID, kind, StatusQueued, StatusAbandoned, reason,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("outbox: cancelling queued %s rows for subscriber %d: %w", kind, subscriberID, err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // MarkRetryOrAbandon transitions a claimed row back to 'queued' with the
 // next backoff step, or to the terminal 'abandoned' state (retaining the
 // last error) once attempts has reached maxRetries. attempts is the row's

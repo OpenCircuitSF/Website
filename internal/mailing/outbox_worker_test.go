@@ -1178,3 +1178,201 @@ func TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress(t *testing.T) {
 		t.Errorf("invitation messages sent = %d, want 0 — nothing should go out without a physical_address", n)
 	}
 }
+
+// TestOutboxWorker_AdminResendInvitation_RendersSameProvenanceAsFirstInvitation
+// is #0312 criterion 1's end-to-end oracle: the message
+// subscribers.Store.AdminResendInvitation enqueues, once actually rendered
+// by THIS package's real OutboxWorker (never a copy of
+// BuildImportInviteEmail's template logic, and never the payload this test
+// wrote — the oracle is the RENDERED body), carries the identical
+// provenance sentence the first invitation carried — built from the SAME
+// subscriber_imports row's source_detail/collected_at — and is the
+// invitation template, never the generic confirmation.
+//
+// Mutation M1 (#0312's plan): make AdminResendInvitation enqueue
+// outbox.KindConfirmation instead of outbox.KindImportInvite. The re-send
+// would then render as "Confirm your Open Circuit SF subscription" with no
+// source_detail anywhere in the body — both assertions below on the
+// re-send fail.
+func TestOutboxWorker_AdminResendInvitation_RendersSameProvenanceAsFirstInvitation(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
+	mailer := &RecordingMailer{}
+	w, _ := newTestOutboxWorker(t, pool, mailer)
+
+	importStore := subscribers.NewImportStore(pool)
+	subStore := subscribers.NewStore(pool)
+
+	email := uniqueOutboxRecipient(t)
+	collectedAt := time.Date(2026, 5, 12, 0, 0, 0, 0, time.UTC)
+	const sourceDetail = "Intro to Soldering (admin resend provenance test)"
+	const inviteSubject = "You're invited to the Open Circuit SF mailing list"
+
+	if _, err := importStore.Commit(context.Background(), subscribers.CommitInput{
+		Source:       subscribers.ImportSourceLuma,
+		SourceDetail: sourceDetail,
+		ConsentMode:  subscribers.ConsentModeInvite,
+		ConsentNote:  "collected via Luma RSVP export, attested by the organizer",
+		CollectedAt:  collectedAt,
+		Filename:     "attendees.csv",
+		Rows:         []subscribers.ImportRow{{Email: email}},
+	}, time.Now()); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	sub, err := subStore.FindByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+
+	// Scoped by recipient throughout, not by slice length or index — this
+	// package's worker drains the WHOLE shared outbound_queue, and other
+	// tests can leave their own rows in it (the exact defect #0129's
+	// blocker 1 traced a false failure to).
+	sentToRecipient := func() []Message {
+		var out []Message
+		for _, m := range mailer.Sent() {
+			if m.To == email {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(sentToRecipient()) < 1 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	first := sentToRecipient()
+	if len(first) != 1 {
+		t.Fatalf("messages sent to %s after the first invitation = %d, want 1", email, len(first))
+	}
+	if first[0].Subject != inviteSubject {
+		t.Fatalf("first message Subject = %q, want %q", first[0].Subject, inviteSubject)
+	}
+	if !strings.Contains(first[0].TextBody, sourceDetail) {
+		t.Fatalf("first invitation body does not contain source_detail %q", sourceDetail)
+	}
+
+	if _, err := subStore.AdminResendInvitation(context.Background(), sub.ID, time.Now(), time.Hour); err != nil {
+		t.Fatalf("AdminResendInvitation: %v", err)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(sentToRecipient()) < 2 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	sent := sentToRecipient()
+	if len(sent) != 2 {
+		t.Fatalf("messages sent to %s after the admin re-send = %d, want 2", email, len(sent))
+	}
+	resend := sent[1]
+	if resend.Subject != inviteSubject {
+		t.Errorf("re-send Subject = %q, want %q (the invitation, not the generic confirmation)", resend.Subject, inviteSubject)
+	}
+	if !strings.Contains(resend.TextBody, sourceDetail) {
+		t.Errorf("re-send body does not contain source_detail %q — criterion 1 (same provenance as the first invitation)", sourceDetail)
+	}
+	if strings.Contains(resend.Subject, "Confirm your Open Circuit SF subscription") {
+		t.Error("re-send Subject reads like the generic confirmation, not the invitation")
+	}
+}
+
+// TestAdminResendInvitation_PhysicalAddressGateNotBypassable
+// is #0312 criterion 6 / CLAUDE.md §9's "must not be bypassable from the
+// UI" — proved by calling the STORE method directly (never through
+// internal/handlers.AdminPendingHandler.ResendInvitation, whose
+// physical_address pre-check is explicitly advisory, not the gate — see
+// that handler's own doc comment) against a blank physical_address, then
+// draining with a real OutboxWorker. The pre-existing
+// TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress (#0129) is the
+// second, independent oracle proving the SAME gate for a first invitation;
+// this one proves it for a re-send, which enqueues through a different
+// code path (AdminResendInvitation, not ImportStore.Commit).
+//
+// Mutation M4 (#0312's plan): delete render's KindImportInvite blank-
+// address refusal in internal/mailing/outbox_worker.go. Both this test and
+// TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress must fail.
+func TestAdminResendInvitation_PhysicalAddressGateNotBypassable(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "") // #0312's advisory handler-side pre-check is not exercised here at all
+
+	mailer := &RecordingMailer{}
+	w, _ := newTestOutboxWorker(t, pool, mailer)
+
+	importStore := subscribers.NewImportStore(pool)
+	subStore := subscribers.NewStore(pool)
+
+	email := uniqueOutboxRecipient(t)
+	if _, err := importStore.Commit(context.Background(), subscribers.CommitInput{
+		Source:       subscribers.ImportSourceLuma,
+		SourceDetail: "Intro to Soldering (gate-not-bypassable test)",
+		ConsentMode:  subscribers.ConsentModeInvite,
+		ConsentNote:  "collected via Luma RSVP export, attested by the organizer",
+		CollectedAt:  time.Date(2026, 5, 12, 0, 0, 0, 0, time.UTC),
+		Filename:     "attendees.csv",
+		Rows:         []subscribers.ImportRow{{Email: email}},
+	}, time.Now()); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	sub, err := subStore.FindByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+
+	// Drain the FIRST invitation too — it also defers (blank
+	// physical_address from the start), so it never leaves a live
+	// confirm_sent_at cooldown behind for the re-send call below.
+	runWorkerUntilStopped(t, w)
+
+	if _, err := subStore.AdminResendInvitation(context.Background(), sub.ID, time.Now(), time.Hour); err != nil {
+		t.Fatalf("AdminResendInvitation (store call, no handler pre-check involved): %v", err)
+	}
+
+	sentToRecipient := func() int {
+		n := 0
+		for _, m := range mailer.Sent() {
+			if m.To == email {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Polls the RE-SENT row specifically (highest id for this subscriber's
+	// import_invite rows — the original, first-invitation row also exists
+	// and also never sends, but is not what this test is about). No status
+	// filter in the query itself: if the gate were bypassed the row would
+	// reach 'sent', and the query must still find it so the assertions
+	// below can say so, rather than failing on "no rows" for the wrong
+	// reason.
+	deadline := time.Now().Add(2 * time.Second)
+	var status string
+	var attempts int
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(context.Background(),
+			`SELECT status, attempts FROM outbound_queue
+			  WHERE subscriber_id = $1 AND kind = 'import_invite'
+			  ORDER BY id DESC LIMIT 1`,
+			sub.ID,
+		).Scan(&status, &attempts); err != nil {
+			t.Fatalf("select: %v", err)
+		}
+		if attempts >= 1 && status != outbox.StatusSending {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if attempts < 1 {
+		t.Fatal("re-sent row was never claimed (attempts stayed 0)")
+	}
+	if status != outbox.StatusQueued {
+		t.Errorf("status = %q, want %q — a missing physical_address must defer the re-send too, not abandon or send it", status, outbox.StatusQueued)
+	}
+	if n := sentToRecipient(); n != 0 {
+		t.Errorf("messages sent to %s = %d, want 0 — nothing should go out without a physical_address, for a re-send any more than a first send", email, n)
+	}
+}

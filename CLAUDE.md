@@ -34,7 +34,7 @@ belong in this tracker.
 |---|---|
 | `cmd/opencircuit/` | Binary entry point — `serve` and `seed` subcommands, the route table |
 | `internal/` | `config`, `db`, `auth`, `audit`, `events`, `devstore`, `handlers`, `middleware`, `testdb` — per-package roles in [`docs/architecture.md`](docs/architecture.md) |
-| `migrations/` | `golang-migrate` up/down SQL pairs, contiguous `000001`–`000025` |
+| `migrations/` | `golang-migrate` up/down SQL pairs, contiguous `000001`–`000026` |
 | `web/` | Svelte 5 SPA; built to `web/dist/` and embedded via `//go:embed all:dist` |
 | `scripts/` | `list-issues-by-phase` (the queue), `check.sh` (canonical verification), `testdb.sh` (per-agent test databases), `db-reset.sh` (rebuild a local DB), `dev.sh`, `sim.sh`, `deploy.sh`, `db-status.sh`, `db/` |
 | `deploy/` | Apache vhost and systemd unit assets |
@@ -1048,7 +1048,7 @@ that needs cost accounting; refresh once per day.
 
 ## 11. PRD section index
 
-`PRD.md` is 1,839 lines (~21k tokens). **Never read it whole.** Every issue's
+`PRD.md` is 1,845 lines (~21k tokens). **Never read it whole.** Every issue's
 `## Relation` block names the section it needs and carries the exact extraction
 command; run that. This table is the fallback when you need a section no issue
 cites.
@@ -1074,9 +1074,9 @@ the PRD.
 | **§5 Information Architecture** | 39 | `sed -n '/^## 5\. /,/^## [0-9]/p' PRD.md` |
 | §5.1 Public routes | 18 | `sed -n '/^### 5\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §5.2 Admin routes (session + `is_admin` required) | 19 | `sed -n '/^### 5\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§6 Mailing List — The Core Subsystem** | 952 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
+| **§6 Mailing List — The Core Subsystem** | 958 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
 | §6.1 Interest taxonomy | 23 | `sed -n '/^### 6\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §6.2 Database schema | 345 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.2 Database schema | 351 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.3 Subscription flow (double opt-in) | 56 | `sed -n '/^### 6\.3 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.4 Preference center | 16 | `sed -n '/^### 6\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.5 Unsubscribe — three paths, all required | 93 | `sed -n '/^### 6\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |

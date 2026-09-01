@@ -135,7 +135,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	importsStore := subscribers.NewImportStore(pool)
 	adminImportsH := handlers.NewAdminImportsHandler(importsStore, interestsStore, auditLogger)
 	// #0128: exercised the same way as adminSubscribersH above.
-	adminPendingH := handlers.NewAdminPendingHandler(subscribersStore, outbox.NewStore(pool), auditLogger)
+	adminPendingH := handlers.NewAdminPendingHandler(subscribersStore, outbox.NewStore(pool), store, auditLogger)
 	// #0100: exercised the same way as adminSubscribersH above.
 	suppressionsStore := subscribers.NewSuppressionStore(pool)
 	adminSuppressionsH := handlers.NewAdminSuppressionsHandler(suppressionsStore, subscribersStore, auditLogger)

@@ -13,13 +13,14 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listPendingSubscribers, resendConfirmation, ApiError } from '../../lib/api';
+  import { listPendingSubscribers, resendConfirmation, resendInvitation, ApiError } from '../../lib/api';
   import {
     formatPendingAge,
     pendingSignupSource,
     queueStateLabel,
     queueStateBadgeClass,
     pendingExpiredBadgeClass,
+    inviteResendButtonTitle,
   } from '../../lib/pending';
   import { formatDateTime } from '../../lib/admin';
   import type { PendingSubscriber } from '../../lib/types';
@@ -76,6 +77,31 @@
       resendingID = null;
     }
   }
+
+  // #0312: the invitation twin of resend() above — a separate action
+  // calling a separate endpoint (POST .../resend-invitation), never a mode
+  // flag on the same button, so an invited row can never be mailed the
+  // wrong template by a UI mistake. Shares resendingID/resendErrorByID/
+  // resendNoticeByID with resend() above (mutually exclusive per row: a row
+  // is either invited or not, for the lifetime of its pending status).
+  async function resendInvite(id: number): Promise<void> {
+    resendingID = id;
+    resendErrorByID = { ...resendErrorByID, [id]: '' };
+    resendNoticeByID = { ...resendNoticeByID, [id]: '' };
+    try {
+      await resendInvitation(id);
+      resendNoticeByID = { ...resendNoticeByID, [id]: 'Invitation resent — that was this address’s one and only re-send.' };
+      // Refresh so invite_resend_available flips to false (button
+      // disables) and the queue-state column reflects the fresh send,
+      // rather than showing stale data until the next full reload.
+      await load();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Could not resend the invitation.';
+      resendErrorByID = { ...resendErrorByID, [id]: message };
+    } finally {
+      resendingID = null;
+    }
+  }
 </script>
 
 <Panel title="Pending confirmations" noPadding={rows.length > 0 && !loading && !loadError}>
@@ -126,13 +152,19 @@
                 </span>
               </td>
               <td class="actions-col">
-                <Button
-                  disabled={resendingID === row.id || row.invited}
-                  title={row.invited ? 'Resend is not available for import invitations yet' : undefined}
-                  onclick={() => resend(row.id)}
-                >
-                  {resendingID === row.id ? 'Resending…' : 'Resend'}
-                </Button>
+                {#if row.invited}
+                  <Button
+                    disabled={resendingID === row.id || !row.invite_resend_available}
+                    title={inviteResendButtonTitle(row)}
+                    onclick={() => resendInvite(row.id)}
+                  >
+                    {resendingID === row.id ? 'Resending…' : 'Resend invitation'}
+                  </Button>
+                {:else}
+                  <Button disabled={resendingID === row.id} onclick={() => resend(row.id)}>
+                    {resendingID === row.id ? 'Resending…' : 'Resend'}
+                  </Button>
+                {/if}
                 {#if resendErrorByID[row.id]}
                   <p class="text-error" role="alert">{resendErrorByID[row.id]}</p>
                 {/if}

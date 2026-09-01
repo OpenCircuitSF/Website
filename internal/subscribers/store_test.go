@@ -1245,7 +1245,7 @@ func TestClaimAndEnqueueConfirmation_FailureAfterEnqueue_CommitsNeither(t *testi
 	postEnqueueCommitHook = func() error { return errPostEnqueueCrash }
 	t.Cleanup(func() { postEnqueueCommitHook = nil })
 
-	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour)
+	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour, RestartSignupInput{})
 	if !errors.Is(err, errPostEnqueueCrash) {
 		t.Fatalf("ClaimAndEnqueueConfirmation error = %v, want errPostEnqueueCrash", err)
 	}
@@ -1349,7 +1349,7 @@ func TestClaimAndEnqueueConfirmation_ClaimsWhenColdAndEnqueues(t *testing.T) {
 	sub := coldConfirmationSubscriber(t, pool, now)
 
 	sentAt := now.Add(time.Minute)
-	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, sentAt, time.Hour, time.Hour)
+	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, sentAt, time.Hour, time.Hour, RestartSignupInput{})
 	if err != nil {
 		t.Fatalf("ClaimAndEnqueueConfirmation: %v", err)
 	}
@@ -1377,6 +1377,80 @@ func TestClaimAndEnqueueConfirmation_ClaimsWhenColdAndEnqueues(t *testing.T) {
 	}
 }
 
+// TestClaimAndEnqueueConfirmation_ReusesLiveToken is #0314's "do not mint
+// unconditionally" half: a person who submits the form twice inside the
+// TTL, and clicks the OLDER of the two resulting emails, must still land on
+// a working link. Both claims here reuse the SAME still-live token — proven
+// by decoding both enqueued payloads AND by confirming with the very first
+// token afterward, an oracle that is not a copy of the mint-vs-reuse `if`
+// under test.
+//
+// Mutation M1b (#0314's plan): mint unconditionally rather than only when
+// stale. Must fail — the second payload's token would differ from the
+// first, and the first token would no longer resolve via Confirm once the
+// live-but-unused first token is overwritten by the second claim's mint.
+func TestClaimAndEnqueueConfirmation_ReusesLiveToken(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now().UTC().Truncate(time.Second)
+	sub := coldConfirmationSubscriber(t, pool, now) // confirm_expires_at = now+1h: live throughout this test
+	firstToken := *sub.ConfirmToken
+
+	// cooldown is deliberately tiny (not zero — Postgres's `<` comparison
+	// on an equal timestamp would still block a same-instant second claim)
+	// so the SECOND claim below is not itself refused by the cooldown this
+	// test is not about.
+	const cooldown = time.Nanosecond
+	if claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, cooldown, time.Hour, RestartSignupInput{}); err != nil || !claimed {
+		t.Fatalf("first claim: claimed=%v err=%v", claimed, err)
+	}
+
+	second := now.Add(time.Minute)
+	if claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, second, cooldown, time.Hour, RestartSignupInput{}); err != nil || !claimed {
+		t.Fatalf("second claim: claimed=%v err=%v", claimed, err)
+	}
+
+	rows, err := pool.Query(context.Background(),
+		`SELECT payload::text FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'confirmation' ORDER BY id`, sub.ID)
+	if err != nil {
+		t.Fatalf("querying enqueued payloads: %v", err)
+	}
+	defer rows.Close()
+	var tokens []string
+	for rows.Next() {
+		var payloadText string
+		if err := rows.Scan(&payloadText); err != nil {
+			t.Fatalf("scanning payload: %v", err)
+		}
+		var decoded struct {
+			ConfirmToken string `json:"confirm_token"`
+		}
+		if err := json.Unmarshal([]byte(payloadText), &decoded); err != nil {
+			t.Fatalf("unmarshalling payload %s: %v", payloadText, err)
+		}
+		tokens = append(tokens, decoded.ConfirmToken)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterating rows: %v", err)
+	}
+	if len(tokens) != 2 {
+		t.Fatalf("enqueued confirmation rows = %d, want 2", len(tokens))
+	}
+	for i, tok := range tokens {
+		if tok != firstToken {
+			t.Errorf("payload[%d].confirm_token = %q, want the ORIGINAL live token %q reused, not a fresh one", i, tok, firstToken)
+		}
+	}
+
+	confirmed, err := store.Confirm(context.Background(), firstToken, second.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Confirm with the first message's token: %v", err)
+	}
+	if confirmed.Status != StatusActive {
+		t.Errorf("Status after confirming with the first (older) message's token = %q, want %q", confirmed.Status, StatusActive)
+	}
+}
+
 // TestClaimAndEnqueueConfirmation_RefusesComplainedRow is #0341's proof
 // that ClaimAndEnqueueConfirmation now guards `status = 'pending'` the same
 // way its twin AdminResendConfirmation does (ErrNotPending). Before #0341's
@@ -1400,7 +1474,7 @@ func TestClaimAndEnqueueConfirmation_RefusesComplainedRow(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	sub := coldConfirmationSubscriberWithStatus(t, pool, now, StatusComplained)
 
-	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour)
+	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour, RestartSignupInput{})
 	if err != nil {
 		t.Fatalf("ClaimAndEnqueueConfirmation: %v", err)
 	}
@@ -1433,7 +1507,7 @@ func TestClaimAndEnqueueConfirmation_RefusesWithinCooldown_EnqueuesNothing(t *te
 	now := time.Now().UTC().Truncate(time.Second)
 	sub := coldConfirmationSubscriber(t, pool, now)
 
-	if claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour); err != nil || !claimed {
+	if claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour, RestartSignupInput{}); err != nil || !claimed {
 		t.Fatalf("first claim: claimed=%v err=%v, want true, nil", claimed, err)
 	}
 
@@ -1441,7 +1515,7 @@ func TestClaimAndEnqueueConfirmation_RefusesWithinCooldown_EnqueuesNothing(t *te
 	// cooldown — must be refused, leave confirm_sent_at unchanged, and
 	// enqueue nothing.
 	second := now.Add(30 * time.Minute)
-	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, second, time.Hour, time.Hour)
+	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, second, time.Hour, time.Hour, RestartSignupInput{})
 	if err != nil {
 		t.Fatalf("second ClaimAndEnqueueConfirmation: %v", err)
 	}
@@ -1470,12 +1544,12 @@ func TestClaimAndEnqueueConfirmation_SucceedsAgainAfterCooldownExpires(t *testin
 	now := time.Now().UTC().Truncate(time.Second)
 	sub := coldConfirmationSubscriber(t, pool, now)
 
-	if claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour); err != nil || !claimed {
+	if claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour, RestartSignupInput{}); err != nil || !claimed {
 		t.Fatalf("first claim: claimed=%v err=%v, want true, nil", claimed, err)
 	}
 
 	later := now.Add(90 * time.Minute)
-	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, later, time.Hour, time.Hour)
+	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, later, time.Hour, time.Hour, RestartSignupInput{})
 	if err != nil {
 		t.Fatalf("second ClaimAndEnqueueConfirmation: %v", err)
 	}
@@ -1516,7 +1590,7 @@ func TestClaimAndEnqueueConfirmation_OnlyOneWinnerUnderConcurrency(t *testing.T)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour)
+			claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour, RestartSignupInput{})
 			if err != nil {
 				t.Errorf("ClaimAndEnqueueConfirmation: %v", err)
 				return

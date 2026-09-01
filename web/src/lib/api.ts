@@ -33,6 +33,7 @@ import type {
   DashboardOverview,
   PendingListResponse,
   ResendConfirmationResponse,
+  ResendInvitationResponse,
 } from './types';
 import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
 import type { UnsubscribeResult } from './unsubscribe';
@@ -528,6 +529,22 @@ export function listPendingSubscribers(oldestFirst = true): Promise<PendingListR
  */
 export function resendConfirmation(id: number): Promise<ResendConfirmationResponse> {
   return apiPost<ResendConfirmationResponse>(`/admin/subscribers/${id}/resend-confirmation`);
+}
+
+/**
+ * POST /admin/subscribers/{id}/resend-invitation — #0312: re-sends an
+ * import invitation (never the generic confirmation), at most once per
+ * address ever — the bounded, user-approved deviation from PRD §6.10.1
+ * recorded in issues/0312.md's "Decision" section. The server answers 409
+ * when the row is not an unaccepted invitation, the owning import has been
+ * revoked, the one-ever re-send has already been used, the address is
+ * suppressed, or physical_address is unset (an advisory pre-check, not the
+ * §9 gate itself — see that handler's own doc comment); 429 when the
+ * cooldown is active. Callers should surface `err.message` for all of
+ * these rather than inventing their own copy.
+ */
+export function resendInvitation(id: number): Promise<ResendInvitationResponse> {
+  return apiPost<ResendInvitationResponse>(`/admin/subscribers/${id}/resend-invitation`);
 }
 
 // ── Admin subscriber import (#0125, PRD §6.10) ───────────────────────────────

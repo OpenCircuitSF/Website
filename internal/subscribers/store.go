@@ -272,6 +272,14 @@ type Subscriber struct {
 	ConsentBasis *string
 	ImportID     *int64
 	InvitedAt    *time.Time
+	// InviteResentAt is migrations/000026's write-once marker for #0312's
+	// bounded PRD §6.10.1 deviation (issues/0312.md's "Decision" section,
+	// approved 2026-08-31): at most ONE further invitation, ever, by an
+	// authenticated admin action, on top of InvitedAt's unconditional
+	// automated-import cap. Stamped by AdminResendInvitation
+	// (internal/subscribers/pending.go) and never re-stamped; nil until an
+	// admin has used that one re-send.
+	InviteResentAt *time.Time
 	// SoftBounceStreak, LastBounceAt, LastDeliveryAt are #0124's delivery
 	// health columns (migration 000010, PRD §6.9): the consecutive count of
 	// Transient/Undetermined bounces since the last successful Delivery.
@@ -366,7 +374,7 @@ const subscriberColumns = `id, email, status, confirm_token, confirm_sent_at,
 	host(signup_ip), signup_user_agent, utm_source, utm_medium, utm_campaign,
 	unsubscribed_at, unsubscribe_source, source, source_detail, consent_basis,
 	import_id, invited_at, soft_bounce_streak, last_bounce_at,
-	last_delivery_at, created_at, updated_at, synthetic`
+	last_delivery_at, created_at, updated_at, synthetic, invite_resent_at`
 
 func scanSubscriber(row pgx.Row) (Subscriber, error) {
 	var sub Subscriber
@@ -376,7 +384,7 @@ func scanSubscriber(row pgx.Row) (Subscriber, error) {
 		&sub.SignupIP, &sub.SignupUserAgent, &sub.UTMSource, &sub.UTMMedium, &sub.UTMCampaign,
 		&sub.UnsubscribedAt, &sub.UnsubscribeSource, &sub.Source, &sub.SourceDetail, &sub.ConsentBasis,
 		&sub.ImportID, &sub.InvitedAt, &sub.SoftBounceStreak, &sub.LastBounceAt,
-		&sub.LastDeliveryAt, &sub.CreatedAt, &sub.UpdatedAt, &sub.Synthetic,
+		&sub.LastDeliveryAt, &sub.CreatedAt, &sub.UpdatedAt, &sub.Synthetic, &sub.InviteResentAt,
 	)
 	if err != nil {
 		return Subscriber{}, err
@@ -512,24 +520,95 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 
 // ClaimAndEnqueueConfirmation atomically claims the right to send a
 // confirmation email to subscriber id AND enqueues it on internal/outbox,
-// inside one transaction (#0126). It stamps confirm_sent_at = now in the
-// same UPDATE that checks the once-per-hour cooldown (PRD §6.3), so the
-// check and the claim can never be split by a race the way a separate
-// read-then-write would be — the property #0026's review (finding 3)
-// required of the pre-#0126 ClaimConfirmationSend, preserved here — and
-// then the enqueue happens in the SAME transaction, so this claim can no
-// longer be stamped for a send that then fails to be queued (the failure
-// mode ReleaseConfirmationClaim used to exist to compensate for; the queue
-// now retries on its own, so that compensating action has no job — see
-// #0126's plan §4).
+// inside one transaction (#0126). It locks the row (`SELECT ... FOR UPDATE`,
+// #0314) and makes every decision below from that freshly-locked copy —
+// sub is used only to name WHICH row (sub.ID); a caller may pass a
+// Subscriber read minutes earlier (#0254's recovery poller) without that
+// staleness reaching the claim. It stamps confirm_sent_at = now in the same
+// UPDATE that checks the once-per-hour cooldown (PRD §6.3), so the check and
+// the claim can never be split by a race the way a separate read-then-write
+// would be — the property #0026's review (finding 3) required of the
+// pre-#0126 ClaimConfirmationSend, preserved here — and then the enqueue
+// happens in the SAME transaction, so this claim can no longer be stamped
+// for a send that then fails to be queued (the failure mode
+// ReleaseConfirmationClaim used to exist to compensate for; the queue now
+// retries on its own, so that compensating action has no job — see #0126's
+// plan §4).
 //
 // Returns claimed=true (and both the stamp and the enqueue commit) only if
 // status is currently 'pending' AND confirm_sent_at is currently NULL or
 // older than now-cooldown; otherwise nothing is changed and claimed=false —
 // the cooldown is genuinely active, a concurrent request already won the
-// claim a moment ago, or (see below) the row is no longer pending. The
-// caller cannot tell those cases apart from this return value alone, and
-// does not need to: either way, this request must not send.
+// claim a moment ago, or the row is no longer pending. The caller cannot
+// tell those cases apart from this return value alone, and does not need
+// to: either way, this request must not send.
+//
+// # #0314 — a stale or nulled token no longer refuses the request outright
+//
+// Before this, the method refused outright when sub.ConfirmToken was nil
+// (ExpirePendingSweep's own doing, or a row that never got one), and the
+// caller (subscribe.go's sendConfirmation) refused a SECOND time before
+// even calling it — so once a pending row's token expired and was swept,
+// that address could never sign up again: the person would submit the
+// form, get the uniform 202 that says to check their email, and no email
+// would ever arrive (issues/0314.md). Now, from the freshly-locked row,
+// live := ConfirmToken != nil && ConfirmExpiresAt != nil &&
+// ConfirmExpiresAt.After(now); a live token is REUSED (a person who submits
+// twice inside the TTL and clicks the OLDER mail must still land on a
+// working link — this method deliberately does NOT mint unconditionally,
+// unlike AdminResendConfirmation, whose own doc comment explains why an
+// admin resend is different); a token that is nil or expired is replaced
+// by a freshly minted one with confirm_expires_at = now+ttl. Establishing a
+// live link is now this method's job, not something the caller must have
+// already arranged. ExpirePendingSweep is UNCHANGED — nulling the token
+// there is still what makes an expired link dead; what changed is that a
+// self-initiated signup can always re-establish a live one, because the
+// person asking is the thing that authorises a new one.
+//
+// # #0313 — an unaccepted import invitation becomes a self-initiated signup
+//
+// "Who initiated the send decides which template goes out" (the shared
+// #0312/#0313/#0314 planning decision, 2026-08-28, issues/0313.md). From
+// the same locked row: converting := ImportID != nil && ConsentBasis ==
+// nil — the identical row-state test Confirm, Unsubscribe,
+// AdminResendConfirmation, and ExpirePendingSweep already derive from the
+// row rather than trust from the caller. A still-pending row an import
+// invited, whose person submits the PUBLIC form themselves, is no longer a
+// live invitation in progress: it is an ordinary signup, and the generic
+// confirmation this method sends is the right template for what the row
+// NOW is. When converting, the SAME claiming UPDATE additionally clears
+// import_id and refreshes signup_ip/signup_user_agent/utm_source/
+// utm_medium/utm_campaign to the evidence parameter — this submission's
+// OWN consent evidence, now that the person's own action is this row's
+// consent record. invited_at, consent_basis, source, and source_detail are
+// NOT touched: invited_at stays write-once (an address ever automatically
+// invited can never be re-invited by a later import — #0129's anti-abuse
+// property), and consent_basis stays NULL until Confirm sets it, exactly
+// like any other pending row. When NOT converting, evidence is ignored
+// entirely — an ordinary pending resend must not rewrite the original
+// consent evidence, so passing a zero-value evidence for that call is
+// always safe.
+//
+// A converting claim also, in the same transaction: writes one
+// subscriber_events row (ActionSignupRequested, detail {"kind":
+// "self_after_invite"}) — recording that the person took the signup over
+// themselves, alongside (never replacing) the earlier imported/invite_sent
+// rows that still carry import_id — and cancels any still-queued
+// outbox.KindImportInvite for this subscriber via outbox.Store.
+// CancelQueuedTx, so a person who converts before the deferred invitation
+// ever leaves the queue (physical_address unset, #0129) does not later
+// receive an invitation addressed to a signup they made themselves,
+// carrying a confirm_token this same claim may have just rotated out from
+// under it.
+//
+// This is also what closes issues/0313.md's Store.Unsubscribe misfire:
+// once import_id is cleared here, a LATER ordinary unsubscribe of this row
+// no longer reads as "declined an import invitation before confirming"
+// (Unsubscribe's own isInviteDecline predicate) and can never wrongly
+// suppress a person who signed up on the website and simply changed their
+// mind — the same class of misfire #0129's review found and RestartSignup
+// closed on the unsubscribed branch; this closes it on the pending branch,
+// which RestartSignup never reaches.
 //
 // # #0341 — the status guard, and its twin AdminResendConfirmation
 //
@@ -547,28 +626,26 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 // corrected Description.
 // AdminResendConfirmation guards the identical predicate
 // (`sub.Status != StatusPending` -> ErrNotPending) in Go, against a row it
-// locks with `SELECT ... FOR UPDATE` first, because that method also needs
-// the locked read for its cooldown/suppression checks. This method has no
-// such prior SELECT — its claim already IS an atomic conditional UPDATE
-// (the cooldown check lives in the same WHERE clause), so adding `status =
-// 'pending'` to that same WHERE clause gets the identical atomicity
-// property without a prior SELECT ... FOR UPDATE or a second query: RowsAffected()==1 remains
-// the single source of truth for "this request won the claim, on a row
-// that was genuinely pending at the moment the UPDATE committed."
+// locks with `SELECT ... FOR UPDATE` — the same mechanism this method now
+// also uses (#0314 added the lock here for the token/conversion decisions
+// above; #0341's status predicate predates that and stays expressed in the
+// WHERE clause below rather than as a Go `if`, since RowsAffected()==1 is
+// still the single source of truth for "this request won the claim, on a
+// row that was genuinely pending at the moment the UPDATE committed" — a
+// Go-side check under the same lock would be equivalent, not stronger, and
+// splitting the guard across two places would be pure churn).
 //
-// Both methods now express the same predicate — status = 'pending', the
-// form #0341 preferred over a bare `<> 'complained'` because this method
-// (like AdminResendConfirmation) is only ever legitimately called on a
-// pending row, so requiring pending is strictly stronger and leaves no
-// implicit invariant for a reader to take on faith. The two layers differ
-// (SQL WHERE-clause claim here, Go check under FOR UPDATE there) because
-// the two methods' surrounding transactions differ, not because the safety
-// property differs. This is deliberately NOT the statusLockedFromNonAdmin
-// shape the package doc comment above describes: that constant keeps the
-// complained guard in ONE place across every status MUTATOR, and neither
-// method here writes status at all — each only refuses to act on a row
-// that is not pending. The divergence recorded here is of mechanism inside
-// one predicate, and it is confined to these two methods.
+// Both methods express the same predicate — status = 'pending', the form
+// #0341 preferred over a bare `<> 'complained'` because this method (like
+// AdminResendConfirmation) is only ever legitimately called on a pending
+// row, so requiring pending is strictly stronger and leaves no implicit
+// invariant for a reader to take on faith. This is deliberately NOT the
+// statusLockedFromNonAdmin shape the package doc comment above describes:
+// that constant keeps the complained guard in ONE place across every
+// status MUTATOR, and neither method here writes status at all — each
+// only refuses to act on a row that is not pending. The divergence
+// recorded here is of mechanism inside one predicate, and it is confined
+// to these two methods.
 //
 // # Every claim path toward a live confirm link (#0341 criterion 5)
 //
@@ -585,33 +662,65 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 //     as described above.
 //  3. AdminResendConfirmation — an EXISTING row, guarded as described above.
 //
-// confirmToken/manageToken/ttl are the subscriber's OWN current values
-// (i.e. sub.ConfirmToken/sub.ManageToken and the nominal TTL constant the
-// caller renders with) — this method does not re-read them, so the caller
-// must pass a Subscriber it just obtained from Create/RestartSignup/
-// FindByEmail. (#0314, unimplemented as of this writing, plans to change
-// this method to re-read and, when the existing token has expired, mint a
-// fresh one under its own FOR UPDATE — a separate concern from this status
-// guard. Whoever implements #0314 should fold this WHERE-clause predicate
-// into that rewrite rather than drop it.)
-func (s *Store) ClaimAndEnqueueConfirmation(ctx context.Context, sub Subscriber, now time.Time, cooldown time.Duration, ttl time.Duration) (claimed bool, err error) {
-	if sub.ConfirmToken == nil {
-		return false, fmt.Errorf("subscribers: subscriber %d has no confirm token", sub.ID)
-	}
-
+// AdminResendInvitation (#0312, pending.go) is NOT a fourth path: it
+// enqueues outbox.KindImportInvite, never KindConfirmation.
+//
+// evidence is the caller's consent evidence for THIS submission — only
+// consulted when converting (above); pass a zero-value RestartSignupInput
+// when the caller has none to offer (e.g. an ordinary pending resend).
+func (s *Store) ClaimAndEnqueueConfirmation(ctx context.Context, sub Subscriber, now time.Time, cooldown time.Duration, ttl time.Duration, evidence RestartSignupInput) (claimed bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("subscribers: beginning claim-confirmation tx for %d: %w", sub.ID, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// #0314: lock and re-read the row fresh — see this method's own doc
+	// comment for why sub itself is not trusted for anything but its id.
+	row := tx.QueryRow(ctx, `SELECT `+subscriberColumns+` FROM subscribers WHERE id = $1 FOR UPDATE`, sub.ID)
+	locked, err := scanSubscriber(row)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return false, nil // row gone entirely -- nothing to claim
+	case err != nil:
+		return false, fmt.Errorf("subscribers: locking subscriber %d for claim-confirmation: %w", sub.ID, err)
+	}
+
+	live := locked.ConfirmToken != nil && locked.ConfirmExpiresAt != nil && locked.ConfirmExpiresAt.After(now)
+	token := locked.ConfirmToken
+	confirmExpiresAt := locked.ConfirmExpiresAt
+	if !live {
+		newTok, err := newToken()
+		if err != nil {
+			return false, err
+		}
+		token = &newTok
+		exp := now.Add(ttl)
+		confirmExpiresAt = &exp
+	}
+
+	// #0313: identical row-state test Confirm/Unsubscribe/
+	// AdminResendConfirmation/ExpirePendingSweep already use.
+	converting := locked.ImportID != nil && locked.ConsentBasis == nil
+
 	cutoff := now.Add(-cooldown)
 	tag, err := tx.Exec(ctx,
 		`UPDATE subscribers
-		    SET confirm_sent_at = $2, updated_at = $2
-		  WHERE id = $1 AND status = $4
+		    SET confirm_sent_at    = $2,
+		        updated_at         = $2,
+		        confirm_token      = $4,
+		        confirm_expires_at = $5,
+		        import_id          = CASE WHEN $7 THEN NULL ELSE import_id        END,
+		        signup_ip          = CASE WHEN $7 THEN $8   ELSE signup_ip        END,
+		        signup_user_agent  = CASE WHEN $7 THEN $9   ELSE signup_user_agent END,
+		        utm_source         = CASE WHEN $7 THEN $10  ELSE utm_source       END,
+		        utm_medium         = CASE WHEN $7 THEN $11  ELSE utm_medium       END,
+		        utm_campaign       = CASE WHEN $7 THEN $12  ELSE utm_campaign     END
+		  WHERE id = $1 AND status = $6
 		    AND (confirm_sent_at IS NULL OR confirm_sent_at < $3)`,
-		sub.ID, now, cutoff, StatusPending,
+		sub.ID, now, cutoff, token, confirmExpiresAt, StatusPending, converting,
+		nullIfEmpty(evidence.SignupIP), nullIfEmpty(evidence.SignupUserAgent),
+		nullIfEmpty(evidence.UTMSource), nullIfEmpty(evidence.UTMMedium), nullIfEmpty(evidence.UTMCampaign),
 	)
 	if err != nil {
 		return false, fmt.Errorf("subscribers: claiming confirmation send for %d: %w", sub.ID, err)
@@ -620,13 +729,28 @@ func (s *Store) ClaimAndEnqueueConfirmation(ctx context.Context, sub Subscriber,
 		return false, nil // cooldown active, status no longer pending, or a concurrent request already claimed this send
 	}
 
+	if converting {
+		if err := RecordEventTx(ctx, tx, Event{
+			SubscriberID: &locked.ID,
+			Email:        locked.Email,
+			Action:       ActionSignupRequested,
+			Detail:       map[string]any{"kind": "self_after_invite"},
+		}); err != nil {
+			return false, fmt.Errorf("subscribers: recording self_after_invite event for %d: %w", sub.ID, err)
+		}
+		if _, err := s.outbox.CancelQueuedTx(ctx, tx, sub.ID, outbox.KindImportInvite,
+			"superseded by a self-initiated website signup"); err != nil {
+			return false, fmt.Errorf("subscribers: cancelling superseded invitation for %d: %w", sub.ID, err)
+		}
+	}
+
 	if _, err := s.outbox.EnqueueTx(ctx, tx, outbox.Item{
 		Kind:         outbox.KindConfirmation,
-		Recipient:    sub.Email,
+		Recipient:    locked.Email,
 		SubscriberID: &sub.ID,
 		Payload: confirmationPayload{
-			ConfirmToken: *sub.ConfirmToken,
-			ManageToken:  sub.ManageToken,
+			ConfirmToken: *token,
+			ManageToken:  locked.ManageToken,
 			TTLSeconds:   int64(ttl.Seconds()),
 		},
 	}); err != nil {
@@ -1817,7 +1941,7 @@ const qualifiedSubscriberColumns = `subscribers.id, subscribers.email, subscribe
 	subscribers.consent_basis, subscribers.import_id, subscribers.invited_at,
 	subscribers.soft_bounce_streak, subscribers.last_bounce_at,
 	subscribers.last_delivery_at, subscribers.created_at, subscribers.updated_at,
-	subscribers.synthetic`
+	subscribers.synthetic, subscribers.invite_resent_at`
 
 // StatusCounts returns the number of subscribers in each status, keyed by
 // the Status* constants. Every known status is present in the result even

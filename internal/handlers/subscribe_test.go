@@ -151,13 +151,13 @@ func (b *blockingSubscriberStore) RestartSignup(ctx context.Context, id int64, i
 	return b.inner.RestartSignup(ctx, id, in, now)
 }
 
-func (b *blockingSubscriberStore) ClaimAndEnqueueConfirmation(ctx context.Context, sub subscribers.Subscriber, now time.Time, cooldown, ttl time.Duration) (bool, error) {
+func (b *blockingSubscriberStore) ClaimAndEnqueueConfirmation(ctx context.Context, sub subscribers.Subscriber, now time.Time, cooldown, ttl time.Duration, evidence subscribers.RestartSignupInput) (bool, error) {
 	if b.which == "ClaimAndEnqueueConfirmation" {
 		if err := b.awaitReleaseOrCancel(ctx); err != nil {
 			return false, err
 		}
 	}
-	return b.inner.ClaimAndEnqueueConfirmation(ctx, sub, now, cooldown, ttl)
+	return b.inner.ClaimAndEnqueueConfirmation(ctx, sub, now, cooldown, ttl, evidence)
 }
 
 func (b *blockingSubscriberStore) ClaimAndEnqueueAlreadySubscribed(ctx context.Context, sub subscribers.Subscriber, now time.Time, cooldown time.Duration) (bool, error) {
@@ -298,6 +298,45 @@ func seedSubscriberRow(t *testing.T, pool *pgxpool.Pool, email, status string, c
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, id) })
 	return id
+}
+
+// seedExpiredPendingSubscriberRow inserts a status='pending' row shaped
+// exactly like ExpirePendingSweep's own output (#0128): confirm_token NULL,
+// confirm_expires_at in the past. This is #0314's whole reproduction case —
+// before that issue's fix, sendConfirmation refused to act on such a row at
+// all, so this state was a dead end with no self-service recovery.
+func seedExpiredPendingSubscriberRow(t *testing.T, pool *pgxpool.Pool, email string) int64 {
+	t.Helper()
+	var id int64
+	err := pool.QueryRow(context.Background(),
+		`INSERT INTO subscribers (email, status, confirm_token, confirm_sent_at, confirm_expires_at, manage_token)
+		 VALUES ($1, 'pending', NULL, NULL, now() - interval '1 hour', $2)
+		 RETURNING id`,
+		email, "mtok-"+email,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("seed expired-pending subscriber %s: %v", email, err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, id) })
+	return id
+}
+
+// confirmationPayloadToken decodes the confirm_token field out of a raw
+// outbound_queue payload::text — the confirmation/import_invite payload
+// shapes both carry this field under the same JSON name (see
+// internal/subscribers' confirmationPayload / importInvitePayload).
+func confirmationPayloadToken(t *testing.T, payloadJSON string) string {
+	t.Helper()
+	var p struct {
+		ConfirmToken string `json:"confirm_token"`
+	}
+	if err := json.Unmarshal([]byte(payloadJSON), &p); err != nil {
+		t.Fatalf("decoding confirm_token from payload %s: %v", payloadJSON, err)
+	}
+	if p.ConfirmToken == "" {
+		t.Fatalf("payload %s carries no confirm_token", payloadJSON)
+	}
+	return p.ConfirmToken
 }
 
 func subscriberStatus(t *testing.T, pool *pgxpool.Pool, id int64) string {
@@ -459,6 +498,24 @@ func TestSubscribe_UniformResponseAcrossBranches(t *testing.T) {
 	suppressedEmail := subscribeUniqueEmail(t) + "-suppressed"
 	suppression := fakeSuppressionChecker{suppressed: map[string]bool{suppressedEmail: true}}
 
+	// #0314: an expired-pending row (ExpirePendingSweep's own output —
+	// confirm_token NULL, confirm_expires_at in the past) must answer the
+	// same uniform 202 as every other branch, even though internally it now
+	// establishes a fresh live token where before this issue it silently
+	// sent nothing at all.
+	expiredPendingEmail := subscribeUniqueEmail(t) + "-expired-pending"
+	seedExpiredPendingSubscriberRow(t, pool, expiredPendingEmail)
+
+	// #0313: a still-pending import invitation, submitted through the
+	// public form by its own address, must be equally invisible from
+	// outside — the conversion (import_id cleared, evidence refreshed,
+	// queued invitation cancelled, generic confirmation sent) is entirely
+	// internal to the mutate worker, which runs after the response is
+	// already written (see this method's own "How this resolves under
+	// #0026's uniform 202" reasoning in issues/0313.md).
+	pendingInvitedEmail := subscribeUniqueEmail(t) + "-pending-invited"
+	commitPublicTakeoverInvite(t, pool, pendingInvitedEmail, "Intro to Soldering (uniform-202 branch)")
+
 	h, mux := subscribeMux(t, pool, suppression)
 
 	cases := []struct {
@@ -483,6 +540,8 @@ func TestSubscribe_UniformResponseAcrossBranches(t *testing.T) {
 		// immediately before writeSubscribeUniform202 in Subscribe left this
 		// test green until this case was added.
 		{"reserved-test-domain", subscribeBody(fmt.Sprintf("zz-subtest-reserved-%d@%s", testdb.Unique(), subscribers.ReservedTestEmailDomain), nil, now)},
+		{"expired-pending", subscribeBody(expiredPendingEmail, nil, now)},
+		{"pending-invited", subscribeBody(pendingInvitedEmail, nil, now)},
 	}
 
 	var firstBody []byte
@@ -790,6 +849,330 @@ func TestSubscribe_NewSignup_CreatesPendingSendsConfirmationAndAudits(t *testing
 
 	if n := auditSignupCount(t, pool, id); n != 1 {
 		t.Errorf("subscriber.signup audit rows for %d = %d, want 1", id, n)
+	}
+}
+
+// ============================================================================
+// #0314 — an expired-pending signup can sign up again and actually receive
+// a working confirm link.
+// ============================================================================
+
+// TestSubscribe_ExpiredPending_SignsUpAgainAndConfirms is #0314's core
+// reproduction: before this issue's fix, a pending row whose confirm_token
+// ExpirePendingSweep had nulled could never sign up again — sendConfirmation
+// refused outright, the endpoint still answered its uniform 202, and no
+// email ever arrived. This drives the whole cycle through the REAL handler
+// and proves the fix by an end-to-end oracle — the token in the NEWLY
+// enqueued mail actually confirms the row — not a copy of the SQL that
+// establishes it.
+func TestSubscribe_ExpiredPending_SignsUpAgainAndConfirms(t *testing.T) {
+	pool := subscribeTestPool(t)
+	h, mux := subscribeMux(t, pool, nil)
+
+	email := subscribeUniqueEmail(t)
+	id := seedExpiredPendingSubscriberRow(t, pool, email)
+
+	// Sanity-check the starting state matches ExpirePendingSweep's own
+	// output exactly, so a later failure can't be misread as this test
+	// having seeded something else by mistake.
+	if _, status, confirmToken, _ := subscriberRow(t, pool, email); status != subscribers.StatusPending || confirmToken != nil {
+		t.Fatalf("seed state = (status=%q, confirm_token=%v), want (pending, nil)", status, confirmToken)
+	}
+
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+
+	rows := outboundQueueRowsFor(t, pool, email)
+	if len(rows) != 1 {
+		t.Fatalf("outbound_queue rows for %q = %d, want 1 (a fresh confirmation must now be enqueued)", email, len(rows))
+	}
+	if rows[0].Kind != "confirmation" {
+		t.Errorf("kind = %q, want %q", rows[0].Kind, "confirmation")
+	}
+	token := confirmationPayloadToken(t, rows[0].Payload)
+
+	store := subscribers.NewStore(pool)
+	confirmed, err := store.Confirm(context.Background(), token, time.Now())
+	if err != nil {
+		t.Fatalf("Confirm with the newly-enqueued token: %v", err)
+	}
+	if confirmed.ID != id {
+		t.Fatalf("Confirm resolved subscriber %d, want %d", confirmed.ID, id)
+	}
+	if confirmed.Status != subscribers.StatusActive {
+		t.Errorf("Status after Confirm = %q, want %q", confirmed.Status, subscribers.StatusActive)
+	}
+}
+
+// TestSubscribe_ExpiredPending_SuppressedStaysSilent is #0314 criterion 4:
+// the expiry-recovery path is not a route around suppression.
+// dispatchMutation's `if suppressed { return }` runs before existingSignup
+// (and therefore before sendConfirmation) regardless of which branch would
+// otherwise fire, so this is the SAME property #0026 already established,
+// re-asserted specifically against the new expired-pending state.
+func TestSubscribe_ExpiredPending_SuppressedStaysSilent(t *testing.T) {
+	pool := subscribeTestPool(t)
+	email := subscribeUniqueEmail(t)
+	seedExpiredPendingSubscriberRow(t, pool, email)
+	suppression := fakeSuppressionChecker{suppressed: map[string]bool{email: true}}
+	h, mux := subscribeMux(t, pool, suppression)
+
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if n := outboundQueueCountFor(t, pool, email); n != 0 {
+		t.Errorf("outbound_queue rows for a suppressed expired-pending address = %d, want 0", n)
+	}
+	if _, status, confirmToken, _ := subscriberRow(t, pool, email); status != subscribers.StatusPending || confirmToken != nil {
+		t.Errorf("row state after a suppressed submit = (status=%q, confirm_token=%v), want unchanged (pending, nil)", status, confirmToken)
+	}
+}
+
+// ============================================================================
+// #0313 — a still-pending import invitation becomes a self-initiated
+// signup when its own address submits the public form.
+// ============================================================================
+
+// commitPublicTakeoverInvite commits a single invite-mode import through
+// the real ImportStore (never a copy of its SQL) and returns the resulting
+// pending, import-linked subscriber id and the owning import's id.
+// sourceDetail is distinctive per test so a payload/body assertion can tell
+// THIS test's provenance apart from another test's leftover row in the
+// shared outbound_queue.
+func commitPublicTakeoverInvite(t *testing.T, pool *pgxpool.Pool, email, sourceDetail string) (subscriberID, importID int64) {
+	t.Helper()
+	importStore := subscribers.NewImportStore(pool)
+	result, err := importStore.Commit(context.Background(), subscribers.CommitInput{
+		Source:       subscribers.ImportSourceLuma,
+		SourceDetail: sourceDetail,
+		ConsentMode:  subscribers.ConsentModeInvite,
+		ConsentNote:  "collected via Luma RSVP export, attested by the organizer",
+		CollectedAt:  time.Date(2026, 5, 12, 0, 0, 0, 0, time.UTC),
+		Filename:     "attendees.csv",
+		Rows:         []subscribers.ImportRow{{Email: email}},
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("commitPublicTakeoverInvite: Commit: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscriber_imports WHERE id = $1`, result.Import.ID)
+	})
+	sub, err := subscribers.NewStore(pool).FindByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatalf("commitPublicTakeoverInvite: FindByEmail: %v", err)
+	}
+	return sub.ID, result.Import.ID
+}
+
+// TestSubscribe_PendingInvitedRow_BecomesSelfInitiatedSignup is #0313's
+// core property, asserted through four independent mechanisms per that
+// issue's own test strategy — none of them a restatement of the UPDATE
+// under test:
+//
+// Mutation M1 (#0313's plan): delete the `import_id = NULL` clause. Must
+// fail on the suppression count and the confirmed_count delta below.
+func TestSubscribe_PendingInvitedRow_BecomesSelfInitiatedSignup(t *testing.T) {
+	pool := subscribeTestPool(t)
+	h, mux := subscribeMux(t, pool, nil)
+
+	email := subscribeUniqueEmail(t)
+	subID, importID := commitPublicTakeoverInvite(t, pool, email, "Intro to Soldering (public takeover test)")
+
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+
+	subStore := subscribers.NewStore(pool)
+	converted, err := subStore.GetByID(context.Background(), subID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	// 1. ImportID is nil.
+	if converted.ImportID != nil {
+		t.Errorf("ImportID after public takeover = %v, want nil", converted.ImportID)
+	}
+	if converted.Status != subscribers.StatusPending {
+		t.Fatalf("Status after public takeover = %q, want %q", converted.Status, subscribers.StatusPending)
+	}
+
+	rows := outboundQueueRowsFor(t, pool, email)
+	var confirmationRow *outboundQueueTestRow
+	for i := range rows {
+		if rows[i].Kind == "confirmation" {
+			confirmationRow = &rows[i]
+		}
+	}
+	if confirmationRow == nil {
+		t.Fatalf("no confirmation row enqueued for %q; rows=%v", email, rows)
+	}
+	token := confirmationPayloadToken(t, confirmationRow.Payload)
+
+	// 2. A subsequent ordinary Unsubscribe creates ZERO suppressions.
+	if _, err := subStore.Unsubscribe(context.Background(), subID, "one_click", time.Now()); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+	var suppressionCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM suppressions WHERE email = $1`, email,
+	).Scan(&suppressionCount); err != nil {
+		t.Fatalf("counting suppressions: %v", err)
+	}
+	if suppressionCount != 0 {
+		t.Errorf("suppressions for %q after an ordinary post-takeover unsubscribe = %d, want 0 (must not read as an invitation decline)", email, suppressionCount)
+	}
+
+	// Restart the signup and re-confirm through the SAME token this
+	// method already minted, so criteria 3-4 below observe an active row
+	// rather than an unsubscribed one — Unsubscribe above only exists to
+	// prove criterion 2 and must not block the rest of this test.
+	restarted, err := subStore.RestartSignup(context.Background(), subID, subscribers.RestartSignupInput{ConfirmTTL: time.Hour}, time.Now())
+	if err != nil {
+		t.Fatalf("RestartSignup: %v", err)
+	}
+	if restarted.ConfirmToken == nil {
+		t.Fatal("RestartSignup left ConfirmToken nil")
+	}
+	token = *restarted.ConfirmToken
+
+	importBefore, err := subscribers.NewImportStore(pool).GetImport(context.Background(), importID)
+	if err != nil {
+		t.Fatalf("GetImport before confirm: %v", err)
+	}
+
+	confirmed, err := subStore.Confirm(context.Background(), token, time.Now())
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if confirmed.Status != subscribers.StatusActive {
+		t.Fatalf("Status after Confirm = %q, want %q", confirmed.Status, subscribers.StatusActive)
+	}
+
+	// 3. Confirm does NOT increment the ORIGINATING import's confirmed_count
+	// — the row's consent no longer derives from that batch.
+	importAfter, err := subscribers.NewImportStore(pool).GetImport(context.Background(), importID)
+	if err != nil {
+		t.Fatalf("GetImport after confirm: %v", err)
+	}
+	if importAfter.ConfirmedCount != importBefore.ConfirmedCount {
+		t.Errorf("import %d ConfirmedCount changed from %d to %d after confirming a converted row — want unchanged", importID, importBefore.ConfirmedCount, importAfter.ConfirmedCount)
+	}
+
+	// 4. The confirming subscriber DOES receive a welcome — denied to an
+	// accepted invitation ("the invitation was the introduction"), correct
+	// here because the invitation is no longer this row's introduction.
+	var welcomeCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1 AND kind = 'welcome'`, subID,
+	).Scan(&welcomeCount); err != nil {
+		t.Fatalf("counting welcome rows: %v", err)
+	}
+	if welcomeCount != 1 {
+		t.Errorf("welcome rows for the converted-then-confirmed subscriber = %d, want 1", welcomeCount)
+	}
+}
+
+// TestSubscribe_PendingInvitedRow_SendsGenericConfirmation is #0313
+// criterion 2's direct half: the public path enqueues the GENERIC
+// confirmation for a pending invited row, never a second invitation.
+//
+// Mutation M2 (#0313's plan): enqueue outbox.KindImportInvite on this path
+// instead. Must fail — both on the kind check and on the payload shape
+// check (only a KindImportInvite payload ever carries source_detail).
+func TestSubscribe_PendingInvitedRow_SendsGenericConfirmation(t *testing.T) {
+	pool := subscribeTestPool(t)
+	h, mux := subscribeMux(t, pool, nil)
+
+	email := subscribeUniqueEmail(t)
+	commitPublicTakeoverInvite(t, pool, email, "Intro to Soldering (generic-confirmation test)")
+
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+
+	rows := outboundQueueRowsFor(t, pool, email)
+	var confirmationRows, inviteRows int
+	var confirmationPayload string
+	var inviteStatus string
+	for _, r := range rows {
+		switch r.Kind {
+		case "confirmation":
+			confirmationRows++
+			confirmationPayload = r.Payload
+		case "import_invite":
+			inviteRows++
+			inviteStatus = r.Status
+		}
+	}
+	if confirmationRows != 1 {
+		t.Fatalf("confirmation rows enqueued = %d, want 1", confirmationRows)
+	}
+	// Exactly ONE import_invite row total — the ORIGINAL, from
+	// ImportStore.Commit — never a second. This path must never enqueue a
+	// new invitation; the mutation this rules out is enqueueing
+	// KindImportInvite here instead of/alongside KindConfirmation, which
+	// would show up as either a second import_invite row or as
+	// confirmationRows == 0.
+	if inviteRows != 1 {
+		t.Errorf("import_invite rows for %q = %d, want exactly 1 (the original only, never a second)", email, inviteRows)
+	}
+	if inviteStatus != "abandoned" {
+		t.Errorf("the original invitation's status = %q, want %q (cancelled by the conversion, #0313 step 2)", inviteStatus, "abandoned")
+	}
+	if strings.Contains(confirmationPayload, "source_detail") {
+		t.Errorf("the enqueued confirmation payload %s carries source_detail — that field only ever appears on an import_invite payload", confirmationPayload)
+	}
+}
+
+// TestSubscribe_PendingInvitedRow_CancelsQueuedInvitation is #0313's
+// queued-invitation cleanup: the ORIGINAL invitation ImportStore.Commit
+// enqueued must be cancelled (abandoned), not left to sit in the queue and
+// eventually mail a self-initiated signer the "we got your address from an
+// import" sentence about an address they typed in themselves.
+//
+// Mutation M3 (#0313's plan): remove the CancelQueuedTx call. Must fail.
+func TestSubscribe_PendingInvitedRow_CancelsQueuedInvitation(t *testing.T) {
+	pool := subscribeTestPool(t)
+	h, mux := subscribeMux(t, pool, nil)
+
+	email := subscribeUniqueEmail(t)
+	commitPublicTakeoverInvite(t, pool, email, "Intro to Soldering (cancel-queued-invite test)")
+
+	// The original invitation is 'queued' right after Commit, regardless of
+	// physical_address — OutboxWorker never runs in this handler-level
+	// test, so this assertion is about outbound_queue state directly, not
+	// about whether a real send was attempted.
+	var beforeStatus string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT status FROM outbound_queue WHERE recipient = $1 AND kind = 'import_invite'`, email,
+	).Scan(&beforeStatus); err != nil {
+		t.Fatalf("reading the original invitation row: %v", err)
+	}
+	if beforeStatus != "queued" {
+		t.Fatalf("original invitation status before the public takeover = %q, want %q", beforeStatus, "queued")
+	}
+
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+
+	var afterStatus string
+	var afterError *string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT status, error FROM outbound_queue WHERE recipient = $1 AND kind = 'import_invite'`, email,
+	).Scan(&afterStatus, &afterError); err != nil {
+		t.Fatalf("reading the original invitation row after takeover: %v", err)
+	}
+	if afterStatus != "abandoned" {
+		t.Errorf("original invitation status after the public takeover = %q, want %q", afterStatus, "abandoned")
+	}
+	if afterError == nil || *afterError == "" {
+		t.Error("original invitation row's error is empty after being cancelled, want a reason recorded")
 	}
 }
 
@@ -1596,11 +1979,11 @@ func (c *countingSubscriberStore) RestartSignup(ctx context.Context, id int64, i
 	return c.inner.RestartSignup(ctx, id, in, now)
 }
 
-func (c *countingSubscriberStore) ClaimAndEnqueueConfirmation(ctx context.Context, sub subscribers.Subscriber, now time.Time, cooldown, ttl time.Duration) (bool, error) {
+func (c *countingSubscriberStore) ClaimAndEnqueueConfirmation(ctx context.Context, sub subscribers.Subscriber, now time.Time, cooldown, ttl time.Duration, evidence subscribers.RestartSignupInput) (bool, error) {
 	c.mu.Lock()
 	c.claimAndEnqueueConfirmationCalls++
 	c.mu.Unlock()
-	return c.inner.ClaimAndEnqueueConfirmation(ctx, sub, now, cooldown, ttl)
+	return c.inner.ClaimAndEnqueueConfirmation(ctx, sub, now, cooldown, ttl, evidence)
 }
 
 func (c *countingSubscriberStore) ClaimAndEnqueueAlreadySubscribed(ctx context.Context, sub subscribers.Subscriber, now time.Time, cooldown time.Duration) (bool, error) {

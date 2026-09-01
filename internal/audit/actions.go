@@ -228,6 +228,17 @@ const (
 	// an operator to reconstruct what happened without a second place the
 	// address sits in the audit trail.
 	ActionSubscriberResendConfirmation = "subscriber.resend_confirmation"
+	// ActionSubscriberResendInvitation is written by POST
+	// /admin/subscribers/{id}/resend-invitation (#0312 — the bounded,
+	// user-approved PRD §6.10.1 deviation letting an admin re-send an
+	// unaccepted import invitation exactly once, ever). Actor is always the
+	// requesting admin. TargetID is the pending subscriber's id. Metadata
+	// carries `import_id` (the owning subscriber_imports batch) and
+	// `previous_confirm_sent_at` (RFC3339, omitted when this is the row's
+	// first confirm_sent_at stamp) — deliberately omits the address, the
+	// same convention ActionSubscriberResendConfirmation's own comment
+	// above documents.
+	ActionSubscriberResendInvitation = "subscriber.resend_invitation"
 
 	// Subscriber import and consent provenance (PRD §6.10, #0125).
 	// ActionSubscriberImportCommitted is written once per POST

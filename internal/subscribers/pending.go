@@ -52,10 +52,40 @@ var ErrResendSuppressed = errors.New("subscribers: address is suppressed")
 // provenance sentence ("not optional copy") — so resending it onto an
 // invited row would replace the person's only copy of WHY they were
 // emailed with one that no longer says. The correct resend for an invited
-// row is a fresh outbox.KindImportInvite, which this method does not build;
-// refusing loudly here is preferred over silently sending the wrong
-// template.
-var ErrResendNotForInvited = errors.New("subscribers: cannot resend a generic confirmation to an import invitation")
+// row is a fresh outbox.KindImportInvite — AdminResendInvitation, below
+// (#0312) — which this method does not build; refusing loudly here is
+// preferred over silently sending the wrong template.
+var ErrResendNotForInvited = errors.New("subscribers: cannot resend a generic confirmation to an import invitation — see AdminResendInvitation")
+
+// ErrResendNotAnInvitation is AdminResendInvitation's mirror of
+// ErrResendNotForInvited above: returned when the row this package's own
+// Invited test does NOT identify as an unaccepted import invitation (either
+// it was never import-linked, or it already confirmed/declined and
+// consent_basis is no longer NULL). The generic AdminResendConfirmation is
+// the correct action for such a row.
+var ErrResendNotAnInvitation = errors.New("subscribers: cannot resend an invitation to a row that is not an unaccepted import invitation — see AdminResendConfirmation")
+
+// ErrInviteImportRevoked is returned by AdminResendInvitation when the
+// subscriber_imports batch this row's import_id names has been revoked
+// (ImportStatusRevoked). Guard 2 (status='pending') usually already catches
+// this, since ImportStore.Revoke moves a still-pending invited row to
+// 'unsubscribed' — but that is not guaranteed for every future revoke path,
+// and re-inviting on behalf of a batch the admin has already disowned is
+// backwards regardless of how the row got here. See
+// AdminResendInvitation's own doc comment for why this guard reads the
+// import row even though guard 2 usually makes it redundant in practice.
+var ErrInviteImportRevoked = errors.New("subscribers: the owning import batch has been revoked")
+
+// ErrInviteAlreadyResent is returned by AdminResendInvitation when
+// invite_resent_at is already non-NULL — the bounded, user-approved
+// deviation from PRD §6.10.1's "one invitation per address, ever"
+// (issues/0312.md's "Decision" section, approved 2026-08-31): automated
+// imports stay capped at exactly one invitation, unconditionally, and an
+// admin gets at most ONE further re-send, ever, per address.
+// invite_resent_at is write-once — nothing else in this package ever
+// clears or re-stamps it — which is what makes "at most one" true by
+// construction rather than by convention.
+var ErrInviteAlreadyResent = errors.New("subscribers: this address has already received its one admin invitation re-send")
 
 // ListPending returns every non-synthetic status='pending' subscriber,
 // ordered by confirm_sent_at — oldestFirst=true (the default the admin
@@ -225,6 +255,183 @@ func (s *Store) AdminResendConfirmation(ctx context.Context, id int64, now time.
 
 	if err := tx.Commit(ctx); err != nil {
 		return ResendResult{}, fmt.Errorf("subscribers: committing admin resend tx for %d: %w", id, err)
+	}
+	return ResendResult{Subscriber: updated, PreviousConfirmSentAt: sub.ConfirmSentAt}, nil
+}
+
+// AdminResendInvitation is AdminResendConfirmation's twin for a row that
+// this package's Invited test identifies as an unaccepted import invitation
+// (#0312) — deliberately a SEPARATE method rather than a mode flag on
+// AdminResendConfirmation, so the two templates (the generic confirmation
+// vs. the provenance-carrying invitation) can never be selected by a
+// boolean an admin UI could get wrong. Same transaction shape, same
+// SELECT ... FOR UPDATE (load-bearing for the identical reason
+// AdminResendConfirmation's own doc comment gives: the cooldown/
+// already-resent checks below are ordinary Go `if`s, not a claim baked into
+// an UPDATE's WHERE clause).
+//
+// # The PRD §6.10.1 deviation this method is the one exception to
+//
+// PRD §6.10.1: "One invitation per address, ever. No reminder, no
+// re-invite on a later import." issues/0312.md's "Decision" section
+// (approved 2026-08-31, after the user was asked directly) carves out a
+// bounded exception: automated imports stay capped at exactly one
+// invitation, unconditionally — invited_at is never re-stamped by anything,
+// including this method — PLUS at most one further invitation, ever, by
+// this explicit, authenticated, audited admin action. Two is a constant,
+// not a loop: this method itself enforces the "at most one" half via guard
+// 5 below (ErrInviteAlreadyResent), and invite_resent_at's write-once
+// nature (nothing else in this package ever clears or re-stamps it) is what
+// makes that bound structural rather than conventional.
+//
+// Guards, checked in order against the row locked above:
+//
+//  1. the subscriber exists and is not synthetic (ErrPendingSubscriberNotFound)
+//  2. status is 'pending' (ErrNotPending)
+//  3. the row IS an unaccepted import invitation — import_id set,
+//     consent_basis still NULL (ErrResendNotAnInvitation, the exact mirror
+//     of ErrResendNotForInvited above)
+//  4. the owning subscriber_imports row is not revoked (ErrInviteImportRevoked)
+//     — not redundant with guard 2: ImportStore.Revoke moves a still-pending
+//     invited row to 'unsubscribed', which usually makes guard 2 catch this
+//     first, but the import row must be read anyway (to rebuild the
+//     provenance sentence below) and re-inviting on behalf of a batch the
+//     admin has already disowned is exactly backwards regardless of which
+//     guard would otherwise have caught it.
+//  5. invite_resent_at IS NULL (ErrInviteAlreadyResent) — the one-ever bound.
+//  6. the address is not suppressed (ErrResendSuppressed)
+//  7. confirm_sent_at is NULL or older than now-cooldown (ErrResendCooldownActive)
+//     — the SAME subscribeResendCooldown AdminPendingHandler passes to
+//     AdminResendConfirmation, so an admin-triggered invitation re-send is
+//     rate-limited exactly like an admin-triggered confirmation resend. An
+//     admin-triggered send is still a send (issue criterion 4).
+//
+// Effects, all inside the one transaction:
+//
+//   - Mint a fresh confirm_token and set confirm_expires_at =
+//     now + importInviteConfirmTTL — NOT subscribeConfirmTTL/ttl: the
+//     invitation has its OWN 7-day constant (imports.go), and a re-send is
+//     still an invitation, not a confirmation. Unconditional minting matches
+//     AdminResendConfirmation: an admin re-send is also a token rotation.
+//   - Stamp confirm_sent_at = now, invite_resent_at = now, updated_at = now.
+//   - Do NOT touch invited_at, status, or consent_basis — invited_at stays
+//     write-once (criterion 5 / #0129's anti-abuse property: a re-uploaded
+//     CSV still cannot re-invite), status stays 'pending', and
+//     consent_basis stays NULL: the address is still unaccepted, and a
+//     re-send cannot make it otherwise (criterion 3).
+//   - Enqueue outbox.KindImportInvite — never KindConfirmation — with an
+//     importInvitePayload rebuilt from the OWNING subscriber_imports row's
+//     OWN source/source_detail/collected_at (read in guard 4, above), the
+//     new token, the row's manage_token, and importInviteConfirmTTL. This is
+//     criterion 1: the provenance sentence comes from the SAME three fields
+//     ImportStore.Commit used for the first invitation, so the re-send says
+//     the same thing the first one said.
+//
+// The physical_address gate (#0129, CAN-SPAM §7704, CLAUDE.md §9) is NOT
+// re-implemented here. OutboxWorker.render's KindImportInvite arm already
+// refuses to build a message when physical_address is unset and defers the
+// row rather than sending — see errImportInviteMissingPhysicalAddress in
+// internal/mailing/outbox_worker.go. Because this method enqueues rather
+// than sends, that gate applies to a re-send automatically, through the
+// exact same code path a first invitation goes through, with no
+// handler-side flag that could skip it. See
+// internal/handlers/admin_pending.go's ResendInvitation for the separate,
+// ADVISORY pre-check that exists purely so the one-and-only
+// invite_resent_at is not burned on a message that will defer indefinitely
+// — that pre-check is not the gate and does not need to be, which is the
+// point: removing it must not (and, proved by
+// TestAdminResendInvitation_PhysicalAddressGateNotBypassable, does not)
+// weaken §9's guarantee.
+func (s *Store) AdminResendInvitation(ctx context.Context, id int64, now time.Time, cooldown time.Duration) (ResendResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ResendResult{}, fmt.Errorf("subscribers: beginning admin-resend-invitation tx for %d: %w", id, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	row := tx.QueryRow(ctx,
+		`SELECT `+subscriberColumns+` FROM subscribers WHERE id = $1 AND synthetic = false FOR UPDATE`, id)
+	sub, err := scanSubscriber(row)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ResendResult{}, ErrPendingSubscriberNotFound
+	case err != nil:
+		return ResendResult{}, fmt.Errorf("subscribers: locking subscriber %d for admin resend invitation: %w", id, err)
+	}
+	if sub.Status != StatusPending {
+		return ResendResult{}, ErrNotPending
+	}
+	if !(sub.ImportID != nil && sub.ConsentBasis == nil) {
+		return ResendResult{}, ErrResendNotAnInvitation
+	}
+
+	var impStatus, impSource, impSourceDetail string
+	var impCollectedAt time.Time
+	if err := tx.QueryRow(ctx,
+		`SELECT status, source, source_detail, collected_at FROM subscriber_imports WHERE id = $1`,
+		*sub.ImportID,
+	).Scan(&impStatus, &impSource, &impSourceDetail, &impCollectedAt); err != nil {
+		return ResendResult{}, fmt.Errorf("subscribers: reading owning import for subscriber %d: %w", id, err)
+	}
+	if impStatus == ImportStatusRevoked {
+		return ResendResult{}, ErrInviteImportRevoked
+	}
+
+	if sub.InviteResentAt != nil {
+		return ResendResult{}, ErrInviteAlreadyResent
+	}
+
+	var suppressed bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM suppressions WHERE email = $1)`, sub.Email,
+	).Scan(&suppressed); err != nil {
+		return ResendResult{}, fmt.Errorf("subscribers: checking suppression for %d: %w", id, err)
+	}
+	if suppressed {
+		return ResendResult{}, ErrResendSuppressed
+	}
+
+	if sub.ConfirmSentAt != nil && sub.ConfirmSentAt.After(now.Add(-cooldown)) {
+		return ResendResult{}, ErrResendCooldownActive
+	}
+
+	newTok, err := newToken()
+	if err != nil {
+		return ResendResult{}, err
+	}
+	confirmExpiresAt := now.Add(importInviteConfirmTTL)
+
+	row = tx.QueryRow(ctx,
+		`UPDATE subscribers
+		    SET confirm_token = $2, confirm_expires_at = $3, confirm_sent_at = $4,
+		        invite_resent_at = $4, updated_at = $4
+		  WHERE id = $1
+		 RETURNING `+subscriberColumns,
+		id, newTok, confirmExpiresAt, now,
+	)
+	updated, err := scanSubscriber(row)
+	if err != nil {
+		return ResendResult{}, fmt.Errorf("subscribers: stamping admin resend invitation for %d: %w", id, err)
+	}
+
+	if _, err := s.outbox.EnqueueTx(ctx, tx, outbox.Item{
+		Kind:         outbox.KindImportInvite,
+		Recipient:    updated.Email,
+		SubscriberID: &updated.ID,
+		Payload: importInvitePayload{
+			ConfirmToken: newTok,
+			ManageToken:  updated.ManageToken,
+			TTLSeconds:   int64(importInviteConfirmTTL.Seconds()),
+			ImportSource: impSource,
+			SourceDetail: impSourceDetail,
+			CollectedAt:  impCollectedAt,
+		},
+	}); err != nil {
+		return ResendResult{}, fmt.Errorf("subscribers: enqueueing admin resend invitation for %d: %w", id, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return ResendResult{}, fmt.Errorf("subscribers: committing admin resend invitation tx for %d: %w", id, err)
 	}
 	return ResendResult{Subscriber: updated, PreviousConfirmSentAt: sub.ConfirmSentAt}, nil
 }

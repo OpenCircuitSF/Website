@@ -20,13 +20,19 @@
 // verification.
 import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PendingListResponse, ResendConfirmationResponse } from '../../lib/types';
+import type {
+  PendingListResponse,
+  ResendConfirmationResponse,
+  ResendInvitationResponse,
+} from '../../lib/types';
 
 const listPendingSubscribers = vi.fn<(oldestFirst?: boolean) => Promise<PendingListResponse>>();
 const resendConfirmation = vi.fn<(id: number) => Promise<ResendConfirmationResponse>>();
+const resendInvitation = vi.fn<(id: number) => Promise<ResendInvitationResponse>>();
 vi.mock('../../lib/api', () => ({
   listPendingSubscribers: (...args: unknown[]) => listPendingSubscribers(...(args as [boolean?])),
   resendConfirmation: (...args: unknown[]) => resendConfirmation(...(args as [number])),
+  resendInvitation: (...args: unknown[]) => resendInvitation(...(args as [number])),
   ApiError: class ApiError extends Error {
     status: number;
     constructor(status: number, message: string) {
@@ -45,6 +51,7 @@ afterEach(() => {
   cleanup();
   listPendingSubscribers.mockReset();
   resendConfirmation.mockReset();
+  resendInvitation.mockReset();
 });
 
 function payload(): PendingListResponse {
@@ -58,6 +65,7 @@ function payload(): PendingListResponse {
         age_seconds: 3600,
         expired: false,
         invited: false,
+        invite_resend_available: false,
         utm_source: 'newsletter',
         queue_state: 'queued',
       },
@@ -69,6 +77,7 @@ function payload(): PendingListResponse {
         age_seconds: 86400 * 20,
         expired: true,
         invited: false,
+        invite_resend_available: false,
         queue_state: 'abandoned',
       },
     ],
@@ -120,7 +129,7 @@ describe('Pending — populated list', () => {
     expect(screen.getByText('Direct')).toBeTruthy();
   });
 
-  it('#0129: marks an invited row with an "Invited" badge and disables its resend button', async () => {
+  it('#0129/#0312: marks an invited row with an "Invited" badge and offers an enabled "Resend invitation" action', async () => {
     listPendingSubscribers.mockResolvedValue({
       pending: [
         {
@@ -131,6 +140,7 @@ describe('Pending — populated list', () => {
           age_seconds: 3600,
           expired: false,
           invited: true,
+          invite_resend_available: true,
           queue_state: 'sent',
         },
       ],
@@ -142,8 +152,38 @@ describe('Pending — populated list', () => {
     });
     expect(screen.getByText('Invited')).toBeTruthy();
 
-    const resendButton = screen.getByRole('button', { name: /resend/i }) as HTMLButtonElement;
+    // Distinct action, distinct label — never the generic "Resend" button,
+    // and NOT disabled: the one-ever re-send is still available.
+    const resendButton = screen.getByRole('button', { name: 'Resend invitation' }) as HTMLButtonElement;
+    expect(resendButton.disabled).toBe(false);
+  });
+
+  it('#0312: disables "Resend invitation" once the one-ever re-send has already been used', async () => {
+    listPendingSubscribers.mockResolvedValue({
+      pending: [
+        {
+          id: 4,
+          email: 'already-resent@example.com',
+          confirm_sent_at: '2026-08-24T10:00:00Z',
+          confirm_expires_at: '2026-08-31T10:00:00Z',
+          age_seconds: 3600,
+          expired: false,
+          invited: true,
+          invite_resend_available: false,
+          invite_resent_at: '2026-08-25T10:00:00Z',
+          queue_state: 'abandoned',
+        },
+      ],
+    });
+    render(Pending);
+
+    await waitFor(() => {
+      expect(screen.getByText('already-resent@example.com')).toBeTruthy();
+    });
+
+    const resendButton = screen.getByRole('button', { name: 'Resend invitation' }) as HTMLButtonElement;
     expect(resendButton.disabled).toBe(true);
+    expect(resendButton.title).toMatch(/already received its one invitation re-send/i);
   });
 
   it('re-fetches with the flipped sort direction when the age header is clicked', async () => {
@@ -210,6 +250,72 @@ describe('Pending — resend', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/try again later/i)).toBeTruthy();
+    });
+  });
+});
+
+describe('Pending — resend invitation (#0312)', () => {
+  function invitedPayload(): PendingListResponse {
+    return {
+      pending: [
+        {
+          id: 5,
+          email: 'invitee@example.com',
+          confirm_sent_at: '2026-08-24T10:00:00Z',
+          confirm_expires_at: '2026-08-31T10:00:00Z',
+          age_seconds: 3600,
+          expired: false,
+          invited: true,
+          invite_resend_available: true,
+          queue_state: 'sent',
+        },
+      ],
+    };
+  }
+
+  it('calls resendInvitation (never resendConfirmation), shows a per-row notice, and reloads the list', async () => {
+    listPendingSubscribers.mockResolvedValue(invitedPayload());
+    resendInvitation.mockResolvedValue({
+      id: 5,
+      confirm_sent_at: '2026-08-25T12:00:00Z',
+      confirm_expires_at: '2026-09-01T12:00:00Z',
+      invite_resent_at: '2026-08-25T12:00:00Z',
+    });
+    render(Pending);
+
+    await waitFor(() => {
+      expect(screen.getByText('invitee@example.com')).toBeTruthy();
+    });
+
+    const resendButton = screen.getByRole('button', { name: 'Resend invitation' });
+    await fireEvent.click(resendButton);
+
+    expect(resendInvitation).toHaveBeenCalledWith(5);
+    expect(resendConfirmation).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(screen.getByText(/invitation resent/i)).toBeTruthy();
+    });
+    // load() runs once on mount and once more after a successful resend.
+    expect(listPendingSubscribers).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows the server error message verbatim on refusal, not invented copy', async () => {
+    listPendingSubscribers.mockResolvedValue(invitedPayload());
+    resendInvitation.mockRejectedValue(
+      new ApiError(409, 'this address has already received its one invitation re-send'),
+    );
+    render(Pending);
+
+    await waitFor(() => {
+      expect(screen.getByText('invitee@example.com')).toBeTruthy();
+    });
+
+    const resendButton = screen.getByRole('button', { name: 'Resend invitation' });
+    await fireEvent.click(resendButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/already received its one invitation re-send/i)).toBeTruthy();
     });
   });
 });

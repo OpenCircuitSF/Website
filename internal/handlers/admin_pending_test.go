@@ -24,7 +24,7 @@ import (
 func adminPendingMux(pool *pgxpool.Pool) http.Handler {
 	authStore := auth.NewStore(pool)
 	subStore := subscribers.NewStore(pool)
-	h := NewAdminPendingHandler(subStore, outbox.NewStore(pool), audit.New(pool))
+	h := NewAdminPendingHandler(subStore, outbox.NewStore(pool), authStore, audit.New(pool))
 	requireSession := middleware.RequireSession(authStore)
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
@@ -32,6 +32,7 @@ func adminPendingMux(pool *pgxpool.Pool) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /admin/subscribers/pending", requireAdmin(http.HandlerFunc(h.List)))
 	mux.Handle("POST /admin/subscribers/{id}/resend-confirmation", requireAdmin(http.HandlerFunc(h.Resend)))
+	mux.Handle("POST /admin/subscribers/{id}/resend-invitation", requireAdmin(http.HandlerFunc(h.ResendInvitation)))
 	return mux
 }
 

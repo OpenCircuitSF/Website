@@ -451,6 +451,12 @@ CREATE TABLE subscribers (
     source_detail  TEXT,                          -- e.g. 'luma:oc-soldering-2026-05'
     consent_basis  TEXT,                          -- double_opt_in | imported_prior_consent | admin_attested
     import_id      BIGINT REFERENCES subscriber_imports(id),
+    invite_resent_at TIMESTAMPTZ,                 -- 000026: write-once. The bounded,
+                                                  -- user-approved deviation from "one invitation
+                                                  -- per address, ever" — at most ONE further
+                                                  -- invitation, by an authenticated admin action
+                                                  -- (#0312). CHECK (invite_resent_at IS NULL OR
+                                                  -- invited_at IS NOT NULL)
     -- Delivery health (§6.9). The streak is the live decision variable;
     -- email_events remains the immutable history behind it.
     soft_bounce_streak INT NOT NULL DEFAULT 0,    -- consecutive Transient bounces; zeroed on Delivery

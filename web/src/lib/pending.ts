@@ -82,6 +82,23 @@ export function pendingExpiredBadgeClass(expired: boolean): string {
 }
 
 /**
+ * The "Resend invitation" button's title text for an invited row (#0312) —
+ * states the one-and-only bound plainly before the admin clicks, or names
+ * why the button is disabled once that one re-send has already been used.
+ * `invite_resent_at` is treated as "already used" whenever it is a
+ * non-empty string, matching the server's own `omitempty` JSON encoding
+ * (absent until set) rather than assuming any particular falsy shape.
+ */
+export function inviteResendButtonTitle(
+  row: Pick<PendingSubscriber, 'invite_resend_available' | 'invite_resent_at'>,
+): string {
+  if (row.invite_resend_available) {
+    return 'This is the one and only re-send this address will ever get.';
+  }
+  return 'This address has already received its one invitation re-send.';
+}
+
+/**
  * Sorts rows for display. The server already sorts (GET
  * /admin/subscribers/pending?sort=...), so this exists only for a client
  * that wants to re-sort an already-loaded page without a round trip — used

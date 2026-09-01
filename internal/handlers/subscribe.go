@@ -210,7 +210,12 @@ type subscriberStore interface {
 	// stamped for a send that then fails to be queued — the queue itself
 	// retries on its own, so the old release-on-failure compensating
 	// action has no job anymore. See this file's package doc comment.
-	ClaimAndEnqueueConfirmation(ctx context.Context, sub subscribers.Subscriber, now time.Time, cooldown time.Duration, ttl time.Duration) (bool, error)
+	// evidence (#0313/#0314) is the caller's consent evidence for THIS
+	// submission — consulted only when the claimed row is converting from
+	// an unaccepted import invitation to a self-initiated signup; pass a
+	// zero-value subscribers.RestartSignupInput when there is none to
+	// offer. See ClaimAndEnqueueConfirmation's own doc comment.
+	ClaimAndEnqueueConfirmation(ctx context.Context, sub subscribers.Subscriber, now time.Time, cooldown time.Duration, ttl time.Duration, evidence subscribers.RestartSignupInput) (bool, error)
 	ClaimAndEnqueueAlreadySubscribed(ctx context.Context, sub subscribers.Subscriber, now time.Time, cooldown time.Duration) (bool, error)
 	SetInterests(ctx context.Context, subscriberID int64, interestIDs []int64) error
 }
@@ -952,7 +957,13 @@ func (h *SubscribeHandler) existingSignup(ctx context.Context, existing subscrib
 		// (PRD §6.3). sendConfirmation's atomic claim IS the rate limit —
 		// no separate cooldown check is needed here, unlike the pre-review
 		// version of this handler (see #0026's review, finding 3).
-		h.sendConfirmation(ctx, existing, now)
+		//
+		// evidence is passed through (#0313/#0314): if this row turns out
+		// to be an unaccepted import invitation, ClaimAndEnqueueConfirmation
+		// converts it to a self-initiated signup using THIS submission's
+		// own evidence. If it is an ordinary pending resend, evidence is
+		// ignored entirely — see that method's own doc comment.
+		h.sendConfirmation(ctx, existing, evidence, now)
 
 	case subscribers.StatusUnsubscribed:
 		h.restartSignup(ctx, existing, interestIDs, evidence, now)
@@ -1000,19 +1011,48 @@ func (h *SubscribeHandler) restartSignup(ctx context.Context, existing subscribe
 		h.log.Error("subscribe: setting interests failed", "subscriber_id", sub.ID, "err", err)
 	}
 
-	h.sendConfirmation(ctx, sub, now)
+	// evidence is passed through here too (#0313/#0314): this row's
+	// import_id was already cleared by RestartSignup above if it was ever
+	// import-linked, so ClaimAndEnqueueConfirmation's converting branch
+	// never fires for a restarted signup — but sharing one call shape with
+	// the StatusPending branch above keeps this method's contract
+	// (evidence is always safe to pass; it is simply ignored when unused)
+	// uniform across both callers.
+	h.sendConfirmation(ctx, sub, evidence, now)
 	h.auditSignup(ctx, sub, evidence.SignupIP, "restarted")
 }
 
 // sendConfirmation claims and enqueues the double opt-in confirmation email
-// for a subscriber with a live confirm_token — a restarted signup, or a
-// resend to an already-pending one (a brand-new signup's own confirmation
-// is already claimed and enqueued inside Create's own transaction — see
-// newSignup — so this is never called for that case). Both remaining call
-// sites are identical from this point on, which is deliberate: #0026's
+// for a subscriber — a restarted signup, an already-pending resend, or an
+// expired-pending or invited-pending row establishing a fresh confirm link
+// for the first time (#0314/#0313; a brand-new signup's own confirmation is
+// already claimed and enqueued inside Create's own transaction — see
+// newSignup — so this is never called for that case). All three remaining
+// call sites are identical from this point on, which is deliberate: #0026's
 // review (finding 3) traced a duplicate-send bug to the resend branch
 // having its OWN, separately-timed cooldown check instead of sharing this
 // one atomic claim.
+//
+// # #0314 — no more "subscriber has no confirm token" silent return
+//
+// Before this, a nil sub.ConfirmToken (ExpirePendingSweep's own doing) made
+// this method log and return without calling the store at all — so once a
+// pending row's token was swept, that address could never sign up again
+// (issues/0314.md). ClaimAndEnqueueConfirmation now establishes a live
+// token itself when the existing one is nil or expired (see that method's
+// own doc comment), so there is no longer a reachable "pending row with no
+// usable token" state on this path for this handler to special-case. The
+// one remaining impossible state — newToken() itself failing — is already
+// a returned error, logged at Error by the call below, which is where a
+// genuine fault belongs. Do not restore this check as apparently-missing
+// defensiveness; it is missing on purpose.
+//
+// evidence is this submission's own consent evidence — SignupIP/
+// SignupUserAgent/UTM* — passed straight through to
+// ClaimAndEnqueueConfirmation, which uses it only if the claimed row turns
+// out to be converting from an unaccepted import invitation to a
+// self-initiated signup (#0313). A zero-value evidence is always safe to
+// pass when the caller has none more specific to offer.
 //
 // The claim-and-enqueue (internal/subscribers.Store.
 // ClaimAndEnqueueConfirmation, #0126) is synchronous, fast, and
@@ -1025,12 +1065,8 @@ func (h *SubscribeHandler) restartSignup(ctx context.Context, existing subscribe
 // first) is not an error, just this request declining to send. Rendering
 // and the actual mailer call happen later, off this goroutine entirely, in
 // internal/mailing.OutboxWorker.
-func (h *SubscribeHandler) sendConfirmation(ctx context.Context, sub subscribers.Subscriber, now time.Time) {
-	if sub.ConfirmToken == nil {
-		h.log.Error("subscribe: subscriber has no confirm token", "subscriber_id", sub.ID)
-		return
-	}
-	if _, err := h.subs.ClaimAndEnqueueConfirmation(ctx, sub, now, subscribeResendCooldown, subscribeConfirmTTL); err != nil {
+func (h *SubscribeHandler) sendConfirmation(ctx context.Context, sub subscribers.Subscriber, evidence subscribers.RestartSignupInput, now time.Time) {
+	if _, err := h.subs.ClaimAndEnqueueConfirmation(ctx, sub, now, subscribeResendCooldown, subscribeConfirmTTL, evidence); err != nil {
 		h.log.Error("subscribe: claiming/enqueueing confirmation send failed", "subscriber_id", sub.ID, "err", err)
 	}
 	// claimed=false is not an error — cooldown active, or a concurrent

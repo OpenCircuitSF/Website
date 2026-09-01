@@ -282,8 +282,11 @@ func servePostgres(cfg *config.Config) error {
 	// but never confirmed, and a per-subscriber resend — see
 	// internal/handlers/admin_pending.go's package doc comment.
 	// outbox.NewStore(pool) is the same stateless wrapper adminDashboardH
-	// below constructs its own copy of.
-	adminPendingH := handlers.NewAdminPendingHandler(subscribersStore, outbox.NewStore(pool), auditLogger)
+	// below constructs its own copy of. store (internal/auth, *auth.Store)
+	// is the same mailing.SettingsReader-shaped connection every other
+	// settings-reading handler in this file already uses, wired here for
+	// #0312's ResendInvitation advisory physical_address pre-check.
+	adminPendingH := handlers.NewAdminPendingHandler(subscribersStore, outbox.NewStore(pool), store, auditLogger)
 
 	// Admin suppression-list screen (#0100, PRD §5.2/§6.2): the admin
 	// surface over suppressionsStore that #0033 built but never gave a
@@ -1023,6 +1026,7 @@ func adminRoutes(
 			// comment above).
 			adminRoute{http.MethodGet, "/admin/subscribers/pending", http.HandlerFunc(adminPendingH.List)},
 			adminRoute{http.MethodPost, "/admin/subscribers/{id}/resend-confirmation", http.HandlerFunc(adminPendingH.Resend)},
+			adminRoute{http.MethodPost, "/admin/subscribers/{id}/resend-invitation", http.HandlerFunc(adminPendingH.ResendInvitation)},
 		)
 	}
 	if adminSuppressionsH != nil {

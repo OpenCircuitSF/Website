@@ -201,6 +201,21 @@ export interface PendingSubscriber {
   utm_campaign?: string;
   /** #0129: true for a still-pending row an import invited (rather than a website signup awaiting confirmation). */
   invited: boolean;
+  /**
+   * #0312: true exactly when `invited` and the row has not already used its
+   * one admin re-send (`invited && invite_resent_at == null`). `invited`
+   * stays true forever on an invited row; this flips to false the moment
+   * the one-ever re-send is spent — use this, not `invited` alone, to
+   * decide whether to render an enabled "Resend invitation" action.
+   */
+  invite_resend_available: boolean;
+  /**
+   * #0312: set once an admin has used the one invitation re-send this
+   * address will ever get (the bounded, user-approved PRD §6.10.1
+   * deviation — see internal/subscribers/pending.go's AdminResendInvitation
+   * doc comment). Absent/undefined until then.
+   */
+  invite_resent_at?: string;
   /** The latest outbound_queue row's status for this address's confirmation (or, for an invited row, invitation) mail: "queued" | "sending" | "sent" | "abandoned" | "none" (no row exists) | "unknown" (server has no outbound_queue backing, STORAGE=json). */
   queue_state: string;
 }
@@ -215,6 +230,14 @@ export interface ResendConfirmationResponse {
   id: number;
   confirm_sent_at: string;
   confirm_expires_at: string;
+}
+
+/** POST /admin/subscribers/{id}/resend-invitation success body (#0312). Matches internal/handlers/admin_pending.go's resendInvitationResponse. */
+export interface ResendInvitationResponse {
+  id: number;
+  confirm_sent_at: string;
+  confirm_expires_at: string;
+  invite_resent_at: string;
 }
 
 /**
