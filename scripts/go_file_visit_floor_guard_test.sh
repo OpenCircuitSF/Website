@@ -884,11 +884,14 @@ fi
 # mutate-and-recheck already handles, so each gets its own oracle here --
 # both textual/independent (this script never compiles or runs Go, per the
 # header comment), and per CLAUDE.md §8's `#0258` lesson, the oracle for
-# each is NOT a heredoc copy of the guard's own text: the exemption check
-# recomputes a `&&` count from the tracked file itself (not a hardcoded
-# "2"), and the regex check hands the EXTRACTED pattern to a different regex
-# engine (Python's `re`, not Go's RE2) so a single edit to the Go source
-# cannot satisfy both the guard and this oracle by construction.
+# each is NOT a heredoc copy of the guard's own text: the exemption check's
+# conjunct count is re-derived from the tracked file itself, and compared
+# against a literal "2" that lives in a different file from its subject, so
+# a single `sed` applied to both the guard and this harness still fails
+# (verified) -- and the regex check hands the EXTRACTED pattern to a
+# different regex engine (Python's `re`, not Go's RE2) so a single edit to
+# the Go source cannot satisfy both the guard and this oracle by
+# construction.
 echo
 echo "== line citation guard shape (#0356) =="
 
@@ -905,14 +908,18 @@ LINE_GUARD_SHA_BEFORE="$(sha_of "$LINE_GUARD_SRC")" || fatal "sha_of fatal-exite
 # exactly two "&&". A mutation that weakens the conjunction (fewer
 # predicates required, or "||" in place of "&&") changes that count. The
 # oracle re-derives "how many conjuncts does the TRACKED file actually
-# require" from the file itself via grep, rather than hardcoding "2" --
-# CLAUDE.md §8's #0258 lesson about a copy of the answer stored next to the
-# question.
+# require" from the file itself via grep, and compares that re-derived
+# count against a literal "2" that lives here, in this script, not in the
+# tracked file -- CLAUDE.md §8's #0258 lesson: it is the fact that the "2"
+# lives in a DIFFERENT file from the guard it judges (so one `sed` applied
+# to both cannot satisfy both) that is the protection, not the
+# re-derivation step alone.
 EXEMPT_RETURN_PATTERN='^[[:space:]]*return commentIsIndented && isSelfCitation && groupHasTranscriptMarker[[:space:]]*$'
-REAL_RETURN_LINE="$(grep -E "$EXEMPT_RETURN_PATTERN" "$LINE_GUARD_SRC")"
-if [ -z "$REAL_RETURN_LINE" ]; then
-  fail "REGRESSION #0356: lineCitationIsExempt's tracked return statement no longer reads 'return commentIsIndented && isSelfCitation && groupHasTranscriptMarker' -- either it was weakened, or this harness's pattern has drifted from the guard's real text. Investigate with: grep -n 'func lineCitationIsExempt' -A2 $LINE_GUARD_FILE"
+EXEMPT_RETURN_COUNT="$(grep -cE "$EXEMPT_RETURN_PATTERN" "$LINE_GUARD_SRC" || true)"
+if [ "$EXEMPT_RETURN_COUNT" -ne 1 ]; then
+  fail "REGRESSION #0356: lineCitationIsExempt's three-conjunct return statement appears ${EXEMPT_RETURN_COUNT} time(s) in $LINE_GUARD_FILE, not exactly 1 -- 0 means it was weakened or renamed; >1 means a decoy copy elsewhere in the file shadows the real (possibly weakened) definition for this oracle's grep, which is CLAUDE.md §8's GUARD-0208 begin/end-count rule and #0356 criterion 9's 'appears exactly once'."
 else
+  REAL_RETURN_LINE="$(grep -E "$EXEMPT_RETURN_PATTERN" "$LINE_GUARD_SRC")"
   REAL_AMP_COUNT="$(printf '%s' "$REAL_RETURN_LINE" | grep -o '&&' | wc -l | tr -d ' ')"
   if [ "$REAL_AMP_COUNT" -eq 2 ]; then
     pass "tracked lineCitationIsExempt requires all three predicates (2 '&&' in its return statement, i.e. a three-way conjunction)"
@@ -940,12 +947,23 @@ fi
 # backtick-delimited raw string literal after regexp.MustCompile) and
 # handed to Python's `re` module -- a different regex engine from Go's RE2,
 # so a single edit to the Go source cannot satisfy both the real guard and
-# this oracle by construction. Real fixture citation:
-# "internal/mailing/worker.go:625" (a real shape this tree's comments use,
-# not invented for this check alone). The tracked pattern must match it;
-# a "loosened to match nothing" mutant (the raw string replaced with a
-# literal containing no ".", ":", or digit) must not.
-FIXTURE_CITATION="internal/mailing/worker.go:625"
+# this oracle by construction. A SET of fixtures, not one: a pattern
+# narrowed to satisfy a single fixture (e.g. hardcoded to match only
+# "internal/mailing/worker.go:625" and nothing else) would otherwise pass
+# this oracle while being dead against every other citation in the tree --
+# #0356's review measured this exact disarmament, including a real
+# citation injected elsewhere going uncaught by `go test` at the same
+# time this harness reported all guards holding. The must-match set
+# exercises different filename/line-number shapes; the must-not-match set
+# pins the .go-only narrowness the census (#0356's plan §3) relied on.
+LINE_CITATION_MUST_MATCH=("internal/mailing/worker.go:625" "sitemap.go:86" "a.go:1" "x_test.go:1234")
+LINE_CITATION_MUST_NOT_MATCH=("PRD.md:671" "citationGuard.test.ts:76" "WorkshopsIndex.svelte:7")
+
+LINE_CITATION_PATTERN_DECL_PATTERN='^var lineCitationPattern = regexp\.MustCompile\(`'
+LINE_CITATION_PATTERN_DECL_COUNT="$(grep -cE "$LINE_CITATION_PATTERN_DECL_PATTERN" "$LINE_GUARD_SRC" || true)"
+if [ "$LINE_CITATION_PATTERN_DECL_COUNT" -ne 1 ]; then
+  fail "REGRESSION #0356: lineCitationPattern's declaration ('var lineCitationPattern = regexp.MustCompile(\`...\`)') appears ${LINE_CITATION_PATTERN_DECL_COUNT} time(s) in $LINE_GUARD_FILE, not exactly 1 -- 0 means it was renamed or removed; >1 means a decoy declaration elsewhere in the file shadows the real (possibly loosened) one for this oracle's extraction, which is CLAUDE.md §8's GUARD-0208 begin/end-count rule and #0356 criterion 9's 'appears exactly once'."
+fi
 
 extract_line_citation_pattern() {
   local src="$1"
@@ -975,18 +993,36 @@ if [ -z "$REAL_PATTERN" ]; then
 fi
 REAL_PATTERN_FILE="$WORKDIR/line_citation_pattern.real.txt"
 printf '%s' "$REAL_PATTERN" > "$REAL_PATTERN_FILE"
-REAL_RESULT="$(python_regex_matches "$REAL_PATTERN_FILE" "$FIXTURE_CITATION")"
-case "$REAL_RESULT" in
-  MATCH)
-    pass "tracked lineCitationPattern matches the real fixture citation \"${FIXTURE_CITATION}\" under Python's independent regex engine"
-    ;;
-  NOMATCH)
-    fail "REGRESSION #0356: tracked lineCitationPattern does NOT match \"${FIXTURE_CITATION}\" -- the committed regex itself no longer catches an ordinary <file>.go:<int> citation"
-    ;;
-  *)
-    fatal "python_regex_matches produced an unexpected result ('${REAL_RESULT}') for the tracked pattern -- refusing to judge. Check python3 is a working interpreter with the 're' module."
-    ;;
-esac
+
+for FIXTURE_CITATION in "${LINE_CITATION_MUST_MATCH[@]}"; do
+  REAL_RESULT="$(python_regex_matches "$REAL_PATTERN_FILE" "$FIXTURE_CITATION")"
+  case "$REAL_RESULT" in
+    MATCH)
+      pass "tracked lineCitationPattern matches the real fixture citation \"${FIXTURE_CITATION}\" under Python's independent regex engine"
+      ;;
+    NOMATCH)
+      fail "REGRESSION #0356: tracked lineCitationPattern does NOT match \"${FIXTURE_CITATION}\" -- the committed regex itself no longer catches an ordinary <file>.go:<int> citation"
+      ;;
+    *)
+      fatal "python_regex_matches produced an unexpected result ('${REAL_RESULT}') for the tracked pattern against \"${FIXTURE_CITATION}\" -- refusing to judge. Check python3 is a working interpreter with the 're' module."
+      ;;
+  esac
+done
+
+for FIXTURE_NON_CITATION in "${LINE_CITATION_MUST_NOT_MATCH[@]}"; do
+  REAL_RESULT="$(python_regex_matches "$REAL_PATTERN_FILE" "$FIXTURE_NON_CITATION")"
+  case "$REAL_RESULT" in
+    NOMATCH)
+      pass "tracked lineCitationPattern correctly does NOT match non-.go extension \"${FIXTURE_NON_CITATION}\" under Python's independent regex engine"
+      ;;
+    MATCH)
+      fail "REGRESSION #0356: tracked lineCitationPattern matches \"${FIXTURE_NON_CITATION}\", a non-.go extension #0356's plan deliberately excludes -- the committed regex has widened beyond .go files"
+      ;;
+    *)
+      fatal "python_regex_matches produced an unexpected result ('${REAL_RESULT}') for the tracked pattern against \"${FIXTURE_NON_CITATION}\" -- refusing to judge. Check python3 is a working interpreter with the 're' module."
+      ;;
+  esac
+done
 
 REGEX_MUTANT="$WORKDIR/$(basename "$LINE_GUARD_FILE").regex_loosened"
 sed 's|^var lineCitationPattern = regexp\.MustCompile(`.*`)$|var lineCitationPattern = regexp.MustCompile(`zzz_no_possible_match_zzz`)|' "$LINE_GUARD_SRC" > "$REGEX_MUTANT"

@@ -268,11 +268,13 @@ func TestNewAuthHandler_NilLoggerDoesNotPanic(t *testing.T) {
 // transaction that inserts the token row), so those two Service methods no
 // longer call the mailer at all — see their own doc comments.
 // SendVerification and SendRecovery are kept on the Mailer interface
-// regardless (#0278's decision) and are still the only place that produces
-// errEnqueueFailed's fixed, sanitized shape, so calling them directly here
-// — rather than going through RegistrationService/RecoveryService — is what
-// gets a real, unmodified production error value into the fake
-// registrar/recoverer below.
+// regardless (#0278's decision) and remain, for the registration/recovery
+// paths, the only place that produces errEnqueueFailed's fixed, sanitized
+// shape — SendSessionsRevoked produces the same shape too, via the same
+// logEnqueueFailure, but for the session-revocation path, not either of
+// these — so calling them directly here, rather than going through
+// RegistrationService/RecoveryService, is what gets a real, unmodified
+// production error value into the fake registrar/recoverer below.
 func TestAuthHandler_MailerErrorDoesNotLeakEmail(t *testing.T) {
 	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
