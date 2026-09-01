@@ -250,9 +250,19 @@ func scanInvalidatorSatisfiers(scope *types.Scope, invalidateOnly *types.Interfa
 			// retired AST scan's structTypesWithEmbeddedFields tripwire
 			// caught and this *types.Named-only oracle could not (#0353).
 			// target is not a *types.Named, so checking only the pointer
-			// form (as the loop below does) is not sound here: promotion
-			// from an embedded value field lands only on the literal's
-			// pointer form, so check both.
+			// form (as the loop below does) is not sound here, and neither
+			// disjunct below is redundant -- each is load-bearing for the
+			// opposite reason (#0354): `type X = struct{ Site }` (a VALUE
+			// embed of a pointer-receiver type) implements only in the
+			// pointer form, since promotion from an embedded value field
+			// lands on the literal's pointer method set, not its value
+			// method set; `type X = *struct{ *Site }` (an alias to a
+			// POINTER literal) implements only in the value form, since
+			// target here already IS the pointer type and wrapping it again
+			// with types.NewPointer produces `**struct`, whose method set is
+			// always empty. Dropping either disjunct silently reopens the
+			// alias shape the other one exists to catch --
+			// TestInvalidatorSatisfierSet_AliasToTypeLiteral pins both.
 			concreteTypesChecked++
 			if types.Implements(target, invalidateOnly) || types.Implements(types.NewPointer(target), invalidateOnly) {
 				got[name] = true
@@ -315,6 +325,26 @@ type FeedCache = struct {
 // spelling of a type already checked under its own name, and must NOT be
 // double-counted as a separate satisfier.
 type AliasToNamed = Site
+
+// AliasValueEmbed pins the disjunct FeedCache above cannot pin on its own
+// (#0354): a VALUE embed of a pointer-receiver type implements
+// interface{ Invalidate() } in POINTER form only (types.Implements(target)
+// is false; types.Implements(types.NewPointer(target)) is true), because
+// promotion from an embedded value field lands on the literal's pointer
+// method set. FeedCache implements in both forms and so cannot by itself
+// prove the pointer-form disjunct is load-bearing.
+type AliasValueEmbed = struct {
+	Site
+}
+
+// AliasToPointerLiteral pins the other disjunct (#0354): an alias to a
+// POINTER literal implements interface{ Invalidate() } in VALUE form only
+// (types.Implements(target) is true; types.Implements(types.NewPointer(target))
+// is false), because target here already IS the pointer type, and wrapping
+// it again produces **struct, whose method set is always empty.
+type AliasToPointerLiteral = *struct {
+	*Site
+}
 `
 
 	fset := token.NewFileSet()
@@ -352,6 +382,23 @@ type AliasToNamed = Site
 			"type) as its own satisfier -- it should be skipped as a redundant spelling of Site " +
 			"(#0337's third review, N2), and double-counting it risks masking a real regression under " +
 			"an unrelated name")
+	}
+
+	// #0354: FeedCache alone cannot discriminate which disjunct of
+	// `types.Implements(target, ...) || types.Implements(types.NewPointer(target), ...)`
+	// is doing the work, because it happens to implement in both forms.
+	// These two pin each disjunct separately -- dropping either one from the
+	// `||` leaves FeedCache (and TestInvalidatorSatisfierSet) green while
+	// silently missing one of these.
+	if !got["AliasValueEmbed"] {
+		t.Error("scanInvalidatorSatisfiers did not report AliasValueEmbed (a value embed of a " +
+			"pointer-receiver type, which implements interface{ Invalidate() } in POINTER form only) as " +
+			"a satisfier -- the pointer-form disjunct of the `||` is missing or broken")
+	}
+	if !got["AliasToPointerLiteral"] {
+		t.Error("scanInvalidatorSatisfiers did not report AliasToPointerLiteral (an alias to a pointer " +
+			"literal, which implements interface{ Invalidate() } in VALUE form only) as a satisfier -- " +
+			"the value-form disjunct of the `||` is missing or broken")
 	}
 }
 
