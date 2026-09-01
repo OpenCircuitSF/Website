@@ -147,7 +147,8 @@ var citationTargetPlaceholderSegments = map[string]bool{
 // for the same convention seen less often. Used only to recognize an
 // INTERMEDIATE segment of a joined-names citation as "this is also a
 // known document, not a directory" (see pathCitationIsExcluded) — the
-// real instance, campaign_markdown.go:14's "PRD/CLAUDE.md §9" (meaning
+// real instance, campaign_markdown.go's Raw-HTML-decision comment's
+// "PRD/CLAUDE.md §9" (meaning
 // "PRD §9 and CLAUDE.md §9", not a nested path under a "PRD/" directory
 // that does not exist), is what motivates including "PRD" here even
 // though citationTargetPathPattern's own bare-suffix alternation
@@ -199,9 +200,10 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 	// A citation of something that legitimately no longer exists,
 	// documented honestly as history rather than asserted as present —
 	// the same shape #0196's Test*-citation guard discounts for "renamed
-	// from". Two real instances: request.go:25's "(deleted in #0002
+	// from". Two real instances: clientIP's doc comment (request.go)'s
+	// "(deleted in #0002
 	// along with the rest of internal/handlers/redirect.go)", and
-	// testutil_test.go:7's "Ported alongside clientIP (request.go) from
+	// itoa's doc comment (testutil_test.go)'s "Ported alongside clientIP (request.go) from
 	// the deleted\ninternal/handlers/url_filters_test.go". Checked in the
 	// same 60-character window as the hypothetical markers above — both
 	// real instances sit well inside it.
@@ -249,12 +251,14 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 	// citationTargetBareDocNames — joined by a bare "/" as a list
 	// separator, not a nested path — e.g.
 	// "campaigns_test.go/audience_test.go" (a real instance,
-	// worker_test_helpers_test.go:2: "following
+	// worker_test_helpers_test.go's own file-header comment: "following
 	// campaigns_test.go/audience_test.go's own conventions"),
 	// "Campaigns.svelte/CampaignEditor.svelte" (the equivalent web/
 	// shape, found in the parallel dry run behind citationGuard.test.ts),
-	// "PRD/CLAUDE.md" (campaign_markdown.go:14, meaning "PRD §9 and
-	// CLAUDE.md §9", not a nested path), or admin_workshops.go:25's
+	// "PRD/CLAUDE.md" (campaign_markdown.go's Raw-HTML-decision comment,
+	// meaning "PRD §9 and
+	// CLAUDE.md §9", not a nested path), or admin_workshops.go's
+	// package-header comment's
 	// own FOUR-segment list citation (not spelled out here as a literal
 	// slash-joined token, since this comment is itself scanned by the
 	// guard below — see that file's line 25 for the real text: a
@@ -283,8 +287,8 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 	// unresolvable path. This is a checked, not assumed, tradeoff:
 	// flipping this loop to "every"-semantics (requiring every
 	// intermediate segment to qualify, not just the first matching one)
-	// and re-running the tree-wide scan surfaces admin_workshops.go:25's
-	// own four-segment citation above as a failure — a legitimate list
+	// and re-running the tree-wide scan surfaces admin_workshops.go's
+	// package-header comment's own four-segment citation above as a failure — a legitimate list
 	// citation of two real files that "every" wrongly flags, because its
 	// first two segments ("internal", "seo") are plain directory names,
 	// not filenames. (That citation is never spelled out above as a
@@ -293,7 +297,7 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 	// scanned by the guard below, so quoting the literal here would make
 	// any stated count self-referential. With no literal quoted, the
 	// every-semantics hit count IS stable, and it is exactly one:
-	// admin_workshops.go:25's citation, and nothing else in the tree.)
+	// admin_workshops.go's package-header comment's citation, and nothing else in the tree.)
 	// That failure is the positive case for keeping
 	// "any", not evidence against it: it shows "every" produces a false
 	// positive on a real citation. The residual cost of "any" is the
@@ -314,8 +318,9 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 // (in order): the exact repo-relative path; the same path with ".md"
 // appended (the bare "HANDOFF", "README", or "LICENSE" form); a real path that ENDS
 // WITH "/" + cited (the shortened-citation shape this tree actually uses —
-// "handlers/auth.go" for internal/handlers/auth.go,
-// logout_all_test.go:285; "admin/Campaigns.svelte" for
+// "handlers/auth.go" for internal/handlers/auth.go, cited that way in
+// internal/handlers/logout_all_test.go's TestLogoutAll_HTTP_Transports
+// comment (not internal/auth's identically-named file); "admin/Campaigns.svelte" for
 // web/src/views/admin/Campaigns.svelte); and the same suffix check with
 // ".md" appended. Then, ONLY if none of those resolves and the first
 // segment carries no extension of its own, retries with that first
@@ -705,7 +710,7 @@ func TestCitationTargetPathPatternExcludesDiscountedShapes(t *testing.T) {
 	}
 
 	// Two whole filenames joined by a bare "/" — the real instance,
-	// worker_test_helpers_test.go:2's
+	// worker_test_helpers_test.go's own file-header comment's
 	// "campaigns_test.go/audience_test.go".
 	joinedText := "following " + "campaigns_test.go" + "/" + "audience_test.go" + "'s own conventions"
 	s, e = testCase(joinedText)
@@ -738,7 +743,8 @@ func TestPathCitationResolvesShortenedAndLeadingWordForms(t *testing.T) {
 		t.Error("exact repo-relative path did not resolve")
 	}
 
-	// Shortened form (drops "internal/") — logout_all_test.go:285's real
+	// Shortened form (drops "internal/") — internal/handlers's
+	// TestLogoutAll_HTTP_Transports comment's real
 	// "handlers/auth.go".
 	if !pathCitationResolves(paths, "handlers/auth.go") {
 		t.Error("shortened suffix path \"handlers/auth.go\" did not resolve against internal/handlers/auth.go")

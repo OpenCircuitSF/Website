@@ -77,8 +77,9 @@ func TestSitemap_ExcludesUnpublishedWorkshops(t *testing.T) {
 		// draft canceled outright). canceled-2 WAS published before the
 		// cancel (Published: true, mirroring published_at staying
 		// non-NULL across the transition -- see #0171's review notes).
-		// #0174: the sitemap gate is status-only (sitemap.go:86 checks
-		// only w.Status, never w.Published), so canceled-2 is the fixture
+		// #0174: the sitemap gate is status-only (Sitemap.Build's own
+		// "w.Status != WorkshopPublished" check, sitemap.go, checks only
+		// w.Status, never w.Published), so canceled-2 is the fixture
 		// that actually exercises the gate -- a hypothetical regression
 		// that swapped the check to key off Published instead of Status
 		// would still exclude canceled-1 (Published already false) but

@@ -235,14 +235,15 @@ floor_plausible() {
 # (yes = include _test.go, matching walkGoFiles' raw yield; no = non-test
 # only, matching the parsed population) | space-separated repo-relative
 # scan roots | the guard test name(s) this floor protects, for messages.
-FLOOR_NAMES=(citedTestScanRootsMinPlausibleFileCount citationGuardMinPlausibleFileCount auditEmailMetadataMinPlausibleFileCount)
-FLOOR_FILES=(internal/handlers/dangling_test_citation_guard_test.go internal/handlers/citation_guard_test.go internal/handlers/audit_email_metadata_guard_test.go)
-FLOOR_INCLUDE_TEST=(yes no no)
-FLOOR_ROOTS=("internal cmd web" "internal cmd web" "internal cmd")
+FLOOR_NAMES=(citedTestScanRootsMinPlausibleFileCount citationGuardMinPlausibleFileCount auditEmailMetadataMinPlausibleFileCount lineCitationGuardMinPlausibleFileCount)
+FLOOR_FILES=(internal/handlers/dangling_test_citation_guard_test.go internal/handlers/citation_guard_test.go internal/handlers/audit_email_metadata_guard_test.go internal/handlers/line_citation_guard_test.go)
+FLOOR_INCLUDE_TEST=(yes no no yes)
+FLOOR_ROOTS=("internal cmd web" "internal cmd web" "internal cmd" "internal cmd web")
 FLOOR_TESTS=(
   "TestNoCommentCitesUnresolvedPathOrSection, TestNoCommentCitesUndefinedTestFunction, TestNoDocCommentNamesADifferentDeclarationInSameFile"
   "TestNoAdminFacingStringCitesInternalDocs"
   "TestAuditEntryEmailMetadataMatchesKnownSites"
+  "TestNoCommentCitesGoFileByLineNumber (#0356)"
 )
 
 SHA_BEFORE=""
@@ -864,6 +865,160 @@ elif [ "$OUTBOX_SHA_BEFORE" = "$OUTBOX_SHA_AFTER" ]; then
   pass "$OUTBOX_GUARD_FILE unchanged across this run -- every mutation happened on a private copy in $WORKDIR, never the tracked file"
 else
   fail "CRITICAL: $OUTBOX_GUARD_FILE's sha256 changed during this run. Investigate immediately with: git diff -- $OUTBOX_GUARD_FILE"
+fi
+
+# ---------------------------------------------------------------------------
+# Line-citation guard shape (#0356): internal/handlers/line_citation_guard_test.go
+#
+# TestNoCommentCitesGoFileByLineNumber's population floor
+# (lineCitationGuardMinPlausibleFileCount) is already covered above, folded
+# into the shared FLOOR_NAMES loop (it walks the identical citedTestScanRoots
+# with the identical include-tests walk, so it needed no new machinery). What
+# is NOT covered by that loop, or by anything else in this script, is the
+# guard's own SHAPE -- per CLAUDE.md §8 ("the guard's own shape belongs in
+# the external harness... the other failure mode is 'the checker was
+# edited'"), #0356's plan named two specific edits that would silently
+# disarm this guard while leaving it green: weakening the three-predicate
+# exemption to fewer conjuncts, and loosening the citation regex so it
+# matches nothing. Neither is a `const NNN = 0` shape the FLOOR_NAMES loop's
+# mutate-and-recheck already handles, so each gets its own oracle here --
+# both textual/independent (this script never compiles or runs Go, per the
+# header comment), and per CLAUDE.md §8's `#0258` lesson, the oracle for
+# each is NOT a heredoc copy of the guard's own text: the exemption check
+# recomputes a `&&` count from the tracked file itself (not a hardcoded
+# "2"), and the regex check hands the EXTRACTED pattern to a different regex
+# engine (Python's `re`, not Go's RE2) so a single edit to the Go source
+# cannot satisfy both the guard and this oracle by construction.
+echo
+echo "== line citation guard shape (#0356) =="
+
+LINE_GUARD_FILE="internal/handlers/line_citation_guard_test.go"
+LINE_GUARD_SRC="$REPO/$LINE_GUARD_FILE"
+[ -f "$LINE_GUARD_SRC" ] || fatal "$LINE_GUARD_FILE not found -- has it moved? Update LINE_GUARD_FILE."
+command -v python3 >/dev/null || fatal "python3 not on PATH -- required for this section's regex-loosening oracle (a second, independent regex engine from Go's RE2, per CLAUDE.md §8)"
+
+LINE_GUARD_SHA_BEFORE="$(sha_of "$LINE_GUARD_SRC")" || fatal "sha_of fatal-exited hashing $LINE_GUARD_SRC -- see the FATAL line above."
+
+# -- Sub-check 1: exemption predicate weakened from three conjuncts to one --
+#
+# lineCitationIsExempt's real body is a single `return a && b && c` line --
+# exactly two "&&". A mutation that weakens the conjunction (fewer
+# predicates required, or "||" in place of "&&") changes that count. The
+# oracle re-derives "how many conjuncts does the TRACKED file actually
+# require" from the file itself via grep, rather than hardcoding "2" --
+# CLAUDE.md §8's #0258 lesson about a copy of the answer stored next to the
+# question.
+EXEMPT_RETURN_PATTERN='^[[:space:]]*return commentIsIndented && isSelfCitation && groupHasTranscriptMarker[[:space:]]*$'
+REAL_RETURN_LINE="$(grep -E "$EXEMPT_RETURN_PATTERN" "$LINE_GUARD_SRC")"
+if [ -z "$REAL_RETURN_LINE" ]; then
+  fail "REGRESSION #0356: lineCitationIsExempt's tracked return statement no longer reads 'return commentIsIndented && isSelfCitation && groupHasTranscriptMarker' -- either it was weakened, or this harness's pattern has drifted from the guard's real text. Investigate with: grep -n 'func lineCitationIsExempt' -A2 $LINE_GUARD_FILE"
+else
+  REAL_AMP_COUNT="$(printf '%s' "$REAL_RETURN_LINE" | grep -o '&&' | wc -l | tr -d ' ')"
+  if [ "$REAL_AMP_COUNT" -eq 2 ]; then
+    pass "tracked lineCitationIsExempt requires all three predicates (2 '&&' in its return statement, i.e. a three-way conjunction)"
+  else
+    fail "REGRESSION #0356: tracked lineCitationIsExempt's return statement has ${REAL_AMP_COUNT} '&&' occurrence(s), not the 2 a three-way conjunction requires -- the exemption has been weakened in the committed source itself"
+  fi
+fi
+
+EXEMPT_MUTANT="$WORKDIR/$(basename "$LINE_GUARD_FILE").exempt_weakened"
+sed 's/return commentIsIndented && isSelfCitation && groupHasTranscriptMarker/return commentIsIndented/' "$LINE_GUARD_SRC" > "$EXEMPT_MUTANT"
+if ! grep -qE '^[[:space:]]*return commentIsIndented[[:space:]]*$' "$EXEMPT_MUTANT"; then
+  fatal "mutation did not take on the copy of ${LINE_GUARD_FILE} for the exemption weakening -- aborting before judging anything."
+fi
+MUT_RETURN_LINE="$(grep -E '^[[:space:]]*return commentIsIndented[[:space:]]*$' "$EXEMPT_MUTANT" | head -1)"
+MUT_AMP_COUNT="$(printf '%s' "$MUT_RETURN_LINE" | grep -o '&&' | wc -l | tr -d ' ')"
+if [ "$MUT_AMP_COUNT" -eq 2 ]; then
+  fail "REGRESSION #0356: this harness judged the exemption-weakened mutant (single predicate, 'return commentIsIndented') as still requiring 2 conjuncts -- the oracle failed to detect the weakening"
+else
+  pass "the single-predicate mutant (0 '&&', down from the tracked file's 2) is correctly detected as weakened by this external oracle, independent of go test -- a compile-and-run check could not distinguish 'weakened to one predicate' from 'working correctly on inputs where the dropped predicates happened to agree', which is exactly the fail-open this textual oracle avoids"
+fi
+
+# -- Sub-check 2: citation regex loosened so it matches nothing --
+#
+# lineCitationPattern's source is extracted from the tracked file (the
+# backtick-delimited raw string literal after regexp.MustCompile) and
+# handed to Python's `re` module -- a different regex engine from Go's RE2,
+# so a single edit to the Go source cannot satisfy both the real guard and
+# this oracle by construction. Real fixture citation:
+# "internal/mailing/worker.go:625" (a real shape this tree's comments use,
+# not invented for this check alone). The tracked pattern must match it;
+# a "loosened to match nothing" mutant (the raw string replaced with a
+# literal containing no ".", ":", or digit) must not.
+FIXTURE_CITATION="internal/mailing/worker.go:625"
+
+extract_line_citation_pattern() {
+  local src="$1"
+  grep -E '^var lineCitationPattern = regexp\.MustCompile\(`' "$src" \
+    | sed -E 's/^var lineCitationPattern = regexp\.MustCompile\(`(.*)`\)$/\1/'
+}
+
+python_regex_matches() {
+  local pattern_file="$1" fixture="$2"
+  python3 - "$pattern_file" "$fixture" <<'PYEOF'
+import re, sys
+pattern_file, fixture = sys.argv[1], sys.argv[2]
+with open(pattern_file) as f:
+    pat = f.read()
+try:
+    matched = bool(re.search(pat, fixture))
+except re.error as e:
+    print("REGEX_ERROR:" + str(e))
+    sys.exit(0)
+print("MATCH" if matched else "NOMATCH")
+PYEOF
+}
+
+REAL_PATTERN="$(extract_line_citation_pattern "$LINE_GUARD_SRC")"
+if [ -z "$REAL_PATTERN" ]; then
+  fatal "could not extract lineCitationPattern's raw string from $LINE_GUARD_FILE -- the declaration's shape has changed; update extract_line_citation_pattern to match."
+fi
+REAL_PATTERN_FILE="$WORKDIR/line_citation_pattern.real.txt"
+printf '%s' "$REAL_PATTERN" > "$REAL_PATTERN_FILE"
+REAL_RESULT="$(python_regex_matches "$REAL_PATTERN_FILE" "$FIXTURE_CITATION")"
+case "$REAL_RESULT" in
+  MATCH)
+    pass "tracked lineCitationPattern matches the real fixture citation \"${FIXTURE_CITATION}\" under Python's independent regex engine"
+    ;;
+  NOMATCH)
+    fail "REGRESSION #0356: tracked lineCitationPattern does NOT match \"${FIXTURE_CITATION}\" -- the committed regex itself no longer catches an ordinary <file>.go:<int> citation"
+    ;;
+  *)
+    fatal "python_regex_matches produced an unexpected result ('${REAL_RESULT}') for the tracked pattern -- refusing to judge. Check python3 is a working interpreter with the 're' module."
+    ;;
+esac
+
+REGEX_MUTANT="$WORKDIR/$(basename "$LINE_GUARD_FILE").regex_loosened"
+sed 's|^var lineCitationPattern = regexp\.MustCompile(`.*`)$|var lineCitationPattern = regexp.MustCompile(`zzz_no_possible_match_zzz`)|' "$LINE_GUARD_SRC" > "$REGEX_MUTANT"
+if ! grep -q 'zzz_no_possible_match_zzz' "$REGEX_MUTANT"; then
+  fatal "mutation did not take on the copy of ${LINE_GUARD_FILE} for the regex-loosening check -- the sed anchor has drifted from lineCitationPattern's real declaration; aborting before judging anything."
+fi
+MUT_PATTERN="$(extract_line_citation_pattern "$REGEX_MUTANT")"
+if [ "$MUT_PATTERN" != "zzz_no_possible_match_zzz" ]; then
+  fatal "re-extraction from the regex-loosened mutant returned '${MUT_PATTERN}', not the expected literal -- the mutation and the extraction disagree; refusing to judge."
+fi
+MUT_PATTERN_FILE="$WORKDIR/line_citation_pattern.mutant.txt"
+printf '%s' "$MUT_PATTERN" > "$MUT_PATTERN_FILE"
+MUT_RESULT="$(python_regex_matches "$MUT_PATTERN_FILE" "$FIXTURE_CITATION")"
+case "$MUT_RESULT" in
+  NOMATCH)
+    pass "the regex-loosened mutant (pattern replaced with a literal containing no '.', ':', or digit) correctly fails to match \"${FIXTURE_CITATION}\" -- detected as loosened by this external oracle, independent of go test"
+    ;;
+  MATCH)
+    fail "REGRESSION #0356: this harness judged the regex-loosened mutant as STILL matching \"${FIXTURE_CITATION}\" -- the oracle failed to catch a citation pattern replaced with a non-matching literal"
+    ;;
+  *)
+    fatal "python_regex_matches produced an unexpected result ('${MUT_RESULT}') for the mutant pattern -- refusing to judge."
+    ;;
+esac
+
+LINE_GUARD_SHA_AFTER="$(sha_of "$LINE_GUARD_SRC")" || fatal "sha_of fatal-exited re-hashing $LINE_GUARD_SRC -- see the FATAL line above."
+if [ -z "$LINE_GUARD_SHA_BEFORE" ] || [ -z "$LINE_GUARD_SHA_AFTER" ]; then
+  fail "CRITICAL: line-citation guard file sha256 computation produced an empty result -- refusing to treat two blanks as a match."
+elif [ "$LINE_GUARD_SHA_BEFORE" = "$LINE_GUARD_SHA_AFTER" ]; then
+  pass "$LINE_GUARD_FILE unchanged across this run -- every mutation happened on a private copy in $WORKDIR, never the tracked file"
+else
+  fail "CRITICAL: $LINE_GUARD_FILE's sha256 changed during this run. Investigate immediately with: git diff -- $LINE_GUARD_FILE"
 fi
 
 echo

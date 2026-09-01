@@ -259,10 +259,20 @@ func TestNewAuthHandler_NilLoggerDoesNotPanic(t *testing.T) {
 // failure (a cancelled context, the same mechanism
 // TestSESMailer_ContextCancelled in internal/auth uses) against a live
 // *auth.SESMailer, so the error routed through the fake registrar/
-// recoverer below is byte-identical to what production returns —
-// registration.go:111 and recovery.go:106 are bare `return
-// s.mailer.SendVerification(...)` / `return s.mailer.SendRecovery(...)`,
-// no wrapping frame in between.
+// recoverer below is byte-identical to what SESMailer.SendVerification and
+// SESMailer.SendRecovery actually return — NOT to what
+// RegistrationService.StartRegistration or RecoveryService.StartRecovery
+// return in production. #0260 moved the real enqueue into
+// Store.CreatePendingRegistration and Store.CreateRecoveryToken themselves
+// (each opens its own internal/outbox.EnqueueTx inside the same
+// transaction that inserts the token row), so those two Service methods no
+// longer call the mailer at all — see their own doc comments.
+// SendVerification and SendRecovery are kept on the Mailer interface
+// regardless (#0278's decision) and are still the only place that produces
+// errEnqueueFailed's fixed, sanitized shape, so calling them directly here
+// — rather than going through RegistrationService/RecoveryService — is what
+// gets a real, unmodified production error value into the fake
+// registrar/recoverer below.
 func TestAuthHandler_MailerErrorDoesNotLeakEmail(t *testing.T) {
 	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")

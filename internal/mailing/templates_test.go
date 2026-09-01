@@ -400,8 +400,8 @@ func TestAllMessagesEnumeratesEveryBuildEmailFunc(t *testing.T) {
 
 // TestAllTemplates_TextBodyNonEmpty proves every template actually has a
 // text alternative, not just an HTML body. A message with HTMLBody set and
-// TextBody empty would still "work" against SESMailer (it only rejects
-// neither being set — mailer.go:105) but would violate the acceptance
+// TextBody empty would still "work" against SESMailer.Send (its own guard
+// only rejects neither being set) but would violate the acceptance
 // criterion and PRD §6.6's explicit "not optional" requirement. Mutation
 // proof: temporarily drop TextBody from one Build* return and this test
 // fails; see the Verification section in issues/0028.md for the observed

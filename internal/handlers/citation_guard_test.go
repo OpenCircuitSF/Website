@@ -37,7 +37,8 @@ import (
 // internal/mailing/preflight.go ("Message is operator-facing; #0047 renders
 // it verbatim" — preflight.go's own doc comment) and is serialized untouched
 // by a handler. That is precisely the shape of the #0178 leak this guard
-// exists to prevent a repeat of (preflight.go:171's PRD §6.6 citation), so
+// exists to prevent a repeat of (preflight.go's PreflightCodeReplyToMissing
+// check's PRD §6.6 citation), so
 // internal/mailing is in scope too. No other internal/ package defines an
 // exported "Message"-shaped field or otherwise threads a string literal
 // into a response body — confirmed by grepping every internal/ package for

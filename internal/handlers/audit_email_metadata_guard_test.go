@@ -101,8 +101,9 @@ import (
 // 87-key census below), not assumed: the only non-inline Metadata
 // identifiers in the tree are credentialMetadata's two call sites (resolved
 // through the helper's own return, by name, in
-// auditEmailMetadataKnownSafeHelpers) and admin_subscribers.go:694 /
-// admin_subscribers_export.go:327, both `metadata := map[string]any{...}`
+// auditEmailMetadataKnownSafeHelpers) and
+// AdminSubscribersHandler.ClearComplaint's / AdminSubscribersHandler.Export's,
+// both `metadata := map[string]any{...}`
 // literals whose only further mutation is a string-literal index
 // assignment — the one case this guard reads completely. So the code is
 // fine and only this description was overstated; the four shapes are
@@ -234,8 +235,10 @@ import (
 // two false positives) is exercised by any real site in this tree today —
 // checked directly while making this change: `grep -rn '\.Metadata\s*='
 // internal cmd --include='*.go'` excluding _test.go files finds exactly one
-// hit tree-wide (internal/audit/read.go:159, a *different* type's Metadata
-// field, unrelated to audit.Entry), and no production audit.Entry is ever
+// hit tree-wide (Reader.ListAuditLog's own `rec.Metadata =
+// json.RawMessage(metaRaw)` assignment, internal/audit/read.go, a
+// *different* type's Metadata field, unrelated to audit.Entry), and no
+// production audit.Entry is ever
 // held in a struct field or mutated through a pointer argument. The
 // 45-site/87-key census below is unchanged by this pass — re-derived with
 // the guard's own key-extraction functions
@@ -410,8 +413,9 @@ var auditEmailMetadataKnownSafeHelpers = map[string]bool{
 // it exists to catch — an edit to an unrelated function earlier in the same
 // file. `count` disambiguates the one action name (ActionSubscriberBounced)
 // that legitimately appears twice in the same file, for two different
-// bounce-severity branches (internal/handlers/ses_notifications.go:443 and
-// :503).
+// bounce-severity branches — the BounceTypePermanent case and the
+// repeated-soft-bounce case, both inside
+// SESNotificationsHandler.applyBounce (ses_notifications.go).
 type auditEmailMetadataKnownSite struct {
 	file   string
 	action string
@@ -1118,7 +1122,8 @@ func compositeLitStringKeys(cl *ast.CompositeLit) []string {
 // map[string]any{"recipient_email": addr, "subscriber_address": addr}
 // site, passed the old exact-match check silently even though
 // "recipient_email" is the SAME key style
-// internal/handlers/admin_campaign_preview.go:419 already uses in
+// AdminCampaignPreviewHandler.Test's own `Metadata: map[string]any{...}`
+// literal (admin_campaign_preview.go) already uses in
 // production. Token-based (split the key on "_", lowercase, EXACT token
 // match) rather than a bare substring test on purpose: a substring test on
 // "recipient" would also fire on internal/mailing/worker.go's "recipients"
@@ -1129,8 +1134,8 @@ func compositeLitStringKeys(cl *ast.CompositeLit) []string {
 // "address") caught while leaving "recipients" (one token, "recipients",
 // not "recipient") alone — checked against every Metadata key actually
 // used in this tree while writing this change, not assumed. "query" is
-// included because internal/handlers/admin_subscribers_export.go:312's
-// "filter_query" key holds unbounded admin-typed search text that MAY be a
+// included because AdminSubscribersHandler.Export's own "filter_query" key
+// (admin_subscribers_export.go) holds unbounded admin-typed search text that MAY be a
 // subscriber's own address if that is what the admin searched by — a
 // value this guard cannot read statically, so the conservative, correct
 // answer is to always treat a "*query*" key as a possible carrier rather
@@ -1141,7 +1146,8 @@ func compositeLitStringKeys(cl *ast.CompositeLit) []string {
 // injecting eight key shapes into a real handler's audit.Entry: "to",
 // "mail", "contact", "user_mail", and "recipientEmail" all passed the
 // four-token set above silently, and "to" is not hypothetical —
-// internal/handlers/admin_campaign_preview.go:419 writes
+// AdminCampaignPreviewHandler.Test's own Metadata literal
+// (admin_campaign_preview.go) writes
 // "to": actor.Email TODAY, and the guard's own ## Gotchas note had wrongly
 // claimed that site already carried two suspect keys when, before this
 // change, it carried exactly one ("recipient_email"; "to" did not match).
@@ -1157,7 +1163,8 @@ func compositeLitStringKeys(cl *ast.CompositeLit) []string {
 // are free — they match nothing in the tree today, closing the
 // "user_mail"/"contact"-shaped gap the review named for zero new sites.
 // "to" is NOT free in that same sense, and an earlier draft of this
-// paragraph wrongly said it was: admin_campaign_preview.go:419 writes the
+// paragraph wrongly said it was: AdminCampaignPreviewHandler.Test's own
+// Metadata literal (admin_campaign_preview.go) writes the
 // literal key "to" TODAY (Metadata: map[string]any{"to": actor.Email, ...})
 // — the exact site named three paragraphs above as the reason "to" was
 // added in the first place. Adding "to" to this token set does not
@@ -1905,10 +1912,12 @@ func recordSomething() {
 // identifier-tracing branch: a Metadata built in a local variable, with
 // "email" added by a conditional index assignment. No real call site in
 // this tree carries "email" this way today — checked directly, not
-// assumed: internal/handlers/admin_suppressions.go:274's suppression-
-// removal entry builds Metadata as an INLINE composite literal (its
+// assumed: AdminSuppressionsHandler.Remove's own suppression-removal
+// entry (admin_suppressions.go, ActionSuppressionRemoved) builds Metadata
+// as an INLINE composite literal (its
 // "email" key is written directly in the literal, no local variable or
-// index assignment involved), and internal/handlers/admin_subscribers.go:694's
+// index assignment involved), and AdminSubscribersHandler.ClearComplaint's
+// (admin_subscribers.go)
 // Complaint-clearing entry DOES use a traced local with conditional index
 // assignments — but for "suppression_removed_note" and
 // "suppression_removed_created_at", never "email" (an earlier draft of
@@ -1916,7 +1925,7 @@ func recordSomething() {
 // phase-3 review found that false for both — see that review for the full
 // reproduction). This fixture exists because the general "traced local +
 // conditional index assignment" pattern IS real in this tree
-// (admin_subscribers.go:694 above is that real instance), so a future site
+// (AdminSubscribersHandler.ClearComplaint above is that real instance), so a future site
 // that adds "email" the same way — the shape #0226's phase-3 review flagged
 // as the most plausible place for a future email addition to slip past a
 // phrase-keyed guard — must still be caught even though no site does it yet.
