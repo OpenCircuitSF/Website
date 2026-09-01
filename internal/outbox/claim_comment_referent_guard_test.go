@@ -86,8 +86,10 @@
 // claimCommentGuardDirHistoricalRe below, dropping "cannot" and "never" --
 // not the same regex reused. #0347's review (bounce 1) measured that
 // reusing the broad list here silently exempted BOTH real defects this
-// axis exists to catch (#0342 sites A and C,
-// db9bff7:internal/mailing/outbox_worker.go:165 and :471): both sites'
+// axis exists to catch (#0342 sites A and C -- at commit db9bff7, site A
+// is mailKinds' doc comment and site C is the inline comment preceding
+// the OrphanSweep call in OutboxWorker.pass, both in
+// internal/mailing/outbox_worker.go): both sites'
 // clauses contain "never" as an ordinary present-tense behavioural modal
 // ("so this worker never claims OR sweeps...", "so this sweep can never
 // release a live claim..."), not as a historical reference, and the broad
@@ -237,8 +239,10 @@ var (
 	// measured that the broad set's negation/modal words ("never",
 	// "cannot") are ordinary PRESENT-TENSE behavioural modals, not
 	// historical markers, and both real pre-fix defects this axis was
-	// built to catch (#0342 sites A and C,
-	// db9bff7:internal/mailing/outbox_worker.go:165 and :471) carry one in
+	// built to catch (#0342 sites A and C -- at commit db9bff7, site A is
+	// mailKinds' doc comment and site C is the inline comment preceding the
+	// OrphanSweep call in OutboxWorker.pass, both in
+	// internal/mailing/outbox_worker.go) carry one in
 	// the SAME clause as the false directional claim -- "so this worker
 	// never claims OR sweeps a row it cannot render" (site A), "so this
 	// sweep can never release a live claim" (site C). Under the broad set,
@@ -625,7 +629,8 @@ func findClaimCommentGuardFindings(path string, src any, allPkgTypes map[string]
 			// Check EVERY DISTINCT target identifier in the window, not
 			// only the nearest. #0347's review (bounce 1, B1, part 2)
 			// measured that nearest-only masks a real site: in #0342 site
-			// A (db9bff7:internal/mailing/outbox_worker.go:165), the
+			// A (mailKinds' doc comment in
+			// internal/mailing/outbox_worker.go at commit db9bff7), the
 			// nearest identifier to the direction word is OrphanSweep,
 			// which DOES occur later in that same file -- so a
 			// nearest-only check resolves and goes silent, while the
@@ -982,7 +987,8 @@ func TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued() {
 
 // TestClaimCommentGuardFlagsKnownStaleSiteFromFfef8cf is #0347 criterion
 // 4's proof: pointed at a reconstruction of the ffef8cf snapshot, the
-// existence axis flags outbox_worker_test.go:746's "OutboxWorker.ClaimDue
+// existence axis flags the t.Cleanup preamble comment in
+// TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued's "OutboxWorker.ClaimDue
 // call"; pointed at the fixed tree's actual current wording, it does not.
 func TestClaimCommentGuardFlagsKnownStaleSiteFromFfef8cf(t *testing.T) {
 	pkgTypes := map[string]map[string]bool{"mailing": {"OutboxWorker": true}}
@@ -1019,7 +1025,9 @@ func TestClaimCommentGuardFlagsKnownStaleSiteFromFfef8cf(t *testing.T) {
 // before this bounce -- exactly how it reached zero-findings-on-HEAD
 // without anyone noticing it detected almost nothing (that review's own
 // words). Built from #0342 sites A and C
-// (db9bff7:internal/mailing/outbox_worker.go:165 and :471, the two real
+// (site A is mailKinds' doc comment, site C is the inline comment
+// preceding the OrphanSweep call in OutboxWorker.pass, both in
+// internal/mailing/outbox_worker.go at commit db9bff7 -- the two real
 // pre-fix defects the directional axis was added to catch), extracted via
 // `git show db9bff7:internal/mailing/outbox_worker.go` and the real HEAD
 // file, not retyped -- CLAUDE.md §8's backslash-escape gotcha generalizes
