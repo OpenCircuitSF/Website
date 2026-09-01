@@ -704,7 +704,7 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   the doc comment directly above `func (s *Sitemap) Invalidate()`, so the
   recruited declaration sat in the rename commit's own diff as context, and
   still nobody noticed it. `(*seo.Sitemap).Invalidate` already carried that
-  exact zero-parameter, zero-result name, so passing a bare `*Sitemap` into
+  exact zero-parameter, zero-result signature, so passing a bare `*Sitemap` into
   either seam went from a compile error to a silent half-invalidation.
   Nothing failed to compile and no toolchain diagnostic fired. Measured with
   `go/types.Implements` over the package's full named-type set, the
@@ -723,7 +723,7 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   `#0337`'s first guard justified a pointer-receiver-only scan in its own doc
   comment, and a `func (s Sitemap) Invalidate() {}` mutation — a value
   receiver, not a pointer one — fully restored the original regression while
-  the guard still reported `ok`. Any guard modeled on this one must scan both
+  the guard still reported `ok`. Any guard modeled on this one must cover both
   receiver forms; `go/types` is the sound oracle, since method-set membership
   is a type-checker rule, not something an AST walk can fully reconstruct on
   its own (an AST walk also can't see a method acquired by embedding a satisfying
