@@ -699,14 +699,18 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   `handlers.workshopCacheInvalidator` (now `seoCacheInvalidator`) and
   `mailing.ArchiveCacheInvalidator` — from `InvalidateWorkshops()` to
   `Invalidate()`. Go interface satisfaction is structural, so that rename
-  moved both interfaces onto `*seo.Sitemap`, a type the commit never touched:
-  `(*seo.Sitemap).Invalidate` already carried that exact zero-parameter,
-  zero-result name, so passing a bare `*Sitemap` into either seam went from a
-  compile error to a silent half-invalidation. Nothing failed to compile and
-  no toolchain diagnostic fired. Measured with `go/types.Implements` over the
-  package's full named-type set, the satisfiers were `{*Sitemap}` before the
-  rename, `{*Site, *Renderer, *Sitemap}` after it, and `{*Site, *Renderer}`
-  once `#0337` closed the instance by unexporting `Sitemap.invalidate`. That
+  moved both interfaces onto `*seo.Sitemap` — a type whose own method the
+  commit never edited, though not a file it never touched: `f7771ed` rewrote
+  the doc comment directly above `func (s *Sitemap) Invalidate()`, so the
+  recruited declaration sat in the rename commit's own diff as context, and
+  still nobody noticed it. `(*seo.Sitemap).Invalidate` already carried that
+  exact zero-parameter, zero-result name, so passing a bare `*Sitemap` into
+  either seam went from a compile error to a silent half-invalidation.
+  Nothing failed to compile and no toolchain diagnostic fired. Measured with
+  `go/types.Implements` over the package's full named-type set, the
+  satisfiers of a bare `Invalidate()` were `{*Sitemap}` before the rename,
+  `{*Site, *Renderer, *Sitemap}` after it, and `{*Site, *Renderer}` once
+  `#0337` closed the instance by unexporting `Sitemap.invalidate`. That
   full named-type set is the check to run before and after a rename like this,
   not a hand-picked list of the ones you already suspect — `#0337`'s first
   guard checked only the three types its author already had in mind, and its
