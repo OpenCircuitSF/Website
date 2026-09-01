@@ -345,6 +345,36 @@ type AliasValueEmbed = struct {
 type AliasToPointerLiteral = *struct {
 	*Site
 }
+
+// DeclaredSeam is a declared (named) interface, present so the doc comments
+// below can point at a concrete counter-example: aliasing to IT, i.e. type X
+// = DeclaredSeam, would NOT exercise the declared-interface continue below,
+// because types.Unalias(tn.Type()) on such an alias resolves to a
+// *types.Named (DeclaredSeam itself), so the alias-to-*types.Named continue
+// (already pinned by AliasToNamed above) fires first and consumes it. Only
+// an alias to an interface LITERAL, with no declared name of its own,
+// reaches the declared-interface continue -- see AliasToIfaceLiteral below.
+// DeclaredSeam itself is not aliased anywhere in this fixture; it exists to
+// make that contrast nameable rather than hypothetical (#0355).
+type DeclaredSeam interface{ Invalidate() }
+
+// AliasToPtrNamed pins the second of the alias branch's three continues
+// (#0355): an alias to a POINTER-TO-*types.Named type, i.e. type X = *Site,
+// distinct from AliasToNamed's direct type X = Site, is a new spelling of a
+// type already checked -- under *Site's own pointer form -- so it must not
+// be double-counted as its own satisfier.
+type AliasToPtrNamed = *Site
+
+// AliasToIfaceLiteral pins the third of the alias branch's three continues
+// (#0355): an alias to an interface LITERAL (not a declared interface name)
+// resolves, via types.Unalias, directly to a *types.Interface -- it is not a
+// *types.Named (so the AliasToNamed continue does not fire) and not a
+// *types.Pointer (so the AliasToPtrNamed continue does not fire either) --
+// so it is the declared-interface continue itself, and only this shape,
+// that must skip it. DeclaredSeam above is the trap: aliasing to a NAMED
+// interface takes an entirely different path through the *types.Named
+// continue and would prove nothing about this one.
+type AliasToIfaceLiteral = interface{ Invalidate() }
 `
 
 	fset := token.NewFileSet()
@@ -399,6 +429,23 @@ type AliasToPointerLiteral = *struct {
 		t.Error("scanInvalidatorSatisfiers did not report AliasToPointerLiteral (an alias to a pointer " +
 			"literal, which implements interface{ Invalidate() } in VALUE form only) as a satisfier -- " +
 			"the value-form disjunct of the `||` is missing or broken")
+	}
+
+	// #0355: the alias branch has three `continue` exclusions in total.
+	// AliasToNamed above already pins the first (alias directly to a
+	// *types.Named); these two pin the remaining two, which #0354's review
+	// found unpinned by anything in the tree.
+	if got["AliasToPtrNamed"] {
+		t.Error("scanInvalidatorSatisfiers reported AliasToPtrNamed (an alias to a pointer-to-*types.Named " +
+			"type, *Site) as its own satisfier -- it should be skipped as a redundant spelling of Site's " +
+			"own pointer form (same reasoning as AliasToNamed, one indirection further), and " +
+			"double-counting it means the alias-to-pointer-to-*types.Named `continue` is missing or broken")
+	}
+	if got["AliasToIfaceLiteral"] {
+		t.Error("scanInvalidatorSatisfiers reported AliasToIfaceLiteral (an alias to the interface " +
+			"LITERAL interface{ Invalidate() }) as a satisfier -- an alias to a seam is not a concrete " +
+			"type joining one, and double-counting it means the declared-interface `continue` is missing " +
+			"or broken")
 	}
 }
 
