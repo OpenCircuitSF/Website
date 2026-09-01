@@ -542,6 +542,121 @@ for spec in \
 done
 
 # ---------------------------------------------------------------------------
+# Outbox claim-comment-referent guard floors (#0347 B3, review bounce)
+#
+# internal/outbox/claim_comment_referent_guard_test.go (#0347) carries
+# three fail-closed floor consts of the exact CLAUDE.md §8
+# direction-of-comparison shape this whole script exists for. #0347's
+# review measured all three directly, on a private copy, never the tracked
+# file:
+#
+#   claimCommentGuardMinPlausibleFileCount          -- zeroed, go test STILL PASSES
+#   claimCommentGuardMinPlausibleCallCensusCount     -- zeroed, go test FAILS
+#   claimCommentGuardMinPlausibleCommentGroupCount   -- zeroed, go test STILL PASSES
+#
+# Only the middle one has an in-package, non-circular oracle already
+# (TestClaimCommentGuardCensusFloorCatchesRootsWithNoRealPopulation): its
+# assertion narrows the SCAN ROOTS (to internal/audit, a real, unmodified,
+# confirmed-empty package), which changes what the walk actually finds
+# (got) -- the same "a mutation of scan roots/input changes what the walk
+# finds" reasoning the claim-kinds section above gives for why
+# TestNonExemptFloorCatchesScanRootsNarrowedToSelf already pins ITS floor
+# without this script's help. The other two are ordinary "got < floor"
+# checks against the real, un-narrowed walk (visited .go file count and
+# ParseComments group count): per this script's own header comment ("WHY
+# THIS SCRIPT NEVER RUNS go test AS ITS ORACLE"), `got < 0` can never fire
+# once floor is forced to 0, so `go test` stays green on that specific
+# mutation no matter what. This section is those two floors' only oracle,
+# following the exact "outbox claim-kinds guard floors" pattern directly
+# above -- reusing extract_const, sha_of, count_go_files, and
+# outbox_floor_plausible as-is -- rather than inventing a new shape.
+echo
+echo "== outbox claim-comment-referent guard floors (#0347 B3) =="
+
+COMMENT_GUARD_FILE="internal/outbox/claim_comment_referent_guard_test.go"
+COMMENT_GUARD_SRC="$REPO/$COMMENT_GUARD_FILE"
+[ -f "$COMMENT_GUARD_SRC" ] || fatal "$COMMENT_GUARD_FILE not found -- has it moved? Update COMMENT_GUARD_FILE."
+
+# count_comment_opening_lines <root> [root...] -- the from-outside-Go
+# population for claimCommentGuardMinPlausibleCommentGroupCount: a fresh
+# per-file grep (skip node_modules/dist, matching count_go_files' own
+# pruning) counting lines that open a "//" line comment. This deliberately
+# OVER-counts against the guard's own go/ast ParseComments group count (a
+# multi-line "//" block is many LINES but one comment GROUP) -- the same
+# direction count_outbox_call_sites' own doc comment above already accepts
+# for the claim-kinds total-population floor: an inflated population only
+# loosens outbox_floor_plausible's upper bound (floor <= population) and
+# never under-protects, and a floor forced to 0 is still caught by the SAME
+# `floor > 0` half of that check regardless of which direction the
+# population itself is off by.
+count_comment_opening_lines() {
+  local total=0 f n
+  while IFS= read -r f; do
+    n="$(grep -cE '^[[:space:]]*//' "$f")"
+    total=$((total + n))
+  done < <(find "$@" \( -name node_modules -o -name dist \) -prune -o -type f -name '*.go' -print)
+  printf '%s' "$total"
+}
+
+COMMENT_GUARD_SHA_BEFORE="$(sha_of "$COMMENT_GUARD_SRC")" || fatal "sha_of fatal-exited hashing $COMMENT_GUARD_SRC -- see the FATAL line above."
+
+# claimCommentGuardScanRoots is ".." (internal/, from internal/outbox) and
+# "../../cmd" (cmd/) -- i.e. the SAME "internal cmd" trees
+# count_go_files/count_outbox_call_sites above already walk from repo root;
+# web/ is never in its scan roots (it holds no claim-machinery Go code) so
+# it is deliberately excluded here too, matching the guard's real walk
+# rather than the broader "internal cmd web" set the handlers family above
+# uses.
+FILE_POP="$(count_go_files yes "$REPO/internal" "$REPO/cmd")"
+case "$FILE_POP" in '' | *[!0-9]*) fatal "count_go_files returned a non-numeric population ('$FILE_POP') for claimCommentGuardMinPlausibleFileCount" ;; esac
+
+COMMENT_POP="$(count_comment_opening_lines "$REPO/internal" "$REPO/cmd")"
+case "$COMMENT_POP" in '' | *[!0-9]*) fatal "count_comment_opening_lines returned a non-numeric population ('$COMMENT_POP')" ;; esac
+
+for spec in \
+  "claimCommentGuardMinPlausibleFileCount:${FILE_POP}:TestNoCommentClaimsClaimMachineryCallFileCodeLacks / TestNoClaimMachineryCallSyntaxLiteralInAnyComment file-visit floor (#0347)" \
+  "claimCommentGuardMinPlausibleCommentGroupCount:${COMMENT_POP}:TestNoCommentClaimsClaimMachineryCallFileCodeLacks comment-group floor (#0347)" \
+; do
+  CONST="${spec%%:*}"
+  rest="${spec#*:}"
+  POP="${rest%%:*}"
+  TESTNAME="${rest#*:}"
+
+  echo "-- ${CONST} (protects: ${TESTNAME}) --"
+
+  REAL_VALUE="$(extract_const "$COMMENT_GUARD_SRC" "$CONST")" || fatal "extract_const fatal-exited extracting ${CONST} from $COMMENT_GUARD_SRC -- see the FATAL line above."
+  if outbox_floor_plausible "$REAL_VALUE" "$POP"; then
+    pass "committed ${CONST}=${REAL_VALUE} is plausible against an externally-measured population of ${POP}"
+  else
+    fail "REGRESSION #0347: committed ${CONST}=${REAL_VALUE} is NOT plausible against an externally-measured population of ${POP} (must be > 0 and <= population). Affects: ${TESTNAME}"
+  fi
+
+  MUTANT="$WORKDIR/$(basename "$COMMENT_GUARD_FILE").${CONST}"
+  sed "s/const ${CONST} = [0-9][0-9]*/const ${CONST} = 0/" "$COMMENT_GUARD_SRC" > "$MUTANT"
+  if ! grep -q "const ${CONST} = 0" "$MUTANT"; then
+    fatal "mutation did not take on the copy of ${COMMENT_GUARD_FILE} for ${CONST} -- aborting before judging anything."
+  fi
+  MUT_VALUE="$(extract_const "$MUTANT" "$CONST")" || fatal "extract_const fatal-exited extracting ${CONST} from the mutated copy $MUTANT -- see the FATAL line above."
+  if [ "$MUT_VALUE" != "0" ]; then
+    fatal "re-extraction from the mutated copy of ${COMMENT_GUARD_FILE} returned '${MUT_VALUE}', not '0' -- the mutation and the extraction disagree; refusing to judge."
+  fi
+  if outbox_floor_plausible "$MUT_VALUE" "$POP"; then
+    fail "REGRESSION #0347: this harness judged ${CONST}=0 PLAUSIBLE -- the external oracle failed to catch a zeroed floor, which #0347's review measured leaves \`go test ./internal/outbox/...\` GREEN for this exact constant. Affects: ${TESTNAME}"
+  else
+    pass "${CONST}=0 (mutated copy) is correctly judged IMPLAUSIBLE by this external oracle, independent of go test (same mathematical-impossibility reasoning as the header comment above: got < 0 can never fire, and #0347's review measured go test does in fact stay green on this exact mutation). Affects: ${TESTNAME}"
+  fi
+done
+
+COMMENT_GUARD_SHA_AFTER="$(sha_of "$COMMENT_GUARD_SRC")" || fatal "sha_of fatal-exited re-hashing $COMMENT_GUARD_SRC -- see the FATAL line above."
+if [ -z "$COMMENT_GUARD_SHA_BEFORE" ] || [ -z "$COMMENT_GUARD_SHA_AFTER" ]; then
+  fail "CRITICAL: claim-comment-referent guard file sha256 computation produced an empty result -- refusing to treat two blanks as a match."
+elif [ "$COMMENT_GUARD_SHA_BEFORE" = "$COMMENT_GUARD_SHA_AFTER" ]; then
+  pass "$COMMENT_GUARD_FILE unchanged across this run -- every mutation happened on a private copy in $WORKDIR, never the tracked file"
+else
+  fail "CRITICAL: $COMMENT_GUARD_FILE's sha256 changed during this run. Investigate immediately with: git diff -- $COMMENT_GUARD_FILE"
+fi
+
+# ---------------------------------------------------------------------------
 # #0330's presence check: an external oracle for
 # claimKindsGuardRequiredNonExemptCallSites, the Go-level var
 # internal/outbox/claim_kinds_call_site_guard_test.go added to assert BY

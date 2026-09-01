@@ -75,11 +75,27 @@
 // to", "the old ", "at the time", "was removed", "removed by", "replaced",
 // "predates", "pre-#NNNN", "historical", "rather than", "instead of",
 // "would", "reverting"/"revert"/"reverted", "cannot", "never" -- is exempt
-// from both axes below, matching #0342's own round-2 audit's convention.
-// This is deliberately broad (a human already read every one of #0342's
-// findings and confirmed the correctly-historical ones carry language like
-// this); the guard's job is to surface candidates and require a human
-// convention to have been followed, not to adjudicate prose.
+// from the EXISTENCE axis below, matching #0342's own round-2 audit's
+// convention. This is deliberately broad (a human already read every one
+// of #0342's findings and confirmed the correctly-historical ones carry
+// language like this); the guard's job is to surface candidates and
+// require a human convention to have been followed, not to adjudicate
+// prose.
+//
+// The DIRECTIONAL axis uses a DIFFERENT, narrower marker list --
+// claimCommentGuardDirHistoricalRe below, dropping "cannot" and "never" --
+// not the same regex reused. #0347's review (bounce 1) measured that
+// reusing the broad list here silently exempted BOTH real defects this
+// axis exists to catch (#0342 sites A and C,
+// db9bff7:internal/mailing/outbox_worker.go:165 and :471): both sites'
+// clauses contain "never" as an ordinary present-tense behavioural modal
+// ("so this worker never claims OR sweeps...", "so this sweep can never
+// release a live claim..."), not as a historical reference, and the broad
+// exemption swallowed them. Criterion 3's convention is about HISTORY;
+// negation and modality are common in completely ordinary, CORRECT
+// directional prose ("X below never does Y") and must not be read as
+// exempting it. See claimCommentGuardDirHistoricalRe's own doc comment,
+// below, for the full account.
 //
 // # What this guard cannot do
 //
@@ -109,6 +125,33 @@
 // code census) is built from a parse that structurally excludes comments.
 // Compare #0356's plan for its own, sibling guard, which draws the
 // identical conclusion for the same reason and reaches the same home.
+//
+// THIS REASONING COVERS THE FINDINGS ASSERTIONS ONLY -- not the three
+// claimCommentGuardMinPlausible* floor constants below. Those are a
+// DIFFERENT comparison direction (CLAUDE.md §8: "the deciding question ...
+// turns on the direction of the comparison, not the kind of thing
+// mutated"), and #0347's review measured, on a private copy, that it does
+// NOT hold for two of the three: forcing
+// claimCommentGuardMinPlausibleFileCount or
+// claimCommentGuardMinPlausibleCommentGroupCount to 0 leaves `go test
+// ./internal/outbox/...` green, because a floor mutated DOWNWARD makes
+// `got < floor` permanently unfalsifiable by a real, non-negative `got` --
+// the identical reasoning scripts/go_file_visit_floor_guard_test.sh's own
+// header comment gives for why it, not `go test`, must be the floors'
+// oracle. Only claimCommentGuardMinPlausibleCallCensusCount has a genuine
+// in-package, non-circular proof
+// (TestClaimCommentGuardCensusFloorCatchesRootsWithNoRealPopulation), because
+// ITS assertion narrows the SCAN ROOTS rather than the floor constant, which
+// does change `got`. The other two floors' only oracle is
+// scripts/go_file_visit_floor_guard_test.sh's own "outbox
+// claim-comment-referent guard floors" section, mirroring the identical
+// treatment its sibling section already gives
+// claimKindsGuardMinPlausibleCallSiteCount and
+// claimKindsGuardMinPlausibleNonExemptCallSiteCount in
+// claim_kinds_call_site_guard_test.go. A green `go test
+// ./internal/outbox/...` alone is therefore NOT sufficient evidence that
+// these two floors are pinned; `scripts/check.sh guards` (which runs that
+// script) is required for that.
 package outbox
 
 import (
@@ -148,7 +191,21 @@ var claimCommentGuardTargetIdents = []string{"ClaimDue", "SelectDue", "OrphanSwe
 // sibling guard) only tracks these three; matching that set here keeps
 // this Go-side check aimed at the same population that harness measures,
 // rather than silently policing a wider one.
-var claimCommentGuardCallSyntaxLiterals = []string{".ClaimDue(", ".OrphanSweep(", ".SelectDue("}
+//
+// Assembled rather than written as contiguous literals on purpose: the
+// external harness (scripts/go_file_visit_floor_guard_test.sh) counts this
+// syntax textually and cannot tell code from a real call site, so writing
+// them whole would add a seventh divergent site to the population that
+// bounds claimKindsGuardMinPlausibleCallSiteCount -- exactly what
+// claim_kinds_call_site_guard_test.go's own doc comment deliberately
+// declined to do (#0323). Do not "simplify" this back -- #0347's first
+// review measured that writing these three whole moved that harness's
+// grep-based population 42 -> 43.
+var claimCommentGuardCallSyntaxLiterals = []string{
+	"." + "ClaimDue" + "(",
+	"." + "OrphanSweep" + "(",
+	"." + "SelectDue" + "(",
+}
 
 func claimCommentGuardIsTargetIdent(name string) bool {
 	for _, n := range claimCommentGuardTargetIdents {
@@ -165,6 +222,32 @@ var (
 	claimCommentGuardCallWordAfterRe = regexp.MustCompile("^[`'\"(),.;:\\-\\s]{0,8}(call|calls)\\b")
 	claimCommentGuardDirWordRe       = regexp.MustCompile(`\b(below|above)\b`)
 	claimCommentGuardHistoricalRe    = regexp.MustCompile(`(?i)\b(before #|since #|has not called|no longer|used to|formerly|the old |at the time|was removed|removed by|replaced|predates|pre-#|historical|rather than|instead of|would|reverting|revert(ed)?|cannot|never)\b`)
+
+	// claimCommentGuardDirHistoricalRe is the DIRECTIONAL axis's own,
+	// narrower marker set -- used ONLY in that axis, in place of
+	// claimCommentGuardHistoricalRe above. #0347's review (bounce 1, B1)
+	// measured that the broad set's negation/modal words ("never",
+	// "cannot") are ordinary PRESENT-TENSE behavioural modals, not
+	// historical markers, and both real pre-fix defects this axis was
+	// built to catch (#0342 sites A and C,
+	// db9bff7:internal/mailing/outbox_worker.go:165 and :471) carry one in
+	// the SAME clause as the false directional claim -- "so this worker
+	// never claims OR sweeps a row it cannot render" (site A), "so this
+	// sweep can never release a live claim" (site C). Under the broad set,
+	// both sentences matched "never" and were silently exempted, which is
+	// the same over-broad-exemption defect the existence axis's own
+	// "rather than" bug (see the ## Fix history in issue #0347) reappearing
+	// one clause-word later. Criterion 3's convention is about HISTORY;
+	// importing negation and modality into the DIRECTIONAL axis specifically
+	// disarms it on completely ordinary prose, since a sentence asserting
+	// "X below" very commonly also asserts what X does or does not do in
+	// the same breath ("never", "cannot", "always"). The existence axis
+	// keeps the broad set unchanged -- several of the nine
+	// subscribe_intake_test.go negative-fixture mentions rely on ITS
+	// negation words (see that axis's own comment above, and
+	// TestClaimCommentGuardIsCleanOnKnownNegativeFixture) -- so this is a
+	// second, narrower regex, not an edit to the first.
+	claimCommentGuardDirHistoricalRe = regexp.MustCompile(`(?i)\b(before #|since #|no longer|used to|formerly|the old |at the time|was removed|removed by|replaced|predates|pre-#|historical|reverting|revert(ed)?)\b`)
 )
 
 // claimCommentGuardFileFacts holds what a mode-0 (comment-free) parse of
@@ -331,6 +414,36 @@ func claimCommentGuardFirstBoundary(s string) int {
 	return best
 }
 
+// claimCommentGuardOpenParen returns the byte offset just after the
+// innermost still-open "(" in s, or -1 if none is open. Used by the
+// directional axis, defined further down in this file, to scope its
+// identifier window to a parenthetical the direction word sits inside, per
+// #0347's review (bounce 1, B1, part 3): checking every identifier in the
+// window rather than only the nearest (part 2, same review) reintroduces a
+// real false positive in store.go, whose real comment names ClaimRow as
+// the sentence's own subject and then, in a trailing parenthetical, points
+// a directional word at a second, EARLIER identifier -- SelectDue --
+// without this scoping, the sentence's OTHER identifier (ClaimRow, well
+// outside that parenthetical) would also be checked and, having no
+// matching occurrence earlier in the file, falsely fire. A trailing
+// parenthetical's directional word binds to what the parenthetical itself
+// names, not to the sentence's own subject.
+func claimCommentGuardOpenParen(s string) int {
+	depth := 0
+	for i := len(s) - 1; i >= 0; i-- {
+		switch s[i] {
+		case ')':
+			depth++
+		case '(':
+			if depth == 0 {
+				return i + 1
+			}
+			depth--
+		}
+	}
+	return -1
+}
+
 // claimCommentGuardSnippet returns context around [start,end) in flat.
 // Rune-boundary-safe: #0342's third review's own scratchpad audit tool's
 // doc comment records that an earlier draft of this exact kind of helper
@@ -457,7 +570,13 @@ func findClaimCommentGuardFindings(path string, src any, allPkgTypes map[string]
 
 		// --- directional axis ---
 		for _, dm := range claimCommentGuardDirWordRe.FindAllStringSubmatchIndex(flat, -1) {
-			if claimCommentGuardHistoricalRe.MatchString(claimCommentGuardSentence(flat, dm[0], dm[1])) {
+			// #0347's review (bounce 1, B1, part 1): use the DIRECTIONAL-
+			// only marker set here, not the existence axis's broader
+			// claimCommentGuardHistoricalRe -- see
+			// claimCommentGuardDirHistoricalRe's own doc comment above for
+			// why "never"/"cannot" in the broad set silently exempted both
+			// real sites (#0342 sites A and C) this axis exists to catch.
+			if claimCommentGuardDirHistoricalRe.MatchString(claimCommentGuardSentence(flat, dm[0], dm[1])) {
 				continue // #0347 criterion 3's convention, sentence-scoped -- see the existence axis's identical fix, above
 			}
 			dir := flat[dm[2]:dm[3]]
@@ -481,48 +600,56 @@ func findClaimCommentGuardFindings(path string, src any, allPkgTypes map[string]
 			if b := claimCommentGuardLastBoundary(flat[:dm[0]]); b > lo {
 				lo = b
 			}
+			// #0347's review (bounce 1, B1, part 3): scope the window to
+			// the innermost still-open parenthesis, when the direction
+			// word sits inside one -- see claimCommentGuardOpenParen's own
+			// doc comment, defined earlier in this file, for the store.go
+			// false positive this closes, which checking every identifier
+			// in the window (the next change here) would otherwise
+			// reintroduce on its own.
+			if pOpen := claimCommentGuardOpenParen(flat[:dm[0]]); pOpen > lo {
+				lo = pOpen
+			}
 			if lo < 0 {
 				lo = 0
 			}
 			window := flat[lo:dm[0]]
-			// Take only the NEAREST target identifier to the direction
-			// word, not every one in the window. Measured against the
-			// real tree, not assumed: an earlier draft took every
-			// identifier in the window and flagged one real, correct
-			// doc comment in this package's own store.go -- a sentence
-			// naming one method as this file's own subject and, in a
-			// trailing parenthetical, pointing a directional word at a
-			// SECOND, different method declared earlier in the same
-			// file. That directional word grammatically binds to the
-			// method named immediately before it inside the
-			// parenthetical, not to the sentence's own subject, 60+
-			// characters earlier. Taking the nearest identifier is the
-			// same simplification English word order makes: a direction
-			// word almost always modifies whatever it immediately
-			// follows, not an earlier noun phrase.
-			matches := claimCommentGuardIdentRe.FindAllString(window, -1)
-			if len(matches) == 0 {
-				continue
-			}
-			im := matches[len(matches)-1]
-			offs := facts.identOffsets[im]
-			ok := false
-			for _, o := range offs {
-				if dir == "below" && o > endOff {
-					ok = true
+			// Check EVERY DISTINCT target identifier in the window, not
+			// only the nearest. #0347's review (bounce 1, B1, part 2)
+			// measured that nearest-only masks a real site: in #0342 site
+			// A (db9bff7:internal/mailing/outbox_worker.go:165), the
+			// nearest identifier to the direction word is OrphanSweep,
+			// which DOES occur later in that same file -- so a
+			// nearest-only check resolves and goes silent, while the
+			// false claim in the SAME clause is about ClaimDue, which has
+			// ZERO occurrences anywhere in that file. A nearer identifier
+			// resolving true must not suppress a farther one in the same
+			// window that doesn't.
+			seen := map[string]bool{}
+			for _, im := range claimCommentGuardIdentRe.FindAllString(window, -1) {
+				if seen[im] {
+					continue
 				}
-				if dir == "above" && o < startOff {
-					ok = true
+				seen[im] = true
+				offs := facts.identOffsets[im]
+				ok := false
+				for _, o := range offs {
+					if dir == "below" && o > endOff {
+						ok = true
+					}
+					if dir == "above" && o < startOff {
+						ok = true
+					}
 				}
-			}
-			if !ok {
-				findings = append(findings, claimCommentFinding{
-					axis: "directional", ident: im, path: path, line: line,
-					detail: fmt.Sprintf(
-						"comment says %q is %s, but this file's code has no %s occurrence %s the comment (occurrences anywhere in file: %d)",
-						im, dir, im, dir, len(offs)),
-					snippet: claimCommentGuardSnippet(flat, dm[0], dm[1]),
-				})
+				if !ok {
+					findings = append(findings, claimCommentFinding{
+						axis: "directional", ident: im, path: path, line: line,
+						detail: fmt.Sprintf(
+							"comment says %q is %s, but this file's code has no %s occurrence %s the comment (occurrences anywhere in file: %d)",
+							im, dir, im, dir, len(offs)),
+						snippet: claimCommentGuardSnippet(flat, dm[0], dm[1]),
+					})
+				}
 			}
 		}
 	}
@@ -833,6 +960,7 @@ type OutboxWorker struct{}
 // post-fix comment from HEAD's outbox_worker_test.go, byte-for-byte
 // (git show HEAD:internal/mailing/outbox_worker_test.go).
 func TestOutboxWorker_Stop_LeavesUnclaimedRowsQueued() {
+	// The whole point of this test is that id2 is deliberately left
 	// 'queued': pass's stopCh check runs before its ClaimRow, so id2 is
 	// never claimed at all (#0297 — see this test's own doc comment
 	// above, and the post-Stop assertions below). A 'queued', due-now
@@ -873,6 +1001,147 @@ func TestClaimCommentGuardFlagsKnownStaleSiteFromFfef8cf(t *testing.T) {
 		if f.ident == "ClaimDue" || f.ident == "ClaimRow" {
 			t.Fatalf("expected the post-fix fixture (HEAD's real wording, \"OutboxWorker pass\") to be clean; got: %+v", f)
 		}
+	}
+}
+
+// The two fixtures below are #0347's review (bounce 1, B1, part 4): a
+// standing directional-axis falsifiability regression, mirroring
+// TestClaimCommentGuardFlagsKnownStaleSiteFromFfef8cf above but for the
+// DIRECTIONAL axis specifically, which had NO falsifiability proof at all
+// before this bounce -- exactly how it reached zero-findings-on-HEAD
+// without anyone noticing it detected almost nothing (that review's own
+// words). Built from #0342 sites A and C
+// (db9bff7:internal/mailing/outbox_worker.go:165 and :471, the two real
+// pre-fix defects the directional axis was added to catch), extracted via
+// `git show db9bff7:internal/mailing/outbox_worker.go` and the real HEAD
+// file, not retyped -- CLAUDE.md §8's backslash-escape gotcha generalizes
+// to "don't retype punctuation a human wrote, either", the same discipline
+// the ffef8cf fixtures above already follow, including the real U+2014 em
+// dash both sites' comments contain.
+//
+// Both site comments name two other target identifiers alongside the false
+// ClaimDue claim. Each fixture's own function body, defined next in this
+// file, deliberately DOES call the two OTHER identifiers those comments
+// name -- reproducing the exact shape that let ClaimDue's absence hide
+// behind a nearer, correctly-resolving identifier before this bounce's
+// part-2 fix (check every identifier in the window, not only the
+// nearest).
+//
+// The calls below are deliberately BARE package-level functions, not
+// methods called through a receiver, on purpose: findClaimCommentGuardFileFacts
+// registers any *ast.Ident matching a target name regardless of call
+// shape, so a bare call proves the census identically -- but, unlike a
+// receiver-qualified call, it never places a period directly before the
+// identifier name and an open paren directly after, which is the exact
+// three-part shape claimCommentGuardCallSyntaxLiterals bans and
+// scripts/go_file_visit_floor_guard_test.sh's external, text-based
+// population oracle also matches on. That harness cannot distinguish a
+// real call from fixture text (#0323's own accepted-inflation precedent,
+// restated in claimCommentGuardCallSyntaxLiterals' own doc comment above),
+// so writing these calls in the qualified shape would needlessly re-inflate
+// the SAME population #0347's B2 fix just brought back down -- avoidable
+// here, unlike that sibling guard's own raw-string fixtures, which must
+// use the qualified shape for an unrelated reason (matching a real
+// production call SHAPE) at deliberate cost.
+
+const claimCommentGuardDirectionalStaleFixtureSrc = `package mailing
+
+// mailKinds is every outbox.Kind this worker's render switch knows how to
+// build a message for — i.e. every Kind EXCEPT outbox.KindSubscribeIntake
+// (#0254), which is not an email and is claimed separately by
+// internal/handlers.SubscribeHandler's own recovery poller. Passed to
+// outbox.Store.ClaimDue's and OrphanSweep's kinds filters in pass, below,
+// so this worker never claims OR sweeps a row it cannot render.
+var mailKinds = []int{}
+
+func OrphanSweep(staleAfter int, kinds []int) (int, error) {
+	return 0, nil
+}
+
+type OutboxWorker struct{}
+
+func (w *OutboxWorker) pass() (bool, error) {
+	// #0254's review bounce: scoped to mailKinds, the same set ClaimDue
+	// below is scoped to, so this sweep can never release a live claim
+	// belonging to internal/handlers.SubscribeHandler's own recovery
+	// poller (KindSubscribeIntake) — see OrphanSweep's doc comment for the
+	// duplicate-send chain an unfiltered sweep produced.
+	swept, err := OrphanSweep(0, mailKinds)
+	_ = swept
+	_ = err
+	return false, nil
+}
+`
+
+const claimCommentGuardDirectionalFixedFixtureSrc = `package mailing
+
+// mailKinds is every outbox.Kind this worker's render switch knows how to
+// build a message for — i.e. every Kind EXCEPT outbox.KindSubscribeIntake
+// (#0254), which is not an email and is claimed separately by
+// internal/handlers.SubscribeHandler's own recovery poller. Passed to
+// outbox.Store.SelectDue's and OrphanSweep's kinds filters in pass, below
+// — #0254 scoped ClaimDue, which this worker has not called since #0297;
+// ClaimRow takes no kinds and only ever claims an id SelectDue already
+// filtered — so this worker never selects OR sweeps a row it cannot
+// render.
+var mailKinds = []int{}
+
+func SelectDue(kinds []int) ([]int, error) {
+	return nil, nil
+}
+
+func OrphanSweep(staleAfter int, kinds []int) (int, error) {
+	return 0, nil
+}
+
+type OutboxWorker struct{}
+
+func (w *OutboxWorker) pass() (bool, error) {
+	// #0254's review bounce: scoped to mailKinds, the same set SelectDue
+	// below is scoped to (#0254 scoped ClaimDue; this pass has not called
+	// it since #0297), so this sweep can never release a live claim
+	// belonging to internal/handlers.SubscribeHandler's own recovery
+	// poller (KindSubscribeIntake) — see OrphanSweep's doc comment for the
+	// duplicate-send chain an unfiltered sweep produced.
+	ids, err := SelectDue(mailKinds)
+	_ = ids
+	_ = err
+	swept, err2 := OrphanSweep(0, mailKinds)
+	_ = swept
+	_ = err2
+	return false, nil
+}
+`
+
+// TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7 is
+// #0347's review (bounce 1, B1, part 4)'s proof: pointed at a
+// reconstruction of #0342 sites A and C (db9bff7's real wording), the
+// directional axis flags ClaimDue at both; pointed at the fixed tree's
+// actual current wording (HEAD's real SelectDue-based rewrite), it flags
+// nothing.
+func TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7(t *testing.T) {
+	pkgTypes := map[string]map[string]bool{"mailing": {"OutboxWorker": true}}
+
+	staleFindings, err := findClaimCommentGuardFindings("outbox_worker.go", claimCommentGuardDirectionalStaleFixtureSrc, pkgTypes)
+	if err != nil {
+		t.Fatalf("scanning stale directional fixture: %v", err)
+	}
+	claimDueDirectional := 0
+	for _, f := range staleFindings {
+		if f.axis == "directional" && f.ident == "ClaimDue" {
+			claimDueDirectional++
+		}
+	}
+	if claimDueDirectional < 2 {
+		t.Fatalf("expected the pre-fix (db9bff7) fixture to produce at least 2 directional ClaimDue findings (one from site A's \"below\" claim, one from site C's), got %d; findings: %+v", claimDueDirectional, staleFindings)
+	}
+
+	fixedFindings, err := findClaimCommentGuardFindings("outbox_worker.go", claimCommentGuardDirectionalFixedFixtureSrc, pkgTypes)
+	if err != nil {
+		t.Fatalf("scanning fixed directional fixture: %v", err)
+	}
+	for _, f := range fixedFindings {
+		t.Fatalf("expected the post-fix fixture (HEAD's real wording) to be entirely clean; got: %+v", f)
 	}
 }
 
