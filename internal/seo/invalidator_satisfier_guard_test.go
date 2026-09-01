@@ -1,6 +1,9 @@
 package seo
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"go/types"
 	"os"
 	"sort"
@@ -25,10 +28,10 @@ import (
 // untouched by the rename, so a previously-impossible assignment (passing a
 // bare *Sitemap into either seam) went from a compile error to compiling
 // silently -- with a real runtime cost, a half-invalidation that clears the
-// sitemap cache and leaves the per-path meta cache stale (the exact failure
-// #0319 was filed to fix). #0337 closed that by unexporting
-// Sitemap.invalidate (see its own doc comment); this test is what stops it
-// from reopening.
+// sitemap cache and leaves the per-path meta cache stale (the meta-cache
+// half of #0319's staleness class, not the sitemap staleness #0319 led
+// with). #0337 closed that by unexporting Sitemap.invalidate (see its own
+// doc comment); this test is what stops it from reopening.
 //
 // #0337's guard answered this with a go/ast scan of method DECLARATIONS,
 // which is a sound proxy for the type-level property (method SETS) only
@@ -43,13 +46,17 @@ import (
 // stays green with no edit to the guard file). #0349 replaces the whole
 // scan with the actual oracle: go/types.Implements against every named
 // type's real method set, computed by the type checker itself via
-// golang.org/x/tools/go/packages with NeedTypes (export-data backed, not
-// the ~11s importer.ForCompiler(fset, "source", nil) both prior reviews used
-// only as one-off ground truth). Measured on 2026-08-31, three repeated runs
-// each: ~500-600ms on the host (darwin/arm64) and ~500-600ms cross-compiled
-// to GOOS=linux/GOARCH=arm64 -- fast enough to run on every `go test`, and
-// the reason this guard now targets linux/arm64 explicitly rather than the
-// host default (see below).
+// golang.org/x/tools/go/packages with NeedTypes -- source-type-checked, not
+// export-data backed (measured, #0349's review: this same package costs
+// 1.3s cold / ~560ms warm via NeedTypes, against 5.4s and 240MB of build
+// cache cold for an export-data-backed load of the same package, `GOOS=linux
+// GOARCH=arm64 go list -export -deps ./internal/seo`) -- not the ~11s
+// importer.ForCompiler(fset, "source", nil) both prior reviews used only as
+// one-off ground truth. Measured on 2026-08-31, three repeated runs each:
+// ~500-600ms on the host (darwin/arm64) and ~500-600ms cross-compiled to
+// GOOS=linux/GOARCH=arm64 -- fast enough to run on every `go test`, and the
+// reason this guard now targets linux/arm64 explicitly rather than the host
+// default (see below).
 //
 // Deleted with the AST scan: the receiver-form special cases (pointer vs.
 // value vs. generic), the embedding tripwire, and the embeddingReviewed
@@ -59,7 +66,12 @@ import (
 // type and its pointer, with no manual types.Instantiate step, confirmed
 // empirically against a synthetic `func (f *FeedCache[T]) Invalidate()`
 // during #0349's measurement -- so there is nothing left for a hand-reviewed
-// allowlist to guard.
+// allowlist to guard by declaration or promotion. The one remaining gap,
+// found by #0349's own review and closed by #0353: a package-scope alias to
+// a type LITERAL (`type FeedCache = struct{ *Site; cached []byte }`) resolves
+// to *types.Alias, not *types.Named, under gotypesalias=1, so it is invisible
+// to a bare *types.Named assertion. That gap is closed structurally, by a
+// types.Unalias branch in the loop below, not by an allowlist.
 //
 // Build-tag decision (#0349, from #0337's third review N11): the AST scan
 // was build-tag-BLIND in the safe direction -- it read every .go file
@@ -110,37 +122,13 @@ func TestInvalidatorSatisfierSet(t *testing.T) {
 			"empty or broken type-checked package, not evidence there is nothing to check")
 	}
 
-	// got records every named, non-interface type in this package whose
-	// pointer implements interface{ Invalidate() } -- by direct method
-	// declaration (either receiver form), by promotion from an embedded
-	// struct or interface field, or via a generic receiver. A pointer's
-	// method set is a superset of its base type's, so checking only the
-	// pointer form is sufficient: it is also what every real call site
-	// passes into either seam (*Site, *Renderer, *Sitemap), never a bare
-	// value.
-	got := map[string]bool{}
-	concreteTypesChecked := 0
-	for _, name := range names {
-		tn, ok := scope.Lookup(name).(*types.TypeName)
-		if !ok {
-			continue
-		}
-		named, ok := tn.Type().(*types.Named)
-		if !ok {
-			continue
-		}
-		if _, isInterface := named.Underlying().(*types.Interface); isInterface {
-			// A declared interface in this package is a seam, not a
-			// concrete type that could accidentally join one -- declaring
-			// `type Invalidator interface{ Invalidate() }` makes nothing
-			// new passable that was not already (#0337's third review, N1).
-			continue
-		}
-		concreteTypesChecked++
-		if types.Implements(types.NewPointer(named), invalidateOnly) {
-			got[name] = true
-		}
-	}
+	// got records every named or aliased, non-interface type in this
+	// package's scope whose pointer implements interface{ Invalidate() } --
+	// by direct method declaration (either receiver form), by promotion
+	// from an embedded struct or interface field, or via a generic
+	// receiver. See scanInvalidatorSatisfiers' own doc comment for the
+	// full shape, including the package-scope alias case (#0353).
+	got, concreteTypesChecked := scanInvalidatorSatisfiers(scope, invalidateOnly)
 
 	// Fail closed (CLAUDE.md §8 / #0275's lesson): finding zero named
 	// concrete types is never legitimate evidence there is nothing to
@@ -194,6 +182,176 @@ func TestInvalidatorSatisfierSet(t *testing.T) {
 			"structurally satisfies handlers.seoCacheInvalidator and mailing.ArchiveCacheInvalidator -- "+
 			"either it is a deliberate new satisfier (add it to `want` with a comment saying why) or it "+
 			"is #0337's defect regrowing (unexport the method, or remove/change the embedding)", typeName)
+	}
+}
+
+// scanInvalidatorSatisfiers is TestInvalidatorSatisfierSet's scanning logic,
+// factored out so TestInvalidatorSatisfierSet_AliasToTypeLiteral below can
+// pin the alias-to-type-literal branch (#0353) against a small synthetic
+// package instead of re-deriving the same assertion by hand -- the same
+// function runs in both tests, so a future edit that breaks the alias
+// handling breaks both, and the synthetic test is not merely a second copy
+// of the same claim (CLAUDE.md §8, "a guard's oracle must not be the same
+// bytes as its subject").
+//
+// It records every named or aliased, non-interface type in scope whose
+// pointer implements invalidateOnly -- by direct method declaration (either
+// receiver form), by promotion from an embedded struct or interface field,
+// by generic receiver, or by a package-scope alias to any of those or to a
+// type LITERAL. A pointer's method set is a superset of its base type's, so
+// checking only the pointer form is sufficient for a *types.Named target: it
+// is also what every real call site passes into either seam (*Site,
+// *Renderer, *Sitemap), never a bare value. An alias target that is not
+// itself a *types.Named (a type literal) is checked in both forms, since
+// promotion from an embedded value field lands only on the literal's
+// pointer form, not the value form.
+func scanInvalidatorSatisfiers(scope *types.Scope, invalidateOnly *types.Interface) (got map[string]bool, concreteTypesChecked int) {
+	got = map[string]bool{}
+	for _, name := range scope.Names() {
+		tn, ok := scope.Lookup(name).(*types.TypeName)
+		if !ok {
+			continue
+		}
+
+		if _, isAlias := tn.Type().(*types.Alias); isAlias {
+			// Package-scope alias case (#0353): under gotypesalias=1 (the
+			// default), scope.Lookup(name).Type() for a `type X = ...`
+			// alias declaration returns *types.Alias, not *types.Named, so
+			// the *types.Named assertion below silently skips it --
+			// reporting `ok` on a real satisfier such as `type FeedCache =
+			// struct{ *Site; cached []byte }`, where var _ interface{
+			// Invalidate() } = FeedCache{} compiles. types.Unalias resolves
+			// to what the alias actually names.
+			target := types.Unalias(tn.Type())
+
+			if _, isNamed := target.(*types.Named); isNamed {
+				// A new spelling of a type this loop already checks under
+				// its own name (`type FeedCache = Renderer`) -- re-checking
+				// here would be redundant, not a coverage gap (#0337's
+				// third review, N2; #0353 criterion 1).
+				continue
+			}
+			if ptr, isPointer := target.(*types.Pointer); isPointer {
+				if _, elemIsNamed := ptr.Elem().(*types.Named); elemIsNamed {
+					// `type FeedCache = *Site` -- same reasoning, one level
+					// of indirection further.
+					continue
+				}
+			}
+			if _, isInterface := target.Underlying().(*types.Interface); isInterface {
+				// An alias to a declared interface (`type Invalidator =
+				// SomeInterface`) is a seam, not a concrete type joining
+				// one -- the same declared-seam rule as the *types.Named
+				// branch below (#0337's third review, N1).
+				continue
+			}
+
+			// A genuine alias to a type LITERAL -- the one construct the
+			// retired AST scan's structTypesWithEmbeddedFields tripwire
+			// caught and this *types.Named-only oracle could not (#0353).
+			// target is not a *types.Named, so checking only the pointer
+			// form (as the loop below does) is not sound here: promotion
+			// from an embedded value field lands only on the literal's
+			// pointer form, so check both.
+			concreteTypesChecked++
+			if types.Implements(target, invalidateOnly) || types.Implements(types.NewPointer(target), invalidateOnly) {
+				got[name] = true
+			}
+			continue
+		}
+
+		named, ok := tn.Type().(*types.Named)
+		if !ok {
+			continue
+		}
+		if _, isInterface := named.Underlying().(*types.Interface); isInterface {
+			// A declared interface in this package is a seam, not a
+			// concrete type that could accidentally join one -- declaring
+			// `type Invalidator interface{ Invalidate() }` makes nothing
+			// new passable that was not already (#0337's third review, N1).
+			continue
+		}
+		concreteTypesChecked++
+		if types.Implements(types.NewPointer(named), invalidateOnly) {
+			got[name] = true
+		}
+	}
+	return got, concreteTypesChecked
+}
+
+// TestInvalidatorSatisfierSet_AliasToTypeLiteral is #0353's permanent
+// standing regression for the one construct #0349's go/types.Implements
+// replacement could not see: a package-scope alias to a type LITERAL
+// (`type X = struct{ *Site; ... }`), which resolves to *types.Alias rather
+// than *types.Named under gotypesalias=1 and is therefore invisible to a
+// bare *types.Named type assertion. #0349's reviewer verified the old,
+// retired AST scan caught this construct; this test pins that
+// scanInvalidatorSatisfiers (the function TestInvalidatorSatisfierSet itself
+// calls, not a re-derivation of it) catches it too.
+//
+// Built directly with go/types.Config.Check against a small synthetic
+// in-memory source file rather than packages.Load against internal/seo's own
+// directory -- it runs in milliseconds, needs no importer, and does not
+// depend on this package's real contents, so it stays a fast, permanent part
+// of `go test ./internal/seo/...` rather than something only exercised in a
+// throwaway mutation worktree (#0353 acceptance criteria 3-4).
+func TestInvalidatorSatisfierSet_AliasToTypeLiteral(t *testing.T) {
+	const src = `package synthetic
+
+type Site struct{}
+
+func (s *Site) Invalidate() {}
+
+// FeedCache is a package-scope alias to an anonymous struct literal that
+// promotes Invalidate() from its embedded *Site field -- the exact
+// construct #0349's go/types.Implements-over-*types.Named replacement
+// missed, and the retired AST scan caught.
+type FeedCache = struct {
+	*Site
+	cached []byte
+}
+
+// AliasToNamed is #0337's third review's correct-survival case N2: a new
+// spelling of a type already checked under its own name, and must NOT be
+// double-counted as a separate satisfier.
+type AliasToNamed = Site
+`
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "synthetic.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse synthetic source: %v", err)
+	}
+
+	conf := types.Config{}
+	pkg, err := conf.Check("synthetic", fset, []*ast.File{f}, nil)
+	if err != nil {
+		t.Fatalf("type-check synthetic source: %v", err)
+	}
+
+	invalidateOnly := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(0, pkg, "Invalidate", types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+	}, nil).Complete()
+
+	got, concreteTypesChecked := scanInvalidatorSatisfiers(pkg.Scope(), invalidateOnly)
+
+	// Fail closed: prove the harness itself found something before trusting
+	// its negative assertions below (CLAUDE.md §8's fail-open lesson).
+	if concreteTypesChecked == 0 {
+		t.Fatal("fail closed: scanInvalidatorSatisfiers found zero concrete types in the synthetic " +
+			"package -- the harness itself is broken, not evidence there is nothing to check")
+	}
+
+	if !got["FeedCache"] {
+		t.Error("scanInvalidatorSatisfiers did not report FeedCache (a package-scope alias to a struct " +
+			"literal promoting Invalidate() from an embedded *Site) as a satisfier -- #0353's fix has " +
+			"regressed and this construct is invisible to the guard again")
+	}
+	if got["AliasToNamed"] {
+		t.Error("scanInvalidatorSatisfiers reported AliasToNamed (an alias to the already-checked Site " +
+			"type) as its own satisfier -- it should be skipped as a redundant spelling of Site " +
+			"(#0337's third review, N2), and double-counting it risks masking a real regression under " +
+			"an unrelated name")
 	}
 }
 

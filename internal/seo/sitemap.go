@@ -158,9 +158,10 @@ func (s *Sitemap) Render() ([]byte, error) {
 // exactly `Invalidate()`) onto *Sitemap as an accidental, structural
 // satisfier: passing a bare *Sitemap into either seam went from a compile
 // error to a silent half-invalidation (sitemap cache cleared, meta cache
-// left stale -- the exact failure #0319 was filed to fix) with no source
-// change of its own. *Site is the only type meant to satisfy either
-// interface; unexporting this method removes *Sitemap from contention
+// left stale -- the meta-cache half of #0319's staleness class, not the
+// sitemap staleness #0319 led with) with no source change of its own. *Site
+// is the only type meant to satisfy either interface; unexporting this
+// method removes *Sitemap from contention
 // without touching Renderer.Invalidate, which stays exported and remains a
 // (pre-existing, harmless -- see #0337) structural satisfier of both, since
 // nothing in this codebase ever passes a bare *Renderer to either seam.
