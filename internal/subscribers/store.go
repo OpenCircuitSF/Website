@@ -524,17 +524,66 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 // #0126's plan §4).
 //
 // Returns claimed=true (and both the stamp and the enqueue commit) only if
-// confirm_sent_at is currently NULL or older than now-cooldown; otherwise
-// nothing is changed and claimed=false — either the cooldown is genuinely
-// active, or a concurrent request already won the claim a moment ago. The
-// caller cannot tell those two cases apart from this return value alone,
-// and does not need to: either way, this request must not send.
+// status is currently 'pending' AND confirm_sent_at is currently NULL or
+// older than now-cooldown; otherwise nothing is changed and claimed=false —
+// the cooldown is genuinely active, a concurrent request already won the
+// claim a moment ago, or (see below) the row is no longer pending. The
+// caller cannot tell those cases apart from this return value alone, and
+// does not need to: either way, this request must not send.
+//
+// # #0341 — the status guard, and its twin AdminResendConfirmation
+//
+// The WHERE clause below carries `AND status = 'pending'`. Before #0341 this
+// method trusted the caller's status read entirely: every live caller
+// (subscribe.go's sendConfirmation) does read status='pending' moments
+// earlier, but nothing stopped an SES complaint landing in the gap between
+// that read and this claim's commit — a race #0341's review found this
+// method had no defense against at all, unlike its twin below.
+// AdminResendConfirmation guards the identical predicate
+// (`sub.Status != StatusPending` -> ErrNotPending) in Go, against a row it
+// locks with `SELECT ... FOR UPDATE` first, because that method also needs
+// the locked read for its cooldown/suppression checks. This method has no
+// such prior SELECT — its claim already IS an atomic conditional UPDATE
+// (the cooldown check lives in the same WHERE clause), so adding `status =
+// 'pending'` to that same WHERE clause gets the identical atomicity
+// property without a row lock or a second query: RowsAffected()==1 remains
+// the single source of truth for "this request won the claim, on a row
+// that was genuinely pending at the moment the UPDATE committed."
+//
+// Both methods now express the same predicate — status = 'pending', the
+// form #0341 preferred over a bare `<> 'complained'` because this method
+// (like AdminResendConfirmation) is only ever legitimately called on a
+// pending row, so requiring pending is strictly stronger and leaves no
+// implicit invariant for a reader to take on faith. The two layers differ
+// (SQL WHERE-clause claim here, Go check under FOR UPDATE there) because
+// the two methods' surrounding transactions differ, not because the safety
+// property differs — the same deliberate-divergence shape the package doc
+// comment above already documents for statusLockedFromNonAdmin.
+//
+// # Every claim path toward a live confirm link (#0341 criterion 5)
+//
+// Exactly three methods in this package can stamp confirm_sent_at and
+// enqueue outbox.KindConfirmation, and no other path does (the outbox
+// worker sends whatever a claim already enqueued; it never re-derives or
+// re-checks subscriber status — see internal/mailing.OutboxWorker):
+//
+//  1. Create — claims unconditionally, but only against the row it just
+//     INSERTed as status='pending' in the SAME transaction; no other writer
+//     has that row's id yet, so there is no window for it to already be
+//     complained.
+//  2. ClaimAndEnqueueConfirmation (this method) — an EXISTING row, guarded
+//     as described above.
+//  3. AdminResendConfirmation — an EXISTING row, guarded as described above.
 //
 // confirmToken/manageToken/ttl are the subscriber's OWN current values
 // (i.e. sub.ConfirmToken/sub.ManageToken and the nominal TTL constant the
 // caller renders with) — this method does not re-read them, so the caller
 // must pass a Subscriber it just obtained from Create/RestartSignup/
-// FindByEmail.
+// FindByEmail. (#0314, unimplemented as of this writing, plans to change
+// this method to re-read and, when the existing token has expired, mint a
+// fresh one under its own FOR UPDATE — a separate concern from this status
+// guard. Whoever implements #0314 should fold this WHERE-clause predicate
+// into that rewrite rather than drop it.)
 func (s *Store) ClaimAndEnqueueConfirmation(ctx context.Context, sub Subscriber, now time.Time, cooldown time.Duration, ttl time.Duration) (claimed bool, err error) {
 	if sub.ConfirmToken == nil {
 		return false, fmt.Errorf("subscribers: subscriber %d has no confirm token", sub.ID)
@@ -550,14 +599,15 @@ func (s *Store) ClaimAndEnqueueConfirmation(ctx context.Context, sub Subscriber,
 	tag, err := tx.Exec(ctx,
 		`UPDATE subscribers
 		    SET confirm_sent_at = $2, updated_at = $2
-		  WHERE id = $1 AND (confirm_sent_at IS NULL OR confirm_sent_at < $3)`,
-		sub.ID, now, cutoff,
+		  WHERE id = $1 AND status = $4
+		    AND (confirm_sent_at IS NULL OR confirm_sent_at < $3)`,
+		sub.ID, now, cutoff, StatusPending,
 	)
 	if err != nil {
 		return false, fmt.Errorf("subscribers: claiming confirmation send for %d: %w", sub.ID, err)
 	}
 	if tag.RowsAffected() != 1 {
-		return false, nil // cooldown active, or a concurrent request already claimed this send
+		return false, nil // cooldown active, status no longer pending, or a concurrent request already claimed this send
 	}
 
 	if _, err := s.outbox.EnqueueTx(ctx, tx, outbox.Item{

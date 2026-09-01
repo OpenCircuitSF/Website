@@ -1304,6 +1304,21 @@ func TestCreate_SyntheticSkipsClaimAndEnqueue(t *testing.T) {
 // tested in isolation, with a known starting queue-row count of zero.
 func coldConfirmationSubscriber(t *testing.T, pool *pgxpool.Pool, now time.Time) Subscriber {
 	t.Helper()
+	return coldConfirmationSubscriberWithStatus(t, pool, now, StatusPending)
+}
+
+// coldConfirmationSubscriberWithStatus is coldConfirmationSubscriber
+// parameterized on status — #0341's TestClaimAndEnqueueConfirmation_
+// RefusesComplainedRow uses status=StatusComplained to prove the WHERE
+// clause's `AND status = 'pending'` guard, added by that issue, actually
+// refuses a claim it would otherwise win. A real complained row would not
+// carry a live confirm_token in practice (Confirm/setStatusTx never leave
+// one), but the point of this helper is isolating the status guard alone:
+// giving the row a token and a NULL confirm_sent_at means the ONLY thing
+// that can make the claim lose is the status check, not a missing token or
+// an active cooldown.
+func coldConfirmationSubscriberWithStatus(t *testing.T, pool *pgxpool.Pool, now time.Time, status string) Subscriber {
+	t.Helper()
 	token := fmt.Sprintf("ctok-%d", testdb.Unique())
 	manageToken := fmt.Sprintf("mtok-%d", testdb.Unique())
 	row := pool.QueryRow(context.Background(),
@@ -1311,7 +1326,7 @@ func coldConfirmationSubscriber(t *testing.T, pool *pgxpool.Pool, now time.Time)
 		     (email, status, confirm_token, confirm_sent_at, confirm_expires_at, manage_token, created_at, updated_at)
 		 VALUES (lower(trim($1)), $2, $3, NULL, $4, $5, $6, $6)
 		 RETURNING `+subscriberColumns,
-		uniqueEmail(t), StatusPending, token, now.Add(time.Hour), manageToken, now,
+		uniqueEmail(t), status, token, now.Add(time.Hour), manageToken, now,
 	)
 	// Scans via scanSubscriber (not a hand-written destination list) so this
 	// helper can never drift out of sync with subscriberColumns the way a
@@ -1319,7 +1334,7 @@ func coldConfirmationSubscriber(t *testing.T, pool *pgxpool.Pool, now time.Time)
 	// see store.go's scanSubscriber.
 	sub, err := scanSubscriber(row)
 	if err != nil {
-		t.Fatalf("seed cold-confirmation subscriber: %v", err)
+		t.Fatalf("seed cold-confirmation subscriber (status=%s): %v", status, err)
 	}
 	return sub
 }
@@ -1359,6 +1374,56 @@ func TestClaimAndEnqueueConfirmation_ClaimsWhenColdAndEnqueues(t *testing.T) {
 	}
 	if queuedCount != 1 {
 		t.Fatalf("queued confirmation rows = %d, want 1", queuedCount)
+	}
+}
+
+// TestClaimAndEnqueueConfirmation_RefusesComplainedRow is #0341's proof
+// that ClaimAndEnqueueConfirmation now guards `status = 'pending'` the same
+// way its twin AdminResendConfirmation does (ErrNotPending). Before #0341's
+// fix this method's WHERE clause checked only the confirm_sent_at cooldown,
+// so a row that had transitioned to complained between a caller's read and
+// this claim (e.g. an SES complaint landing mid-request) would still be
+// claimed and mailed a confirmation — this test fails on that code (see
+// this test's own oracle below) and passes once the WHERE clause carries
+// `AND status = $4` with StatusPending.
+//
+// This does not by itself prove a complained address can be resubscribed —
+// Confirm already refuses a complained row outright (ErrComplainedLocked,
+// store.go) regardless of whether a link was ever mailed to it. What this
+// test proves is the narrower, still load-bearing property #0341 was filed
+// over: the claim itself should refuse a complained row rather than
+// silently mailing one, so the two claim paths enforce the same rule
+// instead of one being weaker than the other.
+func TestClaimAndEnqueueConfirmation_RefusesComplainedRow(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	now := time.Now().UTC().Truncate(time.Second)
+	sub := coldConfirmationSubscriberWithStatus(t, pool, now, StatusComplained)
+
+	claimed, err := store.ClaimAndEnqueueConfirmation(context.Background(), sub, now, time.Hour, time.Hour)
+	if err != nil {
+		t.Fatalf("ClaimAndEnqueueConfirmation: %v", err)
+	}
+	if claimed {
+		t.Fatal("claimed = true for a status=complained row, want false (the status guard must refuse this claim)")
+	}
+
+	status, confirmSentAt := readSubscriberByID(t, pool, sub.ID)
+	if status != StatusComplained {
+		t.Errorf("Status = %q after a refused claim, want unchanged %q", status, StatusComplained)
+	}
+	if confirmSentAt != nil {
+		t.Fatalf("confirm_sent_at = %v after a refused claim, want nil (the claim must not have stamped it)", *confirmSentAt)
+	}
+
+	var queuedCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1`, sub.ID,
+	).Scan(&queuedCount); err != nil {
+		t.Fatalf("counting outbound_queue rows: %v", err)
+	}
+	if queuedCount != 0 {
+		t.Fatalf("outbound_queue rows for a refused complained-row claim = %d, want 0 (no confirmation should have been enqueued)", queuedCount)
 	}
 }
 

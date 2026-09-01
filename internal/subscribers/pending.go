@@ -122,7 +122,14 @@ type ResendResult struct {
 // doc comment used to credit the wrong mechanism):
 //
 //  1. the subscriber exists and is not synthetic (ErrPendingSubscriberNotFound)
-//  2. status is 'pending' (ErrNotPending) — nothing to resend to otherwise
+//  2. status is 'pending' (ErrNotPending) — nothing to resend to otherwise.
+//     #0341: ClaimAndEnqueueConfirmation (internal/subscribers/store.go)
+//     guards this identical predicate — status = 'pending' — in its own
+//     WHERE clause instead of a Go `if`, because that method's claim is
+//     already an atomic conditional UPDATE with no prior SELECT, and this
+//     one already needs the FOR UPDATE read for guards 4 and 5. Same
+//     property, deliberately different mechanism per method; see that
+//     method's own doc comment for the full reasoning.
 //  3. the row is not an unaccepted import invitation (ErrResendNotForInvited,
 //     #0129) — see that error's own doc comment for why resending the
 //     generic confirmation template onto one would be actively wrong
