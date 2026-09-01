@@ -18,15 +18,17 @@ import (
 // structural, so ANY type in this package with a method matching that exact
 // shape satisfies both, whether or not that was intended.
 //
-// #0325's rename (InvalidateWorkshops -> Invalidate, f7771ed) moved those
-// two interfaces onto *Sitemap by accident: *Sitemap already had a method
-// of that shape under its old, longer name, and shortening it made a
-// previously-impossible assignment (passing a bare *Sitemap into either
-// seam) compile silently instead of failing -- with a real runtime cost, a
-// half-invalidation that clears the sitemap cache and leaves the per-path
-// meta cache stale (the exact failure #0319 was filed to fix). #0337 closed
-// that by unexporting Sitemap.invalidate (see its own doc comment); this
-// test is what stops it from reopening.
+// #0325's rename (f7771ed) shortened InvalidateWorkshops to Invalidate on
+// *Site's and *Renderer's own methods and on both seams' required method --
+// not on *Sitemap. That moved both interfaces onto *Sitemap by accident:
+// *Sitemap already had a method of that exact shape under the short name,
+// untouched by the rename, so a previously-impossible assignment (passing a
+// bare *Sitemap into either seam) went from a compile error to compiling
+// silently -- with a real runtime cost, a half-invalidation that clears the
+// sitemap cache and leaves the per-path meta cache stale (the exact failure
+// #0319 was filed to fix). #0337 closed that by unexporting
+// Sitemap.invalidate (see its own doc comment); this test is what stops it
+// from reopening.
 //
 // #0337's guard answered this with a go/ast scan of method DECLARATIONS,
 // which is a sound proxy for the type-level property (method SETS) only
