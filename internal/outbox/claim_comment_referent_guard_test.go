@@ -126,11 +126,12 @@
 // claimCommentGuardDirectionalCalibrationCases, below, and
 // TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping, which
 // pins the real internal/outbox/store.go false positive the parenthesis
-// scoping exists to avoid. Read the table for the current, authoritative
-// account of what this axis catches and what it doesn't -- a green
-// `go test ./internal/outbox/...` after a window-logic change is what
-// proves the calibration still holds; a sentence here could only ever
-// assert it.
+// scoping exists to avoid. Read the table for the trade surfaces that are
+// currently pinned, and add a row when you move one. A green
+// `go test ./internal/outbox/...` after a window-logic change means every
+// surface the table pins still holds -- not that no unpinned surface moved;
+// the table is a growing floor under the calibration, not an inventory of
+// it.
 //
 // # Where the oracle lives (criterion 6)
 //
@@ -1212,7 +1213,24 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 	// as a real defect.
 	{
 		name:                 "identifier-after-direction-word false negative",
-		src:                  "package outbox\n\n// Below, ClaimDue claims the row and marks it sending.\n",
+		src:                  "package outbox\n\n// The row is claimed below by ClaimDue and marked sending.\n",
+		wantClaimDueFindings: 0,
+	},
+	// FALSE NEGATIVE -- claimCommentGuardDirWordRe is case-SENSITIVE, so a
+	// capitalised, sentence-initial direction word is invisible to the axis
+	// entirely and its window logic is never reached. TRADE: not a
+	// deliberate one -- measured by #0358's review, recorded here rather
+	// than fixed, per this issue's criterion 4. The lowercase control
+	// carries the identical sentence and flags, so this pair pins the
+	// capitalisation surface specifically and nothing else.
+	{
+		name:                 "case-sensitivity control: lowercase direction word flags",
+		src:                  "package outbox\n\n// ClaimDue claims the row below.\n",
+		wantClaimDueFindings: 1,
+	},
+	{
+		name:                 "capitalised direction word is invisible to the axis",
+		src:                  "package outbox\n\n// ClaimDue claims the row Below.\n",
 		wantClaimDueFindings: 0,
 	},
 	// FALSE NEGATIVE -- a clause boundary separates the identifier from the
@@ -1336,6 +1354,20 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		src:                  "package outbox\n\n// This worker has never called ClaimDue below since #0297.\n",
 		wantClaimDueFindings: 0,
 	},
+	// TRADE (not a false negative -- the one shape where checking every
+	// identifier is load-bearing): a nearer identifier that RESOLVES must
+	// not suppress a farther one in the same window that does not. #0347's
+	// review (bounce 1, B1 part 2) measured that nearest-only masks #0342
+	// site A, where OrphanSweep sits nearer the direction word and does
+	// occur later in that file, while the false claim is about ClaimDue,
+	// which occurs nowhere in it. Pinned here in-table as well as by
+	// TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7,
+	// which pins it against the real db9bff7 file.
+	{
+		name:                 "every-distinct-identifier: a nearer, resolving identifier must not mask a farther, false one",
+		src:                  "package outbox\n\n// ClaimDue and OrphanSweep below claim the row.\n\nvar _ = OrphanSweep\n",
+		wantClaimDueFindings: 1,
+	},
 }
 
 // TestClaimCommentGuardDirectionalAxisCalibrationTable is #0358 criterion
@@ -1355,8 +1387,9 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 // since a test cannot mutate this file's own production logic without
 // becoming exactly the in-file guard CLAUDE.md §8's #0258 entry warns
 // against): reverting the directional marker set to the broad
-// claimCommentGuardHistoricalRe fails both this table's four
-// marker-exemption rows AND
+// claimCommentGuardHistoricalRe fails this table's three `never`/`cannot`
+// false-positive rows (the four marker-exemption rows stay green -- a
+// broader marker set only exempts more) AND
 // TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7;
 // reverting "every distinct identifier" to "nearest identifier only" fails
 // that same falsifiability test (site A drops from 2 findings to 1);
@@ -1385,6 +1418,20 @@ func TestClaimCommentGuardDirectionalAxisCalibrationTable(t *testing.T) {
 	}
 }
 
+// claimCommentGuardStoreGoParenSentinelRe is #0358's review (B5): the
+// PREVIOUS sentinel here was a bare strings.Contains(src, "see SelectDue"),
+// which did not require the direction word itself -- rewording store.go's
+// parenthetical to "(see SelectDue, declared earlier)" left this test green
+// while pinning nothing, a silent fail-open in a test whose only job is to
+// pin a trade. store.go also wraps the parenthetical across two comment
+// lines ("see SelectDue\n// above)"), so a plain "see SelectDue above"
+// substring check would NOT match today's file either -- this pattern
+// tolerates that wrap (a run of whitespace-or-"/" between the two words)
+// while still requiring the direction word to survive. Verified against
+// the real file both ways: matches today's store.go, stops matching once
+// "above" is reworded away.
+var claimCommentGuardStoreGoParenSentinelRe = regexp.MustCompile(`see SelectDue[\s/]+above`)
+
 // TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping is
 // #0358 criterion 2's explicit ask: name store.go's false positive as the
 // reason the parenthesis scoping exists, pinned against the REAL file
@@ -1408,10 +1455,10 @@ func TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping(t *testing
 	const path = "store.go"
 	src, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("reading %s: %v -- this test's premise (a real, checked-in file with the ClaimRow/SelectDue parenthetical comment at :463) no longer holds and must be re-pointed, not skipped", path, err)
+		t.Fatalf("reading %s: %v -- this test's premise (a real, checked-in file with the ClaimRow/SelectDue parenthetical comment for ClaimRow) no longer holds and must be re-pointed, not skipped", path, err)
 	}
-	if !strings.Contains(string(src), "see SelectDue") {
-		t.Fatal("FAIL-CLOSED: store.go no longer contains the parenthetical \"(see SelectDue above)\" this test pins against -- re-point it at whatever comment now exercises the same paren-scoping trade, or drop it if the shape no longer exists in this file")
+	if !claimCommentGuardStoreGoParenSentinelRe.MatchString(string(src)) {
+		t.Fatal("FAIL-CLOSED: store.go no longer contains the parenthetical \"(see SelectDue ... above)\" -- WITH the direction word itself surviving -- this test pins against; re-point it at whatever comment now exercises the same paren-scoping trade, or drop it if the shape no longer exists in this file")
 	}
 
 	pkgTypes, visited := claimCommentGuardBuildPackageTypeIndex(t, claimCommentGuardScanRoots)
