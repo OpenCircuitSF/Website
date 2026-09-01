@@ -468,6 +468,54 @@ func claimCommentGuardOpenParen(s string) int {
 	return -1
 }
 
+// claimCommentGuardDirectionalWindowLo computes the left edge of the
+// directional axis's backward-looking window for a direction-word match
+// starting at byte offset dmStart within flat. Anchor on the nearer of (a)
+// 90 chars back, or (b) the last clause boundary claimCommentGuardLastBoundary
+// finds -- the SAME boundary set the historical-marker check uses, including
+// the em dash ("—") this codebase writes clauses with far more than it
+// writes periods. An earlier draft trimmed only on ".;:!?" here (a
+// DIFFERENT, narrower set, drifted out of sync from having two copies of
+// the same idea) and a left-to-right scan lets an EARLIER word consume a
+// LATER direction claim and hide the real one -- measured against the real
+// tree, not assumed: a claim-machinery identifier named before an em dash,
+// in a clause unrelated to a directional word that follows it, used to leak
+// into this window (internal/mailing/outbox_worker_test.go's own "#0297 —
+// see this test's own doc comment ABOVE..." was the reproduction: the OTHER
+// identifier named earlier in that same paragraph, well before the em dash,
+// is what leaked). Also scopes to the innermost still-open parenthesis, when
+// the direction word sits inside one -- see claimCommentGuardOpenParen's own
+// doc comment, above, for the store.go false positive this closes, which
+// checking every identifier in the window would otherwise reintroduce on
+// its own (#0347's review, bounce 1, B1, part 3).
+//
+// Extracted from findClaimCommentGuardFindings's directional axis (#0364),
+// byte-identical to what was inline there before -- verified by re-running
+// #0358's and #0363's full mutation batteries against the extracted form
+// and confirming identical pass/fail results throughout (see #0364's
+// ## Verification, issues/0364.md). The extraction exists so
+// claimCommentGuardDiagnoseDirectional, defined near the calibration table
+// below, calls this SAME function to decide whether a target identifier
+// falls inside the window, rather than holding a second, independently
+// -drifting copy of this arithmetic -- CLAUDE.md §8: a copy of the answer
+// stored next to the question is not a check. #0358 criterion 5 / #0364
+// criterion 5 freeze the CALIBRATION this produces, not the act of naming
+// it: every constant and every clamp this function makes is unchanged from
+// what was inline in the directional axis before this extraction.
+func claimCommentGuardDirectionalWindowLo(flat string, dmStart int) int {
+	lo := dmStart - 90
+	if b := claimCommentGuardLastBoundary(flat[:dmStart]); b > lo {
+		lo = b
+	}
+	if pOpen := claimCommentGuardOpenParen(flat[:dmStart]); pOpen > lo {
+		lo = pOpen
+	}
+	if lo < 0 {
+		lo = 0
+	}
+	return lo
+}
+
 // claimCommentGuardSnippet returns context around [start,end) in flat.
 // Rune-boundary-safe: #0342's third review's own scratchpad audit tool's
 // doc comment records that an earlier draft of this exact kind of helper
@@ -613,39 +661,15 @@ func findClaimCommentGuardFindings(path string, src any, allPkgTypes map[string]
 			// prose, which is strictly worse. Pinned by the resolution rows in
 			// claimCommentGuardDirectionalCalibrationCases.
 			dirLower := strings.ToLower(dir)
-			// Anchor on the nearer of (a) 90 chars back, or (b) the last
-			// clause boundary claimCommentGuardLastBoundary finds -- the
-			// SAME boundary set the historical-marker check uses two
-			// paragraphs up, including the em dash ("—") this codebase
-			// writes clauses with far more than it writes periods. An
-			// earlier draft trimmed only on ".;:!?" here (a DIFFERENT,
-			// narrower set, drifted out of sync from having two copies of
-			// the same idea) and a left-to-right scan lets an EARLIER word
-			// consume a LATER direction claim and hide the real one --
-			// measured against the real tree, not assumed: a claim-machinery
-			// identifier named before an em dash, in a clause unrelated to
-			// a directional word that follows it, used to leak into this
-			// window (internal/mailing/outbox_worker_test.go's own "#0297
-			// — see this test's own doc comment ABOVE..." was the
-			// reproduction: the OTHER identifier named earlier in that
-			// same paragraph, well before the em dash, is what leaked).
-			lo := dm[0] - 90
-			if b := claimCommentGuardLastBoundary(flat[:dm[0]]); b > lo {
-				lo = b
-			}
-			// #0347's review (bounce 1, B1, part 3): scope the window to
-			// the innermost still-open parenthesis, when the direction
-			// word sits inside one -- see claimCommentGuardOpenParen's own
-			// doc comment, defined earlier in this file, for the store.go
-			// false positive this closes, which checking every identifier
-			// in the window (the next change here) would otherwise
-			// reintroduce on its own.
-			if pOpen := claimCommentGuardOpenParen(flat[:dm[0]]); pOpen > lo {
-				lo = pOpen
-			}
-			if lo < 0 {
-				lo = 0
-			}
+			// Window left edge -- see claimCommentGuardDirectionalWindowLo's
+			// own doc comment (defined earlier in this file, right after
+			// claimCommentGuardOpenParen) for the full account of the
+			// 90-char cap, the boundary clamp, and the paren scoping this
+			// combines. Extracted there (#0364) so
+			// claimCommentGuardDiagnoseDirectional, near the calibration
+			// table below, shares this exact computation rather than
+			// holding a second, independently-drifting copy of it.
+			lo := claimCommentGuardDirectionalWindowLo(flat, dm[0])
 			window := flat[lo:dm[0]]
 			// Check EVERY DISTINCT target identifier in the window, not
 			// only the nearest. #0347's review (bounce 1, B1, part 2)
@@ -1182,6 +1206,130 @@ func TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7(t *test
 	}
 }
 
+// claimCommentGuardDirectionalReason is #0364's discriminant: WHY a
+// calibration row gets the ClaimDue count it gets, not merely what that
+// count is. A row asserting wantClaimDueFindings alone cannot show whether
+// it is silent (or flagged) for the reason its own comment names --
+// #0358 shipped a row pinning nothing this way (its comment named the
+// backwards-only window; its real cause, at the time, was that the
+// direction-word regex never matched a capitalised "Below" at all, so the
+// axis was never entered), and #0363 shipped the mirror image (a row
+// pinned only entry, blind to whether the axis then RESOLVED correctly --
+// #0363's own shipped bug flagged every capitalised direction word
+// unconditionally, a false positive that row could not see). Both were
+// invisible to a table comparing only counts.
+//
+// dirWordMatched, dirWord, markerExempt, and identInWindow are RE-DERIVED
+// from the axis's own shared primitives -- claimCommentGuardDirWordRe,
+// claimCommentGuardDirHistoricalRe, claimCommentGuardSentence,
+// claimCommentGuardDirectionalWindowLo, claimCommentGuardIdentRe -- the
+// same vars and functions findClaimCommentGuardFindings itself calls when
+// it makes its own decision, not a second, independently-drifting copy of
+// it (CLAUDE.md §8: a copy of the answer stored next to the question is
+// not a check). resolved is deliberately NOT computed by re-implementing
+// the "below"/"above" resolution comparison a third time -- that exact
+// comparison's case-sensitivity trap is #0363's whole subject, and a
+// hand-written duplicate of it here would inherit the identical risk of
+// silently drifting from whatever the real comparison does. Instead
+// resolved asks findClaimCommentGuardFindings itself, the REAL
+// computation, whether a directional ClaimDue finding actually resulted --
+// so a mutation to the real comparison is observed through its real
+// output, not missed by a stale copy standing in for it.
+type claimCommentGuardDirectionalReason struct {
+	dirWordMatched bool
+	dirWord        string
+	markerExempt   bool
+	identInWindow  bool
+	resolved       bool // only meaningful when identInWindow is true
+}
+
+func claimCommentGuardReasonNoDirectionWordMatch() claimCommentGuardDirectionalReason {
+	return claimCommentGuardDirectionalReason{}
+}
+
+func claimCommentGuardReasonMarkerExempt(dirWord string) claimCommentGuardDirectionalReason {
+	return claimCommentGuardDirectionalReason{dirWordMatched: true, dirWord: dirWord, markerExempt: true}
+}
+
+func claimCommentGuardReasonWindowExcludes(dirWord string) claimCommentGuardDirectionalReason {
+	return claimCommentGuardDirectionalReason{dirWordMatched: true, dirWord: dirWord}
+}
+
+func claimCommentGuardReasonResolved(dirWord string) claimCommentGuardDirectionalReason {
+	return claimCommentGuardDirectionalReason{dirWordMatched: true, dirWord: dirWord, identInWindow: true, resolved: true}
+}
+
+func claimCommentGuardReasonUnresolved(dirWord string) claimCommentGuardDirectionalReason {
+	return claimCommentGuardDirectionalReason{dirWordMatched: true, dirWord: dirWord, identInWindow: true, resolved: false}
+}
+
+// claimCommentGuardDiagnoseDirectional re-derives WHY the directional axis
+// produces the ClaimDue count it does for src, for
+// TestClaimCommentGuardDirectionalAxisCalibrationTable to check against
+// each row's declared claimCommentGuardDirectionalReason (#0364). It
+// assumes exactly one non-empty comment group and exactly one
+// direction-word match within it -- every calibration fixture below is
+// deliberately written to that shape, matching what each row's own count
+// assertion already assumes -- and fails loudly, rather than guessing,
+// if a fixture doesn't hold to it.
+func claimCommentGuardDiagnoseDirectional(src string) (claimCommentGuardDirectionalReason, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "diagnose.go", src, parser.ParseComments)
+	if err != nil {
+		return claimCommentGuardDirectionalReason{}, fmt.Errorf("parsing fixture: %w", err)
+	}
+	var flat string
+	nonEmpty := 0
+	for _, cg := range f.Comments {
+		text := cg.Text()
+		if text == "" {
+			continue
+		}
+		nonEmpty++
+		flat = strings.Join(strings.Fields(text), " ")
+	}
+	if nonEmpty != 1 {
+		return claimCommentGuardDirectionalReason{}, fmt.Errorf("fixture has %d non-empty comment group(s); this diagnostic assumes exactly one", nonEmpty)
+	}
+
+	matches := claimCommentGuardDirWordRe.FindAllStringSubmatchIndex(flat, -1)
+	if len(matches) == 0 {
+		return claimCommentGuardReasonNoDirectionWordMatch(), nil
+	}
+	if len(matches) != 1 {
+		return claimCommentGuardDirectionalReason{}, fmt.Errorf("fixture has %d direction-word matches; this diagnostic assumes exactly one", len(matches))
+	}
+	dm := matches[0]
+	dirWord := strings.ToLower(flat[dm[2]:dm[3]])
+
+	if claimCommentGuardDirHistoricalRe.MatchString(claimCommentGuardSentence(flat, dm[0], dm[1])) {
+		return claimCommentGuardReasonMarkerExempt(dirWord), nil
+	}
+
+	lo := claimCommentGuardDirectionalWindowLo(flat, dm[0])
+	window := flat[lo:dm[0]]
+	identInWindow := false
+	for _, im := range claimCommentGuardIdentRe.FindAllString(window, -1) {
+		if im == "ClaimDue" {
+			identInWindow = true
+		}
+	}
+	if !identInWindow {
+		return claimCommentGuardReasonWindowExcludes(dirWord), nil
+	}
+
+	findings, err := findClaimCommentGuardFindings("diagnose.go", src, map[string]map[string]bool{})
+	if err != nil {
+		return claimCommentGuardDirectionalReason{}, fmt.Errorf("scanning fixture: %w", err)
+	}
+	for _, fdg := range findings {
+		if fdg.axis == "directional" && fdg.ident == "ClaimDue" {
+			return claimCommentGuardReasonUnresolved(dirWord), nil
+		}
+	}
+	return claimCommentGuardReasonResolved(dirWord), nil
+}
+
 // #0358's calibration table (job 1: pin the trade surfaces; job 2: retire
 // the prose list above in favour of this table -- see "What this guard
 // cannot do" above for the reasoning).
@@ -1195,10 +1343,20 @@ func TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7(t *test
 // positive elsewhere), never "correctly recognised as true", and
 // wantClaimDueFindings == 1 always means "flagged" (a false positive this
 // calibration accepts, or the real defect this axis exists to catch).
+//
+// wantReason is #0364's addition: each row also declares WHICH of the
+// axis's mechanisms produces that count -- the direction word never
+// matched at all, the sentence's marker exempted it, the identifier fell
+// outside the computed window, or the identifier was in the window and
+// either resolved (silent) or did not (flagged). See
+// claimCommentGuardDirectionalReason's own doc comment for why this is
+// re-derived from the axis's shared primitives rather than a second,
+// driftable copy of the answer.
 type claimCommentGuardDirectionalCalibrationCase struct {
 	name                 string
 	src                  string
 	wantClaimDueFindings int
+	wantReason           claimCommentGuardDirectionalReason
 }
 
 var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectionalCalibrationCase{
@@ -1213,6 +1371,7 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		name:                 "paren-scoping false negative, trades against store.go ClaimRow's false positive",
 		src:                  "package outbox\n\n// ClaimDue's kinds filter (applied in pass, below) so this pass narrows what gets claimed.\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonWindowExcludes("below"),
 	},
 	// FALSE NEGATIVE -- the identifier is named AFTER the direction word.
 	// TRADE: the window only ever looks BACKWARDS from a direction word
@@ -1224,6 +1383,7 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		name:                 "identifier-after-direction-word false negative",
 		src:                  "package outbox\n\n// The row is claimed below by ClaimDue and marked sending.\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonWindowExcludes("below"),
 	},
 	// REGRESSION PIN (#0363) -- claimCommentGuardDirWordRe used to be
 	// case-SENSITIVE, so a capitalised, sentence-initial direction word
@@ -1244,11 +1404,13 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		name:                 "case-sensitivity control: lowercase direction word flags",
 		src:                  "package outbox\n\n// ClaimDue claims the row below.\n",
 		wantClaimDueFindings: 1,
+		wantReason:           claimCommentGuardReasonUnresolved("below"),
 	},
 	{
 		name:                 "case-insensitivity regression pin: capitalised direction word flags too",
 		src:                  "package outbox\n\n// ClaimDue claims the row Below.\n",
 		wantClaimDueFindings: 1,
+		wantReason:           claimCommentGuardReasonUnresolved("below"),
 	},
 	// RESOLUTION PIN (#0363, second bounce) -- the pair above proves only
 	// that a capitalised direction word ENTERS the axis; both fixtures carry
@@ -1268,16 +1430,19 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		name:                 "case-insensitivity resolution control: lowercase direction word resolves against a real declaration below",
 		src:                  "package outbox\n\n// ClaimDue claims the row below.\nfunc ClaimDue() {}\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonResolved("below"),
 	},
 	{
 		name:                 "case-insensitivity resolution pin: capitalised direction word must RESOLVE, not merely enter the axis",
 		src:                  "package outbox\n\n// ClaimDue claims the row Below.\nfunc ClaimDue() {}\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonResolved("below"),
 	},
 	{
 		name:                 "case-insensitivity resolution pin: capitalised Above must resolve too -- the other, separately-written comparison",
 		src:                  "package outbox\n\nfunc ClaimDue() {}\n\n// ClaimDue is declared Above.\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonResolved("above"),
 	},
 	// FALSE NEGATIVE -- a clause boundary separates the identifier from the
 	// direction word. TRADE: the boundary set (claimCommentGuardBoundaryRunes
@@ -1292,16 +1457,19 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		name:                 "clause-boundary false negative (em dash)",
 		src:                  "package outbox\n\n// ClaimDue narrows the kinds filter — the row is processed below.\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonWindowExcludes("below"),
 	},
 	{
 		name:                 "clause-boundary false negative (colon)",
 		src:                  "package outbox\n\n// ClaimDue narrows the kinds filter: the row is processed below.\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonWindowExcludes("below"),
 	},
 	{
 		name:                 "clause-boundary false negative (ASCII double hyphen)",
 		src:                  "package outbox\n\n// ClaimDue narrows the kinds filter -- the row is processed below.\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonWindowExcludes("below"),
 	},
 	// FALSE NEGATIVE -- more than 90 characters separate the identifier
 	// from the direction word, with no boundary between them. TRADE: the
@@ -1315,6 +1483,7 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		name:                 ">90-characters false negative, no boundary",
 		src:                  "package outbox\n\n// ClaimDue determines which due rows this particular render pass considers eligible before the sweep that runs immediately below.\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonWindowExcludes("below"),
 	},
 	// FALSE NEGATIVE -- the marker-exemption surface (#0347's third
 	// review). TRADE: claimCommentGuardDirHistoricalRe's four
@@ -1330,26 +1499,31 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		name:                 "marker-exemption control (no marker, same false claim, stays flagged)",
 		src:                  "package outbox\n\n// So ClaimDue below claims the row.\n",
 		wantClaimDueFindings: 1,
+		wantReason:           claimCommentGuardReasonUnresolved("below"),
 	},
 	{
 		name:                 "marker-exemption: rather than",
 		src:                  "package outbox\n\n// ...rather than a bare loop, so ClaimDue below claims the row.\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonMarkerExempt("below"),
 	},
 	{
 		name:                 "marker-exemption: instead of",
 		src:                  "package outbox\n\n// ...instead of a batch, and ClaimDue below marks it sending.\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonMarkerExempt("below"),
 	},
 	{
 		name:                 "marker-exemption: would",
 		src:                  "package outbox\n\n// A retry would be wasteful here, so ClaimDue below claims the row...\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonMarkerExempt("below"),
 	},
 	{
 		name:                 "marker-exemption: has not called",
 		src:                  "package outbox\n\n// The intake has not called the sweep yet, so ClaimDue below is what claims...\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonMarkerExempt("below"),
 	},
 	// FALSE POSITIVE -- non-positional "above"/"below". TRADE: the axis
 	// cannot tell a positional direction word from an ordinary spatial or
@@ -1363,11 +1537,13 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		name:                 "false positive: non-positional \"below\" (table)",
 		src:                  "package outbox\n\n// ClaimDue semantics matter here, and the table below explains why.\n",
 		wantClaimDueFindings: 1,
+		wantReason:           claimCommentGuardReasonUnresolved("below"),
 	},
 	{
 		name:                 "false positive: non-positional \"below\" (numeric)",
 		src:                  "package outbox\n\n// ClaimDue's retry budget stays below eight attempts.\n",
 		wantClaimDueFindings: 1,
+		wantReason:           claimCommentGuardReasonUnresolved("below"),
 	},
 	// FALSE POSITIVE -- a genuinely historical comment whose ONLY marker is
 	// "never" or "cannot". TRADE: those two words are dropped from
@@ -1384,21 +1560,25 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		name:                 "false positive: historical comment, only marker is \"never\"",
 		src:                  "package outbox\n\n// ClaimDue below was never used by this worker.\n",
 		wantClaimDueFindings: 1,
+		wantReason:           claimCommentGuardReasonUnresolved("below"),
 	},
 	{
 		name:                 "false positive: historical comment, \"never\" plus an unrelated #-reference",
 		src:                  "package outbox\n\n// This worker never called ClaimDue below; #0297 removed that path entirely.\n",
 		wantClaimDueFindings: 1,
+		wantReason:           claimCommentGuardReasonUnresolved("below"),
 	},
 	{
 		name:                 "false positive: historical comment, only marker is \"cannot\"",
 		src:                  "package outbox\n\n// ClaimDue below cannot be reached from here any more.\n",
 		wantClaimDueFindings: 1,
+		wantReason:           claimCommentGuardReasonUnresolved("below"),
 	},
 	{
 		name:                 "rescued: \"never\" alongside \"since #\" is exempt after all",
 		src:                  "package outbox\n\n// This worker has never called ClaimDue below since #0297.\n",
 		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonMarkerExempt("below"),
 	},
 	// TRADE (not a false negative -- the one shape where checking every
 	// identifier is load-bearing): a nearer identifier that RESOLVES must
@@ -1413,6 +1593,35 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 		name:                 "every-distinct-identifier: a nearer, resolving identifier must not mask a farther, false one",
 		src:                  "package outbox\n\n// ClaimDue and OrphanSweep below claim the row.\n\nvar _ = OrphanSweep\n",
 		wantClaimDueFindings: 1,
+		wantReason:           claimCommentGuardReasonUnresolved("below"),
+	},
+	// #0364 -- gives claimCommentGuardDirectionalReason's
+	// no-direction-word-match bucket a real, reachable exemplar under
+	// NORMAL (unmutated) conditions, not only under a hypothetical mutation.
+	// This is exactly the shape #0358's original capitalisation row secretly
+	// fell into while its comment claimed a different cause (a window
+	// limit): before #0363 added the case-insensitive flag, a capitalised
+	// positional word never matched claimCommentGuardDirWordRe at all, so
+	// the window logic was never reached, and a count-only assertion could
+	// not tell that apart from a genuine window exclusion.
+	//
+	// NOTE ON THIS COMMENT'S OWN WORDING: deliberately does not spell either
+	// positional word literally anywhere near "ClaimDue" in this doc
+	// comment -- an earlier draft did, describing the fixture as mentioning
+	// "neither X nor Y", and that description sentence was ITSELF flagged
+	// by the directional axis scanning this very file (ClaimDue preceding
+	// both quoted words, no code anywhere in this file resolving either) --
+	// the same "this guard scans its own file" class #0358's own history
+	// records. Rephrased rather than deleted, per that issue's convention.
+	// The fixture below carries neither positional word at all, so
+	// claimCommentGuardDirWordRe.FindAllStringSubmatchIndex returns zero
+	// matches on it and the directional axis's per-match loop body never
+	// executes -- deliberately, not as an accident of wording.
+	{
+		name:                 "no-direction-word-match: ClaimDue mentioned with neither \"below\" nor \"above\"",
+		src:                  "package outbox\n\n// ClaimDue is scoped to mailKinds in this pass.\n",
+		wantClaimDueFindings: 0,
+		wantReason:           claimCommentGuardReasonNoDirectionWordMatch(),
 	},
 }
 
@@ -1459,6 +1668,22 @@ func TestClaimCommentGuardDirectionalAxisCalibrationTable(t *testing.T) {
 			}
 			if got != c.wantClaimDueFindings {
 				t.Fatalf("directional ClaimDue findings = %d, want %d; all findings: %+v", got, c.wantClaimDueFindings, findings)
+			}
+
+			// #0364 -- a matching count is not enough; re-derive WHY this row
+			// gets that count (from the axis's own shared primitives, via
+			// claimCommentGuardDiagnoseDirectional) and confirm it matches
+			// the mechanism the row's own name and comment claim. This is
+			// what #0358's identifier-after-direction-word row and #0363's
+			// first-pass resolution pin both lacked: each got its declared
+			// count for a DIFFERENT reason than the one it named, and
+			// nothing but hand-instrumentation caught it.
+			reason, err := claimCommentGuardDiagnoseDirectional(c.src)
+			if err != nil {
+				t.Fatalf("diagnosing WHY this row gets its count (#0364): %v", err)
+			}
+			if reason != c.wantReason {
+				t.Fatalf("row got %d finding(s) for a DIFFERENT mechanism than its declared wantReason (#0364) -- want %+v, got %+v", got, c.wantReason, reason)
 			}
 		})
 	}
