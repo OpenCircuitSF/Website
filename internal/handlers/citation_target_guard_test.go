@@ -261,8 +261,8 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 	// package-header comment's
 	// own FOUR-segment list citation (not spelled out here as a literal
 	// slash-joined token, since this comment is itself scanned by the
-	// guard below — see that file's line 25 for the real text: a
-	// directory prefix ("internal", "seo"), then two real files, seo.go
+	// guard below — see that file's package doc comment for the real
+	// text: a directory prefix ("internal", "seo"), then two real files, seo.go
 	// AND sitemap.go — four "/"-separated segments in total. The
 	// excluding segment there is the THIRD of those four, "seo.go", not
 	// the first). ANY
