@@ -111,6 +111,14 @@
 // of this guard means "no comment misattributes a claim-machinery call or
 // its position", not "the comments are accurate".
 //
+// The directional axis is narrower still: its window runs BACKWARDS from
+// the direction word to the nearest clause boundary, at most 90
+// characters, and stops at an enclosing "(" -- so an identifier named
+// AFTER the direction word, beyond a clause boundary, or outside a
+// parenthetical the direction word sits inside, is not checked. Measured,
+// not assumed. Each was a deliberate trade against a real false positive;
+// none of them fires on HEAD today.
+//
 // # Where the oracle lives (criterion 6)
 //
 // In Go, in-package, per CLAUDE.md §8's rule: the deciding question is
@@ -247,7 +255,7 @@ var (
 	// negation words (see that axis's own comment above, and
 	// TestClaimCommentGuardIsCleanOnKnownNegativeFixture) -- so this is a
 	// second, narrower regex, not an edit to the first.
-	claimCommentGuardDirHistoricalRe = regexp.MustCompile(`(?i)\b(before #|since #|no longer|used to|formerly|the old |at the time|was removed|removed by|replaced|predates|pre-#|historical|reverting|revert(ed)?)\b`)
+	claimCommentGuardDirHistoricalRe = regexp.MustCompile(`(?i)\b(before #|since #|has not called|no longer|used to|formerly|the old |at the time|was removed|removed by|replaced|predates|pre-#|historical|rather than|instead of|would|reverting|revert(ed)?)\b`)
 )
 
 // claimCommentGuardFileFacts holds what a mode-0 (comment-free) parse of
