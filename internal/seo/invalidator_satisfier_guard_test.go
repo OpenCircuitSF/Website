@@ -1,13 +1,13 @@
 package seo
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"go/types"
 	"os"
 	"sort"
 	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
 )
 
 // TestInvalidatorSatisfierSet is #0337's regression guard: two callers
@@ -28,31 +28,62 @@ import (
 // that by unexporting Sitemap.invalidate (see its own doc comment); this
 // test is what stops it from reopening.
 //
+// #0337's guard answered this with a go/ast scan of method DECLARATIONS,
+// which is a sound proxy for the type-level property (method SETS) only
+// while no type in this package acquires Invalidate() by PROMOTION from an
+// embedded field -- so three review passes each closed one AST special case
+// (value receivers, generic receivers) and then had to add a
+// refuse-to-answer tripwire for the one case (embedding) an AST scan cannot
+// model at all, plus a name-keyed allowlist to escape it that #0337's third
+// review proved does not stay true (allowlist a type while it embeds a
+// non-satisfier, then let an unrelated later edit swap the embedded type for
+// a real satisfier, and go/types reports a new satisfier while the AST scan
+// stays green with no edit to the guard file). #0349 replaces the whole
+// scan with the actual oracle: go/types.Implements against every named
+// type's real method set, computed by the type checker itself via
+// golang.org/x/tools/go/packages with NeedTypes (export-data backed, not
+// the ~11s importer.ForCompiler(fset, "source", nil) both prior reviews used
+// only as one-off ground truth). Measured on 2026-08-31, three repeated runs
+// each: ~500-600ms on the host (darwin/arm64) and ~500-600ms cross-compiled
+// to GOOS=linux/GOARCH=arm64 -- fast enough to run on every `go test`, and
+// the reason this guard now targets linux/arm64 explicitly rather than the
+// host default (see below).
+//
+// Deleted with the AST scan: the receiver-form special cases (pointer vs.
+// value vs. generic), the embedding tripwire, and the embeddingReviewed
+// allowlist. types.Implements resolves promotion (embedded struct and
+// interface fields) and generic receivers correctly on its own --
+// go/types.Implements works directly on an uninstantiated generic Named
+// type and its pointer, with no manual types.Instantiate step, confirmed
+// empirically against a synthetic `func (f *FeedCache[T]) Invalidate()`
+// during #0349's measurement -- so there is nothing left for a hand-reviewed
+// allowlist to guard.
+//
+// Build-tag decision (#0349, from #0337's third review N11): the AST scan
+// was build-tag-BLIND in the safe direction -- it read every .go file
+// regardless of //go:build constraints, so a `//go:build linux` file
+// declaring an accidental Invalidate() was caught even on a developer's
+// mac. A naive go/types replacement running under the host's default
+// GOOS/GOARCH would lose that: production is linux/arm64 (CLAUDE.md §7), so
+// a linux-only satisfier would be invisible to a darwin type-check. This
+// guard closes that gap deliberately rather than losing it silently: its
+// packages.Config.Env pins GOOS=linux and GOARCH=arm64, matching production
+// exactly, so the type-check this guard performs is the one that matters --
+// what actually ships. (A hypothetical darwin-only or other-GOOS-only
+// satisfier is out of scope: this codebase does not ship to any target
+// other than linux/arm64, so checking additional host targets would only
+// buy coverage for platforms nothing here ever builds for, at the cost of
+// another ~500ms Load per target.)
+//
 // This guard cannot reference handlers.seoCacheInvalidator or
 // mailing.ArchiveCacheInvalidator directly: the former is unexported
 // (package-private to internal/handlers by design -- see
 // admin_workshops.go's doc comment), and internal/seo already imports
 // internal/handlers for route helpers (seo.go's metaFor), so an import in
 // the other direction would be a cycle regardless of visibility. Instead it
-// reads THIS package's own source with go/ast/go/parser -- the same
-// technique cmd/opencircuit/servepostgres_seo_instance_guard_test.go's
-// interfaceIsInvalidateOnly uses for the mirror-image problem (recognizing
-// an Invalidate()-only interface from its declaration) -- and asks the
-// equivalent question about a METHOD declaration instead of an interface
-// declaration: does *Site / *Renderer / *Sitemap have a method named
-// exactly "Invalidate", taking no parameters and returning nothing? Reading
-// method declarations is equivalent to asking about method SETS only while no
-// type in this package acquires Invalidate() by promotion from an embedded
-// field, which is true today (site.go, seo.go, sitemap.go all declare plain,
-// non-embedding structs) -- and this test no longer merely assumes it: the
-// structTypesWithEmbeddedFields check below fails the moment any struct here
-// grows an embedded field, because a promoted method is invisible to the
-// scan. Per CLAUDE.md
-// §8's placement rule, this is a legitimate in-package oracle rather than
-// one requiring an external harness: the guard's subject is this package's
-// own method declarations, and a mutation to those declarations (renaming,
-// adding, removing Invalidate) changes what the scan finds -- there is
-// nothing here for an edit to the subject to hide behind.
+// builds an ad hoc `interface{ Invalidate() }` -- the exact shared shape of
+// both real seams -- and asks go/types whether each named type in this
+// package's own compiled type information implements it.
 //
 // The known correct answer, current as of #0337: *Site and *Renderer are
 // the intended satisfiers (only *Site is ever actually passed into either
@@ -61,25 +92,60 @@ import (
 // scope -- see its acceptance criterion 4). *Sitemap must NOT be a
 // satisfier.
 func TestInvalidatorSatisfierSet(t *testing.T) {
-	fset := token.NewFileSet()
-	methods := invalidateOnlyMethodReceivers(t, fset, ".")
+	pkg := loadSeoPackageForProductionTarget(t)
 
-	// Fail closed (CLAUDE.md §8 / #0275's lesson): finding zero
-	// Invalidate()-only method receivers is never legitimate evidence that
-	// nothing needs checking -- it means the scan itself broke (the
-	// directory moved, every .go file failed to parse). At least one
-	// receiver type in this package has always had a method matching this
-	// exact shape since before #0325.
-	satisfiers := 0
-	for _, has := range methods {
-		if has {
-			satisfiers++
+	// The shared shape both handlers.seoCacheInvalidator and
+	// mailing.ArchiveCacheInvalidator require: exactly one method, named
+	// Invalidate, no parameters, no results.
+	invalidateOnly := types.NewInterfaceType([]*types.Func{
+		types.NewFunc(0, pkg.Types, "Invalidate", types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+	}, nil).Complete()
+
+	scope := pkg.Types.Scope()
+	names := scope.Names()
+	if len(names) == 0 {
+		t.Fatal("fail closed: internal/seo's package scope has zero names -- packages.Load returned an " +
+			"empty or broken type-checked package, not evidence there is nothing to check")
+	}
+
+	// got records every named, non-interface type in this package whose
+	// pointer implements interface{ Invalidate() } -- by direct method
+	// declaration (either receiver form), by promotion from an embedded
+	// struct or interface field, or via a generic receiver. A pointer's
+	// method set is a superset of its base type's, so checking only the
+	// pointer form is sufficient: it is also what every real call site
+	// passes into either seam (*Site, *Renderer, *Sitemap), never a bare
+	// value.
+	got := map[string]bool{}
+	concreteTypesChecked := 0
+	for _, name := range names {
+		tn, ok := scope.Lookup(name).(*types.TypeName)
+		if !ok {
+			continue
+		}
+		named, ok := tn.Type().(*types.Named)
+		if !ok {
+			continue
+		}
+		if _, isInterface := named.Underlying().(*types.Interface); isInterface {
+			// A declared interface in this package is a seam, not a
+			// concrete type that could accidentally join one -- declaring
+			// `type Invalidator interface{ Invalidate() }` makes nothing
+			// new passable that was not already (#0337's third review, N1).
+			continue
+		}
+		concreteTypesChecked++
+		if types.Implements(types.NewPointer(named), invalidateOnly) {
+			got[name] = true
 		}
 	}
-	if satisfiers == 0 {
-		t.Fatal("found zero Invalidate()-only method receivers in internal/seo -- this scan is broken " +
-			"(fail closed, never treat this as 'nothing to check'): as of #0337, *Site and *Renderer " +
-			"both declare one")
+
+	// Fail closed (CLAUDE.md §8 / #0275's lesson): finding zero named
+	// concrete types is never legitimate evidence there is nothing to
+	// check -- it means the scan itself broke.
+	if concreteTypesChecked == 0 {
+		t.Fatal("fail closed: found zero named concrete (non-interface) types in internal/seo -- this " +
+			"oracle is broken, not evidence nothing needs checking")
 	}
 
 	want := map[string]bool{
@@ -87,186 +153,92 @@ func TestInvalidatorSatisfierSet(t *testing.T) {
 		"Renderer": true,  // pre-existing, harmless accidental satisfier, explicitly scoped out by #0337
 		"Sitemap":  false, // #0337's fix: must NOT satisfy handlers.seoCacheInvalidator or mailing.ArchiveCacheInvalidator
 	}
+
+	// Fail closed the other direction: finding zero satisfiers at all would
+	// mean the oracle itself is broken, since *Site and *Renderer have
+	// always had a matching method since before #0325.
+	if len(got) == 0 {
+		t.Fatal("fail closed: go/types.Implements found zero satisfiers of interface{ Invalidate() } in " +
+			"internal/seo -- this oracle is broken (fail closed, never treat this as 'nothing to check'): " +
+			"as of #0337, *Site and *Renderer both satisfy it")
+	}
+
 	for typeName, wantSatisfies := range want {
-		gotSatisfies := methods[typeName]
-		if gotSatisfies != wantSatisfies {
-			t.Errorf("*%s has an Invalidate()-only method: got %v, want %v -- this changes whether "+
+		if got[typeName] != wantSatisfies {
+			t.Errorf("*%s implements interface{ Invalidate() }: got %v, want %v -- this changes whether "+
 				"*%s structurally satisfies handlers.seoCacheInvalidator and mailing.ArchiveCacheInvalidator, "+
 				"both single-method interfaces requiring exactly Invalidate() (see this test's doc comment)",
-				typeName, gotSatisfies, wantSatisfies, typeName)
+				typeName, got[typeName], wantSatisfies, typeName)
 		}
 	}
 
-	// Criterion 5's actual requirement: fail when an UNINTENDED type joins
-	// the satisfier set. The loop above only re-checks the three types known
-	// when this guard was written, so on its own it cannot see a new type
-	// acquiring Invalidate() -- which is precisely the "the satisfier set
-	// grew, silently" failure #0337 was filed about.
-	for typeName, gotSatisfies := range methods {
-		if !gotSatisfies {
-			continue
-		}
+	// The actual regression this guard exists to catch: an UNINTENDED type
+	// joining the satisfier set. The loop above only re-checks the three
+	// types known when this guard was written, so on its own it cannot see
+	// a new type acquiring Invalidate() by any means -- declaration,
+	// promotion, or generic instantiation -- which is precisely the "the
+	// satisfier set grew, silently" failure #0337 was filed about.
+	unexpected := make([]string, 0, len(got))
+	for typeName := range got {
 		if _, known := want[typeName]; known {
 			continue
 		}
-		t.Errorf("%s declares an Invalidate()-only method but is not in this guard's intended "+
-			"satisfier set, so it now structurally satisfies handlers.seoCacheInvalidator and "+
-			"mailing.ArchiveCacheInvalidator -- either it is a deliberate new satisfier (add it "+
-			"to `want` with a comment saying why) or it is #0337's defect regrowing (unexport "+
-			"the method, as Sitemap.invalidate is)", typeName)
+		unexpected = append(unexpected, typeName)
 	}
-
-	// Fail closed on the one construct this scan cannot model. Everything
-	// above reads METHOD DECLARATIONS, which is a sound proxy for "satisfies
-	// an Invalidate()-only interface" only while no type in this package
-	// acquires the method by PROMOTION. Embedding an existing satisfier
-	// (`struct{ *Site }`) or an interface that has the method
-	// (`struct{ cacheInvalidator }`) gives the outer type Invalidate() with
-	// no method declaration anywhere for the scan to find: #0337's second
-	// review proved go/types then reports the outer type as a satisfier of
-	// both seams while this guard stayed green. Reimplementing Go's
-	// method-set rules here would be a type checker, so instead this refuses
-	// to answer at all once the premise breaks. internal/seo declares no
-	// embedded fields today; a type that grows one must be checked by hand
-	// with go/types.Implements and then listed in embeddingReviewed.
-	embeddingReviewed := map[string]bool{}
-	for _, typeName := range structTypesWithEmbeddedFields(t, fset, ".") {
-		if embeddingReviewed[typeName] {
-			continue
-		}
-		t.Errorf("%s is a struct with an embedded field, so it may satisfy "+
-			"handlers.seoCacheInvalidator and mailing.ArchiveCacheInvalidator through a PROMOTED "+
-			"Invalidate() that this guard's method-declaration scan cannot see -- check it with "+
-			"go/types.Implements against interface{ Invalidate() }, then either remove the "+
-			"embedding, unexport the promoted method's source, or add %q to embeddingReviewed with "+
-			"a comment recording that check", typeName, typeName)
+	sort.Strings(unexpected)
+	for _, typeName := range unexpected {
+		t.Errorf("%s structurally implements interface{ Invalidate() } (by declaration, promotion, or "+
+			"generic instantiation) but is not in this guard's intended satisfier set, so it now "+
+			"structurally satisfies handlers.seoCacheInvalidator and mailing.ArchiveCacheInvalidator -- "+
+			"either it is a deliberate new satisfier (add it to `want` with a comment saying why) or it "+
+			"is #0337's defect regrowing (unexport the method, or remove/change the embedding)", typeName)
 	}
 }
 
-// invalidateOnlyMethodReceivers parses every non-test .go file in dir and
-// returns, for each receiver type declared there, whether it has a method
-// named exactly "Invalidate" with zero parameters and zero results -- the
-// shape *seo.Site.Invalidate implements (site.go) and every single-method
-// invalidator seam in this codebase requires. Both receiver forms are
-// scanned, pointer and value, because a value-receiver method matters just
-// as much as a pointer-receiver one: Go's method-set rule makes *T's method
-// set include every value-receiver method declared on T, so
-// `func (s Sitemap) Invalidate() {}` would make *Sitemap satisfy both seams
-// exactly as surely as a pointer receiver does (#0337's review proved this
-// with go/types).
-func invalidateOnlyMethodReceivers(t *testing.T, fset *token.FileSet, dir string) map[string]bool {
+// loadSeoPackageForProductionTarget type-checks internal/seo (this
+// package's own directory) via golang.org/x/tools/go/packages, targeting
+// production's GOOS/GOARCH (linux/arm64, CLAUDE.md §7) rather than the
+// host's default, so a build-tag-gated file that would actually ship is not
+// invisible to this guard on a developer's mac. It runs with
+// GOFLAGS=-mod=readonly explicitly forced (never -mod=mod): a type-checking
+// loader run with -mod=mod against this module has been observed to
+// silently promote an unrelated indirect dependency to direct in go.mod
+// (#0349's own filed trap, hit for real by #0346's reviewer against
+// github.com/aws/smithy-go) -- readonly mode cannot mutate go.mod at all.
+func loadSeoPackageForProductionTarget(t *testing.T) *packages.Package {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
+
+	env := make([]string, 0, len(os.Environ())+3)
+	for _, kv := range os.Environ() {
+		switch {
+		case strings.HasPrefix(kv, "GOOS="),
+			strings.HasPrefix(kv, "GOARCH="),
+			strings.HasPrefix(kv, "GOFLAGS="):
+			continue // overridden explicitly below
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "GOOS=linux", "GOARCH=arm64", "GOFLAGS=-mod=readonly")
+
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax | packages.NeedDeps,
+		Env:  env,
+	}
+	pkgs, err := packages.Load(cfg, ".")
 	if err != nil {
-		t.Fatalf("read dir %s: %v", dir, err)
+		t.Fatalf("packages.Load(internal/seo, GOOS=linux, GOARCH=arm64): %v", err)
 	}
-
-	result := map[string]bool{}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, dir+string(os.PathSeparator)+name, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		for _, decl := range file.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Recv == nil || len(fd.Recv.List) != 1 {
-				continue
-			}
-			// Both receiver forms matter: the method set of *T includes
-			// value-receiver methods, so `func (s Sitemap) Invalidate()` makes
-			// *Sitemap satisfy both seams just as surely as a pointer receiver
-			// does (#0337's review proved this with go/types).
-			recvType := fd.Recv.List[0].Type
-			if star, ok := recvType.(*ast.StarExpr); ok {
-				recvType = star.X
-			}
-			// A generic receiver is spelled T[P] or T[P1, P2], which parse as
-			// *ast.IndexExpr / *ast.IndexListExpr wrapping the base type's
-			// identifier. Unwrap to that identifier: *FeedCache[int] satisfies
-			// an Invalidate()-only interface exactly as *FeedCache would
-			// (#0337's second review proved this with types.Instantiate), and
-			// without this unwrap the whole declaration is skipped.
-			switch idx := recvType.(type) {
-			case *ast.IndexExpr:
-				recvType = idx.X
-			case *ast.IndexListExpr:
-				recvType = idx.X
-			}
-			ident, ok := recvType.(*ast.Ident)
-			if !ok {
-				continue
-			}
-			typeName := ident.Name
-			if _, seen := result[typeName]; !seen {
-				result[typeName] = false
-			}
-			if fd.Name.Name != "Invalidate" {
-				continue
-			}
-			if fd.Type.Params != nil && len(fd.Type.Params.List) > 0 {
-				continue
-			}
-			if fd.Type.Results != nil && len(fd.Type.Results.List) > 0 {
-				continue
-			}
-			result[typeName] = true
-		}
+	if packages.PrintErrors(pkgs) > 0 {
+		t.Fatal("packages.Load reported package errors type-checking internal/seo for linux/arm64 -- " +
+			"fail closed rather than checking a broken load (this is also how a mutation that breaks " +
+			"the package, e.g. removing an intended satisfier's method, is caught: the package fails " +
+			"to build and this test cannot report green)")
 	}
-	return result
-}
-
-// structTypesWithEmbeddedFields parses every non-test .go file in dir and
-// returns, sorted, the name of every struct type declared there that has at
-// least one embedded (anonymous) field. It exists because
-// invalidateOnlyMethodReceivers reads method declarations, and an embedded
-// field can supply Invalidate() with no declaration to read: `struct{ *Site }`
-// and `struct{ cacheInvalidator }` both make the outer type satisfy every
-// Invalidate()-only seam. Deciding whether a particular embedding does that
-// needs full type information (the embedded type may come from another
-// package), so this reports the construct rather than trying to resolve it --
-// the caller fails closed on anything not explicitly reviewed. Interface type
-// declarations are deliberately not reported: an interface in this package
-// whose method set is Invalidate() is a declared seam, not a concrete type
-// accidentally joining one.
-func structTypesWithEmbeddedFields(t *testing.T, fset *token.FileSet, dir string) []string {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read dir %s: %v", dir, err)
+	if len(pkgs) != 1 {
+		t.Fatalf("fail closed: expected exactly 1 package loaded for internal/seo, got %d", len(pkgs))
 	}
-
-	var found []string
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, dir+string(os.PathSeparator)+name, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			ts, ok := node.(*ast.TypeSpec)
-			if !ok {
-				return true
-			}
-			st, ok := ts.Type.(*ast.StructType)
-			if !ok || st.Fields == nil {
-				return true
-			}
-			for _, field := range st.Fields.List {
-				if len(field.Names) == 0 {
-					found = append(found, ts.Name.Name)
-					return true
-				}
-			}
-			return true
-		})
+	if pkgs[0].Types == nil {
+		t.Fatal("fail closed: packages.Load returned no type information for internal/seo")
 	}
-	sort.Strings(found)
-	return found
+	return pkgs[0]
 }
