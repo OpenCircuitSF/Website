@@ -127,7 +127,7 @@ type ResendResult struct {
 //     guards this identical predicate — status = 'pending' — in its own
 //     WHERE clause instead of a Go `if`, because that method's claim is
 //     already an atomic conditional UPDATE with no prior SELECT, and this
-//     one already needs the FOR UPDATE read for guards 4 and 5. Same
+//     one already needs the FOR UPDATE read for guards 3, 4 and 5. Same
 //     property, deliberately different mechanism per method; see that
 //     method's own doc comment for the full reasoning.
 //  3. the row is not an unaccepted import invitation (ErrResendNotForInvited,

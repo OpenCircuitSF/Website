@@ -537,8 +537,14 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 // method trusted the caller's status read entirely: every live caller
 // (subscribe.go's sendConfirmation) does read status='pending' moments
 // earlier, but nothing stopped an SES complaint landing in the gap between
-// that read and this claim's commit — a race #0341's review found this
-// method had no defense against at all, unlike its twin below.
+// that read and this claim's commit — a race this method had no defense
+// against at all, unlike its twin AdminResendConfirmation in this
+// package's pending.go. #0314's plan recorded the same gap independently
+// ("if an SES complaint lands between dispatchMutation's FindByEmail and
+// this claim, the claim still fires on a complained row and mails it");
+// #0341 was filed believing it was a stylistic asymmetry only, and its
+// implementation pass found otherwise — see that issue's struck-and-
+// corrected Description.
 // AdminResendConfirmation guards the identical predicate
 // (`sub.Status != StatusPending` -> ErrNotPending) in Go, against a row it
 // locks with `SELECT ... FOR UPDATE` first, because that method also needs
@@ -546,7 +552,7 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 // such prior SELECT — its claim already IS an atomic conditional UPDATE
 // (the cooldown check lives in the same WHERE clause), so adding `status =
 // 'pending'` to that same WHERE clause gets the identical atomicity
-// property without a row lock or a second query: RowsAffected()==1 remains
+// property without a prior SELECT ... FOR UPDATE or a second query: RowsAffected()==1 remains
 // the single source of truth for "this request won the claim, on a row
 // that was genuinely pending at the moment the UPDATE committed."
 //
@@ -557,8 +563,12 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 // implicit invariant for a reader to take on faith. The two layers differ
 // (SQL WHERE-clause claim here, Go check under FOR UPDATE there) because
 // the two methods' surrounding transactions differ, not because the safety
-// property differs — the same deliberate-divergence shape the package doc
-// comment above already documents for statusLockedFromNonAdmin.
+// property differs. This is deliberately NOT the statusLockedFromNonAdmin
+// shape the package doc comment above describes: that constant keeps the
+// complained guard in ONE place across every status MUTATOR, and neither
+// method here writes status at all — each only refuses to act on a row
+// that is not pending. The divergence recorded here is of mechanism inside
+// one predicate, and it is confined to these two methods.
 //
 // # Every claim path toward a live confirm link (#0341 criterion 5)
 //
