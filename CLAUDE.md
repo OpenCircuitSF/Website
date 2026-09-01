@@ -699,8 +699,8 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   `handlers.workshopCacheInvalidator` (now `seoCacheInvalidator`) and
   `mailing.ArchiveCacheInvalidator` — from `InvalidateWorkshops()` to
   `Invalidate()`. Go interface satisfaction is structural, so that rename
-  moved both interfaces onto `*seo.Sitemap` — a type whose own method the
-  commit never edited, though not a file it never touched: `f7771ed` rewrote
+  moved both interfaces onto `*seo.Sitemap` — a type whose own code the
+  commit never changed, in a file it did touch: `f7771ed` rewrote
   the doc comment directly above `func (s *Sitemap) Invalidate()`, so the
   recruited declaration sat in the rename commit's own diff as context, and
   still nobody noticed it. `(*seo.Sitemap).Invalidate` already carried that
@@ -726,7 +726,7 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   the guard still reported `ok`. Any guard modeled on this one must scan both
   receiver forms; `go/types` is the sound oracle, since method-set membership
   is a type-checker rule, not something an AST walk can fully reconstruct on
-  its own (it also can't see a method acquired by embedding a satisfying
+  its own (an AST walk also can't see a method acquired by embedding a satisfying
   struct or interface field, or hiding behind a generic receiver — see
   `internal/seo/invalidator_satisfier_guard_test.go`'s doc comments for how
   those are handled).
