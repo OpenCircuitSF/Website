@@ -1048,7 +1048,7 @@ that needs cost accounting; refresh once per day.
 
 ## 11. PRD section index
 
-`PRD.md` is 1,845 lines (~21k tokens). **Never read it whole.** Every issue's
+`PRD.md` is 1,853 lines (~21k tokens). **Never read it whole.** Every issue's
 `## Relation` block names the section it needs and carries the exact extraction
 command; run that. This table is the fallback when you need a section no issue
 cites.
@@ -1074,7 +1074,7 @@ the PRD.
 | **§5 Information Architecture** | 39 | `sed -n '/^## 5\. /,/^## [0-9]/p' PRD.md` |
 | §5.1 Public routes | 18 | `sed -n '/^### 5\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §5.2 Admin routes (session + `is_admin` required) | 19 | `sed -n '/^### 5\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§6 Mailing List — The Core Subsystem** | 958 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
+| **§6 Mailing List — The Core Subsystem** | 966 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
 | §6.1 Interest taxonomy | 23 | `sed -n '/^### 6\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.2 Database schema | 351 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.3 Subscription flow (double opt-in) | 56 | `sed -n '/^### 6\.3 /,/^#\{2,3\} [0-9]/p' PRD.md` |
@@ -1084,7 +1084,7 @@ the PRD.
 | §6.7 SES event ingestion | 40 | `sed -n '/^### 6\.7 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.8 Public campaign archive | 65 | `sed -n '/^### 6\.8 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.9 Delivery health — bounce policy and the circuit breaker | 60 | `sed -n '/^### 6\.9 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §6.10 Subscriber import and consent provenance | 120 | `sed -n '/^### 6\.10 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.10 Subscriber import and consent provenance | 128 | `sed -n '/^### 6\.10 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.11 Durable outbound queue and the activity log | 54 | `sed -n '/^### 6\.11 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | **§7 Frontend** | 84 | `sed -n '/^## 7\. /,/^## [0-9]/p' PRD.md` |
 | §7.1 Stack | 7 | `sed -n '/^### 7\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |

@@ -1278,9 +1278,17 @@ and `collected_at`, which is the second reason those three fields are mandatory.
 
 **Rules.**
 
-- One invitation per address, ever. No reminder, no re-invite on a later import.
-  An address that has already been invited is skipped by every subsequent
-  import, in whatever mode.
+- One invitation per address, ever, from any automated import path. No
+  reminder, no re-invite on a later import. An address that has already been
+  invited is skipped by every subsequent import, in whatever mode.
+
+  **Approved deviation** (`#0312`, commit `bcf3239`): an authenticated,
+  audited admin action may resend that one invitation at most once more,
+  ever, per address — recorded in a write-once `subscribers.invite_resent_at`
+  (§6.2, migration `000026`; `CHECK (invite_resent_at IS NULL OR invited_at
+  IS NOT NULL)`). Two is a constant, not a loop: this is one bounded
+  exception for one deliberate admin action, not a general re-invite, and no
+  automated path may ever set `invite_resent_at`.
 - The invitation carries `List-Unsubscribe` headers and a working opt-out that
   suppresses the address outright, so declining is one click and not a
   non-action.
