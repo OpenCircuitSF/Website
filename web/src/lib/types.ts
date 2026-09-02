@@ -216,7 +216,7 @@ export interface PendingSubscriber {
    * doc comment). Absent/undefined until then.
    */
   invite_resent_at?: string;
-  /** The latest outbound_queue row's status for this address's confirmation (or, for an invited row, invitation) mail: "queued" | "sending" | "sent" | "abandoned" | "none" (no row exists) | "unknown" (server has no outbound_queue backing, STORAGE=json). */
+  /** The latest outbound_queue row's status for this address's confirmation (or, for an invited row, invitation) mail: "queued" | "sending" | "sent" | "abandoned" | "skipped" | "none" (no row exists) | "unknown" (server has no outbound_queue backing, STORAGE=json). */
   queue_state: string;
 }
 

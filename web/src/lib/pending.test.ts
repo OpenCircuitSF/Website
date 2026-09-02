@@ -59,6 +59,7 @@ describe('queueStateLabel', () => {
     expect(queueStateLabel('sending')).toBe('Sending');
     expect(queueStateLabel('sent')).toBe('Sent');
     expect(queueStateLabel('abandoned')).toBe('Abandoned');
+    expect(queueStateLabel('skipped')).toBe('Skipped');
     expect(queueStateLabel('none')).toBe('Not sent');
   });
 
@@ -75,6 +76,10 @@ describe('queueStateBadgeClass', () => {
     expect(queueStateBadgeClass('queued')).toBe('badge-muted');
     expect(queueStateBadgeClass('sending')).toBe('badge-muted');
     expect(queueStateBadgeClass('none')).toBe('badge-muted');
+  });
+
+  it('treats skipped as neutral, not a delivery failure (#0365 — a deliberate withholding, not an abandoned send)', () => {
+    expect(queueStateBadgeClass('skipped')).toBe('badge-muted');
   });
 });
 

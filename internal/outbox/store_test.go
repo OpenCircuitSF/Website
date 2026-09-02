@@ -1130,3 +1130,104 @@ func TestOutbox_AbandonedCountByKind_ScopedToKind(t *testing.T) {
 		t.Errorf("AbandonedCountByKind(targetKind) = %d after abandoning one target-kind row, want %d", afterTarget, before+1)
 	}
 }
+
+// TestMarkSkipped_OnlyFromSending is #0365's proof for MarkSkipped's guard
+// and payload-blanking: a claimed ('sending') row transitions to
+// StatusSkipped with the reason in error, claimed_at cleared, and payload
+// blanked to '{}'::jsonb — and a row NOT in 'sending' (never claimed, or
+// already skipped) is left untouched, reported via done=false.
+func TestMarkSkipped_OnlyFromSending(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	kind := distinctKind(t)
+
+	// A never-claimed ('queued') row must NOT be skippable — MarkSkipped
+	// is guarded on status = 'sending' only, unlike MarkSent/MarkDone's
+	// broader IN (...).
+	queuedID, err := store.Enqueue(ctx, Item{
+		Kind:      kind,
+		Recipient: uniqueRecipient(t),
+		Payload:   map[string]any{"confirm_token": "still-queued-token"},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue (queued): %v", err)
+	}
+	doneQueued, err := store.MarkSkipped(ctx, queuedID, "should not apply")
+	if err != nil {
+		t.Fatalf("MarkSkipped on queued row: %v", err)
+	}
+	if doneQueued {
+		t.Fatalf("MarkSkipped on a still-queued row reported done=true")
+	}
+	var stillQueued string
+	if err := pool.QueryRow(ctx, `SELECT status FROM outbound_queue WHERE id = $1`, queuedID).Scan(&stillQueued); err != nil {
+		t.Fatalf("select queued row: %v", err)
+	}
+	if stillQueued != StatusQueued {
+		t.Fatalf("status = %q after a no-op MarkSkipped, want %q", stillQueued, StatusQueued)
+	}
+
+	// A claimed ('sending') row: the real path.
+	id, err := store.Enqueue(ctx, Item{
+		Kind:      kind,
+		Recipient: uniqueRecipient(t),
+		Payload:   map[string]any{"confirm_token": "secret-token-value"},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	rows, err := store.ClaimDue(ctx, 10, AllKinds)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	var claimed *Row
+	for i := range rows {
+		if rows[i].ID == id {
+			claimed = &rows[i]
+		}
+	}
+	if claimed == nil {
+		t.Fatalf("row %d was not claimed", id)
+	}
+
+	const reason = `subscriber status is now "complained", not "pending"`
+	done, err := store.MarkSkipped(ctx, id, reason)
+	if err != nil {
+		t.Fatalf("MarkSkipped: %v", err)
+	}
+	if !done {
+		t.Fatalf("MarkSkipped reported done=false")
+	}
+
+	var status, payload string
+	var errText *string
+	var claimedAt *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT status, payload::text, error, claimed_at FROM outbound_queue WHERE id = $1`, id,
+	).Scan(&status, &payload, &errText, &claimedAt); err != nil {
+		t.Fatalf("select after MarkSkipped: %v", err)
+	}
+	if status != StatusSkipped {
+		t.Fatalf("status = %q, want %q", status, StatusSkipped)
+	}
+	if payload != "{}" {
+		t.Fatalf("payload = %q, want scrubbed to {}", payload)
+	}
+	if errText == nil || *errText != reason {
+		t.Fatalf("error = %v, want %q", errText, reason)
+	}
+	if claimedAt != nil {
+		t.Fatalf("claimed_at = %v, want NULL after MarkSkipped", claimedAt)
+	}
+
+	// A second MarkSkipped on an already-skipped row must not report done
+	// — a row can leave 'sending' by this path exactly once.
+	done2, err := store.MarkSkipped(ctx, id, "ignored")
+	if err != nil {
+		t.Fatalf("second MarkSkipped: %v", err)
+	}
+	if done2 {
+		t.Fatalf("second MarkSkipped on an already-skipped row reported done=true")
+	}
+}

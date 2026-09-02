@@ -198,6 +198,48 @@ var mailKinds = []outbox.Kind{
 	outbox.KindImportInvite,
 }
 
+// gatedKinds is #0365's send-time re-check whitelist: every outbox.Kind
+// sendGate re-checks against live subscriber state immediately before
+// sending, mapped to the ONE subscribers.status a message of that kind is
+// valid to send under. Positive (whitelist) rather than negative
+// (!= complained), matching RecheckEligibleTx's own
+// status == subscribers.StatusActive (audience.go) and #0341's claim
+// predicate AND status = 'pending' — #0341's own plan defends that shape
+// in so many words as "strictly stronger than <> 'complained'". A
+// whitelist also blocks 'unsubscribed'/'bounced' addresses and catches the
+// invite-decline path (internal/subscribers.Store's pending -> unsubscribed
+// transition) for free, with no extra code.
+//
+// welcome and import_invite carry the widest window in the system: render
+// (below) defers either one indefinitely via deferMissingPhysicalAddress
+// when settings.physical_address is blank, so a row of either kind can sit
+// 'queued' for a long time with nothing else re-checking the subscriber in
+// the meantime — see #0365's plan §2.
+//
+// TestGatedKindsPartitionEveryMailKind asserts every mailKinds element
+// appears in exactly one of this map or ungatedKinds, below.
+var gatedKinds = map[outbox.Kind]string{
+	outbox.KindConfirmation:      subscribers.StatusPending,
+	outbox.KindAlreadySubscribed: subscribers.StatusActive,
+	outbox.KindWelcome:           subscribers.StatusActive,
+	outbox.KindImportInvite:      subscribers.StatusPending,
+}
+
+// ungatedKinds is every mailKinds member sendGate deliberately does NOT
+// re-check, each carrying a written reason — the kindExceptions shape
+// (outbox_worker_kinds_guard_test.go, #0296 item 4: an allowlist anyone
+// can append to without an argument is a guard with a hole).
+// TestGatedKindsPartitionEveryMailKind asserts every value here is
+// non-empty, and that gatedKinds+ungatedKinds together partition mailKinds
+// exactly (no overlap, no gap).
+var ungatedKinds = map[outbox.Kind]string{
+	outbox.KindRegistration:    "staff auth mail to a users row, not a subscribers row — Row.SubscriberID is always nil; gating it would let a marketing suppression lock an admin out of the console",
+	outbox.KindRecovery:        "same as registration — a passkey recovery link must reach an admin regardless of any list state",
+	outbox.KindSessionsRevoked: "same as registration — a security notice, not list mail",
+	outbox.KindAdminAlert:      "operational alert to staff, not to a subscriber",
+	outbox.KindGoodbye:         "no producer yet, and a status whitelist would be WRONG for it when one lands: goodbye is sent precisely BECAUSE the address stopped being active. Whoever adds the producer must decide its own predicate rather than inherit one of the four above",
+}
+
 // OutboxWorker drains internal/outbox's outbound_queue. Construct with
 // NewOutboxWorker; call Run in its own goroutine, Stop to shut down.
 type OutboxWorker struct {
@@ -593,12 +635,50 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 	return processed, nil
 }
 
-// sendOne renders and sends a single claimed row, on a context detached
-// from the caller's (so a SIGTERM's ctx cancellation doesn't abort a send
-// already accepted by SES before the status write commits — the same
-// precedent worker.go's package doc comment sets), and records the
-// terminal state (sent, retried, or abandoned).
+// sendOne re-checks eligibility (#0365), renders, and sends a single
+// claimed row, on a context detached from the caller's (so a SIGTERM's ctx
+// cancellation doesn't abort a send already accepted by SES before the
+// status write commits — the same precedent worker.go's package doc
+// comment sets), and records the terminal state (sent, skipped, retried,
+// or abandoned).
+//
+// sendGate runs as the very first statement, before render — #0365's plan
+// §5. That ordering keeps three things true: the #0045/#0264
+// physical-address gates inside render are untouched (an ineligible row
+// returns before ever reaching them, and nothing here is reachable from
+// the UI — CLAUDE.md §9); a welcome/import-invite row parked indefinitely
+// by deferMissingPhysicalAddress still gets re-checked on every later
+// reclaim, which is how this closes that kind's much wider window; and
+// nothing is rendered for a message that will not be sent.
+//
+// Deliberately no new transaction around the gate. RecheckEligibleTx's own
+// doc comment requires its recheck to sit inside the transaction holding
+// the claim; here the worker already holds row in 'sending' via ClaimRow,
+// and ClaimRow/MarkSent/MarkRetryOrAbandon/MarkSkipped all require the row
+// to already be 'sending' (or, for ClaimRow, 'queued') — so no other actor
+// can move this row while sendGate runs. The residual window (a complaint
+// committing between sendGate's read and mailer.Send returning) is
+// microseconds and unclosable in principle, since SES accepts
+// asynchronously: a complaint can always land a moment after Send returns.
+// What this closes is queue latency — seconds, ordinarily, up to
+// indefinite for a deferred welcome/import-invite row.
 func (w *OutboxWorker) sendOne(row outbox.Row) {
+	gateCtx, gateCancel := context.WithTimeout(context.Background(), writeStatusTimeout)
+	skip, reason, gateErr := w.sendGate(gateCtx, row)
+	gateCancel()
+	if gateErr != nil {
+		// A transient read error is exactly when we do NOT know whether
+		// this row is eligible — retrying via the ordinary backoff
+		// schedule is safe; sending on an unknown state is not (#0365's
+		// plan §6: "must not fail open").
+		w.finishFailed(row, fmt.Errorf("checking send eligibility for kind %q: %w", row.Kind, gateErr))
+		return
+	}
+	if skip {
+		w.finishSkipped(row, reason)
+		return
+	}
+
 	sendCtx, sendCancel := context.WithTimeout(context.Background(), sendMessageTimeout)
 	msg, err := w.render(sendCtx, row)
 	if err != nil {
@@ -697,6 +777,104 @@ func (w *OutboxWorker) finishFailed(row outbox.Row, sendErr error) {
 	} else {
 		w.log.Warn("mailing: outbound_queue send failed, will retry", "id", row.ID, "kind", row.Kind, "attempts", row.Attempts, "err", sendErr)
 	}
+}
+
+// sendGate is #0365's send-time re-check: called as the first statement of
+// sendOne, it decides whether row should still be sent. Returns
+// skip=false, err=nil immediately for any kind not in gatedKinds — the
+// ungatedKinds map exists purely so TestGatedKindsPartitionEveryMailKind
+// can assert that omission is deliberate, not an accident of scope.
+//
+// row.SubscriberID == nil on a gated kind is impossible by construction —
+// every producer of every gatedKinds kind sets it (#0365's plan §2's
+// table) — so this treats it as a defensive fail-OPEN (Warn, then send),
+// matching the convention of every other nil-tolerant seam in this file:
+// a defensive branch guarding against a state the code cannot actually
+// reach must not be able to silently kill real mail. w.events == nil gets
+// the identical fail-open treatment, for the identical reason
+// (OutboxWorkerDeps.Events is documented nil-tolerant; production always
+// wires it).
+//
+// A genuine eligibility-read error is different and MUST fail CLOSED: it
+// is returned to the caller, which routes it to finishFailed's ordinary
+// retry/backoff rather than sending on an unknown state (#0365's plan §6).
+func (w *OutboxWorker) sendGate(ctx context.Context, row outbox.Row) (skip bool, reason string, err error) {
+	wantStatus, gated := gatedKinds[row.Kind]
+	if !gated {
+		return false, "", nil
+	}
+
+	if row.SubscriberID == nil {
+		w.log.Warn("mailing: gated outbound_queue row has no subscriber_id — sending without a send-time recheck", "id", row.ID, "kind", row.Kind)
+		return false, "", nil
+	}
+
+	if w.events == nil {
+		w.log.Warn("mailing: outbox worker has no subscribers.Store wired — sending gated row without a send-time recheck", "id", row.ID, "kind", row.Kind)
+		return false, "", nil
+	}
+
+	elig, eligErr := w.events.SendEligibility(ctx, *row.SubscriberID)
+	if eligErr != nil {
+		return false, "", fmt.Errorf("reading subscriber %d's send eligibility: %w", *row.SubscriberID, eligErr)
+	}
+
+	switch {
+	case !elig.Found:
+		// Positively learned there is no subscriber — different from the
+		// nil-SubscriberID case above, which is a defensive branch for a
+		// state that cannot occur. Unreachable in practice
+		// (outbound_queue.subscriber_id is ON DELETE CASCADE), so reaching
+		// it means an inconsistent database; mailing on that basis is not
+		// defensible (#0365's plan §6).
+		return true, "subscriber row no longer exists", nil
+	case elig.Status != wantStatus:
+		// Phrasing mirrors recheckReason (audience.go) exactly.
+		return true, fmt.Sprintf("subscriber status is now %q, not %q", elig.Status, wantStatus), nil
+	case elig.Suppressed:
+		return true, "address is now suppressed", nil
+	case elig.Email != row.Recipient:
+		return true, "subscriber's email changed since enqueue", nil
+	default:
+		return false, "", nil
+	}
+}
+
+// finishSkipped records a send-time eligibility failure via
+// outbox.Store.MarkSkipped (#0365) and logs it. Unlike finishFailed — an
+// ordinary send/render failure, which retries on backoff — a skip is a
+// decision, not a fault: the row terminates immediately, matching
+// RecheckEligibleTx/MarkSkippedTx's identical one-shot semantics for
+// campaign mail (audience.go).
+//
+// No subscriber_events row is written here, no Action constant exists for
+// this, and no admin alert fires — #0365's plan §3.4: nothing NEW happened
+// to the address. The facts that caused the skip ('complained',
+// 'suppressed') are already in that log, timestamped earlier, by the SES
+// event handler; a third row saying "and therefore we withheld a
+// confirmation" would duplicate evidence the log already holds.
+//
+// The Warn deliberately omits the recipient address — #0277's lesson
+// (CLAUDE.md §8b): a prior pass published a live token into a committed
+// issue transcript, and this file's logs get pasted into issue files the
+// same way. id/kind/reason are enough to diagnose from outbound_queue
+// directly.
+func (w *OutboxWorker) finishSkipped(row outbox.Row, reason string) {
+	writeCtx, writeCancel := context.WithTimeout(context.Background(), writeStatusTimeout)
+	defer writeCancel()
+	ok, err := w.store.MarkSkipped(writeCtx, row.ID, reason)
+	if err != nil {
+		w.log.Error("mailing: marking outbound_queue row skipped failed", "id", row.ID, "kind", row.Kind, "err", err)
+		return
+	}
+	if !ok {
+		// MarkSkipped requires status='sending'; affecting zero rows means
+		// something else already moved this row out from under this
+		// decision — matching MarkSent's own "false means the claim was
+		// lost" convention (sendOne's !sentOK branch, above).
+		w.log.Warn("mailing: MarkSkipped affected no rows — this row's claim was lost before the skip decision was recorded", "id", row.ID, "kind", row.Kind)
+	}
+	w.log.Warn("mailing: outbound_queue send skipped — recipient no longer eligible", "id", row.ID, "kind", row.Kind, "reason", reason)
 }
 
 // welcomeAddressDeferMaxRetries is the maxRetries deferMissingPhysicalAddress

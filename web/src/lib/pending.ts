@@ -53,6 +53,8 @@ export function queueStateLabel(state: string): string {
       return 'Sent';
     case 'abandoned':
       return 'Abandoned';
+    case 'skipped':
+      return 'Skipped';
     case 'none':
       return 'Not sent';
     default:

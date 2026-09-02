@@ -261,19 +261,26 @@ func TestOutboxWorker_DrainsWelcomeRow(t *testing.T) {
 // (internal/subscribers) checks for ActionWelcomeSent, closing the gap
 // #0126 left with #0127 named as the owner.
 //
-// Deliberately does NOT go through subscribers.Store.Confirm to produce the
-// welcome row (that atomicity — Confirm enqueueing welcome inside its own
-// transaction — is proven in internal/subscribers/store_test.go instead):
-// Confirm activates the subscriber, and internal/mailing's own
-// worker_store_test.go has several AudienceAll-scoped preflight tests that
-// assert "no subscribers seeded" against this package's SHARED test
-// database (TestMain truncates once per package run, not per test — see
-// its own doc comment). An active subscriber left behind by this test would
-// silently pollute those counts depending on file-order execution. Enqueuing
-// the welcome row directly, against a subscriber left in 'pending', proves
-// the exact same OutboxWorker.sendOne wiring (kind=welcome,
-// row.SubscriberID != nil → RecordEvent ActionWelcomeSent) without that
-// side effect.
+// Calls subscribers.Store.Confirm to activate the subscriber — required
+// since #0365's sendGate now refuses a KindWelcome row for anything but an
+// 'active' subscriber, so the "stays pending, enqueue a welcome row
+// directly" shape this test used before #0365 can no longer reach a real
+// send at all. Confirm's own transaction already enqueues one welcome row
+// for the newly-active subscriber (#0127's producer, internal/subscribers'
+// Confirm) — this test drains THAT row rather than enqueueing a second one,
+// the same "find the auto-enqueued row" pattern
+// TestOutboxWorker_MarkSent_RecordsConfirmationSent (above) already uses
+// for Create's auto-enqueued confirmation row, and for the identical
+// reason: a second explicit Enqueue would leave two welcome rows for one
+// subscriber, both eligible to send, making welcome_sent's count
+// nondeterministic (1 or 2 depending on timing) rather than exactly 1.
+//
+// The resulting active subscriber row is deleted in t.Cleanup before any
+// other test in this package can observe it via an AudienceAll-scoped
+// query, following audience_test.go's and
+// TestOutboxWorker_DefersWelcome_MissingPhysicalAddress's established
+// pattern for the same shared-database constraint (TestMain truncates once
+// per package run, not per test).
 func TestOutboxWorker_MarkSent_RecordsWelcomeSent(t *testing.T) {
 	pool := outboxTestPool(t)
 	// #0264: a blank physical_address (the seeded default) now defers a
@@ -281,7 +288,7 @@ func TestOutboxWorker_MarkSent_RecordsWelcomeSent(t *testing.T) {
 	// unwritten and stall this test's whole point.
 	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
 	mailer := &RecordingMailer{}
-	w, store := newTestOutboxWorker(t, pool, mailer)
+	w, _ := newTestOutboxWorker(t, pool, mailer)
 
 	subStore := subscribers.NewStore(pool)
 	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
@@ -290,18 +297,22 @@ func TestOutboxWorker_MarkSent_RecordsWelcomeSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	// sub stays 'pending' — this test never calls Confirm — so it is
-	// invisible to any AudienceAll (status='active') query elsewhere in
-	// this package's shared test database.
-
-	id, err := store.Enqueue(context.Background(), outbox.Item{
-		Kind:         outbox.KindWelcome,
-		Recipient:    sub.Email,
-		SubscriberID: &sub.ID,
-		Payload:      map[string]any{"manage_token": sub.ManageToken, "interest_names": []string{}},
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, sub.ID)
 	})
+	if sub.ConfirmToken == nil {
+		t.Fatal("Create returned a subscriber with no confirm_token")
+	}
+	sub, err = subStore.Confirm(context.Background(), *sub.ConfirmToken, time.Now())
 	if err != nil {
-		t.Fatalf("Enqueue: %v", err)
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	var id int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT id FROM outbound_queue WHERE subscriber_id = $1 AND kind = $2`, sub.ID, string(outbox.KindWelcome),
+	).Scan(&id); err != nil {
+		t.Fatalf("finding Confirm's auto-enqueued welcome row: %v", err)
 	}
 
 	var before int
@@ -1374,5 +1385,489 @@ func TestAdminResendInvitation_PhysicalAddressGateNotBypassable(t *testing.T) {
 	}
 	if n := sentToRecipient(); n != 0 {
 		t.Errorf("messages sent to %s = %d, want 0 — nothing should go out without a physical_address, for a re-send any more than a first send", email, n)
+	}
+}
+
+// --- #0365: send-time eligibility gate ---
+//
+// TestOutboxWorker_DrainsConfirmationRow and its siblings above enqueue
+// rows with a NIL SubscriberID, so they never exercise sendGate at all —
+// gatedKinds[row.Kind] only matters once row.SubscriberID is set, and
+// their staying green after this change is not evidence the gate works.
+// Every test below sets SubscriberID explicitly via a real subscribers row.
+
+// waitForQueueStatus polls outbound_queue.status for id until it leaves
+// 'queued'/'sending' or the deadline passes, returning the terminal value
+// observed. Shared by every #0365 test below so each one asserts against
+// the SAME terminal-state polling convention the pre-existing
+// TestOutboxWorker_DrainsConfirmationRow uses inline.
+func waitForQueueStatus(t *testing.T, pool *pgxpool.Pool, id int64) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var status string
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(context.Background(), `SELECT status FROM outbound_queue WHERE id = $1`, id).Scan(&status); err != nil {
+			t.Fatalf("select status: %v", err)
+		}
+		if status != outbox.StatusQueued && status != outbox.StatusSending {
+			return status
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return status
+}
+
+// sentTo counts mailer's recorded sends addressed to recipient — scoped
+// rather than mailer.Sent()'s raw length, matching this file's own
+// established convention (see TestOutboxWorker_ResendInvitation_*'s
+// countInviteSent, above): this package's worker drains the WHOLE shared
+// outbound_queue, so a leftover row from an earlier test's own subscriber
+// could in principle also be selected by a later test's fresh worker, and
+// scoping by recipient keeps each test's assertion about mail sent to ITS
+// OWN address regardless.
+func sentTo(mailer *RecordingMailer, recipient string) int {
+	n := 0
+	for _, m := range mailer.Sent() {
+		if m.To == recipient {
+			n++
+		}
+	}
+	return n
+}
+
+// TestOutboxWorker_SkipsConfirmationForComplainedSubscriber is #0365's
+// primary proof: a complaint that lands AFTER a confirmation row is
+// enqueued but BEFORE the worker drains it must not result in a delivered
+// confirmation (CLAUDE.md §9 — "complained subscribers never
+// auto-resubscribe").
+func TestOutboxWorker_SkipsConfirmationForComplainedSubscriber(t *testing.T) {
+	pool := outboxTestPool(t)
+	mailer := &RecordingMailer{}
+	w, _ := newTestOutboxWorker(t, pool, mailer)
+	subStore := subscribers.NewStore(pool)
+
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: uniqueOutboxRecipient(t), ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Create's own transaction already enqueued one confirmation row for
+	// this subscriber (#0126) — find it rather than enqueueing a second.
+	var id int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT id FROM outbound_queue WHERE subscriber_id = $1 AND kind = $2`, sub.ID, string(outbox.KindConfirmation),
+	).Scan(&id); err != nil {
+		t.Fatalf("finding auto-enqueued confirmation row: %v", err)
+	}
+
+	// The complaint lands AFTER the claim committed (Create, above) but
+	// BEFORE the worker drains the row — exactly #0365's window.
+	if _, err := subStore.MarkComplained(context.Background(), sub.ID, time.Now()); err != nil {
+		t.Fatalf("MarkComplained: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	status := waitForQueueStatus(t, pool, id)
+	if status != outbox.StatusSkipped {
+		t.Fatalf("status = %q after waiting, want %q", status, outbox.StatusSkipped)
+	}
+
+	var errText *string
+	var payloadText string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT error, payload::text FROM outbound_queue WHERE id = $1`, id,
+	).Scan(&errText, &payloadText); err != nil {
+		t.Fatalf("select error/payload: %v", err)
+	}
+	if errText == nil || !strings.Contains(*errText, `"complained"`) {
+		t.Errorf("error = %v, want a reason naming the complained status", errText)
+	}
+	if payloadText != "{}" {
+		t.Errorf("payload = %q after skip, want scrubbed to {}", payloadText)
+	}
+
+	if got := sentTo(mailer, sub.Email); got != 0 {
+		t.Fatalf("messages sent to %s = %d, want 0 — a complained subscriber must never receive a confirmation", sub.Email, got)
+	}
+}
+
+// TestOutboxWorker_SkipsWelcomeForSuppressedAddress proves the suppression
+// half of the gate is independently load-bearing: the subscriber's status
+// stays 'active' the whole time — only a suppressions row exists — so a
+// status-only check would miss this.
+func TestOutboxWorker_SkipsWelcomeForSuppressedAddress(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+	subStore := subscribers.NewStore(pool)
+	suppStore := subscribers.NewSuppressionStore(pool)
+
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: uniqueOutboxRecipient(t), ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sub.ConfirmToken == nil {
+		t.Fatalf("Create did not return a confirm token")
+	}
+	if _, err := subStore.Confirm(context.Background(), *sub.ConfirmToken, time.Now()); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	if _, err := suppStore.Add(context.Background(), subscribers.NewSuppression{
+		Email: sub.Email, Reason: subscribers.SuppressionReasonManual,
+	}, time.Now()); err != nil {
+		t.Fatalf("Add suppression: %v", err)
+	}
+
+	subID := sub.ID
+	id, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:         outbox.KindWelcome,
+		Recipient:    sub.Email,
+		SubscriberID: &subID,
+		Payload: map[string]any{
+			"manage_token":   sub.ManageToken,
+			"interest_names": []string{"Soldering"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	status := waitForQueueStatus(t, pool, id)
+	if status != outbox.StatusSkipped {
+		t.Fatalf("status = %q after waiting, want %q", status, outbox.StatusSkipped)
+	}
+
+	var errText *string
+	if err := pool.QueryRow(context.Background(), `SELECT error FROM outbound_queue WHERE id = $1`, id).Scan(&errText); err != nil {
+		t.Fatalf("select error: %v", err)
+	}
+	if errText == nil || !strings.Contains(*errText, "suppressed") {
+		t.Errorf("error = %v, want a reason naming the suppression", errText)
+	}
+
+	if got := sentTo(mailer, sub.Email); got != 0 {
+		t.Fatalf("messages sent to %s = %d, want 0", sub.Email, got)
+	}
+
+	// The subscriber's own status is untouched — this is a suppression,
+	// not a status mutation, and the two predicates must be independently
+	// provable (this test proves the suppression one).
+	live, err := subStore.GetByID(context.Background(), sub.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if live.Status != subscribers.StatusActive {
+		t.Errorf("subscriber status = %q, want unchanged %q", live.Status, subscribers.StatusActive)
+	}
+}
+
+// TestOutboxWorker_SkipsImportInviteForDeclinedInvitee mirrors the
+// invite-decline path's status transition (pending -> unsubscribed, the
+// same UPDATE internal/subscribers.Store.Unsubscribe performs when an
+// invited row declines) — the gate cares about the subscriber's LIVE
+// status, not the specific call that produced it.
+func TestOutboxWorker_SkipsImportInviteForDeclinedInvitee(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+	subStore := subscribers.NewStore(pool)
+
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: uniqueOutboxRecipient(t), ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := subStore.Unsubscribe(context.Background(), sub.ID, subscribers.SourceOneClick, time.Now()); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+
+	subID := sub.ID
+	id, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:         outbox.KindImportInvite,
+		Recipient:    sub.Email,
+		SubscriberID: &subID,
+		Payload: map[string]any{
+			"confirm_token": "the-confirm-token",
+			"manage_token":  sub.ManageToken,
+			"ttl_seconds":   604800,
+			"import_source": "csv",
+			"source_detail": "test-import.csv",
+			"collected_at":  time.Now(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	status := waitForQueueStatus(t, pool, id)
+	if status != outbox.StatusSkipped {
+		t.Fatalf("status = %q after waiting, want %q", status, outbox.StatusSkipped)
+	}
+
+	var errText *string
+	if err := pool.QueryRow(context.Background(), `SELECT error FROM outbound_queue WHERE id = $1`, id).Scan(&errText); err != nil {
+		t.Fatalf("select error: %v", err)
+	}
+	if errText == nil || !strings.Contains(*errText, `"unsubscribed"`) {
+		t.Errorf("error = %v, want a reason naming the unsubscribed status", errText)
+	}
+
+	if got := sentTo(mailer, sub.Email); got != 0 {
+		t.Fatalf("messages sent to %s = %d, want 0", sub.Email, got)
+	}
+}
+
+// TestOutboxWorker_SkipsAlreadySubscribedForComplainedSubscriber is the
+// fourth gated kind.
+func TestOutboxWorker_SkipsAlreadySubscribedForComplainedSubscriber(t *testing.T) {
+	pool := outboxTestPool(t)
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+	subStore := subscribers.NewStore(pool)
+
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: uniqueOutboxRecipient(t), ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sub.ConfirmToken == nil {
+		t.Fatalf("Create did not return a confirm token")
+	}
+	if _, err := subStore.Confirm(context.Background(), *sub.ConfirmToken, time.Now()); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if _, err := subStore.MarkComplained(context.Background(), sub.ID, time.Now()); err != nil {
+		t.Fatalf("MarkComplained: %v", err)
+	}
+
+	subID := sub.ID
+	id, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:         outbox.KindAlreadySubscribed,
+		Recipient:    sub.Email,
+		SubscriberID: &subID,
+		Payload:      map[string]any{"manage_token": sub.ManageToken},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	status := waitForQueueStatus(t, pool, id)
+	if status != outbox.StatusSkipped {
+		t.Fatalf("status = %q after waiting, want %q", status, outbox.StatusSkipped)
+	}
+	if got := sentTo(mailer, sub.Email); got != 0 {
+		t.Fatalf("messages sent to %s = %d, want 0", sub.Email, got)
+	}
+}
+
+// TestOutboxWorker_SendsRegistrationToSuppressedAddress is the ungated
+// half: auth mail is not blocked by list suppression. Regression risk if
+// someone later "simplifies" the gate to cover all kinds — CLAUDE.md §9's
+// "complained subscribers never auto-resubscribe" is about LIST mail, and
+// this worker's registration kind reaches a users row, not a subscribers
+// row (Row.SubscriberID is always nil for it in production, see
+// gatedKinds' doc comment) — an admin whose personal address happens to
+// carry a suppression must still be able to complete registration.
+func TestOutboxWorker_SendsRegistrationToSuppressedAddress(t *testing.T) {
+	pool := outboxTestPool(t)
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+	suppStore := subscribers.NewSuppressionStore(pool)
+
+	recipient := uniqueOutboxRecipient(t)
+	if _, err := suppStore.Add(context.Background(), subscribers.NewSuppression{
+		Email: recipient, Reason: subscribers.SuppressionReasonManual,
+	}, time.Now()); err != nil {
+		t.Fatalf("Add suppression: %v", err)
+	}
+
+	id, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:      outbox.KindRegistration,
+		Recipient: recipient,
+		Payload:   map[string]any{"token": "the-registration-token", "ttl_seconds": 3600},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	status := waitForQueueStatus(t, pool, id)
+	if status != outbox.StatusSent {
+		t.Fatalf("status = %q after waiting, want %q — auth mail must not be blocked by list suppression (CLAUDE.md §9)", status, outbox.StatusSent)
+	}
+	if got := sentTo(mailer, recipient); got != 1 {
+		t.Fatalf("messages sent to %s = %d, want 1", recipient, got)
+	}
+}
+
+// TestOutboxWorker_SkipWritesNoSubscriberEvent is #0365's plan §8
+// criterion 3: no subscriber_events row is written for a skip.
+func TestOutboxWorker_SkipWritesNoSubscriberEvent(t *testing.T) {
+	pool := outboxTestPool(t)
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+	subStore := subscribers.NewStore(pool)
+
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: uniqueOutboxRecipient(t), ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := subStore.MarkComplained(context.Background(), sub.ID, time.Now()); err != nil {
+		t.Fatalf("MarkComplained: %v", err)
+	}
+
+	// Captured AFTER Create (which writes signup_requested) and
+	// MarkComplained (which writes complained) — both are exactly the
+	// facts #0365's plan §3.4 says already explain the skip, timestamped
+	// earlier by the SES event handler's real-world equivalent. This test
+	// isolates whether the SKIP ITSELF adds anything further.
+	var before int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE subscriber_id = $1`, sub.ID,
+	).Scan(&before); err != nil {
+		t.Fatalf("count before: %v", err)
+	}
+
+	subID := sub.ID
+	id, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:         outbox.KindConfirmation,
+		Recipient:    sub.Email,
+		SubscriberID: &subID,
+		Payload:      map[string]any{"confirm_token": "t", "manage_token": "m", "ttl_seconds": 3600},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	status := waitForQueueStatus(t, pool, id)
+	if status != outbox.StatusSkipped {
+		t.Fatalf("status = %q after waiting, want %q", status, outbox.StatusSkipped)
+	}
+
+	var after int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM subscriber_events WHERE subscriber_id = $1`, sub.ID,
+	).Scan(&after); err != nil {
+		t.Fatalf("count after: %v", err)
+	}
+	if after != before {
+		t.Errorf("subscriber_events count changed from %d to %d — a skip must write no new event (#0365's plan §3.4)", before, after)
+	}
+}
+
+// TestOutboxWorker_EligibilityReadFailureRetriesRatherThanSends is #0365's
+// plan §6 row 2: a transient eligibility-read error must fail CLOSED (an
+// ordinary retry/backoff), never fail open into a send.
+//
+// This unit-tests sendGate directly rather than driving it through the
+// full Run/pass/sendOne loop: the shared per-package test pool
+// (outboxTestPool) cannot be torn down mid-test without breaking every
+// other test sharing it (#0365 obstacle scope — no fixture here can
+// manufacture a genuine network/DB fault on demand without doing that), so
+// a context already canceled before the read is the practical way to
+// force pool.QueryRow to return a real error rather than pgx.ErrNoRows.
+// sendOne's own dispatch order — `if gateErr != nil { finishFailed...;
+// return }` runs BEFORE the `if skip` branch (outbox_worker.go) — is what
+// makes proving sendGate's own contract here (err != nil, skip == false)
+// sufficient: an error can never reach finishSkipped by construction.
+func TestOutboxWorker_EligibilityReadFailureRetriesRatherThanSends(t *testing.T) {
+	pool := outboxTestPool(t)
+	mailer := &RecordingMailer{}
+	w, _ := newTestOutboxWorker(t, pool, mailer)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already canceled — forces the pool round trip to fail, not return ErrNoRows
+
+	subID := int64(1)
+	row := outbox.Row{
+		ID:           1,
+		Kind:         outbox.KindConfirmation,
+		Recipient:    "does-not-matter@example.com",
+		SubscriberID: &subID,
+	}
+
+	skip, reason, err := w.sendGate(ctx, row)
+	if err == nil {
+		t.Fatalf("sendGate with an already-canceled context returned no error (skip=%v reason=%q) — a read failure must be reported as an error, not resolved silently either way", skip, reason)
+	}
+	if skip {
+		t.Errorf("sendGate reported skip=true alongside a read error — a read failure must not be mistaken for a decided skip; the caller must route it to finishFailed, never finishSkipped")
+	}
+}
+
+// TestGatedKindsPartitionEveryMailKind is #0365's plan §8 criterion 5:
+// every mailKinds element appears in EXACTLY ONE of gatedKinds/ungatedKinds
+// — no gap (a kind claimed by neither would silently skip the recheck with
+// nothing to notice), no overlap (ambiguous about whether it's checked) —
+// and every ungatedKinds value is non-empty (#0296 item 4: an allowlist
+// anyone can append to without an argument is a guard with a hole).
+//
+// This lives IN the package rather than an external `scripts/check.sh
+// guards` harness — CLAUDE.md §8's rule on where a guard's proof belongs
+// turns on whether mutating the SUBJECT changes what the guard itself
+// observes. Adding a kind to mailKinds, or deleting an entry from
+// gatedKinds/ungatedKinds, changes THIS test's own inputs directly, so it
+// is a non-circular oracle; the external-harness rule exists for
+// floor/ceiling constants a test could trivially satisfy by mutating
+// itself, which this is not.
+//
+// Mutation proof (#0365's ## Verification): add outbox.KindWhatever to
+// internal/outbox and to mailKinds without classifying it in gatedKinds or
+// ungatedKinds, and this test fails, naming it.
+func TestGatedKindsPartitionEveryMailKind(t *testing.T) {
+	for _, k := range mailKinds {
+		_, inGated := gatedKinds[k]
+		_, inUngated := ungatedKinds[k]
+		switch {
+		case inGated && inUngated:
+			t.Errorf("outbox.Kind %q is in BOTH gatedKinds and ungatedKinds — must be exactly one", k)
+		case !inGated && !inUngated:
+			t.Errorf("outbox.Kind %q (in mailKinds) is in NEITHER gatedKinds nor ungatedKinds — a send-time recheck decision was never made for it", k)
+		}
+	}
+
+	for k, reason := range ungatedKinds {
+		if strings.TrimSpace(reason) == "" {
+			t.Errorf("ungatedKinds[%q] has an empty or whitespace-only reason — an exemption from the send-time recheck must be deliberate, not silent", k)
+		}
+	}
+
+	// Reverse direction: gatedKinds/ungatedKinds must not name a kind that
+	// mailKinds itself does not — TestMailKindsCoversEveryOutboxKind
+	// already guards mailKinds against drifting away from internal/outbox;
+	// this guards these two maps against drifting away from mailKinds.
+	inMailKinds := map[outbox.Kind]bool{}
+	for _, k := range mailKinds {
+		inMailKinds[k] = true
+	}
+	for k := range gatedKinds {
+		if !inMailKinds[k] {
+			t.Errorf("gatedKinds names outbox.Kind %q, which is not in mailKinds", k)
+		}
+	}
+	for k := range ungatedKinds {
+		if !inMailKinds[k] {
+			t.Errorf("ungatedKinds names outbox.Kind %q, which is not in mailKinds", k)
+		}
 	}
 }

@@ -135,6 +135,13 @@ const (
 	StatusSent      = "sent"
 	StatusFailed    = "failed" // reserved; unused by this issue — see package doc comment
 	StatusAbandoned = "abandoned"
+	// StatusSkipped (#0365, migrations/000027) is a sixth terminal status:
+	// a send-time eligibility re-check (internal/mailing.OutboxWorker's
+	// sendGate) found the row's subscriber no longer eligible for this
+	// kind between enqueue and drain. Deliberately not StatusAbandoned —
+	// see MarkSkipped's doc comment — and mirrors email_sends' own
+	// 'skipped' status (internal/mailing/audience.go's MarkSkippedTx).
+	StatusSkipped = "skipped"
 )
 
 // DefaultMaxRetries is the fallback used when the settings.queue_max_retries
@@ -606,6 +613,48 @@ func (s *Store) MarkSent(ctx context.Context, id int64, messageID string) (bool,
 	)
 	if err != nil {
 		return false, fmt.Errorf("outbox: marking %d sent: %w", id, err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// MarkSkipped transitions a claimed row STRAIGHT to the terminal 'skipped'
+// state (#0365, migrations/000027) — internal/mailing.OutboxWorker's
+// sendGate found, immediately before sending, that the row's subscriber is
+// no longer eligible for this kind (status changed, address suppressed, or
+// live email drifted from row.Recipient). reason is stored in error, and
+// payload is blanked to '{}'::jsonb — the row IS the diagnostic, the token
+// inside it is not, the same treatment MarkSent and CancelQueuedTx already
+// give a row leaving 'sending'/'queued'. claimed_at is cleared, matching
+// CancelQueuedTx's cancellation shape.
+//
+// Deliberately NOT 'abandoned': that status is a delivery-health signal
+// with three live readers (internal/handlers/admin_dashboard.go's
+// AbandonedCountByKind, the outbound-queue-abandoned dashboard warning, and
+// web/src/lib/pending.ts's queueStateBadgeClass, which gives ONLY
+// 'abandoned' the danger badge) — none of which reads error, so routing a
+// deliberately-withheld send through 'abandoned' would misreport correct
+// behavior as a delivery failure and raise a permanent, never-clearing
+// warning over a single correctly-skipped confirmation. See #0365's plan
+// §3 for the full analysis and why 'failed' (reserved, see the Status
+// block above) is also not used here.
+//
+// Guarded on status = 'sending' ONLY — narrower than MarkSent/MarkDone's
+// broader IN (...), because sendGate runs strictly after
+// OutboxWorker.pass's ClaimRow, so any row reaching this call is already
+// claimed; there is no legitimate 'queued' case to admit. Returns
+// done=false if the row was not 'sending' (claim already lost to something
+// else, or an id that does not exist) — the caller must not treat that as
+// an error, matching MarkSent's own "false means the claim was lost"
+// convention; sendOne logs it as a Warn.
+func (s *Store) MarkSkipped(ctx context.Context, id int64, reason string) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE outbound_queue
+		    SET status = $2, error = $3, claimed_at = NULL, payload = '{}'::jsonb
+		  WHERE id = $1 AND status = $4`,
+		id, StatusSkipped, reason, StatusSending,
+	)
+	if err != nil {
+		return false, fmt.Errorf("outbox: marking %d skipped: %w", id, err)
 	}
 	return tag.RowsAffected() == 1, nil
 }
