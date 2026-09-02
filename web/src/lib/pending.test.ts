@@ -5,6 +5,7 @@ import {
   queueStateLabel,
   queueStateBadgeClass,
   pendingExpiredBadgeClass,
+  inviteResendButtonTitle,
   sortPendingByAge,
 } from './pending';
 import type { PendingSubscriber } from './types';
@@ -81,6 +82,26 @@ describe('pendingExpiredBadgeClass', () => {
   it('is visually distinct for an expired row', () => {
     expect(pendingExpiredBadgeClass(true)).toBe('badge-danger');
     expect(pendingExpiredBadgeClass(false)).toBe('badge-muted');
+  });
+});
+
+// inviteResendButtonTitle has no plain-module test until #0367 — the only
+// prior coverage was indirect, through a jsdom mount of Pending.svelte
+// (Pending.behavior.test.ts). These call the pure function directly (no
+// DOM), per CLAUDE.md §1's "cheap path" — and, since #0367, the function no
+// longer reads invite_resent_at at all (see its own doc comment), so these
+// exercise only invite_resend_available.
+describe('inviteResendButtonTitle', () => {
+  it('states the one-and-only bound when the re-send is still available', () => {
+    expect(inviteResendButtonTitle({ invite_resend_available: true })).toBe(
+      'This is the one and only re-send this address will ever get.',
+    );
+  });
+
+  it('names why the button is disabled once the re-send has been used', () => {
+    expect(inviteResendButtonTitle({ invite_resend_available: false })).toBe(
+      'This address has already received its one invitation re-send.',
+    );
   });
 });
 

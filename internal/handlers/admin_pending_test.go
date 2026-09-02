@@ -393,3 +393,286 @@ func TestAdminPending_Resend_NotFoundReturns404(t *testing.T) {
 		t.Fatalf("status = %d, want 404 (body=%s)", resp.StatusCode, body)
 	}
 }
+
+// ── ResendInvitation (#0367) ─────────────────────────────────────────────────
+//
+// ResendInvitation (#0312) was the only route in this file with no
+// handler-level tests — everything above proves Resend's twin, nothing
+// proved this one at the HTTP layer. #0312's own review drove it once by
+// hand over httptest and reported every case correct; these are that same
+// coverage, kept, mirroring the six TestAdminPending_Resend_* shapes above.
+//
+// seedInvitedPendingSubscriber commits a real invite-mode import (the same
+// producer internal/subscribers/imports_test.go's commitInvite uses, one
+// package over) so the seeded row carries a genuine import_id/invited_at —
+// what AdminResendInvitation actually reads — rather than a synthetic
+// import_id that happens to be non-nil.
+func seedInvitedPendingSubscriber(t *testing.T, pool *pgxpool.Pool) (id int64, email string) {
+	t.Helper()
+	ctx := context.Background()
+	email = fmt.Sprintf("zz-pending-invite-subtest-%d@example.com", testdb.Unique())
+	importStore := subscribers.NewImportStore(pool)
+	in := subscribers.CommitInput{
+		Source:       subscribers.ImportSourceManualCSV,
+		SourceDetail: "admin_pending_test.go invite batch",
+		ConsentMode:  subscribers.ConsentModeInvite,
+		ConsentNote:  "collected via a paper sign-in sheet, attested by the organizer",
+		CollectedAt:  time.Date(2026, 5, 12, 0, 0, 0, 0, time.UTC),
+		Filename:     "attendees.csv",
+		Rows:         []subscribers.ImportRow{{Email: email}},
+	}
+	if _, err := importStore.Commit(ctx, in, time.Now()); err != nil {
+		t.Fatalf("seed invited subscriber: Commit: %v", err)
+	}
+	subStore := subscribers.NewStore(pool)
+	sub, err := subStore.FindByEmail(ctx, email)
+	if err != nil {
+		t.Fatalf("seed invited subscriber: FindByEmail: %v", err)
+	}
+	importID := *sub.ImportID
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
+		defer cancel()
+		_, _ = pool.Exec(ctx, `DELETE FROM outbound_queue WHERE subscriber_id = $1`, sub.ID)
+		_, _ = pool.Exec(ctx, `DELETE FROM subscribers WHERE id = $1`, sub.ID)
+		_, _ = pool.Exec(ctx, `DELETE FROM subscriber_imports WHERE id = $1`, importID)
+	})
+	return sub.ID, email
+}
+
+// setPhysicalAddressSetting sets the (process-wide, one-row) physical_address
+// setting for the duration of the calling test and restores whatever value
+// was there before at cleanup — settings is a singleton table shared by
+// every test in this package's pool (adminSubscribersTestPool), not scoped
+// per test the way "zz-subtest-" rows are.
+func setPhysicalAddressSetting(t *testing.T, pool *pgxpool.Pool, addr string) {
+	t.Helper()
+	authStore := auth.NewStore(pool)
+	ctx := context.Background()
+	previous, err := authStore.GetSetting(ctx, settingPhysicalAddress)
+	if err != nil {
+		t.Fatalf("reading current physical_address setting: %v", err)
+	}
+	if _, err := authStore.UpdateSetting(ctx, settingPhysicalAddress, addr, time.Now()); err != nil {
+		t.Fatalf("setting physical_address: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
+		defer cancel()
+		if _, err := authStore.UpdateSetting(ctx, settingPhysicalAddress, previous, time.Now()); err != nil {
+			t.Errorf("restoring physical_address setting: %v", err)
+		}
+	})
+}
+
+// decodedResendInvitationResponse mirrors resendInvitationResponse's JSON
+// shape (admin_pending.go) for test decoding.
+type decodedResendInvitationResponse struct {
+	ID               int64   `json:"id"`
+	ConfirmSentAt    *string `json:"confirm_sent_at"`
+	ConfirmExpiresAt *string `json:"confirm_expires_at"`
+	InviteResentAt   *string `json:"invite_resent_at"`
+}
+
+func TestAdminPending_ResendInvitation_RequiresSession(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminPendingMux(pool))
+	defer srv.Close()
+
+	resp := doJSON(t, srv.Client(), "POST", srv.URL+"/admin/subscribers/1/resend-invitation", "", "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+// TestAdminPending_ResendInvitation_Success_MintsTokenAndAudits covers
+// #0367 criterion 1's success/body/audit shapes together, matching
+// TestAdminPending_Resend_Success_MintsFreshTokenAndAudits's own pattern:
+// 200, the response body shape (confirm_expires_at ~importInviteConfirmTTL
+// out, not subscribeConfirmTTL — #0312's whole point), and exactly one
+// audit_log row whose metadata carries import_id and never the address.
+func TestAdminPending_ResendInvitation_Success_MintsTokenAndAudits(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminPendingMux(pool))
+	defer srv.Close()
+	setPhysicalAddressSetting(t, pool, "123 Main St, San Francisco, CA 94110")
+
+	admin := seedAdmin(t, pool, "admin-pending-invite-resend@example.com")
+	seedSession(t, pool, admin, "admin-token-pending-invite-resend")
+
+	id, email := seedInvitedPendingSubscriber(t, pool)
+	var originalToken string
+	if err := pool.QueryRow(context.Background(), `SELECT confirm_token FROM subscribers WHERE id = $1`, id).Scan(&originalToken); err != nil {
+		t.Fatalf("select original token: %v", err)
+	}
+
+	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/subscribers/%d/resend-invitation", srv.URL, id), "admin-token-pending-invite-resend", "")
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, body)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var decoded decodedResendInvitationResponse
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode response: %v (body=%s)", err, body)
+	}
+	if decoded.ID != id {
+		t.Errorf("response id = %d, want %d", decoded.ID, id)
+	}
+	if decoded.ConfirmSentAt == nil || *decoded.ConfirmSentAt == "" {
+		t.Error("response confirm_sent_at is empty, want set")
+	}
+	if decoded.ConfirmExpiresAt == nil || *decoded.ConfirmExpiresAt == "" {
+		t.Error("response confirm_expires_at is empty, want set")
+	}
+	if decoded.InviteResentAt == nil || *decoded.InviteResentAt == "" {
+		t.Error("response invite_resent_at is empty, want set")
+	}
+
+	var newToken string
+	if err := pool.QueryRow(context.Background(), `SELECT confirm_token FROM subscribers WHERE id = $1`, id).Scan(&newToken); err != nil {
+		t.Fatalf("select new token: %v", err)
+	}
+	if newToken == originalToken {
+		t.Errorf("confirm_token unchanged after resend — want a freshly minted token")
+	}
+
+	var auditCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log WHERE action = $1 AND target_id = $2`, audit.ActionSubscriberResendInvitation, id,
+	).Scan(&auditCount); err != nil {
+		t.Fatalf("counting audit rows: %v", err)
+	}
+	if auditCount != 1 {
+		t.Errorf("audit rows for invitation resend = %d, want 1", auditCount)
+	}
+
+	var auditMetadataText string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT metadata::text FROM audit_log WHERE action = $1 AND target_id = $2`, audit.ActionSubscriberResendInvitation, id,
+	).Scan(&auditMetadataText); err != nil {
+		t.Fatalf("selecting audit metadata: %v", err)
+	}
+	if !strings.Contains(auditMetadataText, `"import_id"`) {
+		t.Errorf("audit metadata missing import_id: %s", auditMetadataText)
+	}
+	if email != "" && strings.Contains(auditMetadataText, email) {
+		t.Errorf("audit metadata unexpectedly contains the subscriber's email: %s", auditMetadataText)
+	}
+}
+
+func TestAdminPending_ResendInvitation_NotFoundReturns404(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminPendingMux(pool))
+	defer srv.Close()
+	setPhysicalAddressSetting(t, pool, "123 Main St, San Francisco, CA 94110")
+
+	admin := seedAdmin(t, pool, "admin-pending-invite-resend-404@example.com")
+	seedSession(t, pool, admin, "admin-token-pending-invite-resend-404")
+
+	resp := doJSON(t, srv.Client(), "POST", srv.URL+"/admin/subscribers/999999999/resend-invitation", "admin-token-pending-invite-resend-404", "")
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404 (body=%s)", resp.StatusCode, body)
+	}
+}
+
+// TestAdminPending_ResendInvitation_SecondCallReturns409 is #0367 criterion
+// 1's "409 on a second call" — the one-ever bound (issues/0312.md's
+// approved PRD §6.10.1 deviation) mapped to HTTP.
+func TestAdminPending_ResendInvitation_SecondCallReturns409(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminPendingMux(pool))
+	defer srv.Close()
+	setPhysicalAddressSetting(t, pool, "123 Main St, San Francisco, CA 94110")
+
+	admin := seedAdmin(t, pool, "admin-pending-invite-resend-second@example.com")
+	seedSession(t, pool, admin, "admin-token-pending-invite-resend-second")
+
+	id, _ := seedInvitedPendingSubscriber(t, pool)
+	url := fmt.Sprintf("%s/admin/subscribers/%d/resend-invitation", srv.URL, id)
+
+	first := doJSON(t, srv.Client(), "POST", url, "admin-token-pending-invite-resend-second", "")
+	if first.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(first.Body)
+		t.Fatalf("first call status = %d, want 200 (body=%s)", first.StatusCode, body)
+	}
+
+	second := doJSON(t, srv.Client(), "POST", url, "admin-token-pending-invite-resend-second", "")
+	if second.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(second.Body)
+		t.Fatalf("second call status = %d, want 409 (body=%s)", second.StatusCode, body)
+	}
+}
+
+// TestAdminPending_ResendInvitation_BlankPhysicalAddressReturns409 is #0367
+// criterion 1's "409 on a blank physical_address" — the ADVISORY pre-check
+// (admin_pending.go's ResendInvitation doc comment), never the §9 gate
+// itself. This test proves only that the handler's usability nicety is
+// wired up; it must NOT be read as proof that a blank physical_address
+// makes sending impossible — that proof is
+// TestAdminResendInvitation_PhysicalAddressGateNotBypassable
+// (internal/mailing/outbox_worker_test.go, #0312), which calls the STORE
+// method directly with this pre-check entirely out of the picture. #0367
+// criterion 3 / CLAUDE.md §9: a test at this layer must not encode the
+// pre-check as *the* gate, so this one asserts only the 409 and nothing
+// about OutboxWorker's own behavior.
+func TestAdminPending_ResendInvitation_BlankPhysicalAddressReturns409(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminPendingMux(pool))
+	defer srv.Close()
+	setPhysicalAddressSetting(t, pool, "")
+
+	admin := seedAdmin(t, pool, "admin-pending-invite-resend-noaddr@example.com")
+	seedSession(t, pool, admin, "admin-token-pending-invite-resend-noaddr")
+
+	id, _ := seedInvitedPendingSubscriber(t, pool)
+
+	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/subscribers/%d/resend-invitation", srv.URL, id), "admin-token-pending-invite-resend-noaddr", "")
+	if resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 409 (body=%s)", resp.StatusCode, body)
+	}
+
+	// The pre-check must refuse BEFORE calling the store — no re-send should
+	// have been recorded and no confirm_token rotated.
+	var inviteResentAt *time.Time
+	if err := pool.QueryRow(context.Background(), `SELECT invite_resent_at FROM subscribers WHERE id = $1`, id).Scan(&inviteResentAt); err != nil {
+		t.Fatalf("select invite_resent_at: %v", err)
+	}
+	if inviteResentAt != nil {
+		t.Errorf("invite_resent_at = %v after a 409'd advisory pre-check, want nil (the one-ever re-send must not be burned)", *inviteResentAt)
+	}
+}
+
+// TestAdminPending_ResendInvitation_CooldownReturns429 is #0367 criterion
+// 1's 429 rate-limit path, mirroring
+// TestAdminPending_Resend_CooldownReturns429.
+func TestAdminPending_ResendInvitation_CooldownReturns429(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminPendingMux(pool))
+	defer srv.Close()
+	setPhysicalAddressSetting(t, pool, "123 Main St, San Francisco, CA 94110")
+
+	admin := seedAdmin(t, pool, "admin-pending-invite-resend-cooldown@example.com")
+	seedSession(t, pool, admin, "admin-token-pending-invite-resend-cooldown")
+
+	id, _ := seedInvitedPendingSubscriber(t, pool)
+	// ImportStore.Commit never stamps confirm_sent_at (see
+	// importInvitePayload's own doc comment) — stamp it directly to "now" so
+	// the cooldown has something recent to refuse against, matching
+	// TestAdminResendInvitation_RefusesCooldown's own setup
+	// (internal/subscribers/pending_test.go).
+	if _, err := pool.Exec(context.Background(), `UPDATE subscribers SET confirm_sent_at = $2 WHERE id = $1`, id, time.Now()); err != nil {
+		t.Fatalf("stamping confirm_sent_at: %v", err)
+	}
+
+	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/subscribers/%d/resend-invitation", srv.URL, id), "admin-token-pending-invite-resend-cooldown", "")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 429 (body=%s)", resp.StatusCode, body)
+	}
+}

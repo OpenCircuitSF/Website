@@ -2309,3 +2309,243 @@ func TestGrowth30Days_BoundaryAndSyntheticExclusion(t *testing.T) {
 		t.Errorf("unsubscribed_30d = %d, want %d", unsubAfter, unsubBefore+1)
 	}
 }
+
+// ── #0369: the four hand-maintained subscriber column lists ────────────────
+//
+// #0312 added invite_resent_at to subscriberColumns, scanSubscriber's Scan
+// order and the Subscriber struct, but missed qualifiedSubscriberColumns —
+// a second, separately hand-maintained copy Store.List's JOIN query uses —
+// and 500'd the admin subscribers list. qualifiedSubscriberColumns is now
+// DERIVED from subscriberColumns (store.go's deriveQualifiedColumns), which
+// closes that specific defect class structurally: there is only one list
+// left to remember to edit. The three tests below are, in order: an
+// independent unit test of the derivation function itself (not compared
+// against subscriberColumns/qualifiedSubscriberColumns, so it is not "a
+// copy of the answer stored next to the question", CLAUDE.md §8); a guard
+// against qualifiedSubscriberColumns ever being reassigned back to a
+// separately-maintained literal (the literal shape of #0312's actual
+// mistake); and a VALUE-based round trip that pins scanSubscriber's
+// positional Scan order against both subscriberColumns and
+// qualifiedSubscriberColumns — the "worse of the two hazards" #0369
+// criterion 4 asks about, answered by proportionate means rather than an
+// AST parser (see that test's own doc comment for why).
+
+// TestDeriveQualifiedColumns is deriveQualifiedColumns' own unit test,
+// against a small literal input constructed here — NOT against
+// subscriberColumns — so this test's oracle is independent of the thing
+// #0369 criterion 3 warns against copying. It covers both shapes
+// deriveQualifiedColumns has to handle: a bare identifier, and the one
+// wrapped-in-a-function-call identifier subscriberColumns actually contains
+// (host(signup_ip)).
+func TestDeriveQualifiedColumns(t *testing.T) {
+	got := deriveQualifiedColumns("id, host(signup_ip), foo_bar", "subscribers")
+	want := "subscribers.id, host(subscribers.signup_ip), subscribers.foo_bar"
+	if got != want {
+		t.Fatalf("deriveQualifiedColumns = %q, want %q", got, want)
+	}
+}
+
+// TestQualifiedSubscriberColumns_IsDerivedFromSubscriberColumns pins that
+// qualifiedSubscriberColumns is, and stays, deriveQualifiedColumns(
+// subscriberColumns, "subscribers") — never a separately hand-maintained
+// literal again. This is #0369 criterion 2's discrimination proof for the
+// derivation route: under TRUE derivation, "add a column to
+// subscriberColumns alone" can no longer happen (there is only one list),
+// so the equivalent regression this test catches is someone reintroducing
+// the old shape — reassigning qualifiedSubscriberColumns back to a literal
+// that has drifted from subscriberColumns, which is exactly #0312's
+// mistake in literal form. Proven by mutation below (## Verification).
+func TestQualifiedSubscriberColumns_IsDerivedFromSubscriberColumns(t *testing.T) {
+	want := deriveQualifiedColumns(subscriberColumns, "subscribers")
+	if qualifiedSubscriberColumns != want {
+		t.Fatalf("qualifiedSubscriberColumns has drifted from deriveQualifiedColumns(subscriberColumns, \"subscribers\") — got %q, want %q", qualifiedSubscriberColumns, want)
+	}
+}
+
+// TestList_And_GetByID_ScanSubscriberColumnOrderRoundTrip is #0369
+// criterion 4's answer for scanSubscriber's positional Scan order — "the
+// worse of the two hazards" per that criterion, because a reordering (not
+// just an omission) compiles and only misbehaves at runtime, silently,
+// against same-typed neighboring columns.
+//
+// # Why not an AST guard
+//
+// This repo already has one general-purpose AST-based guard
+// (internal/db/issue_citation_guard_test.go, ~1000 lines, built for a
+// genuinely corpus-wide problem). Building an equivalent parser to compare
+// scanSubscriber's `row.Scan(...)` argument identifiers against
+// subscriberColumns' column identifiers, in order, would be disproportionate
+// machinery for a defect that — unlike qualifiedSubscriberColumns — has not
+// actually fired (#0369's own description). Per CLAUDE.md §5/#0369
+// criterion 5 ("if the sound fix needs more machinery than the defect
+// costs, say so and stop"): stopped short of that, in favor of the cheaper
+// value-based check below.
+//
+// # What this test does instead
+//
+// It inserts ONE subscribers row (via a real subscriber_imports row for the
+// import_id FK) with every column set to a value distinct from every other
+// column of the same Go type — eleven distinct timestamps across the ten
+// *time.Time fields plus the two non-pointer time.Time fields
+// (CreatedAt/UpdatedAt), and a dozen distinct strings across the *string/
+// string fields — then reads it back through BOTH scanSubscriber call sites
+// that matter: GetByID (subscriberColumns, unqualified) and List
+// (qualifiedSubscriberColumns, qualified, the JOIN-safe path #0312 actually
+// broke). If either column list's ORDER ever disagrees with scanSubscriber's
+// Scan argument order, a same-typed pair of columns swaps values and this
+// test's per-field assertions catch it — the same way a real operator would
+// notice a subscriber's confirm_sent_at showing where confirm_expires_at
+// should be. A pure column-count check would miss exactly this class of
+// mistake; this test does not.
+func TestList_And_GetByID_ScanSubscriberColumnOrderRoundTrip(t *testing.T) {
+	pool := testPool(t)
+	subStore := NewStore(pool)
+	ctx := context.Background()
+	email := uniqueEmail(t)
+
+	var importID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO subscriber_imports (source, source_detail, consent_mode, consent_note, collected_at)
+		 VALUES ('manual_csv', 'roundtrip-source-detail', 'invite', 'roundtrip test consent note', '2026-05-12')
+		 RETURNING id`,
+	).Scan(&importID); err != nil {
+		t.Fatalf("seeding subscriber_imports: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscriber_imports WHERE id = $1`, importID)
+	})
+
+	base := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	confirmSentAt := base.Add(1 * time.Hour)
+	confirmExpiresAt := base.Add(2 * time.Hour)
+	confirmedAt := base.Add(3 * time.Hour)
+	alreadySubscribedSentAt := base.Add(4 * time.Hour)
+	unsubscribedAt := base.Add(5 * time.Hour)
+	invitedAt := base.Add(6 * time.Hour)
+	lastBounceAt := base.Add(7 * time.Hour)
+	lastDeliveryAt := base.Add(8 * time.Hour)
+	createdAt := base.Add(9 * time.Hour)
+	updatedAt := base.Add(10 * time.Hour)
+	inviteResentAt := base.Add(11 * time.Hour)
+
+	const (
+		confirmToken      = "zz-roundtrip-confirm-token"
+		manageToken       = "zz-roundtrip-manage-token"
+		signupIP          = "203.0.113.7"
+		signupUserAgent   = "zz-roundtrip-user-agent"
+		utmSource         = "zz-roundtrip-utm-source"
+		utmMedium         = "zz-roundtrip-utm-medium"
+		utmCampaign       = "zz-roundtrip-utm-campaign"
+		unsubscribeSource = "admin"
+		source            = "import"
+		sourceDetail      = "zz-roundtrip-source-detail"
+		consentBasis      = "admin_attested"
+		status            = "active"
+		softBounceStreak  = 3
+	)
+
+	var id int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO subscribers (
+			email, status, confirm_token, confirm_sent_at, confirm_expires_at, confirmed_at,
+			already_subscribed_sent_at, manage_token, signup_ip, signup_user_agent,
+			utm_source, utm_medium, utm_campaign, unsubscribed_at, unsubscribe_source,
+			source, source_detail, consent_basis, import_id, invited_at,
+			soft_bounce_streak, last_bounce_at, last_delivery_at, created_at, updated_at,
+			synthetic, invite_resent_at
+		 ) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+			$16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27
+		 ) RETURNING id`,
+		email, status, confirmToken, confirmSentAt, confirmExpiresAt, confirmedAt,
+		alreadySubscribedSentAt, manageToken, signupIP, signupUserAgent,
+		utmSource, utmMedium, utmCampaign, unsubscribedAt, unsubscribeSource,
+		source, sourceDetail, consentBasis, importID, invitedAt,
+		softBounceStreak, lastBounceAt, lastDeliveryAt, createdAt, updatedAt,
+		false, inviteResentAt,
+	).Scan(&id); err != nil {
+		t.Fatalf("seeding sentinel subscriber row: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, id)
+	})
+
+	assertFields := func(t *testing.T, label string, sub Subscriber) {
+		t.Helper()
+		strPtrEq := func(name string, got *string, want string) {
+			t.Helper()
+			if got == nil || *got != want {
+				t.Errorf("%s: %s = %v, want %q", label, name, got, want)
+			}
+		}
+		timePtrEq := func(name string, got *time.Time, want time.Time) {
+			t.Helper()
+			if got == nil || !got.Equal(want) {
+				t.Errorf("%s: %s = %v, want %v", label, name, got, want)
+			}
+		}
+		if sub.ID != id {
+			t.Errorf("%s: ID = %d, want %d", label, sub.ID, id)
+		}
+		if sub.Email != email {
+			t.Errorf("%s: Email = %q, want %q", label, sub.Email, email)
+		}
+		if sub.Status != status {
+			t.Errorf("%s: Status = %q, want %q", label, sub.Status, status)
+		}
+		strPtrEq("ConfirmToken", sub.ConfirmToken, confirmToken)
+		timePtrEq("ConfirmSentAt", sub.ConfirmSentAt, confirmSentAt)
+		timePtrEq("ConfirmExpiresAt", sub.ConfirmExpiresAt, confirmExpiresAt)
+		timePtrEq("ConfirmedAt", sub.ConfirmedAt, confirmedAt)
+		timePtrEq("AlreadySubscribedSentAt", sub.AlreadySubscribedSentAt, alreadySubscribedSentAt)
+		if sub.ManageToken != manageToken {
+			t.Errorf("%s: ManageToken = %q, want %q", label, sub.ManageToken, manageToken)
+		}
+		strPtrEq("SignupIP", sub.SignupIP, signupIP)
+		strPtrEq("SignupUserAgent", sub.SignupUserAgent, signupUserAgent)
+		strPtrEq("UTMSource", sub.UTMSource, utmSource)
+		strPtrEq("UTMMedium", sub.UTMMedium, utmMedium)
+		strPtrEq("UTMCampaign", sub.UTMCampaign, utmCampaign)
+		timePtrEq("UnsubscribedAt", sub.UnsubscribedAt, unsubscribedAt)
+		strPtrEq("UnsubscribeSource", sub.UnsubscribeSource, unsubscribeSource)
+		if sub.Source != source {
+			t.Errorf("%s: Source = %q, want %q", label, sub.Source, source)
+		}
+		strPtrEq("SourceDetail", sub.SourceDetail, sourceDetail)
+		strPtrEq("ConsentBasis", sub.ConsentBasis, consentBasis)
+		if sub.ImportID == nil || *sub.ImportID != importID {
+			t.Errorf("%s: ImportID = %v, want %d", label, sub.ImportID, importID)
+		}
+		timePtrEq("InvitedAt", sub.InvitedAt, invitedAt)
+		if sub.SoftBounceStreak != softBounceStreak {
+			t.Errorf("%s: SoftBounceStreak = %d, want %d", label, sub.SoftBounceStreak, softBounceStreak)
+		}
+		timePtrEq("LastBounceAt", sub.LastBounceAt, lastBounceAt)
+		timePtrEq("LastDeliveryAt", sub.LastDeliveryAt, lastDeliveryAt)
+		if !sub.CreatedAt.Equal(createdAt) {
+			t.Errorf("%s: CreatedAt = %v, want %v", label, sub.CreatedAt, createdAt)
+		}
+		if !sub.UpdatedAt.Equal(updatedAt) {
+			t.Errorf("%s: UpdatedAt = %v, want %v", label, sub.UpdatedAt, updatedAt)
+		}
+		if sub.Synthetic {
+			t.Errorf("%s: Synthetic = true, want false", label)
+		}
+		timePtrEq("InviteResentAt", sub.InviteResentAt, inviteResentAt)
+	}
+
+	byID, err := subStore.GetByID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	assertFields(t, "GetByID (subscriberColumns)", byID)
+
+	listed, total, err := subStore.List(ctx, ListFilter{Query: email})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 || len(listed) != 1 {
+		t.Fatalf("List(%q) returned total=%d len=%d, want exactly 1", email, total, len(listed))
+	}
+	assertFields(t, "List (qualifiedSubscriberColumns)", listed[0])
+}

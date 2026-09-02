@@ -85,13 +85,16 @@ export function pendingExpiredBadgeClass(expired: boolean): string {
  * The "Resend invitation" button's title text for an invited row (#0312) —
  * states the one-and-only bound plainly before the admin clicks, or names
  * why the button is disabled once that one re-send has already been used.
- * `invite_resent_at` is treated as "already used" whenever it is a
- * non-empty string, matching the server's own `omitempty` JSON encoding
- * (absent until set) rather than assuming any particular falsy shape.
+ *
+ * `invite_resend_available` alone decides which copy renders (#0367: it is
+ * server-computed as `invited && invite_resent_at == nil` —
+ * internal/handlers/admin_pending.go's `toPendingSubscriberRow` —  so it
+ * already fully encodes "has the one-ever re-send been used" and this
+ * function does not separately read `invite_resent_at`). Only ever called
+ * for an invited row (Pending.svelte guards the button with `row.invited`),
+ * so the disabled branch's copy is safe to say unconditionally.
  */
-export function inviteResendButtonTitle(
-  row: Pick<PendingSubscriber, 'invite_resend_available' | 'invite_resent_at'>,
-): string {
+export function inviteResendButtonTitle(row: Pick<PendingSubscriber, 'invite_resend_available'>): string {
   if (row.invite_resend_available) {
     return 'This is the one and only re-send this address will ever get.';
   }

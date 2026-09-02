@@ -1932,16 +1932,45 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]Subscriber, int6
 // table and would otherwise risk an ambiguous or wrongly-resolved unqualified
 // column reference (subscriber_interests.created_at vs
 // subscribers.created_at).
-const qualifiedSubscriberColumns = `subscribers.id, subscribers.email, subscribers.status,
-	subscribers.confirm_token, subscribers.confirm_sent_at, subscribers.confirm_expires_at,
-	subscribers.confirmed_at, subscribers.already_subscribed_sent_at, subscribers.manage_token,
-	host(subscribers.signup_ip), subscribers.signup_user_agent, subscribers.utm_source,
-	subscribers.utm_medium, subscribers.utm_campaign, subscribers.unsubscribed_at,
-	subscribers.unsubscribe_source, subscribers.source, subscribers.source_detail,
-	subscribers.consent_basis, subscribers.import_id, subscribers.invited_at,
-	subscribers.soft_bounce_streak, subscribers.last_bounce_at,
-	subscribers.last_delivery_at, subscribers.created_at, subscribers.updated_at,
-	subscribers.synthetic, subscribers.invite_resent_at`
+//
+// #0369: this used to be a SEPARATE hand-maintained literal, and it drifted
+// — #0312 added invite_resent_at to subscriberColumns, missed here, and
+// 500'd the admin subscribers list (List, below, is the only caller). It is
+// now DERIVED from subscriberColumns by deriveQualifiedColumns, so a column
+// added to subscriberColumns can no longer be omitted from this one by a
+// forgotten second edit — there is only one list left to edit. See
+// TestQualifiedSubscriberColumns_IsDerivedFromSubscriberColumns
+// (store_test.go), which pins that this var is never reassigned back to a
+// separately-maintained literal, and
+// TestList_And_GetByID_ScanSubscriberColumnOrderRoundTrip, which proves the
+// result is actually column-for-column correct against scanSubscriber (not
+// just equal in length) by round-tripping distinct sentinel values through
+// both the qualified (List) and unqualified (GetByID) SELECT paths.
+var qualifiedSubscriberColumns = deriveQualifiedColumns(subscriberColumns, "subscribers")
+
+// deriveQualifiedColumns prefixes each comma-separated column reference in
+// cols with "<table>." — including the single identifier inside a one-
+// argument function call such as host(signup_ip) — producing the
+// qualified-for-a-JOIN form of an otherwise bare SELECT list. Written for
+// exactly one caller (qualifiedSubscriberColumns above); kept general enough
+// to unit-test against a small literal input independent of
+// subscriberColumns itself (TestDeriveQualifiedColumns in store_test.go),
+// so that test's oracle is not a copy of subscriberColumns/
+// qualifiedSubscriberColumns sitting next to the question (CLAUDE.md §8).
+func deriveQualifiedColumns(cols, table string) string {
+	parts := strings.Split(cols, ",")
+	out := make([]string, len(parts))
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		if fn, arg, ok := strings.Cut(p, "("); ok {
+			arg = strings.TrimSuffix(strings.TrimSpace(arg), ")")
+			out[i] = fn + "(" + table + "." + arg + ")"
+		} else {
+			out[i] = table + "." + p
+		}
+	}
+	return strings.Join(out, ", ")
+}
 
 // StatusCounts returns the number of subscribers in each status, keyed by
 // the Status* constants. Every known status is present in the result even
