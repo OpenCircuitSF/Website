@@ -1048,7 +1048,7 @@ that needs cost accounting; refresh once per day.
 
 ## 11. PRD section index
 
-`PRD.md` is 1,853 lines (~21k tokens). **Never read it whole.** Every issue's
+`PRD.md` is 1,857 lines (~21k tokens). **Never read it whole.** Every issue's
 `## Relation` block names the section it needs and carries the exact extraction
 command; run that. This table is the fallback when you need a section no issue
 cites.
@@ -1074,9 +1074,9 @@ the PRD.
 | **§5 Information Architecture** | 39 | `sed -n '/^## 5\. /,/^## [0-9]/p' PRD.md` |
 | §5.1 Public routes | 18 | `sed -n '/^### 5\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §5.2 Admin routes (session + `is_admin` required) | 19 | `sed -n '/^### 5\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§6 Mailing List — The Core Subsystem** | 966 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
+| **§6 Mailing List — The Core Subsystem** | 970 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
 | §6.1 Interest taxonomy | 23 | `sed -n '/^### 6\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §6.2 Database schema | 351 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.2 Database schema | 355 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.3 Subscription flow (double opt-in) | 56 | `sed -n '/^### 6\.3 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.4 Preference center | 16 | `sed -n '/^### 6\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.5 Unsubscribe — three paths, all required | 93 | `sed -n '/^### 6\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
@@ -1108,7 +1108,8 @@ the PRD.
 | **§14 Open Questions** | 14 | `sed -n '/^## 14\. /,/^## [0-9]/p' PRD.md` |
 
 Bold rows are whole top-level sections and include their subsections. §6 (the
-mailing list) is 933 lines — take the subsection, not the parent.
+mailing list) is by far the largest section — take the subsection, not the
+parent.
 
 §6.10 includes §6.10.1 (import invite mode).
 
