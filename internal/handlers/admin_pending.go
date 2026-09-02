@@ -146,10 +146,17 @@ type pendingSubscriberRow struct {
 	InviteResentAt *time.Time `json:"invite_resent_at,omitempty"`
 	// QueueState is the latest outbound_queue row's status for this
 	// address's confirmation/invitation mail — "queued" / "sending" /
-	// "sent" / "abandoned" — or "unknown" when h.outbox is nil
+	// "sent" / "skipped" / "abandoned" — or "unknown" when h.outbox is nil
 	// (STORAGE=json) or "none" when no row exists at all (should not
 	// happen for a real signup, but the type does not assume it can't).
-	// Looked up against outbox.KindImportInvite for an Invited row and
+	// "skipped" (#0365, #0378) means the system correctly withheld the
+	// message — the subscriber's live state made it ineligible to send by
+	// the time the worker reached it, or a queued import invitation was
+	// superseded by that same address's own signup — never a delivery
+	// failure; only "abandoned" means that. "failed" is a value the
+	// database's CHECK constraint permits but nothing in this codebase
+	// ever writes, so it does not appear here. Looked up against
+	// outbox.KindImportInvite for an Invited row and
 	// outbox.KindConfirmation otherwise — the two kinds are mutually
 	// exclusive per address (see List's own comment).
 	QueueState string `json:"queue_state"`

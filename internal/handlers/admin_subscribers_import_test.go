@@ -466,15 +466,27 @@ func TestAdminImports_Revoke_UnsubscribesAndAudits(t *testing.T) {
 }
 
 // TestAdminImports_Revoke_RequiresReason proves the JSON body's reason is
-// mandatory.
+// mandatory: POST .../revoke with an empty reason returns 400.
 //
 // Targets a nonexistent sentinel id, not a literal small id (CLAUDE.md §8b
-// — see #0376): AdminImportsHandler.Revoke checks req.Reason and returns
-// 400 (admin_subscribers_import.go, the `reason == ""` block) before it
-// ever calls h.store.Revoke, so the empty-reason check fires before lookup
-// regardless of whether the target id resolves to a real row. A sentinel
-// proves exactly that boundary; a mutated check's proof can never reach a
-// real import.
+// — see #0376), so the sentinel is reachable regardless of whether the
+// target id resolves to a real row.
+//
+// This test pins the observable behaviour only, not which layer produces
+// it (#0383, deliberately, after mutation proved the two are different
+// claims). AdminImportsHandler.Revoke has its own reason == "" check that
+// returns 400 before calling h.store.Revoke, but
+// subscribers.ImportStore.Revoke independently re-validates reason == ""
+// (ErrRevokeReasonRequired), and the handler maps that error to an
+// identical 400 body — so removing the handler-level check alone leaves
+// this test green; it cannot tell "the handler rejected it" from "the
+// store rejected it and the handler translated the error". The store
+// layer is separately, and specifically, pinned by
+// internal/subscribers/imports_test.go's ErrRevokeReasonRequired
+// assertion — that test, not this one, is what would catch the store
+// check going missing. Both checks exist today and both are exercised;
+// this comment describes what each test can and cannot discriminate, not
+// a gap in coverage.
 func TestAdminImports_Revoke_RequiresReason(t *testing.T) {
 	pool := adminImportsTestPool(t)
 	srv := httptest.NewServer(adminImportsMux(pool))

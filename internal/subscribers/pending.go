@@ -7,8 +7,10 @@
 // Before #0126's durable outbound_queue, "why didn't they confirm?" had no
 // answer — the send happened on a goroutine that left no trace. ListPending
 // itself only reads the subscribers table; the per-address queue state an
-// operator actually needs (queued / sent / abandoned) is joined by the
-// handler layer (internal/handlers/admin_pending.go) against
+// operator actually needs (queued / sending / sent / skipped / abandoned —
+// #0365/#0378 added "skipped" for a message correctly withheld, distinct
+// from "abandoned"'s genuine delivery failure) is joined by the handler
+// layer (internal/handlers/admin_pending.go) against
 // internal/outbox.Store.LatestByRecipients, not duplicated here.
 package subscribers
 
