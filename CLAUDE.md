@@ -272,6 +272,20 @@ scripts/db-reset.sh          # rebuild the local dev DB from migrations + seed a
 **Always set `ISSUE=NNNN`** — it gives the run its own database and is what
 lets two agents test concurrently (§5a).
 
+**A scoped run can miss a repo-wide guard's own package (`#0381`).** Four
+packages own guards whose scan roots reach beyond their own directory:
+`internal/handlers` (its citation-guard family — `citation_guard_test.go`,
+`citation_target_guard_test.go`, `dangling_test_citation_guard_test.go`,
+`line_citation_guard_test.go` — scanning `internal/`, `cmd/`, and `web/`),
+`internal/db` (`issue_citation_guard_test.go`, scanning the whole repo for
+issue-file citations of Go test functions), `internal/outbox`
+(`claim_kinds_call_site_guard_test.go`, scanning `internal/` and `cmd/`), and
+`internal/subscribers` (`events_append_only_guard_test.go`, scanning all of
+`internal/`). An edit to any file under one of those scan roots — for
+`internal/handlers`'s family, nearly every Go and Svelte file in the tree —
+must add that guard's owning package to the scoped run, not rely on the
+package you edited alone catching it.
+
 > **`STORAGE=json` has no mailing list.** `internal/devstore` implements none
 > of interests, subscribers, campaigns, or suppressions, so `dev.sh`'s default
 > mode 404s `/api/interests`, returns 405 from `POST /api/subscribe`, and omits
@@ -1048,7 +1062,7 @@ that needs cost accounting; refresh once per day.
 
 ## 11. PRD section index
 
-`PRD.md` is 1,857 lines (~21k tokens). **Never read it whole.** Every issue's
+`PRD.md` is 1,859 lines (~21k tokens). **Never read it whole.** Every issue's
 `## Relation` block names the section it needs and carries the exact extraction
 command; run that. This table is the fallback when you need a section no issue
 cites.
@@ -1074,7 +1088,7 @@ the PRD.
 | **§5 Information Architecture** | 39 | `sed -n '/^## 5\. /,/^## [0-9]/p' PRD.md` |
 | §5.1 Public routes | 18 | `sed -n '/^### 5\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §5.2 Admin routes (session + `is_admin` required) | 19 | `sed -n '/^### 5\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§6 Mailing List — The Core Subsystem** | 970 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
+| **§6 Mailing List — The Core Subsystem** | 972 | `sed -n '/^## 6\. /,/^## [0-9]/p' PRD.md` |
 | §6.1 Interest taxonomy | 23 | `sed -n '/^### 6\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.2 Database schema | 355 | `sed -n '/^### 6\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.3 Subscription flow (double opt-in) | 56 | `sed -n '/^### 6\.3 /,/^#\{2,3\} [0-9]/p' PRD.md` |
@@ -1084,7 +1098,7 @@ the PRD.
 | §6.7 SES event ingestion | 40 | `sed -n '/^### 6\.7 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.8 Public campaign archive | 65 | `sed -n '/^### 6\.8 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.9 Delivery health — bounce policy and the circuit breaker | 60 | `sed -n '/^### 6\.9 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| §6.10 Subscriber import and consent provenance | 128 | `sed -n '/^### 6\.10 /,/^#\{2,3\} [0-9]/p' PRD.md` |
+| §6.10 Subscriber import and consent provenance | 130 | `sed -n '/^### 6\.10 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §6.11 Durable outbound queue and the activity log | 54 | `sed -n '/^### 6\.11 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | **§7 Frontend** | 84 | `sed -n '/^## 7\. /,/^## [0-9]/p' PRD.md` |
 | §7.1 Stack | 7 | `sed -n '/^### 7\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
