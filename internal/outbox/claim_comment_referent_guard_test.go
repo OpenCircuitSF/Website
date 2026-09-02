@@ -1923,14 +1923,24 @@ var claimCommentGuardStoreGoParenSentinelRe = regexp.MustCompile(`see SelectDue[
 // since #0347's own history records that quoting a real defect sentence
 // verbatim in a doc comment trips this guard's two tests against
 // themselves (rephrase, don't delete, is that issue's own stated
-// convention). Without claimCommentGuardOpenParen's scoping, ClaimRow --
-// well outside that parenthetical, with zero earlier occurrences anywhere
-// in this file -- would also be checked against the same positional word
-// and falsely fire; #0347's review (bounce 1, B1 part 3) measured exactly
-// this false positive before the scoping existed. Reading the real file,
-// rather than a copy, means a future edit to store.go's own comment is
-// checked against the real trade rather than a fixture that can drift out
-// of sync with it.
+// convention).
+//
+// #0382 -- this test pins TWO identifiers at zero, and paren scoping is
+// responsible for only one of them; instrumented directly against the real
+// file rather than assumed. SelectDue sits INSIDE the paren-scoped window
+// (the clamp that sets the window's left edge here is the open-paren one,
+// not the 90-char or clause-boundary ones), so it is checked, and it comes
+// back zero because it genuinely resolves -- SelectDue really is declared
+// earlier in this file, in the direction the positional word claims.
+// ClaimRow sits OUTSIDE that parenthetical, well before the window's own
+// left edge, so it is never checked at all -- excluding it from the window
+// is claimCommentGuardOpenParen's actual job here. Without that scoping,
+// ClaimRow -- with zero earlier occurrences anywhere in this file -- would
+// enter the (then wider) window too and falsely fire; #0347's review
+// (bounce 1, B1 part 3) measured exactly this false positive before the
+// scoping existed. Reading the real file, rather than a copy, means a
+// future edit to store.go's own comment is checked against the real trade
+// rather than a fixture that can drift out of sync with it.
 func TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping(t *testing.T) {
 	const path = "store.go"
 	src, err := os.ReadFile(path)
@@ -1952,7 +1962,7 @@ func TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping(t *testing
 	}
 	for _, f := range findings {
 		if f.axis == "directional" && (f.ident == "ClaimRow" || f.ident == "SelectDue") {
-			t.Fatalf("store.go's real ClaimRow parenthetical comment must produce zero directional findings for ClaimRow/SelectDue -- the paren-scoping trade this test pins is broken; got: %+v", f)
+			t.Fatalf("store.go's real ClaimRow parenthetical comment must produce zero directional findings for both ClaimRow (excluded from the window by paren scoping, #0382) and SelectDue (inside the window, resolves genuinely) -- one of those two now fires and the trade this test pins is broken; got: %+v", f)
 		}
 	}
 }

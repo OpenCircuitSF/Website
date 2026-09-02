@@ -934,35 +934,66 @@ func TestOutbox_OrphanSweep_Unscoped_SweepsAcrossKinds(t *testing.T) {
 	}
 }
 
+// TestOutbox_Counts proves Counts partitions rows by status correctly: a
+// row that stays queued is counted under Queued, and a row that is claimed
+// and marked sent is counted under Sent. Measured as a delta around this
+// test's own two rows, each scoped to its own kind unique to this test run
+// (distinctKind's doc comment, #0285), so the assertion is about rows this
+// test itself created rather than whatever an earlier test in this package
+// happened to leave behind.
+//
+// #0386 -- the previous version enqueued both rows under the same real
+// Kind, then called ClaimDue(ctx, 10, AllKinds), which claims every due row
+// up to its limit -- both of them, not just the one this test went on to
+// mark sent. That left nothing queued from this test's own rows, so
+// `counts.Queued >= 1` only ever passed because an EARLIER test in this
+// package leaves queued rows behind: run alone
+// (`go test ./internal/outbox/ -run '^TestOutbox_Counts$'`) it failed with
+// `Queued = 0, want at least 1`. This version claims only the row bound for
+// Sent -- scoped to ITS OWN distinct kind, so ClaimDue cannot touch the row
+// left queued -- and asserts a delta on each side rather than an absolute
+// floor, so it needs no residue from any other test to pass.
 func TestOutbox_Counts(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	ctx := context.Background()
 
-	queuedID, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: uniqueRecipient(t)})
+	before, err := store.Counts(ctx)
+	if err != nil {
+		t.Fatalf("Counts (before): %v", err)
+	}
+
+	queuedKind := distinctKind(t)
+	queuedID, err := store.Enqueue(ctx, Item{Kind: queuedKind, Recipient: uniqueRecipient(t)})
 	if err != nil {
 		t.Fatalf("Enqueue queued: %v", err)
 	}
-	sentID, err := store.Enqueue(ctx, Item{Kind: KindConfirmation, Recipient: uniqueRecipient(t)})
+
+	sentKind := distinctKind(t)
+	sentID, err := store.Enqueue(ctx, Item{Kind: sentKind, Recipient: uniqueRecipient(t)})
 	if err != nil {
 		t.Fatalf("Enqueue sent: %v", err)
 	}
-	if _, err := store.ClaimDue(ctx, 10, AllKinds); err != nil {
+	claimed, err := store.ClaimDue(ctx, 10, []Kind{sentKind})
+	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].ID != sentID {
+		t.Fatalf("ClaimDue([]Kind{sentKind}) claimed %v, want exactly the one row just enqueued for sentKind (%d) -- claiming the queuedKind row too would leave this test unable to tell which row its own Queued delta is measuring", claimed, sentID)
 	}
 	if _, err := store.MarkSent(ctx, sentID, "msg-id"); err != nil {
 		t.Fatalf("MarkSent: %v", err)
 	}
 
-	counts, err := store.Counts(ctx)
+	after, err := store.Counts(ctx)
 	if err != nil {
-		t.Fatalf("Counts: %v", err)
+		t.Fatalf("Counts (after): %v", err)
 	}
-	if counts.Queued < 1 {
-		t.Fatalf("Queued = %d, want at least 1 (id %d)", counts.Queued, queuedID)
+	if after.Queued != before.Queued+1 {
+		t.Fatalf("Queued = %d, want %d (before %d + the one row, id %d, left queued and never claimed)", after.Queued, before.Queued+1, before.Queued, queuedID)
 	}
-	if counts.Sent < 1 {
-		t.Fatalf("Sent = %d, want at least 1", counts.Sent)
+	if after.Sent != before.Sent+1 {
+		t.Fatalf("Sent = %d, want %d (before %d + the one row, id %d, claimed and marked sent)", after.Sent, before.Sent+1, before.Sent, sentID)
 	}
 }
 
