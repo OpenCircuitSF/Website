@@ -166,6 +166,45 @@ describe('Dashboard — populated payload', () => {
   });
 });
 
+describe('Dashboard — outbound queue skipped figure (#0380)', () => {
+  // jsdom mount (CLAUDE.md §1: not a browser) — proves the STRUCTURAL claim
+  // that `skipped` renders as a plain stat-list item alongside its
+  // siblings, with none of the "Needs attention" section's alert styling,
+  // and that a nonzero skipped figure does not itself cause any warning
+  // row to appear. It does not prove anything about real-browser layout.
+  it('renders the skipped figure as informational text, not an alert, and raises no warning', async () => {
+    const overview = populatedOverview();
+    overview.outbound_queue = {
+      queued: 2,
+      sending: 0,
+      sent: 40,
+      abandoned: 1,
+      oldest_queued_age_seconds: 30,
+      abandoned_confirmations: 1,
+      skipped: 3,
+    };
+    // #0378/#0380: a skipped row must never flip this warning — isolate
+    // that from the OTHER alert warnings this fixture already carries
+    // (complaint rate, physical address, SES sandbox) so this test's
+    // assertion is specifically about outbound_queue_abandoned.
+    overview.warnings = { ...overview.warnings, outbound_queue_abandoned: false };
+    getOverview.mockResolvedValue(overview);
+    render(Dashboard, { props: { onOpenCampaign: vi.fn() } });
+
+    const skippedItem = await waitFor(() => screen.getByText('3 skipped'));
+    expect(skippedItem.tagName).toBe('LI');
+    expect(skippedItem.classList.contains('alert')).toBe(false);
+
+    // The "Needs attention" region carries only the OTHER warnings this
+    // fixture sets (address/SES/complaint-rate) — nothing naming the
+    // outbound queue or a skip.
+    const warningsRegion = screen.getByText('Needs attention').closest('.warnings');
+    expect(warningsRegion).toBeTruthy();
+    expect(warningsRegion?.textContent).not.toMatch(/skipped/i);
+    expect(warningsRegion?.textContent).not.toMatch(/outbound queue/i);
+  });
+});
+
 describe('Dashboard — SSE lifecycle', () => {
   it('subscribes to campaign.progress on mount and unsubscribes on unmount', async () => {
     getOverview.mockResolvedValue(emptyOverview());

@@ -202,11 +202,29 @@ type Row struct {
 }
 
 // Counts is the queue-depth summary #0061's admin overview reads.
+//
+// Skipped (#0380) is the 'skipped' terminal state's own figure — deliberately
+// informational rather than a delivery-health signal: unlike Abandoned, a
+// skipped row is a message the system correctly withheld (see MarkSkipped's
+// and CancelQueuedTx's doc comments), so nothing in internal/handlers keys
+// any warning off it. Adding it here does not change what Abandoned counts
+// or what raises the outbound-queue-abandoned warning — that logic still
+// reads only Abandoned.
+//
+// Failed is deliberately NOT counted here (#0380 criterion 3, decided
+// explicitly): StatusFailed is reserved and unused — grep confirms no
+// producer in this codebase ever sets outbound_queue.status = 'failed' — so
+// a Failed field would report a permanent zero with nothing able to
+// exercise it, and would predetermine how a future "failed" terminal state
+// ought to be counted/alerted before that state's own issue defines what it
+// means. That decision belongs to whichever future issue gives 'failed' its
+// first producer.
 type Counts struct {
 	Queued              int64
 	Sending             int64
 	Sent                int64
 	Abandoned           int64
+	Skipped             int64
 	OldestQueuedAgeSecs int64 // 0 when Queued == 0
 }
 
@@ -699,13 +717,28 @@ func (s *Store) MarkDone(ctx context.Context, id int64) (bool, error) {
 }
 
 // CancelQueuedTx marks any STILL-QUEUED row for (subscriberID, kind) as
-// 'abandoned' — for a later event that supersedes a message before it has
-// even been claimed for sending (#0313: a pending import invitation
-// superseded by that same address's self-initiated signup on the public
-// form). Takes a Querier, not *pgxpool.Pool directly, so a caller that must
-// commit or roll back atomically with the event that caused the
-// cancellation (internal/subscribers.Store.ClaimAndEnqueueConfirmation) can
-// pass its own transaction — the same reason EnqueueTx above is Querier-shaped.
+// 'skipped' (#0378; was 'abandoned' when this method was added by #0313) —
+// for a later event that supersedes a message before it has even been
+// claimed for sending (#0313: a pending import invitation superseded by
+// that same address's self-initiated signup on the public form). Takes a
+// Querier, not *pgxpool.Pool directly, so a caller that must commit or roll
+// back atomically with the event that caused the cancellation
+// (internal/subscribers.Store.ClaimAndEnqueueConfirmation) can pass its own
+// transaction — the same reason EnqueueTx above is Querier-shaped.
+//
+// Deliberately NOT 'abandoned': #0365's plan (§3.2, "the conflation has two
+// live consumers and one user-visible symptom") found 'abandoned' is a
+// delivery-health signal with three live readers —
+// internal/handlers/admin_dashboard.go's AbandonedCountByKind(KindConfirmation)
+// (abandoned_confirmations), that same file's counts.Abandoned > 0 raising
+// the outbound-queue-abandoned dashboard warning (terminal, never cleared —
+// one correctly-cancelled invite would raise a permanent false alarm), and
+// web/src/lib/pending.ts's queueStateBadgeClass giving ONLY 'abandoned' the
+// danger badge — none of which reads error, so error alone cannot
+// disambiguate a deliberate cancellation from a genuine delivery failure.
+// See MarkSkipped's own doc comment for the same analysis in more detail;
+// this method now shares that terminal state and its rationale rather than
+// duplicating a second one.
 //
 // Matches status = 'queued' ONLY:
 //
@@ -716,14 +749,12 @@ func (s *Store) MarkDone(ctx context.Context, id int64) (bool, error) {
 //   - 'sent' has already left; there is nothing to cancel.
 //
 // error is set to reason so `outbound_queue.error` explains why this row
-// was never even attempted — distinct from a row abandoned after
-// exhausting MarkRetryOrAbandon's retries, which keeps whatever failure it
-// last hit. payload is blanked to '{}'::jsonb, the same treatment MarkSent
-// gives a row whose secret (here, a confirm_token) no longer needs to sit
-// in this table — the row IS the diagnostic; the token inside it is not.
-// claimed_at is cleared for the same reason MarkDone clears it: a
-// cancelled row was never claimed by a worker, so nothing should read it as
-// if it had been.
+// was never even attempted. payload is blanked to '{}'::jsonb, the same
+// treatment MarkSent gives a row whose secret (here, a confirm_token) no
+// longer needs to sit in this table — the row IS the diagnostic; the token
+// inside it is not. claimed_at is cleared for the same reason MarkDone
+// clears it: a cancelled row was never claimed by a worker, so nothing
+// should read it as if it had been.
 //
 // Returns the number of rows affected — 0 or 1 for the caller's one
 // (subscriber, kind) pair, since #0126's queue rows are never batched by
@@ -735,7 +766,7 @@ func (s *Store) CancelQueuedTx(ctx context.Context, q Querier, subscriberID int6
 		`UPDATE outbound_queue
 		    SET status = $4, error = $5, claimed_at = NULL, payload = '{}'::jsonb
 		  WHERE subscriber_id = $1 AND kind = $2 AND status = $3`,
-		subscriberID, kind, StatusQueued, StatusAbandoned, reason,
+		subscriberID, kind, StatusQueued, StatusSkipped, reason,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("outbox: cancelling queued %s rows for subscriber %d: %w", kind, subscriberID, err)
@@ -922,10 +953,11 @@ func (s *Store) Counts(ctx context.Context) (Counts, error) {
 		    count(*) FILTER (WHERE status = $2),
 		    count(*) FILTER (WHERE status = $3),
 		    count(*) FILTER (WHERE status = $4),
+		    count(*) FILTER (WHERE status = $5),
 		    extract(epoch FROM now() - min(created_at) FILTER (WHERE status = $1))
 		 FROM outbound_queue`,
-		StatusQueued, StatusSending, StatusSent, StatusAbandoned,
-	).Scan(&c.Queued, &c.Sending, &c.Sent, &c.Abandoned, &oldestSecs)
+		StatusQueued, StatusSending, StatusSent, StatusAbandoned, StatusSkipped,
+	).Scan(&c.Queued, &c.Sending, &c.Sent, &c.Abandoned, &c.Skipped, &oldestSecs)
 	if err != nil {
 		return Counts{}, fmt.Errorf("outbox: counting: %w", err)
 	}

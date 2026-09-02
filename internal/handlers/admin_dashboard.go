@@ -280,6 +280,14 @@ type dashboardOutboundQueueView struct {
 	// above mixes in every other outbound_queue kind (welcome,
 	// registration, recovery, ...).
 	AbandonedConfirmations int64 `json:"abandoned_confirmations"`
+	// Skipped (#0380) is purely informational, deliberately reported
+	// alongside Abandoned rather than folded into it: a skipped row is a
+	// message the system correctly withheld at send time (#0365's sendGate
+	// — a subscriber's status changed, address got suppressed, or its
+	// email drifted — or #0378's CancelQueuedTx superseding a queued
+	// invitation), not a delivery failure. No warning below keys off this
+	// figure; only Abandoned feeds OutboundQueueAbandoned.
+	Skipped int64 `json:"skipped"`
 }
 
 type dashboardOverviewResponse struct {
@@ -366,7 +374,10 @@ func (h *AdminDashboardHandler) Overview(w http.ResponseWriter, r *http.Request)
 			Abandoned:              counts.Abandoned,
 			OldestQueuedAgeSecs:    counts.OldestQueuedAgeSecs,
 			AbandonedConfirmations: abandonedConfirmations,
+			Skipped:                counts.Skipped,
 		}
+		// #0380: skipped rows raise no warning, deliberately — only
+		// Abandoned feeds the outbound-queue-abandoned signal below.
 		outboundQueueAbandoned = counts.Abandoned > 0
 	}
 

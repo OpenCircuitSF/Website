@@ -1120,8 +1120,8 @@ func TestSubscribe_PendingInvitedRow_SendsGenericConfirmation(t *testing.T) {
 	if inviteRows != 1 {
 		t.Errorf("import_invite rows for %q = %d, want exactly 1 (the original only, never a second)", email, inviteRows)
 	}
-	if inviteStatus != "abandoned" {
-		t.Errorf("the original invitation's status = %q, want %q (cancelled by the conversion, #0313 step 2)", inviteStatus, "abandoned")
+	if inviteStatus != "skipped" {
+		t.Errorf("the original invitation's status = %q, want %q (cancelled by the conversion, #0313 step 2; skipped rather than abandoned since #0378)", inviteStatus, "skipped")
 	}
 	if strings.Contains(confirmationPayload, "source_detail") {
 		t.Errorf("the enqueued confirmation payload %s carries source_detail — that field only ever appears on an import_invite payload", confirmationPayload)
@@ -1130,9 +1130,10 @@ func TestSubscribe_PendingInvitedRow_SendsGenericConfirmation(t *testing.T) {
 
 // TestSubscribe_PendingInvitedRow_CancelsQueuedInvitation is #0313's
 // queued-invitation cleanup: the ORIGINAL invitation ImportStore.Commit
-// enqueued must be cancelled (abandoned), not left to sit in the queue and
-// eventually mail a self-initiated signer the "we got your address from an
-// import" sentence about an address they typed in themselves.
+// enqueued must be cancelled (skipped, since #0378 — was abandoned when
+// #0313 added CancelQueuedTx), not left to sit in the queue and eventually
+// mail a self-initiated signer the "we got your address from an import"
+// sentence about an address they typed in themselves.
 //
 // Mutation M3 (#0313's plan): remove the CancelQueuedTx call. Must fail.
 func TestSubscribe_PendingInvitedRow_CancelsQueuedInvitation(t *testing.T) {
@@ -1168,8 +1169,8 @@ func TestSubscribe_PendingInvitedRow_CancelsQueuedInvitation(t *testing.T) {
 	).Scan(&afterStatus, &afterError); err != nil {
 		t.Fatalf("reading the original invitation row after takeover: %v", err)
 	}
-	if afterStatus != "abandoned" {
-		t.Errorf("original invitation status after the public takeover = %q, want %q", afterStatus, "abandoned")
+	if afterStatus != "skipped" {
+		t.Errorf("original invitation status after the public takeover = %q, want %q (#0378: not %q — that state is a delivery-health signal with three readers, none of which read error)", afterStatus, "skipped", "abandoned")
 	}
 	if afterError == nil || *afterError == "" {
 		t.Error("original invitation row's error is empty after being cancelled, want a reason recorded")

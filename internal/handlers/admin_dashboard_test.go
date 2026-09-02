@@ -81,6 +81,7 @@ type decodedDashboard struct {
 		Abandoned              int64 `json:"abandoned"`
 		OldestQueuedAgeSecs    int64 `json:"oldest_queued_age_seconds"`
 		AbandonedConfirmations int64 `json:"abandoned_confirmations"`
+		Skipped                int64 `json:"skipped"`
 	} `json:"outbound_queue"`
 	Warnings struct {
 		ComplaintRateHigh      bool     `json:"complaint_rate_high"`
@@ -427,6 +428,94 @@ func TestAdminDashboardOverview_Warnings(t *testing.T) {
 			t.Error("ses_sandbox_active = true, want false (constructed with sesSandbox=false)")
 		}
 	})
+}
+
+// TestAdminDashboardOverview_CancelledInviteSkippedRaisesNoWarning is
+// #0378's and #0380's shared proof, seeded through the REAL production
+// path rather than a synthetic status write: a pending import invitation
+// that its own invitee converts by signing up on the public form (#0313's
+// "self-initiated signup" — subscribers.Store.ClaimAndEnqueueConfirmation's
+// converting branch, which calls outbox.Store.CancelQueuedTx on the
+// still-queued invitation).
+//
+// #0378: before #0378's fix, CancelQueuedTx routed that cancellation
+// through StatusAbandoned — a delivery-health signal with three live
+// readers (admin_dashboard.go's AbandonedCountByKind and
+// outbound-queue-abandoned warning, pending.ts's badge-danger state), none
+// of which read the `error` column CancelQueuedTx sets as a disambiguator.
+// This test proves the dashboard's Abandoned figure and its warning are
+// both UNCHANGED by the cancellation — measured as a delta immediately
+// around the one action, not an absolute "false", because this package's
+// shared test database is never truncated between tests (a genuinely
+// abandoned row from another test earlier in this run could already have
+// set the warning true; what must hold regardless is that THIS action adds
+// nothing to it).
+//
+// #0380: the same cancelled row is also this test's proof that Counts (and
+// this response's `skipped` figure) counts a 'skipped' row — Skipped moves
+// by exactly +1 for the one row this test cancels.
+func TestAdminDashboardOverview_CancelledInviteSkippedRaisesNoWarning(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	admin := seedAdmin(t, pool, "dashboard-cancel-invite-admin@example.com")
+	seedSession(t, pool, admin, "dashboard-cancel-invite-admin-token")
+
+	srv := httptest.NewServer(adminDashboardMux(pool, false))
+	defer srv.Close()
+
+	email := subscribeUniqueEmail(t)
+	commitPublicTakeoverInvite(t, pool, email, "Intro to Soldering (dashboard warning test)")
+
+	before := getDashboard(t, srv.Client(), srv.URL+"/admin/overview", "dashboard-cancel-invite-admin-token")
+	if before.OutboundQueue == nil {
+		t.Fatal("outbound_queue is nil before the action, want a populated figure")
+	}
+
+	h, mux := subscribeMux(t, pool, nil)
+	resp := doSubscribe(t, h, mux, subscribeBody(email, []string{}, time.Now()))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+
+	// Ground truth, read directly: the original invitation row must be
+	// 'skipped', never 'abandoned'.
+	var rowStatus string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT status FROM outbound_queue WHERE recipient = $1 AND kind = 'import_invite'`, email,
+	).Scan(&rowStatus); err != nil {
+		t.Fatalf("reading the original invitation row: %v", err)
+	}
+	if rowStatus != "skipped" {
+		t.Fatalf("original invitation status = %q, want %q", rowStatus, "skipped")
+	}
+
+	after := getDashboard(t, srv.Client(), srv.URL+"/admin/overview", "dashboard-cancel-invite-admin-token")
+	if after.OutboundQueue == nil {
+		t.Fatal("outbound_queue is nil after the action")
+	}
+
+	// #0378: the cancellation must not move Abandoned or its warning at all.
+	if after.OutboundQueue.Abandoned != before.OutboundQueue.Abandoned {
+		t.Errorf("Abandoned moved from %d to %d after a cancelled (skipped) invite — CancelQueuedTx must not raise the delivery-health signal",
+			before.OutboundQueue.Abandoned, after.OutboundQueue.Abandoned)
+	}
+	if after.Warnings.OutboundQueueAbandoned != before.Warnings.OutboundQueueAbandoned {
+		t.Errorf("outbound_queue_abandoned warning changed from %v to %v after a cancelled (skipped) invite, want unchanged",
+			before.Warnings.OutboundQueueAbandoned, after.Warnings.OutboundQueueAbandoned)
+	}
+	// The literal acceptance-criterion framing also holds whenever this
+	// test happens to run before any test in this package has genuinely
+	// abandoned a row (true today: this test precedes
+	// TestAdminDashboardOverview_OutboundQueue in file order, and this
+	// package runs its tests serially — no t.Parallel() anywhere in it).
+	if !before.Warnings.OutboundQueueAbandoned && after.Warnings.OutboundQueueAbandoned {
+		t.Error("outbound_queue_abandoned = true after a correctly-cancelled invite, want it to stay absent")
+	}
+
+	// #0380: Skipped counts the row this test just produced.
+	if after.OutboundQueue.Skipped != before.OutboundQueue.Skipped+1 {
+		t.Errorf("Skipped = %d, want %d (before %d + the one row this test cancelled)",
+			after.OutboundQueue.Skipped, before.OutboundQueue.Skipped+1, before.OutboundQueue.Skipped)
+	}
 }
 
 // TestAdminDashboardOverview_OutboundQueue is #0126's proof: the overview

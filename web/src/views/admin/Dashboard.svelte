@@ -208,6 +208,11 @@
         <li>{oq.queued.toLocaleString()} queued</li>
         <li>{oq.sending.toLocaleString()} sending</li>
         <li>{oq.sent.toLocaleString()} sent</li>
+        <!-- #0380: informational, not a failure — deliberately plain text
+             like its siblings above, with none of the "Needs attention"
+             section's alert styling, since a skipped row is a message the
+             system correctly withheld. -->
+        <li>{oq.skipped.toLocaleString()} skipped</li>
         <li>{oq.abandoned.toLocaleString()} abandoned</li>
         <li>{oq.abandoned_confirmations.toLocaleString()} abandoned confirmations</li>
       </ul>

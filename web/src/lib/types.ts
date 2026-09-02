@@ -653,6 +653,8 @@ export interface DashboardOutboundQueue {
   oldest_queued_age_seconds: number;
   /** abandoned's kind=confirmation subset (#0128) — how many pending signups never got a confirmation delivered, as opposed to abandoned's account-wide total across every kind. */
   abandoned_confirmations: number;
+  /** How many outbound_queue rows reached the terminal 'skipped' state (#0380) — a message the system correctly withheld (subscriber status changed, address suppressed, or email drifted; or a queued send superseded before it was claimed). Purely informational: unlike abandoned, nothing in warnings keys off this figure. */
+  skipped: number;
 }
 
 export interface DashboardSubscriberCounts {

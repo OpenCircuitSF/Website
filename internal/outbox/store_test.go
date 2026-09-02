@@ -966,6 +966,60 @@ func TestOutbox_Counts(t *testing.T) {
 	}
 }
 
+// TestOutbox_Counts_ReportsSkippedDistinctlyFromAbandoned is #0380's proof:
+// Counts reports the 'skipped' terminal state as its own figure, and a
+// MarkSkipped call moves Skipped without moving Abandoned — the whole point
+// being that a skip is a correct outcome, not folded into the
+// delivery-health figure. Measured as a delta around the one MarkSkipped
+// call this test makes, matching TestOutbox_AbandonedCountByKind_ScopedToKind's
+// own before/after idiom (this package's outbound_queue table is truncated
+// once in TestMain, not between tests, so absolute counts are not scoped to
+// this test alone).
+func TestOutbox_Counts_ReportsSkippedDistinctlyFromAbandoned(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	kind := distinctKind(t)
+
+	before, err := store.Counts(ctx)
+	if err != nil {
+		t.Fatalf("Counts (before): %v", err)
+	}
+
+	id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	rows, err := store.ClaimDue(ctx, 10, []Kind{kind})
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != id {
+		t.Fatalf("ClaimDue claimed %v, want exactly the one row just enqueued (%d)", rows, id)
+	}
+	done, err := store.MarkSkipped(ctx, id, "test: eligibility recheck declined")
+	if err != nil {
+		t.Fatalf("MarkSkipped: %v", err)
+	}
+	if !done {
+		t.Fatalf("MarkSkipped reported done=false for a freshly-claimed row")
+	}
+
+	after, err := store.Counts(ctx)
+	if err != nil {
+		t.Fatalf("Counts (after): %v", err)
+	}
+	if after.Skipped != before.Skipped+1 {
+		t.Errorf("Skipped = %d, want %d (before %d + the one row just skipped)", after.Skipped, before.Skipped+1, before.Skipped)
+	}
+	if after.Abandoned != before.Abandoned {
+		t.Errorf("Abandoned moved from %d to %d after a MarkSkipped call — a skip must never count as a delivery-health failure", before.Abandoned, after.Abandoned)
+	}
+	if after.Sent != before.Sent {
+		t.Errorf("Sent moved from %d to %d after a MarkSkipped call, want unchanged", before.Sent, after.Sent)
+	}
+}
+
 // TestOutbox_LatestByRecipients_ReturnsMostRecentPerRecipient is #0128's
 // proof: for a recipient with more than one outbound_queue row of the same
 // kind, LatestByRecipients returns the MOST RECENT one (by created_at), not
