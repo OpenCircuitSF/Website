@@ -1676,13 +1676,23 @@ func TestOutboxWorker_SkipsAlreadySubscribedForComplainedSubscriber(t *testing.T
 }
 
 // TestOutboxWorker_SendsRegistrationToSuppressedAddress is the ungated
-// half: auth mail is not blocked by list suppression. Regression risk if
-// someone later "simplifies" the gate to cover all kinds — CLAUDE.md §9's
-// "complained subscribers never auto-resubscribe" is about LIST mail, and
-// this worker's registration kind reaches a users row, not a subscribers
-// row (Row.SubscriberID is always nil for it in production, see
-// gatedKinds' doc comment) — an admin whose personal address happens to
-// carry a suppression must still be able to complete registration.
+// half, end to end: auth mail is not blocked by list suppression.
+// CLAUDE.md §9's "complained subscribers never auto-resubscribe" is about
+// LIST mail, and this worker's registration kind reaches a users row, not
+// a subscribers row (Row.SubscriberID is always nil for it in production —
+// verified across every producer in internal/auth, see gatedKinds' doc
+// comment), so an admin whose personal address happens to carry a
+// suppression must still be able to complete registration.
+//
+// NOT a regression guard for "someone moves registration into gatedKinds"
+// — corrected by #0365's review, which measured it. Because a registration
+// row's SubscriberID is nil, sendGate's nil-SubscriberID fail-open returns
+// send-anyway BEFORE any map lookup can matter, so this test stays green
+// with KindRegistration moved into gatedKinds (mutation-checked). The
+// mutation that actually catches that is
+// TestOutboxWorker_SendGate_UngatedKindsNeverSkip, below, which drives
+// sendGate directly with a non-nil SubscriberID so the map decision is the
+// only thing under test.
 func TestOutboxWorker_SendsRegistrationToSuppressedAddress(t *testing.T) {
 	pool := outboxTestPool(t)
 	mailer := &RecordingMailer{}
@@ -1868,6 +1878,148 @@ func TestGatedKindsPartitionEveryMailKind(t *testing.T) {
 	for k := range ungatedKinds {
 		if !inMailKinds[k] {
 			t.Errorf("ungatedKinds names outbox.Kind %q, which is not in mailKinds", k)
+		}
+	}
+}
+
+// TestOutboxWorker_SkipsWhenRecipientDiffersFromLiveEmail pins #0365's
+// THIRD predicate — the live-email drift check copied from
+// RecheckEligibleTx (audience.go) — which shipped with no test of its own
+// (#0365's review; deleting `case elig.Email != row.Recipient` from
+// sendGate left the whole suite green).
+//
+// The predicate exists so a suppression/status check is never evaluated
+// against one address while the message goes to another: here the
+// subscriber is 'active' and unsuppressed, so status and suppression both
+// say "send" and ONLY the drift predicate can stop it.
+func TestOutboxWorker_SkipsWhenRecipientDiffersFromLiveEmail(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+	subStore := subscribers.NewStore(pool)
+
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: uniqueOutboxRecipient(t), ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sub.ConfirmToken == nil {
+		t.Fatal("Create returned a subscriber with no confirm_token")
+	}
+	if _, err := subStore.Confirm(context.Background(), *sub.ConfirmToken, time.Now()); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	// Confirm activates the subscriber, so delete it before any
+	// AudienceAll-scoped test elsewhere in this package's SHARED database
+	// can observe it — the same pattern
+	// TestOutboxWorker_MarkSent_RecordsWelcomeSent uses.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, sub.ID)
+	})
+
+	// The queue row names a DIFFERENT address than the live
+	// subscribers.email it carries a subscriber_id for.
+	other := uniqueOutboxRecipient(t)
+	subID := sub.ID
+	id, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:         outbox.KindWelcome,
+		Recipient:    other,
+		SubscriberID: &subID,
+		Payload: map[string]any{
+			"manage_token":   sub.ManageToken,
+			"interest_names": []string{"Soldering"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	status := waitForQueueStatus(t, pool, id)
+	if status != outbox.StatusSkipped {
+		t.Fatalf("status = %q after waiting, want %q — a row whose recipient is not the live subscribers.email must be skipped", status, outbox.StatusSkipped)
+	}
+	if got := sentTo(mailer, other); got != 0 {
+		t.Fatalf("messages sent to %s = %d, want 0 — mail must never go to an address the eligibility check never evaluated", other, got)
+	}
+}
+
+// TestOutboxWorker_SendGate_UngatedKindsNeverSkip pins the
+// gatedKinds/ungatedKinds MEMBERSHIP decision itself, which
+// TestOutboxWorker_SendsRegistrationToSuppressedAddress does not (see that
+// test's own corrected doc comment): it drives sendGate directly with a
+// NON-nil SubscriberID, so the nil-SubscriberID fail-open cannot mask the
+// map lookup, and every ungated kind must still report skip=false against
+// a subscriber that is both 'complained' AND suppressed — the worst state
+// an address can be in.
+//
+// The gated control arm is what makes this falsifiable rather than
+// vacuous: the SAME subscriber must produce skip=true for a gated kind, so
+// a fixture that had silently stopped being ineligible would fail here
+// rather than passing every ungated assertion for the wrong reason.
+//
+// What this DOES catch, measured rather than asserted (#0365's review):
+// sendGate losing its `if !gated { return }` early return — the literal
+// "someone simplifies the gate to cover all kinds" regression — fails here
+// naming all five ungated kinds.
+//
+// What it does NOT catch, and what no in-package test can: a kind
+// DELIBERATELY moved from ungatedKinds into gatedKinds. This test iterates
+// ungatedKinds, so such a move removes the kind from the test's own inputs
+// — CLAUDE.md §8's "a guard's oracle must not be the same bytes as its
+// subject". That is a policy change rather than silent drift, and the
+// protection for it is ungatedKinds' written reason plus review.
+// TestGatedKindsPartitionEveryMailKind covers the silent case (a kind in
+// NEITHER map), which is the gap that can actually open by accident.
+func TestOutboxWorker_SendGate_UngatedKindsNeverSkip(t *testing.T) {
+	pool := outboxTestPool(t)
+	mailer := &RecordingMailer{}
+	w, _ := newTestOutboxWorker(t, pool, mailer)
+	subStore := subscribers.NewStore(pool)
+	suppStore := subscribers.NewSuppressionStore(pool)
+
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: uniqueOutboxRecipient(t), ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := subStore.MarkComplained(context.Background(), sub.ID, time.Now()); err != nil {
+		t.Fatalf("MarkComplained: %v", err)
+	}
+	if _, err := suppStore.Add(context.Background(), subscribers.NewSuppression{
+		Email: sub.Email, Reason: subscribers.SuppressionReasonManual,
+	}, time.Now()); err != nil {
+		t.Fatalf("Add suppression: %v", err)
+	}
+
+	subID := sub.ID
+	row := func(kind outbox.Kind) outbox.Row {
+		return outbox.Row{ID: 1, Kind: kind, Recipient: sub.Email, SubscriberID: &subID}
+	}
+
+	// Control: a GATED kind against this same subscriber must skip. If
+	// this arm ever stops failing the send, every assertion below is
+	// vacuous.
+	skip, _, err := w.sendGate(context.Background(), row(outbox.KindConfirmation))
+	if err != nil {
+		t.Fatalf("sendGate (gated control): %v", err)
+	}
+	if !skip {
+		t.Fatalf("sendGate reported skip=false for a GATED kind against a complained+suppressed subscriber — the fixture is not producing an ineligible subscriber, so this test's ungated assertions prove nothing")
+	}
+
+	for kind := range ungatedKinds {
+		skip, reason, err := w.sendGate(context.Background(), row(kind))
+		if err != nil {
+			t.Errorf("sendGate(%q): %v", kind, err)
+			continue
+		}
+		if skip {
+			t.Errorf("sendGate(%q) reported skip=true (%q) — %q is in ungatedKinds and must never be withheld on list state; gating auth/staff mail on a marketing suppression is an availability failure introduced by a safety feature (#0365's plan §2)", kind, reason, kind)
 		}
 	}
 }
