@@ -147,6 +147,13 @@ func importHTTPEmail(t *testing.T) string {
 // routes at this handler-local mux — the authoritative real-mux proof lives
 // in cmd/opencircuit/admin_wiring_test.go, matching every other admin
 // handler suite's convention.
+//
+// The revoke sub-assertion targets a nonexistent sentinel id, not a literal
+// small id (CLAUDE.md §8b — see #0376): RequireAdmin sits in the mux chain
+// ahead of the handler, so it fires before AdminImportsHandler.Revoke ever
+// parses the path or touches the store. A sentinel proves exactly that —
+// the guard discriminates before lookup — without a mutated guard's proof
+// being able to reach a real import row.
 func TestAdminImports_NonAdminForbidden(t *testing.T) {
 	pool := adminImportsTestPool(t)
 	srv := httptest.NewServer(adminImportsMux(pool))
@@ -169,7 +176,7 @@ func TestAdminImports_NonAdminForbidden(t *testing.T) {
 	}
 	resp2.Body.Close()
 
-	resp3 := doJSON(t, client, "POST", srv.URL+"/admin/imports/1/revoke", "user-token-imports", `{"reason":"x"}`)
+	resp3 := doJSON(t, client, "POST", srv.URL+"/admin/imports/999999999/revoke", "user-token-imports", `{"reason":"x"}`)
 	if resp3.StatusCode != http.StatusForbidden {
 		t.Errorf("revoke with non-admin session: status = %d, want 403", resp3.StatusCode)
 	}
@@ -460,6 +467,14 @@ func TestAdminImports_Revoke_UnsubscribesAndAudits(t *testing.T) {
 
 // TestAdminImports_Revoke_RequiresReason proves the JSON body's reason is
 // mandatory.
+//
+// Targets a nonexistent sentinel id, not a literal small id (CLAUDE.md §8b
+// — see #0376): AdminImportsHandler.Revoke checks req.Reason and returns
+// 400 (admin_subscribers_import.go, the `reason == ""` block) before it
+// ever calls h.store.Revoke, so the empty-reason check fires before lookup
+// regardless of whether the target id resolves to a real row. A sentinel
+// proves exactly that boundary; a mutated check's proof can never reach a
+// real import.
 func TestAdminImports_Revoke_RequiresReason(t *testing.T) {
 	pool := adminImportsTestPool(t)
 	srv := httptest.NewServer(adminImportsMux(pool))
@@ -468,7 +483,7 @@ func TestAdminImports_Revoke_RequiresReason(t *testing.T) {
 	seedSession(t, pool, admin, "admin-token-revoke-reason")
 	client := srv.Client()
 
-	resp := doJSON(t, client, "POST", srv.URL+"/admin/imports/1/revoke", "admin-token-revoke-reason", `{"reason":""}`)
+	resp := doJSON(t, client, "POST", srv.URL+"/admin/imports/999999999/revoke", "admin-token-revoke-reason", `{"reason":""}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		body := readBody(t, resp)

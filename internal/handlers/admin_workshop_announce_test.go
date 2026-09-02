@@ -274,6 +274,22 @@ func TestAdminWorkshopAnnounce_UnknownWorkshopNotFound(t *testing.T) {
 
 // TestAdminWorkshopAnnounce_NonAdminForbidden mirrors
 // TestAdminWorkshops_NonAdminForbidden's shape for the new route.
+//
+// Targets the same nonexistent sentinel id
+// TestAdminWorkshopAnnounce_UnknownWorkshopNotFound uses above, not a
+// literal small id (CLAUDE.md §8b — see #0376): RequireAdmin sits in the
+// mux chain ahead of AdminWorkshopsHandler.Announce, so it fires before the
+// handler ever calls h.store.GetByID. A sentinel proves the guard
+// discriminates before lookup. This also means a mutated-guard proof can
+// only ever reach the handler's own 404 path (workshops.ErrNotFound) — and
+// even for a *real* workshop id, Announce only ever calls
+// mailing.CampaignStore.Create, which inserts one draft email_campaigns row
+// and never calls Send or touches outbound_queue (see
+// admin_workshop_announce.go's package doc comment, "nothing here, or
+// anywhere in this file, ever calls Send"). So unlike #0372's
+// invite_resent_at hazard, this route was never capable of sending real
+// campaign email; the sentinel keeps the proof from creating even a
+// harmless draft row.
 func TestAdminWorkshopAnnounce_NonAdminForbidden(t *testing.T) {
 	pool := interestsTestPool(t)
 	srv := httptest.NewServer(adminWorkshopAnnounceMux(pool))
@@ -283,7 +299,7 @@ func TestAdminWorkshopAnnounce_NonAdminForbidden(t *testing.T) {
 	seedSession(t, pool, nonAdmin, "announce-nonadmin-token")
 
 	resp := doJSON(t, srv.Client(), http.MethodPost,
-		srv.URL+"/admin/workshops/1/announce", "announce-nonadmin-token", "")
+		srv.URL+"/admin/workshops/99999999/announce", "announce-nonadmin-token", "")
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("POST .../announce as non-admin status = %d, want 403", resp.StatusCode)
