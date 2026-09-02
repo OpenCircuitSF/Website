@@ -245,12 +245,23 @@ func TestAdminPending_List_SortOrder(t *testing.T) {
 
 // ── Resend ────────────────────────────────────────────────────────────────────
 
+// TestAdminPending_Resend_RequiresSession targets a throwaway seeded row's
+// own id, not a literal (#0372, CLAUDE.md §8b). A hardcoded
+// /admin/subscribers/1/... is harmless only while the 401 holds — mutating
+// the auth guard to prove this test discriminates would otherwise send a
+// real POST at whatever subscriber id 1 is on the target database, minting
+// it a fresh confirm token and re-enqueueing a real confirmation email. Its
+// ResendInvitation twin below has the sharper hazard (a write-once field),
+// but this endpoint's own side effect on a real row is unwanted too.
 func TestAdminPending_Resend_RequiresSession(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
 	srv := httptest.NewServer(adminPendingMux(pool))
 	defer srv.Close()
 
-	resp := doJSON(t, srv.Client(), "POST", srv.URL+"/admin/subscribers/1/resend-confirmation", "", "")
+	now := time.Now()
+	id, _ := seedPendingSubscriber(t, pool, now.Add(-2*time.Hour), now.Add(6*24*time.Hour))
+
+	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/subscribers/%d/resend-confirmation", srv.URL, id), "", "")
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}
@@ -474,12 +485,20 @@ type decodedResendInvitationResponse struct {
 	InviteResentAt   *string `json:"invite_resent_at"`
 }
 
+// TestAdminPending_ResendInvitation_RequiresSession targets a throwaway
+// seeded row's own id, not a literal (#0372, CLAUDE.md §8b). This is the
+// test #0367's review named as the hazard: invite_resent_at is write-once
+// (#0312) and never cleared, so mutating the auth guard against a literal
+// /admin/subscribers/1/... would permanently burn subscriber 1's one-ever
+// invite re-send on any database where that row exists.
 func TestAdminPending_ResendInvitation_RequiresSession(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
 	srv := httptest.NewServer(adminPendingMux(pool))
 	defer srv.Close()
 
-	resp := doJSON(t, srv.Client(), "POST", srv.URL+"/admin/subscribers/1/resend-invitation", "", "")
+	id, _ := seedInvitedPendingSubscriber(t, pool)
+
+	resp := doJSON(t, srv.Client(), "POST", fmt.Sprintf("%s/admin/subscribers/%d/resend-invitation", srv.URL, id), "", "")
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}

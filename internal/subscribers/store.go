@@ -1957,6 +1957,13 @@ var qualifiedSubscriberColumns = deriveQualifiedColumns(subscriberColumns, "subs
 // subscriberColumns itself (TestDeriveQualifiedColumns in store_test.go),
 // so that test's oracle is not a copy of subscriberColumns/
 // qualifiedSubscriberColumns sitting next to the question (CLAUDE.md §8).
+//
+// #0373: it does NOT handle a multi-argument wrapped call such as
+// coalesce(a, b) — the naive split on "," cuts through the inner comma and
+// mis-derives it, which fails loudly rather than silently: Postgres rejects
+// the resulting malformed SQL with a syntax error, caught at test time by
+// TestList_And_GetByID_ScanSubscriberColumnOrderRoundTrip. subscriberColumns
+// has never contained such a call.
 func deriveQualifiedColumns(cols, table string) string {
 	parts := strings.Split(cols, ",")
 	out := make([]string, len(parts))
