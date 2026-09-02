@@ -272,19 +272,26 @@ scripts/db-reset.sh          # rebuild the local dev DB from migrations + seed a
 **Always set `ISSUE=NNNN`** — it gives the run its own database and is what
 lets two agents test concurrently (§5a).
 
-**A scoped run can miss a repo-wide guard's own package (`#0381`).** Four
-packages own guards whose scan roots reach beyond their own directory:
-`internal/handlers` (its citation-guard family — `citation_guard_test.go`,
-`citation_target_guard_test.go`, `dangling_test_citation_guard_test.go`,
-`line_citation_guard_test.go` — scanning `internal/`, `cmd/`, and `web/`),
-`internal/db` (`issue_citation_guard_test.go`, scanning the whole repo for
-issue-file citations of Go test functions), `internal/outbox`
-(`claim_kinds_call_site_guard_test.go`, scanning `internal/` and `cmd/`), and
-`internal/subscribers` (`events_append_only_guard_test.go`, scanning all of
-`internal/`). An edit to any file under one of those scan roots — for
-`internal/handlers`'s family, nearly every Go and Svelte file in the tree —
-must add that guard's owning package to the scoped run, not rely on the
-package you edited alone catching it.
+**A scoped run can miss a repo-wide guard's own package (`#0381`).** Seven
+packages own tests whose scan roots reach beyond their own directory, so an
+edit inside one of those roots must add that package to the scoped run:
+
+| Package | Reaches into |
+|---|---|
+| `internal/handlers` | `internal/`, `cmd/`, `web/` (the citation-guard family and the audit-metadata guard), plus `migrations/`, `testdata/`, and three `web/src/lib/*.ts` parity fixtures |
+| `internal/db` | the repo root — `issues/`, `PRD.md`, `CLAUDE.md`, `migrations/`, `docs/database.md` |
+| `internal/outbox` | `internal/` and `cmd/` (both the claim-kinds and claim-comment guards) |
+| `internal/subscribers` | all of `internal/` |
+| `internal/seo` | `web/index.html` and `web/dist/index.html` (`#0141`'s placeholder guard) |
+| `cmd/opencircuit` | every `internal/*` package `servePostgres` imports, parsed for `*seo.Site` flow |
+| `internal/mailing` | `internal/outbox` |
+
+Editing `PRD.md` or `CLAUDE.md` means running `internal/db`; editing
+`web/dist/index.html` means running `internal/seo`; editing a Go comment
+anywhere means running `internal/handlers`. `scripts/check.sh` is deliberately
+**not** widened to do this automatically — `internal/handlers` and
+`cmd/opencircuit` each cost ~8× a small package, and §5a's cheap scoped run is
+what makes three concurrent agents workable.
 
 > **`STORAGE=json` has no mailing list.** `internal/devstore` implements none
 > of interests, subscribers, campaigns, or suppressions, so `dev.sh`'s default
