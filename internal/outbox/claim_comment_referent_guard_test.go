@@ -1398,15 +1398,31 @@ func claimCommentGuardDiagnoseDirectional(src string, ident string) (claimCommen
 // half of. Verified by re-running that exact mutation (issue #0366's
 // ## Verification records the throwaway-worktree run): the table's own
 // go test output stayed 100% green under it, confirming the hole was real,
-// though `go test ./internal/outbox/...` as a whole was NOT green, because
+// though `go test ./internal/outbox/...` as a whole was NOT green. Three
+// other tests in this package fail under that mutation, and #0366's review
+// measured that they are NOT all of one kind:
+//
 // TestNoCommentClaimsClaimMachineryCallFileCodeLacks (the whole-tree scan,
-// which does not filter by identifier) and two fixture-pinned tests caught
-// the same mutation against real files already in the tree today. That is
-// not a reason to leave this table's own fixture-level story incomplete --
-// a future edit to those real files' comments could silently remove the
-// whole-tree scan's coverage of this exact trade while this table stayed
-// silent, which is precisely the risk a calibration table exists to retire
-// (see the "growing floor, not an inventory" framing in
+// which does not filter by identifier) and
+// TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping both
+// read real files from disk, so their catch is contingent on what those
+// files' comments happen to say today, and an unrelated comment edit could
+// silently remove it.
+//
+// TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7 does
+// not. It hands claimCommentGuardDirectionalStaleFixtureSrc and
+// claimCommentGuardDirectionalFixedFixtureSrc to findClaimCommentGuardFindings
+// as src, and go/parser never opens the named path when src is non-nil, so
+// that test reads no file at all -- it is a frozen db9bff7 snapshot held in
+// two consts in THIS file, as durable as a calibration row. Its "the fixed
+// fixture must be entirely clean" assertion is identifier-agnostic, which
+// is why it catches this mutation.
+//
+// So this table was not the only durable instrument that would have noticed
+// the mutation. It was the only place THIS ROW's own stated trade -- a
+// nearer, resolving OrphanSweep against a farther, unresolved ClaimDue --
+// was pinned at all, and that, not fragility of the other catchers, is the
+// gap option 1 closes (see the "growing floor, not an inventory" framing in
 // TestClaimCommentGuardDirectionalAxisCalibrationTable's own doc comment,
 // below).
 //
