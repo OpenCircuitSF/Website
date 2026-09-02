@@ -556,6 +556,50 @@ func claimCommentGuardSnippet(flat string, start, end int) string {
 // TRANSFORM as to two copies of an ASSERTION). Folded into one function both
 // call; behaviour-preserving, since it is textually the same expression
 // moved, not rewritten.
+//
+// #0374 (recorded, not closed -- CLAUDE.md §8's #0258 caution binds on this
+// file, six in-file mechanisms already, so a seventh is not the default
+// answer to a gap this cheap to state): the calibration table cannot detect
+// this function doing nothing. Every row in
+// claimCommentGuardDirectionalCalibrationCases is a SINGLE-LINE comment
+// fixture, so this function's body is a semantic no-op on all 24 of them --
+// replacing it with "return text" leaves not just the calibration table but
+// the WHOLE internal/outbox package green (measured, not the table alone).
+// Pre-existing, not introduced by the #0366 extraction: the identical
+// mutation applied to both of the pre-#0366 inline copies is equally green.
+// A fixture that discriminates would need a genuine multi-line comment --
+// new fixture surface of the #0330/#0347/#0356 "record, not close" shape
+// those three families ended by refusing.
+//
+// That gap is in the TABLE, not in the TREE -- this function is not dead
+// code. Measured directly: real, checked-in multi-line comments run through
+// it today and come out changed, not identical. Two examples, deliberately
+// PARAPHRASED rather than quoted -- #0347's own history records that
+// quoting a real defect sentence verbatim in a doc comment trips this
+// guard's directional axis against itself (rephrase, don't delete, is that
+// issue's own stated convention, and this file scans itself). store.go:463's
+// ClaimRow doc comment names a sibling identifier inside a trailing
+// parenthetical whose direction word sits alone at the start of the
+// following physical line (the parenthetical claimCommentGuardStoreGoParenSentinelRe,
+// below, is pinned against) -- joined, the two lines become one sentence.
+// internal/mailing/outbox_worker.go:475 -- the site #0342 corrected from a
+// misnamed identifier -- has the identical shape: the identifier ends one
+// physical line and the direction word that names its position starts the
+// next, and joining is what makes the two lines read as one claim about
+// where that identifier is. (#0342's own file does not say flattening was
+// how that site was originally found, so that causal claim is not repeated
+// here -- only the shape, which is verified against both files as they read
+// today.)
+//
+// One further check so this record does not overstate the other way: on
+// BOTH of those two real sites, `go test ./internal/outbox/...` as a WHOLE
+// -- not only the calibration table -- also stays green under the "return
+// text" mutation, because the window/regex computations downstream of this
+// function tolerate a bare "\n" much like a space for these two comments'
+// particular shapes. So: this function is not a no-op on real input, but no
+// test in this package would currently catch its removal via a real file
+// either. Both gaps are real, and neither is closed by this comment --
+// closing them is exactly the fixture-adding move this issue declined.
 func claimCommentGuardFlattenComment(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
@@ -1456,6 +1500,23 @@ type claimCommentGuardDirectionalCalibrationCase struct {
 	// every-distinct-identifier leaves secondIdent "" and this second check
 	// is skipped entirely; that row is the only one whose stated purpose is
 	// a second, distinct identifier's resolution.
+	//
+	// #0375 (recorded, not closed -- see #0374's doc comment above for why a
+	// seventh in-file check is not the default answer here either):
+	// wantSecondIdentFindings and wantSecondIdentReason are ONLY asserted
+	// when secondIdent is non-empty. A future row that sets
+	// wantSecondIdentFindings (and/or wantSecondIdentReason) while leaving
+	// secondIdent "" asserts NOTHING: the `if c.secondIdent != ""` guard in
+	// TestClaimCommentGuardDirectionalAxisCalibrationTable, below, skips the
+	// whole block, both fields go unread, and the row PASSES regardless of
+	// what they say. Measured, not assumed: a throwaway row with
+	// secondIdent: "" and wantSecondIdentFindings: 1 passes cleanly next to
+	// the 24 real rows. Latent today, not live -- no such row exists, and
+	// the one row that does set secondIdent has both of its assertions live
+	// (each independently fails under its own targeted mutation). If you add
+	// a row with a secondIdent pair, set secondIdent FIRST: an empty
+	// secondIdent here is not "no claim about a second identifier", it is a
+	// claim that silently goes unchecked.
 	secondIdent             string
 	wantSecondIdentFindings int
 	wantSecondIdentReason   claimCommentGuardDirectionalReason
