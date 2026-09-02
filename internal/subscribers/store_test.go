@@ -1662,6 +1662,68 @@ func TestClaimAndEnqueueAlreadySubscribed_ClaimsOnceThenCoolsDown(t *testing.T) 
 	}
 }
 
+// TestClaimAndEnqueueAlreadySubscribed_RefusesComplainedRow is #0379's
+// proof that ClaimAndEnqueueAlreadySubscribed now guards `status =
+// StatusActive` the way #0341 gave ClaimAndEnqueueConfirmation an
+// `AND status = 'pending'` guard. Before #0379's fix this method's WHERE
+// clause checked only the already_subscribed_sent_at cooldown, so a row
+// that had transitioned to complained between a caller's FindByEmail read
+// and this claim (e.g. an SES complaint landing mid-request) would still be
+// claimed and mailed an already-subscribed notice — this test fails on
+// that code (see this test's own oracle below) and passes once the WHERE
+// clause carries `AND status = $4` with StatusActive.
+//
+// The subscriber is seeded already status=complained rather than seeded
+// active and then transitioned, isolating the guard alone the same way
+// coldConfirmationSubscriberWithStatus does for its sibling: the only thing
+// that can make the claim lose is the status check, not an active cooldown
+// (already_subscribed_sent_at starts NULL either way).
+func TestClaimAndEnqueueAlreadySubscribed_RefusesComplainedRow(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	id := seedSubscriberWithStatus(t, pool, StatusComplained)
+	sub, err := store.GetByID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+
+	claimed, err := store.ClaimAndEnqueueAlreadySubscribed(ctx, sub, now, time.Hour)
+	if err != nil {
+		t.Fatalf("ClaimAndEnqueueAlreadySubscribed: %v", err)
+	}
+	if claimed {
+		t.Fatal("claimed = true for a status=complained row, want false (the status guard must refuse this claim)")
+	}
+
+	status, _ := readSubscriberByID(t, pool, id)
+	if status != StatusComplained {
+		t.Errorf("Status = %q after a refused claim, want unchanged %q", status, StatusComplained)
+	}
+
+	var alreadySubscribedSentAt *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT already_subscribed_sent_at FROM subscribers WHERE id = $1`, id,
+	).Scan(&alreadySubscribedSentAt); err != nil {
+		t.Fatalf("reading already_subscribed_sent_at: %v", err)
+	}
+	if alreadySubscribedSentAt != nil {
+		t.Fatalf("already_subscribed_sent_at = %v after a refused claim, want nil (the claim must not have stamped it)", *alreadySubscribedSentAt)
+	}
+
+	var queuedCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM outbound_queue WHERE subscriber_id = $1`, id,
+	).Scan(&queuedCount); err != nil {
+		t.Fatalf("counting outbound_queue rows: %v", err)
+	}
+	if queuedCount != 0 {
+		t.Fatalf("outbound_queue rows for a refused claim = %d, want 0", queuedCount)
+	}
+}
+
 // readSubscriberByID is a small test-only raw-SQL reader so the Claim*
 // tests above can check status/confirm_sent_at without a public
 // single-column getter existing just for tests.
@@ -1681,14 +1743,26 @@ func readSubscriberByID(t *testing.T, pool *pgxpool.Pool, id int64) (status stri
 // need an active row to claim an already-subscribed send against.
 func seedActiveSubscriber(t *testing.T, pool *pgxpool.Pool) int64 {
 	t.Helper()
+	return seedSubscriberWithStatus(t, pool, StatusActive)
+}
+
+// seedSubscriberWithStatus is seedActiveSubscriber parameterized on status —
+// #0379's TestClaimAndEnqueueAlreadySubscribed_RefusesComplainedRow uses
+// status=StatusComplained to prove the WHERE clause's `AND status = $4`
+// guard, added by that issue, actually refuses a claim it would otherwise
+// win. Mirrors coldConfirmationSubscriberWithStatus's role for the
+// confirmation-claim tests (#0341), one column set simpler since this claim
+// path stamps no token of its own.
+func seedSubscriberWithStatus(t *testing.T, pool *pgxpool.Pool, status string) int64 {
+	t.Helper()
 	var id int64
 	err := pool.QueryRow(context.Background(),
 		`INSERT INTO subscribers (email, status, manage_token)
 		 VALUES ($1, $2, $3) RETURNING id`,
-		uniqueEmail(t), StatusActive, fmt.Sprintf("mtok-%d", testdb.Unique()),
+		uniqueEmail(t), status, fmt.Sprintf("mtok-%d", testdb.Unique()),
 	).Scan(&id)
 	if err != nil {
-		t.Fatalf("seed active subscriber: %v", err)
+		t.Fatalf("seed subscriber (status=%s): %v", status, err)
 	}
 	return id
 }

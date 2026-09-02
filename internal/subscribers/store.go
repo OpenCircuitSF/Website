@@ -782,6 +782,40 @@ func (s *Store) ClaimAndEnqueueConfirmation(ctx context.Context, sub Subscriber,
 // package doc comment). Same atomic claim-in-the-WHERE-clause-plus-enqueue
 // shape, same reasoning, a separate column (already_subscribed_sent_at)
 // because the two emails have independent cooldowns.
+//
+// # #0379 — the status guard, #0341's fix applied to this method
+//
+// The WHERE clause below carries `AND status = $4` (bound to StatusActive).
+// Before #0379 this method trusted the caller's status read entirely:
+// existingSignup (internal/handlers/subscribe.go) only reaches this path
+// from its StatusActive branch of a switch on a Subscriber that
+// dispatchMutation's FindByEmail read moments earlier, but nothing stopped
+// an SES complaint landing in the gap between that read and this claim's
+// commit — a row that turned complained in that window would still be
+// claimed and mailed an already-subscribed notice. That is #0341's defect
+// (ClaimAndEnqueueConfirmation's claim carrying no status term at all) in
+// this method; see that issue for the full analysis of why the SQL
+// predicate is not weaker than a `SELECT ... FOR UPDATE` re-read under any
+// interleaving.
+//
+// active, not pending: this method, unlike ClaimAndEnqueueConfirmation, is
+// only ever legitimately called on an active row — existingSignup's switch
+// reaches it only from StatusActive, and an already-subscribed notice is
+// meaningless for anything else. Requiring status = StatusActive is
+// therefore the strictly-stronger, no-implicit-invariant predicate #0341
+// preferred, applied to the status this path actually serves rather than
+// copied from the sibling method's value.
+//
+// The caller's status switch is safe left reading the stale struct: this
+// predicate is now the sole authority over whether the claim commits,
+// exactly as #0341 established for ClaimAndEnqueueConfirmation's caller —
+// the earlier read only decides which claim method to call, never whether
+// the send happens. This method never writes status (only
+// already_subscribed_sent_at/updated_at), so the predicate cannot become a
+// path toward resubscribing anyone: a complained row can never win this
+// claim, and even if it somehow did, no status write would occur. Consistent
+// with CLAUDE.md §9 — complained subscribers never auto-resubscribe, and
+// this claim only ever gates a notification, never a status transition.
 func (s *Store) ClaimAndEnqueueAlreadySubscribed(ctx context.Context, sub Subscriber, now time.Time, cooldown time.Duration) (claimed bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -793,8 +827,9 @@ func (s *Store) ClaimAndEnqueueAlreadySubscribed(ctx context.Context, sub Subscr
 	tag, err := tx.Exec(ctx,
 		`UPDATE subscribers
 		    SET already_subscribed_sent_at = $2, updated_at = $2
-		  WHERE id = $1 AND (already_subscribed_sent_at IS NULL OR already_subscribed_sent_at < $3)`,
-		sub.ID, now, cutoff,
+		  WHERE id = $1 AND status = $4
+		    AND (already_subscribed_sent_at IS NULL OR already_subscribed_sent_at < $3)`,
+		sub.ID, now, cutoff, StatusActive,
 	)
 	if err != nil {
 		return false, fmt.Errorf("subscribers: claiming already-subscribed send for %d: %w", sub.ID, err)
