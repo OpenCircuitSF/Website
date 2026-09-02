@@ -577,12 +577,17 @@ func claimCommentGuardSnippet(flat string, start, end int) string {
 // PARAPHRASED rather than quoted -- #0347's own history records that
 // quoting a real defect sentence verbatim in a doc comment trips this
 // guard's directional axis against itself (rephrase, don't delete, is that
-// issue's own stated convention, and this file scans itself). store.go:463's
-// ClaimRow doc comment names a sibling identifier inside a trailing
-// parenthetical whose direction word sits alone at the start of the
-// following physical line (the parenthetical claimCommentGuardStoreGoParenSentinelRe,
-// below, is pinned against) -- joined, the two lines become one sentence.
-// internal/mailing/outbox_worker.go:475 -- the site #0342 corrected from a
+// issue's own stated convention, and this file scans itself). Both examples
+// are named by STABLE IDENTIFIER rather than by file:line -- #0352's settled
+// rule, enforced repo-wide by internal/handlers' TestNoCommentCitesGoFileByLineNumber
+// (#0356), which this record's first draft tripped from another package.
+// The ClaimRow doc comment in internal/outbox/store.go names a sibling
+// identifier inside a trailing parenthetical whose direction word sits alone
+// at the start of the following physical line (the parenthetical
+// claimCommentGuardStoreGoParenSentinelRe, below, is pinned against) --
+// joined, the two lines become one sentence. The inline comment preceding
+// the OrphanSweep call in OutboxWorker.pass, in
+// internal/mailing/outbox_worker.go -- the site #0342 corrected from a
 // misnamed identifier -- has the identical shape: the identifier ends one
 // physical line and the direction word that names its position starts the
 // next, and joining is what makes the two lines read as one claim about
