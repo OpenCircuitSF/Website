@@ -278,7 +278,7 @@ edit inside one of those roots must add that package to the scoped run:
 
 | Package | Reaches into |
 |---|---|
-| `internal/handlers` | `internal/`, `cmd/`, `web/` (the citation-guard family and the audit-metadata guard), plus `migrations/`, `testdata/`, and three `web/src/lib/*.ts` parity fixtures |
+| `internal/handlers` | **the whole repo tree** — `TestNoCommentCitesUnresolvedPathOrSection` walks the repo root for the set of citable paths and reads `CLAUDE.md`'s own `##` section headings; the rest of the citation-guard family, `TestNoDocCommentNamesADifferentDeclarationInSameFile`, and the audit-metadata guard scan `internal/`, `cmd/`, `web/`; plus `migrations/`, `testdata/url_validators.json`, and three `web/src/lib/*.ts` parity fixtures |
 | `internal/db` | the repo root — `issues/`, `PRD.md`, `CLAUDE.md`, `migrations/`, `docs/database.md` |
 | `internal/outbox` | `internal/` and `cmd/` (both the claim-kinds and claim-comment guards) |
 | `internal/subscribers` | all of `internal/` |
@@ -286,12 +286,16 @@ edit inside one of those roots must add that package to the scoped run:
 | `cmd/opencircuit` | every `internal/*` package `servePostgres` imports, parsed for `*seo.Site` flow |
 | `internal/mailing` | `internal/outbox` |
 
-Editing `PRD.md` or `CLAUDE.md` means running `internal/db`; editing
-`web/dist/index.html` means running `internal/seo`; editing a Go comment
-anywhere means running `internal/handlers`. `scripts/check.sh` is deliberately
-**not** widened to do this automatically — `internal/handlers` and
-`cmd/opencircuit` each cost ~8× a small package, and §5a's cheap scoped run is
-what makes three concurrent agents workable.
+Editing `PRD.md` means running `internal/db`. Editing `CLAUDE.md` means
+running **both** `internal/db` and `internal/handlers` — renumbering or
+deleting a `##` section, or renaming any file a Go comment cites, fails
+`internal/handlers`'s `TestNoCommentCitesUnresolvedPathOrSection` while
+`internal/db` passes clean. Editing `web/dist/index.html` means running
+`internal/seo`; editing a Go comment anywhere means running
+`internal/handlers`. `scripts/check.sh` is deliberately **not** widened to do
+this automatically — `internal/handlers` and `cmd/opencircuit` each cost ~8×
+a small package, and §5a's cheap scoped run is what makes three concurrent
+agents workable.
 
 > **`STORAGE=json` has no mailing list.** `internal/devstore` implements none
 > of interests, subscribers, campaigns, or suppressions, so `dev.sh`'s default
