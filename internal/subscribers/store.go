@@ -791,8 +791,18 @@ func (s *Store) ClaimAndEnqueueConfirmation(ctx context.Context, sub Subscriber,
 // from its StatusActive branch of a switch on a Subscriber that
 // dispatchMutation's FindByEmail read moments earlier, but nothing stopped
 // an SES complaint landing in the gap between that read and this claim's
-// commit — a row that turned complained in that window would still be
-// claimed and mailed an already-subscribed notice. That is #0341's defect
+// commit — a row that turned complained in that window would still WIN
+// this claim, burning already_subscribed_sent_at and committing an
+// already_subscribed outbound_queue row for a complained address. Since
+// #0365 such a row is no longer delivered: internal/mailing's sendGate
+// re-checks live subscriber state immediately before sending and its
+// gatedKinds entry for KindAlreadySubscribed requires StatusActive, so the
+// row is marked skipped instead (see
+// TestOutboxWorker_SkipsAlreadySubscribedForComplainedSubscriber). #0379
+// closes the EARLIER window rather than the delivery — the spurious claim,
+// the wasted queue row, and the burned cooldown stamp never happen at all,
+// and the send gate stops being the only thing standing between a
+// complained address and this notice. That is #0341's defect
 // (ClaimAndEnqueueConfirmation's claim carrying no status term at all) in
 // this method; see that issue for the full analysis of why the SQL
 // predicate is not weaker than a `SELECT ... FOR UPDATE` re-read under any

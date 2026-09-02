@@ -1668,8 +1668,11 @@ func TestClaimAndEnqueueAlreadySubscribed_ClaimsOnceThenCoolsDown(t *testing.T) 
 // `AND status = 'pending'` guard. Before #0379's fix this method's WHERE
 // clause checked only the already_subscribed_sent_at cooldown, so a row
 // that had transitioned to complained between a caller's FindByEmail read
-// and this claim (e.g. an SES complaint landing mid-request) would still be
-// claimed and mailed an already-subscribed notice — this test fails on
+// and this claim (e.g. an SES complaint landing mid-request) would still
+// win this claim, stamping already_subscribed_sent_at and queueing an
+// already_subscribed row for it — #0365's send gate would then refuse to
+// deliver that row, so what this predicate closes is the earlier window,
+// not the delivery — this test fails on
 // that code (see this test's own oracle below) and passes once the WHERE
 // clause carries `AND status = $4` with StatusActive.
 //
