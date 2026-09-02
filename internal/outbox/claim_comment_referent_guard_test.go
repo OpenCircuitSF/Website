@@ -543,6 +543,23 @@ func claimCommentGuardSnippet(flat string, start, end int) string {
 	return flat[loB:hiB]
 }
 
+// claimCommentGuardFlattenComment collapses a parsed comment group's text
+// (ast.CommentGroup.Text(), which keeps line breaks and leading "// ") down
+// to single-spaced prose, the shape every regex and offset computation in
+// this file operates on. #0366 (non-blocking residual, noted by #0364's
+// review): this exact expression -- strings.Join(strings.Fields(text), " ")
+// -- used to live twice, once inline in findClaimCommentGuardFindings's
+// per-comment-group loop and once inline in
+// claimCommentGuardDiagnoseDirectional, the one fragment where the two could
+// silently diverge (CLAUDE.md §8: a copy of the answer stored next to the
+// question is not a check -- this applies just as much to two copies of a
+// TRANSFORM as to two copies of an ASSERTION). Folded into one function both
+// call; behaviour-preserving, since it is textually the same expression
+// moved, not rewritten.
+func claimCommentGuardFlattenComment(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
 // findClaimCommentGuardFindings is the pure, directly testable core
 // (CLAUDE.md §8: a guard's oracle must not be the same bytes as its
 // subject -- this is exercised against in-memory fixtures below, not only
@@ -571,7 +588,7 @@ func findClaimCommentGuardFindings(path string, src any, allPkgTypes map[string]
 		if text == "" {
 			continue
 		}
-		flat := strings.Join(strings.Fields(text), " ")
+		flat := claimCommentGuardFlattenComment(text)
 		startOff := commentFset.Position(cg.Pos()).Offset
 		endOff := commentFset.Position(cg.End()).Offset
 		line := commentFset.Position(cg.Pos()).Line
@@ -1264,7 +1281,7 @@ func claimCommentGuardReasonUnresolved(dirWord string) claimCommentGuardDirectio
 }
 
 // claimCommentGuardDiagnoseDirectional re-derives WHY the directional axis
-// produces the ClaimDue count it does for src, for
+// produces the count it does for ident in src, for
 // TestClaimCommentGuardDirectionalAxisCalibrationTable to check against
 // each row's declared claimCommentGuardDirectionalReason (#0364). It
 // assumes exactly one non-empty comment group and exactly one
@@ -1272,7 +1289,23 @@ func claimCommentGuardReasonUnresolved(dirWord string) claimCommentGuardDirectio
 // deliberately written to that shape, matching what each row's own count
 // assertion already assumes -- and fails loudly, rather than guessing,
 // if a fixture doesn't hold to it.
-func claimCommentGuardDiagnoseDirectional(src string) (claimCommentGuardDirectionalReason, error) {
+//
+// ident is a parameter, not a hardcoded "ClaimDue", since #0366: the
+// calibration table's own count assertion counted only
+// f.ident == "ClaimDue" findings, and this diagnostic INHERITED that scope
+// by hardcoding the same literal in its own window check and findings
+// filter -- so the one row whose stated purpose is a SECOND identifier
+// (every-distinct-identifier's OrphanSweep) had no diagnostic covering it.
+// Parameterising here is the fix: every existing call site names
+// "ClaimDue" explicitly now, and the every-distinct-identifier row's new
+// secondIdent pair (below) is the one call site that names "OrphanSweep"
+// instead. This is a change to the DIAGNOSTIC's argument list, not to the
+// axis it diagnoses -- claimCommentGuardDirWordRe, claimCommentGuardDirHistoricalRe,
+// claimCommentGuardDirectionalWindowLo, claimCommentGuardIdentRe, and
+// findClaimCommentGuardFindings itself are all untouched, so #0358
+// criterion 4's freeze on window logic, marker set, clamp, and
+// every-identifier behaviour holds.
+func claimCommentGuardDiagnoseDirectional(src string, ident string) (claimCommentGuardDirectionalReason, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "diagnose.go", src, parser.ParseComments)
 	if err != nil {
@@ -1286,7 +1319,7 @@ func claimCommentGuardDiagnoseDirectional(src string) (claimCommentGuardDirectio
 			continue
 		}
 		nonEmpty++
-		flat = strings.Join(strings.Fields(text), " ")
+		flat = claimCommentGuardFlattenComment(text)
 	}
 	if nonEmpty != 1 {
 		return claimCommentGuardDirectionalReason{}, fmt.Errorf("fixture has %d non-empty comment group(s); this diagnostic assumes exactly one", nonEmpty)
@@ -1310,7 +1343,7 @@ func claimCommentGuardDiagnoseDirectional(src string) (claimCommentGuardDirectio
 	window := flat[lo:dm[0]]
 	identInWindow := false
 	for _, im := range claimCommentGuardIdentRe.FindAllString(window, -1) {
-		if im == "ClaimDue" {
+		if im == ident {
 			identInWindow = true
 		}
 	}
@@ -1323,7 +1356,7 @@ func claimCommentGuardDiagnoseDirectional(src string) (claimCommentGuardDirectio
 		return claimCommentGuardDirectionalReason{}, fmt.Errorf("scanning fixture: %w", err)
 	}
 	for _, fdg := range findings {
-		if fdg.axis == "directional" && fdg.ident == "ClaimDue" {
+		if fdg.axis == "directional" && fdg.ident == ident {
 			return claimCommentGuardReasonUnresolved(dirWord), nil
 		}
 	}
@@ -1352,11 +1385,64 @@ func claimCommentGuardDiagnoseDirectional(src string) (claimCommentGuardDirectio
 // claimCommentGuardDirectionalReason's own doc comment for why this is
 // re-derived from the axis's shared primitives rather than a second,
 // driftable copy of the answer.
+//
+// #0366 DECISION (criterion 1): this table's count and reason assertions
+// scope to a SINGLE named identifier, "ClaimDue", by construction --
+// wantClaimDueFindings and wantReason above, and
+// claimCommentGuardDiagnoseDirectional before #0366, both hardcoded it.
+// #0364's review measured the consequence: forcing every NON-ClaimDue
+// identifier in the window to flag unconditionally leaves this entire
+// table green, including the every-distinct-identifier row below, whose
+// STATED purpose is that a nearer, resolving OrphanSweep must not mask a
+// farther, unresolved ClaimDue -- a purpose this table asserted only one
+// half of. Verified by re-running that exact mutation (issue #0366's
+// ## Verification records the throwaway-worktree run): the table's own
+// go test output stayed 100% green under it, confirming the hole was real,
+// though `go test ./internal/outbox/...` as a whole was NOT green, because
+// TestNoCommentClaimsClaimMachineryCallFileCodeLacks (the whole-tree scan,
+// which does not filter by identifier) and two fixture-pinned tests caught
+// the same mutation against real files already in the tree today. That is
+// not a reason to leave this table's own fixture-level story incomplete --
+// a future edit to those real files' comments could silently remove the
+// whole-tree scan's coverage of this exact trade while this table stayed
+// silent, which is precisely the risk a calibration table exists to retire
+// (see the "growing floor, not an inventory" framing in
+// TestClaimCommentGuardDirectionalAxisCalibrationTable's own doc comment,
+// below).
+//
+// CHOSE OPTION 1 (add a second, narrowly-scoped pair): the fix is a single
+// row's addition (secondIdent/wantSecondIdentFindings/wantSecondIdentReason
+// below) plus parameterising claimCommentGuardDiagnoseDirectional's
+// hardcoded ident (its own doc comment records that change) -- neither
+// touches the axis itself (#0358 criterion 4's freeze holds: no window
+// logic, marker set, clamp, or every-identifier change), and the pair is
+// proved to discriminate by the SAME mutation that found the hole (#0366's
+// ## Verification). Given that low a cost against a real, already-measured
+// gap on the one row whose whole point is a second identifier, extending
+// the row is more direct than a doc-comment-only "record and stop" (the
+// #0330/#0347/#0356 precedent this issue considered, and could equally have
+// chosen) -- that precedent fits a gap that is expensive or architecturally
+// awkward to close; this one was neither. Every OTHER row in this table
+// still asserts only its ClaimDue half by design -- generalising every row
+// to check every mentioned identifier is explicitly NOT what this decision
+// does, and no other row gained a secondIdent pair.
 type claimCommentGuardDirectionalCalibrationCase struct {
 	name                 string
 	src                  string
 	wantClaimDueFindings int
 	wantReason           claimCommentGuardDirectionalReason
+
+	// secondIdent, wantSecondIdentFindings, and wantSecondIdentReason are
+	// #0366's addition: when secondIdent is non-empty, the test loop below
+	// ALSO asserts a count and a re-derived reason for that identifier,
+	// exactly as it does for ClaimDue -- the second half of a trade this
+	// table otherwise pins only one half of. Every row except
+	// every-distinct-identifier leaves secondIdent "" and this second check
+	// is skipped entirely; that row is the only one whose stated purpose is
+	// a second, distinct identifier's resolution.
+	secondIdent             string
+	wantSecondIdentFindings int
+	wantSecondIdentReason   claimCommentGuardDirectionalReason
 }
 
 var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectionalCalibrationCase{
@@ -1589,11 +1675,25 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 	// which occurs nowhere in it. Pinned here in-table as well as by
 	// TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7,
 	// which pins it against the real db9bff7 file.
+	//
+	// secondIdent (#0366): the row's own name says a NEARER, RESOLVING
+	// identifier must not mask a farther, false one -- until #0366 nothing
+	// here checked the "resolving" half; only ClaimDue's count and reason
+	// were asserted, so a mutation forcing every non-ClaimDue identifier to
+	// flag unconditionally (which would make OrphanSweep flag too, the
+	// opposite of "resolving") moved nothing in this row. secondIdent closes
+	// that: OrphanSweep occurs once in this fixture's code
+	// (`var _ = OrphanSweep`), after the direction word, so it resolves and
+	// contributes 0 directional findings for itself.
 	{
 		name:                 "every-distinct-identifier: a nearer, resolving identifier must not mask a farther, false one",
 		src:                  "package outbox\n\n// ClaimDue and OrphanSweep below claim the row.\n\nvar _ = OrphanSweep\n",
 		wantClaimDueFindings: 1,
 		wantReason:           claimCommentGuardReasonUnresolved("below"),
+
+		secondIdent:             "OrphanSweep",
+		wantSecondIdentFindings: 0,
+		wantSecondIdentReason:   claimCommentGuardReasonResolved("below"),
 	},
 	// #0364 -- gives claimCommentGuardDirectionalReason's
 	// no-direction-word-match bucket a real, reachable exemplar under
@@ -1678,12 +1778,39 @@ func TestClaimCommentGuardDirectionalAxisCalibrationTable(t *testing.T) {
 			// first-pass resolution pin both lacked: each got its declared
 			// count for a DIFFERENT reason than the one it named, and
 			// nothing but hand-instrumentation caught it.
-			reason, err := claimCommentGuardDiagnoseDirectional(c.src)
+			reason, err := claimCommentGuardDiagnoseDirectional(c.src, "ClaimDue")
 			if err != nil {
 				t.Fatalf("diagnosing WHY this row gets its count (#0364): %v", err)
 			}
 			if reason != c.wantReason {
 				t.Fatalf("row got %d finding(s) for a DIFFERENT mechanism than its declared wantReason (#0364) -- want %+v, got %+v", got, c.wantReason, reason)
+			}
+
+			// #0366 -- when a row also declares a secondIdent, assert ITS
+			// count and reason too. Every row except every-distinct-identifier
+			// leaves secondIdent "" and this block is skipped; that row's
+			// stated purpose is a SECOND identifier's resolution, which
+			// wantClaimDueFindings/wantReason alone cannot see (see
+			// claimCommentGuardDirectionalCalibrationCase's own doc comment,
+			// "#0366 DECISION", for why this row and only this row gets one).
+			if c.secondIdent != "" {
+				got2 := 0
+				for _, f := range findings {
+					if f.axis == "directional" && f.ident == c.secondIdent {
+						got2++
+					}
+				}
+				if got2 != c.wantSecondIdentFindings {
+					t.Fatalf("directional %s findings = %d, want %d; all findings: %+v", c.secondIdent, got2, c.wantSecondIdentFindings, findings)
+				}
+
+				reason2, err := claimCommentGuardDiagnoseDirectional(c.src, c.secondIdent)
+				if err != nil {
+					t.Fatalf("diagnosing WHY this row's %s count is what it is (#0366): %v", c.secondIdent, err)
+				}
+				if reason2 != c.wantSecondIdentReason {
+					t.Fatalf("row's %s got %d finding(s) for a DIFFERENT mechanism than its declared wantSecondIdentReason (#0366) -- want %+v, got %+v", c.secondIdent, got2, c.wantSecondIdentReason, reason2)
+				}
 			}
 		})
 	}
