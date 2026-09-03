@@ -8,6 +8,18 @@
 #     scripts/check.sh web                   # just npm run check + npm test
 #     scripts/check.sh all                   # the whole Go suite (a batch's review pass only)
 #     scripts/check.sh guards                # the standalone shell guard tests (see below)
+#     scripts/check.sh browser-nav            # real-browser navigation regression check (#0287)
+#
+# `browser-nav` runs scripts/browser_nav_guard_test.sh alone — a SEPARATE
+# target from `guards`, not folded into it, because it is markedly heavier
+# than that group: a real `npm run build` plus a real Safari session via
+# safaridriver, driving all three client-side navigation paths (link click,
+# programmatic navigate(), popstate) and asserting document.title,
+# document.activeElement, window.scrollY, AND history.state.scrollY on each
+# — the last two are what #0238's first pass silently broke while the first
+# two stayed green, and jsdom cannot evidence either (see that script's own
+# header). Not part of `go`/`web`/`all`/the default for the same reason
+# `guards` itself is not: it costs nothing on the common path this way.
 #
 # `guards` runs scripts/check_guard_test.sh, scripts/testdb_gc_guard_test.sh,
 # scripts/dev_guard_test.sh, scripts/db_reset_guard_test.sh, and
@@ -873,6 +885,14 @@ case "$MODE" in
        # reads, no database, sub-second. See its own header for why a Go
        # test reading its own floor constant cannot do this job.
        step "scripts/go_file_visit_floor_guard_test.sh (#0300)"; run scripts/go_file_visit_floor_guard_test.sh
+       ;;
+  browser-nav)
+       # #0287: a SEPARATE target from `guards`, not folded into it — see the
+       # header comment above for why. scripts/browser_nav_guard_test.sh
+       # manages its own build, static server, safaridriver session, and
+       # cleanup, and prints its own PASS/FAIL lines; `run` here only needs
+       # to observe the exit code.
+       step "scripts/browser_nav_guard_test.sh (#0287)"; run scripts/browser_nav_guard_test.sh
        ;;
   all) step "go build"; runpipe "go build ./... 2>&1 | tail -$TAIL"
        step "go vet";   runpipe "go vet ./... 2>&1 | tail -$TAIL"
