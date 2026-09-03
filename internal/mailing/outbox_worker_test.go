@@ -2376,6 +2376,110 @@ func TestOutboxWorker_TokenGateDoesNotShortCircuitPhysicalAddressDefer(t *testin
 	}
 }
 
+// TestOutboxWorker_SkipsImportInviteAfterRestartSignup is #0400's second
+// half: the fourth of #0340's plan's four stale-row sites,
+// (*subscribers.Store).RestartSignup, which M1/M2/M3 above do not cover.
+// It is the sharpest of the four because it moves status BACK to 'pending'
+// while minting a fresh confirm_token — re-opening gatedKinds' own status
+// check (sendGate's first predicate) on a row that still carries the
+// PRE-restart token in its payload. Without #0340's tokenGate predicate,
+// the status check alone would see 'pending' and wave the stale row
+// through.
+//
+// Sequence: create (pending, confirm_token A) -> enqueue an import_invite
+// row carrying A -> Unsubscribe (status -> unsubscribed) -> RestartSignup
+// (status -> pending again, confirm_token -> B) -> run the worker -> the
+// queued row, which still carries A, must be 'skipped', never delivered.
+//
+// Mutation proof (recorded in ## Verification): disabling tokenGate's
+// elig.ConfirmToken comparison — the same Mutation B shape #0340's review
+// applied to M1/M2 — delivers this row 'sent' with the stale token A
+// instead of 'skipped', in a git-archive export against a private scratch
+// database (CLAUDE.md §8b), never the tracked tree.
+func TestOutboxWorker_SkipsImportInviteAfterRestartSignup(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
+
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+	subStore := subscribers.NewStore(pool)
+
+	email := uniqueOutboxRecipient(t)
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: email, ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, sub.ID)
+	})
+	if sub.ConfirmToken == nil {
+		t.Fatal("Create returned a subscriber with no confirm_token")
+	}
+	preRestart := *sub.ConfirmToken
+
+	subID := sub.ID
+	inviteID, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:         outbox.KindImportInvite,
+		Recipient:    email,
+		SubscriberID: &subID,
+		Payload: map[string]any{
+			"confirm_token": preRestart, // the PRE-restart token — must go stale
+			"manage_token":  sub.ManageToken,
+			"ttl_seconds":   int64(7 * 24 * 3600),
+			"import_source": "csv",
+			"source_detail": "restart-signup-test.csv",
+			"collected_at":  time.Now(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	if _, err := subStore.Unsubscribe(context.Background(), sub.ID, "one_click", time.Now()); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+	restarted, err := subStore.RestartSignup(context.Background(), sub.ID,
+		subscribers.RestartSignupInput{ConfirmTTL: time.Hour}, time.Now())
+	if err != nil {
+		t.Fatalf("RestartSignup: %v", err)
+	}
+	if restarted.Status != subscribers.StatusPending {
+		t.Fatalf("status after RestartSignup = %q, want %q", restarted.Status, subscribers.StatusPending)
+	}
+	if restarted.ConfirmToken == nil || *restarted.ConfirmToken == preRestart {
+		t.Fatal("RestartSignup did not mint a fresh confirm_token")
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	got := waitForQueueStatus(t, pool, inviteID)
+	if got != outbox.StatusSkipped {
+		t.Fatalf("import_invite row status = %q, want %q — RestartSignup re-opened the status gate on a row still carrying the PRE-restart confirm_token", got, outbox.StatusSkipped)
+	}
+	var errText *string
+	if err := pool.QueryRow(context.Background(), `SELECT error FROM outbound_queue WHERE id = $1`, inviteID).Scan(&errText); err != nil {
+		t.Fatalf("select error: %v", err)
+	}
+	if errText == nil || !strings.Contains(*errText, "confirm token") {
+		t.Errorf("error = %v, want a reason naming the confirm token", errText)
+	}
+
+	const inviteSubject = "You're invited to the Open Circuit SF mailing list"
+	for _, m := range mailer.Sent() {
+		if m.To == email && m.Subject == inviteSubject {
+			t.Fatalf("an invitation carrying the pre-restart confirm_token was delivered")
+		}
+	}
+	// CLAUDE.md §8b: never let a real token value land in a committed
+	// artifact (outbound_queue.error is read by admins and can end up
+	// pasted into an issue file).
+	if errText != nil && (strings.Contains(*errText, preRestart) || strings.Contains(*errText, *restarted.ConfirmToken)) {
+		t.Fatalf("outbound_queue.error leaked a confirm_token value")
+	}
+}
+
 // TestTokenGatedKindsPartitionEveryMailKind is #0340's plan §8 criterion 4's
 // coverage guard, a direct sibling of TestGatedKindsPartitionEveryMailKind
 // above: every mailKinds element must appear in EXACTLY ONE of

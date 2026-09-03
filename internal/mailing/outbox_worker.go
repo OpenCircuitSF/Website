@@ -267,9 +267,30 @@ var ungatedKinds = map[outbox.Kind]string{
 // appears in exactly one of this map or tokenUngatedKinds, below — the
 // sibling of TestGatedKindsPartitionEveryMailKind, keeping this enumeration
 // a live artifact rather than prose that can drift.
-var tokenGatedKinds = map[outbox.Kind]bool{
-	outbox.KindConfirmation: true,
-	outbox.KindImportInvite: true,
+//
+// #0400: this was originally map[outbox.Kind]bool, copying gatedKinds'
+// shape above without gatedKinds' reason for that shape — gatedKinds' value
+// is the wanted STATUS STRING, which is never empty and so has no
+// legitimate "off" value, whereas a bool has one by construction. That
+// meant TestTokenGatedKindsPartitionEveryMailKind's membership check
+// (`_, inGated := tokenGatedKinds[k]`) stayed green even after a kind's
+// entry was flipped to false: the key was still present, so the guard
+// "sees" a decision was made and never inspects what the decision WAS.
+// #0340's review measured this directly — flipping
+// tokenGatedKinds[KindImportInvite] to false failed the send-path tests
+// that depend on the gate while the partition guard kept passing.
+//
+// Fixed by changing the type to map[outbox.Kind]struct{}: a set has no
+// off state to forget to check, so the defect is unrepresentable rather
+// than merely caught by an assertion someone has to remember to add. (The
+// issue's alternative — keep map[Kind]bool and add a loop asserting every
+// value is true — was rejected: it adds a check that itself could be
+// deleted or skipped, the same "one more thing that has to be maintained"
+// shape CLAUDE.md's in-file-guard entry warns about, where the type change
+// removes the hazard structurally instead.)
+var tokenGatedKinds = map[outbox.Kind]struct{}{
+	outbox.KindConfirmation: {},
+	outbox.KindImportInvite: {},
 }
 
 // tokenUngatedKinds is every mailKinds member sendGate's token predicate
@@ -897,7 +918,7 @@ func (w *OutboxWorker) sendGate(ctx context.Context, row outbox.Row) (skip bool,
 		return true, "subscriber's email changed since enqueue", nil
 	}
 
-	if !tokenGatedKinds[row.Kind] {
+	if _, tokenGated := tokenGatedKinds[row.Kind]; !tokenGated {
 		return false, "", nil
 	}
 	return w.tokenGate(row, elig)
