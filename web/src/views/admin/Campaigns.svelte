@@ -12,6 +12,7 @@
     campaignStatusBadgeClass,
     validateCampaignDraft,
     wasDemotedAfterScheduling,
+    currentMonthValue,
   } from '../../lib/campaigns';
   import { canViewCampaignStats } from '../../lib/campaignStats';
   import { formatDateTime } from '../../lib/admin';
@@ -65,6 +66,10 @@
   let newName = $state('');
   let newSubject = $state('');
   let newBody = $state('');
+  // #0405: opt-in only, per-draft — never inferred from any other field
+  // (see submitCreate's createCampaign call and its own comment for why).
+  let newIsNewsletter = $state(false);
+  let newNewsletterMonth = $state('');
   let createError = $state<string | null>(null);
   let submittingCreate = $state(false);
   let createModalEl = $state<HTMLDivElement | null>(null);
@@ -140,6 +145,8 @@
     newName = '';
     newSubject = '';
     newBody = '';
+    newIsNewsletter = false;
+    newNewsletterMonth = currentMonthValue(new Date());
     createError = null;
   }
 
@@ -169,6 +176,10 @@
         subject: newSubject,
         body_md: newBody,
         audience_mode: 'all',
+        // #0405: only sent when the operator opted in — omitting the key
+        // entirely (not sending an empty string) is what leaves the
+        // server's nil-means-subject-derived default reachable.
+        ...(newIsNewsletter ? { newsletter_month: newNewsletterMonth } : {}),
       });
       creating = false;
       campaigns = [created, ...campaigns];
@@ -284,6 +295,31 @@
               disabled={submittingCreate}
             ></textarea>
           </div>
+          <div class="field">
+            <label class="checkbox-label">
+              <input
+                type="checkbox"
+                bind:checked={newIsNewsletter}
+                disabled={submittingCreate}
+              />
+              Monthly newsletter (archive URL is MM-YYYY)
+            </label>
+          </div>
+          {#if newIsNewsletter}
+            <div class="field">
+              <label for="new-campaign-newsletter-month">Newsletter month</label>
+              <input
+                id="new-campaign-newsletter-month"
+                type="month"
+                bind:value={newNewsletterMonth}
+                disabled={submittingCreate}
+              />
+              <p class="text-muted">
+                Sets the archive URL to this month, formatted as two-digit month, hyphen,
+                four-digit year — e.g. /archive/MM-YYYY.
+              </p>
+            </div>
+          {/if}
           {#if createError}
             <p class="text-error" role="alert">{createError}</p>
           {/if}
@@ -302,6 +338,12 @@
 <style>
   .mono {
     font-family: var(--font-mono);
+  }
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
   }
   .demoted-hint {
     margin: var(--space-1) 0 0;

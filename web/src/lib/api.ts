@@ -756,6 +756,19 @@ export interface CampaignDraftFields {
   body_md?: string;
   audience_mode?: string;
   interest_ids?: number[];
+  /**
+   * #0405's opt-in newsletter-month archive-slug template, "YYYY-MM"
+   * (native `<input type="month">`'s own value format — see
+   * mailing.ParseNewsletterMonth's doc comment for why that's deliberately
+   * the inverse of the MM-YYYY slug it produces). POST-only: the server's
+   * PATCH handler has no such field at all (#0405's plan deliberately
+   * rejected adding one — after creation the slug already exists, and
+   * `slug` is the one way to change a minted slug; a second field for the
+   * same outcome is how the two drift). decodeJSON's DisallowUnknownFields
+   * means sending it through updateCampaign would fail the request, not
+   * silently ignore it — callers must only ever set this on createCampaign.
+   */
+  newsletter_month?: string;
 }
 
 /** GET /admin/campaigns — every campaign, newest first (admin only). */

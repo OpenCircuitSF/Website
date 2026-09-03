@@ -358,6 +358,15 @@ type createCampaignRequest struct {
 	BodyMD       string  `json:"body_md"`
 	AudienceMode string  `json:"audience_mode,omitempty"`
 	InterestIDs  []int64 `json:"interest_ids,omitempty"`
+	// NewsletterMonth is #0405's opt-in MM-YYYY archive-slug template,
+	// wire format "YYYY-MM" (HTML <input type="month">'s own value
+	// format — see mailing.ParseNewsletterMonth's doc comment for why
+	// that is deliberately the inverse of the MM-YYYY slug it produces).
+	// omitempty plus a *string, not a bare string: absent must be
+	// distinguishable from "" so Create's nil-means-unchanged-behaviour
+	// contract (mailing.CampaignInput.NewsletterMonth) is reachable from
+	// the wire.
+	NewsletterMonth *string `json:"newsletter_month,omitempty"`
 }
 
 // Create handles POST /admin/campaigns. Always creates in status='draft'
@@ -399,15 +408,29 @@ func (h *AdminCampaignsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	preheader := normalizeOptionalCampaignField(req.Preheader)
 
+	// #0405: absent (nil) leaves NewsletterMonth nil, so Create's slug
+	// minting is unchanged (subject-derived) — see createCampaignRequest's
+	// NewsletterMonth doc comment.
+	var newsletterMonth *mailing.NewsletterMonth
+	if req.NewsletterMonth != nil {
+		nm, parseErr := mailing.ParseNewsletterMonth(strings.TrimSpace(*req.NewsletterMonth))
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "newsletter_month must be YYYY-MM")
+			return
+		}
+		newsletterMonth = &nm
+	}
+
 	actorID := actor.ID
 	created, err := h.store.Create(r.Context(), mailing.CampaignInput{
-		Name:         name,
-		Subject:      subject,
-		Preheader:    preheader,
-		BodyMD:       req.BodyMD,
-		AudienceMode: mode,
-		InterestIDs:  req.InterestIDs,
-		CreatedBy:    &actorID,
+		Name:            name,
+		Subject:         subject,
+		Preheader:       preheader,
+		BodyMD:          req.BodyMD,
+		AudienceMode:    mode,
+		InterestIDs:     req.InterestIDs,
+		CreatedBy:       &actorID,
+		NewsletterMonth: newsletterMonth,
 	})
 	switch {
 	case err == nil:
@@ -416,6 +439,9 @@ func (h *AdminCampaignsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, mailing.ErrCampaignInterestNotFound):
 		writeError(w, http.StatusBadRequest, "one or more interest ids do not exist")
+		return
+	case errors.Is(err, mailing.ErrInvalidNewsletterMonth):
+		writeError(w, http.StatusBadRequest, "newsletter_month must be YYYY-MM")
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")

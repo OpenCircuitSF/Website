@@ -270,6 +270,18 @@ type CampaignInput struct {
 	InterestIDs  []int64
 	WorkshopID   *int64
 	CreatedBy    *int64
+	// NewsletterMonth opts this campaign into #0405's MM-YYYY archive-slug
+	// template (issues/0405.md — the user's own decision, "It can be short
+	// and specific"). nil (the default, and the ONLY value the announce
+	// shortcut ever sets — admin_workshop_announce.go never touches this
+	// field) leaves slug minting exactly as it was before #0405:
+	// slugifyCampaign(Subject). Opt-in only, never inferred — #0405's plan
+	// measured all three plausible inference rules (workshop_id IS NULL,
+	// audience_mode == "all", subject/name text matching) failing against
+	// the two real CampaignInput{} call sites, so nothing here derives this
+	// from any other field. See newsletter_month.go for NewsletterMonth
+	// itself.
+	NewsletterMonth *NewsletterMonth
 }
 
 // CampaignUpdate is the payload for Update. Unlike a partial PATCH body, this
@@ -530,6 +542,12 @@ func (s *CampaignStore) Create(ctx context.Context, in CampaignInput) (Campaign,
 	}
 
 	base := slugifyCampaign(in.Subject)
+	if in.NewsletterMonth != nil {
+		if !in.NewsletterMonth.valid() {
+			return Campaign{}, ErrInvalidNewsletterMonth
+		}
+		base = in.NewsletterMonth.Slug()
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

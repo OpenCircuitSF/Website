@@ -23,6 +23,7 @@ import {
   resumeSubjectMatches,
   campaignStatusLabel,
   campaignStatusBadgeClass,
+  currentMonthValue,
 } from './campaigns';
 import { formatDateTime } from './admin';
 
@@ -352,5 +353,23 @@ describe('campaignStatusLabel / campaignStatusBadgeClass', () => {
     for (const status of CAMPAIGN_STATUSES) {
       expect(known.has(campaignStatusBadgeClass(status))).toBe(true);
     }
+  });
+});
+
+// ── currentMonthValue (#0405) ────────────────────────────────────────────────
+
+describe('currentMonthValue', () => {
+  it('zero-pads a single-digit month, constructed with local calendar fields', () => {
+    // Month index 8 = September (zero-based) — the exact trap this helper
+    // exists to close.
+    expect(currentMonthValue(new Date(2026, 8, 15))).toBe('2026-09');
+  });
+
+  it('zero-pads January (month index 0)', () => {
+    expect(currentMonthValue(new Date(2026, 0, 5))).toBe('2026-01');
+  });
+
+  it('does not zero-pad a two-digit month', () => {
+    expect(currentMonthValue(new Date(2026, 11, 25))).toBe('2026-12');
   });
 });

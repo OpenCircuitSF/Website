@@ -403,3 +403,22 @@ export function archiveURLCopyButtonLabel(state: ArchiveURLCopyState): string {
       return 'Copy';
   }
 }
+
+// ── Newsletter-month archive-slug template (#0405, PRD §6.8) ────────────────
+
+/**
+ * `currentMonthValue` returns `now` formatted as `YYYY-MM` — the exact value
+ * a native `<input type="month">` uses, and the wire format
+ * `mailing.ParseNewsletterMonth` expects (server-side inversion to the
+ * `MM-YYYY` slug is intentional; see that function's doc comment). Reads
+ * LOCAL calendar fields (`getFullYear`/`getMonth`), never their UTC
+ * counterparts — a month-picker input reflects the browser's local
+ * calendar, and `getMonth()` is zero-based, so the trap this helper exists
+ * to close is a month coming out one lower than the calendar month it
+ * represents.
+ */
+export function currentMonthValue(now: Date): string {
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
