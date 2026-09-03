@@ -240,6 +240,58 @@ var ungatedKinds = map[outbox.Kind]string{
 	outbox.KindGoodbye:         "no producer yet, and a status whitelist would be WRONG for it when one lands: goodbye is sent precisely BECAUSE the address stopped being active. Whoever adds the producer must decide its own predicate rather than inherit one of the four above",
 }
 
+// tokenGatedKinds is #0340's send-time token re-check whitelist: every
+// outbox.Kind whose payload carries a subscribers.confirm_token that can be
+// rotated out from under an already-queued row — sendGate compares the
+// payload's confirm_token against SendEligibility's live one for exactly
+// these two kinds, immediately after the status/suppression/email checks
+// gatedKinds already runs.
+//
+// Only confirm_token is rotatable under a queued row. #0340's plan §2/§3
+// walked every write to subscribers.confirm_token and subscribers.manage_token
+// in the tree:
+//
+//   - KindConfirmation and KindImportInvite both carry confirm_token, and
+//     four sites can rotate or clear it out from under an already-enqueued,
+//     still-'pending' row: (*Store).AdminResendConfirmation and
+//     (*Store).AdminResendInvitation each mint a fresh token AND enqueue a
+//     new row, leaving the OLD row's payload token stale;
+//     (*Store).ExpirePendingSweep clears it to NULL while deliberately
+//     leaving the row 'pending' (#0128); and (*Store).RestartSignup mints a
+//     fresh token AND moves status back to 'pending' — re-opening
+//     gatedKinds' own status check on a row that still carries the
+//     PRE-restart token. None of these four touch outbound_queue directly,
+//     so nothing before this predicate ever re-validates the token itself.
+//
+// TestTokenGatedKindsPartitionEveryMailKind asserts every mailKinds element
+// appears in exactly one of this map or tokenUngatedKinds, below — the
+// sibling of TestGatedKindsPartitionEveryMailKind, keeping this enumeration
+// a live artifact rather than prose that can drift.
+var tokenGatedKinds = map[outbox.Kind]bool{
+	outbox.KindConfirmation: true,
+	outbox.KindImportInvite: true,
+}
+
+// tokenUngatedKinds is every mailKinds member sendGate's token predicate
+// deliberately does NOT re-check, each carrying a written reason — the
+// ungatedKinds shape above, applied to the token check rather than the
+// status check. A kind can appear here even when it is also in gatedKinds
+// (already_subscribed, welcome): the status/suppression/email predicates
+// still run for it, only the token comparison does not.
+//
+// TestTokenGatedKindsPartitionEveryMailKind asserts every value here is
+// non-empty, and that tokenGatedKinds+tokenUngatedKinds together partition
+// mailKinds exactly (no overlap, no gap).
+var tokenUngatedKinds = map[outbox.Kind]string{
+	outbox.KindAlreadySubscribed: "carries manage_token, not confirm_token, and manage_token's only rotator with a queued-row-relevant call site is RotateManageToken, called by the one-click unsubscribe handler AFTER a real unsubscribe — the row's status has already moved off StatusActive by then, so gatedKinds' own status predicate already withholds it before this predicate would ever run. (RotateManageToken has a second production caller, admin_campaign_preview.go's ensureTestRecipient, but that call sends synchronously via mailer.Send and never enqueues an outbound_queue row for the synthetic recipient it rotates — Create's own in.Synthetic branch skips the enqueue entirely — so no queued row can go stale under it.) This is a derived property, not a coincidence: it stops holding the moment a second RotateManageToken caller appears that does not also change status.",
+	outbox.KindWelcome:           "same reasoning as already_subscribed above — welcome also carries only manage_token, rotated by the identical RotateManageToken call sites",
+	outbox.KindRegistration:      "carries a pending_registrations token, not subscribers.confirm_token — that table is INSERT/SELECT/DELETE-by-token only (internal/auth/store.go), with no UPDATE that rotates a token out from under a queued row; a second registration ceremony inserts a second row and leaves the first token valid to its own TTL. Row.SubscriberID is also always nil for this kind, so there is nothing for a subscriber-keyed check to read anyway.",
+	outbox.KindRecovery:          "same reasoning as registration above — recovery's pending_registrations token is equally insert-only",
+	outbox.KindSessionsRevoked:   "payload carries no token at all (`at` only)",
+	outbox.KindAdminAlert:        "payload carries no token at all (`subject`, `lines` only)",
+	outbox.KindGoodbye:           "no producer yet and no payload struct — see ungatedKinds' identical entry for this kind; whoever adds the producer decides its own token predicate rather than inheriting one of these",
+}
+
 // OutboxWorker drains internal/outbox's outbound_queue. Construct with
 // NewOutboxWorker; call Run in its own goroutine, Stop to shut down.
 type OutboxWorker struct {
@@ -798,6 +850,14 @@ func (w *OutboxWorker) finishFailed(row outbox.Row, sendErr error) {
 // A genuine eligibility-read error is different and MUST fail CLOSED: it
 // is returned to the caller, which routes it to finishFailed's ordinary
 // retry/backoff rather than sending on an unknown state (#0365's plan §6).
+//
+// #0340 added a second predicate after the status/suppression/email checks
+// below: for tokenGatedKinds (KindConfirmation, KindImportInvite), the
+// payload's own confirm_token must still match SendEligibility's live one.
+// It runs strictly AFTER the existing switch — every reason string and
+// every pre-#0340 test above this point is unchanged — and reuses the SAME
+// elig read (SendEligibility already selects confirm_token; see that
+// method's own doc comment), so no second round trip is added.
 func (w *OutboxWorker) sendGate(ctx context.Context, row outbox.Row) (skip bool, reason string, err error) {
 	wantStatus, gated := gatedKinds[row.Kind]
 	if !gated {
@@ -835,6 +895,49 @@ func (w *OutboxWorker) sendGate(ctx context.Context, row outbox.Row) (skip bool,
 		return true, "address is now suppressed", nil
 	case elig.Email != row.Recipient:
 		return true, "subscriber's email changed since enqueue", nil
+	}
+
+	if !tokenGatedKinds[row.Kind] {
+		return false, "", nil
+	}
+	return w.tokenGate(row, elig)
+}
+
+// tokenGate is sendGate's #0340 token predicate, factored out for
+// readability: it decides whether row's payload confirm_token is still the
+// subscriber's live one. Called only for row.Kind in tokenGatedKinds, only
+// after sendGate's own status/suppression/email checks have all passed —
+// elig is therefore already known Found and eligible on every other axis.
+//
+// Reason strings deliberately never include either token value — they land
+// in outbound_queue.error, which admins read and which gets pasted into
+// issue files (CLAUDE.md §8b, #0277's live-magic-link lesson; matches
+// finishSkipped's own Warn already omitting the recipient for the same
+// reason).
+func (w *OutboxWorker) tokenGate(row outbox.Row, elig subscribers.SendEligibility) (skip bool, reason string, err error) {
+	var payloadTok struct {
+		ConfirmToken string `json:"confirm_token"`
+	}
+	if jsonErr := json.Unmarshal(row.Payload, &payloadTok); jsonErr != nil {
+		// Fail CLOSED, exactly like a SendEligibility read error above
+		// (sendGate's own doc comment: "must not fail open on an unknown
+		// state") — an unparseable payload on a token-gated kind cannot be
+		// trusted to carry a valid token either way.
+		return false, "", fmt.Errorf("parsing confirm_token from outbound_queue row %d's payload: %w", row.ID, jsonErr)
+	}
+
+	switch {
+	case payloadTok.ConfirmToken == "":
+		// Unreachable by construction — every producer of every
+		// tokenGatedKinds kind sets confirm_token (#0340's plan §7 step 3)
+		// — but unlike the nil-SubscriberID branch above, failing OPEN
+		// here would mail a link built from an empty token, which is the
+		// exact harm #0340 exists to prevent. Skip rather than send.
+		return true, "queued row's payload carries no confirm token", nil
+	case elig.ConfirmToken == nil:
+		return true, "confirm token has been cleared since enqueue", nil
+	case *elig.ConfirmToken != payloadTok.ConfirmToken:
+		return true, "confirm token was rotated since enqueue", nil
 	default:
 		return false, "", nil
 	}

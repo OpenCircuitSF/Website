@@ -1063,13 +1063,22 @@ func TestOutboxWorker_MarkSent_RecordsInviteSent(t *testing.T) {
 	// AudienceAll (status='active') query elsewhere in this package's
 	// shared test database, mirroring TestOutboxWorker_MarkSent_RecordsWelcomeSent's
 	// own reasoning for the identical choice.
+	if sub.ConfirmToken == nil {
+		t.Fatal("Create returned a subscriber with no confirm_token")
+	}
 
+	// #0340: the payload's confirm_token must be the subscriber's actual
+	// LIVE token, not a fabricated placeholder — sendGate's new token
+	// predicate now correctly withholds a row whose payload token was
+	// never the live one (this test's fixture used a literal placeholder
+	// before #0340, which this fix's own token check would otherwise, and
+	// correctly, skip rather than send).
 	id, err := store.Enqueue(context.Background(), outbox.Item{
 		Kind:         outbox.KindImportInvite,
 		Recipient:    sub.Email,
 		SubscriberID: &sub.ID,
 		Payload: map[string]any{
-			"confirm_token": "the-confirm-token",
+			"confirm_token": *sub.ConfirmToken,
 			"manage_token":  sub.ManageToken,
 			"ttl_seconds":   int64(7 * 24 * 3600),
 			"import_source": "luma",
@@ -2020,6 +2029,398 @@ func TestOutboxWorker_SendGate_UngatedKindsNeverSkip(t *testing.T) {
 		}
 		if skip {
 			t.Errorf("sendGate(%q) reported skip=true (%q) — %q is in ungatedKinds and must never be withheld on list state; gating auth/staff mail on a marketing suppression is an availability failure introduced by a safety feature (#0365's plan §2)", kind, reason, kind)
+		}
+	}
+}
+
+// TestOutboxWorker_SkipsDeferredImportInviteWhoseConfirmTokenWasSwept is
+// #0340's primary mutation proof: an import_invite row deferred by
+// deferMissingPhysicalAddress must not be delivered once its confirm_token
+// has been swept out from under it by a REAL
+// subscribers.Store.ExpirePendingSweep — which clears confirm_token to NULL
+// while deliberately leaving the subscriber 'pending' (#0128), so the
+// status predicate alone cannot see this. Modeled on
+// TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress (the
+// claim-then-defer poll) and TestOutboxWorker_DefersWelcome_MissingPhysicalAddress
+// (forcing next_attempt_at due rather than waiting out Backoff's 1-minute
+// first step). The rotation goes through the REAL production path, never a
+// raw UPDATE of confirm_token itself (CLAUDE.md §8b), so this proves the
+// fix against the exact mechanism that produces the hazard in production.
+//
+// Mutation (#0340's plan §8, M1): against the un-fixed code (no
+// tokenGatedKinds predicate in sendGate), this row is delivered 'sent',
+// carrying a confirm_token that resolves to nothing — every assertion below
+// after the sweep fails.
+func TestOutboxWorker_SkipsDeferredImportInviteWhoseConfirmTokenWasSwept(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "")
+
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+	subStore := subscribers.NewStore(pool)
+
+	email := uniqueOutboxRecipient(t)
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: email, ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, sub.ID)
+	})
+	if sub.ConfirmToken == nil {
+		t.Fatal("Create returned a subscriber with no confirm_token")
+	}
+	liveToken := *sub.ConfirmToken
+
+	// subStore.Create also enqueues an ordinary 'confirmation' row for the
+	// same subscriber/recipient (drained normally by this test's own
+	// worker below, before the sweep below rotates anything — see
+	// TestOutboxWorker_DefersWelcome_MissingPhysicalAddress's identical
+	// comment), so "nothing invited went out" is scoped to the invitation
+	// subject specifically, not to mailer.Sent()'s raw count.
+	const inviteSubject = "You're invited to the Open Circuit SF mailing list"
+	countInviteSent := func() int {
+		n := 0
+		for _, m := range mailer.Sent() {
+			if m.To == email && m.Subject == inviteSubject {
+				n++
+			}
+		}
+		return n
+	}
+
+	subID := sub.ID
+	id, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:         outbox.KindImportInvite,
+		Recipient:    email,
+		SubscriberID: &subID,
+		Payload: map[string]any{
+			"confirm_token": liveToken,
+			"manage_token":  sub.ManageToken,
+			"ttl_seconds":   int64(7 * 24 * 3600),
+			"import_source": "csv",
+			"source_detail": "test-import.csv",
+			"collected_at":  time.Now(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	// Wait for a full claim-then-defer cycle to settle back to 'queued' —
+	// proving this row is genuinely DEFERRED (#0340's premise), not merely
+	// unclaimed. Mirrors TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress's
+	// own comment on why 'sending' is a real intermediate state here.
+	deadline := time.Now().Add(2 * time.Second)
+	var status string
+	var attempts int
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(context.Background(),
+			`SELECT status, attempts FROM outbound_queue WHERE id = $1`, id,
+		).Scan(&status, &attempts); err != nil {
+			t.Fatalf("select: %v", err)
+		}
+		if attempts >= 1 && status == outbox.StatusQueued {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if attempts < 1 {
+		t.Fatal("worker never attempted the import-invite row within the deadline")
+	}
+	if status != outbox.StatusQueued {
+		t.Fatalf("status = %q after a deferred attempt, want %q (deferred, not abandoned/sent)", status, outbox.StatusQueued)
+	}
+	if n := countInviteSent(); n != 0 {
+		t.Fatalf("invitation messages sent = %d, want 0 before physical_address is configured", n)
+	}
+
+	// Rotate through the REAL production path: back-date
+	// confirm_expires_at, then run the real sweep. The row stays 'pending';
+	// confirm_token goes NULL (ExpirePendingSweep's own doc comment).
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE subscribers SET confirm_expires_at = $1 WHERE id = $2`,
+		time.Now().Add(-time.Minute), sub.ID,
+	); err != nil {
+		t.Fatalf("back-dating confirm_expires_at: %v", err)
+	}
+	if _, err := subStore.ExpirePendingSweep(context.Background(), time.Now()); err != nil {
+		t.Fatalf("ExpirePendingSweep: %v", err)
+	}
+	var liveNow *string
+	if err := pool.QueryRow(context.Background(), `SELECT confirm_token FROM subscribers WHERE id = $1`, sub.ID).Scan(&liveNow); err != nil {
+		t.Fatalf("select confirm_token: %v", err)
+	}
+	if liveNow != nil {
+		t.Fatalf("confirm_token = %q after ExpirePendingSweep, want NULL", *liveNow)
+	}
+
+	// The row is otherwise fully deliverable now — physical_address is set,
+	// so the defer is no longer the reason anything is withheld — and
+	// force it due immediately rather than waiting out Backoff's 1-minute
+	// first step (the same technique
+	// TestOutboxWorker_DefersWelcome_MissingPhysicalAddress uses).
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE outbound_queue SET next_attempt_at = now() WHERE id = $1 AND status = $2`,
+		id, outbox.StatusQueued,
+	); err != nil {
+		t.Fatalf("forcing due: %v", err)
+	}
+
+	finalStatus := waitForQueueStatus(t, pool, id)
+	if finalStatus != outbox.StatusSkipped {
+		t.Fatalf("status = %q after waiting, want %q — a swept confirm_token must withhold the deferred row rather than let it send", finalStatus, outbox.StatusSkipped)
+	}
+	var errText *string
+	if err := pool.QueryRow(context.Background(), `SELECT error FROM outbound_queue WHERE id = $1`, id).Scan(&errText); err != nil {
+		t.Fatalf("select error: %v", err)
+	}
+	if errText == nil || !strings.Contains(*errText, "confirm token") {
+		t.Errorf("error = %v, want a reason naming the confirm token", errText)
+	}
+	if n := countInviteSent(); n != 0 {
+		t.Fatalf("invitation messages sent = %d, want 0 — a link built from a swept token must never be delivered", n)
+	}
+}
+
+// TestOutboxWorker_SkipsConfirmationWhoseConfirmTokenWasRotated is #0340's
+// second mutation proof, and does double duty: it proves BOTH halves of
+// criterion 1 at once — the stale pre-resend row must be withheld, AND the
+// legitimate replacement subscribers.Store.AdminResendConfirmation enqueues
+// must still be delivered. A careless "cancel the whole subscriber's
+// confirmation mail on any rotation" implementation would pass the first
+// half and fail the second; this test would catch that.
+//
+// Mutation (#0340's plan §8, M2): against the un-fixed code, BOTH rows send
+// and the address receives two confirmations — the second assertion and the
+// exactly-one-message assertion both fail.
+func TestOutboxWorker_SkipsConfirmationWhoseConfirmTokenWasRotated(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
+	mailer := &RecordingMailer{}
+	w, _ := newTestOutboxWorker(t, pool, mailer)
+	subStore := subscribers.NewStore(pool)
+
+	email := uniqueOutboxRecipient(t)
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: email, ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, sub.ID)
+	})
+
+	// AdminResendConfirmation mints a fresh confirm_token and enqueues a
+	// SECOND outbox.KindConfirmation row in its own transaction, leaving
+	// the FIRST (Create's) row's payload carrying the now-stale token.
+	// cooldown=0 because Create already stamped confirm_sent_at
+	// (ErrResendCooldownActive otherwise).
+	if _, err := subStore.AdminResendConfirmation(context.Background(), sub.ID, time.Now(), 0, time.Hour); err != nil {
+		t.Fatalf("AdminResendConfirmation: %v", err)
+	}
+
+	var ids []int64
+	rows, err := pool.Query(context.Background(),
+		`SELECT id FROM outbound_queue WHERE kind = $1 AND subscriber_id = $2 ORDER BY id`,
+		outbox.KindConfirmation, sub.ID,
+	)
+	if err != nil {
+		t.Fatalf("query outbound_queue rows: %v", err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatalf("scan: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("outbound_queue confirmation rows for subscriber %d = %d, want 2 (Create's original plus the admin resend)", sub.ID, len(ids))
+	}
+	staleID, freshID := ids[0], ids[1]
+
+	runWorkerUntilStopped(t, w)
+
+	staleStatus := waitForQueueStatus(t, pool, staleID)
+	if staleStatus != outbox.StatusSkipped {
+		t.Errorf("stale (pre-resend) row status = %q after waiting, want %q — its payload confirm_token no longer matches the live one", staleStatus, outbox.StatusSkipped)
+	}
+	var staleErr *string
+	if err := pool.QueryRow(context.Background(), `SELECT error FROM outbound_queue WHERE id = $1`, staleID).Scan(&staleErr); err != nil {
+		t.Fatalf("select stale row error: %v", err)
+	}
+	if staleErr == nil || !strings.Contains(*staleErr, "confirm token") {
+		t.Errorf("stale row error = %v, want a reason naming the confirm token", staleErr)
+	}
+
+	freshStatus := waitForQueueStatus(t, pool, freshID)
+	if freshStatus != outbox.StatusSent {
+		t.Errorf("fresh (resend) row status = %q after waiting, want %q — the legitimate resend must still be delivered", freshStatus, outbox.StatusSent)
+	}
+
+	if got := sentTo(mailer, email); got != 1 {
+		t.Errorf("messages sent to %s = %d, want exactly 1 — the stale row must be withheld while the fresh resend still goes out, never both", email, got)
+	}
+}
+
+// TestOutboxWorker_TokenGateDoesNotShortCircuitPhysicalAddressDefer pins
+// #0340's plan §6 / acceptance criterion 3: a row carrying a VALID,
+// unrotated confirm_token must still take render's ordinary
+// deferMissingPhysicalAddress path when physical_address is blank — it must
+// settle back to 'queued' with attempts climbing, never 'skipped', never
+// sent. #0045/#0264's CAN-SPAM refusal (CLAUDE.md §9) is a restricted rule
+// and this issue's token predicate must not be able to weaken it.
+//
+// Unlike the pre-existing TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress
+// (which enqueues with a nil SubscriberID and so never reaches
+// SendEligibility at all — see #0365's own "trap" note in its Verification
+// section), this test sets a real SubscriberID, so it is the first test in
+// this file to drive sendGate's FULL chain — status, suppression, email,
+// AND the token predicate — at the same time render's physical-address
+// defer fires.
+//
+// Mutation (#0340's plan §8, M3): make tokenGate skip unconditionally
+// (ignore the token comparison) and this row becomes 'skipped' instead of
+// staying 'queued' — failing this test. The pre-existing
+// TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress,
+// TestOutboxWorker_DefersWelcome_MissingPhysicalAddress, and
+// TestAdminResendInvitation_PhysicalAddressGateNotBypassable all pass
+// UNMODIFIED alongside this one — see #0340's ## Verification.
+func TestOutboxWorker_TokenGateDoesNotShortCircuitPhysicalAddressDefer(t *testing.T) {
+	pool := outboxTestPool(t)
+	setSetting(t, pool, settingPhysicalAddress, "")
+
+	mailer := &RecordingMailer{}
+	w, store := newTestOutboxWorker(t, pool, mailer)
+	subStore := subscribers.NewStore(pool)
+
+	email := uniqueOutboxRecipient(t)
+	sub, err := subStore.Create(context.Background(), subscribers.NewSignup{
+		Email: email, ConfirmTTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, sub.ID)
+	})
+	if sub.ConfirmToken == nil {
+		t.Fatal("Create returned a subscriber with no confirm_token")
+	}
+
+	const inviteSubject = "You're invited to the Open Circuit SF mailing list"
+	countInviteSent := func() int {
+		n := 0
+		for _, m := range mailer.Sent() {
+			if m.To == email && m.Subject == inviteSubject {
+				n++
+			}
+		}
+		return n
+	}
+
+	subID := sub.ID
+	id, err := store.Enqueue(context.Background(), outbox.Item{
+		Kind:         outbox.KindImportInvite,
+		Recipient:    email,
+		SubscriberID: &subID,
+		Payload: map[string]any{
+			"confirm_token": *sub.ConfirmToken, // the LIVE token — unrotated
+			"manage_token":  sub.ManageToken,
+			"ttl_seconds":   int64(7 * 24 * 3600),
+			"import_source": "csv",
+			"source_detail": "test-import.csv",
+			"collected_at":  time.Now(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	runWorkerUntilStopped(t, w)
+
+	deadline := time.Now().Add(2 * time.Second)
+	var status string
+	var attempts int
+	for time.Now().Before(deadline) {
+		if err := pool.QueryRow(context.Background(),
+			`SELECT status, attempts FROM outbound_queue WHERE id = $1`, id,
+		).Scan(&status, &attempts); err != nil {
+			t.Fatalf("select: %v", err)
+		}
+		if attempts >= 1 && status == outbox.StatusQueued {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if attempts < 1 {
+		t.Fatal("worker never attempted the row within the deadline")
+	}
+	if status != outbox.StatusQueued {
+		t.Fatalf("status = %q, want %q — a valid, unrotated token must still take the physical_address defer path, never %q", status, outbox.StatusQueued, outbox.StatusSkipped)
+	}
+	if n := countInviteSent(); n != 0 {
+		t.Fatalf("invitation messages sent = %d, want 0", n)
+	}
+}
+
+// TestTokenGatedKindsPartitionEveryMailKind is #0340's plan §8 criterion 4's
+// coverage guard, a direct sibling of TestGatedKindsPartitionEveryMailKind
+// above: every mailKinds element must appear in EXACTLY ONE of
+// tokenGatedKinds/tokenUngatedKinds — no gap, no overlap — and every
+// tokenUngatedKinds value must be non-empty (#0296 item 4's
+// kindExceptions convention). Lives in-package for the identical reason
+// its sibling does (CLAUDE.md §8: mutating mailKinds/tokenGatedKinds/
+// tokenUngatedKinds changes THIS test's own inputs directly, a non-circular
+// oracle).
+//
+// Mutation (#0340's plan §8, M4): delete outbox.KindImportInvite from both
+// maps — this test fails, naming it.
+func TestTokenGatedKindsPartitionEveryMailKind(t *testing.T) {
+	for _, k := range mailKinds {
+		_, inGated := tokenGatedKinds[k]
+		_, inUngated := tokenUngatedKinds[k]
+		switch {
+		case inGated && inUngated:
+			t.Errorf("outbox.Kind %q is in BOTH tokenGatedKinds and tokenUngatedKinds — must be exactly one", k)
+		case !inGated && !inUngated:
+			t.Errorf("outbox.Kind %q (in mailKinds) is in NEITHER tokenGatedKinds nor tokenUngatedKinds — a token-rotation recheck decision was never made for it", k)
+		}
+	}
+
+	for k, reason := range tokenUngatedKinds {
+		if strings.TrimSpace(reason) == "" {
+			t.Errorf("tokenUngatedKinds[%q] has an empty or whitespace-only reason — an exemption from the token recheck must be deliberate, not silent", k)
+		}
+	}
+
+	// Reverse direction: tokenGatedKinds/tokenUngatedKinds must not name a
+	// kind mailKinds itself does not, mirroring
+	// TestGatedKindsPartitionEveryMailKind's own reverse check.
+	inMailKinds := map[outbox.Kind]bool{}
+	for _, k := range mailKinds {
+		inMailKinds[k] = true
+	}
+	for k := range tokenGatedKinds {
+		if !inMailKinds[k] {
+			t.Errorf("tokenGatedKinds names outbox.Kind %q, which is not in mailKinds", k)
+		}
+	}
+	for k := range tokenUngatedKinds {
+		if !inMailKinds[k] {
+			t.Errorf("tokenUngatedKinds names outbox.Kind %q, which is not in mailKinds", k)
 		}
 	}
 }
