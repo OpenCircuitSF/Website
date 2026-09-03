@@ -362,18 +362,33 @@ func pathExistsDirectly(paths map[string]bool, cited string) bool {
 }
 
 // citationTargetSkipDirs are pruned entirely from the repo-path walk:
-// version control internals and the one genuinely large vendored tree.
-// Deliberately NOT "dist" (web/dist/): web/dist/index.html is a tracked
-// placeholder (docs/frontend.md:16-18, "web/dist/index.html is
-// committed as a minimal placeholder ... web/dist/* is otherwise
-// gitignored"),
-// and several real comments cite it as "dist/index.html" or
-// "web/dist/index.html" (cmd/opencircuit/main.go, static.go, confirm.go,
-// web/embed.go, internal/seo). Pruning "dist" would make every one of
-// those legitimate citations unresolvable.
+// version control internals, the one genuinely large vendored tree, and
+// agent worktrees/scratch state. Deliberately NOT "dist" (web/dist/):
+// web/dist/index.html is a tracked placeholder (docs/frontend.md:16-18,
+// "web/dist/index.html is committed as a minimal placeholder ...
+// web/dist/* is otherwise gitignored"), and several real comments cite it
+// as "dist/index.html" or "web/dist/index.html" (cmd/opencircuit/main.go,
+// static.go, confirm.go, web/embed.go, internal/seo). Pruning "dist" would
+// make every one of those legitimate citations unresolvable.
+//
+// ".claude" IS pruned, and must be, for the opposite reason "dist" is not:
+// #0399 found CLAUDE.md §5a's own encouraged workflow — "Use a worktree
+// when two agents would otherwise edit the same files" — puts a full
+// second copy of this repository on disk at
+// .claude/worktrees/<agent-name>/, gitignored so `git status` never shows
+// it. Before this line existed, that second copy was walked exactly like
+// the real tree, and because pathExistsDirectly matches by suffix, a
+// comment citing a path that had been DELETED OR RENAMED in the live tree
+// still resolved against the worktree's stale copy — the guard reported
+// clean while the citation was dead. Unlike "dist", nothing under
+// ".claude" is ever a legitimate citation target: no real comment in this
+// tree cites a path inside an agent worktree or session scratch state, so
+// pruning it cannot make a real citation unresolvable the way pruning
+// "dist" would.
 var citationTargetSkipDirs = map[string]bool{
 	".git":         true,
 	"node_modules": true,
+	".claude":      true,
 }
 
 // collectRepoPaths walks the WHOLE repository tree (not just .go files —
