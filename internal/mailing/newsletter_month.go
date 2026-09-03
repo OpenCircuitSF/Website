@@ -20,7 +20,7 @@
 //
 // # Why this decision does not retroactively change minted slugs
 //
-// newsletterSlugFormat (campaigns.go) is a constant, not a settings row —
+// newsletterSlugFormat (this file) is a constant, not a settings row —
 // issues/0405.md §4 records the reasoning. Changing it here in a future
 // commit does not, and must not, alter a slug already written to
 // email_campaigns.slug; Create is the only writer and it runs once, at
@@ -45,6 +45,13 @@ var ErrInvalidNewsletterMonth = errors.New("mailing: newsletter_month must be YY
 // parseNewsletterMonthPattern anchors four digits first, so a transposed
 // "MM-YYYY" value can never parse — see this file's doc comment.
 var parseNewsletterMonthPattern = regexp.MustCompile(`^(\d{4})-(0[1-9]|1[0-2])$`)
+
+// newsletterSlugFormat is the fmt verb pair Slug applies: zero-padded
+// two-digit month, hyphen, four-digit year — issues/0405.md's decision.
+// A named constant, not a settings row; see this file's doc comment for why
+// changing it here does not retroactively alter a slug already written to
+// email_campaigns.slug.
+const newsletterSlugFormat = "%02d-%04d"
 
 // NewsletterMonth is a validated (year, month) pair opting a campaign into
 // #0405's MM-YYYY archive-slug template. Fields are unexported so the only
@@ -92,5 +99,5 @@ func (m NewsletterMonth) valid() bool {
 // Slug returns the MM-YYYY archive-slug template value — issues/0405.md's
 // decision, zero-padded two-digit month, hyphen, four-digit year.
 func (m NewsletterMonth) Slug() string {
-	return fmt.Sprintf("%02d-%04d", int(m.month), m.year)
+	return fmt.Sprintf(newsletterSlugFormat, int(m.month), m.year)
 }

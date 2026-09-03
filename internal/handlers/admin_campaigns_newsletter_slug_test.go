@@ -93,9 +93,15 @@ func TestAdminCampaigns_Create_InvalidNewsletterMonthReturns400(t *testing.T) {
 	}
 }
 
-// newsletterSlugShape matches #0405's MM-YYYY template exactly — used only
-// to assert an announcement's slug does NOT have this shape.
-var newsletterSlugShape = regexp.MustCompile(`^[0-9]{2}-[0-9]{4}$`)
+// newsletterSlugShape matches #0405's MM-YYYY template, with or without the
+// Create collision suffix (-2, -3, ...) — used only to assert an
+// announcement's slug does NOT have this shape. The suffix is optional in
+// the pattern because a workshop announcement that consumed the newsletter's
+// month AND got suffixed (e.g. "03-2031-2") is exactly the same defect as
+// one that took the unsuffixed slug outright; a pattern anchored to the
+// unsuffixed shape alone would miss that case (issues/0405.md's review
+// notes, commit 21d6d0c).
+var newsletterSlugShape = regexp.MustCompile(`^[0-9]{2}-[0-9]{4}(-[0-9]+)?$`)
 
 // TestAdminWorkshopAnnounce_DoesNotConsumeTheNewsletterMonthSlug is
 // issues/0405.md criterion 6's sharpest requirement: create a 2031-03
