@@ -219,11 +219,22 @@ var issueLineCitationFenceLinePattern = regexp.MustCompile(`(?m)^[ \t]*` + "`{3,
 // closed here.
 //
 // This is a parsing correction, not a new exemption: it changes what
-// counts as a fence, not what an exemption is willing to forgive. The
-// forged-marker residual the file-level comment above already discloses —
-// wrapping a citation in a fence carrying a fabricated marker line still
-// exempts it — is unchanged and still open; this function does not, and
-// cannot, tell a genuine transcript from a fabricated one.
+// counts as a fence, not what an exemption is willing to forgive, and two
+// residuals remain for the same underlying reason — pairing trusts the
+// fence lines it finds in document order rather than verifying what they
+// enclose. The forged-marker residual the file-level comment above already
+// discloses — wrapping a citation in a fence carrying a fabricated marker
+// line still exempts it — is unchanged and still open; this function does
+// not, and cannot, tell a genuine transcript from a fabricated one. The
+// second (#0395): pairing is still positional over the fence lines it
+// finds and does not consider fence length, so a nested fence of a
+// different length — a four-backtick wrapper around a three-backtick
+// block, say — can still shift pairs even when the total fence-line count
+// is even, silently exempting a citation sitting in the prose between the
+// inner block's close and the outer wrapper's close. Accepted rather than
+// closed for the same reason: teaching pairing about fence length would be
+// exactly the second mechanism #0391's criterion 6 already declined to
+// add.
 func issueLineCitationFencedBlockContainsTestMarker(text string, start int) bool {
 	fenceLines := issueLineCitationFenceLinePattern.FindAllStringIndex(text, -1)
 	for i := 0; i < len(fenceLines); i += 2 {
