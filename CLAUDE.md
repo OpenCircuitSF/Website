@@ -59,7 +59,8 @@ belong in this tracker.
   stacking an `ALTER TABLE`. **It ended at the deploy on 2026-08-25**, exactly as
   it said it would: `www.opencircuitsf.com` now serves this project (§7), and
   production's PostgreSQL holds a live `opencircuit` database with real rows in
-  it — `#0272` is open about two specific `outbound_queue` rows there.
+  it — `#0272` (resolved 2026-08-27) names two specific `outbound_queue`
+  rows there.
 
   **The rule has two parts, and they answer different questions (`#0407`).**
   The *principle* is load-bearing and permanent: never edit a migration that
@@ -72,7 +73,8 @@ belong in this tracker.
   migration. **Read as a bound on the files on disk, it is wrong in both
   directions**: it under-states once production moves past it, and it
   over-states by implying every numbered file in `migrations/` is untouchable
-  — most of them have never reached production at all.
+  — every file above the frozen bound has never reached production at all,
+  and `#0404` needed to edit one of them.
 
   **Production's applied version, read-only, self-dating — re-derive it
   yourself before trusting a number here, never carry a snapshot forward:**
@@ -80,7 +82,7 @@ belong in this tracker.
       ssh ec2
       sudo bash -c "source /etc/opencircuit/config.env && psql \"\$DATABASE_URL\" -tAc \"select version, dirty from schema_migrations\""
 
-  As of **2026-09-03** that returns `22 | f` — so **`000001`–`000022` are
+  As of **2026-09-03** that returns `22|f` — so **`000001`–`000022` are
   frozen**; `000023` and up have not reached production and stay editable in
   place until they do. New work still goes in a new numbered migration
   regardless of the current frozen bound, and a column added to an
