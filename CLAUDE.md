@@ -287,18 +287,31 @@ edit inside one of those roots must add that package to the scoped run:
 | `internal/mailing` | `internal/outbox` |
 
 **The package column above is guarded; the `Reaches into` column is not**
-(`#0387`). `internal/db`'s `TestClaudeMDRepoWideGuardPackageSetParity` reads
-this table's first column against a live scan of every `_test.go` file under
-`internal/` and `cmd/` (an escaping string literal, or the
-`runtime.Caller`/`os.Getwd` repo-root idiom `internal/subscribers` uses) and
-fails, naming the package, if a row is missing for a package that reaches out
-or a row remains for one that no longer does. It does **not** check that a
-row's `Reaches into` prose still describes what its guard actually scans, and
-it does not check the routing sentence below the table either — both stay
-hand-maintained. **So: when you change a guard's scan roots without adding or
-removing the package entirely, update its row by hand** — the guard cannot see
-that edit. When a package starts or stops reaching outside itself entirely,
-the guard will catch a stale table on the next `internal/db` run.
+(`#0387`). Only the column is cheaply checkable — a package either reaches
+outside its own directory or it does not — while the `Reaches into` cells are
+prose written for a human router, and making them machine-comparable would mean
+rewriting them into a path list, discarding the routing guidance three `#0381`
+review rounds tuned. The asymmetry decides it: a stale `Reaches into` cell
+misdescribes *why* a package is listed, but a **missing row** makes an agent
+skip the package entirely and conclude clean — the `#0381` failure this table
+exists to prevent.
+
+`internal/db`'s `TestClaudeMDRepoWideGuardPackageSetParity` reads this table's
+first column against a live scan of every `_test.go` file under `internal/` and
+`cmd/`, and fails naming the package if a row is missing for one that reaches
+out, or remains for one that no longer does. **It recognises a reach two ways
+only**: an escaping `..` path segment in a string literal, or a
+`runtime.Caller`/`os.Getwd` call — the repo-root idiom `internal/subscribers`
+uses, and the only way that package is visible at all. A reach built any other
+way it cannot see: an absolute path from an environment variable, say, or one
+living in an ordinary `.go` file rather than a `_test.go` one. No package does
+either today; the guard will not tell you when one starts.
+
+It does **not** check that a row's `Reaches into` prose still describes what its
+guard scans, and it does not check the routing sentence below — both stay
+hand-maintained. **So: when you change a guard's scan roots without the package
+starting or stopping reaching out altogether, update its row by hand** — the
+guard cannot see that edit.
 
 Editing `PRD.md` means running `internal/db`. Editing `CLAUDE.md` means
 running **both** `internal/db` and `internal/handlers` — renumbering or
