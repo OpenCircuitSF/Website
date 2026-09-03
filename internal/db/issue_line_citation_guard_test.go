@@ -219,22 +219,32 @@ var issueLineCitationFenceLinePattern = regexp.MustCompile(`(?m)^[ \t]*` + "`{3,
 // closed here.
 //
 // This is a parsing correction, not a new exemption: it changes what
-// counts as a fence, not what an exemption is willing to forgive, and two
-// residuals remain for the same underlying reason — pairing trusts the
-// fence lines it finds in document order rather than verifying what they
-// enclose. The forged-marker residual the file-level comment above already
-// discloses — wrapping a citation in a fence carrying a fabricated marker
-// line still exempts it — is unchanged and still open; this function does
-// not, and cannot, tell a genuine transcript from a fabricated one. The
-// second (#0395): pairing is still positional over the fence lines it
-// finds and does not consider fence length, so a nested fence of a
-// different length — a four-backtick wrapper around a three-backtick
-// block, say — can still shift pairs even when the total fence-line count
-// is even, silently exempting a citation sitting in the prose between the
-// inner block's close and the outer wrapper's close. Accepted rather than
-// closed for the same reason: teaching pairing about fence length would be
-// exactly the second mechanism #0391's criterion 6 already declined to
-// add.
+// counts as a fence, not what an exemption is willing to forgive. Two
+// residuals remain, and they are different in kind rather than one
+// shared cause: this predicate infers a semantic property — that the
+// text around a citation is real captured output — from purely
+// syntactic ones, in two independent places. The forged-marker residual
+// the file-level comment above already discloses — wrapping a citation
+// in a fence carrying a fabricated marker line still exempts it — is
+// unchanged and still open; pairing is correct in that case, and this
+// function does not, and cannot, tell a genuine transcript from a
+// fabricated one. The second (#0395) is a pairing limit instead:
+// pairing stays positional over the fence lines it finds and does not
+// consider fence length, so a nested fence of a different length is
+// paired as though it were an ordinary delimiter. A four-backtick
+// wrapper around one complete three-backtick block is harmless — the
+// shifted pairs are subranges of the block a length-aware parse would
+// produce, so the verdict is unchanged — but a wrapper enclosing an odd
+// number of inner fence lines shifts every pair after it and leaves the
+// wrapper's own closing fence read as an unterminated open running to
+// the end of the section. That sweeps prose sitting outside every real
+// block into a pseudo-block, where a marker line can exempt a citation
+// a length-aware parse would have left non-exempt. It happens at an
+// even total fence-line count, which is why #0391's odd-count fix does
+// not reach it; issues/0092.md carries exactly that shape and is
+// resolved, so nothing in scope is affected today. Accepted rather than
+// closed: teaching pairing about fence length would be exactly the
+// second mechanism #0391's criterion 6 already declined to add.
 func issueLineCitationFencedBlockContainsTestMarker(text string, start int) bool {
 	fenceLines := issueLineCitationFenceLinePattern.FindAllStringIndex(text, -1)
 	for i := 0; i < len(fenceLines); i += 2 {
