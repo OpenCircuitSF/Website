@@ -234,17 +234,25 @@ var issueLineCitationFenceLinePattern = regexp.MustCompile(`(?m)^[ \t]*` + "`{3,
 // paired as though it were an ordinary delimiter. A four-backtick
 // wrapper around one complete three-backtick block is harmless — the
 // shifted pairs are subranges of the block a length-aware parse would
-// produce, so the verdict is unchanged — but a wrapper enclosing an odd
-// number of inner fence lines shifts every pair after it and leaves the
-// wrapper's own closing fence read as an unterminated open running to
-// the end of the section. That sweeps prose sitting outside every real
-// block into a pseudo-block, where a marker line can exempt a citation
-// a length-aware parse would have left non-exempt. It happens at an
-// even total fence-line count, which is why #0391's odd-count fix does
-// not reach it; issues/0092.md carries exactly that shape and is
-// resolved, so nothing in scope is affected today. Accepted rather than
-// closed: teaching pairing about fence length would be exactly the
-// second mechanism #0391's criterion 6 already declined to add.
+// produce, so the verdict is unchanged. A wrapper enclosing an odd
+// number of inner fence lines is not: it shifts every pair after it,
+// so the wrapper's own closing fence is itself read as an opener and
+// sweeps prose sitting outside every real block into a pseudo-block,
+// which a marker line anywhere inside then exempts where a
+// length-aware parse would not. That pseudo-block is bounded by the
+// next fence line when one follows, and runs unterminated to the end
+// of the section when the wrapper's close is the last fence. Neither
+// form is reached by #0391's line-anchoring, whose subject is fence
+// shape rather than fence length; the unterminated form is in fact
+// reachable only because #0391 treats a lone trailing fence as an open
+// block rather than dropping it, which is the right call for a
+// genuinely uncut transcript and the wrong one for a wrapper's close
+// misread as an opener. issues/0092.md carries that unterminated form,
+// a four-backtick wrapper around five three-backtick lines whose close
+// is the last fence in its section, and it is resolved, so nothing in
+// scope is affected today. Accepted rather than closed: teaching
+// pairing about fence length would be exactly the second mechanism
+// #0391's criterion 6 already declined to add.
 func issueLineCitationFencedBlockContainsTestMarker(text string, start int) bool {
 	fenceLines := issueLineCitationFenceLinePattern.FindAllStringIndex(text, -1)
 	for i := 0; i < len(fenceLines); i += 2 {
