@@ -1149,6 +1149,109 @@ func TestOutbox_Counts_ReportsSkippedDistinctlyFromAbandoned(t *testing.T) {
 	}
 }
 
+// TestOutbox_Counts_OldestQueuedAgeSecs is #0394's proof: Counts'
+// OldestQueuedAgeSecs column, built from a `min(created_at) FILTER (WHERE
+// status = $1)` clause, reports the age of the oldest QUEUED row and
+// nothing else. #0390's review measured two mutations of that clause that
+// left the whole package -- #0389's and #0390's own hardened
+// TestOutbox_Counts included -- fully green: repointing the FILTER at
+// StatusAbandoned, and dropping the FILTER entirely so the column reports
+// the oldest row in ANY status. Neither of those five columns' assertions
+// touches OldestQueuedAgeSecs at all, so nothing caught either mutation.
+//
+// Same remedy shape as #0389/#0390: a moment where the reported quantity is
+// attributable to the queued row and to nothing else. This test backdates
+// one queued row to a precisely known age (targetAgeSecs) and backdates one
+// "poison" row per OTHER status -- sending, sent, abandoned, skipped -- to
+// an age two orders of magnitude larger (poisonAgeSecs). A FILTER correctly
+// scoped to StatusQueued alone reports targetAgeSecs regardless of the
+// poison rows' presence. A FILTER repointed at any ONE of the four other
+// statuses reports that status's own oldest row -- one of the poison
+// rows -- which lands near poisonAgeSecs, not targetAgeSecs. A FILTER
+// removed entirely reports the oldest row in the whole table, which is
+// dominated by whichever poison row is oldest -- also near poisonAgeSecs,
+// never targetAgeSecs. So the single assertion below is what #0394 calls
+// for: it fires under repointing to any of the four other statuses AND
+// under dropping the FILTER, and it does not fire on unmutated code,
+// because the ~100000s gap between targetAgeSecs and poisonAgeSecs is far
+// wider than the assertion's tolerance in either direction.
+//
+// created_at is set directly via SQL (the same technique
+// TestOutbox_LatestByRecipients_ReturnsMostRecentPerRecipient already uses
+// to backdate a row) rather than by sleeping (CLAUDE.md §5 / #394 criterion
+// 6): the reported age is deterministic, and the assertion's tolerance
+// below covers only the round trip between the UPDATE and the Counts()
+// call that follows it, not any real elapsed wait -- so this test's running
+// time does not depend on machine load.
+func TestOutbox_Counts_OldestQueuedAgeSecs(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	before, err := store.Counts(ctx)
+	if err != nil {
+		t.Fatalf("Counts (before): %v", err)
+	}
+
+	// This package's outbound_queue is truncated once in TestMain, not
+	// between tests (same idiom as TestOutbox_Counts above), so an earlier
+	// test may have left queued rows behind with some nonzero age.
+	// targetAgeSecs must exceed before.OldestQueuedAgeSecs by a margin much
+	// larger than the few seconds elapsed since `before` was measured, so
+	// backdating the row below to targetAgeSecs is guaranteed to make it
+	// the new oldest queued row regardless of that residue.
+	targetAgeSecs := before.OldestQueuedAgeSecs + 5000
+
+	// poisonAgeSecs is targetAgeSecs plus another 100000s -- far enough that
+	// no realistic scheduling delay or clock skew could make a poison row's
+	// reported age land within the tolerance asserted below.
+	poisonAgeSecs := targetAgeSecs + 100000
+
+	queuedKind := distinctKind(t)
+	queuedID, err := store.Enqueue(ctx, Item{Kind: queuedKind, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue queued: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE outbound_queue SET created_at = now() - ($2 * interval '1 second') WHERE id = $1`,
+		queuedID, targetAgeSecs,
+	); err != nil {
+		t.Fatalf("backdating queued row %d to age %ds: %v", queuedID, targetAgeSecs, err)
+	}
+
+	poisonStatuses := []string{StatusSending, StatusSent, StatusAbandoned, StatusSkipped}
+	poisonIDs := make([]int64, len(poisonStatuses))
+	for i, status := range poisonStatuses {
+		kind := distinctKind(t)
+		id, err := store.Enqueue(ctx, Item{Kind: kind, Recipient: uniqueRecipient(t)})
+		if err != nil {
+			t.Fatalf("Enqueue poison row (status %q): %v", status, err)
+		}
+		poisonIDs[i] = id
+		if _, err := pool.Exec(ctx,
+			`UPDATE outbound_queue SET status = $2, created_at = now() - ($3 * interval '1 second') WHERE id = $1`,
+			id, status, poisonAgeSecs,
+		); err != nil {
+			t.Fatalf("backdating poison row %d (status %q) to age %ds: %v", id, status, poisonAgeSecs, err)
+		}
+	}
+
+	after, err := store.Counts(ctx)
+	if err != nil {
+		t.Fatalf("Counts (after): %v", err)
+	}
+
+	// toleranceSecs covers only query round-trip time between the UPDATEs
+	// above and this Counts() call -- not machine load (CLAUDE.md §5) -- and
+	// is two orders of magnitude smaller than the gap to poisonAgeSecs, so
+	// it cannot mask a repointed or removed FILTER.
+	const toleranceSecs = 5
+	diff := after.OldestQueuedAgeSecs - targetAgeSecs
+	if diff < -toleranceSecs || diff > toleranceSecs {
+		t.Fatalf("OldestQueuedAgeSecs = %d, want %d +/- %ds (the age backdated onto the queued row, id %d) -- got a value %ds away, which is far closer to the poison rows' age %d (ids %v, backdated into sending/sent/abandoned/skipped) than to the queued row's, meaning the FILTER is not scoped to StatusQueued alone", after.OldestQueuedAgeSecs, targetAgeSecs, toleranceSecs, queuedID, diff, poisonAgeSecs, poisonIDs)
+	}
+}
+
 // TestOutbox_LatestByRecipients_ReturnsMostRecentPerRecipient is #0128's
 // proof: for a recipient with more than one outbound_queue row of the same
 // kind, LatestByRecipients returns the MOST RECENT one (by created_at), not
