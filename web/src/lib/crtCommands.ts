@@ -9,6 +9,21 @@ import { CRT_LINE_CHARS } from './crtScreen';
 
 export { CRT_LINE_CHARS };
 
+/** #0403: shown after a successful create/update/delete/reorder/active-toggle
+ *  in the CRT session admin section, via CrtCommands.svelte's `saveNote`
+ *  role="status" region. Two independent 60s cache windows sit between a
+ *  save and the change actually reaching a home-page visitor -- the
+ *  `GET /api/crt-session` server-side in-process cache (#0393) and that
+ *  response's own `Cache-Control: max-age=60` in the browser -- and they do
+ *  not align, so measured worst case is closer to two minutes than to one.
+ *  "Up to a minute" is therefore the honest ceiling to name; a precise
+ *  number like "in 60 seconds" would be wrong often enough to be its own
+ *  annoyance. Naming the hard reload costs nothing and needs no change to
+ *  either cache. Kept here, not inlined in the component, so the wording is
+ *  one unit-tested string (CLAUDE.md §1). */
+export const CRT_SAVE_NOTE =
+  "Saved. It can take up to a minute to appear on the home page — if it still looks out of date, a hard reload bypasses your browser's own cached copy.";
+
 // Mirrors internal/crt.ValidSlug / the crt_commands_slug_format CHECK
 // constraint (internal/crt/store.go): lowercase alphanumerics separated by
 // single hyphens, no leading, trailing, or doubled hyphens. Identical

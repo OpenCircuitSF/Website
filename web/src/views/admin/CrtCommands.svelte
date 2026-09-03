@@ -19,9 +19,21 @@
   larger form needs one.
 
   #0393's Open question 3 ("rate of change"): the public GET /api/crt-session
-  endpoint caches for 60s, so a save here can take up to a minute to reach
-  the live home page. Said explicitly in the panel copy below rather than
-  left for an admin to wonder whether the save took.
+  endpoint caches for 60s, and the response also carries its own
+  Cache-Control: max-age=60 the browser honours independently, so a save
+  here can take up to a minute -- worst case closer to two -- to reach the
+  live home page. #0403 turned this from a permanent paragraph (ignored
+  within a day, per its own acceptance criteria) into `saveNote`: a
+  role="status" region, unconditional at the top of the "CRT session" panel
+  (so it is a persistent DOM node whose text mutates, never one created and
+  destroyed by an {#if} -- #0063's rule, satisfied trivially here since
+  nothing gates this element) that is empty (sr-only) until a
+  create/update/delete/reorder/active-toggle succeeds, then carries
+  CRT_SAVE_NOTE (lib/crtCommands.ts) until the next attempt starts. No
+  self-dismiss timer: modelled on WorkshopEditor.svelte's own `saveNotice`
+  (reset to null when an attempt starts, set on success), which avoids a
+  timer that could outlive the component entirely rather than needing to
+  prove its cleanup.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -35,6 +47,7 @@
     crtOverBudgetWarning,
     CRT_SOURCES,
     CRT_LINE_CHARS,
+    CRT_SAVE_NOTE,
   } from '../../lib/crtCommands';
   import { formatDateTime } from '../../lib/admin';
   import type { CrtCommand } from '../../lib/types';
@@ -45,6 +58,16 @@
   let loading = $state(true);
   let loadError = $state<string | null>(null);
   const sorted = $derived(sortedCrtCommands(commands));
+
+  // #0403: the "up to a minute, hard-reload to bypass the browser's own
+  // cache" note shown after a successful create/update/delete/reorder/
+  // active-toggle. Reset to null when an attempt STARTS (matching
+  // WorkshopEditor.svelte's saveNotice) so a failed action never leaves a
+  // stale success note on screen, and set to CRT_SAVE_NOTE only once that
+  // attempt actually succeeds. Rendered by a single, unconditional
+  // role="status" <p> below -- see the file header comment for why that
+  // placement needs no KNOWN_STABLE_BRANCH_SITES entry.
+  let saveNote = $state<string | null>(null);
 
   async function load(): Promise<void> {
     loading = true;
@@ -82,6 +105,7 @@
     }
     creating = true;
     createError = null;
+    saveNote = null;
     try {
       // A new command is appended after the current highest sort_order,
       // matching Admin.svelte's own "submitCreateInterest" convention.
@@ -92,6 +116,7 @@
       newCommand = '';
       newOutput = '';
       newSource = 'static';
+      saveNote = CRT_SAVE_NOTE;
     } catch (err) {
       createError =
         err instanceof ApiError
@@ -136,6 +161,7 @@
     }
     savingId = id;
     saveError = { ...saveError, [id]: '' };
+    saveNote = null;
     try {
       const updated = await updateCrtCommand(id, {
         command: draft.command,
@@ -145,6 +171,7 @@
       });
       commands = commands.map((c) => (c.id === updated.id ? updated : c));
       closeEdit(id);
+      saveNote = CRT_SAVE_NOTE;
     } catch (err) {
       saveError = {
         ...saveError,
@@ -161,9 +188,11 @@
   async function toggleActive(c: CrtCommand): Promise<void> {
     togglingId = c.id;
     saveError = { ...saveError, [c.id]: '' };
+    saveNote = null;
     try {
       const updated = await updateCrtCommand(c.id, { active: !c.active });
       commands = commands.map((it) => (it.id === updated.id ? updated : it));
+      saveNote = CRT_SAVE_NOTE;
     } catch (err) {
       saveError = {
         ...saveError,
@@ -183,6 +212,7 @@
     if (!swap) return;
     reorderingId = c.id;
     reorderError = null;
+    saveNote = null;
     try {
       const [movedRes, otherRes] = await Promise.all([
         updateCrtCommand(swap.moved.id, { sort_order: swap.moved.sortOrder }),
@@ -193,6 +223,7 @@
         if (it.id === otherRes.id) return otherRes;
         return it;
       });
+      saveNote = CRT_SAVE_NOTE;
     } catch (err) {
       reorderError = err instanceof ApiError ? err.message : 'Could not reorder commands. Please try again.';
     } finally {
@@ -207,10 +238,12 @@
   async function handleDelete(c: CrtCommand): Promise<void> {
     deletingId = c.id;
     deleteRowError = { ...deleteRowError, [c.id]: '' };
+    saveNote = null;
     try {
       await deleteCrtCommand(c.id);
       commands = commands.filter((it) => it.id !== c.id);
       closeEdit(c.id);
+      saveNote = CRT_SAVE_NOTE;
     } catch (err) {
       deleteRowError = {
         ...deleteRowError,
@@ -283,9 +316,7 @@
 </Panel>
 
 <Panel title="CRT session" noPadding={sorted.length > 0 && !loading && !loadError}>
-  <p class="text-muted crt-cache-note">
-    The public screen caches for up to 60 seconds — a save here may take a minute to appear on the home page.
-  </p>
+  <p class={saveNote ? 'text-muted crt-cache-note' : 'sr-only'} role="status">{saveNote ?? ''}</p>
   {#if loading}
     <p class="text-muted" role="status">Loading CRT commands…</p>
   {:else if loadError}
@@ -387,17 +418,31 @@
                       <p class="text-muted crt-width-hint">
                         The CRT glass fits about {CRT_LINE_CHARS} characters per line; longer lines are truncated there.
                       </p>
-                      <!-- No role="status": this row's editor sits inside
-                           {#if editing[c.id]}, and liveRegionGuard.
+                      <!-- #0396: role="status" matches the create form's
+                           identical warning above. This element sits inside
+                           {#if editing[c.id]}, so liveRegionGuard.
                            structuralGuard.test.ts's persistence rule (#0063)
-                           requires either a swap target or an allowlist
-                           entry for any in-branch live region. A per-
-                           keystroke width hint isn't the kind of state
-                           change that rule is protecting -- the create
-                           form's equivalent hint (above) IS role="status"
-                           because it sits in the always-mounted "Add a
-                           command" panel, not behind a branch. -->
-                      <p class="text-warn">{crtOverBudgetWarning(draft.output) ?? ''}</p>
+                           requires either a swap target or a
+                           KNOWN_STABLE_BRANCH_SITES entry -- it has the
+                           latter (see that set's own comment in
+                           liveRegionGuard.structuralGuard.test.ts). The
+                           branch is a real KNOWN_STABLE_BRANCH_SITES case,
+                           not an obstacle to route around: {#if
+                           editing[c.id]} mounts once when an admin clicks
+                           Edit and stays mounted for the whole editing
+                           session -- a full form (command text, output
+                           textarea, source select, active checkbox), well
+                           past #0306's 8-element threshold -- so it is not
+                           driven by this warning's own presence, the same
+                           argument already recorded for WorkshopEditor.
+                           svelte's unsavedInterestsHint. (An earlier version
+                           of this comment reasoned the other way -- omitted
+                           the role specifically to avoid needing that
+                           allowlist entry, which is shaping markup to keep a
+                           guard quiet rather than deciding what's
+                           accessible. That reasoning was the defect #0396
+                           filed to correct, not a fact about this branch.) -->
+                      <p class="text-warn" role="status">{crtOverBudgetWarning(draft.output) ?? ''}</p>
                     </div>
                     <div class="field">
                       <label for={`crt-edit-source-${c.id}`}>Source</label>

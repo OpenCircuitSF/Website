@@ -980,6 +980,12 @@ const KNOWN_STABLE_BRANCH_SITES: AllowlistEntry[] = [
     match: '<p class="text-warn" role="status">{unsavedInterestsHint}</p>',
     reason: KNOWN_STABLE_BRANCH_REASON_MAIN_FORM,
   },
+  {
+    file: 'web/src/views/admin/CrtCommands.svelte',
+    match: '<p class="text-warn" role="status">{crtOverBudgetWarning(draft.output) ?? \'\'}</p>',
+    reason:
+      "#0396: unconditionally rendered itself (not wrapped in its OWN {#if}) inside {#if editing[c.id]}, the per-row inline editor -- mounted once when an admin clicks Edit on that row and stays mounted for the whole editing session (command text, output textarea, source select, active checkbox: a full form, well past #0306's 8-element KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT threshold), not created or destroyed on account of this warning's own presence. The same argument already recorded for WorkshopEditor.svelte's unsavedInterestsHint above, applied to CrtCommands.svelte's row editor rather than its main form. An earlier version of this element omitted role=\"status\" specifically to avoid needing this entry -- shaping markup to keep the guard quiet rather than deciding what's accessible, which is what #0396 was filed to correct; the create form's identical warning (CrtCommands.svelte, always-mounted \"Add a command\" panel) was role=\"status\" from #0393 onward and needed no entry at all.",
+  },
 ];
 
 // ---------------------------------------------------------------------------
