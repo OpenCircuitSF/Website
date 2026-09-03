@@ -286,6 +286,20 @@ edit inside one of those roots must add that package to the scoped run:
 | `cmd/opencircuit` | every `internal/*` package `servePostgres` imports, parsed for `*seo.Site` flow |
 | `internal/mailing` | `internal/outbox` |
 
+**The package column above is guarded; the `Reaches into` column is not**
+(`#0387`). `internal/db`'s `TestClaudeMDRepoWideGuardPackageSetParity` reads
+this table's first column against a live scan of every `_test.go` file under
+`internal/` and `cmd/` (an escaping string literal, or the
+`runtime.Caller`/`os.Getwd` repo-root idiom `internal/subscribers` uses) and
+fails, naming the package, if a row is missing for a package that reaches out
+or a row remains for one that no longer does. It does **not** check that a
+row's `Reaches into` prose still describes what its guard actually scans, and
+it does not check the routing sentence below the table either — both stay
+hand-maintained. **So: when you change a guard's scan roots without adding or
+removing the package entirely, update its row by hand** — the guard cannot see
+that edit. When a package starts or stops reaching outside itself entirely,
+the guard will catch a stale table on the next `internal/db` run.
+
 Editing `PRD.md` means running `internal/db`. Editing `CLAUDE.md` means
 running **both** `internal/db` and `internal/handlers` — renumbering or
 deleting a `##` section, or renaming any file a Go comment cites, fails
