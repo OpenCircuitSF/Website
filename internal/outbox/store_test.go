@@ -1172,17 +1172,23 @@ func TestOutbox_Counts_ReportsSkippedDistinctlyFromAbandoned(t *testing.T) {
 // dominated by whichever poison row is oldest -- also near poisonAgeSecs,
 // never targetAgeSecs. So the single assertion below is what #0394 calls
 // for: it fires under repointing to any of the four other statuses AND
-// under dropping the FILTER, and it does not fire on unmutated code,
-// because the ~100000s gap between targetAgeSecs and poisonAgeSecs is far
-// wider than the assertion's tolerance in either direction.
+// under dropping the FILTER, and it does not fire on unmutated code, because
+// the ~100000s gap between targetAgeSecs and poisonAgeSecs is far wider than
+// the bounds window the assertion checks against (see below).
 //
 // created_at is set directly via SQL (the same technique
 // TestOutbox_LatestByRecipients_ReturnsMostRecentPerRecipient already uses
 // to backdate a row) rather than by sleeping (CLAUDE.md §5 / #394 criterion
-// 6): the reported age is deterministic, and the assertion's tolerance
-// below covers only the round trip between the UPDATE and the Counts()
-// call that follows it, not any real elapsed wait -- so this test's running
-// time does not depend on machine load.
+// 6): the reported age is deterministic. The assertion below checks bounds
+// derived from the fixture's own target/poison separation rather than from
+// any tolerance constant -- so it does not rest on expected query-round-trip
+// timing at all, and cannot be defeated by a busy machine (CLAUDE.md §5: no
+// constant sized against measured machine load). A second queued row, left
+// at its natural (~0s) age, makes the queued status have a distinct oldest
+// and newest row, so a FILTER change that swaps MIN for MAX is
+// distinguishable too -- without relying on residue left by other tests in
+// this package (#0386's residue-proofing); run alone, this test would
+// otherwise be the only queued row in the table and min/max would coincide.
 func TestOutbox_Counts_OldestQueuedAgeSecs(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
@@ -1219,6 +1225,15 @@ func TestOutbox_Counts_OldestQueuedAgeSecs(t *testing.T) {
 		t.Fatalf("backdating queued row %d to age %ds: %v", queuedID, targetAgeSecs, err)
 	}
 
+	// A SECOND queued row, left at its natural age (~0s). The queued status
+	// then has a distinct oldest and newest row, so min(created_at) and
+	// max(created_at) are distinguishable WITHOUT depending on residue left
+	// by other tests in this package (#0386's residue-proofing). Without it,
+	// run alone this test cannot tell min from max.
+	if _, err := store.Enqueue(ctx, Item{Kind: distinctKind(t), Recipient: uniqueRecipient(t)}); err != nil {
+		t.Fatalf("Enqueue second (young) queued row: %v", err)
+	}
+
 	poisonStatuses := []string{StatusSending, StatusSent, StatusAbandoned, StatusSkipped}
 	poisonIDs := make([]int64, len(poisonStatuses))
 	for i, status := range poisonStatuses {
@@ -1241,14 +1256,18 @@ func TestOutbox_Counts_OldestQueuedAgeSecs(t *testing.T) {
 		t.Fatalf("Counts (after): %v", err)
 	}
 
-	// toleranceSecs covers only query round-trip time between the UPDATEs
-	// above and this Counts() call -- not machine load (CLAUDE.md §5) -- and
-	// is two orders of magnitude smaller than the gap to poisonAgeSecs, so
-	// it cannot mask a repointed or removed FILTER.
-	const toleranceSecs = 5
-	diff := after.OldestQueuedAgeSecs - targetAgeSecs
-	if diff < -toleranceSecs || diff > toleranceSecs {
-		t.Fatalf("OldestQueuedAgeSecs = %d, want %d +/- %ds (the age backdated onto the queued row, id %d) -- got a value %ds away, which is far closer to the poison rows' age %d (ids %v, backdated into sending/sent/abandoned/skipped) than to the queued row's, meaning the FILTER is not scoped to StatusQueued alone", after.OldestQueuedAgeSecs, targetAgeSecs, toleranceSecs, queuedID, diff, poisonAgeSecs, poisonIDs)
+	// Both bounds come from the fixture's own separation, never from expected
+	// query timing (CLAUDE.md §5 -- no constant is sized against machine
+	// load). LOWER: the reported age can only be >= targetAgeSecs, because the
+	// target row is the oldest queued row and wall-clock time only moves
+	// forward between its UPDATE and this Counts() call; a min -> max mutation
+	// reports the young queued row instead and lands near 0. UPPER: every
+	// poison row is backdated to at least poisonAgeSecs, so a FILTER repointed
+	// at another status -- or removed -- reports >= poisonAgeSecs, while the
+	// true value could only reach it if the round trips above took 100000
+	// seconds.
+	if after.OldestQueuedAgeSecs < targetAgeSecs || after.OldestQueuedAgeSecs >= poisonAgeSecs {
+		t.Fatalf("OldestQueuedAgeSecs = %d, want >= %d and < %d (the age backdated onto the queued row, id %d; the poison rows, ids %v, were backdated into sending/sent/abandoned/skipped at age %d) -- a value outside that window means the column is not scoped to the OLDEST QUEUED row alone", after.OldestQueuedAgeSecs, targetAgeSecs, poisonAgeSecs, queuedID, poisonIDs, poisonAgeSecs)
 	}
 }
 
