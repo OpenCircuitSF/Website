@@ -987,12 +987,52 @@ func TestImportStore_Revoke_UnknownID(t *testing.T) {
 
 // TestImportStore_Revoke_RequiresReason proves the reason field is
 // mandatory, matching consent_note's own convention.
+//
+// #0388: this used to target the hardcoded import id 1. Revoke's blank-reason
+// check returns before pool.Begin, so nothing was ever reached — but that
+// check is exactly what a mutation proving this test discriminates would
+// remove, and Revoke would then run its full transaction (unsubscribing
+// every subscriber attributed to the import, and marking the import
+// revoked) against whatever id 1 happened to be. A seeded throwaway import
+// is used instead of a nonexistent sentinel: the side effect here is
+// destructive, so the test needs to prove the guard fires before that
+// side effect reaches a real row, not merely before a lookup. The
+// post-call GetImport assertion is what makes that provable — it fails if
+// the blank-reason check is removed, exactly because the seeded row is
+// real enough for the rest of Revoke to act on it.
 func TestImportStore_Revoke_RequiresReason(t *testing.T) {
 	pool := testPool(t)
 	store := NewImportStore(pool)
-	_, _, _, err := store.Revoke(context.Background(), 1, "   ", time.Now())
+	subStore := NewStore(pool)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	in := validCommitInput(t, []ImportRow{{Email: uniqueImportEmail(t)}})
+	committed, err := store.Commit(context.Background(), in, now)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	_, _, _, err = store.Revoke(context.Background(), committed.Import.ID, "   ", time.Now())
 	if !errors.Is(err, ErrRevokeReasonRequired) {
 		t.Errorf("Revoke with blank reason err = %v, want ErrRevokeReasonRequired", err)
+	}
+
+	// The seeded import and its subscriber must be untouched: the guard
+	// must fire before the transaction's side effects, not just before
+	// its error is observed.
+	after, err := store.GetImport(context.Background(), committed.Import.ID)
+	if err != nil {
+		t.Fatalf("GetImport after blank-reason Revoke: %v", err)
+	}
+	if after.Status == ImportStatusRevoked {
+		t.Error("import was revoked despite a blank reason — guard did not fire before the side effect")
+	}
+	sub, err := subStore.FindByEmail(context.Background(), in.Rows[0].Email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+	if sub.Status == StatusUnsubscribed {
+		t.Error("subscriber was unsubscribed despite a blank reason — guard did not fire before the side effect")
 	}
 }
 
