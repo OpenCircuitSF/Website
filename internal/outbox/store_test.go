@@ -953,6 +953,19 @@ func TestOutbox_OrphanSweep_Unscoped_SweepsAcrossKinds(t *testing.T) {
 // Sent -- scoped to ITS OWN distinct kind, so ClaimDue cannot touch the row
 // left queued -- and asserts a delta on each side rather than an absolute
 // floor, so it needs no residue from any other test to pass.
+//
+// #0389 -- the two after-deltas above (Queued +1, Sent +1) are individually
+// sound but jointly unable to tell the two labels apart: a Counts that
+// swaps which SQL argument position feeds Queued and which feeds Sent
+// reports Sent's real count under the name Queued and vice versa, and both
+// deltas still land on +1, so the swap leaves this whole package green
+// (measured by #0382/#0386's reviewer). The mid-point assertion below,
+// taken after both rows are enqueued but BEFORE either is claimed or sent,
+// is asymmetric on purpose: at that instant this test has added two rows to
+// Queued and zero to Sent, so a swapped Counts reports mid.Queued as the
+// unchanged real Sent count rather than before.Queued+2 -- no relabelling
+// can satisfy an assertion built around a delta the mutation itself cannot
+// produce under either label.
 func TestOutbox_Counts(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
@@ -974,6 +987,23 @@ func TestOutbox_Counts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue sent: %v", err)
 	}
+
+	// #0389 -- both rows are queued and neither is claimed or sent yet, so
+	// this is the one moment that discriminates Queued from Sent: two more
+	// rows queued, zero more sent. A Counts that swaps which status feeds
+	// which field cannot satisfy this under either label, unlike the
+	// symmetric +1/+1 deltas asserted below on their own.
+	mid, err := store.Counts(ctx)
+	if err != nil {
+		t.Fatalf("Counts (mid): %v", err)
+	}
+	if mid.Queued != before.Queued+2 {
+		t.Fatalf("mid Queued = %d, want %d (before %d + both rows just enqueued, ids %d and %d, neither claimed nor sent yet)", mid.Queued, before.Queued+2, before.Queued, queuedID, sentID)
+	}
+	if mid.Sent != before.Sent {
+		t.Fatalf("mid Sent = %d, want %d unchanged (before %d) -- nothing has been claimed or marked sent yet", mid.Sent, before.Sent, before.Sent)
+	}
+
 	claimed, err := store.ClaimDue(ctx, 10, []Kind{sentKind})
 	if err != nil {
 		t.Fatalf("ClaimDue: %v", err)
