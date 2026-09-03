@@ -966,6 +966,15 @@ func TestOutbox_OrphanSweep_Unscoped_SweepsAcrossKinds(t *testing.T) {
 // unchanged real Sent count rather than before.Queued+2 -- no relabelling
 // can satisfy an assertion built around a delta the mutation itself cannot
 // produce under either label.
+//
+// #0390 -- the same gap existed between Sending and Abandoned: nothing in
+// this package asserted Sending at all, and Abandoned was only ever
+// asserted unchanged (in TestOutbox_Counts_ReportsSkippedDistinctlyFromAbandoned),
+// so a Counts that swaps which SQL argument feeds Sending and which feeds
+// Abandoned left the whole package green too. Near the end of this test, a
+// third row is claimed and deliberately left mid-flight -- never marked
+// sent or abandoned -- which moves the real Sending count +1 and leaves the
+// real Abandoned count unchanged, the one moment that discriminates them.
 func TestOutbox_Counts(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
@@ -1015,6 +1024,33 @@ func TestOutbox_Counts(t *testing.T) {
 		t.Fatalf("MarkSent: %v", err)
 	}
 
+	// #0390 -- Sending and Abandoned are otherwise indistinguishable: every
+	// other assertion in this package either never touches Sending at all
+	// or asserts Abandoned as unchanged, so a Counts that swaps which SQL
+	// argument feeds which field reports one's real value under the
+	// other's name and the whole package stays green. Claiming a row and
+	// deliberately leaving it mid-flight -- never calling MarkSent or
+	// MarkRetryOrAbandon on it -- is the one moment that discriminates
+	// them: it moves the real Sending count +1 and leaves the real
+	// Abandoned count unchanged, mirroring the Queued/Sent mid-point above.
+	// A swapped Counts reports Sending as the (unchanged) real Abandoned
+	// count and Abandoned as the (moved) real Sending count, so this fails
+	// under either label.
+	sendingKind := distinctKind(t)
+	sendingID, err := store.Enqueue(ctx, Item{Kind: sendingKind, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue sending: %v", err)
+	}
+	sendingClaimed, err := store.ClaimDue(ctx, 10, []Kind{sendingKind})
+	if err != nil {
+		t.Fatalf("ClaimDue sendingKind: %v", err)
+	}
+	if len(sendingClaimed) != 1 || sendingClaimed[0].ID != sendingID {
+		t.Fatalf("ClaimDue([]Kind{sendingKind}) claimed %v, want exactly the one row just enqueued for sendingKind (%d)", sendingClaimed, sendingID)
+	}
+	// Deliberately no MarkSent/MarkRetryOrAbandon call: sendingID stays
+	// 'sending' for the rest of this test.
+
 	after, err := store.Counts(ctx)
 	if err != nil {
 		t.Fatalf("Counts (after): %v", err)
@@ -1024,6 +1060,12 @@ func TestOutbox_Counts(t *testing.T) {
 	}
 	if after.Sent != before.Sent+1 {
 		t.Fatalf("Sent = %d, want %d (before %d + the one row, id %d, claimed and marked sent)", after.Sent, before.Sent+1, before.Sent, sentID)
+	}
+	if after.Sending != before.Sending+1 {
+		t.Fatalf("Sending = %d, want %d (before %d + the one row, id %d, claimed and left mid-flight, never marked sent or abandoned)", after.Sending, before.Sending+1, before.Sending, sendingID)
+	}
+	if after.Abandoned != before.Abandoned {
+		t.Fatalf("Abandoned moved from %d to %d after claiming a row into 'sending' and leaving it there -- claiming a row must never by itself count as a delivery-health failure", before.Abandoned, after.Abandoned)
 	}
 }
 
