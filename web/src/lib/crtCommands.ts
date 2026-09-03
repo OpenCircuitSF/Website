@@ -5,6 +5,9 @@
 // this file is deliberately modelled on.
 
 import type { CrtCommand } from './types';
+import { CRT_LINE_CHARS } from './crtScreen';
+
+export { CRT_LINE_CHARS };
 
 // Mirrors internal/crt.ValidSlug / the crt_commands_slug_format CHECK
 // constraint (internal/crt/store.go): lowercase alphanumerics separated by
@@ -112,4 +115,35 @@ export function crtReorderSwap(
  *  `<select>` itself uses CRT_SOURCES' own labels while editing). */
 export function crtSourceLabel(source: string): string {
   return CRT_SOURCES.find((s) => s.value === source)?.label ?? source;
+}
+
+/** #0393 review-bounce follow-up: the 1-based line numbers within `output`
+ *  (newline-separated, matching the crt_commands.output column and the admin
+ *  `<textarea>`) whose length exceeds `max` (default CRT_LINE_CHARS -- the
+ *  same 36-column budget crtTruncate enforces at render time on the home
+ *  page). Trailing empty lines are ignored, matching Command.Lines() /
+ *  crtSessionToScript's own "trim trailing empties" convention server- and
+ *  client-side, so an admin isn't warned about blank padding at the end of
+ *  the textarea. */
+export function crtOverBudgetLines(output: string, max: number = CRT_LINE_CHARS): number[] {
+  const lines = output.split('\n');
+  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+  const over: number[] = [];
+  lines.forEach((line, i) => {
+    if (line.length > max) over.push(i + 1);
+  });
+  return over;
+}
+
+/** A human warning naming which lines of `output` are over budget, or null
+ *  when every line fits. Kept here rather than inlined in the component's
+ *  markup so the phrasing is one unit-tested string (CLAUDE.md §1:
+ *  components stay thin). Line numbers are 1-based, matching how an admin
+ *  counts lines in the textarea. */
+export function crtOverBudgetWarning(output: string, max: number = CRT_LINE_CHARS): string | null {
+  const over = crtOverBudgetLines(output, max);
+  if (!over.length) return null;
+  const noun = over.length === 1 ? 'Line' : 'Lines';
+  const verb = over.length === 1 ? 'is' : 'are';
+  return `${noun} ${over.join(', ')} ${verb} over the ${max}-character CRT width and will be truncated on the glass.`;
 }

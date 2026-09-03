@@ -32,7 +32,9 @@
     validateNewCrtCommand,
     isValidCrtSlug,
     isValidCrtSource,
+    crtOverBudgetWarning,
     CRT_SOURCES,
+    CRT_LINE_CHARS,
   } from '../../lib/crtCommands';
   import { formatDateTime } from '../../lib/admin';
   import type { CrtCommand } from '../../lib/types';
@@ -69,6 +71,7 @@
   let createError = $state<string | null>(null);
 
   const newSlugInvalid = $derived(newSlug.trim() !== '' && !isValidCrtSlug(newSlug.trim()));
+  const newOutputWarning = $derived(crtOverBudgetWarning(newOutput));
 
   async function submitCreate(e: SubmitEvent): Promise<void> {
     e.preventDefault();
@@ -257,6 +260,10 @@
         disabled={creating}
         oninput={() => (createError = null)}
       ></textarea>
+      <p class="text-muted crt-width-hint">
+        The CRT glass fits about {CRT_LINE_CHARS} characters per line; longer lines are truncated there.
+      </p>
+      <p class="text-warn" role="status">{newOutputWarning ?? ''}</p>
     </div>
     <div class="field">
       <label for="new-crt-source">Source</label>
@@ -377,6 +384,20 @@
                         bind:value={draft.output}
                         disabled={savingId === c.id}
                       ></textarea>
+                      <p class="text-muted crt-width-hint">
+                        The CRT glass fits about {CRT_LINE_CHARS} characters per line; longer lines are truncated there.
+                      </p>
+                      <!-- No role="status": this row's editor sits inside
+                           {#if editing[c.id]}, and liveRegionGuard.
+                           structuralGuard.test.ts's persistence rule (#0063)
+                           requires either a swap target or an allowlist
+                           entry for any in-branch live region. A per-
+                           keystroke width hint isn't the kind of state
+                           change that rule is protecting -- the create
+                           form's equivalent hint (above) IS role="status"
+                           because it sits in the always-mounted "Add a
+                           command" panel, not behind a branch. -->
+                      <p class="text-warn">{crtOverBudgetWarning(draft.output) ?? ''}</p>
                     </div>
                     <div class="field">
                       <label for={`crt-edit-source-${c.id}`}>Source</label>
@@ -425,7 +446,8 @@
   .crt-cache-note {
     padding: var(--space-3) var(--space-3) 0;
   }
-  .crt-fallback-note {
+  .crt-fallback-note,
+  .crt-width-hint {
     margin-top: var(--space-1);
   }
 </style>

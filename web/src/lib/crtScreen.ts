@@ -273,3 +273,66 @@ export function crtEnrichStep(step: CrtScriptStep, live: CrtLiveData | undefined
       return step;
   }
 }
+
+/** #0393 review bounce: the fetch-and-fallback orchestration that used to
+ *  live in Home.svelte's onMount as loadSession()/loadLiveData(), moved here
+ *  verbatim (CLAUDE.md §1 -- SPA logic in lib/, components stay thin) so the
+ *  acceptance criteria "with GET /api/crt-session returning 404 or 500 the
+ *  home CRT still runs the compiled-in CRT_SESSION" and "a live-source row's
+ *  own fetch failing shows its stored fallback lines" are unit-tested
+ *  against the real orchestration rather than only against the pure helpers
+ *  it calls. Behaviour is unchanged: one request to /api/crt-session, then
+ *  (only if a resulting step needs it) one request each to /api/workshops
+ *  and /api/list-stats, all under the same try/catch-then-fallback shape as
+ *  before. `f` defaults to the global `fetch` and is overridden by tests with
+ *  a stub -- see crtScreen.test.ts. */
+export async function crtLoadScript(f: typeof fetch = fetch): Promise<CrtScriptStep[]> {
+  let script: CrtScriptStep[];
+  try {
+    const res = await f('/api/crt-session', { headers: { accept: 'application/json' } });
+    const body = res.ok ? ((await res.json()) as CrtSessionResponse) : null;
+    script = crtSessionToScript(body);
+  } catch {
+    script = crtFallbackScript();
+  }
+
+  // #0274's rule generalised per-row (#0393): a live-source row's own fetch
+  // failing leaves ITS stored `out` untouched. The DECISION of whether/how to
+  // replace a row's `out` is crtEnrichStep above -- this function's only job
+  // is fetching: one request per endpoint, not a poll (both are cached
+  // server-side for 60s anyway), passed to crtEnrichStep as `undefined` when
+  // the fetch failed, threw, or no row needs it, which crtEnrichStep always
+  // treats as "keep the stored fallback".
+  const needsWorkshops = script.some((s) => s.source === 'workshops');
+  const needsListStats = script.some((s) => s.source === 'list_stats' || s.source === 'interests');
+
+  let workshops: CrtWorkshop[] | undefined;
+  if (needsWorkshops) {
+    try {
+      const res = await f('/api/workshops', { headers: { accept: 'application/json' } });
+      if (res.ok) {
+        const body = (await res.json()) as { upcoming?: CrtWorkshop[] };
+        workshops = body.upcoming ?? [];
+      }
+    } catch {
+      // workshops stays undefined -- crtEnrichStep keeps the stored fallback
+    }
+  }
+
+  let listStats: { confirmed?: number; pending?: number } | undefined;
+  let interests: CrtInterestCount[] | undefined;
+  if (needsListStats) {
+    try {
+      const res = await f('/api/list-stats', { headers: { accept: 'application/json' } });
+      if (res.ok) {
+        const body = (await res.json()) as { confirmed?: number; pending?: number; interests?: CrtInterestCount[] };
+        listStats = { confirmed: body.confirmed, pending: body.pending };
+        interests = body.interests;
+      }
+    } catch {
+      // listStats/interests stay undefined -- crtEnrichStep keeps the stored fallback
+    }
+  }
+
+  return script.map((row) => crtEnrichStep(row, { workshops, listStats, interests }));
+}

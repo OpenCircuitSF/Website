@@ -6,7 +6,10 @@ import {
   sortedCrtCommands,
   crtReorderSwap,
   crtSourceLabel,
+  crtOverBudgetLines,
+  crtOverBudgetWarning,
   CRT_SOURCES,
+  CRT_LINE_CHARS,
 } from './crtCommands';
 import type { CrtCommand } from './types';
 
@@ -136,5 +139,56 @@ describe('crtSourceLabel', () => {
 
   it('falls back to the raw value for an unknown source', () => {
     expect(crtSourceLabel('mystery')).toBe('mystery');
+  });
+});
+
+// #0393 review-bounce follow-up: the admin CRT editor gave no line-width
+// guidance and nothing warned about a stored line past the 36-char budget.
+describe('crtOverBudgetLines', () => {
+  it('returns nothing when every line fits', () => {
+    expect(crtOverBudgetLines('short line\nanother short one')).toEqual([]);
+  });
+
+  it('reports the 1-based line number of an over-budget line', () => {
+    const long = 'x'.repeat(CRT_LINE_CHARS + 1);
+    expect(crtOverBudgetLines('fits\n' + long + '\nfits too')).toEqual([2]);
+  });
+
+  it('reports every over-budget line, in order', () => {
+    const long = 'x'.repeat(CRT_LINE_CHARS + 5);
+    expect(crtOverBudgetLines(long + '\nfits\n' + long)).toEqual([1, 3]);
+  });
+
+  it('treats a line at exactly the budget as fitting', () => {
+    const exact = 'x'.repeat(CRT_LINE_CHARS);
+    expect(crtOverBudgetLines(exact)).toEqual([]);
+  });
+
+  it('ignores trailing empty lines', () => {
+    expect(crtOverBudgetLines('fits\n\n\n')).toEqual([]);
+  });
+
+  it('does not ignore a trailing over-budget line, only trailing empties', () => {
+    const long = 'x'.repeat(CRT_LINE_CHARS + 1);
+    expect(crtOverBudgetLines('fits\n' + long)).toEqual([2]);
+  });
+});
+
+describe('crtOverBudgetWarning', () => {
+  it('returns null when every line fits', () => {
+    expect(crtOverBudgetWarning('short line')).toBeNull();
+  });
+
+  it('names the single over-budget line, singular', () => {
+    const long = 'x'.repeat(CRT_LINE_CHARS + 1);
+    const warning = crtOverBudgetWarning(long);
+    expect(warning).toContain('Line 1 is');
+    expect(warning).toContain(String(CRT_LINE_CHARS));
+  });
+
+  it('names multiple over-budget lines, plural', () => {
+    const long = 'x'.repeat(CRT_LINE_CHARS + 1);
+    const warning = crtOverBudgetWarning(long + '\nfits\n' + long);
+    expect(warning).toContain('Lines 1, 3 are');
   });
 });

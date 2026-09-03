@@ -48,12 +48,9 @@
     crtMatrix3d,
     visibleLines,
     crtFallbackScript,
-    crtSessionToScript,
-    crtEnrichStep,
-    type CrtWorkshop,
-    type CrtInterestCount,
+    crtLoadScript,
+    crtTruncate,
     type CrtScriptStep,
-    type CrtSessionResponse,
   } from '../lib/crtScreen';
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
@@ -169,7 +166,11 @@
       const gen = ++generation;
       if (reduce.matches) {
         const step = script[0];
-        lines = ['open circuit sf // sf, ca', '', '> ' + step.cmd, ...step.out];
+        // #0393 review-bounce follow-up: crtTruncate is the same safety net
+        // applied below in the typed-out path -- an admin-entered static
+        // line past the 36-char budget is clipped here too, not just when
+        // reduced-motion is off.
+        lines = ['open circuit sf // sf, ca', '', '> ' + step.cmd, ...step.out.map((l) => crtTruncate(l))];
         paint();
         return;
       }
@@ -188,7 +189,14 @@
         await wait(260);
         for (const line of step.out) {
           if (gen !== generation) return;
-          push(line);
+          // #0393 review-bounce follow-up: crtTruncate was already applied
+          // to the live builders (crtWorkshopLines, crtInterestLines) but
+          // never to a static row's stored `out`, so an admin-entered line
+          // past the 36-char budget drew past the edge of the glass with no
+          // clipping. This is a safety net, not the primary defense -- the
+          // admin textarea now warns per-line (CrtCommands.svelte) so an
+          // admin writes to the budget rather than leaning on this.
+          push(crtTruncate(line));
           await wait(150);
         }
         await wait(PAUSE_MS);
@@ -197,67 +205,14 @@
 
     // #0393: the session now comes from GET /api/crt-session (admin-editable
     // rows, ordered, active-only) rather than the compiled-in CRT_SESSION
-    // alone. crtSessionToScript falls back to the compiled-in session
-    // (crtFallbackScript) whenever that fetch fails, answers non-OK, or
-    // returns no commands -- the STORAGE=json / pre-seed-deploy / offline
-    // cases all collapse to the same fallback, and the screen is never left
-    // with nothing to type. `script` starts as that same fallback so
-    // `session()` always has something to run even before loadSession()
-    // resolves (reduced-motion renders synchronously below).
+    // alone. `script` starts as the compiled-in fallback so `session()`
+    // always has something to run even before crtLoadScript() resolves
+    // (reduced-motion renders synchronously below). The fetch/fallback/
+    // live-enrichment orchestration itself lives in lib/crtScreen.ts's
+    // crtLoadScript (review bounce on #0393: moved out of this component so
+    // it is unit-testable without a DOM, per CLAUDE.md §1) -- this is now
+    // just a thin wrapper that calls it and reassigns `script`.
     let script: CrtScriptStep[] = crtFallbackScript();
-
-    async function loadSession(): Promise<void> {
-      try {
-        const res = await fetch('/api/crt-session', { headers: { accept: 'application/json' } });
-        const body = res.ok ? ((await res.json()) as CrtSessionResponse) : null;
-        script = crtSessionToScript(body);
-      } catch {
-        script = crtFallbackScript();
-      }
-    }
-
-    // #0274's rule generalised per-row (#0393): a live-source row's own
-    // fetch failing leaves ITS stored `out` untouched. The DECISION of
-    // whether/how to replace a row's `out` is crtEnrichStep (lib/crtScreen.ts)
-    // -- pure and unit-tested -- so this function's only job is fetching:
-    // one request per endpoint on mount, not a poll (both are cached
-    // server-side for 60s anyway), passed to crtEnrichStep as `undefined`
-    // when the fetch failed, threw, or no row needs it, which crtEnrichStep
-    // always treats as "keep the stored fallback".
-    async function loadLiveData(): Promise<void> {
-      const needsWorkshops = script.some((s) => s.source === 'workshops');
-      const needsListStats = script.some((s) => s.source === 'list_stats' || s.source === 'interests');
-
-      let workshops: CrtWorkshop[] | undefined;
-      if (needsWorkshops) {
-        try {
-          const res = await fetch('/api/workshops', { headers: { accept: 'application/json' } });
-          if (res.ok) {
-            const body = (await res.json()) as { upcoming?: CrtWorkshop[] };
-            workshops = body.upcoming ?? [];
-          }
-        } catch {
-          // workshops stays undefined -- crtEnrichStep keeps the stored fallback
-        }
-      }
-
-      let listStats: { confirmed?: number; pending?: number } | undefined;
-      let interests: CrtInterestCount[] | undefined;
-      if (needsListStats) {
-        try {
-          const res = await fetch('/api/list-stats', { headers: { accept: 'application/json' } });
-          if (res.ok) {
-            const body = (await res.json()) as { confirmed?: number; pending?: number; interests?: CrtInterestCount[] };
-            listStats = { confirmed: body.confirmed, pending: body.pending };
-            interests = body.interests;
-          }
-        } catch {
-          // listStats/interests stay undefined -- crtEnrichStep keeps the stored fallback
-        }
-      }
-
-      script = script.map((row) => crtEnrichStep(row, { workshops, listStats, interests }));
-    }
 
     fit();
     const onResize = () => fit();
@@ -274,9 +229,10 @@
     if (!reduce.matches) {
       blink = setInterval(() => { cursorOn = !cursorOn; paint(); }, 530);
     }
-    void loadSession()
-      .then(() => loadLiveData())
-      .then(() => session());
+    void crtLoadScript().then((s) => {
+      script = s;
+      void session();
+    });
 
     return () => {
       generation++;
