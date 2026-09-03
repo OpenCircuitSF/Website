@@ -11,16 +11,62 @@
 -- plan is struck through in the issue file, not deleted, as the record of
 -- what was true before the expiry.
 --
--- Existing-row safety: no email_campaigns row exists in production (#0272
--- names what production data does exist, and it is not campaign rows) and
--- this repository has no seed script or fixture that inserts one outside a
--- test's own isolated database (every INSERT INTO email_campaigns is a
--- test fixture, run against a per-agent scratch database that is dropped
--- afterward -- CLAUDE.md §5a). So `ADD COLUMN slug TEXT UNIQUE NOT NULL`
--- with no DEFAULT is safe exactly as PRD §6.2's greenfield note originally
--- argued -- the difference #0293 corrects is only WHICH migration file the
--- column lands in, not whether a backfill is needed.
-ALTER TABLE email_campaigns ADD COLUMN slug TEXT UNIQUE NOT NULL;
+-- Existing-row safety, corrected (#0404, 2026-09-03): the "no email_campaigns
+-- row exists in production" premise this file originally argued from was
+-- true when written (2026-08-27) and is false now. The user drafted a real
+-- campaign through the admin console (id 1, "Open Circuits SF: September
+-- 2026") and it sits in production's email_campaigns table today. The
+-- original `ADD COLUMN slug TEXT UNIQUE NOT NULL` -- no DEFAULT -- fails
+-- outright against that row with "column \"slug\" ... contains null values"
+-- and leaves schema_migrations dirty at 25.
+--
+-- The column is therefore added nullable below, backfilled, and only then
+-- constrained NOT NULL -- the same shape migrations/000024 already uses
+-- against subscriber_imports.source_detail. The one production row (id 1)
+-- gets slug '09-2026', decided by the user in #0405 (the MM-YYYY newsletter
+-- template) -- deliberately NOT the value mailing.slugifyCampaign would mint
+-- from its subject (`open-circuits-sf-september-2026`, measured by #0404's
+-- planning pass). #0405 owns the minting rule for new campaigns and still
+-- has open questions about it; this file only fixes the one existing row and
+-- does not implement that rule.
+--
+-- This file was edited in place under CLAUDE.md §1's actual rule -- "never
+-- edit a migration that has been applied to a database anyone cares about"
+-- -- rather than repaired with a new migration, because production has
+-- never applied 000025: measured 2026-09-03, production's schema_migrations
+-- sat at version 22, not dirty. Every database that HAD already applied the
+-- old form of this file (every local dev database, opencircuit_test, the
+-- shared test template, and per-agent scratch databases) is rebuildable
+-- from migrations/ in seconds and produces an identical resulting schema --
+-- same email_campaigns_slug_key constraint name, same NOT NULL -- so this
+-- edit is a no-op for all of them. See #0404's `## Plan` for the full
+-- reasoning and the schema-diff proof.
+ALTER TABLE email_campaigns ADD COLUMN slug TEXT UNIQUE;
+
+-- The one row that exists anywhere this migration will ever meet a
+-- non-empty email_campaigns: production's id 1, measured by #0404. Its slug
+-- is '09-2026', decided by the user in #0405. Identity-checked on subject as
+-- well as id so this can never stamp '09-2026' onto some other database's
+-- unrelated row 1.
+UPDATE email_campaigns
+   SET slug = '09-2026'
+ WHERE id = 1
+   AND subject = 'Open Circuits SF: September 2026'
+   AND slug IS NULL;
+
+-- Safety net. No row anywhere is expected to reach this statement -- every
+-- database that had already applied this migration had zero rows, and
+-- production has exactly the one row the UPDATE above names. But SET NOT
+-- NULL below fails hard on any straggler, so give it a value that is
+-- non-blank and unique by construction (id is the primary key) and reads
+-- unmistakably as a placeholder rather than impersonating a minted slug. An
+-- UPDATE matching zero rows is a no-op -- the same belt-and-braces shape
+-- migrations/000024 already uses.
+UPDATE email_campaigns
+   SET slug = 'campaign-' || id
+ WHERE slug IS NULL;
+
+ALTER TABLE email_campaigns ALTER COLUMN slug SET NOT NULL;
 
 -- NOT NULL alone does not stop an empty string, and "slug is never blank" is
 -- an invariant the worker (CompleteIfDone), the SEO adapter, and the email
