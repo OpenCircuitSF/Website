@@ -2454,6 +2454,19 @@ func TestOutboxWorker_SkipsImportInviteAfterRestartSignup(t *testing.T) {
 
 	runWorkerUntilStopped(t, w)
 
+	// #0401's review of #0400: this delivery check previously sat AFTER
+	// the status Fatalf below, so it could never be the assertion that
+	// fired — a wrong status always stopped the test first, on exactly the
+	// scenario this loop exists to catch. Checked first and independently
+	// instead, as t.Errorf so the status assertion below still runs (and
+	// still reports) even if this one already failed.
+	const inviteSubject = "You're invited to the Open Circuit SF mailing list"
+	for _, m := range mailer.Sent() {
+		if m.To == email && m.Subject == inviteSubject {
+			t.Errorf("an invitation carrying the pre-restart confirm_token was delivered")
+		}
+	}
+
 	got := waitForQueueStatus(t, pool, inviteID)
 	if got != outbox.StatusSkipped {
 		t.Fatalf("import_invite row status = %q, want %q — RestartSignup re-opened the status gate on a row still carrying the PRE-restart confirm_token", got, outbox.StatusSkipped)
@@ -2462,16 +2475,17 @@ func TestOutboxWorker_SkipsImportInviteAfterRestartSignup(t *testing.T) {
 	if err := pool.QueryRow(context.Background(), `SELECT error FROM outbound_queue WHERE id = $1`, inviteID).Scan(&errText); err != nil {
 		t.Fatalf("select error: %v", err)
 	}
-	if errText == nil || !strings.Contains(*errText, "confirm token") {
-		t.Errorf("error = %v, want a reason naming the confirm token", errText)
+	// #0401's review of #0400: %v on a *string prints the pointer address,
+	// not the text it points to — a failure here used to read like
+	// `error = 0x70b3dcca0500`. Dereference so a failure shows the actual
+	// reason.
+	switch {
+	case errText == nil:
+		t.Errorf("error = <nil>, want a reason naming the confirm token")
+	case !strings.Contains(*errText, "confirm token"):
+		t.Errorf("error = %q, want a reason naming the confirm token", *errText)
 	}
 
-	const inviteSubject = "You're invited to the Open Circuit SF mailing list"
-	for _, m := range mailer.Sent() {
-		if m.To == email && m.Subject == inviteSubject {
-			t.Fatalf("an invitation carrying the pre-restart confirm_token was delivered")
-		}
-	}
 	// CLAUDE.md §8b: never let a real token value land in a committed
 	// artifact (outbound_queue.error is read by admins and can end up
 	// pasted into an issue file).
