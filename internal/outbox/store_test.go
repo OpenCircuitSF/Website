@@ -1173,8 +1173,9 @@ func TestOutbox_Counts_ReportsSkippedDistinctlyFromAbandoned(t *testing.T) {
 // never targetAgeSecs. So the single assertion below is what #0394 calls
 // for: it fires under repointing to any of the four other statuses AND
 // under dropping the FILTER, and it does not fire on unmutated code, because
-// the ~100000s gap between targetAgeSecs and poisonAgeSecs is far wider than
-// the bounds window the assertion checks against (see below).
+// the accepted window runs from targetAgeSecs (inclusive) to poisonAgeSecs
+// (exclusive): the correct value sits exactly on that window's lower edge,
+// and only a poison row's age can reach its upper edge (see below).
 //
 // created_at is set directly via SQL (the same technique
 // TestOutbox_LatestByRecipients_ReturnsMostRecentPerRecipient already uses
@@ -1208,9 +1209,12 @@ func TestOutbox_Counts_OldestQueuedAgeSecs(t *testing.T) {
 	// the new oldest queued row regardless of that residue.
 	targetAgeSecs := before.OldestQueuedAgeSecs + 5000
 
-	// poisonAgeSecs is targetAgeSecs plus another 100000s -- far enough that
-	// no realistic scheduling delay or clock skew could make a poison row's
-	// reported age land within the tolerance asserted below.
+	// poisonAgeSecs is targetAgeSecs plus another 100000s. That separation IS
+	// the assertion's upper bound below: a poison row's reported age is always
+	// >= poisonAgeSecs (elapsed time only pushes it further out), so it can
+	// never land inside the accepted window, while the true value could only
+	// reach poisonAgeSecs if 100000s elapsed between the UPDATEs above and the
+	// Counts call below.
 	poisonAgeSecs := targetAgeSecs + 100000
 
 	queuedKind := distinctKind(t)
