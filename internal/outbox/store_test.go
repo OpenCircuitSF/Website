@@ -971,10 +971,15 @@ func TestOutbox_OrphanSweep_Unscoped_SweepsAcrossKinds(t *testing.T) {
 // this package asserted Sending at all, and Abandoned was only ever
 // asserted unchanged (in TestOutbox_Counts_ReportsSkippedDistinctlyFromAbandoned),
 // so a Counts that swaps which SQL argument feeds Sending and which feeds
-// Abandoned left the whole package green too. Near the end of this test, a
-// third row is claimed and deliberately left mid-flight -- never marked
-// sent or abandoned -- which moves the real Sending count +1 and leaves the
-// real Abandoned count unchanged, the one moment that discriminates them.
+// Abandoned left the whole package green too. A third row, claimed and
+// deliberately left mid-flight -- never marked sent or abandoned -- moves
+// the real Sending count +1 and leaves the real Abandoned count unchanged.
+// That row is claimed and measured (midSending, below) BEFORE sentKind's
+// own row is claimed and marked sent: taking the snapshot afterward instead
+// made Sending's and Sent's deltas coincide at +1 apiece by the test's end,
+// so a Sending<->Sent swap also went undetected (measured directly). Taken
+// before sentID is touched, the two deltas differ -- Sending +1, Sent +0 --
+// which is what actually discriminates the two labels.
 func TestOutbox_Counts(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
@@ -1013,29 +1018,28 @@ func TestOutbox_Counts(t *testing.T) {
 		t.Fatalf("mid Sent = %d, want %d unchanged (before %d) -- nothing has been claimed or marked sent yet", mid.Sent, before.Sent, before.Sent)
 	}
 
-	claimed, err := store.ClaimDue(ctx, 10, []Kind{sentKind})
-	if err != nil {
-		t.Fatalf("ClaimDue: %v", err)
-	}
-	if len(claimed) != 1 || claimed[0].ID != sentID {
-		t.Fatalf("ClaimDue([]Kind{sentKind}) claimed %v, want exactly the one row just enqueued for sentKind (%d) -- claiming the queuedKind row too would leave this test unable to tell which row its own Queued delta is measuring", claimed, sentID)
-	}
-	if _, err := store.MarkSent(ctx, sentID, "msg-id"); err != nil {
-		t.Fatalf("MarkSent: %v", err)
-	}
-
 	// #0390 -- Sending and Abandoned are otherwise indistinguishable: every
 	// other assertion in this package either never touches Sending at all
 	// or asserts Abandoned as unchanged, so a Counts that swaps which SQL
 	// argument feeds which field reports one's real value under the
 	// other's name and the whole package stays green. Claiming a row and
 	// deliberately leaving it mid-flight -- never calling MarkSent or
-	// MarkRetryOrAbandon on it -- is the one moment that discriminates
-	// them: it moves the real Sending count +1 and leaves the real
-	// Abandoned count unchanged, mirroring the Queued/Sent mid-point above.
-	// A swapped Counts reports Sending as the (unchanged) real Abandoned
-	// count and Abandoned as the (moved) real Sending count, so this fails
-	// under either label.
+	// MarkRetryOrAbandon on it -- moves the real Sending count +1 and
+	// leaves the real Abandoned count unchanged.
+	//
+	// This block must run BEFORE sentKind is claimed and marked sent below.
+	// An earlier version measured the Sending delta only in the final
+	// `after` snapshot, by which point sentID's own claim-then-MarkSent
+	// round trip had also pushed the real Sending count up by a net +1 (it
+	// passes through 'sending' on the way to 'sent') while the real Sent
+	// count separately landed on +1 too -- so a Sending<->Sent swap
+	// reported each field under the other's label with the same +1 delta
+	// and passed undetected (measured directly: swapping StatusSending and
+	// StatusSent in Counts' argument list left this test, and the rest of
+	// the package, green). Taking the snapshot here instead, before sentID
+	// is touched at all, makes the two deltas differ at the same instant --
+	// Sending +1, Sent +0 -- the same shape as the Queued/Sent mid-point
+	// above, and the only shape immune to that coincidence.
 	sendingKind := distinctKind(t)
 	sendingID, err := store.Enqueue(ctx, Item{Kind: sendingKind, Recipient: uniqueRecipient(t)})
 	if err != nil {
@@ -1050,6 +1054,28 @@ func TestOutbox_Counts(t *testing.T) {
 	}
 	// Deliberately no MarkSent/MarkRetryOrAbandon call: sendingID stays
 	// 'sending' for the rest of this test.
+
+	midSending, err := store.Counts(ctx)
+	if err != nil {
+		t.Fatalf("Counts (midSending): %v", err)
+	}
+	if midSending.Sending != mid.Sending+1 {
+		t.Fatalf("midSending Sending = %d, want %d (mid %d + the one row, id %d, just claimed and left mid-flight)", midSending.Sending, mid.Sending+1, mid.Sending, sendingID)
+	}
+	if midSending.Sent != mid.Sent {
+		t.Fatalf("midSending Sent = %d, want %d unchanged (mid %d) -- sentID has not been claimed or marked sent yet", midSending.Sent, mid.Sent, mid.Sent)
+	}
+
+	claimed, err := store.ClaimDue(ctx, 10, []Kind{sentKind})
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].ID != sentID {
+		t.Fatalf("ClaimDue([]Kind{sentKind}) claimed %v, want exactly the one row just enqueued for sentKind (%d) -- claiming the queuedKind row too would leave this test unable to tell which row its own Queued delta is measuring", claimed, sentID)
+	}
+	if _, err := store.MarkSent(ctx, sentID, "msg-id"); err != nil {
+		t.Fatalf("MarkSent: %v", err)
+	}
 
 	after, err := store.Counts(ctx)
 	if err != nil {
