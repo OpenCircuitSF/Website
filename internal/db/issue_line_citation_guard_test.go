@@ -176,30 +176,78 @@ func issueLineCitationExcluded(text string, start, end int) bool {
 	return issueLineCitationFencedBlockContainsTestMarker(text, start)
 }
 
-// issueLineCitationFencedBlockContainsTestMarker reports whether the
-// ```-delimited fenced code block enclosing the byte offset start also
-// contains, anywhere in that same block, a go test -v output marker line.
-// Unpaired or absent fences (start not inside any complete open/close pair)
-// report false — a citation outside a fenced block gets no benefit from
-// this predicate, matching predicate 1's own text-only-what-you-can-prove
+// issueLineCitationFenceLinePattern recognizes a markdown fence delimiter
+// line-anchored (#0391): a fence is a line whose first non-space run is
+// three or more backtick characters, matched per line rather than by
+// indexing every raw three-backtick substring in the section text. That is
+// what keeps a bare mention of a fence in the middle of an ordinary
+// sentence — never alone on its own line — from being counted as a fence
+// at all. See issueLineCitationFencedBlockContainsTestMarker's doc comment
+// for why the raw-substring approach this replaces was wrong, not merely
+// less precise.
+var issueLineCitationFenceLinePattern = regexp.MustCompile(`(?m)^[ \t]*` + "`{3,}")
+
+// issueLineCitationFencedBlockContainsTestMarker reports whether the fenced
+// code block enclosing the byte offset start also contains, anywhere in
+// that same block, a go test -v output marker line. Start outside every
+// fence pair (including before the first fence in the section) reports
+// false — a citation outside a fenced block gets no benefit from this
+// predicate, matching predicate 1's own text-only-what-you-can-prove
 // discipline.
+//
+// #0391 rewrote this function's fence detection. #0384's original version
+// collected every raw three-backtick substring offset anywhere in the
+// section text and paired them positionally — first with second, third
+// with fourth — regardless of what those backticks actually were. An odd
+// total count then silently shifted every later pair, two different ways:
+// a stray fence-shaped run sitting mid-sentence in ordinary prose (not on
+// its own line) could pair with a real fence and turn the prose between
+// them into a bogus "block" — which could exempt a stale citation sitting
+// in that prose if a marker-shaped line happened to sit there too, a
+// fail-open; and a genuinely unterminated final fence (the block's closing
+// fence never arrives before the section ends) was simply dropped, since
+// the pairing loop stops rather than treating a lone trailing fence as
+// open — which false-flagged a real, uncut transcript's own citation. This
+// function fixes both: fences are recognized line-anchored via
+// issueLineCitationFenceLinePattern, so a fence-shaped run embedded in
+// prose is never counted, and an unterminated final fence is treated as
+// open through the end of the section rather than as unpaired and
+// dropped. See TestIssueLineCitationFencePairingClosesFailOpen and
+// TestIssueLineCitationFencePairingStopsFalseFlaggingUnterminatedTranscript
+// below for both defects reproduced against the pre-#0391 pairing
+// (preserved as preFix0391FencedBlockContainsTestMarker, test-only) and
+// closed here.
+//
+// This is a parsing correction, not a new exemption: it changes what
+// counts as a fence, not what an exemption is willing to forgive. The
+// forged-marker residual the file-level comment above already discloses —
+// wrapping a citation in a fence carrying a fabricated marker line still
+// exempts it — is unchanged and still open; this function does not, and
+// cannot, tell a genuine transcript from a fabricated one.
 func issueLineCitationFencedBlockContainsTestMarker(text string, start int) bool {
-	var fenceOffsets []int
-	for i := 0; i+3 <= len(text); {
-		idx := strings.Index(text[i:], "```")
-		if idx < 0 {
-			break
+	fenceLines := issueLineCitationFenceLinePattern.FindAllStringIndex(text, -1)
+	for i := 0; i < len(fenceLines); i += 2 {
+		open := fenceLines[i][0]
+		blockEnd := len(text) // unterminated final fence runs to end of section (#0391)
+		if i+1 < len(fenceLines) {
+			blockEnd = issueLineCitationLineEnd(text, fenceLines[i+1][1])
 		}
-		fenceOffsets = append(fenceOffsets, i+idx)
-		i = i + idx + 3
-	}
-	for i := 0; i+1 < len(fenceOffsets); i += 2 {
-		open, close := fenceOffsets[i], fenceOffsets[i+1]
-		if start >= open && start <= close {
-			return issueLineCitationTestMarkerPattern.MatchString(text[open:close])
+		if start >= open && start <= blockEnd {
+			return issueLineCitationTestMarkerPattern.MatchString(text[open:blockEnd])
 		}
 	}
 	return false
+}
+
+// issueLineCitationLineEnd returns the offset of the end of the line
+// containing byte offset from — the position of the following newline, or
+// len(text) when from's line is the last line in text and carries no
+// trailing newline.
+func issueLineCitationLineEnd(text string, from int) int {
+	if idx := strings.IndexByte(text[from:], '\n'); idx >= 0 {
+		return from + idx
+	}
+	return len(text)
 }
 
 // scanIssueDirForLineCitations resolves every `<file>.go:<int>` citation in
@@ -445,5 +493,104 @@ func TestIssueLineCitationPatternMatchesRealGoVetDiagnosticShape(t *testing.T) {
 	}
 	if !issueLineCitationExcluded(text, loc[0], loc[1]) {
 		t.Errorf("a real go vet diagnostic triple must be excluded by predicate 1")
+	}
+}
+
+// preFix0391FencedBlockContainsTestMarker is #0384's original
+// implementation of issueLineCitationFencedBlockContainsTestMarker,
+// preserved byte-for-byte (renamed only) so #0391's two demonstrations
+// below exercise the exact bug they fixed rather than a description of
+// it. Test-only: nothing in the production exemption path calls this.
+// It collects every raw three-backtick substring offset anywhere in text
+// and pairs the resulting offsets positionally — first with second, third
+// with fourth — regardless of whether a given occurrence sits alone on
+// its own line or in the middle of a sentence, and regardless of whether
+// the final occurrence has a partner at all.
+func preFix0391FencedBlockContainsTestMarker(text string, start int) bool {
+	var fenceOffsets []int
+	for i := 0; i+3 <= len(text); {
+		idx := strings.Index(text[i:], "```")
+		if idx < 0 {
+			break
+		}
+		fenceOffsets = append(fenceOffsets, i+idx)
+		i = i + idx + 3
+	}
+	for i := 0; i+1 < len(fenceOffsets); i += 2 {
+		open, close := fenceOffsets[i], fenceOffsets[i+1]
+		if start >= open && start <= close {
+			return issueLineCitationTestMarkerPattern.MatchString(text[open:close])
+		}
+	}
+	return false
+}
+
+// TestIssueLineCitationFencePairingClosesFailOpen is criterion 2's
+// deliverable: the serious half of #0391. It constructs a section with an
+// odd total of raw three-backtick occurrences — one a stray mention in the
+// middle of an ordinary sentence, never alone on its own line, and two
+// forming the section's one real fenced block — where a stale citation and
+// a marker-shaped line both sit in the plain prose between the stray
+// mention and the real block. #0384's original positional pairing
+// (preFix0391FencedBlockContainsTestMarker) pairs the stray mid-sentence
+// mention with the real block's opening fence, so the resulting "block"
+// spans that stretch of ordinary prose — and wrongly exempts the stale
+// citation inside it, because the prose happens to contain a
+// marker-shaped line too. #0391's line-anchored fix never counts the
+// mid-sentence mention as a fence at all, so no block covers that prose,
+// and the same citation is correctly not exempted.
+func TestIssueLineCitationFencePairingClosesFailOpen(t *testing.T) {
+	text := "See the fence delimiter ``` mentioned here, not a real block start.\n\n" +
+		"The check lives at `store.go:8888`, confirmed by reading the file.\n" +
+		"--- PASS: a decoy marker-shaped line sitting in plain prose here, not inside any real block\n\n" +
+		"Later, an unrelated real fenced block:\n\n" +
+		"```\n" +
+		"genuine, unrelated content — the one real fenced block in this fixture\n" +
+		"```\n"
+	start := strings.Index(text, "store.go:8888")
+	if start < 0 {
+		t.Fatalf("fixture missing the planted citation")
+	}
+
+	if !preFix0391FencedBlockContainsTestMarker(text, start) {
+		t.Fatalf("expected #0384's original positional pairing to (wrongly) exempt the planted citation via the shifted pseudo-block — the fail-open this issue exists to close is not reproduced")
+	}
+	if issueLineCitationFencedBlockContainsTestMarker(text, start) {
+		t.Fatalf("expected #0391's line-anchored fix to leave the planted citation un-exempted instead of pairing the stray mid-sentence mention into a block")
+	}
+}
+
+// TestIssueLineCitationFencePairingStopsFalseFlaggingUnterminatedTranscript
+// is criterion 3's deliverable: the other half of #0391. It constructs a
+// section with an odd total fence count from a different, equally real
+// cause — a second, genuine block whose closing fence never arrives before
+// the section text ends (extractNamedSections truncates a section at the
+// next level-2 heading, so a block that runs past that boundary is
+// unterminated from this function's point of view). #0384's original
+// pairing drops that trailing, unpaired fence on the floor — the loop
+// simply stops rather than treating it as open — so the transcript's own
+// citation gets no benefit from predicate 2 and is wrongly flagged.
+// #0391's fix treats the unterminated final fence as open through the end
+// of the section, so the same citation is correctly exempted.
+func TestIssueLineCitationFencePairingStopsFalseFlaggingUnterminatedTranscript(t *testing.T) {
+	text := "Some intro.\n\n" +
+		"```\n" +
+		"irrelevant content, no marker in this first block\n" +
+		"```\n\n" +
+		"Later, a genuine but unterminated transcript:\n\n" +
+		"```\n" +
+		"=== RUN   TestSomething\n" +
+		"    helper.go:99: assertion failed\n" +
+		"--- FAIL: TestSomething (0.00s)\n"
+	start := strings.Index(text, "helper.go:99")
+	if start < 0 {
+		t.Fatalf("fixture missing the planted citation")
+	}
+
+	if preFix0391FencedBlockContainsTestMarker(text, start) {
+		t.Fatalf("expected #0384's original positional pairing to (wrongly) NOT exempt the transcript's own citation — the false-flag this issue exists to close is not reproduced")
+	}
+	if !issueLineCitationFencedBlockContainsTestMarker(text, start) {
+		t.Fatalf("expected #0391's fix to exempt the transcript's citation via the unterminated-fence-runs-to-end-of-section rule")
 	}
 }
