@@ -58,24 +58,56 @@ belong in this tracker.
   and that you should prefer editing the migration that owns a table over
   stacking an `ALTER TABLE`. **It ended at the deploy on 2026-08-25**, exactly as
   it said it would: `www.opencircuitsf.com` now serves this project (§7), and
-  production's PostgreSQL holds a live `opencircuit` database with
-  `schema_migrations.version = 22` and real rows in it — `#0272` is open about
-  two specific `outbound_queue` rows there.
+  production's PostgreSQL holds a live `opencircuit` database with real rows in
+  it — `#0272` is open about two specific `outbound_queue` rows there.
 
-  **So: never edit an existing migration. `000001`–`000022` are frozen.** New
-  work goes in a new numbered migration, and a column added to an existing table
-  is an `ALTER TABLE` in that new file, not an edit to the `CREATE TABLE` that
-  owns it.
+  **The rule has two parts, and they answer different questions (`#0407`).**
+  The *principle* is load-bearing and permanent: never edit a migration that
+  has been **applied to production** — not merely present in `migrations/`.
+  Everything else with a `schema_migrations` row — the local dev DB,
+  `opencircuit_test`, the shared test template, per-agent scratch databases —
+  is rebuildable from `migrations/` in seconds and is never what this rule
+  protects; only production is. The *range* below is that principle evaluated
+  at one moment, and it goes stale the instant a later deploy applies another
+  migration. **Read as a bound on the files on disk, it is wrong in both
+  directions**: it under-states once production moves past it, and it
+  over-states by implying every numbered file in `migrations/` is untouchable
+  — most of them have never reached production at all.
 
-  This is not hypothetical, and the stale note is why. `#0125` was filed on
-  2026-08-21 with an acceptance criterion instructing the `000010` edit, its
-  implementer followed that criterion faithfully, and its review bounced it: a
-  scratch database built to production's version 22 and then migrated against
-  the committed tree fails with `column "import_id" referenced in foreign key
-  constraint does not exist` and leaves `schema_migrations` **dirty at 23**. The
-  deploy would have broken, and separately every subscriber query on the new
-  binary would have errored against a production table lacking the five new
-  columns.
+  **Production's applied version, read-only, self-dating — re-derive it
+  yourself before trusting a number here, never carry a snapshot forward:**
+
+      ssh ec2
+      sudo bash -c "source /etc/opencircuit/config.env && psql \"\$DATABASE_URL\" -tAc \"select version, dirty from schema_migrations\""
+
+  As of **2026-09-03** that returns `22 | f` — so **`000001`–`000022` are
+  frozen**; `000023` and up have not reached production and stay editable in
+  place until they do. New work still goes in a new numbered migration
+  regardless of the current frozen bound, and a column added to an
+  already-applied table is an `ALTER TABLE` in that new file, not an edit to
+  the `CREATE TABLE` that owns it.
+
+  This is not hypothetical, and the stale note is why — twice over, in both
+  directions the misreading can go. `#0125` was filed on 2026-08-21 with an
+  acceptance criterion instructing the `000010` edit, its implementer followed
+  that criterion faithfully, and its review bounced it: a scratch database
+  built to production's version 22 and then migrated against the committed
+  tree fails with `column "import_id" referenced in foreign key constraint
+  does not exist` and leaves `schema_migrations` **dirty at 23**. The deploy
+  would have broken, and separately every subscriber query on the new binary
+  would have errored against a production table lacking the five new columns.
+  That was the range under-stating.
+
+  `#0404` hit the range over-stating. It needed to fix `000025`, which had
+  never reached production; an unchecked assertion that the frozen range was
+  `000001`–`000027` — the count of files present on disk, not the count
+  applied to production — was repeated three times and made the only correct
+  fix, editing `000025` in place, look forbidden. It pushed the issue toward a
+  design that cannot work: a new migration cannot run ahead of the one that
+  fails, since `golang-migrate` applies pending versions strictly in order.
+  `#0404`'s planning pass caught it by reading this section instead of
+  accepting the premise; `#0407` is that miscue's own correction, written so
+  the range can no longer be read as covering every file on disk.
 
   **Check an issue's own greenfield language before following it.** Several
   issues filed before 2026-08-25 still carry the old note in their acceptance
