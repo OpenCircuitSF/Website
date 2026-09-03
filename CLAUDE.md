@@ -732,6 +732,33 @@ an opaque error — check it first if a Phase 1 ceremony fails.
   "the checker was edited", and keep in-file checks only for the early,
   line-naming signal they give.
 
+- **Writing about a citation guard tends to write the exact shape it forbids.**
+  A guard that bans a textual pattern is naturally described using that
+  pattern — a doc comment motivating the ban wants to show the banned shape; a
+  test proving a captured transcript is exempt wants to contain one. `#0392`
+  measured this at nine separate trips across six issues in one phase
+  (`#0347`, `#0374`, `#0384`, `#0387`, `#0394`, `#0395` — `#0347` alone hit
+  four different tests: two of its own new guard's, two of the repo-wide
+  citation family's), and once left `HEAD` red for about eighteen minutes
+  (`#0381`) when a scoped verification run could not see the repo-wide guard
+  the same edit had tripped. None of these was a defect in the guard; each was
+  the guard behaving exactly as designed against text describing it.
+
+  **The fix that generalises, from `#0384`:** move the concrete example out of
+  a comment and into a test body as an asserted string literal. A string
+  literal is not a comment, so a comment-scoped guard is satisfied for the
+  right reason instead of by evasion, and the example is pinned rather than
+  decorative — it cannot drift from the pattern it illustrates. Where no test
+  body is a natural home for the example (an issue file, this file), rephrase
+  rather than delete, per `#0347`'s precedent: name the shape without writing
+  it. Deleting the sentence also goes green, and leaves the next reader with
+  no example at all.
+
+  Do not build a mechanism that checks prose for whether it would trip a
+  sibling guard before it is written — that is `#0258`'s spiral one level out.
+  Let each guard catch its own sibling's prose the way it already has; the
+  measured cost across a whole phase was one rephrase per trip.
+
 - **BSD `grep -P` on this machine matches nothing, silently.** It does not
   error and does not warn — it reports zero hits on a file that demonstrably
   contains the bytes, which reads exactly like "the string isn't there." A
