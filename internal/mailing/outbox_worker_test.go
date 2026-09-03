@@ -2454,12 +2454,15 @@ func TestOutboxWorker_SkipsImportInviteAfterRestartSignup(t *testing.T) {
 
 	runWorkerUntilStopped(t, w)
 
-	// #0401's review of #0400: this delivery check previously sat AFTER
-	// the status Fatalf below, so it could never be the assertion that
-	// fired — a wrong status always stopped the test first, on exactly the
-	// scenario this loop exists to catch. Checked first and independently
-	// instead, as t.Errorf so the status assertion below still runs (and
-	// still reports) even if this one already failed.
+	got := waitForQueueStatus(t, pool, inviteID)
+
+	// #0401's second review: this delivery check must sit AFTER
+	// waitForQueueStatus, which is the test's only synchronisation point —
+	// runWorkerUntilStopped returns immediately, so checked any earlier
+	// this loop reads mailer.Sent() before the worker has claimed anything
+	// and can never fire. Checked here, independently of the status
+	// assertion below, as t.Errorf so that assertion still runs (and still
+	// reports) even if this one already failed.
 	const inviteSubject = "You're invited to the Open Circuit SF mailing list"
 	for _, m := range mailer.Sent() {
 		if m.To == email && m.Subject == inviteSubject {
@@ -2467,7 +2470,6 @@ func TestOutboxWorker_SkipsImportInviteAfterRestartSignup(t *testing.T) {
 		}
 	}
 
-	got := waitForQueueStatus(t, pool, inviteID)
 	if got != outbox.StatusSkipped {
 		t.Fatalf("import_invite row status = %q, want %q — RestartSignup re-opened the status gate on a row still carrying the PRE-restart confirm_token", got, outbox.StatusSkipped)
 	}
