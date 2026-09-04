@@ -389,9 +389,14 @@ Fill in every value `.env.example` ships blank or with a placeholder:
 - `AWS_REGION`, `SES_CONFIGURATION_SET`, `EMAIL_FROM`, `EMAIL_REPLY_TO`,
   `EMAIL_LIST_DOMAIN`, `SES_INBOUND_BUCKET` — see **SES setup** below. As of
   `#0423` (2026-09-04) `.env.example` ships this project's actual production
-  values for all six, not placeholders, so a deploy of *this* domain to *this*
-  SES account needs no editing here — confirm they still match
-  `docs/email-setup.md`'s current-state table rather than reinventing them.
+  values for five of the six, not placeholders, so a deploy of *this* domain
+  to *this* SES account needs no editing for those five — confirm them
+  against `docs/email-setup.md`'s current-state table and
+  `docs/aws-iam-setup.md`'s "The facts this rests on" table, which is where
+  `AWS_REGION` and `SES_CONFIGURATION_SET` actually live, rather than
+  reinventing them. The sixth, `SES_INBOUND_BUCKET`, names the bucket
+  `#0057` will create and does not exist yet — leave it as shipped; there is
+  nothing to confirm it against until that bucket is created.
   Deploying a fork to a different domain or SES account still means
   replacing every one of these with that identity's own values.
 - `MAX_SEND_RATE` — **set to `1` while the SES account is in the sandbox**

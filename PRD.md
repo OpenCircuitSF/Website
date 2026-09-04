@@ -1556,6 +1556,7 @@ EMAIL_FROM=Open Circuit SF <contact@mailing.opencircuitsf.com>  # corrected 2026
 EMAIL_REPLY_TO=contact@opencircuitsf.com  # corrected 2026-09-03 (#0414): was hello@opencircuitsf.com
 EMAIL_LIST_DOMAIN=lists.opencircuitsf.com
 SES_INBOUND_BUCKET=opencircuitsf-inbound
+SES_SANDBOX=true          # flip to false once AWS grants production access (CLAUDE.md §10 item 2); no live AWS call detects status, so this is manual (#0423)
 # No static credentials — the EC2 instance role provides them.
 
 # ── Sending ────────────────────────────────────────────────────────────────

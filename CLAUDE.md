@@ -1162,7 +1162,7 @@ that needs cost accounting; refresh once per day.
 
 ## 11. PRD section index
 
-`PRD.md` is 1,870 lines (~21k tokens). **Never read it whole.** Every issue's
+`PRD.md` is 1,871 lines (~21k tokens). **Never read it whole.** Every issue's
 `## Relation` block names the section it needs and carries the exact extraction
 command; run that. This table is the fallback when you need a section no issue
 cites.
@@ -1208,7 +1208,7 @@ the PRD.
 | §7.5 Accessibility | 13 | `sed -n '/^### 7\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §7.6 Performance budget | 12 | `sed -n '/^### 7\.6 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | **§8 HTTP API** | 65 | `sed -n '/^## 8\. /,/^## [0-9]/p' PRD.md` |
-| **§9 Configuration** | 75 | `sed -n '/^## 9\. /,/^## [0-9]/p' PRD.md` |
+| **§9 Configuration** | 76 | `sed -n '/^## 9\. /,/^## [0-9]/p' PRD.md` |
 | **§10 Infrastructure and Deployment** | 111 | `sed -n '/^## 10\. /,/^## [0-9]/p' PRD.md` |
 | §10.1 Topology | 38 | `sed -n '/^### 10\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §10.2 DNS records (Route 53) | 16 | `sed -n '/^### 10\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
