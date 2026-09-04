@@ -1539,10 +1539,10 @@ WEBAUTHN_RP_ORIGIN=https://www.opencircuitsf.com
 SESSION_SECRET=  # openssl rand -hex 32
 
 # ── AWS / SES ──────────────────────────────────────────────────────────────
-AWS_REGION=us-west-2
+AWS_REGION=us-east-1  # corrected 2026-09-03 (#0418): was us-west-2, never production's real region
 SES_CONFIGURATION_SET=opencircuit-transactional
-EMAIL_FROM=Open Circuit SF <hello@opencircuitsf.com>
-EMAIL_REPLY_TO=hello@opencircuitsf.com
+EMAIL_FROM=Open Circuit SF <contact@mailing.opencircuitsf.com>  # corrected 2026-09-03 (#0414): was hello@opencircuitsf.com — apex, and the apex cannot send
+EMAIL_REPLY_TO=contact@opencircuitsf.com  # corrected 2026-09-03 (#0414): was hello@opencircuitsf.com
 EMAIL_LIST_DOMAIN=lists.opencircuitsf.com
 SES_INBOUND_BUCKET=opencircuitsf-inbound
 # No static credentials — the EC2 instance role provides them.
@@ -1633,20 +1633,20 @@ ever scaled to two instances, exactly one runs the send worker.
 | `opencircuitsf.com` | A | EC2 Elastic IP | 301 redirects to `www` |
 | `go.opencircuitsf.com` | A | EC2 Elastic IP | ShortLinks |
 | `<sel1..3>._domainkey` | CNAME | *(from SES)* | DKIM |
-| `mail.opencircuitsf.com` | MX | `10 feedback-smtp.us-west-2.amazonses.com` | Custom MAIL FROM |
-| `mail.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF alignment |
-| `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-west-2.amazonaws.com` | **Inbound unsubscribe only** |
+| `bounce.mailing.opencircuitsf.com` | MX | `10 feedback-smtp.us-east-1.amazonses.com` | Custom MAIL FROM |
+| `bounce.mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF alignment |
+| `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` | **Inbound unsubscribe only** |
 | `_dmarc.opencircuitsf.com` | TXT | `v=DMARC1; p=quarantine; adkim=s; aspf=s; rua=mailto:…; fo=1` | DMARC |
 
 Start DMARC at `p=none` for two weeks, read the aggregate reports, then move to
-`p=quarantine`, then `p=reject` once clean.
+`p=quarantine`, then `p=reject` once clean. (Region and MAIL FROM subdomain corrected 2026-09-03, #0418 — this table read `us-west-2` and `mail.opencircuitsf.com`; production is `us-east-1` and the custom MAIL FROM lives on `bounce.mailing.opencircuitsf.com`, both verified against the live box and DNS.)
 
 ### 10.3 SES region choice
 
-Pick **`us-west-2`**: closest to San Francisco, and one of the regions that
-supports SES **inbound** email receiving (needed for §6.5 path 3). Verify the
-inbound-region list before committing — it is shorter than the sending-region
-list, and the whole project should sit in one region.
+Production uses `us-east-1`, not `us-west-2` (`CLAUDE.md` §7; corrected
+2026-09-03, #0418). The original reasoning — closest to San Francisco — does
+not carry over, and no record explains why. `us-east-1` does support SES
+**inbound** receiving (§6.5 path 3) and matches the instance's own region.
 
 ### 10.4 SES production access
 

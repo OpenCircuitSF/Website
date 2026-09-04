@@ -1911,23 +1911,43 @@ this tracker (`#0010`) point at this heading directly.
 
 Tracked so a phase doesn't stall silently on one of these — none are code:
 
-1. Rename the GitHub repo `Website` → `OpenCircuitSF`.
-2. SES: verify domain in `us-west-2`, Easy DKIM, custom MAIL FROM, DMARC at
-   `p=none`, request production access — blocks real sends from Phase 3.
+Items 2, 4, 5, 6 and 7 below were an unupdated mirror of `CLAUDE.md` §10's
+table; their status lines are corrected in place here, 2026-09-03 (`#0414`),
+to match it. `CLAUDE.md` §10 remains authoritative if the two ever disagree
+again.
+
+1. Rename the GitHub repo `Website` → `OpenCircuitSF`. **Status: not done.**
+2. SES: verify domain in `us-east-1` (corrected 2026-09-03, `#0418` — this item
+   said `us-west-2`), Easy DKIM, custom MAIL FROM, DMARC at `p=none`, request
+   production access — blocks real sends from Phase 3. **Status: all but done
+   2026-08-25** — domain verified, DKIM and MAIL FROM `SUCCESS`, DMARC live at
+   `p=none` on the subdomain, instance role attached and proven by a real
+   delivered send. Production access is the only piece still open (account
+   still sandboxed).
 3. Physical mailing address (PO box) — `#0045` refuses to start a campaign
-   without it.
-4. Sending identity (`hello@` vs. `workshops@`) and who reads the reply-to
-   inbox — undecided, `PRD.md` §14 Q2 defaults to `hello@`.
+   without it. **Status: not started.**
+4. ~~Sending identity (`hello@` vs. `workshops@`) and who reads the reply-to
+   inbox — undecided, `PRD.md` §14 Q2 defaults to `hello@`.~~ **Correction
+   (#0414, 2026-09-03).** Both halves settled 2026-08-25: mail sends as
+   `contact@mailing.opencircuitsf.com` with `Reply-To:
+   contact@opencircuitsf.com`, a real Google Workspace mailbox that already
+   existed and already reads it.
 5. Whether the domain needs human mailboxes — determines the apex MX,
-   undecided, `PRD.md` §14 Q3.
+   undecided, `PRD.md` §14 Q3. **Status: answered by observation, 2026-08-25**
+   — yes, and it already has them (Google Workspace, predating this project).
+   The apex MX must never be touched.
 6. Server-side details: instance ID/size/region, SSH access,
    `DocumentRoot`, vhost file, certbot renewal schedule, whether the
    existing Postgres is the target — undocumented, capture as encountered.
    This is the item most of this document's `[PLACEHOLDER: ...]` markers
-   trace back to.
+   trace back to. **Status: done, 2026-08-25** — captured in the
+   production-facts table above. The instance is `t4g.nano` in `us-east-1`
+   on PostgreSQL 15.18, each contradicting an earlier assumption.
 7. SES account-level suppression list (`aws sesv2
    put-account-suppression-attributes --suppressed-reasons BOUNCE
-   COMPLAINT`) — see **SES setup** above, step 7; gated on item 2.
+   COMPLAINT`) — see **SES setup** above, step 7; gated on item 2. **Status:
+   already enabled** — `get-account` returns `SuppressedReasons: ["BOUNCE",
+   "COMPLAINT"]`; it appears to predate this project. Nothing to do.
 
 ---
 

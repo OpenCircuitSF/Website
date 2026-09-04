@@ -202,16 +202,24 @@ announces nothing — invisible to every test that exists.
 
 ## 10. Credentials and services that do not exist yet
 
-*Recorded, `CLAUDE.md` §10.* SES has never been set up: no verified domain, no
-DKIM, no production access. So **no issue requiring a real send can be verified
-today**. `MAILER_NOOP=true` logs mail instead of sending and the send worker
-does not start at all, which means live send progress and the SSE stream have
-nothing to drive them.
+*Recorded, `CLAUDE.md` §10.* **Corrected 2026-09-03 (`#0414`):** at the time
+this was written, SES had never been set up — no verified domain, no DKIM, no
+production access — so no issue requiring a real send could be verified. As of
+2026-08-25 the domain is verified, DKIM and custom MAIL FROM are `SUCCESS`,
+and the identity sends real mail; **production access is the only piece still
+missing** (`CLAUDE.md` §10 item 2), so a real send to a non-verified address
+still cannot be proved. `MAILER_NOOP=true` logs mail instead of sending and the
+send worker does not start at all, which means live send progress and the SSE
+stream have nothing to drive them in that mode.
 
-Two more of the same shape: no physical mailing address (`#0045` refuses to
+~~Two more of the same shape: no physical mailing address (`#0045` refuses to
 start a campaign without one, by design), and no decision on who reads
 `hello@opencircuitsf.com` — which `#0075`'s published privacy policy already
-commits to.
+commits to.~~ **Correction (#0414, 2026-09-03):** the mailing-address half is
+still open — `#0045` still refuses to start a campaign without one. The
+sending-identity half is settled as of 2026-08-25: `contact@opencircuitsf.com`
+is a real Google Workspace mailbox that already existed, and it is the address
+`#0075`'s privacy policy and the mailing list's `Reply-To:` both use.
 
 **The obstacle is not the missing credential. It is discovering it at the
 verification step**, after the work is done, instead of naming it in the plan.

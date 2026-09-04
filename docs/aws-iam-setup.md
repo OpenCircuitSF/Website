@@ -36,16 +36,18 @@ hand instead.
 | AWS account | `378152330719` |
 | EC2 instance | `i-0e3bd89e87d1c2364` (`t4g.nano`, **`us-east-1`**) |
 | Current instance role | **none** — the metadata service 404s `iam/security-credentials/` |
-| SES region | **`us-west-2`** (PRD §10.3 — chosen for inbound receiving support, and independent of where the instance lives) |
-| SES identity | `arn:aws:ses:us-west-2:378152330719:identity/mailing.opencircuitsf.com` — **verified**, DKIM `SUCCESS`, custom MAIL FROM `bounce.mailing.opencircuitsf.com` `SUCCESS` |
-| SES configuration set | `arn:aws:ses:us-west-2:378152330719:configuration-set/opencircuit-transactional` |
-| SNS topic for events | `arn:aws:sns:us-west-2:378152330719:opencircuit-ses-events` |
+| SES region | **`us-east-1`** — corrected 2026-09-03 (`#0418`); this row said `us-west-2`, which was never the real region (`CLAUDE.md` §7) |
+| SES identity | `arn:aws:ses:us-east-1:378152330719:identity/mailing.opencircuitsf.com` — **verified**, DKIM `SUCCESS`, custom MAIL FROM `bounce.mailing.opencircuitsf.com` `SUCCESS` |
+| SES configuration set | `arn:aws:ses:us-east-1:378152330719:configuration-set/opencircuit-transactional` |
+| SNS topic for events | `arn:aws:sns:us-east-1:378152330719:opencircuit-ses-events` |
 | Admin CLI user | `arn:aws:iam::378152330719:user/cli-admin` |
 
-The instance being in `us-east-1` while SES is in `us-west-2` is fine and
-deliberate. IAM is global; the SDK reaches SES in whatever region
-`AWS_REGION` names, which `/etc/opencircuit/config.env` already sets to
-`us-west-2`.
+The instance and SES both sit in `us-east-1` — confirmed against
+`/etc/opencircuit/config.env`, which sets `AWS_REGION=us-east-1`, read-only
+via `ssh ec2`. (This row previously described the instance and SES as being
+in different regions, which was itself downstream of the `us-west-2` error
+above; IAM stays global regardless, and the SDK reaches SES in whatever
+region `AWS_REGION` names.)
 
 **The sending identity is the `mailing.` subdomain, not the apex** (user's
 decision, 2026-08-25). `opencircuitsf.com` carries the domain's real human
@@ -57,7 +59,7 @@ before anything reached DNS. Concretely:
 
 | | |
 |---|---|
-| `From:` | `Open Circuit SF <hello@mailing.opencircuitsf.com>` |
+| `From:` | `Open Circuit SF <contact@mailing.opencircuitsf.com>` |
 | `Reply-To:` | `contact@opencircuitsf.com` — replies land in the normal Google inbox |
 | Envelope / `Return-Path` | `bounce.mailing.opencircuitsf.com` |
 | Apex MX | **untouched** — still `1 smtp.google.com` |
@@ -216,8 +218,8 @@ PRD §10.5's "scoped tightly: no `ses:*`, no wildcard resources":
         "ses:SendRawEmail"
       ],
       "Resource": [
-        "arn:aws:ses:us-west-2:378152330719:identity/*",
-        "arn:aws:ses:us-west-2:378152330719:configuration-set/opencircuit-transactional"
+        "arn:aws:ses:us-east-1:378152330719:identity/*",
+        "arn:aws:ses:us-east-1:378152330719:configuration-set/opencircuit-transactional"
       ]
     }
   ]
@@ -240,7 +242,7 @@ RECIPIENT's identity ARN.** Every send to the admin address failed with:
 
 ```
 AccessDeniedException: ... is not authorized to perform 'ses:SendEmail'
-on resource 'arn:aws:ses:us-west-2:378152330719:identity/brennan@opencircuitsf.com'
+on resource 'arn:aws:ses:us-east-1:378152330719:identity/brennan@opencircuitsf.com'
 ```
 
 Naming recipients in an IAM policy is not viable for a mailing list, so the

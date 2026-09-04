@@ -26,7 +26,7 @@ anything reached DNS.
 | | |
 |---|---|
 | SES identity | `mailing.opencircuitsf.com` — verified, DKIM `SUCCESS` |
-| `From:` | `Open Circuit SF <hello@mailing.opencircuitsf.com>` (`EMAIL_FROM`) |
+| `From:` | `Open Circuit SF <contact@mailing.opencircuitsf.com>` (`EMAIL_FROM`) |
 | `Reply-To:` | `contact@opencircuitsf.com` (`EMAIL_REPLY_TO`) — replies land in the normal Google inbox, so the subdomain never needs to receive mail |
 | Envelope / `Return-Path` | `bounce.mailing.opencircuitsf.com` (custom MAIL FROM, `SUCCESS`) |
 | **Apex MX** | **untouched.** Still Google. `CLAUDE.md` §9's "never point the apex MX at SES" is not theoretical here — it would hijack real mail |
@@ -39,12 +39,16 @@ introduced or needs — but it is worth closing independently one day.
 
 ## Region
 
-**`us-west-2`** — closest to San Francisco, and one of the regions that
-supports SES **inbound** email receiving (required for the `mailto:`
-unsubscribe path). Verify the inbound-region list before committing to a
-different region; it is shorter than the sending-region list, and the
-whole project should sit in one region rather than split sending and
-receiving across two.
+**`us-east-1`** — corrected 2026-09-03 (`#0418`); this section previously said
+`us-west-2`, which was never production's real region. Proved three
+independent ways: instance metadata's `placement/region`,
+`AWS_REGION=us-east-1` in `/etc/opencircuit/config.env`, and the live custom
+MAIL FROM MX record (`10 feedback-smtp.us-east-1.amazonses.com`, below). The
+original reasoning — closest to San Francisco — does not carry over to
+`us-east-1`; what still holds is that `us-east-1` supports SES **inbound**
+email receiving (required for the `mailto:` unsubscribe path) and is the
+region the EC2 instance itself already sits in, so sending and receiving stay
+in one place. **Do not migrate to `us-west-2`** (`#0057`'s planning pass).
 
 ## Domain verification and DNS (Route 53)
 
@@ -55,7 +59,7 @@ MAIL FROM both `SUCCESS`.
 | Name | Type | Value | Purpose |
 |---|---|---|---|
 | `<3 tokens>._domainkey.mailing.opencircuitsf.com` | CNAME | `<token>.dkim.amazonses.com` | Easy DKIM, RSA 2048 |
-| `bounce.mailing.opencircuitsf.com` | MX | `10 feedback-smtp.us-west-2.amazonses.com` | Custom MAIL FROM |
+| `bounce.mailing.opencircuitsf.com` | MX | `10 feedback-smtp.us-east-1.amazonses.com` | Custom MAIL FROM |
 | `bounce.mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF for the envelope domain |
 | `mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com -all` | SPF for the `From:` domain. `-all`, not `~all`: nothing but SES ever sends as this name, so a hard fail is safe and stronger |
 | `_dmarc.mailing.opencircuitsf.com` | TXT | `v=DMARC1; p=none; rua=mailto:contact@opencircuitsf.com; fo=1` | DMARC, **subdomain-scoped** |
@@ -86,7 +90,7 @@ the wildcard to keep covering.
 ## Production access
 
 **Still in the sandbox as of 2026-08-25** — `aws sesv2 get-account --region
-us-west-2` reports `ProductionAccessEnabled: false` with `SendingEnabled:
+us-east-1` reports `ProductionAccessEnabled: false` with `SendingEnabled:
 true`. That is 200 messages/day to verified recipients only, which is enough
 to prove the whole pipeline (including SES's simulator addresses) but not to
 launch. `cli-admin`'s inline policy already grants `support:CreateCase`, so
@@ -139,7 +143,7 @@ verified before anything in the body is trusted — see
 |---|---|
 | Configuration set | `opencircuit-transactional`, reputation metrics on |
 | Event destination | `sns-events` — SEND, DELIVERY, BOUNCE, COMPLAINT, REJECT, RENDERING_FAILURE, DELIVERY_DELAY |
-| SNS topic | `arn:aws:sns:us-west-2:378152330719:opencircuit-ses-events` |
+| SNS topic | `arn:aws:sns:us-east-1:378152330719:opencircuit-ses-events` |
 | Topic policy | owner full control, plus `sns:Publish` for `ses.amazonaws.com` conditioned on `SourceAccount` and a `SourceArn` under this account's SES |
 | Subscription | HTTPS → `https://www.opencircuitsf.com/api/ses/notifications`, **auto-confirmed** |
 | `SES_EVENTS_TOPIC_ARN` | set in `/etc/opencircuit/config.env` |
@@ -180,7 +184,7 @@ This is an AWS account setting, not code — it can't be verified by
 ```bash
 aws sesv2 put-account-suppression-attributes \
     --suppressed-reasons BOUNCE COMPLAINT \
-    --region us-west-2
+    --region us-east-1
 ```
 
 What this does and does not cover:
@@ -195,7 +199,7 @@ What this does and does not cover:
   §6.5's state machine still needs the real bounce/complaint events this
   project's own webhook records.
 - Verify it's active with
-  `aws sesv2 get-account-suppression-attributes --region us-west-2`, which
+  `aws sesv2 get-account-suppression-attributes --region us-east-1`, which
   should echo back `{"SuppressedReasons": ["BOUNCE", "COMPLAINT"]}`.
 
 ## Open items (tracked in `CLAUDE.md` §10)
@@ -217,7 +221,7 @@ Resolved, no longer open:
 - Domain verification, Easy DKIM, custom MAIL FROM, and DMARC — all done, on
   the `mailing.` subdomain.
 - The sending identity question (`PRD.md` §14 Q2) — it is
-  `hello@mailing.opencircuitsf.com`, with `Reply-To: contact@opencircuitsf.com`
+  `contact@mailing.opencircuitsf.com`, with `Reply-To: contact@opencircuitsf.com`
   so replies reach a Google Workspace inbox that a human already reads. That
   also settles the "who reads that inbox" half of `CLAUDE.md` §10 item 4.
 
