@@ -8,13 +8,15 @@ import (
 	"strings"
 )
 
-// Site wires the meta-tag injector (#0019), sitemap.xml, and robots.txt
-// (#0020) into the HTTP server. It is the single type cmd/opencircuit's
-// mountAndServe constructs and mounts.
+// Site wires the meta-tag injector (#0019), sitemap.xml, robots.txt (#0020),
+// and the per-workshop Open Graph card generator (#0273) into the HTTP
+// server. It is the single type cmd/opencircuit's mountAndServe constructs
+// and mounts.
 type Site struct {
 	renderer *Renderer
 	sitemap  *Sitemap
 	robots   []byte
+	cards    *cardCache
 }
 
 // NewSite constructs a Site from the built index.html template bytes
@@ -28,26 +30,31 @@ func NewSite(indexHTML []byte, baseURL string, source WorkshopSource, archive Ar
 		renderer: NewRenderer(indexHTML, baseURL, source, archive),
 		sitemap:  NewSitemap(baseURL, source, archive),
 		robots:   BuildRobotsTxt(baseURL),
+		cards:    newCardCache(mustCardRenderer()),
 	}
 }
 
-// Invalidate clears both the per-path meta cache and the sitemap cache --
-// every cached rendering this Site holds, not only workshop-derived ones.
-// Named InvalidateWorkshops until #0325, back when #0051's workshop mutation
-// handlers (create/update/publish/cancel) were its only callers. #0319 added
-// two more: internal/handlers.AdminCampaignArchiveHandler (the admin
-// campaign archive toggle) and internal/mailing.Worker (the send worker's
-// own archive-publish transition, via the ArchiveCacheInvalidator seam).
-// All three call this SAME method through the SAME *Site instance --
+// Invalidate clears the per-path meta cache, the sitemap cache, and the
+// per-workshop card cache (#0273) -- every cached rendering this Site holds,
+// not only workshop-derived ones. Named InvalidateWorkshops until #0325,
+// back when #0051's workshop mutation handlers (create/update/publish/
+// cancel) were its only callers. #0319 added two more:
+// internal/handlers.AdminCampaignArchiveHandler (the admin campaign archive
+// toggle) and internal/mailing.Worker (the send worker's own
+// archive-publish transition, via the ArchiveCacheInvalidator seam). All
+// three call this SAME method through the SAME *Site instance --
 // cmd/opencircuit/seo_wiring_test.go proves the instance identity -- so a
-// stale title, summary, cover image, or archive entry never lingers past
-// the cache TTL after any of those three actions. Calls sitemap.invalidate
-// (unexported since #0337, see its own doc comment) rather than an exported
-// Sitemap.Invalidate -- *Site is the only type meant to satisfy either
-// caller's single-method invalidator interface.
+// stale title, summary, cover image, generated card, or archive entry never
+// lingers past the cache TTL after any of those three actions. Calls
+// sitemap.invalidate and cards.invalidate (both unexported since #0337/
+// #0273, see their own doc comments) rather than an exported
+// Sitemap.Invalidate/cardCache.Invalidate -- *Site is the only type meant to
+// satisfy either caller's single-method invalidator interface (see
+// invalidator_satisfier_guard_test.go).
 func (s *Site) Invalidate() {
 	s.renderer.Invalidate()
 	s.sitemap.invalidate()
+	s.cards.invalidate()
 }
 
 // Middleware wraps next (in practice, handlers.NewSPAHandler's catch-all)
@@ -98,6 +105,50 @@ func (s *Site) SitemapHandler() http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		_, _ = w.Write(body)
+	}
+}
+
+// WorkshopCardHandler serves GET /workshops/{slug}/og.png (#0273): the
+// generated per-workshop Open Graph card. handlers.workshopDetailPattern
+// (`^/workshops/[^/]+$`) does not match a path with a second segment, so
+// this route needs no change to internal/handlers/routes.go -- it is
+// registered as its own, more specific pattern in
+// cmd/opencircuit/main.go's mountAndServe, which Go 1.22's ServeMux
+// resolves ahead of the "GET /" SPA catch-all.
+//
+// Gated on Renderer.cardableWorkshop (seo.go), which applies the exact same
+// workshopIsCardable predicate workshopRouteMeta's og:image branch uses on
+// its own already-fetched Workshop -- a draft, unpublished, canceled, or
+// unknown slug 404s here rather than serving a generic PNG under a
+// workshop-specific URL, which would itself leak the slug's existence
+// (#0273's acceptance criterion 8). This is also why a canceled workshop,
+// which keeps the generic og-default.png fallback per #0135's ruling, 404s
+// here too rather than falling back -- there is nothing for this URL to
+// serve for a slug workshopRouteMeta never points at it.
+func (s *Site) WorkshopCardHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		wk, ok := s.renderer.cardableWorkshop(slug)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+
+		body, etag, err := s.cards.get(wk)
+		if err != nil {
+			http.Error(w, "failed to render workshop card", http.StatusInternalServerError)
+			return
+		}
+
+		h := w.Header()
+		h.Set("Content-Type", "image/png")
+		h.Set("Cache-Control", "public, max-age=3600")
+		h.Set("ETag", etag)
+		if inm := r.Header.Get("If-None-Match"); inm != "" && inm == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		_, _ = w.Write(body)
 	}
 }

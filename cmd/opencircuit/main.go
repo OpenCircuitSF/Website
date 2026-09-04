@@ -1406,6 +1406,14 @@ func mountAndServe(
 	mux.Handle("GET /sitemap.xml", site.SitemapHandler())
 	mux.Handle("GET /robots.txt", site.RobotsHandler())
 
+	// Per-workshop Open Graph card (#0273) -- an explicit, more specific
+	// pattern than the "GET /" SPA catch-all below, so Go 1.22's ServeMux
+	// resolves it first without any change to
+	// internal/handlers/routes.go's workshopDetailPattern (which does not
+	// match a path with a second segment). See Site.WorkshopCardHandler's
+	// doc comment (internal/seo/site.go) for the 404-vs-fallback rules.
+	mux.Handle("GET /workshops/{slug}/og.png", site.WorkshopCardHandler())
+
 	// Svelte SPA — the catch-all served LAST. Under the Go 1.22 mux this
 	// "GET /" pattern is the least specific, so every explicit route above wins
 	// over it. It serves hashed assets from the embedded web/dist directly and

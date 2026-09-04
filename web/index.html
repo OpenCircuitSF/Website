@@ -24,7 +24,24 @@
     <meta property="og:image" content="%%OC_OG_IMAGE%%" />
     <meta property="og:url" content="%%OC_OG_URL%%" />
     <meta property="og:type" content="%%OC_OG_TYPE%%" />
+    <!-- Static literal, not a %%OC_*%% token (#0273): the site name never
+         varies by route, so a token would add substitution surface (and a
+         distPlaceholderTokens/dist_placeholder_guard_test.go entry) for a
+         constant. -->
+    <meta property="og:site_name" content="Open Circuit SF" />
     <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
+    <!-- twitter:title/twitter:description (#0273): Twitter/X documents a
+         fallback to og:title/og:description when these are absent, but the
+         card is declared summary_large_image, which is worth setting
+         explicitly rather than relying on the fallback. Both mirror
+         m.OGTitle/m.OGDescription at substitution time (internal/seo/seo.go's
+         substitute) -- deliberately not independent values, so there is one
+         thing to keep correct per route, not two that could drift.
+         twitter:image is deliberately NOT added: Twitter/X falls back to
+         og:image, and a second copy of the same URL is one more thing to
+         drift. -->
+    <meta name="twitter:title" content="%%OC_TWITTER_TITLE%%" />
+    <meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
     <!-- schema.org Event structured data for a workshop detail page (#0055,
          PRD §7.4). The JSON-LD placeholder token below is substituted with
          either a whole `<script type="application/ld+json">...</script>` block (built

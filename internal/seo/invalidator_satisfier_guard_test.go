@@ -139,9 +139,10 @@ func TestInvalidatorSatisfierSet(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"Site":     true,  // intended satisfier -- the only type actually passed into either seam
-		"Renderer": true,  // pre-existing, harmless accidental satisfier, explicitly scoped out by #0337
-		"Sitemap":  false, // #0337's fix: must NOT satisfy handlers.seoCacheInvalidator or mailing.ArchiveCacheInvalidator
+		"Site":      true,  // intended satisfier -- the only type actually passed into either seam
+		"Renderer":  true,  // pre-existing, harmless accidental satisfier, explicitly scoped out by #0337
+		"Sitemap":   false, // #0337's fix: must NOT satisfy handlers.seoCacheInvalidator or mailing.ArchiveCacheInvalidator
+		"cardCache": false, // #0273: unexported invalidate() by design (card.go) -- must NOT satisfy either seam; would stay green without this row (an unexported method never matches), but the row records the intent so a later rename to Invalidate fails loudly
 	}
 
 	// Fail closed the other direction: finding zero satisfiers at all would

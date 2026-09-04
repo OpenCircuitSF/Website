@@ -23,6 +23,8 @@ const testTemplate = `<!doctype html>
 <meta property="og:url" content="%%OC_OG_URL%%" />
 <meta property="og:type" content="%%OC_OG_TYPE%%" />
 <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
+<meta name="twitter:title" content="%%OC_TWITTER_TITLE%%" />
+<meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
 %%OC_JSONLD%%
 </head><body><div id="app"></div></body></html>`
 
@@ -506,7 +508,8 @@ func TestRender_AllTokensSubstituted(t *testing.T) {
 	r := newTestRenderer(nil)
 	tokens := []string{
 		tokenTitle, tokenDescription, tokenOGTitle, tokenOGDescription,
-		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard, tokenJSONLD,
+		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard,
+		tokenTwitterTitle, tokenTwitterDescription, tokenJSONLD,
 	}
 	for _, path := range []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/nonexistent", "/workshops/some-slug"} {
 		body := string(r.Render(path))
@@ -541,7 +544,8 @@ func TestSourceTemplate_EachTokenAppearsExactlyOnce(t *testing.T) {
 
 	tokens := []string{
 		tokenTitle, tokenDescription, tokenOGTitle, tokenOGDescription,
-		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard, tokenJSONLD,
+		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard,
+		tokenTwitterTitle, tokenTwitterDescription, tokenJSONLD,
 	}
 	for _, tok := range tokens {
 		if n := strings.Count(body, tok); n != 1 {

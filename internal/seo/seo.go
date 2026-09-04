@@ -11,8 +11,12 @@
 // Design (PRD §7.4):
 //  1. Hold the built index.html in memory with placeholder markers (see
 //     web/index.html's %%OC_*%% tokens) for title, description, og:title,
-//     og:description, og:image, og:url, og:type, twitter:card, and (#0055)
-//     a schema.org Event JSON-LD block for a workshop detail page.
+//     og:description, og:image, og:url, og:type, twitter:card,
+//     twitter:title, twitter:description (#0273 -- both mirror og:title/
+//     og:description at substitution time rather than being independent
+//     RouteMeta fields), and (#0055) a schema.org Event JSON-LD block for a
+//     workshop detail page. og:site_name is a static literal in
+//     web/index.html, not a token -- it never varies by route (#0273).
 //  2. On each request, match the path against a route table: a compiled-in
 //     table for the static marketing routes, the workshop store for
 //     /workshops/{slug} (nil until #0051/#0054 land -- falls back to the
@@ -54,6 +58,18 @@ const (
 	tokenOGType        = "%%OC_OG_TYPE%%"
 	tokenTwitterCard   = "%%OC_TWITTER_CARD%%"
 	tokenJSONLD        = "%%OC_JSONLD%%"
+
+	// tokenTwitterTitle/tokenTwitterDescription (#0273) back
+	// twitter:title/twitter:description explicitly, rather than relying on
+	// Twitter/X's own documented fallback to og:title/og:description.
+	// Deliberately NOT new RouteMeta fields: they always mirror
+	// m.OGTitle/m.OGDescription at substitution time (see substitute
+	// below), so there is exactly one value per route to keep correct, not
+	// two that could drift. twitter:image is deliberately not added at all
+	// -- Twitter/X falls back to og:image, and a second copy of the same
+	// URL is one more thing to drift out of sync.
+	tokenTwitterTitle       = "%%OC_TWITTER_TITLE%%"
+	tokenTwitterDescription = "%%OC_TWITTER_DESCRIPTION%%"
 )
 
 // defaultCacheTTL is the short TTL PRD §7.4 calls for on the rendered
@@ -376,9 +392,25 @@ func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 		return m, true
 	}
 
+	// #0273: cover_image stays the override, unchanged. When unset, the
+	// fallback is now the per-workshop generated card (WorkshopCardHandler,
+	// site.go) rather than the one shared og-default.png -- but ONLY when
+	// workshopIsCardable(w) agrees, the exact same pure predicate
+	// Renderer.cardableWorkshop applies after its own store lookup, so the
+	// two call sites structurally cannot drift apart (#0273's plan §7)
+	// without a second WorkshopBySlug lookup here: w was already fetched
+	// once, above, and cmd/opencircuit/seo_wiring_test.go's
+	// TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite pins the
+	// exact number of WorkshopBySlug calls a real render performs, so a
+	// second lookup in this branch is not merely wasteful, it is a pinned
+	// regression.
 	image := absoluteURL(r.baseURL, w.CoverImage)
 	if image == "" {
-		image = r.baseURL + "/og-default.png"
+		if workshopIsCardable(w) {
+			image = r.baseURL + "/workshops/" + slug + "/og.png"
+		} else {
+			image = r.baseURL + "/og-default.png"
+		}
 	}
 	title := w.Title + " — Open Circuit SF"
 	return RouteMeta{
@@ -392,6 +424,52 @@ func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 		TwitterCard:   "summary_large_image",
 		JSONLD:        jsonld,
 	}, true
+}
+
+// workshopIsCardable is the one predicate both workshopRouteMeta's
+// per-workshop og:image branch and Renderer.cardableWorkshop (in turn used
+// by Site.WorkshopCardHandler, site.go) must agree on, given an
+// already-resolved Workshop: Status == WorkshopPublished && Published.
+// Extracted into a pure function over data already in hand -- rather than
+// left as inline conditions duplicated in both places, or as a second
+// WorkshopBySlug lookup repeating cardableWorkshop's own -- is #0273's
+// answer to CLAUDE.md §8's general lesson that a boolean condition
+// duplicated in two places eventually drifts, without adding a second store
+// read that a real request doesn't need: workshopRouteMeta already has w in
+// hand from its own lookup, and
+// cmd/opencircuit/seo_wiring_test.go's
+// TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite pins the exact
+// number of WorkshopBySlug calls one render performs, so re-querying the
+// store here would be an observable regression, not just redundant work.
+//
+// Deliberately narrower than workshopRouteMeta's own top-of-function gate
+// (which also accepts WorkshopCanceled, so a canceled workshop can still
+// carry its own #0055 JSON-LD): a canceled workshop must keep the generic
+// og-default.png fallback per #0135's ruling, so it must never be
+// considered cardable.
+func workshopIsCardable(w Workshop) bool {
+	return w.Status == WorkshopPublished && w.Published
+}
+
+// cardableWorkshop looks up slug and reports whether it is a real,
+// cardable workshop per workshopIsCardable. The sole caller is
+// Site.WorkshopCardHandler (site.go) -- workshopRouteMeta does its own
+// WorkshopBySlug lookup and applies workshopIsCardable directly to the
+// result it already has, rather than calling this method, to avoid a
+// second lookup per render (see workshopIsCardable's doc comment).
+//
+// ok=false for: no WorkshopSource configured, an unknown slug, a workshop
+// source error, a draft/unpublished workshop, or (#0171) a canceled workshop
+// that was never actually published (w.Published false).
+func (r *Renderer) cardableWorkshop(slug string) (Workshop, bool) {
+	if r.workshop == nil {
+		return Workshop{}, false
+	}
+	w, ok, err := r.workshop.WorkshopBySlug(slug)
+	if err != nil || !ok || !workshopIsCardable(w) {
+		return Workshop{}, false
+	}
+	return w, true
 }
 
 // archiveRouteMeta looks up slug in the configured ArchiveSource and builds
@@ -521,6 +599,8 @@ func (r *Renderer) substitute(m RouteMeta) []byte {
 		tokenOGURL, html.EscapeString(m.OGURL),
 		tokenOGType, html.EscapeString(m.OGType),
 		tokenTwitterCard, html.EscapeString(m.TwitterCard),
+		tokenTwitterTitle, html.EscapeString(m.OGTitle),
+		tokenTwitterDescription, html.EscapeString(m.OGDescription),
 		tokenJSONLD, m.JSONLD,
 	)
 	return []byte(replacer.Replace(string(r.template)))
