@@ -91,9 +91,21 @@ func cardTestCases() []cardCase {
 		{
 			name: "normal",
 			workshop: Workshop{
-				Slug:         "intro-to-soldering",
-				Title:        "Introduction to Soldering",
-				StartsAt:     "2026-09-12T18:00:00Z",
+				Slug:  "intro-to-soldering",
+				Title: "Introduction to Soldering",
+				// Deliberately NOT an already-UTC "...T18:00:00Z" shape --
+				// that is the one input production data never has (real
+				// StartsAt values are workshop_seo_source.go's
+				// w.StartsAt.UTC().Format(time.RFC3339) of a real
+				// TIMESTAMPTZ instant), and #0273's review found that every
+				// prior fixture using that shape hid a real UTC-unlabeled
+				// rendering defect from this very test. This is
+				// 2026-09-12T18:00:00 PDT (a Saturday evening class),
+				// expressed as its UTC instant, so a regression back to
+				// t.UTC() changes the rendered day, not just the hour --
+				// see TestFormatCardDate_PacificTimeZone_PinnedInstants for
+				// the direct pin.
+				StartsAt:     "2026-09-13T01:00:00Z",
 				LocationName: "Open Circuit SF Workshop Space",
 			},
 			wantMeta: true,
@@ -126,6 +138,53 @@ func cardTestCases() []cardCase {
 			},
 			wantMeta: false,
 		},
+	}
+}
+
+// TestFormatCardDate_PacificTimeZone_PinnedInstants is #0273's review-pass
+// remedy for the card rendering w.StartsAt in UTC, unlabeled: production's
+// real StartsAt values reach formatCardDate as the UTC instant of a
+// TIMESTAMPTZ Pacific wall-clock time (workshop_seo_source.go's
+// w.StartsAt.UTC().Format(time.RFC3339)), so a Saturday 6 PM Pacific class
+// was rendering as "1:00 AM" the next calendar day -- #0144's already-fixed
+// defect, reborn here without even a zone label. Mirrors
+// internal/handlers/admin_workshop_announce_body_test.go's
+// TestAnnounceWhen_PacificTimeZone_PinnedInstants: two instants on opposite
+// sides of America/Los_Angeles' 2026 DST boundaries, both chosen so the
+// Pacific calendar day differs from the UTC one -- a regression back to
+// t.UTC() changes the rendered DAY, not merely the hour, so this cannot pass
+// by accident. Expected strings computed independently (by hand, from the
+// known UTC offsets -8/-7), not derived from the code under test.
+func TestFormatCardDate_PacificTimeZone_PinnedInstants(t *testing.T) {
+	tests := []struct {
+		name     string
+		startsAt string
+		want     string
+	}{
+		{
+			// Daylight time (PDT, UTC-7). Sat Sep 12 2026 18:00 Pacific ->
+			// Sun Sep 13 2026 01:00 UTC -- the exact instant the review
+			// found rendering as "Sep 13, 2026, 1:00 AM" (no zone label,
+			// wrong day) under the old t.UTC() rendering.
+			name:     "summer daylight time (PDT)",
+			startsAt: "2026-09-13T01:00:00Z",
+			want:     "Sep 12, 2026, 6:00 PM PDT",
+		},
+		{
+			// Standard time (PST, UTC-8). Thu Jan 15 2026 18:00 Pacific ->
+			// Fri Jan 16 2026 02:00 UTC.
+			name:     "winter standard time (PST)",
+			startsAt: "2026-01-16T02:00:00Z",
+			want:     "Jan 15, 2026, 6:00 PM PST",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatCardDate(tc.startsAt); got != tc.want {
+				t.Errorf("formatCardDate(%q) = %q, want %q", tc.startsAt, got, tc.want)
+			}
+		})
 	}
 }
 

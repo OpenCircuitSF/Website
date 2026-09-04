@@ -308,13 +308,45 @@ func cardMetaLine(w Workshop) string {
 	}
 }
 
+// cardLocation is the timezone the card's date/venue line renders in.
+//
+// # Pacific, zone-labeled -- not UTC, and not per-request (#0273 review pass,
+// amending this file's original UTC rendering)
+//
+// The workshops this card advertises are physical, in-person events in the
+// Bay Area (#0144's own reasoning, restated here because this is the same
+// defect on a more public surface): the correct zone is the venue's, which
+// is a fixed site-level fact, not something read from a viewer's request --
+// there is no viewer request here at all, since this handler is fetched by
+// unfurler crawlers, not browsers. #0144 already settled this exact question
+// for the analogous server-side surface, the announce email body
+// (internal/handlers/admin_workshop_announce.go's announceLocation), and
+// this mirrors that pattern rather than inventing a second one: one named
+// var, loaded once at package init via time/tzdata (already imported by
+// cmd/opencircuit/main.go, #0156), so a future WORKSHOP_TIMEZONE config
+// field would be a local change here, not a repo-wide search.
+var cardLocation = mustCardLocation("America/Los_Angeles")
+
+func mustCardLocation(name string) *time.Location {
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		// Only reachable if the Go toolchain's tzdata is missing/corrupt --
+		// every card would be broken regardless, so fail loud at package
+		// init rather than silently rendering the wrong time on every
+		// Slack/iMessage/Bluesky/Mastodon unfurl.
+		panic(fmt.Sprintf("seo: load card location %q: %v", name, err))
+	}
+	return loc
+}
+
 // formatCardDate formats w.StartsAt (RFC 3339 with a UTC offset -- Workshop's
-// own doc comment) for display on the card. Rendered in UTC deliberately:
-// this is a server-side image with no viewer request context to read a
-// timezone from, unlike web/src/lib/workshops.ts's formatWorkshopDate, which
-// runs in the viewer's own browser and can use its local timezone. Returns
-// "" for an empty or unparseable input, matching buildEvent's own "not
-// enough data" posture (jsonld.go) rather than printing a broken string.
+// own doc comment) for display on the card, in cardLocation with the zone
+// abbreviation labeled. The "MST" reference field is Go's placeholder for
+// "the zone abbreviation of whatever *time.Location the time.Time was
+// converted into" (see announceDateLayout's doc comment, the precedent this
+// mirrors) -- it renders "PDT"/"PST" here, not Mountain time. Returns "" for
+// an empty or unparseable input, matching buildEvent's own "not enough data"
+// posture (jsonld.go) rather than printing a broken string.
 func formatCardDate(startsAt string) string {
 	if startsAt == "" {
 		return ""
@@ -323,7 +355,7 @@ func formatCardDate(startsAt string) string {
 	if err != nil {
 		return ""
 	}
-	return t.UTC().Format("Jan 2, 2006, 3:04 PM")
+	return t.In(cardLocation).Format("Jan 2, 2006, 3:04 PM MST")
 }
 
 // render composes and PNG-encodes w's card: the embedded base image, the
