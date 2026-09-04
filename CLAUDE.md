@@ -306,7 +306,7 @@ scripts/db-reset.sh          # rebuild the local dev DB from migrations + seed a
 **Always set `ISSUE=NNNN`** — it gives the run its own database and is what
 lets two agents test concurrently (§5a).
 
-**A scoped run can miss a repo-wide guard's own package (`#0381`).** Seven
+**A scoped run can miss a repo-wide guard's own package (`#0381`).** Eight
 packages own tests whose scan roots reach beyond their own directory, so an
 edit inside one of those roots must add that package to the scoped run:
 
@@ -319,6 +319,7 @@ edit inside one of those roots must add that package to the scoped run:
 | `internal/seo` | `web/index.html` and `web/dist/index.html` (`#0141`'s placeholder guard) |
 | `cmd/opencircuit` | every `internal/*` package `servePostgres` imports, parsed for `*seo.Site` flow |
 | `internal/mailing` | `internal/outbox` |
+| `internal/config` | `.env.example` at the repo root — `TestEnvExampleCoversLoaderVariables` (`#0423`) re-derives the loader's variable set from `config.go`'s own AST and asserts each appears in `.env.example`, which `docs/deployment.md`'s install step copies verbatim onto production |
 
 **The package column above is guarded; the `Reaches into` column is not**
 (`#0387`). Only the column is cheaply checkable — a package either reaches

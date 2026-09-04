@@ -387,11 +387,13 @@ Fill in every value `.env.example` ships blank or with a placeholder:
   this public repository (`#0067`).
 - `ADMIN_EMAIL` — the address pre-authorized as admin on first registration.
 - `AWS_REGION`, `SES_CONFIGURATION_SET`, `EMAIL_FROM`, `EMAIL_REPLY_TO`,
-  `EMAIL_LIST_DOMAIN`, `SES_INBOUND_BUCKET` — see **SES setup** below; these
-  require the SES account and domain verification that `CLAUDE.md` §10 item 2
-  records as not started. Fill in the ones that don't depend on SES existing
-  (`EMAIL_LIST_DOMAIN`, `AWS_REGION`) now; the rest can be corrected later
-  without a rebuild (see **Redeploy procedure**).
+  `EMAIL_LIST_DOMAIN`, `SES_INBOUND_BUCKET` — see **SES setup** below. As of
+  `#0423` (2026-09-04) `.env.example` ships this project's actual production
+  values for all six, not placeholders, so a deploy of *this* domain to *this*
+  SES account needs no editing here — confirm they still match
+  `docs/email-setup.md`'s current-state table rather than reinventing them.
+  Deploying a fork to a different domain or SES account still means
+  replacing every one of these with that identity's own values.
 - `MAX_SEND_RATE` — **set to `1` while the SES account is in the sandbox**
   (1 message/second cap). This is a deploy-time fact the code cannot enforce
   on its own — nothing in this codebase can detect sandbox-vs-production SES

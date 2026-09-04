@@ -7,6 +7,16 @@ instead). It collects **every** validation error before returning, rather
 than failing on the first one, so a broken environment reports its full set
 of problems in one pass.
 
+**This document is the reference; `.env.example` is the production
+template** (decided 2026-09-04, `#0423`) — `docs/deployment.md`'s install
+step is `sudo cp .env.example /etc/opencircuit/config.env`, so that file is
+what production actually gets, and it now ships working values wherever one
+is knowable and safe to publish, not illustrative ones. Read here for the
+*why* behind a variable; `.env.example`'s own header comment records the
+same split for anyone editing that file directly. The two must never
+disagree about what the loader reads or requires — see the change note on
+each row below that `#0423` touched.
+
 ## Variables
 
 | Variable | Required | Default | Notes |
@@ -14,16 +24,17 @@ of problems in one pass.
 | `PORT` | no | `8080` | |
 | `BASE_URL` | yes (non-dev) | — | Public base URL. Drives every canonical URL: `og:url`, `og:image`, `sitemap.xml` `<loc>`, and the `Sitemap:` line in `robots.txt`. Must match the host the browser is actually on — the **www** form in production, since the apex 301s to www; see the gotcha below |
 | `DATABASE_URL` | yes, unless `STORAGE=json` | — | Postgres connection string |
-| `STORAGE` | no | *(unset → Postgres)* | Only the literal value `json` selects the in-memory dev store. An empty/unset `DATABASE_URL` does **not** engage dev mode — production can never silently fall back to the in-memory store. |
+| `STORAGE` | no | *(unset → Postgres)* | Only the literal value `json` selects the in-memory dev store. An empty/unset `DATABASE_URL` does **not** engage dev mode — production can never silently fall back to the in-memory store. Added to `.env.example` 2026-09-04 (`#0423`) — it was previously absent despite the loader reading it since `#0007`; production's own `config.env` was never affected, since an absent variable and an explicit `STORAGE=postgres` behave identically, but the gap meant `.env.example` no longer matched what `internal/config.Load()` actually reads. |
 | `WEBAUTHN_RP_ID` | yes (non-dev) | — | WebAuthn relying-party ID — the apex domain, so a passkey stays valid across apex and www |
 | `WEBAUTHN_RP_ORIGIN` | yes (non-dev) | — | Must match the browser's real origin exactly — the **www** form in production; see the gotcha below |
 | `SESSION_SECRET` | yes (non-dev) | — | HMAC signing key for session cookies. Generate with `openssl rand -hex 32`. `.env.example` ships this **blank** rather than a placeholder string, so a copied template that's never had a real value set fails closed at startup (`config: missing required variable SESSION_SECRET`) instead of silently signing sessions with a key published in a public repository — see `#0067`. |
 | `AWS_REGION` | yes | — | SES region — production runs `us-east-1` (`CLAUDE.md` §7; corrected 2026-09-04, #0421, this row previously said "e.g. `us-west-2`", which was never the real region). No static credentials anywhere in configuration — the EC2 instance role supplies them via the AWS SDK's default credential chain; locally the chain falls back to `~/.aws/credentials`. |
 | `SES_CONFIGURATION_SET` | **yes** | — | SES configuration set used for transactional/campaign sends. Listed as optional here until 2026-08-25, when the first production boot proved otherwise: `mailing.NewSESMailer` returns `cannot construct SES mailer: missing SES_CONFIGURATION_SET` and the service crash-loops without it. The named set need not exist in SES yet. Currently `opencircuit-transactional` |
-| `EMAIL_FROM` | yes | — | RFC 5322 From header. **The address must sit on a verified SES identity**, which is the `mailing.` subdomain, not the apex — production runs `Open Circuit SF <contact@mailing.opencircuitsf.com>` with `EMAIL_REPLY_TO=contact@opencircuitsf.com`, so replies reach the Google Workspace inbox `#0271` made the public contact address. `.env.example` shows the apex form for readability; do not copy it to a host without verifying that identity in SES first. See `docs/email-setup.md` |
+| `EMAIL_FROM` | yes | — | RFC 5322 From header. **The address must sit on a verified SES identity**, which is the `mailing.` subdomain, not the apex — production runs `Open Circuit SF <contact@mailing.opencircuitsf.com>` with `EMAIL_REPLY_TO=contact@opencircuitsf.com`, so replies reach the Google Workspace inbox `#0271` made the public contact address. `.env.example` ships this same working subdomain value (corrected 2026-09-04, `#0423` — it previously shipped the apex form "for readability", which cannot send at all). See `docs/email-setup.md` |
 | `EMAIL_REPLY_TO` | no | — | Reply-To header for outbound mail |
 | `EMAIL_LIST_DOMAIN` | yes | — | Subdomain used for inbound unsubscribe handling, e.g. `lists.opencircuitsf.com`. Interpolated into the `mailto:` form of every campaign's `List-Unsubscribe` header (`mailing.CampaignHeaders`, `#0035`); required with no default (`#0105`) so a misconfigured deploy fails loud at boot instead of emitting a malformed `mailto:unsubscribe@?subject=…` header. Never point the apex MX at SES — see `CLAUDE.md` §9. |
 | `SES_INBOUND_BUCKET` | no | — | S3 bucket SES writes inbound mail to |
+| `SES_EVENTS_TOPIC_ARN` | no | *(unset → reject all)* | The single SNS topic ARN `internal/sesnotify` accepts SES bounce/complaint notifications from (`#0037`/`#0107`). A valid SNS signature only proves SNS sent a message, not that it arrived on *our* topic — any AWS account can subscribe our public endpoint to a topic of their own — so `sesnotify` also checks `TopicArn` against this value. Deliberately not in the required set above: the topic didn't exist yet when this variable was added (`CLAUDE.md` §10 item 2), and an empty value means every notification is rejected rather than the service failing to boot. Added to `.env.example` 2026-09-04 (`#0423`) — it was previously absent despite the loader reading it since `#0037`. |
 | `MAILER_NOOP` | no | `false` | `true` selects `auth.NoOpMailer` instead of the real SES v2 API mailer on the Postgres serve path (`#0027`). For local development against Postgres before SES is set up (`CLAUDE.md` §10 item 2) — `NoOpMailer` logs the full verification/recovery link to stdout, which is how `#0008`'s manual passkey verification procedure reads the magic link. Production leaves this unset. As of `#0045`, this also refuses to start the send worker at all: `noOpMailingMailer.Send` returns the literal message id `"noop"`, which would poison `#0038`'s bounce/complaint join key and `#0049`'s stats if it ever reached `email_sends.ses_message_id`. |
 | `MAX_SEND_RATE` | no | `10` | Messages/second ceiling; keep below the SES quota. This is the environment-level ceiling, not the operator dial — see below. |
 | `SEND_BATCH_SIZE` | no | `50` | Messages per send-worker batch |

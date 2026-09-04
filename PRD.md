@@ -1576,9 +1576,9 @@ MAILER_NOOP=false         # true drops outbound mail instead of calling SES, so 
                           # machine with no AWS credentials still exercises the flows.
                           # The admin routes that would send real mail are omitted
                           # from the route table entirely when this is set.
-SES_EVENTS_TOPIC_ARN=     # The SNS topic bounce/complaint notifications must arrive on.
-                          # A message from any other topic is refused before any
-                          # outbound certificate fetch (#0107).
+SES_EVENTS_TOPIC_ARN=arn:aws:sns:us-east-1:378152330719:opencircuit-ses-events
+                          # corrected 2026-09-04 (#0423): was blank — the topic has
+                          # existed since 2026-08-25 (CLAUDE.md §10 item 2, #0107).
 ```
 
 Runtime-editable values live in the `settings` table, not the environment:
