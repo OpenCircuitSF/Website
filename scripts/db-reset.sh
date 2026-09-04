@@ -232,9 +232,9 @@ echo "$DB is at migration $(psql "$DSN" -tAc 'select version from schema_migrati
 # AWS_REGION is only presence-checked by config.Load for `seed` (it never
 # constructs a mailer or makes an AWS call here) — same inertness dev.sh's
 # equivalent documents at length. Left at the real SES region for consistency
-# rather than the true-until-2026-09-03 us-west-2 planning value: us-east-1,
-# corrected 2026-09-04 (#0421; dev.sh's own default was corrected 2026-09-03,
-# #0418, and the two had since diverged).
+# rather than the planned us-west-2 value, which was never the real region:
+# us-east-1, corrected 2026-09-04 (#0421; dev.sh's own default was corrected
+# 2026-09-03, #0418, and the two had since diverged).
 if [ "$SEED" = "1" ]; then
   echo "seeding admin"
   ( cd "$REPO" && DATABASE_URL="$DSN" \
