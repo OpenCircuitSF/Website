@@ -431,8 +431,12 @@ func verifyDocRowsHaveMigration(t *testing.T, path string, rowLines []string, on
 // table-driven test cover both files' wording rather than needing a sibling
 // test per file. \x{2013} is an en dash (the character actually used in both
 // files, confirmed against their bytes), tolerating a plain hyphen too in
-// case a future edit normalizes it.
-var docRangePattern = regexp.MustCompile("(?:numbered|contiguous) `(\\d{6})`[–-]`(\\d{6})`")
+// case a future edit normalizes it. The leading \b (#0413) keeps the
+// alternation from matching a word that merely ends in "numbered" --
+// "renumbered", which PRD.md's §3.1 row carries -- since without it the
+// match starts mid-word rather than requiring numbered/contiguous as a
+// whole word.
+var docRangePattern = regexp.MustCompile("\\b(?:numbered|contiguous) `(\\d{6})`[–-]`(\\d{6})`")
 
 // docParityCase is one file this test holds to the same migration-range
 // claim. checkRows gates the per-migration row checks (drift modes 1 and 4,

@@ -113,8 +113,8 @@ belong in this tracker.
 
   **Check an issue's own greenfield language before following it.** Several
   issues filed before 2026-08-25 still carry the old note in their acceptance
-  criteria; the criterion is stale, not authoritative. `#0293` tracks correcting
-  the remaining copies in `PRD.md` §6.2 and `docs/deployment.md`.
+  criteria; the criterion is stale, not authoritative. `#0293` corrected the
+  remaining copies in `PRD.md` §6.2 and `docs/deployment.md`.
 - Tests sit beside the code as `_test.go`. DB-backed tests gate on
   `TEST_DATABASE_URL` and skip when it is unset — so a green `go test ./...`
   with that variable unset proves less than it looks like it does.
