@@ -10,7 +10,10 @@
 > its §5.2 list of unknowns are the most out-of-date parts — every one of
 > those questions is now answered in `CLAUDE.md` §7. Kept as written because
 > §6's findings and §3's non-code blockers are still accurate and still cost
-> real time to rediscover.
+> real time to rediscover — **except §3.1's SES region and rationale, which
+> are not** (corrected in place below, 2026-09-04, #0421): SES is done, not
+> pending, and it was done in `us-east-1`, not the `us-west-2` this section
+> still names.
 
 Everything needed to pick this up on another machine. Read this first, then
 [`PRD.md`](PRD.md) for the plan and [`issues/Issues.md`](issues/Issues.md) for
@@ -65,6 +68,18 @@ lands and it can be replayed.
 Neither is code. Both have multi-day lead times and both block a whole phase.
 
 ### 3.1 AWS SES — blocks Phase 3 onward (issues #0027+)
+
+> **Done, not pending (2026-09-04, #0421).** This section reads as a live "do
+> this now" instruction; it is not one. SES was actually set up on
+> 2026-08-25, and step 1's plan below was **not** what was decided: production
+> verified the identity in **`us-east-1`**, not `us-west-2`, matching the EC2
+> instance's own region rather than "close to SF" — that rationale was
+> retired, `CLAUDE.md` §7, `PRD.md` §10.3 (corrected 2026-09-03, `#0418`).
+> Step 3's MAIL FROM host is also different from what actually shipped:
+> `bounce.mailing.opencircuitsf.com`, not `mail.opencircuitsf.com`. The steps
+> below are left as originally written, as a record of the plan; see
+> `CLAUDE.md` §10 item 2 and `docs/email-setup.md` for the current, real
+> setup.
 
 New SES accounts are sandboxed: 200 messages/day, verified recipients only.
 Production access takes ~24h to approve.

@@ -72,7 +72,7 @@ guessed.
 |---|---|
 | Instance ID | `i-0e3bd89e87d1c2364`, hostname `bluesky.sstools.co` |
 | Instance size / type | `t4g.nano` (ARM/Graviton, Amazon Linux 2023, kernel 6.1 aarch64) — **not** the `t4g.small` PRD §10.1 assumes. 418 MB RAM, backed by a 418 MB zram device plus a 2 GB swapfile; 20 GB root, 53% used. `opencircuit` itself sits at ~14 MB RSS, so the box is tight rather than strained — but it also runs Apache, PostgreSQL, two ShortLinks instances and a prototypes service. `go build` is the memory-hungry step; it succeeds, but it is the thing to suspect if a deploy is ever OOM-killed. |
-| Region | **`us-east-1`** (az `us-east-1b`) — **not** the `us-west-2` PRD §10.1/§10.3 assumed. ~~PRD §10.3 picks `us-west-2` for *SES*, which is a separate choice from where the instance lives.~~ **Correction (#0418, 2026-09-03):** SES is in `us-east-1` too — the instance and SES share one region, verified against instance metadata `placement/region` and `AWS_REGION` in `/etc/opencircuit/config.env`. PRD §10.3 has been corrected to match. Inbound receiving (PRD §6.5 path 3) is the region-pinned part and pins to that same region. |
+| Region | **`us-east-1`** (az `us-east-1b`) — **not** the `us-west-2` PRD §10.3 assumed (§10.1 is the topology diagram and never named a region — this cell's own citation dangled on that point until now, #0421, 2026-09-04). ~~PRD §10.3 picks `us-west-2` for *SES*, which is a separate choice from where the instance lives.~~ **Correction (#0418, 2026-09-03):** SES is in `us-east-1` too — the instance and SES share one region, verified against instance metadata `placement/region` and `AWS_REGION` in `/etc/opencircuit/config.env`. PRD §10.3 has been corrected to match. Inbound receiving (PRD §6.5 path 3) is the region-pinned part and pins to that same region. |
 | Public IP / DNS | `44.222.209.183`. `www.opencircuitsf.com` and `opencircuitsf.com` are A records to it; `go.opencircuitsf.com` is a CNAME to `ec2.smallsharptools.com`, which resolves to the same address. |
 | SSH access | `ssh ec2` from the maintainer's Mac — host `ec2.sstools.co`, user `ec2-user`, key `~/.ssh/sstools-ec2.pem`. `ssh ec2-db` is the same host plus a `LocalForward 15432 → localhost:5432` Postgres tunnel (port 15432, not 5432, because a local PostgreSQL already owns 5432 on the Mac). |
 | IAM instance role | **None attached** — the instance metadata service 404s `iam/security-credentials/`. This is the reason SES cannot work yet even after the domain is verified: the AWS SDK's default credential chain has nothing to find, so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false. Attaching a role with `ses:SendEmail`/`ses:SendRawEmail` is a prerequisite for `CLAUDE.md` §10 item 2, not an afterthought. certbot's renewal does **not** depend on it — see the certbot row. |
@@ -856,9 +856,9 @@ link to stdout — that is the closest thing to a proof this step has.
 | `opencircuitsf.com` | A | `44.222.209.183` | 301 → `www` |
 | `go.opencircuitsf.com` | CNAME | `ec2.smallsharptools.com` (same box) | ShortLinks — a CNAME in practice, not the A record PRD §10.2 planned |
 | `<sel1..3>._domainkey.opencircuitsf.com` | CNAME | `[PLACEHOLDER: issued by SES on domain verification, PRD §10.2/§10.4]` | DKIM |
-| `mail.opencircuitsf.com` | MX | `10 feedback-smtp.us-west-2.amazonses.com` | Custom MAIL FROM |
-| `mail.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF alignment |
-| `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-west-2.amazonaws.com` | **Inbound unsubscribe only** — never the apex MX, `CLAUDE.md` §9 |
+| `bounce.mailing.opencircuitsf.com` | MX | `10 feedback-smtp.us-east-1.amazonses.com` | Custom MAIL FROM (host and region corrected 2026-09-04, #0421 — this row read `mail.opencircuitsf.com`/`us-west-2`; see below) |
+| `bounce.mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF alignment |
+| `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` | **Inbound unsubscribe only** — never the apex MX, `CLAUDE.md` §9 (region corrected 2026-09-04, #0421 — was `us-west-2`) |
 | `_dmarc.opencircuitsf.com` | TXT | `v=DMARC1; p=none; adkim=s; aspf=s; rua=mailto:…; fo=1` | DMARC — **start at `p=none`** |
 
 Every record name, type, and static value above is real, copied verbatim
@@ -866,7 +866,11 @@ from `PRD.md` §10.2 (not invented for this document); the two things that
 cannot be known before an instance exists are the Elastic IP and the
 SES-issued DKIM CNAME targets — both explicitly placeholdered rather than
 guessed, per this pass's instructions not to invent `CLAUDE.md` §10 item 6
-facts.
+facts. **Re-synced 2026-09-04 (#0421)** with the MAIL FROM host and region
+`#0418` corrected in `PRD.md` §10.2 on 2026-09-03 — this table had drifted
+from its own cited source in the interim, which is the fact `#0301`'s
+"correctly scoped" verdict on this file's `us-west-2` occurrences did not
+anticipate; see that issue for the correction note.
 
 **DMARC ramp — three steps, not one record.** Start `p=none` for at least
 two weeks and read the aggregate (`rua=`) reports, then move to
@@ -878,14 +882,24 @@ mail with no visibility into why.
 
 ## SES setup
 
-`CLAUDE.md` §10 item 2 records this as **not started**, deferred to
-deployment (user, 2026-08-23) — the only AWS credentials available in this
-development environment (`certbot-dns-updater`) cannot even
-`ses:ListEmailIdentities`, so nothing below has been run, and nothing in this
-pass attempted to run it. This section documents the steps to run **on the
-real box, once the AWS account exists** — see
-[`email-setup.md`](email-setup.md) for the same information organized by
-subsystem rather than by deploy sequence.
+`CLAUDE.md` §10 item 2 recorded this as **not started** when this section was
+written (deferred to deployment, user, 2026-08-23) — the only AWS credentials
+available in this development environment (`certbot-dns-updater`) cannot even
+`ses:ListEmailIdentities`, so nothing below had been run, and nothing in the
+pass that wrote it attempted to run it. This section documented the steps
+planned to run **on the real box, once the AWS account exists**.
+
+> **This plan was not what actually happened (2026-09-04, #0421).** SES has
+> since been set up for real, and item 1 below was decided differently: the
+> real deploy used **`us-east-1`**, not `us-west-2` — matching the EC2
+> instance's own region, not "closest to San Francisco" (`CLAUDE.md` §7,
+> `PRD.md` §10.3, corrected by `#0418`). The custom MAIL FROM host is also
+> different from item 3 below: `bounce.mailing.opencircuitsf.com`, not
+> `mail.opencircuitsf.com`. The numbered steps are left as originally written
+> — an accurate record of the plan as transcribed at the time — but they are
+> **not** a description of what is live. For what is actually configured, see
+> [`email-setup.md`](email-setup.md) (current) and this document's
+> *Production facts* table above, not the list below.
 
 1. **Region: `us-west-2`.** Closest to San Francisco and one of the shorter
    list of regions supporting SES **inbound** receiving (needed for the

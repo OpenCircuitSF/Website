@@ -890,7 +890,7 @@ it automatically is the piece the ShortLinks codebase has no precedent for.
 ```
 Sender → unsubscribe@lists.opencircuitsf.com
     │
-    ▼ MX for lists.opencircuitsf.com → inbound-smtp.us-west-2.amazonaws.com
+    ▼ MX for lists.opencircuitsf.com → inbound-smtp.us-east-1.amazonaws.com
     │
     ▼ SES Receipt Rule Set  "opencircuit-inbound"
     │   ├─ Action 1: S3  → s3://opencircuitsf-inbound/unsubscribe/{messageId}
@@ -916,7 +916,7 @@ The apex domain's MX stays with whatever provider serves human mail.
 
 **SES inbound is region-limited** — available in `us-east-1`, `us-west-2`,
 `eu-west-1` and a few others. Pick the SES region for the whole project with
-inbound availability in mind (§10.3).
+inbound availability in mind (§10.3; the diagram above now reads `us-east-1`, matching §10.2/§10.3 — corrected 2026-09-04, #0421, was `us-west-2`).
 
 **Simpler fallback if inbound proves fiddly:** point the `mailto:` at a real
 monitored mailbox and process unsubscribes manually. Volume at launch is low
