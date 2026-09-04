@@ -1,10 +1,12 @@
 # SEO & Social Preview Cards
 
-`internal/seo` is built and live: per-route meta injection, `sitemap.xml`,
-`robots.txt`, schema.org `Event` JSON-LD, and (`#0273`) a generated
-per-workshop Open Graph card. This document describes it as it actually
-exists — every claim below was checked against the package's source, not
-against the previous draft of this file.
+`internal/seo` is fully built: per-route meta injection, `sitemap.xml`,
+`robots.txt`, schema.org `Event` JSON-LD, the archive source (`#0123`), and
+(`#0273`) a generated per-workshop Open Graph card. This document describes
+the subsystem as it exists in this tree — every claim below was checked
+against the package's source, not against the previous draft of this file.
+It deliberately says nothing about what is deployed; `CLAUDE.md` §7 is the
+record of what production runs, and parts of what follows post-date it.
 
 `PRD.md` §7.4 is stale, not authoritative — see `## PRD §7.4 is out of
 date` at the bottom before trusting it over this file.
@@ -72,15 +74,22 @@ Resolution order (`Renderer.resolve`), in priority:
 
 Both `WorkshopSource` and `ArchiveSource` (`internal/seo/workshop.go`,
 `internal/seo/archive.go`) are narrow interfaces the real stores are
-adapted down to (`cmd/opencircuit/main.go`'s `workshopSEOSource` and
-`campaignArchiveSEOSource`), and both are nil-tolerant: `Renderer` and
-`Sitemap` accept `nil` and degrade to the generic fallback rather than
-erroring, which is what lets a deploy mode with no campaigns-table backing
-still work. Each interface returns every row regardless of status —
-status filtering (published-only, published-or-canceled, etc.) happens in
-`internal/seo` itself, so it is exercised by `go test ./internal/seo/...`
-rather than trusted to whatever the real store's `WHERE` clause happens to
-do.
+adapted down to (`cmd/opencircuit/workshop_seo_source.go`'s
+`workshopSEOSource` and `cmd/opencircuit/campaign_archive_seo_source.go`'s
+`campaignArchiveSEOSource`, constructed by `main.go`'s `servePostgres`), and
+both are nil-tolerant: `Renderer` and `Sitemap` accept `nil` and degrade to
+the generic fallback rather than erroring, which is what lets a deploy mode
+with no campaigns-table backing still work. `WorkshopSource` deliberately
+returns every workshop of every status, and so does
+`ArchiveSource.ArchiveEntryBySlug` for its single row: the published-only
+and published-or-canceled filtering happens in `internal/seo` itself, so
+`go test ./internal/seo/...` exercises it rather than trusting whatever the
+real store's `WHERE` clause happens to do. `ArchiveSource.ArchiveEntries`
+is the deliberate exception — it is specified to return only published
+campaigns, and the real adapter gets that from
+`mailing.CampaignStore.ListArchived`'s own `archive_status = 'published'`
+filter — so `Sitemap.Build`'s `Published` check over that list is defence
+in depth rather than the primary exclusion.
 
 A workshop is eligible for its own metadata when
 `(Status == WorkshopPublished || Status == WorkshopCanceled) &&
@@ -154,7 +163,9 @@ exactly one `*Site` and threads the same pointer into every caller that
 needs to invalidate it, so all three caches are cleared together
 regardless of which caller triggered it. As of `#0319` those callers are:
 
-- workshop create/update/publish/cancel (`#0051`'s original trigger),
+- workshop create, update, and delete (`AdminWorkshopsHandler`'s `Create`,
+  `Patch`, and `Delete` — publish and cancel are status changes made
+  through `Patch`; `#0051`'s original trigger),
 - the admin campaign archive toggle
   (`handlers.AdminCampaignArchiveHandler`), and
 - the send worker's own archive-publish transition

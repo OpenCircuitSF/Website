@@ -4,8 +4,8 @@ package seo
 // injector and #0020's sitemap generator need for one archive page.
 // Mirrors seo.Workshop's own narrowing-adapter role: the real store
 // (internal/mailing.CampaignStore, #0041/#0123) returns a richer row; an
-// adapter (cmd/opencircuit/main.go's archiveSEOSource) narrows to this
-// shape.
+// adapter (cmd/opencircuit/campaign_archive_seo_source.go's
+// campaignArchiveSEOSource) narrows to this shape.
 type ArchiveEntry struct {
 	Slug      string
 	Subject   string
