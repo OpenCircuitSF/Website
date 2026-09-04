@@ -11,7 +11,7 @@ exercised**, because it did not exercise all of them:
 | Section | Status |
 |---|---|
 | Production facts, prerequisites, PostgreSQL, migrations, systemd, Apache, TLS, verification | **Followed on the real host** and corrected where it was wrong. The corrections are inline. |
-| SES setup, DNS records for DKIM / MAIL FROM / inbound, IAM policy, the account-level suppression list | **Still not followed.** SES was deliberately left unconfigured for this deploy so it could be set up afterwards — see "SES is not configured yet" below. No AWS SES identity exists, and **the instance has no IAM role attached at all**. |
+| SES setup, DNS records for DKIM / MAIL FROM / inbound, IAM policy, the account-level suppression list | **Still not followed by this row's original deploy.** SES was deliberately left unconfigured for that deploy so it could be set up afterwards — see "SES is not configured yet" below. No AWS SES identity existed at that point, and ~~**the instance has no IAM role attached at all**~~ **— corrected `#0426`, 2026-09-04: that has since changed.** A later pass (`docs/aws-iam-setup.md`, same day) attached the `opencircuit-instance` role and set up SES; `CLAUDE.md` §10 item 2 and the `## IAM` section below (also corrected, `#0426`) are the current-state record. |
 | Backups (`opencircuit-backup.timer` and friends) | **Not installed yet.** The units exist in `deploy/systemd/`; nothing on the box runs them. |
 
 So `#0064`'s acceptance criterion — "the whole runbook followed once on a
@@ -75,7 +75,7 @@ guessed.
 | Region | **`us-east-1`** (az `us-east-1b`) — **not** the `us-west-2` PRD §10.3 assumed (§10.1 is the topology diagram and never named a region — this cell's own citation dangled on that point until now, #0421, 2026-09-04). ~~PRD §10.3 picks `us-west-2` for *SES*, which is a separate choice from where the instance lives.~~ **Correction (#0418, 2026-09-03):** SES is in `us-east-1` too — the instance and SES share one region, verified against instance metadata `placement/region` and `AWS_REGION` in `/etc/opencircuit/config.env`. PRD §10.3 has been corrected to match. Inbound receiving (PRD §6.5 path 3) is the region-pinned part and pins to that same region. |
 | Public IP / DNS | `44.222.209.183`. `www.opencircuitsf.com` and `opencircuitsf.com` are A records to it; `go.opencircuitsf.com` is a CNAME to `ec2.smallsharptools.com`, which resolves to the same address. |
 | SSH access | `ssh ec2` from the maintainer's Mac — host `ec2.sstools.co`, user `ec2-user`, key `~/.ssh/sstools-ec2.pem`. `ssh ec2-db` is the same host plus a `LocalForward 15432 → localhost:5432` Postgres tunnel (port 15432, not 5432, because a local PostgreSQL already owns 5432 on the Mac). |
-| IAM instance role | **None attached** — the instance metadata service 404s `iam/security-credentials/`. This is the reason SES cannot work yet even after the domain is verified: the AWS SDK's default credential chain has nothing to find, so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false. Attaching a role with `ses:SendEmail`/`ses:SendRawEmail` is a prerequisite for `CLAUDE.md` §10 item 2, not an afterthought. certbot's renewal does **not** depend on it — see the certbot row. |
+| IAM instance role | ~~**None attached** — the instance metadata service 404s `iam/security-credentials/`. This is the reason SES cannot work yet even after the domain is verified: the AWS SDK's default credential chain has nothing to find, so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false.~~ **Correction (`#0426`, 2026-09-04):** attached — `opencircuit-instance`. Re-derived for this issue directly from the instance metadata service (`iam/security-credentials/`, read-only via `ssh ec2`), not copied from the filing; `CLAUDE.md` §10 item 2 already records this role as attached and proven by a real delivered send. Attaching a role with `ses:SendEmail`/`ses:SendRawEmail` was the prerequisite `CLAUDE.md` §10 item 2 named, and is now done — the `## IAM` section below (also corrected, `#0426`) describes the policy's actual shape. certbot's renewal never depended on this role — see the certbot row. |
 | `DocumentRoot` (former static placeholder) | `/var/www/vhosts/www.opencircuitsf.com`. The placeholder HTML is no longer reachable — the Go service answers `/` — but the directory stays, because `/.well-known/` is still served from disk out of it. See "The `/.well-known/` exception" below. |
 | Installed vhost file(s) | `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf` (the proxy vhost) and `001-www.opencircuitsf.com.conf` (port 80 → HTTPS). The apex and every other `*.opencircuitsf.com` name is redirected to `www` by `002-opencircuitsf.com{,-le-ssl}.conf`, which sort *after* the 001 files. **These are not copies of `deploy/apache/opencircuitsf.com.conf`.** That file is one self-contained vhost that does its own apex→www redirect; the box splits the same behaviour across the certbot-managed 001/002 pair it already had, and adding the repo file verbatim would duplicate `ServerName www.opencircuitsf.com`. Edit the installed files; treat the repo file as the reference for the proxy / header / CSP block only. |
 | certbot renewal schedule | `certbot-renew.timer` (systemd), firing twice daily at 00:00 and 12:00 UTC. The cert named `opencircuitsf.com` is a single ECDSA **wildcard** covering `opencircuitsf.com` and `*.opencircuitsf.com`, so one cert serves `www`, `go`, and any future subdomain. The authenticator is **`dns-route53`**, not `--apache`: renewal proves control over the domain through a Route 53 TXT record and never reads the vhosts or `/.well-known/acme-challenge`, so no Apache change in this project can break it. Expiry at deploy time: 2026-11-16. |
@@ -961,8 +961,19 @@ two documents for consistency, not a record of a real SES setup.
 The EC2 instance role must be scoped tightly (`PRD.md` §10.5) — no static
 credentials anywhere in this project's configuration; the AWS SDK's default
 credential chain picks up the instance role automatically
-(`docs/configuration.md`'s `AWS_REGION` row). A policy document matching
-§10.5 exactly:
+(`docs/configuration.md`'s `AWS_REGION` row).
+
+**The role is attached** — `opencircuit-instance`. Re-derived for this issue
+(`#0426`, 2026-09-04) directly from the instance metadata service
+(`iam/security-credentials/`, read-only via `ssh ec2`), not copied from the
+filing; `CLAUDE.md` §10 item 2 already records it as attached and proven by
+a real delivered send.
+
+The JSON below matches `PRD.md` §10.5's **target** shape, including the
+`InboundBucketScoped` statement for the inbound `mailto:` path (`#0057`),
+which is not built yet — so this block is still partly a plan, not a
+transcription of what is attached today. The `SESSendScoped` statement,
+region, and account ID are corrected to match reality:
 
 ```json
 {
@@ -973,13 +984,9 @@ credential chain picks up the instance role automatically
       "Effect": "Allow",
       "Action": ["ses:SendEmail", "ses:SendRawEmail"],
       "Resource": [
-        "arn:aws:ses:us-west-2:<ACCOUNT_ID>:identity/opencircuitsf.com"
-      ],
-      "Condition": {
-        "StringEquals": {
-          "ses:configuration-set": "opencircuit-transactional"
-        }
-      }
+        "arn:aws:ses:us-east-1:378152330719:identity/*",
+        "arn:aws:ses:us-east-1:378152330719:configuration-set/opencircuit-transactional"
+      ]
     },
     {
       "Sid": "InboundBucketScoped",
@@ -991,28 +998,53 @@ credential chain picks up the instance role automatically
 }
 ```
 
-`<ACCOUNT_ID>` is `[PLACEHOLDER: the AWS account ID, unknown until the
-account from CLAUDE.md §10 item 2 exists]`. No `ses:*`, no wildcard
-`Resource`, and no action beyond the two named pairs — matching `PRD.md`
-§10.5 and `email-setup.md`'s IAM section verbatim. **This policy has never
-been created or attached to a real role**; it is transcribed from the spec
-and re-checked against `docs/configuration.md`'s `SES_INBOUND_BUCKET`
-(`opencircuitsf-inbound`) and `SES_CONFIGURATION_SET`
-(`opencircuit-transactional`) defaults for consistency, not validated by
-`aws iam simulate-principal-policy` or any live AWS call — no credentials
+**Correction (`#0426`, 2026-09-04) — region, account ID, and identity were
+all wrong.** This block previously read
+`arn:aws:ses:us-west-2:<ACCOUNT_ID>:identity/opencircuitsf.com` with
+`<ACCOUNT_ID>` marked `[PLACEHOLDER: unknown until the account from
+CLAUDE.md §10 item 2 exists]`, a `Condition` restricting `ses:configuration-set`
+to `opencircuit-transactional`, and the note "**this policy has never been
+created or attached to a real role**". None of that is still true. The
+region is `us-east-1`, not `us-west-2` (`#0418`); the account is
+`378152330719`, not unknown; and the identity is `mailing.opencircuitsf.com`
+(mail sends from that subdomain, never the apex — `docs/aws-iam-setup.md`),
+not `opencircuitsf.com` — except the policy does not name that identity
+either, for the reason below.
 
-**The `ses:configuration-set` condition key above is a best-effort encoding
-of §10.5's "restricted to ... the configuration set" requirement, not a
-verified one.** Its exact name and availability for `ses:SendEmail`/
-`ses:SendRawEmail` was **not** checked against AWS's current IAM
-condition-key reference for SES — no live AWS access exists in this
-environment to confirm it (`CLAUDE.md` §10 item 2). Verify this key against
-AWS's service-authorization reference for Amazon SES before attaching this
-policy to a real role; the `Resource`-scoped identity-ARN restriction above
-it does not depend on this key and is solid either way. The JSON itself
-parses (`python3 -m json.tool`, see `## Verification`) — that only proves it
-is well-formed, not that IAM will accept every key in it.
-capable of that exist in this environment (`CLAUDE.md` §10 item 2).
+**Why `identity/*` and not the one identity mail actually sends from.**
+`CLAUDE.md` §10 item 2 records the trap: **while the account sits in the
+SES sandbox, `ses:SendEmail`/`ses:SendRawEmail` are authorized against the
+*recipient's* identity ARN as well as the sender's**, so a policy naming
+only `identity/mailing.opencircuitsf.com` fails every send to a recipient
+address that is not itself a verified SES identity — which is every real
+subscriber. `docs/aws-iam-setup.md`'s "Why `identity/*` and not just the
+sending domain" section documents this as something that happened for
+real, not a hypothetical: sends to the admin address failed with
+`AccessDeniedException` until the policy was corrected, and the durable
+outbound queue (`#0126`) is what kept those retries from being lost during
+the ~14 minutes that took. **A smoke test against
+`success@simulator.amazonses.com` does not exercise this at all** —
+simulator addresses are not SES identities, so no recipient-resource check
+ever fires against them; only a send to a real verified address does. The
+configuration-set restriction moved from a `Condition` key to its own
+`Resource` ARN in the corrected policy, matching what
+`docs/aws-iam-setup.md` documents as actually attached — SES v2
+`SendEmail` authorizes the configuration set as a separate resource, not a
+condition key, so the original `ses:configuration-set` condition was never
+validated and is now moot rather than corrected.
+
+**Could not independently re-read the live policy for this pass.** The
+box's default AWS CLI identity is `certbot-dns-updater`, which is denied
+IAM reads: `aws iam get-role`, `list-role-policies`, and
+`list-attached-role-policies` against `opencircuit-instance` each returned
+`AccessDenied` (checked read-only, 2026-09-04; no credentials were created
+or sought). The corrected JSON above is transcribed from
+`docs/aws-iam-setup.md`'s own account of the attached policy and the
+production incident that shaped it, not from a live `GetRolePolicy` call
+this pass could make itself.
+
+The JSON parses (`python3 -m json.tool`, see `## Verification`) — that only
+proves it is well-formed, not that IAM has accepted every key in it.
 
 ---
 
@@ -2010,8 +2042,19 @@ What the deploy actually established, each item measured rather than assumed:
 
 Still **not** verified against anything real, unchanged from the original pass:
 
-- The SES, DKIM/MAIL FROM/inbound DNS, and IAM sections. No SES identity
-  exists and the instance has no IAM role, so none of it has been run.
+- ~~The SES, DKIM/MAIL FROM/inbound DNS, and IAM sections. No SES identity
+  exists and the instance has no IAM role, so none of it has been run.~~
+  **Correction (`#0426`, 2026-09-04):** this is stale. `docs/aws-iam-setup.md`'s
+  facts table records a verified SES identity (`mailing.opencircuitsf.com`,
+  DKIM and custom MAIL FROM `SUCCESS`), a live configuration set and SNS
+  event pipeline, and the IAM role attached (`opencircuit-instance`) — the
+  same facts `CLAUDE.md` §10 item 2 and this document's Production-facts
+  table (also corrected, `#0426`) now record. What is genuinely still not
+  run: real SES **production access** (the account remains sandboxed —
+  `docs/aws-iam-setup.md`, "After the role is attached" step 4) and, for
+  this pass specifically, a read of the live attached IAM policy's exact
+  contents — the box's default CLI identity is denied IAM reads (see the
+  `## IAM` section above).
 - The backup timer and its alert unit — the files exist, nothing installs them
   on the box yet.
 
@@ -2035,16 +2078,24 @@ that the deploy did not touch:
 - `deploy/systemd/opencircuit.service`'s hardening directives were confirmed
   present by reading the file directly, not by running it — there is no
   systemd on this development machine.
-- The DNS, SES, and IAM sections are transcriptions of `PRD.md` §10.2–§10.5
+- ~~The DNS, SES, and IAM sections are transcriptions of `PRD.md` §10.2–§10.5
   and `docs/email-setup.md`, cross-checked against `.env.example` and
   `docs/configuration.md` for internal consistency (variable names, default
-  values), not validated against a real AWS account, which does not exist.
+  values), not validated against a real AWS account, which does not exist.~~
+  **Correction (`#0426`, 2026-09-04):** this no longer stands — the AWS
+  account (`378152330719`) exists and SES is live in it, per
+  `docs/aws-iam-setup.md`'s facts table. The IAM policy shown in the `## IAM`
+  section above is still not validated against a live `aws iam
+  simulate-principal-policy` call or a `GetRolePolicy` read from this
+  project's own tooling — the box's default CLI identity is denied IAM
+  reads, checked read-only for this issue (see that section).
 - `CLAUDE.md` §10 item 6's unknowns (instance ID, size, region, SSH access,
   `DocumentRoot`, installed vhost, certbot schedule, target Postgres) were
   **all captured on 2026-08-25** and are in the production-facts table at the
   top. The `[PLACEHOLDER: ...]` markers that remain are the ones that depend
-  on SES or on an AWS account detail nobody has supplied yet — the DKIM CNAME
-  selectors and the account ID — not on access to the box.
+  on SES facts nobody has supplied yet — the DKIM CNAME selectors — not on
+  access to the box. (The account ID was one of these too; it is no longer a
+  placeholder, corrected `#0426` — see the `## IAM` section.)
 
 ## Where to look
 

@@ -11,10 +11,22 @@ ID are the real ones, not examples.
 
 ## The short version
 
-The EC2 instance has **no IAM role attached**, so the running service has no
+**Correction (`#0426`, 2026-09-04): this is done.** The instance now carries
+the `opencircuit-instance` role — re-confirmed for this issue directly
+against instance metadata (`iam/security-credentials/`, read-only via `ssh
+ec2`; it returns `opencircuit-instance`, not the 404 the next paragraph
+describes), not copied from any issue text. `CLAUDE.md` §10 item 2 already
+records the role as attached and proven by a real delivered send. What
+follows is left as the runbook that got it there and as the reference for
+the policy's actual shape (Part 2, which already stated the corrected
+`identity/*` region and ARN this issue used to fix `docs/deployment.md`'s
+`## IAM` section) — Parts 1 and 3 describe one-time setup steps that do not
+need repeating.
+
+~~The EC2 instance has **no IAM role attached**, so the running service has no
 AWS credentials at all and cannot call SES no matter how well SES itself is
-configured. Fixing that means creating a role and an instance profile, and the
-`cli-admin` user cannot do it — it has `AmazonSESFullAccess`, `AmazonSNSFullAccess`,
+configured.~~ Fixing that meant creating a role and an instance profile, which
+the `cli-admin` user could not do directly — it has `AmazonSESFullAccess`, `AmazonSNSFullAccess`,
 `AmazonRoute53FullAccess`, `AmazonS3FullAccess`, `AmazonEC2FullAccess`, and an
 inline policy called `cli-admin-iam-support` that grants IAM **read** plus
 management of `ses-smtp-*` **users** — but nothing that touches **roles** or
@@ -35,7 +47,7 @@ hand instead.
 |---|---|
 | AWS account | `378152330719` |
 | EC2 instance | `i-0e3bd89e87d1c2364` (`t4g.nano`, **`us-east-1`**) |
-| Current instance role | **none** — the metadata service 404s `iam/security-credentials/` |
+| Current instance role | ~~**none** — the metadata service 404s `iam/security-credentials/`~~ **Correction (`#0426`, 2026-09-04):** `opencircuit-instance`, attached — re-confirmed against instance metadata for this issue, not copied from the filing; `CLAUDE.md` §10 item 2 records it as attached and proven by a real delivered send |
 | SES region | **`us-east-1`** — corrected 2026-09-03 (`#0418`); this row said `us-west-2`, which was never the real region (`CLAUDE.md` §7) |
 | SES identity | `arn:aws:ses:us-east-1:378152330719:identity/mailing.opencircuitsf.com` — **verified**, DKIM `SUCCESS`, custom MAIL FROM `bounce.mailing.opencircuitsf.com` `SUCCESS` |
 | SES configuration set | `arn:aws:ses:us-east-1:378152330719:configuration-set/opencircuit-transactional` |
@@ -387,7 +399,9 @@ The remaining SES work, in order — see `docs/email-setup.md` and `CLAUDE.md`
    sandbox (`ProductionAccessEnabled: false`): 200 messages/day, verified
    recipients only. `cli-admin`'s existing inline policy already grants
    `support:CreateCase`, so this can be filed from the CLI.
-5. **Attach the IAM role** — this document's Part 1/Part 3. Still blocked.
+5. ~~**Attach the IAM role** — this document's Part 1/Part 3. Still blocked.~~
+   **Done** — corrected `#0426`, 2026-09-04. `opencircuit-instance` is
+   attached; see "The short version" above.
 6. Flip `SES_SANDBOX=false` and `SEND_WORKER_ENABLED=true`, restart.
 
 Steps 4 and 5 are independent of each other; 6 waits on both.
