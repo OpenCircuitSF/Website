@@ -1403,22 +1403,33 @@ The site's entire purpose is to receive social traffic, so link previews have to
 be right. Crawlers for Discord, Slack, iMessage, X, Facebook, and LinkedIn do
 not execute JavaScript — a plain SPA gives every URL the same generic card.
 
-`internal/seo` handles this in the SPA handler:
+`internal/seo` wraps the SPA handler (`handlers.SPAHandler`) rather than living
+inside it, and rewrites its HTML response before serving:
 
 1. Hold the built `index.html` in memory with placeholder markers for
    `<title>`, `<meta name="description">`, `og:title`, `og:description`,
-   `og:image`, `og:url`, `og:type`, and `twitter:card`.
-2. On each SPA request, match the path against a small route table. For
-   `/workshops/{slug}`, look up the workshop and use its title, summary, and
-   cover image. For static routes, use a compiled-in table.
-3. Substitute and serve. HTML-escape every substituted value.
-4. Cache the rendered `index.html` per path with a short TTL; invalidate on
-   workshop mutation.
+   `og:image`, `og:url`, `og:type`, `twitter:card`, `twitter:title`,
+   `twitter:description` (`#0273` — mirrored from `og:title`/`og:description`
+   at substitution time, not independent fields), and a schema.org `Event`
+   JSON-LD block (`#0055`).
+2. Resolve the request path, in priority order: the static route table, a
+   `/workshops/{slug}` lookup, an `/archive/{slug}` lookup against
+   `ArchiveSource` (`#0123`), a generic fallback for other known routes, and
+   a distinct not-found default.
+3. Substitute and serve; HTML-escape every value except the JSON-LD block,
+   which is already escaped by `encoding/json.Marshal`.
+4. Cache the rendered bytes keyed by *resolved metadata bucket*, not raw
+   path — `#0073` fixed unbounded growth from invented paths — bounded at
+   512 entries with a 60s TTL. Invalidation runs on workshop mutation, the
+   admin archive-publish toggle, and the send worker's archive transition
+   (`#0319`).
 
-Also serve: `GET /sitemap.xml` (generated from published workshops + static
-routes), `GET /robots.txt`, `GET /favicon.svg`, and JSON-LD `Event` structured
-data inside each workshop detail page's server-injected `<head>` — that is what
-makes workshops eligible for rich results in search.
+Also serve: `GET /sitemap.xml`, `GET /robots.txt`, per-workshop JSON-LD
+`Event` data, and (`#0273`) a generated per-workshop Open Graph card at
+`GET /workshops/{slug}/og.png` for a published workshop with no
+`cover_image`. `GET /favicon.svg` is a plain static asset served by
+`handlers.SPAHandler`, not by this subsystem — corrected 2026-09-04
+(`#0422`); see `docs/seo.md` for the full current account.
 
 ### 7.5 Accessibility
 

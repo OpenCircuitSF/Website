@@ -8,8 +8,11 @@ against the package's source, not against the previous draft of this file.
 It deliberately says nothing about what is deployed; `CLAUDE.md` §7 is the
 record of what production runs, and parts of what follows post-date it.
 
-`PRD.md` §7.4 is stale, not authoritative — see `## PRD §7.4 is out of
-date` at the bottom before trusting it over this file.
+`PRD.md` §7.4 was corrected against this file's account on 2026-09-04
+(`#0422`) and no longer describes the pre-implementation plan — see `## PRD
+§7.4's correction` at the bottom for what changed. This file remains the
+fuller reference for implementation detail; §7.4 stays a short summary by
+design (PRD.md's own convention, §11).
 
 ## Why this matters here specifically
 
@@ -294,27 +297,29 @@ purpose — read the linked issue before reopening any of these.
 | `%%OC_*%%` placeholder markers | `web/index.html` |
 | `IsKnownRoute`/`WorkshopDetailSlug`/`ArchiveDetailSlug` | `internal/handlers/routes.go` |
 
-## PRD §7.4 is out of date
+## PRD §7.4's correction
 
-`PRD.md` §7.4 still describes the pre-implementation plan almost verbatim
-and has not been updated as the subsystem was actually built. Concretely,
-as of this writing it:
+`PRD.md` §7.4 used to describe the pre-implementation plan almost verbatim,
+unchanged since before the subsystem was built. As of `#0422` (2026-09-04)
+it no longer does. For the historical record, the six divergences that
+existed until then, all re-derived against the code in that pass rather
+than assumed from this file:
 
-- omits `/archive/{slug}` and `ArchiveSource` entirely (`#0123`);
-- omits `twitter:title`/`twitter:description` and the JSON-LD token
+- it omitted `/archive/{slug}` and `ArchiveSource` entirely (`#0123`);
+- it omitted `twitter:title`/`twitter:description` and the JSON-LD token
   (`#0055`, `#0273`);
-- says the cache is keyed "per path" — that was the design `#0073` found
-  and fixed; the real cache is keyed by resolved bucket, specifically to
-  avoid unbounded growth from distinct nonexistent paths;
-- says invalidation happens "on workshop mutation" only — `#0319` widened
-  that to the admin archive toggle and the send worker's archive-publish
-  transition;
-- doesn't mention `#0273`'s per-workshop card generation, its route, or
+- it said the cache is keyed "per path" — that was the design `#0073`
+  found and fixed; the real cache is keyed by resolved bucket, specifically
+  to avoid unbounded growth from distinct nonexistent paths;
+- it said invalidation happens "on workshop mutation" only — `#0319`
+  widened that to the admin archive toggle and the send worker's
+  archive-publish transition;
+- it didn't mention `#0273`'s per-workshop card generation, its route, or
   its `og:type` decision at all; and
-- lists `GET /favicon.svg` as something this subsystem serves, which (see
-  above) it doesn't.
+- it listed `GET /favicon.svg` as something this subsystem serves, which
+  (see `## Sitemap and robots.txt` above) it doesn't.
 
-This file, not §7.4, should be treated as the current description of
-`internal/seo`. Correcting §7.4 itself is out of scope here — a concurrent
-pass owns `PRD.md` this session (`#0414`/`#0418`) — and is worth its own
-issue.
+§7.4 is now a short, accurate summary of the same facts this file covers in
+full — it can drift again as the subsystem changes further, so treat this
+file as the fuller reference and re-verify both against `internal/seo`
+itself rather than against each other.
