@@ -137,6 +137,15 @@ the two from drifting apart.
   live only on that instance. A rebuilt box comes back with the database intact
   and every workshop image broken. If these images matter, they need either a
   backup path of their own or a copy kept in the repo.
+  - **2026-09-05 (`#0434`):** the "backup path of their own" now exists —
+    `scripts/db/backup-media.sh` and `scripts/db/restore-media.sh` are
+    written, and `deploy/systemd/opencircuit-backup.service` gained a second
+    `ExecStart=` to run the media leg on the same nightly schedule as the
+    database dump. **The sentence above stays true until it is actually
+    installed and running in production**, per `#0434` acceptance #5 — that
+    install is blocked on `#0435` (the timer has never been installed at
+    all) and needs the user's go-ahead (`CLAUDE.md` §5b). See `#0434` for
+    what has and has not been verified so far.
 - **A redeploy does not disturb them.** `scripts/deploy.sh` never touches
   `/var/www`, so images survive `git pull` + rebuild + restart.
 - **Populated as of 2026-09-04.** The two live workshop covers,

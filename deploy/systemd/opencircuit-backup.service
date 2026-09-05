@@ -1,5 +1,5 @@
 [Unit]
-Description=Open Circuit SF nightly PostgreSQL backup
+Description=Open Circuit SF nightly PostgreSQL and media backup
 Documentation=https://github.com/brennanMKE/OpenCircuitSF
 After=network.target postgresql.service
 Wants=postgresql.service
@@ -27,6 +27,16 @@ Group=postgres
 # a placeholder until the real path is captured.
 WorkingDirectory=/opt/opencircuit
 ExecStart=/usr/bin/bash /opt/opencircuit/scripts/db/backup.sh
+# #0434: a second oneshot ExecStart= runs after the first completes — systemd
+# executes multiple ExecStart= lines in a Type=oneshot unit in order, and a
+# non-zero exit from EITHER one marks the whole unit failed, so
+# OnFailure=opencircuit-backup-alert.service (above) still fires for a media
+# backup failure exactly as it does for a database one. Requires the SAME
+# permission fix #0435 already needs for BACKUP_ROOT — see
+# scripts/db/backup-media.sh's header for exactly what and why; nothing new
+# beyond that is required to read /var/www/media (verified world-readable
+# on the box, 2026-09-05).
+ExecStart=/usr/bin/bash /opt/opencircuit/scripts/db/backup-media.sh
 
 # BACKUP_DATABASES is REQUIRED, not optional tuning (#0236). scripts/db/backup.sh
 # no longer defaults to any database name — with this commented out and no
@@ -41,6 +51,13 @@ Environment=BACKUP_DATABASES=opencircuit
 # Optional overrides, uncomment/edit once the real box's layout is known:
 #Environment=BACKUP_ROOT=/var/backups/postgres
 #Environment=BACKUP_RETENTION_DAYS=14
+
+# #0434: media backup config — MEDIA_SOURCE_DIR and MEDIA_BACKUP_RETENTION_DAYS
+# default to /var/www/media and 14 days (falling back to BACKUP_RETENTION_DAYS
+# above if that's the only one set); uncomment to override either
+# independently.
+#Environment=MEDIA_SOURCE_DIR=/var/www/media
+#Environment=MEDIA_BACKUP_RETENTION_DAYS=14
 
 # Hardening, mirroring opencircuit.service where it does not conflict with
 # writing dumps under BACKUP_ROOT (default /var/backups/postgres).

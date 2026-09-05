@@ -6,7 +6,7 @@ This directory contains the systemd units for the EC2 host:
 |---|---|
 | `opencircuit.service` | Runs `/usr/local/bin/opencircuit serve` as a dedicated non-root user, listens on `127.0.0.1:8080` behind the Apache reverse proxy, restarted automatically on failure |
 | `opencircuit-backup.timer` | Fires `opencircuit-backup.service` nightly (`#0229`) |
-| `opencircuit-backup.service` | Runs `scripts/db/backup.sh` as `postgres`; `OnFailure=` chains to the alert unit below |
+| `opencircuit-backup.service` | Runs `scripts/db/backup.sh` then `scripts/db/backup-media.sh` (`#0434`), both as `postgres`; `OnFailure=` chains to the alert unit below if either fails |
 | `opencircuit-backup-alert.service` | Logs a high-priority journal entry and (if configured) POSTs a webhook when a backup run fails — see `scripts/db/backup-alert.sh` |
 
 ## Create the system user
@@ -101,10 +101,26 @@ sudo systemctl enable --now opencircuit-backup.timer
 Test the backup path by hand before trusting the timer:
 
 ```bash
-sudo systemctl start opencircuit-backup.service   # runs backup.sh once, right now
+sudo systemctl start opencircuit-backup.service   # runs backup.sh, then backup-media.sh, right now
 sudo systemctl status opencircuit-backup.service
 sudo journalctl -u opencircuit-backup -n 50
 ```
+
+**Media backup (`#0434`) shares this unit and this timer.** The unit's second
+`ExecStart=` runs `scripts/db/backup-media.sh`, which tars `/var/www/media`
+(docs/media.md's workshop-cover carve-out) into `$BACKUP_ROOT/media/` — the
+same root `scripts/db/backup.sh` writes under, so `pull-backups.sh`'s existing
+rsync of the whole root already carries it offsite with no changes of its own.
+It needs no permission beyond what the database leg already needs: reading
+`/var/www/media` requires nothing extra (verified world-readable on the box,
+2026-09-05), and writing under `$BACKUP_ROOT` needs the exact same fix
+`#0435` documents for the `postgres` user against `/var/backups/postgres`
+being `root:root 0700` today. See `scripts/db/backup-media.sh`'s header for
+the retention rationale (it skips writing a new archive when the source is
+unchanged, since these files have no upload endpoint and rarely move) and
+`scripts/db/restore-media.sh` for restoring a dump — always into a scratch
+directory first, never straight over `/var/www/media`, and note it needs
+`sudo`/root to restore ownership to `ec2-user:ec2-user`.
 
 Test the alert path by deliberately breaking a run (e.g. point `BACKUP_ROOT`
 at a path `postgres` cannot write, per `docs/deployment.md`'s Backups
