@@ -167,11 +167,13 @@ type cacheEntry struct {
 // NewRenderer constructs a Renderer over the given built index.html template
 // bytes (web.DistFS()'s index.html in production; an in-memory fixture in
 // tests) and the canonical base URL (e.g. cfg.BaseURL, no trailing slash).
-// source may be nil -- until #0051/#0054 wire a real workshop store,
-// /workshops/{slug} requests fall back to the generic default metadata (still
-// served with SPAHandler's own 200, since the path matches the known dynamic
-// pattern regardless of whether the slug exists). archive (#0123) may
-// likewise be nil, with the identical fallback for /archive/{slug}.
+// source may be nil -- nil only under STORAGE=json, which has no
+// workshops-table backing -- in which case /workshops/{slug} requests fall
+// back to the generic default metadata (still served with SPAHandler's own
+// 200, since the path matches the known dynamic pattern regardless of
+// whether the slug exists). archive (#0123) may likewise be nil under that
+// same STORAGE=json path, which has no email_campaigns-table backing
+// either, with the identical fallback for /archive/{slug}.
 func NewRenderer(template []byte, baseURL string, source WorkshopSource, archive ArchiveSource) *Renderer {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	r := &Renderer{

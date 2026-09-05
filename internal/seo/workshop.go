@@ -59,12 +59,13 @@ type Workshop struct {
 }
 
 // WorkshopSource supplies workshop data to the SEO renderer (#0019) and
-// sitemap generator (#0020). #0051 (workshops CRUD API/store) has not landed
-// yet, so both Renderer and Sitemap accept a nil source and degrade
-// gracefully: workshop-detail pages fall back to generic default metadata,
-// and the sitemap's workshop portion is simply empty (per #0020's Notes:
-// "Until #0051 lands, the workshop portion of the sitemap can be empty").
-// #0054 is expected to wire the real implementation in.
+// sitemap generator (#0020). Both Renderer and Sitemap accept a nil source
+// and degrade gracefully -- nil only under STORAGE=json, which has no
+// workshops-table backing: workshop-detail pages fall back to generic
+// default metadata, and the sitemap's workshop portion is simply empty (a
+// quotation of #0020's Notes as originally written, describing the
+// then-unimplemented state: "Until #0051 lands, the workshop portion of the
+// sitemap can be empty").
 //
 // Deliberately returns ALL workshops (every status), not pre-filtered to
 // published -- the draft/unpublished/canceled exclusion is asserted inside
