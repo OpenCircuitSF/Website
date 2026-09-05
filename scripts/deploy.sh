@@ -49,6 +49,27 @@ done
 HEAD_SHA="$(git rev-parse --short HEAD)"
 ok "repo:   $REPO"
 ok "commit: $HEAD_SHA — $(git log -1 --pretty=%s)"
+
+# GATE-0424-BEGIN
+# ---- hard gate: nothing untracked under web/public/ (#0424) ----------------
+# `npm run build` sweeps web/public/ verbatim into web/dist/, which the Go
+# binary then embeds via `//go:embed all:dist` (web/embed.go). An untracked
+# file sitting there reaches production without ever being in the
+# repository — exactly how #0416's two workshop cover images shipped for two
+# days, undetected, because the general dirty-tree notice below is USELESS
+# for this: it fires on every single deploy (web/dist/index.html is always
+# `M` after a build) and so cannot distinguish this from ordinary noise. This
+# gate is scoped to web/public/ alone for the reason that makes it safe to be
+# a hard failure rather than another notice: web/dist/index.html is `M`, not
+# `??`, and lives outside web/public/, so it can never trip it.
+UNTRACKED_PUBLIC="$(git status --porcelain -- web/public/ | awk '/^\?\? /{sub(/^\?\? /,""); print}')"
+if [ -n "$UNTRACKED_PUBLIC" ]; then
+  die "untracked file(s) under web/public/ — these would be embedded into the binary WITHOUT being in the repository (see docs/media.md; issues/0416.md shipped exactly this way for two days before anyone noticed):
+$UNTRACKED_PUBLIC
+Commit the file if it belongs in the repo, or remove it if it landed here by mistake. Workshop media and other server-placed content belongs on the box at /var/www/media, never in web/public/."
+fi
+# GATE-0424-END
+
 [ -n "$(git status --porcelain)" ] && info "note: working tree has uncommitted changes"
 
 # Resolve the binary path systemd actually runs, so we build to the SAME file.

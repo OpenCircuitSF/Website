@@ -21,10 +21,10 @@
 # header). Not part of `go`/`web`/`all`/the default for the same reason
 # `guards` itself is not: it costs nothing on the common path this way.
 #
-# `guards` runs scripts/check_guard_test.sh, scripts/testdb_gc_guard_test.sh,
-# scripts/dev_guard_test.sh, scripts/db_reset_guard_test.sh, and
-# scripts/go_file_visit_floor_guard_test.sh (#0300) — not part of any other
-# mode, since
+# `guards` runs scripts/check_guard_test.sh, scripts/deploy_guard_test.sh
+# (#0424), scripts/testdb_gc_guard_test.sh, scripts/dev_guard_test.sh,
+# scripts/db_reset_guard_test.sh, and scripts/go_file_visit_floor_guard_test.sh
+# (#0300) — not part of any other mode, since
 # #0117's third review measured dev_guard_test.sh alone at ~48s and binding
 # :5173 in several parts, which does not belong in every ordinary run. #0207
 # named the actual defect this solves: two prior guard tests
@@ -877,6 +877,12 @@ case "$MODE" in
        # compromised cannot honestly report its own guard test either. The
        # guard test's OWN exit code and its FAIL: lines are the authority.
        step "scripts/check_guard_test.sh (#0258/#0262)"; run scripts/check_guard_test.sh
+       # #0424: external harness for deploy.sh's hard gate on untracked
+       # files under web/public/. Pure git + filesystem operations in a
+       # throwaway `mktemp -d` repo — no database, no port, sub-second — so
+       # it runs here right alongside check_guard_test.sh rather than with
+       # the heavier database- or port-bound checks below.
+       step "scripts/deploy_guard_test.sh (#0424)"; run scripts/deploy_guard_test.sh
        step "scripts/testdb_gc_guard_test.sh (#0150)"; run scripts/testdb_gc_guard_test.sh
        step "scripts/dev_guard_test.sh (#0117)";        run scripts/dev_guard_test.sh
        step "scripts/db_reset_guard_test.sh (#0207)";   run scripts/db_reset_guard_test.sh
