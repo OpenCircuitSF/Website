@@ -38,9 +38,11 @@ func newTestRenderer(source WorkshopSource) *Renderer {
 
 // TestRender_StaticRoutesGetDistinctTitles is #0019's headline acceptance
 // criterion: the compiled-in route table supplies metadata for /, /about,
-// /workshops, /subscribe, and the four must be genuinely different from each
-// other -- a bug that served the same title for every route would still pass
-// a test that only checked "some title is present".
+// /workshops, /subscribe, and (#0070) /privacy, and all five must be
+// genuinely different from each other -- a bug that served the same title
+// for every route would still pass a test that only checked "some title is
+// present". The route table also holds a sixth entry, /archive (#0123), not
+// exercised by the paths slice below.
 func TestRender_StaticRoutesGetDistinctTitles(t *testing.T) {
 	r := newTestRenderer(nil)
 	paths := []string{"/", "/about", "/privacy", "/workshops", "/subscribe"}

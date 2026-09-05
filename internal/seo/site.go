@@ -22,8 +22,9 @@ type Site struct {
 // NewSite constructs a Site from the built index.html template bytes
 // (web.DistFS()'s index.html), the canonical base URL (cfg.BaseURL, e.g.
 // "https://www.opencircuitsf.com" -- no trailing slash), an optional
-// WorkshopSource (nil until #0051/#0054 land), and an optional ArchiveSource
-// (#0123, nil in any deploy mode that has no campaigns-table backing --
+// WorkshopSource (nil only under STORAGE=json, which has no workshops-table
+// backing), and an optional ArchiveSource (#0123, nil under that same
+// STORAGE=json path, which has no email_campaigns-table backing either --
 // mirrors WorkshopSource's own nil-tolerant contract).
 func NewSite(indexHTML []byte, baseURL string, source WorkshopSource, archive ArchiveSource) *Site {
 	return &Site{

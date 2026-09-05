@@ -19,10 +19,11 @@
 //     web/index.html, not a token -- it never varies by route (#0273).
 //  2. On each request, match the path against a route table: a compiled-in
 //     table for the static marketing routes, the workshop store for
-//     /workshops/{slug} (nil until #0051/#0054 land -- falls back to the
-//     generic default), the archive source for /archive/{slug} (nil until
-//     #0123 lands -- same fallback), and a distinct default for unknown
-//     paths (404).
+//     /workshops/{slug} (nil only under STORAGE=json, which has no
+//     workshops-table backing -- falls back to the generic default), the
+//     archive source for /archive/{slug} (#0123; nil only under
+//     STORAGE=json, which has no email_campaigns-table backing either --
+//     same fallback), and a distinct default for unknown paths (404).
 //  3. Substitute and serve. Every substituted meta-tag value is
 //     HTML-escaped; the JSON-LD token is not (see jsonld.go's doc comment
 //     on eventJSONLD for why that's still safe).
@@ -192,7 +193,9 @@ func NewRenderer(template []byte, baseURL string, source WorkshopSource, archive
 // #0019's acceptance criteria: distinct metadata for /, /about, /workshops,
 // and /subscribe. /privacy was added at #0070 for the same reason /about was
 // added at #0019: a route worth sharing gets its own title/description
-// rather than the generic fallback below.
+// rather than the generic fallback below. /archive was added at #0123 (PRD
+// §6.8) for the same reason: the archive index is the site's only recurring
+// indexable page.
 func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 	image := baseURL + "/og-default.png"
 	return map[string]RouteMeta{
