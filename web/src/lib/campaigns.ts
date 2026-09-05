@@ -167,6 +167,34 @@ export function canEditCampaignSlug(status: string): boolean {
   return status === 'draft';
 }
 
+/**
+ * Whether the Delete control should be shown for a campaign at this status
+ * (#0411) — the repair path for a stray draft that minted the wrong slug
+ * and has no other console-reachable fix (#0410 stops at the same boundary
+ * for the same reason). Mirrors mailing.CampaignStore.Delete's own single
+ * accepted source status exactly, the identical boundary
+ * canEditCampaignSlug already draws: any later status may already have
+ * promotion written against its slug or archive URL, and 'sent' has a
+ * published archive page whose URL is already in delivered mail (PRD
+ * §6.8). This is an offer gate only; the server independently refuses a
+ * delete outside draft with ErrCampaignNotDeletable regardless of what this
+ * returns (CLAUDE.md §9).
+ */
+export function canDeleteCampaign(status: string): boolean {
+  return status === 'draft';
+}
+
+/**
+ * Confirmation copy for deleting a draft campaign (#0411) — mirrors
+ * workshopAdmin.ts's deleteConfirmMessage shape ("Delete X? ... cannot be
+ * undone.") for the same destructive-admin-action UI pattern, keyed on the
+ * campaign's subject rather than a title since that is what identifies a
+ * campaign in this console's own listing and editor heading.
+ */
+export function deleteCampaignConfirmMessage(subject: string): string {
+  return `Delete "${subject}"? This permanently removes the draft and frees its archive slug for reuse. This cannot be undone.`;
+}
+
 // ── CRUD-save validation (deliberately NOT the Preflight send gate) ─────────
 
 /** The fields validateCampaignDraft checks. */

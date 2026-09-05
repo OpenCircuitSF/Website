@@ -12,6 +12,8 @@ import {
   canSendCampaign,
   canCancelCampaign,
   canResumeCampaign,
+  canDeleteCampaign,
+  deleteCampaignConfirmMessage,
   canEditCampaignSlug,
   validateSlugInput,
   slugFieldGuidance,
@@ -441,5 +443,39 @@ describe('currentMonthValue', () => {
 
   it('does not zero-pad a two-digit month', () => {
     expect(currentMonthValue(new Date(2026, 11, 25))).toBe('2026-12');
+  });
+});
+
+// ── Delete (#0411) ───────────────────────────────────────────────────────────
+
+describe('canDeleteCampaign', () => {
+  it('is true for draft and false for every other status', () => {
+    for (const status of CAMPAIGN_STATUSES) {
+      expect(canDeleteCampaign(status)).toBe(status === 'draft');
+    }
+  });
+
+  it('is the exact same boundary as canEditCampaignSlug, not merely similar', () => {
+    // #0411 draws the delete boundary identically to #0410's slug-edit
+    // boundary, on purpose — both are refused the instant a campaign may
+    // already have promotion written against its slug/archive URL.
+    for (const status of CAMPAIGN_STATUSES) {
+      expect(canDeleteCampaign(status)).toBe(canEditCampaignSlug(status));
+    }
+  });
+});
+
+describe('deleteCampaignConfirmMessage', () => {
+  it('names the campaign subject', () => {
+    expect(deleteCampaignConfirmMessage('Spring Sale')).toContain('Spring Sale');
+  });
+
+  it('states the action is permanent', () => {
+    const msg = deleteCampaignConfirmMessage('Spring Sale');
+    expect(msg.toLowerCase()).toContain('cannot be undone');
+  });
+
+  it('mentions the slug is freed, distinguishing this from a soft delete', () => {
+    expect(deleteCampaignConfirmMessage('Spring Sale').toLowerCase()).toContain('slug');
   });
 });

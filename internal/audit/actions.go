@@ -374,6 +374,16 @@ const (
 	// comment). "new_status", not "to_status" — see this action's handler
 	// (admin_campaign_archive.go) for why.
 	ActionEmailCampaignArchiveUpdated = "email_campaign.archive_updated"
+	// ActionEmailCampaignDeleted is written by DELETE
+	// /admin/campaigns/{id} (#0411) — only on an actual delete success,
+	// mirroring ActionWorkshopDeleted's own convention: a delete refused as
+	// 409 (mailing.ErrCampaignNotDeletable, any status but draft) writes no
+	// audit row, the same "no row for a refused mutation" rule
+	// AdminInterestsHandler.Delete and AdminWorkshopsHandler.Delete already
+	// follow. Metadata carries name, subject, and slug — the row is gone
+	// once this succeeds, so the audit entry is the only remaining record
+	// of what a stray draft's slug used to be.
+	ActionEmailCampaignDeleted = "email_campaign.deleted"
 
 	// Workshop lifecycle (PRD §5.2/§6.2/§8; #0051's workshop CRUD API,
 	// migrations 000020/#0050). ActionWorkshopUpdated covers any

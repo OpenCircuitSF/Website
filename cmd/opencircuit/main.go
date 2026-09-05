@@ -1086,6 +1086,19 @@ func adminRoutes(
 			adminRoute{http.MethodPatch, "/admin/campaigns/{id}/archive", http.HandlerFunc(adminCampaignArchiveH.Patch)},
 		)
 	}
+	if adminCampaignsH != nil {
+		// Registered last among the /admin/campaigns/{id} family (#0411),
+		// deliberately AFTER every other campaign sub-route above —
+		// mirrors admin_wiring_test.go's own note on why the workshops
+		// DELETE is ordered last: TestMountAndServe_AdminRoutesRequireSessionAndAdmin
+		// (cmd/opencircuit/admin_wiring_test.go) drives every adminRoute in
+		// list order against the SAME seeded campaign, so this genuinely
+		// removing the row must run after audience/preview/test/preflight/
+		// stats/archive have already exercised it, not before.
+		routes = append(routes,
+			adminRoute{http.MethodDelete, "/admin/campaigns/{id}", http.HandlerFunc(adminCampaignsH.Delete)},
+		)
+	}
 	if adminWorkshopsH != nil {
 		routes = append(routes,
 			adminRoute{http.MethodGet, "/admin/workshops", http.HandlerFunc(adminWorkshopsH.List)},

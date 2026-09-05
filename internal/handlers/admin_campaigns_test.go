@@ -41,6 +41,7 @@ func adminCampaignsMux(pool *pgxpool.Pool, preflight campaignPreflightChecker) h
 	mux.Handle("POST /admin/campaigns/{id}/send", requireAdmin(http.HandlerFunc(h.Send)))
 	mux.Handle("POST /admin/campaigns/{id}/cancel", requireAdmin(http.HandlerFunc(h.Cancel)))
 	mux.Handle("POST /admin/campaigns/{id}/resume", requireAdmin(http.HandlerFunc(h.Resume)))
+	mux.Handle("DELETE /admin/campaigns/{id}", requireAdmin(http.HandlerFunc(h.Delete)))
 	return mux
 }
 
@@ -1212,6 +1213,139 @@ func TestAdminCampaigns_Resume_NotFound(t *testing.T) {
 
 	resp := doJSON(t, srv.Client(), "POST", srv.URL+"/admin/campaigns/99999999/resume",
 		"admin-token-campaigns-resumenf", `{"confirm_subject":"whatever"}`)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// ── #0411: DELETE /admin/campaigns/{id} ──────────────────────────────────────
+
+func TestAdminCampaigns_Delete_DraftSucceeds(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-delete@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-delete")
+
+	store := mailing.NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "Delete me", BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, c.ID)
+
+	resp := doJSON(t, srv.Client(), "DELETE", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, c.ID), "admin-token-campaigns-delete", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+
+	getResp := doJSON(t, srv.Client(), "GET", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, c.ID), "admin-token-campaigns-delete", "")
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET after delete: status = %d, want 404 (the row must actually be gone)", getResp.StatusCode)
+	}
+
+	actions := auditActionsForCampaign(t, pool, c.ID)
+	if len(actions) != 1 || actions[0] != audit.ActionEmailCampaignDeleted {
+		t.Errorf("audit actions = %v, want [%s]", actions, audit.ActionEmailCampaignDeleted)
+	}
+}
+
+// TestAdminCampaigns_Delete_FreesSlugForReuse is the handler-level half of
+// #0411's central acceptance criterion (the store-level proof is
+// internal/mailing's TestCampaignStore_Delete_FreesSlugForReuse): PATCHing a
+// SECOND draft's slug to the just-deleted campaign's slug must succeed, not
+// 409 with ErrCampaignSlugTaken — proving the DELETE route itself, not just
+// the store method underneath it, genuinely releases the UNIQUE constraint.
+func TestAdminCampaigns_Delete_FreesSlugForReuse(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-deleteslug@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-deleteslug")
+
+	store := mailing.NewCampaignStore(pool)
+	first, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "Zz Slug Target", BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed first campaign: %v", err)
+	}
+	takenSlug := first.Slug
+
+	resp := doJSON(t, srv.Client(), "DELETE", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, first.ID), "admin-token-campaigns-deleteslug", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete first: status = %d, want 200 (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+
+	second, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "Zz Slug Target Other Subject", BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed second campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, second.ID)
+
+	patchResp := doJSON(t, srv.Client(), "PATCH", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, second.ID),
+		"admin-token-campaigns-deleteslug", fmt.Sprintf(`{"slug":%q}`, takenSlug))
+	if patchResp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH slug to the deleted campaign's former slug: status = %d, want 200 (body=%s) — the slug was not genuinely freed",
+			patchResp.StatusCode, readBody(t, patchResp))
+	}
+	updated := decodeCampaign(t, readBody(t, patchResp))
+	if updated.Slug != takenSlug {
+		t.Errorf("Slug = %q, want %q", updated.Slug, takenSlug)
+	}
+}
+
+func TestAdminCampaigns_Delete_IllegalFromScheduled(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-deleteillegal@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-deleteillegal")
+
+	store := mailing.NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), mailing.CampaignInput{
+		Name: uniqueAdminCampaignName(t), Subject: "s", BodyMD: "b", AudienceMode: mailing.AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	cleanupAdminCampaign(t, pool, c.ID)
+	if _, err := store.Send(context.Background(), c.ID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	resp := doJSON(t, srv.Client(), "DELETE", fmt.Sprintf("%s/admin/campaigns/%d", srv.URL, c.ID), "admin-token-campaigns-deleteillegal", "")
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (a scheduled campaign is not deletable) (body=%s)", resp.StatusCode, readBody(t, resp))
+	}
+
+	// Refused with no audit row (mirrors ActionWorkshopDeleted's own
+	// "never for a refused delete" convention) and the row must survive.
+	actions := auditActionsForCampaign(t, pool, c.ID)
+	if len(actions) != 0 {
+		t.Errorf("audit actions after refused delete = %v, want none", actions)
+	}
+	if campaignStatusForTest(t, pool, c.ID) != mailing.CampaignStatusScheduled {
+		t.Errorf("campaign %d status changed by a refused delete", c.ID)
+	}
+}
+
+func TestAdminCampaigns_Delete_NotFound(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	srv := httptest.NewServer(adminCampaignsMux(pool, nil))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin-campaigns-deletenf@example.com")
+	seedSession(t, pool, admin, "admin-token-campaigns-deletenf")
+
+	resp := doJSON(t, srv.Client(), "DELETE", srv.URL+"/admin/campaigns/99999999", "admin-token-campaigns-deletenf", "")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}

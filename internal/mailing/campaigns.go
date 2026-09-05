@@ -161,6 +161,17 @@ var (
 	// they may already be about to write against it.
 	ErrCampaignSlugTaken = errors.New("mailing: campaign slug is already in use")
 
+	// ErrCampaignNotDeletable is returned by Delete when the campaign's
+	// current status is not draft (#0411's acceptance criterion). The
+	// boundary is deliberately identical to ErrCampaignSlugNotEditable's own
+	// (draft only, not draft-or-scheduled): a scheduled campaign may already
+	// have promotion written against its slug/archive URL (#0410's own
+	// escape hatch stops at draft for the same reason), and every status
+	// past that has either entered the send pipeline or already delivered
+	// mail whose "View this email in your browser" link names this exact
+	// row (PRD §6.8) — see Delete's own doc comment for the full reasoning.
+	ErrCampaignNotDeletable = errors.New("mailing: campaign can only be deleted while it is a draft")
+
 	// errSlugAttemptsExhausted is wrapped into the error Create returns if
 	// maxSlugAttempts consecutive candidates all collide against the
 	// slug's UNIQUE constraint — effectively unreachable in practice, but
@@ -860,6 +871,82 @@ func (s *CampaignStore) Resume(ctx context.Context, id int64, scheduledAt time.T
 	}
 	updated.InterestIDs = ids
 	return updated, nil
+}
+
+// Delete permanently removes a campaign (#0411, PRD §6.8) — the repair path
+// a stray draft otherwise has none of: a draft's slug is UNIQUE and minted
+// immediately at Create time, so a duplicate, a test, or a mis-titled first
+// attempt occupies that slug forever with no way to release it, short of
+// this method.
+//
+// Only a campaign whose status is 'draft' may be deleted — refused with
+// ErrCampaignNotDeletable otherwise, in every other status, with no
+// exception. This is deliberately the exact same boundary Update already
+// draws for a slug CHANGE (ErrCampaignSlugNotEditable), not a new one:
+//   - 'scheduled' and past: the archive URL may already be written into a
+//     go.opencircuitsf.com short link or promotional copy prepared ahead of
+//     the send (PRD §6.8's "load-bearing detail") — #0410's slug-repair
+//     escape hatch stops at draft for the exact same reason, so it would be
+//     inconsistent for delete to reach further than edit does.
+//   - 'sent': the campaign has a published archive page and its URL is
+//     already in mail sitting in real inboxes (PRD §6.8). Deleting it would
+//     404 (or, worse, let some LATER campaign's slug collision-suffix retry
+//     silently mint a different page at a URL that used to be this one) a
+//     link that has already gone out. This criterion is why 'withheld'
+//     exists as a separate, non-destructive lever
+//     (PATCH /admin/campaigns/{id}/archive) — pulling a sent campaign from
+//     the public archive without deleting the row or freeing its slug.
+//   - 'sending': outbound_queue-shaped in-flight work exists for it (its own
+//     email_sends rows, claimed by #0045's worker) that a delete would
+//     either orphan or destroy mid-flight; Cancel already exists for "stop
+//     this" and is the correct verb here, not a second, overlapping one.
+//   - 'paused_delivery_health'/'failed'/'canceled': all reachable only from
+//     a campaign that has already left 'draft' at least once, so the same
+//     promotion-may-exist reasoning applies as 'scheduled'.
+//
+// Hard delete, not soft. Two tables carry a foreign key into
+// email_campaigns(id) — campaign_interests and email_sends (migration
+// 000017) — and BOTH already declare ON DELETE CASCADE, so no orphaned row
+// can survive this DELETE; TestCampaignStore_Delete_CascadesReferencingRows
+// proves this against rows this method's own caller cannot otherwise
+// produce for a still-draft campaign (email_sends is only ever materialized
+// once a send starts — #0044 — which a draft has never done). email_events
+// carries no campaign_id column at all (it is keyed by recipient/
+// ses_message_id, PRD §6.7), so it has nothing to cascade. A soft-delete
+// flag was considered and rejected: the row's continued existence is
+// exactly what would keep occupying the UNIQUE(slug) constraint (migration
+// 000025), which is the entire problem this issue exists to solve — a
+// retained-but-flagged row does not free the slug for reuse, only removing
+// the row does.
+//
+// The single DELETE ... WHERE id = $1 AND status = 'draft' is atomic against
+// a concurrent Send/Update racing this call — there is no separate
+// lock-then-check step to race, unlike Update's explicit `FOR UPDATE`,
+// because a DELETE's own row lock already serializes against any concurrent
+// writer of the same row.
+func (s *CampaignStore) Delete(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM email_campaigns WHERE id = $1 AND status = $2`,
+		id, CampaignStatusDraft,
+	)
+	if err != nil {
+		return fmt.Errorf("mailing: deleting campaign %d: %w", id, err)
+	}
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+	// The DELETE matched no row — either the campaign doesn't exist, or it
+	// exists but isn't a draft. Distinguish 404 from 409 the same way
+	// Cancel/Resume do above: a second read, never inferred from the
+	// affected-row count alone.
+	switch _, gerr := s.GetByID(ctx, id); {
+	case errors.Is(gerr, ErrCampaignNotFound):
+		return ErrCampaignNotFound
+	case gerr != nil:
+		return gerr
+	default:
+		return ErrCampaignNotDeletable
+	}
 }
 
 // MarkTestSent stamps email_campaigns.test_sent_at = at, after a real test

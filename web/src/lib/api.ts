@@ -903,6 +903,18 @@ export function resumeCampaign(id: number, confirmSubject: string): Promise<Camp
 }
 
 /**
+ * DELETE /admin/campaigns/{id} (#0411, admin only) — permanently removes a
+ * `draft` campaign and frees its archive slug for reuse. The server
+ * answers 409 (`mailing.ErrCampaignNotDeletable`) for every other status —
+ * callers must handle that as a real, expected outcome (mirrors
+ * `deleteWorkshop`'s own doc comment for `workshops.ErrHasCampaigns`), not
+ * a generic error toast.
+ */
+export function deleteCampaign(id: number): Promise<{ message: string }> {
+  return apiDelete<{ message: string }>(`/admin/campaigns/${id}`);
+}
+
+/**
  * GET /admin/campaigns/{id}/stats — the per-campaign outcome screen (admin
  * only, #0049): counts by send status, bounce/complaint counts reconciled
  * from email_events, and failed sends with their error messages. Read-only;

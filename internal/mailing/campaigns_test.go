@@ -577,3 +577,166 @@ func TestCampaignStore_Cancel_NotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrCampaignNotFound", err)
 	}
 }
+
+// ── Delete (#0411) ───────────────────────────────────────────────────────────
+
+func TestCampaignStore_Delete_DraftSucceeds(t *testing.T) {
+	pool := testPool(t)
+	store := NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), CampaignInput{
+		Name: uniqueCampaignName(t), Subject: "s", BodyMD: "b", AudienceMode: AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := store.Delete(context.Background(), c.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, gerr := store.GetByID(context.Background(), c.ID); !errors.Is(gerr, ErrCampaignNotFound) {
+		t.Fatalf("GetByID after delete: err = %v, want ErrCampaignNotFound", gerr)
+	}
+}
+
+// TestCampaignStore_Delete_FreesSlugForReuse is #0411's central acceptance
+// criterion made concrete: deleting a draft must genuinely release its slug,
+// not merely hide the row. Proved by minting the SAME subject twice —
+// Create's collision-suffix retry (this file's Create, "-2" on a taken slug)
+// would silently mask a slug that was never actually freed, so the only
+// real proof is that the SECOND campaign, created after the first is
+// deleted, gets the identical bare slug back rather than a "-2" suffix.
+func TestCampaignStore_Delete_FreesSlugForReuse(t *testing.T) {
+	pool := testPool(t)
+	store := NewCampaignStore(pool)
+	subject := fmt.Sprintf("Zz Repeat Subject %d", testdb.Unique())
+
+	first, err := store.Create(context.Background(), CampaignInput{
+		Name: uniqueCampaignName(t), Subject: subject, BodyMD: "b", AudienceMode: AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+
+	if err := store.Delete(context.Background(), first.ID); err != nil {
+		t.Fatalf("Delete first: %v", err)
+	}
+
+	second, err := store.Create(context.Background(), CampaignInput{
+		Name: uniqueCampaignName(t), Subject: subject, BodyMD: "b", AudienceMode: AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("Create second: %v", err)
+	}
+	cleanupCampaign(t, pool, second.ID)
+
+	if second.Slug != first.Slug {
+		t.Fatalf("second.Slug = %q, want %q (the first campaign's slug, reused) — the delete did not genuinely free it",
+			second.Slug, first.Slug)
+	}
+}
+
+// TestCampaignStore_Delete_CascadesReferencingRows proves the referential
+// integrity Delete's own doc comment claims: campaign_interests and
+// email_sends both carry ON DELETE CASCADE into email_campaigns (migration
+// 000017), so a draft's DELETE must remove both without a foreign-key
+// violation. A still-draft campaign can never legitimately have an
+// email_sends row through this package's own API (materialization only
+// happens once a send starts — #0044), so this test creates one directly by
+// SQL — CLAUDE.md §8b: the referencing row is seeded, never a literal id,
+// and it is this test's own throwaway campaign, not a shared fixture.
+func TestCampaignStore_Delete_CascadesReferencingRows(t *testing.T) {
+	pool := testPool(t)
+	store := NewCampaignStore(pool)
+	c, err := store.Create(context.Background(), CampaignInput{
+		Name: uniqueCampaignName(t), Subject: "s", BodyMD: "b", AudienceMode: AudienceAll,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	it := seedInterest(t, pool)
+
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO campaign_interests (campaign_id, interest_id) VALUES ($1, $2)`,
+		c.ID, it.ID,
+	); err != nil {
+		t.Fatalf("seed campaign_interests: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO email_sends (campaign_id, subscriber_id, email, status) VALUES ($1, NULL, $2, 'queued')`,
+		c.ID, fmt.Sprintf("zz-mailing-test-%d@example.com", testdb.Unique()),
+	); err != nil {
+		t.Fatalf("seed email_sends: %v", err)
+	}
+
+	if err := store.Delete(ctx, c.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	var interestCount, sendCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM campaign_interests WHERE campaign_id = $1`, c.ID).Scan(&interestCount); err != nil {
+		t.Fatalf("count campaign_interests: %v", err)
+	}
+	if interestCount != 0 {
+		t.Errorf("campaign_interests rows remaining = %d, want 0 (should cascade)", interestCount)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM email_sends WHERE campaign_id = $1`, c.ID).Scan(&sendCount); err != nil {
+		t.Fatalf("count email_sends: %v", err)
+	}
+	if sendCount != 0 {
+		t.Errorf("email_sends rows remaining = %d, want 0 (should cascade)", sendCount)
+	}
+}
+
+// TestCampaignStore_Delete_RefusedWhenNotDraft is #0411's other acceptance
+// criterion: every status except draft must refuse with a clear, typed
+// error and must leave the row untouched — never a silent no-op, and never
+// a delete that quietly succeeds against a status whose slug may already be
+// promoted or whose archive page may already be public.
+func TestCampaignStore_Delete_RefusedWhenNotDraft(t *testing.T) {
+	statuses := []string{
+		CampaignStatusScheduled,
+		CampaignStatusSending,
+		CampaignStatusPausedDeliveryHealth,
+		CampaignStatusSent,
+		CampaignStatusCanceled,
+		CampaignStatusFailed,
+	}
+	for _, status := range statuses {
+		t.Run(status, func(t *testing.T) {
+			pool := testPool(t)
+			store := NewCampaignStore(pool)
+			c, err := store.Create(context.Background(), CampaignInput{
+				Name: uniqueCampaignName(t), Subject: "s", BodyMD: "b", AudienceMode: AudienceAll,
+			})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			cleanupCampaign(t, pool, c.ID)
+			setCampaignStatus(t, pool, c.ID, status)
+
+			err = store.Delete(context.Background(), c.ID)
+			if !errors.Is(err, ErrCampaignNotDeletable) {
+				t.Fatalf("Delete from %q: err = %v, want ErrCampaignNotDeletable", status, err)
+			}
+
+			got, gerr := store.GetByID(context.Background(), c.ID)
+			if gerr != nil {
+				t.Fatalf("GetByID after refused delete: %v", gerr)
+			}
+			if got.Status != status {
+				t.Errorf("status after refused Delete = %q, want unchanged %q", got.Status, status)
+			}
+		})
+	}
+}
+
+func TestCampaignStore_Delete_NotFound(t *testing.T) {
+	pool := testPool(t)
+	store := NewCampaignStore(pool)
+
+	err := store.Delete(context.Background(), 99999999)
+	if !errors.Is(err, ErrCampaignNotFound) {
+		t.Fatalf("err = %v, want ErrCampaignNotFound", err)
+	}
+}

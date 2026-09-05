@@ -13,6 +13,10 @@
 //	POST /admin/campaigns/{id}/cancel scheduled|sending|paused_delivery_health -> canceled
 //	POST /admin/campaigns/{id}/resume paused_delivery_health -> scheduled (#0124)
 //
+// DELETE /admin/campaigns/{id} (#0411) is not a status transition — it
+// removes the row outright, and only from 'draft'. See Delete's own doc
+// comment and mailing.CampaignStore.Delete's for the full reasoning.
+//
 // scheduled -> sending, sending -> sent/failed, and sending ->
 // paused_delivery_health (#0124's circuit breaker, PRD §6.9) belong to
 // #0045's send worker and are never written here. Every illegal transition
@@ -82,6 +86,12 @@ type campaignStore interface {
 	// paused_delivery_health -> scheduled. See mailing.CampaignStore.Resume's
 	// own doc comment for why this is a narrower transition than Send's.
 	Resume(ctx context.Context, id int64, scheduledAt time.Time) (mailing.Campaign, error)
+	// Delete permanently removes a campaign (#0411). Refused with
+	// mailing.ErrCampaignNotDeletable unless the campaign is currently
+	// draft — see mailing.CampaignStore.Delete's own doc comment for why
+	// that boundary is drawn exactly where Update's slug-editability gate
+	// already is.
+	Delete(ctx context.Context, id int64) error
 }
 
 // campaignPreflightFailure mirrors the eventual shape of #0045's
@@ -206,6 +216,7 @@ type campaignAudienceCounter interface {
 //	POST   /admin/campaigns/{id}/send   — draft|failed -> scheduled
 //	POST   /admin/campaigns/{id}/cancel — scheduled|sending|paused_delivery_health -> canceled
 //	POST   /admin/campaigns/{id}/resume — paused_delivery_health -> scheduled (#0124)
+//	DELETE /admin/campaigns/{id}        — permanently removes a draft (#0411)
 //
 // All routes MUST be mounted behind middleware.RequireSession then
 // middleware.RequireAdmin, exactly like every other admin handler — see
@@ -974,6 +985,80 @@ func (h *AdminCampaignsHandler) Resume(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, toCampaignView(resumed))
+}
+
+// ── DELETE /admin/campaigns/{id} ─────────────────────────────────────────────
+
+// Delete handles DELETE /admin/campaigns/{id} (#0411): the repair path a
+// stray draft otherwise has none of — a mis-titled test, a duplicate, or a
+// mistake mints a UNIQUE slug at Create time (mailing.CampaignStore.Create)
+// and, before this route existed, had no way to release it.
+//
+// Refused with 409 (mailing.ErrCampaignNotDeletable) unless the campaign is
+// currently 'draft' — the exact same boundary PATCH's slug-change gate
+// already draws (ErrCampaignSlugNotEditable), for the same reason: any
+// later status may already have promotion written against its slug or
+// archive URL. No other verb overlaps with this one — Cancel already owns
+// "stop this from sending", and this route never accepts anything Cancel
+// would also accept.
+//
+// Loaded first, mirroring AdminWorkshopsHandler.Delete's own convention, so
+// the audit metadata can record what the row WAS — the name, subject, and
+// slug are otherwise gone the instant Delete succeeds.
+func (h *AdminCampaignsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	actor, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	id, ok := parseCampaignID(w, r)
+	if !ok {
+		return
+	}
+
+	current, err := h.store.GetByID(r.Context(), id)
+	switch {
+	case err == nil:
+	case errors.Is(err, mailing.ErrCampaignNotFound):
+		writeError(w, http.StatusNotFound, "campaign not found")
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	err = h.store.Delete(r.Context(), id)
+	switch {
+	case err == nil:
+	case errors.Is(err, mailing.ErrCampaignNotFound):
+		writeError(w, http.StatusNotFound, "campaign not found")
+		return
+	case errors.Is(err, mailing.ErrCampaignNotDeletable):
+		writeError(w, http.StatusConflict, "a campaign can only be deleted while it is a draft")
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	if h.auditor != nil {
+		actorID := actor.ID
+		targetID := id
+		h.auditor.Record(r.Context(), audit.Entry{
+			ActorID:    &actorID,
+			Action:     audit.ActionEmailCampaignDeleted,
+			TargetType: audit.TargetEmailCampaign,
+			TargetID:   &targetID,
+			Metadata: map[string]any{
+				"name":    current.Name,
+				"subject": current.Subject,
+				"slug":    current.Slug,
+			},
+			IP: clientIP(r),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "campaign deleted"})
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────

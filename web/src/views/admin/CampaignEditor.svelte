@@ -33,6 +33,7 @@
     sendCampaign,
     cancelCampaign,
     resumeCampaign,
+    deleteCampaign,
     listInterests,
     ApiError,
   } from '../../lib/api';
@@ -41,6 +42,8 @@
     canSendCampaign,
     canCancelCampaign,
     canResumeCampaign,
+    canDeleteCampaign,
+    deleteCampaignConfirmMessage,
     canEditCampaignSlug,
     interestsApplyToMode,
     AUDIENCE_MODES,
@@ -164,6 +167,18 @@
   let resumeModalEl = $state<HTMLDivElement | null>(null);
   let resumeConfirmRaw = $state('');
 
+  // ── Delete dialog (#0411) ───────────────────────────────────────────────
+  let deleteDialogOpen = $state(false);
+  let deleting = $state(false);
+  let deleteError = $state<string | null>(null);
+  let deleteModalEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    // Same focus-management fix as the cancel/resume dialogs' own effects
+    // above (#0120).
+    if (deleteDialogOpen) void tick().then(() => deleteModalEl?.focus());
+  });
+
   $effect(() => {
     // Same focus-management fix as the cancel dialog's own effect above
     // (#0120) — mount into a fresh dialog must not skip it.
@@ -210,6 +225,9 @@
   let cancelOffered = $derived(campaign ? canCancelCampaign(campaign.status) : false);
   // #0124: the circuit breaker's recovery path.
   let resumeOffered = $derived(campaign ? canResumeCampaign(campaign.status) : false);
+  // #0411: the repair path for a stray draft holding the wrong slug.
+  let deleteOffered = $derived(campaign ? canDeleteCampaign(campaign.status) : false);
+  let deleteMessage = $derived(campaign ? deleteCampaignConfirmMessage(campaign.subject) : '');
   let pausedExplanation = $derived(
     campaign && campaign.status === 'paused_delivery_health' ? pausedDeliveryHealthExplanation() : '',
   );
@@ -678,6 +696,34 @@
     }
   }
 
+  // ── Delete (#0411) ───────────────────────────────────────────────────────
+  function openDelete(): void {
+    deleteError = null;
+    deleteDialogOpen = true;
+  }
+
+  function closeDelete(): void {
+    if (deleting) return;
+    deleteDialogOpen = false;
+  }
+
+  async function onConfirmDelete(): Promise<void> {
+    deleting = true;
+    deleteError = null;
+    try {
+      await deleteCampaign(campaignId);
+      deleteDialogOpen = false;
+      // The row is gone — nothing left here to re-load or resync (unlike
+      // Cancel/Resume, which reassign `campaign` to the server's response).
+      // Return to the list, mirroring WorkshopEditor.svelte's confirmDelete.
+      onBack();
+    } catch (err) {
+      deleteError = err instanceof ApiError ? err.message : 'Could not delete this campaign.';
+    } finally {
+      deleting = false;
+    }
+  }
+
   function goToFix(section: string): void {
     if (section === 'settings') {
       onGoToSettings();
@@ -955,6 +1001,9 @@
       {#if resumeOffered}
         <Button onclick={openResume}>Resume campaign</Button>
       {/if}
+      {#if deleteOffered}
+        <Button variant="danger" onclick={openDelete}>Delete campaign</Button>
+      {/if}
     </div>
 
     <!-- #0124's "surface it as a distinct, EXPLAINED state" criterion —
@@ -1083,6 +1132,42 @@
               {resuming ? 'Resuming…' : 'Resume campaign'}
             </Button>
             <Button disabled={resuming} onclick={closeResume}>Keep it paused</Button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    {#if deleteDialogOpen}
+      <div
+        class="modal-backdrop"
+        role="presentation"
+        onclick={closeDelete}
+        onkeydown={(e) => {
+          if (isModalEscape(e)) closeDelete();
+        }}
+      >
+        <div
+          class="modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Delete campaign"
+          tabindex="-1"
+          bind:this={deleteModalEl}
+          onclick={(e) => e.stopPropagation()}
+          onkeydown={(e) => {
+            if (isModalEscape(e)) closeDelete();
+          }}
+        >
+          <h2 class="modal-title">Delete this campaign?</h2>
+          <p>{deleteMessage}</p>
+          {#if deleteError}
+            <p class="text-error" role="alert">{deleteError}</p>
+          {/if}
+          <div class="row" style="margin-top: var(--space-3);">
+            <Button variant="danger" disabled={deleting} onclick={onConfirmDelete}>
+              {deleting ? 'Deleting…' : 'Delete'}
+            </Button>
+            <Button disabled={deleting} onclick={closeDelete}>Keep it</Button>
           </div>
         </div>
       </div>
