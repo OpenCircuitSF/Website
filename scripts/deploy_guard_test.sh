@@ -31,6 +31,25 @@
 #      deploy.sh, scenario 1's exact untracked-file repository is no longer
 #      caught — i.e. assertion 1 is actually sensitive to the #0424 fix, not
 #      vacuously true, and this is exactly the blind spot #0416 exploited.
+#   6. Exactly-once anchors (added on #0424's first review bounce): each of
+#      the four extraction anchors — the GATE-0424-BEGIN/END markers and the
+#      die()/info() definitions — is asserted to appear exactly once in
+#      scripts/deploy.sh before anything above runs. Measured regression: a
+#      second `die(){ ... }` defined above the real preflight leaves the
+#      GATE-0424 block byte-identical (so this harness's `grep -m1` extraction
+#      still pulls the original, first-defined die() and reports every check
+#      above PASSING), while bash itself resolves the duplicate to the LAST
+#      definition at runtime — so the real deploy.sh silently treats the
+#      gate's failure as a soft note and exits 0. A disarmed production gate
+#      with a green harness (CLAUDE.md §8, GUARD-0208's exactly-once rule).
+#
+# Known, accepted gap: an edit *outside* the marker pair can still neutralise
+# the gate without this harness noticing — a `git()` shim defined ahead of the
+# block, for instance, makes the real preflight see a clean tree while the
+# extracted gate, run here against real `git`, still fires. Verified by
+# #0424's review. Not closable by extraction: only what lies between the
+# markers is what gets executed. Contrived; no realistic edit to deploy.sh
+# produces it.
 #
 # SAFETY DESIGN — read this before changing the test
 #
@@ -101,6 +120,25 @@ NOTICE_LINE="$(extract_notice "$REAL_SCRIPT")"
 [ -n "$DIE_LINE" ]    || { echo "FATAL: extraction of die() from $REAL_SCRIPT produced nothing" >&2; exit 2; }
 [ -n "$INFO_LINE" ]   || { echo "FATAL: extraction of info() from $REAL_SCRIPT produced nothing" >&2; exit 2; }
 [ -n "$NOTICE_LINE" ] || { echo "FATAL: extraction of the general dirty-tree notice from $REAL_SCRIPT produced nothing" >&2; exit 2; }
+
+# ---- exactly-once anchors (CLAUDE.md §8; GUARD-0208's BR_COUNT/ER_COUNT) ----
+# grep -m1 and the awk marker sweep both take the FIRST match and ignore any
+# later one, while bash resolves a duplicated function definition to the LAST.
+# So a second `die(){` added below the first fully disarms the real gate — the
+# deploy proceeds, exit 0 — while this harness still extracts the original and
+# reports VERIFICATION PASSED. Measured, by #0424's review. Count every anchor
+# the extraction depends on, and refuse to run on anything but exactly one.
+assert_once() {
+  local label="$1" count="$2"
+  [ "${count:-0}" -eq 1 ] || {
+    echo "FATAL: expected $label exactly once in $REAL_SCRIPT; found $count. A duplicate shadows the real one at runtime while this harness extracts the first (CLAUDE.md §8)." >&2
+    exit 2
+  }
+}
+assert_once "the GATE-0424-BEGIN marker" "$(grep -c '# GATE-0424-BEGIN' "$REAL_SCRIPT")"
+assert_once "the GATE-0424-END marker"   "$(grep -c '# GATE-0424-END'   "$REAL_SCRIPT")"
+assert_once "die()'s definition"         "$(grep -c '^die(){'           "$REAL_SCRIPT")"
+assert_once "info()'s definition"        "$(grep -c '^info(){'          "$REAL_SCRIPT")"
 
 # ---- scratch repo builder ----------------------------------------------------
 # A minimal repo shaped like the real one in the one way that matters here:
