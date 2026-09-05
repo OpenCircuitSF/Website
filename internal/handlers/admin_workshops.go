@@ -701,7 +701,9 @@ const coverImageErrorMessage = `cover_image must be a site-relative path startin
 // excluding /assets/ from the Apache proxy would cut the SPA off from its
 // own JS and CSS). migrations/000020's cover_image comment is frozen
 // (CLAUDE.md §1) and cannot be edited to fix it, so the correction is
-// recorded here and in docs/media.md instead.
+// recorded here and in docs/media.md; PRD.md §6.2's own copy of the comment
+// was not frozen the same way, and #0438 corrected it directly, so the
+// quotation above is now history rather than PRD.md's current text.
 //
 // #0138 bounce, finding 1: a prefix check alone isn't enough. A browser's
 // URL parser deletes every ASCII tab, LF and CR from the input before

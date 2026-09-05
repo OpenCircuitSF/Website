@@ -573,7 +573,7 @@
         <p class="text-muted cover-hint">
           A site-relative path (e.g. "/media/soldering-101.jpg") to an image already hosted
           on this site. Workshop photos are placed directly on the server, not uploaded here
-          -- there is no upload control, and external image URLs are not accepted.
+          — there is no upload control, and external image URLs are not accepted.
         </p>
       </div>
     </Panel>
