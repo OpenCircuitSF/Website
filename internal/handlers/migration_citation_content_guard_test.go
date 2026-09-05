@@ -106,8 +106,9 @@ import (
 //     after the citation, is not checked. A naive forward window was tried
 //     during this guard's dry run and produced 5 false positives
 //     (internal/db/prd_index_parity_test.go, internal/mailing/worker_store.go,
-//     internal/subscribers/erase.go, and twice this guard's own doc
-//     comments), so backward-only is deliberate, not an oversight.
+//     internal/subscribers/erase.go, internal/sesnotify/store.go, and this
+//     guard's own doc comments), so backward-only is deliberate, not an
+//     oversight.
 //
 // Same technique as #0196/#0220/#0265/#0267 throughout (go/ast comment
 // walk, a regexp naming the candidate shape, exclusion rules earned by a
@@ -513,7 +514,7 @@ func collectMigrationCitationContentHits(t *testing.T, roots []string, migConten
 // migrationCitationMinPlausibleCitationCount and
 // migrationCitationMinPlausibleIdentifierCount are the #0459 criterion 3
 // floors: measured directly by running TestMigrationCitationIdentifierMatchesContent
-// while writing this guard (74 "migrations/NNNNNN" citations and 34
+// while writing this guard (73 "migrations/NNNNNN" citations and 34
 // identifier-against-migration checks across internal/ and cmd/, this
 // guard's own file included), set comfortably below that so the tree can
 // shrink without a false alarm, while still tripping if citedTestScanRoots
