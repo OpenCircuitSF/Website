@@ -151,6 +151,22 @@ export function canResumeCampaign(status: string): boolean {
   return status === 'paused_delivery_health';
 }
 
+/**
+ * Whether the archive-slug field should be offered as editable — #0410, the
+ * console-side mirror of mailing.CampaignStore.Update's own slug-specific
+ * rule (see ErrCampaignSlugNotEditable's doc comment in
+ * internal/mailing/campaigns.go). Deliberately STRICTER than canEditCampaign:
+ * the slug is what promotion (a short link, a Discord post) is written
+ * against before a scheduled send goes out, so the server locks it the
+ * moment the campaign leaves draft — 'scheduled' still offers the rest of
+ * the editor (canEditCampaign) but never this field. This is an offer gate
+ * only; the server independently refuses a changed slug outside draft with
+ * ErrCampaignSlugNotEditable regardless of what this returns (CLAUDE.md §9).
+ */
+export function canEditCampaignSlug(status: string): boolean {
+  return status === 'draft';
+}
+
 // ── CRUD-save validation (deliberately NOT the Preflight send gate) ─────────
 
 /** The fields validateCampaignDraft checks. */
@@ -402,6 +418,66 @@ export function archiveURLCopyButtonLabel(state: ArchiveURLCopyState): string {
     default:
       return 'Copy';
   }
+}
+
+// ── Archive slug editing (#0410, PRD §6.8) ───────────────────────────────────
+//
+// #0405 chose an opt-in newsletter-slug template precisely because a
+// forgotten opt-in is "loud and reversible" -- visible in the editor,
+// fixable by PATCH while the campaign is still a draft. That repair path is
+// what this section wires up: PATCH /admin/campaigns/{id} has always
+// accepted a `slug`, rejecting a taken one (ErrCampaignSlugTaken) and
+// refusing edits once the campaign has left draft (ErrCampaignSlugNotEditable)
+// -- no admin view sent it until now.
+
+/** validateSlugInput's result: ok, or an error message to show. */
+export type SlugValidation = { ok: true } | { ok: false; error: string };
+
+/**
+ * Validate an archive-slug edit before a PATCH -- the client-side mirror of
+ * admin_campaigns.go's own `strings.TrimSpace(*req.Slug) == ""` check, itself
+ * backing migration 000025's `email_campaigns_slug_not_blank_check`. Blank or
+ * whitespace-only is the only thing rejected here: the column carries no
+ * character-shape constraint beyond non-blank, and this function invents
+ * none either -- validation for a value lives with the column that owns it,
+ * not duplicated with extra restrictions here.
+ */
+export function validateSlugInput(slug: string): SlugValidation {
+  if (slug.trim() === '') {
+    return { ok: false, error: 'Archive slug cannot be blank.' };
+  }
+  return { ok: true };
+}
+
+/** slugFieldGuidance's result: a message and a length-advice-style tone for CSS. */
+export interface SlugFieldGuidance {
+  tone: 'ok' | 'over';
+  message: string;
+}
+
+/**
+ * The archive-slug field's helper message and tone, given the campaign's
+ * CURRENT status and the editable slug buffer (which may be blank or
+ * whitespace mid-edit -- see validateSlugInput). CampaignEditor.svelte
+ * renders this verbatim rather than branching on status or slug validity
+ * itself (#0094; see this module's own header comment). The blank-buffer
+ * case takes priority over the not-editable case so an operator who somehow
+ * reaches a blank buffer always sees why saving that value would fail,
+ * rather than a generic reserved-until-draft note that doesn't explain the
+ * one thing actually wrong right now.
+ */
+export function slugFieldGuidance(status: string, slug: string): SlugFieldGuidance {
+  const validation = validateSlugInput(slug);
+  if (!validation.ok) {
+    return { tone: 'over', message: validation.error };
+  }
+  if (!canEditCampaignSlug(status)) {
+    return {
+      tone: 'ok',
+      message: 'Editable only while this campaign is a draft — the URL is already promised once scheduled.',
+    };
+  }
+  return { tone: 'ok', message: 'Editable while this campaign is a draft.' };
 }
 
 // ── Newsletter-month archive-slug template (#0405, PRD §6.8) ────────────────

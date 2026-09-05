@@ -12,6 +12,9 @@ import {
   canSendCampaign,
   canCancelCampaign,
   canResumeCampaign,
+  canEditCampaignSlug,
+  validateSlugInput,
+  slugFieldGuidance,
   interestsApplyToMode,
   validateCampaignDraft,
   subjectLengthAdvice,
@@ -353,6 +356,73 @@ describe('campaignStatusLabel / campaignStatusBadgeClass', () => {
     for (const status of CAMPAIGN_STATUSES) {
       expect(known.has(campaignStatusBadgeClass(status))).toBe(true);
     }
+  });
+});
+
+// ── Archive slug editing (#0410) ─────────────────────────────────────────────
+
+describe('canEditCampaignSlug', () => {
+  it('is true for draft and false for every other status, including scheduled', () => {
+    for (const status of CAMPAIGN_STATUSES) {
+      expect(canEditCampaignSlug(status)).toBe(status === 'draft');
+    }
+  });
+
+  it('is stricter than canEditCampaign specifically on scheduled', () => {
+    // The whole point of #0410's escape hatch being a stricter gate than the
+    // rest of the editor: a scheduled campaign's other fields stay editable
+    // while its slug locks -- the archive URL is already promised to
+    // whatever promotion was prepared before the send goes out.
+    expect(canEditCampaign('scheduled')).toBe(true);
+    expect(canEditCampaignSlug('scheduled')).toBe(false);
+  });
+});
+
+describe('validateSlugInput', () => {
+  it('accepts an ordinary slug', () => {
+    expect(validateSlugInput('spring-sale').ok).toBe(true);
+  });
+
+  it('rejects an empty string', () => {
+    const r = validateSlugInput('');
+    expect(r.ok).toBe(false);
+  });
+
+  it('rejects a whitespace-only string', () => {
+    const r = validateSlugInput('   ');
+    expect(r.ok).toBe(false);
+  });
+
+  it('accepts a value that is only whitespace around real content', () => {
+    expect(validateSlugInput('  spring-sale  ').ok).toBe(true);
+  });
+});
+
+describe('slugFieldGuidance', () => {
+  it('reports the blank-buffer error even when the campaign is a draft', () => {
+    const g = slugFieldGuidance('draft', '   ');
+    expect(g.tone).toBe('over');
+    expect(g.message.length).toBeGreaterThan(0);
+  });
+
+  it('the blank-buffer error takes priority over the not-editable message', () => {
+    // A scheduled campaign's buffer can only be blank if the loaded slug
+    // itself were blank, which the server never allows -- but the priority
+    // order itself is the property worth pinning, independent of how a
+    // caller might reach it.
+    const blank = slugFieldGuidance('scheduled', '');
+    const filled = slugFieldGuidance('scheduled', 'spring-sale');
+    expect(blank.tone).toBe('over');
+    expect(filled.tone).toBe('ok');
+    expect(blank.message).not.toBe(filled.message);
+  });
+
+  it('gives a distinct, ok-toned message for an editable draft versus a locked non-draft', () => {
+    const draftMsg = slugFieldGuidance('draft', 'spring-sale');
+    const scheduledMsg = slugFieldGuidance('scheduled', 'spring-sale');
+    expect(draftMsg.tone).toBe('ok');
+    expect(scheduledMsg.tone).toBe('ok');
+    expect(draftMsg.message).not.toBe(scheduledMsg.message);
   });
 });
 

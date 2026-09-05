@@ -41,6 +41,7 @@
     canSendCampaign,
     canCancelCampaign,
     canResumeCampaign,
+    canEditCampaignSlug,
     interestsApplyToMode,
     AUDIENCE_MODES,
     subjectLengthAdvice,
@@ -53,6 +54,8 @@
     archiveURL,
     archiveURLNote,
     archiveURLCopyButtonLabel,
+    validateSlugInput,
+    slugFieldGuidance,
     type ArchiveURLCopyState,
   } from '../../lib/campaigns';
   import { parseUnmetFromError, fixLocation } from '../../lib/preflight';
@@ -106,6 +109,13 @@
   let subject = $state('');
   let preheader = $state('');
   let bodyMd = $state('');
+  // #0410: the archive-page slug, editable only while the campaign is a
+  // draft (canEditCampaignSlug). Kept as its own buffer, not derived from
+  // `campaign.slug`, for the same reason name/subject/bodyMd are: so an
+  // operator's in-flight edit survives a background resync (see
+  // resyncCampaignStatus's own doc comment) and so saveDraft can tell an
+  // edited value from an unchanged one.
+  let slug = $state('');
   let mode = $state('all');
   let interestIds = $state<number[]>([]);
   let taxonomyInterests = $state<Interest[]>([]);
@@ -277,8 +287,22 @@
   // Reserved at draft time (Campaign.slug is never blank), so this is
   // always computable once `campaign` has loaded -- the whole point of
   // minting the slug at Create rather than at send.
-  let archiveURLValue = $derived(campaign ? archiveURL(window.location.origin, campaign) : '');
+  //
+  // #0410: built from the live `slug` EDIT BUFFER, not campaign.slug, so the
+  // URL shown updates as the operator types -- "the archive URL it produces
+  // is shown so the effect is obvious before saving" (#0410's acceptance
+  // criterion 1). This is not the anti-drift concern #0405 raised about
+  // previewing a slug the client would have to FORMAT itself (the newsletter
+  // checkbox's month input): archiveURL is the same one pure function
+  // already used for the saved value, called here with the buffer instead --
+  // one formatter, one source of truth, same as #0405 left it.
+  let archiveURLValue = $derived(campaign ? archiveURL(window.location.origin, { slug }) : '');
   let archiveURLNoteText = $derived(campaign ? archiveURLNote(campaign) : '');
+  // #0410: whether the slug field itself may be edited right now, and its
+  // helper message/tone -- see canEditCampaignSlug's and slugFieldGuidance's
+  // own doc comments for why this is stricter than `editable` above.
+  let slugEditable = $derived(campaign ? canEditCampaignSlug(campaign.status) : false);
+  let slugGuidance = $derived(slugFieldGuidance(campaign?.status ?? '', slug));
   let archiveURLCopyState = $state<ArchiveURLCopyState>('idle');
   let archiveURLCopyLabel = $derived(archiveURLCopyButtonLabel(archiveURLCopyState));
 
@@ -305,6 +329,7 @@
       subject = c.subject;
       preheader = c.preheader ?? '';
       bodyMd = c.body_md;
+      slug = c.slug;
       mode = c.audience_mode;
       interestIds = c.interest_ids;
       dirty = false;
@@ -441,6 +466,17 @@
     saveState = 'saving';
     saveError = null;
     try {
+      // #0410: an invalid (blank/whitespace) slug buffer is never sent to
+      // the server -- validateSlugInput's own doc comment explains why this
+      // duplicates, rather than replaces, the server's identical check. The
+      // fallback to the campaign's own current slug makes this safe
+      // regardless of whether the field is even editable right now
+      // (slugEditable false means the buffer was never touched away from
+      // campaign.slug in the first place, so this is always a no-op change
+      // in that case) -- an unchanged slug is accepted by the server at any
+      // status (mailing.CampaignStore.Update's own doc comment).
+      const slugCheck = validateSlugInput(slug);
+      const slugToSend = slugCheck.ok ? slug.trim() : campaign.slug;
       const updated = await updateCampaign(campaignId, {
         name,
         subject,
@@ -457,6 +493,7 @@
         body_md: bodyMd,
         audience_mode: mode,
         interest_ids: interestIds,
+        slug: slugToSend,
       });
       campaign = updated;
       dirty = false;
@@ -689,6 +726,24 @@
           oninput={scheduleAutosave}
           onblur={handleBlur}
         />
+      </div>
+      <div class="field">
+        <!-- #0410: the escape hatch #0405's opt-in newsletter-slug template
+             assumes exists -- editable only while this campaign is a draft
+             (slugEditable), mirroring the server's own
+             ErrCampaignSlugNotEditable rule. -->
+        <label for="campaign-slug">Archive slug</label>
+        <input
+          id="campaign-slug"
+          type="text"
+          bind:value={slug}
+          disabled={!slugEditable}
+          autocomplete="off"
+          spellcheck="false"
+          oninput={scheduleAutosave}
+          onblur={handleBlur}
+        />
+        <p class="length-advice {slugGuidance.tone}">{slugGuidance.message}</p>
       </div>
       <div class="field">
         <label for="campaign-archive-url">Archive URL</label>

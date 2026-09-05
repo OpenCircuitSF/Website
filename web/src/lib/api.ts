@@ -769,6 +769,21 @@ export interface CampaignDraftFields {
    * silently ignore it — callers must only ever set this on createCampaign.
    */
   newsletter_month?: string;
+  /**
+   * #0410's escape hatch for #0405's opt-in newsletter-month template: the
+   * campaign's archive-page slug (PRD §6.8). PATCH-only — the mirror image
+   * of `newsletter_month` above. `createCampaignRequest`
+   * (internal/handlers/admin_campaigns.go) has no `slug` field at all, so
+   * decodeJSON's DisallowUnknownFields means sending it through
+   * createCampaign would fail the request outright, not silently ignore it
+   * — callers must only ever set this on updateCampaign. Rejected server-side
+   * with 409 if it collides with another campaign's slug
+   * (`ErrCampaignSlugTaken`) or if the campaign has left `draft`
+   * (`ErrCampaignSlugNotEditable`); CampaignEditor.svelte mirrors the latter
+   * as an offer gate (lib/campaigns.ts's `canEditCampaignSlug`) but the
+   * server enforces it regardless.
+   */
+  slug?: string;
 }
 
 /** GET /admin/campaigns — every campaign, newest first (admin only). */
@@ -797,7 +812,11 @@ export function createCampaign(fields: CampaignDraftFields): Promise<Campaign> {
  * always sends `''` rather than omitting the key when it's blank). There is
  * deliberately no `status` field — the server never changes status via this
  * route (see `sendCampaign`/`cancelCampaign`). The server answers 409 unless
- * the campaign is currently `draft` or `scheduled` (`canEditCampaign`).
+ * the campaign is currently `draft` or `scheduled` (`canEditCampaign`). `slug`
+ * (#0410) carries its own stricter rule on top of that: unless the value sent
+ * back is unchanged, the server answers 409 unless the campaign is currently
+ * `draft` (`canEditCampaignSlug`), and a distinct 409 if the slug collides
+ * with another campaign's.
  */
 export function updateCampaign(id: number, fields: CampaignDraftFields): Promise<Campaign> {
   return apiPatch<Campaign>(`/admin/campaigns/${id}`, fields);
