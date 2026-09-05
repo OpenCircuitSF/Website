@@ -42,3 +42,18 @@ CERBERUS.md
 # match a `.claude/worktrees` at any depth. See CLAUDE.md §8: the same anchoring
 # mistake on the binary name silently excluded cmd/opencircuit/ in ShortLinks.
 /.claude/worktrees/
+
+# ── Server-managed workshop photos ────────────────────────────────────────────
+# Workshop cover images are placed on the server directly (referenced by
+# workshops.cover_image) and are deliberately NOT in source control — the
+# user's decision, 2026-09-04, recorded in issues/0416.md. `npm run build`
+# sweeps web/public/ into the embedded dist/, so they reach the site from the
+# deploy checkout without ever being committed.
+#
+# Anchored and extension-scoped on purpose. web/public/ also holds 23 tracked,
+# load-bearing design assets — fonts, favicons, the logo and mark variants, the
+# hero-crt webp set, og-default.png — and a broader pattern would invite
+# ignoring those too. See CLAUDE.md §8 on the anchoring mistake that silently
+# excluded cmd/opencircuit/ in ShortLinks.
+/web/public/*.jpg
+/web/public/*.jpeg
