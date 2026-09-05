@@ -41,6 +41,16 @@
 # matters for headroom against future, larger, more frequently-updated covers,
 # not against today's footprint.
 #
+# #0434 review: pruning excludes whatever media-latest.tar.gz currently
+# resolves to, regardless of its age, so the skip path above can never age
+# the last remaining archive out from under itself — "keeps exactly one
+# archive on disk indefinitely" is therefore actually true, not just true
+# until MEDIA_BACKUP_RETENTION_DAYS nights of unchanged content have passed.
+# And if that archive is ever lost some other way (manual cleanup, a full
+# disk, a partial rsync), the skip condition also checks for its existence,
+# so a missing media-latest.tar.gz forces a fresh write instead of trusting a
+# stale manifest forever.
+#
 # ── Configuration (all overridable via environment) ──────────────────────────
 #   MEDIA_SOURCE_DIR              Directory to back up.      Default: /var/www/media
 #   BACKUP_ROOT                   Common backup root — shared with backup.sh
@@ -151,7 +161,7 @@ if [ -z "$new_manifest" ]; then
   echo "NOTE: '$MEDIA_SOURCE_DIR' contains no files — nothing to archive."
 fi
 
-if [ -f "$manifest_file" ] && [ "$new_manifest" = "$(cat "$manifest_file")" ]; then
+if [ -f "$manifest_file" ] && [ -e "$dir/media-latest.tar.gz" ] && [ "$new_manifest" = "$(cat "$manifest_file")" ]; then
   echo "Unchanged since the last backup (manifest matches $manifest_file) — skipping a new archive."
 else
   echo "Content changed (or no prior manifest) — writing a fresh archive."
@@ -174,7 +184,20 @@ fi
 
 # Prune old archives (after any fresh write, so today's archive — age 0 — can
 # never be the thing pruned away, matching backup.sh's own ordering).
+#
+# #0434 review: unlike backup.sh, this script does NOT write an archive on
+# every run — an unchanged source takes the skip path above. So "age 0"
+# alone does not protect the last copy: with no edits, the one archive on
+# disk ages past retention and gets deleted, and the manifest still matches
+# forever after, so nothing replaces it. Exclude whatever media-latest
+# currently resolves to, so the newest archive is retained regardless of age.
+keep_args=()
+if [ -L "$dir/media-latest.tar.gz" ]; then
+  keep_target="$(readlink "$dir/media-latest.tar.gz")"
+  [ -n "$keep_target" ] && keep_args=(! -name "$keep_target")
+fi
 pruned="$(find "$dir" -maxdepth 1 -type f -name 'media-*.tar.gz' \
+            ${keep_args[@]+"${keep_args[@]}"} \
             -mtime +"$MEDIA_BACKUP_RETENTION_DAYS" -print -delete | wc -l | tr -d ' ')"
 [ "$pruned" -gt 0 ] && echo "    pruned $pruned archive(s) older than ${MEDIA_BACKUP_RETENTION_DAYS}d"
 
