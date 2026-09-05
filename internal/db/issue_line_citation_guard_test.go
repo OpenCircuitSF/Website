@@ -402,6 +402,43 @@ func TestIssueLineCitationGuardCatchesPlantedStaleCitationAndSparesCorrectingQuo
 	}
 }
 
+// TestIssueLineCitationGuardScansWorkLog is #0446's proof: this guard reuses
+// issueCitationSectionHeaders and extractNamedSections from the sibling
+// Test-name-citation guard's file, so admitting `## Work log` there widens
+// this scan too, without any change in this file. Before #0446 this
+// fixture's Work log citation was invisible to scanIssueDirForLineCitations
+// because the section itself was never extracted; it is asserted here
+// against the real, shared function rather than only against the map, so a
+// future edit that narrows extractNamedSections independently of the map is
+// still caught.
+func TestIssueLineCitationGuardScansWorkLog(t *testing.T) {
+	dir := t.TempDir()
+	planted := "# 9994 — scratch fixture for #0446's proof\n\n" +
+		"| | |\n|---|---|\n| **Status** | in-progress |\n\n" +
+		"## Work log\n\nFixed the bug named at `store.go:4242`.\n"
+	fixturePath := filepath.Join(dir, "9994.md")
+	if err := os.WriteFile(fixturePath, []byte(planted), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	failures, _ := scanIssueDirForLineCitations(t, dir, func(status string) bool { return status == "in-progress" })
+	if len(failures) != 1 {
+		t.Fatalf("expected the Work log citation to be reported, got %d: %v", len(failures), failures)
+	}
+	if !strings.Contains(failures[0], "store.go:4242") {
+		t.Fatalf("expected the failure to name the Work log citation, got %q", failures[0])
+	}
+
+	corrected := strings.Replace(planted, "`store.go:4242`", "the enclosing declaration named in the fix", 1)
+	if err := os.WriteFile(fixturePath, []byte(corrected), 0o600); err != nil {
+		t.Fatalf("rewrite fixture: %v", err)
+	}
+	failures, _ = scanIssueDirForLineCitations(t, dir, func(status string) bool { return status == "in-progress" })
+	if len(failures) != 0 {
+		t.Fatalf("expected clean after replacing the citation, got %v", failures)
+	}
+}
+
 // TestIssueLineCitationGuardExcludesResolvedFilesByDefault mirrors
 // TestIssueVerificationCitationGuardExcludesResolvedFilesByDefault above:
 // the status filter, not the section split, is what keeps a resolved

@@ -499,7 +499,45 @@ func collectDefinedGoTestFuncs(t *testing.T, roots []string) map[string]bool {
 //     standing in for a real family — a shape the pipe rule does not cover
 //     because it is not pipe-adjacent (see the residual noted there).
 //
-//   - **## Work log.** Token and cost accounting, not evidence about tests.
+// # #0446 correction — ## Work log was wrong from birth, not measured
+//
+// This list previously carried a bullet excluding `## Work log` as "token
+// and cost accounting, not evidence about tests." That characterization was
+// never checked against the corpus the way every other row above was: this
+// repo's phase-2 convention (`issues/Issues.md`) is exactly where an
+// implementer writes its evidence, and `#0443`'s reviewer found a live,
+// non-exempt citation sitting there while this guard — and its
+// go-file-plus-line-number sibling in the file beside this one — both ran
+// green over it. Unlike every exclusion above, which cites a measured
+// dangling/token count, that bullet cited no count at all, because none was
+// taken. `#0446` took one: sweeping every open and in-progress issue file's
+// `## Work log` against both guards this map feeds found the go-file-line
+// class already clean (the reviewer's manual fix and normal drift left
+// nothing outstanding), and this map is what widens both scans going
+// forward. `## Work log` is admitted below for the same reason `## Fix pass`
+// and `## Review notes` were in #0268: it is where evidence actually gets
+// asserted, not where it is proposed or quoted as subject matter.
+//
+// # #0446 also asked whether to invert this into a denylist — declined
+//
+// An allowlist's failure mode is exactly what happened here: a section
+// gains real evidence and the guard never learns about it until someone
+// notices by hand. Inverting to "scan everything except an explicit exempt
+// set" would close that failure mode by construction — a new heading
+// defaults to scanned, not skipped. Declined anyway, for the same reason
+// #0268 gives for every row in this map: each admission above is backed by
+// a corpus measurement, not a guess, and inversion has none. `## Root
+// cause`, `## Gotchas`, `## Files changed` and the "scattering of one-off
+// narrative headings" #0268 names are excluded today on a *measured* zero
+// plus a documented pattern of legitimate quoting (a deleted scratch test,
+// a pre-rename name) — exactly the "day-one noise" #0268 declined to
+// import. An exempt set would need to enumerate all of those, and every
+// future one-off heading besides, correctly, on the first try, with no
+// measurement to check the guess against — trading one silent
+// under-scanning failure mode for a silent over-scanning one (a legitimate
+// historical quote newly flagged) with no corpus evidence either way. This
+// map stays an allowlist, widened by exactly the one heading this issue's
+// sweep proved needs it.
 var issueCitationSectionHeaders = map[string]bool{
 	"verification":          true,
 	"implementation notes":  true,
@@ -509,6 +547,7 @@ var issueCitationSectionHeaders = map[string]bool{
 	"review findings":       true, // ditto
 	"bounce fix":            true, // earlier passes' spelling of "fix pass"
 	"bounce-fix completion": true, // ditto
+	"work log":              true, // #0446: the phase-2 convention's actual evidence section
 }
 
 // issueSectionTitle normalizes a level-2 heading line to the bare section
@@ -871,6 +910,7 @@ func TestIssueSectionTitleNormalizesRealCorpusHeadings(t *testing.T) {
 		{"## Review findings (2026-08-18) — approved, with one correction", "review findings"},
 		{"## Bounce fix (2026-08-23, claude-sonnet-5)", "bounce fix"},
 		{"## Bounce-fix completion (third pass, 2026-08-19 — escalated to Opus)", "bounce-fix completion"},
+		{"## Work log", "work log"}, // #0446: admitted — see the file-level comment
 		// Deliberately not admitted — see the file-level comment.
 		{"## Description", "description"},
 		{"## Notes", "notes"},
@@ -924,7 +964,8 @@ func TestIssueCitationGuardScansEvidenceSectionsNotSubjectMatter(t *testing.T) {
 		"## Fix pass — 2026-08-25 (a dated heading)\n\n" +
 		"### Verification\n\nRan `TestRv0268NestedUnderFixPass` and it passed.\n\n" +
 		"## Review notes — phase 3 (Opus, 2026-08-25)\n\nRe-ran `TestRv0268InReviewNotes` myself.\n\n" +
-		"## Notes\n\nSee also `TestRv0268InNotes`.\n"
+		"## Notes\n\nSee also `TestRv0268InNotes`.\n\n" +
+		"## Work log\n\nRan `TestRv0446InWorkLog` here.\n"
 	if err := os.WriteFile(filepath.Join(dir, "9997.md"), []byte(fixture), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -933,7 +974,7 @@ func TestIssueCitationGuardScansEvidenceSectionsNotSubjectMatter(t *testing.T) {
 		return status == "open" || status == "in-progress"
 	})
 	joined := strings.Join(failures, "\n")
-	for _, want := range []string{"TestRv0268NestedUnderFixPass", "TestRv0268InReviewNotes"} {
+	for _, want := range []string{"TestRv0268NestedUnderFixPass", "TestRv0268InReviewNotes", "TestRv0446InWorkLog"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("expected %s to be reported, got:\n%s", want, joined)
 		}
@@ -943,8 +984,8 @@ func TestIssueCitationGuardScansEvidenceSectionsNotSubjectMatter(t *testing.T) {
 			t.Errorf("%s sits in an unscanned section and must not be reported, got:\n%s", unwanted, joined)
 		}
 	}
-	if len(failures) != 2 {
-		t.Fatalf("expected exactly 2 dangling citations, got %d:\n%s", len(failures), joined)
+	if len(failures) != 3 {
+		t.Fatalf("expected exactly 3 dangling citations, got %d:\n%s", len(failures), joined)
 	}
 }
 
