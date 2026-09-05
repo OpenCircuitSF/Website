@@ -661,19 +661,37 @@ var issueStatusPattern = regexp.MustCompile(`(?m)^\|\s*\*\*Status\*\*\s*\|\s*([a
 // row — the closer's leniency feeding a later opener, a dangerous-direction
 // pairing neither branch produces alone. The closing branch is now gated on
 // the same leadingIndentWidth <= 3 threshold as the opener, reaching parity
-// with docTableRowLines's closer on the point #0092 hardened there. It
-// deliberately does not adopt the rest of #0092's closer rule: a closer
-// carrying trailing text after its run still closes here, since that half is
-// one of the safe-direction divergences #0455's criterion 3 protects, and
-// closing it would trade a loud failure (a row wrongly read as real) for a
-// silent one (a row wrongly ignored).
+// with docTableRowLines's closer on the indentation point #0092 hardened
+// there.
+//
+// #0463: #0460 additionally declined the rest of #0092's closer rule -- a
+// closer carrying trailing text after its run still closed -- reasoning that
+// closing it "would trade a loud failure for a silent one". That is the same
+// one-sided direction argument #0460 itself was filed to retire, one level
+// out, and #0460's own review measured it has the identical flaw: of the 126
+// documents that became newly dangerous by gating the closer on indentation
+// alone, 96 required exactly this trailing-text leniency feeding a later
+// opener. The closing branch now also requires the line to carry no trailing
+// text after its backtick run -- the run must account for the whole trimmed
+// line, mirroring docTableRowLines's "(b) be nothing but that run once
+// trimmed" rule -- reaching full parity with that closer on both points
+// #0092 hardened. Reusing the two existing helpers unmodified: leadingRunLength
+// computes the run, leadingIndentWidth the column check; no new helper, no
+// touch to docTableRowLines. Re-derived over the 22,620-document corpus
+// (every sequence of length 1-4 over a 12-token fence alphabet, each followed
+// by a metadata table), the dangerous-divergence count drops from 746 to 184,
+// and the newly-dangerous set this change itself introduces is 18 documents,
+// every one requiring the tilde or fence-length blindness #0455's criterion 3
+// protects -- under the 30-document ceiling this issue's stopping rule set,
+// so no fourth level of fixing is warranted here.
 func issueStatus(fileText string) string {
 	inFence := false
 	for _, line := range strings.Split(fileText, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
 			if inFence {
-				if leadingIndentWidth(line) <= 3 {
+				run := leadingRunLength(trimmed, '`')
+				if leadingIndentWidth(line) <= 3 && run == len(trimmed) {
 					inFence = false
 				}
 				continue
@@ -1208,12 +1226,17 @@ func TestIssueStatusDoesNotOpenFenceOnNonOpenerLine(t *testing.T) {
 	})
 }
 
-// TestIssueStatusSafeDirectionDivergencesUnchanged pins #0455's criterion 3:
-// the four safe-direction divergences #0454's review measured against real
-// CommonMark are left alone, since a row wrongly read as real is loud (a
-// guard runs against prose that isn't an issue) rather than silent (a guard
-// silently stops running at all). Each case here still finds the row, the
-// same as before #0455.
+// TestIssueStatusSafeDirectionDivergencesUnchanged pins the three of
+// #0454's review's four safe-direction divergences that #0463 leaves alone:
+// a row wrongly read as real is loud (a guard runs against prose that isn't
+// an issue) rather than silent (a guard silently stops running at all), and
+// closing those is not this issue's job. Each case here still finds the row,
+// the same as before #0463.
+//
+// The fourth of the original four -- a row after a closer carrying trailing
+// text -- is deliberately *not* here: that is exactly the divergence #0463
+// closes, so it now moves. It is pinned separately in
+// TestIssueStatusClosingBranchRequiresNoTrailingText below.
 func TestIssueStatusSafeDirectionDivergencesUnchanged(t *testing.T) {
 	t.Run("row inside a tilde fence", func(t *testing.T) {
 		doc := "~~~\n" +
@@ -1239,16 +1262,6 @@ func TestIssueStatusSafeDirectionDivergencesUnchanged(t *testing.T) {
 		}
 	})
 
-	t.Run("row after a closer carrying trailing text", func(t *testing.T) {
-		doc := "```\nfenced content\n``` nope\n" +
-			"| | |\n" +
-			"|---|---|\n" +
-			"| **Status** | open |\n"
-		if got := issueStatus(doc); got != "open" {
-			t.Errorf("issueStatus after a closer with trailing text = %q, want %q (unchanged divergence)", got, "open")
-		}
-	})
-
 	t.Run("inline triple backtick mid-prose above the row", func(t *testing.T) {
 		doc := "Some prose mentions ``` mid-sentence, not as a fence.\n\n" +
 			"| | |\n" +
@@ -1258,6 +1271,36 @@ func TestIssueStatusSafeDirectionDivergencesUnchanged(t *testing.T) {
 			t.Errorf("issueStatus with inline triple backtick mid-prose = %q, want %q", got, "open")
 		}
 	})
+}
+
+// TestIssueStatusClosingBranchRequiresNoTrailingText pins #0463's fix: a
+// fence line carrying trailing text after its backtick run no longer closes
+// the fence, reaching parity with docTableRowLines's closer on the half
+// #0092 hardened there and #0460 had declined. Before this fix, the closer
+// below closed on "``` nope" despite its trailing text, so the real Status
+// row that followed was read even though CommonMark treats the whole
+// document as one still-open fence (a closing fence may be followed only by
+// spaces or tabs) and never sees the row at all -- the opposite of what this
+// test now asserts.
+func TestIssueStatusClosingBranchRequiresNoTrailingText(t *testing.T) {
+	doc := "```\nfenced content\n``` nope\n" +
+		"| | |\n" +
+		"|---|---|\n" +
+		"| **Status** | open |\n"
+	if got := issueStatus(doc); got != "" {
+		t.Errorf("issueStatus after a closer with trailing text = %q, want \"\" (fence never closes, per CommonMark)", got)
+	}
+
+	// Control: an ordinary closer with no trailing text still closes exactly
+	// as before, so a genuine issue file with an unrelated, properly-closed
+	// fence elsewhere still has its own Status row read.
+	docCleanClose := "```\nfenced content\n```\n" +
+		"| | |\n" +
+		"|---|---|\n" +
+		"| **Status** | open |\n"
+	if got := issueStatus(docCleanClose); got != "open" {
+		t.Errorf("issueStatus after a clean closer = %q, want %q", got, "open")
+	}
 }
 
 // TestIssueStatusClosingBranchDoesNotHideRowBehindReopenedFence pins #0460's
