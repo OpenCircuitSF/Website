@@ -28,7 +28,8 @@ placeholder/
 ├── mark-mask-64.png    chip mark, white alpha mask (header)
 ├── mark-green-32.png   favicon
 ├── apple-touch-icon.png
-└── og-default.png      1200×630 social share card
+├── og-default.png      1200×630 social share card
+└── build-og.py         generates og-default.png
 ```
 
 Total weight is about 290 KB, most of it the two logo masks.
