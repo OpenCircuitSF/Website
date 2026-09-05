@@ -353,10 +353,17 @@ var envDollarExpansion = regexp.MustCompile(`\\\$|\$\(?\{?[A-Z0-9_]+\}?`)
 // review's own count because that review's exact corpus is not reproducible
 // from its write-up alone — CLAUDE.md §8's "every number inherited without
 // measurement in this lineage has been wrong at least once" is exactly why
-// this was re-run rather than copied). The re-derived finding holds
-// regardless of the exact corpus: every one of the currently-unflagged
-// divergences begins with a quote character, and no divergence exists among
-// values that do not.
+// this was re-run rather than copied). That finding is oracle-dependent, and
+// the dependence is the point. Against a systemd model that keeps the raw
+// bytes — the model the four shapes above were proved against — the
+// unflagged divergences over the extended alphabet are dominated by
+// whitespace rather than quoting, and this fifth shape closes none of them.
+// Against a systemd model that trims leading and trailing whitespace the way
+// godotenv's unquoted branch does, every remaining unflagged divergence is
+// quote-led and this shape closes all of them. Which model is right is a
+// systemd question this environment cannot settle — the same reason #0461
+// chose refusal over modelling. Both counts, and the whitespace family's
+// disposition, are in issues/0461.md.
 //
 // Read from extractVarValue (parser.go) and confirmed by probing
 // godotenv.Unmarshal directly — never by reasoning from the source alone
