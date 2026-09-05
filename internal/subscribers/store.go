@@ -89,7 +89,7 @@ const (
 )
 
 // Provenance values (#0125, PRD §6.10), matching the subscribers_source_check
-// and subscribers_consent_basis_check CHECK constraints (migrations/000010).
+// and subscribers_consent_basis_check CHECK constraints (migrations/000023).
 // Named Subscriber* rather than reusing Source*/Status*-shaped names to keep
 // this column's vocabulary (where an ADDRESS entered the list) unmistakably
 // separate from unsubscribe_source's (why it LEFT) — the two are easy to
@@ -229,7 +229,7 @@ type Subscriber struct {
 	UnsubscribedAt          *time.Time
 	UnsubscribeSource       *string
 	// Source, SourceDetail, ConsentBasis, ImportID, InvitedAt are #0125's
-	// provenance columns (migrations/000010, PRD §6.10): every address must
+	// provenance columns (migrations/000023, PRD §6.10): every address must
 	// be able to answer "where did this come from, and when?" without
 	// reading subscriber_events. Source defaults to SourceSignupForm at the
 	// database and is never left empty. InvitedAt is #0129's "one
