@@ -389,28 +389,32 @@ describe('CampaignEditor slug and delete wiring (#0444)', () => {
           '(<Button onclick={openDelete}>) -- has #0411\'s offer gate moved? (#0444)',
       );
     }
-    // #0451 (the "Also worth fixing" note): a genuine offer gate wraps ONLY
-    // the trigger button, give or take incidental whitespace Text nodes. If
-    // `{#if deleteOffered}` is deleted outright, the nearest-by-span
-    // candidate that remains is a much larger containing block (the outer
-    // `{:else if campaign}` branch), which was never a dedicated gate for
-    // this button. Naming that mismatch directly, before resolving its
-    // unrelated `test` identifier, turns the previously "confusing but
-    // fail-closed" message (naming `campaign` as though it were the gate)
-    // into one that names the real defect: the gate is gone, not mispointed.
+    // #0451 (the "Also worth fixing" note, revised on this issue's second
+    // pass per its reviewer's bounce): a genuine offer gate has the trigger
+    // as a DIRECT CHILD of its consequent -- not "exactly one non-whitespace
+    // node", which false-failed on an innocuous markup edit (an HTML comment
+    // or a sibling hint element added inside `{#if deleteOffered}`, both
+    // verified to pass before this commit and to false-fail under the
+    // sibling-count check). If `{#if deleteOffered}` is deleted outright, the
+    // nearest-by-span candidate that remains is a much larger containing
+    // block (the outer `{:else if campaign}` branch) whose trigger is nested
+    // deeper than a direct child, which was never a dedicated gate for this
+    // button. Naming that mismatch directly, before resolving its unrelated
+    // `test` identifier, turns the previously "confusing but fail-closed"
+    // message (naming `campaign` as though it were the gate) into one that
+    // names the real defect: the gate is gone, not mispointed.
     const consequentNodes = ((offerIfBlock.consequent as SvelteNode).nodes as SvelteNode[] | undefined) ?? [];
-    const nonWhitespaceNodes = consequentNodes.filter((n) =>
-      n.type === 'Text' ? ((n.data as string) ?? '').trim().length > 0 : true,
+    const directlyWrapsTheTrigger = consequentNodes.some(
+      (n) =>
+        n.type === 'Component' &&
+        n.name === 'Button' &&
+        isIdentifierNamed(attrExpression(findAttr(n, 'onclick')), 'openDelete'),
     );
-    const wrapsOnlyTheTrigger =
-      nonWhitespaceNodes.length === 1 &&
-      nonWhitespaceNodes[0].type === 'Component' &&
-      nonWhitespaceNodes[0].name === 'Button';
-    if (!wrapsOnlyTheTrigger) {
+    if (!directlyWrapsTheTrigger) {
       throw new Error(
         `${COMPONENT_PATH}: the {#if ...} nearest the "Delete campaign" trigger (\`${srcOf(offerIfBlock.test as SvelteNode)}\`) ` +
-          'wraps more than just that trigger button -- the dedicated offer gate {#if} appears to be missing ' +
-          "entirely, not merely re-pointed to a different gate variable (#0451, from #0444's review)",
+          'has that trigger nested somewhere deeper rather than as a direct child -- the dedicated offer gate ' +
+          "{#if} appears to be missing entirely, not merely re-pointed to a different gate variable (#0451, from #0444's review)",
       );
     }
     const test = offerIfBlock.test as SvelteNode;
