@@ -12,6 +12,7 @@ func TestIsKnownRoute_StaticRoutes(t *testing.T) {
 	known := []string{
 		"/",
 		"/workshops",
+		"/archive",
 		"/about",
 		"/subscribe",
 		"/subscribe/thanks",

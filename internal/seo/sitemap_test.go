@@ -25,8 +25,7 @@ func TestSitemap_MarketingRoutesAreKnownRoutes(t *testing.T) {
 // TestSitemap_ContainsStaticRoutesWithLastmod covers #0020's first
 // criterion: valid XML with <loc> and <lastmod> for each static marketing
 // route present in the want map below -- /, /about, /privacy (#0070),
-// /workshops, and /subscribe. marketingRoutes also holds a sixth entry,
-// /archive (#0123), not exercised by the want map below.
+// /workshops, /subscribe, and /archive (#0123).
 func TestSitemap_ContainsStaticRoutesWithLastmod(t *testing.T) {
 	s := NewSitemap(testBaseURL, nil, nil)
 	body, err := s.Build()
@@ -45,6 +44,7 @@ func TestSitemap_ContainsStaticRoutesWithLastmod(t *testing.T) {
 		testBaseURL + "/privacy":   false,
 		testBaseURL + "/workshops": false,
 		testBaseURL + "/subscribe": false,
+		testBaseURL + "/archive":   false,
 	}
 	for _, u := range parsed.URLs {
 		if _, ok := want[u.Loc]; ok {
