@@ -188,8 +188,18 @@ var envAssignmentLine = regexp.MustCompile(`^(export[ \t]+)?([A-Z][A-Z0-9_]*)=(.
 // itself would not treat it as a comment either, so there is no divergence.
 var envTrailingComment = regexp.MustCompile(`[ \t]#`)
 
-// envDollarExpansion matches $VAR / ${VAR} syntax in a value.
-var envDollarExpansion = regexp.MustCompile(`\$\{?[A-Za-z_][A-Za-z0-9_]*\}?`)
+// envDollarExpansion matches $VAR / ${VAR} syntax in a value, using the same
+// variable-name character class joho/godotenv v1.5.1's own expandVarRegex
+// requires (parser.go: `(\\)?(\$)(\()?\{?([A-Z0-9_]+)?\}?`) — uppercase
+// letters, digits, and underscore, with a digit permitted to lead. #0450: an
+// earlier version of this pattern required the name to start with a letter
+// or underscore ([A-Za-z_][A-Za-z0-9_]*), which excluded digit-led names
+// like the one in `PRICE=cost$5`. godotenv expands that to `cost` (the name
+// `5` is undefined in the file, so it substitutes the empty string) while
+// systemd's EnvironmentFile= performs no expansion at all and keeps the
+// literal `cost$5` — a silent divergence in the loaded value that this
+// pattern previously let through undetected.
+var envDollarExpansion = regexp.MustCompile(`\$\{?[A-Z0-9_]+\}?`)
 
 // scanEnvExampleValueShapes walks .env.example-shaped content line by line
 // and reports every KEY=VALUE line whose shape the two parsers named in
