@@ -616,13 +616,41 @@ func extractNamedSections(fileText string) []struct {
 var issueStatusPattern = regexp.MustCompile(`(?m)^\|\s*\*\*Status\*\*\s*\|\s*([a-z-]+)\s*\|`)
 
 // issueStatus returns the status recorded in an issues/NNNN.md file's
-// metadata table, or "" if the row is missing or malformed.
+// metadata table, or "" if no such row exists outside a fenced code block.
+//
+// #0454: issues/Issues.md documents the issue-file-format template inside a
+// fenced ```markdown block, and that template's own worked example carries a
+// literal Status-metadata row reading "open" — exactly the shape
+// issueStatusPattern is built to find — to show issue authors what to write.
+// Before this fix, that made issueStatus (and every guard built on it) treat
+// the template document as an open issue and scan its example sections as
+// evidence.
+//
+// The chosen fix is structural rather than a skip of "Issues.md" by name: a
+// genuine issue file's Status row is never fenced, because the row is live
+// metadata, not a demonstration of one. A name-based skip would go stale the
+// moment the template file is renamed; this predicate instead asks the one
+// question that actually separates a real issue from prose describing what
+// one looks like, so it keeps working under a rename for free. Measured
+// against the full corpus (see TestIssueStatusIgnoresFencedExampleRow and
+// this issue's own Work log): every one of the 454 issues/*.md files present
+// when this was written has its Status row, if any, outside every fence, and
+// only issues/Issues.md's template example sits inside one.
 func issueStatus(fileText string) string {
-	m := issueStatusPattern.FindStringSubmatch(fileText)
-	if m == nil {
-		return ""
+	inFence := false
+	for _, line := range strings.Split(fileText, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		if m := issueStatusPattern.FindStringSubmatch(line); m != nil {
+			return m[1]
+		}
 	}
-	return m[1]
+	return ""
 }
 
 // scanIssueDirForDanglingTestCitations resolves every Test… identifier
@@ -1043,5 +1071,51 @@ func TestIssueCitationLineWrappedNameResolvesOnlyWhenJoinedNameIsDefined(t *test
 				t.Errorf("issueCitationExcluded = %v, want %v", got, c.wantExcluded)
 			}
 		})
+	}
+}
+
+// TestIssueStatusIgnoresFencedExampleRow pins #0454's fix: a Status
+// metadata row is only "live" when it sits outside every fenced code block.
+// The fixture below reproduces the shape of issues/Issues.md's own
+// issue-file-format template as an asserted string literal rather than as a
+// comment demonstrating the pattern, per #0384's precedent for describing a
+// banned or trap-prone shape without writing it where a comment-scoped guard
+// would see it. It also pins the ordinary case: a real issue file's
+// unfenced row must still parse exactly as before.
+func TestIssueStatusIgnoresFencedExampleRow(t *testing.T) {
+	templateLikeDoc := "# Issue tracker guide\n\n" +
+		"## Issue file format\n\n" +
+		"```markdown\n" +
+		"# NNNN — Title\n\n" +
+		"| | |\n" +
+		"|---|---|\n" +
+		"| **Status** | open |\n" +
+		"| **Module** | <module name(s)> |\n" +
+		"```\n\n" +
+		"## Notes\n\nProse describing the format above.\n"
+	if got := issueStatus(templateLikeDoc); got != "" {
+		t.Errorf("issueStatus on a fenced template example = %q, want \"\" (not a real issue)", got)
+	}
+
+	realIssueDoc := "# 9998 — A real issue\n\n" +
+		"| | |\n" +
+		"|---|---|\n" +
+		"| **Status** | in-progress |\n" +
+		"| **Module** | db |\n\n" +
+		"## Description\n\nSomething is wrong.\n"
+	if got := issueStatus(realIssueDoc); got != "in-progress" {
+		t.Errorf("issueStatus on a real, unfenced row = %q, want %q", got, "in-progress")
+	}
+
+	// A real issue quoting a fenced code sample of its own — e.g. a shell
+	// transcript in ## Verification — must not have its own, unfenced
+	// Status row hidden by an unrelated fence elsewhere in the file.
+	docWithUnrelatedFence := "# 9999 — Another real issue\n\n" +
+		"| | |\n" +
+		"|---|---|\n" +
+		"| **Status** | open |\n\n" +
+		"## Verification\n\n```\n$ go test ./...\nok\n```\n"
+	if got := issueStatus(docWithUnrelatedFence); got != "open" {
+		t.Errorf("issueStatus with an unrelated later fence = %q, want %q", got, "open")
 	}
 }
