@@ -563,11 +563,17 @@
              for v1 and struck #0052's "upload or path entry" criterion, leaving the upload
              question to #0153 (PRD §5.2 asks for no upload). An external URL is rejected
              because the site hosts its own images (CLAUDE.md §9: no external CDNs). Both
-             citations stay here, not in the admin-facing copy below (#0172). -->
+             citations stay here, not in the admin-facing copy below (#0172).
+
+             The "/media/..." convention named in the hint below is docs/media.md's: covers
+             are placed on the server's disk at /var/www/media and served by an Apache
+             carve-out, not built into the SPA (#0432 -- the hint used to show a stale
+             "/assets/..." example, from before /media/ existed). That citation stays here
+             too, for the same #0172 reason. -->
         <p class="text-muted cover-hint">
-          A site-relative path (e.g. "/assets/workshops/soldering.jpg") to an image already
-          hosted on this site. There is no upload control here, and external image URLs are
-          not accepted.
+          A site-relative path (e.g. "/media/soldering-101.jpg") to an image already hosted
+          on this site. Workshop photos are placed directly on the server, not uploaded here
+          -- there is no upload control, and external image URLs are not accepted.
         </p>
       </div>
     </Panel>

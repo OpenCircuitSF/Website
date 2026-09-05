@@ -695,6 +695,14 @@ const coverImageErrorMessage = `cover_image must be a site-relative path startin
 // "//evil.host/x" form and are caught by normalizing backslashes to
 // slashes before the "//" check.
 //
+// Correction (#0432): the schema comment quoted above is itself wrong, and
+// wrong twice over -- the real path is under /media, not /assets, and
+// /assets/ is Vite's own embedded build output (see docs/media.md for why
+// excluding /assets/ from the Apache proxy would cut the SPA off from its
+// own JS and CSS). migrations/000020's cover_image comment is frozen
+// (CLAUDE.md §1) and cannot be edited to fix it, so the correction is
+// recorded here and in docs/media.md instead.
+//
 // #0138 bounce, finding 1: a prefix check alone isn't enough. A browser's
 // URL parser deletes every ASCII tab, LF and CR from the input before
 // parsing it, so e.g. "/\t/evil.host/x.jpg" doesn't start with "//" as

@@ -92,8 +92,13 @@ cut the SPA off from its own JS and CSS.
 
 > The `migrations/000020_create_workshops.up.sql` comment on `cover_image` still
 > reads `-- path under /assets`. That predates this setup and is now
-> misleading — the path is under `/media`. Worth correcting the next time that
-> area is touched.
+> misleading twice over — the path is under `/media`, not `/assets`, and
+> `/assets/` is Vite's own embedded build output, not workshop media at all.
+> `000020` is frozen (`CLAUDE.md` §1) and cannot be edited to fix this, so the
+> correction is recorded instead in `isSafeCoverImage`'s doc comment
+> (`internal/handlers/admin_workshops.go`), which already quoted the same
+> wrong text when explaining why the validator rejects other-host URLs
+> (`#0432`).
 
 ## Adding an image
 
@@ -134,8 +139,12 @@ the two from drifting apart.
   backup path of their own or a copy kept in the repo.
 - **A redeploy does not disturb them.** `scripts/deploy.sh` never touches
   `/var/www`, so images survive `git pull` + rebuild + restart.
-- **The directory is currently empty** (checked 2026-09-04). The wiring is in
-  place and unused.
+- **Populated as of 2026-09-04.** The two live workshop covers,
+  `soldering.jpg` and `programming_leds.jpg`, were copied here from their old
+  home in `web/public/` and now serve at `/media/soldering.jpg` and
+  `/media/programming_leds.jpg` with the documented `max-age=604800` and
+  sandboxing CSP, confirmed by `curl -sI`. `#0417`'s dimensions/EXIF work on
+  these two files remains open.
 - **The repo's copy of the vhost is in sync.**
   `deploy/apache/installed-001-www.opencircuitsf.com-le-ssl.conf` matches the
   live file byte for byte as of 2026-09-04. Nothing enforces that — it is kept

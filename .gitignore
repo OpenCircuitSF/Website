@@ -43,17 +43,15 @@ CERBERUS.md
 # mistake on the binary name silently excluded cmd/opencircuit/ in ShortLinks.
 /.claude/worktrees/
 
-# ── Server-managed workshop photos ────────────────────────────────────────────
-# Workshop cover images are placed on the server directly (referenced by
-# workshops.cover_image) and are deliberately NOT in source control — the
-# user's decision, 2026-09-04, recorded in issues/0416.md. `npm run build`
-# sweeps web/public/ into the embedded dist/, so they reach the site from the
-# deploy checkout without ever being committed.
+# ── Workshop cover images ──────────────────────────────────────────────────────
+# Workshop cover images are NOT part of this repository at all, and do not
+# belong under web/public/ in any form -- tracked or ignored. They live on the
+# server's own disk at /var/www/media, served directly by Apache's /media/
+# carve-out, entirely outside web/public/ and the Go binary's embedded dist/.
+# See docs/media.md for the full design and how to add one.
 #
-# Anchored and extension-scoped on purpose. web/public/ also holds 23 tracked,
-# load-bearing design assets — fonts, favicons, the logo and mark variants, the
-# hero-crt webp set, og-default.png — and a broader pattern would invite
-# ignoring those too. See CLAUDE.md §8 on the anchoring mistake that silently
-# excluded cmd/opencircuit/ in ShortLinks.
-/web/public/*.jpg
-/web/public/*.jpeg
+# This corrects a wrong premise (#0432): the *.jpg/*.jpeg rules that used to
+# sit here (added 2026-09-04, issues/0416.md) assumed cover images belonged in
+# web/public/ and merely shouldn't be tracked. They don't belong there at all.
+# web/public/ holds only its 23 tracked, load-bearing design assets -- fonts,
+# favicons, the logo and mark variants, the hero-crt webp set, og-default.png.
