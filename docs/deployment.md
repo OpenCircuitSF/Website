@@ -874,51 +874,89 @@ documented under a real proxied SSE connection to `/api/events`.
 
 ## 9. TLS
 
-**Corrected `#0431`, 2026-09-04 — this is live, and not by the command shown
-below.** The command below (HTTP-01 via the `--apache` plugin, two named
-hosts) predates the deploy and was never what actually ran: production's
-cert is a **wildcard** — re-verified read-only for this pass with
-`openssl s_client -connect www.opencircuitsf.com:443 … | openssl x509 -noout
--text`, which shows `X509v3 Subject Alternative Name: DNS:*.opencircuitsf.com,
-DNS:opencircuitsf.com`. A wildcard SAN cannot be issued over HTTP-01/
-`--apache`; it requires the DNS-01 challenge, matching what the production-
-facts table already says: the authenticator in use is **`dns-route53`**, not
-`--apache`. So the two-name command below is not a description of what
-produced the live certificate — it is left only as a syntactically valid
-fallback for obtaining a narrower, non-wildcard cert by the HTTP-01 path, if
-that were ever wanted instead.
+**Corrected `#0431`, 2026-09-04.** ~~The command below (HTTP-01 via the
+`--apache` plugin, two named hosts) predates the deploy and was never what
+actually ran~~ — production's cert is a **wildcard**, re-verified read-only for
+this pass with `openssl s_client -connect www.opencircuitsf.com:443 …
+| openssl x509 -noout -text`, which shows `X509v3 Subject Alternative Name:
+DNS:*.opencircuitsf.com, DNS:opencircuitsf.com`. A wildcard SAN cannot be
+issued over HTTP-01/`--apache`; it requires the DNS-01 challenge, matching
+what the production-facts table already says: the authenticator in use is
+**`dns-route53`**, not `--apache`.
 
-Obtain a single certificate covering both names (HTTP-01 — narrower than the
-wildcard actually in production; see the correction above):
+**Corrected `#0436`, 2026-09-05 — the command itself, not just this
+paragraph, was wrong.** `#0431`'s pass identified that the `--apache` command
+below did not describe production, but then kept the command in the document
+anyway, framed as "a syntactically valid fallback … if that were ever wanted
+instead." That framing understated the risk: `--apache` doesn't *decline* the
+wildcard, it **replaces** one. Re-verified read-only for this pass —
+`sudo certbot certificates` on the box lists exactly one cert for this domain,
+`Certificate Name: opencircuitsf.com`, `Domains: opencircuitsf.com
+*.opencircuitsf.com`, `Expiry Date: 2026-11-16` — so running the command below
+as it previously stood would have obtained a certificate for
+`opencircuitsf.com`/`www.opencircuitsf.com` only under that same certificate
+name, discarding the wildcard SAN and, with it, coverage for every other
+subdomain: **`go.opencircuitsf.com`**, a *different project*'s deploy
+(ShortLinks, `CLAUDE.md` §1) hosted on this same box, and any future
+subdomain. It would also switch the authenticator from `dns-route53` back to
+the Apache plugin, which (re-)couples renewal to `/.well-known/acme-challenge`
+and to whatever it rewrites in the installed vhosts — including the
+`/.well-known/` `ProxyPass … !` carve-out this box depends on to serve
+`atproto-did` from disk (`CLAUDE.md` §7; the Go service itself 404s that
+path). There is no scenario in this project where the narrower cert is wanted,
+so the command is corrected below rather than kept as an option.
+
+Obtain (or renew ahead of the timer) the certificate the way production
+actually does — DNS-01 via `dns-route53`, covering the wildcard. Re-derived
+read-only for this pass directly from the installed renewal config,
+`/etc/letsencrypt/renewal/opencircuitsf.com.conf`: `authenticator =
+dns-route53`, `key_type = ecdsa`, no installer configured — so this obtains a
+certificate only and never touches a vhost:
 
 ```bash
-sudo certbot --apache -d opencircuitsf.com -d www.opencircuitsf.com
+sudo certbot certonly --dns-route53 -d opencircuitsf.com -d '*.opencircuitsf.com'
 ```
 
-Certbot's Apache plugin typically offers to add its own `:80` vhost with an
-HTTP→HTTPS redirect if one doesn't already exist for these names — **accept
-that offer** (or add one by hand) so plain-HTTP requests aren't served
-insecurely; `deploy/apache/opencircuitsf.com.conf` as committed only defines
-a `:443` vhost. Certbot also installs its own renewal timer/cron entry
-automatically. On this box that is **`certbot-renew.timer`**, firing at 00:00
-and 12:00 UTC, using the **`dns-route53`** authenticator against a wildcard
-cert — so renewal never reads a vhost or an ACME webroot, and no Apache change
-here can break it. Recorded in the production-facts table above.
+**Why DNS-01, not `--apache`.** The domain list above includes a wildcard
+(`*.opencircuitsf.com`), and the ACME protocol only permits proving control of
+a wildcard name via a DNS-01 challenge (a TXT record under
+`_acme-challenge.opencircuitsf.com`) — HTTP-01, which is what the `--apache`
+plugin drives, cannot issue one at all. That is a protocol constraint, not a
+preference: there is no `--apache` invocation that would produce the same
+certificate. `dns-route53` is the DNS-01 authenticator this box already has
+IAM permissions for, which is why it — not a webroot or standalone HTTP-01
+authenticator — is what production uses.
 
-Reload once more if certbot didn't already:
+**Do not "simplify" this back to `--apache`.** It reads like the more direct
+tool because it needs no Route 53 credentials and matches the
+`www`/`opencircuitsf.com` pair already used elsewhere in this document — but
+that pair is exactly the two names this cert is *not* scoped to. Running it
+would silently drop `go.opencircuitsf.com`'s coverage (a different project),
+re-couple renewal to `/.well-known/acme-challenge` and Apache vhost state, and
+still fail to reproduce the wildcard even after all that, since `--apache`
+cannot issue one under any set of flags.
+
+Certbot's own renewal timer needs no manual step here. On this box that is
+**`certbot-renew.timer`** (systemd), firing at 00:00 and 12:00 UTC —
+re-verified read-only for this pass with `systemctl list-timers
+certbot-renew.timer`, which shows the next run at 2026-09-05 12:00 UTC and the
+last run at 2026-09-05 00:00 UTC — using the `dns-route53` authenticator
+against the wildcard, so renewal never reads a vhost or an ACME webroot and no
+Apache change in this project can break it. Recorded in the production-facts
+table above.
+
+Reload Apache only if a manual `certonly` run (not the timer) obtained a new
+certificate and Apache hasn't picked it up:
 
 ```bash
 sudo systemctl reload httpd
 curl -fsS https://www.opencircuitsf.com/health
 ```
 
-**Stale — see the correction at the top of this section.** `www.opencircuitsf.com`
-now resolves and serves over TLS: re-verified read-only for this pass,
-`curl -sI https://www.opencircuitsf.com/` returns `HTTP/1.1 200 OK` and the
-certificate above is valid to 2026-11-16, matching the production-facts
-table. The HTTP-01 command shown here specifically was never run against a
-real box — the wildcard cert that is live was obtained through the
-`dns-route53` DNS-01 path instead.
+`www.opencircuitsf.com` resolves and serves over TLS today: re-verified
+read-only for this pass, `curl -sI https://www.opencircuitsf.com/` returns
+`HTTP/1.1 200 OK` and the certificate above is valid to 2026-11-16, matching
+the production-facts table.
 
 ---
 
@@ -989,7 +1027,7 @@ link to stdout — that is the closest thing to a proof this step has.
 | `www.opencircuitsf.com` | A | `44.222.209.183` | **Canonical host** |
 | `opencircuitsf.com` | A | `44.222.209.183` | 301 → `www` |
 | `go.opencircuitsf.com` | CNAME | `ec2.smallsharptools.com` (same box) | ShortLinks — a CNAME in practice, not the A record PRD §10.2 planned |
-| `<sel1..3>._domainkey.opencircuitsf.com` | CNAME | `[PLACEHOLDER: issued by SES on domain verification, PRD §10.2/§10.4]` | DKIM |
+| `<sel1..3>._domainkey.mailing.opencircuitsf.com` | CNAME | `[PLACEHOLDER: issued by SES on domain verification, PRD §10.2/§10.4]` | DKIM (parent corrected 2026-09-05, #0436 — this row named the apex; see below) |
 | `bounce.mailing.opencircuitsf.com` | MX | `10 feedback-smtp.us-east-1.amazonses.com` | Custom MAIL FROM (host and region corrected 2026-09-04, #0421 — this row read `mail.opencircuitsf.com`/`us-west-2`; see below) |
 | `bounce.mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF alignment |
 | `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` | **Inbound unsubscribe only** — never the apex MX, `CLAUDE.md` §9 (region corrected 2026-09-04, #0421 — was `us-west-2`) |
@@ -1008,13 +1046,18 @@ which means domain verification completed and the real selector tokens exist
 in Route 53 today. This pass did not read them out of the AWS console or DNS
 to duplicate them here — `docs/email-setup.md` is the place to look, and
 keeping the actual token values in one place avoids the drift this table
-already suffered once (`#0421`, below). **Worth a closer look, not fixed by
+already suffered once (`#0421`, below). ~~**Worth a closer look, not fixed by
 this pass:** `docs/email-setup.md`'s own DKIM row names
 `<3 tokens>._domainkey.mailing.opencircuitsf.com` — under the `mailing.`
 subdomain — while this table's row names `<sel1..3>._domainkey.opencircuitsf.com`,
 the apex. Those are different hostnames; this document did not resolve which
 one is correct or reconcile the two, and it should not be trusted to name
-the right hostname until that is checked.
+the right hostname until that is checked.~~ **Corrected 2026-09-05, #0436:**
+the `mailing.` form is right, matching `docs/email-setup.md`'s own row and
+`CLAUDE.md` §9's rule that the apex carries real Google Workspace mail and is
+restricted — a DKIM record published at the bare apex would be both wrong and
+adjacent to that restriction. The table row above now names the same
+`mailing.opencircuitsf.com` parent.
 
 **Original note, left for context — accurate only for the pre-instance
 state:** the two things that could not be known before an instance existed
