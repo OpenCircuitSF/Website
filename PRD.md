@@ -1700,11 +1700,19 @@ real offsite host exist.
 **S3 is a deferred option, not the design.** An earlier draft of this section
 specified `pg_dump` to S3 with a 30-day lifecycle rule, bucket encryption, a
 public-access block, and IAM scoped to the bucket prefix. None of that is
-built, and this section no longer specifies it as the target — it needs an
-AWS account, which does not exist yet (`CLAUDE.md` §10 item 2), and building
-it now would mean writing against credentials nobody has, same reasoning as
-SES. The design above ships without it; S3 upload can be added later on top
-of `backup.sh` without redesigning the local-dump/offsite-pull shape.
+built, and this section no longer specifies it as the target.
+
+**Corrected 2026-09-05, `#0430`:** this passage originally reasoned that S3
+needed an AWS account, which did not exist yet (`CLAUDE.md` §10 item 2), and
+that building it would mean writing against credentials nobody had — the
+same reasoning applied to SES. The account now exists (verified read-only,
+`aws sts get-caller-identity`) and SES is live in it, so that precondition
+has lapsed, and the "same reasoning as SES" comparison no longer holds — SES
+itself is no longer deferred for that reason. No replacement decision to
+build S3 upload is recorded; it remains simply not built, on no current
+stated grounds. The design above ships without it; S3 upload can be added
+later on top of `backup.sh` without redesigning the local-dump/offsite-pull
+shape.
 
 ---
 

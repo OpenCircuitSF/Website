@@ -1380,12 +1380,18 @@ and the Mac mini are what protect it — `backup.sh` already `chmod 0700`s the
 backup root and `chmod 0600`s each dump), and its retention is a local
 `find -mtime` prune, not an S3 lifecycle rule.
 
-**S3 upload is a deferred option, not abandoned.** `#0229`'s `## Decision`:
+**S3 upload is a deferred option, not abandoned.** ~~`#0229`'s `## Decision`:
 building it needs an AWS account, which does not exist yet (`CLAUDE.md` §10
-item 2), and the user deferred all AWS work to deployment, same as SES.
-`PRD.md` §10.6 now records S3 as an addable upload leg on top of `backup.sh`
-once that account exists, rather than a redesign — nothing about the
-local-dump/offsite-pull shape needs to change to add it later.
+item 2), and the user deferred all AWS work to deployment, same as SES.~~
+**Correction (`#0430`, 2026-09-05):** both grounds `#0229` gave have lapsed —
+the AWS account exists (`378152330719`, re-verified read-only via `aws sts
+get-caller-identity` for this issue) with SES live in it, and deployment
+itself happened on 2026-08-25, so "deferred until deployment" has also
+passed. **No replacement decision to build S3 upload is recorded** — it
+remains simply not built, on no current stated grounds. `PRD.md` §10.6
+records S3 as an addable upload leg on top of `backup.sh`, not a redesign —
+nothing about the local-dump/offsite-pull shape needs to change if it is
+added later.
 
 Run locally against a disposable PostgreSQL 16 cluster (Homebrew, macOS),
 never against a database anyone depends on. Every database name below is
@@ -1956,10 +1962,13 @@ anything that is not a fresh scratch database:
 - **No S3.** `#0229` recorded this as a deliberate deferral, not an
   oversight — nothing here talks to AWS. There is no bucket, no lifecycle
   policy, no bucket-level encryption or public-access block, and no IAM
-  policy scoped to a bucket prefix, because none of those AWS resources exist
-  yet (`CLAUDE.md` §10 item 2). `PRD.md` §10.6 records it as an addable
-  upload leg once the AWS account exists, not as work that was skipped by
-  mistake.
+  policy scoped to a bucket prefix. ~~because none of those AWS resources
+  exist yet (`CLAUDE.md` §10 item 2).~~ **Correction (`#0430`, 2026-09-05):**
+  the AWS account now exists (`378152330719`) and SES is live in it, so that
+  precondition has lapsed — these resources simply have not been built, and
+  no decision to build them is recorded. `PRD.md` §10.6 still records an S3
+  upload leg as addable on top of `backup.sh`, not as work that was skipped
+  by mistake.
 - **No point-in-time recovery.** This is logical (`pg_dump`) backup only —
   a restore recovers to the moment of the last completed dump, not to any
   point in between. No WAL archiving, no continuous archiving, no PITR tool
