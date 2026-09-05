@@ -9,7 +9,9 @@ import (
 
 // marketingRoutes is the sitemap's curated static-route portion (#0020's
 // acceptance criteria: "/", "/about", "/workshops", "/subscribe"; "/privacy"
-// added at #0070 for the same reason -- a real, indexable public page). This is
+// added at #0070 for the same reason -- a real, indexable public page;
+// "/archive" added at #0123 (PRD §6.8) for the same reason: the archive
+// index is the site's only recurring indexable page). This is
 // deliberately NOT handlers.StaticRoutes() -- that table also contains the
 // Phase 1 auth/account/token routes (/login, /account, /admin, /confirm,
 // /preferences, /unsubscribe, /register/verify, /recover/verify,
