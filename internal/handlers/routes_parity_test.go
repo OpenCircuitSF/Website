@@ -65,6 +65,22 @@ func readRouterTS(t *testing.T) string {
 // away than the entries themselves.
 var staticRoutesBlockRe = regexp.MustCompile(`(?s)const STATIC_ROUTES:[^=]*=\s*\{(.*?)\n\};`)
 
+// staticRoutesBlockAnchorText is staticRoutesBlockRe's literal starting
+// anchor, duplicated here (rather than derived from the compiled regexp)
+// specifically so TestStaticRoutesBlockAnchorIsUnambiguous can count its
+// occurrences in router.ts independently of staticRoutesBlockRe's own
+// match. That independence is the point: staticRoutesBlockRe's `[^=]*` falls
+// forward across anything between the first occurrence of this text and the
+// declaration's real `= {`, so FindAllString on staticRoutesBlockRe itself
+// always reports exactly one match -- even when the anchor text appears
+// twice in the file -- because the earlier occurrence's match simply
+// swallows the later one (measured for #0449: router.ts had two
+// occurrences, one inside a doc comment quoting this exact text, and
+// staticRoutesBlockRe.FindAllString still returned a single, correct match,
+// by luck rather than by anything pinning it). Counting the literal anchor
+// text directly is what makes the ambiguity visible.
+const staticRoutesBlockAnchorText = "const STATIC_ROUTES:"
+
 // staticRoutesEntryRe matches one whole, trimmed 'path': 'RouteName' entry
 // line from the block staticRoutesBlockRe captures. Anchored (^...$) on
 // purpose: parseStaticRoutesFromRouterTS applies it per line, not as a scan
@@ -186,6 +202,32 @@ func TestRouteTableParity_StaticRoutes(t *testing.T) {
 			"route table parity: %d path(s) present in routes.go's knownStaticRoutes but missing from router.ts's STATIC_ROUTES: %s\n"+
 				"add the missing entry/entries to web/src/lib/router.ts's STATIC_ROUTES",
 			len(onlyInGo), strings.Join(onlyInGo, ", "),
+		)
+	}
+}
+
+// TestStaticRoutesBlockAnchorIsUnambiguous fails if router.ts contains
+// staticRoutesBlockAnchorText anywhere other than the STATIC_ROUTES
+// declaration itself -- most plausibly inside a doc comment quoting the
+// anchor verbatim, as #0440 added and #0449 caught. staticRoutesBlockRe
+// still finds the right block in that case (see staticRoutesBlockAnchorText's
+// doc comment for why), but only because its `[^=]*` happens to fall forward
+// past the comment to the real `= {`; nothing was pinning that property, so
+// nothing would have caught a future edit that made it stop being true. This
+// is #0449's fix: one assertion naming the ambiguity directly, rather than a
+// second parsing mechanism layered onto staticRoutesBlockRe.
+func TestStaticRoutesBlockAnchorIsUnambiguous(t *testing.T) {
+	src := readRouterTS(t)
+	n := strings.Count(src, staticRoutesBlockAnchorText)
+	if n != 1 {
+		t.Fatalf(
+			"%s contains %d occurrence(s) of %q, but staticRoutesBlockRe anchors "+
+				"on the first one and relies on being the only match -- "+
+				"reword whichever occurrence is not the STATIC_ROUTES declaration "+
+				"itself (commonly a doc comment quoting the anchor text, as #0449 "+
+				"found), or re-anchor staticRoutesBlockRe so no other text in the "+
+				"file can match its start",
+			routerTSPath, n, staticRoutesBlockAnchorText,
 		)
 	}
 }

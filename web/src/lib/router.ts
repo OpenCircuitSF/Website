@@ -63,8 +63,9 @@ export interface Route {
  * this same route set to drift, following #0425's seven and #0437's four.
  * Also read as source text (not imported) by
  * internal/handlers/routes_parity_test.go's `staticRoutesBlockRe`, which
- * matches on the substring "const STATIC_ROUTES:" and is unaffected by the
- * `export` keyword preceding it. */
+ * anchors on this declaration's own `const` keyword, name, and colon --
+ * not spelled out verbatim here on purpose, see #0449 -- and is unaffected
+ * by the `export` keyword preceding it. */
 export const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
   '/': 'home',
   '/workshops': 'workshops',
