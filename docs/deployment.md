@@ -307,12 +307,26 @@ already on the box per `CLAUDE.md` §7.
 - **`openssl` and `certbot`**:
 
   ```bash
-  sudo dnf install -y openssl certbot python3-certbot-apache
+  sudo dnf install -y openssl certbot python3-certbot-dns-route53
   ```
 
-- **DNS already resolving** — confirm before requesting a TLS certificate
-  (Certbot's HTTP-01 challenge needs the hostname to already resolve to this
-  box):
+  **Corrected 2026-09-05, `#0436`:** this step previously installed
+  `python3-certbot-apache`. That is the plugin §9 now says must never be
+  used here — it is HTTP-01 and cannot issue this domain's wildcard — and
+  it does not provide `--dns-route53`, so the runbook as it stood
+  installed one plugin and then invoked another. Measured on the box,
+  both packages are present (`python3-certbot-apache-2.6.0` and
+  `python3-certbot-dns-route53-2.6.0`); only the latter is required by
+  anything this document tells you to run.
+
+- **DNS already resolving** — not a certificate prerequisite, but confirm
+  it before the Apache and proxy steps below. **Corrected 2026-09-05,
+  `#0436`:** this bullet previously justified itself as "Certbot's
+  HTTP-01 challenge needs the hostname to already resolve to this box",
+  which describes a path this box does not use. DNS-01 via `dns-route53`
+  (§9) never connects to the box or resolves these names; what it needs
+  is permission to write a TXT record under
+  `_acme-challenge.opencircuitsf.com` in the hosted zone.
 
   ```bash
   dig +short www.opencircuitsf.com
@@ -936,17 +950,26 @@ re-couple renewal to `/.well-known/acme-challenge` and Apache vhost state, and
 still fail to reproduce the wildcard even after all that, since `--apache`
 cannot issue one under any set of flags.
 
-Certbot's own renewal timer needs no manual step here. On this box that is
-**`certbot-renew.timer`** (systemd), firing at 00:00 and 12:00 UTC —
-re-verified read-only for this pass with `systemctl list-timers
-certbot-renew.timer`, which shows the next run at 2026-09-05 12:00 UTC and the
-last run at 2026-09-05 00:00 UTC — using the `dns-route53` authenticator
-against the wildcard, so renewal never reads a vhost or an ACME webroot and no
-Apache change in this project can break it. Recorded in the production-facts
-table above.
+The renewal timer itself needs no manual step — it is already installed
+and running. On this box that is **`certbot-renew.timer`** (systemd), firing
+at 00:00 and 12:00 UTC — re-verified read-only for this pass with `systemctl
+list-timers certbot-renew.timer`, which shows the next run at 2026-09-05
+12:00 UTC and the last run at 2026-09-05 00:00 UTC — using the `dns-route53`
+authenticator against the wildcard, so renewal never reads a vhost or an ACME
+webroot and no Apache change in this project can break it. Recorded in the
+production-facts table above.
 
-Reload Apache only if a manual `certonly` run (not the timer) obtained a new
-certificate and Apache hasn't picked it up:
+**Reload Apache after any renewal, including the timer's.** Re-verified
+read-only for this pass: `/etc/letsencrypt/renewal-hooks/deploy/` and
+`/etc/letsencrypt/renewal-hooks/post/` are both empty,
+`/etc/sysconfig/certbot` sets `PRE_HOOK`, `POST_HOOK` and `DEPLOY_HOOK`
+to the empty string, and `certbot-renew.service` is a bare
+`certbot renew --quiet`. The renewal config configures no installer. So
+nothing reloads Apache when the certificate is replaced, and `mod_ssl`
+goes on serving the previous one until it is. After a manual `certonly`,
+run the reload yourself. For the unattended path there is currently no
+mechanism at all — a gap in the box's configuration tracked separately as
+`#0447`, not something this document can fix:
 
 ```bash
 sudo systemctl reload httpd
