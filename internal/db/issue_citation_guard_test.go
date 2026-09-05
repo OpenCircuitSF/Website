@@ -636,12 +636,39 @@ var issueStatusPattern = regexp.MustCompile(`(?m)^\|\s*\*\*Status\*\*\s*\|\s*([a
 // this issue's own Work log): every one of the 454 issues/*.md files present
 // when this was written has its Status row, if any, outside every fence, and
 // only issues/Issues.md's template example sits inside one.
+//
+// #0455: the fence toggle above only ever opened on any "```"-prefixed line,
+// which admits two shapes CommonMark would not treat as an opener: one
+// indented 4+ columns (or tab-indented, which reaches column 4 in one step),
+// and a backtick-fence opener carrying a backtick in its info string (the
+// text after the backtick run). Both spuriously entered the fenced state, so
+// a genuine Status row lower in the file was silently skipped and the file
+// read as not an issue at all — the dangerous direction, since a guard that
+// depends on issueStatus then stops scanning the file with no message. The
+// gate below reuses leadingIndentWidth and leadingRunLength, the same two
+// helpers docTableRowLines's own opener branch relies on (#0224), rather than
+// reimplementing the check or extracting docTableRowLines's fence-state
+// machine into a shared helper (#0454's review declined that trade; #0176 is
+// the standing precedent). A closing "```" line is intentionally left
+// ungated, matching the pre-existing (safe-direction) behavior of closing on
+// any such line regardless of its own indentation or trailing text.
 func issueStatus(fileText string) string {
 	inFence := false
 	for _, line := range strings.Split(fileText, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
-			inFence = !inFence
-			continue
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			if inFence {
+				inFence = false
+				continue
+			}
+			run := leadingRunLength(trimmed, '`')
+			if leadingIndentWidth(line) <= 3 && !strings.Contains(trimmed[run:], "`") {
+				inFence = true
+				continue
+			}
+			// Not a real opener by CommonMark's rules -- fall through and
+			// let this line be considered for the status-row match below,
+			// same as any other non-fence line.
 		}
 		if inFence {
 			continue
@@ -1118,4 +1145,100 @@ func TestIssueStatusIgnoresFencedExampleRow(t *testing.T) {
 	if got := issueStatus(docWithUnrelatedFence); got != "open" {
 		t.Errorf("issueStatus with an unrelated later fence = %q, want %q", got, "open")
 	}
+}
+
+// TestIssueStatusDoesNotOpenFenceOnNonOpenerLine pins #0455's fix: a
+// "```"-prefixed line above a real Status row must not enter the fenced
+// state unless it is actually a fence opener by CommonMark's rules. Before
+// this fix, either shape below spuriously opened a fence, so the real row
+// that follows was silently skipped and the document read as not an issue —
+// the dangerous direction #0454's review found and declined to close in the
+// same pass.
+func TestIssueStatusDoesNotOpenFenceOnNonOpenerLine(t *testing.T) {
+	t.Run("fence line indented 4+ columns", func(t *testing.T) {
+		doc := "# 9997 — A real issue\n\n" +
+			"Some paragraph.\n\n" +
+			"    ```\n" +
+			"| | |\n" +
+			"|---|---|\n" +
+			"| **Status** | open |\n"
+		if got := issueStatus(doc); got != "open" {
+			t.Errorf("issueStatus with a 4-space-indented fence line above the row = %q, want %q", got, "open")
+		}
+	})
+
+	t.Run("tab-indented fence line", func(t *testing.T) {
+		doc := "# 9997 — A real issue\n\n" +
+			"Some paragraph.\n\n" +
+			"\t```\n" +
+			"| | |\n" +
+			"|---|---|\n" +
+			"| **Status** | open |\n"
+		if got := issueStatus(doc); got != "open" {
+			t.Errorf("issueStatus with a tab-indented fence line above the row = %q, want %q", got, "open")
+		}
+	})
+
+	t.Run("backtick fence opener with a backtick in its info string", func(t *testing.T) {
+		doc := "# 9997 — A real issue\n\n" +
+			"``` foo`bar\n" +
+			"| | |\n" +
+			"|---|---|\n" +
+			"| **Status** | open |\n"
+		if got := issueStatus(doc); got != "open" {
+			t.Errorf("issueStatus with a backtick-in-info-string opener above the row = %q, want %q", got, "open")
+		}
+	})
+}
+
+// TestIssueStatusSafeDirectionDivergencesUnchanged pins #0455's criterion 3:
+// the four safe-direction divergences #0454's review measured against real
+// CommonMark are left alone, since a row wrongly read as real is loud (a
+// guard runs against prose that isn't an issue) rather than silent (a guard
+// silently stops running at all). Each case here still finds the row, the
+// same as before #0455.
+func TestIssueStatusSafeDirectionDivergencesUnchanged(t *testing.T) {
+	t.Run("row inside a tilde fence", func(t *testing.T) {
+		doc := "~~~\n" +
+			"| | |\n" +
+			"|---|---|\n" +
+			"| **Status** | open |\n" +
+			"~~~\n"
+		if got := issueStatus(doc); got != "open" {
+			t.Errorf("issueStatus on a tilde-fenced row = %q, want %q (unchanged divergence)", got, "open")
+		}
+	})
+
+	t.Run("row inside a 3-backtick fence nested in a 4-backtick fence", func(t *testing.T) {
+		doc := "````\n" +
+			"```\n" +
+			"| | |\n" +
+			"|---|---|\n" +
+			"| **Status** | open |\n" +
+			"```\n" +
+			"````\n"
+		if got := issueStatus(doc); got != "open" {
+			t.Errorf("issueStatus on a nested-fence row = %q, want %q (unchanged divergence)", got, "open")
+		}
+	})
+
+	t.Run("row after a closer carrying trailing text", func(t *testing.T) {
+		doc := "```\nfenced content\n``` nope\n" +
+			"| | |\n" +
+			"|---|---|\n" +
+			"| **Status** | open |\n"
+		if got := issueStatus(doc); got != "open" {
+			t.Errorf("issueStatus after a closer with trailing text = %q, want %q (unchanged divergence)", got, "open")
+		}
+	})
+
+	t.Run("inline triple backtick mid-prose above the row", func(t *testing.T) {
+		doc := "Some prose mentions ``` mid-sentence, not as a fence.\n\n" +
+			"| | |\n" +
+			"|---|---|\n" +
+			"| **Status** | open |\n"
+		if got := issueStatus(doc); got != "open" {
+			t.Errorf("issueStatus with inline triple backtick mid-prose = %q, want %q", got, "open")
+		}
+	})
 }
