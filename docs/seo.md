@@ -12,7 +12,7 @@ record of what production runs, and parts of what follows post-date it.
 (`#0422`) and no longer describes the pre-implementation plan — see `## PRD
 §7.4's correction` at the bottom for what changed. This file remains the
 fuller reference for implementation detail; §7.4 stays a short summary by
-design (PRD.md's own convention, §11).
+design (`CLAUDE.md` §11 is the index of those sections).
 
 ## Why this matters here specifically
 

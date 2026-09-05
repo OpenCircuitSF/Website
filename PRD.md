@@ -1426,10 +1426,10 @@ inside it, and rewrites its HTML response before serving:
 
 Also serve: `GET /sitemap.xml`, `GET /robots.txt`, per-workshop JSON-LD
 `Event` data, and (`#0273`) a generated per-workshop Open Graph card at
-`GET /workshops/{slug}/og.png` for a published workshop with no
-`cover_image`. `GET /favicon.svg` is a plain static asset served by
-`handlers.SPAHandler`, not by this subsystem — corrected 2026-09-04
-(`#0422`); see `docs/seo.md` for the full current account.
+`GET /workshops/{slug}/og.png` for a published workshop, used as its
+`og:image` when it has no `cover_image`. `GET /favicon.svg` is a plain
+static asset served by `handlers.SPAHandler`, not by this subsystem —
+corrected 2026-09-04 (`#0422`); see `docs/seo.md` for the full current account.
 
 ### 7.5 Accessibility
 

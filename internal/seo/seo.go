@@ -20,7 +20,9 @@
 //  2. On each request, match the path against a route table: a compiled-in
 //     table for the static marketing routes, the workshop store for
 //     /workshops/{slug} (nil until #0051/#0054 land -- falls back to the
-//     generic default), and a distinct default for unknown paths (404).
+//     generic default), the archive source for /archive/{slug} (nil until
+//     #0123 lands -- same fallback), and a distinct default for unknown
+//     paths (404).
 //  3. Substitute and serve. Every substituted meta-tag value is
 //     HTML-escaped; the JSON-LD token is not (see jsonld.go's doc comment
 //     on eventJSONLD for why that's still safe).
@@ -90,14 +92,15 @@ const defaultCacheTTL = 60 * time.Second
 // standing between the cache and unbounded growth.
 //
 // The realistic keyspace is tiny: the handful of static routes, one fallback
-// bucket, one not-found bucket, and one entry per distinct *published or
+// bucket, one not-found bucket, one entry per distinct *published or
 // canceled* workshop slug actually requested (bounded by real catalog size,
 // not by how many distinct paths an attacker can invent -- canceled joined
 // published at #0055, once a canceled workshop's cached rendering started
 // carrying its own per-workshop JSON-LD and could no longer safely share the
 // single fallback bucket with every other canceled/draft/unknown slug, see
-// resolve's doc comment). 512 is comfortable headroom above that and should
-// almost never be reached in practice.
+// resolve's doc comment), and one entry per distinct published archive slug
+// actually requested (#0123, same bound reasoning). 512 is comfortable
+// headroom above that and should almost never be reached in practice.
 //
 // Eviction policy: a write that would grow the cache past the bound flushes
 // the entire cache first, then inserts the new entry. A full flush rather
@@ -299,11 +302,14 @@ func defaultNotFoundMeta(baseURL string) RouteMeta {
 // bucket key its rendered bytes belong under, in priority order: (1) an
 // exact static-route entry, keyed by the path itself -- bounded to len(r.static)
 // entries, (2) a workshop-detail match resolved against the workshop source,
-// keyed by slug -- bounded by the number of distinct published-or-canceled
-// workshops actually requested, not by how many distinct paths a client can
-// invent, (3) the known-but-uncataloged fallback, which is byte-identical for
-// every route that reaches it and therefore shares ONE cache key regardless
-// of which such route was requested, or (4) the not-found default when
+// keyed by "workshop:" + slug -- bounded by the number of distinct
+// published-or-canceled workshops actually requested, not by how many
+// distinct paths a client can invent, (3) an archive-detail match resolved
+// against the archive source (#0123), keyed by "archive:" + slug -- same
+// bound, over distinct published archive entries actually requested, (4) the
+// known-but-uncataloged fallback, which is byte-identical for every route
+// that reaches it and therefore shares ONE cache key regardless of which
+// such route was requested, or (5) the not-found default when
 // handlers.IsKnownRoute rejects the path -- also byte-identical across every
 // unknown path, so it too shares one cache key. This is the fix for #0073:
 // caching by raw request path let an unauthenticated client grow the cache
