@@ -324,6 +324,14 @@
   let archiveURLCopyState = $state<ArchiveURLCopyState>('idle');
   let archiveURLCopyLabel = $derived(archiveURLCopyButtonLabel(archiveURLCopyState));
 
+  // #0444: copies `archiveURLValue` -- the same live-buffer-derived string
+  // the read-only field above it displays -- not a URL built from the last
+  // SAVED slug. Decided (not left unexamined): this is the right call. The
+  // input, the preview, and this button all read one source, so what the
+  // operator sees is exactly what lands on the clipboard; copying the saved
+  // value instead would let an unsaved edit make the preview and the
+  // clipboard disagree, which is the same anti-drift concern #0410's own
+  // criterion 1 was written to avoid for the preview.
   async function copyArchiveURL(): Promise<void> {
     try {
       await navigator.clipboard.writeText(archiveURLValue);
@@ -413,7 +421,7 @@
   // connection, is forever. (worker.go's failCampaign publishes a closing
   // snapshot itself, so the terminal-frame path covers that case too, not
   // only CompleteIfDone's.) Deliberately narrower than load(): it only
-  // replaces `campaign`, never the name/subject/preheader/bodyMd/mode/
+  // replaces `campaign`, never the name/subject/preheader/bodyMd/slug/mode/
   // interestIds editable buffer, so an operator's in-progress (unsaved) edit
   // is never clobbered by a background resync. Best-effort: a failure here
   // just means the next progress frame or the operator's own next action
@@ -486,15 +494,19 @@
     try {
       // #0410: an invalid (blank/whitespace) slug buffer is never sent to
       // the server -- validateSlugInput's own doc comment explains why this
-      // duplicates, rather than replaces, the server's identical check. The
-      // fallback to the campaign's own current slug makes this safe
-      // regardless of whether the field is even editable right now
-      // (slugEditable false means the buffer was never touched away from
-      // campaign.slug in the first place, so this is always a no-op change
-      // in that case) -- an unchanged slug is accepted by the server at any
-      // status (mailing.CampaignStore.Update's own doc comment).
-      const slugCheck = validateSlugInput(slug);
-      const slugToSend = slugCheck.ok ? slug.trim() : campaign.slug;
+      // duplicates, rather than replaces, the server's identical check.
+      // #0444: fall back to the campaign's own current slug outright when
+      // the field isn't editable right now, rather than trimming the buffer
+      // and relying on it having never diverged from campaign.slug in the
+      // first place. Same result today -- the buffer IS campaign.slug
+      // whenever slugEditable is false -- but it drops that reasoning step
+      // for the next reader, and stays correct even if a stored slug ever
+      // carried incidental whitespace (an unchanged slug is accepted by the
+      // server at any status regardless -- mailing.CampaignStore.Update's
+      // own doc comment).
+      const slugToSend = slugEditable
+        ? (validateSlugInput(slug).ok ? slug.trim() : campaign.slug)
+        : campaign.slug;
       const updated = await updateCampaign(campaignId, {
         name,
         subject,
