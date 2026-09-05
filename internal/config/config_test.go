@@ -315,3 +315,85 @@ func TestLoad_RemovedVariablesIgnored(t *testing.T) {
 	// updating this test.
 	_ = cfg
 }
+
+// TestLoad_EnvExampleValuesAreSystemdParseable proves the #0429 boot-failure
+// regression end to end, rather than reasoning about systemd's parser.
+// `.env.example` used to carry MAX_SEND_RATE and SEND_WORKER_ENABLED with a
+// trailing `# ...` comment on the SAME line as the value:
+//
+//	MAX_SEND_RATE=10          # messages/second, keep below the SES quota
+//	SEND_WORKER_ENABLED=true  # false on a second instance to avoid double-sending
+//
+// docs/deployment.md's install step copies that file verbatim to
+// /etc/opencircuit/config.env, and deploy/systemd/opencircuit.service loads
+// it with EnvironmentFile=. systemd treats `#` as a comment only when it
+// opens the line, so an unquoted value runs to end of line: the whole
+// trailing-comment string becomes the environment variable's value, and
+// getInt/getBool hand that straight to strconv.Atoi/ParseBool, which fail.
+//
+// The two `preFix*` constants below are the exact strings systemd would have
+// assigned to the process environment from those two lines — not a
+// paraphrase of the bug, but the literal value a real systemd EnvironmentFile
+// parse produces from unquoted KEY=VALUE text running to end of line. This
+// test sets the environment directly to that value (bypassing godotenv,
+// which strips inline comments and is why no local workflow reproduced this)
+// and proves loadFromFile rejects it, then proves the post-#0429 fixed value
+// (bare "10" / "true", with the comment relocated to its own preceding line
+// in .env.example) is accepted. See .env.example's "── Sending ──" section
+// for the current, fixed text.
+func TestLoad_EnvExampleValuesAreSystemdParseable(t *testing.T) {
+	const preFixMaxSendRate = "10          # messages/second, keep below the SES quota"
+	const preFixSendWorkerEnabled = "true  # false on a second instance to avoid double-sending"
+
+	t.Run("pre-fix MAX_SEND_RATE value is rejected", func(t *testing.T) {
+		setRequired(t)
+		t.Setenv("MAX_SEND_RATE", preFixMaxSendRate)
+
+		_, err := loadFromFile(noEnvFile)
+		if err == nil {
+			t.Fatal("expected loadFromFile to reject the pre-#0429 MAX_SEND_RATE value (systemd passes the trailing comment through as part of the value), got nil error")
+		}
+		if !strings.Contains(err.Error(), "MAX_SEND_RATE") {
+			t.Errorf("error = %q, want substring %q", err.Error(), "MAX_SEND_RATE")
+		}
+	})
+
+	t.Run("post-fix MAX_SEND_RATE value is accepted", func(t *testing.T) {
+		setRequired(t)
+		t.Setenv("MAX_SEND_RATE", "10")
+
+		cfg, err := loadFromFile(noEnvFile)
+		if err != nil {
+			t.Fatalf("loadFromFile returned error for the post-#0429 MAX_SEND_RATE value: %v", err)
+		}
+		if cfg.MaxSendRate != 10 {
+			t.Errorf("MaxSendRate = %d, want 10", cfg.MaxSendRate)
+		}
+	})
+
+	t.Run("pre-fix SEND_WORKER_ENABLED value is rejected", func(t *testing.T) {
+		setRequired(t)
+		t.Setenv("SEND_WORKER_ENABLED", preFixSendWorkerEnabled)
+
+		_, err := loadFromFile(noEnvFile)
+		if err == nil {
+			t.Fatal("expected loadFromFile to reject the pre-#0429 SEND_WORKER_ENABLED value, got nil error")
+		}
+		if !strings.Contains(err.Error(), "SEND_WORKER_ENABLED") {
+			t.Errorf("error = %q, want substring %q", err.Error(), "SEND_WORKER_ENABLED")
+		}
+	})
+
+	t.Run("post-fix SEND_WORKER_ENABLED value is accepted", func(t *testing.T) {
+		setRequired(t)
+		t.Setenv("SEND_WORKER_ENABLED", "true")
+
+		cfg, err := loadFromFile(noEnvFile)
+		if err != nil {
+			t.Fatalf("loadFromFile returned error for the post-#0429 SEND_WORKER_ENABLED value: %v", err)
+		}
+		if cfg.SendWorkerEnabled != true {
+			t.Errorf("SendWorkerEnabled = %v, want true", cfg.SendWorkerEnabled)
+		}
+	})
+}
