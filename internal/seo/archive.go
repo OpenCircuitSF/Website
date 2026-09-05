@@ -18,7 +18,7 @@ type ArchiveEntry struct {
 // (#0019) and sitemap generator (#0020), mirroring WorkshopSource's own
 // "may be nil, callers degrade gracefully" contract — see that type's doc
 // comment for the full reasoning, restated here for the archive case:
-// #0123's real store is expected to be wired in from the start (unlike
+// #0123's real store was wired in from the start (unlike
 // WorkshopSource's staged #0051/#0054 rollout), but keeping this an
 // interface with the same nil-tolerant shape costs nothing and keeps
 // internal/seo's two data sources structurally consistent.
