@@ -547,6 +547,19 @@ func TestEnvExampleValueShapeFloorFailsClosedOnEmptyExtraction(t *testing.T) {
 // regression pin). Each case injects exactly one bad line into an otherwise
 // clean block of minScannedEnvExampleAssignments assignment lines and
 // asserts the scan names the right line and mentions both parsers.
+//
+// #0458: the three cases below named "dollar expansion — ..." are not a
+// fifth, sixth, or seventh shape. They are regression pins for the three
+// widenings envDollarExpansion's own doc comment already documents
+// (#0450's digit-leading name class, #0453's $(...) admission, and #0457's
+// backslash-before-dollar alternative) — each is a fact envDollarExpansion
+// alone already established, not a new fact this file is asserting. Each
+// badLine below is chosen so that reverting exactly one widening (and no
+// other) changes this test's own result for that one case: #0453's
+// reviewer measured that, before this issue, reverting any of the three
+// left the whole package green. Confirmed in a throwaway worktree per
+// this issue's own criterion 3 (see issues/0458.md's ## Work log for the
+// three revert transcripts) rather than assumed from reading the pattern.
 func TestScanEnvExampleValueShapes_DetectsEachDivergentShape(t *testing.T) {
 	// cleanLines is a minimal, entirely well-shaped block big enough to clear
 	// minScannedEnvExampleAssignments on its own, so each case below only has
@@ -581,6 +594,39 @@ func TestScanEnvExampleValueShapes_DetectsEachDivergentShape(t *testing.T) {
 			name:       "trailing backslash continuation",
 			badLine:    `BASE_URL=https://www.opencircuitsf.com\`,
 			wantSubstr: []string{"BASE_URL", "systemd", "godotenv", "continuation"},
+		},
+		{
+			// #0450's widening: a digit-leading variable name. Pinned with
+			// $5 rather than $ABC because $5 is the exact shape #0450 added
+			// coverage for — godotenv's expandVarRegex uses [A-Z0-9_]+,
+			// digits permitted to lead, while the pre-#0450 class required
+			// a leading letter or underscore and missed it.
+			name:       "dollar expansion - digit-leading name (#0450)",
+			badLine:    "PRICE=cost$5",
+			wantSubstr: []string{"PRICE", "systemd", "godotenv", "expand"},
+		},
+		{
+			// #0453's widening: the $(...) shape, which godotenv v1.5.1
+			// misparses as a variable named FOO due to a group-numbering
+			// bug in its own expandVariables (see envDollarExpansion's doc
+			// comment). Pinned with the literal "$(...)" substring, which
+			// only this case's dedicated message contains — the plain
+			// $VAR/${VAR} message never mentions parens.
+			name:       "dollar expansion - $(...) form (#0453)",
+			badLine:    "PRICE=cost$(FOO)",
+			wantSubstr: []string{"PRICE", "systemd", "godotenv", "$(...)"},
+		},
+		{
+			// #0457's widening: a backslash immediately before a "$", with
+			// no variable name required to follow it. Pinned with the bare
+			// "cost\$" form specifically (rather than "cost\$FOO") because
+			// it has no name after the dollar sign at all — the one case
+			// the plain $VAR/${VAR} alternative can never match on its own,
+			// so reverting #0457 drops this case straight to zero
+			// violations rather than merely changing which message fires.
+			name:       "dollar expansion - backslash before dollar (#0457)",
+			badLine:    `PRICE=cost\$`,
+			wantSubstr: []string{"PRICE", "systemd", "godotenv", "backslash"},
 		},
 	}
 
