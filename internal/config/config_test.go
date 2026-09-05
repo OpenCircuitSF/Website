@@ -341,6 +341,26 @@ func TestLoad_RemovedVariablesIgnored(t *testing.T) {
 // (bare "10" / "true", with the comment relocated to its own preceding line
 // in .env.example) is accepted. See .env.example's "── Sending ──" section
 // for the current, fixed text.
+//
+// #0441 widened this test's SCOPE (in its doc comment, not its assertions)
+// rather than replacing it or duplicating it. It stays narrow on purpose:
+// this is a behavioral proof that config.go's own getInt/getBool genuinely
+// REJECT the literal value systemd's EnvironmentFile= would produce from the
+// two specific pre-#0429 lines, exercised via t.Setenv — it says nothing
+// about what .env.example's text currently contains, and it cannot be
+// generalized to the other three shapes in #0441's table ($VAR expansion,
+// "export " prefix, trailing backslash continuation): none of those corrupt
+// a numeric or boolean field the way a trailing comment does, so there is no
+// getInt/getBool rejection to observe for them — they change which KEY gets
+// which VALUE, a parser-level fact this test's mechanism (setting one
+// already-resolved environment variable and loading it) cannot see at all.
+// The general, all-four-shapes, every-line check that #0441 asked for lives
+// in internal/config/env_example_guard_test.go's
+// TestEnvExampleValuesAvoidDivergentParserShapes, which scans .env.example's
+// actual text instead of simulating one parser's output for two hardcoded
+// lines. The two are not duplicates — see that test's own doc comment for
+// why CLAUDE.md §8's "the two homes are not exclusive" applies here — and
+// this one keeps its original two subtests unchanged.
 func TestLoad_EnvExampleValuesAreSystemdParseable(t *testing.T) {
 	const preFixMaxSendRate = "10          # messages/second, keep below the SES quota"
 	const preFixSendWorkerEnabled = "true  # false on a second instance to avoid double-sending"
