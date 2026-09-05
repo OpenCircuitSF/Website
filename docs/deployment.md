@@ -1144,9 +1144,14 @@ here, should treat that wildcard as load-bearing (checked 2026-09-05,
 this table's existing rows against the live zone for false statements; this
 pass is the reverse, checking the live zone for records the table omits
 entirely. `aws route53 list-resource-record-sets` for this hosted zone
-returns 16 record sets. Of those, one was a genuine omission and is now the
-`mailing.opencircuitsf.com` SPF row added above. The rest are deliberately
-left out of this table, not missed:
+returns 15 record sets, matching the `ResourceRecordSetCount` that
+`aws route53 list-hosted-zones` reports for it. Of those, one was a genuine
+omission and is now the `mailing.opencircuitsf.com` SPF row added above.
+Six were already documented rows and needed no change: the apex `A`, the
+`*.opencircuitsf.com` wildcard `CNAME`, `www.opencircuitsf.com`'s `CNAME`,
+`_dmarc.mailing.opencircuitsf.com`'s `TXT`, and
+`bounce.mailing.opencircuitsf.com`'s `MX` and `TXT`. The remaining eight
+are deliberately left out of this table, not missed:
 
 - The zone's `NS` and `SOA` records at the apex are hosted-zone
   infrastructure that Route 53 creates automatically, not application DNS
@@ -1962,8 +1967,8 @@ anything that is not a fresh scratch database:
 - **No S3.** `#0229` recorded this as a deliberate deferral, not an
   oversight — nothing here talks to AWS. There is no bucket, no lifecycle
   policy, no bucket-level encryption or public-access block, and no IAM
-  policy scoped to a bucket prefix. ~~because none of those AWS resources
-  exist yet (`CLAUDE.md` §10 item 2).~~ **Correction (`#0430`, 2026-09-05):**
+  policy scoped to a bucket prefix~~, because none of those AWS resources
+  exist yet (`CLAUDE.md` §10 item 2)~~. **Correction (`#0430`, 2026-09-05):**
   the AWS account now exists (`378152330719`) and SES is live in it, so that
   precondition has lapsed — these resources simply have not been built, and
   no decision to build them is recorded. `PRD.md` §10.6 still records an S3
