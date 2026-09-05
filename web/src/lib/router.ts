@@ -57,8 +57,15 @@ export interface Route {
 }
 
 /** Static path -> route name. Mirrors PRD §5.1's public routes table plus the
- * Phase 1 auth routes carried over from the old currentView store. */
-const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
+ * Phase 1 auth routes carried over from the old currentView store. Exported
+ * so router.test.ts can assert its `parsePath` fixture covers this table
+ * exactly, rather than restating it by hand (#0440) -- the ninth account of
+ * this same route set to drift, following #0425's seven and #0437's four.
+ * Also read as source text (not imported) by
+ * internal/handlers/routes_parity_test.go's `staticRoutesBlockRe`, which
+ * matches on the substring "const STATIC_ROUTES:" and is unaffected by the
+ * `export` keyword preceding it. */
+export const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
   '/': 'home',
   '/workshops': 'workshops',
   '/archive': 'archive',
