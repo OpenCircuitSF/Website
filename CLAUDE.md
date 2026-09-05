@@ -312,7 +312,7 @@ edit inside one of those roots must add that package to the scoped run:
 
 | Package | Reaches into |
 |---|---|
-| `internal/handlers` | **the whole repo tree** — `TestNoCommentCitesUnresolvedPathOrSection` walks the repo root for the set of citable paths and reads `CLAUDE.md`'s own `##` section headings; the rest of the citation-guard family, `TestNoDocCommentNamesADifferentDeclarationInSameFile`, and the audit-metadata guard scan `internal/`, `cmd/`, `web/`; plus `migrations/`, `testdata/url_validators.json`, and three `web/src/lib/*.ts` parity fixtures |
+| `internal/handlers` | **the whole repo tree** — `TestNoCommentCitesUnresolvedPathOrSection` walks the repo root for the set of citable paths and reads `CLAUDE.md`'s own `##` section headings; the rest of the citation-guard family, `TestNoDocCommentNamesADifferentDeclarationInSameFile`, and the audit-metadata guard scan `internal/`, `cmd/`, `web/`; plus `migrations/` (`settings_test.go`'s existing seed-value check, and, since `#0459`, `TestMigrationCitationIdentifierMatchesContent` reading every migration file's own SQL text to verify a comment's cited constraint or column identifier actually appears in the migration it names), `testdata/url_validators.json`, and three `web/src/lib/*.ts` parity fixtures |
 | `internal/db` | the repo root — `issues/`, `PRD.md`, `CLAUDE.md`, `migrations/`, `docs/database.md` |
 | `internal/outbox` | `internal/` and `cmd/` (both the claim-kinds and claim-comment guards) |
 | `internal/subscribers` | all of `internal/` |
