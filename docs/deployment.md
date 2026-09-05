@@ -532,13 +532,14 @@ greenfield exception is over: `CLAUDE.md` §1 now treats
 `migrations/000001`–`000022` as append-only, without qualification, and any
 new schema change is a new migration file above `000022`.
 
-**Corrected `#0431`, 2026-09-04 — this note contradicted the correction two
-paragraphs above it.** This exact `migrate ... up` invocation *has* been run
+**Corrected `#0431`, 2026-09-04 — this note contradicted the correction just
+above it.** This exact `migrate ... up` invocation *has* been run
 against a real box: the `#0293` correction just above records that it ran
 against production's PostgreSQL on 2026-08-25, leaving
 `schema_migrations.version = 22`. Production is PostgreSQL **15.18**, not the
-AL2023 PostgreSQL 16 the paragraph below assumed — consistent with the
-Prerequisites section's own correction of that same assumption.
+AL2023 PostgreSQL 16 assumed by the pre-deploy note this correction
+replaces — consistent with the Prerequisites section's own correction of
+that same assumption.
 
 **Original note, left for context — accurate only for the drills it actually
 describes:** `#0062`'s and `#0228`'s restore drills ran this exact `migrate
@@ -934,9 +935,14 @@ an account that exists but has no passkey yet (mirrors ShortLinks
    is a first-class concern here, `CLAUDE.md` §9).
 3. **Email delivery must be working** — SES configured, `MAILER_NOOP=false`
    in `/etc/opencircuit/config.env` — before this step succeeds. See **SES
-   setup** below; until SES exists, `MAILER_NOOP=true` logs the recovery
-   link to stdout instead (`docs/configuration.md`), which is a
-   `dev.sh`/local-only substitute, never a production setting.
+   setup** below; SES exists but the account is still sandboxed, so a
+   recovery mail only reaches an address that is itself a verified SES
+   identity until production access lands (`CLAUDE.md` §10 item 2).
+   `MAILER_NOOP=true` logs the recovery link to stdout instead
+   (`docs/configuration.md`), which is a `dev.sh`/local-only substitute,
+   never a production setting — `cmd/opencircuit/main.go`'s
+   `checkMailerNoOp` refuses to start it outright on a production
+   `BASE_URL` (`CLAUDE.md` §10).
 4. Follow the magic link from the recovery email. The browser opens the
    recovery ceremony page and calls `navigator.credentials.create()` —
    WebAuthn requires HTTPS, so TLS (step 9) must already be live.
@@ -961,6 +967,13 @@ later corrections claims that anyone has. Locally, `#0008`'s manual
 verification procedure exercises the equivalent flow with `MAILER_NOOP=true`
 logging the link to stdout, which remains the closest thing to a proof this
 specific step has — that much of the original note still stands.
+
+**Original note, left for context — accurate only for the pre-deploy
+state:** Not run against a real deploy — no SES account exists to send the
+recovery email through yet (`CLAUDE.md` §10 item 2), and no live instance
+exists to receive the HTTPS request. Locally, `#0008`'s manual verification
+procedure exercises the equivalent flow with `MAILER_NOOP=true` logging the
+link to stdout — that is the closest thing to a proof this step has.
 
 ---
 
