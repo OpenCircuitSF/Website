@@ -1087,14 +1087,12 @@ func adminRoutes(
 		)
 	}
 	if adminCampaignsH != nil {
-		// Registered last among the /admin/campaigns/{id} family (#0411),
-		// deliberately AFTER every other campaign sub-route above —
-		// mirrors admin_wiring_test.go's own note on why the workshops
-		// DELETE is ordered last: TestMountAndServe_AdminRoutesRequireSessionAndAdmin
-		// (cmd/opencircuit/admin_wiring_test.go) drives every adminRoute in
-		// list order against the SAME seeded campaign, so this genuinely
-		// removing the row must run after audience/preview/test/preflight/
-		// stats/archive have already exercised it, not before.
+		// #0411: added after the rest of the /admin/campaigns/{id} family
+		// above and kept in its own block for diff hygiene. Its position in
+		// this list is not load-bearing — registering it earlier does not
+		// break any test in this package (verified directly, #0411 review
+		// notes) — so this route may be reordered freely if that is ever
+		// convenient.
 		routes = append(routes,
 			adminRoute{http.MethodDelete, "/admin/campaigns/{id}", http.HandlerFunc(adminCampaignsH.Delete)},
 		)

@@ -904,15 +904,24 @@ func (s *CampaignStore) Resume(ctx context.Context, id int64, scheduledAt time.T
 //     a campaign that has already left 'draft' at least once, so the same
 //     promotion-may-exist reasoning applies as 'scheduled'.
 //
-// Hard delete, not soft. Two tables carry a foreign key into
-// email_campaigns(id) — campaign_interests and email_sends (migration
-// 000017) — and BOTH already declare ON DELETE CASCADE, so no orphaned row
-// can survive this DELETE; TestCampaignStore_Delete_CascadesReferencingRows
-// proves this against rows this method's own caller cannot otherwise
+// Hard delete, not soft. Three tables carry a foreign key into
+// email_campaigns(id): campaign_interests (migration 000017, ON DELETE
+// CASCADE), email_sends (migration 000017, ON DELETE CASCADE), and
+// subscriber_events (migration 000022, ON DELETE SET NULL — nulled, not
+// cascaded, because it is the append-only activity log PRD §6.11
+// describes). subscriber_events.campaign_id's only writer is the send
+// worker's campaign-sent event, which fires only during a real send, so a
+// still-draft campaign — the only status this method accepts — can never
+// own such a row today; that is why this DELETE can neither fail nor
+// orphan against it, even though SET NULL differs in kind from the other
+// two tables' CASCADE. TestCampaignStore_Delete_CascadesReferencingRows
+// proves all three against rows this method's own caller cannot otherwise
 // produce for a still-draft campaign (email_sends is only ever materialized
-// once a send starts — #0044 — which a draft has never done). email_events
+// once a send starts — #0044 — which a draft has never done): the
+// campaign_interests and email_sends rows are gone, and a seeded
+// subscriber_events row still exists with campaign_id nulled. email_events
 // carries no campaign_id column at all (it is keyed by recipient/
-// ses_message_id, PRD §6.7), so it has nothing to cascade. A soft-delete
+// ses_message_id, PRD §6.7), so it has nothing to cascade or null. A soft-delete
 // flag was considered and rejected: the row's continued existence is
 // exactly what would keep occupying the UNIQUE(slug) constraint (migration
 // 000025), which is the entire problem this issue exists to solve — a

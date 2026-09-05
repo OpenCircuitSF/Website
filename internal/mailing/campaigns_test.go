@@ -644,6 +644,14 @@ func TestCampaignStore_Delete_FreesSlugForReuse(t *testing.T) {
 // happens once a send starts — #0044), so this test creates one directly by
 // SQL — CLAUDE.md §8b: the referencing row is seeded, never a literal id,
 // and it is this test's own throwaway campaign, not a shared fixture.
+//
+// A third table, subscriber_events (migration 000022), also references
+// email_campaigns(id) but behaves differently in kind: ON DELETE SET NULL,
+// not CASCADE, because it is an append-only activity log (PRD §6.11) whose
+// rows must survive the campaign that produced them. This test also seeds
+// one such row directly by SQL — with the real 'campaign_sent' action, the
+// column's only writer — and asserts it still exists after Delete with
+// campaign_id nulled rather than the row being removed.
 func TestCampaignStore_Delete_CascadesReferencingRows(t *testing.T) {
 	pool := testPool(t)
 	store := NewCampaignStore(pool)
@@ -668,6 +676,13 @@ func TestCampaignStore_Delete_CascadesReferencingRows(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed email_sends: %v", err)
 	}
+	var eventID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO subscriber_events (campaign_id, email, action) VALUES ($1, $2, 'campaign_sent') RETURNING id`,
+		c.ID, fmt.Sprintf("zz-mailing-test-%d@example.com", testdb.Unique()),
+	).Scan(&eventID); err != nil {
+		t.Fatalf("seed subscriber_events: %v", err)
+	}
 
 	if err := store.Delete(ctx, c.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -685,6 +700,14 @@ func TestCampaignStore_Delete_CascadesReferencingRows(t *testing.T) {
 	}
 	if sendCount != 0 {
 		t.Errorf("email_sends rows remaining = %d, want 0 (should cascade)", sendCount)
+	}
+
+	var gotCampaignID *int64
+	if err := pool.QueryRow(ctx, `SELECT campaign_id FROM subscriber_events WHERE id = $1`, eventID).Scan(&gotCampaignID); err != nil {
+		t.Fatalf("select subscriber_events row: %v (row should still exist, only campaign_id nulled)", err)
+	}
+	if gotCampaignID != nil {
+		t.Errorf("subscriber_events.campaign_id = %v, want NULL (should be set null, not cascaded)", *gotCampaignID)
 	}
 }
 
