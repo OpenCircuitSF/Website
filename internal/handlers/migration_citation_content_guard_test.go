@@ -101,6 +101,13 @@ import (
 //     TestNoCommentCitesUnresolvedPathOrSection's own path-existence check
 //     restated with extra steps and would defeat the whole point of #0456
 //     (the wrong number was itself a real, existing migration).
+//   - Candidates are collected only from text PRECEDING a citation — the
+//     idiomatic "migrations/000023's `source` column" ordering, identifier
+//     after the citation, is not checked. A naive forward window was tried
+//     during this guard's dry run and produced 5 false positives
+//     (internal/db/prd_index_parity_test.go, internal/mailing/worker_store.go,
+//     internal/subscribers/erase.go, and twice this guard's own doc
+//     comments), so backward-only is deliberate, not an oversight.
 //
 // Same technique as #0196/#0220/#0265/#0267 throughout (go/ast comment
 // walk, a regexp naming the candidate shape, exclusion rules earned by a
@@ -183,17 +190,6 @@ func migrationCitationCandidateIsNegated(text string, start int) bool {
 	return false
 }
 
-// migrationCitationTruncatedSuffixPattern recognizes a recognized file
-// extension immediately following a matched token — the real instance is
-// "TestConsentBasisValuesAreClassified (imports_test.go) reads
-// migrations/000023's ...", where a naive scan would extract "imports_test"
-// as a candidate identifier from the filename "imports_test.go". A
-// filename fragment is not a constraint or column identifier, and
-// migrations/000023 genuinely does not contain the literal text
-// "imports_test" — checking it would be a false positive on a citation
-// that is correct.
-var migrationCitationTruncatedSuffixPattern = regexp.MustCompile(`^\.(?:go|sql|ts|tsx|svelte|md)\b`)
-
 // migrationCitationAcronymBoundary and migrationCitationCaseBoundary
 // together convert a Go PascalCase identifier to snake_case, acronym-aware
 // (so "ImportID" becomes "import_id", not "import_i_d"). Verified directly
@@ -240,26 +236,12 @@ type migrationCitationSnakeCandidate struct {
 }
 
 // collectMigrationCitationSnakeCandidates finds every
-// migrationCitationSnakeTokenPattern match in text, excluding a token
-// immediately followed by "_" (a truncated wildcard prefix — the real
-// instance is "the three send_health_* settings", where the pattern alone
-// would extract "send_health" and a literal-substring check would then
-// wrongly pass against ANY migration containing "send_health_min_sample",
-// since "send_health" is a prefix of that identifier, not the whole word a
-// \b-bounded check requires it to be — excluding the truncated form here
-// is what keeps that non-instance out of the candidate set in the first
-// place) or by a recognized file extension (a filename fragment, not an
-// identifier).
+// migrationCitationSnakeTokenPattern match in text, excluding a negated
+// candidate (see migrationCitationCandidateIsNegated).
 func collectMigrationCitationSnakeCandidates(text string) []migrationCitationSnakeCandidate {
 	var out []migrationCitationSnakeCandidate
 	for _, m := range migrationCitationSnakeTokenPattern.FindAllStringIndex(text, -1) {
 		start, end := m[0], m[1]
-		if end < len(text) && text[end] == '_' {
-			continue
-		}
-		if migrationCitationTruncatedSuffixPattern.MatchString(text[end:]) {
-			continue
-		}
 		if migrationCitationCandidateIsNegated(text, start) {
 			continue
 		}
@@ -860,11 +842,15 @@ func TestMigrationContentHasIdentifierRejectsSubstringMatch(t *testing.T) {
 // — and confirms this guard fires on both. A guard that cannot catch the
 // case that motivated it would be decoration.
 func TestMigrationCitationGuardCatchesBothRealHistoricalCases(t *testing.T) {
-	// Reconstructed verbatim from `git show a8e0986^:internal/subscribers/store.go`
+	// Reconstructed — abridged — from `git show a8e0986^:internal/subscribers/store.go`
 	// (read directly, not from #0456's own report), trimmed to the two
 	// doc comments and just enough surrounding declaration syntax for
 	// each to parse and, in the second case, for the comment to attach
-	// as the Source field's own Doc.
+	// as the Source field's own Doc. The field comment's third line is a
+	// paraphrase of the real text rather than a trim of it — inert here
+	// (candidates are only taken from text preceding a citation, per this
+	// file's "Deliberately NOT covered" list above), but "abridged" says
+	// so rather than overclaiming exactness.
 	src := "package fixture\n\n" +
 		"// Provenance values (#0125, PRD §6.10), matching the subscribers_source_check\n" +
 		"// and subscribers_consent_basis_check CHECK constraints (migrations/000010).\n" +
