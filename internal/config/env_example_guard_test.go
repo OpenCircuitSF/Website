@@ -48,25 +48,45 @@ var envVarNameLiteral = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 // this test still exiting 0. Reproduced in a throwaway worktree per the
 // issue's acceptance criterion 1; see its `## Verification`.
 //
-// The fix is not a floor on len(names): a floor is a number that can itself
-// drift out of sync with config.go and only ever tells you extraction
-// shrank, not why. Instead, matching moved off the callee identifier
-// entirely and onto the ARGUMENT's shape — any call, regardless of what it
-// is named, whose first argument is a string literal that looks like an
-// environment variable name. `env("EMAIL_FROM")`, `os.Getenv("EMAIL_FROM")`,
-// and `someFutureHelper("EMAIL_FROM")` all extract identically, because none
-// of them can rename away the one thing that has to stay a literal for
-// loadFromFile to compile: the name being read. This does not require a
-// second mechanism (CLAUDE.md §8's #0258 warning) — it is the same single
-// AST walk with its match condition changed, and it makes the measured
-// fail-open unrepresentable rather than merely detecting it after the fact
-// (CLAUDE.md's "prefer making the bad state unrepresentable" guidance, per
-// #0400). It does not cover every conceivable refactor — a table-driven
-// rewrite that assembles names outside any call argument (e.g. as elements
-// of a slice literal) would still evade both the old extraction and this
-// one — but that is a materially different, more invasive rewrite than the
-// one #0423's review actually produced, and the original guard never covered
-// it either, so this is not a regression in what is checked.
+// Matching moved off the callee identifier entirely and onto the ARGUMENT's
+// shape — any call, regardless of what it is named, whose first argument is
+// a string literal that looks like an environment variable name.
+// `env("EMAIL_FROM")`, `os.Getenv("EMAIL_FROM")`, and
+// `someFutureHelper("EMAIL_FROM")` all extract identically. This closes the
+// wrapper-rename case above without a second mechanism (CLAUDE.md §8's
+// #0258 warning) — it is the same single AST walk with its match condition
+// changed.
+//
+// It does NOT make the fail-open unrepresentable, and an earlier version of
+// this comment claimed it did; #0428's review measured that claim false. A
+// named constant compiles and stops being a literal call argument: hoisting
+// five of the deleted-in-review variable names into a const block (config.go
+// already has one, for its numeric defaults) and reading
+// os.Getenv(envEmailFrom) drops the extraction from 20 names to 15, compiles,
+// is gofmt/vet-clean, and leaves EMAIL_FROM, SESSION_SECRET, STORAGE,
+// SES_EVENTS_TOPIC_ARN, and ADMIN_EMAIL free to vanish from .env.example
+// undetected. A second shape — assembling a subset of names as elements of a
+// []string{...} literal and reading them in a loop — drops the extraction
+// 20 -> 18 the same way, with no missing variable required at all. Both
+// compile and are gofmt/vet-clean; neither is the "materially different,
+// more invasive rewrite" an earlier version of this comment used to wave off
+// the slice-literal shape.
+//
+// What actually closes both, and any other shape that shrinks the
+// extraction rather than just these two, is minLoaderVariables below: a
+// floor on len(names), scored by go test's exit code, that fails whenever
+// the walk sees fewer literal-shaped calls than config.go is known to make
+// today. A floor was originally rejected in favor of the argument-shape
+// predicate alone, on the reasoning that a floor is "one more constant that
+// can drift" and only ever detects a shrink after the fact. That reasoning
+// was not wrong about the floor; it was incomplete about the predicate,
+// which narrows the set of evading shapes rather than eliminating it. The
+// floor and the predicate are not redundant: the predicate is what makes a
+// same-argument rename (the wrapper) extract identically to the original;
+// the floor is what catches every OTHER way of shrinking got — including the
+// const-hoist and slice-literal shapes above, and any shape neither this
+// comment nor #0428's review anticipated — because it observes the count
+// directly instead of trying to enumerate syntax.
 //
 // This only proves loader ⊆ .env.example (every variable the loader reads
 // appears as a `NAME=` line somewhere in the file) — it says nothing about
@@ -104,12 +124,25 @@ func TestEnvExampleCoversLoaderVariables(t *testing.T) {
 		return true
 	})
 
-	// An empty extraction means the AST walk or the envVarNameLiteral match
-	// broke, not that config.go reads nothing — assert this before trusting
-	// the result, per CLAUDE.md §8's "assert the extraction produced
-	// something before hashing/using it" rule.
-	if len(names) == 0 {
-		t.Fatal("extracted zero environment variable names from config.go — the AST walk or the envVarNameLiteral match is broken, not evidence config.go reads nothing")
+	// minLoaderVariables replaces the old "extraction produced literally
+	// nothing" check with a real threshold, added by #0428's review after the
+	// argument-shape predicate above was shown to still evade under a
+	// const-identifier hoist (20 -> 15) and a slice-literal loop (20 -> 18) —
+	// see the doc comment. config.go reads exactly 20 variables today,
+	// verified in #0428's review by enumerating every CallExpr in the file
+	// whose first argument is a string literal (the 20 counted here, plus two
+	// Errorf formats, three Sprintf formats, and loadFromFile(".env"...),
+	// none of which match envVarNameLiteral). Falling below the floor means
+	// the walk stopped seeing reads it used to see, not that config.go reads
+	// fewer variables — assert this before trusting the result, per
+	// CLAUDE.md §8's "assert the extraction produced something before
+	// hashing/using it" rule. Lower this constant only when a variable is
+	// genuinely and deliberately removed from config.go — a loud, reviewed
+	// edit — never to make a shrink go quiet.
+	const minLoaderVariables = 20
+
+	if len(names) < minLoaderVariables {
+		t.Fatalf("extracted %d environment variable name(s) from config.go, below the floor of %d — the AST walk or the envVarNameLiteral match stopped seeing reads it used to see, which is not evidence config.go reads fewer variables", len(names), minLoaderVariables)
 	}
 
 	envExample, err := os.ReadFile("../../.env.example")
