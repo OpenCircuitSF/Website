@@ -36,19 +36,33 @@ func newTestRenderer(source WorkshopSource) *Renderer {
 
 // --- Route matching -------------------------------------------------------
 
-// TestRender_StaticRoutesGetDistinctTitles is #0019's headline acceptance
-// criterion: the compiled-in route table supplies metadata for /, /about,
-// /workshops, /subscribe, (#0070) /privacy, and (#0123) /archive, and all six
-// must be genuinely different from each other -- a bug that served the same
-// title for every route would still pass a test that only checked "some
-// title is present".
-func TestRender_StaticRoutesGetDistinctTitles(t *testing.T) {
+// TestRender_StaticRoutesGetDistinctNonEmptyTitles is #0019's headline
+// acceptance criterion: the compiled-in route table supplies metadata for /,
+// /about, /workshops, /subscribe, (#0070) /privacy, and (#0123) /archive, and
+// all six must be genuinely different from each other -- a bug that served
+// the same title for every route would still pass a test that only checked
+// "some title is present". Renamed from TestRender_StaticRoutesGetDistinctTitles
+// by #0442, whose reviewer measured that the old name promised less than the
+// test delivered: distinctness alone does not catch an *empty* title (one
+// empty string is still distinct from five non-empty ones), nor a title that
+// silently inherits the shared fallback bucket's title instead of getting its
+// own -- both are the same class of defect as a missing route entry, and
+// neither was asserted anywhere before #0442. The two added assertions below
+// close that gap; the name now says what the test actually checks.
+func TestRender_StaticRoutesGetDistinctNonEmptyTitles(t *testing.T) {
 	r := newTestRenderer(nil)
 	paths := []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/archive"}
 	titles := make(map[string]bool)
 	for _, p := range paths {
 		body := string(r.Render(p))
 		title := extractTag(t, body, "title")
+
+		if title == "" {
+			t.Errorf("path %q produced an empty title", p)
+		}
+		if title == r.fallback.Title {
+			t.Errorf("path %q produced the shared fallback's title (%q) instead of its own -- a static route silently inheriting the fallback bucket is the same class of defect as a missing route entry", p, title)
+		}
 		if titles[title] {
 			t.Errorf("path %q produced a title already used by another route: %q", p, title)
 		}
