@@ -9,10 +9,13 @@ current site and won't be taken again. Left as originally written rather than
 region-fixed — same reasoning `#0421` applied to `docs/deployment.md`'s
 "SES setup" section and `HANDOFF.md` §3.1: rewriting a plan that was never
 followed as written would misrepresent what was planned, and this note is
-what marks it superseded instead of live. Everything above "Deploying
-today" — the file inventory, the `file://` gotcha, the token/motif
-provenance — still describes this directory's actual contents and stays
-accurate.
+what marks it superseded instead of live. Everything above
+"Deploying today" — the file inventory and the `file://` gotcha — still
+describes this directory's actual contents. "Before it goes live" is a
+pre-deploy checklist and is historical for the same reason the runbook is.
+"Relationship to the real site", below the runbook, is still current: the
+token block, theme toggle, and terminal motifs really are the porting
+source `#0011` and `#0013` drew on (`CLAUDE.md` §6).
 
 A single self-contained page for `opencircuitsf.com` to point social links at
 while the real Svelte + Go site is built. No build step, no dependencies, no

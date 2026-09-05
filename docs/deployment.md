@@ -1049,6 +1049,7 @@ link to stdout — that is the closest thing to a proof this step has.
 |---|---|---|---|
 | `www.opencircuitsf.com` | CNAME | `ec2.smallsharptools.com` (same box) | **Canonical host** — a CNAME in practice, not the A record this table stated until corrected 2026-09-05, `#0448` (same target as `go.opencircuitsf.com` below) |
 | `opencircuitsf.com` | A | `44.222.209.183` | 301 → `www` |
+| `*.opencircuitsf.com` | CNAME | `ec2.smallsharptools.com` (same box) | Wildcard — why `go.`, `_dmarc.`, and `lists.` resolve without records of their own (added 2026-09-05, `#0448`) |
 | `go.opencircuitsf.com` | CNAME | `ec2.smallsharptools.com` (same box) | ShortLinks — a CNAME in practice, not the A record PRD §10.2 planned |
 | `<sel1..3>._domainkey.mailing.opencircuitsf.com` | CNAME | `[PLACEHOLDER: issued by SES on domain verification, PRD §10.2/§10.4]` | DKIM (parent corrected 2026-09-05, #0436 — this row named the apex; see below) |
 | `bounce.mailing.opencircuitsf.com` | MX | `10 feedback-smtp.us-east-1.amazonses.com` | Custom MAIL FROM (host and region corrected 2026-09-04, #0421 — this row read `mail.opencircuitsf.com`/`us-west-2`; see below) |
@@ -1124,10 +1125,19 @@ the zone holds a CNAME to `ec2.smallsharptools.com`, not an A record to a
 literal IP, so a rebuild that followed the old row would have pinned `www` to
 an address that has to be maintained by hand instead of following the
 indirection the `go.` row already documented. The rest of this table was
-swept against `aws route53 list-resource-record-sets` for the same pass; the
-apex `A`, `go.` CNAME, DKIM CNAMEs, and `bounce.mailing.` MX/TXT rows all
-matched the live zone exactly and were left as they were, per `#0448`
-criterion 4.
+swept against `aws route53 list-resource-record-sets` for the same pass;
+the apex `A`, DKIM CNAMEs, and `bounce.mailing.` MX/TXT rows all matched
+the live zone exactly and were left as they were, per `#0448` criterion 4.
+One documented name matches only through the wildcard:
+`go.opencircuitsf.com` has **no record of its own** in the zone, and
+resolves to `ec2.smallsharptools.com` solely because
+`*.opencircuitsf.com` is a CNAME to that name — the same mechanism that
+makes `_dmarc.opencircuitsf.com` and `lists.opencircuitsf.com` appear to
+resolve. Its row's "a CNAME in practice" wording is accurate as written
+and stays, but nothing pins `go.` independently, so narrowing or removing
+the wildcard would break it silently. `#0057`, which will add records
+here, should treat that wildcard as load-bearing (checked 2026-09-05,
+`#0448`).
 
 ---
 
