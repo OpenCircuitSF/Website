@@ -336,6 +336,78 @@ var envTrailingComment = regexp.MustCompile(`[ \t]#`)
 // positives and zero remaining misses.
 var envDollarExpansion = regexp.MustCompile(`\\\$|\$\(?\{?[A-Z0-9_]+\}?`)
 
+// envQuotedValuePrefix is #0461: it matches a value whose first
+// non-whitespace character is a single or double quote — the exact
+// condition joho/godotenv v1.5.1's hasQuotePrefix (parser.go) checks, on the
+// same already-leading-whitespace-trimmed text locateKeyName hands it, to
+// decide whether to parse a value as QUOTED at all rather than as the plain
+// unquoted text the three checks below (trailing comment, dollar expansion,
+// trailing backslash) are written against and were proved against.
+//
+// #0457's reviewer swept an extended alphabet — this file's original ten
+// characters ($ ( ) { } A 5 _ \ x) plus ', ", a space, #, and a lowercase
+// letter — through the real library and the scan: still zero false
+// positives, and a further set of genuine, unflagged divergences. #0461
+// re-derived that sweep independently (see issues/0461.md's ## Work log for
+// the corpus construction and counts, which differ from the earlier
+// review's own count because that review's exact corpus is not reproducible
+// from its write-up alone — CLAUDE.md §8's "every number inherited without
+// measurement in this lineage has been wrong at least once" is exactly why
+// this was re-run rather than copied). The re-derived finding holds
+// regardless of the exact corpus: every one of the currently-unflagged
+// divergences begins with a quote character, and no divergence exists among
+// values that do not.
+//
+// Read from extractVarValue (parser.go) and confirmed by probing
+// godotenv.Unmarshal directly — never by reasoning from the source alone
+// (CLAUDE.md §5) — a leading quote changes the parsing path entirely:
+//
+//   - Only the quote character itself is trimmed from each end, not
+//     whitespace. Interior whitespace, including a space adjacent to either
+//     quote, survives untouched: `'  x  '` loads as `"  x  "`, not `"x"` —
+//     unlike the unquoted path a few lines below, which also trims
+//     whitespace at both ends of the value.
+//   - A single-quoted value gets NO escape processing and NO variable
+//     expansion at all: `'cost$FOO'` loads as the literal `cost$FOO` —
+//     unlike the identical text unquoted, which the dollar-expansion check
+//     below would correctly flag as expanding.
+//   - A double-quoted value runs expandEscapes before expandVariables:
+//     `"cost\n"` loads with an actual newline byte, not the two characters
+//     backslash-then-n; `"cost\t"` loads as the single literal character
+//     `t` (unescapeCharsRegex strips the backslash from any escape that
+//     is not `\n`, `\r`, or `\$`); and a literal `$` still interacts with a
+//     preceding backslash exactly as #0457 documented, since
+//     expandVariables still runs afterward on the already-unescaped text.
+//   - An unterminated quote is not a silent divergence at all — it is a
+//     hard parse error (Unmarshal fails outright), the boot-failure half of
+//     this bug class (#0429) rather than the silently-wrong-value half the
+//     rest of this file targets.
+//
+// None of this can be assumed to match whatever systemd's EnvironmentFile=
+// does with the same quote characters. systemd's quoting rules are a
+// separate grammar — not the one #0450's, #0453's and #0457's reviews
+// verified is at least internally consistent for godotenv's own expansion
+// and escaping — and this repository has no systemd parser to probe the way
+// CLAUDE.md §5 and this issue's own criterion 3 require for godotenv.
+// Modelling both grammars and keeping them in lockstep is exactly the shape
+// that has produced five issues in this lineage (#0441, #0450, #0453,
+// #0457, #0461) for ONE mechanism (dollar expansion) alone. #0461 decided
+// not to build a sixth: quoted values are forbidden outright in this file,
+// the same policy #0441 already chose for "export " (CLAUDE.md §8, #0258 —
+// no second mechanism where a blanket rule closes the whole family).
+//
+// This is deliberately a FIFTH shape, not a widening of one of the other
+// four — unlike #0453's and #0457's extensions, it shares no mechanism with
+// "godotenv expands a bare $, systemd doesn't"; it is "godotenv parses a
+// quoted value under rules this scan does not encode, and systemd's rules
+// for the same bytes are unverified and likely different." Forbidding it
+// outright means the other three value-side checks never again need to
+// reason about quoting: a quoted value is caught and reported on here,
+// before it can reach them (see the early continue at the call site) — so
+// their own matching logic keeps meaning exactly what its own doc comments
+// already say it means, which was written assuming unquoted text.
+var envQuotedValuePrefix = regexp.MustCompile(`^[ \t]*(['"])`)
+
 // scanEnvExampleValueShapes walks .env.example-shaped content line by line
 // and reports every KEY=VALUE line whose shape the two parsers named in
 // #0441 — systemd's EnvironmentFile= and joho/godotenv v1.5.1 (the library
@@ -372,6 +444,21 @@ func scanEnvExampleValueShapes(content []byte) (scanned int, violations []string
 			violations = append(violations, fmt.Sprintf(
 				"line %d (%s): starts with %q — godotenv accepts and strips an \"export \" prefix (joho/godotenv v1.5.1 locateKeyName), while systemd's EnvironmentFile= has no such keyword and either rejects the line outright or treats \"export %s\" as the literal key name; drop the \"export \" prefix",
 				lineNo, name, strings.TrimRight(exportPrefix, " \t")+" ", name))
+		}
+
+		if qm := envQuotedValuePrefix.FindStringSubmatch(value); qm != nil {
+			quoteKind := "double"
+			if qm[1] == "'" {
+				quoteKind = "single"
+			}
+			violations = append(violations, fmt.Sprintf(
+				"line %d (%s): value %q begins with a %s-quote character — joho/godotenv v1.5.1 (parser.go's hasQuotePrefix/extractVarValue) parses a quoted value under its own rules (stripping only the quote characters rather than surrounding whitespace, skipping escape processing and expansion entirely for a single-quoted value, and running escape processing before expansion for a double-quoted one), while systemd's EnvironmentFile= applies its own, separate quoting grammar to the same bytes; this scan does not model either grammar closely enough to say whether the two would agree, so quoted values are forbidden here rather than modeled (#0461) — write %s unquoted",
+				lineNo, name, value, quoteKind, name))
+			continue // #0461: the three checks below assume the UNQUOTED
+			// parsing path (see envQuotedValuePrefix's doc comment) — running
+			// them against a quoted value's raw text would either mis-describe
+			// why it diverges or flag a divergence that quoting itself already
+			// fully explains.
 		}
 
 		if envTrailingComment.MatchString(value) {
@@ -459,6 +546,12 @@ func checkScannedFloor(scanned, floor int) error {
 // .env.example on the NAME side only; its own doc comment says the value
 // side "is a different gap ... left to that issue's own judgment call rather
 // than folded in here" — this test is that judgment call.
+//
+// #0461 added a fifth shape, quoted values (envQuotedValuePrefix's doc
+// comment), so this test now scans for five shapes rather than #0441's
+// original four. The paragraphs below describing #0441's own four criteria
+// are left as the historical record of that issue's own decisions; they are
+// not restated for the fifth.
 //
 // #0441 criterion 3 asked whether this duplicates #0429's
 // TestLoad_EnvExampleValuesAreSystemdParseable (config_test.go). It does
@@ -560,6 +653,12 @@ func TestEnvExampleValueShapeFloorFailsClosedOnEmptyExtraction(t *testing.T) {
 // left the whole package green. Confirmed in a throwaway worktree per
 // this issue's own criterion 3 (see issues/0458.md's ## Work log for the
 // three revert transcripts) rather than assumed from reading the pattern.
+//
+// #0461: the "quoted value" case below IS a genuine fifth shape (see
+// envQuotedValuePrefix's doc comment for why), not another regression pin
+// in the #0458 sense above — there is no earlier widening of an existing
+// shape to name here, since nothing in this file checked value-quoting
+// before #0461 added it.
 func TestScanEnvExampleValueShapes_DetectsEachDivergentShape(t *testing.T) {
 	// cleanLines is a minimal, entirely well-shaped block big enough to clear
 	// minScannedEnvExampleAssignments on its own, so each case below only has
@@ -627,6 +726,23 @@ func TestScanEnvExampleValueShapes_DetectsEachDivergentShape(t *testing.T) {
 			name:       "dollar expansion - backslash before dollar (#0457)",
 			badLine:    `PRICE=cost\$`,
 			wantSubstr: []string{"PRICE", "systemd", "godotenv", "backslash"},
+		},
+		{
+			// #0461's fifth shape: a value beginning with a quote character.
+			// Unlike the three cases immediately above, this is NOT a
+			// regression pin for a widening of the dollar-expansion
+			// mechanism — envQuotedValuePrefix is its own check, with its
+			// own violation message, that fires and "continue"s BEFORE the
+			// dollar-expansion check below ever runs. A single-quoted value
+			// containing a "$" (rather than an empty one) would prove
+			// nothing about the ordering, since godotenv does not expand
+			// inside single quotes at all (envQuotedValuePrefix's doc
+			// comment) — 'shh' has no "$" in it at all, so this case cannot
+			// be satisfied by the dollar-expansion check misfiring on raw
+			// text; only the quote check can produce it.
+			name:       "quoted value (#0461)",
+			badLine:    `SECRET='shh'`,
+			wantSubstr: []string{"SECRET", "systemd", "godotenv", "quote"},
 		},
 	}
 
