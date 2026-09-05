@@ -1648,10 +1648,10 @@ ever scaled to two instances, exactly one runs the send worker.
 | `bounce.mailing.opencircuitsf.com` | MX | `10 feedback-smtp.us-east-1.amazonses.com` | Custom MAIL FROM |
 | `bounce.mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF alignment |
 | `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` | **Inbound unsubscribe only** |
-| `_dmarc.opencircuitsf.com` | TXT | `v=DMARC1; p=quarantine; adkim=s; aspf=s; rua=mailto:…; fo=1` | DMARC |
+| `_dmarc.mailing.opencircuitsf.com` | TXT | `v=DMARC1; p=none; rua=mailto:contact@opencircuitsf.com; fo=1` | DMARC — deliberately on the `mailing.` subdomain, not the apex |
 
 Start DMARC at `p=none` for two weeks, read the aggregate reports, then move to
-`p=quarantine`, then `p=reject` once clean. (Region and MAIL FROM subdomain corrected 2026-09-03, #0418 — this table read `us-west-2` and `mail.opencircuitsf.com`; production is `us-east-1` and the custom MAIL FROM lives on `bounce.mailing.opencircuitsf.com`, both verified against the live box and DNS.)
+`p=quarantine`, then `p=reject` once clean. (Region and MAIL FROM subdomain corrected 2026-09-03, #0418 — this table read `us-west-2` and `mail.opencircuitsf.com`; production is `us-east-1` and the custom MAIL FROM lives on `bounce.mailing.opencircuitsf.com`, both verified against the live box and DNS. Name, value, and alignment tags corrected 2026-09-05, #0427 — this row previously named the apex with `p=quarantine; adkim=s; aspf=s`; the live record is on `mailing.opencircuitsf.com`, deliberately, so the apex's Google Workspace mail is untouched, and it carries `p=none` with no alignment tags — this table now states that as the current live value, not the eventual `p=quarantine`/`p=reject` target the ramp above still describes.)
 
 ### 10.3 SES region choice
 

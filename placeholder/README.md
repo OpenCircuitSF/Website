@@ -1,5 +1,19 @@
 # Placeholder site
 
+**Retired 2026-09-05 (`#0427`).** `CLAUDE.md` §7: "The static placeholder is
+gone" — `www.opencircuitsf.com` has served this project's Go service since
+2026-08-25, and nothing in this directory is deployed anywhere today. The
+whole "Deploying today" runbook below, including its `us-west-2` S3 bucket
+command, describes a pre-launch deploy path that was never taken for the
+current site and won't be taken again. Left as originally written rather than
+region-fixed — same reasoning `#0421` applied to `docs/deployment.md`'s
+"SES setup" section and `HANDOFF.md` §3.1: rewriting a plan that was never
+followed as written would misrepresent what was planned, and this note is
+what marks it superseded instead of live. Everything above "Deploying
+today" — the file inventory, the `file://` gotcha, the token/motif
+provenance — still describes this directory's actual contents and stays
+accurate.
+
 A single self-contained page for `opencircuitsf.com` to point social links at
 while the real Svelte + Go site is built. No build step, no dependencies, no
 external requests.

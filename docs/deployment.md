@@ -1047,17 +1047,18 @@ link to stdout — that is the closest thing to a proof this step has.
 
 | Name | Type | Value | Purpose |
 |---|---|---|---|
-| `www.opencircuitsf.com` | A | `44.222.209.183` | **Canonical host** |
+| `www.opencircuitsf.com` | CNAME | `ec2.smallsharptools.com` (same box) | **Canonical host** — a CNAME in practice, not the A record this table stated until corrected 2026-09-05, `#0448` (same target as `go.opencircuitsf.com` below) |
 | `opencircuitsf.com` | A | `44.222.209.183` | 301 → `www` |
 | `go.opencircuitsf.com` | CNAME | `ec2.smallsharptools.com` (same box) | ShortLinks — a CNAME in practice, not the A record PRD §10.2 planned |
 | `<sel1..3>._domainkey.mailing.opencircuitsf.com` | CNAME | `[PLACEHOLDER: issued by SES on domain verification, PRD §10.2/§10.4]` | DKIM (parent corrected 2026-09-05, #0436 — this row named the apex; see below) |
 | `bounce.mailing.opencircuitsf.com` | MX | `10 feedback-smtp.us-east-1.amazonses.com` | Custom MAIL FROM (host and region corrected 2026-09-04, #0421 — this row read `mail.opencircuitsf.com`/`us-west-2`; see below) |
 | `bounce.mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF alignment |
-| `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` | **Inbound unsubscribe only** — never the apex MX, `CLAUDE.md` §9 (region corrected 2026-09-04, #0421 — was `us-west-2`) |
-| `_dmarc.opencircuitsf.com` | TXT | `v=DMARC1; p=none; adkim=s; aspf=s; rua=mailto:…; fo=1` | DMARC — **start at `p=none`** |
+| `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` *(planned — not created yet)* | **Inbound unsubscribe only** — never the apex MX, `CLAUDE.md` §9 (region corrected 2026-09-04, #0421 — was `us-west-2`; existence checked 2026-09-05, `#0448` — the zone has no record at this name today, matching `docs/email-setup.md`'s "Not created, on purpose"; Phase 4, `#0057`) |
+| `_dmarc.mailing.opencircuitsf.com` | TXT | `v=DMARC1; p=none; rua=mailto:contact@opencircuitsf.com; fo=1` | DMARC — **deliberately on the `mailing.` subdomain, not the apex** (name, value, and alignment tags corrected 2026-09-05, `#0427` — this row previously named `_dmarc.opencircuitsf.com`, which has no DMARC record in the live zone, and asserted `adkim=s; aspf=s`, which the real record does not carry; see below) |
 
-Every record name, type, and static value above is real, copied verbatim
-from `PRD.md` §10.2 (not invented for this document).
+Every record name, type, and static value above started as a verbatim copy
+from `PRD.md` §10.2; where the live zone disagrees, the row is corrected in
+place and dated, not silently overwritten.
 
 **Corrected `#0431`, 2026-09-04 — the paragraph below is stale on both
 counts.** The public IP is no longer unknown — it is `44.222.209.183`, the
@@ -1096,7 +1097,37 @@ occurrences did not anticipate; see that issue for the correction note.
 two weeks and read the aggregate (`rua=`) reports, then move to
 `p=quarantine`, then `p=reject` once the reports show DKIM/SPF passing
 cleanly. Jumping straight to `p=reject` risks silently dropping legitimate
-mail with no visibility into why.
+mail with no visibility into why. This applies to
+`_dmarc.mailing.opencircuitsf.com`, not the apex — see below.
+
+**DMARC record corrected 2026-09-05, `#0427`.** Both this table and `PRD.md`
+§10.2 named `_dmarc.opencircuitsf.com`; re-derived with `dig`, that name
+resolves through the zone's `*.opencircuitsf.com` wildcard to
+`ec2.smallsharptools.com` — a CNAME, not a DMARC policy. No DMARC record
+exists at the apex at all. The real, live record is at
+`_dmarc.mailing.opencircuitsf.com` (`v=DMARC1; p=none;
+rua=mailto:contact@opencircuitsf.com; fo=1`, matching
+[`email-setup.md`](email-setup.md) and confirmed by `aws route53
+list-resource-record-sets` and `dig`), and that placement is deliberate: list
+mail sends from the `mailing.` subdomain precisely so the apex — which
+carries real Google Workspace mail (`CLAUDE.md` §9, §10 item 5) — is
+untouched. Publishing a DMARC policy at the apex would govern that Workspace
+mail, not this project's. The live record also does **not** carry
+`adkim=s; aspf=s` — this pass records that as the current state, not as an
+aspiration to reach; adding strict alignment is a real policy decision for
+whoever owns the `p=quarantine`/`p=reject` step of the ramp above to make
+deliberately, against the record that then exists, not something to restore
+here because an older draft of this table asserted it.
+
+`www.opencircuitsf.com`'s row above was corrected the same pass, `#0448`:
+the zone holds a CNAME to `ec2.smallsharptools.com`, not an A record to a
+literal IP, so a rebuild that followed the old row would have pinned `www` to
+an address that has to be maintained by hand instead of following the
+indirection the `go.` row already documented. The rest of this table was
+swept against `aws route53 list-resource-record-sets` for the same pass; the
+apex `A`, `go.` CNAME, DKIM CNAMEs, and `bounce.mailing.` MX/TXT rows all
+matched the live zone exactly and were left as they were, per `#0448`
+criterion 4.
 
 ---
 
