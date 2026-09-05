@@ -19,10 +19,27 @@ clean instance and corrected where it was wrong" — is now **partly** met: the
 serving path is proven, the email path is not. `PRD.md` §10 and `CLAUDE.md`
 §7/§10 remain authoritative wherever this document is silent or wrong.
 
-### SES is not configured yet
+### SES is not configured yet (historical — the section title describes the 2026-08-25 deploy, not today)
 
 Deliberate, at the user's direction: bring the site up first, configure SES
 after. Two things follow that are easy to get wrong.
+
+**Correction (`#0431`, 2026-09-04): SES has since been configured.** The
+deferral this heading describes ended the same day it started — see
+`docs/email-setup.md` ("Configured 2026-08-25") and `CLAUDE.md` §10 item 2 for
+the current-state record: the `mailing.opencircuitsf.com` identity is
+verified, DKIM and custom MAIL FROM are `SUCCESS`, and a real message has been
+delivered through it. The account remains **sandboxed** (production access
+still pending), which is why `SEND_WORKER_ENABLED=false` below is still the
+real production setting today, not a leftover from before SES existed. That
+variable gates only the **campaign** send worker (`internal/mailing/worker.go`'s
+own doc comment: "the only place a *campaign* moves scheduled -> sending ->
+sent/failed"), not the `outbound_queue` that transactional mail (a recovery
+magic link, a subscription confirmation) rides on — so the bullets below,
+written when no SES identity existed at all, no longer describe the current
+constraint on those messages the way they did when this section was written.
+Whether the first-admin recovery flow has actually been exercised against the
+live site is a separate question, addressed in **First admin login** below.
 
 **`MAILER_NOOP=true` is not the way to express this in production.**
 `cmd/opencircuit/main.go`'s `checkMailerNoOp` refuses to start unless
@@ -35,20 +52,28 @@ campaign send worker starts.
 **`SES_CONFIGURATION_SET` is required, despite `docs/configuration.md`
 listing it as optional.** `mailing.NewSESMailer` returns `cannot construct SES
 mailer: missing SES_CONFIGURATION_SET` and the service will not boot without
-it. The named set does not have to exist in SES yet.
+it. The named set did not have to exist in SES at the time this was written —
+**it does now**: `opencircuit-transactional` is live (`docs/aws-iam-setup.md`'s
+facts table), corrected `#0431`, 2026-09-04.
 
-What this costs until SES is live:
+What this cost during the pre-SES gap (2026-08-23 – 2026-08-25), historical —
+not the current constraint, per the correction above:
 
 - Every outbound message goes through the durable `outbound_queue` (`#0126`),
   so nothing is lost in flight — it is enqueued, the send fails, and the outbox
   worker retries on the six-step backoff up to `queue_max_retries` (8) before
-  marking the row `abandoned`.
-- **The seeded admin cannot sign in.** `opencircuit seed` created the
+  marking the row `abandoned`. This mechanism is unchanged today; what changed
+  is that a queued send can now actually succeed once it reaches SES.
+- **The seeded admin could not sign in.** `opencircuit seed` created the
   `ADMIN_EMAIL` user with no passkey, so first sign-in is "Recover account",
-  which mails a magic link. Request it *after* SES works, not before, or the
-  queue row just burns its retries.
-- A visitor who subscribes still gets the uniform `202` (`#0026`) but no
-  confirmation mail.
+  which mails a magic link. With SES now live this is no longer blocked the
+  same way, though this pass did not itself exercise the recovery ceremony
+  against the live site — see **First admin login** below for what is and
+  is not verified there.
+- A visitor who subscribes previously got the uniform `202` (`#0026`) but no
+  confirmation mail; with SES live, a subscribe request can now actually
+  deliver one, subject to the sandbox's verified-recipient restriction
+  (`CLAUDE.md` §10 item 2) until production access is granted.
 
 ## Current production facts (`CLAUDE.md` §7)
 
@@ -57,8 +82,8 @@ What this costs until SES is live:
 | Canonical host | `https://www.opencircuitsf.com` — apex and plain HTTP both 301 to it |
 | Server | Apache 2.4.68, Amazon Linux, OpenSSL 3.5.7 |
 | TLS | Let's Encrypt, valid to 2026-11-16 |
-| Already on the box | PostgreSQL and Apache |
-| Currently served | the static placeholder (`placeholder/`) |
+| Already on the box | PostgreSQL and Apache — plus `opencircuit.service` itself, serving the site since 2026-08-25 (this row is a current-state record, corrected `#0431`, 2026-09-04) |
+| Currently served | **This project** (`opencircuit.service`), since 2026-08-25 — the static placeholder is gone. **Corrected `#0431`, 2026-09-04**; re-verified read-only against the live host (`curl -sI https://www.opencircuitsf.com/` returns `Server: Apache/2.4.68 (Amazon Linux)` fronting the Go service, matching the detailed facts table below) |
 
 **A box already exists and already runs Apache and PostgreSQL** — the
 production facts above are measured, not aspirational. **This project's own
@@ -349,12 +374,24 @@ already exists" error on that one statement.
 > without qualification — no in-place rewrite is legitimate against any of
 > them any more.
 
-**Syntax-checked, not run against a production instance:** `psql --version`
-confirms local PostgreSQL 16 syntax-accepts `scripts/db/create.sql` and
+**Correction (`#0431`, 2026-09-04): this step has since been run for real.**
+The paragraph below was written before the 2026-08-25 deploy, when nothing had
+run against a real instance. Production's PostgreSQL now holds a database
+named `opencircuit` owned by a login role of the same name (production-facts
+table above), which is exactly what this step's `CREATE ROLE`/`CREATE
+DATABASE` produce — the role and database exist on the box today, so the
+create path has been exercised against a real instance, not merely
+syntax-checked. (Not necessarily re-confirmed as this literal script
+invocation rather than an equivalent manual step — this pass did not read the
+deploy transcript — but the outcome the step exists to produce is live and
+measured, which is the fact a reader deciding whether to re-run it needs.)
+
+**Original note, left for context — accurate only as a description of the
+local, pre-deploy syntax check it performed:** `psql --version` confirms
+local PostgreSQL 16 syntax-accepts `scripts/db/create.sql` and
 `scripts/db/drop.sql` unchanged (they are copied from ShortLinks, `#0001`,
 and already exercised repeatedly by `scripts/testdb.sh` and
-`scripts/db-reset.sh` against local databases) — this step has not been run
-as the `postgres` OS user against a fresh AL2023 PostgreSQL 16 install.
+`scripts/db-reset.sh` against local databases).
 
 ---
 
@@ -411,11 +448,18 @@ Fill in every value `.env.example` ships blank or with a placeholder:
 `WEBAUTHN_RP_ORIGIN` must match the browser's actual origin exactly or every
 passkey ceremony fails with an opaque error (`CLAUDE.md` §7).
 
-**Not verified against a real box:** this step was exercised locally
-(`scripts/db-reset.sh` builds the equivalent environment inline for dev use)
-but never as `/etc/opencircuit/config.env` read by a real `EnvironmentFile=`
-on a real systemd unit — see the systemd step for what that confirms and
-does not.
+**Corrected `#0431`, 2026-09-04 — this has since been verified on a real
+box.** The paragraph below described the pre-deploy state. Since 2026-08-25,
+`/etc/opencircuit/config.env` is read by `opencircuit.service`'s real
+`EnvironmentFile=` on the production host, and the service came up serving
+real traffic on it ("What this document is, and is not, verified against"
+below records the end-to-end serving path as measured). See the systemd step
+for exactly what that run does and does not additionally prove.
+
+**Original note, left for context — accurate only for what it actually
+tested:** this step was also exercised locally (`scripts/db-reset.sh` builds
+the equivalent environment inline for dev use), which is a different thing
+from a real `EnvironmentFile=` on a real systemd unit.
 
 ---
 
@@ -436,14 +480,21 @@ Install to the path the systemd unit's `ExecStart` references:
 sudo install -m 0755 opencircuit /usr/local/bin/opencircuit
 ```
 
-**Syntax/build-checked, not run on AL2023:** `go build ./...` and the web
-`npm run check`/`npm test` suite pass locally on macOS/arm64 as of this
-writing (see `## Verification` in `#0064`). Cross-compilation to
-`linux/arm64` or `linux/amd64` was **not** attempted here — `go build`
-without `GOOS`/`GOARCH` overrides targets the host it runs on, so run this
-step **on the target instance itself** (per the Prerequisites step's Go
-install), not on a developer's Mac, unless a cross-compile + transfer
-pipeline is deliberately set up later.
+**Corrected `#0431`, 2026-09-04 — this has since been run on AL2023 for
+real.** The paragraph below described the state before this build step was
+first run for real. "What this document is, and is not, verified against"
+(near the end of this file) records that the SPA build ran on the box's own
+Node 18.20.8 during the 2026-08-25 deploy and produced byte-identical hashed
+assets to a local build; the Go binary was likewise built and run on the
+instance itself, not cross-compiled. So this step is no longer only
+syntax/build-checked off-box.
+
+**Original note, left for context — accurate only as a description of the
+pre-deploy state:** `go build ./...` and the web `npm run check`/`npm test`
+suite passed locally on macOS/arm64 as of that writing (see `## Verification`
+in `#0064`); cross-compilation to `linux/arm64` or `linux/amd64` was not
+attempted, and the guidance to run this step **on the target instance itself**
+rather than a developer's Mac is still the right instruction going forward.
 
 ---
 
@@ -481,11 +532,19 @@ greenfield exception is over: `CLAUDE.md` §1 now treats
 `migrations/000001`–`000022` as append-only, without qualification, and any
 new schema change is a new migration file above `000022`.
 
-**Verified locally, not on a real box:** `#0062`'s and `#0228`'s restore
-drills both ran this exact `migrate ... up` invocation repeatedly against
-local scratch databases (`schema_migrations` landing at `version=20,
-dirty=false` every time) — see **Backups** below. It has not been run
-against a freshly `initdb`'d AL2023 PostgreSQL 16 cluster.
+**Corrected `#0431`, 2026-09-04 — this note contradicted the correction two
+paragraphs above it.** This exact `migrate ... up` invocation *has* been run
+against a real box: the `#0293` correction just above records that it ran
+against production's PostgreSQL on 2026-08-25, leaving
+`schema_migrations.version = 22`. Production is PostgreSQL **15.18**, not the
+AL2023 PostgreSQL 16 the paragraph below assumed — consistent with the
+Prerequisites section's own correction of that same assumption.
+
+**Original note, left for context — accurate only for the drills it actually
+describes:** `#0062`'s and `#0228`'s restore drills ran this exact `migrate
+... up` invocation repeatedly against local scratch databases
+(`schema_migrations` landing at `version=20, dirty=false` every time) — see
+**Backups** below.
 
 ---
 
@@ -544,20 +603,29 @@ beyond the criterion's named set. It also encodes the process's own graceful
 `cmd/opencircuit/main.go`'s two independent shutdown timeouts) — read that
 unit file's comments before changing `TimeoutStopSec` for any reason.
 
-**Structurally verified, not run under real systemd:** there is no systemd on
-the development machine (macOS) this runbook was written on, and no
-`systemd-analyze verify` available to check the unit file directly (the same
-gap `#0229` recorded for the backup units). Confirmed instead: every
-non-comment line is `key=value` and every section header is `[Section]`
-(the same structural check `#0229` used), and the file was diffed line by
-line against `deploy/systemd/README.md`'s and this project's own
-`opencircuit-backup.service`'s equivalents for consistency. **What this does
-not prove:** that `EnvironmentFile=/etc/opencircuit/config.env` resolves
-correctly, that the hardening directives don't reject something the process
-legitimately needs (e.g. `RestrictAddressFamilies` blocking a DNS lookup path
-that needs `AF_NETLINK`, which is not in the allowed list — watch for this on
-first real start), or that `Restart=on-failure` / `KillSignal=SIGTERM`
-actually behave as documented under a real crash.
+**Corrected `#0431`, 2026-09-04 — this unit has since run under real
+systemd.** The paragraph below described the state before the 2026-08-25
+deploy, when this development environment's lack of systemd was the only
+check available. Since that deploy, `opencircuit.service` has been running
+under the box's real systemd: "What this document is, and is not, verified
+against" (below) records it coming up `enabled` at boot and serving
+`/health` as `{"status":"ok","db":"ok"}`. That run demonstrates
+`EnvironmentFile=/etc/opencircuit/config.env` resolves correctly and that the
+hardening directives (`RestrictAddressFamilies` included) do not reject
+anything the process needs to start and serve traffic. **Still not
+demonstrated by anything measured here:** that `Restart=on-failure` /
+`KillSignal=SIGTERM` behave as documented under a real crash — no deliberate
+crash test has been run against the live service.
+
+**Original note, left for context — accurate only as a description of the
+pre-deploy structural check:** there was no systemd on the development
+machine (macOS) this runbook was written on, and no `systemd-analyze verify`
+available to check the unit file directly (the same gap `#0229` recorded for
+the backup units). Confirmed instead: every non-comment line is `key=value`
+and every section header is `[Section]` (the same structural check `#0229`
+used), and the file was diffed line by line against
+`deploy/systemd/README.md`'s and this project's own
+`opencircuit-backup.service`'s equivalents for consistency.
 
 ---
 
@@ -738,7 +806,20 @@ half (`style-src`, where the realistic worst case is CSS-based UI redressing,
 not arbitrary code execution) — a defensible, common compromise, but not what
 "a CSP with no `unsafe-inline`" says literally.
 
-**Syntax-checked, not run on AL2023 or against a real request:**
+**Corrected `#0431`, 2026-09-04 — this vhost has since run on AL2023 against
+real requests.** The header below described the state before the 2026-08-25
+deploy. "What this document is, and is not, verified against" (below) already
+records the vhost syntax-checking and running on the real AL2023 httpd
+2.4.68; re-confirmed read-only for this pass with a live request —
+`curl -sI https://www.opencircuitsf.com/` returns `Server: Apache/2.4.68
+(Amazon Linux) OpenSSL/3.5.7` and the exact `Content-Security-Policy` line
+from this section, byte for byte, served over a real HTTPS connection. What
+that single GET does **not** confirm: whether `flushpackets=on` behaves as
+documented under a real proxied SSE connection to `/api/events` — that needs
+a request against that specific route, not the homepage.
+
+**Original note, left for context — accurate only for the local check it
+describes:**
 
 ```bash
 # Minimal wrapper config: load mpm_event, proxy, proxy_http, rewrite, ssl,
@@ -772,20 +853,37 @@ httpd -t -f /tmp/httpd-check.conf
 ```
 
 run against the real Apache 2.4.67 installed on this development machine
-(`httpd -v`) — the closest available stand-in for AL2023's 2.4.68, not the
-real thing. This confirms the file **parses**: every `Header`/`ProxyPass`/
-`RewriteRule` directive is spelled correctly and every module they need
-(`mod_headers`, `mod_proxy`, `mod_proxy_http`, `mod_rewrite`, `mod_ssl`) is
-one Apache actually ships. It does **not** confirm the headers are correct
-under a real HTTPS request, that the CSP doesn't break some interaction not
+(`httpd -v`) — the closest available stand-in for AL2023's 2.4.68 available
+when this was written, not the real thing at the time. This confirms the
+file **parses**: every `Header`/`ProxyPass`/`RewriteRule` directive is
+spelled correctly and every module they need (`mod_headers`, `mod_proxy`,
+`mod_proxy_http`, `mod_rewrite`, `mod_ssl`) is one Apache actually ships. **As
+of the correction above, the headers are now also confirmed correct under a
+real HTTPS request** — the live `curl` matched this section's CSP exactly.
+Still not confirmed: that the CSP doesn't break some interaction not
 exercised by the SPA's automated tests, or that `flushpackets=on` behaves as
-documented under a real proxied SSE connection.
+documented under a real proxied SSE connection to `/api/events`.
 
 ---
 
 ## 9. TLS
 
-Obtain a single certificate covering both names:
+**Corrected `#0431`, 2026-09-04 — this is live, and not by the command shown
+below.** The command below (HTTP-01 via the `--apache` plugin, two named
+hosts) predates the deploy and was never what actually ran: production's
+cert is a **wildcard** — re-verified read-only for this pass with
+`openssl s_client -connect www.opencircuitsf.com:443 … | openssl x509 -noout
+-text`, which shows `X509v3 Subject Alternative Name: DNS:*.opencircuitsf.com,
+DNS:opencircuitsf.com`. A wildcard SAN cannot be issued over HTTP-01/
+`--apache`; it requires the DNS-01 challenge, matching what the production-
+facts table already says: the authenticator in use is **`dns-route53`**, not
+`--apache`. So the two-name command below is not a description of what
+produced the live certificate — it is left only as a syntactically valid
+fallback for obtaining a narrower, non-wildcard cert by the HTTP-01 path, if
+that were ever wanted instead.
+
+Obtain a single certificate covering both names (HTTP-01 — narrower than the
+wildcard actually in production; see the correction above):
 
 ```bash
 sudo certbot --apache -d opencircuitsf.com -d www.opencircuitsf.com
@@ -808,9 +906,13 @@ sudo systemctl reload httpd
 curl -fsS https://www.opencircuitsf.com/health
 ```
 
-**Not run anywhere** — this needs a real, publicly resolvable hostname
-pointed at a real box before certbot's HTTP-01 challenge can succeed; there
-is nothing to run it against yet.
+**Stale — see the correction at the top of this section.** `www.opencircuitsf.com`
+now resolves and serves over TLS: re-verified read-only for this pass,
+`curl -sI https://www.opencircuitsf.com/` returns `HTTP/1.1 200 OK` and the
+certificate above is valid to 2026-11-16, matching the production-facts
+table. The HTTP-01 command shown here specifically was never run against a
+real box — the wildcard cert that is live was obtained through the
+`dns-route53` DNS-01 path instead.
 
 ---
 
@@ -847,11 +949,18 @@ before inviting anyone else to register — non-admin users use the
 **Register** form (not Recover account) and complete an email verification
 step.
 
-**Not run against a real deploy** — no SES account exists to send the
-recovery email through yet (`CLAUDE.md` §10 item 2), and no live instance
-exists to receive the HTTPS request. Locally, `#0008`'s manual verification
-procedure exercises the equivalent flow with `MAILER_NOOP=true` logging the
-link to stdout — that is the closest thing to a proof this step has.
+**Corrected `#0431`, 2026-09-04 — both premises below are now false.** SES is
+live (`mailing.opencircuitsf.com` verified, DKIM and MAIL FROM `SUCCESS`,
+`CLAUDE.md` §10 item 2), and the instance has served `www.opencircuitsf.com`
+since 2026-08-25 — re-verified read-only for this pass with a live `curl`
+(see the Production-facts correction above). **What is still genuinely
+unverified is this specific ceremony, not the infrastructure it needs**: this
+pass did not itself click through "Recover account" against the live site,
+and nothing in this document's own record of the 2026-08-25 deploy or its
+later corrections claims that anyone has. Locally, `#0008`'s manual
+verification procedure exercises the equivalent flow with `MAILER_NOOP=true`
+logging the link to stdout, which remains the closest thing to a proof this
+specific step has — that much of the original note still stands.
 
 ---
 
@@ -869,15 +978,35 @@ link to stdout — that is the closest thing to a proof this step has.
 | `_dmarc.opencircuitsf.com` | TXT | `v=DMARC1; p=none; adkim=s; aspf=s; rua=mailto:…; fo=1` | DMARC — **start at `p=none`** |
 
 Every record name, type, and static value above is real, copied verbatim
-from `PRD.md` §10.2 (not invented for this document); the two things that
-cannot be known before an instance exists are the Elastic IP and the
-SES-issued DKIM CNAME targets — both explicitly placeholdered rather than
-guessed, per this pass's instructions not to invent `CLAUDE.md` §10 item 6
-facts. **Re-synced 2026-09-04 (#0421)** with the MAIL FROM host and region
-`#0418` corrected in `PRD.md` §10.2 on 2026-09-03 — this table had drifted
-from its own cited source in the interim, which is the fact `#0301`'s
-"correctly scoped" verdict on this file's `us-west-2` occurrences did not
-anticipate; see that issue for the correction note.
+from `PRD.md` §10.2 (not invented for this document).
+
+**Corrected `#0431`, 2026-09-04 — the paragraph below is stale on both
+counts.** The public IP is no longer unknown — it is `44.222.209.183`, the
+same value already used two rows above in this very table, and the instance
+that owns it has existed since 2026-08-25. The DKIM CNAME targets are also no
+longer unknowable in principle: SES reports the `mailing.opencircuitsf.com`
+identity's DKIM as `SUCCESS` (`docs/email-setup.md`, `CLAUDE.md` §10 item 2),
+which means domain verification completed and the real selector tokens exist
+in Route 53 today. This pass did not read them out of the AWS console or DNS
+to duplicate them here — `docs/email-setup.md` is the place to look, and
+keeping the actual token values in one place avoids the drift this table
+already suffered once (`#0421`, below). **Worth a closer look, not fixed by
+this pass:** `docs/email-setup.md`'s own DKIM row names
+`<3 tokens>._domainkey.mailing.opencircuitsf.com` — under the `mailing.`
+subdomain — while this table's row names `<sel1..3>._domainkey.opencircuitsf.com`,
+the apex. Those are different hostnames; this document did not resolve which
+one is correct or reconcile the two, and it should not be trusted to name
+the right hostname until that is checked.
+
+**Original note, left for context — accurate only for the pre-instance
+state:** the two things that could not be known before an instance existed
+were the Elastic IP and the SES-issued DKIM CNAME targets — both explicitly
+placeholdered rather than guessed, per that pass's instructions not to
+invent `CLAUDE.md` §10 item 6 facts. **Re-synced 2026-09-04 (#0421)** with the
+MAIL FROM host and region `#0418` corrected in `PRD.md` §10.2 on 2026-09-03 —
+this table had drifted from its own cited source in the interim, which is the
+fact `#0301`'s "correctly scoped" verdict on this file's `us-west-2`
+occurrences did not anticipate; see that issue for the correction note.
 
 **DMARC ramp — three steps, not one record.** Start `p=none` for at least
 two weeks and read the aggregate (`rua=`) reports, then move to
@@ -950,9 +1079,17 @@ planned to run **on the real box, once the AWS account exists**.
    until step 5's production-access approval lands, and correspondingly cap
    `MAX_SEND_RATE=1` — see step 3 above.
 
-**None of the above was executed.** This is a transcription of `PRD.md`
-§10.2–§10.4 and `email-setup.md` into deploy order, re-checked against those
-two documents for consistency, not a record of a real SES setup.
+**Corrected `#0431`, 2026-09-04 — "none of the above was executed" is no
+longer true and contradicts the blockquote above it.** This numbered list is
+a transcription of `PRD.md` §10.2–§10.4 and `email-setup.md` into deploy
+order, and most of it *was* substantially executed on 2026-08-25 — with the
+region and MAIL FROM host the blockquote above already names as different
+from what is written here. What genuinely was not executed by that pass:
+step 5's production-access request (`CLAUDE.md` §10 item 2 — the account
+remains sandboxed) and step 8's IAM role (also since done — see `## IAM`
+below). Treat this numbered list as the plan as originally transcribed, not
+as a checklist of what remains; `email-setup.md` and the Production-facts
+table above are the current-state record.
 
 ---
 
@@ -2070,14 +2207,26 @@ that the deploy did not touch:
 - The Apache vhost, including the new security headers, syntax-checks clean
   (`httpd -t`) against a real local Apache 2.4.67 with `mod_proxy`,
   `mod_proxy_http`, `mod_rewrite`, `mod_ssl`, and `mod_headers` loaded — see
-  the Apache step above for exactly what that does and does not prove.
+  the Apache step above for exactly what that does and does not prove. **This
+  bullet is listed under "parts the deploy did not touch," which is now
+  wrong for this one item (`#0431`, 2026-09-04): the "What the deploy
+  actually established" list above already records the same vhost syntax-
+  checking and *running* on the real AL2023 httpd 2.4.68, and this pass
+  re-confirmed it serving the exact CSP header over a live HTTPS request.
+  The local-Apache-2.4.67 check below is real but superseded, not the
+  current limit on what is known.**
 - The `script-src` CSP hash was computed programmatically (not hand-typed,
   `CLAUDE.md` §8) from `web/index.html`'s source. **That limitation is now
   closed** — see the verified list above; the committed hash turned out to be
   correct against a real build and against the live response.
-- `deploy/systemd/opencircuit.service`'s hardening directives were confirmed
+- ~~`deploy/systemd/opencircuit.service`'s hardening directives were confirmed
   present by reading the file directly, not by running it — there is no
-  systemd on this development machine.
+  systemd on this development machine.~~ **Corrected `#0431`, 2026-09-04:**
+  superseded by the "Serving path, end to end" bullet above and by the ##
+  7. systemd correction — the unit has since run under the box's real
+  systemd, confirming the hardening directives don't block a real startup.
+  Reading the file directly (still true of *this development machine*, which
+  remains macOS with no systemd) is no longer the only evidence.
 - ~~The DNS, SES, and IAM sections are transcriptions of `PRD.md` §10.2–§10.5
   and `docs/email-setup.md`, cross-checked against `.env.example` and
   `docs/configuration.md` for internal consistency (variable names, default
