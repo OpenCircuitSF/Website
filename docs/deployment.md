@@ -30,8 +30,12 @@ deferral this heading describes ended the same day it started — see
 the current-state record: the `mailing.opencircuitsf.com` identity is
 verified, DKIM and custom MAIL FROM are `SUCCESS`, and a real message has been
 delivered through it. The account remains **sandboxed** (production access
-still pending), which is why `SEND_WORKER_ENABLED=false` below is still the
-real production setting today, not a leftover from before SES existed. That
+still pending) — but production's own `/etc/opencircuit/config.env`, read
+read-only on 2026-09-03, carries `SES_SANDBOX=false` **and
+`SEND_WORKER_ENABLED=true`** (`#0415`, `#0057`'s facts table, `#0423`), which
+is the flip §10 item 2 says to make only *after* access is granted. `#0415`
+is open to establish `ProductionAccessEnabled` from AWS and owns reconciling
+the two — do not take either side as settled from this document. That
 variable gates only the **campaign** send worker (`internal/mailing/worker.go`'s
 own doc comment: "the only place a *campaign* moves scheduled -> sending ->
 sent/failed"), not the `outbound_queue` that transactional mail (a recovery
@@ -46,8 +50,9 @@ live site is a separate question, addressed in **First admin login** below.
 `BASE_URL`'s host is `localhost` or `127.0.0.1`, so a production host can
 never silently disable outbound email. Setting it here just crash-loops the
 service. `/etc/opencircuit/config.env` therefore leaves it unset and
-constructs the real SES v2 mailer, with `SEND_WORKER_ENABLED=false` so no
-campaign send worker starts.
+constructs the real SES v2 mailer. (It does **not** additionally disable the
+campaign worker: the same 2026-09-03 read shows `SEND_WORKER_ENABLED=true` —
+see the correction above and `#0415`.)
 
 **`SES_CONFIGURATION_SET` is required, despite `docs/configuration.md`
 listing it as optional.** `mailing.NewSESMailer` returns `cannot construct SES
