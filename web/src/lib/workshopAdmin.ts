@@ -59,6 +59,17 @@
 // signup_url is routinely an external ticketing site) -- an image is a load
 // the page performs on the reader's behalf without asking, so it gets the
 // tighter, same-origin-only rule.
+//
+// Correction (#0438): the schema comment quoted above is itself wrong, and
+// wrong twice over -- the real path is under /media, not /assets, and
+// /assets/ is Vite's own embedded build output (see docs/media.md for why
+// excluding /assets/ from the Apache proxy would cut the SPA off from its
+// own JS and CSS). migrations/000020's cover_image comment is frozen
+// (CLAUDE.md §1) and cannot be edited to fix it, so the correction is
+// recorded here (the Go twin, internal/handlers/admin_workshops.go, already
+// carries the identical note per #0432) and in docs/media.md and PRD.md
+// §6.2 (#0438 corrected the PRD's own copy of the comment, since unlike the
+// migration it is not frozen).
 
 import type { AdminWorkshop } from './types';
 
@@ -663,7 +674,7 @@ export function validateWorkshopForm(
   if (coverImage !== '' && !isSafeCoverImage(coverImage)) {
     return {
       error:
-        'Cover image must be a site-relative path starting with "/" (e.g. "/assets/workshops/soldering.jpg") — an external URL is not accepted.',
+        'Cover image must be a site-relative path starting with "/" (e.g. "/media/soldering-101.jpg") — an external URL is not accepted.',
     };
   }
 

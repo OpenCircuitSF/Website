@@ -567,13 +567,13 @@ describe('validateWorkshopForm', () => {
       validateWorkshopForm(blankFields({ title: 'X', coverImage: 'javascript:alert(1)' })),
     ).toEqual({
       error:
-        'Cover image must be a site-relative path starting with "/" (e.g. "/assets/workshops/soldering.jpg") — an external URL is not accepted.',
+        'Cover image must be a site-relative path starting with "/" (e.g. "/media/soldering-101.jpg") — an external URL is not accepted.',
     });
   });
 
   it('accepts a site-relative path cover image', () => {
     expect(
-      'error' in validateWorkshopForm(blankFields({ title: 'X', coverImage: '/assets/cover.jpg' })),
+      'error' in validateWorkshopForm(blankFields({ title: 'X', coverImage: '/media/cover.jpg' })),
     ).toBe(false);
   });
 

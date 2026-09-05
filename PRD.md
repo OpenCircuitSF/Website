@@ -699,7 +699,7 @@ CREATE TABLE workshops (
     location_note    TEXT,                  -- "exact address emailed to attendees"
     capacity         INT,                   -- display only in v1
     signup_url       TEXT,                  -- external RSVP link if used
-    cover_image      TEXT,                  -- path under /assets
+    cover_image      TEXT,                  -- path under /media
     status           TEXT NOT NULL DEFAULT 'draft',  -- draft | published | canceled
     published_at     TIMESTAMPTZ,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
