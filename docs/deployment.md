@@ -1054,6 +1054,7 @@ link to stdout — that is the closest thing to a proof this step has.
 | `<sel1..3>._domainkey.mailing.opencircuitsf.com` | CNAME | `[PLACEHOLDER: issued by SES on domain verification, PRD §10.2/§10.4]` | DKIM (parent corrected 2026-09-05, #0436 — this row named the apex; see below) |
 | `bounce.mailing.opencircuitsf.com` | MX | `10 feedback-smtp.us-east-1.amazonses.com` | Custom MAIL FROM (host and region corrected 2026-09-04, #0421 — this row read `mail.opencircuitsf.com`/`us-west-2`; see below) |
 | `bounce.mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF alignment |
+| `mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com -all` | SPF for the `From:` domain — added 2026-09-05, `#0452`, present in the live zone and in `docs/email-setup.md` but previously missing from this table entirely. **Hard-fail `-all`, not `~all`** like the `bounce.mailing.` row above: nothing but SES ever sends as this exact name, so a hard fail is safe and stronger — a future editor softening it to `~all` should do so knowingly, not by copying the envelope-domain row's qualifier |
 | `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` *(planned — not created yet)* | **Inbound unsubscribe only** — never the apex MX, `CLAUDE.md` §9 (region corrected 2026-09-04, #0421 — was `us-west-2`; existence checked 2026-09-05, `#0448` — the zone has no record at this name today, matching `docs/email-setup.md`'s "Not created, on purpose"; Phase 4, `#0057`) |
 | `_dmarc.mailing.opencircuitsf.com` | TXT | `v=DMARC1; p=none; rua=mailto:contact@opencircuitsf.com; fo=1` | DMARC — **deliberately on the `mailing.` subdomain, not the apex** (name, value, and alignment tags corrected 2026-09-05, `#0427` — this row previously named `_dmarc.opencircuitsf.com`, which has no DMARC record in the live zone, and asserted `adkim=s; aspf=s`, which the real record does not carry; see below) |
 
@@ -1138,6 +1139,33 @@ and stays, but nothing pins `go.` independently, so narrowing or removing
 the wildcard would break it silently. `#0057`, which will add records
 here, should treat that wildcard as load-bearing (checked 2026-09-05,
 `#0448`).
+
+**Mirror-image sweep, `#0452`, 2026-09-05** — `#0448`'s sweep above checked
+this table's existing rows against the live zone for false statements; this
+pass is the reverse, checking the live zone for records the table omits
+entirely. `aws route53 list-resource-record-sets` for this hosted zone
+returns 16 record sets. Of those, one was a genuine omission and is now the
+`mailing.opencircuitsf.com` SPF row added above. The rest are deliberately
+left out of this table, not missed:
+
+- The zone's `NS` and `SOA` records at the apex are hosted-zone
+  infrastructure that Route 53 creates automatically, not application DNS
+  this project manages; every zone has them.
+- The apex `MX` (`1 SMTP.GOOGLE.COM.`), the apex `TXT`
+  (`google-site-verification=…`), and `google._domainkey.opencircuitsf.com`
+  `TXT` all belong to the pre-existing Google Workspace mailboxes at the
+  apex (`CLAUDE.md` §7, §9, §10 item 5) — human mail this project must never
+  touch, not part of the `mailing.` subsystem this table documents. The apex
+  MX in particular is covered by its own restriction elsewhere in this
+  document and in `CLAUDE.md` §9 rather than by a row in this DNS table.
+- The three DKIM `CNAME` records under `mailing.opencircuitsf.com` are
+  already represented by this table's single `<sel1..3>._domainkey…`
+  placeholder row (real selector tokens deliberately not reproduced here —
+  see `docs/email-setup.md`).
+
+Nothing else in the zone is absent from the table. Re-derived read-only via
+`aws route53 list-resource-record-sets --hosted-zone-id Z0825067RV8QY5UIKS96`;
+nothing in DNS was changed and the apex MX was not touched.
 
 ---
 
