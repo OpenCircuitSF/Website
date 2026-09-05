@@ -188,18 +188,62 @@ var envAssignmentLine = regexp.MustCompile(`^(export[ \t]+)?([A-Z][A-Z0-9_]*)=(.
 // itself would not treat it as a comment either, so there is no divergence.
 var envTrailingComment = regexp.MustCompile(`[ \t]#`)
 
-// envDollarExpansion matches $VAR / ${VAR} syntax in a value, using the same
-// variable-name character class joho/godotenv v1.5.1's own expandVarRegex
-// requires (parser.go: `(\\)?(\$)(\()?\{?([A-Z0-9_]+)?\}?`) — uppercase
-// letters, digits, and underscore, with a digit permitted to lead. #0450: an
-// earlier version of this pattern required the name to start with a letter
-// or underscore ([A-Za-z_][A-Za-z0-9_]*), which excluded digit-led names
-// like the one in `PRICE=cost$5`. godotenv expands that to `cost` (the name
-// `5` is undefined in the file, so it substitutes the empty string) while
-// systemd's EnvironmentFile= performs no expansion at all and keeps the
-// literal `cost$5` — a silent divergence in the loaded value that this
-// pattern previously let through undetected.
-var envDollarExpansion = regexp.MustCompile(`\$\{?[A-Z0-9_]+\}?`)
+// envDollarExpansion matches $VAR, ${VAR}, and $(VAR) syntax in a value. This
+// is #0453's extension of #0450's widening, not a fifth shape: it is the same
+// "godotenv expands, systemd doesn't" divergence, just admitting one more
+// prefix — `\(?` — into the same character-class-and-structure story, exactly
+// as #0450 widened the name class itself. The violation site below still
+// covers it inside the existing $VAR/${VAR} check, not a fifth branch.
+//
+// The `\(?` mirrors joho/godotenv v1.5.1's own expandVarRegex verbatim
+// (parser.go: `(\\)?(\$)(\()?\{?([A-Z0-9_]+)?\}?`) — an optional backslash,
+// the dollar, an optional open paren, an optional open brace, the name class
+// (uppercase letters, digits, underscore, digit-led permitted), an optional
+// close brace. Before #0453 this pattern started matching only at `\$\{?`,
+// so a value with a literal `(` between the dollar and the name — the
+// `$(FOO)` shape — was invisible to the scan entirely: `\{?` only makes the
+// brace optional, it does not also make an intervening `(` optional.
+//
+// $(FOO) looks like it ought to be a no-op to both parsers (neither this
+// project's config.go nor systemd's EnvironmentFile= documents any command
+// substitution), but godotenv v1.5.1 has a bug that makes it silently
+// misparse: expandVariables (parser.go) is meant to leave the `$(…)` form
+// alone, and tries to detect it with `submatch[2] == "("`. But in
+// expandVarRegex's own group numbering, group 2 is the **dollar** capture —
+// always literally "$", never "(" — and the paren is group 3, which nothing
+// tests. That branch is therefore unreachable dead code, so `$(FOO` falls
+// through to ordinary variable expansion, reads "FOO" as a variable name
+// (substituting the empty string if undefined, same as any other unknown
+// $VAR), and leaves any trailing `)` as literal text — which is why
+// `PRICE=cost$(FOO)` loads as `cost)` rather than `cost` or `cost$(FOO)`.
+// Verified by probing godotenv.Unmarshal directly, in a throwaway module
+// against the real v1.5.1 dependency (never by reasoning from the regex
+// alone — CLAUDE.md §5, and the exact way the group-numbering bug was
+// missed the first time):
+//
+//	value              godotenv loads   diverges from systemd's literal text?
+//	cost$(FOO)         cost)            yes
+//	cost$(FOO          cost             yes
+//	cost$(FOO}         cost             yes
+//	cost$(FOO})        cost)            yes
+//	cost$(5)           cost)            yes (digit-led name, same as #0450)
+//	cost${FOO)         cost)            yes (already caught pre-#0453: the
+//	                                    optional `{` sits directly after `$`
+//	                                    with no intervening `(`, so the
+//	                                    pre-#0453 pattern already matched
+//	                                    "${FOO")
+//	cost$()            cost$()          no  (no name characters after the
+//	                                    parenthesis; expandVariables returns
+//	                                    the unexpanded text unchanged, and the
+//	                                    widened pattern's required
+//	                                    `[A-Z0-9_]+` correctly does not match
+//	                                    here either)
+//	cost$((FOO))       cost$((FOO))     no  (the SECOND "(" is not a valid
+//	                                    name character, so godotenv's own
+//	                                    regex fails to match starting at the
+//	                                    first "$" at all; the widened pattern
+//	                                    agrees and does not flag it)
+var envDollarExpansion = regexp.MustCompile(`\$\(?\{?[A-Z0-9_]+\}?`)
 
 // scanEnvExampleValueShapes walks .env.example-shaped content line by line
 // and reports every KEY=VALUE line whose shape the two parsers named in
@@ -245,10 +289,22 @@ func scanEnvExampleValueShapes(content []byte) (scanned int, violations []string
 				lineNo, name, value, name))
 		}
 
-		if envDollarExpansion.MatchString(value) {
-			violations = append(violations, fmt.Sprintf(
-				"line %d (%s): value %q contains $VAR/${VAR} syntax — joho/godotenv v1.5.1 (parser.go's expandVariables) expands this against variables assigned earlier in the SAME file (silently substituting an empty string if the name isn't yet defined there), while systemd's EnvironmentFile= performs no expansion at all and keeps it as a literal dollar sign; the two parsers would load different values for %s",
-				lineNo, name, value, name))
+		if match := envDollarExpansion.FindString(value); match != "" {
+			if strings.Contains(match, "(") {
+				// #0453: the $(VAR) shape. Worded separately from the
+				// plain $VAR/${VAR} case below because the fact is more
+				// surprising and the fix is different — this isn't a
+				// documented feature being misused, it is a library bug
+				// (see envDollarExpansion's doc comment for the exact
+				// group-numbering defect in godotenv's expandVariables).
+				violations = append(violations, fmt.Sprintf(
+					"line %d (%s): value %q contains $(...) syntax, which looks like it should be a no-op but is NOT one — joho/godotenv v1.5.1 has a bug (parser.go's expandVariables checks the wrong regex capture group to detect the parenthesis) that makes it silently read the text after '(' as a variable name instead, substituting its value (empty if undefined elsewhere in this file) and leaving any trailing ')' as literal text, while systemd's EnvironmentFile= performs no expansion at all and keeps the value exactly as written; the two parsers would load completely different values for %s — remove the $(...) syntax",
+					lineNo, name, value, name))
+			} else {
+				violations = append(violations, fmt.Sprintf(
+					"line %d (%s): value %q contains $VAR/${VAR} syntax — joho/godotenv v1.5.1 (parser.go's expandVariables) expands this against variables assigned earlier in the SAME file (silently substituting an empty string if the name isn't yet defined there), while systemd's EnvironmentFile= performs no expansion at all and keeps it as a literal dollar sign; the two parsers would load different values for %s",
+					lineNo, name, value, name))
+			}
 		}
 
 		if strings.HasSuffix(value, `\`) {
