@@ -243,7 +243,92 @@ var envTrailingComment = regexp.MustCompile(`[ \t]#`)
 //	                                    regex fails to match starting at the
 //	                                    first "$" at all; the widened pattern
 //	                                    agrees and does not flag it)
-var envDollarExpansion = regexp.MustCompile(`\$\(?\{?[A-Z0-9_]+\}?`)
+//
+// #0457 widens this once more, admitting an optional leading backslash —
+// `\\?` — into the same variable, not a fifth shape or a second pattern:
+// still the "godotenv treats a dollar sign specially, systemd doesn't"
+// mechanism, still one FindString call at the one violation site below. This
+// closes the family #0453's reviewer measured and reported but did not fix:
+// a backslash sitting directly in front of a "$" anywhere in the value.
+//
+// This is distinct from the trailing-backslash CONTINUATION check later in
+// this file (the very last check in scanEnvExampleValueShapes, which tests
+// whether value itself ends in a single backslash character): that one
+// fires on a backslash at the END of the value with no dollar sign
+// involved, and it is systemd doing something special there (line
+// continuation) while godotenv does nothing. This one
+// fires on a backslash immediately BEFORE a dollar sign, anywhere in the
+// value, and it is godotenv doing something special (silently stripping the
+// backslash) while systemd does nothing. Neither shape subsumes the other —
+// a value can trip one, both, or neither — so the two stay two separate
+// checks with two separate messages, and each message names its own parser
+// as the one behaving unusually rather than leaving an operator to guess
+// which backslash is meant.
+//
+// The mechanism, read from expandVariables (parser.go):
+//
+//	if submatch[1] == "\\" || submatch[2] == "(" {
+//		return submatch[0][1:]
+//	} else if submatch[4] != "" {
+//		return m[submatch[4]]
+//	}
+//	return s
+//
+// submatch[1] is the optional leading backslash (expandVarRegex's first
+// group). Whenever ANY match of expandVarRegex has that group present,
+// expandVariables strips exactly the one matched backslash character and
+// returns the rest of the match completely unchanged — no substitution
+// happens even when a valid variable name follows, and this fires even for
+// a bare backslash-dollar with nothing after it at all, since every group
+// after the dollar is independently optional. That unconditional behavior
+// is why the widened pattern below does not also require a name to follow a
+// backslash-prefixed dollar, unlike the plain (non-backslash) alternative,
+// which still does: a bare "$" with no name after it does not diverge
+// (#0450's review), so keeping the name required there is still correct.
+//
+// Verified by probing godotenv.Unmarshal directly, in a throwaway module
+// against the real v1.5.1 dependency (never by reasoning from the regex
+// alone — CLAUDE.md §5):
+//
+//	value          godotenv loads  diverges?
+//	cost\$FOO      cost$FOO        yes (backslash stripped; unlike the
+//	                               no-backslash "cost$FOO" case above, the
+//	                               "FOO" is left literal, NOT substituted)
+//	cost\${FOO}    cost${FOO}      yes (brace form, same strip-only result)
+//	cost\$(FOO)    cost$(FOO)      yes (the backslash SUPPRESSES the
+//	                               $(...) misparse bug documented above —
+//	                               submatch[1] is checked before
+//	                               submatch[2], so this strips and stops
+//	                               rather than also misparsing)
+//	cost\$5        cost$5          yes (digit-led name, same as #0450)
+//	cost\$         cost$           yes (bare backslash-dollar, no name
+//	                               characters at all, still diverges — the
+//	                               case the required-name half of the
+//	                               pattern must NOT apply to)
+//	cost\n         cost\n          no  (a literal backslash followed by the
+//	                               letter "n", not a newline; the backslash
+//	                               is not immediately before a "$", so
+//	                               expandVarRegex — which requires a literal
+//	                               "$" right after its optional backslash —
+//	                               never matches here at all)
+//	cost\\$FOO     cost\$FOO       yes (only the backslash directly
+//	                               adjacent to the dollar sign is consumed;
+//	                               an earlier, non-adjacent backslash is
+//	                               untouched — still diverges, and still
+//	                               caught, since the pattern only needs to
+//	                               find one qualifying pair)
+//
+// Re-derived over the exact 111,110-value corpus #0453's reviewer built (the
+// alphabet `$ ( ) { } A 5 _ \ x`, every combination of length 1 through 5,
+// each appended to a "cost" prefix, each run through the real
+// godotenv.Unmarshal and compared against the literal text systemd would
+// keep): the pre-#0457 pattern flags 14,637 of them with zero false
+// positives, and of the 3,024 that genuinely diverge and go unflagged, every
+// one contains a backslash — #0453's finding, reproduced here rather than
+// trusted. The widened pattern below flags all 17,661 true divergences in
+// that same corpus (14,637 + the 3,024 it was missing) with zero false
+// positives and zero remaining misses.
+var envDollarExpansion = regexp.MustCompile(`\\\$|\$\(?\{?[A-Z0-9_]+\}?`)
 
 // scanEnvExampleValueShapes walks .env.example-shaped content line by line
 // and reports every KEY=VALUE line whose shape the two parsers named in
@@ -290,7 +375,21 @@ func scanEnvExampleValueShapes(content []byte) (scanned int, violations []string
 		}
 
 		if match := envDollarExpansion.FindString(value); match != "" {
-			if strings.Contains(match, "(") {
+			switch {
+			case strings.HasPrefix(match, `\`):
+				// #0457: a backslash sitting directly in front of a "$",
+				// anywhere in the value. Worded separately from both cases
+				// below, and from the trailing-backslash CONTINUATION check
+				// further down in this function — see envDollarExpansion's
+				// doc comment for why none of the three is the other. Here
+				// godotenv is the one behaving unusually (silently
+				// dropping the backslash and substituting nothing), so the
+				// message names godotenv's behavior first rather than
+				// leading with "expansion", which this case never performs.
+				violations = append(violations, fmt.Sprintf(
+					"line %d (%s): value %q has a backslash immediately before a \"$\" — joho/godotenv v1.5.1 (parser.go's expandVariables, via expandVarRegex's optional leading backslash group) silently strips exactly that one backslash and leaves the dollar sign and anything after it as literal text with NO substitution, while systemd's EnvironmentFile= has no backslash-escaping at all and keeps the backslash byte-for-byte; this is NOT the trailing-backslash line-continuation shape (that one is about a backslash at the END of the value, not one sitting in front of a \"$\") — the two parsers would assign different values to %s; remove the backslash",
+					lineNo, name, value, name))
+			case strings.Contains(match, "("):
 				// #0453: the $(VAR) shape. Worded separately from the
 				// plain $VAR/${VAR} case below because the fact is more
 				// surprising and the fix is different — this isn't a
@@ -300,7 +399,7 @@ func scanEnvExampleValueShapes(content []byte) (scanned int, violations []string
 				violations = append(violations, fmt.Sprintf(
 					"line %d (%s): value %q contains $(...) syntax, which looks like it should be a no-op but is NOT one — joho/godotenv v1.5.1 has a bug (parser.go's expandVariables checks the wrong regex capture group to detect the parenthesis) that makes it silently read the text after '(' as a variable name instead, substituting its value (empty if undefined elsewhere in this file) and leaving any trailing ')' as literal text, while systemd's EnvironmentFile= performs no expansion at all and keeps the value exactly as written; the two parsers would load completely different values for %s — remove the $(...) syntax",
 					lineNo, name, value, name))
-			} else {
+			default:
 				violations = append(violations, fmt.Sprintf(
 					"line %d (%s): value %q contains $VAR/${VAR} syntax — joho/godotenv v1.5.1 (parser.go's expandVariables) expands this against variables assigned earlier in the SAME file (silently substituting an empty string if the name isn't yet defined there), while systemd's EnvironmentFile= performs no expansion at all and keeps it as a literal dollar sign; the two parsers would load different values for %s",
 					lineNo, name, value, name))
