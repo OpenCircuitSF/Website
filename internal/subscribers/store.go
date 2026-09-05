@@ -107,6 +107,23 @@ const (
 	ConsentBasisAdminAttested        = "admin_attested"
 )
 
+// growthArrivalConsentBases lists the consent_basis values that represent a
+// standing consent attested by someone OTHER than the subscriber themselves
+// — as opposed to ConsentBasisDoubleOptIn, which is the subscriber's own
+// later confirmation and belongs to confirmed_30d alone. Growth30Days'
+// imported_30d arrival FILTER and unsubscribed_30d departure FILTER both
+// read this SAME slice (#0343, #0344) so the two sides of net_30d can never
+// classify a value differently by accident — see that method's own doc
+// comment for why they must agree here even though they answer different
+// questions elsewhere. ConsentBasisAdminAttested has no writer anywhere in
+// this tree yet; it is listed regardless, because the first writer of it
+// must not be the one to discover which bucket it belongs to.
+// TestConsentBasisValuesAreClassified (imports_test.go) reads
+// migrations/000023's CHECK constraint directly and fails, naming the
+// value, if a consent_basis value is ever added there without a matching
+// decision recorded in this slice.
+var growthArrivalConsentBases = []string{ConsentBasisImportedPriorConsent, ConsentBasisAdminAttested}
+
 // ReservedTestEmailDomain is the RFC 2606-reserved domain
 // #0046's ensureTestRecipient anchors every synthetic test-send recipient
 // row to (internal/handlers/admin_campaign_preview.go): guaranteed to never
@@ -1451,6 +1468,21 @@ type RestartSignupInput struct {
 // the ActionImported/ActionInviteAccepted/ActionConfirmed rows that recorded
 // it in the first place.
 //
+// # #0343 — the same clearing already covers a not-yet-written third value
+//
+// consent_basis has three CHECK-permitted values (migrations/000023):
+// ConsentBasisDoubleOptIn (the person's own confirmation — belongs to
+// confirmed_30d, never imported_30d), ConsentBasisImportedPriorConsent (an
+// import batch's own attestation — the case walked through above), and
+// ConsentBasisAdminAttested, which nothing in this tree writes yet. This
+// method's ELSE branch clears consent_basis unconditionally, by value, not
+// by name — it does not need to know ConsentBasisAdminAttested exists to
+// clear it correctly on a restart, and it already did before that constant
+// was ever declared. The classification that DOES need to name it
+// explicitly lives in Growth30Days' own doc comment (imported_30d's
+// consent_basis = ANY($3) list): this method only has to keep discarding
+// standing consent on restart, of whatever value it happens to hold.
+//
 // It guards statusLockedFromNonAdmin exactly like every other status mutator
 // in this package (see the package doc comment): if the subscriber is
 // currently complained, EVERY column this method would otherwise touch —
@@ -2085,9 +2117,10 @@ func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 // what changed is which subscribers rows can now be active without ever
 // tripping it.
 //
-// "Imported" (#0305, revised by #0311, revised again by #0324) counts
-// `source = 'import' AND consent_basis IS NOT NULL AND confirmed_at IS NULL
-// AND created_at >= since` — an EVENT count (did an import batch place this
+// "Imported" (#0305, revised by #0311, #0324, #0336, #0343) counts
+// `source = 'import' AND consent_basis IN (imported_prior_consent,
+// admin_attested) AND confirmed_at IS NULL AND created_at >= since` — an
+// EVENT count (did an import batch, or an admin's own attestation, place this
 // address on the list, with its own standing consent, within the window),
 // not a snapshot of current status. #0305's original form additionally
 // required `status = 'active'`, which made it a CURRENT-STATE count: a
@@ -2148,6 +2181,28 @@ func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 // without ever restarting stays counted here, the same append-only property
 // #0311 relied on for `source`.
 //
+// #0343 classifies the third CHECK-permitted value the same way. Migration
+// 000023's subscribers_consent_basis_check permits exactly three values —
+// ConsentBasisDoubleOptIn, ConsentBasisImportedPriorConsent, and
+// ConsentBasisAdminAttested — and nothing in this tree writes the third one
+// yet. Left unclassified, the first writer of it would reopen exactly
+// #0311's bug: this predicate demanding an exact match against
+// ConsentBasisImportedPriorConsent alone would refuse to count the row as an
+// arrival, while unsubscribed_30d's departure guard (below) already counted
+// any non-NULL consent_basis as a departure — an arrival counted in neither
+// bucket and a departure counted in full, net -1, discovered only by the
+// accident of when someone finally writes the value. ConsentBasisAdminAttested
+// means the same kind of thing ConsentBasisImportedPriorConsent does — some
+// standing attestation OTHER than the person's own later confirmation
+// currently justifies the row being on the list — so it belongs in the same
+// bucket for the same reason, and this predicate now reads
+// `consent_basis = ANY($3)` with $3 = {ConsentBasisImportedPriorConsent,
+// ConsentBasisAdminAttested} rather than a single equality.
+// TestConsentBasisValuesAreClassified (imports_test.go) reads migrations/
+// 000023's CHECK constraint directly and fails, naming the value, if a
+// fourth one is ever added there without a matching decision here — the
+// value set and the classification cannot drift apart silently again.
+//
 // `source = 'import'` alone is still not enough: source is never rewritten
 // after INSERT (see the Subscriber.Source field's own #0317 doc comment), so
 // an accepted import INVITE keeps source='import' forever after Confirm sets
@@ -2163,67 +2218,93 @@ func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 // {confirmed, imported, neither (e.g. still-pending website signup or a
 // still-unaccepted invitation)} at any moment, never both.
 //
-// "Unsubscribed" (#0061, revised by #0324) counts `unsubscribed_at >= $1
-// AND NOT (source = 'import' AND consent_basis IS NULL)` — the design
-// question #0324 was filed to settle: what a revoked or expired unaccepted
-// invitation should count as in unsubscribed_30d, now that imported_30d no
-// longer counts it as an arrival.
+// "Unsubscribed" (#0061, revised by #0324, generalized by #0344) counts
+// `unsubscribed_at >= $1 AND (confirmed_at IS NOT NULL OR (source = $2 AND
+// consent_basis = ANY($3)))` — a positive test for "did this row hold an
+// arrival footprint at the moment it departed", replacing #0324's negative
+// exclusion `NOT (source = 'import' AND consent_basis IS NULL)`.
 //
-// # #0336 — this guard and imported_30d's are deliberately NOT the same test
+// # #0344 — the exclusion generalizes past import rows
 //
-// #0324's doc comment (through #0336) claimed this guard's negation and
-// imported_30d's `consent_basis IS NOT NULL` were "the SAME test... applied
-// on both sides of net_30d". #0336 narrowed the arrival side to an exact
-// match against ConsentBasisImportedPriorConsent (see that paragraph above),
-// which breaks the claim as stated: `= ConsentBasisImportedPriorConsent` and
-// `IS NULL` are not negations of each other once a THIRD value
-// (ConsentBasisDoubleOptIn) is in play. This guard is left as `IS NULL`
-// rather than narrowed to match — deliberately, not by oversight — because
-// the two sides are answering different questions. imported_30d asks "did an
-// import batch's OWN attestation place this row on the list" (a narrow,
-// single-source question); this guard asks "did this row EVER have ANY
-// standing consent behind it, from any source" (a broad question, because a
-// departure's exclusion here must cover every arrival this method could ever
-// have counted, not just imported_30d's). consent_basis is NULL for exactly
-// one class of row: an import-sourced address nobody has ever consented for
-// — never accepted (still pending) or restarted since (#0336's RestartSignup
-// clearing, above) — and that is precisely the class this guard must
-// exclude, regardless of which arrival bucket an accepted version of the
-// same row would have landed in.
+// #0324's guard only ever excluded an import-sourced row (`source = 'import'
+// AND consent_basis IS NULL`); every OTHER source unconditionally counted
+// `unsubscribed_at >= $1`, with no test of whether that row had ever actually
+// been counted as an arrival. That is exactly wrong for a website signup
+// that confirms, unsubscribes, restarts, and then unsubscribes AGAIN while
+// still pending (never having reconfirmed): the first unsubscribe correctly
+// pairs with the earlier confirmation (net 0); the restart withdraws BOTH
+// (net 0, RestartSignup's own #0324 clearing); but the second unsubscribe
+// re-stamps unsubscribed_at with no live confirmed_at behind it —
+// RestartSignup cleared that too — and the old guard, which only ever
+// examined source='import', let it straight through. One person, five
+// actions, net -1, for someone who ends the sequence exactly where they
+// started.
 //
-// Concretely, the two predicates necessarily agree for a NULL or
-// ConsentBasisImportedPriorConsent value (the only two an import row can
-// hold without ever having been confirmed) and necessarily differ for
-// ConsentBasisDoubleOptIn (an accepted invitation): imported_30d excludes it
-// unconditionally now (it is not this import's own attestation, it is the
-// person's own later confirmation — confirmed_30d's job), while this guard
-// must still COUNT its departure, because that confirmation DID count as
-// confirmed_30d growth and the departure has to balance it. Narrowing this
-// guard to mirror imported_30d's equality check would silently stop counting
-// an accepted invitee's later unsubscribe — a real regression, not a
-// symmetry improvement — which is exactly why #0336 left it as `IS NULL`
-// rather than "fixing" it to match.
+// The fix is not "handle five actions specially" — #0324 already tried the
+// narrow version of that shape once (item 2, four actions) and #0336 found
+// the interaction it missed. Six or seven actions reach the identical state:
+// after the fifth action the row is unsubscribed again with confirmed_at
+// NULL; a sixth-action RestartSignup clears unsubscribed_at back to NULL (so
+// it drops out of `unsubscribed_at >= $1` regardless of this guard, exactly
+// as after the fourth action); a seventh unsubscribe-while-pending reaches
+// the SAME state this guard already excludes. The predicate is keyed on the
+// row's CURRENT columns, not on how many times Unsubscribe has run, so the
+// fix bounds the whole family: any number of repeated confirm-less
+// unsubscribes nets 0, not just the first one this issue happened to
+// measure.
 //
-// Walked through by row: ExpirePendingSweep never touches unsubscribed_at at
-// all (the row stays pending), so an expired unaccepted invitation needs no
-// guard from this predicate. ImportStore.Revoke and Store.Unsubscribe's
-// invite-decline branch both DO stamp unsubscribed_at on a row whose
-// consent_basis is still NULL — this guard excludes those, matching that
-// imported_30d never counted them as an arrival either. A prior_consent
+// So this guard is now the mirror image of imported_30d's arrival test,
+// stated positively: a departure counts only if the row held SOME
+// standing-consent footprint — either its own local confirmation
+// (`confirmed_at IS NOT NULL`, set once by Confirm and never touched by
+// Unsubscribe) or an import's own attestation (`source = 'import' AND
+// consent_basis = ANY($3)`, the identical two-value set imported_30d's
+// arrival FILTER uses, #0343). Both footprints are exactly the ones the
+// arrival predicates set, so a departure can never be counted without a
+// matching arrival having been possible in the first place.
+//
+// # This subsumes #0336's narrower exclusion, rather than sitting alongside it
+//
+// #0336's `NOT (source = 'import' AND consent_basis IS NULL)` and this
+// predicate agree on every import row: consent_basis is NULL only when
+// confirmed_at is also NULL (Confirm and an accepted invite's own path
+// always stamp both together — see the "Imported" paragraphs above), so
+// wherever the old guard excluded a row, this predicate's `confirmed_at IS
+// NOT NULL` disjunct is false and its `consent_basis = ANY($3)` disjunct is
+// also false (NULL matches neither value in $3) — the same exclusion,
+// reached by a positive test instead of a negative one. Where the old guard
+// counted a row (an accepted invitee, or a prior_consent import, each
+// carrying a non-NULL consent_basis and — for the accepted invitee — a
+// non-NULL confirmed_at too), this predicate counts it as well. The two
+// agree on every import row reachable today; the difference is entirely in
+// what happens for a NON-import row, which the old guard never examined at
+// all. That makes this a generalization of #0336's guard, not a second guard
+// beside it — #0313 and any future consumer of this predicate need only read
+// this one.
+//
+// Walked through by row, re-using #0336's own labels: ExpirePendingSweep
+// never touches unsubscribed_at at all (the row stays pending), so an
+// expired unaccepted invitation needs no guard from this predicate.
+// ImportStore.Revoke and Store.Unsubscribe's invite-decline branch both DO
+// stamp unsubscribed_at on a row whose consent_basis is still NULL and
+// confirmed_at is still NULL — excluded, matching that imported_30d never
+// counted them as an arrival either. A prior_consent or admin_attested
 // import that is later revoked or unsubscribed WITHOUT ever restarting keeps
-// consent_basis = ConsentBasisImportedPriorConsent (append-only outside
-// RestartSignup) and is unaffected by this guard, continuing to count as a
-// departure that matches its own arrival — the ordinary join-then-leave
-// symmetry #0311 established. An accepted invitee who later unsubscribes
-// (again, no restart) has consent_basis = ConsentBasisDoubleOptIn — not
-// NULL — so the departure counts, mirroring that the acceptance itself
-// counted as confirmed_30d growth, exactly as before #0336. And a row of
-// EITHER provenance that unsubscribes, then restarts (RestartSignup's #0336
-// clearing sets consent_basis back to NULL and unsubscribed_at back to NULL
-// in the SAME UPDATE — see that method's own doc comment) contributes to
-// neither imported_30d, confirmed_30d, nor unsubscribed_30d until whatever
-// happens to the restarted row next writes a new event of its own — which is
-// the fix for #0336's rows O and P.
+// its consent_basis (append-only outside RestartSignup) and is counted via
+// the `consent_basis = ANY($3)` disjunct — the ordinary join-then-leave
+// symmetry #0311 established, now covering admin_attested too (#0343). An
+// accepted invitee who later unsubscribes (again, no restart) has
+// confirmed_at set — not NULL — so the departure counts via the OTHER
+// disjunct, mirroring that the acceptance itself counted as confirmed_30d
+// growth. And a row of ANY provenance that unsubscribes, then restarts
+// (RestartSignup's #0336 clearing sets confirmed_at, consent_basis, and
+// unsubscribed_at all back to NULL in the SAME UPDATE — see that method's
+// own doc comment) contributes to neither imported_30d, confirmed_30d, nor
+// unsubscribed_30d until whatever happens to the restarted row next writes a
+// new event of its own — the fix for #0336's rows O and P, and, since this
+// predicate no longer needs source='import' to reach that state, also for
+// #0344's website-signup equivalent: a THIRD unsubscribe-while-pending on
+// the very same row is excluded for the identical reason, not a new one.
 //
 // The dashboard's net_30d is confirmed + imported - unsubscribed — the
 // import branch stopped being counted as a confirmation (#0292) but must
@@ -2259,10 +2340,10 @@ func (s *Store) Growth30Days(ctx context.Context, since time.Time) (confirmed, i
 	err = s.pool.QueryRow(ctx,
 		`SELECT
 		    count(*) FILTER (WHERE confirmed_at >= $1),
-		    count(*) FILTER (WHERE source = $2 AND consent_basis = $3 AND confirmed_at IS NULL AND created_at >= $1),
-		    count(*) FILTER (WHERE unsubscribed_at >= $1 AND NOT (source = $2 AND consent_basis IS NULL))
+		    count(*) FILTER (WHERE source = $2 AND consent_basis = ANY($3::text[]) AND confirmed_at IS NULL AND created_at >= $1),
+		    count(*) FILTER (WHERE unsubscribed_at >= $1 AND (confirmed_at IS NOT NULL OR (source = $2 AND consent_basis = ANY($3::text[]))))
 		 FROM subscribers WHERE synthetic = false`,
-		since, SubscriberSourceImport, ConsentBasisImportedPriorConsent,
+		since, SubscriberSourceImport, growthArrivalConsentBases,
 	).Scan(&confirmed, &imported, &unsubscribed)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("subscribers: computing 30-day growth: %w", err)

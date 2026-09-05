@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -1787,5 +1790,324 @@ func TestGrowth30Days_TruthTable_0336(t *testing.T) {
 				t.Errorf("row %s (%s): net delta = %d, want %d", sc.row, sc.name, got, sc.want)
 			}
 		})
+	}
+}
+
+// growth30DaysComponents is growth30DaysNet's un-collapsed sibling: the
+// three individual Growth30Days counts, for tests that must assert each one
+// separately rather than trust a net figure that can hide two errors
+// cancelling out. That is the exact failure mode #0336's review found (its
+// cells O3/P3 netted zero from two opposite errors) and the exact one
+// #0343 and #0344 were filed to close — a net-only assertion would have
+// passed on the un-fixed predicate for both.
+func growth30DaysComponents(t *testing.T, subStore *Store, since time.Time) (confirmed, imported, unsubscribed int64) {
+	t.Helper()
+	confirmed, imported, unsubscribed, err := subStore.Growth30Days(context.Background(), since)
+	if err != nil {
+		t.Fatalf("Growth30Days: %v", err)
+	}
+	return confirmed, imported, unsubscribed
+}
+
+// TestGrowth30Days_AdminAttestedArrivalAndDeparture is #0343's component-wise
+// proof (criterion 4): admin_attested classifies as an imported_30d arrival,
+// and a row carrying it that later unsubscribes nets 0, not -1 (criterion
+// 5). consent_basis=admin_attested has no writer anywhere in this tree yet
+// (#0343's own premise), so this test seeds the row directly via SQL — the
+// same technique TestList_And_GetByID_ScanSubscriberColumnOrderRoundTrip
+// (store_test.go) already uses
+// for a value nothing in the store package's own API can produce, pairing
+// it with source=import exactly as this issue's own description and that
+// existing fixture both do.
+//
+// Pre-#0343, this would have measured (confirmed 0, imported 0, unsubscribed
+// 0) after the seed (no arrival counted at all) and (0, 0, 1) after
+// Unsubscribe (a full departure with nothing to balance it) — net -1 for a
+// person who is, at the end, exactly where an import that never happened
+// would have left them. Verified by mutation: reverting
+// growthArrivalConsentBases to []string{ConsentBasisImportedPriorConsent}
+// (the pre-#0343 predicate) reproduces exactly that failure — see this
+// issue's Verification section for the worktree run.
+func TestGrowth30Days_AdminAttestedArrivalAndDeparture(t *testing.T) {
+	pool := testPool(t)
+	subStore := NewStore(pool)
+	since := time.Now().UTC()
+
+	baseC, baseI, baseU := growth30DaysComponents(t, subStore, since)
+
+	email := uniqueImportEmail(t)
+	manageToken, err := newToken()
+	if err != nil {
+		t.Fatalf("newToken: %v", err)
+	}
+	now := time.Now().UTC()
+	var id int64
+	if err := pool.QueryRow(context.Background(),
+		`INSERT INTO subscribers (
+			email, status, manage_token, source, consent_basis, created_at, updated_at, synthetic
+		 ) VALUES (lower(trim($1)), $2, $3, $4, $5, $6, $6, false) RETURNING id`,
+		email, StatusActive, manageToken, SubscriberSourceImport, ConsentBasisAdminAttested, now,
+	).Scan(&id); err != nil {
+		t.Fatalf("seeding admin_attested row: %v", err)
+	}
+
+	gotC, gotI, gotU := growth30DaysComponents(t, subStore, since)
+	if d := gotC - baseC; d != 0 {
+		t.Errorf("after seeding admin_attested arrival: confirmed delta = %d, want 0", d)
+	}
+	if d := gotI - baseI; d != 1 {
+		t.Errorf("after seeding admin_attested arrival: imported delta = %d, want 1 — admin_attested must classify as an imported_30d arrival (#0343)", d)
+	}
+	if d := gotU - baseU; d != 0 {
+		t.Errorf("after seeding admin_attested arrival: unsubscribed delta = %d, want 0", d)
+	}
+
+	if _, err := subStore.Unsubscribe(context.Background(), id, SourceOneClick, since.Add(2*time.Second)); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+
+	gotC, gotI, gotU = growth30DaysComponents(t, subStore, since)
+	if d := gotC - baseC; d != 0 {
+		t.Errorf("after unsubscribe: confirmed delta = %d, want 0", d)
+	}
+	if d := gotI - baseI; d != 1 {
+		t.Errorf("after unsubscribe: imported delta = %d, want 1 — imported_30d is an EVENT count (#0311) and stays counted after departure", d)
+	}
+	if d := gotU - baseU; d != 1 {
+		t.Errorf("after unsubscribe: unsubscribed delta = %d, want 1 — the matching departure", d)
+	}
+	if net := (gotC - baseC) + (gotI - baseI) - (gotU - baseU); net != 0 {
+		t.Errorf("net delta after admin_attested join-then-leave = %d, want 0 — this is #0343's own bug: before the fix this read -1", net)
+	}
+}
+
+// TestGrowth30Days_RestartedImportRowSecondUnsubscribeStaysExcluded proves
+// #0344's generalized departure predicate does not regress #0336's rows O3
+// and P3 (invite-accepted or prior_consent import, unsubscribed, restarted,
+// then unsubscribed AGAIN while still pending) — #0344 criterion 2. Neither
+// row has its own committed regression test today; #0336's review measured
+// them only in a throwaway worktree. Asserted component-wise throughout, not
+// as a net, per both issues' criterion 4/3.
+func TestGrowth30Days_RestartedImportRowSecondUnsubscribeStaysExcluded(t *testing.T) {
+	pool := testPool(t)
+	subStore := NewStore(pool)
+	importStore := NewImportStore(pool)
+
+	type step struct {
+		name                string
+		wantC, wantI, wantU int64
+	}
+
+	run := func(t *testing.T, seed func(since time.Time) (id int64, restartAt time.Time)) {
+		since := time.Now().UTC()
+		baseC, baseI, baseU := growth30DaysComponents(t, subStore, since)
+
+		id, restartAt := seed(since)
+
+		assertAt := func(label string, s step) {
+			t.Helper()
+			gotC, gotI, gotU := growth30DaysComponents(t, subStore, since)
+			if d := gotC - baseC; d != s.wantC {
+				t.Errorf("%s: confirmed delta = %d, want %d", label, d, s.wantC)
+			}
+			if d := gotI - baseI; d != s.wantI {
+				t.Errorf("%s: imported delta = %d, want %d", label, d, s.wantI)
+			}
+			if d := gotU - baseU; d != s.wantU {
+				t.Errorf("%s: unsubscribed delta = %d, want %d", label, d, s.wantU)
+			}
+		}
+		assertAt("after restart (row O/P, #0336's own fix point)", step{wantC: 0, wantI: 0, wantU: 0})
+
+		if _, err := subStore.Unsubscribe(context.Background(), id, SourceOneClick, restartAt.Add(time.Second)); err != nil {
+			t.Fatalf("second Unsubscribe (row O3/P3): %v", err)
+		}
+		assertAt("after second Unsubscribe while pending (row O3/P3)", step{wantC: 0, wantI: 0, wantU: 0})
+	}
+
+	t.Run("O3_invite_accepted_unsub_restart_unsub_again", func(t *testing.T) {
+		run(t, func(since time.Time) (int64, time.Time) {
+			email := uniqueImportEmail(t)
+			invited, _ := commitInvite(t, importStore, email, time.Now().UTC())
+			confirmed, err := subStore.Confirm(context.Background(), *invited.ConfirmToken, since.Add(2*time.Second))
+			if err != nil {
+				t.Fatalf("Confirm: %v", err)
+			}
+			if _, err := subStore.Unsubscribe(context.Background(), confirmed.ID, SourceOneClick, since.Add(3*time.Second)); err != nil {
+				t.Fatalf("Unsubscribe: %v", err)
+			}
+			if _, err := subStore.RestartSignup(context.Background(), confirmed.ID, RestartSignupInput{ConfirmTTL: time.Hour}, since.Add(4*time.Second)); err != nil {
+				t.Fatalf("RestartSignup: %v", err)
+			}
+			return confirmed.ID, since.Add(4 * time.Second)
+		})
+	})
+
+	t.Run("P3_prior_consent_unsub_restart_unsub_again", func(t *testing.T) {
+		run(t, func(since time.Time) (int64, time.Time) {
+			email := uniqueImportEmail(t)
+			in := validCommitInput(t, []ImportRow{{Email: email}})
+			if _, err := importStore.Commit(context.Background(), in, time.Now().UTC()); err != nil {
+				t.Fatalf("Commit: %v", err)
+			}
+			sub, err := subStore.FindByEmail(context.Background(), email)
+			if err != nil {
+				t.Fatalf("FindByEmail: %v", err)
+			}
+			if _, err := subStore.Unsubscribe(context.Background(), sub.ID, SourceOneClick, since.Add(2*time.Second)); err != nil {
+				t.Fatalf("Unsubscribe: %v", err)
+			}
+			if _, err := subStore.RestartSignup(context.Background(), sub.ID, RestartSignupInput{ConfirmTTL: time.Hour}, since.Add(3*time.Second)); err != nil {
+				t.Fatalf("RestartSignup: %v", err)
+			}
+			return sub.ID, since.Add(3 * time.Second)
+		})
+	})
+}
+
+// TestGrowth30Days_WebsiteSignupRepeatedUnsubscribeNetsZero is #0344's own
+// proof, asserting each of Growth30Days' three components separately after
+// EVERY action (criterion 3; #0343 criterion 4 makes the same demand): a
+// net-only assertion would have missed this bug outright, since action four
+// already nets zero by construction (#0324's own fix) while action five's
+// departure has no live arrival left to cancel against — only a
+// component-wise check catches that unsubscribed_30d moved on its own with
+// nothing on the other side.
+//
+// Walks the issue's own five-action minimum reproduction, then two more
+// actions to prove the fix bounds the whole family rather than this one
+// cell (criterion 4): action six (RestartSignup again) clears
+// unsubscribed_at a second time, dropping it out of the window exactly as
+// action four did; action seven (Unsubscribe again while pending) reaches
+// the IDENTICAL state action five already proved excluded, so it also nets
+// 0 — for the same reason, not a new one. An off-by-one that only fixed
+// action five would fail here at action seven.
+func TestGrowth30Days_WebsiteSignupRepeatedUnsubscribeNetsZero(t *testing.T) {
+	pool := testPool(t)
+	subStore := NewStore(pool)
+	since := time.Now().UTC()
+
+	baseC, baseI, baseU := growth30DaysComponents(t, subStore, since)
+
+	assertDelta := func(label string, wantC, wantI, wantU int64) {
+		t.Helper()
+		gotC, gotI, gotU := growth30DaysComponents(t, subStore, since)
+		if d := gotC - baseC; d != wantC {
+			t.Errorf("%s: confirmed delta = %d, want %d", label, d, wantC)
+		}
+		if d := gotI - baseI; d != wantI {
+			t.Errorf("%s: imported delta = %d, want %d", label, d, wantI)
+		}
+		if d := gotU - baseU; d != wantU {
+			t.Errorf("%s: unsubscribed delta = %d, want %d", label, d, wantU)
+		}
+	}
+
+	created, err := subStore.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	assertDelta("1: after Create (pending)", 0, 0, 0)
+
+	confirmed, err := subStore.Confirm(context.Background(), *created.ConfirmToken, since.Add(2*time.Second))
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	id := confirmed.ID
+	assertDelta("2: after Confirm", 1, 0, 0)
+
+	if _, err := subStore.Unsubscribe(context.Background(), id, SourceOneClick, since.Add(3*time.Second)); err != nil {
+		t.Fatalf("Unsubscribe #1: %v", err)
+	}
+	assertDelta("3: after first Unsubscribe", 1, 0, 1)
+
+	if _, err := subStore.RestartSignup(context.Background(), id, RestartSignupInput{ConfirmTTL: time.Hour}, since.Add(4*time.Second)); err != nil {
+		t.Fatalf("RestartSignup (action four, #0324's own fix point): %v", err)
+	}
+	assertDelta("4: after RestartSignup", 0, 0, 0)
+
+	if _, err := subStore.Unsubscribe(context.Background(), id, SourceOneClick, since.Add(5*time.Second)); err != nil {
+		t.Fatalf("Unsubscribe #2 while pending (action five): %v", err)
+	}
+	assertDelta("5: after second Unsubscribe while pending — #0344's own bug, pre-fix this read (0,0,1) net -1", 0, 0, 0)
+
+	if _, err := subStore.RestartSignup(context.Background(), id, RestartSignupInput{ConfirmTTL: time.Hour}, since.Add(6*time.Second)); err != nil {
+		t.Fatalf("RestartSignup (action six): %v", err)
+	}
+	assertDelta("6: after second RestartSignup", 0, 0, 0)
+
+	if _, err := subStore.Unsubscribe(context.Background(), id, SourceOneClick, since.Add(7*time.Second)); err != nil {
+		t.Fatalf("Unsubscribe #3 while pending (action seven): %v", err)
+	}
+	assertDelta("7: after third Unsubscribe while pending — same excluded state as action five, not a new one", 0, 0, 0)
+}
+
+// TestConsentBasisValuesAreClassified is #0343 criterion 6's guard. It reads
+// migrations/000023_create_subscriber_imports.up.sql's own
+// subscribers_consent_basis_check CHECK constraint directly — an oracle
+// wholly independent of growthArrivalConsentBases, not a hand-copied
+// restatement of it — and fails, naming the value, if the CHECK constraint
+// ever permits a consent_basis value this test's own `classified` map does
+// not account for, or if `classified` names a value the CHECK constraint no
+// longer permits. This is exactly how #0343 happened the first time:
+// ConsentBasisAdminAttested sat in the CHECK constraint, unclassified by
+// Growth30Days' predicates, for months before anything wrote it.
+//
+// The `classified` map's own correctness — that it says the same thing
+// growthArrivalConsentBases (store.go) actually does — is checked
+// separately below, against that real package-level slice, so a change to
+// one without the other fails here too.
+func TestConsentBasisValuesAreClassified(t *testing.T) {
+	// Every value the CHECK constraint permits, and whether Growth30Days'
+	// arrival predicates treat it as a "someone-else-attested" arrival
+	// (true) or leave it to confirmed_30d alone (false — the reason is
+	// ConsentBasisDoubleOptIn's own case, above growthArrivalConsentBases in
+	// store.go).
+	classified := map[string]bool{
+		ConsentBasisDoubleOptIn:          false,
+		ConsentBasisImportedPriorConsent: true,
+		ConsentBasisAdminAttested:        true,
+	}
+
+	root := repoRootForEventsGuard(t)
+	migrationPath := filepath.Join(root, "migrations", "000023_create_subscriber_imports.up.sql")
+	data, err := os.ReadFile(migrationPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", migrationPath, err)
+	}
+
+	checkPattern := regexp.MustCompile(`(?s)consent_basis_check\s+CHECK \([^;]*?consent_basis IN \(([^)]*)\)`)
+	m := checkPattern.FindSubmatch(data)
+	if m == nil {
+		t.Fatalf("could not find subscribers_consent_basis_check's IN (...) list in %s — has its shape changed? Update this test's extraction pattern deliberately if so.", migrationPath)
+	}
+	valuePattern := regexp.MustCompile(`'([a-z_]+)'`)
+	values := valuePattern.FindAllStringSubmatch(string(m[1]), -1)
+	if len(values) == 0 {
+		t.Fatalf("found the CHECK constraint but extracted zero values from %q", string(m[1]))
+	}
+
+	seen := map[string]bool{}
+	for _, v := range values {
+		val := v[1]
+		seen[val] = true
+		if _, ok := classified[val]; !ok {
+			t.Errorf("consent_basis value %q is permitted by migrations/000023's CHECK constraint but not classified in TestConsentBasisValuesAreClassified's `classified` map (imports_test.go) — decide which Growth30Days bucket it belongs to and record the decision there", val)
+		}
+	}
+	for val := range classified {
+		if !seen[val] {
+			t.Errorf("TestConsentBasisValuesAreClassified's `classified` map lists %q but migrations/000023's CHECK constraint no longer permits it — stale entry", val)
+		}
+	}
+
+	arrivalSet := make(map[string]bool, len(growthArrivalConsentBases))
+	for _, v := range growthArrivalConsentBases {
+		arrivalSet[v] = true
+	}
+	for val, wantArrival := range classified {
+		if arrivalSet[val] != wantArrival {
+			t.Errorf("classified[%q] = %v but growthArrivalConsentBases (store.go) disagrees: present = %v", val, wantArrival, arrivalSet[val])
+		}
 	}
 }

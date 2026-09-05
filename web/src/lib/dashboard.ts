@@ -53,6 +53,22 @@ export function formatNetGrowth(growth: DashboardGrowth): string {
  * internal/subscribers/store.go), so a restarted row counts as neither an
  * arrival nor a departure until its own next event decides which.
  *
+ * `consent_basis` has three values (migrations/000023's CHECK constraint):
+ * `double_opt_in` (the person's own confirmation — always `confirmed_30d`,
+ * never `imported_30d`), `imported_prior_consent` (an import batch's own
+ * attestation — `imported_30d`), and `admin_attested` (an admin's own
+ * attestation — also `imported_30d`, #0343). Nothing writes `admin_attested`
+ * yet, but the bucket it belongs to is decided regardless, so the first
+ * change that does write it does not silently drift this arithmetic.
+ *
+ * `unsubscribed_30d` counts a departure only from a row that held one of
+ * those same footprints — its own confirmation, or one of the two
+ * "someone-else-attested" import values — at the moment it left (#0344): an
+ * address that unsubscribes without ever having been counted as growth (a
+ * still-pending signup, an unaccepted invitation, or a restarted row that
+ * has not yet re-earned either) is not a departure either, no matter how
+ * many times that cycle repeats.
+ *
  * This function and internal/subscribers.Store.Growth30Days' doc comment
  * describe the same three counts; keep them in agreement.
  */
