@@ -244,12 +244,18 @@ var envTrailingComment = regexp.MustCompile(`[ \t]#`)
 //	                                    first "$" at all; the widened pattern
 //	                                    agrees and does not flag it)
 //
-// #0457 widens this once more, admitting an optional leading backslash —
-// `\\?` — into the same variable, not a fifth shape or a second pattern:
-// still the "godotenv treats a dollar sign specially, systemd doesn't"
-// mechanism, still one FindString call at the one violation site below. This
-// closes the family #0453's reviewer measured and reported but did not fix:
-// a backslash sitting directly in front of a "$" anywhere in the value.
+// #0457 widens this once more — not by making the leading backslash optional
+// on the existing alternative, but by adding a second alternative to the same
+// variable: `\\\$`, a backslash immediately followed by a dollar sign. A
+// prefix form — splicing an optional `\\?` onto the existing
+// `\$\(?\{?[A-Z0-9_]+\}?` alternative — was considered and rejected: it would
+// still require a variable name to follow the dollar sign, so it would miss
+// the bare backslash-dollar case entirely and reproduce the pre-#0457 counts
+// exactly. This is not a fifth shape or a second pattern: still the "godotenv
+// treats a dollar sign specially, systemd doesn't" mechanism, still one
+// FindString call at the one violation site below. This closes the family
+// #0453's reviewer measured and reported but did not fix: a backslash sitting
+// directly in front of a "$" anywhere in the value.
 //
 // This is distinct from the trailing-backslash CONTINUATION check later in
 // this file (the very last check in scanEnvExampleValueShapes, which tests
@@ -387,7 +393,7 @@ func scanEnvExampleValueShapes(content []byte) (scanned int, violations []string
 				// message names godotenv's behavior first rather than
 				// leading with "expansion", which this case never performs.
 				violations = append(violations, fmt.Sprintf(
-					"line %d (%s): value %q has a backslash immediately before a \"$\" — joho/godotenv v1.5.1 (parser.go's expandVariables, via expandVarRegex's optional leading backslash group) silently strips exactly that one backslash and leaves the dollar sign and anything after it as literal text with NO substitution, while systemd's EnvironmentFile= has no backslash-escaping at all and keeps the backslash byte-for-byte; this is NOT the trailing-backslash line-continuation shape (that one is about a backslash at the END of the value, not one sitting in front of a \"$\") — the two parsers would assign different values to %s; remove the backslash",
+					"line %d (%s): value %q has a backslash immediately before a \"$\" — joho/godotenv v1.5.1 (parser.go's expandVariables, via expandVarRegex's optional leading backslash group) silently strips exactly that one backslash and leaves the dollar sign it precedes as literal text with no substitution for that occurrence, while systemd's EnvironmentFile= has no backslash-escaping at all and keeps the backslash byte-for-byte; this is NOT the trailing-backslash line-continuation shape (that one is about a backslash at the END of the value, not one sitting in front of a \"$\") — the two parsers would assign different values to %s; remove the backslash",
 					lineNo, name, value, name))
 			case strings.Contains(match, "("):
 				// #0453: the $(VAR) shape. Worded separately from the
