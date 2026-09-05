@@ -649,16 +649,33 @@ var issueStatusPattern = regexp.MustCompile(`(?m)^\|\s*\*\*Status\*\*\s*\|\s*([a
 // helpers docTableRowLines's own opener branch relies on (#0224), rather than
 // reimplementing the check or extracting docTableRowLines's fence-state
 // machine into a shared helper (#0454's review declined that trade; #0176 is
-// the standing precedent). A closing "```" line is intentionally left
-// ungated, matching the pre-existing (safe-direction) behavior of closing on
-// any such line regardless of its own indentation or trailing text.
+// the standing precedent).
+//
+// #0460: the closing branch was left ungated by #0455 on the reasoning that
+// closing early can only ever un-hide a row, never hide one. That reasoning
+// does not hold in general: an opener at column 0, followed by a fence-shaped
+// line indented four columns, followed by an unindented fence-shaped line,
+// closes once under CommonMark (the indented line is content, not a closer)
+// and leaves a status row below outside every fence. The ungated closer
+// instead closes on the indented line and reopens on the next one, hiding the
+// row — the closer's leniency feeding a later opener, a dangerous-direction
+// pairing neither branch produces alone. The closing branch is now gated on
+// the same leadingIndentWidth <= 3 threshold as the opener, reaching parity
+// with docTableRowLines's closer on the point #0092 hardened there. It
+// deliberately does not adopt the rest of #0092's closer rule: a closer
+// carrying trailing text after its run still closes here, since that half is
+// one of the safe-direction divergences #0455's criterion 3 protects, and
+// closing it would trade a loud failure (a row wrongly read as real) for a
+// silent one (a row wrongly ignored).
 func issueStatus(fileText string) string {
 	inFence := false
 	for _, line := range strings.Split(fileText, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
 			if inFence {
-				inFence = false
+				if leadingIndentWidth(line) <= 3 {
+					inFence = false
+				}
 				continue
 			}
 			run := leadingRunLength(trimmed, '`')
@@ -1241,4 +1258,25 @@ func TestIssueStatusSafeDirectionDivergencesUnchanged(t *testing.T) {
 			t.Errorf("issueStatus with inline triple backtick mid-prose = %q, want %q", got, "open")
 		}
 	})
+}
+
+// TestIssueStatusClosingBranchDoesNotHideRowBehindReopenedFence pins #0460's
+// fix: the closing branch, like the opener since #0455, now closes a fence
+// only when leadingIndentWidth(line) <= 3. Before this fix, an opener at
+// column 0 followed by a fence-shaped line indented four columns followed by
+// an unindented fence-shaped line closed on the indented line and reopened
+// on the unindented one, hiding a real Status row below. CommonMark instead
+// closes that fence exactly once — the indented line is content, not a
+// closer — leaving the row outside every fence, which is the answer this
+// test asserts.
+func TestIssueStatusClosingBranchDoesNotHideRowBehindReopenedFence(t *testing.T) {
+	doc := "```\n" +
+		"    ```\n" +
+		"```\n" +
+		"| | |\n" +
+		"|---|---|\n" +
+		"| **Status** | open |\n"
+	if got := issueStatus(doc); got != "open" {
+		t.Errorf("issueStatus with a 4-space-indented fence line closing early and reopening = %q, want %q", got, "open")
+	}
 }
