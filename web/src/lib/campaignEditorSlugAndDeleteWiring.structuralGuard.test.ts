@@ -179,23 +179,41 @@ function spanLength(node: SvelteNode): number {
   return end - start;
 }
 
+// #0451: scoped to <script>'s TOP-LEVEL statement list only -- deliberately
+// not a recursive findFirst walk. A recursive walk would also match a nested
+// function or nested variable declarator sharing the target name (e.g. one
+// declared inside another handler's body), which is exactly the decoy
+// #0444's review constructed against assertion 4 (a nested `onConfirmDelete`
+// calling deleteCampaign(...), declared earlier, satisfying the check even
+// with the real top-level handler's call deleted). `saveDraft` and
+// `onConfirmDelete` are both top-level FunctionDeclarations in
+// CampaignEditor.svelte today (confirmed against the real parsed AST), so
+// this scoping changes nothing for either of this guard's two callers.
 function findFunctionOrArrowByName(instanceContent: unknown, name: string): SvelteNode {
-  const found = findFirst(instanceContent, (n) => {
-    if (n.type === 'FunctionDeclaration' && isIdentifierNamed(n.id as SvelteNode | undefined, name)) {
-      return true;
-    }
-    if (n.type === 'VariableDeclarator' && isIdentifierNamed(n.id as SvelteNode | undefined, name)) {
-      const init = n.init as SvelteNode | undefined;
-      return !!init && (init.type === 'ArrowFunctionExpression' || init.type === 'FunctionExpression');
-    }
-    return false;
-  });
-  if (!found) {
-    throw new Error(
-      `${COMPONENT_PATH}: could not find a function or arrow-function-assigned variable named \`${name}\` in <script>`,
-    );
+  const body = (instanceContent as SvelteNode).body as unknown[] | undefined;
+  if (!Array.isArray(body)) {
+    throw new Error(`${COMPONENT_PATH}: <script> content has no top-level statement list`);
   }
-  return found.type === 'VariableDeclarator' ? (found.init as SvelteNode) : found;
+  for (const stmt of body) {
+    const s = stmt as SvelteNode;
+    if (s.type === 'FunctionDeclaration' && isIdentifierNamed(s.id as SvelteNode | undefined, name)) {
+      return s;
+    }
+    if (s.type === 'VariableDeclaration') {
+      const decls = (s.declarations as SvelteNode[] | undefined) ?? [];
+      for (const d of decls) {
+        if (d.type === 'VariableDeclarator' && isIdentifierNamed(d.id as SvelteNode | undefined, name)) {
+          const init = d.init as SvelteNode | undefined;
+          if (init && (init.type === 'ArrowFunctionExpression' || init.type === 'FunctionExpression')) {
+            return init;
+          }
+        }
+      }
+    }
+  }
+  throw new Error(
+    `${COMPONENT_PATH}: could not find a top-level function or arrow-function-assigned variable named \`${name}\` in <script>`,
+  );
 }
 
 function findDerivedDeclarator(instanceContent: unknown, name: string): SvelteNode {
@@ -222,10 +240,15 @@ describe('CampaignEditor slug and delete wiring (#0444)', () => {
   // silent regression this issue was filed for: every other visible signal
   // (typing, "Saved", the archive URL preview) keeps reporting success.
   it("saveDraft's updateCampaign(...) call still sends a `slug` property", () => {
-    const call = findFirst(instanceContent, (n) => isCallTo(n, 'updateCampaign'));
+    // #0451: scoped to saveDraft's own body -- a whole-<script> search would
+    // also match an earlier, unrelated updateCampaign(...) call carrying its
+    // own `slug` property, which is exactly the decoy #0444's review
+    // constructed against this assertion.
+    const saveDraftFn = findFunctionOrArrowByName(instanceContent, 'saveDraft');
+    const call = findFirst(saveDraftFn.body, (n) => isCallTo(n, 'updateCampaign'));
     if (!call) {
       throw new Error(
-        `${COMPONENT_PATH}: could not find a call to updateCampaign(...) in <script> -- has saveDraft's PATCH call moved or been renamed? (#0444)`,
+        `${COMPONENT_PATH}: could not find a call to updateCampaign(...) inside saveDraft's body -- has saveDraft's PATCH call moved or been renamed? (#0444)`,
       );
     }
     const args = call.arguments as SvelteNode[] | undefined;
@@ -364,6 +387,30 @@ describe('CampaignEditor slug and delete wiring (#0444)', () => {
       throw new Error(
         `${COMPONENT_PATH}: could not find the {#if ...} wrapping the "Delete campaign" trigger ` +
           '(<Button onclick={openDelete}>) -- has #0411\'s offer gate moved? (#0444)',
+      );
+    }
+    // #0451 (the "Also worth fixing" note): a genuine offer gate wraps ONLY
+    // the trigger button, give or take incidental whitespace Text nodes. If
+    // `{#if deleteOffered}` is deleted outright, the nearest-by-span
+    // candidate that remains is a much larger containing block (the outer
+    // `{:else if campaign}` branch), which was never a dedicated gate for
+    // this button. Naming that mismatch directly, before resolving its
+    // unrelated `test` identifier, turns the previously "confusing but
+    // fail-closed" message (naming `campaign` as though it were the gate)
+    // into one that names the real defect: the gate is gone, not mispointed.
+    const consequentNodes = ((offerIfBlock.consequent as SvelteNode).nodes as SvelteNode[] | undefined) ?? [];
+    const nonWhitespaceNodes = consequentNodes.filter((n) =>
+      n.type === 'Text' ? ((n.data as string) ?? '').trim().length > 0 : true,
+    );
+    const wrapsOnlyTheTrigger =
+      nonWhitespaceNodes.length === 1 &&
+      nonWhitespaceNodes[0].type === 'Component' &&
+      nonWhitespaceNodes[0].name === 'Button';
+    if (!wrapsOnlyTheTrigger) {
+      throw new Error(
+        `${COMPONENT_PATH}: the {#if ...} nearest the "Delete campaign" trigger (\`${srcOf(offerIfBlock.test as SvelteNode)}\`) ` +
+          'wraps more than just that trigger button -- the dedicated offer gate {#if} appears to be missing ' +
+          "entirely, not merely re-pointed to a different gate variable (#0451, from #0444's review)",
       );
     }
     const test = offerIfBlock.test as SvelteNode;
