@@ -27,12 +27,19 @@ require picking one. Read-only checks on the box (2026-09-06) rule out the
   invocation shape (the timer's bare `--quiet`, a manual `certbot renew`, or
   `--dry-run --run-deploy-hooks`), and only runs what it finds there after a
   certificate has actually renewed.
-- This host renews certificates for several unrelated domains under the same
-  certbot install (`beerbeerbeer.me`, `eurekaplatforms.com`,
-  `gregariousbots.social`, `sstools.co`, `terriblename.com`, alongside
-  `opencircuitsf.com`) — all fronted by the same Apache process. A
-  deploy-hooks-directory script fires for renewals of any of them, and
-  reloading Apache after any of those renewals is desired, not just harmless.
+- This host renews eight lineages under the same certbot install, per `sudo
+  certbot certificates`: `beerbeerbeer.me`, `eurekaplatforms.com`,
+  `gregariousbots.social`, `opencircuitsf.com`, `sstools.co-wildcard`,
+  `terriblename.com`, `www.beerbeerbeer.me`, and `www.eurekaplatforms.com` —
+  all fronted by the same Apache process. Two of the seven unrelated to this
+  project, `www.beerbeerbeer.me` and `www.eurekaplatforms.com`, use
+  `authenticator = apache`, which is exactly why `certbot renew` must always
+  be scoped with `--cert-name opencircuitsf.com` when exercised by hand (see
+  `docs/deployment.md` §9) — an unscoped dry run would have certbot's Apache
+  plugin temporarily rewrite and reload config for those two unrelated
+  domains. A deploy-hooks-directory script still fires for renewals of any of
+  the eight, and reloading Apache after any of those renewals is desired, not
+  just harmless.
 
 ## No-op when nothing renewed
 
@@ -52,8 +59,11 @@ sudo install -m 0755 deploy/certbot/reload-apache-deploy-hook.sh \
 
 See `docs/deployment.md`'s TLS section (§9) for the full approval-ready
 sequence, including how to prove the hook fires without deploying a real
-certificate (`certbot renew --dry-run --run-deploy-hooks`) and exactly what
-that dry run does and does not establish.
+certificate (`certbot renew --cert-name opencircuitsf.com --dry-run
+--run-deploy-hooks`) and exactly what that dry run does and does not
+establish. **`--cert-name` is required** — see the enumeration above; without
+it the dry run simulates renewal of all eight lineages on this box, including
+the two that use the apache authenticator.
 
 ## Does not touch
 

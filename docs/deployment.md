@@ -974,8 +974,9 @@ sudo systemctl reload httpd
 curl -fsS https://www.opencircuitsf.com/health
 ```
 
-**For the unattended path, `#0447` closes the gap with a certbot deploy
-hook** — `deploy/certbot/reload-apache-deploy-hook.sh` in this repo. It runs
+**For the unattended path, `#0447` prepares a certbot deploy hook to close
+the gap, pending approval** — `deploy/certbot/reload-apache-deploy-hook.sh`
+in this repo. It runs
 `httpd -t` and, only if that passes, `systemctl reload httpd`; certbot only
 invokes a deploy hook after a certificate actually renews, so the script
 needs no "did anything change" check of its own, and a failed `httpd -t`
@@ -1001,9 +1002,13 @@ sudo install -m 0755 deploy/certbot/reload-apache-deploy-hook.sh \
 # 2. Confirm it is in place.
 sudo ls -l /etc/letsencrypt/renewal-hooks/deploy/
 
-# 3. Exercise the renewal path against Let's Encrypt's *staging* server,
-#    with the deploy hook enabled, without touching the real certificate.
-sudo certbot renew --dry-run --run-deploy-hooks
+# 3. Exercise the renewal path for THIS certificate only, against Let's
+#    Encrypt's *staging* server, with the deploy hook enabled, without
+#    touching the real certificate. --cert-name is required: without it
+#    certbot simulates renewal of all eight lineages on this box, two of
+#    which use the apache authenticator and would temporarily rewrite and
+#    reload Apache config for unrelated domains.
+sudo certbot renew --cert-name opencircuitsf.com --dry-run --run-deploy-hooks
 
 # 4. Confirm the site is still serving correctly afterward.
 curl -fsS https://www.opencircuitsf.com/health
@@ -1028,6 +1033,19 @@ itself — `certbot-renew.service` still runs the unmodified
 unconditional deploy-hooks-directory scan rather than on anything this dry
 run adds. The two are the same scan mechanism, but only the real timer
 invocation is proof of the timer path specifically.
+
+**What step 3 does to the live box.** With `--cert-name` it touches one
+lineage: certbot writes and then deletes a `_acme-challenge` TXT record in
+this domain's Route 53 zone, discards the staging certificate, and runs the
+deploy hook once — one `httpd -t` and one `systemctl reload httpd`, which
+is `httpd -k graceful` and drains in-flight requests rather than dropping
+them. Expect a single reload and no interruption. **Do not drop
+`--cert-name`.** Unscoped, `certbot renew --dry-run` simulates renewal of
+every lineage on this host regardless of expiry, and two of them
+(`www.beerbeerbeer.me`, `www.eurekaplatforms.com`) are configured with
+`authenticator = apache`, which — as `certbot --help renew` warns of
+`--dry-run` — temporarily modifies and rolls back webserver configuration
+on the Apache process this site shares.
 
 `www.opencircuitsf.com` resolves and serves over TLS today: re-verified
 read-only for this pass, `curl -sI https://www.opencircuitsf.com/` returns
