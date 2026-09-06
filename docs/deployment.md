@@ -967,14 +967,67 @@ to the empty string, and `certbot-renew.service` is a bare
 `certbot renew --quiet`. The renewal config configures no installer. So
 nothing reloads Apache when the certificate is replaced, and `mod_ssl`
 goes on serving the previous one until it is. After a manual `certonly`,
-run the reload yourself. For the unattended path there is currently no
-mechanism at all — a gap in the box's configuration tracked separately as
-`#0447`, not something this document can fix:
+run the reload yourself:
 
 ```bash
 sudo systemctl reload httpd
 curl -fsS https://www.opencircuitsf.com/health
 ```
+
+**For the unattended path, `#0447` closes the gap with a certbot deploy
+hook** — `deploy/certbot/reload-apache-deploy-hook.sh` in this repo. It runs
+`httpd -t` and, only if that passes, `systemctl reload httpd`; certbot only
+invokes a deploy hook after a certificate actually renews, so the script
+needs no "did anything change" check of its own, and a failed `httpd -t`
+leaves the previously-loaded certificate serving rather than reloading into
+a broken config. It is a deploy-hooks-directory script rather than
+`DEPLOY_HOOK` in `/etc/sysconfig/certbot` because `certbot-renew.service`'s
+`ExecStart` above does not source that file or splice its hook variables
+onto the command line — setting `DEPLOY_HOOK` there would sit inert for the
+timer path without also editing the unit. A script placed in
+`/etc/letsencrypt/renewal-hooks/deploy/` needs no such edit: certbot scans
+that directory unconditionally on every `renew` invocation. See
+`deploy/certbot/README.md` for the full reasoning.
+
+**This is a change to production and needs the user's explicit approval
+before any of it runs on the box** (`CLAUDE.md` §5b, §9). Nothing below has
+been run. In order:
+
+```bash
+# 1. Install the hook (idempotent; safe to re-run).
+sudo install -m 0755 deploy/certbot/reload-apache-deploy-hook.sh \
+  /etc/letsencrypt/renewal-hooks/deploy/reload-apache.sh
+
+# 2. Confirm it is in place.
+sudo ls -l /etc/letsencrypt/renewal-hooks/deploy/
+
+# 3. Exercise the renewal path against Let's Encrypt's *staging* server,
+#    with the deploy hook enabled, without touching the real certificate.
+sudo certbot renew --dry-run --run-deploy-hooks
+
+# 4. Confirm the site is still serving correctly afterward.
+curl -fsS https://www.opencircuitsf.com/health
+```
+
+**What step 3 proves, and what it does not.** `certbot --help renew`
+documents that `--dry-run` alone does *not* run deploy hooks at all
+(`--deploy-hook commands do not run, unless enabled by --run-deploy-hooks`),
+so `--run-deploy-hooks` is required for this to be a proof of anything.
+With it: certbot obtains a **test, invalid** certificate from the staging
+server, does **not** save it to disk, and then — because the dry run
+succeeded — runs the deploy hook using `RENEWED_LINEAGE` pointing at the
+**real, currently active** certificate (per `certbot --help renew`'s own
+description of the flag), not the temporary staging one. So this proves the
+hook is discovered, that it runs, that `httpd -t` and `systemctl reload
+httpd` both succeed, and that Apache goes on serving correctly afterward —
+i.e. the exact reload mechanics that would fire on a real renewal. It does
+**not** prove a real certificate gets issued or deployed (the dry run
+explicitly discards its test cert), and it does not exercise the timer unit
+itself — `certbot-renew.service` still runs the unmodified
+`certbot renew --quiet` with neither flag, relying on the same
+unconditional deploy-hooks-directory scan rather than on anything this dry
+run adds. The two are the same scan mechanism, but only the real timer
+invocation is proof of the timer path specifically.
 
 `www.opencircuitsf.com` resolves and serves over TLS today: re-verified
 read-only for this pass, `curl -sI https://www.opencircuitsf.com/` returns
