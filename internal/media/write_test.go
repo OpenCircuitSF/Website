@@ -3,6 +3,7 @@ package media
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -52,8 +53,21 @@ func TestWriteAtomic_NoPartialFileOnFailure(t *testing.T) {
 	// any bytes are written anywhere.
 	dir := filepath.Join(t.TempDir(), "does-not-exist")
 
-	if err := WriteAtomic(dir, "photo.jpg", []byte("data")); err == nil {
+	err := WriteAtomic(dir, "photo.jpg", []byte("data"))
+	if err == nil {
 		t.Fatal("expected an error writing into a nonexistent directory")
+	}
+
+	// Pin the temp file's *location*, not just that CreateTemp failed. This
+	// is what proves the temp file is created inside dir (never
+	// os.TempDir()) even when nothing else in this test can observe the
+	// path directly: a future regression to os.CreateTemp("", ...) would
+	// still fail here (there is no "does-not-exist" directory under
+	// os.TempDir() either), but for the wrong reason, so the message itself
+	// is the only thing that pins WHERE the attempt was made. See
+	// WriteAtomic's own error wrapping ("media: creating temp file in %s").
+	if !strings.Contains(err.Error(), "creating temp file in "+dir) {
+		t.Errorf("error = %q, want it to mention creating temp file in %s", err, dir)
 	}
 
 	if _, err := os.Stat(filepath.Join(dir, "photo.jpg")); !os.IsNotExist(err) {

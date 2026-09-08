@@ -157,8 +157,12 @@ func firstN(b []byte, n int) []byte {
 // image is >100 MB of pixel data if ever decoded) should be refused before
 // anything is written, on a box with ~166 MB available. 8000x6000 is the
 // plan's own example of what must be rejected; the ceiling below rejects it
-// on both grounds (edge and total pixels) while comfortably admitting any
-// real phone photo at typical resolutions.
+// on both grounds (edge and total pixels). It does not admit every real
+// phone photo — a 24 MP frame (5712x4284, e.g. a recent iPhone's main
+// sensor) is 24.47 MP and exceeds it — but the 5 MiB request-body cap
+// (internal/handlers) refuses a file that large first in practice, so the
+// dimension ceiling's role is to bound decode-header cost, not to be the
+// first line of defense against a large sensor.
 const (
 	MaxImageEdgePixels = 6000
 	MaxImagePixels     = 24_000_000 // 24 MP
@@ -246,8 +250,11 @@ func SanitizeStem(name string) string {
 // traversal is impossible (the extension comes from the sniffed format,
 // never the client, and SanitizeStem's output alphabet excludes '.' and
 // '/'), the week-long Cache-Control max-age is never stale (different bytes
-// always produce a different name), and duplicate uploads of identical
-// bytes converge instead of accumulating.
+// always produce a different name), and an upload of the exact same file —
+// same original name and identical stripped bytes — converges on the same
+// stored path instead of accumulating a near-duplicate. Identical bytes
+// under a *different* original name only share the hash suffix: the stem
+// differs, so the two still produce different paths.
 func Filename(originalName string, strippedBytes []byte, format Format) string {
 	stem := SanitizeStem(originalName)
 	sum := sha256.Sum256(strippedBytes)

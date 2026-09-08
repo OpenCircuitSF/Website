@@ -308,7 +308,11 @@ lets two agents test concurrently (§5a).
 
 **A scoped run can miss a repo-wide guard's own package (`#0381`).** Eight
 packages own tests whose scan roots reach beyond their own directory, so an
-edit inside one of those roots must add that package to the scoped run:
+edit inside one of those roots must add that package to the scoped run. The
+table carries a **ninth** row, `internal/media`: it reaches nothing, and is
+listed only because the parity guard's `".."`-literal detector flags its
+traversal-prevention test data. Its `Reaches into` cell says so. Do not
+delete that row to reconcile the count — the guard requires it.
 
 | Package | Reaches into |
 |---|---|

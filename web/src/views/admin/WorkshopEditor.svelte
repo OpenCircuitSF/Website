@@ -613,6 +613,7 @@
              (docs/media.md) stays supported for when the endpoint is unconfigured or the
              admin already has a file on the server. An external URL is still rejected
              because the site hosts its own images (CLAUDE.md §9: no external CDNs). -->
+        <label for="workshop-cover-image-upload">Upload an image</label>
         <div class="cover-upload">
           <input
             id="workshop-cover-image-upload"
