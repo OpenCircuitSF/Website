@@ -2479,7 +2479,7 @@ touched often enough on `main` that a stale checkout's next pull is likely to
 collide with it. Check before pulling:
 
 ```bash
-git status --porcelain -- web/dist/
+git status --porcelain
 ```
 
 Any output there is very likely leftover build artifact, not an intended edit
@@ -2487,7 +2487,7 @@ Any output there is very likely leftover build artifact, not an intended edit
 
 ```bash
 git show HEAD:web/dist/index.html > web/dist/index.html
-git status --porcelain -- web/dist/   # confirm clean before the pull below
+git status --porcelain   # confirm clean before the pull below
 ```
 
 **Never `git checkout -- web/dist/index.html`** to do this — `CLAUDE.md` §8a
@@ -2496,6 +2496,16 @@ session, and on a shared box you generally cannot tell whether you did. The
 `git show HEAD:… >` form above reaches the same end state without it. This
 check costs nothing when the file turns out to be clean, so it is worth
 running unconditionally rather than only after a pull already fails.
+
+A tracked file the checkout has modified shows as `M`, and the `git show`
+form above restores it. A file `scp`'d in that this checkout does not
+track yet shows as `??` — the `git show HEAD:… >` form cannot restore it
+(`fatal: path '…' exists on disk, but not in 'HEAD'`). Remove it instead
+and let the pull deliver the committed copy:
+
+```bash
+rm <the ?? paths git status just named>
+```
 
 **Which of `git pull` or a targeted `scp` brings a file current is decided by
 one question, not by habit (`#0467`): does the change need a rebuilt Go
@@ -2508,7 +2518,14 @@ rebuild for no reason, on a box with 418 MB of RAM (`CLAUDE.md` §7), while
 also landing every other unreleased commit onto the production checkout at
 once. `#0447`, `#0465`, and `#0435`'s prepared instructions (`#0466`) each
 answered "no" and chose a targeted `scp` of the one file each needed,
-verified by hash; nothing here changes that. This section's `git pull`
+verified by hash; nothing here changes that.
+
+Note the two branches interact: a `scp` into `/opt/opencircuit` leaves
+that file `M` or `??` in the production checkout, and the next redeploy's
+`git pull` refuses until it is cleared — under `--rebase`, on *any*
+unstaged change, whether or not the incoming commits touch it. That is
+what the whole-tree check above is for; it is not only about
+`web/dist/index.html`. This section's `git pull`
 remains the mechanism for the case those three are not: an actual redeploy
 of the running service.
 
