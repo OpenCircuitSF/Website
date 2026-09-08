@@ -18,15 +18,6 @@ group). Create it once before installing the service:
 sudo useradd --system --no-create-home opencircuit
 ```
 
-## Create the system user
-
-The unit runs as an unprivileged `opencircuit` system user (and group). Create
-it once before installing the service:
-
-```bash
-sudo useradd --system --no-create-home opencircuit
-```
-
 ## Install
 
 Install the unit, reload systemd, then enable and start the service so it runs
@@ -358,9 +349,8 @@ BACKUP_ALERT_WEBHOOK_URL=https://hooks.example.com/...
 ```
 
 No such channel is configured anywhere in this repo — that URL does not exist
-yet. Until it does, the journal log is the alert. See `docs/deployment.md`'s
-Backups section for exactly what this pair of units has and has not been
-verified against.
+yet. See `docs/deployment.md`'s Backups section for exactly what this pair of
+units has and has not been verified against.
 
 **`#0435`'s recommendation: leave `BACKUP_ALERT_WEBHOOK_URL` unconfigured for
 now, deliberately, not as an oversight.** `/etc/opencircuit/backup-alert.env`
@@ -369,10 +359,57 @@ has no committed template and confirmed does not exist on the box
 webhook or healthchecks.io URL exists for this project at all (`CLAUDE.md` §10
 items 2 and 6 record no such channel). Wiring one up would mean inventing a
 destination with no real endpoint behind it, which is worse than no alert.
-The journal-only path already works without any of that: a failed run logs
-`daemon.err` (surfaced by `journalctl -p err`) and, independently, shows up in
-`systemctl --failed` the moment `opencircuit-backup-alert.service` itself
-runs. That is a real, if manual, signal — check `systemctl --failed`
-periodically, or wire an external channel later once one actually exists.
-Nothing here needs to be re-decided before the timer is installed; it is a
-"leave as configured" call, not a blocker.
+That part of the recommendation stands.
+
+**Corrected (`#0468`, 2026-09-08): the journal is not the alert, and nobody
+should read it as one.** `journalctl -p err` and `systemctl --failed` are both
+**pull commands** — each one only tells you something the moment a person
+runs it, and **nothing on this box is scheduled to run either one.** Read-only,
+against the live box: `systemctl list-timers --all` lists 8 timers and every
+one is an OS timer unrelated to backups (`certbot-renew`, `logrotate`,
+`sysstat-collect`/`-summary`, `systemd-tmpfiles-clean`, `fstrim`,
+`update-motd`, `refresh-policy-routes@ens5`); `crontab -l` for `root` reports
+none, and `/etc/cron.d/` holds only the stock `0hourly`. So a run that fails at
+3a.m. produces a journal entry and a failed-unit mark that sit there, unread,
+until someone happens to check — which is exactly the silent-failure mode
+`#0468` exists to close. **A `Type=oneshot` unit's `OnFailure=` marking itself
+failed is not a notification; it is a fact waiting for something to ask about
+it, and today nothing asks.**
+
+The honest state, as of this pass: **there is no interim failure signal for
+this backup beyond a human choosing, on their own initiative, to run
+`journalctl -p err` or `systemctl --failed`.** That is worth doing
+occasionally, but it is not a substitute for a scheduled check, and this
+document should not imply otherwise.
+
+Two things worth recording about why that gap is not closed here:
+
+- **A channel that could actually reach a person still doesn't exist.**
+  `#0271` established `contact@opencircuitsf.com` as a real Google Workspace
+  mailbox, and it was the first thing checked as a cheaper option than a new
+  webhook. It is not currently reachable *from this box*, though: read-only,
+  there is no mail transfer agent installed at all (`postfix`, `sendmail`,
+  `mailx`, `msmtp`, `ssmtp` all absent), so nothing here can hand off an SMTP
+  message to it without installing new software first. This project's own
+  mail path is AWS SES, and `#0415` still blocks that (sandboxed regardless of
+  `#0415`, per `CLAUDE.md` §10 item 2). So mail to the Workspace inbox is a
+  real destination, but not a currently usable one, and standing it up is new
+  software on the box plus a send path — both need the user's decision and
+  approval (`CLAUDE.md` §5b, §9), not something this pass does unilaterally.
+- **A scheduled *pull* alone would not close the gap either, and that is why
+  one was not added here.** A timer that periodically re-runs
+  `systemctl --failed` and writes the result back to the journal only
+  automates the same read a human would otherwise have to remember to do — it
+  does not put the result in front of anyone unless it is paired with a
+  destination a person already looks at (a mailbox, a chat channel, or
+  something already on the box's regular attention, like the MOTD
+  `update-motd.timer` already refreshes on every login). Building that
+  pairing is a decision about where the result goes, which is exactly what
+  criterion 4 reserves for the user, not this pass.
+
+**Nothing was installed or changed on the box for this.** The three unit files
+in this directory are byte-identical to what `#0435` verified there; this pass
+is a correction to this document's own claim, not new mechanism. **Worth
+filing** once the user has a preference: a scheduled `systemctl --failed`
+check with a real destination (mailbox, once reachable, or a chat webhook),
+sized to whatever cadence the user actually wants to be interrupted at.

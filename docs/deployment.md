@@ -2448,9 +2448,18 @@ explicit approval (`CLAUDE.md` §5b, §9) before any of those commands run.
 
 `BACKUP_ALERT_WEBHOOK_URL` remains deliberately unconfigured: no
 Slack/Discord/Mattermost/healthchecks.io channel exists anywhere in this
-project (`CLAUDE.md` §10 items 2 and 6), so `#0435` recommends leaving the
-journal-only alert path (`journalctl -p err`, `systemctl --failed`) as the
-interim signal rather than inventing a destination with nothing behind it.
+project (`CLAUDE.md` §10 items 2 and 6), so `#0435` recommends leaving it
+unset rather than inventing a destination with nothing behind it.
+**Corrected (`#0468`, 2026-09-08): `journalctl -p err` and `systemctl
+--failed` are not an interim alert — they are pull commands, and nothing on
+the box is scheduled to run either one** (its 8 timers are all OS-owned;
+there is no root/postgres/ec2-user crontab). So today there is no interim
+failure signal beyond a human choosing to check on their own initiative; see
+`deploy/systemd/README.md`'s "Backup timer and failure alert" section for the
+full honest statement, including why a real destination
+(`contact@opencircuitsf.com`, `#0271`) is not currently reachable from this
+box (no mail transfer agent installed, and this project's own mail path is
+SES, still blocked by `#0415`).
 The offsite pull (`pull-backups.sh`) is treated as **out of scope** for this
 issue: the user has mentioned a machine named "joe" as the eventual puller,
 but its hostname and reachability for an unattended `rsync` are not recorded
@@ -2459,6 +2468,34 @@ anywhere in this repo, and `#0435` does not guess a default for it.
 ---
 
 ## Redeploy procedure
+
+**Before either path below: check for a dirty tracked file first (`#0467`).**
+Both the recommended path and the manual steps open with `git pull`, and a
+pull refuses outright — loudly, not silently — if the checkout carries an
+uncommitted change to a file the incoming commits also touch. `web/dist/index.html`
+is the recurring case: `./scripts/dev.sh --built` and any prior `npm run build`
+run directly on the box leave it modified (`CLAUDE.md` §8b), and that file is
+touched often enough on `main` that a stale checkout's next pull is likely to
+collide with it. Check before pulling:
+
+```bash
+git status --porcelain -- web/dist/
+```
+
+Any output there is very likely leftover build artifact, not an intended edit
+— restore it to the checkout's own committed version before pulling:
+
+```bash
+git show HEAD:web/dist/index.html > web/dist/index.html
+git status --porcelain -- web/dist/   # confirm clean before the pull below
+```
+
+**Never `git checkout -- web/dist/index.html`** to do this — `CLAUDE.md` §8a
+forbids that class of command against a path you did not personally edit this
+session, and on a shared box you generally cannot tell whether you did. The
+`git show HEAD:… >` form above reaches the same end state without it. This
+check costs nothing when the file turns out to be clean, so it is worth
+running unconditionally rather than only after a pull already fails.
 
 ### Recommended: `scripts/deploy.sh`
 
