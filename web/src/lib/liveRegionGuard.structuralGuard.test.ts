@@ -894,6 +894,22 @@ const KNOWN_STABLE_BRANCH_REASON_TAB_PANEL_0299 = `${KNOWN_STABLE_BRANCH_REASON_
 const KNOWN_STABLE_BRANCH_REASON_MAIN_FORM =
   "Unconditionally rendered itself (not wrapped in its OWN {#if}) inside the editor's main form ({:else if workshop}), which mounts once when the workshop record loads and stays mounted across ordinary editing -- ~~the same stable branch this file's \"Rendering preview…\"/previewStale entries above already rest on~~ **corrected 2026-08-27 (#0306): measured, neither actually rested there at the time this was written. \"Rendering preview…\" is a KNOWN_LOADING_PLACEHOLDERS entry in the smaller {:else if previewLoading} branch, a different mechanism and never a real peer of this set. previewStale sat in the small, single-element {:else if hasPreviewContent} branch, which #0306's structural check on this set correctly refused to call \"large, multi-purpose\" -- #0306 relocated previewStale's own element to this SAME {:else if workshop} branch, so it is now a genuine peer of saveNotice/unsavedInterestsHint (see its own entry below); \"Rendering preview…\" still is not.** Previously mis-credited (#0299) to transitionModalEl, a status-change dialog's own focus target several conditionals deeper behind its OWN {#if transitionOpen} -- an unrelated dialog, not evidence about this branch's own mount. Persistence within the stable main-form branch is the real, sufficient argument.";
 
+/** #0406: the count the real-tree test's own measurement comment below
+ * claims for `KNOWN_STABLE_BRANCH_SITES` ("All twelve clear ..."), kept as a
+ * literal declared here rather than only in that prose. Editing the array
+ * immediately below does not also edit this line -- they are different
+ * declarations in different places -- so the two can genuinely disagree
+ * until someone updates both, and the real-tree test's own
+ * `toHaveLength(KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT)` assertion is what
+ * makes that disagreement fail loudly instead of silently -- the same drift
+ * class CLAUDE.md §11 documents for the PRD section index (`#0406`). Bump
+ * this by hand whenever an entry is added to or removed from the array, and
+ * update the measurement comment's prose and per-entry table to match -- see
+ * the sensitivity test below (`describe('KNOWN_STABLE_BRANCH_SITES recorded
+ * count (#0406)')`) for proof that adding an entry alone does not also
+ * satisfy this constant. */
+const KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT = 12;
+
 const KNOWN_STABLE_BRANCH_SITES: AllowlistEntry[] = [
   {
     file: 'web/src/views/Admin.svelte',
@@ -1289,6 +1305,43 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
     // magnitude under the floor) and was fixed at the site rather than
     // allowlisted past the check; see this file's header and that entry's
     // own reason for the account.
+    //
+    // #0406: re-derived by counting the array and the rows in the table just
+    // above -- both are twelve, matching the prose, as of this pass. The
+    // assertion below is what keeps that agreement from being merely
+    // asserted in English: it fails the moment an entry is added to or
+    // removed from KNOWN_STABLE_BRANCH_SITES without also updating
+    // KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT (declared next to the array
+    // above, not here), rather than only being noticed by a reader counting
+    // by hand.
+    expect(KNOWN_STABLE_BRANCH_SITES).toHaveLength(KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT);
+  });
+});
+
+// #0406 acceptance criteria 2-4: the real-tree test's own
+// `toHaveLength(KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT)` assertion just
+// above is the mechanism that ties the measurement comment's prose to the
+// array. This describe proves that mechanism is a real, sensitive oracle --
+// not a copy of the thing it checks (CLAUDE.md §8, the #0258 rule) -- by
+// mutating an IN-MEMORY COPY of the array (CLAUDE.md §8a: never the file on
+// disk, never the real KNOWN_STABLE_BRANCH_SITES binding itself) and showing
+// the count it would be asserted against no longer agrees.
+describe('KNOWN_STABLE_BRANCH_SITES recorded count (#0406)', () => {
+  it('disagrees with KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT once a copy gains an entry the constant was not also bumped for', () => {
+    const mutatedCopy: AllowlistEntry[] = [
+      ...KNOWN_STABLE_BRANCH_SITES,
+      { file: 'fixture.svelte', match: '<p role="status">x</p>', reason: 'synthetic #0406 mutation, never a real allowlist entry' },
+    ];
+    // The real KNOWN_STABLE_BRANCH_SITES binding and KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT
+    // are untouched -- only `mutatedCopy`, a local array, changed.
+    expect(KNOWN_STABLE_BRANCH_SITES).toHaveLength(KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT);
+    // Adding one entry to a copy does not also edit the separately-declared
+    // constant -- that is the whole point of keeping them as two different
+    // declarations -- so the copy's length now disagrees with it, which is
+    // exactly what would make the real assertion above fail if this had
+    // happened to the real array instead of a copy.
+    expect(mutatedCopy).toHaveLength(KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT + 1);
+    expect(mutatedCopy.length).not.toBe(KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT);
   });
 });
 
