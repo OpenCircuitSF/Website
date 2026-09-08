@@ -12,7 +12,7 @@ exercised**, because it did not exercise all of them:
 |---|---|
 | Production facts, prerequisites, PostgreSQL, migrations, systemd, Apache, TLS, verification | **Followed on the real host** and corrected where it was wrong. The corrections are inline. |
 | SES setup, DNS records for DKIM / MAIL FROM / inbound, IAM policy, the account-level suppression list | **Still not followed by this row's original deploy.** SES was deliberately left unconfigured for that deploy so it could be set up afterwards — see "SES is not configured yet" below. No AWS SES identity existed at that point, and ~~**the instance has no IAM role attached at all**~~ **— corrected `#0426`, 2026-09-04: that has since changed.** A later pass (`docs/aws-iam-setup.md`, same day) attached the `opencircuit-instance` role and set up SES; `CLAUDE.md` §10 item 2 and the `## IAM` section below (also corrected, `#0426`) are the current-state record. |
-| Backups (`opencircuit-backup.timer` and friends) | **Not installed yet.** The units exist in `deploy/systemd/`; nothing on the box runs them. |
+| Backups (`opencircuit-backup.timer` and friends) | **Not installed yet.** The units exist in `deploy/systemd/`; nothing on the box runs them. `#0435` (2026-09-08) re-confirmed this read-only, found a second blocker (the on-box checkout is missing `#0434`'s media-backup scripts), and wrote an approval-ready fix in `deploy/systemd/README.md` — see the "Backups" section below. |
 
 So `#0064`'s acceptance criterion — "the whole runbook followed once on a
 clean instance and corrected where it was wrong" — is now **partly** met: the
@@ -2140,10 +2140,12 @@ triggers the alert unit the way the unit graph implies, or that `journalctl
 - **Actual disk paths and permissions on the box** — `BACKUP_ROOT` defaults
   to `/var/backups/postgres`; confirm it exists, is owned/writable as
   `backup.sh` expects, and has room for `BACKUP_RETENTION_DAYS` of dumps at
-  real data volume. `deploy/systemd/opencircuit-backup.service`'s
-  `WorkingDirectory=`/`ExecStart=` assume the repo is checked out at
-  `/opt/opencircuit` — a placeholder (`CLAUDE.md` §10 item 6, still
-  undocumented) that must be corrected to the real path before installing.
+  real data volume. **Corrected (`#0435`, 2026-09-08):** the
+  `/opt/opencircuit` `WorkingDirectory=`/`ExecStart=` path is no longer a
+  placeholder — `CLAUDE.md` §10 item 6 has recorded it as the real, confirmed
+  checkout location since 2026-08-25, and `#0435` re-verified directly that
+  the repo lives there. The real blocker on disk paths turned out to be
+  ownership, not path correctness — see below.
 - **The timer and the alert unit, installed on a real systemd host** —
   confirm `opencircuit-backup.timer` actually fires nightly, that
   `BACKUP_DATABASES` is actually set on that box (`#0236` — it is a required
@@ -2156,6 +2158,49 @@ triggers the alert unit the way the unit graph implies, or that `journalctl
 - **`pull-backups.sh` end to end**, against the real Mac mini and a real SSH
   key — see "What this drill does not cover" above for exactly what that
   verification looks like.
+
+### Re-derived on the real box (`#0435`, 2026-09-08) — still not installed
+
+**`opencircuit` has never been backed up.** Read-only, on the box: no unit
+matching `opencircuit-backup*` exists under `/etc/systemd/system/` (only
+`opencircuit.service` is there), `systemctl is-enabled
+opencircuit-backup.timer` reports the unit file does not exist, and
+`systemctl list-timers` lists none of this project's units among its eight
+entries. The recorded blocker — `/var/backups/postgres` is `root:root 0700`,
+and the unit's `User=postgres` cannot even traverse it — was re-confirmed
+directly (`stat`) rather than trusted from the prior filing, and still holds.
+
+**A second blocker surfaced only by re-deriving rather than trusting the
+last-known state:** `/opt/opencircuit`'s checkout is 711 commits behind this
+repo's `main` and predates `#0434` entirely, so `scripts/db/backup-media.sh`
+and `scripts/db/restore-media.sh` are simply absent there, and the box's copy
+of `opencircuit-backup.service` is the older, single-`ExecStart=` version.
+Installing today's committed unit file unmodified would run the database leg
+successfully and then fail the media leg with a "no such file" error, marking
+the whole run failed and paging every night regardless of whether the
+database dump worked. `sha256sum` confirmed every *other* file this timer
+needs — `backup.sh`, `restore.sh`, `pull-backups.sh`, `backup-alert.sh`, the
+`.timer`, and the alert `.service` — is already byte-identical on the box to
+this repo's current commit, so only three files need bringing current.
+
+**Both blockers, the exact commands, and a restore drill proving the dump
+before trusting it, are now written up as an approval-ready sequence in
+`deploy/systemd/README.md`'s "Backup timer and failure alert" section** — see
+its "Fix the `/var/backups/postgres` permission blocker", "Bring the on-box
+checkout current for the media leg", and "Verify the dump is real, and prove
+a restore" subsections. Nothing in this pass was applied to the box —
+everything above was read-only, and installation still needs the user's
+explicit approval (`CLAUDE.md` §5b, §9) before any of those commands run.
+
+`BACKUP_ALERT_WEBHOOK_URL` remains deliberately unconfigured: no
+Slack/Discord/Mattermost/healthchecks.io channel exists anywhere in this
+project (`CLAUDE.md` §10 items 2 and 6), so `#0435` recommends leaving the
+journal-only alert path (`journalctl -p err`, `systemctl --failed`) as the
+interim signal rather than inventing a destination with nothing behind it.
+The offsite pull (`pull-backups.sh`) is treated as **out of scope** for this
+issue: the user has mentioned a machine named "joe" as the eventual puller,
+but its hostname and reachability for an unattended `rsync` are not recorded
+anywhere in this repo, and `#0435` does not guess a default for it.
 
 ---
 
