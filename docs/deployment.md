@@ -2497,6 +2497,21 @@ session, and on a shared box you generally cannot tell whether you did. The
 check costs nothing when the file turns out to be clean, so it is worth
 running unconditionally rather than only after a pull already fails.
 
+**Which of `git pull` or a targeted `scp` brings a file current is decided by
+one question, not by habit (`#0467`): does the change need a rebuilt Go
+binary or a rebuilt SPA?** If yes, this section's `git pull` is already the
+right and necessary first step — a real redeploy pays for the rebuild anyway,
+so paying once to also bring the checkout current at the same time is free.
+If no — a single config file, unit file, or standalone script that the
+running binary does not embed — a `git pull` here would force that same
+rebuild for no reason, on a box with 418 MB of RAM (`CLAUDE.md` §7), while
+also landing every other unreleased commit onto the production checkout at
+once. `#0447`, `#0465`, and `#0435`'s prepared instructions (`#0466`) each
+answered "no" and chose a targeted `scp` of the one file each needed,
+verified by hash; nothing here changes that. This section's `git pull`
+remains the mechanism for the case those three are not: an actual redeploy
+of the running service.
+
 ### Recommended: `scripts/deploy.sh`
 
 From the repo checkout on the host, on the latest commit:
