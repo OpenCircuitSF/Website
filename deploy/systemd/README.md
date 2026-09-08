@@ -75,10 +75,21 @@ has been run on the box for this issue; it needs the user's approval first
 ## Backup timer and failure alert (`#0229`)
 
 `opencircuit-backup.service` assumes the repo is checked out at
-`/opt/opencircuit` (`WorkingDirectory=` and `ExecStart=` both reference it) —
-a placeholder matching ShortLinks' own `/opt/shortlinks` convention until the
-real server layout is captured (`CLAUDE.md` §10 item 6, still undocumented).
-**Edit the unit file to match the real path before installing it.**
+`/opt/opencircuit` (`WorkingDirectory=` and `ExecStart=` both reference it).
+**Corrected (`#0435`, 2026-09-08): this is the real path, not a placeholder.**
+It was written as one, mirroring ShortLinks' `/opt/shortlinks` convention,
+while `CLAUDE.md` §10 item 6 still recorded the server layout as uncaptured;
+that item has been done since 2026-08-25, and `#0435` re-verified directly that
+the checkout lives at `/opt/opencircuit`. Do **not** edit the unit file's paths
+before installing it — the sequence below copies that file byte for byte and
+verifies its `sha256sum`, which an edit would fail.
+
+The same stale sentence survives as a comment inside
+`deploy/systemd/opencircuit-backup.service` itself (its `WorkingDirectory=`
+block). Left uncorrected on purpose for this pass: it is a comment with no
+runtime effect, and editing it would change the file's hash, which would then
+require recomputing all three expected hashes below rather than leaving them
+as a stable check against this repo's committed bytes.
 
 **Also confirm `Environment=BACKUP_DATABASES=opencircuit` is present and
 uncommented (`#0236`) before enabling the timer.** `scripts/db/backup.sh`
@@ -137,7 +148,7 @@ contents keep their existing ownership untouched. Verify both facts after
 running it:
 
 ```bash
-stat -c '%U:%G %a' /var/backups/postgres /var/backups/postgres/shortlinks
+sudo stat -c '%U:%G %a' /var/backups/postgres /var/backups/postgres/shortlinks
 ```
 
 Expect `postgres:postgres 700` on the first line and `root:root 700`,
@@ -215,7 +226,10 @@ Install and enable the timer (the `.service` files are triggered, not
 enabled directly — see the "No `[Install]` section" note in
 `opencircuit-backup.service`):
 
+Everything from here on runs **on the box** (`ssh ec2`).
+
 ```bash
+cd /opt/opencircuit/deploy/systemd
 sudo cp opencircuit-backup.service opencircuit-backup.timer opencircuit-backup-alert.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now opencircuit-backup.timer
@@ -261,7 +275,7 @@ archive** — `pg_restore --list` reads only the archive's table of contents; it
 opens no database connection and changes nothing:
 
 ```bash
-ls -la /var/backups/postgres/opencircuit/
+sudo ls -la /var/backups/postgres/opencircuit/
 sudo -u postgres pg_restore --list /var/backups/postgres/opencircuit/opencircuit-latest.dump | head -20
 sudo -u postgres tar -tzf /var/backups/postgres/media/media-latest.tar.gz
 ```
