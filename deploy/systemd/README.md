@@ -56,6 +56,22 @@ sudo journalctl -u opencircuit -f
 - If the unit file itself changes, re-copy it and run
   `sudo systemctl daemon-reload` before restarting.
 
+## Workshop media write access (`#0465`) — prepared, not yet applied
+
+`opencircuit.service` now carries `ReadWritePaths=/var/www/media`
+(added for `#0465`, ahead of `#0433`'s admin-console image upload). **This
+line alone changes nothing on the box** until the updated unit file is
+installed there, and even installed it is one of **two independent**
+requirements — the other is the directory's own group and mode, which this
+file does not control. Fixing either alone leaves the write still failing,
+in a way that looks exactly like the other one was never fixed. See
+`docs/deployment.md` §7, "Workshop media upload enablement (`#0465`)", for
+the full approval-ready sequence (both blockers re-derived read-only against
+the box, the exact commands, what a restart interrupts, and the hash-based
+verification that the two existing images are unchanged afterward). Nothing
+has been run on the box for this issue; it needs the user's approval first
+(`CLAUDE.md` §5b, §9).
+
 ## Backup timer and failure alert (`#0229`)
 
 `opencircuit-backup.service` assumes the repo is checked out at

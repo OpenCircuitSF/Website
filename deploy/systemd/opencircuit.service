@@ -61,5 +61,19 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 LockPersonality=true
 
+# #0465: ProtectSystem=strict above makes the ENTIRE filesystem hierarchy
+# read-only to this process regardless of any directory's own owner/group/
+# mode — so the workshop-media upload endpoint (#0433) cannot write
+# /var/www/media until this line names it explicitly. ReadWritePaths= is
+# systemd's documented, narrow escape hatch for exactly this case (see
+# systemd.exec(5)); it does not weaken ProtectSystem=strict itself, and it
+# grants nothing beyond this one path. This alone is NOT sufficient on its
+# own — /var/www/media also needs group ownership `opencircuit` and mode
+# `2775` on the box (docs/deployment.md §7, "Workshop media upload
+# enablement"); fixing only one of the two leaves the write still failing.
+# Pending the user's approval (CLAUDE.md §5b, §9) — see docs/deployment.md
+# §7 for the full instruction. Not yet installed on the box as of #0465.
+ReadWritePaths=/var/www/media
+
 [Install]
 WantedBy=multi-user.target

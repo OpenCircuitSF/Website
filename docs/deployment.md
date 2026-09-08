@@ -647,6 +647,194 @@ used), and the file was diffed line by line against
 `deploy/systemd/README.md`'s and this project's own
 `opencircuit-backup.service`'s equivalents for consistency.
 
+### Workshop media upload enablement (`#0465`) — pending approval
+
+`#0433` builds an admin-console upload endpoint for workshop cover images,
+provable end to end against a temporary directory, but its planning pass
+found **two independent reasons** the Go service cannot actually write
+`/var/www/media` (`docs/media.md`) in production. Fixing either one alone
+changes nothing — the failure just moves, and looks exactly like a
+permissions bug someone already fixed:
+
+1. **Ownership.** The directory is owned by `ec2-user`, not `opencircuit`.
+2. **`ProtectSystem=strict`** in `opencircuit.service` (above) makes the
+   *entire* filesystem hierarchy read-only to the process, regardless of any
+   directory's own mode. `ReadWritePaths=` is systemd's documented escape
+   hatch for exactly this — it does not weaken `ProtectSystem=strict` itself,
+   it exempts one named path from it.
+
+**Re-derived read-only against the box, 2026-09-08 — do not trust the figures
+below without re-checking; re-derive them yourself first if time has passed**
+(`CLAUDE.md` §5b). Both blockers hold exactly as `#0433`'s planning pass
+measured:
+
+```
+$ ssh ec2 stat -c '%U:%G %a %n' /var/www/media
+ec2-user:ec2-user 755 /var/www/media          # no setgid bit (mode is exactly 755, not 2755/2775)
+
+$ ssh ec2 id opencircuit
+uid=990(opencircuit) gid=990(opencircuit) groups=990(opencircuit)   # no supplementary groups
+
+$ ssh ec2 systemctl show opencircuit.service -p ProtectSystem -p ReadWritePaths
+ProtectSystem=strict
+ReadWritePaths=                                # empty — nothing exempted yet
+
+$ ssh ec2 df -h /
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p1   20G   11G  9.1G  55% /
+```
+
+Also confirmed, read-only, and load-bearing for the questions below:
+
+```
+$ ssh ec2 id apache
+uid=48(apache) gid=48(apache) groups=48(apache)
+
+$ ssh ec2 id postgres
+uid=26(postgres) gid=26(postgres) groups=26(postgres)
+
+$ ssh ec2 systemctl cat opencircuit-backup.service
+No files found for opencircuit-backup.service.   # #0434/#0435's timer is not installed yet either
+```
+
+Neither `apache` nor `postgres` is a member of, or will become a member of,
+the `opencircuit` group — both read `/var/www/media` today through the
+directory's **`other`** permission bits, which the change below leaves
+untouched (`755`'s trailing `5` = `r-x`; `2775`'s trailing `5` is the same
+`r-x`). That is the answer to two of the questions below.
+
+**What may be approved.** Two changes: the directory's group and mode, and
+`ReadWritePaths=/var/www/media` on the unit — the latter is now committed in
+`deploy/systemd/opencircuit.service` (`#0465`), so a rebuilt server picks it
+up automatically; only the *box* needs the copy-and-restart below.
+
+```bash
+# 1. Give the service's group write access to the directory, and set the
+#    setgid bit so newly created files — from either writer — inherit the
+#    directory's group rather than the creating process's own primary
+#    group. ec2-user stays the owner; the scp workflow (docs/media.md) is
+#    unaffected.
+sudo chgrp opencircuit /var/www/media
+sudo chmod 2775 /var/www/media
+
+# Expect:
+stat -c '%U:%G %a %n' /var/www/media
+#   ec2-user:opencircuit 2775 /var/www/media
+
+# 2. Install the updated unit (this repo's opencircuit.service now carries
+#    ReadWritePaths=/var/www/media; the copy on the box does not yet).
+sudo cp deploy/systemd/opencircuit.service /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# 3. Restart — daemon-reload alone does not apply a changed ReadWritePaths=
+#    to the already-running process; the unit must actually restart.
+sudo systemctl restart opencircuit
+sudo systemctl status opencircuit
+
+# Expect Active: active (running) and the same PID class as any other
+# restart; journalctl should show no new errors:
+sudo journalctl -u opencircuit -n 30
+```
+
+**A restart briefly interrupts the site.** Unlike the `httpd -k graceful`
+reload `#0447`'s certbot hook uses, `systemctl restart opencircuit` stops the
+process (draining in-flight work first, per the `KillSignal=SIGTERM` /
+`TimeoutStopSec=30` budget documented above — up to ~20s in the worst case,
+typically well under a second when the service is idle) and then starts a
+new one. There is a real gap, however brief, during which `127.0.0.1:8080`
+is not accepting connections and Apache's reverse proxy will return an
+error to any request that lands in that window. Nothing else on the box is
+touched: Apache itself is not restarted or reloaded, the two ShortLinks
+services on `:8081`/`:8083` and the prototypes service on `:8082` are
+independent units and are not affected, and the database connection this
+service holds is simply closed and reopened.
+
+**Verify the existing images afterward by hash, not by status code** — §7's
+standing lesson from the `/.well-known/` carve-out, where a `200` proves
+something answered, not that the right bytes did. `#0417` recorded both
+files' sizes and dimensions; re-derived here with an independent SHA-256:
+
+```bash
+ssh ec2 sha256sum /var/www/media/programming_leds.jpg /var/www/media/soldering.jpg
+```
+
+Expect exactly:
+
+```
+ad298443d7d4d88ddb05c6825ace4b4c785602bb2002e2bdf313cbe841343d8f  /var/www/media/programming_leds.jpg
+55510a2a2ce82e98df077a2cca7451c1bf2911335dcb1968cc4099e8d03c142e  /var/www/media/soldering.jpg
+```
+
+(63,253 bytes / 600×450, and 89,179 bytes / 1200×630, per `#0417` — dimensions
+re-confirmed here by parsing each file's `SOF0` marker directly, matching.)
+Also confirm the files' own ownership and mode are untouched — only the
+*directory's* group and mode change, never the files':
+
+```bash
+ssh ec2 stat -c '%U:%G %a %n' /var/www/media/programming_leds.jpg /var/www/media/soldering.jpg
+#   ec2-user:ec2-user 644 /var/www/media/programming_leds.jpg
+#   ec2-user:ec2-user 644 /var/www/media/soldering.jpg
+```
+
+Finally, confirm the service and the site over HTTPS, not just the process
+state:
+
+```bash
+curl -fsS http://127.0.0.1:8080/health
+curl -fsS https://www.opencircuitsf.com/health
+curl -sI https://www.opencircuitsf.com/media/soldering.jpg | grep -iE 'HTTP|cache-control'
+```
+
+**Questions this instruction has to answer, answered:**
+
+- **Why `2775` and not plain `0775`?** The setgid bit (the leading `2`)
+  forces every file newly created in the directory to inherit the
+  directory's group (`opencircuit`), regardless of the creating process's
+  own primary group — this is standard POSIX directory semantics, not
+  specific to this project. The `opencircuit` service's primary group is
+  already `opencircuit` (confirmed above), so setgid changes nothing for
+  files *it* writes. Its actual effect is on the **`scp` path**: `ec2-user`'s
+  primary group is `ec2-user`, so without setgid a freshly `scp`'d file would
+  land group-owned `ec2-user` while service-written files land group-owned
+  `opencircuit` — a split that costs nothing today (both groups already read
+  every file fine through the `other` bits, unaffected by this change) but
+  would quietly resurface the moment anything ever relies on group
+  ownership being consistent across the directory (a future cleanup script
+  running as `opencircuit`, for instance). Setgid keeps that never a live
+  question, at zero cost: it does not grant any additional access by itself,
+  and neither writer's directory-level ability to create, rename, or delete
+  files depends on it (that already follows from `ec2-user` owning the
+  directory and `opencircuit` now being able to write via the group bit).
+- **Does the group change affect `#0434`'s media backup?** No.
+  `opencircuit-backup.service` runs as `User=postgres`, and `postgres`
+  (`uid=26`, confirmed above) is neither the directory's owner nor a member
+  of the `opencircuit` group before or after this change — it reads
+  `/var/www/media` through the **`other`** permission bits, which `2775`
+  leaves identical to today's `755` (`r-x` either way). The backup's write
+  target is `/var/backups/postgres`, a completely different path this
+  change never touches. Also confirmed: `opencircuit-backup.service` is not
+  installed on the box yet at all (`#0435` is its own separate, still-open
+  approval), so there is nothing currently running to disturb.
+- **Is `ReadWritePaths=` the narrow escape hatch, and does it weaken anything
+  else?** Yes, and no. Per `systemd.exec(5)`, `ReadWritePaths=` is the
+  documented mechanism for exempting specific paths from `ProtectSystem=`'s
+  effect; it does not change `ProtectSystem=strict`'s own value, and every
+  other directory on the host stays exactly as inaccessible to this process
+  as before. `systemctl show` after the restart should report
+  `ProtectSystem=strict` unchanged and `ReadWritePaths=/var/www/media` newly
+  set — both are worth checking, not just the second.
+- **What happens to the two existing files?** Nothing. They keep their
+  names, their `ec2-user:ec2-user` ownership, their `0644` mode, and their
+  `cover_image` values; Apache serves them exactly as before, proven by the
+  hash check above rather than assumed from a `200`.
+
+**Confirm the service still starts and the site still serves before
+declaring this done** — the `curl` checks above, plus `systemctl status`
+showing `active (running)` with no restart loop
+(`sudo systemctl show opencircuit -p NRestarts` should read `0` for this
+restart). Record exactly what was run and its output in the issue's
+`## Work log`.
+
 ---
 
 ## 8. Apache
