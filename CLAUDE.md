@@ -320,6 +320,7 @@ edit inside one of those roots must add that package to the scoped run:
 | `cmd/opencircuit` | every `internal/*` package `servePostgres` imports, parsed for `*seo.Site` flow |
 | `internal/mailing` | `internal/outbox` |
 | `internal/config` | `.env.example` at the repo root — `TestEnvExampleCoversLoaderVariables` (`#0423`) re-derives the loader's variable set from `config.go`'s own AST and asserts each appears in `.env.example`, which `docs/deployment.md`'s install step copies verbatim onto production |
+| `internal/media` | **nothing** — `#0433`'s `TestSanitizeStem`/`TestFilename` cases carry `".."`-shaped strings as path-traversal-prevention test *data* (proving `SanitizeStem` strips them), which trips the detector's literal-segment match below even though no test in this package reads a file outside its own `t.TempDir()`. Listed here so the guard's own parity check passes for the right reason — a false positive under the detector's two-way recognition, not an actual reach; a scoped `./internal/media/...` run misses nothing by staying scoped |
 
 **The package column above is guarded; the `Reaches into` column is not**
 (`#0387`). Only the column is cheaply checkable — a package either reaches

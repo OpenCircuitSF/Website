@@ -101,6 +101,20 @@ type Config struct {
 
 	// Bootstrap
 	AdminEmail string
+
+	// MediaDir is the directory the admin image upload endpoint
+	// (internal/handlers/admin_media_upload.go, #0433) writes stripped
+	// uploads to — /var/www/media in production, once #0465 grants the
+	// service write access there (group ownership + ReadWritePaths=; the
+	// directory's mode/ownership is NOT this project's concern, and this
+	// value does not change anything about the still-supported scp
+	// workflow documented in docs/media.md). Optional, with no default and
+	// no required-field check: an empty value means "not configured", and
+	// AdminMediaHandler.Upload refuses with a named 503 rather than the
+	// route being omitted (issues/0433.md's "Behaviour when the directory
+	// is not configured" section) or the service failing to boot over a
+	// feature that has a documented manual fallback.
+	MediaDir string
 }
 
 // DevMode reports whether the dev store should be used instead of Postgres.
@@ -157,6 +171,7 @@ func loadFromFile(path string) (*Config, error) {
 		SendBatchSize:       getInt("SEND_BATCH_SIZE", defaultSendBatchSize, &errs),
 		SendWorkerEnabled:   getBool("SEND_WORKER_ENABLED", defaultSendWorkerEnabled, &errs),
 		AdminEmail:          os.Getenv("ADMIN_EMAIL"),
+		MediaDir:            os.Getenv("MEDIA_DIR"),
 	}
 
 	// Validate required fields. When STORAGE=json (dev mode) DATABASE_URL is

@@ -41,6 +41,7 @@ each row below that `#0423` touched.
 | `SEND_BATCH_SIZE` | no | `50` | Messages per send-worker batch |
 | `SEND_WORKER_ENABLED` | no | `true` | Set `false` on a second instance to avoid double-sending. Has no effect when `MAILER_NOOP=true` — the worker never starts regardless (see above). |
 | `ADMIN_EMAIL` | yes | — | Pre-authorized as admin on first registration when no users exist yet |
+| `MEDIA_DIR` | no | *(unset → 503)* | Directory `POST /admin/media/upload` (`#0433`) writes EXIF-stripped image uploads to — `/var/www/media` in production, once `#0465`'s group-ownership and `ReadWritePaths=` change lands. Left unset, the endpoint refuses with a named 503 rather than the service failing to boot or the route being silently omitted; the `scp` workflow (`docs/media.md`) is unaffected either way. Every test in `internal/media`/`internal/handlers` points this at a `t.TempDir()`. |
 
 **`WEBAUTHN_RP_ID` and `WEBAUTHN_RP_ORIGIN` are not interchangeable.** A
 mismatch between `RP_ORIGIN` and the browser's actual origin fails every

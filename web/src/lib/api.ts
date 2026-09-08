@@ -37,6 +37,7 @@ import type {
 } from './types';
 import type { SubscribeRequestBody, PreferencesPatchBody } from './subscribe';
 import type { UnsubscribeResult } from './unsubscribe';
+import { buildMediaUploadFormData } from './media';
 import type {
   ServerCredentialAssertion,
   AssertionFinishPayload,
@@ -678,6 +679,34 @@ export function importCommit(fields: ImportUploadFields): Promise<ImportCommitRe
  */
 export function revokeImport(id: number, reason: string): Promise<ImportRevokeResult> {
   return apiPost<ImportRevokeResult>(`/admin/imports/${id}/revoke`, { reason });
+}
+
+// ── Admin image upload (#0433, reopening #0153) ──────────────────────────────
+// Also multipart, like the import pair above — one file, no other fields.
+// See web/src/lib/media.ts for the pre-check/error-message decisions kept
+// out of this file and out of WorkshopEditor.svelte.
+
+/** POST /admin/media/upload's 200 body. */
+export interface MediaUploadResult {
+  /** A same-site "/media/<name>" path — paste-ready into a workshop's
+   * cover_image field (internal/handlers/admin_workshops.go's
+   * isSafeCoverImage always accepts it, by construction). */
+  path: string;
+}
+
+/**
+ * POST /admin/media/upload — validates and EXIF-strips file server-side and
+ * writes it under the configured media directory. Throws ApiError on any
+ * refusal: 415 (unsupported format, including a specific message for HEIC),
+ * 400 (oversize, absurd dimensions, corrupt file), 503 (uploads not
+ * configured on this server — MEDIA_DIR unset, #0465 not yet deployed), or
+ * 507 (the media directory is out of disk space). Every one of those
+ * carries its own specific `error` message — see
+ * web/src/lib/media.ts's messageForUploadError for how the editor turns
+ * that into copy.
+ */
+export function mediaUpload(file: File): Promise<MediaUploadResult> {
+  return postMultipart<MediaUploadResult>('/admin/media/upload', buildMediaUploadFormData(file));
 }
 
 // ── Admin suppression-list screen (#0100) ────────────────────────────────────

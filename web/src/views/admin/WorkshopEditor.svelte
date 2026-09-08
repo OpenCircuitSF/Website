@@ -41,9 +41,17 @@
   is right and struck that criterion rather than adding a slug-editing
   route. See lib/workshopAdmin.ts's header comment for the full reasoning.
 
-  Cover image: a path/URL text field, not an upload control -- #0051's API
-  has no upload endpoint. Also flagged as a discrepancy in lib/workshopAdmin.ts
-  and this issue's Gotchas.
+  Cover image: a path/URL text field, PLUS an upload control since #0433
+  (reopening #0153, the decision #0138 originally deferred to). Uploading
+  POSTs to /admin/media/upload (server-side EXIF strip, magic-byte format
+  sniffing, no client-side trust of the filename extension or Content-Type
+  -- see web/src/lib/media.ts and internal/handlers/admin_media_upload.go)
+  and assigns the returned "/media/<name>" path directly into
+  fields.coverImage, the SAME buffer the text field binds to. The text
+  field and the documented `scp` fallback (docs/media.md) both stay --
+  isSafeCoverImage deliberately accepts any same-site path, and the upload
+  endpoint can be unconfigured (a named 503) until #0465's production
+  enablement lands.
 
   Delete's 409: workshops.ErrHasCampaigns (an email campaign still
   references this workshop) is a real, expected outcome, not a generic error
@@ -77,8 +85,10 @@
     announceWorkshop,
     previewWorkshop,
     listInterests,
+    mediaUpload,
     ApiError,
   } from '../../lib/api';
+  import { precheckFile, messageForPrecheckReason, messageForUploadError } from '../../lib/media';
   import {
     workshopStatusLabel,
     workshopStatusBadgeClass,
@@ -143,6 +153,44 @@
   let saving = $state(false);
   let saveError = $state<string | null>(null);
   let saveNotice = $state<string | null>(null);
+
+  // ── Cover image upload (#0433, reopening #0153) ───────────────────────────
+  // Separate from Save on purpose: an upload writes a file server-side
+  // immediately (see admin_media_upload.go), independently of whether the
+  // workshop's other fields have been saved yet, so its own progress/error
+  // state is kept apart from saving/saveError above. On success this
+  // assigns the returned path directly into fields.coverImage -- the same
+  // buffer the text field already binds to -- which is why no separate
+  // structural guard was added for this wiring (issues/0433.md's plan): if
+  // that assignment were ever missing, the field would visibly stay empty.
+  let uploadingCover = $state(false);
+  let uploadCoverError = $state<string | null>(null);
+
+  async function handleCoverImageFileChange(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    if (!file) return;
+
+    uploadCoverError = null;
+
+    const pre = precheckFile(file);
+    if (!pre.ok) {
+      uploadCoverError = messageForPrecheckReason(pre.reason!);
+      input.value = ''; // allow re-selecting the same file after fixing it
+      return;
+    }
+
+    uploadingCover = true;
+    try {
+      const result = await mediaUpload(file);
+      fields.coverImage = result.path;
+    } catch (err) {
+      uploadCoverError = messageForUploadError(err);
+    } finally {
+      uploadingCover = false;
+      input.value = ''; // allow re-selecting the same (or a corrected) file
+    }
+  }
 
   // ── Body preview (#0136) ─────────────────────────────────────────────────
   // Server-rendered, not a client-side re-derivation of the unsaved buffer:
@@ -559,21 +607,32 @@
           bind:value={fields.coverImage}
           disabled={saving}
         />
-        <!-- No upload endpoint exists, by design: #0138 decided cover images stay path entry
-             for v1 and struck #0052's "upload or path entry" criterion, leaving the upload
-             question to #0153 (PRD §5.2 asks for no upload). An external URL is rejected
-             because the site hosts its own images (CLAUDE.md §9: no external CDNs). Both
-             citations stay here, not in the admin-facing copy below (#0172).
-
-             The "/media/..." convention named in the hint below is docs/media.md's: covers
-             are placed on the server's disk at /var/www/media and served by an Apache
-             carve-out, not built into the SPA (#0432 -- the hint used to show a stale
-             "/assets/..." example, from before /media/ existed). That citation stays here
-             too, for the same #0172 reason. -->
+        <!-- #0433 (reopening #0153, the decision #0138 originally deferred to) adds this
+             upload control ALONGSIDE the text field, not instead of it: isSafeCoverImage
+             deliberately accepts any same-site path, and the documented scp workflow
+             (docs/media.md) stays supported for when the endpoint is unconfigured or the
+             admin already has a file on the server. An external URL is still rejected
+             because the site hosts its own images (CLAUDE.md §9: no external CDNs). -->
+        <div class="cover-upload">
+          <input
+            id="workshop-cover-image-upload"
+            type="file"
+            accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+            disabled={saving || uploadingCover}
+            onchange={handleCoverImageFileChange}
+          />
+          {#if uploadingCover}
+            <span class="text-muted" role="status">Uploading…</span>
+          {/if}
+        </div>
+        {#if uploadCoverError}
+          <p class="text-error" role="alert">{uploadCoverError}</p>
+        {/if}
         <p class="text-muted cover-hint">
-          A site-relative path (e.g. "/media/soldering-101.jpg") to an image already hosted
-          on this site. Workshop photos are placed directly on the server, not uploaded here
-          — there is no upload control, and external image URLs are not accepted.
+          Upload a JPEG or PNG (device and location metadata are stripped automatically), or
+          type a site-relative path (e.g. "/media/soldering-101.jpg") to an image already on
+          the server via the documented <code>scp</code> workflow. External image URLs are not
+          accepted.
         </p>
       </div>
     </Panel>
@@ -828,6 +887,12 @@
   .cover-hint,
   .interests-hint {
     margin: var(--space-1) 0 var(--space-2);
+  }
+  .cover-upload {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
   }
   .checkbox-group {
     display: flex;

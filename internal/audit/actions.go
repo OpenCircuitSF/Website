@@ -407,6 +407,16 @@ const (
 	// handler surfaces without an audit row, matching
 	// AdminInterestsHandler.Delete's convention for its own refused case.
 	ActionWorkshopDeleted = "workshop.deleted"
+
+	// ActionMediaImageUploaded is written by POST /admin/media/upload
+	// (#0433, reopening #0153) once a stripped, validated image has been
+	// written to the media directory. Not tied to any one workshop row: the
+	// upload happens independently of which workshop, if any, ends up
+	// referencing the resulting path in its cover_image field, so this
+	// action's audit.Entry deliberately leaves TargetType/TargetID both
+	// empty/nil (see internal/handlers/admin_media_upload.go) rather than
+	// reusing TargetWorkshop for a row that may not exist yet.
+	ActionMediaImageUploaded = "media.image_uploaded"
 )
 
 // Deleted (#0068): ActionCampaignCreated/Updated/Deleted and

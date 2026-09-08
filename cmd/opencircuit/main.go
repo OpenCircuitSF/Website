@@ -36,6 +36,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
+	"github.com/brennanMKE/OpenCircuitSF/internal/media"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
@@ -260,6 +261,26 @@ func servePostgres(cfg *config.Config) error {
 	publicWorkshopsH := handlers.NewPublicWorkshopsHandler(workshopsStore, interestsStore)
 	// #0274: aggregate list counts for the home page's live CRT screen.
 	publicListStatsH := handlers.NewPublicListStatsHandler(subscribersStore)
+
+	// Admin image upload (#0433, reopening #0153): constructed
+	// UNCONDITIONALLY here, unlike every nil-guarded devstore-gap handler
+	// below -- cfg.MediaDir may itself be empty (production enablement is
+	// #0465's, not this issue's), but that is a runtime 503 from
+	// AdminMediaHandler.Upload, not a reason to omit the route the way
+	// STORAGE=json's missing tables are (see serveDevMode's adminMediaH,
+	// which IS nil, for that contrast). A misconfigured or not-yet-
+	// permissioned directory is logged here at startup via
+	// media.CheckWritable rather than only discovered on first upload. The
+	// log message itself names no issue number -- CLAUDE.md §8's citation
+	// guard (internal/handlers/citation_guard_test.go) treats every
+	// production string literal as a document an operator reading logs
+	// might see, not just SPA-rendered text, so the #0465 citation for
+	// "this is the production enablement that fixes it" stays here, in a
+	// comment, rather than in the string.
+	if err := media.CheckWritable(cfg.MediaDir); err != nil {
+		slog.Default().Warn("media directory is not writable -- uploads will be refused until this is fixed", "err", err)
+	}
+	adminMediaH := handlers.NewAdminMediaHandler(cfg.MediaDir, auditLogger)
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,
 	// manual suppress, clear-complaint, and manual add. manualAdd (subscribeH)
@@ -520,7 +541,7 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicArchiveH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, nil, /* no outer middleware in production */
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -854,6 +875,15 @@ func serveDevMode(cfg *config.Config) error {
 	var adminWorkshopsH *handlers.AdminWorkshopsHandler
 	var publicWorkshopsH *handlers.PublicWorkshopsHandler
 
+	// Admin image upload (#0433) has no devstore backing either — it has
+	// nothing to do with workshops directly, but STORAGE=json has no
+	// workshops screen to upload a cover image FROM (obstacle catalogue
+	// §11: "STORAGE=json has no workshops at all, not just no mailing
+	// list"), so there is no reachable caller for this route in dev mode.
+	// adminRoutes omits its one route when nil, mirroring every nil-guard
+	// above.
+	var adminMediaH *handlers.AdminMediaHandler
+
 	// Public campaign archive (#0123) has the same devstore gap as
 	// adminCampaignStatsH above -- internal/devstore has no
 	// email_campaigns-table backing. Passing nil leaves every other route
@@ -908,7 +938,7 @@ func serveDevMode(cfg *config.Config) error {
 	var outboxWorker *mailing.OutboxWorker
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminDashboardH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicArchiveH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -957,6 +987,7 @@ func adminRoutes(
 	adminCampaignStatsH *handlers.AdminCampaignStatsHandler,
 	adminCampaignArchiveH *handlers.AdminCampaignArchiveHandler,
 	adminWorkshopsH *handlers.AdminWorkshopsHandler,
+	adminMediaH *handlers.AdminMediaHandler,
 	adminDashboardH *handlers.AdminDashboardHandler,
 ) []adminRoute {
 	routes := []adminRoute{
@@ -1118,6 +1149,16 @@ func adminRoutes(
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/preview", http.HandlerFunc(adminWorkshopsH.Preview)},
 		)
 	}
+	if adminMediaH != nil {
+		routes = append(routes,
+			// #0433: admin-console image upload, replacing the scp-only
+			// workflow docs/media.md still documents as a fallback. Not
+			// nested under /admin/workshops -- the upload is not tied to a
+			// workshop id (see internal/handlers/admin_media_upload.go's
+			// package doc comment on why its audit row has no target).
+			adminRoute{http.MethodPost, "/admin/media/upload", http.HandlerFunc(adminMediaH.Upload)},
+		)
+	}
 	if adminDashboardH != nil {
 		routes = append(routes,
 			// #0061: the /admin landing screen's single data call.
@@ -1165,6 +1206,7 @@ func mountAndServe(
 	adminCampaignStatsH *handlers.AdminCampaignStatsHandler,
 	adminCampaignArchiveH *handlers.AdminCampaignArchiveHandler,
 	adminWorkshopsH *handlers.AdminWorkshopsHandler,
+	adminMediaH *handlers.AdminMediaHandler,
 	adminDashboardH *handlers.AdminDashboardHandler,
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
@@ -1244,7 +1286,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminDashboardH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 

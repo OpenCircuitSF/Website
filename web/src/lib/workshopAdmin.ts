@@ -70,6 +70,22 @@
 // carries the identical note per #0432) and in docs/media.md and PRD.md
 // §6.2 (#0438 corrected the PRD's own copy of the comment, since unlike the
 // migration it is not frozen).
+//
+// Correction (#0433, reopening #0153 -- the decision this section's own
+// heading used to treat as settled): an upload endpoint now exists, POST
+// /admin/media/upload (internal/handlers/admin_media_upload.go), so "no
+// upload, path entry only" above is history, not current behavior. What
+// does NOT change: isSafeCoverImage below is unaffected -- #0433's plan was
+// explicit that the endpoint's generated "/media/<hash>.<ext>" path is
+// checked against this SAME validator as a POST-CONDITION, not a second,
+// narrower definition of "safe path" alongside it, and the text field (this
+// module's whole reason for existing) stays because isSafeCoverImage
+// deliberately accepts any same-site path, including a hand-typed one from
+// the still-documented `scp` workflow (docs/media.md). The upload UI's own
+// decisions (client-side size/extension pre-check, the HEIC-specific
+// message, building the multipart body) live in ./media, a separate module
+// for a separate concern -- this file's job stays what it always was:
+// workshop form/status logic, not image handling.
 
 import type { AdminWorkshop } from './types';
 

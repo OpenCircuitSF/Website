@@ -232,6 +232,7 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 			nil, /* adminCampaignStatsH: not exercised */
 			nil, /* adminCampaignArchiveH: not exercised */
 			nil, /* adminWorkshopsH: not exercised */
+			nil, /* adminMediaH: not exercised */
 			nil, /* adminDashboardH: not exercised */
 			eventsH, nil, subscribeH,
 			nil, nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH: not exercised */

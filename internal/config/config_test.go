@@ -44,6 +44,7 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 	t.Setenv("MAX_SEND_RATE", "25")
 	t.Setenv("SEND_BATCH_SIZE", "100")
 	t.Setenv("SEND_WORKER_ENABLED", "false")
+	t.Setenv("MEDIA_DIR", "/var/www/media")
 
 	cfg, err := loadFromFile(noEnvFile)
 	if err != nil {
@@ -74,6 +75,7 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 		{"SendBatchSize", cfg.SendBatchSize, 100},
 		{"SendWorkerEnabled", cfg.SendWorkerEnabled, false},
 		{"AdminEmail", cfg.AdminEmail, "admin@example.com"},
+		{"MediaDir", cfg.MediaDir, "/var/www/media"},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -178,6 +180,25 @@ func TestLoad_SESEventsTopicARNOptional(t *testing.T) {
 	}
 	if cfg.SESEventsTopicARN != "" {
 		t.Errorf("SESEventsTopicARN = %q, want empty", cfg.SESEventsTopicARN)
+	}
+}
+
+// TestLoad_MediaDirOptional proves MEDIA_DIR is NOT a required variable
+// (#0433): the production directory permission change is #0465's, not this
+// issue's, so the binary must still boot with it unset, loading to "" —
+// AdminMediaHandler.Upload treats that as "not configured" and returns a
+// named 503 rather than the service failing to boot over a feature with a
+// documented manual (scp) fallback.
+func TestLoad_MediaDirOptional(t *testing.T) {
+	setRequired(t)
+	t.Setenv("MEDIA_DIR", "")
+
+	cfg, err := loadFromFile(noEnvFile)
+	if err != nil {
+		t.Fatalf("loadFromFile returned error with MEDIA_DIR unset: %v", err)
+	}
+	if cfg.MediaDir != "" {
+		t.Errorf("MediaDir = %q, want empty", cfg.MediaDir)
 	}
 }
 

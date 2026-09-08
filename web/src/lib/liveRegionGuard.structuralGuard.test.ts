@@ -807,6 +807,11 @@ const KNOWN_LOADING_PLACEHOLDERS: AllowlistEntry[] = [
   { file: 'web/src/views/admin/WorkshopEditor.svelte', match: 'Loading workshop…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
   {
     file: 'web/src/views/admin/WorkshopEditor.svelte',
+    match: 'Uploading…',
+    reason: `${KNOWN_LOADING_PLACEHOLDER_REASON} #0433's cover-image upload control: a single-child {#if uploadingCover} branch whose sole content is this static text, announcing an in-flight POST /admin/media/upload the same way the "Loading…" family announces an in-flight GET -- not the result of a user action needing a focus-swap target, just a transient in-progress notice.`,
+  },
+  {
+    file: 'web/src/views/admin/WorkshopEditor.svelte',
     match: 'Rendering preview…',
     reason: `${KNOWN_LOADING_PLACEHOLDER_REASON} This is WorkshopEditor.svelte's SECOND placeholder -- not named anywhere in issues/0063.md (its enumeration only counted the "Loading…"-worded ones) but structurally identical, discovered by this guard's own development run; converting it means reworking the four-branch previewLoading/previewError/hasPreviewContent/else chain it sits in, out of proportion to #0242/#0243's own scope.`,
   },

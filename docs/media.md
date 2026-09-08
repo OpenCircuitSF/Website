@@ -102,8 +102,30 @@ cut the SPA off from its own JS and CSS.
 
 ## Adding an image
 
-There is no upload endpoint. The admin editor's cover image field is a plain
-text box, so the workflow is two steps:
+**Upload it through the admin console (`#0433`, reopening `#0153`).** The
+workshop editor's "Cover image" field now has an upload control next to the
+text box: choose a JPEG or PNG, and `POST /admin/media/upload`
+(`internal/handlers/admin_media_upload.go`) validates it (magic bytes only —
+never the filename extension or the browser's claimed `Content-Type`),
+strips every metadata segment/chunk that isn't required to render (EXIF,
+XMP, IPTC, GPS, device make/model — see "What gets stripped" below), writes
+it under `/var/www/media` with a server-generated, content-hashed filename,
+and returns the `/media/<name>` path, which the editor drops straight into
+the cover image field. Nothing is committed to source control, and nothing
+about the request trusts a byte the browser sent for anything beyond the
+image's own pixel data.
+
+**Until `#0465`'s production enablement lands, the upload control 503s on
+this box specifically.** The endpoint is fully built and tested (see
+`internal/media` and `internal/handlers/admin_media_upload_test.go`), but
+the service cannot yet write `/var/www/media` in production — that
+directory's group ownership and the systemd unit's `ReadWritePaths=` are
+`#0465`'s approval-gated change, not this one's. A 503 naming `MEDIA_DIR`
+means exactly that: the code works, the box isn't wired up for it yet. The
+`scp` workflow below is unaffected and stays the fallback for exactly this
+case.
+
+**The `scp` workflow — always available, and the only option before `#0465`:**
 
 ```bash
 scp -i ~/.aws/AWS.pem soldering-101.jpg ec2-user@<host>:/var/www/media/
@@ -111,13 +133,58 @@ scp -i ~/.aws/AWS.pem soldering-101.jpg ec2-user@<host>:/var/www/media/
 
 Then type `/media/soldering-101.jpg` into the workshop's cover image field.
 
-`/var/www/media` is owned by `ec2-user`, so the copy needs no `sudo`.
+`/var/www/media` is owned by `ec2-user`, so the copy needs no `sudo`. This
+keeps working unchanged after `#0465` — the directory's ownership stays
+`ec2-user`, with the service only added to its group.
+
+### What gets stripped
+
+The strip is lossless segment/chunk surgery over the raw bytes — no decode,
+no re-encode, so pixel data is bit-identical to the original minus the
+dropped metadata (the same technique `#0417` used by hand for the two
+covers already on disk, generalised into an **allowlist**: keep only what
+renders, drop everything else, rather than a denylist built from one
+sample's segments).
+
+- **JPEG**: keeps `APP0` (JFIF) and `APP2` only when it carries an embedded
+  ICC colour profile; drops every other `APPn` (`APP1` — Exif *and* XMP,
+  including any GPS tag — and `APP13` — IPTC/Photoshop — among them) and
+  `COM`. Pixel data (`DQT`/`SOF`/`DHT`/`SOS` onward) is untouched.
+- **PNG**: keeps `IHDR`/`PLTE`/`IDAT`/`IEND` plus the rendering-relevant
+  ancillaries `tRNS`/`gAMA`/`cHRM`/`sRGB`/`iCCP`/`sBIT`; drops everything
+  else, including `eXIf`/`tEXt`/`iTXt`/`zTXt`/`tIME`.
+- **Everything else is refused outright**, including SVG (script-bearing
+  markup — the CSP below is a backstop, not a licence to skip validation).
+  **HEIC/HEIF gets its own error message**, since an iPhone shoots HEIC by
+  default: export or share the photo as JPEG first.
+
+No `exiftool`, no Pillow, no imaging library of any kind — the box has
+neither, and the strip needs neither.
+
+### Filename
+
+The stored filename is generated **server-side**, never from the client's
+filename: `<sanitised-stem>-<hash-of-stripped-bytes>.<ext>`. This makes
+traversal impossible (no caller-supplied byte ever reaches a path
+component), makes the week-long `max-age` below a non-issue (different
+bytes always produce a different name), and converges re-uploads of
+identical bytes onto the same file instead of accumulating near-duplicates.
+Upload is capped at 5 MiB and an absurd pixel count is refused before
+anything is written (`image.DecodeConfig`, never a full decode — a memory
+decision on a box with ~166 MB available, not a style one).
+
+**Orphan pruning is deliberately out of scope.** Nothing deletes an
+unreferenced upload — see `issues/0433.md`'s Plan for why a reliable
+reference count isn't available. Deleting a file nothing references is an
+operator action, same as it always was.
 
 ### Validation
 
 `cover_image` is checked server-side by `isSafeCoverImage`
-(`internal/handlers/admin_workshops.go`), on both Create and Patch. A value is
-accepted only if it:
+(`internal/handlers/admin_workshops.go`), on both Create and Patch — the
+upload endpoint's own returned path is checked against this SAME function
+as a post-condition, never a second, narrower definition of "safe path." A
+value is accepted only if it:
 
 1. contains no control characters (`< 0x20` or `0x7f`),
 2. starts with a single `/`, and
@@ -148,6 +215,15 @@ the two from drifting apart.
     what has and has not been verified so far.
 - **A redeploy does not disturb them.** `scripts/deploy.sh` never touches
   `/var/www`, so images survive `git pull` + rebuild + restart.
+- **Uploads are audited.** Every successful `POST /admin/media/upload`
+  writes an `audit_log` row (`audit.ActionMediaImageUploaded`) recording the
+  actor, filename, stored path, format, byte size, and dimensions — no
+  target row, since the upload is not tied to any one workshop (`#0433`).
+- **`MEDIA_DIR` (`docs/configuration.md`) controls where uploads land.**
+  Unset (the default until `#0465`), the upload endpoint 503s naming the
+  variable rather than the route being silently omitted. `#0434`'s nightly
+  media backup already covers whatever this directory holds, so uploads
+  growing the directory changes that backup's size, not its scope.
 - **Populated as of 2026-09-04.** The two live workshop covers,
   `soldering.jpg` and `programming_leds.jpg`, were copied here from their old
   home in `web/public/` and now serve at `/media/soldering.jpg` and
@@ -168,6 +244,9 @@ the two from drifting apart.
 | 403 | File mode — the file needs to be readable by the `apache` user |
 | Image loads but a stale version | The week-long `Cache-Control`; rename the file and update `cover_image` |
 | Save rejects the path | `isSafeCoverImage` — check it starts with exactly one `/` |
+| Upload button gives a 503 naming `MEDIA_DIR` | Expected until `#0465` lands — use the `scp` workflow above |
+| Upload gives a 415 naming HEIC | Export/share the photo as JPEG first (see "What gets stripped") — this server does not convert HEIC |
+| Upload gives a 507 | The media directory is out of disk space |
 
 Verify a change with `sudo apachectl configtest` before
 `sudo systemctl reload httpd`, then confirm the header block is actually
