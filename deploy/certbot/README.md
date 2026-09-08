@@ -52,6 +52,13 @@ renewed and on disk either way; only the reload is skipped.
 
 ## Install (requires the user's approval — this is a change to production)
 
+**Precondition — get this file onto the box first (`#0466`).** The box's
+`/opt/opencircuit` checkout predates this script (still at `ef0a58f`, from
+`#0274`), so the command below fails "No such file or directory" until the
+file is copied there — `scp`, not `git pull`, since this change needs neither
+a Go rebuild nor the SPA. See `docs/deployment.md` §9 for the exact `scp`
+command, expected hash, and the reasoning for choosing `scp` over `git pull`.
+
 ```bash
 sudo install -m 0755 deploy/certbot/reload-apache-deploy-hook.sh \
   /etc/letsencrypt/renewal-hooks/deploy/reload-apache.sh

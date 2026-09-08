@@ -708,6 +708,39 @@ untouched (`755`'s trailing `5` = `r-x`; `2775`'s trailing `5` is the same
 `deploy/systemd/opencircuit.service` (`#0465`), so a rebuilt server picks it
 up automatically; only the *box* needs the copy-and-restart below.
 
+**Precondition — the box's checkout of this file is stale (`#0466`).**
+`/opt/opencircuit`'s checkout is still at `ef0a58f` (`#0274`, 2026-08-25),
+several hundred commits behind `main`, so its copy of
+`deploy/systemd/opencircuit.service` predates `#0465`'s
+`ReadWritePaths=/var/www/media` line entirely (confirmed read-only,
+2026-09-08: `grep ReadWritePaths` on the box's copy finds nothing). Step 2
+below (`sudo cp deploy/systemd/opencircuit.service /etc/systemd/system/`)
+would therefore install the *old* unit unchanged — no error, no
+`ReadWritePaths=`, and the write would keep failing in a way that looks like
+step 1 never took effect. **`scp` this one file, not `git pull`:** a
+`git pull` would also bring every other commit since `ef0a58f`, including a
+`go build`/`npm run build` this box's 418 MB of RAM makes expensive
+(`CLAUDE.md` §7), to update a single unit file that needs neither. Run from
+the local repo checkout, not on the box:
+
+```bash
+scp deploy/systemd/opencircuit.service \
+  ec2:/opt/opencircuit/deploy/systemd/opencircuit.service
+```
+
+Then confirm the bytes landed correctly (recompute the left-hand value
+locally with `shasum -a 256` if `main` has moved since this was written):
+
+```bash
+ssh ec2 sha256sum /opt/opencircuit/deploy/systemd/opencircuit.service
+```
+
+Expect:
+
+```
+5df0b896983a68cd5b7c99f958afe78ee53806b06fee24068e647a3c20f862c8  /opt/opencircuit/deploy/systemd/opencircuit.service
+```
+
 ```bash
 # 1. Give the service's group write access to the directory, and set the
 #    setgid bit so newly created files — from either writer — inherit the
@@ -1178,9 +1211,42 @@ timer path without also editing the unit. A script placed in
 that directory unconditionally on every `renew` invocation. See
 `deploy/certbot/README.md` for the full reasoning.
 
+**Precondition — the box's checkout does not have this file yet (`#0466`).**
+Re-derived read-only, 2026-09-08: `/opt/opencircuit`'s checkout is still at
+`ef0a58f` (`#0274`, 2026-08-25), which predates `deploy/certbot/
+reload-apache-deploy-hook.sh` by every commit since `8fc216d` — the directory
+`/opt/opencircuit/deploy/certbot/` does not exist there at all. Step 1 below
+fails at its first command, `sudo install -m 0755 deploy/certbot/
+reload-apache-deploy-hook.sh …`, with "No such file or directory" until this
+is done. **`scp` this one file, not `git pull`:** the checkout is several
+hundred commits behind `main` and a `git pull` would also pull in a
+`go build`/`npm run build` this box's 418 MB of RAM makes expensive
+(`CLAUDE.md` §7), for a change that needs neither the new binary nor the
+SPA — only this one script. Run from the local repo checkout, not on the
+box:
+
+```bash
+ssh ec2 mkdir -p /opt/opencircuit/deploy/certbot
+scp deploy/certbot/reload-apache-deploy-hook.sh \
+  ec2:/opt/opencircuit/deploy/certbot/reload-apache-deploy-hook.sh
+```
+
+Then confirm the bytes landed correctly (recompute the left-hand value
+locally with `shasum -a 256` if `main` has moved since this was written):
+
+```bash
+ssh ec2 sha256sum /opt/opencircuit/deploy/certbot/reload-apache-deploy-hook.sh
+```
+
+Expect:
+
+```
+6fa010d0f74e3d87acc67bbca65fe08295d12270cca6f5961346f685f67f97ee  /opt/opencircuit/deploy/certbot/reload-apache-deploy-hook.sh
+```
+
 **This is a change to production and needs the user's explicit approval
 before any of it runs on the box** (`CLAUDE.md` §5b, §9). Nothing below has
-been run. In order:
+been run. In order (from `/opt/opencircuit`, per the precondition above):
 
 ```bash
 # 1. Install the hook (idempotent; safe to re-run).
