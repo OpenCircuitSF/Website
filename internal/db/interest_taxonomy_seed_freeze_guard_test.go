@@ -86,7 +86,8 @@ func interestTaxonomyGuardViolations(files map[string]string) []string {
 				"%s: removes rows from interests (DELETE/TRUNCATE/DROP) — retire an interest at "+
 					"runtime via interests.Store.Deactivate (#0024), never in a migration; a migration "+
 					"delete orphans or cascades away subscriber_interests/workshop_interests/"+
-					"campaign_interests history", name))
+					"campaign_interests history"+
+					" (in a .down.sql, write a documented no-op instead — see docs/mailing-list.md)", name))
 		}
 		if insertRe.MatchString(body) && !onConflictRe.MatchString(body) {
 			violations = append(violations, fmt.Sprintf(
@@ -222,5 +223,31 @@ func TestInterestTaxonomyMigrationGuardIgnores000009Itself(t *testing.T) {
 	}
 	if violations := interestTaxonomyGuardViolations(files); len(violations) != 0 {
 		t.Fatalf("expected 000009's own down migration to be out of scope, got: %v", violations)
+	}
+}
+
+// TestInterestTaxonomyMigrationGuardRejectsDeleteInDownMigration proves the
+// guard also fires on the .down.sql half of the exact additive pattern
+// docs/mailing-list.md's "Changing the taxonomy" section prescribes for
+// channel 2: an idempotent up-migration seed paired with the natural
+// reversal a rollback would otherwise want to write. The down side must stay
+// a documented no-op rather than a DELETE, because the seeded row may have
+// acquired subscriber_interests/workshop_interests/campaign_interests
+// associations while it existed, and those cascade away with it. Without
+// this test, the up file's idempotent INSERT going quiet (already proven by
+// TestInterestTaxonomyMigrationGuardAllowsIdempotentInsert) could be misread
+// as the whole pair being sanctioned.
+func TestInterestTaxonomyMigrationGuardRejectsDeleteInDownMigration(t *testing.T) {
+	files := map[string]string{
+		"000030_add_ai_ml_interest.up.sql": "INSERT INTO interests (slug, name, sort_order) " +
+			"VALUES ('ai-ml', 'AI & Machine Learning', 130) ON CONFLICT (slug) DO NOTHING;",
+		"000030_add_ai_ml_interest.down.sql": "DELETE FROM interests WHERE slug = 'ai-ml';",
+	}
+	violations := interestTaxonomyGuardViolations(files)
+	if len(violations) != 1 {
+		t.Fatalf("expected exactly one violation for the down migration's DELETE, got: %v", violations)
+	}
+	if !strings.Contains(violations[0], "000030_add_ai_ml_interest.down.sql") {
+		t.Fatalf("expected the violation to name the .down.sql file, got: %v", violations)
 	}
 }

@@ -35,15 +35,29 @@ be edited again, by this project or a downstream. That is fine, because it
 was never meant to be the only way the taxonomy changes — there are two
 supported channels, and neither touches `000009`:
 
-- **A live catalog change** — add, rename, redescribe, reorder, deactivate,
-  or (if unused) hard-delete an interest — is an **admin-console action**,
-  not a migration: `POST`/`PATCH`/`DELETE /admin/interests`
-  (`internal/interests`, `#0024`). It takes effect immediately, with no
-  deploy and no restart. `interests.Store.Deactivate` is the only supported
-  way to retire an interest that any subscriber has ever selected — it hides
-  the row from the signup form while preserving it and every
-  `subscriber_interests`/`workshop_interests`/`campaign_interests` row that
-  references it.
+- **A live catalog change** — add, rename (the display `name` only),
+  redescribe, reorder, deactivate, or hard-delete an interest no subscriber
+  has ever selected — is an **admin-console action**, not a migration:
+  `POST`/`PATCH`/`DELETE /admin/interests` (`internal/interests`, `#0024`).
+  It takes effect immediately, with no deploy and no restart. Two limits are
+  load-bearing and are not obvious from the verb list:
+  - **`slug` is immutable through this channel.** `interests.Store.Update`
+    takes no slug parameter and the PATCH body type has no `slug` field, so
+    a PATCH carrying one is rejected with 400 rather than silently ignored
+    (`#0023`'s decision: a slug change breaks every already-issued
+    preference-center link that references it). To replace a slug, `POST`
+    the new interest and deactivate the old one — subscribers do not move
+    across, and a downstream re-theming the taxonomy wholesale is doing
+    creates-and-deactivates, not renames.
+  - **`DELETE` is refused (409) only when a `subscriber_interests` row
+    references the interest.** `workshop_interests` and `campaign_interests`
+    are `ON DELETE CASCADE` (`migrations/000020_create_workshops.up.sql`,
+    `migrations/000017_create_campaigns.up.sql`) and are **not** consulted,
+    so deleting an interest that no subscriber has selected but a workshop
+    is tagged with, or a campaign targeted, silently drops those rows.
+    Prefer `PATCH {"active": false}`: deactivation preserves the row and
+    every `subscriber_interests`/`workshop_interests`/`campaign_interests`
+    row that references it.
 - **A change to what a *fresh* install seeds by default** — the canonical
   list in `PRD.md` §6.1 itself changing — is a **new, additively-numbered
   migration**, never an edit to `000009`, following exactly the shape
@@ -55,6 +69,12 @@ supported channels, and neither touches `000009`:
   `internal/db`'s `TestInterestTaxonomyMigrationGuardPassesOnRealMigrations`
   enforces both the idempotency and the no-delete rule mechanically for
   every migration numbered after `000009`.
+
+  The matching `.down.sql` must be a documented no-op — a comment saying the
+  seeded row is deliberately not removed on rollback — never a `DELETE`: the
+  row may have acquired `subscriber_interests`/`workshop_interests`/
+  `campaign_interests` associations while it existed, and `ON DELETE CASCADE`
+  would take them with it. The guard enforces this in both directions.
 
 ## Subscription flow — double opt-in (Phase 3, `#0025`–`#0032`)
 
