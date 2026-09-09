@@ -2,14 +2,28 @@
 #
 # dev.sh — start Open Circuit SF locally on macOS for fast UI iteration.
 #
-# No PostgreSQL, no systemd, no migrations needed. Uses STORAGE=json (in-memory
-# dev store, internal/devstore) and the dev auto-login middleware
-# (internal/middleware.DevAutoLogin) so the account view opens immediately as
-# the mock admin.
+# Two backends:
+#   STORAGE=json (default) — in-memory dev store (internal/devstore), no
+#     PostgreSQL, no migrations needed. The dev auto-login middleware
+#     (internal/middleware.DevAutoLogin) opens the account view immediately
+#     as the mock admin. STORAGE=json has NO mailing list at all — no
+#     interests, subscribers, campaigns, or suppressions (CLAUDE.md §5) — so
+#     it cannot exercise that subsystem.
+#   --postgres/-p — the real Postgres path (STORAGE unset), for the mailing
+#     subsystem. Requires a local database already migrated and seeded with
+#     an admin row — scripts/db-reset.sh does both. DEV_ADMIN_LOGIN=true is
+#     set automatically so the account view opens as that seeded admin with
+#     no passkey ceremony (internal/middleware.DevAdminAutoLogin, #0402) —
+#     refused at startup unless BASE_URL's host is localhost/127.0.0.1
+#     (CLAUDE.md §10). MAILER_NOOP=true is also set automatically: without
+#     it the real SES mailer construction refuses to start without
+#     SES_CONFIGURATION_SET (CLAUDE.md §10).
 #
 # Usage:
-#   ./scripts/dev.sh           # hot-reload: Go API on :$PORT + Vite dev server on :5173
-#   ./scripts/dev.sh --built   # built-SPA: npm build + go run serving on :$PORT only
+#   ./scripts/dev.sh                      # hot-reload, STORAGE=json: Go API on :$PORT + Vite on :5173
+#   ./scripts/dev.sh --built              # built-SPA, STORAGE=json: npm build + go run serving on :$PORT only
+#   ./scripts/dev.sh --postgres           # hot-reload against Postgres (see above)
+#   ./scripts/dev.sh --built --postgres   # combinable, order-independent (-b -p works too)
 #
 # Open in browser:
 #   hot-reload mode:  http://localhost:5173  (Vite proxies /api → :$PORT)
@@ -20,6 +34,7 @@
 #   PORT=9090 ./scripts/dev.sh   # threaded into BASE_URL, WEBAUTHN_RP_ORIGIN,
 #                                 # and Vite's proxy targets (#0213) — the whole
 #                                 # stack moves, not just the Go server
+#   DATABASE_URL=postgres://... ./scripts/dev.sh --postgres   # a non-default database
 #
 # $PORT defaults to 8080 and :5173 is Vite's own fixed port (not
 # configurable — it is spelled the same way in web/vite.config.ts, README.md,
@@ -44,10 +59,42 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
+step() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
+ok()   { printf '    \033[32m✓\033[0m %s\n' "$*"; }
+info() { printf '    %s\n' "$*"; }
+
+# is_true mirrors strconv.ParseBool's truthy set ("1", "t", "T", "TRUE",
+# "true", "True"), lowercased first since bash 3.2.57 (CLAUDE.md §8) has no
+# ${var,,}. Used below to decide whether the "logs in automatically" banner
+# is honest when DEV_ADMIN_LOGIN was overridden by the caller rather than
+# left at this script's own default.
+is_true() {  # <value>
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    1|t|true) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# ── Parse flags ──────────────────────────────────────────────────────────────
+# A loop over "$@", not a single `case "${1:-}"`, so --built/-b and
+# --postgres/-p are combinable in either order (scripts/db-reset.sh already
+# had to learn this lesson for its own flags). -h/--help still short-circuits
+# immediately, matching the previous single-flag behaviour.
+MODE="hot"
+BACKEND="json"
+for arg in "$@"; do
+  case "$arg" in
+    --built|-b) MODE="built" ;;
+    --postgres|-p) BACKEND="postgres" ;;
+    -h|--help) sed -n '2,56p' "$0"; exit 0 ;;
+    "") : ;;
+    *) printf 'Unknown flag: %s\n' "$arg" >&2; exit 1 ;;
+  esac
+done
+
 # ── Dev environment defaults ─────────────────────────────────────────────────
-# All of these can be overridden by setting them in the calling environment.
-# DATABASE_URL is intentionally unset: STORAGE=json skips Postgres entirely.
-export STORAGE="${STORAGE:-json}"
+# All of these can be overridden by setting them in the calling environment —
+# "${VAR:-default}" below honours a caller-supplied value in both backends.
 # PORT must be set before BASE_URL/WEBAUTHN_RP_ORIGIN so both can default off
 # of it (#0213 — they used to hardcode :8080 regardless of $PORT). It is also
 # exported before `npm run dev` runs so web/vite.config.ts can read it via
@@ -59,44 +106,53 @@ export BASE_URL="${BASE_URL:-http://localhost:${PORT}}"
 export WEBAUTHN_RP_ID="${WEBAUTHN_RP_ID:-localhost}"
 # In --built mode the front end and API share one origin (:$PORT), so this
 # value is exactly what a browser would send. In hot-reload mode the browser's
-# real origin is :5173 (Vite), not :$PORT — but that mismatch is inert here:
-# internal/middleware.DevAutoLogin bypasses WebAuthn entirely under
-# STORAGE=json (see the header comment), so no real ceremony ever checks this
-# value against a request Origin. It is threaded to $PORT anyway so --built
-# mode is correct and so the value stays honest about which port dev.sh
-# actually started, rather than silently naming a fixed 8080 (CLAUDE.md §7).
+# real origin is :5173 (Vite), not :$PORT — but that mismatch is inert under
+# STORAGE=json: internal/middleware.DevAutoLogin bypasses WebAuthn entirely
+# (see the header comment), so no real ceremony ever checks this value against
+# a request Origin. Under --postgres, DevAdminAutoLogin bypasses the same
+# ceremony the same way (#0402) — a real WebAuthn ceremony, if one were ever
+# attempted through hot-reload mode against either backend, WOULD hit this
+# mismatch, which is why it's threaded to $PORT anyway: so --built mode is
+# correct and so the value stays honest about which port dev.sh actually
+# started, rather than silently naming a fixed 8080 (CLAUDE.md §7).
 export WEBAUTHN_RP_ORIGIN="${WEBAUTHN_RP_ORIGIN:-http://localhost:${PORT}}"
 export SESSION_SECRET="${SESSION_SECRET:-dev-session-secret-not-for-production}"
 export ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
 # AWS_REGION, EMAIL_FROM, and EMAIL_LIST_DOMAIN are unconditionally required by
-# config.Load (#0116) even though STORAGE=json's serveDevMode never reads them
-# for anything but that validation — dev mode never constructs the SES mailer
-# or the send worker. The values below are placeholders that satisfy the
-# check without looking like production config: EMAIL_FROM uses a "dev@"
-# local part (production is "contact@mailing…", corrected 2026-09-03 #0414 —
-# this comment previously said "hello@…") and EMAIL_LIST_DOMAIN uses
-# "lists.localhost" rather than the real "lists.opencircuitsf.com" (CLAUDE.md
-# §9), so nobody mistakes a dev run for a production one. AWS_REGION is inert
-# under STORAGE=json (no AWS SDK call is ever made on this path), so it is
-# left at the real SES region for anyone who overrides STORAGE to exercise
-# the Postgres path locally — us-east-1, corrected 2026-09-03 (#0418; was
-# us-west-2, which was never the real region).
+# config.Load (#0116) regardless of backend — STORAGE=json's serveDevMode never
+# reads them for anything but that validation (dev mode never constructs the
+# SES mailer or the send worker), and --postgres's MAILER_NOOP=true (below)
+# means servePostgres doesn't construct the real SES mailer either. The values
+# below are placeholders that satisfy the check without looking like
+# production config: EMAIL_FROM uses a "dev@" local part (production is
+# "contact@mailing…", corrected 2026-09-03 #0414 — this comment previously
+# said "hello@…") and EMAIL_LIST_DOMAIN uses "lists.localhost" rather than the
+# real "lists.opencircuitsf.com" (CLAUDE.md §9), so nobody mistakes a dev run
+# for a production one. AWS_REGION is inert under both backends here (no AWS
+# SDK call is ever made — MAILER_NOOP swaps in the no-op mailer on the
+# --postgres path too), so it is left at the real SES region — us-east-1,
+# corrected 2026-09-03 (#0418; was us-west-2, which was never the real
+# region).
 export AWS_REGION="${AWS_REGION:-us-east-1}"
 export EMAIL_FROM="${EMAIL_FROM:-Open Circuit SF <dev@localhost>}"
 export EMAIL_LIST_DOMAIN="${EMAIL_LIST_DOMAIN:-lists.localhost}"
 
-step() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
-ok()   { printf '    \033[32m✓\033[0m %s\n' "$*"; }
-info() { printf '    %s\n' "$*"; }
-
-# ── Parse flags ──────────────────────────────────────────────────────────────
-MODE="hot"
-case "${1:-}" in
-  --built|-b) MODE="built" ;;
-  -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
-  "") : ;;
-  *) printf 'Unknown flag: %s\n' "$1" >&2; exit 1 ;;
-esac
+# STORAGE/DATABASE_URL/DEV_ADMIN_LOGIN/MAILER_NOOP are the four variables
+# --postgres sets (#0402) — all four honour a caller-supplied value, matching
+# every other default in this section. DATABASE_URL's default is the exact
+# DSN scripts/db-reset.sh builds by default, so the two scripts agree on
+# "the" local Postgres database with no further configuration.
+if [ "$BACKEND" = "postgres" ]; then
+  export STORAGE="${STORAGE:-}"
+  export DATABASE_URL="${DATABASE_URL:-postgres://opencircuit:opencircuit@localhost:5432/opencircuit?sslmode=disable}"
+  export DEV_ADMIN_LOGIN="${DEV_ADMIN_LOGIN:-true}"
+  export MAILER_NOOP="${MAILER_NOOP:-true}"
+else
+  # DATABASE_URL is intentionally left unset here: STORAGE=json skips
+  # Postgres entirely, so a stray DATABASE_URL in the caller's environment
+  # (from an earlier --postgres run, say) is simply never read on this path.
+  export STORAGE="${STORAGE:-json}"
+fi
 
 # ── Preflight ────────────────────────────────────────────────────────────────
 step "Preflight"
@@ -104,7 +160,17 @@ for c in go node npm; do
   command -v "$c" >/dev/null 2>&1 || { printf '  ERROR: %s not found\n' "$c" >&2; exit 1; }
 done
 ok "repo:    $REPO"
-ok "storage: $STORAGE (no Postgres)"
+if [ "$STORAGE" = "json" ]; then
+  ok "storage: json (in-memory dev store, no Postgres, no mailing list — CLAUDE.md §5)"
+else
+  ok "storage: postgres"
+  ok "database: ${DATABASE_URL:-<unset>}"
+  if is_true "${DEV_ADMIN_LOGIN:-}"; then
+    ok "dev admin login: enabled (DEV_ADMIN_LOGIN=$DEV_ADMIN_LOGIN)"
+  else
+    ok "dev admin login: DISABLED (DEV_ADMIN_LOGIN=${DEV_ADMIN_LOGIN:-<unset>}) — /admin will answer 401 until you sign in"
+  fi
+fi
 ok "admin:   $ADMIN_EMAIL"
 ok "port:    $PORT"
 
@@ -361,7 +427,16 @@ step "Starting Vite dev server on http://localhost:5173"
 info "Vite proxies /api /auth /account /admin → http://localhost:${PORT}"
 printf '\n'
 printf '\033[1m  Open: http://localhost:5173\033[0m\n'
-printf '  (logs in automatically as %s)\n' "$ADMIN_EMAIL"
+# The banner must tell the truth under both backends (#0402's acceptance
+# criterion 7) rather than claim auto-login unconditionally: under
+# STORAGE=json it always holds (DevAutoLogin has no gate); under Postgres it
+# holds only when DEV_ADMIN_LOGIN is genuinely true, which is the default
+# under --postgres but can be overridden off by the caller.
+if [ "$STORAGE" = "json" ] || is_true "${DEV_ADMIN_LOGIN:-}"; then
+  printf '  (logs in automatically as %s)\n' "$ADMIN_EMAIL"
+else
+  printf '  (no automatic session — DEV_ADMIN_LOGIN is not true, so /admin will answer 401 until you sign in; see docs/dev.md)\n'
+fi
 printf '\n'
 
 # Run Vite in foreground — Ctrl-C naturally kills it, then EXIT trap fires.

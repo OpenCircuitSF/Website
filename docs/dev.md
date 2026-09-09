@@ -40,6 +40,57 @@ This runs `npm run build` first, then `go run ./cmd/opencircuit serve`,
 serving the embedded SPA at **http://localhost:8080**. Useful for verifying
 asset embedding, favicon, and SPA deep-link handling before deploying.
 
+## Running against Postgres
+
+`STORAGE=json` has no mailing list at all — no interests, subscribers,
+campaigns, or suppressions (`CLAUDE.md` §5) — so the subscribers, imports,
+pending, suppressions, deliverability, and campaigns admin screens can only
+be exercised against the real database:
+
+```bash
+./scripts/dev.sh --postgres
+```
+
+This unsets `STORAGE` (so `servePostgres` runs instead of the dev store),
+points `DATABASE_URL` at the same local database `scripts/db-reset.sh`
+builds by default, sets `DEV_ADMIN_LOGIN=true`, and sets `MAILER_NOOP=true`
+(otherwise the real SES mailer refuses to construct without
+`SES_CONFIGURATION_SET`). Combine with `--built` the same as the default
+mode: `./scripts/dev.sh --built --postgres` (order doesn't matter; `-p -b`
+works too).
+
+**Prerequisite: the database must already exist, be migrated, and have an
+admin row.** `DEV_ADMIN_LOGIN` never creates the account it targets — it
+only signs in as an EXISTING, active `ADMIN_EMAIL` user
+(`cmd/opencircuit`'s `newDevAdminAutoLogin`, #0402). One command does all
+three:
+
+```bash
+scripts/db-reset.sh
+```
+
+If another process already holds the database, `db-reset.sh` refuses
+without `--force` (`CLAUDE.md` §5a) — seed the existing database directly
+instead:
+
+```bash
+go run ./cmd/opencircuit seed
+```
+
+**`DEV_ADMIN_LOGIN`'s localhost-only refusal.** The service refuses to
+start at all — not just to skip the bypass — if `DEV_ADMIN_LOGIN=true` and
+`BASE_URL`'s host is anything but `localhost`/`127.0.0.1`, the same shape as
+`MAILER_NOOP` (`CLAUDE.md` §10). This can only happen if you override
+`BASE_URL` yourself; `scripts/dev.sh --postgres` never sets it to anything
+else.
+
+**Sign-out is a no-op while this mode is active.** `POST /auth/logout`
+deletes the session row and clears the cookie, but the very next request
+mints a fresh one — the mode's contract is "you are the admin", not "you
+stay signed out until you sign back in". This is deliberate: see
+`internal/middleware.DevAdminAutoLogin`'s doc comment
+(`internal/middleware/devauth.go`).
+
 ## Environment variables
 
 All variables have sensible defaults — no `.env` file is needed. Override any
@@ -47,13 +98,15 @@ of them before calling the script:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `STORAGE` | `json` | Must stay `json` for dev mode |
+| `STORAGE` | `json` | `json` for the in-memory dev store; `--postgres` sets it to empty so `servePostgres` runs instead |
 | `PORT` | `8080` | Go server port |
 | `BASE_URL` | `http://localhost:${PORT}` | Public base URL — derives from `$PORT` (#0213), so it moves with an override rather than staying fixed at `:8080` |
 | `WEBAUTHN_RP_ID` | `localhost` | WebAuthn relying-party ID |
 | `WEBAUTHN_RP_ORIGIN` | `http://localhost:${PORT}` | WebAuthn origin — also derives from `$PORT` (#0213) |
 | `SESSION_SECRET` | *(dev value)* | HMAC signing key — insecure, dev only |
-| `ADMIN_EMAIL` | `admin@localhost` | Mock admin email |
+| `ADMIN_EMAIL` | `admin@localhost` | Mock admin email (`STORAGE=json`) or the existing admin `--postgres` signs in as |
+| `DATABASE_URL` | *(unset; `--postgres` sets the local default)* | Only read on the Postgres path — see "Running against Postgres" above for the DSN `--postgres` defaults to |
+| `DEV_ADMIN_LOGIN` | *(unset; `--postgres` sets `true`)* | Postgres-only auto-login (#0402) — refused at startup unless `BASE_URL`'s host is `localhost`/`127.0.0.1`; see "Running against Postgres" above |
 
 `$PORT` is listed first because `BASE_URL` and `WEBAUTHN_RP_ORIGIN` are
 defined in terms of it — `scripts/dev.sh` sets `PORT` before either, for the

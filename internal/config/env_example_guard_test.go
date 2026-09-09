@@ -130,18 +130,21 @@ func TestEnvExampleCoversLoaderVariables(t *testing.T) {
 	// nothing" check with a real threshold, added by #0428's review after the
 	// argument-shape predicate above was shown to still evade under a
 	// const-identifier hoist (20 -> 15) and a slice-literal loop (20 -> 18) —
-	// see the doc comment. config.go reads exactly 20 variables today,
-	// verified in #0428's review by enumerating every CallExpr in the file
-	// whose first argument is a string literal (the 20 counted here, plus two
-	// Errorf formats, three Sprintf formats, and loadFromFile(".env"...),
-	// none of which match envVarNameLiteral). Falling below the floor means
-	// the walk stopped seeing reads it used to see, not that config.go reads
-	// fewer variables — assert this before trusting the result, per
-	// CLAUDE.md §8's "assert the extraction produced something before
-	// hashing/using it" rule. Lower this constant only when a variable is
-	// genuinely and deliberately removed from config.go — a loud, reviewed
-	// edit — never to make a shrink go quiet.
-	const minLoaderVariables = 20
+	// see the doc comment; those two figures are #0428's own review-time
+	// measurements and are not re-derived here. config.go reads exactly 22
+	// variables today (raised from 20 by #0433's MEDIA_DIR, which landed
+	// without a floor bump, and #0402's DEV_ADMIN_LOGIN), reverified by
+	// enumerating every CallExpr in the file whose first argument is a
+	// string literal (the 22 counted here, plus two Errorf formats, three
+	// Sprintf formats, and loadFromFile(".env"...), none of which match
+	// envVarNameLiteral). Falling below the floor means the walk stopped
+	// seeing reads it used to see, not that config.go reads fewer variables —
+	// assert this before trusting the result, per CLAUDE.md §8's "assert the
+	// extraction produced something before hashing/using it" rule. Lower
+	// this constant only when a variable is genuinely and deliberately
+	// removed from config.go — a loud, reviewed edit — never to make a
+	// shrink go quiet.
+	const minLoaderVariables = 22
 
 	if len(names) < minLoaderVariables {
 		t.Fatalf("extracted %d environment variable name(s) from config.go, below the floor of %d — the AST walk or the envVarNameLiteral match stopped seeing reads it used to see, which is not evidence config.go reads fewer variables", len(names), minLoaderVariables)

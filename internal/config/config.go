@@ -79,6 +79,18 @@ type Config struct {
 	// #0008's manual passkey verification procedure reads the magic link.
 	MailerNoOp bool
 
+	// DevAdminLogin selects middleware.DevAdminAutoLogin on the Postgres
+	// serve path (#0402): DEV_ADMIN_LOGIN=true establishes an admin session
+	// for the configured ADMIN_EMAIL on every request, without a passkey
+	// ceremony. Default false: production always requires real WebAuthn
+	// registration/login. Honoured ONLY when BASE_URL's host is exactly
+	// "localhost" or "127.0.0.1" — cmd/opencircuit's newDevAdminAutoLogin
+	// refuses to start the service otherwise, the same shape as MailerNoOp
+	// above and mailerNoOpAllowed's own guard. Set true for local
+	// development against Postgres, where STORAGE=json's DevAutoLogin has no
+	// mailing-list tables to exercise (CLAUDE.md §5).
+	DevAdminLogin bool
+
 	// SESSandbox reports whether the SES account is still sandboxed (200
 	// messages/day, verified recipients only — PRD §10.4). There is no live
 	// AWS call anywhere in this codebase that could detect this (the
@@ -166,6 +178,7 @@ func loadFromFile(path string) (*Config, error) {
 		SESInboundBucket:    os.Getenv("SES_INBOUND_BUCKET"),
 		SESEventsTopicARN:   os.Getenv("SES_EVENTS_TOPIC_ARN"),
 		MailerNoOp:          getBool("MAILER_NOOP", false, &errs),
+		DevAdminLogin:       getBool("DEV_ADMIN_LOGIN", false, &errs),
 		SESSandbox:          getBool("SES_SANDBOX", true, &errs),
 		MaxSendRate:         getInt("MAX_SEND_RATE", defaultMaxSendRate, &errs),
 		SendBatchSize:       getInt("SEND_BATCH_SIZE", defaultSendBatchSize, &errs),

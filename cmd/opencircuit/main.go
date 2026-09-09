@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata" // #0156: embed the IANA tzdata database in the binary so
@@ -547,11 +548,39 @@ func servePostgres(cfg *config.Config) error {
 		return requireSession(middleware.RequireAdmin(next))
 	}
 
+	// devAdminAutoLogin (#0402) is nil — and the handler chain therefore
+	// byte-for-byte the same as before this issue — unless an operator has
+	// explicitly set DEV_ADMIN_LOGIN=true against a loopback BASE_URL. See
+	// newDevAdminAutoLogin's doc comment for the full ordering and the
+	// refusal this can return.
+	devAdminAutoLogin, err := newDevAdminAutoLogin(ctx, cfg, store, pool, slog.Default())
+	if err != nil {
+		return err
+	}
+
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicArchiveH, sesNotifyH, sendWorker, outboxWorker, site,
-		requireSession, requireAdmin, nil, /* no outer middleware in production */
+		requireSession, requireAdmin, devAdminAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
+}
+
+// baseURLIsLoopback reports whether the given BASE_URL's host is exactly
+// "localhost" or "127.0.0.1". Extracted from mailerNoOpAllowed (#0402) so
+// newDevAdminAutoLogin's startup gate can reuse the identical predicate
+// instead of a second, independently-written one — CLAUDE.md §10 records
+// mailerNoOpAllowed's guard as correct and not to be weakened, and reusing
+// its host check byte-for-byte is the cheapest proof this extraction changed
+// nothing about it. An unparseable BASE_URL is treated as disallowed rather
+// than erroring here, so every caller gets one uniform "not permitted"
+// outcome regardless of why.
+func baseURLIsLoopback(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1"
 }
 
 // mailerNoOpAllowed reports whether MAILER_NOOP=true is permitted for the
@@ -559,16 +588,11 @@ func servePostgres(cfg *config.Config) error {
 // Carried into #0026 from #0027's review — MAILER_NOOP previously had none
 // of the three guards STORAGE=json already uses (explicit opt-in, a loud
 // startup warning, a hard refusal on the wrong path); this supplies the
-// last two. An unparseable BASE_URL is treated as disallowed rather than
-// erroring here, so the caller gets one uniform "not permitted" outcome
-// regardless of why.
+// last two. A one-line wrapper around baseURLIsLoopback (#0402's
+// extraction) — its name, doc framing, and TestMailerNoOpAllowed are
+// unchanged, so nothing about this guard's behaviour moved.
 func mailerNoOpAllowed(baseURL string) bool {
-	u, err := url.Parse(baseURL)
-	if err != nil {
-		return false
-	}
-	host := u.Hostname()
-	return host == "localhost" || host == "127.0.0.1"
+	return baseURLIsLoopback(baseURL)
 }
 
 // checkMailerNoOp enforces mailerNoOpAllowed at startup. When MAILER_NOOP is
@@ -588,6 +612,82 @@ func checkMailerNoOp(cfg *config.Config, logger *slog.Logger) error {
 	}
 	logger.Warn("opencircuit: MAILER_NOOP=true — outbound email is disabled; messages are logged instead of sent (refused outside localhost/127.0.0.1)")
 	return nil
+}
+
+// newDevAdminAutoLogin builds the Postgres-path dev-admin bypass (#0402):
+// off by default, refused outside a loopback BASE_URL exactly like
+// checkMailerNoOp above, and never creating the admin account it targets.
+// Returns (nil, nil) when DEV_ADMIN_LOGIN is unset/false — a nil
+// outerMiddleware, which is what servePostgres already passed before this
+// issue, so the production handler chain is byte-for-byte unchanged.
+//
+// Order matters and is deliberate:
+//
+//  1. cfg.DevAdminLogin off ⇒ return immediately. No store or pool access at
+//     all on this branch — a testable property (see devadmin_test.go's nil
+//     store/pool case).
+//  2. baseURLIsLoopback(cfg.BaseURL) — checked BEFORE any store or pool use,
+//     so a misconfigured production BASE_URL fails here rather than after
+//     a database round trip. Reuses mailerNoOpAllowed's own predicate
+//     (CLAUDE.md §10: that guard is correct and must not be weakened; #0402
+//     extracted baseURLIsLoopback out of it rather than writing a second,
+//     independently-maintained host check).
+//  3. Resolve the configured ADMIN_EMAIL via store.LookupUserByEmail. On
+//     auth.ErrUserNotFound, the error names both the address AND the fix
+//     (opencircuit seed / scripts/db-reset.sh) — this mode must NEVER
+//     create the row itself; cmd/opencircuit/seed.go's ensureAdminUser is
+//     the one place a user is created. On a deactivated account, the error
+//     says so. Neither of these checks reads acct.IsAdmin — LookupUserByEmail
+//     doesn't select it — because RequireAdmin remains the sole decider of
+//     admin-ness: a non-admin ADMIN_EMAIL still boots into this mode and
+//     still gets a legible 403 on admin routes, exactly as it would with a
+//     real session.
+//  4. Exactly one slog.Warn, mirroring DevAutoLogin's "NEVER run this in
+//     production" wording, plus the loopback refusal this mode carries that
+//     DevAutoLogin does not.
+//  5. Build the minter closure over store/pool/acct.ID: auth.NewSessionToken
+//     then store.CreateSession(ctx, pool, acct.ID, token, now) — using the
+//     REQUEST's context (the minter's own ctx parameter), not the startup
+//     ctx this function was called with, since the session must not outlive
+//     an unrelated startup context. No new exported auth API is added: both
+//     calls are already exported, and *pgxpool.Pool already satisfies
+//     CreateSession's unexported querier parameter structurally.
+func newDevAdminAutoLogin(ctx context.Context, cfg *config.Config, store *auth.Store, pool *pgxpool.Pool, logger *slog.Logger) (func(http.Handler) http.Handler, error) {
+	if !cfg.DevAdminLogin {
+		return nil, nil
+	}
+	if !baseURLIsLoopback(cfg.BaseURL) {
+		return nil, fmt.Errorf("opencircuit: DEV_ADMIN_LOGIN=true is only permitted when BASE_URL's host is localhost or 127.0.0.1 (got %q)", cfg.BaseURL)
+	}
+
+	email := strings.ToLower(strings.TrimSpace(cfg.AdminEmail))
+	acct, err := store.LookupUserByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			return nil, fmt.Errorf("opencircuit: DEV_ADMIN_LOGIN=true but ADMIN_EMAIL %q has no users row — run `opencircuit seed` (or scripts/db-reset.sh) first", email)
+		}
+		return nil, fmt.Errorf("opencircuit: DEV_ADMIN_LOGIN=true: looking up ADMIN_EMAIL %q: %w", email, err)
+	}
+	if !acct.Active {
+		return nil, fmt.Errorf("opencircuit: DEV_ADMIN_LOGIN=true but ADMIN_EMAIL %q's account is deactivated", email)
+	}
+
+	logger.Warn("DEV MODE: DEV_ADMIN_LOGIN=true — every request will be authenticated as the configured admin; NEVER run this in production (refused outside localhost/127.0.0.1)",
+		"admin_email", email)
+
+	minter := func(mintCtx context.Context) (string, time.Time, error) {
+		token, err := auth.NewSessionToken()
+		if err != nil {
+			return "", time.Time{}, fmt.Errorf("dev admin auth: minting session token: %w", err)
+		}
+		expiresAt, err := store.CreateSession(mintCtx, pool, acct.ID, token, time.Now())
+		if err != nil {
+			return "", time.Time{}, fmt.Errorf("dev admin auth: creating session: %w", err)
+		}
+		return token, expiresAt, nil
+	}
+
+	return middleware.DevAdminAutoLogin(store, minter, true), nil
 }
 
 // newSESSender decides which mailing.Mailer backs sesSender for this
@@ -1221,8 +1321,11 @@ func adminRoutes(
 // This is shared between the Postgres and dev paths to avoid code duplication.
 // The `db` parameter satisfies handlers.Pinger for GET /health.
 // outerMiddleware, when non-nil, wraps the entire mux as the outermost handler.
-// It is used in dev mode only (serveDevMode) to apply the auto-login middleware;
-// the production path always passes nil.
+// serveDevMode always passes DevAutoLogin's result. servePostgres passes
+// newDevAdminAutoLogin's result (#0402), which is nil unless an operator has
+// explicitly set DEV_ADMIN_LOGIN=true against a loopback BASE_URL — so the
+// Postgres path is nil, and the production handler chain unchanged, in every
+// other configuration.
 // ready, when non-nil, is closed the instant the TCP listener is bound and
 // accepting connections — before srv.Serve is even called (#0084). It exists
 // for the wiring tests (admin_wiring_test.go and its siblings): they used to
