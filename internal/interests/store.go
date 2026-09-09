@@ -307,25 +307,53 @@ func (s *Store) SubscriberCounts(ctx context.Context) (map[int64]int64, error) {
 // deactivating it would leave permanent clutter in the admin list for no
 // reason.
 //
-// Everything below is ONE statement: a data-modifying CTE attempts the
-// delete, and the surrounding SELECT reports both whether it succeeded and,
-// using the identical snapshot the DELETE's own NOT EXISTS clauses read,
-// which of the three tables reference the row. Because every sub-statement
-// of a single query sees the same snapshot, a reported blocker is always
-// the clause that actually rejected the row, and the two can never
-// disagree the way two separate round trips could under a concurrent
-// insert. The shared snapshot does not make the delete itself race-free.
-// Under READ COMMITTED a concurrent transaction touching the same
-// interests row after this snapshot is taken can leave the DELETE
-// affecting zero rows while the outer SELECT still reports the row present
-// and unreferenced; that case falls through to deleteOutcomeAfterRace,
-// which re-reads in a fresh snapshot. Reported in a fixed priority order
-// when more than one table references the same row: the subscriber case
-// first (it was the original, and only, guard before #0474), then the
-// campaign case, then the workshop case.
+// Delete runs in a transaction that locks the interests row first, with
+// `SELECT ... FOR UPDATE`, before checking any of the three referencing
+// tables (#0477). Every INSERT into subscriber_interests, campaign_interests,
+// or workshop_interests takes a FOR KEY SHARE lock on the interest row it
+// references, to enforce the foreign key, and FOR KEY SHARE conflicts with
+// FOR UPDATE -- so a tagging transaction racing this Delete cannot commit its
+// insert while the lock is held, and Delete cannot proceed past the lock
+// statement while a tagging transaction already holds it. The lock and the
+// check are deliberately two separate statements: a lock taken inside the
+// same statement as the check would buy nothing, since every sub-statement of
+// one query shares a single snapshot, and only a statement whose snapshot is
+// taken after the lock was granted can see a reference committed by the
+// transaction it just waited for. Once the lock is granted, the check below
+// runs against a fresh READ COMMITTED snapshot that reflects every write the
+// lock forced to finish first, so a reference committed while Delete waited
+// is always seen rather than cascaded away.
+//
+// The check itself is unchanged from #0474: a data-modifying CTE attempts the
+// delete, and the surrounding SELECT reports both whether it succeeded and
+// which of the three tables reference the row, all from the identical
+// snapshot the DELETE's own NOT EXISTS clauses read. With the lock held first,
+// this NOT EXISTS check is now provably accurate rather than merely usually
+// accurate -- but it is kept rather than replaced by a plain read, as a
+// database-level backstop: a mistake in the locking reasoning above would
+// surface as a refusal here, never as a silent cascade. Reported in a fixed
+// priority order when more than one table references the same row: the
+// subscriber case first (it was the original, and only, guard before
+// #0474), then the campaign case, then the workshop case.
 func (s *Store) Delete(ctx context.Context, id int64) error {
-	var deleted, stillExists, hasSubscribers, hasCampaigns, hasWorkshops bool
-	err := s.pool.QueryRow(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("interests: beginning delete of id %d: %w", id, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var locked int64
+	err = tx.QueryRow(ctx,
+		`SELECT id FROM interests WHERE id = $1 FOR UPDATE`, id).Scan(&locked)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNotFound
+	case err != nil:
+		return fmt.Errorf("interests: locking id %d for delete: %w", id, err)
+	}
+
+	var deleted, hasSubscribers, hasCampaigns, hasWorkshops bool
+	if err := tx.QueryRow(ctx,
 		`WITH del AS (
 		    DELETE FROM interests
 		     WHERE id = $1
@@ -336,25 +364,19 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 		 )
 		 SELECT
 		    EXISTS (SELECT 1 FROM del),
-		    EXISTS (SELECT 1 FROM interests WHERE id = $1),
 		    EXISTS (SELECT 1 FROM subscriber_interests WHERE interest_id = $1),
 		    EXISTS (SELECT 1 FROM campaign_interests WHERE interest_id = $1),
 		    EXISTS (SELECT 1 FROM workshop_interests WHERE interest_id = $1)`,
 		id,
-	).Scan(&deleted, &stillExists, &hasSubscribers, &hasCampaigns, &hasWorkshops)
-	if err != nil {
+	).Scan(&deleted, &hasSubscribers, &hasCampaigns, &hasWorkshops); err != nil {
 		return fmt.Errorf("interests: deleting id %d: %w", id, err)
 	}
 	if deleted {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("interests: committing delete of id %d: %w", id, err)
+		}
 		return nil
 	}
-	// stillExists reflects the pre-statement snapshot the DELETE itself read
-	// (see the doc comment above), so when the row was actually removed this
-	// reads true even though it is now gone -- deleted, checked first, is
-	// what decides success. From here the row was never removed.
-	if !stillExists {
-		return ErrNotFound
-	}
 	switch {
 	case hasSubscribers:
 		return ErrHasSubscribers
@@ -363,54 +385,12 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 	case hasWorkshops:
 		return ErrHasWorkshops
 	default:
-		// deleted is false, yet this statement's own snapshot showed the
-		// row present and no referencing row in any of the three tables.
-		// That is reachable, not an invariant violation. Under READ
-		// COMMITTED a concurrent transaction that deletes or updates the
-		// same interests row after this statement's snapshot is taken
-		// makes the DELETE affect zero rows via EvalPlanQual, while the
-		// outer SELECT still reads the pre-statement snapshot. #0474's
-		// review reproduced exactly that with two sessions. Only a fresh
-		// read can say what is true now, so take one -- it costs a second
-		// round trip on a path nothing but a concurrent admin action
-		// reaches, and the fast path above stays one atomic statement.
-		return s.deleteOutcomeAfterRace(ctx, id)
-	}
-}
-
-// deleteOutcomeAfterRace re-reads, in a NEW statement and therefore a
-// NEW snapshot, why Delete's atomic statement removed nothing when its
-// own snapshot said it should have. Delete's concurrent-modification
-// branch is the only caller (#0474). Returns ErrNotFound when the row
-// is gone, or the same priority-ordered sentinel Delete itself uses
-// when something now references it.
-func (s *Store) deleteOutcomeAfterRace(ctx context.Context, id int64) error {
-	var exists, hasSubscribers, hasCampaigns, hasWorkshops bool
-	if err := s.pool.QueryRow(ctx,
-		`SELECT
-		    EXISTS (SELECT 1 FROM interests WHERE id = $1),
-		    EXISTS (SELECT 1 FROM subscriber_interests WHERE interest_id = $1),
-		    EXISTS (SELECT 1 FROM campaign_interests WHERE interest_id = $1),
-		    EXISTS (SELECT 1 FROM workshop_interests WHERE interest_id = $1)`,
-		id,
-	).Scan(&exists, &hasSubscribers, &hasCampaigns, &hasWorkshops); err != nil {
-		return fmt.Errorf("interests: re-reading refused delete for id %d: %w", id, err)
-	}
-	switch {
-	case !exists:
-		return ErrNotFound
-	case hasSubscribers:
-		return ErrHasSubscribers
-	case hasCampaigns:
-		return ErrHasCampaigns
-	case hasWorkshops:
-		return ErrHasWorkshops
-	default:
-		// The row is present and unreferenced right now, so the writer
-		// that blocked the DELETE has released it and the call is simply
-		// retryable. ErrNotFound would be a lie and a table-naming
-		// sentinel would be a guess; report the transient condition.
-		return fmt.Errorf("interests: delete id %d lost a race with a concurrent modification; retry", id)
+		// Unreachable in ordinary operation: this transaction has held an
+		// exclusive lock on the interests row since the statement above, so
+		// nothing could have deleted it or added a reference to it between
+		// the lock and this check. Reported as an error rather than assumed
+		// away, per the doc comment's backstop reasoning.
+		return fmt.Errorf("interests: delete id %d removed nothing while holding its row lock; retry", id)
 	}
 }
 

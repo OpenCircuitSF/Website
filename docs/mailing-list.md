@@ -66,9 +66,12 @@ supported channels, and none touches `000009`:
     (`migrations/000010_create_subscribers.up.sql`,
     `migrations/000017_create_campaigns.up.sql`,
     `migrations/000020_create_workshops.up.sql`), so `interests.Store.Delete`
-    checks all three in one atomic statement and the error names which one
-    blocked it — a subscriber's selection, a campaign's target segment, or a
-    workshop's topic tag. Prefer `PATCH {"active": false}` for any interest
+    locks the interest row first, then checks all three, and the error names
+    which one blocked it — a subscriber's selection, a campaign's target
+    segment, or a workshop's topic tag. Locking first (`#0477`) means a
+    reference committed by another admin while the delete was waiting on the
+    lock is seen by the check rather than cascaded away. Prefer
+    `PATCH {"active": false}` for any interest
     with history: deactivation preserves the row and every
     `subscriber_interests`/`campaign_interests`/`workshop_interests` row
     that references it. (Before `#0474`, `DELETE` consulted
