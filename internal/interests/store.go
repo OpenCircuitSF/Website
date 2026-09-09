@@ -303,14 +303,18 @@ func (s *Store) SubscriberCounts(ctx context.Context) (map[int64]int64, error) {
 // delete, and the surrounding SELECT reports both whether it succeeded and,
 // using the identical snapshot the DELETE's own NOT EXISTS clauses read,
 // which of the three tables reference the row. Because every sub-statement
-// of a single query sees the same snapshot, "did it delete" and "why not"
-// can never disagree with each other the way two separate round trips
-// could under a concurrent insert -- there is no window in which a
-// follow-up check could read a different reality than the one the DELETE
-// itself acted on. Reported in a fixed priority order when more than one
-// table references the same row: the subscriber case first (it was the
-// original, and only, guard before #0474), then the campaign case, then
-// the workshop case.
+// of a single query sees the same snapshot, a reported blocker is always
+// the clause that actually rejected the row, and the two can never
+// disagree the way two separate round trips could under a concurrent
+// insert. The shared snapshot does not make the delete itself race-free.
+// Under READ COMMITTED a concurrent transaction touching the same
+// interests row after this snapshot is taken can leave the DELETE
+// affecting zero rows while the outer SELECT still reports the row present
+// and unreferenced; that case falls through to deleteOutcomeAfterRace,
+// which re-reads in a fresh snapshot. Reported in a fixed priority order
+// when more than one table references the same row: the subscriber case
+// first (it was the original, and only, guard before #0474), then the
+// campaign case, then the workshop case.
 func (s *Store) Delete(ctx context.Context, id int64) error {
 	var deleted, stillExists, hasSubscribers, hasCampaigns, hasWorkshops bool
 	err := s.pool.QueryRow(ctx,
@@ -351,13 +355,54 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 	case hasWorkshops:
 		return ErrHasWorkshops
 	default:
-		// stillExists is true (so the id is real) yet none of the three
-		// NOT EXISTS clauses in the DELETE's own WHERE was false -- meaning
-		// the DELETE's own snapshot should have removed it. Postgres
-		// guarantees this cannot happen inside one statement; treated as an
-		// internal invariant violation rather than silently reported as a
-		// specific, potentially wrong, reference reason.
-		return fmt.Errorf("interests: delete id %d refused with no referencing table found (invariant violation)", id)
+		// deleted is false, yet this statement's own snapshot showed the
+		// row present and no referencing row in any of the three tables.
+		// That is reachable, not an invariant violation. Under READ
+		// COMMITTED a concurrent transaction that deletes or updates the
+		// same interests row after this statement's snapshot is taken
+		// makes the DELETE affect zero rows via EvalPlanQual, while the
+		// outer SELECT still reads the pre-statement snapshot. #0474's
+		// review reproduced exactly that with two sessions. Only a fresh
+		// read can say what is true now, so take one -- it costs a second
+		// round trip on a path nothing but a concurrent admin action
+		// reaches, and the fast path above stays one atomic statement.
+		return s.deleteOutcomeAfterRace(ctx, id)
+	}
+}
+
+// deleteOutcomeAfterRace re-reads, in a NEW statement and therefore a
+// NEW snapshot, why Delete's atomic statement removed nothing when its
+// own snapshot said it should have. Delete's concurrent-modification
+// branch is the only caller (#0474). Returns ErrNotFound when the row
+// is gone, or the same priority-ordered sentinel Delete itself uses
+// when something now references it.
+func (s *Store) deleteOutcomeAfterRace(ctx context.Context, id int64) error {
+	var exists, hasSubscribers, hasCampaigns, hasWorkshops bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT
+		    EXISTS (SELECT 1 FROM interests WHERE id = $1),
+		    EXISTS (SELECT 1 FROM subscriber_interests WHERE interest_id = $1),
+		    EXISTS (SELECT 1 FROM campaign_interests WHERE interest_id = $1),
+		    EXISTS (SELECT 1 FROM workshop_interests WHERE interest_id = $1)`,
+		id,
+	).Scan(&exists, &hasSubscribers, &hasCampaigns, &hasWorkshops); err != nil {
+		return fmt.Errorf("interests: re-reading refused delete for id %d: %w", id, err)
+	}
+	switch {
+	case !exists:
+		return ErrNotFound
+	case hasSubscribers:
+		return ErrHasSubscribers
+	case hasCampaigns:
+		return ErrHasCampaigns
+	case hasWorkshops:
+		return ErrHasWorkshops
+	default:
+		// The row is present and unreferenced right now, so the writer
+		// that blocked the DELETE has released it and the call is simply
+		// retryable. ErrNotFound would be a lie and a table-naming
+		// sentinel would be a guess; report the transient condition.
+		return fmt.Errorf("interests: delete id %d lost a race with a concurrent modification; retry", id)
 	}
 }
 
