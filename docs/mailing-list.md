@@ -26,6 +26,36 @@ pcb-design, sensors-iot, robotics, radio-rf, retro-computing, 3d-printing,
 test-equipment, beginner). A subscriber with **zero** interests selected is
 a valid, expected state — they receive only general announcements.
 
+### Changing the taxonomy (`#0471`)
+
+`migrations/000009_create_interests` only ever seeds these twelve rows once,
+on a fresh install. It is frozen the moment it has run against production
+(`CLAUDE.md` §1 — production has been past it since Phase 3) and must never
+be edited again, by this project or a downstream. That is fine, because it
+was never meant to be the only way the taxonomy changes — there are two
+supported channels, and neither touches `000009`:
+
+- **A live catalog change** — add, rename, redescribe, reorder, deactivate,
+  or (if unused) hard-delete an interest — is an **admin-console action**,
+  not a migration: `POST`/`PATCH`/`DELETE /admin/interests`
+  (`internal/interests`, `#0024`). It takes effect immediately, with no
+  deploy and no restart. `interests.Store.Deactivate` is the only supported
+  way to retire an interest that any subscriber has ever selected — it hides
+  the row from the signup form while preserving it and every
+  `subscriber_interests`/`workshop_interests`/`campaign_interests` row that
+  references it.
+- **A change to what a *fresh* install seeds by default** — the canonical
+  list in `PRD.md` §6.1 itself changing — is a **new, additively-numbered
+  migration**, never an edit to `000009`, following exactly the shape
+  `000009` already uses: `INSERT INTO interests (...) VALUES (...) ON
+  CONFLICT (slug) DO NOTHING` to add a default, `UPDATE interests SET ...
+  WHERE slug = '...'` to rename or redescribe one in place (this preserves
+  `id`, so no existing `subscriber_interests` row is orphaned or
+  renumbered). A migration in this family must never `DELETE` a row —
+  `internal/db`'s `TestInterestTaxonomyMigrationGuardPassesOnRealMigrations`
+  enforces both the idempotency and the no-delete rule mechanically for
+  every migration numbered after `000009`.
+
 ## Subscription flow — double opt-in (Phase 3, `#0025`–`#0032`)
 
 Standard double opt-in: a public form submits an email + optional interest
