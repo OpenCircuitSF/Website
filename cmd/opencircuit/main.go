@@ -144,6 +144,10 @@ func servePostgres(cfg *config.Config) error {
 	// configuration; see #0007). MAILER_NOOP=true swaps in a stdout no-op
 	// instead, for local development against Postgres before SES domain
 	// verification/DKIM/production access is done (CLAUDE.md §10 item 2).
+	// SEND_WORKER_ENABLED=false plus an unconfigured SES swaps in a third
+	// kind, mailing.UnconfiguredMailer, that fails loudly at every Send
+	// instead of either sending for real or silently no-opping (#0472) — see
+	// newSESSender's own doc comment for the exact decision.
 	//
 	// sesSender is the shared internal/mailing.Mailer primitive, used by
 	// the campaign send worker, #0046's test-send handler, and #0126's
@@ -151,17 +155,20 @@ func servePostgres(cfg *config.Config) error {
 	// process, including the three transactional auth emails
 	// auth.SESMailer used to send directly — see that type's doc comment
 	// for why it now enqueues instead).
-	var sesSender mailing.Mailer
+	sesSender, err := newSESSender(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("opencircuit: constructing SES mailer: %w", err)
+	}
+
+	// auth.Mailer never talks to AWS directly regardless of which sesSender
+	// case above fired: despite its name, auth.SESMailer only enqueues onto
+	// outbound_queue (#0126) — internal/mailing.OutboxWorker performs the
+	// actual send later, through sesSender. So its only distinction is
+	// MAILER_NOOP; #0472's new case does not change it.
 	var mailer auth.Mailer
 	if cfg.MailerNoOp {
-		sesSender = noOpMailingMailer{}
 		mailer = auth.NoOpMailer{BaseURL: cfg.BaseURL}
 	} else {
-		sender, err := mailing.NewSESMailer(ctx, cfg)
-		if err != nil {
-			return fmt.Errorf("opencircuit: constructing SES mailer: %w", err)
-		}
-		sesSender = sender
 		mailer = auth.NewSESMailer(pool, cfg)
 	}
 
@@ -581,6 +588,48 @@ func checkMailerNoOp(cfg *config.Config, logger *slog.Logger) error {
 	}
 	logger.Warn("opencircuit: MAILER_NOOP=true — outbound email is disabled; messages are logged instead of sent (refused outside localhost/127.0.0.1)")
 	return nil
+}
+
+// newSESSender decides which mailing.Mailer backs sesSender for this
+// instance's Postgres path (#0472). Three outcomes, in order:
+//
+//  1. MAILER_NOOP=true: noOpMailingMailer, unchanged from before this issue
+//     — checkMailerNoOp has already refused this outside localhost/127.0.0.1,
+//     so reaching here means it's permitted.
+//  2. SEND_WORKER_ENABLED=false AND SES_CONFIGURATION_SET is unset:
+//     mailing.NewUnconfiguredMailer(), CLAUDE.md §10 item 2's prescribed
+//     "turn SES off in production" recipe, made to actually work. Before
+//     this issue that recipe did not boot at all: case 3 below always ran
+//     when MAILER_NOOP was false, and mailing.NewSESMailer refuses to
+//     construct without SES_CONFIGURATION_SET, so servePostgres returned an
+//     error and the service never started. This case requires BOTH
+//     conditions deliberately — SEND_WORKER_ENABLED defaults to true, so an
+//     operator who merely forgets SES_CONFIGURATION_SET (the common
+//     misconfiguration this project actually wants to fail loud at boot,
+//     per docs/configuration.md) still hits case 3 and gets today's clear
+//     construction error, not a silently degraded instance. Checking only
+//     cfg.SESConfigurationSet (not AWS_REGION or EMAIL_FROM, the other two
+//     mailing.NewSESMailer validates) is sufficient: both of those are
+//     already unconditionally required by config.Load, so by the time a
+//     *config.Config reaches here they can never be empty — SES_CONFIGURATION_SET
+//     is the only one of the three NewSESMailer checks that config.Load
+//     does not also enforce.
+//  3. Otherwise: the real mailing.NewSESMailer(ctx, cfg), unchanged — fails
+//     construction loudly (CLAUDE.md §10) if SES_CONFIGURATION_SET is
+//     missing here despite case 2's guard, which cannot happen given (2)'s
+//     reasoning but is left to NewSESMailer's own check rather than assumed.
+//
+// UnconfiguredMailer's Send always errors (unlike noOpMailingMailer's, which
+// always succeeds) — see that type's doc comment for why this is "fails
+// loudly at the point of send," not a second silent-discard path.
+func newSESSender(ctx context.Context, cfg *config.Config) (mailing.Mailer, error) {
+	if cfg.MailerNoOp {
+		return noOpMailingMailer{}, nil
+	}
+	if !cfg.SendWorkerEnabled && cfg.SESConfigurationSet == "" {
+		return mailing.NewUnconfiguredMailer(), nil
+	}
+	return mailing.NewSESMailer(ctx, cfg)
 }
 
 // noOpMailingMailer implements mailing.Mailer by logging the message instead

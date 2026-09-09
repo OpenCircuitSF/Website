@@ -1140,9 +1140,29 @@ hard way on deploy day:
   not be weakened — it is what stops a production host silently swallowing
   every outbound email. "Turn SES off in production" is expressed as
   `SEND_WORKER_ENABLED=false` plus an unconfigured SES, not as `MAILER_NOOP`.
-- **`SES_CONFIGURATION_SET` is required, not optional.**
-  `docs/configuration.md` lists it as optional; `mailing.NewSESMailer` refuses
-  to construct without it and the service will not boot. The doc is wrong.
+  **That recipe is now real (`#0472`, 2026-09-08).** Until then it described a
+  configuration the code refused to boot in at all: `MAILER_NOOP=false` (the
+  only alternative to the guard above) always called `mailing.NewSESMailer`,
+  which itself refuses to construct without `SES_CONFIGURATION_SET` — so
+  there was no supported way to run without SES anywhere but `localhost`.
+  `cmd/opencircuit`'s `newSESSender` now recognises exactly this combination
+  and swaps in `mailing.UnconfiguredMailer` instead: unlike the no-op mailer,
+  every `Send` through it fails loudly with `mailing.ErrSESUnconfigured`
+  rather than looking like success, so nothing is silently discarded (§9) —
+  registration/recovery/etc. simply enqueue, retry, and abandon on
+  `outbound_queue`'s existing backoff, the same fate already described below
+  for "a magic link requested before SES exists." The ordinary
+  misconfiguration this guard exists to catch — `SES_CONFIGURATION_SET`
+  merely forgotten, `SEND_WORKER_ENABLED` left at its default `true` — still
+  crash-loops exactly as before, since the new case requires an operator to
+  set `SEND_WORKER_ENABLED=false` deliberately.
+- **`SES_CONFIGURATION_SET` is required, not optional — except by the recipe
+  above.** `mailing.NewSESMailer` refuses to construct without it and the
+  service will not boot, unless `SEND_WORKER_ENABLED=false` also holds, per
+  `#0472`. The stale half of this note is now fixed: `docs/configuration.md`
+  listing it as optional was true only until 2026-08-25's first production
+  boot (the same day this note was first written) and has read **yes**,
+  required, since; nothing here needs correcting there today.
 
 Anything now queued for send accumulates in `outbound_queue` and retries on
 the six-step backoff up to `queue_max_retries` (8) before going `abandoned`,
