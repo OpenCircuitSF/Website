@@ -233,6 +233,46 @@ func TestDevAutoLogin_GarbageCookieHeals(t *testing.T) {
 	}
 }
 
+// TestDevAutoLogin_UnusableBearerTokenDropped mirrors
+// TestDevAdminAutoLogin_UnusableBearerTokenDropped: sessionToken (auth.go)
+// prefers Authorization: Bearer over the cookie, so an unusable bearer
+// token — with no cookie present at all — must not reproduce #0409's stuck
+// 401 by that second route. The request must reach the admin, and the
+// Authorization header must be gone by the time RequireSession reads the
+// request.
+func TestDevAutoLogin_UnusableBearerTokenDropped(t *testing.T) {
+	store := newFakeDevStore()
+	mw := DevAutoLogin(store, store, true)
+	requireSession := RequireSession(store)
+
+	inner := &captureHandler{}
+	var sawAuthHeader string
+	sawAuthHeaderSet := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAuthHeader = r.Header.Get("Authorization")
+		sawAuthHeaderSet = true
+		requireSession(inner).ServeHTTP(w, r)
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req.Header.Set("Authorization", "Bearer unusable-garbage-token")
+	mw(next).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (unusable bearer token must heal, not 401)", rec.Code)
+	}
+	if !inner.ran || !inner.ok {
+		t.Fatal("inner handler did not run authenticated after an unusable bearer token")
+	}
+	if !sawAuthHeaderSet {
+		t.Fatal("test bug: next was never called")
+	}
+	if sawAuthHeader != "" {
+		t.Errorf("Authorization header = %q, want empty (must be dropped so it can't win at RequireSession)", sawAuthHeader)
+	}
+}
+
 // TestDevAutoLogin_ComposesWithRequireSession verifies the full chain:
 // DevAutoLogin (outermost) → RequireSession (inner) → handler.
 // A request with no cookie must arrive at the inner handler fully authenticated.
