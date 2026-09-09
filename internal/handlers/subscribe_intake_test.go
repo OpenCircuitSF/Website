@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -90,14 +91,14 @@ func intakeQueueDiagnostic(pool *pgxpool.Pool, ids ...int64) string {
 		fmt.Fprintf(&b, "\n  queued-and-due %s rows table-wide: %d (SelectDue would return this many)",
 			outbox.KindSubscribeIntake, queuedDue)
 	}
-	pollers, parked := goroutinesIn("handlers.(*SubscribeHandler).runIntakeWorker")
+	pollers, parked := goroutinesIn(frameName((*SubscribeHandler).runIntakeWorker))
 	fmt.Fprintf(&b, "\n  live intake pollers (goroutines in runIntakeWorker): %d", pollers)
 	for _, g := range parked {
 		fmt.Fprintf(&b, "\n    parked: %s", g)
 	}
-	fmt.Fprintf(&b, "\n  goroutines inside processIntakeRow: %d", countGoroutinesIn("handlers.(*SubscribeHandler).processIntakeRow"))
+	fmt.Fprintf(&b, "\n  goroutines inside processIntakeRow: %d", countGoroutinesIn(frameName((*SubscribeHandler).processIntakeRow)))
 	fmt.Fprintf(&b, "\n  goroutines inside blockingSuppressionChecker.IsSuppressed: %d",
-		countGoroutinesIn("handlers.(*blockingSuppressionChecker).IsSuppressed"))
+		countGoroutinesIn(frameName((*blockingSuppressionChecker).IsSuppressed)))
 	return b.String()
 }
 
@@ -108,15 +109,33 @@ func countGoroutinesIn(frame string) int {
 	return n
 }
 
+// frameName returns the exact fully-qualified stack-frame name of fn,
+// as the runtime prints it in a goroutine dump. Deriving it from the
+// function value instead of writing the string by hand is what keeps
+// goroutinesIn's callers honest: goroutinesIn reports zero both when
+// nothing is in the frame and when the name it was handed matches
+// nothing at all, and TestNoLeakedIntakePollers PASSES on zero — so a
+// hand-written literal that goes stale disarms the guard silently,
+// which is CLAUDE.md §8's "an empty result must be an error, never an
+// input". Measured during #0470's review: with 32 leaked pollers
+// provably alive, renaming runIntakeWorker made the guard pass in
+// 0.00s and the package go green. Written this way the same rename is
+// a compile error instead.
+func frameName(fn any) string {
+	return runtime.FuncForPC(reflect.ValueOf(fn).Pointer()).Name()
+}
+
 // goroutinesIn returns how many live goroutines are executing frame right
 // now, plus the header line of the first few, so a failure can show where
-// they are parked rather than only how many there are. frame must be an
-// exact stack-frame prefix (a "pkg.(*T).Method" string): a goroutine dump
-// prints one such line per goroutine that is inside it, so counting the
-// frame is exact where splitting the dump into per-goroutine blocks is not
-// -- the block separator is not reliably distinct from blank lines the
-// runtime emits inside a block, which over-counts badly on a dump with many
-// goroutines.
+// they are parked rather than only how many there are. frame must be the
+// exact fully-qualified stack-frame name a goroutine dump prints — pass the
+// result of frameName(...) rather than writing it by hand, so a rename of
+// the watched method is a compile error instead of silently disarming the
+// match. A goroutine dump prints one such line per goroutine that is inside
+// the frame, so counting the frame is exact where splitting the dump into
+// per-goroutine blocks is not -- the block separator is not reliably
+// distinct from blank lines the runtime emits inside a block, which
+// over-counts badly on a dump with many goroutines.
 func goroutinesIn(frame string) (int, []string) {
 	buf := make([]byte, 4<<20)
 	dump := string(buf[:runtime.Stack(buf, true)])
@@ -165,7 +184,7 @@ func TestNoLeakedIntakePollers(t *testing.T) {
 	if testDBPool == nil {
 		t.Skip("TEST_DATABASE_URL not set; no DB-backed test has built a SubscribeHandler")
 	}
-	const frame = "handlers.(*SubscribeHandler).runIntakeWorker"
+	frame := frameName((*SubscribeHandler).runIntakeWorker)
 	deadline := time.Now().Add(time.Second)
 	for {
 		n, parked := goroutinesIn(frame)

@@ -396,6 +396,23 @@ peaking at load average 320. A day went into widening test deadlines from 5s to
 statements were never slow. The machine was saturated. All five are closed;
 `#0096` and `#0099` as `wontfix`.
 
+**And the converse, which took four passes to learn (`#0470`).** The rule
+above says what a timing failure at *high* load means. It says nothing about
+one at *normal* load, and four separate passes read that silence as "not my
+change" and moved on. Read it the other way too: **a deadline-bound test
+that fails while the load average is normal is evidence of a defect, and the
+`uptime` reading is what tells you so** — it removes the only ambient
+explanation, which is the opposite of licensing a shrug. Look first for a
+**silent decline path**: a worker that `continue`s without logging, a
+`len(x) == 0` early return, a background goroutine outliving the test that
+started it. That is what makes this class of failure present as a bare
+expired deadline with no error in it. `#0470` was all three at once — a test
+helper that never `Close`d the handler it built leaked 32 background pollers
+into the rest of the package's binary, and one of them claimed the rows the
+failing test was waiting on. Nothing about it was load-dependent. Widening
+the deadline is still the wrong instinct; making the decline say something
+is the right one.
+
 **There is no performance requirement in this project and no load test.** It is
 a marketing site with a mailing list. If you catch yourself sizing a constant
 against measured machine load, stop — you are solving the wrong problem.
