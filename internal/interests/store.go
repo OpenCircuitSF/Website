@@ -7,10 +7,12 @@
 // `active = false` hides it from the signup form (via ListActive) while
 // preserving associations. Delete (added by #0024, the admin CRUD) is
 // deliberately narrower than its name suggests: it hard-removes a row only
-// when zero subscriber_interests rows reference it, and refuses
-// (ErrHasSubscribers) otherwise -- the moment any subscriber has ever
-// selected an interest, Deactivate is the only way to retire it. The slug
-// format and uniqueness constraints are enforced both here and by the
+// when nothing references it at all, and refuses otherwise. #0474 widened
+// that check from subscriber_interests alone to the campaign and workshop
+// join tables too, so the moment any subscriber has selected an interest,
+// any campaign has targeted it, or any workshop has been tagged with it,
+// Deactivate is the only way to retire it. The slug format and uniqueness
+// constraints are enforced both here and by the
 // `interests_slug_format` CHECK and UNIQUE index added in
 // migrations/000009_create_interests.up.sql, so a future direct INSERT can't
 // slip past them either.
