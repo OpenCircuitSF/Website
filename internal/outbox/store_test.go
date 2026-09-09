@@ -17,16 +17,20 @@ func uniqueRecipient(t *testing.T) string {
 // distinctKind returns a Kind unique to this test run (#0285).
 //
 // This is NOT defence against internal/mailing or internal/handlers running
-// concurrently with this package's tests — they cannot. Every DB-backed
-// package's TestMain calls internal/testdb.Lock() on the same fixed
-// advisory-lock key, and that package's own doc comment says plainly that
-// "only one package can hold the lock at a time, so they run one-at-a-time
-// even under `go test ./...`" — measured directly during #0285's review by
-// launching two `go test` binaries against one database and polling
-// pg_locks: one holder, one blocked waiter, never overlapping. This
-// package's own main_test.go also TRUNCATEs outbound_queue on entry while
-// holding that lock, so even sequential residue from an earlier package's
-// run is gone before this package's first test executes.
+// concurrently with this package's tests. Every DB-backed package's
+// TestMain calls internal/testdb.Lock() on the same fixed advisory-lock key
+// before running a single test, and that call either serializes the whole
+// run behind that key or ends the test binary outright — it does not hand
+// back control any other way (#0476).
+//
+// That guarantee is conditional on Lock() itself, not absolute the way an
+// earlier version of this comment stated it. #0285's review measured only
+// the success case: launching two `go test` binaries against one database
+// and polling pg_locks showed one holder, one blocked waiter, never
+// overlapping. This package's own main_test.go also TRUNCATEs
+// outbound_queue on entry while holding that lock, so even sequential
+// residue from an earlier package's run is gone before this package's
+// first test executes.
 //
 // The real reason to scope by a distinct kind: it makes each assertion
 // about rows the test itself created, independent of anything else that

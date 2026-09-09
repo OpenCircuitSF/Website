@@ -11,11 +11,22 @@
 // one package can hold the lock at a time, so they run one-at-a-time even under
 // `go test ./...`. When TEST_DATABASE_URL is unset, the DB-backed tests skip
 // themselves and Lock is a no-op.
+//
+// That serialization claim holds whenever Lock returns normally (#0476). Two
+// things can go wrong while acquiring it, and they are handled differently —
+// see Lock's own doc comment for why: a failed connection returns a no-op
+// release, because the DB-backed tests that follow will fail loudly on their
+// own connection attempts against the same unreachable database; a failed
+// advisory-lock call instead terminates the process immediately, because
+// nothing downstream would fail — the connection is live, every test would
+// run and pass normally, just unserialized against whatever other package
+// currently holds the real lock.
 package testdb
 
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -30,9 +41,35 @@ import (
 const advisoryLockKey int64 = 0x53484F52544C4B // "SHORTLK"
 
 // Lock acquires the shared advisory lock and returns a release function the
-// caller must invoke before exiting (typically right before os.Exit). It blocks
-// until the lock is free. If TEST_DATABASE_URL is unset, it returns a no-op
-// release immediately.
+// caller must invoke before exiting (typically right before os.Exit). It
+// blocks until the lock is free. If TEST_DATABASE_URL is unset, it returns a
+// no-op release immediately.
+//
+// The two ways acquisition can fail are deliberately NOT treated the same
+// way (#0476 criteria 1 and 2). Lock is called from every DB-backed
+// package's TestMain, before that TestMain runs a single test; a signature
+// change (e.g. returning an ok bool) would require touching all of them,
+// and — more importantly — would still let a TestMain that forgets to check
+// it fall straight back into the fail-open this issue closes. A caller
+// cannot ignore a process that has already exited, so that is the option
+// chosen here for the path where the value of a real fix is greatest:
+//
+//   - If the connection itself fails, this returns a no-op release and only
+//     logs to stderr, unchanged from before #0476. That is still correct
+//     here specifically: every DB-backed test in the caller's package is
+//     about to try the same unreachable database (via Connect) and will
+//     fail or skip loudly on its own, so nothing downstream can silently do
+//     the wrong thing.
+//   - If the connection succeeds but the advisory-lock SELECT itself fails
+//     (e.g. a revoked EXECUTE privilege, or any other server-side error),
+//     that reasoning does not transfer: the connection is fine, every test
+//     that follows will connect and run normally, and none of them has any
+//     way to notice it is running unserialized against whatever other
+//     package currently holds the real lock. There is no second symptom to
+//     rely on, so this path can no longer return a value the caller might
+//     ignore — it calls log.Fatalf and ends the process before any test
+//     runs, the same way EntryTruncate already does for a failed entry
+//     TRUNCATE below.
 func Lock() func() {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -49,9 +86,18 @@ func Lock() func() {
 	}
 
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", advisoryLockKey); err != nil {
-		fmt.Fprintf(os.Stderr, "testdb: advisory lock failed: %v\n", err)
+		// Unlike the connect failure above, nothing downstream will fail on
+		// its own here: the connection is live, so every DB-backed test in
+		// this package would connect and run fine, just unserialized against
+		// whatever other package currently holds the real lock (#0476). A
+		// stderr line alone is not enough — it is invisible under
+		// scripts/check.sh's tail -40 and does not stop anything — so this
+		// ends the whole test binary before any test runs, rather than
+		// handing the caller a release function it could mistake for a real
+		// one.
 		_ = conn.Close(ctx)
-		return func() {}
+		log.Fatalf("testdb: advisory lock failed: %v — refusing to run this package's "+
+			"tests unserialized against a database another package may be using", err)
 	}
 
 	return func() {
