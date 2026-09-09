@@ -169,7 +169,7 @@ func TestAdminSuppressions_Remove_RequiresNote(t *testing.T) {
 // `unsubscribed`, never silently flipped back to `active`; #0100 plan §6).
 func TestAdminSuppressions_Remove_ManualSuppressionIsReversible(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	subscribersSrv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	subscribersSrv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer subscribersSrv.Close()
 	suppressionsSrv := httptest.NewServer(adminSuppressionsMux(pool))
 	defer suppressionsSrv.Close()

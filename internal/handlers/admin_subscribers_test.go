@@ -60,12 +60,46 @@ func testSubscriberEmail(t *testing.T) string {
 // existingSignup dispatch. #0126 removed the mailer parameter entirely:
 // sending now happens out-of-band via internal/mailing.OutboxWorker
 // draining internal/outbox, not through this handler.
-func newTestSubscribeHandler(pool *pgxpool.Pool) *SubscribeHandler {
-	return NewSubscribeHandler(
+//
+// # Why this takes a *testing.T (#0470)
+//
+// Since #0254 a non-nil intake store makes NewSubscribeHandler start
+// runIntakeWorker, a background goroutine that polls outbound_queue for
+// KindSubscribeIntake rows every intakePollInterval and CLAIMS whatever it
+// finds, for the whole life of the process. This helper used to take only
+// a pool, so it could not register a cleanup and nothing ever called
+// Close: each of its 30-odd call sites leaked one live poller into the
+// rest of the package's test binary.
+//
+// That is what #0470 was filed against.
+// TestSubscribeIntakeWorker_ClaimsRowsIndividuallyNotAsBatch seeds two due
+// rows and waits for ITS OWN handler's poller to reach a deliberately
+// blocking SuppressionChecker; every leaked poller here is a competitor
+// for those same rows, and each one runs NoSuppressions instead. When a
+// leaked poller won the race it claimed and finished both rows without
+// ever touching the blocking checker, so the test's wait expired against
+// rows that were already 'sent'. Both of intakePass's decline paths are
+// silent, so the run showed no error at all — see intakeQueueDiagnostic
+// (subscribe_intake_test.go) for the failure text that now says so.
+//
+// Registering Close as a cleanup keeps every poller's lifetime inside the
+// test that created it, which is the property TestNoLeakedIntakePollers
+// (subscribe_intake_test.go) pins.
+func newTestSubscribeHandler(t *testing.T, pool *pgxpool.Pool) *SubscribeHandler {
+	t.Helper()
+	h := NewSubscribeHandler(
 		subscribers.NewStore(pool), interests.NewStore(pool),
 		NoSuppressions{}, nil, "http://localhost:8080", slog.Default(),
 		outbox.NewStore(pool),
 	)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.Close(ctx); err != nil {
+			t.Errorf("newTestSubscribeHandler cleanup: h.Close: %v", err)
+		}
+	})
+	return h
 }
 
 // adminSubscribersMux wires the real admin subscribers routes guarded by
@@ -130,7 +164,7 @@ func auditActionsForSubscriberTarget(t *testing.T, pool *pgxpool.Pool, id int64)
 // the handler level, matching every other admin handler's own suite.
 func TestAdminSubscribers_NonAdminForbidden(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	user := seedUser(t, pool, "regular-subs@example.com") // is_admin = FALSE
@@ -190,7 +224,7 @@ func seedTestSubscriber(t *testing.T, pool *pgxpool.Pool, status string) int64 {
 
 func TestAdminSubscribers_List_FiltersAndCounts(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-list@example.com")
@@ -246,7 +280,7 @@ func TestAdminSubscribers_List_FiltersAndCounts(t *testing.T) {
 
 func TestAdminSubscribers_List_InvalidStatusRejected(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-badstatus@example.com")
@@ -264,7 +298,7 @@ func TestAdminSubscribers_List_InvalidStatusRejected(t *testing.T) {
 
 func TestAdminSubscribers_Get_ReturnsConsentEvidenceAndInterests(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-get@example.com")
@@ -328,7 +362,7 @@ func TestAdminSubscribers_Get_ReturnsConsentEvidenceAndInterests(t *testing.T) {
 // events field, newest first.
 func TestAdminSubscribers_Get_IncludesEventHistory(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-events@example.com")
@@ -388,7 +422,7 @@ func TestAdminSubscribers_Get_IncludesEventHistory(t *testing.T) {
 // doc comment).
 func TestAdminSubscribers_Get_EventHistoryIncludesImportID(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-import-events@example.com")
@@ -456,7 +490,7 @@ func TestAdminSubscribers_Get_EventHistoryIncludesImportID(t *testing.T) {
 // current value and the migrations/000015 default.
 func TestAdminSubscribers_Get_IncludesSoftBounceStreak(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-softbounce@example.com")
@@ -525,7 +559,7 @@ func TestAdminSubscribers_Get_IncludesSoftBounceStreak(t *testing.T) {
 
 func TestAdminSubscribers_Get_NotFound(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-get404@example.com")
@@ -543,7 +577,7 @@ func TestAdminSubscribers_Get_NotFound(t *testing.T) {
 
 func TestAdminSubscribers_Suppress_RequiresNote(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-suppress-note@example.com")
@@ -564,7 +598,7 @@ func TestAdminSubscribers_Suppress_RequiresNote(t *testing.T) {
 // the action.
 func TestAdminSubscribers_Suppress_ActiveSubscriberBecomesUnsubscribed(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-suppress-ok@example.com")
@@ -627,7 +661,7 @@ func TestAdminSubscribers_Suppress_ActiveSubscriberBecomesUnsubscribed(t *testin
 // complained row, and the handler must report that rather than imply success.
 func TestAdminSubscribers_Suppress_ComplainedRowIsNoOp(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-suppress-noop@example.com")
@@ -661,7 +695,7 @@ func TestAdminSubscribers_Suppress_ComplainedRowIsNoOp(t *testing.T) {
 
 func TestAdminSubscribers_ClearComplaint_NotComplainedConflict(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-clear-conflict@example.com")
@@ -679,7 +713,7 @@ func TestAdminSubscribers_ClearComplaint_NotComplainedConflict(t *testing.T) {
 
 func TestAdminSubscribers_ClearComplaint_Success(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-clear-ok@example.com")
@@ -737,7 +771,7 @@ func subscriberEmailByID(t *testing.T, pool *pgxpool.Pool, id int64) string {
 // address is actually blocked at #0026's suppressed send gate.
 func TestAdminSubscribers_Suppress_WritesRealSuppressionRow(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-suppress-real@example.com")
@@ -777,7 +811,7 @@ func TestAdminSubscribers_Suppress_WritesRealSuppressionRow(t *testing.T) {
 // the send gate despite the admin's clear-complaint action.
 func TestAdminSubscribers_ClearComplaint_RemovesSuppressionRow(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-clear-suppression@example.com")
@@ -818,7 +852,7 @@ func TestAdminSubscribers_ClearComplaint_RemovesSuppressionRow(t *testing.T) {
 // the surviving hard_bounce reason.
 func TestAdminSubscribers_ClearComplaint_RemovesOnlyComplaintSuppression(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-clear-scoped@example.com")
@@ -905,7 +939,7 @@ func TestAdminSubscribers_ClearComplaint_RemovesOnlyComplaintSuppression(t *test
 // old "removed any matching entry" over-claim.
 func TestAdminSubscribers_ClearComplaint_MessageWhenNothingRemains(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-clear-nothing-left@example.com")
@@ -957,7 +991,7 @@ func TestAdminSubscribers_ClearComplaint_MessageWhenNothingRemains(t *testing.T)
 // address must land `pending`, never `active`, regardless of who added it.
 func TestAdminSubscribers_Create_NewAddressEndsUpPendingNeverActive(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	sh := newTestSubscribeHandler(pool)
+	sh := newTestSubscribeHandler(t, pool)
 	srv := httptest.NewServer(adminSubscribersMux(pool, sh))
 	defer srv.Close()
 
@@ -1021,7 +1055,7 @@ func TestAdminSubscribers_Create_NewAddressEndsUpPendingNeverActive(t *testing.T
 
 func TestAdminSubscribers_Create_ComplainedAddressNeverResubscribed(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	sh := newTestSubscribeHandler(pool)
+	sh := newTestSubscribeHandler(t, pool)
 	srv := httptest.NewServer(adminSubscribersMux(pool, sh))
 	defer srv.Close()
 
@@ -1063,7 +1097,7 @@ func TestAdminSubscribers_Create_ComplainedAddressNeverResubscribed(t *testing.T
 // all, leaving confirm_sent_at untouched.
 func TestAdminSubscribers_Create_ExistingPendingResendsConfirmation(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	sh := newTestSubscribeHandler(pool)
+	sh := newTestSubscribeHandler(t, pool)
 	srv := httptest.NewServer(adminSubscribersMux(pool, sh))
 	defer srv.Close()
 

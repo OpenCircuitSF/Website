@@ -59,7 +59,7 @@ func eraseRequestBody(t *testing.T, v map[string]any) string {
 
 func TestAdminSubscribers_Erase_RequiresMatchingConfirmEmail(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-erase-confirm@example.com")
@@ -95,7 +95,7 @@ func TestAdminSubscribers_Erase_RequiresMatchingConfirmEmail(t *testing.T) {
 // acceptance criteria.
 func TestAdminSubscribers_Erase_Success(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-erase-ok@example.com")
@@ -158,7 +158,7 @@ func TestAdminSubscribers_Erase_Success(t *testing.T) {
 // hardcoded literal.
 func TestAdminSubscribers_Erase_NotFound(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-erase-404@example.com")
@@ -186,7 +186,7 @@ func TestAdminSubscribers_Erase_NotFound(t *testing.T) {
 // queued or in-progress campaign delivery cannot be erased.
 func TestAdminSubscribers_Erase_ConflictsOnPendingSend(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-erase-pending@example.com")
@@ -218,7 +218,7 @@ func TestAdminSubscribers_Erase_ConflictsOnPendingSend(t *testing.T) {
 // and no new subscribers row is ever created for it.
 func TestAdminSubscribers_Erase_ThenAddressStaysBlockedFromResubscribing(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-erase-resub@example.com")

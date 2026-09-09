@@ -3,7 +3,10 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +34,153 @@ func intakeRowStatus(t *testing.T, pool *pgxpool.Pool, recipient string) (status
 		t.Fatalf("reading intake row status for %q: %v", recipient, err)
 	}
 	return status, true
+}
+
+// intakeQueueDiagnostic renders, for a failure message, what outbound_queue
+// actually holds for ids right now plus how many KindSubscribeIntake rows are
+// queued and due across the whole table, and how many intake pollers are
+// alive to compete for them.
+//
+// It exists because the two ways intakePass can decline to process a row are
+// both SILENT: SelectDue returning no ids at all, and ClaimRow reporting
+// claimed=false because the row was no longer queued. Neither logs anything,
+// so a test that waits on the poller and times out had, before this, no
+// evidence at all about which of the two happened, what state the rows were
+// left in, or whether some other handler's poller got there first. Four
+// separate review passes each paid that diagnostic cost and reached the same
+// dead end, which is what #0470 was filed against; the poller census is the
+// line that names the real cause when it recurs.
+//
+// Best-effort by construction: it runs on a failure path, so a query error is
+// folded into the returned text rather than failing the test a second time
+// and replacing the real diagnosis with a secondary one.
+func intakeQueueDiagnostic(pool *pgxpool.Pool, ids ...int64) string {
+	ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
+	defer cancel()
+
+	var b strings.Builder
+	for _, id := range ids {
+		var status string
+		var attempts int
+		var claimedAt *time.Time
+		var dueIn float64
+		err := pool.QueryRow(ctx,
+			`SELECT status, attempts, claimed_at, extract(epoch from (next_attempt_at - now()))
+			   FROM outbound_queue WHERE id = $1`, id,
+		).Scan(&status, &attempts, &claimedAt, &dueIn)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			fmt.Fprintf(&b, "\n  id=%d: ROW IS GONE (deleted or truncated out from under the poller)", id)
+		case err != nil:
+			fmt.Fprintf(&b, "\n  id=%d: could not be read back: %v", id, err)
+		default:
+			fmt.Fprintf(&b, "\n  id=%d: status=%q attempts=%d claimed_at=%v due_in=%.2fs",
+				id, status, attempts, claimedAt, dueIn)
+		}
+	}
+
+	var queuedDue int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM outbound_queue
+		  WHERE kind = $1 AND status = $2 AND next_attempt_at <= now()`,
+		string(outbox.KindSubscribeIntake), outbox.StatusQueued,
+	).Scan(&queuedDue); err != nil {
+		fmt.Fprintf(&b, "\n  queued-and-due %s rows: could not be counted: %v", outbox.KindSubscribeIntake, err)
+	} else {
+		fmt.Fprintf(&b, "\n  queued-and-due %s rows table-wide: %d (SelectDue would return this many)",
+			outbox.KindSubscribeIntake, queuedDue)
+	}
+	pollers, parked := goroutinesIn("handlers.(*SubscribeHandler).runIntakeWorker")
+	fmt.Fprintf(&b, "\n  live intake pollers (goroutines in runIntakeWorker): %d", pollers)
+	for _, g := range parked {
+		fmt.Fprintf(&b, "\n    parked: %s", g)
+	}
+	fmt.Fprintf(&b, "\n  goroutines inside processIntakeRow: %d", countGoroutinesIn("handlers.(*SubscribeHandler).processIntakeRow"))
+	fmt.Fprintf(&b, "\n  goroutines inside blockingSuppressionChecker.IsSuppressed: %d",
+		countGoroutinesIn("handlers.(*blockingSuppressionChecker).IsSuppressed"))
+	return b.String()
+}
+
+// countGoroutinesIn is goroutinesIn without the parked-at sample, for the
+// call sites that only need the number.
+func countGoroutinesIn(frame string) int {
+	n, _ := goroutinesIn(frame)
+	return n
+}
+
+// goroutinesIn returns how many live goroutines are executing frame right
+// now, plus the header line of the first few, so a failure can show where
+// they are parked rather than only how many there are. frame must be an
+// exact stack-frame prefix (a "pkg.(*T).Method" string): a goroutine dump
+// prints one such line per goroutine that is inside it, so counting the
+// frame is exact where splitting the dump into per-goroutine blocks is not
+// -- the block separator is not reliably distinct from blank lines the
+// runtime emits inside a block, which over-counts badly on a dump with many
+// goroutines.
+func goroutinesIn(frame string) (int, []string) {
+	buf := make([]byte, 4<<20)
+	dump := string(buf[:runtime.Stack(buf, true)])
+	n := strings.Count(dump, frame+"(")
+	var sample []string
+	for _, g := range strings.Split(dump, "\ngoroutine ") {
+		if !strings.Contains(g, frame+"(") {
+			continue
+		}
+		lines := strings.SplitN(g, "\n", 3)
+		if len(sample) < 3 {
+			sample = append(sample, strings.Join(lines[:min(2, len(lines))], " | "))
+		}
+	}
+	return n, sample
+}
+
+// TestNoLeakedIntakePollers is #0470's regression pin, and it must stay the
+// FIRST test in this file: it asserts that no SubscribeHandler built by any
+// earlier test in this package is still polling outbound_queue.
+//
+// Since #0254, NewSubscribeHandler with a non-nil intake store starts
+// runIntakeWorker, which claims KindSubscribeIntake rows every
+// intakePollInterval until Close stops it. A handler built without a
+// matching Close therefore does not merely leak a goroutine — it leaks a
+// competitor for the rows every other test in this package seeds, for the
+// remainder of the test binary. #0470 measured 33 such pollers alive by the
+// time this file ran, all from newTestSubscribeHandler
+// (admin_subscribers_test.go), which took no *testing.T and so could not
+// register a cleanup. See that helper's doc comment for the full chain and
+// for the failure it produced.
+//
+// The oracle is the live goroutine dump rather than a counter this package
+// maintains, so it cannot be satisfied by a bookkeeping mistake: a handler
+// whose poller is genuinely still running shows up here whether or not
+// anything recorded that it was created.
+//
+// A short settle window, not a deadline: Close returns once runIntakeWorker
+// has closed its done channel, but the goroutine itself needs a moment more
+// to leave the frame, and a preceding test's cleanup may still be in
+// flight. This waits for the count to reach zero rather than sampling once,
+// so an in-flight shutdown is not misreported as a leak. It is NOT sized
+// against machine load (CLAUDE.md §5) — a genuine leak never reaches zero,
+// however long the window, and a clean shutdown reaches it in microseconds.
+func TestNoLeakedIntakePollers(t *testing.T) {
+	if testDBPool == nil {
+		t.Skip("TEST_DATABASE_URL not set; no DB-backed test has built a SubscribeHandler")
+	}
+	const frame = "handlers.(*SubscribeHandler).runIntakeWorker"
+	deadline := time.Now().Add(time.Second)
+	for {
+		n, parked := goroutinesIn(frame)
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d intake poller goroutine(s) from earlier tests are still running; every SubscribeHandler must be Closed by the test that built it, or its poller keeps claiming outbound_queue rows out from under every later test (#0470). Parked at:\n  %s",
+				n, strings.Join(parked, "\n  "))
+		}
+		// 25ms, not a tighter spin: each probe takes a full goroutine
+		// dump, so polling faster only burns allocation on a run that is
+		// already failing.
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 // TestSubscribe_MutationDropped_IntakeRowStaysDurablyQueued is #0254's
@@ -387,7 +537,8 @@ func TestSubscribeIntakeWorker_ClaimsRowsIndividuallyNotAsBatch(t *testing.T) {
 	select {
 	case <-checker.started:
 	case <-time.After(intakePollInterval*2 + 5*time.Second):
-		t.Fatal("blockingSuppressionChecker.IsSuppressed was never called; the intake poller never reached either seeded row")
+		t.Fatalf("blockingSuppressionChecker.IsSuppressed was never called; the intake poller never reached either seeded row.%s",
+			intakeQueueDiagnostic(pool, id1, id2))
 	}
 
 	// Exactly one of the two rows is claimed now — the one blocked inside

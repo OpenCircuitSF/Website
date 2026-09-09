@@ -117,7 +117,7 @@ func exportRecordsByEmail(t *testing.T, client *http.Client, url, token string) 
 
 func TestAdminSubscribers_Export_Headers(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-export-headers@example.com")
@@ -152,7 +152,7 @@ func TestAdminSubscribers_Export_Headers(t *testing.T) {
 // quote, per #0059's Notes: "Prefix such fields with a single quote").
 func TestAdminSubscribers_Export_CSVEdgeCases(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-export-edge@example.com")
@@ -298,7 +298,7 @@ func keysOf(m map[string][]string) []string {
 // exercising a subscriber with more than one selected interest.
 func TestAdminSubscribers_Export_InterestsSemicolonJoined(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-export-interests@example.com")
@@ -326,7 +326,7 @@ func TestAdminSubscribers_Export_InterestsSemicolonJoined(t *testing.T) {
 // from List/StatusCounts.
 func TestAdminSubscribers_Export_ExcludesSynthetic(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-export-synth@example.com")
@@ -349,7 +349,7 @@ func TestAdminSubscribers_Export_ExcludesSynthetic(t *testing.T) {
 
 func TestAdminSubscribers_Export_RespectsStatusAndInterestFilters(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-export-filter@example.com")
@@ -397,7 +397,7 @@ func TestAdminSubscribers_Export_RespectsStatusAndInterestFilters(t *testing.T) 
 // what was actually streamed and the filter that was applied.
 func TestAdminSubscribers_Export_Audited(t *testing.T) {
 	pool := adminSubscribersTestPool(t)
-	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(pool)))
+	srv := httptest.NewServer(adminSubscribersMux(pool, newTestSubscribeHandler(t, pool)))
 	defer srv.Close()
 
 	admin := seedAdmin(t, pool, "admin-subs-export-audit@example.com")
