@@ -157,6 +157,25 @@ Any additional context, guesses at root cause, related code locations.
 7. **Plan it (phase 1).** Dispatch a fresh subagent on the **planning model (Opus)** to read this guide, `CLAUDE.md`, the new issue, and the relevant code, then write a `## Plan` section into `issues/NNNN.md` (after `## Description`). It writes no code and leaves status at `open`. This gives whoever picks the issue up a running start. Record the planner's usage in `## Work log`. Skip if the user is jotting a quick note and doesn't want planning yet.
 8. **If `issues/` is tracked by git**, commit the new file with message `#NNNN <issue title>` so the issue enters git history with its `open` status — the `## Plan` rides along if it's landed, else commit it separately as `#NNNN Plan`. If ignored, skip.
 
+**This path has the same timing gap, in miniature (`#0478`).** A freshly
+written `## Description` and its acceptance criteria are exactly the kind of
+issue-markdown prose `internal/db`'s guards scan, and step 8 commits them with
+no run in between — there is no phase-2-style build-and-test step here to have
+already passed. The gap is narrower than phase 2's or phase 3's, though: those
+guards scan all of `issues/`, not just the file most recently touched, and
+`internal/db` sits in the default package list every bare `scripts/check.sh`
+run reads. So the very next phase 2 step 8 or phase 3 step 3/5 dispatched for
+*any* issue incidentally re-scans a newly filed file — the same mechanism that
+caught `#0476` late, i.e. by luck, not by design. Two things follow, short of
+a new check: when step 7's planning pass runs, that subagent already has a
+shell open before its own commit, so have it run
+`ISSUE=NNNN scripts/check.sh go ./internal/db/...` there, folding the re-run
+into a pass that already exists rather than adding one. When phase 1 is
+skipped — most issues, per `CLAUDE.md` §Model policy — there is no subagent
+between drafting and commit, and this note does not create one; the filed text
+is caught, or not, by the next dispatch's ordinary run. `issues/0478.md` itself
+was filed exactly this way.
+
 ## Updating an issue
 
 Edit the file in place. The Mac app picks up changes automatically — no follow-up command. Touch only the rows or sections that changed; don't reformat the rest.
@@ -344,7 +363,20 @@ A subagent starts with fresh context, so its first job is loading the project's 
      - **`## Files changed`** — one bullet per file, with a short note on what changed.
      - **`## Gotchas`** *(optional)* — surprises, dead ends, non-obvious behavior. Skip if nothing's notable; be specific when present.
 
-8. **Do not commit the markdown draft.** Return to the orchestrator with a one-line summary. The reviewer makes the single resolution commit in phase 3.
+8. **Re-run the doc-scanning guards over the sections you just drafted.** Step
+   4's run predates this text — `## Root cause`, `## Fix`, `## Verification`,
+   `## Files changed`, and `## Gotchas` did not exist yet when it passed, and
+   they are exactly the issue-markdown prose `internal/db`'s citation,
+   undefined-test-name, and line-number-evidence guards scan (`#0478`). Run
+   `ISSUE=NNNN scripts/check.sh go ./internal/db/...` by default — it is the
+   cheap package. Add `./internal/handlers/...` only when this pass touched a
+   Go doc comment or renamed/renumbered a `CLAUDE.md` `##` heading (`CLAUDE.md`
+   §5 explains why that package alone reads `CLAUDE.md`'s own section
+   headings); it costs roughly 8× `internal/db` (`CLAUDE.md` §5a), so don't run
+   it by default. If the re-run fails, rephrase the offending line — never
+   relocate it under an unscanned heading (`CLAUDE.md` §8) — and run again
+   before moving on.
+9. **Do not commit the markdown draft.** Return to the orchestrator with a one-line summary. The reviewer makes the single resolution commit in phase 3.
 
 ### Phase 3 — Review subagent (Opus): verify → resolve or bounce
 
@@ -356,6 +388,7 @@ An independent reviewer is the gate between "code landed" and "issue resolved". 
 4. **Decide:**
    - **Approve** (fix is correct, verification passed): change **Status** to `resolved`; add a `**Closed**` row with today's date; ensure the `**Commit**` row is present; add a top-of-resolution `## Resolution notes` blockquote (`> 🟢 Resolved YYYY-MM-DD — <one sentence>.`). **If `issues/` is tracked**, make the resolution commit — stage `issues/NNNN.md`, message `#NNNN Resolve: <title>`, body noting the code commit hash. If ignored, skip; the markdown is the record.
    - **Bounce** (verification failed, fix wrong, scope off): revert **Status** to `open`; add a `## Review notes` section stating exactly what failed and what the next implementation pass must fix. Leave the code commit in place unless you say otherwise in the notes. **If tracked**, commit the markdown with `#NNNN Review: <reason>`. Return to the orchestrator, which re-dispatches phase 2.
+5. **Re-run the doc-scanning guards over the notes you just wrote, before making the commit in step 4.** Whichever branch you took, `## Resolution notes` or `## Review notes` is prose written after step 3's run, and it is exactly the issue-markdown text `internal/db`'s guards scan (`#0478`) — the same convention phase 2's step 8 applies to `## Root cause`/`## Fix`/etc. Run `ISSUE=NNNN scripts/check.sh go ./internal/db/...` by default; add `./internal/handlers/...` only if you touched a Go doc comment or a `CLAUDE.md` `##` heading (`CLAUDE.md` §5, §5a — the cost difference is why the expensive package isn't the default here either). If it fails, rephrase the offending line before committing.
 
 Status flow: `open` (with `## Plan`) → `in-progress` → review → `resolved`, or bounced back to `open`. **Never set `closed`** — the user does that after verifying the fix.
 
