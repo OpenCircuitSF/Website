@@ -365,9 +365,21 @@ A subagent starts with fresh context, so its first job is loading the project's 
 
 8. **Re-run the doc-scanning guards over the sections you just drafted.** Step
    4's run predates this text — `## Root cause`, `## Fix`, `## Verification`,
-   `## Files changed`, and `## Gotchas` did not exist yet when it passed, and
-   they are exactly the issue-markdown prose `internal/db`'s citation,
-   undefined-test-name, and line-number-evidence guards scan (`#0478`). Run
+   `## Files changed`, and `## Gotchas` did not exist yet when it passed. Of
+   those five, only `## Verification` sits inside the citation guards' reach:
+   `internal/db`'s undefined-test-name guard and its line-number-evidence
+   sibling both resolve citations under one shared allowlist of nine section
+   titles (`internal/db`'s `issueCitationSectionHeaders`), which admits
+   `verification` and `work log` but not `root cause`, `fix`, `files
+   changed`, or `gotchas` (`#0480`). "Scanned" is three separate things here,
+   not one: a *status* filter limits these guards to `open`/`in-progress`
+   files; a *section* filter, the allowlist above, further limits them to a
+   handful of headings within such a file; and each guard's own reach is a
+   third, independent matter — the `**Closed**`-row check in phase 3 step 5
+   keys off status alone rather than prose, and the dangerous-fence family
+   scans on its own terms. Run this step anyway, because `## Verification` is
+   where citations concentrate and is the section that broke in `#0476`,
+   which is what began this convention. Run
    `ISSUE=NNNN scripts/check.sh go ./internal/db/...` by default — it is the
    cheap package. Add `./internal/handlers/...` only when this pass touched a
    Go comment or renamed/renumbered a `CLAUDE.md` `##` heading (`CLAUDE.md`
@@ -388,10 +400,48 @@ An independent reviewer is the gate between "code landed" and "issue resolved". 
 4. **Decide:**
    - **Approve** (fix is correct, verification passed): add a top-of-resolution `## Resolution notes` blockquote (`> 🟢 Resolved YYYY-MM-DD — <one sentence>.`) and ensure the `**Commit**` row is present. **Leave Status at `in-progress` for now** — step 5 covers when it flips to `resolved`, and doing that here would move this file out of scope before its own guard run.
    - **Bounce** (verification failed, fix wrong, scope off): revert **Status** to `open`; add a `## Review notes` section stating exactly what failed and what the next implementation pass must fix. Leave the code commit in place unless you say otherwise in the notes.
-5. **Re-run the doc-scanning guards over the notes you just wrote, before either branch's commit in step 6.** Whichever branch you took, `## Resolution notes` or `## Review notes` is prose written after step 3's run, and it is exactly the issue-markdown text `internal/db`'s guards scan (`#0478`) — the same convention phase 2's step 8 applies to `## Root cause`/`## Fix`/etc. Run `ISSUE=NNNN scripts/check.sh go ./internal/db/...` by default; add `./internal/handlers/...` only if you touched a Go comment or a `CLAUDE.md` `##` heading (`CLAUDE.md` §5, §5a — the cost difference is why the expensive package isn't the default here either). If it fails, rephrase the offending line and run again.
-   - **Bounce**: Status already reads `open` from step 4, so this one run covers everything and step 6 commits directly.
-   - **Approve**: run this first, while Status still reads `in-progress` from step 4. That is deliberate — the citation guards exclude `resolved`/`closed` files by design. `TestIssueVerificationCitationGuardExcludesResolvedFilesByDefault` pins that exclusion for the undefined-test-name guard. `TestIssueLineCitationGuardExcludesResolvedFilesByDefault` pins the matching exclusion for the line-number-citation guard. Running now, before the flip, is what lets both actually scan the `## Resolution notes` you just wrote. Only once this run is clean, flip **Status** to `resolved` and add the `**Closed**` row with today's date, then run the same command a second time. That second, post-flip run checks a different thing, not the same thing twice: it is what exercises `TestResolvedOrClosedIssueCarriesClosedRow`, which fires on a `resolved` status left without a `**Closed**` row. By then the citation guards have already stopped reading this file, so this run is not re-checking the prose — it is the row check, and only the row check.
-6. **Make the commit.** **If `issues/` is tracked**: on approve, stage `issues/NNNN.md`, message `#NNNN Resolve: <title>`, body noting the code commit hash; on bounce, message `#NNNN Review: <reason>` and return to the orchestrator, which re-dispatches phase 2. If ignored, skip either way; the markdown is the record.
+5. **Re-run the doc-scanning guards over the notes you just wrote, before
+   either branch's commit in step 6.** Only `## Review notes` sits inside the
+   citation guards' section allowlist. `## Resolution notes`, the approve
+   branch's top-of-file blockquote, is outside that allowlist at *any*
+   status, not only while `resolved` — phase 2 step 8 names the full
+   allowlist and spells out the status/section/per-guard distinction this
+   relies on.
+   - **Bounce**: Status already reads `open` from step 4, so `## Review
+     notes` is inside both the status filter and the section filter. Run
+     `ISSUE=NNNN scripts/check.sh go ./internal/db/...` by default; add
+     `./internal/handlers/...` only if you touched a Go comment or a
+     `CLAUDE.md` `##` heading. Once it is clean, step 6 commits directly.
+   - **Approve**, as two ordered sub-steps — do not run the second without
+     the first:
+     1. **Run `ISSUE=NNNN scripts/check.sh go ./internal/db/...` now, while
+        Status still reads `in-progress` from step 4.** This is the only
+        point at which the citation guards can see `## Review notes`, the
+        commentary a reviewer records regardless of verdict.
+        `TestIssueVerificationCitationGuardExcludesResolvedFilesByDefault`
+        pins that a `resolved` file is excluded by status alone for the
+        undefined-test-name guard; `TestIssueLineCitationGuardExcludesResolvedFilesByDefault`
+        pins the matching exclusion for the line-number-citation guard. If it
+        fails, rephrase the offending line and run again before continuing.
+     2. **Only once that run is clean**, flip **Status** to `resolved`, add
+        the `**Closed**` row with today's date, and run the identical
+        command a second time — same `ISSUE=NNNN` suffix; `scripts/check.sh`
+        drops its database on exit, so this run re-provisions rather than
+        reusing the first's. This second run checks a different thing, not
+        the same thing twice: by now the file is outside the guards' status
+        scope, so it is `TestResolvedOrClosedIssueCarriesClosedRow` this run
+        exercises — firing on a `resolved` status left without a
+        `**Closed**` row — not a re-check of any prose. The two runs
+        together cost under a second (`#0479` measured 0.533s and 0.484s);
+        that is not worth optimising away.
+6. **Make the commit.** Check `git diff --cached --name-only` first
+   (`CLAUDE.md` §8a) — a bare `git commit` takes whatever is staged, so if
+   anything besides `issues/NNNN.md` is sitting in the index, commit with a
+   pathspec instead of bare. **If `issues/` is tracked**: on approve, stage
+   `issues/NNNN.md`, message `#NNNN Resolve: <title>`, body noting the code
+   commit hash; on bounce, message `#NNNN Review: <reason>` and return to the
+   orchestrator, which re-dispatches phase 2. If ignored, skip either way; the
+   markdown is the record.
 
 Status flow: `open` (with `## Plan`) → `in-progress` → review → `resolved`, or bounced back to `open`. **Never set `closed`** — the user does that after verifying the fix.
 
