@@ -32,8 +32,8 @@ a valid, expected state — they receive only general announcements.
 on a fresh install. It is frozen the moment it has run against production
 (`CLAUDE.md` §1 — production has been past it since Phase 3) and must never
 be edited again, by this project or a downstream. That is fine, because it
-was never meant to be the only way the taxonomy changes — there are two
-supported channels, and neither touches `000009`:
+was never meant to be the only way the taxonomy changes — there are three
+supported channels, and none touches `000009`:
 
 - **A live catalog change** — add, rename (the display `name` only),
   redescribe, reorder, deactivate, or hard-delete an interest no subscriber
@@ -42,13 +42,24 @@ supported channels, and neither touches `000009`:
   It takes effect immediately, with no deploy and no restart. Two limits are
   load-bearing and are not obvious from the verb list:
   - **`slug` is immutable through this channel.** `interests.Store.Update`
-    takes no slug parameter and the PATCH body type has no `slug` field, so
-    a PATCH carrying one is rejected with 400 rather than silently ignored
-    (`#0023`'s decision: a slug change breaks every already-issued
-    preference-center link that references it). To replace a slug, `POST`
-    the new interest and deactivate the old one — subscribers do not move
-    across, and a downstream re-theming the taxonomy wholesale is doing
-    creates-and-deactivates, not renames.
+    takes no slug parameter, and the PATCH body type carries a slug field
+    only so a request that includes one is refused outright with an explicit
+    400 explaining why, rather than being rejected with the same generic
+    message a typo would produce (`#0475`). The reason is a scope decision
+    about the admin channel, not a technical one: measured directly, nothing
+    references an interest by slug — `subscriber_interests`,
+    `campaign_interests`, and `workshop_interests` all key off `id`, and no
+    issued preference-center link or other URL carries a slug at all
+    (`#0023`'s own Gotchas said as much at the time, conditionally, and this
+    is that condition resolved). A slug is the taxonomy's stable external
+    name, so changing one is a reviewed, recorded operation rather than a
+    form field — see the "Changing an existing slug" bullet below for the
+    supported way to do it. **Creating a new interest and deactivating the
+    old one is not a substitute for a rename**: it mints a new `id`, and
+    every one of the three join tables above references the interest by
+    `id`, so that path strands each existing subscriber selection, campaign
+    segment, and workshop tag on a row no longer offered on the signup
+    form.
   - **`DELETE` is refused (409) when any of `subscriber_interests`,
     `campaign_interests`, or `workshop_interests` references the interest**
     (`#0474`). All three are `ON DELETE CASCADE`
@@ -70,19 +81,55 @@ supported channels, and neither touches `000009`:
   list in `PRD.md` §6.1 itself changing — is a **new, additively-numbered
   migration**, never an edit to `000009`, following exactly the shape
   `000009` already uses: `INSERT INTO interests (...) VALUES (...) ON
-  CONFLICT (slug) DO NOTHING` to add a default, `UPDATE interests SET ...
-  WHERE slug = '...'` to rename or redescribe one in place (this preserves
+  CONFLICT (slug) DO NOTHING` to add a default, or `UPDATE interests SET
+  name = '...', description = '...' WHERE slug = '...'` to redescribe one in
+  place — matching the row by its existing, unchanged slug (this preserves
   `id`, so no existing `subscriber_interests` row is orphaned or
-  renumbered). A migration in this family must never `DELETE` a row —
-  `internal/db`'s `TestInterestTaxonomyMigrationGuardPassesOnRealMigrations`
-  enforces both the idempotency and the no-delete rule mechanically for
-  every migration numbered after `000009`.
+  renumbered). **This channel's `WHERE slug = '...'` selects the row; it
+  never appears on the `SET` side.** Changing the slug value itself is a
+  different operation with its own conditions — the third bullet below. A
+  migration in this family must never `DELETE` a row — `internal/db`'s
+  `TestInterestTaxonomyMigrationGuardPassesOnRealMigrations` enforces both
+  the idempotency and the no-delete rule mechanically for every migration
+  numbered after `000009`.
 
   The matching `.down.sql` must be a documented no-op — a comment saying the
   seeded row is deliberately not removed on rollback — never a `DELETE`: the
   row may have acquired `subscriber_interests`/`workshop_interests`/
   `campaign_interests` associations while it existed, and `ON DELETE CASCADE`
   would take them with it. The guard enforces this in both directions.
+- **Changing an existing slug** (`#0475`) is a migration, never an admin-API
+  call. Measured directly: `subscriber_interests`, `campaign_interests`, and
+  `workshop_interests` all reference an interest by `id`, and no issued
+  preference-center link or other URL carries a slug, so a rename that keeps
+  the row's `id` breaks nothing already in flight. The blessed shape has five
+  conditions:
+  - The statement is `UPDATE interests SET slug = 'new-slug' WHERE slug =
+    'old-slug';` in a new, additively-numbered migration. Never a delete
+    plus an insert — that mints a new `id`, and the three join tables above
+    reference the row by `id`, so the associations would cascade away
+    instead of carrying across.
+  - The new value must satisfy the lowercase-hyphenated
+    `interests_slug_format` CHECK constraint.
+  - A collision with an existing slug raises a unique violation and aborts
+    the migration. That fail-closed outcome is correct and must not be
+    softened with `ON CONFLICT`.
+  - Re-running the migration is a no-op, because the second run's `WHERE
+    slug = 'old-slug'` matches no row. Unlike the seed channel above, the
+    matching `.down.sql` **may** reverse this one: `UPDATE interests SET
+    slug = 'old-slug' WHERE slug = 'new-slug';` removes no row and fires no
+    cascade, so the no-op-down rule that governs a seeded row's rollback
+    does not apply here.
+  - The migration must **not** rewrite `audit_log.metadata`. Audit rows
+    record what an operator actually did at the time and are the
+    consent-evidence record, so a historical entry naming a since-renamed
+    slug is correct, not stale.
+
+  Two consequences follow, both visible and both fail-closed rather than
+  silent: a browser tab left open across the change gets a 400 "unknown
+  interest" on its next preference save, cleared by a reload, and a CSV
+  import file still carrying the old slug is reported in the preview's
+  `unknown_interest_slugs` rather than silently importing without the link.
 
 ## Subscription flow — double opt-in (Phase 3, `#0025`–`#0032`)
 

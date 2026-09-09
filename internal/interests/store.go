@@ -221,9 +221,15 @@ func (s *Store) Create(ctx context.Context, slug, name string, description *stri
 }
 
 // Update changes an existing interest's name, description, sort_order, and
-// active flag. The slug is immutable through this method — renaming a slug
-// would break any already-issued preference-center link that references it
-// by slug; #0024 can add a dedicated rename path later if that's ever needed.
+// active flag. The slug is immutable through this method — not because a
+// rename would break an already-issued link (measured for #0475: nothing
+// references an interest by slug, since subscriber_interests,
+// campaign_interests, and workshop_interests all key off id, and no issued
+// preference-center link or other URL carries a slug at all) but because a
+// slug is the taxonomy's stable external name, and changing one is a
+// reviewed, recorded operation rather than a form field. The supported way
+// to change a slug is a migration, per "Changing an existing slug" in
+// docs/mailing-list.md.
 func (s *Store) Update(ctx context.Context, id int64, name string, description *string, sortOrder int, active bool) (Interest, error) {
 	row := s.pool.QueryRow(ctx,
 		`UPDATE interests

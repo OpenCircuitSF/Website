@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -190,15 +191,19 @@ func (h *AdminInterestsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toInterestView(created, map[int64]int64{}))
 }
 
-// patchInterestRequest is the PATCH /admin/interests/{id} body. Every field
-// is optional (a nil pointer leaves that field unchanged); any field present
-// replaces the current value outright. There is deliberately NO slug field:
-// interests.Store.Update takes no slug parameter (#0023's decision, "renaming
-// a slug would break any already-issued preference-center link that
-// references it by slug"), and decodeJSON's DisallowUnknownFields means a
-// client that sends "slug" gets a 400 rather than having it silently
-// ignored — the immutability is enforced, not just undocumented. See this
-// issue's Gotchas for why #0024 chose not to add a rename path.
+// patchInterestRequest is the PATCH /admin/interests/{id} body. Every
+// updatable field is optional (a nil pointer leaves that field unchanged);
+// any field present replaces the current value outright.
+// interests.Store.Update still takes no slug parameter and can never write
+// the column — Slug exists only so the handler can tell a deliberate rename
+// attempt apart from an ordinary typo. Its type is json.RawMessage rather
+// than *string so that the mere presence of the key is refused whatever its
+// value, including an explicit `null`, which a *string would decode to nil
+// and let through as an empty, silently-accepted patch. When Slug is
+// present, Patch refuses the whole request outright before merging any other
+// field — it is never partially applied. The supported way to change a
+// slug is a migration; see "Changing an existing slug" in
+// docs/mailing-list.md.
 //
 // Deactivating/reactivating is just PATCHing `active` — there is no separate
 // route. The handler still writes a dedicated interest.deactivated /
@@ -207,10 +212,11 @@ func (h *AdminInterestsHandler) Create(w http.ResponseWriter, r *http.Request) {
 // signup form" is the detail an operator scanning the log needs at a
 // glance, mirroring AdminUsersHandler's account.deactivated/reactivated.
 type patchInterestRequest struct {
-	Name        *string `json:"name,omitempty"`
-	Description *string `json:"description,omitempty"`
-	SortOrder   *int    `json:"sort_order,omitempty"`
-	Active      *bool   `json:"active,omitempty"`
+	Name        *string         `json:"name,omitempty"`
+	Description *string         `json:"description,omitempty"`
+	SortOrder   *int            `json:"sort_order,omitempty"`
+	Active      *bool           `json:"active,omitempty"`
+	Slug        json.RawMessage `json:"slug,omitempty"`
 }
 
 // Patch handles PATCH /admin/interests/{id}. Loads the current row, merges
@@ -243,6 +249,10 @@ func (h *AdminInterestsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	var req patchInterestRequest
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Slug != nil {
+		writeError(w, http.StatusBadRequest, "an interest's slug cannot be changed through this endpoint — it is a deliberately reviewed, recorded operation performed by a database migration, not an admin-console field")
 		return
 	}
 

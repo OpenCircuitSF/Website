@@ -226,6 +226,29 @@ func TestInterestTaxonomyMigrationGuardIgnores000009Itself(t *testing.T) {
 	}
 }
 
+// TestInterestTaxonomyMigrationGuardAllowsSlugRenameUpdate proves the guard
+// does not fire on the pattern #0475 blesses for changing an existing slug:
+// a plain UPDATE that rewrites the slug column, matched by the OLD slug on
+// the way in and reversed the same way on the way out. Neither statement is
+// a DELETE/TRUNCATE/DROP against interests and neither is an INSERT, so
+// today's two rules already let it through -- this test pins that fact so a
+// future change to either regexp cannot silently start rejecting the very
+// pattern docs/mailing-list.md's "Changing an existing slug" section
+// prescribes, which is exactly the disagreement #0471's review caught
+// between prose and guard before anyone had written a test for either side
+// of it.
+func TestInterestTaxonomyMigrationGuardAllowsSlugRenameUpdate(t *testing.T) {
+	files := map[string]string{
+		"000031_rename_home_automation_slug.up.sql": "UPDATE interests SET slug = 'smart-home' " +
+			"WHERE slug = 'home-automation';",
+		"000031_rename_home_automation_slug.down.sql": "UPDATE interests SET slug = 'home-automation' " +
+			"WHERE slug = 'smart-home';",
+	}
+	if violations := interestTaxonomyGuardViolations(files); len(violations) != 0 {
+		t.Fatalf("expected no violations for the blessed slug-rename UPDATE pattern, got: %v", violations)
+	}
+}
+
 // TestInterestTaxonomyMigrationGuardRejectsDeleteInDownMigration proves the
 // guard also fires on the .down.sql half of the exact additive pattern
 // docs/mailing-list.md's "Changing the taxonomy" section prescribes for

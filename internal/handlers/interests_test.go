@@ -531,7 +531,9 @@ func TestAdminInterests_PatchUpdatesFieldsAndRejectsSlug(t *testing.T) {
 		t.Fatalf("slug changed to %q, want unchanged %q", got.Slug, slug)
 	}
 
-	// A body carrying "slug" is rejected outright.
+	// A body carrying "slug" is rejected outright, with a message that names
+	// the reason rather than the generic decode-error text a typo would also
+	// produce.
 	slugAttempt := doJSON(t, srv.Client(), http.MethodPatch,
 		fmt.Sprintf("%s/admin/interests/%d", srv.URL, created.ID), "admin-token",
 		fmt.Sprintf(`{"slug":%q}`, slug+"-renamed"))
@@ -539,12 +541,38 @@ func TestAdminInterests_PatchUpdatesFieldsAndRejectsSlug(t *testing.T) {
 	if slugAttempt.StatusCode != http.StatusBadRequest {
 		t.Fatalf("PATCH with slug field status = %d, want 400", slugAttempt.StatusCode)
 	}
+	slugAttemptBody, _ := io.ReadAll(slugAttempt.Body)
+	if !strings.Contains(string(slugAttemptBody), "slug cannot be changed") {
+		t.Fatalf("PATCH with slug field body = %s, want it to contain %q", slugAttemptBody, "slug cannot be changed")
+	}
 	reread, err := istore.GetByID(context.Background(), created.ID)
 	if err != nil {
 		t.Fatalf("re-read: %v", err)
 	}
 	if reread.Slug != slug {
 		t.Fatalf("slug is %q after rejected patch, want unchanged %q", reread.Slug, slug)
+	}
+
+	// An explicit {"slug":null} is refused the same way -- this is exactly
+	// the case a *string field would have let through as a no-op patch,
+	// since JSON null decodes to a nil *string.
+	slugNullAttempt := doJSON(t, srv.Client(), http.MethodPatch,
+		fmt.Sprintf("%s/admin/interests/%d", srv.URL, created.ID), "admin-token",
+		`{"slug":null}`)
+	defer slugNullAttempt.Body.Close()
+	if slugNullAttempt.StatusCode != http.StatusBadRequest {
+		t.Fatalf(`PATCH with {"slug":null} status = %d, want 400`, slugNullAttempt.StatusCode)
+	}
+	slugNullBody, _ := io.ReadAll(slugNullAttempt.Body)
+	if !strings.Contains(string(slugNullBody), "slug cannot be changed") {
+		t.Fatalf(`PATCH with {"slug":null} body = %s, want it to contain %q`, slugNullBody, "slug cannot be changed")
+	}
+	rereadAfterNull, err := istore.GetByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("re-read after null slug attempt: %v", err)
+	}
+	if rereadAfterNull.Slug != slug {
+		t.Fatalf("slug is %q after rejected null-slug patch, want unchanged %q", rereadAfterNull.Slug, slug)
 	}
 }
 
