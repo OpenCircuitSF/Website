@@ -36,8 +36,29 @@ const apiTarget = `http://localhost:${apiPort}`;
 // itself instead of proxying, so a navigation gets the dev server's own
 // index.html (which loads /@vite/client) while every other request still
 // proxies straight through to Go.
+//
+// Only /admin and /account THEMSELVES are SPA routes — the admin console's
+// tabs are components rendered inside that one route, not URL routes of
+// their own. Everything deeper under either prefix is a Go API path,
+// including /admin/subscribers/export, which web/src/views/Admin.svelte
+// reaches with a real `<a href download>` browser navigation rather than
+// fetch() (see subscribersExportHref in web/src/lib/admin.ts). A bypass
+// keyed on the Sec-Fetch-Mode header alone cannot tell that request apart
+// from a genuine top-level navigation to /admin itself, and would serve it
+// Vite's index.html instead of the CSV — and would do the same to any
+// method-agnostic POST navigation under either prefix, not just GET. So the
+// path is checked first, against this explicit allowlist, and only GET/HEAD
+// requests to exactly these two paths are eligible for the header check at
+// all. Adding a new SPA route under either prefix means adding it here too.
+const SPA_BYPASS_PATHS = new Set(['/admin', '/account']);
+
 function spaNavigationBypass(req: IncomingMessage): string | undefined {
-  if (req.headers['sec-fetch-mode'] === 'navigate') {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return undefined;
+  const path = (req.url ?? '').split('?')[0];
+  if (!SPA_BYPASS_PATHS.has(path)) return undefined;
+  const mode = req.headers['sec-fetch-mode'];
+  const accept = String(req.headers.accept ?? '');
+  if (mode === 'navigate' || (mode === undefined && accept.includes('text/html'))) {
     return '/index.html';
   }
   return undefined;
