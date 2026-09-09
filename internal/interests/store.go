@@ -45,6 +45,22 @@ var ErrDuplicateSlug = errors.New("interests: slug already exists")
 // has history and must be deactivated instead of deleted".
 var ErrHasSubscribers = errors.New("interests: has subscribers; deactivate instead of deleting")
 
+// ErrHasWorkshops is returned by Delete when one or more workshop_interests
+// rows still reference the interest (#0474) -- a workshop is still tagged
+// with it. workshop_interests.interest_id is ON DELETE CASCADE
+// (migrations/000020), so without this check a delete that passed
+// ErrHasSubscribers would silently strip the tag from every workshop that
+// carries it.
+var ErrHasWorkshops = errors.New("interests: has workshop tags; deactivate instead of deleting")
+
+// ErrHasCampaigns is returned by Delete when one or more campaign_interests
+// rows still reference the interest (#0474) -- a campaign was targeted at it.
+// campaign_interests.interest_id is ON DELETE CASCADE (migrations/000017),
+// so without this check a delete that passed ErrHasSubscribers would silently
+// erase the record of who an already-sent campaign was targeted at -- the
+// one of the three that cannot be reconstructed after the fact.
+var ErrHasCampaigns = errors.New("interests: has campaign segments; deactivate instead of deleting")
+
 // slugPattern matches the same format enforced by the database CHECK
 // constraint: lowercase alphanumerics separated by single hyphens, no leading,
 // trailing, or doubled hyphens.
@@ -268,44 +284,81 @@ func (s *Store) SubscriberCounts(ctx context.Context) (map[int64]int64, error) {
 	return out, nil
 }
 
-// Delete permanently removes an interest row, but ONLY when no
-// subscriber_interests rows reference it. This does not weaken the "no
-// hard-delete" design documented at the top of this file: an interest that
-// any subscriber has ever selected can still only be hidden via Deactivate,
-// which preserves the historical association. Delete exists for the case
-// Deactivate does not cover -- an interest created in error (a typo, a
-// duplicate) that nobody has selected yet, where deactivating it would leave
-// permanent clutter in the admin list for no reason.
+// Delete permanently removes an interest row, but ONLY when nothing
+// references it. #0474 widened this check from subscriber_interests alone.
+// campaign_interests is ON DELETE CASCADE on interest_id (migrations/000017).
+// workshop_interests is ON DELETE CASCADE on interest_id (migrations/000020).
+// Left unchecked, either cascade would have let a delete silently erase
+// every campaign's recorded segment or every workshop's topic tag. This
+// does not weaken the "no hard-delete" design documented at the top of this
+// file: an interest that any subscriber has ever selected, any campaign has
+// ever targeted, or any workshop has ever tagged can still only be hidden
+// via Deactivate, which preserves every historical association. Delete
+// exists for the case Deactivate does not cover -- an interest created in
+// error (a typo, a duplicate) that nothing has referenced yet, where
+// deactivating it would leave permanent clutter in the admin list for no
+// reason.
 //
-// The refusal is enforced by the DELETE statement's own WHERE clause (a
-// single atomic query, not a check-then-delete race), so a subscriber
-// selecting the interest concurrently with this call cannot result in a
-// referenced row being deleted. When the statement affects no rows, a
-// follow-up existence check distinguishes ErrNotFound (no such id) from
-// ErrHasSubscribers (exists, but is referenced) for the caller's error
-// message; that follow-up has no effect on which outcome actually occurred.
+// Everything below is ONE statement: a data-modifying CTE attempts the
+// delete, and the surrounding SELECT reports both whether it succeeded and,
+// using the identical snapshot the DELETE's own NOT EXISTS clauses read,
+// which of the three tables reference the row. Because every sub-statement
+// of a single query sees the same snapshot, "did it delete" and "why not"
+// can never disagree with each other the way two separate round trips
+// could under a concurrent insert -- there is no window in which a
+// follow-up check could read a different reality than the one the DELETE
+// itself acted on. Reported in a fixed priority order when more than one
+// table references the same row: the subscriber case first (it was the
+// original, and only, guard before #0474), then the campaign case, then
+// the workshop case.
 func (s *Store) Delete(ctx context.Context, id int64) error {
-	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM interests
-		  WHERE id = $1
-		    AND NOT EXISTS (SELECT 1 FROM subscriber_interests WHERE interest_id = $1)`,
-		id)
+	var deleted, stillExists, hasSubscribers, hasCampaigns, hasWorkshops bool
+	err := s.pool.QueryRow(ctx,
+		`WITH del AS (
+		    DELETE FROM interests
+		     WHERE id = $1
+		       AND NOT EXISTS (SELECT 1 FROM subscriber_interests WHERE interest_id = $1)
+		       AND NOT EXISTS (SELECT 1 FROM campaign_interests WHERE interest_id = $1)
+		       AND NOT EXISTS (SELECT 1 FROM workshop_interests WHERE interest_id = $1)
+		    RETURNING id
+		 )
+		 SELECT
+		    EXISTS (SELECT 1 FROM del),
+		    EXISTS (SELECT 1 FROM interests WHERE id = $1),
+		    EXISTS (SELECT 1 FROM subscriber_interests WHERE interest_id = $1),
+		    EXISTS (SELECT 1 FROM campaign_interests WHERE interest_id = $1),
+		    EXISTS (SELECT 1 FROM workshop_interests WHERE interest_id = $1)`,
+		id,
+	).Scan(&deleted, &stillExists, &hasSubscribers, &hasCampaigns, &hasWorkshops)
 	if err != nil {
 		return fmt.Errorf("interests: deleting id %d: %w", id, err)
 	}
-	if tag.RowsAffected() > 0 {
+	if deleted {
 		return nil
 	}
-	var exists bool
-	if err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM interests WHERE id = $1)`, id,
-	).Scan(&exists); err != nil {
-		return fmt.Errorf("interests: checking existence after refused delete id %d: %w", id, err)
-	}
-	if !exists {
+	// stillExists reflects the pre-statement snapshot the DELETE itself read
+	// (see the doc comment above), so when the row was actually removed this
+	// reads true even though it is now gone -- deleted, checked first, is
+	// what decides success. From here the row was never removed.
+	if !stillExists {
 		return ErrNotFound
 	}
-	return ErrHasSubscribers
+	switch {
+	case hasSubscribers:
+		return ErrHasSubscribers
+	case hasCampaigns:
+		return ErrHasCampaigns
+	case hasWorkshops:
+		return ErrHasWorkshops
+	default:
+		// stillExists is true (so the id is real) yet none of the three
+		// NOT EXISTS clauses in the DELETE's own WHERE was false -- meaning
+		// the DELETE's own snapshot should have removed it. Postgres
+		// guarantees this cannot happen inside one statement; treated as an
+		// internal invariant violation rather than silently reported as a
+		// specific, potentially wrong, reference reason.
+		return fmt.Errorf("interests: delete id %d refused with no referencing table found (invariant violation)", id)
+	}
 }
 
 // isUniqueViolation reports whether err is a Postgres unique_violation

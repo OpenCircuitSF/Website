@@ -311,6 +311,66 @@ func seedSubscriberWithInterest(t *testing.T, pool *pgxpool.Pool, interestID int
 	return subID
 }
 
+// seedWorkshopWithInterest inserts a minimal workshops row and links it to
+// interestID via workshop_interests, registering cleanup that deletes the
+// workshop (workshop_interests rows cascade via ON DELETE CASCADE, per
+// migrations/000020). Returns the workshop's id. Added by #0474 to prove
+// Delete's guard now covers this table, which #0024's original guard never
+// checked.
+func seedWorkshopWithInterest(t *testing.T, pool *pgxpool.Pool, interestID int64) int64 {
+	t.Helper()
+	ctx := context.Background()
+	slug := fmt.Sprintf("zz-test-workshop-%d", testdb.Unique())
+	var workshopID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO workshops (slug, title) VALUES ($1, 'zz-test workshop') RETURNING id`,
+		slug,
+	).Scan(&workshopID); err != nil {
+		t.Fatalf("seed workshop: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workshops WHERE id = $1`, workshopID)
+	})
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO workshop_interests (workshop_id, interest_id) VALUES ($1, $2)`,
+		workshopID, interestID,
+	); err != nil {
+		t.Fatalf("link workshop to interest: %v", err)
+	}
+	return workshopID
+}
+
+// seedCampaignWithInterest inserts a minimal email_campaigns row and links it
+// to interestID via campaign_interests, registering cleanup that deletes the
+// campaign (campaign_interests rows cascade via ON DELETE CASCADE, per
+// migrations/000017). Returns the campaign's id. Added by #0474 to prove
+// Delete's guard now covers this table -- the one of the three whose loss is
+// unrecoverable, since it is the record of who an already-sent campaign was
+// targeted at.
+func seedCampaignWithInterest(t *testing.T, pool *pgxpool.Pool, interestID int64) int64 {
+	t.Helper()
+	ctx := context.Background()
+	slug := fmt.Sprintf("zz-test-campaign-%d", testdb.Unique())
+	var campaignID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO email_campaigns (name, subject, body_md, slug)
+		 VALUES ('zz-test campaign', 'zz-test subject', 'body', $1) RETURNING id`,
+		slug,
+	).Scan(&campaignID); err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM email_campaigns WHERE id = $1`, campaignID)
+	})
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO campaign_interests (campaign_id, interest_id) VALUES ($1, $2)`,
+		campaignID, interestID,
+	); err != nil {
+		t.Fatalf("link campaign to interest: %v", err)
+	}
+	return campaignID
+}
+
 func TestSubscriberCounts_CountsLinkedAndOmitsZero(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
@@ -383,6 +443,115 @@ func TestDelete_RefusedWhenSubscribersExist(t *testing.T) {
 	}
 	if got.ID != created.ID {
 		t.Fatalf("GetByID after refused Delete = %+v, want id=%d", got, created.ID)
+	}
+}
+
+// TestDelete_RefusedWhenWorkshopReferencesIt is #0474's criterion-4 proof for
+// the workshop_interests half of the widened guard: an interest tagged on a
+// workshop but selected by no subscriber used to pass the old
+// subscriber_interests-only check and be hard-deleted, cascading away the
+// workshop's tag. Seeds a throwaway interest and a throwaway workshop (never
+// a literal or seeded id, per CLAUDE.md §8b / this issue's criterion 4).
+func TestDelete_RefusedWhenWorkshopReferencesIt(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	slug := testSlug(t, pool)
+
+	created, err := store.Create(context.Background(), slug, "Tagged on a workshop", nil, 0)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	seedWorkshopWithInterest(t, pool, created.ID)
+
+	err = store.Delete(context.Background(), created.ID)
+	if !errors.Is(err, ErrHasWorkshops) {
+		t.Fatalf("Delete: got err=%v, want ErrHasWorkshops", err)
+	}
+
+	// The row must still exist -- refusal must not have deleted it anyway.
+	got, err := store.GetByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetByID after refused Delete: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Fatalf("GetByID after refused Delete = %+v, want id=%d", got, created.ID)
+	}
+}
+
+// TestDelete_RefusedWhenCampaignReferencesIt is #0474's criterion-4 proof for
+// the campaign_interests half -- the more serious of the two, since a sent
+// campaign's target segment cannot be reconstructed once lost. Seeds a
+// throwaway interest and a throwaway campaign (never a literal or seeded id).
+func TestDelete_RefusedWhenCampaignReferencesIt(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	slug := testSlug(t, pool)
+
+	created, err := store.Create(context.Background(), slug, "Targeted by a campaign", nil, 0)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	seedCampaignWithInterest(t, pool, created.ID)
+
+	err = store.Delete(context.Background(), created.ID)
+	if !errors.Is(err, ErrHasCampaigns) {
+		t.Fatalf("Delete: got err=%v, want ErrHasCampaigns", err)
+	}
+
+	// The row must still exist -- refusal must not have deleted it anyway.
+	got, err := store.GetByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetByID after refused Delete: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Fatalf("GetByID after refused Delete = %+v, want id=%d", got, created.ID)
+	}
+}
+
+// TestDelete_ReferencedByAllThreeReportsSubscribersFirst pins the
+// deterministic priority documented on Store.Delete: when more than one
+// table references the same row, subscriber_interests is reported first
+// (it was the original, and only, guard before #0474), then
+// campaign_interests, then workshop_interests.
+func TestDelete_ReferencedByAllThreeReportsSubscribersFirst(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	slug := testSlug(t, pool)
+
+	created, err := store.Create(context.Background(), slug, "Referenced by all three", nil, 0)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	seedSubscriberWithInterest(t, pool, created.ID)
+	seedCampaignWithInterest(t, pool, created.ID)
+	seedWorkshopWithInterest(t, pool, created.ID)
+
+	err = store.Delete(context.Background(), created.ID)
+	if !errors.Is(err, ErrHasSubscribers) {
+		t.Fatalf("Delete: got err=%v, want ErrHasSubscribers (checked first)", err)
+	}
+}
+
+// TestDelete_ReferencedByCampaignAndWorkshopReportsCampaignFirst pins the
+// second half of the same priority order: with no subscriber involved,
+// campaign_interests is reported ahead of workshop_interests, since the
+// campaign case is the one whose loss is unrecoverable (see the package doc
+// comment and this issue's "why it matters more" section).
+func TestDelete_ReferencedByCampaignAndWorkshopReportsCampaignFirst(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	slug := testSlug(t, pool)
+
+	created, err := store.Create(context.Background(), slug, "Referenced by campaign and workshop", nil, 0)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	seedCampaignWithInterest(t, pool, created.ID)
+	seedWorkshopWithInterest(t, pool, created.ID)
+
+	err = store.Delete(context.Background(), created.ID)
+	if !errors.Is(err, ErrHasCampaigns) {
+		t.Fatalf("Delete: got err=%v, want ErrHasCampaigns (checked before workshops)", err)
 	}
 }
 

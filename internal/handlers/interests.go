@@ -31,7 +31,7 @@ type interestStore interface {
 //	GET    /admin/interests      — list every interest (active + inactive), with a per-interest subscriber count
 //	POST   /admin/interests      — create a new interest
 //	PATCH  /admin/interests/{id} — update name/description/sort_order/active (slug is immutable — see patchInterestRequest)
-//	DELETE /admin/interests/{id} — hard-delete, refused (409) when any subscriber is associated
+//	DELETE /admin/interests/{id} — hard-delete, refused (409) when any subscriber, campaign, or workshop is associated (#0474)
 //
 // All routes MUST be mounted behind middleware.RequireSession then
 // middleware.RequireAdmin, exactly like AdminUsersHandler and
@@ -323,10 +323,15 @@ func (h *AdminInterestsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 }
 
 // Delete handles DELETE /admin/interests/{id}. Refuses with 409 and a clear
-// message when the interest has ever been selected by a subscriber
-// (interests.ErrHasSubscribers) — the acceptance criterion's "deactivate
-// instead" guidance is put directly in the response body, not just implied
-// by the status code. Writes interest.deleted only on an actual deletion.
+// message when the interest is still referenced by any of the three tables
+// interests.Store.Delete checks — a subscriber's selection
+// (interests.ErrHasSubscribers), a campaign's target segment
+// (interests.ErrHasCampaigns), or a workshop's topic tag
+// (interests.ErrHasWorkshops) — #0474 widened this from the subscriber case
+// alone. Each message names the specific blocker rather than a generic
+// "still in use", and states the "deactivate it instead" guidance directly
+// in the response body, not just implied by the status code. Writes
+// interest.deleted only on an actual deletion.
 func (h *AdminInterestsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	actor, ok := middleware.UserFromContext(r.Context())
 	if !ok {
@@ -364,6 +369,14 @@ func (h *AdminInterestsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, interests.ErrHasSubscribers):
 		writeError(w, http.StatusConflict,
 			"cannot delete an interest with associated subscribers; deactivate it instead")
+		return
+	case errors.Is(err, interests.ErrHasCampaigns):
+		writeError(w, http.StatusConflict,
+			"cannot delete an interest still targeted by a campaign; deactivate it instead")
+		return
+	case errors.Is(err, interests.ErrHasWorkshops):
+		writeError(w, http.StatusConflict,
+			"cannot delete an interest still tagged on a workshop; deactivate it instead")
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")

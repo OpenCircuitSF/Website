@@ -49,15 +49,23 @@ supported channels, and neither touches `000009`:
     the new interest and deactivate the old one — subscribers do not move
     across, and a downstream re-theming the taxonomy wholesale is doing
     creates-and-deactivates, not renames.
-  - **`DELETE` is refused (409) only when a `subscriber_interests` row
-    references the interest.** `workshop_interests` and `campaign_interests`
-    are `ON DELETE CASCADE` (`migrations/000020_create_workshops.up.sql`,
-    `migrations/000017_create_campaigns.up.sql`) and are **not** consulted,
-    so deleting an interest that no subscriber has selected but a workshop
-    is tagged with, or a campaign targeted, silently drops those rows.
-    Prefer `PATCH {"active": false}`: deactivation preserves the row and
-    every `subscriber_interests`/`workshop_interests`/`campaign_interests`
-    row that references it.
+  - **`DELETE` is refused (409) when any of `subscriber_interests`,
+    `campaign_interests`, or `workshop_interests` references the interest**
+    (`#0474`). All three are `ON DELETE CASCADE`
+    (`migrations/000010_create_subscribers.up.sql`,
+    `migrations/000017_create_campaigns.up.sql`,
+    `migrations/000020_create_workshops.up.sql`), so `interests.Store.Delete`
+    checks all three in one atomic statement and the error names which one
+    blocked it — a subscriber's selection, a campaign's target segment, or a
+    workshop's topic tag. Prefer `PATCH {"active": false}` for any interest
+    with history: deactivation preserves the row and every
+    `subscriber_interests`/`campaign_interests`/`workshop_interests` row
+    that references it. (Before `#0474`, `DELETE` consulted
+    `subscriber_interests` only, so an interest tagged on a workshop or
+    targeted by a campaign but selected by no subscriber could be
+    hard-deleted, silently dropping those rows via the cascade — the
+    campaign case was unrecoverable, since a sent campaign's target segment
+    cannot be reconstructed afterward.)
 - **A change to what a *fresh* install seeds by default** — the canonical
   list in `PRD.md` §6.1 itself changing — is a **new, additively-numbered
   migration**, never an edit to `000009`, following exactly the shape

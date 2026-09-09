@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -80,6 +81,65 @@ func seedSubscriberLinkedToInterest(t *testing.T, pool *pgxpool.Pool, interestID
 		t.Fatalf("link subscriber to interest: %v", err)
 	}
 	return subID
+}
+
+// seedWorkshopLinkedToInterest inserts a minimal workshops row linked to
+// interestID via workshop_interests, mirroring
+// internal/interests/store_test.go's seedWorkshopWithInterest. Cleanup
+// deletes the workshop; workshop_interests cascades (ON DELETE CASCADE,
+// migrations/000020). Added by #0474 to prove the mux-level Delete route
+// now refuses this case too.
+func seedWorkshopLinkedToInterest(t *testing.T, pool *pgxpool.Pool, interestID int64) int64 {
+	t.Helper()
+	ctx := context.Background()
+	slug := fmt.Sprintf("zz-test-workshop-%d", testdb.Unique())
+	var workshopID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO workshops (slug, title) VALUES ($1, 'zz-test workshop') RETURNING id`,
+		slug,
+	).Scan(&workshopID); err != nil {
+		t.Fatalf("seed workshop: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workshops WHERE id = $1`, workshopID)
+	})
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO workshop_interests (workshop_id, interest_id) VALUES ($1, $2)`,
+		workshopID, interestID,
+	); err != nil {
+		t.Fatalf("link workshop to interest: %v", err)
+	}
+	return workshopID
+}
+
+// seedCampaignLinkedToInterest inserts a minimal email_campaigns row linked
+// to interestID via campaign_interests, mirroring
+// internal/interests/store_test.go's seedCampaignWithInterest. Cleanup
+// deletes the campaign; campaign_interests cascades (ON DELETE CASCADE,
+// migrations/000017). Added by #0474 to prove the mux-level Delete route
+// now refuses this case too -- the one whose loss is unrecoverable.
+func seedCampaignLinkedToInterest(t *testing.T, pool *pgxpool.Pool, interestID int64) int64 {
+	t.Helper()
+	ctx := context.Background()
+	slug := fmt.Sprintf("zz-test-campaign-%d", testdb.Unique())
+	var campaignID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO email_campaigns (name, subject, body_md, slug)
+		 VALUES ('zz-test campaign', 'zz-test subject', 'body', $1) RETURNING id`,
+		slug,
+	).Scan(&campaignID); err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM email_campaigns WHERE id = $1`, campaignID)
+	})
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO campaign_interests (campaign_id, interest_id) VALUES ($1, $2)`,
+		campaignID, interestID,
+	); err != nil {
+		t.Fatalf("link campaign to interest: %v", err)
+	}
+	return campaignID
 }
 
 // adminInterestsMux wires the real admin interests CRUD routes guarded by
@@ -597,6 +657,108 @@ func TestAdminInterests_DeleteRefusedWithSubscribers(t *testing.T) {
 	}
 	if !interestExists(t, pool, slug) {
 		t.Fatalf("interest %q was deleted despite having a subscriber", slug)
+	}
+	actions := auditActionsForSlug(t, pool, slug)
+	for _, a := range actions {
+		if a == audit.ActionInterestDeleted {
+			t.Fatalf("interest.deleted audit row written for a refused delete")
+		}
+	}
+}
+
+// TestAdminInterests_DeleteRefusedWithWorkshop asserts a DELETE on an
+// interest tagged on a workshop -- but selected by no subscriber, so the
+// pre-#0474 guard would have let it through -- is refused with 409, a
+// message naming the workshop as the blocker, no interest.deleted audit row,
+// and the row (and its workshop tag) still present.
+func TestAdminInterests_DeleteRefusedWithWorkshop(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminInterestsMux(pool))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin@example.com")
+	seedSession(t, pool, admin, "admin-token")
+
+	istore := interests.NewStore(pool)
+	slug := testInterestSlug(t, pool)
+	created, err := istore.Create(context.Background(), slug, "Tagged on a workshop", nil, 0)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	seedWorkshopLinkedToInterest(t, pool, created.ID)
+
+	resp := doJSON(t, srv.Client(), http.MethodDelete,
+		fmt.Sprintf("%s/admin/interests/%d", srv.URL, created.ID), "admin-token", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var errBody struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &errBody); err != nil {
+		t.Fatalf("decode error body: %v (body=%s)", err, body)
+	}
+	if !strings.Contains(errBody.Error, "workshop") {
+		t.Fatalf("error message = %q, want it to name the workshop as the blocker", errBody.Error)
+	}
+	if !strings.Contains(errBody.Error, "deactivate") {
+		t.Fatalf("error message = %q, want it to say deactivate instead", errBody.Error)
+	}
+	if !interestExists(t, pool, slug) {
+		t.Fatalf("interest %q was deleted despite being tagged on a workshop", slug)
+	}
+	actions := auditActionsForSlug(t, pool, slug)
+	for _, a := range actions {
+		if a == audit.ActionInterestDeleted {
+			t.Fatalf("interest.deleted audit row written for a refused delete")
+		}
+	}
+}
+
+// TestAdminInterests_DeleteRefusedWithCampaign asserts a DELETE on an
+// interest targeted by a campaign -- but selected by no subscriber, so the
+// pre-#0474 guard would have let it through -- is refused with 409, a
+// message naming the campaign as the blocker, no interest.deleted audit row,
+// and the row (and the campaign's recorded segment) still present.
+func TestAdminInterests_DeleteRefusedWithCampaign(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminInterestsMux(pool))
+	defer srv.Close()
+
+	admin := seedAdmin(t, pool, "admin@example.com")
+	seedSession(t, pool, admin, "admin-token")
+
+	istore := interests.NewStore(pool)
+	slug := testInterestSlug(t, pool)
+	created, err := istore.Create(context.Background(), slug, "Targeted by a campaign", nil, 0)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	seedCampaignLinkedToInterest(t, pool, created.ID)
+
+	resp := doJSON(t, srv.Client(), http.MethodDelete,
+		fmt.Sprintf("%s/admin/interests/%d", srv.URL, created.ID), "admin-token", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var errBody struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &errBody); err != nil {
+		t.Fatalf("decode error body: %v (body=%s)", err, body)
+	}
+	if !strings.Contains(errBody.Error, "campaign") {
+		t.Fatalf("error message = %q, want it to name the campaign as the blocker", errBody.Error)
+	}
+	if !strings.Contains(errBody.Error, "deactivate") {
+		t.Fatalf("error message = %q, want it to say deactivate instead", errBody.Error)
+	}
+	if !interestExists(t, pool, slug) {
+		t.Fatalf("interest %q was deleted despite being targeted by a campaign", slug)
 	}
 	actions := auditActionsForSlug(t, pool, slug)
 	for _, a := range actions {
