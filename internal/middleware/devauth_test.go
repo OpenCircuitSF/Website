@@ -59,7 +59,18 @@ func TestDevAutoLogin_PanicsOutsideDevMode(t *testing.T) {
 			t.Fatal("DevAutoLogin(devMode=false) did not panic — guardrail missing")
 		}
 	}()
-	DevAutoLogin(newFakeDevStore(), false) // must panic
+	DevAutoLogin(newFakeDevStore(), newFakeDevStore(), false) // must panic
+}
+
+// TestDevAutoLogin_PanicsOnNilResolver covers the same structural backstop
+// for a nil resolver, mirroring DevAdminAutoLogin's equivalent guard.
+func TestDevAutoLogin_PanicsOnNilResolver(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("DevAutoLogin(nil resolver) did not panic")
+		}
+	}()
+	DevAutoLogin(newFakeDevStore(), nil, true)
 }
 
 // TestDevAutoLogin_SetsCookieOnRequest verifies that DevAutoLogin injects a
@@ -67,7 +78,7 @@ func TestDevAutoLogin_PanicsOutsideDevMode(t *testing.T) {
 // and also sets it on the response (so the browser stores it).
 func TestDevAutoLogin_SetsCookieOnRequest(t *testing.T) {
 	store := newFakeDevStore()
-	mw := DevAutoLogin(store, true)
+	mw := DevAutoLogin(store, store, true)
 
 	var seenCookie string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,13 +123,23 @@ func TestDevAutoLogin_SetsCookieOnRequest(t *testing.T) {
 	}
 }
 
-// TestDevAutoLogin_SkipsWhenCookiePresent verifies that DevAutoLogin is a no-op
-// when the request already carries a session cookie — it must not overwrite it.
-func TestDevAutoLogin_SkipsWhenCookiePresent(t *testing.T) {
+// TestDevAutoLogin_PassesThroughValidCookie verifies that DevAutoLogin is a
+// no-op when the request already carries a VALID session cookie — it must
+// not mint a replacement or overwrite it. This test's predecessor (renamed
+// here, #0409) asserted skip-on-PRESENCE rather than skip-on-VALIDITY, which
+// is #0409's bug: a stale or garbage cookie took the same branch and stayed
+// 401 forever. It is rewritten here to key the assertion on the cookie's
+// VALIDITY instead, matching the fixed implementation — the request cookie
+// below is registered with the resolver first, so pass-through here is only
+// possible because resolver.ResolveSession succeeds, not merely because a
+// cookie was present.
+func TestDevAutoLogin_PassesThroughValidCookie(t *testing.T) {
 	store := newFakeDevStore()
-	mw := DevAutoLogin(store, true)
-
 	const existingToken = "already-present-token"
+	store.sessions[existingToken] = testSession{userID: devAuthAdminID, expiresAt: time.Now().Add(time.Hour)}
+
+	mw := DevAutoLogin(store, store, true)
+
 	var seenCookie string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(auth.SessionCookieName); err == nil {
@@ -134,10 +155,81 @@ func TestDevAutoLogin_SkipsWhenCookiePresent(t *testing.T) {
 	mw(next).ServeHTTP(rec, req)
 
 	if seenCookie != existingToken {
-		t.Errorf("cookie = %q, want original %q (must not replace existing cookie)", seenCookie, existingToken)
+		t.Errorf("cookie = %q, want original %q (must not replace a valid cookie)", seenCookie, existingToken)
 	}
-	if len(store.sessions) != 0 {
-		t.Errorf("dev sessions created = %d, want 0 (should have skipped existing cookie)", len(store.sessions))
+	if len(store.sessions) != 1 {
+		t.Errorf("dev sessions after request = %d, want 1 (no mint for a valid cookie)", len(store.sessions))
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Errorf("response set %d cookie(s), want 0 for a valid cookie (no rewrite)", len(rec.Result().Cookies()))
+	}
+}
+
+// TestDevAutoLogin_StaleCookieHeals is #0409's regression pin for the
+// STORAGE=json path: a cookie whose session the dev store no longer
+// recognises (the in-memory map lost it, e.g. a process restart) must NOT
+// 401 forever. It must heal by minting a fresh session, and the request's
+// rebuilt Cookie header must carry exactly one opencircuit_session entry
+// whose value is the fresh token — proving r.Header.Set (replace) was used
+// rather than r.AddCookie (append), which is what let the stale value win at
+// extraction before this fix.
+func TestDevAutoLogin_StaleCookieHeals(t *testing.T) {
+	store := newFakeDevStore()
+	mw := DevAutoLogin(store, store, true)
+	requireSession := RequireSession(store)
+
+	inner := &captureHandler{}
+	var sawSessionCookies []string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, c := range r.Cookies() {
+			if c.Name == auth.SessionCookieName {
+				sawSessionCookies = append(sawSessionCookies, c.Value)
+			}
+		}
+		requireSession(inner).ServeHTTP(w, r)
+	})
+
+	rec := httptest.NewRecorder()
+	req := reqWithCookie("stale-token-whose-row-is-gone")
+	mw(next).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (stale cookie must heal, not 401 — #0409)", rec.Code)
+	}
+	if !inner.ran || !inner.ok {
+		t.Fatal("inner handler did not run authenticated after a stale cookie")
+	}
+	if len(sawSessionCookies) != 1 {
+		t.Fatalf("request carried %d session cookie(s), want exactly 1 (r.AddCookie would leave 2 — see #0409)", len(sawSessionCookies))
+	}
+	if sawSessionCookies[0] == "stale-token-whose-row-is-gone" {
+		t.Error("the request's surviving session cookie is still the stale one — not replaced")
+	}
+	if len(store.sessions) != 1 {
+		t.Errorf("dev sessions after healing = %d, want 1", len(store.sessions))
+	}
+}
+
+// TestDevAutoLogin_GarbageCookieHeals is the garbage-value sibling of
+// TestDevAutoLogin_StaleCookieHeals — a cookie value that was never a real
+// token must heal exactly the same way as a stale one.
+func TestDevAutoLogin_GarbageCookieHeals(t *testing.T) {
+	store := newFakeDevStore()
+	mw := DevAutoLogin(store, store, true)
+	requireSession := RequireSession(store)
+
+	inner := &captureHandler{}
+	chain := mw(requireSession(inner))
+
+	rec := httptest.NewRecorder()
+	req := reqWithCookie("opencircuit_session=nonsense")
+	chain.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (garbage cookie must heal, not 401 — #0409)", rec.Code)
+	}
+	if !inner.ran || !inner.ok {
+		t.Fatal("inner handler did not run authenticated after a garbage cookie")
 	}
 }
 
@@ -146,7 +238,7 @@ func TestDevAutoLogin_SkipsWhenCookiePresent(t *testing.T) {
 // A request with no cookie must arrive at the inner handler fully authenticated.
 func TestDevAutoLogin_ComposesWithRequireSession(t *testing.T) {
 	store := newFakeDevStore()
-	devMW := DevAutoLogin(store, true)
+	devMW := DevAutoLogin(store, store, true)
 
 	// RequireSession backed by the same store (which also implements SessionResolver).
 	requireSession := RequireSession(store)

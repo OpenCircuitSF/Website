@@ -31,22 +31,56 @@ const devAuthSessionTTL = 24 * time.Hour
 const devAuthAdminID int64 = 1
 
 // DevAutoLogin returns middleware that, in dev mode only, automatically
-// establishes an authenticated session for the seeded mock admin user when a
-// request arrives without a valid session cookie. The session token is written
-// to the response (so the browser stores it) and injected into the request (so
-// RequireSession can validate it on the same request).
+// establishes an authenticated session for the seeded mock admin user. The
+// session token is written to the response (so the browser stores it) and
+// set on the request (so RequireSession can validate it on the same
+// request).
+//
+// The construction invariant is the same one DevAdminAutoLogin documents in
+// full, and #0409 is why it must hold here too: after this middleware runs,
+// the token RequireSession will extract from the request is exactly the
+// token whose validity this middleware just established. There is no branch
+// keyed on a credential merely being PRESENT — only one keyed on it being
+// VALID, via resolver.ResolveSession. #0409 found that the earlier
+// presence-only check stayed 401 forever for a cookie the devstore no
+// longer recognised — routine here, since internal/devstore holds sessions
+// in a plain in-memory map that a process restart empties while the browser
+// keeps the cookie. Request handling, in order:
+//
+//  1. Extract the token with the same sessionToken helper RequireSession
+//     uses, so header-vs-cookie precedence can never diverge between them.
+//  2. If that token resolves to a live session, pass the request through
+//     completely unchanged: no mint, no Set-Cookie, no new session.
+//  3. Otherwise — no token, or an unusable one (absent, stale, garbage,
+//     expired) — mint a fresh dev session for the mock admin, set it as the
+//     response cookie, and REPLACE the request's own Cookie header with
+//     that token as its only opencircuit_session entry, dropping any
+//     Authorization header the request carried.
+//
+// Both rewrites in step 3 are load-bearing: (*http.Request).AddCookie
+// APPENDS to the Cookie header and (*http.Request).Cookie (via
+// sessionToken) returns the FIRST match, so a stale cookie left in place
+// ahead of a newly-appended one would still win at extraction even after a
+// successful mint — see DevAdminAutoLogin's doc comment for the fuller
+// account of this failure shape.
 //
 // Hard guardrail: the returned middleware panics at construction time if
 // devMode is false, so it is structurally impossible to wire this into the
-// production (Postgres) path even by accident.
+// production (Postgres) path even by accident. It also panics if resolver is
+// nil, mirroring DevAdminAutoLogin's guard against a miswiring that would
+// otherwise turn step 1 above into a nil-pointer crash on the first request
+// instead of failing at startup.
 //
 // This must be wired only inside serveDevMode (cmd/opencircuit/main.go), which
 // itself is only reached when STORAGE=json is set.
-func DevAutoLogin(creator devSessionCreator, devMode bool) func(http.Handler) http.Handler {
+func DevAutoLogin(creator devSessionCreator, resolver SessionResolver, devMode bool) func(http.Handler) http.Handler {
 	if !devMode {
 		// Fail loudly at startup rather than silently. If this ever fires it
 		// means the caller wired dev middleware on the production path — a bug.
 		panic("middleware.DevAutoLogin: must not be called outside dev mode (STORAGE=json)")
+	}
+	if resolver == nil {
+		panic("middleware.DevAutoLogin: resolver must not be nil")
 	}
 
 	devAuthOnce.Do(func() {
@@ -55,14 +89,18 @@ func DevAutoLogin(creator devSessionCreator, devMode bool) func(http.Handler) ht
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// If the request already carries a session cookie, let RequireSession
-			// validate it normally — no new token needed.
-			if c, err := r.Cookie(auth.SessionCookieName); err == nil && c.Value != "" {
-				next.ServeHTTP(w, r)
-				return
+			if tok := sessionToken(r); tok != "" {
+				if _, err := resolver.ResolveSession(r.Context(), tok, time.Now()); err == nil {
+					// Valid credential: pass through untouched. No mint, no
+					// Set-Cookie, no new session — this is the ONLY
+					// pass-through branch, and it is keyed on validity,
+					// never presence.
+					next.ServeHTTP(w, r)
+					return
+				}
 			}
 
-			// No session cookie present: mint a dev session for the mock admin.
+			// No usable credential: mint a dev session for the mock admin.
 			token, expiresAt, err := creator.CreateDevSession(devAuthAdminID, devAuthSessionTTL)
 			if err != nil {
 				slog.Error("devauth: failed to create dev session", "error", err)
@@ -74,13 +112,25 @@ func DevAutoLogin(creator devSessionCreator, devMode bool) func(http.Handler) ht
 			// subsequent requests.
 			auth.SetSessionCookie(w, token, expiresAt)
 
-			// Inject the cookie into the current request so RequireSession (which
-			// reads r.Cookie) can validate the token on this very request without
-			// needing a client round-trip.
-			r.AddCookie(&http.Cookie{
-				Name:  auth.SessionCookieName,
-				Value: token,
-			})
+			// Rebuild the Cookie header from scratch so the new token is the
+			// request's ONLY opencircuit_session entry — never r.AddCookie,
+			// which appends and would leave a stale value first in the
+			// header, exactly where sessionToken's r.Cookie call finds it
+			// (see the doc comment above).
+			var kept []string
+			for _, c := range r.Cookies() {
+				if c.Name == auth.SessionCookieName {
+					continue
+				}
+				kept = append(kept, c.Name+"="+c.Value)
+			}
+			kept = append(kept, auth.SessionCookieName+"="+token)
+			r.Header.Set("Cookie", strings.Join(kept, "; "))
+			// sessionToken prefers Authorization: Bearer over the cookie; an
+			// unusable bearer token reaching this branch has just been
+			// judged invalid, so it must not survive into RequireSession by
+			// a second route.
+			r.Header.Del("Authorization")
 
 			next.ServeHTTP(w, r)
 		})

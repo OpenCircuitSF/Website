@@ -924,11 +924,15 @@ func serveDevMode(cfg *config.Config) error {
 		return requireSession(middleware.RequireAdmin(next))
 	}
 
-	// Dev-only auto-login middleware: on every request that has no session cookie,
-	// mint a dev session for the seeded mock admin and inject it into the request
-	// so RequireSession accepts it immediately — no passkey ceremony needed.
-	// The hard guardrail (cfg.DevMode() check) is enforced inside DevAutoLogin.
-	devAutoLogin := middleware.DevAutoLogin(ds, cfg.DevMode())
+	// Dev-only auto-login middleware: on every request whose credential does
+	// not resolve to a live session, mint a dev session for the seeded mock
+	// admin and set it on the request so RequireSession accepts it
+	// immediately — no passkey ceremony needed. ds is passed twice: once as
+	// the devSessionCreator that mints sessions, once as the SessionResolver
+	// that validates them (it already satisfies both, since requireSession
+	// above is built from the same ds). The hard guardrails (cfg.DevMode()
+	// and non-nil resolver) are enforced inside DevAutoLogin.
+	devAutoLogin := middleware.DevAutoLogin(ds, ds, cfg.DevMode())
 
 	// Subscribe (#0026) has no dev-store backing yet: internal/devstore's own
 	// doc comment says subscriber/interest fakes are "added incrementally as
