@@ -80,6 +80,12 @@ export const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
   '/login': 'login',
   '/register/verify': 'register-verify',
   '/recover/verify': 'recover-verify',
+  // #0408: '/account' and '/admin' are also proxied to the Go service in
+  // web/vite.config.ts's dev-server config, for same-origin API calls. A
+  // future SPA route added here that shares a proxied prefix reproduces
+  // that issue's defect -- a browser navigation to it gets silently
+  // forwarded to Go instead of served by the dev server -- unless the new
+  // prefix is also wired through that file's spaNavigationBypass.
   '/account': 'account',
   '/admin': 'admin',
 };

@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import type { IncomingMessage } from 'node:http';
 
 // The SPA is built to `dist/` and embedded into the Go binary via //go:embed at
 // compile time. In development the dev server proxies the API, auth, account,
@@ -16,6 +17,31 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 // leaves $PORT unset and falls back to 8080, matching dev.sh's own default.
 const apiPort = process.env.PORT || '8080';
 const apiTarget = `http://localhost:${apiPort}`;
+
+// #0408: `/account` and `/admin` are proxied to Go above so the SPA's own
+// fetch()/XHR calls to those prefixes reach the API, but both prefixes are
+// ALSO SPA routes in router.ts's STATIC_ROUTES ('/account', '/admin') — keep
+// this list and that one in sync; a future SPA route colliding with a
+// proxied prefix here reproduces the same defect. A plain proxy entry cannot
+// tell a browser's top-level navigation (a direct load or reload of the URL)
+// from the SPA's own same-path API calls, so both were forwarded to Go,
+// which returned its *embedded* dist/index.html — the tracked placeholder,
+// with no bundle — instead of the dev server's real shell. That is why a
+// reload of /admin rendered a blank page: 0-byte body, no JS error.
+//
+// Browsers set `Sec-Fetch-Mode: navigate` on top-level document navigations;
+// the SPA's own fetch() calls to these same paths ask for JSON and do not
+// carry that header value. Vite's proxy `bypass` option is checked before a
+// request is forwarded: returning a path from it makes Vite serve that file
+// itself instead of proxying, so a navigation gets the dev server's own
+// index.html (which loads /@vite/client) while every other request still
+// proxies straight through to Go.
+function spaNavigationBypass(req: IncomingMessage): string | undefined {
+  if (req.headers['sec-fetch-mode'] === 'navigate') {
+    return '/index.html';
+  }
+  return undefined;
+}
 
 export default defineConfig({
   plugins: [svelte()],
@@ -39,10 +65,16 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
+      // Plain string form: neither collides with an SPA route ('/login',
+      // '/register/verify', '/recover/verify' are the auth-adjacent SPA
+      // paths, and none is under /auth), so every request proxies straight
+      // through with no navigation/XHR distinction needed.
       '/api': apiTarget,
       '/auth': apiTarget,
-      '/account': apiTarget,
-      '/admin': apiTarget,
+      // '/account' and '/admin' collide with SPA routes — see
+      // spaNavigationBypass above.
+      '/account': { target: apiTarget, bypass: spaNavigationBypass },
+      '/admin': { target: apiTarget, bypass: spaNavigationBypass },
     },
   },
   // #0094: under Vitest, Vite's default module resolution picks Svelte's
