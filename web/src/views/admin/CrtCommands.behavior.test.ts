@@ -197,6 +197,30 @@ describe('CrtCommands — save note (#0403)', () => {
     await waitFor(() => expect(screen.getByText('Could not save the command. Please try again.')).toBeTruthy());
     expect(screen.queryByText(/up to a minute/)).toBeNull();
   });
+
+  it('clears a prior save note when the next save is rejected by client-side validation, not the network', async () => {
+    const rows = twoRows();
+    listCrtCommands.mockResolvedValue({ commands: rows });
+    updateCrtCommand.mockResolvedValueOnce({ ...rows[0], active: false });
+    render(CrtCommands);
+
+    await waitFor(() => expect(screen.getByLabelText('Toggle whoami active')).toBeTruthy());
+    await fireEvent.click(screen.getByLabelText('Toggle whoami active'));
+    await waitFor(() => expect(screen.getByText(/up to a minute/)).toBeTruthy());
+
+    // Open the row editor and blank the command field -- saveEdit's own
+    // client-side guard rejects this before any request leaves the
+    // component, so updateCrtCommand must not be called a second time.
+    await fireEvent.click(screen.getAllByText('Edit')[0]);
+    const commandInput = document.getElementById('crt-edit-command-1') as HTMLInputElement;
+    expect(commandInput).toBeTruthy();
+    await fireEvent.input(commandInput, { target: { value: '' } });
+    await fireEvent.click(screen.getByText('Save'));
+
+    await waitFor(() => expect(screen.getByText('Command cannot be empty.')).toBeTruthy());
+    expect(updateCrtCommand).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/up to a minute/)).toBeNull();
+  });
 });
 
 // #0396: the per-row inline editor's over-budget width warning must be

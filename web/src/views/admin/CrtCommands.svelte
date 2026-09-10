@@ -98,6 +98,7 @@
 
   async function submitCreate(e: SubmitEvent): Promise<void> {
     e.preventDefault();
+    saveNote = null;
     const result = validateNewCrtCommand(newSlug, newCommand, newOutput);
     if ('error' in result) {
       createError = result.error;
@@ -105,7 +106,6 @@
     }
     creating = true;
     createError = null;
-    saveNote = null;
     try {
       // A new command is appended after the current highest sort_order,
       // matching Admin.svelte's own "submitCreateInterest" convention.
@@ -145,6 +145,7 @@
   }
 
   async function saveEdit(id: number): Promise<void> {
+    saveNote = null;
     const draft = editing[id];
     if (!draft) return;
     if (draft.command.trim() === '') {
@@ -161,7 +162,6 @@
     }
     savingId = id;
     saveError = { ...saveError, [id]: '' };
-    saveNote = null;
     try {
       const updated = await updateCrtCommand(id, {
         command: draft.command,
