@@ -17,9 +17,9 @@ import { describe, it, expect } from 'vitest';
 import { isSafeLinkHref } from './linkSafety';
 import { isSafeCoverImage } from './workshopAdmin';
 // tsconfig.json sets resolveJsonModule, so this is a typed static import --
-// no node:fs/node:path (this project carries no @types/node dependency,
-// per web/tsconfig.json's `types: ["svelte", "vite/client"]`) and no
-// runtime path resolution to get wrong. The path reaches outside web/ on
+// no node:fs/node:path (this file's program can't see Node's types either
+// way, per web/tsconfig.json's `types: ["svelte", "vite/client"]`, which
+// #0485 left unchanged) and no runtime path resolution to get wrong. The path reaches outside web/ on
 // purpose: the fixture is shared with internal/handlers's Go test, which
 // reads the identical file via ../../testdata/url_validators.json relative
 // to its own package directory.

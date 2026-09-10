@@ -196,9 +196,10 @@ const SOURCE_FILES = import.meta.glob('../**/*.svelte', {
  * three characters off the FILENAME instead of the prefix, e.g.
  * './Button.svelte' -> 'utton.svelte'. Resolving each '.'/'..' segment
  * against 'web/src/lib' by hand (rather than importing 'node:path', which
- * this project deliberately does without -- see nodeFsShim.d.ts's own doc
- * comment on why @types/node was removed in favor of hand-declared
- * ambients) handles all three shapes uniformly. */
+ * this file still does without -- see nodeFsShim.d.ts's own doc comment for
+ * why its hand-declared ambients still apply here even though #0485 added
+ * @types/node as a devDependency for a different file) handles all three
+ * shapes uniformly. */
 function toRepoRelativePath(globKey: string): string {
   const segments = `web/src/lib/${globKey}`.split('/');
   const resolved: string[] = [];

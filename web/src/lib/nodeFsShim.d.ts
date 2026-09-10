@@ -4,17 +4,27 @@
 // of files matching a glob known at build time, not an arbitrary
 // repo-relative path string discovered at runtime from a comment).
 //
-// A real @types/node package would cover this more completely, but this
-// project deliberately does not depend on it: #0181's own review pass
-// (see citationGuard.test.ts's header) removed an earlier attempt's
-// @types/node dependency and a "node" entry in tsconfig.json's `types`
-// array in favor of import.meta.glob, specifically to avoid the
-// dependency. `npm ls --all` confirms @types/node is not installed here --
-// only present, unmet, as an OPTIONAL peer of vite/vitest. Declaring just
-// the handful of functions this one test file actually calls keeps that
-// precedent intact: zero new devDependencies, and the shipped
-// `web/dist/` bundle never sees any of this (these three modules are only
-// ever imported from _test.ts files, which `vite build` does not touch).
+// #0181's own review pass (see citationGuard.test.ts's header) removed an
+// earlier attempt's @types/node dependency and a "node" entry in
+// tsconfig.json's `types` array in favor of import.meta.glob, specifically
+// to avoid the dependency -- and `npm ls --all` used to confirm @types/node
+// was not installed here at all, only present, unmet, as an OPTIONAL peer
+// of vite/vitest. #0485 overturned that precedent for a different file:
+// web/vite.config.ts genuinely runs in Node and has no import.meta.glob-shaped
+// alternative, so #0485 added @types/node as a devDependency and a narrow
+// web/tsconfig.node.json (types: ["node"]) scoped to that one file. `npm ls
+// @types/node` now reports it as a direct devDependency, with vite's and
+// vitest's formerly-unmet optional peers deduped against it.
+//
+// That does not make this shim redundant. web/tsconfig.json -- the config
+// that actually checks this file, since citationTargetGuard.test.ts lives
+// under src/**/*.ts -- still lists only `types: ["svelte", "vite/client"]`,
+// byte-unchanged by #0485, so none of @types/node's ambients are visible
+// here. Declaring just the handful of functions this one test file actually
+// calls remains the way its three "node:*" imports resolve, and the shipped
+// `web/dist/` bundle still never sees any of this (these three modules are
+// only ever imported from _test.ts files, which `vite build` does not
+// touch).
 declare module 'node:fs' {
   export interface Dirent {
     name: string;
