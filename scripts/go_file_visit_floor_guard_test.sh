@@ -415,32 +415,55 @@ OUTBOX_SRC="$REPO/$OUTBOX_GUARD_FILE"
 #
 # #0323: this grep population and the guard's own go/ast population are NOT
 # the same number, on purpose, and that must never be "fixed" by making
-# this oracle parse Go. For the TOTAL population (no exclude), this
-# function measures 42 (#0303 re-measured; #0323 measured 35 against the
-# pre-#0303 two-method pattern); internal/outbox/claim_kinds_call_site_guard_test.go's
-# own doc comment (claimKindsGuardMinPlausibleCallSiteCount) measures 36 by
-# go/ast (#0323 measured 32), and now records this same divergence and
-# names the six sites. For the NON-EXEMPT population (internal/outbox
-# excluded), both methods agree exactly at 12 -- every non-exempt site
-# matches one for one -- because all six of the divergent sites sit INSIDE
-# internal/outbox (so they only ever affect the total, exempt-inclusive
-# count, never the one claimKindsGuardMinPlausibleNonExemptCallSiteCount is
-# judged against). The six all live inside the raw-string Go-source
-# fixtures TestClaimKindsGuardFiresOnFixtureWithNoKinds builds in memory
-# (#0303 added three new fixtures alongside the original two, one of which
-# -- the AllKinds-sentinel fixture -- itself contains two occurrences) --
-# text that looks like a real call inside a Go string literal, which this
-# grep cannot distinguish from a real one
-# and go/ast correctly never parses as one, since those fixtures are handed
-# to the parser as an in-memory `src` argument, not discovered by walking
-# the tree. The direction matters: grep only ever INFLATES the total
-# relative to go/ast here, which only loosens outbox_floor_plausible's
-# `floor <= population` upper bound and never tightens it -- nothing is
-# under-protected by the gap. Separately, `grep -c` counts matching LINES,
-# not occurrences, so it would UNDER-count (not over-count) if two guarded
-# calls ever shared a single source line -- a different risk from the one
-# above, recorded here because both are ways this population can diverge
-# from a true occurrence count, in opposite directions.
+# this oracle parse Go. #0303 first pinned both as absolute counts (42
+# here, 36 in internal/outbox/claim_kinds_call_site_guard_test.go's own
+# claimKindsGuardMinPlausibleCallSiteCount doc comment; #0323 had earlier
+# measured 35 and 32 respectively, against the pre-#0303 two-method
+# pattern). Both of those absolute counts went stale by the same three
+# call sites of ordinary tree growth -- undetected for exactly the reason a
+# floor only catches shrinks (CLAUDE.md §8; #0483 and #0487 are three
+# earlier instances of the identical shape). #0487 fixed the Go file's copy
+# but not this one, so the two files came to actively DISAGREE -- this
+# paragraph named that Go declaration while describing a total it no
+# longer reported (#0488).
+#
+# #0488's fix: stop restating either total here as an absolute number at
+# all, and keep the live figure in exactly one place --
+# claimKindsGuardMinPlausibleCallSiteCount's own doc comment in
+# internal/outbox/claim_kinds_call_site_guard_test.go, which already
+# carries the same "historical, not a live claim" framing this lineage
+# settled on. What this paragraph asserts instead is the relationship
+# between the two tools, which does not need updating as the tree grows:
+# the grep total (this function, unmodified) equals that file's go/ast
+# total plus exactly six, the count of call-site-shaped occurrences living
+# inside TestClaimKindsGuardFiresOnFixtureWithNoKinds's raw-string
+# fixtures -- text that looks like a real call inside a Go string literal,
+# which this grep cannot distinguish from a real one, and which go/ast
+# correctly never parses as one, since those fixtures are handed to the
+# parser as an in-memory `src` argument rather than discovered by walking
+# the tree. Re-derived directly for #0488 (2026-09-09), agreeing with the
+# figure recorded in that file on the same date: 39 by go/ast, 45 by this
+# function, a difference of six. For the NON-EXEMPT population
+# (internal/outbox excluded), both methods agree exactly at 12 -- every
+# non-exempt site matches one for one -- because all six of the divergent
+# occurrences sit INSIDE internal/outbox's own fixture file, so they only
+# ever affect the total, exempt-inclusive count, never the one
+# claimKindsGuardMinPlausibleNonExemptCallSiteCount is judged against.
+#
+# "Plus six" holds under ordinary call-site growth anywhere under the scan
+# roots, but is not exhaustive -- two known routes move it without any
+# fixture in TestClaimKindsGuardFiresOnFixtureWithNoKinds changing at all,
+# both measured by #0487's review in a throwaway copy: call-site-shaped
+# text inside an ordinary doc comment in ANY .go file under these roots (40
+# vs 47, a gap of seven), and two guarded calls sharing one physical source
+# line, which this line-oriented `grep -c` (it counts matching LINES, not
+# occurrences) UNDER-counts relative to go/ast (41 vs 46, a gap of five).
+# Neither is ordinary growth, and both are tree-wide risks, not confined to
+# any one file or paragraph. The ordinary-growth direction is inflation --
+# grep only ever over-counts fixture text go/ast never parses as code --
+# which only loosens outbox_floor_plausible's `floor <= population` upper
+# bound and never tightens it, so the six-site gap itself under-protects
+# nothing.
 count_outbox_call_sites() {
   local exclude="$1"; shift
   local total=0 f n

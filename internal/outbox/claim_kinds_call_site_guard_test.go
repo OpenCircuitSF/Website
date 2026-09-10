@@ -152,19 +152,26 @@ var claimKindsGuardScanRoots = []string{"..", "../../cmd"}
 // floor's own go/ast total plus six, whatever that total happens to be on
 // a given day — 39 plus six is 45 today, both re-measured for #0487 (was
 // 36 plus six is 42 when #0303 wrote this paragraph) — and "plus six" is
-// the only part of that relationship this comment needs to keep true: it
-// moves only if TestClaimKindsGuardFiresOnFixtureWithNoKinds's own
-// fixtures do, a deliberate, reviewed edit to THIS file, never an
-// automatic side effect of ordinary call-site growth elsewhere in the
-// tree. All six sit inside THIS file, inside internal/outbox, so they
-// inflate only the exempt side — the NON-exempt count agrees exactly
-// between grep and go/ast, one for one, because none of the six is a
-// non-exempt site, and it has stayed exactly 12 across both measurements.
-// Deliberately not written as literal guarded-call-syntax prose in THIS
-// paragraph (unlike an earlier version of this comment, and of
-// nameMatchesGuardedMethod's) — doing so would make this paragraph a
-// seventh divergent site of the exact class it describes. The error
-// direction is inflation, which only loosens
+// the part of that relationship this comment needs to keep true under
+// ORDINARY call-site growth: growth elsewhere in the tree does not move it
+// unless it changes TestClaimKindsGuardFiresOnFixtureWithNoKinds's own
+// fixtures, a deliberate, reviewed edit to THIS file. That is not
+// exhaustive, though — the two non-growth routes named later in this same
+// paragraph (call-shaped text in an ordinary comment, and two guarded
+// calls sharing one physical source line) can move the gap without
+// touching this test's fixtures at all; neither is ordinary growth, and
+// #0487's review measured both (40 vs 47, a gap of seven; 41 vs 46, a gap
+// of five). All six of the fixture occurrences sit inside THIS file,
+// inside internal/outbox, so they inflate only the exempt side — the
+// NON-exempt count agrees exactly between grep and go/ast, one for one,
+// because none of the six is a non-exempt site, and it has stayed exactly
+// 12 across both measurements. Deliberately not written as literal
+// guarded-call-syntax prose in THIS paragraph (unlike an earlier version
+// of this comment, and of nameMatchesGuardedMethod's) — doing so, in any
+// comment anywhere under the scan roots and not only in this one
+// paragraph, would add a seventh divergent site of the exact class it
+// describes; this paragraph avoids doing so itself. The error direction of
+// ordinary growth is inflation, which only loosens
 // outbox_floor_plausible's floor<=population upper bound and never
 // tightens it — nothing is under-protected by this gap. Also worth
 // knowing generally: grep -c counts matching LINES, not occurrences, so it
