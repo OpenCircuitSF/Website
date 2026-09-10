@@ -92,32 +92,63 @@
 #      makes the guard permanently fail even with nothing wrong. The lower
 #      bound (floor >= half the population) is this script's own margin: a
 #      floor that clears "greater than zero" but sits far below the real
-#      count (say, 5 out of 258) offers only token protection -- most of a
-#      narrowing attack would go undetected before the floor ever tripped.
-#      Half is comfortable slack for ordinary repo growth between reviews
-#      (every committed floor here clears it: 150/258 = 58%, 80/111 = 72%,
-#      80/110 = 73%) while still catching a floor that has drifted badly out
-#      of proportion to what it is meant to protect.
+#      count offers only token protection -- most of a narrowing attack
+#      would go undetected before the floor ever tripped. Half is
+#      comfortable slack for ordinary repo growth between reviews while
+#      still catching a floor that has drifted badly out of proportion to
+#      what it is meant to protect.
+#
+#      Both bounds together say one thing, and #0489 states it as that one
+#      relationship rather than as the table of per-floor percentages this
+#      comment used to carry: a floor is valid exactly while the population
+#      sits inside the window [floor, 2*floor+1]. No population or ratio is
+#      restated anywhere in this file's comments, deliberately. Every
+#      number this script judges is measured on the run that judges it and
+#      printed in that run's own PASS and FAIL lines, which is the only
+#      copy of a moving figure that cannot go stale -- #0483, #0487, #0488
+#      and #0489 are four issues' worth of evidence that a copy written
+#      into a comment does.
 #
 #      GROWTH CEILING, not just a shrink/lower-too-far detector: the same
-#      lower bound also fails if the population grows too far ABOVE a
-#      static floor, with no code change at all. For
-#      citedTestScanRootsMinPlausibleFileCount=150 against today's
-#      population of 258 `internal cmd web` .go files (150/258 = 58%),
-#      `floor_plausible`'s integer-division `half=$((population/2))` trips
-#      once population reaches 302 -- roughly 44 ordinary new .go files away
-#      at today's count, not a distant hypothetical for an actively
-#      developed tree. That is a legitimate, intended trip (the floor
-#      really has drifted out of proportion once the population has grown
-#      that far past it) and not a bug in this script, but it means a
-#      passing run today is not evidence the floor stays passing after a
-#      few dozen ordinary commits -- raising the constant in the guarded Go
-#      source, not loosening this script's margin, is the correct response
-#      when it fires for that reason. This script does not track how close
-#      the ceiling is; if that becomes a recurring nuisance, a WARN band
-#      (e.g. population > 1.5 * floor) reported alongside PASS would be a
-#      reasonable follow-up, but is not implemented here since it is
-#      outside #0300's scope and no such follow-up has been needed yet.
+#      lower bound also fails when the population grows past the top of
+#      that window with no code change at all -- the floor stands still
+#      while the tree grows around it. That is a legitimate, intended trip
+#      and not a bug in this script (the floor really has drifted out of
+#      proportion once the population is more than twice it), but it means
+#      a passing run today is not evidence the floor still passes after a
+#      few dozen ordinary commits. The correct response when it fires for
+#      that reason is to raise the constant in the guarded Go source, never
+#      to loosen this script's margin (#0489 criterion 3): this ceiling is
+#      the only mechanism in this family that catches growth at all, and
+#      the three issues named above exist because the floors that lack one
+#      drifted silently.
+#
+#      WHICH VALUE TO RAISE IT TO (#0489): the measured population divided
+#      by the square root of two, rounded up -- suggested_floor() below
+#      computes exactly that, and floor_failure_reason() prints it in the
+#      FAIL line, but only on the branch where the ceiling is what broke, so
+#      acting on this particular failure is transcription rather than
+#      judgement while the other two branches still ask for a decision. That value puts
+#      the measured population at the geometric centre of the
+#      [floor, 2*floor+1] window, which leaves the same proportional slack
+#      against growth as against shrinkage and buys room for the population
+#      to grow by roughly two fifths again before the ceiling fires. It is
+#      the same rule citedTestScanRootsMinPlausibleFileCount's own doc
+#      comment now states in internal/handlers, and #0489 used it to raise
+#      that constant and lineCitationGuardMinPlausibleFileCount together
+#      when this ceiling fired on both.
+#
+#      WHY THIS SCRIPT IS ALSO WIRED INTO THE ORDINARY RUN (#0489): a
+#      ceiling nobody runs catches nothing. #0300 wired this script into
+#      `scripts/check.sh guards` and nowhere else, and CLAUDE.md §5
+#      deliberately keeps that bundle out of every default scope because
+#      dev_guard_test.sh, in the same bundle, costs ~48s and binds :5173.
+#      So this check went unrun long enough for two floors to fall through
+#      the margin unnoticed, and on the day it was failing four agents ran
+#      this file directly and each read only the PASS lines of its own
+#      section. scripts/check.sh now runs THIS script -- alone, not the
+#      bundle -- in its go, all and default arms, where it costs about two
+#      seconds, binds no port, touches no database and needs no build.
 #
 # This script touches no database and changes nothing under version control
 # -- it only reads the three tracked files (never edits them) and writes
@@ -219,6 +250,41 @@ sha_of() {
   printf '%s' "$digest"
 }
 
+# suggested_floor <population> -- the value #0489 settled on as the rule for
+# choosing a floor in this family: the population divided by the square root
+# of two, rounded up, which places the population at the geometric centre of
+# the [floor, 2*floor+1] window floor_plausible accepts. Integer arithmetic
+# only (bash 3.2 has no floating point, CLAUDE.md §8): 1/sqrt(2) to five
+# decimal places is 0.70711, and adding 99999 before dividing is the ceiling.
+# Printed in the FAIL message so a ceiling trip names its own remedy rather
+# than leaving the next agent to invent one.
+suggested_floor() {
+  local population="$1"
+  printf '%s' "$(( (population * 70711 + 99999) / 100000 ))"
+}
+
+# floor_failure_reason <floor> <population> <const-name> <file> -- names WHICH
+# of floor_plausible's three bounds a failing floor broke, and, for the one
+# case where the answer is mechanical, the exact value to write. #0489 added
+# it because the single sentence this used to print listed all four possible
+# causes at once and left the reader to work out which had happened, then to
+# invent a replacement number -- and inventing one is how a floor ends up
+# just above the line, failing again a few commits later. It reports, never
+# decides: floor_plausible's rule is untouched by anything here, and the
+# growth branch is the only one that prints a value, because a floor sitting
+# ABOVE its population is a question about the tree (did files really vanish?)
+# that no arithmetic here can answer.
+floor_failure_reason() {
+  local floor="$1" population="$2" name="$3" file="$4"
+  if [ "$floor" -le 0 ]; then
+    printf '%s' "The floor is not positive, so its guard cannot fail on any real count -- this is #0300's fail-open itself, in the tracked source."
+  elif [ "$floor" -gt "$population" ]; then
+    printf '%s' "The floor sits ABOVE the measured population, which is #0275's own failure mode: its guard now fails permanently against a tree with nothing wrong with it. Do not simply lower it to fit -- first establish whether the tree really lost that many .go files, or whether this run measured the wrong roots."
+  else
+    printf '%s' "The tree grew past the floor's margin: a floor must stay >= population/2, and this one no longer does, with no code change needed to get here (see the header comment's growth-ceiling note). THE REMEDY (#0489): set ${name} = $(suggested_floor "$population") in ${file}, which is this run's own population divided by the square root of two, rounded up. Do NOT loosen this script's margin instead."
+  fi
+}
+
 # floor_plausible <floor> <population> -- this script's own oracle, entirely
 # independent of goFileVisitCountImplausible (different language, different
 # walk, different bound). See the margin rationale in the header comment.
@@ -279,7 +345,7 @@ while [ "$i" -lt "${#FLOOR_NAMES[@]}" ]; do
   if floor_plausible "$REAL_VALUE" "$POP"; then
     pass "committed ${CONST}=${REAL_VALUE} is plausible against an externally-measured population of ${POP} (>= half, <= population)"
   else
-    fail "REGRESSION #0300: committed ${CONST}=${REAL_VALUE} is NOT plausible against an externally-measured population of ${POP} -- either it was lowered too far, raised above the real population (#0275's own failure mode), the tree shrank, or the tree grew past the floor's margin (floor must stay >= population/2; see the header comment's growth-ceiling note). Affects: ${TESTS}"
+    fail "REGRESSION #0300: committed ${CONST}=${REAL_VALUE} is NOT plausible against an externally-measured population of ${POP}. $(floor_failure_reason "$REAL_VALUE" "$POP" "$CONST" "$REL_FILE") Affects: ${TESTS}"
   fi
 
   MUTANT="$WORKDIR/$(basename "$REL_FILE")"
@@ -489,33 +555,38 @@ NONEXEMPT_POP="$(count_outbox_call_sites "$REPO/internal/outbox" "$REPO/internal
 case "$NONEXEMPT_POP" in '' | *[!0-9]*) fatal "count_outbox_call_sites returned a non-numeric non-exempt population ('$NONEXEMPT_POP')" ;; esac
 
 # outbox_floor_plausible <floor> <population> -- deliberately NOT
-# floor_plausible() above: that function's `floor >= population/2` margin
-# fits the handlers family's FILE-count populations, which are in the
-# hundreds -- today, citedTestScanRootsMinPlausibleFileCount sits at
-# floor=150 against a re-measured population of 267 (#0300 measured 258
-# when it picked this margin; it drifts as the tree grows). At that scale
-# `population/2` gives real headroom before the margin itself needs
-# attention: by the same `floor >= population/2` arithmetic, that floor
-# does not fail until the population reaches roughly 302 -- on the order of
-# 35 files of growth, re-measured today (#0300 measured ~44 files of
-# headroom at the time, against the smaller population then; the number is
-# a moving target by design, not a constant to keep in sync).
+# floor_plausible() above: that function's `floor >= population/2` margin is
+# calibrated for the handlers family's FILE-count populations, which run to
+# the hundreds. The populations in this section are CALL SITES, an order of
+# magnitude smaller, and the identical bound behaves completely differently
+# at that scale.
 #
-# A call-site population is an order of magnitude smaller, so the identical
-# margin behaves completely differently here. #0304's own non-exempt floor
-# is 6 against a population of 12 -- exactly population/2 already -- so
-# reusing floor_plausible()'s margin verbatim would put this floor AT its
-# own failure boundary today, and it would trip after just TWO new
-# non-exempt call sites (population 12 -> 14 fails the identical
-# `floor >= population/2` check the handlers family relies on). That is not
-# "the tree grew enough to warrant a look"; it is "the next two ordinary
-# commits that add a caller." #0304's own comment previously justified the
-# weaker margin here by claiming the population "CAN be dominated by one
-# file (worst case 3, in internal/mailing/worker_store_test.go)" -- but 3 of
-# the 12 non-exempt sites this floor actually governs is 25%, not
-# domination; the population that genuinely is file-dominated (~20 of 32,
-# inside internal/outbox's own store_test.go) belongs to the TOTAL floor
-# above, not this one.
+# The difference is arithmetic, and #0489 states it as arithmetic rather
+# than as the worked example this paragraph used to carry. That example had
+# gone stale in three places at once -- badly enough that this comment
+# predicted a growth ceiling "roughly 35 files" away while the very same
+# run reported that ceiling already breached, one terminal scroll further
+# up. Its replacement quotes no population, no floor and no percentage,
+# because those are exactly the figures that drift; the run prints the live
+# ones. In window terms (see the header comment's item 4): under
+# `floor >= population/2` a floor is valid while the population sits inside
+# [floor, 2*floor+1], so a floor sitting at exactly half its own population
+# has room for that population to grow by exactly two before it trips, at
+# any scale. On a file-count population in the hundreds, a floor picked by
+# suggested_floor() sits at about seven tenths of the population and buys
+# room for two fifths again as many files before the ceiling fires -- "the
+# tree grew enough to warrant a look". On a call-site population counted in
+# tens, that same two-site margin is the next commit or two that adds a
+# caller -- ordinary development, not a signal.
+#
+# #0304's own comment previously justified the weaker margin here by
+# claiming this population "CAN be dominated by one file", and #0488's
+# review corrected the counts it used to make that case. The structural
+# answer needs no counts at all and cannot go stale: the file that does
+# dominate is internal/outbox's own store_test.go, and the NON-EXEMPT
+# population excludes internal/outbox wholesale, by construction of
+# count_outbox_call_sites' exclude argument. A domination argument can
+# therefore only ever bear on the TOTAL floor above, never on this one.
 #
 # So the bar that matters for THIS family is deliberately weaker than
 # floor_plausible()'s: greater than zero (closes the #0300/#0304 fail-open

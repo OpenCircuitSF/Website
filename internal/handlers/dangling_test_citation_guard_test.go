@@ -232,21 +232,45 @@ var citedTestScanRoots = []string{"..", "../../cmd", "../../web"}
 // guard that walks citedTestScanRoots and parses everything walkGoFiles
 // yields it (test files included, nothing skipped afterward — unlike the
 // audit-metadata guard, so walkGoFiles' own return value already IS the
-// parsed count for these three; see criterion 4a). Measured directly, not
-// fitted: `find .. ../../cmd ../../web -name '*.go' -not -path
-// '*/node_modules/*' -not -path '*/dist/*'` counts 255 files under these
-// roots today, and the single largest package under them (internal/handlers
-// itself, this guard's own directory) has 96 — cmd/ alone has 18, web/
-// alone has 1. 150 sits comfortably below the real total (room for the
-// tree to shrink without a false alarm) while still tripping if the roots
-// were narrowed to any one of the three, which is the "a real narrowing
-// would trip it" bar #0275 criterion 3 sets. Reproduced directly before
-// adding this floor: emptying citedTestScanRoots made all three guards
-// that share it (TestNoCommentCitesUndefinedTestFunction,
+// parsed count for these three; see criterion 4a). Reproduced directly
+// before this floor existed: emptying citedTestScanRoots made all three
+// guards that share it (TestNoCommentCitesUndefinedTestFunction,
 // TestNoCommentCitesUnresolvedPathOrSection,
 // TestNoDocCommentNamesADifferentDeclarationInSameFile) PASS in under
 // 0.01s each, having examined nothing.
-const citedTestScanRootsMinPlausibleFileCount = 150
+//
+// HOW THE VALUE IS DERIVED (#0489), so that raising it is arithmetic
+// rather than taste. scripts/go_file_visit_floor_guard_test.sh re-measures
+// the population from outside Go and judges this constant against two
+// bounds that, taken together, say the floor is valid only while the
+// population stays inside the window running from the floor itself up to
+// twice the floor plus one. Below the bottom of that window the guard
+// fails permanently against a tree with nothing wrong with it, which is
+// #0275's own too-high-floor failure mode; past the top of it the harness
+// reports that the floor has drifted out of proportion to the tree it is
+// meant to protect. Dividing the measured population by the square root of
+// two and rounding up — a little over seven tenths of the population —
+// places the population at the geometric centre of that window, leaving
+// the same proportional slack on either side. The rule is the durable
+// part. The constant is that rule evaluated once, and it needs
+// re-evaluating only when the harness says the window no longer holds.
+//
+// Evaluated on 2026-09-09 against a population of 305 .go files under
+// these roots. Both figures are historical and begin going stale with the
+// next file anyone adds, which is why the harness measures the population
+// itself instead of trusting a number written here, and why it prints the
+// floor this rule would choose today whenever it fires.
+//
+// What the value buys, stated as relationships rather than counts: it sits
+// well above the largest single package under these roots, which is this
+// guard's own directory internal/handlers, so a narrowing of the roots to
+// any one package still trips it — the bar #0275 criterion 3 sets. It does
+// not catch every conceivable narrowing and never could: all but a couple
+// of dozen of these files live under internal, so a floor high enough to
+// detect the roots being cut back to internal alone would sit so close to
+// the full population that ordinary deletions would start failing the
+// guard.
+const citedTestScanRootsMinPlausibleFileCount = 216
 
 // skipVendoredDir reports whether dirName should be pruned from the walk
 // entirely. #0194 is open against #0181's guard for descending into

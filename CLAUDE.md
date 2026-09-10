@@ -527,12 +527,21 @@ contend at all. `scripts/testdb.sh` clones a fully-migrated template database in
   `--force`. It also only manages those two names: a per-agent scratch
   database (`opencircuit_test_NNNN`) is refused too, even with a name
   starting `opencircuit*` — that pool belongs to `scripts/testdb.sh`
-  (drop/reset/gc), not this script. Four standalone shell guard tests now
-  exist for exactly this class of regression — `scripts/testdb_gc_guard_test.sh`
+  (drop/reset/gc), not this script. A family of standalone shell guard tests
+  now exists for exactly this class of regression — `scripts/testdb_gc_guard_test.sh`
   (#0150), `scripts/dev_guard_test.sh` (#0117), `scripts/db_reset_guard_test.sh`
-  (#0207) — run all of them with `scripts/check.sh guards` (not part of
-  `go`/`web`/`all`/the default, since `dev_guard_test.sh` alone costs ~48s and
-  binds `:5173`).
+  (#0207) among them — run all of them with `scripts/check.sh guards` (not part
+  of `go`/`web`/`all`/the default, since `dev_guard_test.sh` alone costs ~48s and
+  binds `:5173`). Read that exclusion as being about `dev_guard_test.sh`'s cost,
+  not about guard scripts as a category: **`scripts/go_file_visit_floor_guard_test.sh`
+  is the one exception, and since `#0489` it also runs on the `go`, `all` and
+  default arms**, where it costs ~2s, binds no port and touches no database. It
+  had to be, because it is the only member of this family that catches its
+  subject drifting *upward* as the tree grows, and behind `guards` alone nobody
+  ran it: two floor constants sat below their own margin, `HEAD` was red for
+  days, and four agents ran the script directly on the day it was failing while
+  reading only its `PASS` lines. A guard nobody runs catches nothing, so the
+  exit code now reaches an ordinary run.
 
 If a verification genuinely needs the whole suite under `-race`, say so and ask
 first — on this tree that is a ~5 minute fully-loaded run, and it is not free.

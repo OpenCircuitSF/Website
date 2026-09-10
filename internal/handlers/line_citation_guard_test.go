@@ -112,19 +112,24 @@ var lineCitationTranscriptMarker = regexp.MustCompile(`^\t(=== RUN |--- (FAIL|PA
 // floor, deliberately a fresh constant rather than a reuse of
 // citedTestScanRootsMinPlausibleFileCount even though it walks the exact
 // same citedTestScanRoots with the exact same walkGoFiles (test files
-// included, nothing filtered afterward — this guard's own `got` already
+// included, nothing filtered afterward — this guard's own count already
 // equals what walkGoFiles yields, same as its siblings). A dedicated
 // constant is what lets scripts/go_file_visit_floor_guard_test.sh mutate
 // THIS guard's own floor to 0 and assert THIS guard specifically fails,
 // independent of whatever the three siblings sharing the other constant
-// do. Same value and same justification as citedTestScanRootsMinPlausibleFileCount
-// (see dangling_test_citation_guard_test.go): 272 real .go files under
-// internal/+cmd/+web/ today (measured directly: `find internal cmd web
-// -name '*.go' -not -path '*/node_modules/*' -not -path '*/dist/*' | wc
-// -l`), comfortably above 150, low enough that the
-// tree can shrink without a false alarm, high enough that narrowing to any
-// one of the three roots still trips it.
-const lineCitationGuardMinPlausibleFileCount = 150
+// do.
+//
+// Same value and same derivation as citedTestScanRootsMinPlausibleFileCount
+// (see dangling_test_citation_guard_test.go, whose doc comment carries the
+// rule in full): the floor is the externally measured population divided by
+// the square root of two and rounded up, which centres that population in
+// the window the harness judges the floor against. #0489 raised both from
+// 150 in one step, after the harness caught that a floor chosen when the
+// tree was smaller had fallen below half of a grown population. No Go test
+// in this package can see that drift on its own, because every guard here
+// compares a live file count against the floor and never the floor against
+// the size of the tree.
+const lineCitationGuardMinPlausibleFileCount = 216
 
 // lineCitationHit is one non-exempt `<file>.go:<int>` citation found in a
 // Go comment.

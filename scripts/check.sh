@@ -24,7 +24,8 @@
 # `guards` runs scripts/check_guard_test.sh, scripts/deploy_guard_test.sh
 # (#0424), scripts/testdb_gc_guard_test.sh, scripts/dev_guard_test.sh,
 # scripts/db_reset_guard_test.sh, and scripts/go_file_visit_floor_guard_test.sh
-# (#0300) — not part of any other mode, since
+# (#0300). The last of those ALSO runs on the ordinary path now (#0489 — see
+# floor_guard_check below); the rest are not part of any other mode, since
 # #0117's third review measured dev_guard_test.sh alone at ~48s and binding
 # :5173 in several parts, which does not belong in every ordinary run. #0207
 # named the actual defect this solves: two prior guard tests
@@ -856,10 +857,45 @@ gofmt_check() {
   fi
 }
 
+# #0489: the external oracle for the internal/handlers guard family's
+# "plausible file count" floor constants runs HERE, on the ordinary path,
+# not only under `guards`. #0300 wired it into `guards` alone, and CLAUDE.md
+# §5 keeps that whole bundle out of every default scope for a reason that is
+# real but belongs to a DIFFERENT script in it: dev_guard_test.sh costs ~48s
+# and binds :5173. This one is about two seconds of filesystem reads, binds
+# no port, touches no database and needs no build, so the reason to exclude
+# the bundle is not a reason to exclude this. The cost of leaving it out was
+# measured: two floors sat below their own growth-ceiling rule long enough
+# that four agents ran the script directly on the day it was failing and all
+# four read only the PASS lines of the section they cared about, while its
+# exit code said 1. Repo-wide on every arm, exactly like gofmt_check above
+# and for the same reason -- the drift it catches is not confined to the
+# packages any one run happens to be scoped to.
+# On success only its one-line summary is echoed: the script prints ~40 PASS
+# lines, and burying every ordinary run's build/vet/gofmt steps under them is
+# how a check stops being read. On ANY non-zero status the full output is
+# printed and FAILED is set, the same way gofmt_check above reports, so the
+# quiet path can never hide a failure -- the exit code is what decides, which
+# is precisely what #0489 found nobody was looking at.
+floor_guard_check() {
+  step "scripts/go_file_visit_floor_guard_test.sh (#0300/#0489 — guard-family floor constants)"
+  local out rc
+  out="$(scripts/go_file_visit_floor_guard_test.sh 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$out" | tail -1
+  else
+    FAILED=1
+    printf '\033[31mFAILED (%d): scripts/go_file_visit_floor_guard_test.sh\033[0m\n' "$rc"
+    printf '%s\n' "$out"
+  fi
+}
+
 case "$MODE" in
   go)  step "go build"; runpipe "go build ./... 2>&1 | tail -$TAIL"
        step "go vet";   runpipe "go vet ./... 2>&1 | tail -$TAIL"
        gofmt_check
+       floor_guard_check
        go_test "$@" ;;
   web) web_check ;;
   guards)
@@ -903,6 +939,7 @@ case "$MODE" in
   all) step "go build"; runpipe "go build ./... 2>&1 | tail -$TAIL"
        step "go vet";   runpipe "go vet ./... 2>&1 | tail -$TAIL"
        gofmt_check
+       floor_guard_check
        go_test "./..."; web_check ;;
   *)   step "go build"; runpipe "go build ./... 2>&1 | tail -$TAIL"
        step "go vet";   runpipe "go vet ./... 2>&1 | tail -$TAIL"
@@ -915,6 +952,7 @@ case "$MODE" in
        # agents to run. Calling go_test with no arguments makes this arm read
        # the exact same default list `go)` reads when given none, so there is
        # only one place that list is spelled.
+       floor_guard_check
        go_test; web_check ;;
 esac
 
