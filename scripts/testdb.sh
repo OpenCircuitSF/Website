@@ -29,8 +29,14 @@
 # `template` itself (the rebuild command) also refuses — without needing a
 # flag, since running it at all is already the explicit ask — if the
 # template has a live connection; #0482 closed the gap where this path
-# dropped it unconditionally and let a raw driver error stand in for a
-# refusal.
+# dropped it unconditionally. Measured on this machine's Postgres: the drop
+# does not error immediately — it blocks for a bounded window (observed
+# 3s-11.5s) and then either succeeds, destroying the database, if the
+# holder's connection ended first, or fails with "is being accessed by other
+# users" if it did not. A `create` clone holds the template for well under a
+# second, so the common case was silent destruction with no diagnostic at
+# all, not a raw driver error. Refusing before the drop is what prevents
+# that, not merely a nicer message.
 #
 # Typical use inside a subagent:
 #
@@ -264,10 +270,17 @@ build_template() {
   fi
   # #0482: `drop template --force` refuses on a live connection (#0333);
   # this rebuild path used to drop the exact same database unconditionally,
-  # inverting that asymmetry rather than removing it. Nothing was ever LOST
-  # this way — Postgres itself refuses to drop a database with an open
-  # connection — but the operator got a raw driver error instead of the
-  # friendly refusal below. Check first and give the same message.
+  # inverting that asymmetry rather than removing it. Measured directly on
+  # this machine's Postgres before writing this fix: DROP DATABASE against a
+  # database with a live connection does not error immediately — it blocks
+  # for a bounded window (observed 3s-11.5s) and then either succeeds,
+  # destroying the database, if the holder's connection ended within that
+  # window, or fails with "is being accessed by other users" if it did not.
+  # A `create` clone holds the template for well under a second, so the
+  # common case was silent destruction under whoever was using it, with no
+  # diagnostic at all — worse than a raw driver error, not merely uglier
+  # than one. Check first and give the same message: refusing fast is what
+  # prevents the loss, not a cosmetic improvement to the error text.
   refuse_if_connected "$TEMPLATE"
   echo "building $TEMPLATE from migrations/ ..."
   psql_admin -qc "DROP DATABASE IF EXISTS $TEMPLATE;"
@@ -520,7 +533,20 @@ EOF
       # nobody was told it existed to clean up by hand. List every scratch
       # database matching the prefix; mark what the sweep will not touch as
       # protected instead of omitting it.
-      all_dbs=$(psql_admin -tAc "select datname from pg_database where datname like '${PREFIX}%' order by 1")
+      #
+      # The shared template itself ($TEMPLATE, and the real default
+      # $DEFAULT_TEMPLATE regardless of any override) is excluded from this
+      # list outright rather than annotated, because it is excluded from the
+      # sweep for a DIFFERENT reason than an ad hoc "..._template" scratch
+      # database is: the latter merely looks like a template and belongs to
+      # somebody, which is exactly what "(protected — ...)" says; the shared
+      # template belongs to everybody, and dropping it by hand is the act
+      # #0333 deliberately made hard. A first version of this fix annotated
+      # both the same way, which turned the ordinary clean-state case (only
+      # the template present, nothing to clean up) into a nonzero refusal
+      # that advised dropping the shared template by hand — bounced in
+      # review; see #0482's review notes.
+      all_dbs=$(psql_admin -tAc "select datname from pg_database where datname like '${PREFIX}%' and datname <> '$TEMPLATE' and datname <> '$DEFAULT_TEMPLATE' order by 1")
       if [ -z "$all_dbs" ]; then echo "no scratch databases"; exit 0; fi
       echo "refusing to sweep — these belong to somebody, possibly another agent:"
       while IFS= read -r db; do

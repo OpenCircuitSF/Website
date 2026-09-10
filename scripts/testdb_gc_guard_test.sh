@@ -375,8 +375,12 @@ if ! grep -Fq "exclude_clause=\"datname <> '\$TEMPLATE'\"" "$MUTANT2"; then
   echo "FATAL: #0327 guard-removal mutation did not take effect — aborting rather than run an unmutated gc --all (that would prove nothing)." >&2
   exit 1
 fi
-if grep -q "DEFAULT_TEMPLATE" "$MUTANT2" && grep -q "and datname <> '\$DEFAULT_TEMPLATE'" "$MUTANT2"; then
-  echo "FATAL: mutation left the DEFAULT_TEMPLATE exclusion intact — the mutant does not actually reproduce the pre-#0327 script." >&2
+# Scoped to the exclude_clause= line itself (not a whole-file scan): #0482's
+# fix 2 added a second, legitimate "and datname <> '$DEFAULT_TEMPLATE'"
+# occurrence to the all_dbs= line below, which a whole-file grep would also
+# match and FATAL on even though that line was never touched by this sed.
+if grep "^    exclude_clause=" "$MUTANT2" | grep -q "DEFAULT_TEMPLATE"; then
+  echo "FATAL: mutation left the DEFAULT_TEMPLATE exclusion intact in exclude_clause= — the mutant does not actually reproduce the pre-#0327 script." >&2
   exit 1
 fi
 
@@ -689,11 +693,16 @@ fi
 #
 # That has a real cost: reformatting this condition (different spacing,
 # quoting, or comparison operator) would make this sed find nothing and
-# leave $MUTANT3 byte-identical to $REAL_SCRIPT. This is acceptable because
-# it fails closed, not silently. The check immediately below aborts the
-# whole run with a FATAL message if the mutation did not visibly take
-# effect, rather than proceeding to run an unmutated script and reporting a
-# false pass.
+# leave $MUTANT3 byte-identical to $REAL_SCRIPT — a pattern anchored on the
+# variable name and wildcarding the rest (e.g. `^      if \[ .*force.*\];
+# then`) would survive some of those reformats, the way Part 4/5's
+# assignment-anchored wildcards do; staying literal here is a choice, not a
+# necessity. It is acceptable because it fails closed, not silently: the
+# check immediately below aborts the whole run with a FATAL message if the
+# mutation did not visibly take effect, rather than proceeding to run an
+# unmutated script and reporting a false pass. That proved fail-closed
+# behaviour, not the absence of an alternative, is what justifies staying
+# literal.
 #
 # Confirm 'drop template' (no --force) WOULD then drop it, proving the
 # assertions above are sensitive to the #0333 regression, not vacuously true.
@@ -765,6 +774,15 @@ make_template_state_driver() {
 set -euo pipefail
 PGHOST_URL="$PGHOST_URL"
 TEMPLATE="$TS_NONEXISTENT"
+# #0481 review notes: bash passes function definitions through the
+# environment, so an ambient exported template_state (e.g. from a parent
+# shell that sourced testdb.sh) would otherwise be inherited here even
+# though this driver is a separate process. Unset it first so a defining
+# 'source "\$fragment"' below is what the driver actually runs — belt and
+# suspenders alongside the positive/mutation pairing that already closes the
+# fail-open case (any ambient definition satisfying the positive assertion
+# also satisfies the mutant, so the mutation proof still can't pass falsely).
+unset -f template_state 2>/dev/null || true
 source "$fragment"
 template_state
 echo "reached:\${TSTATE_VERSION}|\${TSTATE_DIGEST}"
@@ -999,7 +1017,76 @@ else
 fi
 drop_and_verify "$P9M_PROTECTED"
 
-echo "== Part 10: leak census — no ${TESTPREFIX}* database survives this run =="
+echo "== Part 10: bare gc returns to the clean-state message with only the template present (#0482, second bounce) =="
+#
+# #0482's review bounced the first version of the listing/sweep split: Part 9
+# above proved a genuinely "..._template"-suffixed scratch database is now
+# listed rather than omitted, but all_dbs selected every database matching
+# the prefix unconditionally, and the shared template itself always matches
+# the prefix too. So the ordinary steady state — template present, nothing
+# else to clean up — got annotated as protected and turned bare gc into a
+# nonzero refusal that advised dropping the shared template by hand, the
+# exact act #0333 made hard on purpose. Nothing in Part 9 caught this,
+# because Part 9 always creates an ordinary scratch database alongside the
+# protected one; this part is the one that isolates the clean-state case.
+#
+# The fix excludes $TEMPLATE and $DEFAULT_TEMPLATE from all_dbs outright
+# (they are excluded from the sweep for a different reason than an ad hoc
+# "..._template" database is — see the comment in scripts/testdb.sh), rather
+# than annotating them. This proves the restored behaviour, then mutates
+# all_dbs back to its un-excluded shape (reproducing the second-bounce
+# defect exactly, since that shape is what shipped before this fix) and
+# confirms the assertion is sensitive to it.
+
+P10_TEMPLATE="${TESTPREFIX}template"   # exactly $SCOPED's own DEFAULT_TEMPLATE
+createdb_raw "$P10_TEMPLATE"
+
+OUT_P10="$("$SCOPED" gc 2>&1)"
+RC_P10=$?
+
+if [ "$RC_P10" -eq 0 ] && [ "$OUT_P10" = "no scratch databases" ]; then
+  pass "bare gc reported 'no scratch databases' and exited 0 with only the shared template present"
+else
+  fail "REGRESSION #0482: bare gc did not return to the clean-state message with only the shared template present (exit $RC_P10, output: '$OUT_P10')"
+fi
+
+drop_and_verify "$P10_TEMPLATE"
+
+# Mutation proof: revert all_dbs to the un-excluded prefix-only query (the
+# shape this issue's review bounced), reproducing the defect exactly.
+# Anchored on the trailing "order by 1" that only this line carries
+# immediately after the two added exclusions — the list subcommand's own
+# identical-looking query (scripts/testdb.sh's `list` case) has no preceding
+# exclude clause to anchor on, so it is untouched by this substitution.
+MUTANT_ALLDBS="$WORKDIR/testdb_mutant_alldbs.sh"
+sed -e "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" \
+    -e "s/ and datname <> '\\\$TEMPLATE' and datname <> '\\\$DEFAULT_TEMPLATE' order by 1/ order by 1/" \
+    "$REAL_SCRIPT" > "$MUTANT_ALLDBS"
+chmod +x "$MUTANT_ALLDBS"
+
+if ! grep -q "^PREFIX=\"${TESTPREFIX}\"\$" "$MUTANT_ALLDBS"; then
+  echo "FATAL: prefix-scoping of the all_dbs mutant failed — aborting before running it." >&2
+  exit 1
+fi
+if ! grep -Fxq "      all_dbs=\$(psql_admin -tAc \"select datname from pg_database where datname like '\${PREFIX}%' order by 1\")" "$MUTANT_ALLDBS"; then
+  echo "FATAL: #0482 all_dbs-mutation did not take effect as expected (all_dbs= line does not match the un-excluded shape) — aborting rather than run it." >&2
+  exit 1
+fi
+
+P10M_TEMPLATE="${TESTPREFIX}template"
+createdb_raw "$P10M_TEMPLATE"
+
+OUT_P10M="$("$MUTANT_ALLDBS" gc 2>&1)"
+RC_P10M=$?
+
+if [ "$RC_P10M" -ne 0 ] && printf '%s' "$OUT_P10M" | grep -qF "$P10M_TEMPLATE"; then
+  pass "with all_dbs reverted to the un-excluded prefix-only query, bare gc annotated the shared template itself and refused instead of reporting the clean state — confirms the assertion above is sensitive to this issue's second-bounce regression, not vacuously true"
+else
+  fail "mutation was ineffective: with all_dbs reverted to the un-excluded query, bare gc still reported the clean state (exit $RC_P10M, output: '$OUT_P10M'). This means Part 10's assertion would not actually catch a real regression of #0482's listing fix."
+fi
+drop_and_verify "$P10M_TEMPLATE"
+
+echo "== Part 11: leak census — no ${TESTPREFIX}* database survives this run =="
 LEFTOVER="$(psql_admin -tAc "select datname from pg_database where datname like '${TESTPREFIX}%'" 2>/dev/null | tr '\n' ' ' | xargs)"
 if [ -z "$LEFTOVER" ]; then
   pass "no ${TESTPREFIX}* databases remain after cleanup"
