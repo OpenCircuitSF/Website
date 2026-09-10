@@ -26,6 +26,11 @@
 # by default — it names the same database `create` clones from, so dropping
 # it stalls every concurrent agent until someone rebuilds it. Pass --force
 # if you really mean it: `scripts/testdb.sh drop template --force` (#0333).
+# `template` itself (the rebuild command) also refuses — without needing a
+# flag, since running it at all is already the explicit ask — if the
+# template has a live connection; #0482 closed the gap where this path
+# dropped it unconditionally and let a raw driver error stand in for a
+# refusal.
 #
 # Typical use inside a subagent:
 #
@@ -223,6 +228,24 @@ EOF
   fi
 }
 
+# #0482: shared by `drop template --force` (#0333) and `build_template`
+# below — both are paths where consent to touch the template is already
+# established (an explicit --force flag, or the deliberate act of running
+# `template` at all), and the only remaining question is whether someone is
+# using it RIGHT NOW. An agent's `create` may be mid-clone from it; report
+# the connection count and refuse rather than dropping a resource out from
+# under a running agent, the same shape as `gc --all`'s per-database
+# live-connection skip (#0150).
+refuse_if_connected() {
+  local db="$1"
+  local conns
+  conns=$(psql_admin -tAc "select count(*) from pg_stat_activity where datname = '$db'")
+  if [ "${conns:-0}" -gt 0 ]; then
+    echo "refusing: '$db' has $conns active connection(s) — someone (possibly another agent's 'create' cloning from it) is using it right now. Wait for it to finish, then retry." >&2
+    exit 1
+  fi
+}
+
 build_template() {
   require_createdb
   command -v migrate >/dev/null || { echo "error: golang-migrate not on PATH (brew install golang-migrate)" >&2; exit 1; }
@@ -239,6 +262,13 @@ build_template() {
     echo "note: other scratch databases exist — rebuilding $TEMPLATE does not touch them, but any agent whose migrations/ still matches the current template loses the fast clone path (falls back to direct provisioning, #0315) until they catch up:" >&2
     echo "$scratch" | sed 's/^/  /' >&2
   fi
+  # #0482: `drop template --force` refuses on a live connection (#0333);
+  # this rebuild path used to drop the exact same database unconditionally,
+  # inverting that asymmetry rather than removing it. Nothing was ever LOST
+  # this way — Postgres itself refuses to drop a database with an open
+  # connection — but the operator got a raw driver error instead of the
+  # friendly refusal below. Check first and give the same message.
+  refuse_if_connected "$TEMPLATE"
   echo "building $TEMPLATE from migrations/ ..."
   psql_admin -qc "DROP DATABASE IF EXISTS $TEMPLATE;"
   psql_admin -qc "CREATE DATABASE $TEMPLATE;"
@@ -424,16 +454,12 @@ EOF
       fi
       # #0333 criterion 4: even under --force, never drop a template that is
       # actively in use — an agent's `create` may be mid-clone from it right
-      # now. Same shape as gc --all's per-database live-connection skip
-      # (#0150): report the connection count and refuse, rather than
-      # dropping a resource out from under a running agent. --force means "I
-      # know this is the shared template and I mean to drop it," not "drop it
-      # even if someone is using it right now."
-      conns=$(psql_admin -tAc "select count(*) from pg_stat_activity where datname = '$db'")
-      if [ "${conns:-0}" -gt 0 ]; then
-        echo "refusing: '$db' has $conns active connection(s) — someone (possibly another agent's 'create' cloning from it) is using it right now. Wait for it to finish, then retry." >&2
-        exit 1
-      fi
+      # now. --force means "I know this is the shared template and I mean to
+      # drop it," not "drop it even if someone is using it right now."
+      # #0482 pulled the connection check itself into refuse_if_connected()
+      # so build_template's rebuild path could share it verbatim rather than
+      # re-deriving the same message.
+      refuse_if_connected "$db"
     fi
     if psql_admin -qc "DROP DATABASE $db;"; then
       echo "dropped $db"
@@ -486,9 +512,25 @@ EOF
     exclude_clause="datname <> '$TEMPLATE' and datname <> '$DEFAULT_TEMPLATE' and datname !~* '_template\$'"
     dbs=$(psql_admin -tAc "select datname from pg_database where datname like '${PREFIX}%' and $exclude_clause")
     if [ "${1:-}" != "--all" ]; then
-      if [ -z "$dbs" ]; then echo "no scratch databases"; exit 0; fi
+      # #0482: exclude_clause decides what gc --all will NOT touch — it must
+      # not also decide what the caller is even TOLD exists. A genuinely
+      # "..._template"-suffixed scratch database (the shape #0315 itself
+      # teaches an agent to create) is correctly protected from the sweep,
+      # but until #0482 that same clause also hid it from this listing, so
+      # nobody was told it existed to clean up by hand. List every scratch
+      # database matching the prefix; mark what the sweep will not touch as
+      # protected instead of omitting it.
+      all_dbs=$(psql_admin -tAc "select datname from pg_database where datname like '${PREFIX}%' order by 1")
+      if [ -z "$all_dbs" ]; then echo "no scratch databases"; exit 0; fi
       echo "refusing to sweep — these belong to somebody, possibly another agent:"
-      echo "$dbs" | sed 's/^/  /'
+      while IFS= read -r db; do
+        [ -n "$db" ] || continue
+        if printf '%s\n' "$dbs" | grep -qxF "$db"; then
+          echo "  $db"
+        else
+          echo "  $db  (protected — looks like a template; gc --all will not touch it; drop it by hand if you mean to)"
+        fi
+      done <<< "$all_dbs"
       echo
       echo "drop your own:  scripts/testdb.sh drop <ISSUE>"
       echo "sweep them all: scripts/testdb.sh gc --all   (only when you are alone)"

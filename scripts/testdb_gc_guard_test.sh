@@ -204,7 +204,15 @@ dropdb_raw "$A1"; dropdb_raw "$A2"
 echo "== Part 2: live-connection skip (scoped-prefix copy, --all) =="
 
 SCOPED="$WORKDIR/testdb_scoped.sh"
-sed "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" "$REAL_SCRIPT" > "$SCOPED"
+# REPO is also corrected here (not just PREFIX): $SCOPED lives under
+# $WORKDIR, so its own default `REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"`
+# would resolve to $WORKDIR's parent rather than this checkout — harmless
+# for every part that only exercises `gc`/`drop` (they never read $REPO),
+# but Part 8 below also runs $SCOPED's `template` subcommand, which needs
+# $REPO/migrations to exist.
+sed -e "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" \
+    -e "s#^REPO=.*#REPO=\"$REPO\"#" \
+    "$REAL_SCRIPT" > "$SCOPED"
 chmod +x "$SCOPED"
 
 # Verify the prefix substitution actually took — if it silently didn't, the
@@ -661,10 +669,34 @@ else
   pass "'drop <ordinary id>' (no flag) still drops an ordinary scratch database, unaffected by the template guard"
 fi
 
-# Mutation proof: neuter the refusal condition (targeting its own line by a
-# wildcard match, not a copy of its literal condition — §8) and confirm
-# 'drop template' (no --force) WOULD then drop it, proving the assertions
-# above are sensitive to the #0333 regression, not vacuously true.
+# Mutation proof: neuter the refusal condition by replacing its literal text
+# with `if false; then`.
+#
+# #0481 corrected this comment. The previous wording claimed this sed
+# targets its own line by a wildcard match rather than a copy of its
+# literal condition. That was false.
+#
+# The pattern below is a verbatim, character-for-character copy of
+# `if [ "$force" != "1" ]; then`. The wildcard technique the Part 4 and
+# Part 5 mutations above actually use only works because those mutations
+# target an assignment (`exclude_clause=...`): the variable name is a
+# stable anchor separate from its value, so `^    exclude_clause=.*` can
+# wildcard the value away and survive a reformat of the right-hand side. An
+# `if [ condition ]; then` line has no such separate name — the condition IS
+# the only thing identifying which `if` this is — so there is no equivalent
+# wildcard form here; locating this specific line necessarily means
+# matching its own text.
+#
+# That has a real cost: reformatting this condition (different spacing,
+# quoting, or comparison operator) would make this sed find nothing and
+# leave $MUTANT3 byte-identical to $REAL_SCRIPT. This is acceptable because
+# it fails closed, not silently. The check immediately below aborts the
+# whole run with a FATAL message if the mutation did not visibly take
+# effect, rather than proceeding to run an unmutated script and reporting a
+# false pass.
+#
+# Confirm 'drop template' (no --force) WOULD then drop it, proving the
+# assertions above are sensitive to the #0333 regression, not vacuously true.
 MUTANT3="$WORKDIR/testdb_mutant3.sh"
 sed -e "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" \
     -e 's/if \[ "\$force" != "1" \]; then/if false; then/' \
@@ -690,7 +722,284 @@ else
 fi
 drop_and_verify "$D_MUT"
 
-echo "== Part 7: leak census — no ${TESTPREFIX}* database survives this run =="
+echo "== Part 7: template_state() survives a missing template under 'set -e' (#0331) =="
+#
+# #0331: template_state()'s row assignment used to have no '|| true'. Under
+# 'set -e', a DIRECT call to the function — not inside an 'if' condition,
+# which suspends -e, and not inside a command substitution, where a bash 3.2
+# quirk swallows the failure — aborted the whole script the moment $TEMPLATE
+# did not exist, because a failing command substitution assigned to a plain
+# 'var=$(...)' propagates its exit status to the simple command containing
+# it. testdb.sh's own two call sites never happen to trigger this: one is
+# always reached through an 'if' condition, the other through its own
+# command substitution. That is exactly why this needs an external harness
+# rather than trusting the two existing call sites to exercise it — neither
+# one can.
+#
+# This extracts template_state()'s actual function body from a private copy
+# of the real script (never a reimplementation of its logic — an oracle
+# built from a paraphrase would not be testing the real function) and calls
+# it directly under 'set -e' against a database name that does not exist.
+
+TS_NONEXISTENT="${TESTPREFIX}does_not_exist"   # deliberately never created
+
+extract_template_state() {
+  awk '/^template_state\(\) \{/,/^}/' "$1"
+}
+
+TS_FRAGMENT="$WORKDIR/template_state_real.sh"
+extract_template_state "$REAL_SCRIPT" > "$TS_FRAGMENT"
+if [ ! -s "$TS_FRAGMENT" ]; then
+  echo "FATAL: extracting template_state() from $REAL_SCRIPT produced nothing — aborting rather than test an empty fragment." >&2
+  exit 1
+fi
+if ! grep -q '|| true' "$TS_FRAGMENT"; then
+  echo "FATAL: the extracted template_state() does not contain '|| true'. Either the extraction is wrong or the #0331 fix has already regressed. Aborting rather than test the wrong thing." >&2
+  exit 1
+fi
+
+make_template_state_driver() {
+  local fragment="$1" out="$2"
+  cat > "$out" <<DRIVER
+#!/usr/bin/env bash
+set -euo pipefail
+PGHOST_URL="$PGHOST_URL"
+TEMPLATE="$TS_NONEXISTENT"
+source "$fragment"
+template_state
+echo "reached:\${TSTATE_VERSION}|\${TSTATE_DIGEST}"
+DRIVER
+  chmod +x "$out"
+}
+
+TS_DRIVER="$WORKDIR/template_state_driver.sh"
+make_template_state_driver "$TS_FRAGMENT" "$TS_DRIVER"
+
+OUT_TS="$("$TS_DRIVER" 2>&1)"
+RC_TS=$?
+if [ "$RC_TS" -eq 0 ] && [ "$OUT_TS" = "reached:none|none" ]; then
+  pass "template_state() against a nonexistent template ($TS_NONEXISTENT) did not abort under 'set -e' when called directly, and reported none/none"
+else
+  fail "REGRESSION #0331: template_state() against a nonexistent template either aborted (exit $RC_TS) or reported something other than none/none (got: '$OUT_TS') when called directly under 'set -e'"
+fi
+
+# Mutation proof: strip '|| true' from the extracted fragment and confirm
+# the identical direct call now aborts the driver under 'set -e' — proving
+# the assertion above is sensitive to the #0331 regression, not vacuously
+# true.
+TS_MUT_FRAGMENT="$WORKDIR/template_state_mutant.sh"
+sed 's/ || true$//' "$TS_FRAGMENT" > "$TS_MUT_FRAGMENT"
+if grep -q '|| true' "$TS_MUT_FRAGMENT"; then
+  echo "FATAL: #0331 guard-removal mutation did not take effect — '|| true' is still present in the mutated fragment. Aborting rather than run it." >&2
+  exit 1
+fi
+
+TS_MUT_DRIVER="$WORKDIR/template_state_mutant_driver.sh"
+make_template_state_driver "$TS_MUT_FRAGMENT" "$TS_MUT_DRIVER"
+
+OUT_TS_MUT="$("$TS_MUT_DRIVER" 2>&1)"
+RC_TS_MUT=$?
+if [ "$RC_TS_MUT" -ne 0 ] && ! printf '%s' "$OUT_TS_MUT" | grep -q '^reached:'; then
+  pass "with '|| true' stripped, the identical direct call to template_state() DID abort under 'set -e' (exit $RC_TS_MUT) — confirms the assertion above is sensitive to the #0331 regression, not vacuously true"
+else
+  fail "mutation was ineffective: with '|| true' stripped, template_state() still did not abort (exit $RC_TS_MUT, output: '$OUT_TS_MUT'). This means Part 7's assertion would not actually catch a real #0331 regression."
+fi
+
+echo "== Part 8: build_template refuses fast on a live connection instead of blocking silently (#0482) =="
+#
+# #0482: 'drop template --force' refuses on a live connection (#0333, Part 6
+# above). build_template — the 'template' subcommand — dropped the same
+# database unconditionally instead, inverting that asymmetry rather than
+# removing it. Measured directly against this machine's Postgres before
+# writing the fix: DROP DATABASE against a database with an active
+# connection does not error immediately here — it blocks until that
+# connection ends, then silently succeeds. So the pre-fix cost was not "a
+# raw driver error" as first assumed; it was an unexplained hang for
+# however long the in-progress connection lasted. The fix reuses the same
+# refuse_if_connected() check 'drop template --force' already had, in front
+# of the drop, so the refusal is immediate and explained instead of a
+# silent wait.
+#
+# This proves it by comparing timing rather than error text, since the raw
+# behaviour turned out to be a block rather than an immediate error: the
+# real script refuses fast (well under the connection's remaining
+# lifetime) while the mutant with the check's call site removed is still
+# running, blocked, after the same bound — proving the assertion is
+# sensitive to the regression, not vacuously true.
+
+BT_TEMPLATE="${TESTPREFIX}template"   # $SCOPED's own DEFAULT_TEMPLATE
+createdb_raw "$BT_TEMPLATE"
+OID_BEFORE=$(psql_admin -tAc "select oid from pg_database where datname='$BT_TEMPLATE'")
+
+psql "$PGHOST_URL/$BT_TEMPLATE" -c "select pg_sleep(20)" >/dev/null 2>&1 &
+CONN_PID=$!
+BG_PIDS+=("$CONN_PID")
+WAITED=0
+while [ "$(psql_admin -tAc "select count(*) from pg_stat_activity where datname='$BT_TEMPLATE'")" -eq 0 ] && [ "$WAITED" -lt 10 ]; do
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+
+OUT_BT="$("$SCOPED" template 2>&1)"
+RC_BT=$?
+
+if [ "$RC_BT" -ne 0 ] && printf '%s' "$OUT_BT" | grep -qi "refusing" && printf '%s' "$OUT_BT" | grep -qi "connection"; then
+  pass "build_template refused immediately, naming the connection, while $BT_TEMPLATE had a live connection"
+else
+  fail "REGRESSION #0482: 'testdb.sh template' did not give a fast, named refusal while $BT_TEMPLATE had a live connection (exit $RC_BT, output: '$OUT_BT')"
+fi
+
+OID_AFTER=$(psql_admin -tAc "select oid from pg_database where datname='$BT_TEMPLATE'" 2>/dev/null)
+if [ "$OID_AFTER" = "$OID_BEFORE" ]; then
+  pass "build_template did not touch $BT_TEMPLATE while it had a live connection (oid unchanged)"
+else
+  fail "REGRESSION #0482: $BT_TEMPLATE's oid changed ($OID_BEFORE -> $OID_AFTER) even though build_template was supposed to refuse — it was dropped and recreated anyway"
+fi
+
+terminate_backends "$BT_TEMPLATE"
+kill "$CONN_PID" >/dev/null 2>&1 || true
+wait "$CONN_PID" 2>/dev/null || true
+wait_for_disconnect "$BT_TEMPLATE" 20 || true
+drop_and_verify "$BT_TEMPLATE"
+
+# Mutation proof: remove ONLY the refuse_if_connected call build_template
+# added, keeping the rest of the (also REPO-corrected, see $SCOPED above)
+# script intact, and confirm the same scenario no longer refuses fast — it
+# blocks instead. Anchored on the call site as a whole line (the function
+# name plus its one fixed argument) rather than on any boolean condition's
+# text, since refuse_if_connected() itself is exercised unmodified by
+# Part 6 above — only the CALL from build_template is removed here.
+MUTANT_BT="$WORKDIR/testdb_mutant_buildtemplate.sh"
+sed -e "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" \
+    -e "s#^REPO=.*#REPO=\"$REPO\"#" \
+    -e '/^  refuse_if_connected "\$TEMPLATE"$/d' \
+    "$REAL_SCRIPT" > "$MUTANT_BT"
+chmod +x "$MUTANT_BT"
+
+if ! grep -q "^PREFIX=\"${TESTPREFIX}\"\$" "$MUTANT_BT"; then
+  echo "FATAL: prefix-scoping of the build_template mutant failed — aborting before running it." >&2
+  exit 1
+fi
+if grep -Fq 'refuse_if_connected "$TEMPLATE"' "$MUTANT_BT"; then
+  echo "FATAL: #0482 guard-removal mutation did not take effect — build_template's refuse_if_connected call is still present. Aborting rather than run an unmutated build_template (that would prove nothing)." >&2
+  exit 1
+fi
+
+BT_MUT="${TESTPREFIX}template"
+createdb_raw "$BT_MUT"
+
+psql "$PGHOST_URL/$BT_MUT" -c "select pg_sleep(20)" >/dev/null 2>&1 &
+CONN_PID2=$!
+BG_PIDS+=("$CONN_PID2")
+WAITED=0
+while [ "$(psql_admin -tAc "select count(*) from pg_stat_activity where datname='$BT_MUT'")" -eq 0 ] && [ "$WAITED" -lt 10 ]; do
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+
+"$MUTANT_BT" template >"$WORKDIR/mut_bt_out.log" 2>&1 &
+MUT_BT_PID=$!
+BG_PIDS+=("$MUT_BT_PID")
+
+# The real script above refused in well under a second. Give the mutant
+# generous headroom past that and then check whether it has already
+# finished — if the fix is genuinely gone, it should still be blocked
+# waiting on the live connection.
+sleep 3
+if kill -0 "$MUT_BT_PID" 2>/dev/null; then
+  pass "with the #0482 check removed, 'testdb.sh template' was still running (blocked on the live connection) 3s in, where the real script had already refused — confirms the assertion above is sensitive to the #0482 regression, not vacuously true"
+else
+  fail "mutation was ineffective: with the #0482 check removed, 'testdb.sh template' had already finished within 3s despite the live connection. This means Part 8's assertion would not actually catch a real #0482 regression."
+fi
+
+# Unblock and clean up regardless of the outcome above.
+terminate_backends "$BT_MUT"
+kill "$CONN_PID2" >/dev/null 2>&1 || true
+wait "$CONN_PID2" 2>/dev/null || true
+wait_for_disconnect "$BT_MUT" 20 || true
+WAITED=0
+while kill -0 "$MUT_BT_PID" 2>/dev/null && [ "$WAITED" -lt 20 ]; do
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+kill "$MUT_BT_PID" >/dev/null 2>&1 || true
+wait "$MUT_BT_PID" 2>/dev/null || true
+drop_and_verify "$BT_MUT"
+
+echo "== Part 9: bare 'gc' lists a protected-looking scratch database instead of omitting it (#0482) =="
+#
+# #0482: exclude_clause (above, Part 4/5) decides what gc --all will NOT
+# sweep. Before this fix, the SAME clause also decided what the bare-gc
+# refusal listing would even mention — so a genuinely "..._template"-
+# suffixed scratch database, the shape #0315 itself teaches an agent to
+# create, was correctly protected from the sweep but silently absent from
+# the listing too. Nobody was told it existed to clean up by hand. The fix
+# lists every scratch database matching the prefix and marks the ones the
+# sweep will not touch as protected, rather than omitting them.
+
+P9_ORDINARY="${TESTPREFIX}0482ord"
+P9_PROTECTED="${TESTPREFIX}genuine_template"
+createdb_raw "$P9_ORDINARY"
+createdb_raw "$P9_PROTECTED"
+
+OUT_P9="$("$SCOPED" gc 2>&1)"
+RC_P9=$?
+
+if [ "$RC_P9" -ne 0 ]; then
+  pass "bare gc still refused (exit $RC_P9) with a protected-looking scratch database present"
+else
+  fail "REGRESSION: bare gc exited 0 with scratch databases present — unrelated to #0482, but breaks this part's own premise"
+fi
+
+if printf '%s' "$OUT_P9" | grep -qF "$P9_ORDINARY"; then
+  pass "bare gc's listing named the ordinary scratch database ($P9_ORDINARY)"
+else
+  fail "bare gc's listing did not name the ordinary scratch database ($P9_ORDINARY) at all"
+fi
+
+if printf '%s' "$OUT_P9" | grep -qF "$P9_PROTECTED"; then
+  pass "bare gc's listing named the protected-looking scratch database ($P9_PROTECTED) instead of omitting it"
+else
+  fail "REGRESSION #0482: bare gc's listing did not mention $P9_PROTECTED at all — a genuinely template-suffixed scratch database is invisible to the operator again"
+fi
+
+drop_and_verify "$P9_ORDINARY"
+drop_and_verify "$P9_PROTECTED"
+
+# Mutation proof: revert the listing to enumerate only the sweepable set
+# (what exclude_clause already computed as $dbs), reproducing the pre-fix
+# shape where the listing and the sweep predicate were the same clause.
+# Anchored on the wildcard assignment-target form used elsewhere in this
+# file (Part 4/5's exclude_clause mutations), not on any literal condition
+# text.
+MUTANT_LISTING="$WORKDIR/testdb_mutant_listing.sh"
+sed -e "s/^PREFIX=\"opencircuit_test_\"\$/PREFIX=\"${TESTPREFIX}\"/" \
+    -e 's/^      all_dbs=.*/      all_dbs="$dbs"/' \
+    "$REAL_SCRIPT" > "$MUTANT_LISTING"
+chmod +x "$MUTANT_LISTING"
+
+if ! grep -q "^PREFIX=\"${TESTPREFIX}\"\$" "$MUTANT_LISTING"; then
+  echo "FATAL: prefix-scoping of the listing mutant failed — aborting before running it." >&2
+  exit 1
+fi
+if ! grep -Fxq '      all_dbs="$dbs"' "$MUTANT_LISTING"; then
+  echo "FATAL: #0482 listing-mutation did not take effect as expected (all_dbs= line does not match the reverted shape) — aborting rather than run it." >&2
+  exit 1
+fi
+
+P9M_PROTECTED="${TESTPREFIX}another_template"   # must end in exactly "_template" to be protected
+createdb_raw "$P9M_PROTECTED"
+
+OUT_P9M="$("$MUTANT_LISTING" gc 2>&1)"
+
+if printf '%s' "$OUT_P9M" | grep -qF "$P9M_PROTECTED"; then
+  fail "mutation was ineffective: with the listing reverted to the sweepable-only set, $P9M_PROTECTED still appeared. This means Part 9's assertion would not actually catch a real #0482 regression."
+else
+  pass "with the listing reverted to the sweepable-only set, $P9M_PROTECTED (protected-looking) is invisible to bare gc's refusal listing — confirms Part 9's assertion is sensitive to the #0482 regression, not vacuously true"
+fi
+drop_and_verify "$P9M_PROTECTED"
+
+echo "== Part 10: leak census — no ${TESTPREFIX}* database survives this run =="
 LEFTOVER="$(psql_admin -tAc "select datname from pg_database where datname like '${TESTPREFIX}%'" 2>/dev/null | tr '\n' ' ' | xargs)"
 if [ -z "$LEFTOVER" ]; then
   pass "no ${TESTPREFIX}* databases remain after cleanup"
