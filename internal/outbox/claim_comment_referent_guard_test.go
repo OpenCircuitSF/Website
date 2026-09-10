@@ -857,9 +857,27 @@ const claimCommentGuardMinPlausibleCallCensusCount = 15
 // job: it exists only to catch a broken walk, the same role
 // claimCommentGuardMinPlausibleCallCensusCount plays above at floor 15,
 // and deliberately does NOT try to track this population's size the way
-// the file-count floors do. A floor forced to grow with this population
-// would need re-deriving on nearly every commit that touches a comment,
-// which is the drift #0489's whole family exists to stop, not cause.
+// the file-count floors do.
+//
+// THE DECISIVE REASON IS A UNIT MISMATCH, NOT DRIFT FREQUENCY (corrected
+// by #0491's review, which measured both). Drift frequency is not the
+// discriminator: the strong rule's accepted window is [floor,
+// 2*floor+1] whatever the scale, so a proportional floor on this
+// population would carry the same roughly +41% growth headroom the
+// file-count floors carry -- no more re-derivation, not less. What
+// actually disqualifies the strong rule is that its two sides are
+// measured in different units here. The external oracle counts
+// comment-opening LINES, while got -- the quantity this floor is
+// compared against inside claimCommentGuardFloorImplausible -- is a
+// go/ast comment GROUP count, and a multi-line line-comment block is
+// many lines but one group. Measured over internal/ and cmd/ on
+// 2026-09-09: 37641 lines against roughly 5160 groups, a ratio near 7.3,
+// corroborating the 4963 groups cited above. A floor at half that line
+// population would sit above 18000, more than three times the group
+// count a healthy walk actually yields, so this guard would fail on
+// every run against a sound tree -- #0275's own failure mode, and
+// permanently. A one-sided bound (floor <= population) tolerates an
+// over-counting proxy for its population; a two-sided one does not.
 const claimCommentGuardMinPlausibleCommentGroupCount = 500
 
 func claimCommentGuardFloorImplausible(guardName string, roots []string, got, floor int) string {
