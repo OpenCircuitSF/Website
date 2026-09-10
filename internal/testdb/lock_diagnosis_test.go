@@ -479,13 +479,36 @@ func TestDiagnoseLockHolders_SameNameDifferentSchema_NoFalsePositive(t *testing.
 // one held in ours.
 //
 // This first proves the precondition that makes the bug reachable at all
-// (matching oids across a fresh template clone), rather than assuming it,
-// then proves the diagnostic no longer reports the sibling's lock as ours,
-// and — in the same test, so an implementation that always returns "" for
-// everything cannot pass for the wrong reason — that a lock genuinely held
-// in OUR OWN database is still reported.
+// (matching oids across two clones of one template generation), rather than
+// assuming it, then proves the diagnostic no longer reports the sibling's
+// lock as ours, and — in the same test, so an implementation that always
+// returns "" for everything cannot pass for the wrong reason — that a lock
+// genuinely held in the database being asked about is still reported.
+//
+// Both databases are created here and neither is the ambient
+// TEST_DATABASE_URL one, which is #0339. This test used to compare the
+// ambient database against a fresh template clone, which silently assumes
+// the ambient database is itself a clone of the current template
+// generation. #0315 makes that assumption deliberately false whenever the
+// shared template disagrees with this working tree's migrations/, because
+// scripts/testdb.sh then stops cloning and provisions the agent's database
+// directly with `migrate up` so its schema matches the working tree
+// exactly. Relation oids come from a cluster-wide counter at creation time,
+// so two independent `migrate up` runs never reproduce each other's oids —
+// measured for #0339 as 59945228 for both of two clones of one template
+// against 59945743 and 59946256 for two direct provisions of the same
+// migrations. The precondition then failed through no fault of the code
+// under test, and it failed in a condition #0315 designed for rather than a
+// broken environment: any agent adding a migration in a git worktree moves
+// the shared template ahead of every other checkout. Cloning both sides
+// from one template generation restores exactly what #0234's own review
+// measured — two scripts/testdb.sh-shaped clones, each asked for its own
+// audit_log oid — and makes the precondition depend only on Postgres's
+// clone semantics rather than on how this agent's database was provisioned.
 func TestDiagnoseLockHolders_IgnoresLocksInOtherDatabase(t *testing.T) {
-	pool := lockDiagPoolOrSkip(t)
+	if lockDiagPool == nil {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
 	ctx := context.Background()
 
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -495,19 +518,17 @@ func TestDiagnoseLockHolders_IgnoresLocksInOtherDatabase(t *testing.T) {
 	}
 
 	// scripts/testdb.sh's own template name and override variable
-	// (TEMPLATE_DB), matched here so this test creates its sibling exactly
-	// the way every agent's own scratch database is created — a fresh
-	// clone of the shared template, not a clone of our already-connected
-	// scratch database, which Postgres refuses (a database that is a
-	// CREATE DATABASE ... TEMPLATE source must have no other sessions).
+	// (TEMPLATE_DB), matched here so both databases below are created the
+	// way every agent's own scratch database is created on that script's
+	// clone path.
 	templateDB := os.Getenv("TEMPLATE_DB")
 	if templateDB == "" {
 		templateDB = "opencircuit_test_template"
 	}
 
-	// Connect to the `postgres` maintenance database to CREATE/DROP a
-	// sibling scratch database — the same operation scripts/testdb.sh
-	// performs for every agent's own test database.
+	// Connect to the `postgres` maintenance database to CREATE/DROP the two
+	// scratch databases — the same operation scripts/testdb.sh performs for
+	// every agent's own test database.
 	adminCfg := cfg.Copy()
 	adminCfg.Database = "postgres"
 	adminConn, err := pgx.ConnectConfig(ctx, adminCfg)
@@ -515,20 +536,48 @@ func TestDiagnoseLockHolders_IgnoresLocksInOtherDatabase(t *testing.T) {
 		t.Fatalf("connect to postgres maintenance db: %v", err)
 	}
 
-	otherDB := fmt.Sprintf("zz_testdb_0234_%d", Unique())
-	if _, err := adminConn.Exec(ctx, "CREATE DATABASE "+otherDB+" TEMPLATE "+templateDB); err != nil {
-		t.Fatalf("CREATE DATABASE %s TEMPLATE %s: %v — does the connecting role have CREATEDB, and does the template exist (scripts/testdb.sh template)? (CLAUDE.md §5b)", otherDB, templateDB, err)
-	}
-	// Registered before adminConn is ever closed: t.Cleanup runs after this
-	// function's own defers, so adminConn is guaranteed still open when
-	// this fires. Do NOT also `defer adminConn.Close` — that would close it
-	// first and leave nothing open to run the DROP with.
+	// ourDB is the database the diagnostic is asked about; otherDB is the
+	// sibling holding the lock it must ignore. The zz_ prefix keeps both
+	// outside the opencircuit_test_% pool that scripts/testdb.sh's gc
+	// sweeps.
+	stamp := Unique()
+	ourDB := fmt.Sprintf("zz_testdb_0234_%d_ours", stamp)
+	otherDB := fmt.Sprintf("zz_testdb_0234_%d_sib", stamp)
+
+	// Registered before either database exists and before anything connects
+	// to them: t.Cleanup runs LIFO, so this fires after the pool-closing
+	// cleanup registered below and after this function's own defers, which
+	// is what leaves adminConn open to run the DROPs with. Do NOT also
+	// `defer adminConn.Close` — that would close it first and leave nothing
+	// open to drop with.
 	t.Cleanup(func() {
 		bg := context.Background()
-		_, _ = adminConn.Exec(bg, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()", otherDB)
-		_, _ = adminConn.Exec(bg, "DROP DATABASE IF EXISTS "+otherDB)
+		for _, db := range []string{ourDB, otherDB} {
+			_, _ = adminConn.Exec(bg, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()", db)
+			_, _ = adminConn.Exec(bg, "DROP DATABASE IF EXISTS "+db)
+		}
 		_ = adminConn.Close(bg)
 	})
+
+	for _, db := range []string{ourDB, otherDB} {
+		if _, err := adminConn.Exec(ctx, "CREATE DATABASE "+db+" TEMPLATE "+templateDB); err != nil {
+			t.Fatalf("CREATE DATABASE %s TEMPLATE %s: %v — does the connecting role have CREATEDB, and does the template exist (scripts/testdb.sh template)? (CLAUDE.md §5b)", db, templateDB, err)
+		}
+	}
+
+	// The pool the diagnostic is run against. Deliberately not lockDiagPool:
+	// see this function's doc comment for why the ambient database cannot be
+	// one side of the oid comparison below.
+	poolCfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse TEST_DATABASE_URL as a pool config: %v", err)
+	}
+	poolCfg.ConnConfig.Database = ourDB
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		t.Fatalf("open pool on %s: %v", ourDB, err)
+	}
+	t.Cleanup(pool.Close)
 
 	otherCfg := cfg.Copy()
 	otherCfg.Database = otherDB
@@ -550,7 +599,7 @@ func TestDiagnoseLockHolders_IgnoresLocksInOtherDatabase(t *testing.T) {
 		t.Fatalf("sibling's audit_log oid: %v", err)
 	}
 	if ourOID != otherOID {
-		t.Fatalf("expected audit_log's oid to be identical across a template clone (the precondition that makes #0234 reachable at all), got ours=%d sibling=%d", ourOID, otherOID)
+		t.Fatalf("expected audit_log's oid to be identical across two clones of template %s (the precondition that makes #0234 reachable at all), got ours=%d sibling=%d", templateDB, ourOID, otherOID)
 	}
 
 	// Hold a real lock on audit_log in the SIBLING database.
