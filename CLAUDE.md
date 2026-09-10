@@ -297,7 +297,7 @@ scripts/check.sh guards                                 # standalone shell guard
 scripts/testdb.sh template   # rebuild the test template after a migration change
 scripts/testdb.sh drop NNNN  # drop YOUR database when done
 scripts/testdb.sh gc --all   # drop every agent's — only when you are alone
-scripts/db-reset.sh          # rebuild the local dev DB from migrations + seed admin
+scripts/db-reset.sh          # drops and rebuilds the local dev DB from migrations + seed admin
 
 ./scripts/dev.sh             # Vite :5173 + Go API :8080, hot reload, STORAGE=json
 ./scripts/dev.sh --built     # production embedding at :8080

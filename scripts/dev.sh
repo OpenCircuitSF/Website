@@ -11,7 +11,9 @@
 #     it cannot exercise that subsystem.
 #   --postgres/-p — the real Postgres path (STORAGE unset), for the mailing
 #     subsystem. Requires a local database already migrated and seeded with
-#     an admin row — scripts/db-reset.sh does both. DEV_ADMIN_LOGIN=true is
+#     an admin row — scripts/db-reset.sh does both, but drops and rebuilds
+#     the target database first, so it is not a safe thing to run reflexively
+#     if that database already holds data you want. DEV_ADMIN_LOGIN=true is
 #     set automatically so the account view opens as that seeded admin with
 #     no passkey ceremony (internal/middleware.DevAdminAutoLogin, #0402) —
 #     refused at startup unless BASE_URL's host is localhost/127.0.0.1

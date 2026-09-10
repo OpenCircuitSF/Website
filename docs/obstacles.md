@@ -58,7 +58,7 @@ did not exist. A demo would have failed live, on the first campaign screen.
 |---|---|
 | **Signal** | none. This is the danger — health checks pass |
 | **Check** | `psql "$DSN" -tAc 'select version, dirty from schema_migrations'` against `ls migrations/*.up.sql \| tail -1` |
-| **Clear** | `scripts/db-reset.sh` (rebuild + seed) or `migrate -path migrations -database "$DSN" up` |
+| **Clear** | `scripts/db-reset.sh` (drops the database, then rebuilds and seeds it — destructive) or `migrate -path migrations -database "$DSN" up` (applies pending migrations only, non-destructive) |
 | **Now guarded by** | `scripts/testdb.sh` refuses to hand out a clone when the template is behind `migrations/` |
 
 ---

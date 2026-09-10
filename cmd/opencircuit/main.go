@@ -664,7 +664,7 @@ func newDevAdminAutoLogin(ctx context.Context, cfg *config.Config, store *auth.S
 	acct, err := store.LookupUserByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
-			return nil, fmt.Errorf("opencircuit: DEV_ADMIN_LOGIN=true but ADMIN_EMAIL %q has no users row — run `opencircuit seed` (or scripts/db-reset.sh) first", email)
+			return nil, fmt.Errorf("opencircuit: DEV_ADMIN_LOGIN=true but ADMIN_EMAIL %q has no users row — run `opencircuit seed` to create just that row, or scripts/db-reset.sh if you want to drop and rebuild the whole database first", email)
 		}
 		return nil, fmt.Errorf("opencircuit: DEV_ADMIN_LOGIN=true: looking up ADMIN_EMAIL %q: %w", email, err)
 	}
