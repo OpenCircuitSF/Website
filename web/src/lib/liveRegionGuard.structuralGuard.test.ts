@@ -313,7 +313,7 @@ function elementCountInSubtree(root: unknown, seen = new Set<unknown>()): number
 
 /** #0306 criterion 3: the threshold a KNOWN_STABLE_BRANCH_SITES entry's own
  * governing branch must clear, justified independently of what today's
- * twelve entries happen to measure (criterion 2's own warning: a threshold
+ * thirteen entries happen to measure (criterion 2's own warning: a threshold
  * picked to admit the current set is not a validation of it). The guard
  * already has a concrete, real "small, single-purpose branch wrongly
  * claiming legitimacy" shape on file: the #0286 fixture below (a status
@@ -326,7 +326,7 @@ function elementCountInSubtree(root: unknown, seen = new Set<unknown>()): number
  * independent content. 8 clears that decoy with more than double its size --
  * real margin, not "one more than 3" -- while asking nothing close to what
  * an actual multi-field settings tab or a whole editor form naturally
- * contains (today's twelve entries range 11-156; see the real-tree test's
+ * contains (today's thirteen entries range 12-158; see the real-tree test's
  * own comment for the measured figures, kept there rather than here so this
  * threshold's number is not read as derived from them). */
 const KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT = 8;
@@ -897,7 +897,7 @@ const KNOWN_STABLE_BRANCH_REASON_MAIN_FORM =
   "Unconditionally rendered itself (not wrapped in its OWN {#if}) inside the editor's main form ({:else if workshop}), which mounts once when the workshop record loads and stays mounted across ordinary editing -- ~~the same stable branch this file's \"Rendering preview…\"/previewStale entries above already rest on~~ **corrected 2026-08-27 (#0306): measured, neither actually rested there at the time this was written. \"Rendering preview…\" is a KNOWN_LOADING_PLACEHOLDERS entry in the smaller {:else if previewLoading} branch, a different mechanism and never a real peer of this set. previewStale sat in the small, single-element {:else if hasPreviewContent} branch, which #0306's structural check on this set correctly refused to call \"large, multi-purpose\" -- #0306 relocated previewStale's own element to this SAME {:else if workshop} branch, so it is now a genuine peer of saveNotice/unsavedInterestsHint (see its own entry below); \"Rendering preview…\" still is not.** Previously mis-credited (#0299) to transitionModalEl, a status-change dialog's own focus target several conditionals deeper behind its OWN {#if transitionOpen} -- an unrelated dialog, not evidence about this branch's own mount. Persistence within the stable main-form branch is the real, sufficient argument.";
 
 /** #0406: the count the real-tree test's own measurement comment below
- * claims for `KNOWN_STABLE_BRANCH_SITES` ("All twelve clear ..."), kept as a
+ * claims for `KNOWN_STABLE_BRANCH_SITES` ("All thirteen clear ..."), kept as a
  * literal declared here rather than only in that prose. Editing the array
  * immediately below does not also edit this line -- they are different
  * declarations in different places -- so the two can genuinely disagree
@@ -910,7 +910,7 @@ const KNOWN_STABLE_BRANCH_REASON_MAIN_FORM =
  * the sensitivity test below (`describe('KNOWN_STABLE_BRANCH_SITES recorded
  * count (#0406)')`) for proof that adding an entry alone does not also
  * satisfy this constant. */
-const KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT = 12;
+const KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT = 13;
 
 const KNOWN_STABLE_BRANCH_SITES: AllowlistEntry[] = [
   {
@@ -1296,26 +1296,38 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
     //   Admin.svelte settingsNotice              14
     //   Admin.svelte addressNotice                14
     //   Admin.svelte newSlugInvalid hint           57
-    //   Admin.svelte createSubNotice              156
-    //   Admin.svelte CSV-import notice            156
+    //   Admin.svelte createSubNotice              158
+    //   Admin.svelte CSV-import notice            158
     //   PreferenceCenter.svelte saveError          19
     //   PreferenceCenter.svelte saveMessage        19
     //   PreferenceCenter.svelte unsubscribeError   19
-    //   Pending.svelte resendNotice                11
-    //   WorkshopEditor.svelte previewStale         78  (was 1 before #0306's fix)
-    //   WorkshopEditor.svelte saveNotice           78
-    //   WorkshopEditor.svelte unsavedInterestsHint 78
+    //   Pending.svelte resendNotice                12
+    //   WorkshopEditor.svelte previewStale         84  (was 1 before #0306's fix)
+    //   WorkshopEditor.svelte saveNotice           84
+    //   WorkshopEditor.svelte unsavedInterestsHint 84
+    //   CrtCommands.svelte per-row width warning   19  (#0396, added this pass)
     //
-    // All twelve clear KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT (8)
-    // non-trivially -- the smallest margin is Pending.svelte's 11 (3 clear,
-    // 37.5% above the floor), not a knife-edge fit. previewStale is the one
+    // #0396's transplant onto main re-measured all thirteen with the same
+    // temporary-console.log technique rather than assuming the twelve
+    // existing figures still held: five had drifted upward with ordinary
+    // work since #0306 measured them (createSubNotice and CSV-import notice
+    // 156 -> 158, resendNotice 11 -> 12, and WorkshopEditor's three 78 ->
+    // 84), so the numbers above are this pass's measurement, not #0306's
+    // carried forward. The drift is one-directional and harmless -- every
+    // figure moved further ABOVE the floor, never toward it -- but leaving
+    // known-stale numbers in a table whose whole purpose is to be checkable
+    // by hand would defeat it.
+    //
+    // All thirteen clear KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT (8)
+    // non-trivially -- the smallest margin is Pending.svelte's 12 (4 clear,
+    // 50% above the floor), not a knife-edge fit. previewStale is the one
     // entry that did NOT clear it before #0306 (measured 1, an order of
     // magnitude under the floor) and was fixed at the site rather than
     // allowlisted past the check; see this file's header and that entry's
     // own reason for the account.
     //
     // #0406: re-derived by counting the array and the rows in the table just
-    // above -- both are twelve, matching the prose, as of this pass. The
+    // above -- both are thirteen, matching the prose, as of this pass. The
     // assertion below is what keeps that agreement from being merely
     // asserted in English: it fails the moment an entry is added to or
     // removed from KNOWN_STABLE_BRANCH_SITES without also updating
