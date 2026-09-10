@@ -662,12 +662,26 @@ done
 # ParseComments group count): per this script's own header comment ("WHY
 # THIS SCRIPT NEVER RUNS go test AS ITS ORACLE"), `got < 0` can never fire
 # once floor is forced to 0, so `go test` stays green on that specific
-# mutation no matter what. This section is those two floors' only oracle,
-# following the exact "outbox claim-kinds guard floors" pattern directly
-# above -- reusing extract_const, sha_of, count_go_files, and
-# outbox_floor_plausible as-is -- rather than inventing a new shape.
+# mutation no matter what. This section is those two floors' only oracle.
+#
+# THE TWO ARE NO LONGER JUDGED ALIKE (#0491). claimCommentGuardMinPlausible-
+# FileCount's population is a FILE COUNT, the same shape as the
+# internal/handlers family above (in the hundreds, not the tens a
+# call-site population runs to) -- #0491 found it committed at 150 and
+# judged only against outbox_floor_plausible below, already two files
+# past the threshold the STRONG rule (floor_plausible, used by the
+# internal/handlers family above) would have applied. It is judged under
+# floor_plausible() in its own small block below, not folded into the
+# "for spec in" loop that follows: that loop keeps
+# claimCommentGuardMinPlausibleCommentGroupCount, whose population
+# (comment-opening LINES, not files) is two orders of magnitude larger
+# and whose job -- catching a broken walk, not tracking the tree's size --
+# is exactly what outbox_floor_plausible's weaker bound is for. See that
+# constant's own doc comment in claim_comment_referent_guard_test.go for
+# why it stays there. Both blocks below still reuse extract_const,
+# sha_of, and count_go_files as-is.
 echo
-echo "== outbox claim-comment-referent guard floors (#0347 B3) =="
+echo "== outbox claim-comment-referent guard floors (#0347 B3, #0491) =="
 
 COMMENT_GUARD_FILE="internal/outbox/claim_comment_referent_guard_test.go"
 COMMENT_GUARD_SRC="$REPO/$COMMENT_GUARD_FILE"
@@ -709,39 +723,74 @@ case "$FILE_POP" in '' | *[!0-9]*) fatal "count_go_files returned a non-numeric 
 COMMENT_POP="$(count_comment_opening_lines "$REPO/internal" "$REPO/cmd")"
 case "$COMMENT_POP" in '' | *[!0-9]*) fatal "count_comment_opening_lines returned a non-numeric population ('$COMMENT_POP')" ;; esac
 
-for spec in \
-  "claimCommentGuardMinPlausibleFileCount:${FILE_POP}:TestNoCommentClaimsClaimMachineryCallFileCodeLacks / TestNoClaimMachineryCallSyntaxLiteralInAnyComment file-visit floor (#0347)" \
-  "claimCommentGuardMinPlausibleCommentGroupCount:${COMMENT_POP}:TestNoCommentClaimsClaimMachineryCallFileCodeLacks comment-group floor (#0347)" \
-; do
-  CONST="${spec%%:*}"
-  rest="${spec#*:}"
-  POP="${rest%%:*}"
-  TESTNAME="${rest#*:}"
+# claimCommentGuardMinPlausibleFileCount (#0491): judged under
+# floor_plausible(), the STRONG rule used for the internal/handlers
+# file-count family above -- not outbox_floor_plausible(), the weak
+# call-site rule the rest of this section uses. Its population (FILE_POP,
+# computed above) is a file count in the hundreds, the same shape as
+# citedTestScanRootsMinPlausibleFileCount and its siblings, not a
+# call-site count in the tens. Written as a standalone block, not folded
+# into the "for spec" loop below, precisely because it now takes a
+# different predicate than everything left in that loop.
+CCG_FILE_TESTNAME="TestNoCommentClaimsClaimMachineryCallFileCodeLacks / TestNoClaimMachineryCallSyntaxLiteralInAnyComment file-visit floor (#0347)"
+echo "-- claimCommentGuardMinPlausibleFileCount (protects: ${CCG_FILE_TESTNAME}) --"
 
-  echo "-- ${CONST} (protects: ${TESTNAME}) --"
+REAL_VALUE="$(extract_const "$COMMENT_GUARD_SRC" "claimCommentGuardMinPlausibleFileCount")" || fatal "extract_const fatal-exited extracting claimCommentGuardMinPlausibleFileCount from $COMMENT_GUARD_SRC -- see the FATAL line above."
+if floor_plausible "$REAL_VALUE" "$FILE_POP"; then
+  pass "committed claimCommentGuardMinPlausibleFileCount=${REAL_VALUE} is plausible against an externally-measured population of ${FILE_POP} (>= half, <= population)"
+else
+  fail "REGRESSION #0491: committed claimCommentGuardMinPlausibleFileCount=${REAL_VALUE} is NOT plausible against an externally-measured population of ${FILE_POP}. $(floor_failure_reason "$REAL_VALUE" "$FILE_POP" "claimCommentGuardMinPlausibleFileCount" "$COMMENT_GUARD_FILE") Affects: ${CCG_FILE_TESTNAME}"
+fi
 
-  REAL_VALUE="$(extract_const "$COMMENT_GUARD_SRC" "$CONST")" || fatal "extract_const fatal-exited extracting ${CONST} from $COMMENT_GUARD_SRC -- see the FATAL line above."
-  if outbox_floor_plausible "$REAL_VALUE" "$POP"; then
-    pass "committed ${CONST}=${REAL_VALUE} is plausible against an externally-measured population of ${POP}"
-  else
-    fail "REGRESSION #0347: committed ${CONST}=${REAL_VALUE} is NOT plausible against an externally-measured population of ${POP} (must be > 0 and <= population). Affects: ${TESTNAME}"
-  fi
+MUTANT="$WORKDIR/$(basename "$COMMENT_GUARD_FILE").claimCommentGuardMinPlausibleFileCount"
+sed "s/const claimCommentGuardMinPlausibleFileCount = [0-9][0-9]*/const claimCommentGuardMinPlausibleFileCount = 0/" "$COMMENT_GUARD_SRC" > "$MUTANT"
+if ! grep -q "const claimCommentGuardMinPlausibleFileCount = 0" "$MUTANT"; then
+  fatal "mutation did not take on the copy of ${COMMENT_GUARD_FILE} for claimCommentGuardMinPlausibleFileCount -- aborting before judging anything."
+fi
+MUT_VALUE="$(extract_const "$MUTANT" "claimCommentGuardMinPlausibleFileCount")" || fatal "extract_const fatal-exited extracting claimCommentGuardMinPlausibleFileCount from the mutated copy $MUTANT -- see the FATAL line above."
+if [ "$MUT_VALUE" != "0" ]; then
+  fatal "re-extraction from the mutated copy of ${COMMENT_GUARD_FILE} returned '${MUT_VALUE}', not '0' -- the mutation and the extraction disagree; refusing to judge."
+fi
+if floor_plausible "$MUT_VALUE" "$FILE_POP"; then
+  fail "REGRESSION #0491: this harness judged claimCommentGuardMinPlausibleFileCount=0 PLAUSIBLE -- the external oracle failed to catch a zeroed floor. Affects: ${CCG_FILE_TESTNAME}"
+else
+  pass "claimCommentGuardMinPlausibleFileCount=0 (mutated copy) is correctly judged IMPLAUSIBLE by this external oracle, independent of go test -- \`go test ./internal/outbox/...\` on the same mutation stays green (see this file's own top-of-file doc comment), which is exactly why this floor's oracle is this script, not the Go suite. Affects: ${CCG_FILE_TESTNAME}"
+fi
 
-  MUTANT="$WORKDIR/$(basename "$COMMENT_GUARD_FILE").${CONST}"
-  sed "s/const ${CONST} = [0-9][0-9]*/const ${CONST} = 0/" "$COMMENT_GUARD_SRC" > "$MUTANT"
-  if ! grep -q "const ${CONST} = 0" "$MUTANT"; then
-    fatal "mutation did not take on the copy of ${COMMENT_GUARD_FILE} for ${CONST} -- aborting before judging anything."
-  fi
-  MUT_VALUE="$(extract_const "$MUTANT" "$CONST")" || fatal "extract_const fatal-exited extracting ${CONST} from the mutated copy $MUTANT -- see the FATAL line above."
-  if [ "$MUT_VALUE" != "0" ]; then
-    fatal "re-extraction from the mutated copy of ${COMMENT_GUARD_FILE} returned '${MUT_VALUE}', not '0' -- the mutation and the extraction disagree; refusing to judge."
-  fi
-  if outbox_floor_plausible "$MUT_VALUE" "$POP"; then
-    fail "REGRESSION #0347: this harness judged ${CONST}=0 PLAUSIBLE -- the external oracle failed to catch a zeroed floor, which #0347's review measured leaves \`go test ./internal/outbox/...\` GREEN for this exact constant. Affects: ${TESTNAME}"
-  else
-    pass "${CONST}=0 (mutated copy) is correctly judged IMPLAUSIBLE by this external oracle, independent of go test (same mathematical-impossibility reasoning as the header comment above: got < 0 can never fire, and #0347's review measured go test does in fact stay green on this exact mutation). Affects: ${TESTNAME}"
-  fi
-done
+# claimCommentGuardMinPlausibleCommentGroupCount (#0347 B3) is the only
+# remaining member of this once-two-entry list (#0491 moved
+# claimCommentGuardMinPlausibleFileCount to its own floor_plausible()
+# block above), so this is written as a plain block rather than a
+# single-item "for spec in" loop -- shellcheck (SC2066) correctly flags a
+# quoted one-element word list as a loop that will only ever run once,
+# which is now simply true rather than an accident of the list's length.
+CONST="claimCommentGuardMinPlausibleCommentGroupCount"
+POP="$COMMENT_POP"
+TESTNAME="TestNoCommentClaimsClaimMachineryCallFileCodeLacks comment-group floor (#0347)"
+
+echo "-- ${CONST} (protects: ${TESTNAME}) --"
+
+REAL_VALUE="$(extract_const "$COMMENT_GUARD_SRC" "$CONST")" || fatal "extract_const fatal-exited extracting ${CONST} from $COMMENT_GUARD_SRC -- see the FATAL line above."
+if outbox_floor_plausible "$REAL_VALUE" "$POP"; then
+  pass "committed ${CONST}=${REAL_VALUE} is plausible against an externally-measured population of ${POP}"
+else
+  fail "REGRESSION #0347: committed ${CONST}=${REAL_VALUE} is NOT plausible against an externally-measured population of ${POP} (must be > 0 and <= population). Affects: ${TESTNAME}"
+fi
+
+MUTANT="$WORKDIR/$(basename "$COMMENT_GUARD_FILE").${CONST}"
+sed "s/const ${CONST} = [0-9][0-9]*/const ${CONST} = 0/" "$COMMENT_GUARD_SRC" > "$MUTANT"
+if ! grep -q "const ${CONST} = 0" "$MUTANT"; then
+  fatal "mutation did not take on the copy of ${COMMENT_GUARD_FILE} for ${CONST} -- aborting before judging anything."
+fi
+MUT_VALUE="$(extract_const "$MUTANT" "$CONST")" || fatal "extract_const fatal-exited extracting ${CONST} from the mutated copy $MUTANT -- see the FATAL line above."
+if [ "$MUT_VALUE" != "0" ]; then
+  fatal "re-extraction from the mutated copy of ${COMMENT_GUARD_FILE} returned '${MUT_VALUE}', not '0' -- the mutation and the extraction disagree; refusing to judge."
+fi
+if outbox_floor_plausible "$MUT_VALUE" "$POP"; then
+  fail "REGRESSION #0347: this harness judged ${CONST}=0 PLAUSIBLE -- the external oracle failed to catch a zeroed floor, which #0347's review measured leaves \`go test ./internal/outbox/...\` GREEN for this exact constant. Affects: ${TESTNAME}"
+else
+  pass "${CONST}=0 (mutated copy) is correctly judged IMPLAUSIBLE by this external oracle, independent of go test (same mathematical-impossibility reasoning as the header comment above: got < 0 can never fire, and #0347's review measured go test does in fact stay green on this exact mutation). Affects: ${TESTNAME}"
+fi
 
 COMMENT_GUARD_SHA_AFTER="$(sha_of "$COMMENT_GUARD_SRC")" || fatal "sha_of fatal-exited re-hashing $COMMENT_GUARD_SRC -- see the FATAL line above."
 if [ -z "$COMMENT_GUARD_SHA_BEFORE" ] || [ -z "$COMMENT_GUARD_SHA_AFTER" ]; then

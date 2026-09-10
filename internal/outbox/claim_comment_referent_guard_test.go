@@ -164,16 +164,22 @@
 // in-package, non-circular proof
 // (TestClaimCommentGuardCensusFloorCatchesRootsWithNoRealPopulation), because
 // ITS assertion narrows the SCAN ROOTS rather than the floor constant, which
-// does change `got`. The other two floors' only oracle is
-// scripts/go_file_visit_floor_guard_test.sh's own "outbox
-// claim-comment-referent guard floors" section, mirroring the identical
-// treatment its sibling section already gives
-// claimKindsGuardMinPlausibleCallSiteCount and
-// claimKindsGuardMinPlausibleNonExemptCallSiteCount in
-// claim_kinds_call_site_guard_test.go. A green `go test
+// does change `got`. Of the remaining two, they are no longer judged
+// alike (#0491): claimCommentGuardMinPlausibleFileCount is a FILE-COUNT
+// population and its only oracle is now
+// scripts/go_file_visit_floor_guard_test.sh's own dedicated section
+// judging it under floor_plausible() -- the strong rule, mirroring the
+// internal/handlers file-count family
+// (citedTestScanRootsMinPlausibleFileCount and its siblings), not the
+// claim-kinds call-site family. claimCommentGuardMinPlausibleCommentGroupCount
+// stays under the weaker outbox_floor_plausible(), by an explicit
+// decision recorded on the constant itself, below -- it is a
+// comment-LINE population, not a file count, and its job is to catch a
+// broken walk, not to track the tree's size. A green `go test
 // ./internal/outbox/...` alone is therefore NOT sufficient evidence that
-// these two floors are pinned; `scripts/check.sh guards` (which runs that
-// script) is required for that.
+// either floor is pinned; scripts/go_file_visit_floor_guard_test.sh must
+// run too, and per #0489 an ordinary `scripts/check.sh` (its go, all, and
+// default arms) now runs it -- not only the `guards` bundle.
 package outbox
 
 import (
@@ -786,10 +792,39 @@ func findClaimCommentGuardFindings(path string, src any, allPkgTypes map[string]
 // silently stopped matching must fail loudly rather than report an
 // all-clear built on an empty population. Measured directly against
 // claimCommentGuardScanRoots, not fitted -- TestNoCommentClaimsClaimMachineryCallFileCodeLacks,
-// below, both enforces and re-measures these floors on every run, and
-// issue #0347's ## Verification records the exact numbers observed for
-// this session.
-const claimCommentGuardMinPlausibleFileCount = 150
+// below, both enforces and re-measures these floors on every run.
+//
+// THIS ONE IS A FILE COUNT, NOT A CALL-SITE COUNT (#0491). It was
+// committed at 150 and judged only by
+// scripts/go_file_visit_floor_guard_test.sh's outbox_floor_plausible --
+// the weak predicate calibrated for the claim-kinds guard's call-site
+// populations, an order of magnitude smaller than a file count. #0491
+// found this constant sitting in that weak predicate's list despite
+// having the same shape as citedTestScanRootsMinPlausibleFileCount and
+// its siblings in internal/handlers: a population in the hundreds, not
+// tens. Judged under the strong rule those siblings use
+// (floor >= population/2), 150 was already two files past its own
+// threshold, and outbox_floor_plausible never asked. It now sits under
+// that same strong rule instead, with its own dedicated section in
+// scripts/go_file_visit_floor_guard_test.sh (not the weak
+// "outbox claim-comment-referent guard floors" for-loop
+// claimCommentGuardMinPlausibleCommentGroupCount, below, stays in).
+//
+// HOW THE VALUE IS DERIVED. #0489 states the rule and #0491 applies it
+// here: dividing the measured population by the square root of two and
+// rounding up places the population at the geometric centre of the
+// window [floor, 2*floor+1] that the strong rule accepts, leaving the
+// same proportional slack on either side. The rule is the durable part;
+// the constant is that rule evaluated once, and needs re-evaluating only
+// when the harness says the window no longer holds.
+//
+// Evaluated on 2026-09-09 against a population of 304 .go files under
+// claimCommentGuardScanRoots (internal/ and cmd/ -- this guard, unlike
+// the internal/handlers family, has no web/ in its roots). That figure is
+// historical and begins going stale with the next file anyone adds under
+// those roots, which is why the harness measures the population itself
+// rather than trusting a number written here.
+const claimCommentGuardMinPlausibleFileCount = 215
 
 // claimCommentGuardMinPlausibleCallCensusCount is the floor on the SUM,
 // across every file and every target identifier, of
@@ -811,6 +846,20 @@ const claimCommentGuardMinPlausibleCallCensusCount = 15
 // §8's #0300 lesson: a floor set close to today's population fails
 // permanently on ordinary drift) -- its job is only to catch "the
 // ParseComments walk visited nothing".
+//
+// STAYS UNDER outbox_floor_plausible, THE WEAK PREDICATE -- an explicit
+// decision (#0491), not an omission. This is NOT a file count: its
+// external oracle (scripts/go_file_visit_floor_guard_test.sh's
+// count_comment_opening_lines) counts comment-opening LINES, which run
+// two orders of magnitude larger than a file count over the same trees
+// (tens of thousands, not hundreds). Applying the strong rule
+// (floor >= population/2) here would fight this constant's own stated
+// job: it exists only to catch a broken walk, the same role
+// claimCommentGuardMinPlausibleCallCensusCount plays above at floor 15,
+// and deliberately does NOT try to track this population's size the way
+// the file-count floors do. A floor forced to grow with this population
+// would need re-deriving on nearly every commit that touches a comment,
+// which is the drift #0489's whole family exists to stop, not cause.
 const claimCommentGuardMinPlausibleCommentGroupCount = 500
 
 func claimCommentGuardFloorImplausible(guardName string, roots []string, got, floor int) string {
