@@ -273,6 +273,22 @@ const (
 	// retiring one with history, which is ActionInterestDeactivated.
 	ActionInterestDeleted = "interest.deleted"
 
+	// CRT session commands (#0393, PRD is silent — this predates a PRD
+	// section): the admin-editable rows behind the home hero's live CRT
+	// screen (#0270, #0274). Unlike the interest taxonomy above, there is no
+	// dedicated ActionCrtCommandDeactivated/Reactivated pair — active is just
+	// one of the fields ActionCrtCommandUpdated's PATCH can change, per
+	// #0393's own Design §2 ("Every mutation writes an audit entry
+	// (crt_command.created, .updated, .deleted)"), a narrower vocabulary than
+	// interest's by that issue's explicit choice.
+	ActionCrtCommandCreated = "crt_command.created"
+	ActionCrtCommandUpdated = "crt_command.updated"
+	// ActionCrtCommandDeleted is written on every successful DELETE — unlike
+	// interests.Store.Delete, crt.Store.Delete is unconditional (nothing else
+	// in the schema references crt_commands), so there is no refused-delete
+	// case to distinguish here.
+	ActionCrtCommandDeleted = "crt_command.deleted"
+
 	// Email campaign lifecycle (PRD §5.2/§6.6/§8; #0041's campaign CRUD
 	// API). Named email_campaign.* per the deleted-constants note just
 	// below — this is a distinct concept from ShortLinks' campaigns
@@ -457,4 +473,7 @@ const (
 	// actions above (#0125) — a batch (subscriber_imports row), distinct
 	// from TargetSubscriber (one subscribers row).
 	TargetSubscriberImport = "subscriber_import"
+	// TargetCrtCommand is the target type for the crt_command.* actions
+	// above (#0393).
+	TargetCrtCommand = "crt_command"
 )

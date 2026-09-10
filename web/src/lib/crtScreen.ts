@@ -71,7 +71,21 @@ export function crtMatrix3d(stageW: number, stageH: number): string {
 
 /** The session. Illustrative brand copy, not the workshops API — see #0233's
  *  recorded decision: real dates duplicate "Next up" directly below the hero
- *  and would make this element information rather than decoration. */
+ *  and would make this element information rather than decoration.
+ *
+ *  #0393 moved the live session into a `crt_commands` database table (an
+ *  admin-editable superset of this array, plus ten additional inactive "fun"
+ *  rows) served at GET /api/crt-session. This constant does NOT go away: it
+ *  is the fallback for STORAGE=json (no crt_commands-table backing), for a
+ *  pre-seed deploy (the migration has run but no rows exist yet), and for
+ *  any failure of that endpoint's own fetch (Home.svelte falls back to this
+ *  array on a non-OK response). That means two copies of the session exist
+ *  by design — this constant and the seed rows in
+ *  migrations/000028_create_crt_commands.up.sql — and they are ALLOWED TO
+ *  DRIFT: this constant is a floor (the worst case the screen ever shows),
+ *  not a mirror of whatever an admin has since edited into the database. Do
+ *  not "fix" a difference between this array and the seeded/live rows by
+ *  syncing them — that is not a bug. */
 export const CRT_SESSION: ReadonlyArray<{ cmd: string; out: readonly string[] }> = [
   { cmd: 'workshops --next', out: ['soldering 101 ..... sat 12:30', 'kicad from scratch  sep 18', 'esp32 + sensors ... oct 02', '3 scheduled, 12 seats open'] },
   { cmd: 'whoami', out: ['open circuit sf', 'a san francisco group that', 'builds things on tables.'] },
@@ -82,6 +96,51 @@ export const CRT_SESSION: ReadonlyArray<{ cmd: string; out: readonly string[] }>
   { cmd: 'subscribe --interests', out: ['pick only what you want:', '[x] workshops  [ ] digests', '[ ] announcements', 'double opt-in. leave anytime.'] },
   { cmd: 'uptime', out: ['soldering irons hot since 2026', 'no analytics. no trackers.'] },
 ];
+
+/** One step of the running session, as Home.svelte types it out and
+ *  live-enriches it (#0393). `source` selects which endpoint, if any,
+ *  replaces `out` at render time — see the Design §1 table in issues/0393.md:
+ *  'static' (never replaced), 'workshops' (GET /api/workshops), 'list_stats'
+ *  (GET /api/list-stats' confirmed/pending), 'interests' (that same
+ *  response's new `interests` array, via crtInterestLines). `out` is always
+ *  the fallback shown when the live fetch is skipped, fails, or returns
+ *  nothing usable — #0274's rule that the screen must never degrade to a
+ *  blank block or an error string applies per-row, not just to the session
+ *  as a whole. */
+export type CrtScriptStep = { cmd: string; out: string[]; source: string };
+
+/** GET /api/crt-session's response shape (internal/handlers/
+ *  public_crt_session.go's publicCrtSessionResponse): active rows only, in
+ *  order, carrying no id/active/timestamp. */
+export type CrtSessionResponse = { commands: ReadonlyArray<{ cmd: string; out: readonly string[]; source: string }> };
+
+/** Builds a live-enrichable script from the compiled-in CRT_SESSION,
+ *  tagging each step with the same `source` values
+ *  migrations/000028_create_crt_commands.up.sql's seed uses for the two
+ *  originally-live commands ('workshops --next' -> 'workshops',
+ *  'subscribe --interests' -> 'list_stats', everything else -> 'static') —
+ *  so the fallback path live-enriches identically to the database-backed
+ *  session. This is the STORAGE=json / pre-seed-deploy / crt-session-fetch-
+ *  failed path (#0393's Design §2). */
+export function crtFallbackScript(): CrtScriptStep[] {
+  return CRT_SESSION.map((c) => ({
+    cmd: c.cmd,
+    out: [...c.out],
+    source: c.cmd === 'workshops --next' ? 'workshops' : c.cmd === 'subscribe --interests' ? 'list_stats' : 'static',
+  }));
+}
+
+/** Converts a fetched GET /api/crt-session response into a running script,
+ *  falling back to crtFallbackScript() when `resp` is null/undefined (the
+ *  fetch failed or answered non-OK — the caller passes null in that case)
+ *  or carries no commands (an empty array is itself "no usable data": a
+ *  pre-seed deploy where the migration ran but nothing has been seeded
+ *  into it, or every row has been deactivated). Pure and DOM-free so it is
+ *  unit-testable without mounting Home.svelte. */
+export function crtSessionToScript(resp: CrtSessionResponse | null | undefined): CrtScriptStep[] {
+  if (!resp || !Array.isArray(resp.commands) || resp.commands.length === 0) return crtFallbackScript();
+  return resp.commands.map((c) => ({ cmd: c.cmd, out: [...c.out], source: c.source }));
+}
 
 /** paint() draws only the last MAX_LINES, so pushing one past that shifts
  *  everything up — the scroll, without a scrollback buffer. */
@@ -137,4 +196,80 @@ export function crtListLines(confirmed: number, pending: number): string[] {
   if (pending > 0) lines.push('~' + pending + ' awaiting confirmation');
   lines.push('double opt-in. leave anytime.');
   return lines;
+}
+
+/** #0393: GET /api/list-stats' new `interests` array -- one entry per
+ *  interest with at least one active subscriber, already ordered by count
+ *  descending then sort_order (see internal/subscribers.Store.
+ *  ActiveInterestCounts). `count` is exact, not bucketed -- see that
+ *  method's doc comment for why that is safe. */
+export type CrtInterestCount = { slug: string; name: string; count: number };
+
+/** A "label ...... value" leader line, truncated defensively to `width` if
+ *  an unusually long label would otherwise overflow it. Shared by
+ *  crtInterestLines below; kept private since nothing else needs a dotted
+ *  leader yet. */
+function dottedLine(label: string, value: string, width: number = CRT_LINE_CHARS): string {
+  const left = label + ' ';
+  const right = ' ' + value;
+  const dotsLen = Math.max(width - left.length - right.length, 1);
+  return crtTruncate(left + '.'.repeat(dotsLen) + right, width);
+}
+
+/** #0393: renders the top three interests by active-subscriber count as
+ *  dotted-leader lines (`microcontrollers ...... 4`), plus a trailing
+ *  singular/plural summary of how many interests have at least one
+ *  subscriber -- matching crtWorkshopLines' own "N scheduled." convention.
+ *  Empty input yields an empty result, the same "no data -> caller keeps
+ *  the stored fallback" contract crtWorkshopLines already has (#0274's
+ *  rule: the screen must never degrade to a blank block). */
+export function crtInterestLines(counts: readonly CrtInterestCount[]): string[] {
+  if (!counts.length) return [];
+  const lines = counts.slice(0, 3).map((c) => dottedLine(c.slug, String(c.count)));
+  const n = counts.length;
+  lines.push(n === 1 ? '1 topic has subscribers.' : n + ' topics have subscribers.');
+  return lines;
+}
+
+/** Whatever live data Home.svelte managed to fetch for one script step's
+ *  `source`, or nothing for a field whose own fetch failed/was skipped —
+ *  see crtEnrichStep below. */
+export type CrtLiveData = {
+  workshops?: readonly CrtWorkshop[];
+  listStats?: { confirmed?: number; pending?: number };
+  interests?: readonly CrtInterestCount[];
+};
+
+/**
+ * The per-row half of #0274's rule, generalised to sourced script steps
+ * (#0393): given one step and whatever live data Home.svelte fetched (or
+ * `undefined` when that fetch failed, threw, or was never attempted),
+ * returns the step enriched with live lines when there is something usable
+ * for its `source`, or the ORIGINAL step, UNCHANGED, otherwise — so a
+ * failed fetch, an empty live result (e.g. zero upcoming workshops), or a
+ * 'static' step all fall through to the stored fallback `out` rather than a
+ * blank block or an error string. Pure, so the "keeps the stored fallback
+ * on failure" claim is a real assertion here, not just an argument about
+ * Home.svelte's try/catch shape. */
+export function crtEnrichStep(step: CrtScriptStep, live: CrtLiveData | undefined): CrtScriptStep {
+  if (!live) return step;
+  switch (step.source) {
+    case 'workshops': {
+      if (!live.workshops) return step;
+      const lines = crtWorkshopLines(live.workshops);
+      return lines.length ? { ...step, out: lines } : step;
+    }
+    case 'list_stats': {
+      if (!live.listStats || typeof live.listStats.confirmed !== 'number') return step;
+      return { ...step, out: crtListLines(live.listStats.confirmed, live.listStats.pending ?? 0) };
+    }
+    case 'interests': {
+      if (!live.interests) return step;
+      const lines = crtInterestLines(live.interests);
+      return lines.length ? { ...step, out: lines } : step;
+    }
+    default:
+      // 'static' and any unrecognised future source: never replaced.
+      return step;
+  }
 }

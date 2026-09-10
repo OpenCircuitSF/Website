@@ -75,6 +75,27 @@ export interface Interest {
   created_at: string;
 }
 
+/**
+ * A CRT-session command row (GET /admin/crt-commands item, #0393). Matches
+ * internal/handlers/crt_commands.go `crtCommandView`. `output` is the raw
+ * newline-separated string, not split into lines -- the admin editor is a
+ * plain `<textarea>` bound directly to it. `source` is one of 'static' |
+ * 'workshops' | 'list_stats' | 'interests' (internal/crt.Source*); for
+ * anything but 'static', `output` is the fallback the home CRT falls back
+ * to when the live fetch fails, not decoration (#0274's rule).
+ */
+export interface CrtCommand {
+  id: number;
+  slug: string;
+  command: string;
+  output: string;
+  source: string;
+  sort_order: number;
+  active: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
 /** A subscriber's selected interest, as embedded in a Subscriber detail (GET /admin/subscribers/{id} item). */
 export interface SubscriberInterestRef {
   id: number;

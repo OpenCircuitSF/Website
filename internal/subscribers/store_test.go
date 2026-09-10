@@ -2242,6 +2242,142 @@ func TestStatusCounts_AllFiveStatusesPresentAndAccurate(t *testing.T) {
 	_ = pending
 }
 
+// createTestInterest inserts a throwaway interests row directly (bypassing
+// the interests package to avoid this test package depending on it just for
+// one insert) and registers cleanup to remove it. Returns its id and slug.
+// Because the id is unique and created fresh by this call, a count keyed to
+// it is exact and isolated by construction -- no other test's rows can ever
+// reference it -- which is what lets TestActiveInterestCounts_* below assert
+// an EXACT count rather than the before/after delta every other test in this
+// file (see testPool's doc comment) has to fall back to over the shared,
+// never-truncated table.
+func createTestInterest(t *testing.T, pool *pgxpool.Pool, active bool) (id int64, slug string) {
+	t.Helper()
+	slug = fmt.Sprintf("zz-test-%d", testdb.Unique())
+	err := pool.QueryRow(context.Background(),
+		`INSERT INTO interests (slug, name, active) VALUES ($1, $2, $3) RETURNING id`,
+		slug, "Test interest "+slug, active,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert test interest %q: %v", slug, err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = pool.Exec(ctx, `DELETE FROM interests WHERE id = $1`, id)
+	})
+	return id, slug
+}
+
+// TestActiveInterestCounts_CountsOnlyActiveSubscribers is #0393's DB-backed
+// proof for GET /api/list-stats' new `interests` array: three ACTIVE
+// (confirmed) subscribers selecting a throwaway interest are counted, while
+// a PENDING subscriber and an UNSUBSCRIBED subscriber selecting the SAME
+// interest are not -- the two exclusions the issue's acceptance criteria
+// call out by name. Because the interest is created fresh by
+// createTestInterest, the count is exact rather than a before/after delta.
+func TestActiveInterestCounts_CountsOnlyActiveSubscribers(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	interestID, slug := createTestInterest(t, pool, true)
+
+	// Three ACTIVE subscribers linked to the interest -- must be counted.
+	for i := 0; i < 3; i++ {
+		seed, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+		if err != nil {
+			t.Fatalf("Create active seed %d: %v", i, err)
+		}
+		active, err := store.Confirm(ctx, *seed.ConfirmToken, now.Add(time.Second))
+		if err != nil {
+			t.Fatalf("Confirm active seed %d: %v", i, err)
+		}
+		if err := store.SetInterests(ctx, active.ID, []int64{interestID}); err != nil {
+			t.Fatalf("SetInterests active seed %d: %v", i, err)
+		}
+	}
+
+	// A PENDING subscriber linked to the same interest -- must NOT be
+	// counted: it never completed double opt-in.
+	pending, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create pending: %v", err)
+	}
+	if err := store.SetInterests(ctx, pending.ID, []int64{interestID}); err != nil {
+		t.Fatalf("SetInterests pending: %v", err)
+	}
+
+	// An UNSUBSCRIBED subscriber (once active, then left) linked to the same
+	// interest -- must NOT be counted either.
+	unsubSeed, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create unsubscribe seed: %v", err)
+	}
+	unsub, err := store.Confirm(ctx, *unsubSeed.ConfirmToken, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("Confirm unsubscribe seed: %v", err)
+	}
+	if err := store.SetInterests(ctx, unsub.ID, []int64{interestID}); err != nil {
+		t.Fatalf("SetInterests unsubscribed: %v", err)
+	}
+	if _, err := store.Unsubscribe(ctx, unsub.ID, SourceOneClick, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+
+	counts, err := store.ActiveInterestCounts(ctx)
+	if err != nil {
+		t.Fatalf("ActiveInterestCounts: %v", err)
+	}
+	var found *InterestCount
+	for i := range counts {
+		if counts[i].Slug == slug {
+			found = &counts[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("interest %q missing from ActiveInterestCounts, want count 3", slug)
+	}
+	if found.Count != 3 {
+		t.Errorf("count for %q = %d, want exactly 3 -- pending and unsubscribed subscribers must not be counted", slug, found.Count)
+	}
+}
+
+// TestActiveInterestCounts_ExcludesInactiveInterest proves the "restricted to
+// active interests" half of #0393's Design §3: an active subscriber
+// selecting a DEACTIVATED interest must not appear in the result at all.
+func TestActiveInterestCounts_ExcludesInactiveInterest(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	interestID, slug := createTestInterest(t, pool, false)
+
+	seed, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	active, err := store.Confirm(ctx, *seed.ConfirmToken, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if err := store.SetInterests(ctx, active.ID, []int64{interestID}); err != nil {
+		t.Fatalf("SetInterests: %v", err)
+	}
+
+	counts, err := store.ActiveInterestCounts(ctx)
+	if err != nil {
+		t.Fatalf("ActiveInterestCounts: %v", err)
+	}
+	for _, c := range counts {
+		if c.Slug == slug {
+			t.Fatalf("deactivated interest %q appeared in ActiveInterestCounts with count %d, want omitted", slug, c.Count)
+		}
+	}
+}
+
 // TestIsolation_UniqueDataNeverCollides is #0091 round two's isolation
 // proof. The package no longer truncates before every test (see testPool's
 // doc comment) — the table now accumulates rows across the whole binary

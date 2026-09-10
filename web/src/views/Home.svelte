@@ -45,12 +45,15 @@
   import {
     CRT_SRC_W,
     CRT_SRC_H,
-    CRT_SESSION,
     crtMatrix3d,
     visibleLines,
-    crtWorkshopLines,
-    crtListLines,
+    crtFallbackScript,
+    crtSessionToScript,
+    crtEnrichStep,
     type CrtWorkshop,
+    type CrtInterestCount,
+    type CrtScriptStep,
+    type CrtSessionResponse,
   } from '../lib/crtScreen';
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
@@ -192,38 +195,68 @@
       }
     }
 
-    // #0274: replace the illustrative first and last commands with real data
-    // when both fetches succeed. Either failing leaves that command's
-    // illustrative copy untouched -- the screen is decorative and must never
-    // degrade to a blank block or an error string. One fetch on mount, not a
-    // poll: the counts are cached server-side for 60s anyway.
-    const script = CRT_SESSION.map((c) => ({ cmd: c.cmd, out: [...c.out] }));
+    // #0393: the session now comes from GET /api/crt-session (admin-editable
+    // rows, ordered, active-only) rather than the compiled-in CRT_SESSION
+    // alone. crtSessionToScript falls back to the compiled-in session
+    // (crtFallbackScript) whenever that fetch fails, answers non-OK, or
+    // returns no commands -- the STORAGE=json / pre-seed-deploy / offline
+    // cases all collapse to the same fallback, and the screen is never left
+    // with nothing to type. `script` starts as that same fallback so
+    // `session()` always has something to run even before loadSession()
+    // resolves (reduced-motion renders synchronously below).
+    let script: CrtScriptStep[] = crtFallbackScript();
 
-    async function loadLiveData() {
+    async function loadSession(): Promise<void> {
       try {
-        const res = await fetch('/api/workshops', { headers: { accept: 'application/json' } });
-        if (res.ok) {
-          const body = (await res.json()) as { upcoming?: CrtWorkshop[] };
-          const lines = crtWorkshopLines(body.upcoming ?? []);
-          if (lines.length) script[0] = { cmd: script[0].cmd, out: lines };
-        }
+        const res = await fetch('/api/crt-session', { headers: { accept: 'application/json' } });
+        const body = res.ok ? ((await res.json()) as CrtSessionResponse) : null;
+        script = crtSessionToScript(body);
       } catch {
-        // keep the illustrative copy
+        script = crtFallbackScript();
       }
-      try {
-        const res = await fetch('/api/list-stats', { headers: { accept: 'application/json' } });
-        if (res.ok) {
-          const body = (await res.json()) as { confirmed?: number; pending?: number };
-          if (typeof body.confirmed === 'number') {
-            const idx = script.findIndex((c) => c.cmd.startsWith('subscribe'));
-            if (idx >= 0) {
-              script[idx] = { cmd: script[idx].cmd, out: crtListLines(body.confirmed, body.pending ?? 0) };
-            }
+    }
+
+    // #0274's rule generalised per-row (#0393): a live-source row's own
+    // fetch failing leaves ITS stored `out` untouched. The DECISION of
+    // whether/how to replace a row's `out` is crtEnrichStep (lib/crtScreen.ts)
+    // -- pure and unit-tested -- so this function's only job is fetching:
+    // one request per endpoint on mount, not a poll (both are cached
+    // server-side for 60s anyway), passed to crtEnrichStep as `undefined`
+    // when the fetch failed, threw, or no row needs it, which crtEnrichStep
+    // always treats as "keep the stored fallback".
+    async function loadLiveData(): Promise<void> {
+      const needsWorkshops = script.some((s) => s.source === 'workshops');
+      const needsListStats = script.some((s) => s.source === 'list_stats' || s.source === 'interests');
+
+      let workshops: CrtWorkshop[] | undefined;
+      if (needsWorkshops) {
+        try {
+          const res = await fetch('/api/workshops', { headers: { accept: 'application/json' } });
+          if (res.ok) {
+            const body = (await res.json()) as { upcoming?: CrtWorkshop[] };
+            workshops = body.upcoming ?? [];
           }
+        } catch {
+          // workshops stays undefined -- crtEnrichStep keeps the stored fallback
         }
-      } catch {
-        // keep the illustrative copy
       }
+
+      let listStats: { confirmed?: number; pending?: number } | undefined;
+      let interests: CrtInterestCount[] | undefined;
+      if (needsListStats) {
+        try {
+          const res = await fetch('/api/list-stats', { headers: { accept: 'application/json' } });
+          if (res.ok) {
+            const body = (await res.json()) as { confirmed?: number; pending?: number; interests?: CrtInterestCount[] };
+            listStats = { confirmed: body.confirmed, pending: body.pending };
+            interests = body.interests;
+          }
+        } catch {
+          // listStats/interests stay undefined -- crtEnrichStep keeps the stored fallback
+        }
+      }
+
+      script = script.map((row) => crtEnrichStep(row, { workshops, listStats, interests }));
     }
 
     fit();
@@ -241,7 +274,9 @@
     if (!reduce.matches) {
       blink = setInterval(() => { cursorOn = !cursorOn; paint(); }, 530);
     }
-    void loadLiveData().then(() => session());
+    void loadSession()
+      .then(() => loadLiveData())
+      .then(() => session());
 
     return () => {
       generation++;

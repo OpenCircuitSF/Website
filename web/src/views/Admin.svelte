@@ -28,6 +28,11 @@
     case rather than letting the admin discover the refusal after a failed
     request. Slugs are immutable once created (no field for it anywhere in
     this section) — see #0024's Gotchas for why.
+  - CRT session — GET/POST/PATCH/DELETE /admin/crt-commands[/{id}] (#0393):
+    the home hero's live CRT screen, moved from a hard-coded array into rows.
+    Lives in its own component, CrtCommands.svelte, since #0393's Design §4
+    calls for one; markup/wiring only, per CLAUDE.md's "components stay
+    thin" — see that file's own doc comment.
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
@@ -122,6 +127,7 @@
   import Dashboard from './admin/Dashboard.svelte';
   import Pending from './admin/Pending.svelte';
   import Deliverability from './admin/Deliverability.svelte';
+  import CrtCommands from './admin/CrtCommands.svelte';
 
   type Section =
     | 'overview'
@@ -134,7 +140,8 @@
     | 'suppressions'
     | 'deliverability'
     | 'campaigns'
-    | 'workshops';
+    | 'workshops'
+    | 'crt';
   // #0061: the /admin landing screen (PRD §5.2's "Overview — list size,
   // growth, recent campaigns, pending sends") is the default tab, matching
   // what an admin who navigates straight to /admin actually sees first.
@@ -1271,10 +1278,21 @@
         aria-current={section === 'workshops' ? 'page' : undefined}
         onclick={() => (section = 'workshops')}
       >Workshops</button>
+      <button
+        type="button"
+        class="subtab"
+        class:active={section === 'crt'}
+        aria-current={section === 'crt' ? 'page' : undefined}
+        onclick={() => (section = 'crt')}
+      >CRT session</button>
     </nav>
 
     {#if section === 'overview'}
       <Dashboard onOpenCampaign={goToAnnouncedCampaign} />
+    {/if}
+
+    {#if section === 'crt'}
+      <CrtCommands />
     {/if}
 
     {#if section === 'settings'}

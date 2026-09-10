@@ -11,17 +11,37 @@ import (
 )
 
 // ListStatsStore is the narrow store interface this handler needs (CLAUDE.md
-// §1): the same aggregate query the admin dashboard uses, nothing more.
+// §1): the same aggregate query the admin dashboard uses, plus the
+// per-interest active-subscriber breakdown #0393 adds below.
 type ListStatsStore interface {
 	StatusCounts(ctx context.Context) (map[string]int64, error)
+	ActiveInterestCounts(ctx context.Context) ([]subscribers.InterestCount, error)
 }
 
-// listStatsResponse is deliberately two integers. No addresses, no ids, no
-// timestamps — nothing that could identify a signup, which is what makes this
-// endpoint safe to serve publicly (#0274).
+// listStatsInterestView is one entry of the interests array below: a slug,
+// its display name, and the exact count of active subscribers who currently
+// have it selected. No id — the public wire contract has never needed one
+// (matching publicInterestView's own convention), and this is the one field
+// set #0393 adds to what was otherwise a fixed two-field response.
+type listStatsInterestView struct {
+	Slug  string `json:"slug"`
+	Name  string `json:"name"`
+	Count int64  `json:"count"`
+}
+
+// listStatsResponse. `confirmed` and `pending` are the original two
+// integers; no addresses, no ids, no timestamps — nothing that could
+// identify a signup, which is what makes this endpoint safe to serve
+// publicly (#0274). `interests` (#0393) is the one addition: per-interest
+// active-subscriber counts, always present as a list (never null, matching
+// every other list endpoint's convention) though it may be empty. See
+// value()'s call into subscribers.Store.ActiveInterestCounts for why these
+// counts are exact rather than bucketed like pending — the reasoning is
+// recorded on that method, not duplicated here.
 type listStatsResponse struct {
-	Confirmed int64 `json:"confirmed"`
-	Pending   int64 `json:"pending"`
+	Confirmed int64                   `json:"confirmed"`
+	Pending   int64                   `json:"pending"`
+	Interests []listStatsInterestView `json:"interests"`
 }
 
 // PublicListStatsHandler serves GET /api/list-stats: aggregate mailing-list
@@ -45,6 +65,19 @@ type listStatsResponse struct {
 // submission usually does not move the reported value at all, and when it does
 // the boundary is not attributable to any particular submission. Combined with
 // the cache TTL below, a submit-then-poll cannot attribute a change.
+//
+// # Why the per-interest counts (#0393) are exact too
+//
+// `interests` carries the same exactness as `confirmed`, for the same reason:
+// moving an interest's count requires confirming a subscription with that
+// interest selected, which requires clicking a link in an email only the
+// address's owner receives. An attacker cannot move an interest's count for an
+// address they do not control, and selecting an interest is not itself an
+// oracle for "is this address already on the list" — the thing the uniform 202
+// protects, and the thing bucketing `pending` above closes off. Only `pending`
+// needed the bucket; `interests`, like `confirmed`, deliberately does not
+// apply one. See subscribers.Store.ActiveInterestCounts's own doc comment for
+// the full statement of this argument against the query it actually runs.
 //
 // The screen this feeds is decorative; single-address precision buys it
 // nothing, so the mitigation costs nothing real.
@@ -115,10 +148,29 @@ func (h *PublicListStatsHandler) value(ctx context.Context) (listStatsResponse, 
 		}
 		return listStatsResponse{}, err
 	}
+	interestCounts, err := h.store.ActiveInterestCounts(ctx)
+	if err != nil {
+		// Same degrade-to-stale-or-error convention as the StatusCounts
+		// error above, rather than silently reporting an empty interests
+		// array over a real store error — an empty array is itself a claim
+		// ("no interest currently has an active subscriber"), and this
+		// endpoint must not fabricate one.
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.haveOnce {
+			return h.cached, nil
+		}
+		return listStatsResponse{}, err
+	}
 
+	interestViews := make([]listStatsInterestView, 0, len(interestCounts))
+	for _, ic := range interestCounts {
+		interestViews = append(interestViews, listStatsInterestView{Slug: ic.Slug, Name: ic.Name, Count: ic.Count})
+	}
 	resp := listStatsResponse{
 		Confirmed: maxInt64(counts[subscribers.StatusActive], 0),
 		Pending:   bucketDown(counts[subscribers.StatusPending], pendingBucket),
+		Interests: interestViews,
 	}
 
 	h.mu.Lock()

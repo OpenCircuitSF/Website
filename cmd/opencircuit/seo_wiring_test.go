@@ -166,9 +166,10 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 			adminWorkshopsH,
 			nil,           /* adminMediaH: not exercised by this test */
 			nil,           /* adminDashboardH: not exercised by this test */
+			nil,           /* adminCrtCommandsH: not exercised by this test */
 			nil, nil, nil, /* eventsH, meH, subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
-			nil, nil, /* publicWorkshopsH, publicListStatsH: not exercised by this test -- this test hits the SEO-rendered detail page, not the JSON API */
+			nil, nil, nil, /* publicWorkshopsH, publicListStatsH, publicCrtSessionH: not exercised by this test -- this test hits the SEO-rendered detail page, not the JSON API */
 			nil, /* publicArchiveH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
@@ -445,9 +446,10 @@ func TestMountAndServe_CampaignArchiveMutationInvalidatesSharedSEOSite(t *testin
 			nil,           /* adminWorkshopsH: not exercised by this test */
 			nil,           /* adminMediaH: not exercised by this test */
 			nil,           /* adminDashboardH: not exercised by this test */
+			nil,           /* adminCrtCommandsH: not exercised by this test */
 			nil, nil, nil, /* eventsH, meH, subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
-			nil, nil, /* publicWorkshopsH, publicListStatsH: not exercised by this test */
+			nil, nil, nil, /* publicWorkshopsH, publicListStatsH, publicCrtSessionH: not exercised by this test */
 			nil, /* publicArchiveH: not exercised by this test -- this test hits the sitemap route, not the JSON API */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */

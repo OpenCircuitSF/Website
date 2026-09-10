@@ -10,6 +10,7 @@ import type {
   AdminUser,
   Setting,
   Interest,
+  CrtCommand,
   Subscriber,
   SubscribersPage,
   Suppression,
@@ -407,6 +408,52 @@ export function updateInterest(
  */
 export function deleteInterest(id: number): Promise<{ message: string }> {
   return apiDelete<{ message: string }>(`/admin/interests/${id}`);
+}
+
+// ── Admin: CRT session commands (#0393) ──────────────────────────────────────
+
+/** GET /admin/crt-commands — every command row, active and inactive (admin only). */
+export function listCrtCommands(): Promise<{ commands: CrtCommand[] }> {
+  return apiGet<{ commands: CrtCommand[] }>('/admin/crt-commands');
+}
+
+/**
+ * POST /admin/crt-commands — create a new command row (admin only). `slug`
+ * must be lowercase and hyphenated and is immutable once created; `source`
+ * defaults to 'static' when omitted; `sortOrder` defaults to 0.
+ */
+export function createCrtCommand(
+  slug: string,
+  command: string,
+  output: string,
+  source?: string,
+  sortOrder?: number,
+): Promise<CrtCommand> {
+  return apiPost<CrtCommand>('/admin/crt-commands', {
+    slug,
+    command,
+    output,
+    source: source || undefined,
+    sort_order: sortOrder,
+  });
+}
+
+/**
+ * PATCH /admin/crt-commands/{id} — update an existing row's command, output,
+ * source, sort_order, and/or active flag (admin only). Only the fields
+ * present in `fields` are changed; there is deliberately no `slug` field —
+ * the server rejects a body that carries one, mirroring updateInterest.
+ */
+export function updateCrtCommand(
+  id: number,
+  fields: { command?: string; output?: string; source?: string; sort_order?: number; active?: boolean },
+): Promise<CrtCommand> {
+  return apiPatch<CrtCommand>(`/admin/crt-commands/${id}`, fields);
+}
+
+/** DELETE /admin/crt-commands/{id} — permanently remove a command row (admin only). */
+export function deleteCrtCommand(id: number): Promise<{ message: string }> {
+  return apiDelete<{ message: string }>(`/admin/crt-commands/${id}`);
 }
 
 // ── Admin: subscribers screen (#0032) ────────────────────────────────────────

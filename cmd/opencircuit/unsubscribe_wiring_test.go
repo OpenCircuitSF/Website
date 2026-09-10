@@ -108,10 +108,11 @@ func TestMountAndServe_UnsubscribePost_NeverRateLimited(t *testing.T) {
 			nil, /* adminWorkshopsH: not exercised by this test */
 			nil, /* adminMediaH: not exercised by this test */
 			nil, /* adminDashboardH: not exercised by this test */
+			nil, /* adminCrtCommandsH: not exercised by this test */
 			nil, nil, nil,
 			nil, nil, nil, /* publicInterestsH, preferencesH, confirmH: not exercised by this test */
 			unsubscribeH,
-			nil, nil, /* publicWorkshopsH, publicListStatsH: not exercised by this test */
+			nil, nil, nil, /* publicWorkshopsH, publicListStatsH, publicCrtSessionH: not exercised by this test */
 			nil, /* publicArchiveH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
@@ -233,10 +234,11 @@ func TestMountAndServe_UnsubscribePost_NoSessionNoCSRF(t *testing.T) {
 			nil, /* adminWorkshopsH: not exercised by this test */
 			nil, /* adminMediaH: not exercised by this test */
 			nil, /* adminDashboardH: not exercised by this test */
+			nil, /* adminCrtCommandsH: not exercised by this test */
 			nil, nil, nil,
 			nil, nil, nil,
 			unsubscribeH,
-			nil, nil, /* publicWorkshopsH, publicListStatsH: not exercised by this test */
+			nil, nil, nil, /* publicWorkshopsH, publicListStatsH, publicCrtSessionH: not exercised by this test */
 			nil, /* publicArchiveH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */

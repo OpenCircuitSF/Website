@@ -14,9 +14,12 @@ import (
 )
 
 type fakeListStatsStore struct {
-	counts map[string]int64
-	err    error
-	calls  int
+	counts         map[string]int64
+	interestCounts []subscribers.InterestCount
+	err            error
+	interestErr    error
+	calls          int
+	interestCalls  int
 }
 
 func (f *fakeListStatsStore) StatusCounts(context.Context) (map[string]int64, error) {
@@ -25,6 +28,14 @@ func (f *fakeListStatsStore) StatusCounts(context.Context) (map[string]int64, er
 		return nil, f.err
 	}
 	return f.counts, nil
+}
+
+func (f *fakeListStatsStore) ActiveInterestCounts(context.Context) ([]subscribers.InterestCount, error) {
+	f.interestCalls++
+	if f.interestErr != nil {
+		return nil, f.interestErr
+	}
+	return f.interestCounts, nil
 }
 
 func getStats(t *testing.T, h *PublicListStatsHandler) (int, listStatsResponse, string) {
@@ -83,7 +94,7 @@ func TestListStats_ConfirmedIsExact(t *testing.T) {
 // The response must never carry anything that could identify a signup. This
 // asserts on the serialised bytes rather than the struct, so adding a field
 // later fails here rather than shipping.
-func TestListStats_ResponseCarriesOnlyTwoAggregateFields(t *testing.T) {
+func TestListStats_ResponseCarriesOnlyThreeAggregateFields(t *testing.T) {
 	store := &fakeListStatsStore{counts: map[string]int64{
 		subscribers.StatusActive:     42,
 		subscribers.StatusPending:    10,
@@ -95,10 +106,10 @@ func TestListStats_ResponseCarriesOnlyTwoAggregateFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &raw); err != nil {
 		t.Fatalf("decoding %q: %v", body, err)
 	}
-	if len(raw) != 2 {
-		t.Fatalf("response has %d fields (%q), want exactly confirmed and pending", len(raw), body)
+	if len(raw) != 3 {
+		t.Fatalf("response has %d fields (%q), want exactly confirmed, pending, and interests", len(raw), body)
 	}
-	for _, k := range []string{"confirmed", "pending"} {
+	for _, k := range []string{"confirmed", "pending", "interests"} {
 		if _, ok := raw[k]; !ok {
 			t.Errorf("missing %q in %q", k, body)
 		}
@@ -107,6 +118,83 @@ func TestListStats_ResponseCarriesOnlyTwoAggregateFields(t *testing.T) {
 		if strings.Contains(strings.ToLower(body), forbidden) {
 			t.Errorf("response %q contains %q — this endpoint is public and must stay aggregate-only", body, forbidden)
 		}
+	}
+}
+
+// #0393: the interests array carries exactly slug/name/count per entry —
+// asserted against the encoded JSON bytes, matching the whole-response
+// assertion above, so an id or timestamp added to listStatsInterestView
+// later fails here too.
+func TestListStats_InterestsArrayShapeAndOrdering(t *testing.T) {
+	store := &fakeListStatsStore{
+		counts: map[string]int64{subscribers.StatusActive: 10},
+		interestCounts: []subscribers.InterestCount{
+			{Slug: "microcontrollers", Name: "Microcontrollers", Count: 4},
+			{Slug: "soldering", Name: "Soldering", Count: 3},
+		},
+	}
+	_, got, body := getStats(t, NewPublicListStatsHandler(store))
+	if len(got.Interests) != 2 {
+		t.Fatalf("Interests has %d entries, want 2 (body %q)", len(got.Interests), body)
+	}
+	if got.Interests[0].Slug != "microcontrollers" || got.Interests[0].Count != 4 {
+		t.Errorf("Interests[0] = %+v, want slug=microcontrollers count=4", got.Interests[0])
+	}
+	if got.Interests[1].Slug != "soldering" || got.Interests[1].Count != 3 {
+		t.Errorf("Interests[1] = %+v, want slug=soldering count=3", got.Interests[1])
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(body), &raw); err != nil {
+		t.Fatalf("decoding %q: %v", body, err)
+	}
+	entries, ok := raw["interests"].([]any)
+	if !ok || len(entries) != 2 {
+		t.Fatalf("raw interests = %#v, want a 2-element array", raw["interests"])
+	}
+	first, ok := entries[0].(map[string]any)
+	if !ok || len(first) != 3 {
+		t.Fatalf("interests[0] = %#v, want exactly slug/name/count", entries[0])
+	}
+	for _, k := range []string{"slug", "name", "count"} {
+		if _, ok := first[k]; !ok {
+			t.Errorf("interests[0] missing %q", k)
+		}
+	}
+}
+
+// An empty distribution must serialise as [], never null — the SPA's
+// crtInterestLines (web/src/lib/crtScreen.ts) is written against "always an
+// array", matching every other list endpoint's convention in this codebase.
+func TestListStats_InterestsEmptyIsArrayNotNull(t *testing.T) {
+	store := &fakeListStatsStore{counts: map[string]int64{subscribers.StatusActive: 0}}
+	_, _, body := getStats(t, NewPublicListStatsHandler(store))
+	if !strings.Contains(body, `"interests":[]`) {
+		t.Errorf("body %q does not contain an empty interests array literal", body)
+	}
+}
+
+// A store error on the interest-counts query must degrade the same way a
+// StatusCounts error does (serve stale once warm, 503 cold) — not silently
+// report an empty interests array, which would itself be a fabricated claim.
+func TestListStats_InterestCountsErrorDegradesLikeStatusCountsError(t *testing.T) {
+	store := &fakeListStatsStore{counts: map[string]int64{subscribers.StatusActive: 5}}
+	h := NewPublicListStatsHandler(store)
+	now := time.Now()
+	h.now = func() time.Time { return now }
+
+	if code, _, body := getStats(t, h); code != http.StatusOK {
+		t.Fatalf("warm-up: code %d body %q", code, body)
+	}
+
+	store.interestErr = errors.New("database down")
+	now = now.Add(listStatsTTL + time.Second)
+	code, got, body := getStats(t, h)
+	if code != http.StatusOK {
+		t.Fatalf("status %d (%q), want the stale value served", code, body)
+	}
+	if got.Confirmed != 5 {
+		t.Errorf("confirmed = %d, want the stale 5", got.Confirmed)
 	}
 }
 

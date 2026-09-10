@@ -833,6 +833,7 @@ const KNOWN_LOADING_PLACEHOLDERS: AllowlistEntry[] = [
     reason: `${KNOWN_LOADING_PLACEHOLDER_REASON} Dashboard.svelte's SECOND placeholder -- not worded "Loading…" (it's the empty-state copy, the {:else} of {#if warnings.length > 0}) but the identical shape: single-child branch, static unvarying text, reached only from the same async overview fetch as "Loading overview…" above.`,
   },
   { file: 'web/src/views/admin/Pending.svelte', match: 'Loading pending signups…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/admin/CrtCommands.svelte', match: 'Loading CRT commands…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
 ];
 
 /** #0286: an in-branch role="status"/aria-live site with dynamic text, no

@@ -17,6 +17,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
+	"github.com/brennanMKE/OpenCircuitSF/internal/crt"
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
@@ -203,6 +204,10 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	adminDashboardH := handlers.NewAdminDashboardHandler(
 		subscribersStore, interestsStore, campaignsStore, campaignStatsStore, store, outbox.NewStore(pool), cfg.SESSandbox,
 	)
+	// #0393: exercised the same way as adminDashboardH above — a real store,
+	// so this test's guard proof covers /admin/crt-commands too.
+	crtStore := crt.NewStore(pool)
+	adminCrtCommandsH := handlers.NewAdminCrtCommandsHandler(crtStore, auditLogger)
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 	meH := handlers.NewMeHandler()
@@ -224,8 +229,8 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
-			nil, nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH: not exercised by this test */
+			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			nil, nil, nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH: not exercised by this test */
 			nil, /* publicArchiveH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
@@ -341,6 +346,27 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM workshops WHERE title LIKE 'zz-wiring-%'`)
 	})
 
+	// A dedicated throwaway crt_commands row for the
+	// /admin/crt-commands/{id} family (#0393), seeded through the real
+	// store — never a literal id, same CLAUDE.md §8b reasoning as every
+	// other target* above. The admin-session case reaches the real handler
+	// for every verb (GET, POST, PATCH, DELETE); this test sends no body on
+	// PATCH, so it 400s on the empty/invalid JSON body, and DELETE
+	// genuinely removes the row — still proof enough that RequireAdmin let
+	// the request through, the same standard targetWorkshop's own comment
+	// above applies. The cleanup below is unconditional regardless of
+	// whether DELETE actually ran.
+	targetCrtSlug := fmt.Sprintf("zz-wiring-%d", testdb.Unique())
+	targetCrtCommand, err := crtStore.Create(context.Background(), targetCrtSlug, "wiring --target", "wiring guard target output", crt.SourceStatic, 0)
+	if err != nil {
+		t.Fatalf("seed target crt command: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), wiringDBOpTimeout)
+		defer cancel()
+		_, _ = pool.Exec(ctx, `DELETE FROM crt_commands WHERE slug LIKE 'zz-wiring-%'`)
+	})
+
 	// adminRoutes (cmd/opencircuit/main.go) is the single list mountAndServe
 	// itself loops over to register every admin route behind requireAdmin.
 	// Enumerating it here, rather than hand-listing paths, is what closes
@@ -365,8 +391,8 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			return status != http.StatusUnauthorized && status != http.StatusForbidden
 		}},
 	}
-	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH) {
-		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID, targetCampaign.ID, targetWorkshop.ID)
+	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH) {
+		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID, targetCampaign.ID, targetWorkshop.ID, targetCrtCommand.ID)
 		for _, c := range cases {
 			req, err := http.NewRequest(route.method, baseURL+path, nil)
 			if err != nil {
@@ -401,7 +427,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 // id; /admin/campaigns/... routes (#0041) take a campaign id, including its
 // /send and /cancel sub-routes. Routes with no {id} (e.g. /admin/settings,
 // /admin/audit, /admin/subscribers itself) pass through unchanged.
-func resolveAdminRoutePath(path string, userID, interestID, subscriberID, campaignID, workshopID int64) string {
+func resolveAdminRoutePath(path string, userID, interestID, subscriberID, campaignID, workshopID, crtCommandID int64) string {
 	switch {
 	case strings.HasPrefix(path, "/admin/users/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(userID), 1)
@@ -413,6 +439,8 @@ func resolveAdminRoutePath(path string, userID, interestID, subscriberID, campai
 		return strings.Replace(path, "{id}", fmt.Sprint(campaignID), 1)
 	case strings.HasPrefix(path, "/admin/workshops/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(workshopID), 1)
+	case strings.HasPrefix(path, "/admin/crt-commands/"):
+		return strings.Replace(path, "{id}", fmt.Sprint(crtCommandID), 1)
 	default:
 		return path
 	}

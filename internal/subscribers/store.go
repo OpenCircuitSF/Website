@@ -2094,6 +2094,73 @@ func (s *Store) StatusCounts(ctx context.Context) (map[string]int64, error) {
 	return counts, nil
 }
 
+// InterestCount is one row of ActiveInterestCounts' result: an interest and
+// how many active subscribers currently have it selected.
+type InterestCount struct {
+	Slug  string
+	Name  string
+	Count int64
+}
+
+// ActiveInterestCounts returns, for every ACTIVE interest with at least one
+// ACTIVE (confirmed) subscriber currently selecting it, the number of such
+// subscribers -- ordered by count descending then the interest's own
+// sort_order, per #0393's Design §3. An INNER JOIN through
+// subscriber_interests naturally omits an interest with zero qualifying
+// subscribers, so there is no separate "omit zero counts" step here the way
+// StatusCounts needs its "every known status present" backfill above.
+//
+// Restricted to status = 'active' (never 'pending', 'unsubscribed',
+// 'bounced', or 'complained') and, like StatusCounts, excludes synthetic =
+// true rows -- an admin's own test-send fixture must not inflate a public
+// count. Restricted to interests.active = true so a deactivated interest
+// (hidden from the signup form, #0024) does not appear on the public CRT
+// screen either, even though its historical subscriber_interests rows
+// persist.
+//
+// # Why this count is exact, unlike StatusCounts' pending
+//
+// GET /api/list-stats' pending count is deliberately bucketed (see this
+// file's sibling handler, internal/handlers/public_list_stats.go, for the
+// full reasoning) because a live exact pending count would let an attacker
+// submit an address and poll to learn whether it was already on the list --
+// a narrow reopening of what POST /api/subscribe's uniform 202 exists to
+// prevent (CLAUDE.md §9). These per-interest counts carry no such risk and
+// are exact for exactly the same reason `confirmed` is exact: moving one
+// requires confirming a subscription, which requires clicking a link in an
+// email only the address's owner receives. An attacker cannot move an
+// interest's count for an address they do not control, and watching a count
+// move says nothing about any address they might be probing -- selecting an
+// interest is not itself an oracle for "is this address already
+// subscribed", the thing the uniform 202 protects. Only pending needed the
+// bucket; this method deliberately does not apply one.
+func (s *Store) ActiveInterestCounts(ctx context.Context) ([]InterestCount, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT i.slug, i.name, count(*) AS n
+		  FROM subscriber_interests si
+		  JOIN subscribers s ON s.id = si.subscriber_id
+		  JOIN interests i ON i.id = si.interest_id
+		 WHERE s.status = 'active' AND s.synthetic = false AND i.active = true
+		 GROUP BY i.id, i.slug, i.name, i.sort_order
+		 ORDER BY n DESC, i.sort_order`)
+	if err != nil {
+		return nil, fmt.Errorf("subscribers: counting active subscribers by interest: %w", err)
+	}
+	defer rows.Close()
+	var out []InterestCount
+	for rows.Next() {
+		var ic InterestCount
+		if err := rows.Scan(&ic.Slug, &ic.Name, &ic.Count); err != nil {
+			return nil, fmt.Errorf("subscribers: scanning interest count: %w", err)
+		}
+		out = append(out, ic)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("subscribers: iterating interest counts: %w", err)
+	}
+	return out, nil
+}
+
 // Growth30Days returns three counts over the trailing window starting at
 // since (the caller passes now.Add(-30*24*time.Hour); kept as a parameter
 // rather than computed here so the result is deterministic in tests, the

@@ -31,6 +31,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
+	"github.com/brennanMKE/OpenCircuitSF/internal/crt"
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
 	"github.com/brennanMKE/OpenCircuitSF/internal/devstore"
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
@@ -268,7 +269,18 @@ func servePostgres(cfg *config.Config) error {
 	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, campaignsStore, auditLogger, cfg.BaseURL)
 	publicWorkshopsH := handlers.NewPublicWorkshopsHandler(workshopsStore, interestsStore)
 	// #0274: aggregate list counts for the home page's live CRT screen.
+	// subscribersStore now also backs #0393's per-interest active-subscriber
+	// breakdown (ActiveInterestCounts) — same stateless-wrapper-over-the-
+	// shared-pool reuse as interestsStore's two call sites above.
 	publicListStatsH := handlers.NewPublicListStatsHandler(subscribersStore)
+
+	// CRT session commands (#0393): the home hero's CRT screen, moved from
+	// the hard-coded CRT_SESSION array into rows. crtStore is a stateless
+	// wrapper over the shared pool, backing both the admin CRUD and the
+	// public read below — same convention as interestsStore's reuse above.
+	crtStore := crt.NewStore(pool)
+	adminCrtCommandsH := handlers.NewAdminCrtCommandsHandler(crtStore, auditLogger)
+	publicCrtSessionH := handlers.NewPublicCrtSessionHandler(crtStore)
 
 	// Admin image upload (#0433, reopening #0153): constructed
 	// UNCONDITIONALLY here, unlike every nil-guarded devstore-gap handler
@@ -559,8 +571,8 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicArchiveH, sesNotifyH, sendWorker, outboxWorker, site,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH, eventsH, meH, subscribeH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAdminAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -1058,6 +1070,19 @@ func serveDevMode(cfg *config.Config) error {
 	// nil.
 	var adminDashboardH *handlers.AdminDashboardHandler
 
+	// CRT session commands (#0393) have the same devstore gap as
+	// adminDashboardH above -- internal/devstore does not implement
+	// crtCommandStore/publicCrtCommandStore, so there is no crt_commands-table
+	// backing under STORAGE=json. Passing nil leaves every other route
+	// working; adminRoutes omits its four routes when adminCrtCommandsH is
+	// nil, and mountAndServe only registers GET /api/crt-session when
+	// publicCrtSessionH is non-nil, mirroring publicListStatsH's own
+	// nil-guard. The SPA's fallback for this exact case is the compiled-in
+	// CRT_SESSION constant (web/src/lib/crtScreen.ts) -- see that file's own
+	// doc comment.
+	var adminCrtCommandsH *handlers.AdminCrtCommandsHandler
+	var publicCrtSessionH *handlers.PublicCrtSessionHandler
+
 	// Public interests (#0029), confirm (#0030), preferences (#0031), and
 	// one-click unsubscribe (#0034) all have the same devstore gap as
 	// subscribeH/adminInterestsH above -- internal/devstore has no
@@ -1091,8 +1116,8 @@ func serveDevMode(cfg *config.Config) error {
 	var outboxWorker *mailing.OutboxWorker
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicArchiveH, sesNotifyH, sendWorker, outboxWorker, site,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH, eventsH, meH, subscribeH,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -1118,11 +1143,11 @@ type adminRoute struct {
 //
 // adminInterestsH, adminSubscribersH, adminImportsH, adminSuppressionsH,
 // adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH,
-// adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH, and
-// adminDashboardH may be nil (dev mode / STORAGE=json has no
-// interests/subscribers-table backing yet — see mountAndServe's comment on
-// the call site); their routes are simply omitted, mirroring mountAndServe's
-// own former nil guard.
+// adminCampaignPreflightH, adminCampaignStatsH, adminWorkshopsH,
+// adminDashboardH, and adminCrtCommandsH may be nil (dev mode / STORAGE=json
+// has no interests/subscribers/crt_commands-table backing yet — see
+// mountAndServe's comment on the call site); their routes are simply
+// omitted, mirroring mountAndServe's own former nil guard.
 func adminRoutes(
 	settingsH *handlers.SettingsHandler,
 	adminUsersH *handlers.AdminUsersHandler,
@@ -1142,6 +1167,7 @@ func adminRoutes(
 	adminWorkshopsH *handlers.AdminWorkshopsHandler,
 	adminMediaH *handlers.AdminMediaHandler,
 	adminDashboardH *handlers.AdminDashboardHandler,
+	adminCrtCommandsH *handlers.AdminCrtCommandsHandler,
 ) []adminRoute {
 	routes := []adminRoute{
 		{http.MethodGet, "/admin/settings", http.HandlerFunc(settingsH.List)},
@@ -1318,6 +1344,15 @@ func adminRoutes(
 			adminRoute{http.MethodGet, "/admin/overview", http.HandlerFunc(adminDashboardH.Overview)},
 		)
 	}
+	if adminCrtCommandsH != nil {
+		routes = append(routes,
+			// #0393: the home hero's CRT session, admin-editable.
+			adminRoute{http.MethodGet, "/admin/crt-commands", http.HandlerFunc(adminCrtCommandsH.List)},
+			adminRoute{http.MethodPost, "/admin/crt-commands", http.HandlerFunc(adminCrtCommandsH.Create)},
+			adminRoute{http.MethodPatch, "/admin/crt-commands/{id}", http.HandlerFunc(adminCrtCommandsH.Patch)},
+			adminRoute{http.MethodDelete, "/admin/crt-commands/{id}", http.HandlerFunc(adminCrtCommandsH.Delete)},
+		)
+	}
 	return routes
 }
 
@@ -1364,6 +1399,7 @@ func mountAndServe(
 	adminWorkshopsH *handlers.AdminWorkshopsHandler,
 	adminMediaH *handlers.AdminMediaHandler,
 	adminDashboardH *handlers.AdminDashboardHandler,
+	adminCrtCommandsH *handlers.AdminCrtCommandsHandler,
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
 	subscribeH *handlers.SubscribeHandler,
@@ -1373,6 +1409,7 @@ func mountAndServe(
 	unsubscribeH *handlers.UnsubscribeHandler,
 	publicWorkshopsH *handlers.PublicWorkshopsHandler,
 	publicListStatsH *handlers.PublicListStatsHandler,
+	publicCrtSessionH *handlers.PublicCrtSessionHandler,
 	publicArchiveH *handlers.PublicArchiveHandler,
 	sesNotifyH *handlers.SESNotificationsHandler,
 	sendWorker *mailing.Worker,
@@ -1442,7 +1479,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 
@@ -1505,6 +1542,17 @@ func mountAndServe(
 	if publicListStatsH != nil {
 		mux.Handle("GET /api/list-stats", http.HandlerFunc(publicListStatsH.Stats))
 		mux.Handle("GET /api/workshops/{slug}", http.HandlerFunc(publicWorkshopsH.GetBySlug))
+	}
+
+	// CRT session commands (#0393) — public, unauthenticated, same trust
+	// level as list-stats above: the ordered, active-only rows the home
+	// page's live CRT screen types out. publicCrtSessionH is nil in dev
+	// mode (STORAGE=json — internal/devstore has no crt_commands-table
+	// backing, see serveDevMode's comment); the SPA falls back to the
+	// compiled-in CRT_SESSION constant (web/src/lib/crtScreen.ts) whenever
+	// this route is absent or answers a non-OK status.
+	if publicCrtSessionH != nil {
+		mux.Handle("GET /api/crt-session", http.HandlerFunc(publicCrtSessionH.List))
 	}
 
 	// Public campaign archive read routes (#0123, PRD §6.8) — no auth, no
