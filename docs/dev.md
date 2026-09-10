@@ -63,7 +63,7 @@ works too).
 admin row.** `DEV_ADMIN_LOGIN` never creates the account it targets — it
 only signs in as an EXISTING, active `ADMIN_EMAIL` user
 (`cmd/opencircuit`'s `newDevAdminAutoLogin`, #0402). One command does all
-three:
+three, though it drops and rebuilds the database before doing so:
 
 ```bash
 scripts/db-reset.sh

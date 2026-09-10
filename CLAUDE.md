@@ -36,7 +36,7 @@ belong in this tracker.
 | `internal/` | `config`, `db`, `auth`, `audit`, `events`, `devstore`, `handlers`, `middleware`, `testdb` — per-package roles in [`docs/architecture.md`](docs/architecture.md) |
 | `migrations/` | `golang-migrate` up/down SQL pairs, contiguous `000001`–`000027` |
 | `web/` | Svelte 5 SPA; built to `web/dist/` and embedded via `//go:embed all:dist` |
-| `scripts/` | `list-issues-by-phase` (the queue), `check.sh` (canonical verification), `testdb.sh` (per-agent test databases), `db-reset.sh` (rebuild a local DB), `dev.sh`, `sim.sh`, `deploy.sh`, `db-status.sh`, `db/` |
+| `scripts/` | `list-issues-by-phase` (the queue), `check.sh` (canonical verification), `testdb.sh` (per-agent test databases), `db-reset.sh` (drop and rebuild a local DB), `dev.sh`, `sim.sh`, `deploy.sh`, `db-status.sh`, `db/` |
 | `deploy/` | Apache vhost and systemd unit assets |
 | `docs/` | Per-subsystem documentation, indexed by [`docs/README.md`](docs/README.md) |
 | `assets/`, `placeholder/` | Logo and brand assets; the static site currently in production |

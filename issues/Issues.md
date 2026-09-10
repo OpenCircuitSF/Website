@@ -469,7 +469,7 @@ Database management:
 ```bash
 scripts/testdb.sh template      # (re)build the template after a migration change
 scripts/testdb.sh list | gc     # see / drop leftover per-agent databases
-scripts/db-reset.sh             # rebuild the local dev DB from migrations + seed admin
+scripts/db-reset.sh             # drops and rebuilds the local dev DB from migrations + seed admin
 ```
 
 Full local run:
