@@ -51,12 +51,18 @@ import (
 // count, is what this guard enforces and what
 // TestNoOpenIssueVerificationCitesUndefinedTestFunction checks on every run.
 //
-// The corpus-wide total drifts with ordinary work and is expected to. Over
-// this guard's short history it has read 1,742 / 107 / 87 when first
-// written; 1,746 / 140 / 108 / 88 after `#0265`'s fix pass corrected a
-// misattributed milestone; and 1,766 / 146 / 114 / 94 at 03db7ce, the tree
-// #0268's own scope decision above was measured against. Two of those steps
-// are worth separating, because only one of them is anybody's error:
+// The corpus-wide total drifts with ordinary work and is expected to. Every
+// row below is written in one unit: the first figure counts every
+// `Test…`-shaped token in the admitted sections, and each figure after it
+// counts how many of those are still *unresolved* — neither discounted by
+// the rules applied so far nor defined anywhere in the tree. A row that
+// reports surviving tokens rather than unresolved ones is not comparable to
+// its neighbours and must not be added. Over this guard's short history it
+// has read 1,742 / 107 / 87 when first written; 1,746 / 140 / 108 / 88 after
+// `#0265`'s fix pass corrected a misattributed milestone; and 1,766 / 146 /
+// 114 / 94 at 03db7ce, the tree #0268's own scope decision above was
+// measured against. Two of those steps are worth separating, because only
+// one of them is anybody's error:
 //
 //   - **1,746 → 1,766, and 88 → 94, was external.** `#0124` (06fefb3)
 //     deleted ten soft-bounce test functions that `issues/0039.md` and
@@ -88,20 +94,25 @@ import (
 //   - **A later widening moved the total again, independently of #0268.**
 //     `#0446` (385352c, 2026-09-05) added `## Work log` to this map (see
 //     below), admitting more text without this ledger gaining its own row.
-//     Re-derived for #0268's second implementation pass — using this file's
+//     #0268's second implementation pass re-derived this using this file's
 //     own `extractNamedSections`, `issueCitationExcluded` and
-//     `collectDefinedGoTestFuncs` rather than a hand count, per that pass's
-//     `## Verification` (`internal/db`, 2026-09-09): 490 `issues/*.md` files,
-//     5,665 raw tokens, 5,493 after `#0196`'s four rules, 5,477 after
-//     +line-wrap, 5,171 after +pipe, 4,548 after +marker — all 4,548 outside
-//     `open`/`in-progress` files, enforced scope still 0. This entry is
-//     dated on purpose, the way `#0487` dated its own re-derived total: a
-//     measurement taken *for* this correction, not an ongoing "today" claim
-//     the next reader should expect still to match. A future widening that
-//     wants its own before/after point should add a new dated entry rather
-//     than edit this one in place — editing an existing "current" figure in
-//     place, repeatedly, is the pattern that produced the contradiction this
-//     pass fixes.
+//     `collectDefinedGoTestFuncs` rather than a hand count, but reported raw
+//     survivor counts at each stage rather than the unresolved unit every
+//     other row in this ledger uses — the same defect this issue was filed
+//     on, one level up. The phase-3 review that caught it (2026-09-09) hands
+//     over the corrected figures, re-measured in the ledger's unit at
+//     a697486, the tree that review's own commit is: 490 numbered
+//     `issues/NNNN.md` files (491 `.md` files are read, `Issues.md`
+//     included, and it contributes no token in an admitted section), 5,681
+//     raw tokens, 369 after `#0196`'s four rules, 353 after +line-wrap, 279
+//     after +pipe, 235 after +marker — all 235 in `resolved` files, enforced
+//     scope still 0. This entry is dated on purpose, the way `#0487` dated
+//     its own re-derived total: a measurement taken *for* this correction,
+//     not an ongoing "today" claim the next reader should expect still to
+//     match. A future widening that wants its own before/after point should
+//     add a new dated entry rather than edit this one in place — editing an
+//     existing "current" figure in place, repeatedly, is the pattern that
+//     produced the contradiction this pass fixes.
 //
 // That is not a coincidence of a small sample; it is the project's own
 // mutation-testing convention (`CLAUDE.md` §8b, §8a: copy a file aside,
@@ -350,12 +361,14 @@ func isPipeAdjacentFragmentOfDefinedTest(name string, defined map[string]bool) b
 // still reported — that much is true unconditionally, and is what the rest
 // of this file relies on. It is not proof against every construction:
 // #0268's second-pass review built an adversarial fixture where a
-// stand-alone citation, followed by an unrelated next line that happens to
-// supply the exact remaining characters of some real function's name with
-// nothing else on either line to break the join, is discounted even though
-// the two lines were never meant to be read as one identifier. That shape
-// needs the cited fragment to be an exact prefix of a real function and the
-// very next line to complete it exactly, which no real corpus text has ever
+// stand-alone citation, followed by an unrelated next line whose first run
+// of identifier characters happens to supply the exact remaining characters
+// of some real function's name, is discounted even though the two lines
+// were never meant to be read as one identifier — only that first run is
+// consulted, so ordinary prose may follow it on the same line without
+// affecting the result. That shape needs the cited fragment to be an exact
+// prefix of a real function and the very next line to begin with the
+// characters that complete it exactly, which no real corpus text has ever
 // matched — contrived enough not to be a practical route past the guard, but
 // real enough that this comment should not claim more than the narrower
 // guarantee above. Blockquote markers are skipped along with indentation,
