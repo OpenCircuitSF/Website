@@ -12,6 +12,7 @@ than being integrated.
 | Folder | Issue | What it demonstrates |
 |---|---|---|
 | `crt-live-screen/` | [`#0233`](../issues/0233.md) | A live terminal screen projectively warped onto the hero CRT photograph |
+| `eu-crt/` | — | The same warp on a second CRT, with the corners, the commands and their output all editable in the page and saved as one JSON document |
 
 ## Sharing one
 
@@ -40,7 +41,15 @@ non-zero if any differ:
 ```sh
 python3 prototypes/crt-live-screen/build.py           # build, and report drift
 python3 prototypes/crt-live-screen/build.py --sync     # copy upstream over, then build
+python3 prototypes/eu-crt/build.py                    # same contract
+python3 prototypes/eu-crt/build.py --photos           # ...and re-derive the photographs
 ```
+
+`eu-crt/` also carries source material with no upstream counterpart — the two
+CRT photographs — so its `build.py` derives the `.webp` files it inlines from
+the `.png` originals beside it rather than only checking them. One of the two
+needs its alpha channel reconstructed first; `eu-crt/tools/key-light-photo.py`
+explains why and how.
 
 Run outside the repository — after someone unzips it — there is nothing to
 compare against, so the check reports that and carries on.
@@ -49,6 +58,13 @@ compare against, so the check reports that and carries on.
 
 Edit `index.src.html`, then re-run `build.py` to regenerate `index.html`.
 `index.html` carries a do-not-edit banner and is overwritten every build.
+
+`eu-crt/` is meant to be edited from the page rather than the file: the corner
+calibration, the commands and their output are all controls in the browser, and
+the JSON box at the bottom is the whole state. Copy it out to keep a screen,
+paste one back to restore it. To show the CRT on its own — centred, filling the
+viewport, with every control gone — set `SHOW_CONTROLS` to `false` at the top of
+the script.
 
 Both are committed on purpose: the source so changes are reviewable as diffs,
 the generated file so it can be opened straight from a checkout or a zip
