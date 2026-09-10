@@ -169,12 +169,15 @@ func devWiringPort(t *testing.T) int {
 // up only that user's own rows, never a literal or seeded id (CLAUDE.md
 // §8b).
 //
-// Three assertions, matching the issue's acceptance criteria: with the
-// DevAdminAutoLogin middleware wired, GET /api/me with NO cookie answers
-// 200 and reports the seeded admin; with nil passed for outerMiddleware
-// (today's unchanged production shape), the identical request answers 401;
-// and repeated credential-less requests against the wired server leave
-// EXACTLY ONE row in sessions for that admin (the cache-or-mint contract).
+// Five assertions now, matching #0402's original three plus the two #0484
+// added: with the DevAdminAutoLogin middleware wired, GET /api/me with NO
+// cookie answers 200 and reports the seeded admin; a stale cookie (a token
+// whose row is gone) and a garbage cookie (one that never was a token) each
+// heal to 200 rather than sticking at 401; with nil passed for
+// outerMiddleware (today's unchanged production shape), a credential-less
+// request answers 401; and repeated credential-less requests against the
+// wired server leave EXACTLY ONE row in sessions for that admin (the
+// cache-or-mint contract).
 func TestNewDevAdminAutoLogin_RealRouteTable(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -257,6 +260,47 @@ func TestNewDevAdminAutoLogin_RealRouteTable(t *testing.T) {
 	}
 	if me.ID != adminID || me.Email != adminEmail || !me.IsAdmin {
 		t.Errorf("/api/me = %+v, want {ID:%d Email:%s IsAdmin:true}", me, adminID, adminEmail)
+	}
+
+	// Server A, a stale cookie (a token whose sessions row was deleted) and
+	// a garbage cookie (a value that was never a real token): #0409's two
+	// healing states, which #0484 found pinned only one layer down against
+	// a fake resolver (TestDevAdminAutoLogin_StaleCookieHeals,
+	// TestDevAdminAutoLogin_GarbageCookieHeals) rather than through this
+	// real mountAndServe table.
+	//
+	// One request per state, no insert-then-delete round trip for "stale":
+	// reading auth.Store.ResolveSession shows a deleted row and a token
+	// that never existed take the IDENTICAL code path. The first UPDATE
+	// matches no row either way, so it falls through to the diagnostic
+	// SELECT; that SELECT also finds no row either way, since the row is
+	// simply absent in both cases; and both therefore return
+	// auth.ErrSessionInvalid from the same "case errors.Is(derr,
+	// pgx.ErrNoRows)" branch. An inserted-then-deleted row would reach that
+	// exact branch too, so it would prove nothing a bare nonexistent token
+	// does not already prove — the two client-observable "stale" and
+	// "garbage" states are one server-side state.
+	for _, tc := range []struct {
+		name        string
+		cookieValue string
+	}{
+		{"stale", "stale-token-never-minted-by-any-server"},
+		{"garbage", "nonsense"},
+	} {
+		req, err := http.NewRequest(http.MethodGet, urlA+"/api/me", nil)
+		if err != nil {
+			t.Fatalf("%s cookie: build request: %v", tc.name, err)
+		}
+		req.Header.Set("Cookie", auth.SessionCookieName+"="+tc.cookieValue)
+		resp3, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s cookie: GET %s/api/me: %v", tc.name, urlA, err)
+		}
+		body3, _ := io.ReadAll(resp3.Body)
+		resp3.Body.Close()
+		if resp3.StatusCode != http.StatusOK {
+			t.Errorf("server A, %s cookie: status = %d, want 200 (must heal, not 401 — #0409); body=%s", tc.name, resp3.StatusCode, body3)
+		}
 	}
 
 	// Server B, identical request, no auto-login wired: 401.
