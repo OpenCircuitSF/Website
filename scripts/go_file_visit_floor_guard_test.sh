@@ -441,13 +441,14 @@ OUTBOX_SRC="$REPO/$OUTBOX_GUARD_FILE"
 # which this grep cannot distinguish from a real one, and which go/ast
 # correctly never parses as one, since those fixtures are handed to the
 # parser as an in-memory `src` argument rather than discovered by walking
-# the tree. Re-derived directly for #0488 (2026-09-09), agreeing with the
-# figure recorded in that file on the same date: 39 by go/ast, 45 by this
-# function, a difference of six. For the NON-EXEMPT population
-# (internal/outbox excluded), both methods agree exactly at 12 -- every
-# non-exempt site matches one for one -- because all six of the divergent
-# occurrences sit INSIDE internal/outbox's own fixture file, so they only
-# ever affect the total, exempt-inclusive count, never the one
+# the tree. Both totals were re-derived independently for #0488
+# (2026-09-09) and their difference was exactly six; the absolute
+# figures themselves deliberately live only in that Go doc comment. For
+# the NON-EXEMPT population (internal/outbox excluded), both methods
+# agree with each other -- every non-exempt site matches one for one --
+# because all six of the divergent occurrences sit INSIDE
+# internal/outbox's own fixture file, so they only ever affect the
+# total, exempt-inclusive count, never the one
 # claimKindsGuardMinPlausibleNonExemptCallSiteCount is judged against.
 #
 # "Plus six" holds under ordinary call-site growth anywhere under the scan
