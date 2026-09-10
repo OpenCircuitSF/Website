@@ -24,26 +24,39 @@ import (
 //
 // Before writing the pattern, this guard's `## Verification` was produced by
 // running its candidate extractor (the pattern and discount rules below)
-// against the real corpus. **Every figure in this comment is a point-in-time
-// measurement, taken at the tree #0268 was implemented against**, not a
-// constant: 268 `issues/NNNN.md` files, all the sections listed in
-// issueCitationSectionHeaders, 2,796 raw `Test…`-shaped tokens. `#0196`'s
-// four rules alone (wildcard family — trailing `*`/`...` — a `renamed from`
-// note, and the `TestSentAt`/`TestPool` allowlist) leave 256 unresolved.
-// Three more rules this corpus specifically required (below) narrow that
-// further: the line-wrap rule takes it to 251, the `-run`-style
+// against the real corpus: 268 `issues/NNNN.md` files, all the sections
+// listed in issueCitationSectionHeaders. The exact raw `Test…`-shaped token
+// count, and how far each rule below narrows it, is recorded exactly once —
+// in the dated ledger a few paragraphs down — rather than restated here too.
+// **Restating it here independently is exactly the mistake #0268's own
+// second pass corrected**: an earlier revision of this sentence claimed
+// "2,796" while the ledger twelve lines below it claimed "2,783" for what was
+// supposed to be a measurement of the same tree, and neither figure
+// reproduced against any commit its own wording could plausibly have named
+// (checked at four candidate commits, across every admitted-set variant, with
+// and without `Issues.md` — see `#0268`'s `## Review notes`, 2026-09-09, for
+// the full search). One number, one location: the ledger below.
+//
+// The shape of the narrowing is stable even where the count is not. `#0196`'s
+// four rules (wildcard family — trailing `*`/`...` — a `renamed from` note,
+// and the `TestSentAt`/`TestPool` allowlist) remove the first slice. Three
+// more rules this corpus specifically required (below) remove further
+// slices, in this order: the line-wrap rule, the `-run`-style
 // regex-alternation-fragment rule (adjacent `|`, scoped to a genuine
-// substring of a defined test name — see below for why) takes it to 199,
-// and the go-test-output-marker rule takes it to 161. **All 161 are in
-// `resolved` issue files. Zero are in `open` or `in-progress` files** —
-// and the zero, not the 161, is what this guard enforces.
+// substring of a defined test name — see below for why), then the
+// go-test-output-marker rule. **Whatever the exact counts are on the day
+// someone reads this, every citation the last of those rules still leaves
+// unresolved sits in a `resolved` issue file, and the enforced
+// `open`/`in-progress` scope is zero** — and the zero, not any resolved-file
+// count, is what this guard enforces and what
+// TestNoOpenIssueVerificationCitesUndefinedTestFunction checks on every run.
 //
 // The corpus-wide total drifts with ordinary work and is expected to. Over
 // this guard's short history it has read 1,742 / 107 / 87 when first
 // written; 1,746 / 140 / 108 / 88 after `#0265`'s fix pass corrected a
-// misattributed milestone; 1,766 / 146 / 114 / 94 at 03db7ce; and
-// 2,783 / 256 / 204 / 166 here. Two of those steps are worth separating,
-// because only one of them is anybody's error:
+// misattributed milestone; and 1,766 / 146 / 114 / 94 at 03db7ce, the tree
+// #0268's own scope decision above was measured against. Two of those steps
+// are worth separating, because only one of them is anybody's error:
 //
 //   - **1,746 → 1,766, and 88 → 94, was external.** `#0124` (06fefb3)
 //     deleted ten soft-bounce test functions that `issues/0039.md` and
@@ -54,13 +67,41 @@ import (
 //     `resolved`-file drift the scope decision below deliberately declines
 //     to police.
 //
-//   - **1,766 → 2,796 is #0268 widening what gets scanned**, not the corpus
-//     growing. Admitting `## Fix pass`, `## Review notes` and their earlier
-//     spellings roughly doubled the text this guard reads. The enforced
-//     `open`/`in-progress` scope was 0 before the widening and is 0 after —
-//     but only after the eleven dangling citations #0268 measured in the
-//     newly-admitted sections were fixed. It failed loudly on first run,
-//     which was the point.
+//   - **03db7ce → #0268 landing was #0268 widening what gets scanned**, not
+//     the corpus growing. Admitting `## Fix pass`, `## Review notes` and
+//     their earlier spellings roughly doubled the volume of text this guard
+//     reads. The enforced `open`/`in-progress` scope was 0 before the
+//     widening and 0 after — but only once the eleven dangling citations
+//     #0268 measured in the newly-admitted sections were fixed. It failed
+//     loudly on first run, which was the point. No exact before/after token
+//     count is given for this specific step, on purpose: the two figures
+//     this comment once carried for it — "2,796" here, "2,783" twelve lines
+//     below, both describing what was meant to be this same tree —
+//     disagreed with each other, and neither reproduced at any commit either
+//     could plausibly have named (#0268's second-pass review searched four).
+//     Re-substituting a fourth number here would fix today's contradiction
+//     and reopen tomorrow's; the claim that actually needs to keep holding —
+//     enforced scope stayed 0 through the widening — is checked by
+//     `TestNoOpenIssueVerificationCitesUndefinedTestFunction` on every run,
+//     not by a token count in this prose, so no replacement number is owed.
+//
+//   - **A later widening moved the total again, independently of #0268.**
+//     `#0446` (385352c, 2026-09-05) added `## Work log` to this map (see
+//     below), admitting more text without this ledger gaining its own row.
+//     Re-derived for #0268's second implementation pass — using this file's
+//     own `extractNamedSections`, `issueCitationExcluded` and
+//     `collectDefinedGoTestFuncs` rather than a hand count, per that pass's
+//     `## Verification` (`internal/db`, 2026-09-09): 490 `issues/*.md` files,
+//     5,665 raw tokens, 5,493 after `#0196`'s four rules, 5,477 after
+//     +line-wrap, 5,171 after +pipe, 4,548 after +marker — all 4,548 outside
+//     `open`/`in-progress` files, enforced scope still 0. This entry is
+//     dated on purpose, the way `#0487` dated its own re-derived total: a
+//     measurement taken *for* this correction, not an ongoing "today" claim
+//     the next reader should expect still to match. A future widening that
+//     wants its own before/after point should add a new dated entry rather
+//     than edit this one in place — editing an existing "current" figure in
+//     place, repeatedly, is the pattern that produced the contradiction this
+//     pass fixes.
 //
 // That is not a coincidence of a small sample; it is the project's own
 // mutation-testing convention (`CLAUDE.md` §8b, §8a: copy a file aside,
@@ -303,10 +344,22 @@ func isPipeAdjacentFragmentOfDefinedTest(name string, defined map[string]bool) b
 // #0268 — and every one was reported as dangling although each joined into a
 // real defined function.
 //
-// The rule cannot smuggle anything past the guard, because it discounts only
-// when the *joined* name is in defined. A wrapped name whose halves do not
-// join into something real is still reported. Blockquote markers are skipped
-// along with indentation, since review notes are frequently quoted.
+// The guarantee this rule actually gives is narrower than "cannot be
+// smuggled past the guard": it discounts only when the *joined* name is in
+// defined, so a wrapped name whose halves do not join into something real is
+// still reported — that much is true unconditionally, and is what the rest
+// of this file relies on. It is not proof against every construction:
+// #0268's second-pass review built an adversarial fixture where a
+// stand-alone citation, followed by an unrelated next line that happens to
+// supply the exact remaining characters of some real function's name with
+// nothing else on either line to break the join, is discounted even though
+// the two lines were never meant to be read as one identifier. That shape
+// needs the cited fragment to be an exact prefix of a real function and the
+// very next line to complete it exactly, which no real corpus text has ever
+// matched — contrived enough not to be a practical route past the guard, but
+// real enough that this comment should not claim more than the narrower
+// guarantee above. Blockquote markers are skipped along with indentation,
+// since review notes are frequently quoted.
 func isLineWrappedDefinedTestName(text string, end int, name string, defined map[string]bool) bool {
 	if end >= len(text) || text[end] != '\n' {
 		return false
@@ -538,16 +591,36 @@ func collectDefinedGoTestFuncs(t *testing.T, roots []string) map[string]bool {
 // historical quote newly flagged) with no corpus evidence either way. This
 // map stays an allowlist, widened by exactly the one heading this issue's
 // sweep proved needs it.
+//
+// # #0268 second pass — two more corpus-attested spellings closed
+//
+// Criterion 1 asks for the admitted set to be enumerated from the corpus, not
+// guessed. Normalizing every level-2 heading in all `issues/*.md` files turns
+// up two evidence-asserting spellings issueSectionTitle produces that this
+// map did not yet admit: a numbered second fix pass (`issues/0231.md` and
+// `issues/0251.md`, both `## Fix pass 2`, one with a trailing date-and-actor
+// annotation) and a review-notes heading whose subject is appended directly
+// to the title instead of being set off by an em-dash or an opening
+// parenthesis (`issues/0043.md`'s `## Review notes on the regexp styling
+// (2026-08-21)` — the parenthesis here brackets only the date, so stripping
+// at it leaves the appended subject in place and the normalized title never
+// matches "review notes"). All three files are `resolved`, and each of the
+// two sections carries zero `Test…`-shaped tokens, so admitting them changes
+// nothing measured today — but the reason to normalize at all is that a
+// renamed heading must not defeat the guard, and these two real spellings did
+// exactly that until now.
 var issueCitationSectionHeaders = map[string]bool{
-	"verification":          true,
-	"implementation notes":  true,
-	"fix pass":              true, // #0268: 5 of the 11 measured dangling citations
-	"review notes":          true, // #0268: 2 of the 11
-	"review verification":   true, // earlier passes' spelling of "review notes"
-	"review findings":       true, // ditto
-	"bounce fix":            true, // earlier passes' spelling of "fix pass"
-	"bounce-fix completion": true, // ditto
-	"work log":              true, // #0446: the phase-2 convention's actual evidence section
+	"verification":                       true,
+	"implementation notes":               true,
+	"fix pass":                           true, // #0268: 5 of the 11 measured dangling citations
+	"fix pass 2":                         true, // #0268 second pass: issues/0231.md, issues/0251.md
+	"review notes":                       true, // #0268: 2 of the 11
+	"review notes on the regexp styling": true, // #0268 second pass: issues/0043.md's appended-subject spelling
+	"review verification":                true, // earlier passes' spelling of "review notes"
+	"review findings":                    true, // ditto
+	"bounce fix":                         true, // earlier passes' spelling of "fix pass"
+	"bounce-fix completion":              true, // ditto
+	"work log":                           true, // #0446: the phase-2 convention's actual evidence section
 }
 
 // issueSectionTitle normalizes a level-2 heading line to the bare section
@@ -1001,6 +1074,9 @@ func TestIssueSectionTitleNormalizesRealCorpusHeadings(t *testing.T) {
 		{"## Bounce fix (2026-08-23, claude-sonnet-5)", "bounce fix"},
 		{"## Bounce-fix completion (third pass, 2026-08-19 — escalated to Opus)", "bounce-fix completion"},
 		{"## Work log", "work log"}, // #0446: admitted — see the file-level comment
+		{"## Fix pass 2 — 2026-08-24 (orchestrator, direct)", "fix pass 2"},                          // #0268 second pass: issues/0231.md
+		{"## Fix pass 2", "fix pass 2"},                                                              // #0268 second pass: issues/0251.md
+		{"## Review notes on the regexp styling (2026-08-21)", "review notes on the regexp styling"}, // #0268 second pass: issues/0043.md
 		// Deliberately not admitted — see the file-level comment.
 		{"## Description", "description"},
 		{"## Notes", "notes"},
