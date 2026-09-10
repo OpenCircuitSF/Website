@@ -21,6 +21,20 @@
 // nothing downstream would fail — the connection is live, every test would
 // run and pass normally, just unserialized against whatever other package
 // currently holds the real lock.
+//
+// Holding the lock is not, by itself, proof the database is safe to test
+// against. #0360 found the shared opencircuit_test and opencircuit
+// databases both recording a migration as applied whose DDL had never
+// taken effect — schema_migrations read clean, and `migrate up` exits 0
+// having fixed nothing, since golang-migrate correctly skips a migration
+// it already believes applied. Lock therefore also runs CheckSchema (see
+// schema_check.go) against the connection it just locked, before
+// returning, and log.Fatalfs on any disagreement — the same escalation
+// #0476 established for a failure with no other symptom, for the same
+// reason: every test that follows would otherwise connect and run
+// normally against a schema quietly missing columns it expects, and fail
+// with an unattributable "column ... does not exist" that reads exactly
+// like a flake.
 package testdb
 
 import (
@@ -40,10 +54,12 @@ import (
 // serializes through this helper. All callers must use the same value.
 const advisoryLockKey int64 = 0x53484F52544C4B // "SHORTLK"
 
-// Lock acquires the shared advisory lock and returns a release function the
-// caller must invoke before exiting (typically right before os.Exit). It
-// blocks until the lock is free. If TEST_DATABASE_URL is unset, it returns a
-// no-op release immediately.
+// Lock acquires the shared advisory lock, verifies the locked database's
+// live schema actually agrees with migrations/ (#0360, see CheckSchema),
+// and returns a release function the caller must invoke before exiting
+// (typically right before os.Exit). It blocks until the lock is free. If
+// TEST_DATABASE_URL is unset, it returns a no-op release immediately and
+// runs no schema check at all — there is no database to check.
 //
 // The two ways acquisition can fail are deliberately NOT treated the same
 // way (#0476 criteria 1 and 2). Lock is called from every DB-backed
@@ -70,6 +86,14 @@ const advisoryLockKey int64 = 0x53484F52544C4B // "SHORTLK"
 //     ignore — it calls log.Fatalf and ends the process before any test
 //     runs, the same way EntryTruncate already does for a failed entry
 //     TRUNCATE below.
+//   - Once the lock is held, CheckSchema runs against that same
+//     connection (#0360). A schema disagreement gets exactly the same
+//     treatment as a failed advisory lock and for the same reason: the
+//     connection is live, every test that follows would connect and run
+//     fine, and none of them has any way to notice its schema is wrong
+//     underneath it — it would simply fail later with an unattributable
+//     "column ... does not exist" that reads like a flake rather than the
+//     diagnosis CheckSchema's error already names.
 func Lock() func() {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -98,6 +122,22 @@ func Lock() func() {
 		_ = conn.Close(ctx)
 		log.Fatalf("testdb: advisory lock failed: %v — refusing to run this package's "+
 			"tests unserialized against a database another package may be using", err)
+	}
+
+	// #0360: the lock alone does not prove the database is safe to test
+	// against — schema_migrations can read clean while the live schema is
+	// still missing what it claims to have applied. Fail exactly the same
+	// way the advisory-lock failure above does: closing conn here also
+	// releases the session-level advisory lock (Postgres releases every
+	// session advisory lock on disconnect), so no explicit unlock call is
+	// needed before log.Fatalf ends the process.
+	if dir, err := migrationsDir(); err != nil {
+		_ = conn.Close(ctx)
+		log.Fatalf("testdb: %v — cannot verify the locked database's schema without a "+
+			"resolved migrations/ directory", err)
+	} else if err := CheckSchema(ctx, conn, dir); err != nil {
+		_ = conn.Close(ctx)
+		log.Fatalf("%v", err)
 	}
 
 	return func() {
