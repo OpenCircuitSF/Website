@@ -56,6 +56,14 @@
 #           success over a failing step — including ones no in-file check can
 #           see, such as a bare `FAILED=0` before the verdict — fails here,
 #           because this part runs the tracked file itself.
+#   Part 1b Isolation rows for #0493: gofmt_check and floor_guard_check each
+#           assign FAILED=1 in their OWN body, not through run() — so a
+#           sandbox where one of them is the ONLY failing step is needed,
+#           because Part 1's bare sandbox makes everything fail (masking
+#           either one behind the others) and its stubs sandbox makes
+#           nothing fail (nothing to mask). Each row uses a trivial
+#           gofmt-clean Go module and a floor-guard-script stub, with
+#           exactly one of the two made to fail.
 #   Part 2  Sensitivity. Mutants that are EXPECTED to defeat check.sh's
 #           in-file checks, proving Part 1's assertion is not vacuous. Same
 #           role as db_reset_guard_test.sh's Part 3.
@@ -67,6 +75,14 @@
 #   Part 4  No false positives: benign additions must leave check.sh working
 #           rather than tripping a self-check.
 #   Part 5  Byte-identity of the tracked scripts/check.sh across the run.
+#   Part 6  Parity: the set of functions that assign FAILED=1 directly (not
+#           through run()) matches a pinned list. NOT adversarially sound on
+#           its own — an adversary who adds a new site can add its name to
+#           the pinned list in the same edit. It catches a maintainer adding
+#           a new accounting site and forgetting an isolation row for it,
+#           which is exactly how #0161's and #0300/#0489's sites both arrived
+#           unguarded (#0493). Part 1b's isolation rows are the sound part;
+#           this row is the early warning that a new one needs a row.
 #
 # SAFETY (CLAUDE.md §8a, §8b)
 #
@@ -158,12 +174,39 @@ mk_sandbox() {  # <name> <script> <kind: bare|stubs|web>  -> prints the sandbox 
   printf '%s' "$sb"
 }
 
+# #0493: gofmt_check and floor_guard_check assign FAILED=1 in their OWN
+# body, not through run() — so mk_sandbox's "bare" (everything fails) and
+# "stubs" (nothing fails) kinds cannot isolate either one: a step masked by
+# OTHER failing steps can be disarmed without the verdict ever moving. This
+# builds a sandbox where EXACTLY ONE of the two can fail: a trivial Go module
+# (so go build/vet/test all pass cleanly regardless of gofmt-cleanliness) plus
+# a scripts/go_file_visit_floor_guard_test.sh stub with a chosen exit code.
+mk_iso_sandbox() {  # <name> <script> <floor-stub-exit> <gofmt-dirty:0|1> -> prints sandbox dir
+  local sb="$WORKDIR/sb/$1"
+  rm -rf "$sb"; mkdir -p "$sb/scripts"
+  cp "$2" "$sb/scripts/check.sh"; chmod +x "$sb/scripts/check.sh"
+  printf 'module isolationsandbox\n\ngo 1.22\n' > "$sb/go.mod"
+  if [ "$4" = "1" ]; then
+    # Two-space indentation: valid Go (go build/vet/test do not care), and
+    # gofmt -l flags it — measured directly, not assumed (see issue #0493's
+    # implementation notes).
+    printf 'package main\n\nfunc main() {\n  println("ok")\n}\n' > "$sb/main.go"
+  else
+    printf 'package main\n\nfunc main() {\n\tprintln("ok")\n}\n' > "$sb/main.go"
+  fi
+  printf '#!/bin/sh\nexit %s\n' "$3" > "$sb/scripts/go_file_visit_floor_guard_test.sh"
+  chmod +x "$sb/scripts/go_file_visit_floor_guard_test.sh"
+  printf '%s' "$sb"
+}
+
 RC=0; OUTFILE=""
-run_case() {  # <sandbox> <mode>
-  OUTFILE="$1/out"
+run_case() {  # <sandbox> <mode> [extra args passed through to check.sh, e.g. a package pattern]
+  local sb="$1" mode="$2"
+  shift 2
+  OUTFILE="$sb/out"
   # stdin from /dev/null: a child that reads it would block on the terminal,
   # and under `scripts/check.sh guards` that is a silent hang.
-  ( cd "$1" && env -u ISSUE "$BASHBIN" "$1/scripts/check.sh" "$2" ) > "$OUTFILE" 2>&1 < /dev/null
+  ( cd "$sb" && env -u ISSUE "$BASHBIN" "$sb/scripts/check.sh" "$mode" "$@" ) > "$OUTFILE" 2>&1 < /dev/null
   RC=$?
 }
 
@@ -307,6 +350,35 @@ if command -v npm >/dev/null; then
   fi
 else
   echo "SKIP: npm not on PATH — the go-mode row above already covers the pipefail property"
+fi
+
+# ---------------------------------------------------------------------------
+echo
+echo "== Part 1b: isolation rows for FAILED=1 sites outside run() (#0493) =="
+# gofmt_check (#0161) and floor_guard_check (#0300/#0489) each assign
+# FAILED=1 directly in their own body, never through run(). Part 1's "bare"
+# sandbox makes EVERY step fail (no go.mod at all), so stubbing either one's
+# accounting there is invisible behind the other failures; its "stubs"
+# sandbox makes NOTHING fail, so there is nothing for a stub to hide. Neither
+# sandbox can tell "the accounting was removed" from "the step never ran".
+# These two rows use mk_iso_sandbox to make EXACTLY ONE of the two steps
+# fail, with "go" mode's package list pinned to "./..." so the trivial
+# module's absent internal/cmd/web directories never reach go_test's default
+# list (which names those three explicitly).
+SB="$(mk_iso_sandbox p1b_floor "$REAL" 1 0)"
+run_case "$SB" go ./...
+if [ "$RC" -eq 1 ] && grep -q '\[31mVERIFICATION FAILED' "$OUTFILE"; then
+  pass "go mode, ONLY floor_guard_check's step fails (build/vet/gofmt/test all clean): VERIFICATION FAILED, exit 1 (#0493 — floor_guard_check's own FAILED=1, outside run())"
+else
+  fail "REGRESSION #0493: scripts/check.sh did not report a floor-guard-only failure honestly. exit=$RC, verdict=$(classify). floor_guard_check assigns FAILED=1 directly, not through run() — a stub or removal of that assignment is invisible to every check that only watches run()/runpipe()/accounting_probe. Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
+fi
+
+SB="$(mk_iso_sandbox p1b_gofmt "$REAL" 0 1)"
+run_case "$SB" go ./...
+if [ "$RC" -eq 1 ] && grep -q '\[31mVERIFICATION FAILED' "$OUTFILE"; then
+  pass "go mode, ONLY gofmt_check's step fails (build/vet/floor/test all clean): VERIFICATION FAILED, exit 1 (#0493 — gofmt_check's own FAILED=1, outside run())"
+else
+  fail "REGRESSION #0493: scripts/check.sh did not report a gofmt-only failure honestly. exit=$RC, verdict=$(classify). gofmt_check assigns FAILED=1 directly, not through run() — a stub or removal of that assignment is invisible to every check that only watches run()/runpipe()/accounting_probe. Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
 fi
 
 # ---------------------------------------------------------------------------
@@ -582,6 +654,66 @@ if [ "$SHA_BEFORE" = "$SHA_AFTER" ]; then
   pass "scripts/check.sh unchanged across the run (sha256 $SHA_AFTER) — every mutation happened on a private copy under $WORKDIR, never the tracked file"
 else
   fail "CRITICAL: scripts/check.sh's sha256 changed during this test run ($SHA_BEFORE -> $SHA_AFTER). Investigate immediately with: git diff -- scripts/check.sh"
+fi
+
+# ---------------------------------------------------------------------------
+echo
+echo "== Part 6: parity of FAILED=1 assignment sites (#0493) =="
+# Be honest about what this buys, per the issue: it is NOT adversarially
+# sound. An adversary who adds a new FAILED=1 site can add its name to the
+# pinned list below in the very same edit, and this row would still pass.
+# What it catches is a maintainer adding a new accounting site and
+# forgetting to add an isolation row for it -- exactly how gofmt_check
+# (#0161) and floor_guard_check (#0300/#0489) both arrived unguarded. Part
+# 1b's isolation rows are the sound part, because they run the TRACKED file
+# in a sandbox where the bypass is directly observable; this row is only an
+# early, line-naming warning that a new site needs a row of its own.
+#
+# This reads the FILE, not the running shell -- the same trap #0258's fourth
+# pass hit by sourcing candidates into a subshell of the executing check.sh
+# and silently falling back to ITS live definitions (CLAUDE.md §8). Every
+# grep/awk below runs against "$REAL" on disk.
+PINNED_FAILED1_FUNCS="floor_guard_check
+gofmt_check
+run"
+# A line ASSIGNS FAILED=1 (as opposed to mentioning the text in a comment or
+# a printf format string) when "FAILED=1" is preceded by a non-identifier
+# character and immediately followed by ";", "}", or end-of-line. Narrow on
+# purpose: scripts/check.sh has three prose occurrences of the literal text
+# "FAILED=1" (in comments and a printf format string, documenting this very
+# accounting) and none of them is immediately followed by one of those three
+# things -- verified by running this exact pattern against the tracked file
+# and confirming it returns exactly the three known assignment lines, no
+# more and no fewer.
+FAILED1_LINES="$(grep -nE '^[^#]*[^A-Za-z0-9_]FAILED=1([;}]|[[:space:]]*$)' "$REAL" | cut -d: -f1)"
+if [ -z "$FAILED1_LINES" ]; then
+  fail "parity scan (#0493): found ZERO FAILED=1 assignment sites in scripts/check.sh -- the scan pattern is broken (it should find at least 'run'), not evidence there are none"
+else
+  # Map every line number to its enclosing function: the name from the
+  # nearest column-0 "name() {" header at or before that line. Sound for
+  # THIS file specifically because every function in it is defined at
+  # column 0 and none is nested -- every line matching
+  # ^[A-Za-z_][A-Za-z0-9_]*\(\) in scripts/check.sh is a real function
+  # header, never a call (calls in this file are never written
+  # "name()" at the start of a line with no arguments).
+  FUNCMAP="$(awk '
+    /^[A-Za-z_][A-Za-z0-9_]*\(\)/ { split($0, a, "("); cur = a[1] }
+    { print NR"\t"cur }
+  ' "$REAL")"
+  FOUND_FILE="$WORKDIR/found_funcs_0493"
+  : > "$FOUND_FILE"
+  for ln in $FAILED1_LINES; do
+    fn="$(awk -F'\t' -v n="$ln" '$1==n{print $2}' <<<"$FUNCMAP")"
+    [ -n "$fn" ] || fatal "parity scan (#0493): line $ln of scripts/check.sh assigns FAILED=1 but maps to no enclosing function -- this scan's column-0-header assumption no longer holds for this file and needs a human look, not a silent pass"
+    printf '%s\n' "$fn" >> "$FOUND_FILE"
+  done
+  FOUND_SORTED="$(sort -u "$FOUND_FILE")"
+  PINNED_SORTED="$(printf '%s\n' "$PINNED_FAILED1_FUNCS" | sort -u)"
+  if [ "$FOUND_SORTED" = "$PINNED_SORTED" ]; then
+    pass "parity (#0493): the functions assigning FAILED=1 directly are exactly the pinned set ($(tr '\n' ' ' < "$FOUND_FILE" | sed 's/ *$//'))"
+  else
+    fail "parity (#0493): the set of functions assigning FAILED=1 directly has changed. Pinned: $(printf '%s' "$PINNED_SORTED" | tr '\n' ' '); found: $(printf '%s' "$FOUND_SORTED" | tr '\n' ' '). A function ADDED to this set needs its own isolation row above (a sandbox where ONLY its step fails) BEFORE this pinned list is updated to include it -- this row alone only notices a new site exists, it does not prove that site is externally detectable."
+  fi
 fi
 
 echo
