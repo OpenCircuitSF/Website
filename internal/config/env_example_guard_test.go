@@ -131,14 +131,20 @@ func TestEnvExampleCoversLoaderVariables(t *testing.T) {
 	// argument-shape predicate above was shown to still evade under a
 	// const-identifier hoist (20 -> 15) and a slice-literal loop (20 -> 18) —
 	// see the doc comment; those two figures are #0428's own review-time
-	// measurements and are not re-derived here. config.go reads exactly 22
-	// variables today (raised from 20 by #0433's MEDIA_DIR, which landed
-	// without a floor bump, and #0402's DEV_ADMIN_LOGIN), reverified by
-	// enumerating every CallExpr in the file whose first argument is a
-	// string literal (the 22 counted here, plus two Errorf formats, three
-	// Sprintf formats, and loadFromFile(".env"...), none of which match
-	// envVarNameLiteral). Falling below the floor means the walk stopped
-	// seeing reads it used to see, not that config.go reads fewer variables —
+	// measurements and are not re-derived here. The constant has climbed
+	// twice since #0428 set it at 20: #0433's MEDIA_DIR took the real count
+	// to 21 without a matching bump, and #0402 raised the constant itself to
+	// 22 after its implementer re-derived the count from this same AST walk
+	// rather than trust the doc comment that used to sit here. That comment
+	// asserted config.go "reads exactly 22 variables today" — an exact-count
+	// claim a floor can never keep true, since growth clears a `<` check
+	// silently by design. #0483 removed the claim, not the floor: the floor
+	// did its job throughout, catching nothing because nothing shrank, and
+	// the stale prose beside it is what misled #0402's planning pass toward
+	// prescribing the wrong number. This comment therefore names no current
+	// count on purpose; the constant below is the only number that has to
+	// stay accurate. Falling below the floor means the walk stopped seeing
+	// reads it used to see, not that config.go reads fewer variables —
 	// assert this before trusting the result, per CLAUDE.md §8's "assert the
 	// extraction produced something before hashing/using it" rule. Lower
 	// this constant only when a variable is genuinely and deliberately
@@ -522,13 +528,18 @@ func scanEnvExampleValueShapes(content []byte) (scanned int, violations []string
 // minScannedEnvExampleAssignments is the fail-closed floor for
 // scanEnvExampleValueShapes (CLAUDE.md §8: "assert the scan saw a plausible
 // number of lines before concluding anything" — the exact lesson #0258 and
-// #0428 both taught the hard way, the latter in this same package). It
-// matches minLoaderVariables above: .env.example carries exactly 20 "NAME="
-// lines today (PORT through ADMIN_EMAIL), so a scan that recognizes fewer
-// than 20 assignment-shaped lines stopped seeing lines it used to see, not
-// evidence the file shrank. Lower it only when a variable is genuinely and
-// deliberately removed from .env.example — a loud, reviewed edit — never to
-// make a shrink go quiet.
+// #0428 both taught the hard way, the latter in this same package). Its
+// prose used to carry the same defect #0483 found and removed from
+// minLoaderVariables above: it asserted .env.example "carries exactly 20
+// 'NAME=' lines today," an exact-count claim beside this same shape of
+// floor. #0433's MEDIA_DIR and #0402's DEV_ADMIN_LOGIN each added a line
+// without a matching bump here, so that claim had already drifted false the
+// same way — undetected only because a floor of 20 still passes at the real
+// count. This sentence names no current count on purpose; a scan that
+// recognizes fewer than the constant below stopped seeing lines it used to
+// see, not evidence the file shrank. Lower it only when a variable is
+// genuinely and deliberately removed from .env.example — a loud, reviewed
+// edit — never to make a shrink go quiet.
 const minScannedEnvExampleAssignments = 20
 
 // checkScannedFloor is minScannedEnvExampleAssignments's assertion, pulled
