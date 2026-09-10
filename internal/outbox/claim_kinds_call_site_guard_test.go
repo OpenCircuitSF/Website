@@ -71,67 +71,97 @@ var claimKindsGuardScanRoots = []string{"..", "../../cmd"}
 // alone: the walk could visit hundreds of files and still find zero
 // matches if the method-name check itself broke).
 //
-// Measured directly, not fitted (a temporary t.Logf counted allSites
-// before this comment was written, then was removed): a full scan over
-// claimKindsGuardScanRoots today finds 36 call sites named ClaimDue,
-// OrphanSweep, or SelectDue in total (#0303 re-measured after adding
-// SelectDue to nameMatchesGuardedMethod and adding
-// internal/outbox/select_due_claim_row_test.go, both landing after #0304
-// measured 32) — 24 inside internal/outbox's own tests (store_test.go
-// and select_due_claim_row_test.go, deliberately exercising the unscoped
-// AllKinds default, excluded from the VIOLATION check by inOwnPkg but
-// still counted here, since they are real evidence the scan reached this
-// package) plus 12 outside it (this package's own methods called from
-// internal/handlers and internal/mailing, and mailing.SendStore's
-// unrelated same-named OrphanSweep — see nameMatchesGuardedMethod's doc
-// comment for why that coincidence does not need resolving). 5 sits
-// comfortably below that and well above what a narrowing to any single
-// NON-EXEMPT file could produce (at most 3, in
-// internal/mailing/worker_store_test.go — its three
-// mailing.SendStore.OrphanSweep call sites, name-matched the same as this
-// package's own; internal/handlers/subscribe_intake.go and
-// internal/mailing/outbox_worker.go each hold 2, one OrphanSweep call
-// plus one SelectDue call). That bound holds only for the non-exempt
-// population: internal/outbox's own store_test.go alone holds 20 exempt
-// sites, so keeping just that one file — not an entire package — already
-// clears this floor while leaving zero non-exempt callers, exactly the
-// gap #0304, next paragraph, closes.
+// #0487: this floor's own bite is fully subsumed today by
+// claimKindsGuardMinPlausibleNonExemptCallSiteCount below, and that is not
+// an empirical fact that could quietly stop holding — it follows from how
+// the two are computed. Both are checked against the very same allSites
+// slice built by one walk, and the non-exempt count used below is that
+// same slice filtered for !inOwnPkg, so the non-exempt count can never
+// exceed len(allSites), for any tree this guard ever runs against. Since
+// the non-exempt floor's value (8) exceeds this one's (5), clearing that
+// floor already forces len(allSites) to 8 or more, which clears this one
+// too — this floor has never independently failed a run the other one
+// would have passed, and cannot, while 8 stays above 5. Separately,
+// internal/outbox's own tests (store_test.go and
+// select_due_claim_row_test.go, deliberately exercising the unscoped
+// AllKinds default — excluded from the VIOLATION check by inOwnPkg, but
+// real evidence the scan reached this package) hold far more than 5
+// exempt call sites by themselves, dozens rather than a handful, so this
+// floor is trivially satisfied by internal/outbox's own directory alone
+// whether or not the walk reaches a single caller outside it — the gap
+// #0304, next paragraph, exists to close. This floor's remaining,
+// non-redundant job is historical and structural, not a live measurement:
+// it predates the non-exempt floor by one issue (#0281 before #0304), and
+// it is what still catches a totally broken or emptied walk should a
+// future, deliberate change ever lower the non-exempt floor's value back
+// below this one's.
+//
+// Historical, not a live claim (#0487: an earlier version of this
+// paragraph asserted an exact "today" total beside this inequality, and it
+// went stale by three call sites unnoticed for exactly the reason a floor
+// only catches shrinks — CLAUDE.md §8, and see #0483 for two sibling
+// instances of the identical shape). Measured with the guard's own scan
+// roots, prune rules, and name matcher for #0487 (2026-09-09): the walk
+// finds 39 call sites named ClaimDue, OrphanSweep, or SelectDue in total,
+// up from the 36 recorded when this paragraph was first written — 27
+// inside internal/outbox's own tests noted above, up from 24, plus 12
+// outside it (this package's own methods called from internal/handlers
+// and internal/mailing, and mailing.SendStore's unrelated same-named
+// OrphanSweep — see nameMatchesGuardedMethod's doc comment for why that
+// coincidence does not need resolving), unchanged from the 12 recorded
+// originally. The entire three-site drift landed inside internal/outbox's
+// own, already-exempt population, so
+// claimKindsGuardMinPlausibleNonExemptCallSiteCount below was never at
+// risk of the staleness this paragraph carried. Do not read 39, or any
+// other count in this comment, as a claim about today: only the two floor
+// constants themselves are asserted, and only they need to stay accurate;
+// a fresh count belongs in a future review, not a hand-edit here.
 //
 // #0304: THIS FLOOR ONLY PROVES THE WALK REACHED *A* TREE, NOT THE RIGHT
-// ONE. 24 of the 36 sites it counts sit inside internal/outbox itself,
+// ONE. Most of the sites it counts sit inside internal/outbox itself,
 // where every call is exempt from the VIOLATION check (inOwnPkg). A
 // narrowing of claimKindsGuardScanRoots to []string{"."} leaves this floor
 // passing (well above 5, every site inside internal/outbox) while the walk
 // never reaches a single caller outside the package — zero of the
 // population this guard exists to check
 // (TestNonExemptFloorCatchesScanRootsNarrowedToSelf, below, proves this
-// permanently). This floor still earns its place (a genuinely empty or
-// broken walk trips it), but it is not sufficient alone; see
+// permanently). This floor still earns its place in principle (a
+// genuinely empty or broken walk trips it — see the dominance argument
+// above for how much of that job it still does independently today), but
+// it is not sufficient alone; see
 // claimKindsGuardMinPlausibleNonExemptCallSiteCount below, which is.
 //
-// #0323: this Go/AST count (36) is NOT the number
+// #0323: this Go/AST count is NOT the number
 // scripts/go_file_visit_floor_guard_test.sh's external oracle measures for
 // the identical roots — that harness counts textually with grep rather
-// than parsing Go, and measures 42 (#0303 re-measured; #0323 measured 35
-// against 32 before SelectDue joined both the guard and the harness's own
-// pattern). This is expected and must stay this way (do not "fix" it by
-// making the oracle parse Go — its independence from go/ast is the entire
-// reason it can catch a regression in THIS file's own parsing logic;
-// CLAUDE.md §8, an oracle must not share its method with its subject).
-// The six extras all sit inside THIS file, inside internal/outbox, so
-// they inflate only the exempt side — the NON-exempt count (12) agrees
-// exactly between grep and go/ast, one for one, because none of the
-// extras is a non-exempt site. All six are the textual-miscount class
-// grep is prone to and go/ast correctly ignores: they are inside
-// TestClaimKindsGuardFiresOnFixtureWithNoKinds's raw-string fixtures
-// (#0303 added three new fixtures — nil, an empty slice literal, and the
-// AllKinds sentinel, the last containing two occurrences — alongside the
-// original two) — syntactically real-looking Go text living inside a Go
-// string literal, which go/ast never parses as code (they are handed to
-// findOutboxCallSitesInFile as an in-memory `src` argument, not
-// discovered by walking the tree) and grep cannot tell apart from a real
-// call. Deliberately not written as literal guarded-call-syntax prose in
-// THIS paragraph (unlike an earlier version of this comment, and of
+// than parsing Go. This is expected and must stay this way (do not "fix"
+// it by making the oracle parse Go — its independence from go/ast is the
+// entire reason it can catch a regression in THIS file's own parsing
+// logic; CLAUDE.md §8, an oracle must not share its method with its
+// subject). The gap between the two totals is not a second number that
+// needs keeping in sync with the first: it is pinned at exactly six, the
+// count of call-site-shaped occurrences living inside
+// TestClaimKindsGuardFiresOnFixtureWithNoKinds's raw-string fixtures below
+// (#0303 left five fixtures there — nil, an empty slice literal, and the
+// AllKinds sentinel, the last containing two occurrences, alongside the
+// original two — for six occurrences in total), syntactically real-looking
+// Go text living inside a Go string literal that go/ast never parses as
+// code (handed to findOutboxCallSitesInFile as an in-memory `src`
+// argument, not discovered by walking the tree) and that grep cannot tell
+// apart from a real call. So the external oracle's total is always this
+// floor's own go/ast total plus six, whatever that total happens to be on
+// a given day — 39 plus six is 45 today, both re-measured for #0487 (was
+// 36 plus six is 42 when #0303 wrote this paragraph) — and "plus six" is
+// the only part of that relationship this comment needs to keep true: it
+// moves only if TestClaimKindsGuardFiresOnFixtureWithNoKinds's own
+// fixtures do, a deliberate, reviewed edit to THIS file, never an
+// automatic side effect of ordinary call-site growth elsewhere in the
+// tree. All six sit inside THIS file, inside internal/outbox, so they
+// inflate only the exempt side — the NON-exempt count agrees exactly
+// between grep and go/ast, one for one, because none of the six is a
+// non-exempt site, and it has stayed exactly 12 across both measurements.
+// Deliberately not written as literal guarded-call-syntax prose in THIS
+// paragraph (unlike an earlier version of this comment, and of
 // nameMatchesGuardedMethod's) — doing so would make this paragraph a
 // seventh divergent site of the exact class it describes. The error
 // direction is inflation, which only loosens
