@@ -132,6 +132,7 @@ func startDevAdminWiringServer(t *testing.T, pool handlers.Pinger, cfg *config.C
 			nil,
 			nil,
 			nil,
+			nil,
 			site,
 			requireSession, requireAdmin, outerMiddleware, ready)
 	}()

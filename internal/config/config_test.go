@@ -39,6 +39,7 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 	t.Setenv("EMAIL_REPLY_TO", "hello@opencircuitsf.com")
 	t.Setenv("SES_INBOUND_BUCKET", "opencircuitsf-inbound")
 	t.Setenv("SES_EVENTS_TOPIC_ARN", "arn:aws:sns:us-west-2:123456789012:opencircuit-ses-events")
+	t.Setenv("SES_INBOUND_TOPIC_ARN", "arn:aws:sns:us-west-2:123456789012:opencircuit-inbound-mail")
 	t.Setenv("MAILER_NOOP", "true")
 	t.Setenv("SES_SANDBOX", "false")
 	t.Setenv("MAX_SEND_RATE", "25")
@@ -69,6 +70,7 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 		{"EmailListDomain", cfg.EmailListDomain, "lists.opencircuitsf.com"},
 		{"SESInboundBucket", cfg.SESInboundBucket, "opencircuitsf-inbound"},
 		{"SESEventsTopicARN", cfg.SESEventsTopicARN, "arn:aws:sns:us-west-2:123456789012:opencircuit-ses-events"},
+		{"SESInboundTopicARN", cfg.SESInboundTopicARN, "arn:aws:sns:us-west-2:123456789012:opencircuit-inbound-mail"},
 		{"MailerNoOp", cfg.MailerNoOp, true},
 		{"SESSandbox", cfg.SESSandbox, false},
 		{"MaxSendRate", cfg.MaxSendRate, 25},
@@ -180,6 +182,24 @@ func TestLoad_SESEventsTopicARNOptional(t *testing.T) {
 	}
 	if cfg.SESEventsTopicARN != "" {
 		t.Errorf("SESEventsTopicARN = %q, want empty", cfg.SESEventsTopicARN)
+	}
+}
+
+// TestLoad_SESInboundTopicARNOptional proves SES_INBOUND_TOPIC_ARN is NOT a
+// required variable (#0058): #0057's topic is not provisioned yet, so the
+// binary must still boot with it unset, loading to "" — the same
+// reject-everything-when-empty convention as SES_EVENTS_TOPIC_ARN above,
+// enforced by the same internal/sesnotify.Verifier type.
+func TestLoad_SESInboundTopicARNOptional(t *testing.T) {
+	setRequired(t)
+	t.Setenv("SES_INBOUND_TOPIC_ARN", "")
+
+	cfg, err := loadFromFile(noEnvFile)
+	if err != nil {
+		t.Fatalf("loadFromFile returned error with SES_INBOUND_TOPIC_ARN unset: %v", err)
+	}
+	if cfg.SESInboundTopicARN != "" {
+		t.Errorf("SESInboundTopicARN = %q, want empty", cfg.SESInboundTopicARN)
 	}
 }
 

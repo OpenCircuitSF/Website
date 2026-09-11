@@ -36,6 +36,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/devstore"
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
+	"github.com/brennanMKE/OpenCircuitSF/internal/inbound"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/media"
@@ -540,6 +541,31 @@ func servePostgres(cfg *config.Config) error {
 		sesVerifier, pool, sesEventsStore, subscribersStore, suppressionsStore, store, auditLogger, slog.Default(),
 	)
 
+	// Inbound mailto: unsubscribe (#0058, PRD §6.5 path 3): POST
+	// /api/ses/inbound, a SECOND SNS HTTPS subscription endpoint over a
+	// DIFFERENT topic (SESInboundTopicARN, opencircuit-inbound-mail) from
+	// sesVerifier above — see ses_inbound.go's package doc comment for why
+	// reusing sesVerifier's topic would let the two endpoints' messages
+	// satisfy each other's TopicArn check. inboundObjects (internal/inbound,
+	// #0057) fetches/deletes the S3 object a matched message names;
+	// constructing it only needs cfg.AWSRegion (always set) — an empty
+	// SESInboundBucket (the bucket #0057 creates does not exist yet,
+	// CLAUDE.md §10) means Fetch/Delete calls fail operationally rather
+	// than at boot, matching sesInboundVerifier's empty-topic-ARN
+	// reject-everything convention just below. subscribersStore
+	// (constructed above) is reused directly — a mailto unsubscribe touches
+	// only that one table, unlike #0038's handler, so no cross-store
+	// transaction is needed here (see ses_inbound.go's package doc
+	// comment).
+	inboundObjects, err := inbound.NewS3Store(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("constructing inbound S3 store: %w", err)
+	}
+	sesInboundVerifier := sesnotify.NewVerifier(cfg.AWSRegion, cfg.SESInboundTopicARN, slog.Default())
+	sesInboundH := handlers.NewSESInboundHandler(
+		sesInboundVerifier, inboundObjects, subscribersStore, auditLogger, nil, slog.Default(),
+	)
+
 	// broker/eventsH (GET /api/events) were constructed earlier, alongside
 	// the send worker's campaign progress publisher — see that comment for
 	// why.
@@ -572,7 +598,7 @@ func servePostgres(cfg *config.Config) error {
 
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sendWorker, outboxWorker, site,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAdminAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -1102,6 +1128,12 @@ func serveDevMode(cfg *config.Config) error {
 	// STORAGE=json mode; mountAndServe only registers POST
 	// /api/ses/notifications when non-nil.
 	var sesNotifyH *handlers.SESNotificationsHandler
+	// Inbound mailto: unsubscribe (#0058) has the same devstore gap as
+	// sesNotifyH above -- internal/devstore has no subscribers-table
+	// backing yet. Passing nil leaves every other route working in
+	// STORAGE=json mode; mountAndServe only registers POST
+	// /api/ses/inbound when non-nil.
+	var sesInboundH *handlers.SESInboundHandler
 
 	// Send worker (#0045) has the same devstore gap as sesNotifyH above —
 	// internal/devstore has no email_campaigns/email_sends backing, and the
@@ -1117,7 +1149,7 @@ func serveDevMode(cfg *config.Config) error {
 
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sendWorker, outboxWorker, site,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -1412,6 +1444,7 @@ func mountAndServe(
 	publicCrtSessionH *handlers.PublicCrtSessionHandler,
 	publicArchiveH *handlers.PublicArchiveHandler,
 	sesNotifyH *handlers.SESNotificationsHandler,
+	sesInboundH *handlers.SESInboundHandler,
 	sendWorker *mailing.Worker,
 	outboxWorker *mailing.OutboxWorker,
 	site *seo.Site,
@@ -1647,6 +1680,20 @@ func mountAndServe(
 	// nil-guarded route above.
 	if sesNotifyH != nil {
 		mux.Handle("POST /api/ses/notifications", http.HandlerFunc(sesNotifyH.Notify))
+	}
+
+	// Inbound mailto: unsubscribe (#0058, PRD §6.5 path 3) — a SECOND SNS
+	// HTTPS subscription endpoint, over the opencircuit-inbound-mail topic
+	// rather than opencircuit-ses-events. Same unguarded, unrate-limited
+	// shape as /api/ses/notifications immediately above and for the
+	// identical reasons: #0037's signature verification (against THIS
+	// topic's own allowlisted ARN) is the authentication, and a burst of
+	// inbound mail must not be rejected by a per-IP limiter tuned for
+	// ordinary public traffic. sesInboundH is nil in dev mode (STORAGE=json
+	// — internal/devstore has no subscribers-table backing); the route is
+	// only registered when a real handler is wired.
+	if sesInboundH != nil {
+		mux.Handle("POST /api/ses/inbound", http.HandlerFunc(sesInboundH.Notify))
 	}
 
 	// SEO: server-injected per-route meta tags (#0019) and generated

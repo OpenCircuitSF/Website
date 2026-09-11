@@ -35,6 +35,15 @@ const (
 	EventTypeDelivery         = "Delivery"
 	EventTypeReject           = "Reject"
 	EventTypeRenderingFailure = "RenderingFailure"
+
+	// EventTypeReceived is the event SES publishes when a receipt rule's
+	// action fires (#0058, PRD §6.5 path 3) — always carried as
+	// notificationType, never eventType, since this is a receipt-rule
+	// notification rather than a Configuration Set event. Type() already
+	// falls back to NotificationType, so this constant needs no dispatch
+	// change in this file; it exists so callers (internal/handlers'
+	// SESInboundHandler) can compare against it instead of a bare string.
+	EventTypeReceived = "Received"
 )
 
 // Bounce bounceType values (PRD §6.5).
@@ -107,6 +116,28 @@ type SESDelivery struct {
 	Recipients []string `json:"recipients"`
 }
 
+// SESReceiptAction is the "receipt.action" object present on a Received
+// notification — the one SES publishes to an S3 action's own TopicArn
+// after it finishes writing the object (#0058; #0057's plan settles on a
+// single S3Action with TopicArn set, rather than a separate SNS action, for
+// exactly this reason: a standalone SNS action carries the raw mail content
+// instead of this object, and has no ObjectKey to fetch by at all). Only
+// the fields an S3 action populates are modeled; SES's other action types
+// (Lambda, SNS-only, Bounce, Stop, WorkMail) are irrelevant here since only
+// the S3 action's TopicArn ever reaches this endpoint.
+type SESReceiptAction struct {
+	Type            string `json:"type"`
+	TopicArn        string `json:"topicArn,omitempty"`
+	BucketName      string `json:"bucketName,omitempty"`
+	ObjectKey       string `json:"objectKey,omitempty"`
+	ObjectKeyPrefix string `json:"objectKeyPrefix,omitempty"`
+}
+
+// SESReceipt is the "receipt" object present on a Received notification.
+type SESReceipt struct {
+	Action SESReceiptAction `json:"action"`
+}
+
 // SESEvent is the payload inside a verified Notification's Message field.
 type SESEvent struct {
 	EventType        string        `json:"eventType"`
@@ -115,6 +146,27 @@ type SESEvent struct {
 	Bounce           *SESBounce    `json:"bounce,omitempty"`
 	Complaint        *SESComplaint `json:"complaint,omitempty"`
 	Delivery         *SESDelivery  `json:"delivery,omitempty"`
+	Receipt          *SESReceipt   `json:"receipt,omitempty"`
+}
+
+// ObjectKey returns the S3 object key a Received notification's action
+// names (#0058), or "" when this isn't a Received event, carries no receipt
+// object, or the action isn't an S3 action. Falls back to
+// ObjectKeyPrefix+Mail.MessageID when the action's own ObjectKey is absent —
+// AWS's default key naming, and the shape #0057's plan and PRD §6.5's
+// diagram both cite (s3://opencircuitsf-inbound/unsubscribe/{messageId}) —
+// so a payload that ever omits the explicit field is still handled.
+func (e SESEvent) ObjectKey() string {
+	if e.Receipt == nil {
+		return ""
+	}
+	if e.Receipt.Action.ObjectKey != "" {
+		return e.Receipt.Action.ObjectKey
+	}
+	if e.Receipt.Action.ObjectKeyPrefix != "" && e.Mail.MessageID != "" {
+		return e.Receipt.Action.ObjectKeyPrefix + e.Mail.MessageID
+	}
+	return ""
 }
 
 // Type returns EventType if set, else NotificationType — see the package

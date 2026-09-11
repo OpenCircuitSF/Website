@@ -71,6 +71,20 @@ type Config struct {
 	// than failing to boot.
 	SESEventsTopicARN string
 
+	// SESInboundTopicARN is the SNS topic ARN POST /api/ses/inbound (#0058,
+	// PRD §6.5 path 3) accepts notifications from — the S3 action's own
+	// TopicArn on the "unsubscribe" receipt rule, named opencircuit-inbound-
+	// mail. Deliberately a SEPARATE value from SESEventsTopicARN above,
+	// never reused: #0057's plan is explicit that this is a distinct topic,
+	// because internal/handlers' SES message-type dispatch keys off
+	// TopicArn, and a shared topic would let a bounce/complaint notification
+	// and an inbound-mail notification satisfy each other's verifier. Same
+	// not-yet-provisioned convention as SESEventsTopicARN: not in the
+	// `required` table, and empty means sesnotify.Verifier rejects every
+	// message rather than refusing to boot (#0057's receipt rule and SNS
+	// topic are gated on the user, not on this issue).
+	SESInboundTopicARN string
+
 	// MailerNoOp selects auth.NoOpMailer instead of the real SES v2 API mailer
 	// on the Postgres serve path (#0027). Default false: production always
 	// gets the real mailer. Set true for local development against Postgres
@@ -177,6 +191,7 @@ func loadFromFile(path string) (*Config, error) {
 		EmailListDomain:     os.Getenv("EMAIL_LIST_DOMAIN"),
 		SESInboundBucket:    os.Getenv("SES_INBOUND_BUCKET"),
 		SESEventsTopicARN:   os.Getenv("SES_EVENTS_TOPIC_ARN"),
+		SESInboundTopicARN:  os.Getenv("SES_INBOUND_TOPIC_ARN"),
 		MailerNoOp:          getBool("MAILER_NOOP", false, &errs),
 		DevAdminLogin:       getBool("DEV_ADMIN_LOGIN", false, &errs),
 		SESSandbox:          getBool("SES_SANDBOX", true, &errs),
