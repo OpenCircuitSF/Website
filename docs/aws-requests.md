@@ -5,9 +5,9 @@ is self-contained: every fact below was read live from the account or the box,
 and the sources are named so you can re-derive them rather than trust them.
 
 **Account `378152330719`, region `us-east-1` throughout.** Do not use
-`us-west-2` — `PRD.md` §10.3 and `docs/email-setup.md` both name it and both are
-stale; the instance, the SES identity, the configuration set and the MAIL FROM
-MX are all in `us-east-1`.
+`us-west-2` — earlier versions of `PRD.md` §10.3 and `docs/email-setup.md`
+named it; both have since been corrected (`#0418`); the instance, the SES
+identity, the configuration set and the MAIL FROM MX are all in `us-east-1`.
 
 ---
 
@@ -96,8 +96,8 @@ used only to construct a `mailto:` header.
 
 | # | Object | Name | Notes |
 |---|---|---|---|
-| A1 | SES domain identity | `lists.opencircuitsf.com` | **already exists and is verified**, confirmed 2026-09-11 — receive-only; no DKIM, no MAIL FROM, never used to send |
-| A2 | S3 bucket | `opencircuitsf-inbound` | **already exists** (`head-bucket` → 403 against a random-name control's 404, confirmed 2026-09-11). Its public-access-block, lifecycle and bucket-policy state could not be read from here — read each with the matching `get-` command (below) before applying A3/A4/A5 |
+| A1 | SES domain identity | `lists.opencircuitsf.com` | **the identity already exists** — its `_amazonses` TXT resolves (D1, confirmed 2026-09-11), which proves the token was published, **not** that SES finished verifying. `ses:GetEmailIdentity` is denied to every credential available to us (re-confirmed 2026-09-11), so **confirm `VerificationStatus: SUCCESS` at ordering step 2 before continuing** — receive-only; no DKIM, no MAIL FROM, never used to send |
+| A2 | S3 bucket | `opencircuitsf-inbound` | **already exists** (`head-bucket` → 403 against a random-name control's 404, confirmed 2026-09-11). Its public-access-block, lifecycle and bucket-policy state could not be read from here — read each with the matching `get-` command (ordering step 4) before applying A3/A4/A5 |
 | A3 | S3 Block Public Access | all four flags on A2 | holds inbound mail; must never be public |
 | A4 | S3 bucket policy | on A2 | allow `ses.amazonaws.com` `s3:PutObject` on `…/unsubscribe/*` **only**, conditioned on `AWS:SourceAccount` **and** `AWS:SourceArn` of the exact receipt rule |
 | A5 | S3 lifecycle rule | `expire-inbound-30d`, prefix `unsubscribe/` | `Expiration: 30 days` |
@@ -125,8 +125,11 @@ message content with a 150 KB cap and **carries no S3 object key** — our
 consumer could not find the mail. The `S3Action`'s own `TopicArn` produces a
 notification that *does* name the key. One action satisfies both needs.
 
-**Not yet:** an SNS HTTPS subscription to our endpoint. `POST /api/ses/inbound`
-does not exist yet. A subscription that cannot be confirmed stays
+**Not yet:** an SNS HTTPS subscription to our endpoint.
+`POST /api/ses/inbound` exists in our codebase (`#0058`, shipped 2026-09-10)
+but is **not live in production** — the running service predates it and
+`SES_INBOUND_TOPIC_ARN` is not yet in its configuration, so it would reject
+SNS's confirmation message. A subscription that cannot be confirmed stays
 `PendingConfirmation` and delivers nothing; mail still lands in S3 meanwhile, so
 nothing is lost by waiting.
 
@@ -136,13 +139,23 @@ Every AWS object is inert until the MX exists, so build the destination first
 and route mail to it only at the end.
 
 1. **Gate**: Part 1's `describe-active-receipt-rule-set`.
-2. A1 — **already done** (identity verified 2026-09-11); confirm with
-   `aws sesv2 get-email-identity --email-identity lists.opencircuitsf.com --region us-east-1`
-   rather than creating it again.
+2. A1 — the identity **already exists**; do not create it again. Its
+   verification status could not be read from here, so **confirm it now —
+   this is a hard stop**:
+   `aws sesv2 get-email-identity --email-identity lists.opencircuitsf.com --region us-east-1`.
+   Expect `"VerificationStatus": "SUCCESS"`. If it reads `PENDING`, wait and
+   re-check; nothing past this step works until it reads `SUCCESS`.
 3. D1 — **already applied**; confirm the TXT resolves rather than re-running
    it as `CREATE` (it will fail — the record set already exists).
 4. A2 — **the bucket already exists**; read its current public-access-block,
-   lifecycle and bucket-policy state with the matching `get-` command first
+   lifecycle and bucket-policy state with the matching `get-` commands first:
+
+   ```bash
+   aws s3api get-public-access-block --bucket opencircuitsf-inbound --region us-east-1
+   aws s3api get-bucket-lifecycle-configuration --bucket opencircuitsf-inbound --region us-east-1
+   aws s3api get-bucket-policy --bucket opencircuitsf-inbound --region us-east-1
+   ```
+
    (`put-bucket-policy` and `put-bucket-lifecycle-configuration` both
    **replace** the whole configuration rather than merging, so applying blind
    risks silently discarding whatever is already there). Then apply A3, A5,
@@ -200,34 +213,63 @@ that gets this wrong, because simulator addresses are not identities.
 
 ## What we have already verified, so you need not
 
+**Rule for this section, added after bounce #3 replaced one unmeasurable
+"verified" claim with another in the same place: nothing may appear below
+unless it was read with a credential this project actually holds —
+`certbot-dns-updater`'s IAM permissions, IMDS on the instance,
+`/etc/opencircuit/config.env` on the box, or public DNS — and every entry
+must name the command or probe that produced it and the date it was run. A
+claim that cannot be measured that way belongs in "you must check this"
+(Part 1, an ordering step, or the closing paragraph below), never here.**
+
 Read live on 2026-09-04/05, read-only, with the rows below re-measured
 2026-09-11 (each says so):
 
-- Instance `i-0e3bd89e87d1c2364`, region `us-east-1`, AZ `us-east-1b`
+- Instance `i-0e3bd89e87d1c2364`, region `us-east-1`, AZ `us-east-1b` — IMDS
+  `placement/region` and `placement/availability-zone`, read on the box
+  2026-09-04
 - Instance role **`opencircuit-instance`** is attached (three ways: IMDS
   `iam/security-credentials/`, `iam/info`, and `sts get-caller-identity`
-  returning `assumed-role/opencircuit-instance/i-0e3bd89e87d1c2364`)
-- Sending identity `mailing.opencircuitsf.com`, DKIM and SPF present
-- Custom MAIL FROM `bounce.mailing.opencircuitsf.com` → `feedback-smtp.us-east-1.amazonses.com`
+  returning `assumed-role/opencircuit-instance/i-0e3bd89e87d1c2364`), read on
+  the box 2026-09-04
+- Sending identity `mailing.opencircuitsf.com`, DKIM and SPF present —
+  `aws route53 list-resource-record-sets` / `dig TXT mailing.opencircuitsf.com`,
+  2026-09-04, re-confirmed 2026-09-11
+- Custom MAIL FROM `bounce.mailing.opencircuitsf.com` →
+  `feedback-smtp.us-east-1.amazonses.com` —
+  `dig MX bounce.mailing.opencircuitsf.com`, 2026-09-04, re-confirmed
+  2026-09-11
 - Configuration set `opencircuit-transactional`; events topic
-  `arn:aws:sns:us-east-1:378152330719:opencircuit-ses-events`
-- **`lists.opencircuitsf.com` (A1) already exists as a verified SES domain
-  identity, and its `_amazonses.lists.opencircuitsf.com` TXT (D1,
+  `arn:aws:sns:us-east-1:378152330719:opencircuit-ses-events` — from
+  `/etc/opencircuit/config.env` on the box, 2026-09-04. **Not independently
+  confirmed against AWS**: `ses:GetConfigurationSet` and
+  `sns:GetTopicAttributes` are both denied to every credential available to
+  us (re-confirmed 2026-09-11) — this states what the running service is
+  configured to use, not that SES/SNS agree the resources exist and are
+  healthy
+- **`lists.opencircuitsf.com` (A1) already exists as an SES domain identity**,
+  and its `_amazonses.lists.opencircuitsf.com` TXT (D1,
   `"APWUrtnPLURlLWOGg0ybU3t6HbptTzDE77f8JE1YHX0="`) already resolves —
-  confirmed 2026-09-11.** Skip ordering steps 2 and 3 below other than
-  confirming; re-applying D1 as `CREATE` will fail because the record set
-  already exists.
+  `dig TXT _amazonses.lists.opencircuitsf.com`, confirmed 2026-09-11. Its
+  **`VerificationStatus` could not be read** (`ses:GetEmailIdentity` denied,
+  re-confirmed 2026-09-11) — ordering step 2 is a required check, not a
+  formality. D1 must not be re-applied as `CREATE`; the record set already
+  exists.
 - **`s3://opencircuitsf-inbound` (A2) already exists** — `head-bucket` returns
   403 against it, versus 404 for a random-name control, confirmed 2026-09-11.
   **Its lockdown state (public-access-block, lifecycle, bucket policy) could
-  not be read from here** — read each with the matching `get-` command before
-  applying A3/A4/A5, since `put-bucket-policy` and
+  not be read from here** — read each with the matching `get-` command (see
+  ordering step 4) before applying A3/A4/A5, since `put-bucket-policy` and
   `put-bucket-lifecycle-configuration` both **replace** rather than merge the
   existing configuration.
 - DMARC lives at `_dmarc.mailing.opencircuitsf.com` (`p=none`), **not** at the
-  apex — deliberate, and our own docs were wrong about it
+  apex — `dig TXT _dmarc.mailing.opencircuitsf.com` vs
+  `dig TXT _dmarc.opencircuitsf.com`, 2026-09-04, re-confirmed 2026-09-11 —
+  deliberate, and our own docs were wrong about it
 
 **We could not read**, and did not pursue: the `opencircuit-instance` role's
-attached policy documents, `sesv2 get-account`, and A2's public-access-block/
-lifecycle/policy state. All denied or unreadable from every identity
-available on the box. No credentials were created or sought.
+attached policy documents, `sesv2 get-account`, A1's `VerificationStatus`
+(`ses:GetEmailIdentity` denied), the configuration set and events topic
+above (`ses:GetConfigurationSet`/`sns:GetTopicAttributes` denied), and A2's
+public-access-block/lifecycle/policy state. All denied or unreadable from
+every identity available on the box. No credentials were created or sought.
