@@ -1086,7 +1086,7 @@ func TestIssueSectionTitleNormalizesRealCorpusHeadings(t *testing.T) {
 		{"## Review findings (2026-08-18) — approved, with one correction", "review findings"},
 		{"## Bounce fix (2026-08-23, claude-sonnet-5)", "bounce fix"},
 		{"## Bounce-fix completion (third pass, 2026-08-19 — escalated to Opus)", "bounce-fix completion"},
-		{"## Work log", "work log"}, // #0446: admitted — see the file-level comment
+		{"## Work log", "work log"},                                                                  // #0446: admitted — see the file-level comment
 		{"## Fix pass 2 — 2026-08-24 (orchestrator, direct)", "fix pass 2"},                          // #0268 second pass: issues/0231.md
 		{"## Fix pass 2", "fix pass 2"},                                                              // #0268 second pass: issues/0251.md
 		{"## Review notes on the regexp styling (2026-08-21)", "review notes on the regexp styling"}, // #0268 second pass: issues/0043.md
