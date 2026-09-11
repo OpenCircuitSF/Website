@@ -124,8 +124,9 @@ describe('crtCommandLine (#0397)', () => {
 // restatement of CRT_COMMAND_LINE_CHARS -- it fails the moment
 // CRT_LINE_CHARS (and so CRT_COMMAND_LINE_CHARS, which is derived from it)
 // is lowered far enough that a real seeded command like 'subscribe
-// --interests' (23 characters) no longer fits, exactly as #0393's own
-// no-op test fails if CRT_LINE_CHARS is lowered past a real output line.
+// --interests' (21 characters, 23 once the prefix is counted) no longer
+// fits, exactly as #0393's own no-op test fails if CRT_LINE_CHARS is
+// lowered past a real output line.
 describe('crtCommandLine is a no-op on the seeded active CRT_SESSION commands', () => {
   it('leaves every CRT_SESSION command line unchanged, prefix included', () => {
     expect(CRT_SESSION.length).toBeGreaterThan(0);

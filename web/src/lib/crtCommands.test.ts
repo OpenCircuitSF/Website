@@ -215,7 +215,7 @@ describe('crtOverBudgetLines/crtOverBudgetWarning against the command budget (#0
     expect(warning).toContain(String(CRT_COMMAND_LINE_CHARS));
   });
 
-  it('a command that fits the command budget but not the full output budget is still flagged, proving the caller cannot fall back to CRT_LINE_CHARS by mistake', () => {
+  it('flags a command that overflows the command budget while still fitting the full output budget -- the gap a caller passing CRT_LINE_CHARS would miss', () => {
     // CRT_COMMAND_LINE_CHARS < CRT_LINE_CHARS, so a command sized to be
     // exactly one over the SMALLER budget is still comfortably under the
     // larger one -- if a caller passed CRT_LINE_CHARS by accident (the
@@ -225,5 +225,9 @@ describe('crtOverBudgetLines/crtOverBudgetWarning against the command budget (#0
     expect(commandOnlyOver.length).toBeLessThan(CRT_LINE_CHARS);
     expect(crtOverBudgetLines(commandOnlyOver, CRT_LINE_CHARS)).toEqual([]);
     expect(crtOverBudgetLines(commandOnlyOver, CRT_COMMAND_LINE_CHARS)).toEqual([1]);
+    // This drives crtOverBudgetLines directly and never observes
+    // CrtCommands.svelte's own call sites, so it cannot fail when a caller
+    // drops the argument -- measured during review, the create form's caller
+    // falling back to CRT_LINE_CHARS leaves the whole suite green.
   });
 });

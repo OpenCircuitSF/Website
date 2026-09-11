@@ -313,7 +313,7 @@ function elementCountInSubtree(root: unknown, seen = new Set<unknown>()): number
 
 /** #0306 criterion 3: the threshold a KNOWN_STABLE_BRANCH_SITES entry's own
  * governing branch must clear, justified independently of what today's
- * thirteen entries happen to measure (criterion 2's own warning: a threshold
+ * fourteen entries happen to measure (criterion 2's own warning: a threshold
  * picked to admit the current set is not a validation of it). The guard
  * already has a concrete, real "small, single-purpose branch wrongly
  * claiming legitimacy" shape on file: the #0286 fixture below (a status
@@ -326,7 +326,7 @@ function elementCountInSubtree(root: unknown, seen = new Set<unknown>()): number
  * independent content. 8 clears that decoy with more than double its size --
  * real margin, not "one more than 3" -- while asking nothing close to what
  * an actual multi-field settings tab or a whole editor form naturally
- * contains (today's thirteen entries range 12-158; see the real-tree test's
+ * contains (today's fourteen entries range 12-158; see the real-tree test's
  * own comment for the measured figures, kept there rather than here so this
  * threshold's number is not read as derived from them). */
 const KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT = 8;
@@ -897,7 +897,7 @@ const KNOWN_STABLE_BRANCH_REASON_MAIN_FORM =
   "Unconditionally rendered itself (not wrapped in its OWN {#if}) inside the editor's main form ({:else if workshop}), which mounts once when the workshop record loads and stays mounted across ordinary editing -- ~~the same stable branch this file's \"Rendering preview…\"/previewStale entries above already rest on~~ **corrected 2026-08-27 (#0306): measured, neither actually rested there at the time this was written. \"Rendering preview…\" is a KNOWN_LOADING_PLACEHOLDERS entry in the smaller {:else if previewLoading} branch, a different mechanism and never a real peer of this set. previewStale sat in the small, single-element {:else if hasPreviewContent} branch, which #0306's structural check on this set correctly refused to call \"large, multi-purpose\" -- #0306 relocated previewStale's own element to this SAME {:else if workshop} branch, so it is now a genuine peer of saveNotice/unsavedInterestsHint (see its own entry below); \"Rendering preview…\" still is not.** Previously mis-credited (#0299) to transitionModalEl, a status-change dialog's own focus target several conditionals deeper behind its OWN {#if transitionOpen} -- an unrelated dialog, not evidence about this branch's own mount. Persistence within the stable main-form branch is the real, sufficient argument.";
 
 /** #0406: the count the real-tree test's own measurement comment below
- * claims for `KNOWN_STABLE_BRANCH_SITES` ("All thirteen clear ..."), kept as a
+ * claims for `KNOWN_STABLE_BRANCH_SITES` ("All fourteen clear ..."), kept as a
  * literal declared here rather than only in that prose. Editing the array
  * immediately below does not also edit this line -- they are different
  * declarations in different places -- so the two can genuinely disagree

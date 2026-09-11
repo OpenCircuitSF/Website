@@ -183,7 +183,7 @@ export const CRT_COMMAND_LINE_CHARS = CRT_LINE_CHARS - CRT_COMMAND_PREFIX.length
 /** Renders one script step's command line exactly as both Home.svelte draw
  *  sites must show it (#0397): the "> " prompt prefix followed by the
  *  command text truncated to CRT_COMMAND_LINE_CHARS. A single shared helper
- *  used at both call sites so they cannot diverge -- CLAUDE.md \u00a71: SPA logic
+ *  used at both call sites so they cannot diverge -- CLAUDE.md §1: SPA logic
  *  lives in lib/ so it is unit-testable without a DOM, and two call sites
  *  that must agree are exactly what drifts apart when duplicated. */
 export function crtCommandLine(cmd: string): string {
