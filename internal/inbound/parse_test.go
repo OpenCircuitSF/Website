@@ -30,6 +30,47 @@ func TestParse_SubjectToken(t *testing.T) {
 	if pm.AutoReply {
 		t.Error("AutoReply = true, want false")
 	}
+	if pm.Subject != "unsubscribe:abc123XYZ" {
+		t.Errorf("Subject = %q, want %q", pm.Subject, "unsubscribe:abc123XYZ")
+	}
+}
+
+// TestParse_SubjectFieldDecodesMIMEEncoding pins #0499's Subject field: it
+// carries the DECODED Subject header (the same decode extractToken already
+// applies when hunting for the token), not the raw RFC 2047-encoded bytes —
+// otherwise a parked-message audit record (recordParked,
+// internal/handlers/ses_inbound.go) would show an admin unreadable encoded
+// text instead of the subject a person actually typed.
+func TestParse_SubjectFieldDecodesMIMEEncoding(t *testing.T) {
+	raw := rawMessage(map[string]string{
+		"From":    "someone@example.com",
+		"Subject": "=?UTF-8?Q?please_unsubscribe?=",
+	}, "body\r\n")
+
+	pm, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if pm.Subject != "please unsubscribe" {
+		t.Errorf("Subject = %q, want %q", pm.Subject, "please unsubscribe")
+	}
+}
+
+// TestParse_SubjectFieldEmptyWhenHeaderAbsent pins the "" fallback recordParked
+// relies on to omit the metadata key entirely rather than store an empty
+// string (see that function's doc comment).
+func TestParse_SubjectFieldEmptyWhenHeaderAbsent(t *testing.T) {
+	raw := rawMessage(map[string]string{
+		"From": "someone@example.com",
+	}, "body\r\n")
+
+	pm, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if pm.Subject != "" {
+		t.Errorf("Subject = %q, want empty", pm.Subject)
+	}
 }
 
 func TestParse_SubjectTokenWithReplyPrefixAndCase(t *testing.T) {

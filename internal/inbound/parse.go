@@ -48,6 +48,13 @@ type ParsedMessage struct {
 	// signals, and #0498 for why passing through a list manager alone is
 	// deliberately not one of them.
 	AutoReply bool
+	// Subject is the decoded Subject header (RFC 2047 MIME-decoded the same
+	// way extractToken's own copy is, falling back to the raw header value
+	// unchanged on a decode failure), or "" if the header is absent. Not
+	// used for matching — Token above is what's matched against — this
+	// exists so a caller that leaves the message unmatched can record it
+	// for manual review (#0499) without re-reading the raw bytes.
+	Subject string
 }
 
 // Parse parses raw (the full RFC 5322 message fetched from S3) with
@@ -65,14 +72,28 @@ func Parse(raw []byte) (ParsedMessage, error) {
 		return ParsedMessage{}, err
 	}
 
+	subjectHeader := msg.Header.Get("Subject")
 	pm := ParsedMessage{
-		Token:     extractToken(msg.Header.Get("Subject")),
+		Token:     extractToken(subjectHeader),
+		Subject:   decodeMIMEHeader(subjectHeader),
 		AutoReply: isAutoReply(msg.Header),
 	}
 	if addr, err := mail.ParseAddress(msg.Header.Get("From")); err == nil {
 		pm.From = strings.ToLower(strings.TrimSpace(addr.Address))
 	}
 	return pm, nil
+}
+
+// decodeMIMEHeader decodes a possibly RFC 2047 MIME-encoded header value
+// (e.g. "=?UTF-8?B?...?="), falling back to the raw value unchanged when
+// decoding fails — the same fallback extractToken below relies on. Shared
+// so Subject's decoded value and Token's decoded search text come from one
+// place rather than two copies of the same decode-or-fall-back logic.
+func decodeMIMEHeader(raw string) string {
+	if decoded, err := (&mime.WordDecoder{}).DecodeHeader(raw); err == nil {
+		return decoded
+	}
+	return raw
 }
 
 // extractToken pulls the token out of a (possibly RFC 2047 MIME-encoded,
@@ -82,9 +103,7 @@ func Parse(raw []byte) (ParsedMessage, error) {
 // a hand-typed reply subject a mail client chose to encode, and a decode
 // error there is better handled by matching the raw bytes than by giving up.
 func extractToken(subject string) string {
-	if decoded, err := (&mime.WordDecoder{}).DecodeHeader(subject); err == nil {
-		subject = decoded
-	}
+	subject = decodeMIMEHeader(subject)
 	m := tokenPattern.FindStringSubmatch(subject)
 	if m == nil {
 		return ""

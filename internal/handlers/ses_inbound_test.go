@@ -323,14 +323,32 @@ func TestSESInboundHandler_StaleTokenDoesNotFallBackToFrom(t *testing.T) {
 	if count != 0 {
 		t.Errorf("audit_log rows for subscriber.unsubscribed = %d, want 0", count)
 	}
+
+	// #0499: this is the "stale token" no-match reason — the token was
+	// present but did not resolve, so it must never be reported as
+	// "from_not_found" (which would misleadingly suggest the From: address
+	// was the problem, when the whole point of this test is that From: was
+	// valid and deliberately not tried).
+	var reason string
+	if err := pool.QueryRow(ctx,
+		`SELECT metadata->>'reason' FROM audit_log WHERE action = $1 AND metadata->>'key' = $2`,
+		audit.ActionInboundMailParked, "unsubscribe/msg-stale",
+	).Scan(&reason); err != nil {
+		t.Fatalf("query audit_log for parked record: %v", err)
+	}
+	if reason != "token_not_found" {
+		t.Errorf("metadata reason = %q, want %q", reason, "token_not_found")
+	}
 }
 
 func TestSESInboundHandler_NoMatch_LeavesObjectInPlace(t *testing.T) {
 	pool := journeyTestPool(t)
 	subs := subscribers.NewStore(pool)
+	ctx := context.Background()
 
+	fromAddr := journeyUniqueEmail(t) // guaranteed not to exist as a subscriber
 	raw := inboundRawMessage(map[string]string{
-		"From":    journeyUniqueEmail(t), // guaranteed not to exist as a subscriber
+		"From":    fromAddr,
 		"Subject": "please stop emailing me",
 	}, "body\r\n")
 	objects := &fakeInboundObjectStore{objects: map[string][]byte{"unsubscribe/msg-3": raw}}
@@ -346,6 +364,69 @@ func TestSESInboundHandler_NoMatch_LeavesObjectInPlace(t *testing.T) {
 	}
 	if _, ok := objects.objects["unsubscribe/msg-3"]; !ok {
 		t.Error("object was removed from the store on a no-match — it must be left in place")
+	}
+
+	// #0499: a no-match must leave a durable audit_log record, not only the
+	// log line — this is what lets the object's own 30-day S3 expiry
+	// (#0057 A5) happen without also destroying the only evidence the
+	// request ever arrived.
+	var targetType, reason, from, subject string
+	if err := pool.QueryRow(ctx,
+		`SELECT target_type, metadata->>'reason', metadata->>'from', metadata->>'subject'
+		   FROM audit_log WHERE action = $1 AND metadata->>'key' = $2`,
+		audit.ActionInboundMailParked, "unsubscribe/msg-3",
+	).Scan(&targetType, &reason, &from, &subject); err != nil {
+		t.Fatalf("query audit_log for parked record: %v", err)
+	}
+	if targetType != audit.TargetInboundMail {
+		t.Errorf("target_type = %q, want %q", targetType, audit.TargetInboundMail)
+	}
+	if reason != "from_not_found" {
+		t.Errorf("metadata reason = %q, want %q", reason, "from_not_found")
+	}
+	if from != fromAddr {
+		t.Errorf("metadata from = %q, want %q", from, fromAddr)
+	}
+	if subject != "please stop emailing me" {
+		t.Errorf("metadata subject = %q, want %q", subject, "please stop emailing me")
+	}
+}
+
+// TestSESInboundHandler_NoTokenNoFrom_RecordsParkedWithNoSignalReason pins
+// noMatchReason's third branch: neither a subject token nor a parseable
+// From: address at all (as opposed to TestSESInboundHandler_NoMatch_
+// LeavesObjectInPlace's "from_not_found", where a From: was present but
+// didn't resolve to a subscriber).
+func TestSESInboundHandler_NoTokenNoFrom_RecordsParkedWithNoSignalReason(t *testing.T) {
+	pool := journeyTestPool(t)
+	subs := subscribers.NewStore(pool)
+	ctx := context.Background()
+
+	raw := inboundRawMessage(map[string]string{
+		"Subject": "hello",
+	}, "no From: header at all\r\n")
+	objects := &fakeInboundObjectStore{objects: map[string][]byte{"unsubscribe/msg-3b": raw}}
+	h := NewSESInboundHandler(&fakeInboundVerifier{}, objects, subs, audit.New(pool), nil, nil)
+
+	rr := doPostSESInbound(h, inboundNotificationBody(t, "unsubscribe/msg-3b"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+
+	var reason string
+	var hasFrom bool
+	if err := pool.QueryRow(ctx,
+		`SELECT metadata->>'reason', metadata ? 'from'
+		   FROM audit_log WHERE action = $1 AND metadata->>'key' = $2`,
+		audit.ActionInboundMailParked, "unsubscribe/msg-3b",
+	).Scan(&reason, &hasFrom); err != nil {
+		t.Fatalf("query audit_log for parked record: %v", err)
+	}
+	if reason != "no_identifying_signal" {
+		t.Errorf("metadata reason = %q, want %q", reason, "no_identifying_signal")
+	}
+	if hasFrom {
+		t.Error(`metadata has key "from", want it omitted — the message carried no From: header`)
 	}
 }
 
@@ -402,6 +483,29 @@ func TestSESInboundHandler_AutoReply_IgnoredEvenWithAValidToken(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("audit_log rows for subscriber.unsubscribed = %d, want 0", count)
+	}
+
+	// #0499: an auto-reply-classified message is exactly the shape #0498
+	// warned can carry a genuine subscriber's own address (an
+	// out-of-office bouncing off a real campaign), so it must leave a
+	// parked record too — reason "auto_reply", distinguishing it from a
+	// no-match at the metadata level.
+	var reason, from, subject string
+	if err := pool.QueryRow(ctx,
+		`SELECT metadata->>'reason', metadata->>'from', metadata->>'subject'
+		   FROM audit_log WHERE action = $1 AND metadata->>'key' = $2`,
+		audit.ActionInboundMailParked, "unsubscribe/msg-4",
+	).Scan(&reason, &from, &subject); err != nil {
+		t.Fatalf("query audit_log for parked record: %v", err)
+	}
+	if reason != "auto_reply" {
+		t.Errorf("metadata reason = %q, want %q", reason, "auto_reply")
+	}
+	if from != created.Email {
+		t.Errorf("metadata from = %q, want %q", from, created.Email)
+	}
+	if subject != "Automatic reply: unsubscribe:"+created.ManageToken {
+		t.Errorf("metadata subject = %q, want %q", subject, "Automatic reply: unsubscribe:"+created.ManageToken)
 	}
 }
 
@@ -615,6 +719,10 @@ func TestSESInboundHandler_UnparseableMessage_Returns200AndLeavesObject(t *testi
 	pool := journeyTestPool(t)
 	subs := subscribers.NewStore(pool)
 	objects := &fakeInboundObjectStore{objects: map[string][]byte{"unsubscribe/msg-9": []byte("not a valid RFC 5322 message")}}
+	// A nil auditor here doubles as #0499's nil-safety proof: recordParked
+	// must be a no-op rather than a nil-pointer panic when no auditor is
+	// configured (NewSESInboundHandler's own doc comment says a nil
+	// auditor "disables the audit write").
 	h := NewSESInboundHandler(&fakeInboundVerifier{}, objects, subs, nil, nil, nil)
 
 	rr := doPostSESInbound(h, inboundNotificationBody(t, "unsubscribe/msg-9"))
@@ -623,6 +731,47 @@ func TestSESInboundHandler_UnparseableMessage_Returns200AndLeavesObject(t *testi
 	}
 	if len(objects.deleted) != 0 {
 		t.Error("an unparseable message must be left in place, not deleted")
+	}
+}
+
+// TestSESInboundHandler_UnparseableMessage_RecordsParkedWithoutFromOrSubject
+// pins #0499's third left-in-place outcome: net/mail failed before any
+// field could be extracted at all, so the parked record still exists (key,
+// message id, reason) but genuinely has neither a From: nor a Subject to
+// report — recordParked must omit those metadata keys rather than store
+// empty strings (see its own doc comment).
+func TestSESInboundHandler_UnparseableMessage_RecordsParkedWithoutFromOrSubject(t *testing.T) {
+	pool := journeyTestPool(t)
+	subs := subscribers.NewStore(pool)
+	ctx := context.Background()
+	objects := &fakeInboundObjectStore{objects: map[string][]byte{"unsubscribe/msg-9b": []byte("not a valid RFC 5322 message")}}
+	h := NewSESInboundHandler(&fakeInboundVerifier{}, objects, subs, audit.New(pool), nil, nil)
+
+	rr := doPostSESInbound(h, inboundNotificationBody(t, "unsubscribe/msg-9b"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+
+	var targetType, reason string
+	var hasFrom, hasSubject bool
+	if err := pool.QueryRow(ctx,
+		`SELECT target_type, metadata->>'reason', metadata ? 'from', metadata ? 'subject'
+		   FROM audit_log WHERE action = $1 AND metadata->>'key' = $2`,
+		audit.ActionInboundMailParked, "unsubscribe/msg-9b",
+	).Scan(&targetType, &reason, &hasFrom, &hasSubject); err != nil {
+		t.Fatalf("query audit_log for parked record: %v", err)
+	}
+	if targetType != audit.TargetInboundMail {
+		t.Errorf("target_type = %q, want %q", targetType, audit.TargetInboundMail)
+	}
+	if reason != "unparseable" {
+		t.Errorf("metadata reason = %q, want %q", reason, "unparseable")
+	}
+	if hasFrom {
+		t.Error(`metadata has key "from", want it omitted — Parse never returned a From: address`)
+	}
+	if hasSubject {
+		t.Error(`metadata has key "subject", want it omitted — Parse never returned a Subject`)
 	}
 }
 

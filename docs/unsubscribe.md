@@ -48,6 +48,23 @@ token from the `Subject:` line (preferred) or falls back to matching the
 `From:` address, and unsubscribes — or leaves the object for manual review
 if neither matches.
 
+**"Left for manual review" has a reviewer (`#0499`).** The S3 object under
+`unsubscribe/` is left in place — never deleted — for three outcomes: no
+subject token or `From:` match, an unparseable message, and one classified
+as an auto-reply. `#0057`'s `expire-inbound-30d` lifecycle rule deletes that
+object after 30 days regardless, so each of the three additionally writes a
+durable `audit_log` row (`audit.ActionInboundMailParked`,
+`target_type = 'inbound_mail'`) carrying the S3 key, the SNS message id, the
+`From:` address and `Subject` when known, and why the message wasn't acted
+on — never the message body, since the body already lives in S3 for as long
+as that lasts. `audit_log` has no equivalent expiry, so this record outlives
+the object it describes. An admin finds these at **GET `/admin/audit`**,
+filtered to `target_type=inbound_mail` (the admin console's audit screen
+already supports a target-type filter, `#0114`) — no SSH access to the box
+required. See `internal/handlers/ses_inbound.go`'s `recordParked` for the
+exact metadata shape and `internal/audit/actions.go`'s
+`ActionInboundMailParked` doc comment for the full rationale.
+
 **Critical DNS detail:** the dedicated `lists.opencircuitsf.com` subdomain
 carries its own MX pointed at SES inbound. **Never point the apex
 domain's MX at SES** — that would hijack all mail to `opencircuitsf.com`,

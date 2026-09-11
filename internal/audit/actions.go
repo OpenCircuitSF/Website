@@ -110,6 +110,30 @@ const (
 	ActionSESSubscriptionConfirmed   = "ses.subscription_confirmed"
 	ActionSESUnsubscribeConfirmation = "ses.unsubscribe_confirmation"
 
+	// ActionInboundMailParked is written by POST /api/ses/inbound (#0058,
+	// #0499) whenever a fetched inbound message is left in S3 rather than
+	// acted on — an unparseable message, one classified as an auto-reply
+	// (internal/inbound.ParsedMessage.AutoReply), or one whose subject
+	// token and From: address both fail to resolve to a subscriber (PRD
+	// §6.5 path 3, #0058 criterion 5). Actor NULL — the caller is SES/SNS,
+	// not a person, same convention as the ses.* actions above.
+	// TargetType is TargetInboundMail with TargetID left nil: no subscriber
+	// was ever identified for these, so there is nothing to attribute the
+	// row to (mirrors ActionMediaImageUploaded's convention below).
+	//
+	// This row is #0499's fix for #0058's own gap: "object left in place
+	// for manual review" named no reviewer, and the S3 lifecycle rule
+	// (#0057 A5, expire-inbound-30d) deletes the object 30 days later. This
+	// audit_log row is a record of the FAILURE, not a copy of the message —
+	// it deliberately never carries the message body — and audit_log has
+	// no equivalent retention limit, so it outlives the object it
+	// describes. See internal/handlers/ses_inbound.go's recordParked for
+	// the exact metadata shape (the S3 key, the SNS message id, the From:
+	// address and Subject when known, and why the message wasn't acted on)
+	// and docs/unsubscribe.md for the admin-facing surface this is found
+	// on: GET /admin/audit filtered to target_type=inbound_mail.
+	ActionInboundMailParked = "inbound_mail.parked"
+
 	// Subscriber admin actions (PRD §5.2, §6.5; #0032's admin screen).
 	// Actor is always the acting admin, unlike ActionSubscriberSignup above.
 	//
@@ -476,4 +500,9 @@ const (
 	// TargetCrtCommand is the target type for the crt_command.* actions
 	// above (#0393).
 	TargetCrtCommand = "crt_command"
+	// TargetInboundMail is the target type for ActionInboundMailParked
+	// (#0499). Like TargetSNSTopic above, the target has no BIGINT id — the
+	// S3 object key is a string, recorded in metadata instead — so TargetID
+	// is left nil for every row of this type.
+	TargetInboundMail = "inbound_mail"
 )

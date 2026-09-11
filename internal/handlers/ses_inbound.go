@@ -53,6 +53,23 @@
 // no token and no From match, an unparseable message, and an auto-reply.
 // The 30-day lifecycle rule (#0057, A5) is what eventually reclaims those.
 //
+// # Parked messages get a durable record, not just a log line (#0499)
+//
+// #0058 criterion 5 says an unmatched message is "logged ... left in place
+// for manual review", but a log line on the box is not itself a review
+// mechanism, and the object it describes is gone in 30 days regardless.
+// Each of the three left-in-place outcomes named just above additionally
+// calls recordParked, which writes an audit.ActionInboundMailParked row
+// (audit_log has no expiry, unlike the S3 object) carrying the S3 key, the
+// SNS message id, the From: address and Subject when known, and why the
+// message was left — never the message body. An admin finds these at GET
+// /admin/audit filtered to target_type=inbound_mail, with no SSH access to
+// the box required; see docs/unsubscribe.md. recordParked is a no-op when
+// h.auditor is nil, and audit.Logger.Record itself logs-and-swallows any
+// insert failure — a failure to WRITE this record must never turn this
+// handler's 200 into a 500, since that would make SNS redeliver the SAME
+// message and loop.
+//
 // # Auto-replies are checked before any lookup at all
 //
 // #0058's practical hazard: an out-of-office bouncing off a campaign send
@@ -272,6 +289,7 @@ func (h *SESInboundHandler) handleNotification(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		h.log.Warn("ses_inbound: parsing fetched message failed; leaving object for manual review",
 			"key", key, "message_id", msg.MessageId, "err", err)
+		h.recordParked(ctx, key, msg.MessageId, parkedReasonUnparseable, "", "")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -279,6 +297,7 @@ func (h *SESInboundHandler) handleNotification(w http.ResponseWriter, r *http.Re
 	if pm.AutoReply {
 		h.log.Info("ses_inbound: ignoring auto-reply/bounce-shaped message; leaving object for manual review",
 			"key", key, "message_id", msg.MessageId)
+		h.recordParked(ctx, key, msg.MessageId, parkedReasonAutoReply, pm.From, pm.Subject)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -292,6 +311,7 @@ func (h *SESInboundHandler) handleNotification(w http.ResponseWriter, r *http.Re
 	if matchedVia == "" {
 		h.log.Info("ses_inbound: no subject token or From: match; leaving object for manual review",
 			"key", key, "message_id", msg.MessageId)
+		h.recordParked(ctx, key, msg.MessageId, noMatchReason(pm), pm.From, pm.Subject)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -302,6 +322,70 @@ func (h *SESInboundHandler) handleNotification(w http.ResponseWriter, r *http.Re
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// Reason values recordParked writes into its audit row's metadata.reason —
+// see that function's doc comment and noMatchReason below for which
+// left-in-place outcome produces which value.
+const (
+	parkedReasonUnparseable = "unparseable"
+	parkedReasonAutoReply   = "auto_reply"
+	parkedReasonTokenStale  = "token_not_found"
+	parkedReasonFromUnknown = "from_not_found"
+	parkedReasonNoSignal    = "no_identifying_signal"
+)
+
+// recordParked writes the durable audit record #0499 added for a message
+// handleNotification is about to leave in S3 for manual review — see this
+// file's package doc comment ("Parked messages get a durable record, not
+// just a log line") for why this exists and where an admin finds the
+// result. from and subject are passed through as-is and may be "" (an
+// unparseable message has neither); the metadata omits an empty one rather
+// than storing an empty string, so a reader can distinguish "known to be
+// blank" from "not available for this outcome".
+//
+// A nil h.auditor is a no-op, matching every other audit call site in this
+// file. audit.Logger.Record itself logs-and-swallows any insert failure, so
+// this can never turn the caller's 200 into a 500 — see the constraint
+// named in the package doc comment.
+func (h *SESInboundHandler) recordParked(ctx context.Context, key, messageID, reason, from, subject string) {
+	if h.auditor == nil {
+		return
+	}
+	meta := map[string]any{
+		"key":        key,
+		"message_id": messageID,
+		"reason":     reason,
+	}
+	if from != "" {
+		meta["from"] = from
+	}
+	if subject != "" {
+		meta["subject"] = subject
+	}
+	h.auditor.Record(ctx, audit.Entry{
+		Action:     audit.ActionInboundMailParked,
+		TargetType: audit.TargetInboundMail,
+		Metadata:   meta,
+	})
+}
+
+// noMatchReason explains, for recordParked's metadata.reason, why match
+// returned matchedVia == "" — reconstructed from pm alone (rather than
+// widening match's own return values) since match's three no-match
+// branches map onto pm.Token/pm.From one-to-one: a present Token that
+// didn't resolve never falls back to From (match's own stale-token rule,
+// see its doc comment), so its absence here means Token was either absent
+// or, if present, already handled by the first case below.
+func noMatchReason(pm inbound.ParsedMessage) string {
+	switch {
+	case pm.Token != "":
+		return parkedReasonTokenStale
+	case pm.From == "":
+		return parkedReasonNoSignal
+	default:
+		return parkedReasonFromUnknown
+	}
 }
 
 // match implements PRD §6.5's precedence exactly: the subject token first
