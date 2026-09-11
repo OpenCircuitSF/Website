@@ -237,7 +237,7 @@ verification.
 |---|---|
 | **A1** — SES domain identity `lists.opencircuitsf.com` | Its DNS verification TXT exists (see D1 below), which only happens after `CreateEmailIdentity`/`VerifyDomainIdentity` runs — **treat A1 as created**, but re-confirm verification actually completed (step 0 below), since no credential available to this pass can call `ses:GetIdentityVerificationAttributes`. |
 | **D1** — `_amazonses.lists.opencircuitsf.com` TXT | **Exists**: `"APWUrtnPLURlLWOGg0ybU3t6HbptTzDE77f8JE1YHX0="`. Kept as `deploy/aws/D1-route53-change-batch-txt.json` for reference and rollback only — **do not re-run it.** |
-| **A2** — S3 bucket `opencircuitsf-inbound` | **Exists** (`head-bucket` → 403, against a random-name control returning 404 — 403 means the bucket is there and this identity just can't read it). Its public-access-block, lifecycle, and policy state could **not** be read from here — confirm each with the read commands in step 2 below before assuming any of A3/A4/A5 still need to be applied. |
+| **A2** — S3 bucket `opencircuitsf-inbound` | **Exists** (`head-bucket` → 403, against a random-name control returning 404 — 403 means the bucket is there and this identity just can't read it). Its public-access-block, lifecycle, and policy state could **not** be read from here — confirm each with the read commands in step 1 below before assuming any of A3/A4/A5 still need to be applied. |
 | **D2** — `lists.opencircuitsf.com` MX | **Absent.** Still served only by the zone's `*.opencircuitsf.com` wildcard A record. This is correct — D2 is deliberately last (step 8). |
 
 Everything else in the table below (A6–A11, A12) does not yet exist.
@@ -460,7 +460,8 @@ aws s3 ls s3://opencircuitsf-inbound/unsubscribe/ --region us-east-1
 
 Confirm an object appears. This alone proves A1–A10 and D2 are wired
 correctly — it does **not** yet exercise `#0058`'s handler, since that
-needs step 11 below (the SNS subscription) confirmed first.
+needs the SNS subscription (A12) from the "After this issue" section below
+confirmed first.
 
 **10. A11 — grant the instance role read/delete on the prefix, not the
 bucket.** Last, because nothing reads the bucket until `#0058`'s deployed

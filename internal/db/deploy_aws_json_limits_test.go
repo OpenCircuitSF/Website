@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,7 +71,7 @@ func deployAWSJSONViolations(name string, data []byte) []string {
 	if c, ok := doc["Comment"].(string); ok {
 		if n := len(c); n > route53CommentMaxLen {
 			violations = append(violations, fmt.Sprintf(
-				"%s: Comment is %d chars, exceeds Route 53 ChangeBatch.Comment's %d-char limit (ResourceDescription)",
+				"%s: Comment is %d bytes, exceeds Route 53 ChangeBatch.Comment's %d-byte limit (ResourceDescription)",
 				name, n, route53CommentMaxLen))
 		}
 	}
@@ -87,7 +88,7 @@ func deployAWSJSONViolations(name string, data []byte) []string {
 			}
 			if n := len(id); n > s3LifecycleIDMaxLen {
 				violations = append(violations, fmt.Sprintf(
-					"%s: Rules[%d].ID is %d chars, exceeds S3 LifecycleRule.ID's %d-char limit",
+					"%s: Rules[%d].ID is %d bytes, exceeds S3 LifecycleRule.ID's %d-byte limit",
 					name, i, n, s3LifecycleIDMaxLen))
 			}
 		}
@@ -97,30 +98,37 @@ func deployAWSJSONViolations(name string, data []byte) []string {
 }
 
 // TestDeployAWSJSONFieldLimits is the real guard: every *.json file
-// currently in deploy/aws/ must satisfy deployAWSJSONViolations.
+// anywhere under deploy/aws/ -- including subdirectories, per #0057 review
+// (bounce #2): os.ReadDir does not recurse, so a file dropped into a nested
+// directory (e.g. deploy/aws/nested/bad.json) was silently skipped, measured
+// with a 900-byte Comment passing -- must satisfy deployAWSJSONViolations.
 func TestDeployAWSJSONFieldLimits(t *testing.T) {
-	entries, err := os.ReadDir(deployAWSDir)
-	if err != nil {
-		t.Fatalf("read %s: %v", deployAWSDir, err)
-	}
-
 	found := 0
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
-			continue
+	walkErr := filepath.WalkDir(deployAWSDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Ext(d.Name()) != ".json" {
+			return nil
 		}
 		found++
-		path := filepath.Join(deployAWSDir, e.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
 		}
-		for _, v := range deployAWSJSONViolations(e.Name(), data) {
+		for _, v := range deployAWSJSONViolations(path, data) {
 			t.Errorf("%s", v)
 		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walk %s: %v", deployAWSDir, walkErr)
 	}
 	if found == 0 {
-		t.Fatalf("found no *.json files in %s -- has the repo layout changed?", deployAWSDir)
+		t.Fatalf("found no *.json files under %s -- has the repo layout changed?", deployAWSDir)
 	}
 }
 
@@ -162,5 +170,28 @@ func TestDeployAWSJSONFieldLimitsCatchesOverLength(t *testing.T) {
 	}
 	if v := deployAWSJSONViolations("compliant.json", okDoc); len(v) != 0 {
 		t.Fatalf("deployAWSJSONViolations flagged a compliant document: %v", v)
+	}
+}
+
+// TestDeployAWSJSONLimitConstantsMatchDocumented pins route53CommentMaxLen
+// and s3LifecycleIDMaxLen against literals spelled out independently of the
+// constants themselves. Per #0057 review (bounce #2) and CLAUDE.md's #0258
+// rule ("a guard's oracle must not be the same bytes as its subject"):
+// TestDeployAWSJSONFieldLimitsCatchesOverLength builds its fixtures as
+// route53CommentMaxLen+1 / s3LifecycleIDMaxLen+1, so it moves with the
+// constant rather than checking it -- measured by raising
+// route53CommentMaxLen to 10000 and restoring D2's original 720-char
+// Comment: both TestDeployAWSJSONFieldLimits and the vacuity test stayed
+// green. This test is the independent oracle: it fails the moment either
+// constant no longer equals the documented AWS limit, regardless of what
+// the rest of the file's fixtures are built from.
+func TestDeployAWSJSONLimitConstantsMatchDocumented(t *testing.T) {
+	if route53CommentMaxLen != 256 {
+		t.Errorf("route53CommentMaxLen = %d, want 256 (Route 53 ChangeBatch.Comment's documented ResourceDescription max)",
+			route53CommentMaxLen)
+	}
+	if s3LifecycleIDMaxLen != 255 {
+		t.Errorf("s3LifecycleIDMaxLen = %d, want 255 (S3 LifecycleRule.ID's documented max, per field prose -- the shape carries no machine-checkable max)",
+			s3LifecycleIDMaxLen)
 	}
 }

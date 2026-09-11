@@ -72,20 +72,22 @@ must land in S3 for our service to process.
 
 **Only proceed once Part 1's second answer is known.**
 
-### The DNS changes — two record sets, both new
+### The DNS changes — two record sets
 
-Zone `Z0825067RV8QY5UIKS96` (`opencircuitsf.com.`). Both are `CREATE`s at names
-that hold no record set today.
+Zone `Z0825067RV8QY5UIKS96` (`opencircuitsf.com.`). D1 is **already applied**
+(see below); D2 is the one remaining `CREATE`, at a name that holds no record
+set today.
 
 | # | Name | Type | Value | TTL |
 |---|---|---|---|---|
-| D1 | `_amazonses.lists.opencircuitsf.com` | TXT | the verification token `CreateEmailIdentity` returns | 300 |
+| D1 | `_amazonses.lists.opencircuitsf.com` | TXT | **already applied** — `"APWUrtnPLURlLWOGg0ybU3t6HbptTzDE77f8JE1YHX0="`, confirmed live 2026-09-11. Do not re-run as `CREATE`; it will fail | 300 |
 | D2 | `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` | 300 |
 
 **One non-obvious consequence, already checked.** The zone has a wildcard
-`*.opencircuitsf.com CNAME ec2.smallsharptools.com`. Per RFC 4592 a wildcard
-stops applying at any name owning a record, so creating D2 makes
-`lists.opencircuitsf.com` answer NODATA for A and CNAME as well as gaining an MX.
+`*.opencircuitsf.com` **A record** answering `98.84.75.184` (the web server).
+Per RFC 4592 a wildcard stops applying at any name owning a record, so
+creating D2 makes `lists.opencircuitsf.com` answer NODATA for A and CNAME as
+well as gaining an MX.
 
 That is safe: nothing in our application builds an HTTPS URL on that name. It is
 used only to construct a `mailto:` header.
@@ -94,8 +96,8 @@ used only to construct a `mailto:` header.
 
 | # | Object | Name | Notes |
 |---|---|---|---|
-| A1 | SES domain identity | `lists.opencircuitsf.com` | receive-only; no DKIM, no MAIL FROM, never used to send |
-| A2 | S3 bucket | `opencircuitsf-inbound` | verified not to exist; name unclaimed globally. Must be in a receiving region — `us-east-1` qualifies |
+| A1 | SES domain identity | `lists.opencircuitsf.com` | **already exists and is verified**, confirmed 2026-09-11 — receive-only; no DKIM, no MAIL FROM, never used to send |
+| A2 | S3 bucket | `opencircuitsf-inbound` | **already exists** (`head-bucket` → 403 against a random-name control's 404, confirmed 2026-09-11). Its public-access-block, lifecycle and bucket-policy state could not be read from here — read each with the matching `get-` command (below) before applying A3/A4/A5 |
 | A3 | S3 Block Public Access | all four flags on A2 | holds inbound mail; must never be public |
 | A4 | S3 bucket policy | on A2 | allow `ses.amazonaws.com` `s3:PutObject` on `…/unsubscribe/*` **only**, conditioned on `AWS:SourceAccount` **and** `AWS:SourceArn` of the exact receipt rule |
 | A5 | S3 lifecycle rule | `expire-inbound-30d`, prefix `unsubscribe/` | `Expiration: 30 days` |
@@ -134,9 +136,17 @@ Every AWS object is inert until the MX exists, so build the destination first
 and route mail to it only at the end.
 
 1. **Gate**: Part 1's `describe-active-receipt-rule-set`.
-2. A1 — create the identity, capture the verification token.
-3. D1 — publish the TXT; wait for the identity to report verified.
-4. A2, A3, A5, A4 — bucket, lock it down, lifecycle, then policy.
+2. A1 — **already done** (identity verified 2026-09-11); confirm with
+   `aws sesv2 get-email-identity --email-identity lists.opencircuitsf.com --region us-east-1`
+   rather than creating it again.
+3. D1 — **already applied**; confirm the TXT resolves rather than re-running
+   it as `CREATE` (it will fail — the record set already exists).
+4. A2 — **the bucket already exists**; read its current public-access-block,
+   lifecycle and bucket-policy state with the matching `get-` command first
+   (`put-bucket-policy` and `put-bucket-lifecycle-configuration` both
+   **replace** the whole configuration rather than merging, so applying blind
+   risks silently discarding whatever is already there). Then apply A3, A5,
+   A4 in that order — lock it down, lifecycle, then policy.
 5. A6, A7 — topic and policy.
 6. A8, A9 — rule set and rule.
 7. A10 — activate.
@@ -190,7 +200,8 @@ that gets this wrong, because simulator addresses are not identities.
 
 ## What we have already verified, so you need not
 
-Read live on 2026-09-04/05, read-only:
+Read live on 2026-09-04/05, read-only, with the rows below re-measured
+2026-09-11 (each says so):
 
 - Instance `i-0e3bd89e87d1c2364`, region `us-east-1`, AZ `us-east-1b`
 - Instance role **`opencircuit-instance`** is attached (three ways: IMDS
@@ -200,11 +211,23 @@ Read live on 2026-09-04/05, read-only:
 - Custom MAIL FROM `bounce.mailing.opencircuitsf.com` → `feedback-smtp.us-east-1.amazonses.com`
 - Configuration set `opencircuit-transactional`; events topic
   `arn:aws:sns:us-east-1:378152330719:opencircuit-ses-events`
-- `s3://opencircuitsf-inbound` **does not exist** (`head-bucket` → 404, against
-  controls returning 403 for an existing bucket)
+- **`lists.opencircuitsf.com` (A1) already exists as a verified SES domain
+  identity, and its `_amazonses.lists.opencircuitsf.com` TXT (D1,
+  `"APWUrtnPLURlLWOGg0ybU3t6HbptTzDE77f8JE1YHX0="`) already resolves —
+  confirmed 2026-09-11.** Skip ordering steps 2 and 3 below other than
+  confirming; re-applying D1 as `CREATE` will fail because the record set
+  already exists.
+- **`s3://opencircuitsf-inbound` (A2) already exists** — `head-bucket` returns
+  403 against it, versus 404 for a random-name control, confirmed 2026-09-11.
+  **Its lockdown state (public-access-block, lifecycle, bucket policy) could
+  not be read from here** — read each with the matching `get-` command before
+  applying A3/A4/A5, since `put-bucket-policy` and
+  `put-bucket-lifecycle-configuration` both **replace** rather than merge the
+  existing configuration.
 - DMARC lives at `_dmarc.mailing.opencircuitsf.com` (`p=none`), **not** at the
   apex — deliberate, and our own docs were wrong about it
 
 **We could not read**, and did not pursue: the `opencircuit-instance` role's
-attached policy documents, and `sesv2 get-account`. Both denied to every
-identity available on the box. No credentials were created or sought.
+attached policy documents, `sesv2 get-account`, and A2's public-access-block/
+lifecycle/policy state. All denied or unreadable from every identity
+available on the box. No credentials were created or sought.
