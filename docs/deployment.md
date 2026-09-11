@@ -443,16 +443,19 @@ Fill in every value `.env.example` ships blank or with a placeholder:
   this public repository (`#0067`).
 - `ADMIN_EMAIL` — the address pre-authorized as admin on first registration.
 - `AWS_REGION`, `SES_CONFIGURATION_SET`, `EMAIL_FROM`, `EMAIL_REPLY_TO`,
-  `EMAIL_LIST_DOMAIN`, `SES_INBOUND_BUCKET` — see **SES setup** below. As of
-  `#0423` (2026-09-04) `.env.example` ships this project's actual production
-  values for five of the six, not placeholders, so a deploy of *this* domain
-  to *this* SES account needs no editing for those five — confirm them
-  against `docs/email-setup.md`'s current-state table and
-  `docs/aws-iam-setup.md`'s "The facts this rests on" table, which is where
-  `AWS_REGION` and `SES_CONFIGURATION_SET` actually live, rather than
-  reinventing them. The sixth, `SES_INBOUND_BUCKET`, names the bucket
-  `#0057` will create and does not exist yet — leave it as shipped; there is
-  nothing to confirm it against until that bucket is created.
+  `EMAIL_LIST_DOMAIN`, `SES_INBOUND_BUCKET`, `SES_INBOUND_TOPIC_ARN` — see
+  **SES setup** below. As of `#0423` (2026-09-04) `.env.example` ships this
+  project's actual production values for five of the seven, not
+  placeholders, so a deploy of *this* domain to *this* SES account needs no
+  editing for those five — confirm them against `docs/email-setup.md`'s
+  current-state table and `docs/aws-iam-setup.md`'s "The facts this rests
+  on" table, which is where `AWS_REGION` and `SES_CONFIGURATION_SET`
+  actually live, rather than reinventing them. The other two,
+  `SES_INBOUND_BUCKET` and `SES_INBOUND_TOPIC_ARN` (added `#0058`), name the
+  bucket and SNS topic `#0057`'s runbook (`docs/email-setup.md`, "Inbound
+  unsubscribe") creates — leave both as shipped until that runbook's AWS
+  steps are actually done; there is nothing to confirm them against before
+  then.
   Deploying a fork to a different domain or SES account still means
   replacing every one of these with that identity's own values.
 - `MAX_SEND_RATE` — **set to `1` while the SES account is in the sandbox**
@@ -1612,11 +1615,27 @@ region, and account ID are corrected to match reality:
       "Sid": "InboundBucketScoped",
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:DeleteObject"],
-      "Resource": "arn:aws:s3:::opencircuitsf-inbound/*"
+      "Resource": "arn:aws:s3:::opencircuitsf-inbound/unsubscribe/*"
     }
   ]
 }
 ```
+
+**Correction (`#0057`, 2026-09-11) — `InboundBucketScoped`'s `Resource`
+narrowed to the `unsubscribe/` prefix.** `PRD.md` §10.5 itself still reads
+`arn:aws:s3:::opencircuitsf-inbound/*` (the whole bucket); `#0057`'s
+planning pass corrects this against its own AWS object table (row A11): the
+grant should be **the prefix, not the bucket**, since nothing else is
+planned to live in this bucket but there is no reason to grant broader
+access than the one prefix `#0058`'s handler actually reads. The
+ready-to-apply version of this exact statement is
+[`deploy/aws/A11-iam-inline-policy.json`](../deploy/aws/A11-iam-inline-policy.json).
+`docs/aws-iam-setup.md`'s "What is deliberately *not* in it" section still
+shows the bucket-wide form and has the same staleness — reported, not fixed
+here, since that file's "not built yet" framing needs its own pass once
+`#0057`'s AWS objects actually exist. `PRD.md` §10.5 is unedited by this
+pass (out of scope for `#0057`); the disagreement is reported to the
+orchestrator for filing.
 
 **Correction (`#0426`, 2026-09-04) — region, account ID, and identity were
 all wrong.** This block previously read

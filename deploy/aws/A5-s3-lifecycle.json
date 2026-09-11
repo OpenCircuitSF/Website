@@ -1,0 +1,10 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-inbound-30d",
+      "Filter": { "Prefix": "unsubscribe/" },
+      "Status": "Enabled",
+      "Expiration": { "Days": 30 }
+    }
+  ]
+}

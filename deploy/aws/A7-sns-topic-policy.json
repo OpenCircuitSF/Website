@@ -1,0 +1,38 @@
+{
+  "Version": "2012-10-17",
+  "Id": "opencircuit-inbound-mail-policy",
+  "Statement": [
+    {
+      "Sid": "AllowAccountManageTopic",
+      "Effect": "Allow",
+      "Principal": { "AWS": "*" },
+      "Action": [
+        "SNS:GetTopicAttributes",
+        "SNS:SetTopicAttributes",
+        "SNS:AddPermission",
+        "SNS:RemovePermission",
+        "SNS:DeleteTopic",
+        "SNS:Subscribe",
+        "SNS:ListSubscriptionsByTopic",
+        "SNS:Publish"
+      ],
+      "Resource": "arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail",
+      "Condition": {
+        "StringEquals": { "AWS:SourceOwner": "378152330719" }
+      }
+    },
+    {
+      "Sid": "AllowSESPublishForUnsubscribeRule",
+      "Effect": "Allow",
+      "Principal": { "Service": "ses.amazonaws.com" },
+      "Action": "SNS:Publish",
+      "Resource": "arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail",
+      "Condition": {
+        "StringEquals": {
+          "AWS:SourceAccount": "378152330719",
+          "AWS:SourceArn": "arn:aws:ses:us-east-1:378152330719:receipt-rule-set/opencircuit-inbound:receipt-rule/unsubscribe"
+        }
+      }
+    }
+  ]
+}

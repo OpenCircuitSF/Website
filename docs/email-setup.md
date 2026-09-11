@@ -6,8 +6,12 @@ configuration set, and event ingestion is a record of what exists, measured
 against account `378152330719`; the two gaps are called out where they bite.
 See [`aws-iam-setup.md`](aws-iam-setup.md) for the instance-role work,
 [`mailing-list.md`](mailing-list.md) for the sending engine that consumes this
-setup, and [`unsubscribe.md`](unsubscribe.md) for the inbound `mailto:` path
-(Phase 4, `#0057`, not built).
+setup, and [`unsubscribe.md`](unsubscribe.md) for the inbound `mailto:` design
+(Phase 4). The AWS/DNS build steps for that inbound path are their own
+runbook below, **"Inbound unsubscribe (Phase 4, `#0057`)"** — as of
+2026-09-11 the domain identity and its verification TXT (A1/D1) and the S3
+bucket (A2) exist; the SNS topic, receipt rule, rule-set activation, MX, and
+IAM grant do not yet.
 
 ## Sending happens on a subdomain, not the apex
 
@@ -64,8 +68,11 @@ MAIL FROM both `SUCCESS`.
 | `mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com -all` | SPF for the `From:` domain. `-all`, not `~all`: nothing but SES ever sends as this name, so a hard fail is safe and stronger |
 | `_dmarc.mailing.opencircuitsf.com` | TXT | `v=DMARC1; p=none; rua=mailto:contact@opencircuitsf.com; fo=1` | DMARC, **subdomain-scoped** |
 
-**Not created, on purpose:** anything at the apex, and
-`lists.opencircuitsf.com` (Phase 4 inbound, `#0057`).
+**Not created, on purpose:** anything at the apex, and (still, as of
+2026-09-11) the MX at `lists.opencircuitsf.com` itself — see "Inbound
+unsubscribe (Phase 4, `#0057`)" below. The identity-verification TXT at
+`_amazonses.lists.opencircuitsf.com` is a different name and does already
+exist.
 
 **DMARC is on the subdomain, not the apex, and that is the point.** A receiver
 resolving DMARC for `mailing.opencircuitsf.com` checks `_dmarc.mailing.…`
@@ -201,6 +208,317 @@ What this does and does not cover:
 - Verify it's active with
   `aws sesv2 get-account-suppression-attributes --region us-east-1`, which
   should echo back `{"SuppressedReasons": ["BOUNCE", "COMPLAINT"]}`.
+
+## Inbound unsubscribe (Phase 4, `#0057`)
+
+The AWS-side plumbing for PRD §6.5 path 3: mail sent to
+`unsubscribe@lists.opencircuitsf.com` lands in S3, SES notifies an SNS
+topic, and that topic POSTs to `POST /api/ses/inbound` — the handler
+`#0058` already built and merged (`internal/inbound`,
+`internal/handlers/ses_inbound.go`), reading two config variables,
+`SES_INBOUND_BUCKET` and `SES_INBOUND_TOPIC_ARN` (`docs/configuration.md`).
+This section is the step-by-step runbook for the AWS objects and DNS
+records; everything in it is outward-facing and account-wide in one step
+(A10 below), so **the user runs every command in this section**, not an
+agent (`CLAUDE.md` §8b, §9).
+
+All commands run in **`us-east-1`**, account `378152330719`. Ready-to-apply
+JSON documents for the policy/rule steps live in
+[`deploy/aws/`](../deploy/aws/README.md) — that directory's own `README.md`
+is the file manifest; this section is the ordering, the gate, and the
+verification.
+
+### What is already done — checked 2026-09-11, read-only
+
+| Row | State |
+|---|---|
+| **A1** — SES domain identity `lists.opencircuitsf.com` | Its DNS verification TXT exists (see D1 below), which only happens after `CreateEmailIdentity`/`VerifyDomainIdentity` runs — **treat A1 as created**, but re-confirm verification actually completed (step 0 below), since no credential available to this pass can call `ses:GetIdentityVerificationAttributes`. |
+| **D1** — `_amazonses.lists.opencircuitsf.com` TXT | **Exists**: `"APWUrtnPLURlLWOGg0ybU3t6HbptTzDE77f8JE1YHX0="`. Kept as `deploy/aws/D1-route53-change-batch-txt.json` for reference and rollback only — **do not re-run it.** |
+| **A2** — S3 bucket `opencircuitsf-inbound` | **Exists** (`head-bucket` → 403, against a random-name control returning 404 — 403 means the bucket is there and this identity just can't read it). Its public-access-block, lifecycle, and policy state could **not** be read from here — confirm each with the read commands in step 2 below before assuming any of A3/A4/A5 still need to be applied. |
+| **D2** — `lists.opencircuitsf.com` MX | **Absent.** Still served only by the zone's `*.opencircuitsf.com` wildcard CNAME. This is correct — D2 is deliberately last (step 8). |
+
+Everything else in the table below (A6–A11, A12) does not yet exist.
+
+### The account-wide gate — run this first, always
+
+```bash
+aws ses describe-active-receipt-rule-set --region us-east-1
+```
+
+This account also runs ShortLinks and other services, and **a region has
+exactly one active receipt rule set for the whole account.** Read the
+result before doing anything else:
+
+- **Empty (`{}`)** → no rule set is active. Proceed with A8/A9/A10 below
+  exactly as written — create `opencircuit-inbound` and activate it.
+- **Non-empty** (a `Metadata` block naming an existing set, plus its
+  `Rules`) → **stop.** Do not create or activate a second rule set — that
+  would silently replace whatever the existing set does for the whole
+  account. Instead: add the `unsubscribe` rule to that existing set
+  (`--rule-set-name <its name>` in place of `opencircuit-inbound` in A9's
+  command, and `--after <name of its last rule>` so the new rule is
+  appended rather than inserted first), edit the `AWS:SourceArn` condition
+  in `deploy/aws/A4-s3-bucket-policy.json` and
+  `deploy/aws/A7-sns-topic-policy.json` to name that set instead of
+  `opencircuit-inbound`, and skip A8 and A10 entirely — the set is already
+  active. If this turns out to be fiddly (another project's rule ordering,
+  unclear ownership), take the escape hatch: point the `mailto:` at a
+  monitored mailbox and process unsubscribes by hand instead.
+
+### Order — every AWS object is inert until the MX exists, so the MX goes last
+
+The whole safety argument for this ordering: nothing below can receive mail
+until D2 (the MX) exists, so every object is built and locked down first,
+and the very last step is the one that turns traffic on. Each step is
+independently reversible — see **Rollback**, below.
+
+**0. Confirm A1's verification actually completed** (the DNS record exists,
+but that only proves the token was published, not that SES finished
+checking it):
+
+```bash
+aws sesv2 get-email-identity --email-identity lists.opencircuitsf.com --region us-east-1
+```
+
+Expect `"VerificationStatus": "SUCCESS"` (or the v1-shaped
+`aws ses get-identity-verification-attributes --identities
+lists.opencircuitsf.com --region us-east-1` → `"VerificationStatus":
+"Success"`, depending which API originally created the identity). If it
+instead reads `"PENDING"`, the TXT record hasn't finished propagating or
+SES hasn't polled it yet — wait and re-check before continuing; nothing
+past this point works until it reads `Success`.
+
+**1. Confirm A2's bucket lockdown state**, since existence was all that
+could be checked from here:
+
+```bash
+aws s3api get-public-access-block --bucket opencircuitsf-inbound --region us-east-1
+aws s3api get-bucket-lifecycle-configuration --bucket opencircuitsf-inbound --region us-east-1
+aws s3api get-bucket-policy --bucket opencircuitsf-inbound --region us-east-1
+```
+
+For each: if it returns the expected configuration (all four
+public-access-block flags `true`; a lifecycle rule named
+`expire-inbound-30d` on prefix `unsubscribe/`; a policy matching
+`deploy/aws/A4-s3-bucket-policy.json`), skip that step below. If it errors
+(`NoSuchPublicAccessBlockConfiguration`, `NoSuchLifecycleConfiguration`,
+`NoSuchBucketPolicy`) or the configuration differs, apply it:
+
+```bash
+# A3 — block all public access (skip if already set)
+aws s3api put-public-access-block --bucket opencircuitsf-inbound --region us-east-1 \
+  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+# A5 — 30-day lifecycle on the unsubscribe/ prefix (skip if already set)
+aws s3api put-bucket-lifecycle-configuration --bucket opencircuitsf-inbound --region us-east-1 \
+  --lifecycle-configuration file://deploy/aws/A5-s3-lifecycle.json
+
+# A4 — allow SES to PutObject under unsubscribe/ only, scoped to this
+# account and this exact receipt rule (skip if already set, or if the gate
+# above found an existing rule set — edit the SourceArn first, see above)
+aws s3api put-bucket-policy --bucket opencircuitsf-inbound --region us-east-1 \
+  --policy file://deploy/aws/A4-s3-bucket-policy.json
+```
+
+Expect each command to return no output on success; confirm with the `get-`
+commands above.
+
+**2. A6 — create the SNS topic** (separate from the existing
+`opencircuit-ses-events` topic — do not reuse it; `internal/sesnotify`
+dispatches SES message types by `TopicArn`, and a shared topic would let
+either endpoint's messages satisfy the other's verifier):
+
+```bash
+aws sns create-topic --name opencircuit-inbound-mail --region us-east-1
+```
+
+Confirm the returned `TopicArn` is exactly
+`arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail` — that value
+is already baked into `.env.example`'s `SES_INBOUND_TOPIC_ARN` and into
+`deploy/aws/A7-sns-topic-policy.json` / `A9-ses-receipt-rule.json`.
+
+**3. A7 — set the topic policy** (owner keeps full control; `ses.amazonaws.com`
+may publish, scoped the same way as A4):
+
+```bash
+aws sns set-topic-attributes --region us-east-1 \
+  --topic-arn arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail \
+  --attribute-name Policy --attribute-value file://deploy/aws/A7-sns-topic-policy.json
+```
+
+**4. A8 — create the receipt rule set** (only if the gate above found none
+active):
+
+```bash
+aws ses create-receipt-rule-set --rule-set-name opencircuit-inbound --region us-east-1
+```
+
+**5. A9 — create the `unsubscribe` rule.** One `S3Action` with its own
+`TopicArn` set — **not** a second, separate SNS action. A standalone SNS
+receipt-rule action publishes the raw message content (capped at 150 KB)
+and carries no S3 object key; the S3 action's own optional `TopicArn`
+field is what fires *after* SES finishes writing the object, and its
+notification is what `#0058`'s `sesnotify.SESEvent.ObjectKey()` reads the
+key from. `TlsPolicy: Optional`, not `Require` — refusing an unsubscribe
+because the sender's MTA doesn't offer STARTTLS is the wrong failure on
+this address (RFC 8058 treats unsubscribe handling as something that must
+not error):
+
+```bash
+aws ses create-receipt-rule --region us-east-1 \
+  --rule-set-name opencircuit-inbound \
+  --rule file://deploy/aws/A9-ses-receipt-rule.json
+```
+
+(If the gate found an existing active set, use that set's name in
+`--rule-set-name` and add `--after <name of its last rule>` — see the gate
+section above.)
+
+**6. A10 — activate the rule set** (only if the gate above found none
+active; skip entirely if you added a rule to an existing set instead — that
+set is already active and this step would needlessly replace it):
+
+```bash
+aws ses set-active-receipt-rule-set --rule-set-name opencircuit-inbound --region us-east-1
+```
+
+**7. Confirm the apex MX before touching DNS again** — the check that
+matters, because a mistake in the next step costs real human mail:
+
+```bash
+dig +noall +answer MX opencircuitsf.com
+```
+
+Must read exactly `1 smtp.google.com.` and nothing else. Nothing in this
+runbook creates, edits, or deletes any record at the bare apex.
+
+**8. D2 — the MX. Apply this last; mail begins flowing only here.**
+
+```bash
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z0825067RV8QY5UIKS96 \
+  --change-batch file://deploy/aws/D2-route53-change-batch-mx.json
+```
+
+Capture the returned `ChangeInfo.Id` and wait for it to sync:
+
+```bash
+aws route53 get-change --id <ChangeId from above>
+```
+
+Wait for `"Status": "INSYNC"` before treating the record as live (usually
+well under a minute).
+
+**The RFC 4592 consequence, and why it's safe.** The zone's
+`*.opencircuitsf.com` CNAME wildcard currently answers for
+`lists.opencircuitsf.com` (today: `ec2.smallsharptools.com`, IP
+`98.84.75.184`). Per RFC 4592 a wildcard does not apply at a name that owns
+any record of its own, so creating this MX stops the wildcard answering at
+`lists.opencircuitsf.com` for **every** record type, not just MX — A and
+CNAME queries at that exact name go NODATA afterward.
+
+This was re-verified against the current code for this pass, not just
+carried over from the plan: `grep -rn "EmailListDomain\|EMAIL_LIST_DOMAIN"
+internal/` shows `config.Config.EmailListDomain` reaches exactly one
+consumer, `internal/mailing/campaign_headers.go`, which uses it only to
+build the `mailto:` form of `List-Unsubscribe`
+(`"mailto:unsubscribe@" + listDomain + "?subject=..."`). Nothing in this
+codebase — Go or the SPA — ever constructs an HTTPS URL on
+`lists.opencircuitsf.com`; the visually similar `List-Id` header uses the
+deliberately different singular `list.opencircuitsf.com`, which RFC 2919
+makes an opaque identifier that never needs to resolve at all. So losing
+web/CNAME resolution at `lists.opencircuitsf.com` breaks nothing currently
+built.
+
+**9. Verify end to end.** Send a real message from an outside mail account
+to `unsubscribe@lists.opencircuitsf.com`, then:
+
+```bash
+aws s3 ls s3://opencircuitsf-inbound/unsubscribe/ --region us-east-1
+```
+
+Confirm an object appears. This alone proves A1–A10 and D2 are wired
+correctly — it does **not** yet exercise `#0058`'s handler, since that
+needs step 11 below (the SNS subscription) confirmed first.
+
+**10. A11 — grant the instance role read/delete on the prefix, not the
+bucket.** Last, because nothing reads the bucket until `#0058`'s deployed
+code does:
+
+```bash
+aws iam put-role-policy --role-name opencircuit-instance \
+  --policy-name opencircuit-inbound-s3 \
+  --policy-document file://deploy/aws/A11-iam-inline-policy.json
+```
+
+### After this issue: deploying `#0058`'s code and A12
+
+**Out of scope for this issue** — belongs to `#0058`'s own deploy, not
+`#0057`'s: setting `SES_INBOUND_BUCKET=opencircuitsf-inbound` and
+`SES_INBOUND_TOPIC_ARN=arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail`
+in `/etc/opencircuit/config.env` and restarting `opencircuit.service` so
+`POST /api/ses/inbound` actually starts verifying and processing messages.
+Both variables are already correct in `.env.example`
+(`docs/configuration.md`).
+
+**A12 — the SNS HTTPS subscription — only after that restart**, not before:
+an SNS subscription that cannot be confirmed by the endpoint (because the
+topic ARN isn't in the handler's allowlist yet, or the new binary isn't
+running at all) stays `PendingConfirmation` and delivers nothing. This
+updates the original plan: A12 was deferred indefinitely because
+`POST /api/ses/inbound` didn't exist yet; it now exists (`#0058` shipped and
+resolved 2026-09-10), so the only remaining gate is the config-env change
+and restart above, not the code.
+
+```bash
+aws sns subscribe --region us-east-1 \
+  --topic-arn arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail \
+  --protocol https \
+  --notification-endpoint https://www.opencircuitsf.com/api/ses/inbound
+```
+
+Confirm it auto-confirmed (mirrors the existing `opencircuit-ses-events`
+subscription's behavior):
+
+```bash
+aws sns list-subscriptions-by-topic --region us-east-1 \
+  --topic-arn arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail
+```
+
+`SubscriptionArn` should be a real ARN, not the literal string
+`PendingConfirmation`. Mail landing in S3 (step 9) still works with A12
+un-confirmed — nothing is lost while this step waits — but a subscriber's
+message will not actually be unsubscribed until it is.
+
+### Rollback
+
+Ordered from fastest/safest to slowest, matching the build order in
+reverse for the parts that were actually created this pass:
+
+| Undo | Effect |
+|---|---|
+| **Delete the D2 record set** (`lists.opencircuitsf.com` MX) | Inbound routing stops immediately; the wildcard resumes answering that name within the 300s TTL. **This alone fully reverts the routing change.** |
+| `aws ses set-active-receipt-rule-set --region us-east-1` with no `--rule-set-name` (or back to whatever was active before, per the gate) | SES stops applying the rule |
+| `aws ses delete-receipt-rule` / `delete-receipt-rule-set` | removes A9/A8 |
+| `aws sns delete-topic` on `opencircuit-inbound-mail` | removes A6/A7 |
+| Empty then delete the bucket `opencircuitsf-inbound` | removes A2–A5 — **but this bucket predates this pass; confirm nothing else depends on it before deleting** |
+| Delete the D1 record set, delete the SES identity `lists.opencircuitsf.com` | removes the verification — again, both predate this pass |
+| `aws iam delete-role-policy --role-name opencircuit-instance --policy-name opencircuit-inbound-s3` | removes the instance-role grant |
+
+**Confirm apex mail still flows** after any of the above, especially after
+D2:
+
+- `dig +noall +answer MX opencircuitsf.com` → still exactly
+  `1 smtp.google.com.`
+- `dig +short MX lists.opencircuitsf.com` → `10
+  inbound-smtp.us-east-1.amazonaws.com`, and the *only* MX at that name
+- `dig +short MX bounce.mailing.opencircuitsf.com` → still `10
+  feedback-smtp.us-east-1.amazonses.com`, unchanged
+- Send from an outside address to a real Google Workspace mailbox on the
+  apex and confirm delivery
+
+Nothing in this section touches the apex, `bounce.mailing.`, `www`, the
+zone wildcard, or the `/.well-known/` Apache exception.
 
 ## Open items (tracked in `CLAUDE.md` §10)
 

@@ -285,11 +285,18 @@ profile, and the profile is associated with `i-0e3bd89e87d1c2364`.
 
 ### What is deliberately *not* in it
 
-- **No `s3:*`.** PRD §10.5 also lists `s3:GetObject`/`s3:DeleteObject` on
+- **No `s3:*`.** PRD §10.5 lists `s3:GetObject`/`s3:DeleteObject` on
   `arn:aws:s3:::opencircuitsf-inbound/*`, but that is for the **inbound**
-  `mailto:` unsubscribe path (PRD §6.5 path 3, issue `#0057`, Phase 4). That
-  bucket does not exist and inbound is out of scope for this pass. Add the
-  statement when `#0057` is built, not before.
+  `mailto:` unsubscribe path (PRD §6.5 path 3, issue `#0057`, Phase 4), and
+  inbound is out of scope for this pass. **Corrected `#0057`, 2026-09-11:**
+  the PRD's `/*` is bucket-wide; `#0057`'s plan narrows this to the
+  `unsubscribe/` prefix only (`arn:aws:s3:::opencircuitsf-inbound/unsubscribe/*`
+  — see [`deploy/aws/A11-iam-inline-policy.json`](../deploy/aws/A11-iam-inline-policy.json)
+  and `docs/deployment.md`'s `## IAM` section), and as of 2026-09-11 the
+  bucket itself already exists (read-only `head-bucket` check) — this
+  statement is not yet attached to the role either way. Add it once
+  `#0057`'s runbook (`docs/email-setup.md`, "Inbound unsubscribe") reaches
+  its A11 step, not before.
 - **No `ses:GetAccount`, `ses:ListEmailIdentities`, or any other read.** The
   service never introspects SES; `SES_SANDBOX` is a manually-set flag in
   `config.env` precisely because no live AWS call in this codebase can detect

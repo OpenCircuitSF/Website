@@ -1,0 +1,16 @@
+{
+  "Comment": "#0057 D2 -- SES inbound receiving MX for lists.opencircuitsf.com. Apply LAST, only after A1-A10 are done and the gate step (aws ses describe-active-receipt-rule-set) has been checked. This CREATEs a record at a name that today resolves only via the zone's *.opencircuitsf.com wildcard CNAME; per RFC 4592 that stops the wildcard answering at this exact name for every record type, not just MX. See docs/email-setup.md's Inbound unsubscribe section for why that is safe (EMAIL_LIST_DOMAIN is only ever used to build a mailto: URI) and for the rollback (delete this record set; the wildcard resumes within the 300s TTL). Does NOT touch the apex opencircuitsf.com MX (1 smtp.google.com) or bounce.mailing.opencircuitsf.com.",
+  "Changes": [
+    {
+      "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "lists.opencircuitsf.com",
+        "Type": "MX",
+        "TTL": 300,
+        "ResourceRecords": [
+          { "Value": "10 inbound-smtp.us-east-1.amazonaws.com" }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowSESPutForUnsubscribeRule",
+      "Effect": "Allow",
+      "Principal": { "Service": "ses.amazonaws.com" },
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::opencircuitsf-inbound/unsubscribe/*",
+      "Condition": {
+        "StringEquals": {
+          "AWS:SourceAccount": "378152330719",
+          "AWS:SourceArn": "arn:aws:ses:us-east-1:378152330719:receipt-rule-set/opencircuit-inbound:receipt-rule/unsubscribe"
+        }
+      }
+    }
+  ]
+}

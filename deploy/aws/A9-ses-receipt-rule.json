@@ -1,0 +1,16 @@
+{
+  "Name": "unsubscribe",
+  "Enabled": true,
+  "TlsPolicy": "Optional",
+  "Recipients": ["unsubscribe@lists.opencircuitsf.com"],
+  "Actions": [
+    {
+      "S3Action": {
+        "TopicArn": "arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail",
+        "BucketName": "opencircuitsf-inbound",
+        "ObjectKeyPrefix": "unsubscribe/"
+      }
+    }
+  ],
+  "ScanEnabled": true
+}
