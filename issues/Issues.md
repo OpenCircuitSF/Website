@@ -295,7 +295,7 @@ groups by phase and phases run in order, which is the order that matters.
    they depend on and block — and pick the one whose dependencies are already
    satisfied. Reading the whole tracker to make this decision is exactly the
    bloat this step exists to avoid.
-5. **Dispatch a fresh Sonnet subagent** (phase 2) with the issue id and instructions to follow the implementation steps below.
+5. **Dispatch a fresh Sonnet subagent** (phase 2) with the issue id, dispatching **by reference, not by paraphrase**: point at phase 2 above and add only what is issue-specific (file scope, database needs, anything unusual). Do not restate part of phase 2's sequence in the brief — a brief that names the issue file's end state without also naming step 2 reads as the whole instruction and quietly overrides the rest (`#0496`).
 6. **When it returns, record its usage** and dispatch a fresh **Opus reviewer** (phase 3) for the same issue. Record the reviewer's usage when it returns.
 7. If the reviewer bounced the issue, re-dispatch phase 2. Otherwise return to step 2 — **re-run the script**, since the queue has changed and a review may have filed new issues.
 
@@ -332,7 +332,17 @@ A subagent starts with fresh context, so its first job is loading the project's 
 
    If the two guides disagree, prefer `CLAUDE.md` for code/repo conventions and this file for issue-tracking specifics.
 
-2. **Set status to `in-progress`** in the markdown — working copy only, no commit. The Mac app picks it up immediately.
+2. **Set status to `in-progress` now, before step 3's first code change.** Do
+   this even if your dispatch brief only describes the issue file's *end*
+   state — that is not a waiver of this step. Working copy only, no commit:
+   `scripts/list-issues-by-phase` reads the working tree directly, so the flip
+   is visible the instant you save, and this pipeline dispatches phase 2 from
+   one checkout, so nothing needs a second checkout to see it. This is the
+   queue's only signal that the issue is taken — `CLAUDE.md` §4 treats a stray
+   `in-progress` row as abandoned work worth resuming, while a stray `open`
+   row mid-fix is indistinguishable from untouched and invites a second agent
+   to start the same fix. A commit here would only buy a second, status-only
+   commit per issue for visibility the working-tree read already gives.
 3. **Make the code changes** required to fix the bug, following the `## Plan`. If you deviate, note why in `## Fix` so the reviewer understands.
 4. **Build *and* run the project's verification command, and confirm tests actually executed and passed.** Mandatory; cannot be shortcutted.
 
