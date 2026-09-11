@@ -405,6 +405,86 @@ func TestSESInboundHandler_AutoReply_IgnoredEvenWithAValidToken(t *testing.T) {
 	}
 }
 
+// TestSESInboundHandler_PrecedenceList_HumanReplyStillUnsubscribes pins
+// #0498's fix: a message whose only conventional auto-reply signal is
+// Precedence: list must NOT be treated as machine-generated, because that
+// header only marks mail as having passed through a list manager (a group
+// alias, a corporate distribution list, a mailing-list relay) and says
+// nothing about whether a person wrote it. A human replying to an Open
+// Circuit campaign through such a relay, with a valid unsubscribe token,
+// must still be unsubscribed — the exact scenario #0498's Description
+// describes as silently parking a legitimate request.
+func TestSESInboundHandler_PrecedenceList_HumanReplyStillUnsubscribes(t *testing.T) {
+	pool := journeyTestPool(t)
+	subs := subscribers.NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := subs.Create(ctx, subscribers.NewSignup{Email: journeyUniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
+	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	// The message's ONLY conventional auto-reply signal is Precedence:
+	// list — a corporate distribution list relaying a genuine reply, not an
+	// out-of-office or a bounce. No Auto-Submitted, no X-Autoreply, no null
+	// Return-Path, no delivery-status Content-Type.
+	raw := inboundRawMessage(map[string]string{
+		"From":       created.Email,
+		"Subject":    "unsubscribe:" + created.ManageToken,
+		"Precedence": "list",
+	}, "please take me off this list\r\n")
+	objects := &fakeInboundObjectStore{objects: map[string][]byte{"unsubscribe/msg-precedence-list": raw}}
+	verifier := &fakeInboundVerifier{}
+	auditor := audit.New(pool)
+	h := NewSESInboundHandler(verifier, objects, subs, auditor, nil, nil)
+
+	rr := doPostSESInbound(h, inboundNotificationBody(t, "unsubscribe/msg-precedence-list"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+
+	after, err := subs.FindByEmail(ctx, created.Email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+	if after.Status != subscribers.StatusUnsubscribed {
+		t.Errorf("Status = %q, want %q — Precedence: list alone must not be read as an auto-reply", after.Status, subscribers.StatusUnsubscribed)
+	}
+	if after.UnsubscribeSource == nil || *after.UnsubscribeSource != subscribers.SourceMailto {
+		t.Errorf("UnsubscribeSource = %v, want %q", after.UnsubscribeSource, subscribers.SourceMailto)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE action = $1 AND target_id = $2`,
+		audit.ActionSubscriberUnsubscribed, created.ID,
+	).Scan(&count); err != nil {
+		t.Fatalf("query audit_log: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("audit_log rows for subscriber.unsubscribed = %d, want 1", count)
+	}
+	var source string
+	if err := pool.QueryRow(ctx,
+		`SELECT metadata->>'source' FROM audit_log WHERE action = $1 AND target_id = $2`,
+		audit.ActionSubscriberUnsubscribed, created.ID,
+	).Scan(&source); err != nil {
+		t.Fatalf("query audit_log metadata: %v", err)
+	}
+	if source != subscribers.SourceMailto {
+		t.Errorf("audit metadata source = %q, want %q", source, subscribers.SourceMailto)
+	}
+
+	if len(objects.deleted) != 1 || objects.deleted[0] != "unsubscribe/msg-precedence-list" {
+		t.Errorf("deleted = %v, want [unsubscribe/msg-precedence-list] — a processed message must be deleted from S3", objects.deleted)
+	}
+}
+
 func TestSESInboundHandler_ComplainedMatch_NoOpButStillDeletesObject(t *testing.T) {
 	pool := journeyTestPool(t)
 	subs := subscribers.NewStore(pool)

@@ -42,9 +42,11 @@ type ParsedMessage struct {
 	// issue's Notes).
 	From string
 	// AutoReply reports whether the message carries a conventional
-	// automated-mail signal (an out-of-office, a bounce/DSN, a mailing-list
-	// software reply) and must NOT be read as a person's unsubscribe
-	// request — see isAutoReply's doc comment for exactly which signals.
+	// automated-mail signal (an out-of-office, a bounce/DSN, a ticketing-
+	// system or autoresponder reply) and must NOT be read as a person's
+	// unsubscribe request — see isAutoReply's doc comment for exactly which
+	// signals, and #0498 for why passing through a list manager alone is
+	// deliberately not one of them.
 	AutoReply bool
 }
 
@@ -100,9 +102,20 @@ func extractToken(subject string) string {
 //
 //   - Auto-Submitted (RFC 3834): present with any value other than the
 //     literal "no" — the RFC's own definition of "not manually submitted".
-//   - Precedence: bulk / auto_reply / list / junk — conventional (if
-//     never formally standardized) marker used by list software, ticketing
-//     systems, and some autoresponders.
+//   - Precedence: bulk / auto_reply / junk — conventional (if never
+//     formally standardized) marker used by ticketing systems and some
+//     autoresponders. #0498 deliberately narrowed this from the four values
+//     #0058 originally shipped: Precedence: list marks mail as having
+//     passed through a list manager (a group alias, a corporate
+//     distribution list, a mailing-list relay), which says nothing about
+//     whether a human wrote it. Treating it as sufficient on its own
+//     silently classified a genuine, human-typed unsubscribe reply relayed
+//     through such a list as an auto-reply — parked in S3 rather than
+//     acted on, with no reviewer to notice (#0499). The other three values
+//     have no equivalent hazard: no ordinary person's reply carries
+//     Precedence: bulk, auto_reply, or junk, so dropping only list is
+//     enough to close the gap without reopening the out-of-office hazard
+//     this detector exists to catch.
 //   - X-Autoreply / X-Auto-Response-Suppress: presence alone is enough —
 //     both are automated-mail signals used by vacation responders and
 //     Exchange/Outlook autoresponders regardless of the value carried.
@@ -116,7 +129,7 @@ func isAutoReply(h mail.Header) bool {
 		return true
 	}
 	switch strings.ToLower(strings.TrimSpace(h.Get("Precedence"))) {
-	case "bulk", "auto_reply", "list", "junk":
+	case "bulk", "auto_reply", "junk":
 		return true
 	}
 	if strings.TrimSpace(h.Get("X-Autoreply")) != "" {

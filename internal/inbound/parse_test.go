@@ -120,22 +120,38 @@ func TestIsAutoReply_AutoSubmittedNoIsNotFlagged(t *testing.T) {
 	}
 }
 
+// TestIsAutoReply_PrecedenceBulk pins isAutoReply's Precedence handling for
+// all four conventional values, deliberately with the DIFFERENT expectation
+// #0498 introduced for "list": bulk, auto_reply, and junk are genuine
+// machine-generation markers no ordinary person's reply carries, so they
+// still classify as auto-replies; "list" only marks the message as having
+// passed through a list manager, which says nothing about whether a human
+// wrote it, so it must NOT classify as an auto-reply on its own (see
+// isAutoReply's doc comment for the full rationale).
 func TestIsAutoReply_PrecedenceBulk(t *testing.T) {
-	cases := []string{"bulk", "auto_reply", "list", "junk"}
-	for _, value := range cases {
-		t.Run(value, func(t *testing.T) {
+	cases := []struct {
+		value string
+		want  bool
+	}{
+		{"bulk", true},
+		{"auto_reply", true},
+		{"list", false},
+		{"junk", true},
+	}
+	for _, c := range cases {
+		t.Run(c.value, func(t *testing.T) {
 			raw := rawMessage(map[string]string{
 				"From":       "list-daemon@example.com",
 				"Subject":    "unsubscribe:abc",
-				"Precedence": value,
+				"Precedence": c.value,
 			}, "body\r\n")
 
 			pm, err := Parse(raw)
 			if err != nil {
 				t.Fatalf("Parse: %v", err)
 			}
-			if !pm.AutoReply {
-				t.Errorf("AutoReply = false, want true (Precedence: %s)", value)
+			if pm.AutoReply != c.want {
+				t.Errorf("AutoReply = %v, want %v (Precedence: %s)", pm.AutoReply, c.want, c.value)
 			}
 		})
 	}
