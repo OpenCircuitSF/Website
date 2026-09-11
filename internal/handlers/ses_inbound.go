@@ -308,10 +308,10 @@ func (h *SESInboundHandler) handleNotification(w http.ResponseWriter, r *http.Re
 // (pm.Token, matched via manage_token — the same value #0034's one-click
 // link carries), falling back to the From: address only when no token was
 // present at all. matchedVia is "" when neither matched at all — the
-// caller's cue to take the no-match path. The From:
-// fallback is deliberately never tried when a token WAS present but simply
-// didn't resolve to anything current (e.g. already rotated away) — a stale
-// or forged token should not fall through to trusting an equally-forgeable
+// caller's cue to take the no-match path. The From: fallback is
+// deliberately never tried when a token WAS present but simply didn't
+// resolve to anything current (e.g. already rotated away) — a stale or
+// forged token should not fall through to trusting an equally-forgeable
 // From: header for the SAME message; see this issue's Notes on why From:
 // stays the fallback used only in the token's total absence.
 func (h *SESInboundHandler) match(ctx context.Context, pm inbound.ParsedMessage) (sub subscribers.Subscriber, matchedVia string, err error) {
