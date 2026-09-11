@@ -261,6 +261,70 @@ func TestSESInboundHandler_FromAddressFallback_Match(t *testing.T) {
 	}
 }
 
+// TestSESInboundHandler_StaleTokenDoesNotFallBackToFrom pins match's
+// security-relevant rule: a subject token that is present but does not
+// resolve (stale or forged) must not fall through to trusting the From:
+// address on the SAME message, even when From: is the subscriber's own,
+// genuine email address. Falling through here would let a forged or
+// out-of-date token in the Subject line be silently upgraded to a
+// successful unsubscribe via an equally-forgeable header.
+func TestSESInboundHandler_StaleTokenDoesNotFallBackToFrom(t *testing.T) {
+	pool := journeyTestPool(t)
+	subs := subscribers.NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := subs.Create(ctx, subscribers.NewSignup{Email: journeyUniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
+	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	// A token that does NOT resolve to anything current — the subscriber's
+	// own manage token with a character appended — alongside a From: that
+	// IS this subscriber's own, genuine address.
+	raw := inboundRawMessage(map[string]string{
+		"From":    created.Email,
+		"Subject": "unsubscribe:" + created.ManageToken + "x",
+	}, "please unsubscribe me\r\n")
+	objects := &fakeInboundObjectStore{objects: map[string][]byte{"unsubscribe/msg-stale": raw}}
+	verifier := &fakeInboundVerifier{}
+	h := NewSESInboundHandler(verifier, objects, subs, audit.New(pool), nil, nil)
+
+	rr := doPostSESInbound(h, inboundNotificationBody(t, "unsubscribe/msg-stale"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+
+	after, err := subs.FindByEmail(ctx, created.Email)
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+	if after.Status != subscribers.StatusActive {
+		t.Errorf("Status = %q, want %q — a stale token must not fall back to the From: address", after.Status, subscribers.StatusActive)
+	}
+	if len(objects.deleted) != 0 {
+		t.Errorf("deleted = %v, want none — a stale token is left for manual review, not deleted", objects.deleted)
+	}
+	if _, ok := objects.objects["unsubscribe/msg-stale"]; !ok {
+		t.Error("object was removed from the store on a stale-token no-match — it must be left in place")
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE action = $1 AND target_id = $2`,
+		audit.ActionSubscriberUnsubscribed, created.ID,
+	).Scan(&count); err != nil {
+		t.Fatalf("query audit_log: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("audit_log rows for subscriber.unsubscribed = %d, want 0", count)
+	}
+}
+
 func TestSESInboundHandler_NoMatch_LeavesObjectInPlace(t *testing.T) {
 	pool := journeyTestPool(t)
 	subs := subscribers.NewStore(pool)

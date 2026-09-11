@@ -307,8 +307,8 @@ func (h *SESInboundHandler) handleNotification(w http.ResponseWriter, r *http.Re
 // match implements PRD §6.5's precedence exactly: the subject token first
 // (pm.Token, matched via manage_token — the same value #0034's one-click
 // link carries), falling back to the From: address only when no token was
-// present OR the token didn't resolve. matchedVia is "" when neither
-// matched at all — the caller's cue to take the no-match path. The From:
+// present at all. matchedVia is "" when neither matched at all — the
+// caller's cue to take the no-match path. The From:
 // fallback is deliberately never tried when a token WAS present but simply
 // didn't resolve to anything current (e.g. already rotated away) — a stale
 // or forged token should not fall through to trusting an equally-forgeable

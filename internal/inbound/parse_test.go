@@ -121,18 +121,23 @@ func TestIsAutoReply_AutoSubmittedNoIsNotFlagged(t *testing.T) {
 }
 
 func TestIsAutoReply_PrecedenceBulk(t *testing.T) {
-	raw := rawMessage(map[string]string{
-		"From":       "list-daemon@example.com",
-		"Subject":    "unsubscribe:abc",
-		"Precedence": "bulk",
-	}, "body\r\n")
+	cases := []string{"bulk", "auto_reply", "list", "junk"}
+	for _, value := range cases {
+		t.Run(value, func(t *testing.T) {
+			raw := rawMessage(map[string]string{
+				"From":       "list-daemon@example.com",
+				"Subject":    "unsubscribe:abc",
+				"Precedence": value,
+			}, "body\r\n")
 
-	pm, err := Parse(raw)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if !pm.AutoReply {
-		t.Error("AutoReply = false, want true (Precedence: bulk)")
+			pm, err := Parse(raw)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if !pm.AutoReply {
+				t.Errorf("AutoReply = false, want true (Precedence: %s)", value)
+			}
+		})
 	}
 }
 
@@ -149,6 +154,22 @@ func TestIsAutoReply_XAutoreplyHeader(t *testing.T) {
 	}
 	if !pm.AutoReply {
 		t.Error("AutoReply = false, want true (X-Autoreply present)")
+	}
+}
+
+func TestIsAutoReply_XAutoResponseSuppressHeader(t *testing.T) {
+	raw := rawMessage(map[string]string{
+		"From":                     "vacation@example.com",
+		"Subject":                  "Away",
+		"X-Auto-Response-Suppress": "All",
+	}, "body\r\n")
+
+	pm, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !pm.AutoReply {
+		t.Error("AutoReply = false, want true (X-Auto-Response-Suppress present)")
 	}
 }
 
