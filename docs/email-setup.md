@@ -87,8 +87,11 @@ at that policy silently drops mail with no visibility into why. Note the
 report volume is real: aggregate XML arrives daily from every receiver that
 sees your mail.
 
-**Note on the wildcard.** The zone has a `*.opencircuitsf.com` CNAME pointing
-at the web server. Creating explicit records at `mailing.` and
+**Note on the wildcard.** The zone has a `*.opencircuitsf.com` wildcard **A**
+record pointing at the web server (`98.84.75.184`, measured against the
+zone's authoritative nameserver — not a CNAME, and not
+`ec2.smallsharptools.com`, which resolves to a different IP,
+`44.222.209.183`; see `#0057`'s review). Creating explicit records at `mailing.` and
 `bounce.mailing.` suppresses wildcard synthesis for those exact names, so they
 no longer resolve as web hosts. Nothing served them, so nothing broke — but it
 is the kind of thing to remember before adding a record at a name you expect
@@ -235,7 +238,7 @@ verification.
 | **A1** — SES domain identity `lists.opencircuitsf.com` | Its DNS verification TXT exists (see D1 below), which only happens after `CreateEmailIdentity`/`VerifyDomainIdentity` runs — **treat A1 as created**, but re-confirm verification actually completed (step 0 below), since no credential available to this pass can call `ses:GetIdentityVerificationAttributes`. |
 | **D1** — `_amazonses.lists.opencircuitsf.com` TXT | **Exists**: `"APWUrtnPLURlLWOGg0ybU3t6HbptTzDE77f8JE1YHX0="`. Kept as `deploy/aws/D1-route53-change-batch-txt.json` for reference and rollback only — **do not re-run it.** |
 | **A2** — S3 bucket `opencircuitsf-inbound` | **Exists** (`head-bucket` → 403, against a random-name control returning 404 — 403 means the bucket is there and this identity just can't read it). Its public-access-block, lifecycle, and policy state could **not** be read from here — confirm each with the read commands in step 2 below before assuming any of A3/A4/A5 still need to be applied. |
-| **D2** — `lists.opencircuitsf.com` MX | **Absent.** Still served only by the zone's `*.opencircuitsf.com` wildcard CNAME. This is correct — D2 is deliberately last (step 8). |
+| **D2** — `lists.opencircuitsf.com` MX | **Absent.** Still served only by the zone's `*.opencircuitsf.com` wildcard A record. This is correct — D2 is deliberately last (step 8). |
 
 Everything else in the table below (A6–A11, A12) does not yet exist.
 
@@ -303,6 +306,13 @@ public-access-block flags `true`; a lifecycle rule named
 `deploy/aws/A4-s3-bucket-policy.json`), skip that step below. If it errors
 (`NoSuchPublicAccessBlockConfiguration`, `NoSuchLifecycleConfiguration`,
 `NoSuchBucketPolicy`) or the configuration differs, apply it:
+
+**Read before you write.** `put-bucket-lifecycle-configuration` and
+`put-bucket-policy` both **replace** the whole configuration rather than
+merging into it. This bucket predates this pass — the `get-` commands above
+are not optional busywork; applying either command blind would silently
+discard any existing lifecycle rule or policy statement that isn't in the
+files below.
 
 ```bash
 # A3 — block all public access (skip if already set)
@@ -374,6 +384,14 @@ aws ses create-receipt-rule --region us-east-1 \
 `--rule-set-name` and add `--after <name of its last rule>` — see the gate
 section above.)
 
+**If this fails with a "could not write to bucket" error**, it is likely
+A4's prefix scoping: SES writes an `AMAZON_SES_SETUP_NOTIFICATION` object to
+the bucket when a rule with an `S3Action` is created, and whether that write
+honours `ObjectKeyPrefix` was not confirmed from here. Temporarily widen A4
+to `"Resource": "arn:aws:s3:::opencircuitsf-inbound/*"`, re-apply it
+(`put-bucket-policy`), create the rule, then re-apply the prefix-scoped
+`deploy/aws/A4-s3-bucket-policy.json` to narrow it back.
+
 **6. A10 — activate the rule set** (only if the gate above found none
 active; skip entirely if you added a rule to an existing set instead — that
 set is already active and this step would needlessly replace it):
@@ -410,12 +428,15 @@ Wait for `"Status": "INSYNC"` before treating the record as live (usually
 well under a minute).
 
 **The RFC 4592 consequence, and why it's safe.** The zone's
-`*.opencircuitsf.com` CNAME wildcard currently answers for
-`lists.opencircuitsf.com` (today: `ec2.smallsharptools.com`, IP
-`98.84.75.184`). Per RFC 4592 a wildcard does not apply at a name that owns
-any record of its own, so creating this MX stops the wildcard answering at
-`lists.opencircuitsf.com` for **every** record type, not just MX — A and
-CNAME queries at that exact name go NODATA afterward.
+`*.opencircuitsf.com` wildcard **A** record (today `98.84.75.184`, the web
+server — measured against the zone's authoritative nameserver
+`ns-923.awsdns-51.net`; a CNAME query at the name returns empty while an A
+query returns this value directly, so it is an A record, not a CNAME, and
+`ec2.smallsharptools.com` is not what it resolves to) currently answers for
+`lists.opencircuitsf.com`. Per RFC 4592 a wildcard does not apply at a name
+that owns any record of its own, so creating this MX stops the wildcard
+answering at `lists.opencircuitsf.com` for **every** record type, not just
+MX — A and CNAME queries at that exact name go NODATA afterward.
 
 This was re-verified against the current code for this pass, not just
 carried over from the plan: `grep -rn "EmailListDomain\|EMAIL_LIST_DOMAIN"

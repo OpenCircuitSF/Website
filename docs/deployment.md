@@ -1630,12 +1630,11 @@ planned to live in this bucket but there is no reason to grant broader
 access than the one prefix `#0058`'s handler actually reads. The
 ready-to-apply version of this exact statement is
 [`deploy/aws/A11-iam-inline-policy.json`](../deploy/aws/A11-iam-inline-policy.json).
-`docs/aws-iam-setup.md`'s "What is deliberately *not* in it" section still
-shows the bucket-wide form and has the same staleness — reported, not fixed
-here, since that file's "not built yet" framing needs its own pass once
-`#0057`'s AWS objects actually exist. `PRD.md` §10.5 is unedited by this
-pass (out of scope for `#0057`); the disagreement is reported to the
-orchestrator for filing.
+`docs/aws-iam-setup.md`'s "What is deliberately *not* in it" section carries
+the same correction as of this pass — narrowed to the `unsubscribe/` prefix,
+matching row A11 above. `PRD.md` §10.5 is the one place this disagreement
+still stands: it is unedited by this pass (out of scope for `#0057`) and
+still reads the bucket-wide form; reported to the orchestrator for filing.
 
 **Correction (`#0426`, 2026-09-04) — region, account ID, and identity were
 all wrong.** This block previously read

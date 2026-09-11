@@ -40,6 +40,30 @@ activate a second rule set in that case — see `docs/email-setup.md`.
 | D1 | `D1-route53-change-batch-txt.json` | SES domain-identity verification TXT for `lists.opencircuitsf.com`. **Already applied** — kept for reference and as the exact rollback undo | `aws route53 change-resource-record-sets --hosted-zone-id Z0825067RV8QY5UIKS96 --change-batch file://deploy/aws/D1-route53-change-batch-txt.json` |
 | D2 | `D2-route53-change-batch-mx.json` | The inbound MX for `lists.opencircuitsf.com`. **Apply last** — see the ordering and RFC 4592 note in `docs/email-setup.md` | `aws route53 change-resource-record-sets --hosted-zone-id Z0825067RV8QY5UIKS96 --change-batch file://deploy/aws/D2-route53-change-batch-mx.json` |
 
+**D1 and D2's `Comment` fields are intentionally short.**
+`ChangeBatch.Comment` is Route 53's `ResourceDescription` shape, capped at
+256 characters server-side; botocore does not enforce this client-side, so
+an over-long `Comment` parses and passes `--generate-cli-skeleton` locally
+but is rejected by the API itself with `InvalidInput`. The full context each
+comment used to carry, in full here instead:
+
+- **D1** — SES domain identity verification TXT for
+  `lists.opencircuitsf.com`. Already applied as of 2026-09-11 (the record
+  exists in the zone); kept only for reference and as the rollback undo for
+  "delete record set D1, delete identity A1". Do not re-run unless
+  recreating this record after an explicit rollback.
+- **D2** — SES inbound receiving MX for `lists.opencircuitsf.com`. Apply
+  LAST, only after A1–A10 are done and the account-wide gate
+  (`aws ses describe-active-receipt-rule-set`) has been checked. This
+  `CREATE`s a record at a name that today resolves only via the zone's
+  `*.opencircuitsf.com` wildcard A record; per RFC 4592 that stops the
+  wildcard answering at this exact name for every record type, not just MX.
+  See `docs/email-setup.md`'s "Inbound unsubscribe" section for why that is
+  safe (`EMAIL_LIST_DOMAIN` is only ever used to build a `mailto:` URI) and
+  for the rollback (delete this record set; the wildcard resumes within the
+  300s TTL). Does **not** touch the apex `opencircuitsf.com` MX
+  (`1 smtp.google.com`) or `bounce.mailing.opencircuitsf.com`.
+
 Not represented as a file here, because each is a single flag-driven command
 with no JSON body worth templating — see the runbook for the exact
 invocation: the account-wide gate (`describe-active-receipt-rule-set`), A2

@@ -1,5 +1,5 @@
 {
-  "Comment": "#0057 D1 -- SES domain identity verification TXT for lists.opencircuitsf.com. ALREADY APPLIED as of 2026-09-11 (the record exists in the zone) -- kept here only for reference and as the rollback undo for 'delete record set D1, delete identity A1'. Do not re-run unless you are recreating this record after an explicit rollback.",
+  "Comment": "#0057 D1 -- SES identity verification TXT for lists.opencircuitsf.com. ALREADY APPLIED 2026-09-11; kept for rollback only. Do not re-run.",
   "Changes": [
     {
       "Action": "CREATE",
