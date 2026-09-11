@@ -35,6 +35,7 @@ later.
 - [Frontend / SPA](frontend.md) — the Svelte 5 app, routing, and the build/embed pipeline
 - [Brand & design system](design.md) — terminal-inspired design tokens, motifs, logo assets
 - [SEO & social preview cards](seo.md) — server-injected meta tags, sitemap, structured data
+- [Workshop cover images](media.md) — the `/media/` Apache carve-out, the admin upload path, `isSafeCoverImage`
 
 ## Working the tracker
 

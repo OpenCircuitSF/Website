@@ -1,0 +1,1205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Circuit SF — EU CRT screen studio</title>
+
+<!--
+  A second take on prototypes/crt-live-screen, built around the eu-crt
+  photographs (a rounded European portable, shot on transparency, dark and
+  light variants).
+
+  What is new here, relative to crt-live-screen:
+
+    * The corner calibration is per THEME. The two photographs are NOT
+      registered to each other — the light one sits about 2% of image width
+      further left and 2% larger — so a single quadrilateral cannot serve
+      both. Switching the theme switches the calibration with it.
+    * The terminal content is data, not source. Commands and their output
+      lines are edited in the panel, and the whole state (corners, session,
+      render options) round-trips through one JSON textarea, so a screen can
+      be saved to a file and pasted back later.
+    * Every control is behind ONE boolean. Set SHOW_CONTROLS to false below
+      and the page becomes nothing but the CRT, centred and as large as the
+      viewport allows.
+
+  THIS IS THE SOURCE FILE. Edit it, then run:
+
+      python3 prototypes/eu-crt/build.py
+
+  which regenerates the sibling index.html with every asset inlined as a
+  data: URI. Open THAT one — it works straight from the Finder over file://.
+  Under file:// a browser will not reliably fetch subresources, which leaves
+  the photograph an empty box and the fonts on a fallback stack; that reads
+  as a broken stylesheet rather than as a blocked fetch, so the inlined
+  build is the artefact to open and to send.
+
+  A server works too, if you would rather edit without rebuilding:
+      python3 -m http.server -d . 8200      (from the repository root)
+      open http://localhost:8200/prototypes/eu-crt/index.src.html
+-->
+
+<style>
+/* ══ Design tokens ═══════════════════════════════════════════════════════════
+   Copied from web/src/app.css, same two-selector light/dark pattern the real
+   stylesheet uses so both an explicit toggle and the OS preference work. */
+:root {
+  --bg-page:#F4F6F3; --bg-panel:#FFFFFF; --bg-subtle:#E9EEE6; --bg-header:#E1E8DE;
+  --text:#10140F; --text-muted:#4C574A; --text-faint:#5F6A5C;
+  --border:#CFD8CA; --border-strong:#87977F;
+  --accent:#2F7D0C; --accent-hover:#245F09; --accent-text:#FFFFFF;
+  --accent-subtle:#E4F1DB; --accent-dim:#79C34A;
+  --warning:#8A5A00; --danger:#B4231B;
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:24px; --space-6:32px;
+  --font:'Archivo',ui-sans-serif,system-ui,sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --fs-sm:12px; --fs-base:13px; --fs-md:15px; --fs-lg:18px; --fs-xl:22px;
+  --lh:1.45; --measure:62ch; --radius:4px; --border-w:1px;
+  color-scheme:light dark;
+
+  /* Which photograph the stage shows. Swapped by the theme, not by a
+     <picture>, because an explicit toggle has to be able to override the OS
+     preference and <picture> cannot see a data attribute. */
+  --crt-photo:url('assets/eu-crt-light.webp');
+}
+@media (prefers-color-scheme:dark) {
+  :root:not([data-theme="light"]) {
+    --bg-page:#0A0D0B; --bg-panel:#121712; --bg-subtle:#182018; --bg-header:#1B231C;
+    --text:#E8F0E8; --text-muted:#9AA79E; --text-faint:#7E8D82;
+    --border:#243028; --border-strong:#4E6553;
+    --accent:#68FF23; --accent-hover:#8AFF55; --accent-text:#0A0D0B;
+    --accent-subtle:#142B0C; --accent-dim:#3C9E0F;
+    --warning:#E5B22C; --danger:#FF5F56;
+    --crt-photo:url('assets/eu-crt-dark.webp');
+  }
+}
+:root[data-theme="dark"] {
+  --bg-page:#0A0D0B; --bg-panel:#121712; --bg-subtle:#182018; --bg-header:#1B231C;
+  --text:#E8F0E8; --text-muted:#9AA79E; --text-faint:#7E8D82;
+  --border:#243028; --border-strong:#4E6553;
+  --accent:#68FF23; --accent-hover:#8AFF55; --accent-text:#0A0D0B;
+  --accent-subtle:#142B0C; --accent-dim:#3C9E0F;
+  --warning:#E5B22C; --danger:#FF5F56;
+  --crt-photo:url('assets/eu-crt-dark.webp');
+}
+
+@font-face{font-family:'Archivo';font-style:normal;font-weight:100 900;font-display:swap;
+  src:url('assets/archivo-variable-latin.woff2') format('woff2-variations');}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('assets/jetbrains-mono-400-latin.woff2') format('woff2');}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:700;font-display:swap;
+  src:url('assets/jetbrains-mono-700-latin.woff2') format('woff2');}
+
+*,*::before,*::after{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:var(--bg-page); color:var(--text);
+  font-family:var(--font); font-size:var(--fs-base); line-height:var(--lh);
+  min-height:100vh;
+}
+
+.page{width:min(1120px,100%); margin:0 auto; padding:var(--space-5);}
+.page-head{
+  display:flex; align-items:center; gap:var(--space-4);
+  margin-bottom:var(--space-5);
+}
+.brand{font-family:var(--font-mono); font-weight:700; font-size:var(--fs-md);}
+.brand .mark{color:var(--accent);}
+.page-head .spacer{margin-left:auto;}
+.chip{
+  min-height:32px; padding:0 var(--space-3);
+  font-family:var(--font-mono); font-size:var(--fs-sm);
+  background:var(--bg-panel); color:var(--text);
+  border:var(--border-w) solid var(--border); border-radius:var(--radius);
+  cursor:pointer;
+}
+.chip:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+
+/* ══ The CRT stage ═══════════════════════════════════════════════════════════
+   Aspect-ratio locked to the photograph's own 1368x1150, so a corner given as
+   a percentage means the same physical point on the glass at every width. */
+.stage-wrap{display:flex; justify-content:center;}
+.stage{
+  position:relative;
+  width:min(680px, 100%);
+  aspect-ratio:1368/1150;
+  background-image:var(--crt-photo);
+  background-size:100% 100%; background-repeat:no-repeat;
+  user-select:none;
+}
+
+/* The live display is an ordinary rectangle; JS applies a projective
+   matrix3d() mapping it onto the four calibrated corners of the photographed
+   glass. transform-origin must be 0 0 or the homography is wrong. */
+.screen-plane{
+  position:absolute; left:0; top:0;
+  width:640px; height:512px;
+  transform-origin:0 0;
+  overflow:hidden;
+  /* The glass is a rounded rectangle and the calibration quad is its
+     bounding shape, so the plane's square corners overhang the bezel. Nothing
+     shows there while the canvas is transparent, but the scanline and glass
+     overlays are not — over the light photograph they paint four grey
+     rectangular ears on the cream case.
+
+     BOTH of these are here on purpose and neither is redundant. border-radius
+     with overflow:hidden is what Chromium honours; WebKit DROPS a rounded
+     overflow clip on an element carrying a 3D transform, and matrix3d() is
+     exactly that — so in Safari the ears come back with square corners, which
+     is what the first build of this page did on the user's machine and not on
+     the headless Chromium it was verified in. clip-path survives the 3D
+     transform in both engines. It is in pixels rather than percentages because
+     the plane is a fixed 640x512 box; the matrix3d is what scales it. */
+  border-radius:14%/16%;
+  clip-path:inset(0 round 90px / 82px);
+  /* No background. The canvas is cleared rather than filled, so the
+     photograph's own phosphor — its texture, curvature, vignette and the
+     bloom pooling at the top — shows through, and only the glyphs are drawn
+     over it. A flat fill would replace all of that with a rectangle. */
+  background:transparent;
+  will-change:transform;
+}
+.screen-plane canvas,.scanlines,.glass{position:absolute; inset:0; width:100%; height:100%;}
+.screen-plane canvas{display:block;}
+#glowCanvas{filter:blur(9px); opacity:.42; mix-blend-mode:screen;}
+.scanlines,.glass{pointer-events:none;}
+.scanlines{
+  /* Light on purpose: the photographed screen already carries its own scan
+     texture, and doubling it reads as moire. */
+  background:repeating-linear-gradient(to bottom,
+    rgba(0,0,0,.16) 0 1px, transparent 1px 3px);
+  opacity:.22;
+}
+.glass{
+  background:
+    radial-gradient(ellipse at center, transparent 62%, rgba(0,0,0,.06) 80%, rgba(0,0,0,.26) 100%),
+    linear-gradient(150deg, rgba(255,255,255,.03), transparent 26%, transparent 74%, rgba(95,255,145,.02));
+}
+.stage.no-scanlines .scanlines{display:none;}
+.stage.no-glass .glass{display:none;}
+
+/* ── Corner handles ───────────────────────────────────────────────────────── */
+.quad{position:absolute; inset:0; pointer-events:none; display:none;}
+.stage.calibrating .quad{display:block;}
+.quad svg{position:absolute; inset:0; width:100%; height:100%; overflow:visible;}
+.quad polygon{fill:rgba(104,255,35,.05); stroke:#68FF23; stroke-width:2;
+  stroke-dasharray:6 4; vector-effect:non-scaling-stroke;}
+.handle{
+  position:absolute; width:26px; height:26px; margin:-13px 0 0 -13px;
+  border:2px solid #d6ffe0; border-radius:50%; background:#1c6f39;
+  box-shadow:0 0 0 4px rgba(42,255,112,.18);
+  pointer-events:auto; cursor:grab; touch-action:none; padding:0;
+}
+.handle:active{cursor:grabbing;}
+.handle:focus-visible{outline:2px solid var(--accent); outline-offset:3px;}
+
+/* ── The control panel — everything below is scaffolding ──────────────────── */
+.panel{
+  margin-top:var(--space-6); padding:var(--space-5);
+  border:var(--border-w) dashed var(--border-strong); border-radius:6px;
+  background:var(--bg-subtle);
+}
+.panel h2{margin:var(--space-5) 0 var(--space-2); font-size:var(--fs-md); font-family:var(--font-mono);}
+.panel h2:first-child{margin-top:0;}
+.panel p.note{margin:0 0 var(--space-4); color:var(--text-muted); font-size:var(--fs-sm); max-width:var(--measure);}
+.toolbar{display:flex; gap:var(--space-3); flex-wrap:wrap; align-items:center;}
+.panel button,.panel input,.panel select,.panel textarea{font:inherit;}
+.panel button{
+  min-height:34px; padding:0 var(--space-3);
+  border:var(--border-w) solid var(--border); border-radius:var(--radius);
+  background:var(--bg-panel); color:var(--text); cursor:pointer;
+}
+.panel button:hover{background:var(--bg-header);}
+.panel button.primary{background:var(--accent); color:var(--accent-text); border-color:var(--accent);}
+.panel button.primary:hover{background:var(--accent-hover);}
+.panel button.danger{color:var(--danger);}
+.panel button:focus-visible,.panel input:focus-visible,.panel textarea:focus-visible{
+  outline:2px solid var(--accent); outline-offset:2px;}
+.switch{display:inline-flex; gap:var(--space-2); align-items:center; color:var(--text-muted);}
+
+.grid4{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--space-3); margin-top:var(--space-4);}
+.card{padding:var(--space-3); border:var(--border-w) solid var(--border); border-radius:var(--radius); background:var(--bg-panel);}
+.card strong{display:block; margin-bottom:var(--space-2); font-size:var(--fs-sm); font-family:var(--font-mono);}
+.xy{display:grid; grid-template-columns:16px minmax(0,1fr); gap:6px; align-items:center; margin-top:5px;}
+.xy label{color:var(--text-faint); font-size:var(--fs-sm);}
+.xy input,.opt input{width:100%; min-width:0; min-height:30px; padding:0 6px;
+  border:var(--border-w) solid var(--border); border-radius:var(--radius);
+  background:var(--bg-page); color:var(--text);}
+
+.opts{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:var(--space-3); margin-top:var(--space-4);}
+.opt{padding:var(--space-3); border:var(--border-w) solid var(--border); border-radius:var(--radius); background:var(--bg-panel);}
+.opt label{display:block; margin-bottom:var(--space-2); color:var(--text-faint); font-size:var(--fs-sm); font-family:var(--font-mono);}
+
+/* ── Command / output editor ──────────────────────────────────────────────── */
+.steps{display:flex; flex-direction:column; gap:var(--space-3); margin-top:var(--space-4);}
+.step{
+  display:grid; grid-template-columns:minmax(0,1fr) auto; gap:var(--space-3);
+  padding:var(--space-3); border:var(--border-w) solid var(--border);
+  border-radius:var(--radius); background:var(--bg-panel);
+}
+.step .fields{display:flex; flex-direction:column; gap:var(--space-2); min-width:0;}
+.step .rowlab{color:var(--text-faint); font-size:var(--fs-sm); font-family:var(--font-mono);}
+.step input[type="text"],.step textarea{
+  width:100%; min-width:0; padding:var(--space-2);
+  border:var(--border-w) solid var(--border); border-radius:var(--radius);
+  background:var(--bg-page); color:var(--text);
+  font-family:var(--font-mono); font-size:var(--fs-sm);
+}
+.step input[type="text"]{min-height:32px;}
+.step textarea{min-height:74px; resize:vertical;}
+.step .ctrls{display:flex; flex-direction:column; gap:var(--space-2);}
+.step .ctrls button{min-width:36px; padding:0 var(--space-2);}
+.overlong{color:var(--warning); font-size:var(--fs-sm); font-family:var(--font-mono);}
+
+.io{margin-top:var(--space-4);}
+.io label{display:block; margin-bottom:var(--space-2); color:var(--text-faint); font-size:var(--fs-sm);}
+.io textarea{
+  width:100%; min-height:220px; resize:vertical; padding:var(--space-2);
+  border:var(--border-w) solid var(--border); border-radius:var(--radius);
+  background:var(--bg-page); color:var(--text);
+  font-family:var(--font-mono); font-size:var(--fs-sm); white-space:pre;
+}
+.status{margin-top:var(--space-2); font-family:var(--font-mono); font-size:var(--fs-sm); min-height:1.4em;}
+.status.ok{color:var(--accent);}
+.status.err{color:var(--danger);}
+
+@media (max-width:820px){.grid4{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media (max-width:500px){.grid4{grid-template-columns:1fr;}}
+
+/* ══ Presentation mode ═══════════════════════════════════════════════════════
+   What SHOW_CONTROLS=false produces. The class is set on <html> before first
+   paint, so the panel never flashes. The stage grows to whichever of viewport
+   width or height binds first, keeping the photograph's aspect ratio, and the
+   page becomes nothing but the CRT on the page ground. */
+html.presenting, html.presenting body{height:100%;}
+html.presenting body{display:grid; place-items:center; padding:2vmin;}
+html.presenting .page{width:100%; padding:0;}
+html.presenting .page-head,
+html.presenting .panel{display:none;}
+html.presenting .stage{
+  width:min(96vw, calc((100vh - 4vmin) * 1368 / 1150));
+}
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="page-head">
+    <span class="brand"><span class="mark">&gt;_</span> EU CRT screen studio</span>
+    <span class="spacer"></span>
+    <button class="chip" id="themeToggle" type="button">Auto</button>
+  </header>
+
+  <div class="stage-wrap">
+    <!-- The photograph is decorative and the live screen is a demo loop, so
+         the stage as a whole carries no text alternative. -->
+    <div id="stage" class="stage">
+      <div id="screenPlane" class="screen-plane" aria-hidden="true">
+        <canvas id="glowCanvas" width="640" height="512"></canvas>
+        <canvas id="terminalCanvas" width="640" height="512"></canvas>
+        <div class="scanlines"></div>
+        <div class="glass"></div>
+      </div>
+      <div id="quad" class="quad" aria-hidden="true">
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none"><polygon id="quadPolygon" points=""></polygon></svg>
+        <button class="handle" data-corner="tl" type="button" aria-label="Top left corner"></button>
+        <button class="handle" data-corner="tr" type="button" aria-label="Top right corner"></button>
+        <button class="handle" data-corner="br" type="button" aria-label="Bottom right corner"></button>
+        <button class="handle" data-corner="bl" type="button" aria-label="Bottom left corner"></button>
+      </div>
+    </div>
+  </div>
+
+  <section class="panel" id="panel">
+
+    <h2>Screen corners — <span id="cornerScope">dark</span> photograph</h2>
+    <p class="note">
+      Turn on the handles and drag them onto the four corners of the glass. The
+      live canvas is projectively warped into that quadrilateral — real
+      perspective, not a rotate/skew — and the corners are percentages of the
+      photograph, so the fit survives a resize. The two photographs are
+      <strong>not</strong> registered to each other, so each theme carries its
+      own calibration; switch the theme to edit the other one.
+    </p>
+    <div class="toolbar">
+      <label class="switch"><input id="calToggle" type="checkbox"> Show corner handles</label>
+      <button id="resetCorners" type="button">Reset corners</button>
+      <label class="switch"><input id="scanToggle" type="checkbox" checked> Scanlines</label>
+      <label class="switch"><input id="glassToggle" type="checkbox" checked> Glass vignette</label>
+      <span class="switch" id="motionNote"></span>
+    </div>
+    <div class="grid4">
+      <div class="card"><strong>Top left</strong>
+        <div class="xy"><label for="tlx">X</label><input id="tlx" type="number" step="0.1"></div>
+        <div class="xy"><label for="tly">Y</label><input id="tly" type="number" step="0.1"></div></div>
+      <div class="card"><strong>Top right</strong>
+        <div class="xy"><label for="trx">X</label><input id="trx" type="number" step="0.1"></div>
+        <div class="xy"><label for="tryy">Y</label><input id="tryy" type="number" step="0.1"></div></div>
+      <div class="card"><strong>Bottom right</strong>
+        <div class="xy"><label for="brx">X</label><input id="brx" type="number" step="0.1"></div>
+        <div class="xy"><label for="bry">Y</label><input id="bry" type="number" step="0.1"></div></div>
+      <div class="card"><strong>Bottom left</strong>
+        <div class="xy"><label for="blx">X</label><input id="blx" type="number" step="0.1"></div>
+        <div class="xy"><label for="bly">Y</label><input id="bly" type="number" step="0.1"></div></div>
+    </div>
+
+    <h2>Session — commands and output</h2>
+    <p class="note">
+      Each step types its command, then prints its output lines. One output
+      line per row in the box. Roughly <span id="fitHint">36</span> characters
+      fit across the raster at the current font size; longer lines are not
+      wrapped and will run off the glass, so anything over the limit is
+      flagged.
+    </p>
+    <div class="toolbar">
+      <button id="addStep" type="button" class="primary">+ Add command</button>
+      <button id="restartBtn" type="button">Restart session</button>
+    </div>
+    <div class="steps" id="steps"></div>
+
+    <h2>Render options</h2>
+    <div class="opts">
+      <div class="opt"><label for="optFontPx">font px</label><input id="optFontPx" type="number" step="1" min="6"></div>
+      <div class="opt"><label for="optLineH">line height</label><input id="optLineH" type="number" step="1" min="6"></div>
+      <div class="opt"><label for="optLeft">pad left</label><input id="optLeft" type="number" step="1"></div>
+      <div class="opt"><label for="optTop">pad top</label><input id="optTop" type="number" step="1"></div>
+      <div class="opt"><label for="optMaxLines">max lines</label><input id="optMaxLines" type="number" step="1" min="1"></div>
+      <div class="opt"><label for="optBulge">bulge</label><input id="optBulge" type="number" step="0.01" min="0" max="0.5"></div>
+      <div class="opt"><label for="optType">type ms/char</label><input id="optType" type="number" step="1" min="0"></div>
+      <div class="opt"><label for="optPause">pause ms</label><input id="optPause" type="number" step="50" min="0"></div>
+      <div class="opt"><label for="optPhosphor">phosphor</label><input id="optPhosphor" type="text"></div>
+      <div class="opt"><label for="optCursor">cursor</label><input id="optCursor" type="text"></div>
+    </div>
+
+    <h2>Data</h2>
+    <p class="note">
+      The whole screen — both corner calibrations, the session, and the render
+      options — as one JSON document. Copy it into a file to keep it; paste a
+      file back in and press Load to restore it. Every edit above rewrites this
+      box, so it is always the current state.
+    </p>
+    <div class="toolbar">
+      <button id="loadJson" type="button" class="primary">Load from text</button>
+      <button id="copyJson" type="button">Copy</button>
+      <button id="downloadJson" type="button">Download .json</button>
+      <button id="resetAll" type="button" class="danger">Reset everything</button>
+    </div>
+    <div class="io">
+      <label for="dataText">screen.json</label>
+      <textarea id="dataText" spellcheck="false"></textarea>
+      <p class="status" id="status"></p>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  /* ════════════════════════════════════════════════════════════════════════
+     THE ONE SWITCH.
+
+     false → the panel, the page header and the corner handles are all gone,
+             and the CRT is centred and grown to fill the viewport.
+     true  → the studio, with every input shown.
+     ════════════════════════════════════════════════════════════════════════ */
+  const SHOW_CONTROLS = true;
+
+  // Applied to <html> immediately rather than to <body> on DOMContentLoaded,
+  // so a presentation-mode page never flashes its panel before hiding it.
+  if (!SHOW_CONTROLS) document.documentElement.classList.add('presenting');
+
+  /* ── The default document ───────────────────────────────────────────────── */
+  const SRC_W = 640, SRC_H = 512;
+
+  // Corner percentages were derived from the photographs rather than eyed in:
+  // the green raster was masked by hue, a line was least-squares fitted to the
+  // middle 60% of each of the four edges (the middle, so the rounded corners
+  // do not drag the fit inward), and the four lines intersected. That is a
+  // starting point and not a final answer — the glass bulges, so no
+  // quadrilateral fits it exactly, and the last percent is a judgement made by
+  // dragging with text on the screen.
+  const DEFAULTS = {
+    corners: {
+      dark:  { tl:{x:12.88,y:13.61}, tr:{x:67.90,y:11.41}, br:{x:65.23,y:79.08}, bl:{x:7.28,y:75.36} },
+      light: { tl:{x:11.79,y:11.45}, tr:{x:69.13,y:9.14},  br:{x:66.21,y:81.28}, bl:{x:5.52,y:77.70} }
+    },
+    options: {
+      fontPx:26, lineHeight:33, padLeft:72, padTop:56, maxLines:12,
+      typeMs:42, pauseMs:3000,
+      phosphor:'#3dff86', cursor:'#d5ffe2',
+      // How far the glyphs bow outward off the middle of the tube. See
+      // placeGlyph() for what the number means. 0 draws flat.
+      bulge:0.07,
+      // Off by default. The photograph already carries its own scan texture
+      // and its own corner falloff, so both of these are doubling something
+      // that is in the picture — and over the light photograph the pair reads
+      // as a grey wash sitting on the glass rather than as the glass. They
+      // stay as switches because they are worth having on a flatter photo.
+      scanlines:false, glass:false
+    },
+    session: [
+      { cmd:'workshops --next', out:[
+        'soldering 101 ..... sat 12:30',
+        'kicad from scratch  sep 18',
+        'esp32 + sensors ... oct 02',
+        '3 scheduled, 12 seats open' ] },
+      { cmd:'whoami', out:[
+        'open circuit sf',
+        'a san francisco group that',
+        'builds things on tables.' ] },
+      { cmd:'ls tools/', out:[
+        'irons  multimeters  scopes',
+        'logic-analysers  hot-air',
+        'all provided. bring nothing.' ] },
+      { cmd:'cat topics.txt', out:[
+        'microcontrollers',
+        'soldering',
+        'homelab',
+        'home automation' ] },
+      { cmd:'skill --required', out:[
+        'none.',
+        'absolute beginners welcome.' ] },
+      { cmd:'subscribe --interests', out:[
+        'pick only what you want:',
+        '[x] workshops  [ ] digests',
+        '[ ] announcements',
+        'double opt-in. leave anytime.' ] },
+      { cmd:'uptime', out:[
+        'soldering irons hot since 2026',
+        'no analytics. no trackers.' ] }
+    ]
+  };
+
+  const clone = v => JSON.parse(JSON.stringify(v));
+  let data = clone(DEFAULTS);
+
+  /* ── Elements ───────────────────────────────────────────────────────────── */
+  const stage   = document.getElementById('stage');
+  const plane   = document.getElementById('screenPlane');
+  const poly    = document.getElementById('quadPolygon');
+  const dataText = document.getElementById('dataText');
+  const statusEl = document.getElementById('status');
+  const stepsEl  = document.getElementById('steps');
+  const calToggle = document.getElementById('calToggle');
+
+  const handles = {};
+  for (const el of document.querySelectorAll('.handle')) handles[el.dataset.corner] = el;
+  const fields = {
+    tl:{x:document.getElementById('tlx'), y:document.getElementById('tly')},
+    tr:{x:document.getElementById('trx'), y:document.getElementById('tryy')},
+    br:{x:document.getElementById('brx'), y:document.getElementById('bry')},
+    bl:{x:document.getElementById('blx'), y:document.getElementById('bly')}
+  };
+  const optFields = {
+    fontPx:'optFontPx', lineHeight:'optLineH', padLeft:'optLeft', padTop:'optTop',
+    maxLines:'optMaxLines', bulge:'optBulge', typeMs:'optType', pauseMs:'optPause',
+    phosphor:'optPhosphor', cursor:'optCursor'
+  };
+
+  /* ── Theme ──────────────────────────────────────────────────────────────── */
+  // Three states, mirroring lib/theme.ts: auto follows the OS, light and dark
+  // pin it. The active theme also selects which corner calibration is edited
+  // and applied, so this toggle is not purely cosmetic here.
+  const order = ['auto','light','dark'];
+  const themeToggle = document.getElementById('themeToggle');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
+  let themeIndex = 0;
+
+  // Read the attribute rather than the counter. The two agree while the button
+  // is the only thing setting the theme, but the attribute is what actually
+  // chose the photograph — so a page opened with data-theme already on <html>
+  // (a screenshot harness, a bookmarklet) still calibrates against the
+  // photograph it is really showing.
+  function activeTheme() {
+    const attr = document.documentElement.getAttribute('data-theme');
+    if (attr === 'dark' || attr === 'light') return attr;
+    return prefersDark.matches ? 'dark' : 'light';
+  }
+  themeToggle.addEventListener('click', () => {
+    themeIndex = (themeIndex + 1) % order.length;
+    const t = order[themeIndex];
+    if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', t);
+    themeToggle.textContent = t[0].toUpperCase() + t.slice(1);
+    applyWarp();
+  });
+  prefersDark.addEventListener('change', () => { if (order[themeIndex] === 'auto') applyWarp(); });
+
+  const corners = () => data.corners[activeTheme()];
+
+  /* ── Projective warp ────────────────────────────────────────────────────── */
+  // Gauss-Jordan with partial pivoting. Eight unknowns: the projective
+  // homography's independent coefficients (h33 is fixed at 1).
+  function solve(A, b) {
+    const n = b.length;
+    const M = A.map((row, i) => [...row, b[i]]);
+    for (let c = 0; c < n; c++) {
+      let p = c, best = Math.abs(M[p][c]);
+      for (let r = c + 1; r < n; r++) {
+        const v = Math.abs(M[r][c]);
+        if (v > best) { best = v; p = r; }
+      }
+      if (best < 1e-12) throw new Error('degenerate quadrilateral');
+      if (p !== c) { const t = M[c]; M[c] = M[p]; M[p] = t; }
+      const piv = M[c][c];
+      for (let k = c; k <= n; k++) M[c][k] /= piv;
+      for (let r = 0; r < n; r++) {
+        if (r === c) continue;
+        const f = M[r][c];
+        for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+      }
+    }
+    return M.map(r => r[n]);
+  }
+
+  function homography(src, dst) {
+    const A = [], b = [];
+    for (let i = 0; i < 4; i++) {
+      const {x, y} = src[i], X = dst[i].x, Y = dst[i].y;
+      A.push([x, y, 1, 0, 0, 0, -X * x, -X * y]); b.push(X);
+      A.push([0, 0, 0, x, y, 1, -Y * x, -Y * y]); b.push(Y);
+    }
+    return solve(A, b);
+  }
+
+  const toPx = p => ({ x: stage.clientWidth * p.x / 100, y: stage.clientHeight * p.y / 100 });
+
+  function applyWarp() {
+    const c = corners();
+    const src = [{x:0,y:0},{x:SRC_W,y:0},{x:SRC_W,y:SRC_H},{x:0,y:SRC_H}];
+    const dst = [toPx(c.tl), toPx(c.tr), toPx(c.br), toPx(c.bl)];
+    try {
+      const h = homography(src, dst);
+      // CSS matrix3d is column-major; with z=0 this yields
+      //   X = (h0*x + h1*y + h2) / (h6*x + h7*y + 1)
+      //   Y = (h3*x + h4*y + h5) / (h6*x + h7*y + 1)
+      const m = [h[0],h[3],0,h[6], h[1],h[4],0,h[7], 0,0,1,0, h[2],h[5],0,1];
+      plane.style.transform = 'matrix3d(' + m.map(v =>
+        Number((Math.abs(v) < 1e-12 ? 0 : v).toFixed(12))).join(',') + ')';
+    } catch (e) {
+      console.error(e);
+    }
+    syncCornerUi();
+  }
+
+  function syncCornerUi() {
+    if (!SHOW_CONTROLS) return;
+    const c = corners(), names = ['tl','tr','br','bl'];
+    document.getElementById('cornerScope').textContent = activeTheme();
+    for (const n of names) {
+      handles[n].style.left = c[n].x + '%';
+      handles[n].style.top  = c[n].y + '%';
+      if (document.activeElement !== fields[n].x) fields[n].x.value = c[n].x.toFixed(2);
+      if (document.activeElement !== fields[n].y) fields[n].y.value = c[n].y.toFixed(2);
+    }
+    poly.setAttribute('points', names.map(n => c[n].x + ',' + c[n].y).join(' '));
+    writeJson();
+  }
+
+  const clamp = v => Number.isFinite(v) ? Math.max(-20, Math.min(120, v)) : 0;
+
+  /* ── Corner inputs, dragging, keyboard nudge ────────────────────────────── */
+  if (SHOW_CONTROLS) {
+    for (const n of Object.keys(fields)) {
+      for (const axis of ['x','y']) {
+        fields[n][axis].addEventListener('change', () => {
+          const v = Number(fields[n][axis].value);
+          if (Number.isFinite(v)) { corners()[n][axis] = clamp(v); applyWarp(); }
+        });
+      }
+    }
+
+    let dragging = null;
+    for (const [n, el] of Object.entries(handles)) {
+      el.addEventListener('pointerdown', e => {
+        if (!calToggle.checked) return;
+        dragging = n; el.setPointerCapture(e.pointerId); e.preventDefault();
+      });
+      el.addEventListener('pointermove', e => {
+        if (dragging !== n) return;
+        const r = stage.getBoundingClientRect();
+        corners()[n].x = clamp((e.clientX - r.left) / r.width * 100);
+        corners()[n].y = clamp((e.clientY - r.top) / r.height * 100);
+        applyWarp();
+      });
+      const stop = e => {
+        if (dragging === n) {
+          dragging = null;
+          if (e.pointerId != null && el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+        }
+      };
+      el.addEventListener('pointerup', stop);
+      el.addEventListener('pointercancel', stop);
+      // Keyboard nudge, so calibration does not require a pointer.
+      el.addEventListener('keydown', e => {
+        const step = e.shiftKey ? 1 : 0.1;
+        const d = {ArrowLeft:['x',-step],ArrowRight:['x',step],ArrowUp:['y',-step],ArrowDown:['y',step]}[e.key];
+        if (!d) return;
+        e.preventDefault();
+        corners()[n][d[0]] = clamp(corners()[n][d[0]] + d[1]);
+        applyWarp();
+      });
+    }
+
+    calToggle.addEventListener('change', () =>
+      stage.classList.toggle('calibrating', calToggle.checked));
+
+    document.getElementById('resetCorners').addEventListener('click', () => {
+      data.corners[activeTheme()] = clone(DEFAULTS.corners[activeTheme()]);
+      applyWarp();
+      say('corners reset for the ' + activeTheme() + ' photograph', 'ok');
+    });
+  }
+
+  window.addEventListener('resize', applyWarp);
+
+  /* ── Scanlines / glass ──────────────────────────────────────────────────── */
+  const scanToggle = document.getElementById('scanToggle');
+  const glassToggle = document.getElementById('glassToggle');
+  function applyOverlays() {
+    stage.classList.toggle('no-scanlines', !data.options.scanlines);
+    stage.classList.toggle('no-glass', !data.options.glass);
+    if (SHOW_CONTROLS) {
+      scanToggle.checked = data.options.scanlines;
+      glassToggle.checked = data.options.glass;
+    }
+  }
+  scanToggle.addEventListener('change', () => {
+    data.options.scanlines = scanToggle.checked; applyOverlays(); writeJson();
+  });
+  glassToggle.addEventListener('change', () => {
+    data.options.glass = glassToggle.checked; applyOverlays(); writeJson();
+  });
+
+  /* ── Render options ─────────────────────────────────────────────────────── */
+  function syncOptionUi() {
+    if (!SHOW_CONTROLS) return;
+    for (const [key, id] of Object.entries(optFields)) {
+      const el = document.getElementById(id);
+      if (document.activeElement !== el) el.value = data.options[key];
+    }
+    document.getElementById('fitHint').textContent = String(charBudget());
+  }
+  if (SHOW_CONTROLS) {
+    for (const [key, id] of Object.entries(optFields)) {
+      document.getElementById(id).addEventListener('change', e => {
+        const raw = e.target.value;
+        if (typeof DEFAULTS.options[key] === 'number') {
+          const v = Number(raw);
+          if (!Number.isFinite(v)) { syncOptionUi(); return; }
+          data.options[key] = v;
+        } else {
+          data.options[key] = raw;
+        }
+        syncOptionUi(); refreshOverlong(); writeJson(); paint();
+      });
+    }
+  }
+
+  /* ── Session editor ─────────────────────────────────────────────────────── */
+  // How many monospace characters fit across the raster at the current size.
+  // Measured with the canvas rather than assumed from a ratio, because the
+  // advance width is the font's, not ours.
+  function charBudget() {
+    const usable = SRC_W - data.options.padLeft * 2;
+    ctx.save();
+    ctx.font = data.options.fontPx + "px 'JetBrains Mono', ui-monospace, Menlo, monospace";
+    const adv = ctx.measureText('M').width || data.options.fontPx * 0.6;
+    ctx.restore();
+    // The bulge still spreads a line: the corners are pinned but a glyph part
+    // way out is magnified, so the far end of a mid-height line lands further
+    // out than where it was laid out. The true worst case is 1 + 0.7*bulge at
+    // this padding; 1 + bulge is the conservative bound, which errs toward
+    // flagging a line early rather than letting one ride off the glass.
+    const spread = 1 + Math.max(0, data.options.bulge || 0);
+    return Math.max(1, Math.floor(usable / (adv * spread)));
+  }
+
+  // Recompute every row's "over N chars" warning WITHOUT rebuilding the list.
+  //
+  // The warnings depend on the character budget, which depends on font px, pad
+  // left and bulge — so an edit to any of those has to refresh them. Calling
+  // renderSteps() for that is what made the page jump to the top on every
+  // press of a spinner arrow: its first act is stepsEl.textContent = '', which
+  // collapses the list to zero height, the document gets shorter, the browser
+  // CLAMPS the scroll offset to the new height, and re-adding the rows a
+  // moment later does not put the scroll position back. The rows themselves
+  // were identical before and after — the teardown was pure cost.
+  let overlongFlaggers = [];
+  function refreshOverlong() {
+    if (!SHOW_CONTROLS) return;
+    const budget = charBudget();
+    for (const flag of overlongFlaggers) flag(budget);
+  }
+
+  function renderSteps() {
+    if (!SHOW_CONTROLS) return;
+    const budget = charBudget();
+    // Genuine rebuilds — add, remove, reorder, load, reset — still collapse the
+    // list for an instant, so hold the scroll offset across it. The whole
+    // rebuild is synchronous, so restoring here lands before the next paint and
+    // nothing is seen to move.
+    const scroll = window.scrollY;
+    overlongFlaggers = [];
+    stepsEl.textContent = '';
+    data.session.forEach((step, i) => {
+      const row = document.createElement('div');
+      row.className = 'step';
+
+      const fieldsBox = document.createElement('div');
+      fieldsBox.className = 'fields';
+
+      const cmdLab = document.createElement('span');
+      cmdLab.className = 'rowlab';
+      cmdLab.textContent = '#' + (i + 1) + '  command';
+      const cmdIn = document.createElement('input');
+      cmdIn.type = 'text';
+      cmdIn.value = step.cmd;
+      cmdIn.setAttribute('aria-label', 'Command ' + (i + 1));
+      cmdIn.addEventListener('input', () => {
+        step.cmd = cmdIn.value; writeJson(); flagOverlong();
+      });
+
+      const outLab = document.createElement('span');
+      outLab.className = 'rowlab';
+      outLab.textContent = 'output — one line per row';
+      const outIn = document.createElement('textarea');
+      outIn.value = step.out.join('\n');
+      outIn.spellcheck = false;
+      outIn.setAttribute('aria-label', 'Output for command ' + (i + 1));
+      outIn.addEventListener('input', () => {
+        // Split on newlines only. A trailing empty row is kept: a blank line
+        // on the screen is a legitimate thing to want.
+        step.out = outIn.value.split('\n');
+        writeJson(); flagOverlong();
+      });
+
+      const warn = document.createElement('span');
+      warn.className = 'overlong';
+
+      const flagOverlong = (b = charBudget()) => {
+        const long = ['> ' + step.cmd, ...step.out].filter(l => l.length > b);
+        warn.textContent = long.length
+          ? long.length + ' line(s) over ' + b + ' chars — will run off the glass'
+          : '';
+      };
+      overlongFlaggers.push(flagOverlong);
+      flagOverlong(budget);
+
+      fieldsBox.append(cmdLab, cmdIn, outLab, outIn, warn);
+
+      const ctrls = document.createElement('div');
+      ctrls.className = 'ctrls';
+      const mk = (label, title, fn, cls) => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.textContent = label; b.title = title;
+        b.setAttribute('aria-label', title);
+        if (cls) b.className = cls;
+        b.addEventListener('click', fn);
+        return b;
+      };
+      ctrls.append(
+        mk('↑', 'Move step ' + (i + 1) + ' up', () => {
+          if (i === 0) return;
+          [data.session[i - 1], data.session[i]] = [data.session[i], data.session[i - 1]];
+          renderSteps(); writeJson(); runSession();
+        }),
+        mk('↓', 'Move step ' + (i + 1) + ' down', () => {
+          if (i === data.session.length - 1) return;
+          [data.session[i + 1], data.session[i]] = [data.session[i], data.session[i + 1]];
+          renderSteps(); writeJson(); runSession();
+        }),
+        mk('⧉', 'Duplicate step ' + (i + 1), () => {
+          data.session.splice(i + 1, 0, clone(step));
+          renderSteps(); writeJson();
+        }),
+        mk('✕', 'Remove step ' + (i + 1), () => {
+          data.session.splice(i, 1);
+          renderSteps(); writeJson(); runSession();
+        }, 'danger')
+      );
+
+      row.append(fieldsBox, ctrls);
+      stepsEl.append(row);
+    });
+    if (window.scrollY !== scroll) window.scrollTo(window.scrollX, scroll);
+  }
+
+  if (SHOW_CONTROLS) {
+    document.getElementById('addStep').addEventListener('click', () => {
+      data.session.push({ cmd:'new --command', out:['output line one'] });
+      renderSteps(); writeJson();
+      stepsEl.lastElementChild.querySelector('input').focus();
+    });
+    document.getElementById('restartBtn').addEventListener('click', () => runSession());
+  }
+
+  /* ── JSON in and out ────────────────────────────────────────────────────── */
+  let writing = false;
+  function writeJson() {
+    if (!SHOW_CONTROLS || writing) return;
+    // Do not clobber what someone is in the middle of pasting.
+    if (document.activeElement === dataText) return;
+    dataText.value = JSON.stringify(data, null, 2);
+  }
+
+  function say(msg, kind) {
+    if (!SHOW_CONTROLS) return;
+    statusEl.textContent = msg;
+    statusEl.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
+  // Validate rather than trust. A pasted document that is missing a field
+  // takes the default for that field; one whose shape is wrong is rejected
+  // with a message, and the live screen is left exactly as it was.
+  function coerce(input) {
+    if (input === null || typeof input !== 'object' || Array.isArray(input))
+      throw new Error('top level must be a JSON object');
+
+    const out = clone(DEFAULTS);
+
+    if (input.corners !== undefined) {
+      if (typeof input.corners !== 'object' || input.corners === null)
+        throw new Error('"corners" must be an object');
+      for (const theme of ['dark','light']) {
+        const c = input.corners[theme];
+        if (c === undefined) continue;
+        if (typeof c !== 'object' || c === null)
+          throw new Error('"corners.' + theme + '" must be an object');
+        for (const n of ['tl','tr','br','bl']) {
+          const p = c[n];
+          if (p === undefined) continue;
+          if (typeof p !== 'object' || p === null || !Number.isFinite(Number(p.x)) || !Number.isFinite(Number(p.y)))
+            throw new Error('"corners.' + theme + '.' + n + '" needs numeric x and y');
+          out.corners[theme][n] = { x: clamp(Number(p.x)), y: clamp(Number(p.y)) };
+        }
+      }
+    }
+
+    if (input.options !== undefined) {
+      if (typeof input.options !== 'object' || input.options === null)
+        throw new Error('"options" must be an object');
+      for (const [key, def] of Object.entries(DEFAULTS.options)) {
+        if (input.options[key] === undefined) continue;
+        const v = input.options[key];
+        if (typeof def === 'number') {
+          if (!Number.isFinite(Number(v))) throw new Error('"options.' + key + '" must be a number');
+          out.options[key] = Number(v);
+        } else if (typeof def === 'boolean') {
+          out.options[key] = Boolean(v);
+        } else {
+          out.options[key] = String(v);
+        }
+      }
+    }
+
+    if (input.session !== undefined) {
+      if (!Array.isArray(input.session)) throw new Error('"session" must be an array');
+      out.session = input.session.map((s, i) => {
+        if (typeof s !== 'object' || s === null) throw new Error('session[' + i + '] must be an object');
+        const cmd = s.cmd === undefined ? '' : String(s.cmd);
+        let lines = [];
+        if (Array.isArray(s.out)) lines = s.out.map(String);
+        else if (typeof s.out === 'string') lines = s.out.split('\n');
+        else if (s.out !== undefined) throw new Error('session[' + i + '].out must be an array or a string');
+        return { cmd, out: lines };
+      });
+    }
+
+    return out;
+  }
+
+  function loadFromText() {
+    let parsed;
+    try {
+      parsed = JSON.parse(dataText.value);
+    } catch (e) {
+      say('not valid JSON: ' + e.message, 'err');
+      return;
+    }
+    let next;
+    try {
+      next = coerce(parsed);
+    } catch (e) {
+      say('rejected: ' + e.message, 'err');
+      return;
+    }
+    data = next;
+    applyOverlays();
+    syncOptionUi();
+    renderSteps();
+    applyWarp();
+    // applyWarp -> syncCornerUi -> writeJson is suppressed while the textarea
+    // has focus, so normalise it explicitly once the load has succeeded.
+    writing = true;
+    dataText.value = JSON.stringify(data, null, 2);
+    writing = false;
+    runSession();
+    say('loaded — ' + data.session.length + ' command(s)', 'ok');
+  }
+
+  if (SHOW_CONTROLS) {
+    document.getElementById('loadJson').addEventListener('click', loadFromText);
+    dataText.addEventListener('blur', writeJson);
+
+    document.getElementById('copyJson').addEventListener('click', async () => {
+      const text = JSON.stringify(data, null, 2);
+      try {
+        await navigator.clipboard.writeText(text);
+        say('copied to the clipboard', 'ok');
+      } catch (e) {
+        // The clipboard API is unavailable over file:// in some browsers.
+        // Selecting the text is the fallback that always works.
+        dataText.focus(); dataText.select();
+        say('clipboard blocked — the text is selected, press ' +
+            (navigator.platform.indexOf('Mac') === 0 ? '⌘C' : 'Ctrl+C'), 'err');
+      }
+    });
+
+    document.getElementById('downloadJson').addEventListener('click', () => {
+      const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'eu-crt-screen.json';
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      say('downloaded eu-crt-screen.json', 'ok');
+    });
+
+    document.getElementById('resetAll').addEventListener('click', () => {
+      data = clone(DEFAULTS);
+      applyOverlays(); syncOptionUi(); renderSteps(); applyWarp();
+      writing = true; dataText.value = JSON.stringify(data, null, 2); writing = false;
+      runSession();
+      say('everything back to defaults', 'ok');
+    });
+  }
+
+  /* ── The screen itself ──────────────────────────────────────────────────── */
+  const term = document.getElementById('terminalCanvas');
+  const glow = document.getElementById('glowCanvas');
+  const ctx  = term.getContext('2d');
+  const gctx = glow.getContext('2d');
+
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  if (SHOW_CONTROLS) {
+    document.getElementById('motionNote').textContent =
+      reduceMotion.matches ? 'reduced motion: on (screen is static)' : 'reduced motion: off';
+  }
+
+  let lines = [], cursorOn = true, timers = [], generation = 0;
+  const clearTimers = () => { timers.forEach(clearTimeout); timers = []; };
+  const wait = ms => new Promise(r => timers.push(setTimeout(r, ms)));
+
+  /* ── The bulge ──────────────────────────────────────────────────────────
+     The photographed tube is convex, and a flat plane of text pasted onto it
+     reads as a sticker: the glass curves and the type does not. The homography
+     cannot help — a matrix3d maps a plane to a plane, and every straight line
+     stays straight by construction, whatever four corners you give it.
+
+     So the curve is put in at draw time instead, as radial magnification that
+     FALLS OFF toward the corners:
+
+         f = 1 + bulge * (1 - r²/2)   u,v = ±1 at the raster edge, r² = u²+v²
+         p' = centre + (p - centre) * f
+
+     The direction of that falloff is the whole thing, and getting it backwards
+     is not subtle — it inverts the effect. Magnification that GROWS with r
+     (f = 1 + k·r², the obvious first guess, and what this drew at first) moves
+     a corner further than the middle of an edge, so every edge bows INWARD
+     between its corners: that is pincushion, and it reads as the glass being
+     dished rather than domed. Falloff the other way pins the corners and
+     swells the middle, so each edge bows outward — barrel, which is what a
+     convex faceplate does to a straight scan line.
+
+     Normalising to r² = 2 at a corner makes f exactly 1 there, so the outermost
+     glyphs land where they were laid out and the bulge cannot push a line off
+     the glass. bulge is the option; 0.07 reads as "the tube is curved" without
+     reading as a fisheye, and 0 draws flat.
+
+     It is applied per GLYPH rather than per pixel. Warping the finished
+     bitmap would mean a getImageData/putImageData remap of 327,680 pixels on
+     every frame of the typing animation; placing each glyph costs one
+     transform and one fillText, and it is sharper, because each glyph is
+     rasterised at its final size instead of being resampled.
+
+     A glyph also has to ROTATE, not just move. Glyphs along one line are
+     displaced by different amounts, so the line bows, and a glyph sitting on a
+     bowed line has to lean along it or the text visibly shears. The angle is
+     the slope of the mapped line at that point, dy'/dx', both derivatives
+     taken along x with y held fixed. */
+  const CORNER_R2 = 2;   // u² + v² at a corner, with u and v normalised to ±1
+
+  function placeGlyph(gx, gy, draw) {
+    const k = data.options.bulge || 0;
+    if (!k) { ctx.save(); ctx.translate(gx, gy); draw(); ctx.restore(); return; }
+    const cx = SRC_W / 2, cy = SRC_H / 2;
+    const u = (gx - cx) / cx, v = (gy - cy) / cy;
+    const f = 1 + k * (1 - (u * u + v * v) / CORNER_R2);
+    const dfdu = -2 * k * u / CORNER_R2;          // ∂f/∂u, and du/dx is 1/cx
+    ctx.save();
+    ctx.translate(cx + (gx - cx) * f, cy + (gy - cy) * f);
+    ctx.rotate(Math.atan2((gy - cy) * dfdu / cx, f + u * dfdu));
+    ctx.scale(f, f);
+    draw();
+    ctx.restore();
+  }
+
+  // x,y are the line's left edge and top, as fillText with textBaseline 'top'
+  // would take them. adv is the monospace advance, measured by the caller once
+  // per frame rather than once per glyph.
+  function drawLine(text, x, y, adv) {
+    if (!data.options.bulge) { ctx.fillText(text, x, y); return; }
+    const half = data.options.fontPx / 2;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === ' ') continue;          // nothing to draw, and it is ~40% of a line
+      placeGlyph(x + i * adv + adv / 2, y + half,
+                 () => ctx.fillText(ch, -adv / 2, -half));
+    }
+  }
+
+  function paint() {
+    // Nothing is visible in a background tab, so do not pay for it. The
+    // visibilitychange handler repaints once on the way back, so no state
+    // change is lost — it is just not drawn while nobody can see it.
+    if (document.hidden) return;
+
+    const o = data.options;
+
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.shadowBlur = 0;
+    // Cleared, not filled. Everything the photograph already shows — phosphor
+    // texture, tube curvature, corner falloff, the bloom pooling at the top —
+    // survives, and only the glyphs are composited over it.
+    ctx.clearRect(0,0,SRC_W,SRC_H);
+
+    ctx.textBaseline = 'top';
+    ctx.font = o.fontPx + "px 'JetBrains Mono', ui-monospace, Menlo, monospace";
+    ctx.fillStyle = o.phosphor; ctx.shadowColor = o.phosphor; ctx.shadowBlur = 3;
+
+    // maxLines is what makes it scroll: only the last N are ever drawn, so
+    // pushing a line past N shifts everything up by one, exactly like a
+    // terminal whose scrollback has left the viewport.
+    const vis = lines.slice(-Math.max(1, Math.floor(o.maxLines)));
+    const adv = ctx.measureText('M').width;
+    vis.forEach((l, i) => drawLine(l, o.padLeft, o.padTop + i * o.lineHeight, adv));
+
+    if (cursorOn && vis.length) {
+      const last = vis[vis.length - 1];
+      ctx.save();
+      ctx.fillStyle = o.cursor; ctx.shadowColor = o.phosphor; ctx.shadowBlur = 9;
+      // Same treatment as a glyph, or the block detaches from the end of the
+      // line it is supposed to be sitting on.
+      const w = Math.round(o.fontPx * 0.5), h = o.fontPx - 3;
+      placeGlyph(o.padLeft + last.length * adv + 4 + w / 2,
+                 o.padTop + (vis.length - 1) * o.lineHeight + 3 + h / 2,
+                 () => ctx.fillRect(-w / 2, -h / 2, w, h));
+      ctx.restore();
+    }
+
+    // The bloom layer is the glyphs alone, blurred. It must also be cleared
+    // rather than filled: this canvas is composited with mix-blend-mode
+    // screen, and screen against a filled ground would lift the whole
+    // photographed screen, not just the text.
+    gctx.setTransform(1,0,0,1,0,0);
+    gctx.globalCompositeOperation = 'source-over';
+    gctx.clearRect(0,0,SRC_W,SRC_H);
+    gctx.drawImage(term, 0, 0);
+  }
+
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) paint(); });
+
+  const push = text => { lines.push(text); paint(); };
+
+  // Every await checks the generation it started under. Restarting the session
+  // bumps it, which strands any in-flight typing loop instead of leaving two of
+  // them writing into `lines` at once. Editing a command restarts the session,
+  // so this happens on nearly every keystroke in the panel.
+  async function typeLine(gen, text) {
+    lines.push('');
+    for (const ch of text) {
+      if (gen !== generation) return false;
+      lines[lines.length - 1] += ch;
+      paint();
+      await wait(data.options.typeMs + Math.random() * 30);
+    }
+    return gen === generation;
+  }
+
+  async function bootSequence(gen) {
+    lines = []; paint();
+    await wait(240);
+    if (gen !== generation) return false;
+    push('open circuit sf // sf, ca');
+    await wait(300);
+    if (gen !== generation) return false;
+    push('memory ok. phosphor ok.');
+    await wait(420);
+    return gen === generation;
+  }
+
+  async function runSession() {
+    clearTimers();
+    const gen = ++generation;
+
+    if (!data.session.length) {
+      lines = ['open circuit sf // sf, ca', '', 'no commands defined.'];
+      paint();
+      return;
+    }
+
+    if (reduceMotion.matches) {
+      // A still frame, not a blank screen and not an animation: the finished
+      // state of one command, which is what someone who asked for less motion
+      // should get.
+      const step = data.session[0];
+      lines = ['open circuit sf // sf, ca', '', '> ' + step.cmd, ...step.out];
+      cursorOn = true; paint();
+      return;
+    }
+
+    if (!await bootSequence(gen)) return;
+
+    for (let i = 0; gen === generation; i++) {
+      const step = data.session[i % data.session.length];
+      push('');
+      if (!await typeLine(gen, '> ' + step.cmd)) return;
+      await wait(260);
+      for (const line of step.out) {
+        if (gen !== generation) return;
+        push(line);
+        await wait(150);
+      }
+      // Hold so it can be read, then the next command types itself. This is
+      // the only thing separating "a terminal someone is using" from "a list
+      // that scrolled past".
+      await wait(data.options.pauseMs);
+    }
+  }
+
+  if (!reduceMotion.matches) {
+    setInterval(() => { cursorOn = !cursorOn; paint(); }, 530);
+  }
+
+  /* ── Go ─────────────────────────────────────────────────────────────────── */
+  applyOverlays();
+  syncOptionUi();
+  renderSteps();
+  applyWarp();
+  writeJson();
+  // The webfont decides the glyph advance, and until it loads the canvas
+  // measures a fallback. Repaint and re-check the character budget once it
+  // has actually arrived.
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => { syncOptionUi(); refreshOverlong(); paint(); });
+  }
+  runSession();
+})();
+</script>
+</body>
+</html>
