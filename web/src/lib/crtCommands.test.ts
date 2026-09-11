@@ -10,6 +10,7 @@ import {
   crtOverBudgetWarning,
   CRT_SOURCES,
   CRT_LINE_CHARS,
+  CRT_COMMAND_LINE_CHARS,
 } from './crtCommands';
 import type { CrtCommand } from './types';
 
@@ -190,5 +191,39 @@ describe('crtOverBudgetWarning', () => {
     const long = 'x'.repeat(CRT_LINE_CHARS + 1);
     const warning = crtOverBudgetWarning(long + '\nfits\n' + long);
     expect(warning).toContain('Lines 1, 3 are');
+  });
+});
+
+// #0397: CrtCommands.svelte calls crtOverBudgetWarning/crtOverBudgetLines on
+// the single-line command field too, passing CRT_COMMAND_LINE_CHARS as `max`
+// -- two characters narrower than CRT_LINE_CHARS -- since the command is
+// drawn with a "> " prompt prefix at render time (crtScreen.ts's
+// crtCommandLine) and so has two characters less room than a plain output
+// line. These pin the boundary these callers actually rely on.
+describe('crtOverBudgetLines/crtOverBudgetWarning against the command budget (#0397)', () => {
+  it('treats a command of exactly CRT_COMMAND_LINE_CHARS as fitting', () => {
+    const exact = 'x'.repeat(CRT_COMMAND_LINE_CHARS);
+    expect(crtOverBudgetLines(exact, CRT_COMMAND_LINE_CHARS)).toEqual([]);
+    expect(crtOverBudgetWarning(exact, CRT_COMMAND_LINE_CHARS)).toBeNull();
+  });
+
+  it('flags a command one character over CRT_COMMAND_LINE_CHARS', () => {
+    const oneOver = 'x'.repeat(CRT_COMMAND_LINE_CHARS + 1);
+    expect(crtOverBudgetLines(oneOver, CRT_COMMAND_LINE_CHARS)).toEqual([1]);
+    const warning = crtOverBudgetWarning(oneOver, CRT_COMMAND_LINE_CHARS);
+    expect(warning).toContain('Line 1 is');
+    expect(warning).toContain(String(CRT_COMMAND_LINE_CHARS));
+  });
+
+  it('a command that fits the command budget but not the full output budget is still flagged, proving the caller cannot fall back to CRT_LINE_CHARS by mistake', () => {
+    // CRT_COMMAND_LINE_CHARS < CRT_LINE_CHARS, so a command sized to be
+    // exactly one over the SMALLER budget is still comfortably under the
+    // larger one -- if a caller passed CRT_LINE_CHARS by accident (the
+    // literal #0397 defect, applied to the warning instead of the draw
+    // sites), this line would wrongly read as fitting.
+    const commandOnlyOver = 'x'.repeat(CRT_COMMAND_LINE_CHARS + 1);
+    expect(commandOnlyOver.length).toBeLessThan(CRT_LINE_CHARS);
+    expect(crtOverBudgetLines(commandOnlyOver, CRT_LINE_CHARS)).toEqual([]);
+    expect(crtOverBudgetLines(commandOnlyOver, CRT_COMMAND_LINE_CHARS)).toEqual([1]);
   });
 });

@@ -9,7 +9,10 @@ import {
   crtSessionToScript,
   crtEnrichStep,
   crtLoadScript,
+  crtCommandLine,
   CRT_LINE_CHARS,
+  CRT_COMMAND_PREFIX,
+  CRT_COMMAND_LINE_CHARS,
   CRT_SESSION,
 } from './crtScreen';
 
@@ -74,6 +77,60 @@ describe('crtTruncate is a no-op on the seeded active CRT_SESSION rows', () => {
       for (const line of out) {
         expect(crtTruncate(line)).toBe(line);
       }
+    }
+  });
+});
+
+// #0397: `#0393` truncated a row's `output` at both Home.svelte draw sites
+// but never its `cmd` -- the typed "> " line was drawn straight from
+// step.cmd, so an operator typing a long command (the entire point of the
+// feature) got it drawn past the edge of the tube with no warning. Both
+// draw sites now go through this one shared helper instead of a bare
+// `'> ' + step.cmd`, so they cannot diverge (CLAUDE.md §1's "two call sites
+// that must agree are exactly what drifts" -- see crtScreen.ts's own doc
+// comment on crtCommandLine).
+describe('crtCommandLine (#0397)', () => {
+  it('prefixes an untruncated command with "> " unchanged', () => {
+    expect(crtCommandLine('whoami')).toBe('> whoami');
+  });
+
+  // The crux of #0397: the command line is drawn with a 2-character "> "
+  // prefix, so the command TEXT's own budget is CRT_LINE_CHARS - 2, not
+  // CRT_LINE_CHARS -- a fix that truncated `cmd` against the full budget
+  // would still overflow the glass by exactly the prefix's width. This pins
+  // the boundary precisely: a command of exactly CRT_COMMAND_LINE_CHARS
+  // characters must survive untouched, and one character longer must be
+  // truncated.
+  it('leaves a command of exactly CRT_COMMAND_LINE_CHARS characters untouched', () => {
+    const exact = 'x'.repeat(CRT_COMMAND_LINE_CHARS);
+    const rendered = crtCommandLine(exact);
+    expect(rendered).toBe(CRT_COMMAND_PREFIX + exact);
+    expect(rendered.length).toBe(CRT_LINE_CHARS);
+  });
+
+  it('truncates a command one character over CRT_COMMAND_LINE_CHARS', () => {
+    const oneOver = 'x'.repeat(CRT_COMMAND_LINE_CHARS + 1);
+    const rendered = crtCommandLine(oneOver);
+    expect(rendered).not.toBe(CRT_COMMAND_PREFIX + oneOver);
+    expect(rendered.endsWith('…')).toBe(true);
+    expect(rendered.length).toBeLessThanOrEqual(CRT_LINE_CHARS);
+  });
+});
+
+// #0397's no-op safety net, the same falsifiable model #0393 already
+// established for `output` above (describe('crtTruncate is a no-op on the
+// seeded active CRT_SESSION rows')): every CRT_SESSION command survives
+// crtCommandLine's truncation untouched today. This is falsifiable, not a
+// restatement of CRT_COMMAND_LINE_CHARS -- it fails the moment
+// CRT_LINE_CHARS (and so CRT_COMMAND_LINE_CHARS, which is derived from it)
+// is lowered far enough that a real seeded command like 'subscribe
+// --interests' (23 characters) no longer fits, exactly as #0393's own
+// no-op test fails if CRT_LINE_CHARS is lowered past a real output line.
+describe('crtCommandLine is a no-op on the seeded active CRT_SESSION commands', () => {
+  it('leaves every CRT_SESSION command line unchanged, prefix included', () => {
+    expect(CRT_SESSION.length).toBeGreaterThan(0);
+    for (const { cmd } of CRT_SESSION) {
+      expect(crtCommandLine(cmd)).toBe(CRT_COMMAND_PREFIX + cmd);
     }
   });
 });

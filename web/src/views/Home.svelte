@@ -50,6 +50,7 @@
     crtFallbackScript,
     crtLoadScript,
     crtTruncate,
+    crtCommandLine,
     type CrtScriptStep,
   } from '../lib/crtScreen';
   import TerminalPanel from '../lib/TerminalPanel.svelte';
@@ -169,8 +170,11 @@
         // #0393 review-bounce follow-up: crtTruncate is the same safety net
         // applied below in the typed-out path -- an admin-entered static
         // line past the 36-char budget is clipped here too, not just when
-        // reduced-motion is off.
-        lines = ['open circuit sf // sf, ca', '', '> ' + step.cmd, ...step.out.map((l) => crtTruncate(l))];
+        // reduced-motion is off. #0397: the command line goes through
+        // crtCommandLine (not a bare '> ' + step.cmd) so a long command is
+        // clipped against the "> "-prefix-aware budget too, the same as the
+        // typed-out path below.
+        lines = ['open circuit sf // sf, ca', '', crtCommandLine(step.cmd), ...step.out.map((l) => crtTruncate(l))];
         paint();
         return;
       }
@@ -185,7 +189,9 @@
       for (let i = 0; gen === generation; i++) {
         const step = script[i % script.length];
         push('');
-        if (!(await typeLine(gen, '> ' + step.cmd))) return;
+        // #0397: crtCommandLine, not a bare '> ' + step.cmd -- see the
+        // reduced-motion path above for why the prefix needs its own budget.
+        if (!(await typeLine(gen, crtCommandLine(step.cmd)))) return;
         await wait(260);
         for (const line of step.out) {
           if (gen !== generation) return;

@@ -168,6 +168,28 @@ export function crtTruncate(text: string, max = CRT_LINE_CHARS): string {
   return text.slice(0, max - 1).trimEnd() + '\u2026';
 }
 
+/** #0397: both Home.svelte draw sites (the reduced-motion snapshot in
+ *  session() and the normal typed-out loop) render a script step's command
+ *  with this literal "> " prompt prefix, so the command TEXT's own budget is
+ *  two characters narrower than a plain output line's CRT_LINE_CHARS -- a
+ *  fix that truncated `cmd` against the full budget would still overflow
+ *  the glass by exactly the prefix's width. Exported so crtCommands.ts's
+ *  admin-editor warning checks the command field against the same number
+ *  the draw sites actually enforce, rather than a second, independently
+ *  guessed constant that could drift from it. */
+export const CRT_COMMAND_PREFIX = '> ';
+export const CRT_COMMAND_LINE_CHARS = CRT_LINE_CHARS - CRT_COMMAND_PREFIX.length;
+
+/** Renders one script step's command line exactly as both Home.svelte draw
+ *  sites must show it (#0397): the "> " prompt prefix followed by the
+ *  command text truncated to CRT_COMMAND_LINE_CHARS. A single shared helper
+ *  used at both call sites so they cannot diverge -- CLAUDE.md \u00a71: SPA logic
+ *  lives in lib/ so it is unit-testable without a DOM, and two call sites
+ *  that must agree are exactly what drifts apart when duplicated. */
+export function crtCommandLine(cmd: string): string {
+  return CRT_COMMAND_PREFIX + crtTruncate(cmd, CRT_COMMAND_LINE_CHARS);
+}
+
 /** "sat 12:30" style, matching the illustrative copy's register. Invalid or
  *  missing dates yield '' rather than "Invalid Date". */
 export function crtShortDate(iso: string): string {

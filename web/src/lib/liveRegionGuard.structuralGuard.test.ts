@@ -910,7 +910,7 @@ const KNOWN_STABLE_BRANCH_REASON_MAIN_FORM =
  * the sensitivity test below (`describe('KNOWN_STABLE_BRANCH_SITES recorded
  * count (#0406)')`) for proof that adding an entry alone does not also
  * satisfy this constant. */
-const KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT = 13;
+const KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT = 14;
 
 const KNOWN_STABLE_BRANCH_SITES: AllowlistEntry[] = [
   {
@@ -985,6 +985,13 @@ const KNOWN_STABLE_BRANCH_SITES: AllowlistEntry[] = [
     match: '<p class="text-warn" role="status">{crtOverBudgetWarning(draft.output) ?? \'\'}</p>',
     reason:
       "#0396: unconditionally rendered itself (not wrapped in its OWN {#if}) inside {#if editing[c.id]}, the per-row inline editor -- mounted once when an admin clicks Edit on that row and stays mounted for the whole editing session (command text, output textarea, source select, active checkbox: a full form, well past #0306's 8-element KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT threshold), not created or destroyed on account of this warning's own presence. The same argument already recorded for WorkshopEditor.svelte's unsavedInterestsHint above, applied to CrtCommands.svelte's row editor rather than its main form. An earlier version of this element omitted role=\"status\" specifically to avoid needing this entry -- shaping markup to keep the guard quiet rather than deciding what's accessible, which is what #0396 was filed to correct; the create form's identical warning (CrtCommands.svelte, always-mounted \"Add a command\" panel) was role=\"status\" from #0393 onward and needed no entry at all.",
+  },
+  {
+    file: 'web/src/views/admin/CrtCommands.svelte',
+    match:
+      '<p class="text-warn" role="status">{crtOverBudgetWarning(draft.command, CRT_COMMAND_LINE_CHARS) ?? \'\'}</p>',
+    reason:
+      "#0397: the command field's own over-budget warning, added beside the entry directly above inside the SAME {#if editing[c.id]} branch -- same mount lifecycle, same well-past-threshold branch size, same argument, just for the command input rather than the output textarea. The create form's equivalent (CrtCommands.svelte, always-mounted \"Add a command\" panel) again needed no entry, for the same reason the create form's output warning didn't.",
   },
 ];
 
@@ -1305,7 +1312,8 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
     //   WorkshopEditor.svelte previewStale         84  (was 1 before #0306's fix)
     //   WorkshopEditor.svelte saveNotice           84
     //   WorkshopEditor.svelte unsavedInterestsHint 84
-    //   CrtCommands.svelte per-row width warning   19  (#0396, added this pass)
+    //   CrtCommands.svelte per-row output warning  20  (#0396, +1 since -- #0397 added a sibling to the same branch)
+    //   CrtCommands.svelte per-row command warning 20  (#0397, added this pass -- same {#if editing[c.id]} branch as the entry above)
     //
     // #0396's transplant onto main re-measured all thirteen with the same
     // temporary-console.log technique rather than assuming the twelve
@@ -1316,9 +1324,12 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
     // carried forward. The drift is one-directional and harmless -- every
     // figure moved further ABOVE the floor, never toward it -- but leaving
     // known-stale numbers in a table whose whole purpose is to be checkable
-    // by hand would defeat it.
+    // by hand would defeat it. #0397 re-measured the CrtCommands.svelte row
+    // itself the same way: adding the new command-warning <p> to the
+    // {#if editing[c.id]} branch grew ITS OWN size by one element too (19 ->
+    // 20), since both entries share one governing branch.
     //
-    // All thirteen clear KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT (8)
+    // All fourteen clear KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT (8)
     // non-trivially -- the smallest margin is Pending.svelte's 12 (4 clear,
     // 50% above the floor), not a knife-edge fit. previewStale is the one
     // entry that did NOT clear it before #0306 (measured 1, an order of
@@ -1327,7 +1338,7 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
     // own reason for the account.
     //
     // #0406: re-derived by counting the array and the rows in the table just
-    // above -- both are thirteen, matching the prose, as of this pass. The
+    // above -- both are fourteen, matching the prose, as of this pass. The
     // assertion below is what keeps that agreement from being merely
     // asserted in English: it fails the moment an entry is added to or
     // removed from KNOWN_STABLE_BRANCH_SITES without also updating

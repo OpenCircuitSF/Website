@@ -47,6 +47,7 @@
     crtOverBudgetWarning,
     CRT_SOURCES,
     CRT_LINE_CHARS,
+    CRT_COMMAND_LINE_CHARS,
     CRT_SAVE_NOTE,
   } from '../../lib/crtCommands';
   import { formatDateTime } from '../../lib/admin';
@@ -94,6 +95,11 @@
   let createError = $state<string | null>(null);
 
   const newSlugInvalid = $derived(newSlug.trim() !== '' && !isValidCrtSlug(newSlug.trim()));
+  // #0397: the command line is drawn with a "> " prompt prefix at both
+  // Home.svelte draw sites (crtScreen.ts's crtCommandLine), so it warns
+  // against CRT_COMMAND_LINE_CHARS -- two characters narrower than the plain
+  // output budget -- not CRT_LINE_CHARS.
+  const newCommandWarning = $derived(crtOverBudgetWarning(newCommand, CRT_COMMAND_LINE_CHARS));
   const newOutputWarning = $derived(crtOverBudgetWarning(newOutput));
 
   async function submitCreate(e: SubmitEvent): Promise<void> {
@@ -283,6 +289,7 @@
         placeholder="fortune"
         oninput={() => (createError = null)}
       />
+      <p class="text-warn" role="status">{newCommandWarning ?? ''}</p>
     </div>
     <div class="field">
       <label for="new-crt-output">Output (one line per row)</label>
@@ -406,6 +413,9 @@
                         bind:value={draft.command}
                         disabled={savingId === c.id}
                       />
+                      <!-- #0397: same allowlisted branch as the output
+                           warning below -- see that element's comment. -->
+                      <p class="text-warn" role="status">{crtOverBudgetWarning(draft.command, CRT_COMMAND_LINE_CHARS) ?? ''}</p>
                     </div>
                     <div class="field">
                       <label for={`crt-edit-output-${c.id}`}>Output (one line per row)</label>

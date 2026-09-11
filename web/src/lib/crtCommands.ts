@@ -5,9 +5,9 @@
 // this file is deliberately modelled on.
 
 import type { CrtCommand } from './types';
-import { CRT_LINE_CHARS } from './crtScreen';
+import { CRT_LINE_CHARS, CRT_COMMAND_LINE_CHARS } from './crtScreen';
 
-export { CRT_LINE_CHARS };
+export { CRT_LINE_CHARS, CRT_COMMAND_LINE_CHARS };
 
 /** #0403: shown after a successful create/update/delete/reorder/active-toggle
  *  in the CRT session admin section, via CrtCommands.svelte's `saveNote`
@@ -139,7 +139,10 @@ export function crtSourceLabel(source: string): string {
  *  page). Trailing empty lines are ignored, matching Command.Lines() /
  *  crtSessionToScript's own "trim trailing empties" convention server- and
  *  client-side, so an admin isn't warned about blank padding at the end of
- *  the textarea. */
+ *  the textarea. #0397: CrtCommands.svelte also calls this on the single-line
+ *  command field, passing CRT_COMMAND_LINE_CHARS as `max` since that line is
+ *  drawn with a "> " prefix at render time (crtScreen.ts's crtCommandLine)
+ *  and so has two characters less room than a plain output line. */
 export function crtOverBudgetLines(output: string, max: number = CRT_LINE_CHARS): number[] {
   const lines = output.split('\n');
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
