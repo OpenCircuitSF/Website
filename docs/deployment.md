@@ -11,7 +11,7 @@ exercised**, because it did not exercise all of them:
 | Section | Status |
 |---|---|
 | Production facts, prerequisites, PostgreSQL, migrations, systemd, Apache, TLS, verification | **Followed on the real host** and corrected where it was wrong. The corrections are inline. |
-| SES setup, DNS records for DKIM / MAIL FROM / inbound, IAM policy, the account-level suppression list | **Still not followed by this row's original deploy.** SES was deliberately left unconfigured for that deploy so it could be set up afterwards — see "SES is not configured yet" below. No AWS SES identity existed at that point, and ~~**the instance has no IAM role attached at all**~~ **— corrected `#0426`, 2026-09-04: that has since changed.** A later pass (`docs/aws-iam-setup.md`, same day) attached the `opencircuit-instance` role and set up SES; `CLAUDE.md` §10 item 2 and the `## IAM` section below (also corrected, `#0426`) are the current-state record. |
+| SES setup, DNS records for DKIM / MAIL FROM / inbound, IAM policy, the account-level suppression list | **Still not followed by this row's original deploy.** SES was deliberately left unconfigured for that deploy so it could be set up afterwards — see "SES is not configured yet" below. No AWS SES identity existed at that point, and ~~**the instance has no IAM role attached at all**~~ **— corrected `#0426`, 2026-09-04: that has since changed.** A later pass (`docs/aws-iam-setup.md`, same day) attached the `opencircuit-instance` role and set up SES; `CLAUDE.md` §10 item 2 and the `## IAM` section below (also corrected, `#0426`) recorded that as the current state at the time. **Superseded (`#0508`, 2026-09-12): that instance is now decommissioned and the live box carries `opencircuit-web-2026` instead** — see both sections' own corrections. |
 | Backups (`opencircuit-backup.timer` and friends) | **Not installed yet.** The units exist in `deploy/systemd/`; nothing on the box runs them. `#0435` (2026-09-08) re-confirmed this read-only, found a second blocker (the on-box checkout is missing `#0434`'s media-backup scripts), and wrote an approval-ready fix in `deploy/systemd/README.md` — see the "Backups" section below. |
 
 So `#0064`'s acceptance criterion — "the whole runbook followed once on a
@@ -100,12 +100,13 @@ guessed.
 
 | Fact | Value |
 |---|---|
-| Instance ID | `i-0e3bd89e87d1c2364`, hostname `bluesky.sstools.co` |
-| Instance size / type | `t4g.nano` (ARM/Graviton, Amazon Linux 2023, kernel 6.1 aarch64) — **not** the `t4g.small` PRD §10.1 assumes. 418 MB RAM, backed by a 418 MB zram device plus a 2 GB swapfile; 20 GB root, 53% used. `opencircuit` itself sits at ~14 MB RSS, so the box is tight rather than strained — but it also runs Apache, PostgreSQL, two ShortLinks instances and a prototypes service. `go build` is the memory-hungry step; it succeeds, but it is the thing to suspect if a deploy is ever OOM-killed. |
-| Region | **`us-east-1`** (az `us-east-1b`) — **not** the `us-west-2` PRD §10.3 assumed (§10.1 is the topology diagram and never named a region — this cell's own citation dangled on that point until now, #0421, 2026-09-04). ~~PRD §10.3 picks `us-west-2` for *SES*, which is a separate choice from where the instance lives.~~ **Correction (#0418, 2026-09-03):** SES is in `us-east-1` too — the instance and SES share one region, verified against instance metadata `placement/region` and `AWS_REGION` in `/etc/opencircuit/config.env`. PRD §10.3 has been corrected to match. Inbound receiving (PRD §6.5 path 3) is the region-pinned part and pins to that same region. |
-| Public IP / DNS | `44.222.209.183`. `www.opencircuitsf.com` and `opencircuitsf.com` are A records to it; `go.opencircuitsf.com` is a CNAME to `ec2.smallsharptools.com`, which resolves to the same address. |
-| SSH access | `ssh ec2` from the maintainer's Mac — host `ec2.sstools.co`, user `ec2-user`, key `~/.ssh/sstools-ec2.pem`. `ssh ec2-db` is the same host plus a `LocalForward 15432 → localhost:5432` Postgres tunnel (port 15432, not 5432, because a local PostgreSQL already owns 5432 on the Mac). |
-| IAM instance role | ~~**None attached** — the instance metadata service 404s `iam/security-credentials/`. This is the reason SES cannot work yet even after the domain is verified: the AWS SDK's default credential chain has nothing to find, so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false.~~ **Correction (`#0426`, 2026-09-04):** attached — `opencircuit-instance`. Re-derived for this issue directly from the instance metadata service (`iam/security-credentials/`, read-only via `ssh ec2`), not copied from the filing; `CLAUDE.md` §10 item 2 already records this role as attached and proven by a real delivered send. Attaching a role with `ses:SendEmail`/`ses:SendRawEmail` was the prerequisite `CLAUDE.md` §10 item 2 named, and is now done — the `## IAM` section below (also corrected, `#0426`) describes the policy's actual shape. certbot's renewal never depended on this role — see the certbot row. |
+| Instance ID | ~~`i-0e3bd89e87d1c2364`, hostname `bluesky.sstools.co`~~ **Correction (`#0508`, 2026-09-12): production moved to a different instance.** The one above is decommissioned as far as this service is concerned. Current: `i-01c45429c78f3adf7`, hostname `photon.sstools.co`. |
+| Instance size / type | ~~`t4g.nano` (ARM/Graviton, Amazon Linux 2023, kernel 6.1 aarch64) — **not** the `t4g.small` PRD §10.1 assumes. 418 MB RAM, backed by a 418 MB zram device plus a 2 GB swapfile; 20 GB root, 53% used. `opencircuit` itself sits at ~14 MB RSS, so the box is tight rather than strained — but it also runs Apache, PostgreSQL, two ShortLinks instances and a prototypes service. `go build` is the memory-hungry step; it succeeds, but it is the thing to suspect if a deploy is ever OOM-killed.~~ **Correction (`#0508`, 2026-09-12):** the new box (`i-01c45429c78f3adf7`) is a `t4g.small` — PRD §10.1's original assumption, ironically now the true one — with **1846 MB RAM**, 2 vCPU, and 30 GB disk (23 GB free). 4.4× the old RAM; the tight-memory framing above no longer applies with the same force, though `go build` is moot regardless — **see the next row**, the new box has no Go toolchain at all. |
+| Region | **`us-east-1`** (az `us-east-1b`) — **not** the `us-west-2` PRD §10.3 assumed (§10.1 is the topology diagram and never named a region — this cell's own citation dangled on that point until now, #0421, 2026-09-04). ~~PRD §10.3 picks `us-west-2` for *SES*, which is a separate choice from where the instance lives.~~ **Correction (#0418, 2026-09-03):** SES is in `us-east-1` too — the instance and SES share one region, verified against instance metadata `placement/region` and `AWS_REGION` in `/etc/opencircuit/config.env`. PRD §10.3 has been corrected to match. Inbound receiving (PRD §6.5 path 3) is the region-pinned part and pins to that same region. Unchanged by `#0508`'s instance replacement — the new box is also `us-east-1`. |
+| No Go toolchain on the new box | **New row, `#0509`, 2026-09-12.** `photon` has no `go` on `PATH` and none at the usual fixed locations. The build-on-box procedure documented below (`## Deploy (updates)`) cannot run there as written. `#0509` (open) owns deciding the replacement — install Go on the new box, or cross-compile locally and ship the binary; do not assume either here. |
+| Public IP / DNS | ~~`44.222.209.183`. `www.opencircuitsf.com` and `opencircuitsf.com` are A records to it; `go.opencircuitsf.com` is a CNAME to `ec2.smallsharptools.com`, which resolves to the same address.~~ **Correction (`#0508`, 2026-09-12):** `www.opencircuitsf.com`, the apex, and `go.opencircuitsf.com` now all resolve to **`98.84.75.184`** (the new instance's IP, confirmed by `dig`) via the zone's `*.opencircuitsf.com` A-record wildcard (not a CNAME — see `#0057`'s DNS correction below). `ec2.smallsharptools.com` still resolves to the *old* IP, `44.222.209.183` — that name was never repointed, and the old box is still up (still answering, just no longer serving this vhost). |
+| SSH access | ~~the alias formerly named `ec2`, from the maintainer's Mac — host `ec2.sstools.co`, user `ec2-user`, key `~/.ssh/sstools-ec2.pem`. A second alias was the same host plus a `LocalForward 15432 → localhost:5432` Postgres tunnel (port 15432, not 5432, because a local PostgreSQL already owns 5432 on the Mac).~~ **Correction (`#0508`, 2026-09-12):** `ssh photon` — already configured in `~/.ssh/config`, verified working (`ec2-user@photon.sstools.co`). The old tunnel alias has not been re-created for the new host as part of this doc fix; confirm it exists before relying on it. |
+| IAM instance role | ~~**None attached** — the instance metadata service 404s `iam/security-credentials/`. This is the reason SES cannot work yet even after the domain is verified: the AWS SDK's default credential chain has nothing to find, so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false.~~ ~~**Correction (`#0426`, 2026-09-04):** attached — `opencircuit-instance`. Re-derived for this issue directly from the instance metadata service (`iam/security-credentials/`, read-only on the box), not copied from the filing; `CLAUDE.md` §10 item 2 already records this role as attached and proven by a real delivered send. Attaching a role with `ses:SendEmail`/`ses:SendRawEmail` was the prerequisite `CLAUDE.md` §10 item 2 named, and is now done — the `## IAM` section below (also corrected, `#0426`) describes the policy's actual shape. certbot's renewal never depended on this role — see the certbot row.~~ **Correction (`#0508`, 2026-09-12):** that role and that instance are both gone. The live box carries **`opencircuit-web-2026`** instead. The permission shape described in the `## IAM` section below should still apply — verify it against the new role name rather than assuming. certbot's renewal still does not depend on this role. |
 | `DocumentRoot` (former static placeholder) | `/var/www/vhosts/www.opencircuitsf.com`. The placeholder HTML is no longer reachable — the Go service answers `/` — but the directory stays, because `/.well-known/` is still served from disk out of it. See "The `/.well-known/` exception" below. |
 | Installed vhost file(s) | `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf` (the proxy vhost) and `001-www.opencircuitsf.com.conf` (port 80 → HTTPS). The apex and every other `*.opencircuitsf.com` name is redirected to `www` by `002-opencircuitsf.com{,-le-ssl}.conf`, which sort *after* the 001 files. **These are not copies of `deploy/apache/opencircuitsf.com.conf`.** That file is one self-contained vhost that does its own apex→www redirect; the box splits the same behaviour across the certbot-managed 001/002 pair it already had, and adding the repo file verbatim would duplicate `ServerName www.opencircuitsf.com`. Edit the installed files; treat the repo file as the reference for the proxy / header / CSP block only. |
 | certbot renewal schedule | `certbot-renew.timer` (systemd), firing twice daily at 00:00 and 12:00 UTC. The cert named `opencircuitsf.com` is a single ECDSA **wildcard** covering `opencircuitsf.com` and `*.opencircuitsf.com`, so one cert serves `www`, `go`, and any future subdomain. The authenticator is **`dns-route53`**, not `--apache`: renewal proves control over the domain through a Route 53 TXT record and never reads the vhosts or `/.well-known/acme-challenge`, so no Apache change in this project can break it. Expiry at deploy time: 2026-11-16. |
@@ -236,11 +237,14 @@ production facts above, it likely does) or is provisioned fresh. Confirm what
 is already installed before reinstalling anything — Apache and PostgreSQL are
 already on the box per `CLAUDE.md` §7.
 
-- **EC2 instance**, Amazon Linux 2023. The real one is a **`t4g.nano`** in
+- **EC2 instance**, Amazon Linux 2023. The real one is a **`t4g.small`** in
   `us-east-1` — ARM/Graviton, so every arch-specific tarball below needs the
-  `arm64` build, not `amd64`. PRD §10.1's `t4g.small` assumption is one size
-  too large; the box has 418 MB of RAM plus swap, which is enough but leaves
-  little headroom during `go build`.
+  `arm64` build, not `amd64`. (**Corrected `#0508`, 2026-09-12**: production
+  moved from a `t4g.nano` with 418 MB RAM — where PRD §10.1's `t4g.small`
+  assumption was one size too large — to a `t4g.small` with 1846 MB, matching
+  the PRD after all. The new box also has no Go toolchain installed; see
+  `#0509` before assuming the build-on-box steps below can run there
+  unmodified.)
 - **Apache (`httpd`) with `mod_ssl`, `mod_proxy`, `mod_proxy_http`,
   `mod_rewrite`, and `mod_headers`.** Already on the box per `CLAUDE.md` §7;
   if provisioning fresh:
@@ -672,17 +676,17 @@ below without re-checking; re-derive them yourself first if time has passed**
 measured:
 
 ```
-$ ssh ec2 stat -c '%U:%G %a %n' /var/www/media
+$ ssh photon stat -c '%U:%G %a %n' /var/www/media
 ec2-user:ec2-user 755 /var/www/media          # no setgid bit (mode is exactly 755, not 2755/2775)
 
-$ ssh ec2 id opencircuit
+$ ssh photon id opencircuit
 uid=990(opencircuit) gid=990(opencircuit) groups=990(opencircuit)   # no supplementary groups
 
-$ ssh ec2 systemctl show opencircuit.service -p ProtectSystem -p ReadWritePaths
+$ ssh photon systemctl show opencircuit.service -p ProtectSystem -p ReadWritePaths
 ProtectSystem=strict
 ReadWritePaths=                                # empty — nothing exempted yet
 
-$ ssh ec2 df -h /
+$ ssh photon df -h /
 Filesystem      Size  Used Avail Use% Mounted on
 /dev/nvme0n1p1   20G   11G  9.1G  55% /
 ```
@@ -690,13 +694,13 @@ Filesystem      Size  Used Avail Use% Mounted on
 Also confirmed, read-only, and load-bearing for the questions below:
 
 ```
-$ ssh ec2 id apache
+$ ssh photon id apache
 uid=48(apache) gid=48(apache) groups=48(apache)
 
-$ ssh ec2 id postgres
+$ ssh photon id postgres
 uid=26(postgres) gid=26(postgres) groups=26(postgres)
 
-$ ssh ec2 systemctl cat opencircuit-backup.service
+$ ssh photon systemctl cat opencircuit-backup.service
 No files found for opencircuit-backup.service.   # #0434/#0435's timer is not installed yet either
 ```
 
@@ -722,20 +726,22 @@ would therefore install the *old* unit unchanged — no error, no
 `ReadWritePaths=`, and the write would keep failing in a way that looks like
 step 1 never took effect. **`scp` this one file, not `git pull`:** a
 `git pull` would also bring every other commit since `ef0a58f`, including a
-`go build`/`npm run build` this box's 418 MB of RAM makes expensive
-(`CLAUDE.md` §7), to update a single unit file that needs neither. Run from
+`go build`/`npm run build` — memory-hungry on the old `t4g.nano` this
+guidance was written against, and **not even possible on the current box**
+(`#0508`/`#0509`: the live instance has no Go toolchain installed at all) —
+to update a single unit file that needs neither. Run from
 the local repo checkout, not on the box:
 
 ```bash
 scp deploy/systemd/opencircuit.service \
-  ec2:/opt/opencircuit/deploy/systemd/opencircuit.service
+  photon:/opt/opencircuit/deploy/systemd/opencircuit.service
 ```
 
 Then confirm the bytes landed correctly (recompute the left-hand value
 locally with `shasum -a 256` if `main` has moved since this was written):
 
 ```bash
-ssh ec2 sha256sum /opt/opencircuit/deploy/systemd/opencircuit.service
+ssh photon sha256sum /opt/opencircuit/deploy/systemd/opencircuit.service
 ```
 
 Expect:
@@ -791,7 +797,7 @@ something answered, not that the right bytes did. `#0417` recorded both
 files' sizes and dimensions; re-derived here with an independent SHA-256:
 
 ```bash
-ssh ec2 sha256sum /var/www/media/programming_leds.jpg /var/www/media/soldering.jpg
+ssh photon sha256sum /var/www/media/programming_leds.jpg /var/www/media/soldering.jpg
 ```
 
 Expect exactly:
@@ -807,7 +813,7 @@ Also confirm the files' own ownership and mode are untouched — only the
 *directory's* group and mode change, never the files':
 
 ```bash
-ssh ec2 stat -c '%U:%G %a %n' /var/www/media/programming_leds.jpg /var/www/media/soldering.jpg
+ssh photon stat -c '%U:%G %a %n' /var/www/media/programming_leds.jpg /var/www/media/soldering.jpg
 #   ec2-user:ec2-user 644 /var/www/media/programming_leds.jpg
 #   ec2-user:ec2-user 644 /var/www/media/soldering.jpg
 ```
@@ -1223,22 +1229,24 @@ fails at its first command, `sudo install -m 0755 deploy/certbot/
 reload-apache-deploy-hook.sh …`, with "No such file or directory" until this
 is done. **`scp` this one file, not `git pull`:** the checkout is several
 hundred commits behind `main` and a `git pull` would also pull in a
-`go build`/`npm run build` this box's 418 MB of RAM makes expensive
-(`CLAUDE.md` §7), for a change that needs neither the new binary nor the
+`go build`/`npm run build` — memory-hungry on the old `t4g.nano` this
+guidance was written against, and **not even possible on the current box**
+(`#0508`/`#0509`: the live instance has no Go toolchain installed at all) —
+for a change that needs neither the new binary nor the
 SPA — only this one script. Run from the local repo checkout, not on the
 box:
 
 ```bash
-ssh ec2 mkdir -p /opt/opencircuit/deploy/certbot
+ssh photon mkdir -p /opt/opencircuit/deploy/certbot
 scp deploy/certbot/reload-apache-deploy-hook.sh \
-  ec2:/opt/opencircuit/deploy/certbot/reload-apache-deploy-hook.sh
+  photon:/opt/opencircuit/deploy/certbot/reload-apache-deploy-hook.sh
 ```
 
 Then confirm the bytes landed correctly (recompute the left-hand value
 locally with `shasum -a 256` if `main` has moved since this was written):
 
 ```bash
-ssh ec2 sha256sum /opt/opencircuit/deploy/certbot/reload-apache-deploy-hook.sh
+ssh photon sha256sum /opt/opencircuit/deploy/certbot/reload-apache-deploy-hook.sh
 ```
 
 Expect:
@@ -1372,6 +1380,17 @@ link to stdout — that is the closest thing to a proof this step has.
 ---
 
 ## DNS (Route 53) — real values from `PRD.md` §10.2
+
+> **Partial correction (`#0508`, 2026-09-12) — re-measured by `dig` while
+> fixing this issue, not a full reconciliation.** `www.opencircuitsf.com`,
+> the bare apex, and `go.opencircuitsf.com` now all resolve directly to
+> **`98.84.75.184`** (production's new IP — see `CLAUDE.md` §7), not the
+> `44.222.209.183`/`ec2.smallsharptools.com` values the rows below still
+> show. Whether the record *type* is still CNAME-to-`ec2.smallsharptools.com`
+> underneath, or has become a direct A record, was not re-verified row by
+> row here — that fuller reconciliation is `#0504`'s and `#0427`'s scope, not
+> this issue's. Treat every `44.222.209.183`/`ec2.smallsharptools.com` value
+> below as unconfirmed until one of those closes.
 
 | Name | Type | Value | Purpose |
 |---|---|---|---|
@@ -1588,9 +1607,17 @@ credential chain picks up the instance role automatically
 
 **The role is attached** — `opencircuit-instance`. Re-derived for this issue
 (`#0426`, 2026-09-04) directly from the instance metadata service
-(`iam/security-credentials/`, read-only via `ssh ec2`), not copied from the
+(`iam/security-credentials/`, read-only on the box), not copied from the
 filing; `CLAUDE.md` §10 item 2 already records it as attached and proven by
 a real delivered send.
+
+**Correction (`#0508`, 2026-09-12) — that instance and role are gone.**
+Production runs on a different box now (`i-01c45429c78f3adf7`,
+`photon.sstools.co`), carrying IAM role **`opencircuit-web-2026`** in place
+of `opencircuit-instance`. The JSON policy below describes the permission
+shape that should be attached to the *current* role; it has not been
+independently re-verified against `opencircuit-web-2026` as part of this
+pass.
 
 The JSON below matches `PRD.md` §10.5's **target** shape, including the
 `InboundBucketScoped` statement for the inbound `mailto:` path (`#0057`),
@@ -2530,9 +2557,15 @@ one question, not by habit (`#0467`): does the change need a rebuilt Go
 binary or a rebuilt SPA?** If yes, this section's `git pull` is already the
 right and necessary first step — a real redeploy pays for the rebuild anyway,
 so paying once to also bring the checkout current at the same time is free.
-If no — a single config file, unit file, or standalone script that the
-running binary does not embed — a `git pull` here would force that same
-rebuild for no reason, on a box with 418 MB of RAM (`CLAUDE.md` §7), while
+**Corrected (`#0508`/`#0509`, 2026-09-12): on the current box this "yes"
+branch cannot run at all as written — `photon` has no Go toolchain installed,
+so a `go build` on the box fails outright, not just expensively. `#0509`
+(open) owns picking a replacement (install Go, given the new box's 1846 MB
+RAM makes that far less painful than it was on the old 418 MB `t4g.nano`; or
+cross-compile locally and ship the binary) before this branch is usable
+again.** If no — a single config file, unit file, or standalone script that
+the running binary does not embed — a `git pull` here would force that same
+rebuild for no reason, while
 also landing every other unreleased commit onto the production checkout at
 once. `#0447`, `#0465`, and `#0435`'s prepared instructions (`#0466`) each
 answered "no" and chose a targeted `scp` of the one file each needed,

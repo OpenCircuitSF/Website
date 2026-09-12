@@ -184,8 +184,8 @@ local checkout of this repo, byte for byte — is what the rest of this section
 assumes. Run from the local machine, **not** on the box:
 
 ```bash
-scp scripts/db/backup-media.sh scripts/db/restore-media.sh ec2:/opt/opencircuit/scripts/db/
-scp deploy/systemd/opencircuit-backup.service ec2:/opt/opencircuit/deploy/systemd/opencircuit-backup.service
+scp scripts/db/backup-media.sh scripts/db/restore-media.sh photon:/opt/opencircuit/scripts/db/
+scp deploy/systemd/opencircuit-backup.service photon:/opt/opencircuit/deploy/systemd/opencircuit-backup.service
 ```
 
 Then confirm the bytes landed correctly (values below match this repo's
@@ -193,7 +193,7 @@ Then confirm the bytes landed correctly (values below match this repo's
 `shasum -a 256` instead of trusting these):
 
 ```bash
-ssh ec2 sha256sum /opt/opencircuit/scripts/db/backup-media.sh /opt/opencircuit/scripts/db/restore-media.sh /opt/opencircuit/deploy/systemd/opencircuit-backup.service
+ssh photon sha256sum /opt/opencircuit/scripts/db/backup-media.sh /opt/opencircuit/scripts/db/restore-media.sh /opt/opencircuit/deploy/systemd/opencircuit-backup.service
 ```
 
 Expect:
@@ -217,7 +217,7 @@ Install and enable the timer (the `.service` files are triggered, not
 enabled directly — see the "No `[Install]` section" note in
 `opencircuit-backup.service`):
 
-Everything from here on runs **on the box** (`ssh ec2`).
+Everything from here on runs **on the box** (`ssh photon`).
 
 ```bash
 cd /opt/opencircuit/deploy/systemd

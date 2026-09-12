@@ -122,6 +122,14 @@ sandbox is enough to develop against; it is not enough to launch.
 > `assumed-role/opencircuit-instance/i-0e3bd89e87d1c2364` and sends
 > successfully. See [`aws-iam-setup.md`](aws-iam-setup.md).
 >
+> **Correction (`#0508`, 2026-09-12):** that instance is decommissioned as
+> far as this service is concerned. Production now runs on
+> `i-01c45429c78f3adf7` (`photon.sstools.co`), and the role actually
+> attached there is **`opencircuit-web-2026`**, not `opencircuit-instance`.
+> The same `opencircuit-ses-send` permission shape applies — it was
+> presumably recreated for the new role when the box was provisioned — but
+> re-verify it there rather than assuming; see `CLAUDE.md` §7.
+>
 > **One trap, recorded because it cost a live debugging round:** the policy's
 > `Resource` must be `identity/*`, not just the sending domain's identity.
 > While the account is in the **sandbox**, SES authorizes `SendEmail` against
@@ -465,10 +473,13 @@ confirmed first.
 
 **10. A11 — grant the instance role read/delete on the prefix, not the
 bucket.** Last, because nothing reads the bucket until `#0058`'s deployed
-code does:
+code does. **Corrected (`#0508`, 2026-09-12):** the plan's original
+`--role-name opencircuit-instance` targets the now-decommissioned instance's
+role. The live box runs `i-01c45429c78f3adf7` (`photon.sstools.co`) and
+carries the role **`opencircuit-web-2026`** instead — grant to that:
 
 ```bash
-aws iam put-role-policy --role-name opencircuit-instance \
+aws iam put-role-policy --role-name opencircuit-web-2026 \
   --policy-name opencircuit-inbound-s3 \
   --policy-document file://deploy/aws/A11-iam-inline-policy.json
 ```
@@ -525,7 +536,7 @@ reverse for the parts that were actually created this pass:
 | `aws sns delete-topic` on `opencircuit-inbound-mail` | removes A6/A7 |
 | Empty then delete the bucket `opencircuitsf-inbound` | removes A2–A5 — **but this bucket predates this pass; confirm nothing else depends on it before deleting** |
 | Delete the D1 record set, delete the SES identity `lists.opencircuitsf.com` | removes the verification — again, both predate this pass |
-| `aws iam delete-role-policy --role-name opencircuit-instance --policy-name opencircuit-inbound-s3` | removes the instance-role grant |
+| `aws iam delete-role-policy --role-name opencircuit-web-2026 --policy-name opencircuit-inbound-s3` | removes the instance-role grant (role name corrected `#0508`, 2026-09-12 — see step 10 above) |
 
 **Confirm apex mail still flows** after any of the above, especially after
 D2:

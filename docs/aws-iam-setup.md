@@ -7,6 +7,20 @@ finish, and why each piece exists.
 measured against account `378152330719` — the policy names, ARNs, and instance
 ID are the real ones, not examples.
 
+> **Correction (`#0508`, 2026-09-12): production is a different instance now.**
+> The box this document was written against (`i-0e3bd89e87d1c2364`,
+> `bluesky.sstools.co`, reached by the alias formerly named `ec2`) is dead as
+> far as this service is concerned. Production runs on
+> **`i-01c45429c78f3adf7`** (`photon.sstools.co`, reached by **`ssh photon`**,
+> a `t4g.small`), and the role actually attached there is
+> **`opencircuit-web-2026`**, not `opencircuit-instance`. See `CLAUDE.md` §7
+> for the current facts. Everything below — the fact table, the role name,
+> the old SSH alias, and the instance ID — describes the original setup pass
+> against the now-decommissioned host. The permission shapes (Part 2's
+> `opencircuit-ses-send` policy, and the S3 grant `#0057`'s A11 needs) are
+> still the right ones to apply; apply them to `opencircuit-web-2026`, the
+> role the live box actually uses.
+
 ---
 
 ## The short version
@@ -21,7 +35,9 @@ follows is left as the runbook that got it there and as the reference for
 the policy's actual shape (Part 2, which already stated the corrected
 `identity/*` region and ARN this issue used to fix `docs/deployment.md`'s
 `## IAM` section) — Parts 1 and 3 describe one-time setup steps that do not
-need repeating.
+need repeating. **(That was `i-0e3bd89e87d1c2364`. `#0508`, 2026-09-12: the
+live box is now `i-01c45429c78f3adf7`/`photon.sstools.co`, carrying
+`opencircuit-web-2026` instead — see the correction note above.)**
 
 ~~The EC2 instance has **no IAM role attached**, so the running service has no
 AWS credentials at all and cannot call SES no matter how well SES itself is
@@ -56,7 +72,7 @@ hand instead.
 
 The instance and SES both sit in `us-east-1` — confirmed against
 `/etc/opencircuit/config.env`, which sets `AWS_REGION=us-east-1`, read-only
-via `ssh ec2`. (This row previously described the instance and SES as being
+on the box. (This row previously described the instance and SES as being
 in different regions, which was itself downstream of the `us-west-2` error
 above; IAM stays global regardless, and the SDK reaches SES in whatever
 region `AWS_REGION` names.)
@@ -338,24 +354,28 @@ From your Mac (read-only is enough):
 
 ```bash
 AWS_PROFILE=admin aws ec2 describe-instances \
-  --instance-ids i-0e3bd89e87d1c2364 \
+  --instance-ids i-01c45429c78f3adf7 \
   --query 'Reservations[].Instances[].IamInstanceProfile' --output json
 ```
 
-Expect the profile ARN, not `null`.
+Expect the profile ARN, not `null`. (`i-01c45429c78f3adf7` is the current
+production instance, `photon.sstools.co` — see the correction note above;
+the original `i-0e3bd89e87d1c2364` is decommissioned as far as this service
+is concerned.)
 
 Then on the box — this is the check that actually matters, because it proves
 the *instance* can reach credentials, not just that a role exists:
 
 ```bash
-ssh ec2 'TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+ssh photon 'TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
   -H "X-aws-ec2-metadata-token-ttl-seconds: 60"); \
   curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
   http://169.254.169.254/latest/meta-data/iam/security-credentials/'
 ```
 
-Expect `opencircuit-instance`. Before the role is attached this returns a 404
-HTML body, which is the current state and is exactly how the gap was found.
+Expect `opencircuit-web-2026` (the role name the live box carries; the
+original `opencircuit-instance` role lived on the now-decommissioned
+instance). Before a role is attached this returns a 404 HTML body.
 
 ---
 

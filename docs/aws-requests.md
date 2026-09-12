@@ -9,6 +9,16 @@ and the sources are named so you can re-derive them rather than trust them.
 named it; both have since been corrected (`#0418`); the instance, the SES
 identity, the configuration set and the MAIL FROM MX are all in `us-east-1`.
 
+> **Correction (`#0508`, 2026-09-12): the instance named throughout this
+> document is decommissioned.** Everything below was measured against
+> `i-0e3bd89e87d1c2364` (`bluesky.sstools.co`), which no longer serves this
+> project. Production now runs on **`i-01c45429c78f3adf7`**
+> (`photon.sstools.co`, a `t4g.small`), carrying IAM role
+> **`opencircuit-web-2026`** in place of `opencircuit-instance`. Any AWS
+> object grant or IAM change below (A11 in particular) must target the new
+> instance/role, not the values dated 2026-09-04/05/11 in the sections that
+> follow. See `CLAUDE.md` §7 for the current facts.
+
 ---
 
 ## Guardrails — read before anything else
@@ -106,7 +116,7 @@ used only to construct a `mailto:` header.
 | A8 | SES receipt rule set | `opencircuit-inbound` | **or a rule added to the already-active set**, per Part 1 |
 | A9 | SES receipt rule | `unsubscribe` in A8 | see below |
 | A10 | Activate A8 | `SetActiveReceiptRuleSet` | **the account-wide step** |
-| A11 | IAM inline policy | `opencircuit-inbound-s3` on role `opencircuit-instance` | `s3:GetObject`, `s3:DeleteObject` on `arn:aws:s3:::opencircuitsf-inbound/unsubscribe/*` — **the prefix, not the bucket** |
+| A11 | IAM inline policy | `opencircuit-inbound-s3` on role `opencircuit-web-2026` (corrected `#0508` — the live box's role, not the decommissioned `opencircuit-instance`) | `s3:GetObject`, `s3:DeleteObject` on `arn:aws:s3:::opencircuitsf-inbound/unsubscribe/*` — **the prefix, not the bucket** |
 
 **A9's shape:**
 
@@ -227,11 +237,13 @@ Read live on 2026-09-04/05, read-only, with the rows below re-measured
 
 - Instance `i-0e3bd89e87d1c2364`, region `us-east-1`, AZ `us-east-1b` — IMDS
   `placement/region` and `placement/availability-zone`, read on the box
-  2026-09-04
+  2026-09-04. **That instance is decommissioned (`#0508`, 2026-09-12); the
+  live one is `i-01c45429c78f3adf7` (`photon.sstools.co`), same region.**
 - Instance role **`opencircuit-instance`** is attached (three ways: IMDS
   `iam/security-credentials/`, `iam/info`, and `sts get-caller-identity`
   returning `assumed-role/opencircuit-instance/i-0e3bd89e87d1c2364`), read on
-  the box 2026-09-04
+  the box 2026-09-04. **Superseded (`#0508`): the live instance carries
+  `opencircuit-web-2026` instead — see the correction note above and A11.**
 - Sending identity `mailing.opencircuitsf.com`, DKIM and SPF present —
   `aws route53 list-resource-record-sets` / `dig TXT mailing.opencircuitsf.com`,
   2026-09-04, re-confirmed 2026-09-11

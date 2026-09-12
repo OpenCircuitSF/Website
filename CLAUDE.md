@@ -79,7 +79,7 @@ belong in this tracker.
   **Production's applied version, read-only, self-dating — re-derive it
   yourself before trusting a number here, never carry a snapshot forward:**
 
-      ssh ec2
+      ssh photon
       sudo bash -c "source /etc/opencircuit/config.env && psql \"\$DATABASE_URL\" -tAc \"select version, dirty from schema_migrations\""
 
   As of **2026-09-03** that returns `22|f` — so **`000001`–`000022` are
@@ -607,12 +607,22 @@ message sent to a segment) share a word and nothing else.
 | | |
 |---|---|
 | Canonical host | **`https://www.opencircuitsf.com`** — the apex and plain HTTP both 301 to it |
-| Server | `i-0e3bd89e87d1c2364`, a **`t4g.nano`** (arm64) in **`us-east-1`**, hostname `bluesky.sstools.co`, public IP `44.222.209.183`. Apache 2.4.68 on Amazon Linux 2023, OpenSSL 3.5.7. `ssh ec2` gets you there. |
+| Server | `i-01c45429c78f3adf7`, a **`t4g.small`** (arm64, 2 vCPU) in **`us-east-1`**, hostname `photon.sstools.co`, public IP `98.84.75.184`. Apache 2.4.68 on Amazon Linux 2023, OpenSSL 3.5.7. `ssh photon` gets you there — already configured, verified working. IAM instance role **`opencircuit-web-2026`**. |
 | TLS | Let's Encrypt **wildcard** (`opencircuitsf.com` + `*.opencircuitsf.com`), ECDSA, valid to 2026-11-16, renewed by `certbot-renew.timer` via the **`dns-route53`** authenticator — so renewal never touches a vhost or an ACME webroot |
-| Already on the box | PostgreSQL **15.18** (one cluster, also holding `shortlinks` and `shortlinks_ocsf`) and Apache. Ports `:8081`/`:8083` are two ShortLinks instances, `:8082` is prototypes; this project owns **`:8080`**. |
+| Already on the box | PostgreSQL **15.19** (one cluster, also holding `shortlinks` and `shortlinks_ocsf`) and Apache. Ports `:8081`/`:8083` are two ShortLinks instances, `:8082` is prototypes; this project owns **`:8080`**. |
 | Currently served | **This project, since 2026-08-25.** `opencircuit.service` on `127.0.0.1:8080` behind `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf`. The static placeholder is gone. |
 | The one static exception | **`/.well-known/` is still served from disk**, out of `/var/www/vhosts/www.opencircuitsf.com/.well-known/`, via `ProxyPass /.well-known/ !` + `Alias` ahead of the proxy rules. It holds `atproto-did` — this domain's Bluesky DID. **The Go service 404s that path**, so removing the exception silently breaks Bluesky handle verification. Verify by hash, not by status code, after any Apache change: `curl -s https://www.opencircuitsf.com/.well-known/atproto-did \| shasum -a 256` → `4198e742…5948d`. |
-| Machine size is real | 418 MB RAM plus swap on the `t4g.nano`, shared with Apache, PostgreSQL, and three other Go services. `go build` is the memory-hungry step of a deploy. |
+| Machine size is real, but less tight than it was | **1846 MB RAM, 30 GB disk (23 GB free)** on the `t4g.small`, shared with Apache, PostgreSQL, and three other Go services — 4.4× the previous box's RAM (see the note below). `go build` is still the memory-hungry step of a deploy where it runs at all, but **the new box has no Go toolchain installed** (`#0509`, open) — the build-on-box procedure in `docs/deployment.md` cannot run there as written until that issue picks a replacement (install Go, or cross-compile and ship the binary). |
+
+> **Production moved to a new instance (`#0508`, 2026-09-12).** The row above
+> describes `i-01c45429c78f3adf7` (`photon.sstools.co`), which is what
+> actually serves `www.opencircuitsf.com` today. The original deploy-day box —
+> `i-0e3bd89e87d1c2364`, `bluesky.sstools.co`, `44.222.209.183`, a `t4g.nano`
+> with 418 MB RAM, IAM role `opencircuit-instance`, reached by the alias that
+> used to be named `ec2` — is powered down as far as this service is
+> concerned; its Apache still answers on that name but 503s this vhost. Any
+> instruction anywhere in this repo that still names the old host, alias, or
+> role is stale and should be corrected on sight.
 
 ```env
 WEBAUTHN_RP_ID=opencircuitsf.com                   # apex — one passkey covers apex and www
@@ -1201,7 +1211,7 @@ stall silently on one.
 | # | Item | Blocks | Status |
 |---|---|---|---|
 | 1 | Rename the GitHub repo to `OpenCircuitSF` | `#0001` housekeeping | not done |
-| 2 | SES — **production access is the only piece left** | real sends to non-verified addresses | **all but done 2026-08-25.** Identity `mailing.opencircuitsf.com` verified, DKIM and custom MAIL FROM `SUCCESS`, DMARC `p=none` on the subdomain, config set + SNS + auto-confirmed HTTPS subscription live, account suppression list on, and instance role `opencircuit-instance` attached and **proven by a real delivered send**. Remaining: the account is still sandboxed (`ProductionAccessEnabled: false`) — 200/day, 1/sec, verified recipients only. When granted, flip `SES_SANDBOX=false` and `SEND_WORKER_ENABLED=true`. **Trap worth knowing:** in the sandbox SES authorizes `SendEmail` against the *recipient's* identity ARN too, so the role policy needs `identity/*`, not just the sending domain — and a test send to `success@simulator.amazonses.com` will NOT catch a policy that gets this wrong, because simulator addresses are not identities. See [`docs/aws-iam-setup.md`](docs/aws-iam-setup.md) |
+| 2 | SES — **production access is the only piece left** | real sends to non-verified addresses | **all but done 2026-08-25.** Identity `mailing.opencircuitsf.com` verified, DKIM and custom MAIL FROM `SUCCESS`, DMARC `p=none` on the subdomain, config set + SNS + auto-confirmed HTTPS subscription live, account suppression list on, and instance role `opencircuit-instance` attached and **proven by a real delivered send**. Remaining: the account is still sandboxed (`ProductionAccessEnabled: false`) — 200/day, 1/sec, verified recipients only. When granted, flip `SES_SANDBOX=false` and `SEND_WORKER_ENABLED=true`. **Trap worth knowing:** in the sandbox SES authorizes `SendEmail` against the *recipient's* identity ARN too, so the role policy needs `identity/*`, not just the sending domain — and a test send to `success@simulator.amazonses.com` will NOT catch a policy that gets this wrong, because simulator addresses are not identities. See [`docs/aws-iam-setup.md`](docs/aws-iam-setup.md). **That role attachment was on the instance replaced by `#0508` (2026-09-12) — the live box carries `opencircuit-web-2026` instead; re-verify the send permission there rather than assuming it carried over.** |
 | 3 | Physical mailing address (PO box) | `#0045` refuses to start a campaign without it — Phase 5 | not started |
 | 4 | Sending identity and **who reads that inbox** | Phase 3 | **both halves settled 2026-08-25.** The public contact address is `contact@opencircuitsf.com` (`#0271`), and it is a real **Google Workspace** mailbox that already exists — which is what `#0075`'s privacy policy needed, since it routes GDPR erasure and data-export requests there. Mail *sends* as `contact@mailing.opencircuitsf.com` with `Reply-To: contact@opencircuitsf.com`: the `From:` has to sit on the verified SES subdomain identity, while replies land in the Workspace inbox. Same local part on purpose, so the two read as one address |
 | 5 | Whether the domain needs human mailboxes — determines apex MX | Phase 0 DNS | **answered by observation 2026-08-25: yes, and it already has them.** The apex MX is `1 smtp.google.com` with a `google._domainkey` record — Google Workspace, predating this project. This is why list mail sends from the `mailing.` subdomain and why **the apex MX must never be touched**: doing so would hijack real human mail, not just hypothetical mail |
