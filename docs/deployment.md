@@ -1388,9 +1388,9 @@ link to stdout — that is the closest thing to a proof this step has.
 > `44.222.209.183`/`ec2.smallsharptools.com` values the rows below still
 > show. Whether the record *type* is still CNAME-to-`ec2.smallsharptools.com`
 > underneath, or has become a direct A record, was not re-verified row by
-> row here — that fuller reconciliation is `#0504`'s and `#0427`'s scope, not
+> row here — that fuller reconciliation is `#0427`'s scope, not
 > this issue's. Treat every `44.222.209.183`/`ec2.smallsharptools.com` value
-> below as unconfirmed until one of those closes.
+> below as unconfirmed until it closes.
 
 | Name | Type | Value | Purpose |
 |---|---|---|---|

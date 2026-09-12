@@ -25,7 +25,7 @@
 # rare. Images are also larger and compress worse than the SQL dumps
 # backup.sh writes. A naive "tar it every night, prune after N days" policy
 # would multiply an unchanging directory's size by the retention window for
-# zero benefit — on a t4g.nano (418 MB RAM, CLAUDE.md §7) with limited disk,
+# zero benefit — on a small instance with limited disk (CLAUDE.md §7),
 # that is pure waste, not safety margin.
 #
 # So this script hashes the source tree's contents (relative path + sha256 of

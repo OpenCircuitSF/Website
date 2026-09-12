@@ -27,8 +27,8 @@ ID are the real ones, not examples.
 
 **Correction (`#0426`, 2026-09-04): this is done.** The instance now carries
 the `opencircuit-instance` role — re-confirmed for this issue directly
-against instance metadata (`iam/security-credentials/`, read-only via `ssh
-ec2`; it returns `opencircuit-instance`, not the 404 the next paragraph
+against instance metadata (`iam/security-credentials/`, read-only on the
+box; it returns `opencircuit-instance`, not the 404 the next paragraph
 describes), not copied from any issue text. `CLAUDE.md` §10 item 2 already
 records the role as attached and proven by a real delivered send. What
 follows is left as the runbook that got it there and as the reference for

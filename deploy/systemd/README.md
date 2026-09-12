@@ -177,9 +177,11 @@ directory`, which marks the *whole* oneshot unit failed and fires
 though the database dump the operator actually cares about most had already
 succeeded. A full redeploy (`git pull --rebase origin main && ./scripts/deploy.sh`,
 see the Redeploy procedure in `docs/deployment.md`) would also fix this, but
-that rebuilds the whole Go binary and SPA on a 418 MB box (`CLAUDE.md` §7) and
-is `#0404`'s job at the next real deploy, not a prerequisite for turning
-backups on today. The narrower fix — copying just these three files from a
+that rebuilds the whole Go binary and SPA — memory-hungry on the old
+`t4g.nano` this guidance was written against, and **not even possible on
+the current box** (`#0508`/`#0509`: the live instance has no Go toolchain
+installed at all) — and is `#0404`'s job at the next real deploy, not a
+prerequisite for turning backups on today. The narrower fix — copying just these three files from a
 local checkout of this repo, byte for byte — is what the rest of this section
 assumes. Run from the local machine, **not** on the box:
 
