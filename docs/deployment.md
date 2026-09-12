@@ -103,7 +103,7 @@ guessed.
 | Instance ID | ~~`i-0e3bd89e87d1c2364`, hostname `bluesky.sstools.co`~~ **Correction (`#0508`, 2026-09-12): production moved to a different instance.** The one above is decommissioned as far as this service is concerned. Current: `i-01c45429c78f3adf7`, hostname `photon.sstools.co`. |
 | Instance size / type | ~~`t4g.nano` (ARM/Graviton, Amazon Linux 2023, kernel 6.1 aarch64) — **not** the `t4g.small` PRD §10.1 assumes. 418 MB RAM, backed by a 418 MB zram device plus a 2 GB swapfile; 20 GB root, 53% used. `opencircuit` itself sits at ~14 MB RSS, so the box is tight rather than strained — but it also runs Apache, PostgreSQL, two ShortLinks instances and a prototypes service. `go build` is the memory-hungry step; it succeeds, but it is the thing to suspect if a deploy is ever OOM-killed.~~ **Correction (`#0508`, 2026-09-12):** the new box (`i-01c45429c78f3adf7`) is a `t4g.small` — PRD §10.1's original assumption, ironically now the true one — with **1846 MB RAM**, 2 vCPU, and 30 GB disk (23 GB free). 4.4× the old RAM; the tight-memory framing above no longer applies with the same force, though `go build` is moot regardless — **see the next row**, the new box has no Go toolchain at all. |
 | Region | **`us-east-1`** (az `us-east-1b`) — **not** the `us-west-2` PRD §10.3 assumed (§10.1 is the topology diagram and never named a region — this cell's own citation dangled on that point until now, #0421, 2026-09-04). ~~PRD §10.3 picks `us-west-2` for *SES*, which is a separate choice from where the instance lives.~~ **Correction (#0418, 2026-09-03):** SES is in `us-east-1` too — the instance and SES share one region, verified against instance metadata `placement/region` and `AWS_REGION` in `/etc/opencircuit/config.env`. PRD §10.3 has been corrected to match. Inbound receiving (PRD §6.5 path 3) is the region-pinned part and pins to that same region. Unchanged by `#0508`'s instance replacement — the new box is also `us-east-1`. |
-| No Go toolchain on the new box | `photon` has no `go` on `PATH` and none at the usual fixed locations. **Decided (`#0509`, 2026-09-12, by the user): it stays that way.** "We won't install the Go toolchain on the EC2 instance photon. Instead we should compile before deployment." The **Redeploy procedure** below builds the SPA and the Go binary on the operator's workstation (or CI) and ships the finished artifact — no step in it assumes a toolchain on the box. |
+| No Go toolchain on the new box | `photon` has no `go` on `PATH` and none at the usual fixed locations. **Decided (`#0509`, 2026-09-12, by the user): it stays that way.** "We won't install the Go toolchain on the EC2 instance photon. Instead we should compile before deployment." **Delivery mechanism decided in a later same-day pass:** the built artifact ships as a published GitHub Release, which `photon` fetches with a plain `curl` (`#0509` third pass, `#0514`). The **Redeploy procedure** below builds the SPA and the Go binary on the operator's workstation (or CI), packages and publishes them as a release, and has `photon` fetch and verify them — no step in it assumes a toolchain on the box, a `gh` install on the box, or the box's own git checkout being current. |
 | Public IP / DNS | ~~`44.222.209.183`. `www.opencircuitsf.com` and `opencircuitsf.com` are A records to it; `go.opencircuitsf.com` is a CNAME to `ec2.smallsharptools.com`, which resolves to the same address.~~ **Correction (`#0508`, 2026-09-12):** `www.opencircuitsf.com`, the apex, and `go.opencircuitsf.com` now all resolve to **`98.84.75.184`** (the new instance's IP, confirmed by `dig`) via the zone's `*.opencircuitsf.com` A-record wildcard (not a CNAME — see `#0057`'s DNS correction below). `ec2.smallsharptools.com` still resolves to the *old* IP, `44.222.209.183` — that name was never repointed, and the old box is still up (still answering, just no longer serving this vhost). |
 | SSH access | ~~the alias formerly named `ec2`, from the maintainer's Mac — host `ec2.sstools.co`, user `ec2-user`, key `~/.ssh/sstools-ec2.pem`. A second alias was the same host plus a `LocalForward 15432 → localhost:5432` Postgres tunnel (port 15432, not 5432, because a local PostgreSQL already owns 5432 on the Mac).~~ **Correction (`#0508`, 2026-09-12):** `ssh photon` — already configured in `~/.ssh/config`, verified working (`ec2-user@photon.sstools.co`). The old tunnel alias has not been re-created for the new host as part of this doc fix; confirm it exists before relying on it. |
 | IAM instance role | ~~**None attached** — the instance metadata service 404s `iam/security-credentials/`. This is the reason SES cannot work yet even after the domain is verified: the AWS SDK's default credential chain has nothing to find, so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false.~~ ~~**Correction (`#0426`, 2026-09-04):** attached — `opencircuit-instance`. Re-derived for this issue directly from the instance metadata service (`iam/security-credentials/`, read-only on the box), not copied from the filing; `CLAUDE.md` §10 item 2 already records this role as attached and proven by a real delivered send. Attaching a role with `ses:SendEmail`/`ses:SendRawEmail` was the prerequisite `CLAUDE.md` §10 item 2 named, and is now done — the `## IAM` section below (also corrected, `#0426`) describes the policy's actual shape. certbot's renewal never depended on this role — see the certbot row.~~ **Correction (`#0508`, 2026-09-12):** that role and that instance are both gone. The live box carries **`opencircuit-web-2026`** instead. The permission shape described in the `## IAM` section below should still apply — verify it against the new role name rather than assuming. certbot's renewal still does not depend on this role. |
@@ -325,14 +325,21 @@ already on the box per `CLAUDE.md` §7.
   up the `PATH` change.
 
 - **`golang-migrate` CLI, on `photon` itself** — migrations are still applied
-  on the box (**Migrations**, below), against the migration files in its
-  checkout, and that step is unaffected by the no-Go decision as long as the
-  CLI binary is obtained without a Go toolchain. **Corrected (`#0509`,
-  2026-09-12): do not `go install` this on `photon`** — that requires exactly
-  the toolchain this box does not have. Measured 2026-09-12: `command -v
-  migrate` on `photon` finds nothing, so this has not been done yet by any
-  method. Use the project's prebuilt release tarball instead (`arm64`, matching
-  `photon`'s architecture):
+  on the box (**Migrations**, below), and that step is unaffected by the
+  no-Go decision as long as the CLI binary is obtained without a Go
+  toolchain. **Corrected a third time (`#0509`, 2026-09-12): the migration
+  *files* it reads no longer come from `/opt/opencircuit`'s git checkout
+  either.** Since the redeploy procedure moved to shipping a GitHub Release
+  (**Redeploy procedure**, step 6, below), the exact `migrations/` tree for
+  the commit being deployed travels inside that release's bundle — the
+  box's own checkout can be stale or dirty without affecting this step.
+  This bullet is only about the `migrate` *tool*, which still has to exist
+  on the box by some means; **do not `go install` it on `photon`** — that
+  requires exactly the toolchain this box does not have. Measured
+  2026-09-12: `command -v migrate` on `photon` finds nothing, so this has
+  not been done yet by any method (tracked as `#0513`, open). Use the
+  project's prebuilt release tarball instead (`arm64`, matching `photon`'s
+  architecture):
 
   ```bash
   MIGRATE_VERSION=v4.18.1   # confirm the current tag at
@@ -1810,7 +1817,7 @@ accompanied by a sibling `SHA256SUMS` to verify it against. 2026-09-12's
 nightly run produced a 75,812-byte `opencircuit.dump` there.
 
 **This is the restore point the redeploy procedure actually checks** (see
-step 5, **Migrations**, in **Redeploy procedure** below) — not
+step 6, **Migrations**, in **Redeploy procedure** below) — not
 `/var/backups/postgres/<db>/`, which nothing currently writes to on this
 box. An operator following the rest of this section alone to find a restore
 point today would look in the wrong directory. Finishing this repo's own
@@ -2579,14 +2586,54 @@ anywhere in this repo, and `#0435` does not guess a default for it.
 
 ## Redeploy procedure
 
-**Rewritten (`#0509`, 2026-09-12) around the user's decision: build locally,
-ship the binary. `photon` will never have a Go toolchain.** Recorded
-verbatim: "We won't install the Go toolchain on the EC2 instance photon.
-Instead we should compile before deployment." Every build step below runs on
-the operator's **workstation** (or CI) — nothing in this section assumes
-`go` or a `go build` on the box. `photon` only ever receives finished
-artifacts: a built binary and, where migrations changed, an updated
-checkout of `migrations/`.
+**Rewritten a third time (`#0509`, 2026-09-12), after the first two passes
+were reviewed and accepted, around a further decision by the user that
+changes only *how the built artifact reaches the box* — not how it is
+built.** Recorded verbatim: "use the release system on GitHub to prepare a
+release with a zip archive of what the server will need for deployment,"
+driven from the workstation with `gh` (installed and authenticated as
+`brennanMKE`; the repo carried no tags and no releases as of this pass). On
+shipping a compiled binary through a public release: "I am fine with
+publishing the binary with the release since this is all public and Open
+Source under an MIT license. Anyone could build it themselves."
+
+**What stays exactly as the first two passes settled it:** cross-compile on
+the workstation (`photon` never gets a Go toolchain); `GOOS=linux
+GOARCH=arm64 CGO_ENABLED=0` pinned explicitly; the commit hash embedded via
+`-ldflags` and exposed through `--version`; the SPA built before the Go
+binary because of `//go:embed all:dist`; proving the artifact runs before it
+replaces anything live; backing up the previous binary; verifying a database
+restore point before any migration; and migrate-before-install
+(`CLAUDE.md` §1's `#0125` precedent).
+
+**What changes:** instead of `scp`-ing a bare binary to a scratch path, the
+workstation publishes a **GitHub Release** and `photon` fetches it with a
+plain `curl` — no credential of any kind, because the repo and its releases
+are both public. **The release bundle also now carries `migrations/`.** This
+is the change that matters most: `photon`'s own checkout at
+`/opt/opencircuit` is 900 commits behind and currently dirty
+(`M web/dist/index.html`, measured 2026-09-12), and the old procedure
+depended on bringing that checkout current before `migrate` could run. It no
+longer does — the exact `migrations/` tree for the commit being deployed
+travels inside the same hash-verified bundle as the binary, so a stale or
+dirty on-box checkout is no longer in the critical path for either building
+or migrating. That checkout still exists on the box and is still used for
+`scripts/db/restore.sh` and other ancillary tooling; keeping it pulled up to
+date remains good hygiene but is no longer something this procedure depends
+on.
+
+**This does not supply the `golang-migrate` tool itself, and does not close
+that gap.** Bundling migration *files* is not the same as installing the
+migration *binary* — `command -v migrate` on `photon` still finds nothing
+(`#0513`, open). Step 6 below still routes to the corrected Prerequisites
+bullet (a prebuilt release tarball, not `go install`) for that, unchanged
+from the prior two passes.
+
+**The release-publishing script itself — build, package, `gh release
+create`, tag scheme — is `#0514`, not this issue.** What follows is the
+sequence an operator runs by hand until that script exists. Once it lands,
+step 1 and step 2 below collapse into one script invocation; steps 3 onward
+are unaffected either way.
 
 **This is not a cross-*architecture* build.** The workstation this was
 proven on is `darwin/arm64`; `photon` is `linux/arm64` — only `GOOS`
@@ -2602,15 +2649,24 @@ LSB executable, ARM aarch64, statically linked, not stripped`.
 
 Shipping a pre-built binary is the trade this decision makes: the box's own
 checkout (`/opt/opencircuit`) is no longer what the running binary was built
-from, so `git log` on the box no longer answers "what is live." The build
-embeds the commit hash via `-ldflags` into `cmd/opencircuit`'s `commitHash`
-variable, exposed through the CLI's existing version output — extending an
-already-existing surface rather than adding a new one:
+from, so `git log` on the box no longer answers "what is live." Two things
+now answer it, at different levels of trust:
+
+- **The release tag** (`gh release list`) names *which* build is installed,
+  at a glance — useful for a human, but a tag is just a label GitHub lets you
+  move.
+- **The embedded commit hash** is what actually proves it, byte for byte.
+  The build embeds the commit via `-ldflags` into `cmd/opencircuit`'s
+  `commitHash` variable, exposed through the CLI's existing version output —
+  extending an already-existing surface rather than adding a new one:
 
 ```bash
 /usr/local/bin/opencircuit --version
 # opencircuit 0.1.0 (3f1a9c2…)   — any unrecognized subcommand, or none, prints this
 ```
+
+The tag names the release; the hash proves the contents — a tag could in
+principle point somewhere else later, the hash cannot.
 
 **Why the CLI surface and not `/health`.** `GET /health`
 (`internal/handlers/health.go`) already has a fixed, tested response shape
@@ -2627,11 +2683,11 @@ database, no session — so it is exactly what step 4 below uses to prove the
 `photon`-side artifact is real before it goes anywhere near the live
 service.
 
-### Step 1 — build the SPA, then the Go binary, in that order
+### Step 1 — build the SPA, the Go binary, and assemble the release bundle
 
 `web/embed.go` does `//go:embed all:dist`, so whatever sits in `web/dist/`
-at `go build` time is what ships — cross-compiling changes nothing about
-this ordering requirement. On the workstation, at the commit to deploy:
+at `go build` time is what ships. On the workstation, at the commit to
+deploy:
 
 ```bash
 cd web && npm ci && npm run build
@@ -2660,102 +2716,160 @@ the commit hash:
 
 ```bash
 COMMIT="$(git rev-parse HEAD)"
+SHORT="${COMMIT:0:7}"
+TAG="v0.1.0-${SHORT}"   # illustrative — #0514 owns the actual tag scheme;
+                        # everything below works with whatever tag it produces
+
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
   -ldflags "-X main.commitHash=$COMMIT" \
-  -o opencircuit-linux-arm64 \
+  -o opencircuit \
   ./cmd/opencircuit
 
-file opencircuit-linux-arm64     # expect: ELF 64-bit LSB executable, ARM aarch64, statically linked
-sha256sum opencircuit-linux-arm64
+file opencircuit     # expect: ELF 64-bit LSB executable, ARM aarch64, statically linked
 ```
 
-Record that sha256 — it is what step 2's precondition and step 3's transfer
-check both compare against.
+Assemble the bundle — exactly what the box needs, and nothing it must not
+have (`#0514`'s bundle contents, applied here by hand):
 
-### Step 2 — precondition: where it goes, and by whom (`#0466`'s discipline, applied to a binary)
+```bash
+STAGE="release-${TAG}"
+mkdir -p "$STAGE"
+cp opencircuit "$STAGE/"
+cp -r migrations "$STAGE/"
+cp deploy/systemd/opencircuit.service "$STAGE/"
+# never: config.env, credentials, or anything from the private infrastructure repo
 
-Same discipline `#0466` established for `scp`-ing scripts and unit files
-applies here — state the destination, that it is writable by the account
-doing the copy, and the expected hash, so a failed copy cannot read as a
+BUNDLE="opencircuit-${TAG}-linux-arm64.zip"
+(cd "$STAGE" && zip -r "../$BUNDLE" .)
+shasum -a 256 "$BUNDLE" > SHA256SUMS
+cat SHA256SUMS
+```
+
+Record `$TAG`, `$COMMIT`, and the `SHA256SUMS` line — step 2 uploads exactly
+these two files, and step 3 downloads and re-verifies the same bytes on
+`photon`.
+
+### Step 2 — publish the release
+
+```bash
+gh release create "$TAG" \
+  "$BUNDLE" SHA256SUMS \
+  --title "opencircuit $TAG" \
+  --notes "Commit $COMMIT."
+```
+
+Confirm both assets attached:
+
+```bash
+gh release view "$TAG"
+```
+
+**The release is public — deliberately.** The user's own reasoning,
+recorded above: the source is already public and MIT-licensed, so a
+compiled binary of it reveals nothing a reader could not build themselves.
+Nothing else belongs in the release: no `config.env`, no credentials, no
+host-specific configuration — the bundle is exactly the three files (plus
+checksums) step 1 staged.
+
+### Step 3 — precondition: fetch and verify the release on `photon`
+
+Same discipline `#0466` established for `scp`-ing scripts and unit files,
+adapted for a `curl` from a public release instead of a direct copy: state
+the destination, that it is writable by the account doing the fetch, and
+the expected hash, so a failed or truncated download cannot read as a
 successful one.
 
-- **Destination:** a scratch path in `/opt/opencircuit/` on `photon`, not
-  directly over the live binary — e.g. `/opt/opencircuit/releases/opencircuit-<short-sha>`.
-  `/opt/opencircuit` is owned by `ec2-user` (confirmed 2026-09-12:
-  `drwxr-xr-x. ec2-user ec2-user /opt/opencircuit`), the same account `ssh
-  photon` connects as, so the copy itself needs no `sudo`. `/usr/local/bin`
-  is root-owned (`drwxr-xr-x. root root`) and only the later install step
-  (step 5) touches it, under `sudo`, same as before.
-- **Expected hash:** the `sha256sum` captured in step 1. Verify it matches
-  on the box before doing anything else with the file:
+- **Destination:** a release-specific directory under
+  `/opt/opencircuit/releases/`, never directly over the live binary —
+  `/opt/opencircuit/releases/$TAG/`. `/opt/opencircuit` is owned by
+  `ec2-user` (confirmed 2026-09-12: `drwxr-xr-x. ec2-user ec2-user
+  /opt/opencircuit`), the same account `ssh photon` connects as, so the
+  fetch itself needs no `sudo`. `/usr/local/bin` is root-owned and only the
+  later install step (step 7) touches it, under `sudo`, same as before.
+- **No credential of any kind.** The repo and its releases are public,
+  which is exactly the point of the user's decision — `photon` needs no
+  GitHub token, nothing beyond the outbound HTTPS to `github.com` it
+  already uses for `git pull`.
+- **Expected hash:** the `SHA256SUMS` published alongside the bundle in
+  step 2. Fetch both and verify before touching the archive's contents:
 
 ```bash
-SHORT="${COMMIT:0:7}"
-ssh photon "mkdir -p /opt/opencircuit/releases"
-scp opencircuit-linux-arm64 "photon:/opt/opencircuit/releases/opencircuit-$SHORT"
-ssh photon "sha256sum /opt/opencircuit/releases/opencircuit-$SHORT"
-# compare against the workstation's sha256sum from step 1 — byte-for-byte,
-# not just "a file arrived"
+ssh photon "mkdir -p /opt/opencircuit/releases/$TAG && \
+  cd /opt/opencircuit/releases/$TAG && \
+  curl -fsSLO https://github.com/brennanMKE/OpenCircuitSF/releases/download/$TAG/$BUNDLE && \
+  curl -fsSLO https://github.com/brennanMKE/OpenCircuitSF/releases/download/$TAG/SHA256SUMS && \
+  sha256sum -c SHA256SUMS"
 ```
 
-Every remaining step below runs as a **single non-interactive `ssh photon
-"..."` command** from the workstation, precisely so `$SHORT`/`$COMMIT`
-(set once, here, on the workstation) stay in scope — an interactive `ssh
-photon` session started fresh would not have them, and retyping a 7-char
-sha by hand is exactly the kind of manual step this procedure exists to
-avoid.
-
-A `scp` that reports success but leaves a truncated or zero-byte file is
-exactly the class of failure this hash check exists to catch — the same
-reasoning `#0466` recorded for `deploy/systemd/opencircuit.service` and
-`backup-media.sh` applies unchanged to a 26 MB binary.
-
-**Ordering, corrected (`#0509` review, 2026-09-12).** The four remaining
-steps used to run migrate → prove-artifact → back-up-previous-binary →
-install — migrating *before* the two free checks below. Proving the artifact
-runs and backing up the previous binary are free and non-mutating; migrating
-is the one irreversible step in this whole procedure. Running the free
-checks *after* the irreversible one meant a mis-built artifact could be
-discovered only once the schema had already moved, with the *old*
-binary — which predates every migration just applied — still the one
-running. **Migrate-before-install is still correct and stays that way**
-(`CLAUDE.md` §1's `#0125` note is exactly why: never install a binary whose
-migrations haven't run yet). Only the free checks moved, to *before* the
-migration. The order below is now: prove the artifact runs (step 3) → back
-up the previous binary (step 4) → migrations, if any (step 5) → install and
-restart (step 6).
-
-### Step 3 — prove the artifact runs, before it replaces anything live
-
-Before installing over `/usr/local/bin/opencircuit`, run the just-shipped
-binary directly from its scratch path and confirm the version output names
-the commit just built — this is the same command the **Provenance** section
-above describes, and it needs nothing else running:
+If that check reports anything other than `OK`, **stop** — retry the fetch;
+do not unzip a bundle whose hash does not match. Once it verifies:
 
 ```bash
-ssh photon "/opt/opencircuit/releases/opencircuit-$SHORT --version"
+ssh photon "cd /opt/opencircuit/releases/$TAG && unzip -o $BUNDLE"
+```
+
+(`unzip` ships in AL2023's default package set; confirm with `command -v
+unzip` on `photon` before relying on it — `sudo dnf install -y unzip` once
+if it is somehow absent.)
+
+Every remaining step below runs as a **single non-interactive `ssh photon
+"..."` command** from the workstation, precisely so `$TAG`/`$COMMIT`/`$SHORT`
+(set once, here, on the workstation) stay in scope — an interactive `ssh
+photon` session started fresh would not have them, and retyping a tag or a
+7-char sha by hand is exactly the kind of manual step this procedure exists
+to avoid.
+
+A download that reports success but leaves a truncated or zero-byte file is
+exactly the class of failure this hash check exists to catch — the same
+reasoning `#0466` recorded for `deploy/systemd/opencircuit.service` and
+`backup-media.sh`, and the second pass recorded for a raw `scp`'d binary,
+applies unchanged to a fetched release archive.
+
+**Ordering, fixed at the second pass and unchanged here beyond
+renumbering.** The four remaining steps once ran migrate →
+prove-the-artifact-runs → back-up-the-previous-binary → install — migrating
+*before* the two free checks below. Proving the artifact runs and backing up
+the previous binary are non-mutating and cost seconds; migrating is the one
+irreversible step in this whole procedure. Running the free checks *after*
+the irreversible one meant a mis-built artifact could be discovered only
+once the schema had already moved, with the *old* binary — which predates
+every migration just applied — still the one running. **Migrate-before-install
+is still correct and stays that way** (`CLAUDE.md` §1's `#0125` note is
+exactly why: never install a binary whose migrations haven't run yet). The
+order is: prove the artifact runs (step 4) → back up the previous binary
+(step 5) → migrations, if any (step 6) → install and restart (step 7).
+
+### Step 4 — prove the artifact runs, before it replaces anything live
+
+Before installing over `/usr/local/bin/opencircuit`, run the just-fetched
+binary directly from its release directory and confirm the version output
+names the commit just built — this is the same command the **Provenance**
+section above describes, and it needs nothing else running:
+
+```bash
+ssh photon "/opt/opencircuit/releases/$TAG/opencircuit --version"
 # opencircuit 0.1.0 (<the same COMMIT recorded in step 1>)
 ```
 
 A binary that starts and prints the right commit hash here is real evidence
-it will run under systemd; a `file`/hash check alone is not — this is what
-distinguishes "the bytes arrived intact" (step 2) from "the bytes are a
-working `linux/arm64` executable" (this step). It costs seconds and touches
-nothing live, which is why it now runs before the irreversible migration
-step below rather than after it.
+it will run under systemd; the hash check in step 3 alone is not — that
+step distinguishes "the bytes arrived intact," this one distinguishes "the
+bytes are a working `linux/arm64` executable." It costs seconds and touches
+nothing live, which is why it runs before the irreversible migration step
+below rather than after it.
 
-### Step 4 — back up the previous binary
+### Step 5 — back up the previous binary
 
 Shipping a pre-built artifact removes the fallback the old on-box-build flow
 had implicitly — an on-box checkout to rebuild the last-known-good commit
-from. Preserve the binary being replaced **before** installing the new one,
-so "swap back" is a single `install`, not a rebuild. Like step 3, this is
-free and non-mutating, which is why it also now runs before migrations:
+from. Preserve the binary being replaced **before** installing the new one.
+Like step 4, this is free and non-mutating, which is why it also runs before
+migrations:
 
 ```bash
 ssh photon "sudo cp /usr/local/bin/opencircuit /opt/opencircuit/releases/opencircuit-previous && /opt/opencircuit/releases/opencircuit-previous --version"
-# confirm it still runs before continuing — migrations (step 5, if any) and
-# the install (step 6) come next
+# confirm it still runs before continuing — migrations (step 6, if any) and
+# the install (step 7) come next
 ```
 
 **On the first deploy following `#0509`, this check cannot confirm a commit
@@ -2766,67 +2880,82 @@ parenthesised hash at all. Every deploy after this one will have a real
 commit to compare against; treat "it still runs" as the check on this one
 occasion, not "it names the prior commit."
 
-To roll back after a bad deploy:
+**To roll back after a bad deploy, lead with the release, not the on-box
+copy — this is the improvement shipping through a release system buys.**
+Rollback is now "fetch the previous release," not "hope the previous binary
+is still on disk":
+
+```bash
+gh release list --limit 5     # from the workstation — find the tag before $TAG
+PREV_TAG="<the tag immediately before the one just installed>"
+ssh photon "mkdir -p /opt/opencircuit/releases/$PREV_TAG && \
+  cd /opt/opencircuit/releases/$PREV_TAG && \
+  curl -fsSLO https://github.com/brennanMKE/OpenCircuitSF/releases/download/$PREV_TAG/opencircuit-$PREV_TAG-linux-arm64.zip && \
+  curl -fsSLO https://github.com/brennanMKE/OpenCircuitSF/releases/download/$PREV_TAG/SHA256SUMS && \
+  sha256sum -c SHA256SUMS && \
+  unzip -o opencircuit-$PREV_TAG-linux-arm64.zip"
+ssh photon "sudo install -m 0755 /opt/opencircuit/releases/$PREV_TAG/opencircuit /usr/local/bin/opencircuit && sudo systemctl restart opencircuit && sudo systemctl status opencircuit"
+curl -fsS https://www.opencircuitsf.com/health
+```
+
+**Keep the on-box `opencircuit-previous` copy above as a belt-and-braces
+fallback, not the primary path** — it covers the case where the release
+infrastructure itself (GitHub, or `photon`'s outbound network path to it) is
+what is unavailable at the exact moment a rollback is needed. If that copy
+is what you reach for instead:
 
 ```bash
 ssh photon "sudo install -m 0755 /opt/opencircuit/releases/opencircuit-previous /usr/local/bin/opencircuit && sudo systemctl restart opencircuit && sudo systemctl status opencircuit"
 curl -fsS https://www.opencircuitsf.com/health
 ```
 
-**This swap does not cover a bad migration, because the schema does not
-revert with the binary.** Naming which failure each path actually covers:
+**Neither path covers a bad migration, because the schema does not revert
+with the binary.** Naming which failure each path actually covers:
 
-- **A bad *binary*** — one that starts, passes step 3, and only then misbehaves
-  under load, or a `systemctl restart` that fails to come back healthy — is
-  exactly what the swap above fixes, and it is instant: the schema is
-  unchanged by a binary-only rollback, so putting the previous binary back in
-  front of it is symmetric.
-- **A bad *migration*** is a different failure entirely, and this swap does
-  **not** fix it. After step 5 applies `000023`–`000028`, the schema has
-  moved forward regardless of which binary is running; reinstalling
-  `opencircuit-previous` puts a binary that predates all six migrations in
-  front of a schema that already has them, which is not a working
-  configuration.
+- **A bad *binary*** — one that starts, passes step 4, and only then
+  misbehaves under load, or a `systemctl restart` that fails to come back
+  healthy — is exactly what both swaps above fix, and either is instant: the
+  schema is unchanged by a binary-only rollback, so putting a previous
+  binary back in front of it is symmetric.
+- **A bad *migration*** is a different failure entirely, and neither swap
+  fixes it. After step 6 applies `000023`–`000028`, the schema has moved
+  forward regardless of which binary is running; reinstalling an older
+  release's binary puts a build that predates those migrations in front of
+  a schema that already has them, which is not a working configuration.
 - **`migrate ... down` is not the reflex here.** The down migrations for
   `000023`–`000028` have never run against production, and `CLAUDE.md` §1's
   append-only discipline governs what happens to a migration once it is
   applied there — reaching for `down` on a live database with real
   subscriber rows is not a tested path.
-- **Recovery from a bad migration is the dump verified in step 5 below,
+- **Recovery from a bad migration is the dump verified in step 6 below,
   restored per `scripts/db/restore.sh`** (see **Backups**) — a materially
-  heavier operation than the binary swap above, and the reason step 5
+  heavier operation than either binary swap above, and the reason step 6
   confirms a restore point exists *before* touching the schema at all.
 
-Keep at least the immediately-previous release; pruning older ones is
-routine disk hygiene (`/opt/opencircuit` has 23 GB free per `CLAUDE.md` §7)
-and not covered further here.
+Keep at least the immediately-previous release's directory under
+`/opt/opencircuit/releases/`, in addition to the flat `opencircuit-previous`
+copy; pruning older ones is routine disk hygiene (`/opt/opencircuit` has
+23 GB free per `CLAUDE.md` §7) and not covered further here.
 
-### Step 5 — bring the migrations checkout current, and apply them, if this deploy adds any
+### Step 6 — apply migrations, if this deploy adds any, reading them from the release bundle
 
-The Go binary no longer needs the box's checkout to build, but
-`golang-migrate` still needs the box's checkout to read `migrations/` from,
-and the running service's schema still has to match what the new binary's
-queries expect. Check whether this deploy adds migrations at all before
+The Go binary no longer needs the box's checkout to build, and as of this
+pass **`golang-migrate` no longer needs it to read `migrations/` from
+either** — that directory now travels inside the same hash-verified bundle
+this step's binary came from, extracted in step 3 at
+`/opt/opencircuit/releases/$TAG/migrations/`. This is the change that
+matters most in this pass: the box's `/opt/opencircuit` checkout can be 900
+commits behind, dirty, or missing entirely, and this step is unaffected,
+because the exact `migrations/` tree for the exact commit being deployed
+already arrived, verified, in step 3. There is no `git pull` in this step
+anymore.
+
+The running service's schema still has to match what the new binary's
+queries expect, so check whether this deploy adds migrations at all before
 doing anything else:
 
 ```bash
 git diff --name-only <last-deployed-sha>..HEAD -- migrations/   # any output => a migration is needed
-```
-
-If there is output, bring `/opt/opencircuit`'s checkout current — `git pull`
-remains the right tool here (unlike the old on-box-build case, this is a
-small, infrequent, source-only update, not a rebuild-triggering one) — after
-clearing the same dirty-tree hazard `#0467` documented for the old
-build-on-box flow, which can still apply to a long-lived checkout that
-predates this issue:
-
-```bash
-ssh photon "cd /opt/opencircuit && git status --porcelain"
-# anything in that output should be investigated, not assumed harmless — if
-# it is web/dist/index.html showing modified (the recurring case, CLAUDE.md
-# §8b), restore it before pulling:
-ssh photon "cd /opt/opencircuit && git show HEAD:web/dist/index.html > web/dist/index.html && git status --porcelain -- web/dist/"
-ssh photon "cd /opt/opencircuit && git pull"
 ```
 
 **Before running `migrate ... up`, confirm a restore point exists and
@@ -2855,8 +2984,17 @@ If the directory is missing, `opencircuit.dump` is zero-byte or absent, or
 the checksum check does not report `OK`, **stop — do not run `migrate ...
 up`** until a real restore point exists. If a migration does go wrong after
 this check passes, recovery is `scripts/db/restore.sh` against that dump
-(see **Backups**), not the binary swap in step 4 above — that swap does not
-touch the schema at all (see the rollback paragraph in step 4).
+(see **Backups**), not either binary swap in step 5 above — those swaps do
+not touch the schema at all (see the rollback paragraph in step 5).
+
+Once the restore point verifies, apply the migrations from the bundle's
+copy — the only thing that differs from the plain invocation in
+**Migrations** above is the `-path`, which now points at the extracted
+release directory instead of a relative `migrations` inside a checkout:
+
+```bash
+ssh photon "sudo bash -c 'source /etc/opencircuit/config.env && /usr/local/bin/migrate -path /opt/opencircuit/releases/$TAG/migrations -database \"\$DATABASE_URL\" up'"
+```
 
 **As of 2026-09-12, production's applied schema version is 22 and 28
 migration files exist on disk, so a real deploy today would apply
@@ -2867,40 +3005,55 @@ migration files exist on disk, so a real deploy today would apply
 above and re-deriving the production version first, per `CLAUDE.md` §1's
 standing instruction never to trust a carried-forward number.
 
-**`golang-migrate` itself is not currently installed on `photon` by any
-method** (`command -v migrate` found nothing, measured 2026-09-12) — see the
-corrected **Prerequisites** bullet above for installing it via the prebuilt
-release tarball rather than `go install`, before the next real deploy needs
-it.
+**`golang-migrate` itself is still not installed on `photon` by any method**
+(`command -v migrate` found nothing, measured 2026-09-12; tracked as
+`#0513`, open) — see the corrected **Prerequisites** bullet above for
+installing it via the prebuilt release tarball rather than `go install`.
+Bundling the migration *files* inside this release does not supply the
+migration *tool*; that is `#0513`'s separate, still-open gap, and this step
+keeps routing to the tarball install rather than assuming the CLI is
+present.
 
-### Step 6 — install and restart
+### Step 7 — install and restart
 
-Only after step 3's version check, step 4's backup, and step 5's migrations
+Only after step 4's version check, step 5's backup, and step 6's migrations
 (if this deploy needed any) have all succeeded:
 
 ```bash
-ssh photon "sudo install -m 0755 /opt/opencircuit/releases/opencircuit-$SHORT /usr/local/bin/opencircuit && sudo systemctl restart opencircuit && sudo systemctl status opencircuit"
+ssh photon "sudo install -m 0755 /opt/opencircuit/releases/$TAG/opencircuit /usr/local/bin/opencircuit && sudo systemctl restart opencircuit && sudo systemctl status opencircuit"
 curl -fsS https://www.opencircuitsf.com/health
-ssh photon "/usr/local/bin/opencircuit --version"   # confirm the LIVE binary, not just the scratch copy, names this commit
+ssh photon "/usr/local/bin/opencircuit --version"   # confirm the LIVE binary, not just the fetched copy, names this commit
 ```
 
 If a deploy only changes `/etc/opencircuit/config.env`, `sudo systemctl
-restart opencircuit` alone is enough — no new binary needed. If the systemd
-unit file itself changed, re-copy it and `sudo systemctl daemon-reload`
-first, same as before.
+restart opencircuit` alone is enough — no new release needed. If the
+systemd unit itself changed, it already travelled inside this release's
+bundle (`#0514`'s bundle contents) rather than needing a separate `scp`;
+install it from the extracted copy and reload before restarting:
 
-### `scripts/deploy.sh` no longer applies to `photon` as written
+```bash
+ssh photon "sudo cp /opt/opencircuit/releases/$TAG/opencircuit.service /etc/systemd/system/opencircuit.service && sudo systemctl daemon-reload"
+```
 
-`scripts/deploy.sh`'s own preflight requires `go` and `npm` on the machine
-it runs on, and its header comment says to run it "on the production host."
-That was correct for the box that was live through 2026-09-11; it is not
-correct for `photon`, which has neither tool and will not get them
-(`#0509`). **Until the script itself is updated to match this decision** —
-e.g. to build locally and drive the `scp`/install steps above by SSH, the
-way this section now does by hand — the **manual steps above are the
-canonical redeploy procedure for `photon`**, not a fallback description of
-what the script automates. Worth a follow-up issue; not filed here per
-`CLAUDE.md` §9 (subagents report, they don't file).
+then continue with the `install` / `restart` / `curl /health` sequence
+above.
+
+### `scripts/release.sh` and `scripts/deploy.sh` — neither matches this procedure yet
+
+Both are out of this issue's scope, and both are already filed:
+
+- **The build-and-publish steps above (1 and 2) are manual** because the
+  script that automates them — build, package, `gh release create`, tag
+  scheme — is `#0514`, not yet written. Once it exists, an operator runs it
+  in place of steps 1 and 2; steps 3–7 below are unaffected either way.
+- **`scripts/deploy.sh`** still requires `go` and `npm` on the machine it
+  runs on and still describes itself as running "on the production host."
+  That was correct for the box that was live through 2026-09-11; it is not
+  correct for `photon`, which has neither tool and will not get either
+  (`#0509`), and it has not been updated to drive the release-based fetch
+  above either — that is `#0512`. **Until both land, the manual steps above
+  are the canonical redeploy procedure for `photon`**, not a fallback
+  description of what a script automates.
 
 ---
 
