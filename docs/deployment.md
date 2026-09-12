@@ -2753,22 +2753,6 @@ Record `$TAG`, `$COMMIT`, `$REPO`, and the `SHA256SUMS` line — step 2
 uploads exactly the two staged files, and step 3 downloads and re-verifies
 the same bytes on `photon`.
 
-**Clean up the build residue afterward, if this was a shared checkout.**
-`.gitignore` anchors `/opencircuit` so the binary itself is covered, but
-`$STAGE` (`release-$TAG/`), `$BUNDLE`
-(`opencircuit-$TAG-linux-arm64.zip`), and `SHA256SUMS` are not, and
-`git status --porcelain` will show them as untracked once this step
-finishes:
-
-```bash
-rm -rf "$STAGE" "$BUNDLE" SHA256SUMS opencircuit
-git status --porcelain   # confirm clean again
-```
-
-A throwaway `git worktree` (`CLAUDE.md` §5a) pinned to the commit being
-deployed avoids this entirely, and is still the recommended way to run this
-step — the cleanup above is only needed for a shared checkout.
-
 ### Step 2 — publish the release
 
 **The release must be cut from a pushed commit, and this step fails early if
@@ -2783,11 +2767,12 @@ guess if the push did not land where expected:
 
 ```bash
 git push origin HEAD
-git ls-remote origin "$COMMIT" | grep -q "$COMMIT" || {
-  echo "STOP: $COMMIT is not on origin — do not proceed to gh release create"
-  exit 1
-}
+git ls-remote origin | grep -q "^$COMMIT" \
+  || echo "STOP: $COMMIT is not on origin — do not run gh release create"
 ```
+
+If that prints `STOP`, do not continue — the push did not land where
+expected.
 
 Then publish, pinning the tag to the exact commit just pushed with
 `--target` rather than letting it default to the branch head:
@@ -2812,6 +2797,22 @@ compiled binary of it reveals nothing a reader could not build themselves.
 Nothing else belongs in the release: no `config.env`, no credentials, no
 host-specific configuration — the bundle is exactly the three files (plus
 checksums) step 1 staged.
+
+**Once step 2 has confirmed both assets attached, clean up the build
+residue, if this was a shared checkout.** `.gitignore` anchors
+`/opencircuit` so the binary itself is covered, but `$STAGE`
+(`release-$TAG/`), `$BUNDLE` (`opencircuit-$TAG-linux-arm64.zip`), and
+`SHA256SUMS` are not, and `git status --porcelain` will show them as
+untracked once this step finishes:
+
+```bash
+rm -rf "$STAGE" "$BUNDLE" SHA256SUMS opencircuit
+git status --porcelain   # confirm clean again
+```
+
+A throwaway `git worktree` (`CLAUDE.md` §5a) pinned to the commit being
+deployed avoids this entirely, and is still the recommended way to run this
+step — the cleanup above is only needed for a shared checkout.
 
 ### Step 3 — precondition: fetch and verify the release on `photon`
 
