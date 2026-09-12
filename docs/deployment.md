@@ -2629,11 +2629,33 @@ migration *binary* — `command -v migrate` on `photon` still finds nothing
 bullet (a prebuilt release tarball, not `go install`) for that, unchanged
 from the prior two passes.
 
-**The release-publishing script itself — build, package, `gh release
-create`, tag scheme — is `#0514`, not this issue.** What follows is the
-sequence an operator runs by hand until that script exists. Once it lands,
-step 1 and step 2 below collapse into one script invocation; steps 3 onward
-are unaffected either way.
+**The release-publishing script — build, package, `gh release create`, tag
+scheme — is `scripts/release.sh` (`#0514`).** Steps 1 and 2 below now
+collapse into one invocation of it:
+
+```bash
+scripts/release.sh 0.1.0             # builds, tags v0.1.0, and publishes
+scripts/release.sh --dry-run 0.1.0   # everything above except the publish
+```
+
+It gates on a clean tree, a real branch (refuses a detached HEAD), `main`
+(overridable with `--allow-non-main`), the commit actually being on
+`origin/main` (`git merge-base --is-ancestor`, not `git ls-remote` — see its
+own header comment for why that distinction matters), and the tag not
+already existing; it builds in a disposable `git worktree` so the shared
+checkout's `web/dist/index.html` is never touched; and it scans the
+assembled bundle — binary included — for `#0511`'s restricted identifiers
+before publishing. Its tag scheme (plain semver, `v<major>.<minor>.<patch>`,
+decided 2026-09-12) and how it determines "the previous release" for
+rollback are documented in the script's own header comment, not repeated
+here.
+
+**What follows is still the byte-for-byte manual procedure the script
+automates, kept as the documented fallback** — read it to understand what
+the script does, or run it by hand if the script itself is ever
+unavailable or in question. Steps 3 onward (fetch-and-verify on `photon`
+through service restart) are unaffected either way and are not automated by
+this script.
 
 **This is not a cross-*architecture* build.** The workstation this was
 proven on is `darwin/arm64`; `photon` is `linux/arm64` — only `GOOS`
