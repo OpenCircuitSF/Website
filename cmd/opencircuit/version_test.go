@@ -18,6 +18,13 @@ func TestVersionStringIncludesSemVerAndCommitHash(t *testing.T) {
 	if !strings.Contains(got, version) {
 		t.Errorf("versionString() = %q, want it to contain the semantic version %q", got, version)
 	}
+	// commitHash must itself be non-empty before comparing got against it:
+	// strings.Contains(got, "") is vacuously true, so an empty commitHash
+	// (e.g. a stray `var commitHash = ""`) would otherwise pass this check
+	// while versionString() silently prints "opencircuit 0.1.0 ()".
+	if commitHash == "" {
+		t.Fatalf("commitHash is empty; versionString() = %q would pass the Contains check below vacuously", got)
+	}
 	if !strings.Contains(got, commitHash) {
 		t.Errorf("versionString() = %q, want it to contain commitHash %q", got, commitHash)
 	}

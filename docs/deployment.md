@@ -1796,6 +1796,30 @@ and the Mac mini are what protect it — `backup.sh` already `chmod 0700`s the
 backup root and `chmod 0600`s each dump), and its retention is a local
 `find -mtime` prune, not an S3 lifecycle rule.
 
+**Corrected for `photon` (`#0509`, 2026-09-12) — a different mechanism is
+what's actually protecting the database today.** Everything above is this
+repo's own `backup.sh`/`opencircuit-backup.timer` design, and it is still
+`PRD.md` §10.6's design of record — but it is **not installed on `photon`**
+(unchanged since `#0435`; see "Re-derived on the real box" below). What
+*is* running, measured read-only on the box, is a separate, pre-existing
+host-level mechanism outside this repo: `host-backup-db.timer` and
+`host-backup-full.timer`, which back up every database on the box (not only
+`opencircuit`'s) nightly at 03:15 UTC into `/var/backups/host/<UTC-date>-db/`
+and `/var/backups/host/<UTC-date>-full/` respectively, each dump
+accompanied by a sibling `SHA256SUMS` to verify it against. 2026-09-12's
+nightly run produced a 75,812-byte `opencircuit.dump` there.
+
+**This is the restore point the redeploy procedure actually checks** (see
+step 5, **Migrations**, in **Redeploy procedure** below) — not
+`/var/backups/postgres/<db>/`, which nothing currently writes to on this
+box. An operator following the rest of this section alone to find a restore
+point today would look in the wrong directory. Finishing this repo's own
+`backup.sh`/`opencircuit-backup.timer` install (still described as
+not-yet-done in "Must be re-verified on the server" and "Re-derived on the
+real box" below) remains worth doing — it is the only leg with an offsite
+copy — but until then, `host-backup-db.timer` is what today's redeploy
+actually relies on.
+
 **S3 upload is a deferred option, not abandoned.** ~~`#0229`'s `## Decision`:
 building it needs an AWS account, which does not exist yet (`CLAUDE.md` §10
 item 2), and the user deferred all AWS work to deployment, same as SES.~~
@@ -2686,7 +2710,98 @@ exactly the class of failure this hash check exists to catch — the same
 reasoning `#0466` recorded for `deploy/systemd/opencircuit.service` and
 `backup-media.sh` applies unchanged to a 26 MB binary.
 
-### Step 3 — bring the migrations checkout current, if this deploy adds any
+**Ordering, corrected (`#0509` review, 2026-09-12).** The four remaining
+steps used to run migrate → prove-artifact → back-up-previous-binary →
+install — migrating *before* the two free checks below. Proving the artifact
+runs and backing up the previous binary are free and non-mutating; migrating
+is the one irreversible step in this whole procedure. Running the free
+checks *after* the irreversible one meant a mis-built artifact could be
+discovered only once the schema had already moved, with the *old*
+binary — which predates every migration just applied — still the one
+running. **Migrate-before-install is still correct and stays that way**
+(`CLAUDE.md` §1's `#0125` note is exactly why: never install a binary whose
+migrations haven't run yet). Only the free checks moved, to *before* the
+migration. The order below is now: prove the artifact runs (step 3) → back
+up the previous binary (step 4) → migrations, if any (step 5) → install and
+restart (step 6).
+
+### Step 3 — prove the artifact runs, before it replaces anything live
+
+Before installing over `/usr/local/bin/opencircuit`, run the just-shipped
+binary directly from its scratch path and confirm the version output names
+the commit just built — this is the same command the **Provenance** section
+above describes, and it needs nothing else running:
+
+```bash
+ssh photon "/opt/opencircuit/releases/opencircuit-$SHORT --version"
+# opencircuit 0.1.0 (<the same COMMIT recorded in step 1>)
+```
+
+A binary that starts and prints the right commit hash here is real evidence
+it will run under systemd; a `file`/hash check alone is not — this is what
+distinguishes "the bytes arrived intact" (step 2) from "the bytes are a
+working `linux/arm64` executable" (this step). It costs seconds and touches
+nothing live, which is why it now runs before the irreversible migration
+step below rather than after it.
+
+### Step 4 — back up the previous binary
+
+Shipping a pre-built artifact removes the fallback the old on-box-build flow
+had implicitly — an on-box checkout to rebuild the last-known-good commit
+from. Preserve the binary being replaced **before** installing the new one,
+so "swap back" is a single `install`, not a rebuild. Like step 3, this is
+free and non-mutating, which is why it also now runs before migrations:
+
+```bash
+ssh photon "sudo cp /usr/local/bin/opencircuit /opt/opencircuit/releases/opencircuit-previous && /opt/opencircuit/releases/opencircuit-previous --version"
+# confirm it still runs before continuing — migrations (step 5, if any) and
+# the install (step 6) come next
+```
+
+**On the first deploy following `#0509`, this check cannot confirm a commit
+hash — that is expected, exactly once.** The binary installed before this
+issue predates `commitHash` entirely: measured read-only on `photon`,
+`/usr/local/bin/opencircuit --version` prints `opencircuit 0.1.0` with no
+parenthesised hash at all. Every deploy after this one will have a real
+commit to compare against; treat "it still runs" as the check on this one
+occasion, not "it names the prior commit."
+
+To roll back after a bad deploy:
+
+```bash
+ssh photon "sudo install -m 0755 /opt/opencircuit/releases/opencircuit-previous /usr/local/bin/opencircuit && sudo systemctl restart opencircuit && sudo systemctl status opencircuit"
+curl -fsS https://www.opencircuitsf.com/health
+```
+
+**This swap does not cover a bad migration, because the schema does not
+revert with the binary.** Naming which failure each path actually covers:
+
+- **A bad *binary*** — one that starts, passes step 3, and only then misbehaves
+  under load, or a `systemctl restart` that fails to come back healthy — is
+  exactly what the swap above fixes, and it is instant: the schema is
+  unchanged by a binary-only rollback, so putting the previous binary back in
+  front of it is symmetric.
+- **A bad *migration*** is a different failure entirely, and this swap does
+  **not** fix it. After step 5 applies `000023`–`000028`, the schema has
+  moved forward regardless of which binary is running; reinstalling
+  `opencircuit-previous` puts a binary that predates all six migrations in
+  front of a schema that already has them, which is not a working
+  configuration.
+- **`migrate ... down` is not the reflex here.** The down migrations for
+  `000023`–`000028` have never run against production, and `CLAUDE.md` §1's
+  append-only discipline governs what happens to a migration once it is
+  applied there — reaching for `down` on a live database with real
+  subscriber rows is not a tested path.
+- **Recovery from a bad migration is the dump verified in step 5 below,
+  restored per `scripts/db/restore.sh`** (see **Backups**) — a materially
+  heavier operation than the binary swap above, and the reason step 5
+  confirms a restore point exists *before* touching the schema at all.
+
+Keep at least the immediately-previous release; pruning older ones is
+routine disk hygiene (`/opt/opencircuit` has 23 GB free per `CLAUDE.md` §7)
+and not covered further here.
+
+### Step 5 — bring the migrations checkout current, and apply them, if this deploy adds any
 
 The Go binary no longer needs the box's checkout to build, but
 `golang-migrate` still needs the box's checkout to read `migrations/` from,
@@ -2714,6 +2829,35 @@ ssh photon "cd /opt/opencircuit && git show HEAD:web/dist/index.html > web/dist/
 ssh photon "cd /opt/opencircuit && git pull"
 ```
 
+**Before running `migrate ... up`, confirm a restore point exists and
+verifies — an unverified dump is not a restore point.** `photon` is backed
+up by `host-backup-db.timer` (see **Backups** below for what this is and how
+it differs from this repo's own, not-installed `opencircuit-backup.timer`),
+which writes nightly at 03:15 UTC into `/var/backups/host/<UTC-date>-db/`.
+Confirm the newest dump exists, is non-zero, is from the most recent nightly
+run, and verifies against its sibling `SHA256SUMS`:
+
+```bash
+ssh photon 'sudo bash -s' <<'BACKUP_CHECK'
+d=$(ls -td /var/backups/host/*-db 2>/dev/null | head -1)
+echo "newest backup dir: $d"
+ls -la "$d/opencircuit.dump"
+cd "$d" && sha256sum -c SHA256SUMS --ignore-missing
+BACKUP_CHECK
+```
+
+(the quoted heredoc delimiter, `<<'BACKUP_CHECK'`, keeps `$d` and `$(...)`
+from being expanded by the *local* shell before it ever reaches `photon` —
+see `CLAUDE.md` §8's unquoted-heredoc warning for why that distinction
+matters)
+
+If the directory is missing, `opencircuit.dump` is zero-byte or absent, or
+the checksum check does not report `OK`, **stop — do not run `migrate ...
+up`** until a real restore point exists. If a migration does go wrong after
+this check passes, recovery is `scripts/db/restore.sh` against that dump
+(see **Backups**), not the binary swap in step 4 above — that swap does not
+touch the schema at all (see the rollback paragraph in step 4).
+
 **As of 2026-09-12, production's applied schema version is 22 and 28
 migration files exist on disk, so a real deploy today would apply
 `000023`–`000028`.** This procedure names that step; it does not perform it
@@ -2729,50 +2873,10 @@ corrected **Prerequisites** bullet above for installing it via the prebuilt
 release tarball rather than `go install`, before the next real deploy needs
 it.
 
-### Step 4 — prove the artifact runs, before it replaces anything live
-
-Before installing over `/usr/local/bin/opencircuit`, run the just-shipped
-binary directly from its scratch path and confirm the version output names
-the commit just built — this is the same command the **Provenance** section
-above describes, and it needs nothing else running:
-
-```bash
-ssh photon "/opt/opencircuit/releases/opencircuit-$SHORT --version"
-# opencircuit 0.1.0 (<the same COMMIT recorded in step 1>)
-```
-
-A binary that starts and prints the right commit hash here is real evidence
-it will run under systemd; a `file`/hash check alone is not — this is what
-distinguishes "the bytes arrived intact" (step 2) from "the bytes are a
-working `linux/arm64` executable" (this step).
-
-### Step 5 — rollback: keep the previous binary
-
-Shipping a pre-built artifact removes the fallback the old on-box-build flow
-had implicitly — an on-box checkout to rebuild the last-known-good commit
-from. Preserve the binary being replaced **before** installing the new one,
-so "swap back" is a single `install`, not a rebuild:
-
-```bash
-ssh photon "sudo cp /usr/local/bin/opencircuit /opt/opencircuit/releases/opencircuit-previous && /opt/opencircuit/releases/opencircuit-previous --version"
-# confirm it still runs and names the prior commit before proceeding to step 6
-```
-
-To roll back after a bad deploy:
-
-```bash
-ssh photon "sudo install -m 0755 /opt/opencircuit/releases/opencircuit-previous /usr/local/bin/opencircuit && sudo systemctl restart opencircuit && sudo systemctl status opencircuit"
-curl -fsS https://www.opencircuitsf.com/health
-```
-
-Keep at least the immediately-previous release; pruning older ones is
-routine disk hygiene (`/opt/opencircuit` has 23 GB free per `CLAUDE.md` §7)
-and not covered further here.
-
 ### Step 6 — install and restart
 
-Only after step 3 (if needed), step 4's version check, and step 5's backup
-have all succeeded:
+Only after step 3's version check, step 4's backup, and step 5's migrations
+(if this deploy needed any) have all succeeded:
 
 ```bash
 ssh photon "sudo install -m 0755 /opt/opencircuit/releases/opencircuit-$SHORT /usr/local/bin/opencircuit && sudo systemctl restart opencircuit && sudo systemctl status opencircuit"
