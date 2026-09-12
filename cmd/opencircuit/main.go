@@ -51,10 +51,29 @@ import (
 
 const version = "0.1.0"
 
+// commitHash records the git commit the running binary was built from. It is
+// "unknown" unless overridden at build time via -ldflags, which is exactly
+// how a cross-compiled binary is built since #0509 — production is no longer
+// built from an on-box checkout, so this is the only way to ask a running
+// process what source it actually contains. docs/deployment.md's redeploy
+// procedure sets it:
+//
+//	go build -ldflags "-X main.commitHash=$(git rev-parse HEAD)" ...
+var commitHash = "unknown"
+
+// versionString formats the identity `opencircuit version`/`--version` prints
+// and the value `main()`'s default branch falls back to: the semantic version
+// plus the embedded commit hash, so a build produced by #0509's cross-compile
+// procedure is traceable to the source it was built from without needing the
+// on-box checkout that procedure deliberately no longer keeps current.
+func versionString() string {
+	return fmt.Sprintf("opencircuit %s (%s)", version, commitHash)
+}
+
 func main() {
 	// Subcommand routing: `opencircuit serve` starts the HTTP server;
 	// `opencircuit seed` bootstraps the admin user; anything else (including
-	// no argument or `version`) prints the version.
+	// no argument, `version`, or `--version`) prints the version and commit hash.
 	cmd := ""
 	if len(os.Args) > 1 {
 		cmd = os.Args[1]
@@ -70,7 +89,7 @@ func main() {
 			log.Fatalf("opencircuit: %v", err)
 		}
 	default:
-		fmt.Printf("opencircuit %s\n", version)
+		fmt.Println(versionString())
 	}
 }
 
