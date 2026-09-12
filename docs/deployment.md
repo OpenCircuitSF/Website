@@ -2719,6 +2719,10 @@ COMMIT="$(git rev-parse HEAD)"
 SHORT="${COMMIT:0:7}"
 TAG="v0.1.0-${SHORT}"   # illustrative — #0514 owns the actual tag scheme;
                         # everything below works with whatever tag it produces
+REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"   # e.g. org/repo —
+                        # derived, not hardcoded, so it survives the pending
+                        # rename in CLAUDE.md §2 automatically; used in every
+                        # release URL below (steps 2, 3, and 5's rollback)
 
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
   -ldflags "-X main.commitHash=$COMMIT" \
@@ -2745,17 +2749,55 @@ shasum -a 256 "$BUNDLE" > SHA256SUMS
 cat SHA256SUMS
 ```
 
-Record `$TAG`, `$COMMIT`, and the `SHA256SUMS` line — step 2 uploads exactly
-these two files, and step 3 downloads and re-verifies the same bytes on
-`photon`.
+Record `$TAG`, `$COMMIT`, `$REPO`, and the `SHA256SUMS` line — step 2
+uploads exactly the two staged files, and step 3 downloads and re-verifies
+the same bytes on `photon`.
+
+**Clean up the build residue afterward, if this was a shared checkout.**
+`.gitignore` anchors `/opencircuit` so the binary itself is covered, but
+`$STAGE` (`release-$TAG/`), `$BUNDLE`
+(`opencircuit-$TAG-linux-arm64.zip`), and `SHA256SUMS` are not, and
+`git status --porcelain` will show them as untracked once this step
+finishes:
+
+```bash
+rm -rf "$STAGE" "$BUNDLE" SHA256SUMS opencircuit
+git status --porcelain   # confirm clean again
+```
+
+A throwaway `git worktree` (`CLAUDE.md` §5a) pinned to the commit being
+deployed avoids this entirely, and is still the recommended way to run this
+step — the cleanup above is only needed for a shared checkout.
 
 ### Step 2 — publish the release
+
+**The release must be cut from a pushed commit, and this step fails early if
+it is not.** `gh release create` for a tag that does not exist yet creates
+that tag at the **remote default branch's current head** unless told
+otherwise — not at the local commit step 1 just built. If `$COMMIT` is not
+on the remote, the tag would name a different tree than the binary inside
+the bundle, silently breaking the provenance contract the **Provenance**
+section above describes and misleading step 5's rollback, which selects a
+release by tag. Push first, and fail loudly rather than proceeding on a
+guess if the push did not land where expected:
+
+```bash
+git push origin HEAD
+git ls-remote origin "$COMMIT" | grep -q "$COMMIT" || {
+  echo "STOP: $COMMIT is not on origin — do not proceed to gh release create"
+  exit 1
+}
+```
+
+Then publish, pinning the tag to the exact commit just pushed with
+`--target` rather than letting it default to the branch head:
 
 ```bash
 gh release create "$TAG" \
   "$BUNDLE" SHA256SUMS \
   --title "opencircuit $TAG" \
-  --notes "Commit $COMMIT."
+  --notes "Commit $COMMIT." \
+  --target "$COMMIT"
 ```
 
 Confirm both assets attached:
@@ -2796,8 +2838,8 @@ successful one.
 ```bash
 ssh photon "mkdir -p /opt/opencircuit/releases/$TAG && \
   cd /opt/opencircuit/releases/$TAG && \
-  curl -fsSLO https://github.com/brennanMKE/OpenCircuitSF/releases/download/$TAG/$BUNDLE && \
-  curl -fsSLO https://github.com/brennanMKE/OpenCircuitSF/releases/download/$TAG/SHA256SUMS && \
+  curl -fsSLO https://github.com/$REPO/releases/download/$TAG/$BUNDLE && \
+  curl -fsSLO https://github.com/$REPO/releases/download/$TAG/SHA256SUMS && \
   sha256sum -c SHA256SUMS"
 ```
 
@@ -2812,12 +2854,15 @@ ssh photon "cd /opt/opencircuit/releases/$TAG && unzip -o $BUNDLE"
 unzip` on `photon` before relying on it — `sudo dnf install -y unzip` once
 if it is somehow absent.)
 
-Every remaining step below runs as a **single non-interactive `ssh photon
-"..."` command** from the workstation, precisely so `$TAG`/`$COMMIT`/`$SHORT`
-(set once, here, on the workstation) stay in scope — an interactive `ssh
-photon` session started fresh would not have them, and retyping a tag or a
-7-char sha by hand is exactly the kind of manual step this procedure exists
-to avoid.
+Most remaining commands below are non-interactive `ssh photon "..."`
+invocations from the workstation shell — a few (step 5's `gh release list`,
+step 6's `git diff` and its `sudo bash -s` heredoc, the closing `curl
+.../health` checks) are not, but every one of them still runs from that same
+workstation shell, precisely so `$TAG`/`$COMMIT`/`$BUNDLE`/`$REPO` (set once,
+here, on the workstation) stay in scope. An interactive `ssh photon` session
+started fresh would not have them, and retyping a tag, a bundle name, or a
+repo slug by hand is exactly the kind of manual step this procedure exists
+to avoid. Keep this shell open until step 7 finishes.
 
 A download that reports success but leaves a truncated or zero-byte file is
 exactly the class of failure this hash check exists to catch — the same
@@ -2886,12 +2931,15 @@ Rollback is now "fetch the previous release," not "hope the previous binary
 is still on disk":
 
 ```bash
+REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"   # re-derive —
+                        # a rollback may run in a fresh shell, days after
+                        # step 1's shell was closed
 gh release list --limit 5     # from the workstation — find the tag before $TAG
 PREV_TAG="<the tag immediately before the one just installed>"
 ssh photon "mkdir -p /opt/opencircuit/releases/$PREV_TAG && \
   cd /opt/opencircuit/releases/$PREV_TAG && \
-  curl -fsSLO https://github.com/brennanMKE/OpenCircuitSF/releases/download/$PREV_TAG/opencircuit-$PREV_TAG-linux-arm64.zip && \
-  curl -fsSLO https://github.com/brennanMKE/OpenCircuitSF/releases/download/$PREV_TAG/SHA256SUMS && \
+  curl -fsSLO https://github.com/$REPO/releases/download/$PREV_TAG/opencircuit-$PREV_TAG-linux-arm64.zip && \
+  curl -fsSLO https://github.com/$REPO/releases/download/$PREV_TAG/SHA256SUMS && \
   sha256sum -c SHA256SUMS && \
   unzip -o opencircuit-$PREV_TAG-linux-arm64.zip"
 ssh photon "sudo install -m 0755 /opt/opencircuit/releases/$PREV_TAG/opencircuit /usr/local/bin/opencircuit && sudo systemctl restart opencircuit && sudo systemctl status opencircuit"
@@ -2952,11 +3000,24 @@ anymore.
 
 The running service's schema still has to match what the new binary's
 queries expect, so check whether this deploy adds migrations at all before
-doing anything else:
+doing anything else — this is a **workstation** command, unlike every other
+command in this step, which is prefixed `ssh photon`:
 
 ```bash
 git diff --name-only <last-deployed-sha>..HEAD -- migrations/   # any output => a migration is needed
 ```
+
+**`<last-deployed-sha>` has no value on the very first deploy following
+`#0509`, and that is exactly the deploy this document exists for.** From the
+*second* deploy onward, the value is the commit hash `/usr/local/bin/opencircuit
+--version` prints — the same provenance surface step 4 and step 5's
+first-deploy exception already rely on. On this first deploy there is
+nothing to diff against, because the installed binary predates `commitHash`
+entirely; the authoritative check instead is the `schema_migrations` query
+`CLAUDE.md` §1 already mandates before trusting any carried-forward version
+number, and the paragraph immediately below gives that query's answer as of
+2026-09-12: version 22, so `000023`–`000028` are the migrations this first
+deploy needs.
 
 **Before running `migrate ... up`, confirm a restore point exists and
 verifies — an unverified dump is not a restore point.** `photon` is backed
@@ -3029,7 +3090,18 @@ If a deploy only changes `/etc/opencircuit/config.env`, `sudo systemctl
 restart opencircuit` alone is enough — no new release needed. If the
 systemd unit itself changed, it already travelled inside this release's
 bundle (`#0514`'s bundle contents) rather than needing a separate `scp`;
-install it from the extracted copy and reload before restarting:
+**diff it against the box's installed copy before overwriting** — this
+document elsewhere records the box's unit file drifting from the repo's, and
+this bundle's copy being at least the deployed commit's version is not the
+same claim as it matching what's currently installed:
+
+```bash
+ssh photon "diff -u /etc/systemd/system/opencircuit.service /opt/opencircuit/releases/$TAG/opencircuit.service"
+# review any diff before proceeding — it is expected the first time this
+# procedure closes a real drift, not evidence of a mistake
+```
+
+Then install from the extracted copy and reload before restarting:
 
 ```bash
 ssh photon "sudo cp /opt/opencircuit/releases/$TAG/opencircuit.service /etc/systemd/system/opencircuit.service && sudo systemctl daemon-reload"
