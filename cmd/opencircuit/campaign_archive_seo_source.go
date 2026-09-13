@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
@@ -87,16 +88,23 @@ func toSEOArchiveEntry(c mailing.Campaign) seo.ArchiveEntry {
 	if c.Preheader != nil {
 		preheader = *c.Preheader
 	}
-	var updatedAt string
+	var updatedAt, archivedAt string
 	if c.ArchivedAt != nil {
 		updatedAt = c.ArchivedAt.UTC().Format("2006-01-02")
+		// ArchivedAt (#0519) carries the full RFC 3339 timestamp, not just
+		// the UTC calendar date UpdatedAt truncates to -- see
+		// internal/seo/archive.go's ArchiveEntry doc comment for why
+		// fallback.go's archiveDateLabel needs the time-of-day to convert
+		// correctly into America/Los_Angeles.
+		archivedAt = c.ArchivedAt.UTC().Format(time.RFC3339)
 	}
 	return seo.ArchiveEntry{
-		Slug:      c.Slug,
-		Subject:   c.Subject,
-		Preheader: preheader,
-		UpdatedAt: updatedAt,
-		Published: c.Status == mailing.CampaignStatusSent && c.ArchiveStatus == mailing.ArchiveStatusPublished,
-		BodyMD:    c.BodyMD,
+		Slug:       c.Slug,
+		Subject:    c.Subject,
+		Preheader:  preheader,
+		UpdatedAt:  updatedAt,
+		ArchivedAt: archivedAt,
+		Published:  c.Status == mailing.CampaignStatusSent && c.ArchiveStatus == mailing.ArchiveStatusPublished,
+		BodyMD:     c.BodyMD,
 	}
 }

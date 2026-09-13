@@ -102,7 +102,9 @@ func TestRender_InternalNavLinksArePlainAnchors(t *testing.T) {
 
 // TestRender_WorkshopDetailServesTitleDateVenueAndBody covers the workshop
 // detail page's title, date/venue block, and body -- the same
-// mailing.RenderMarkdownHTML output renderWorkshopBodyHTML wraps.
+// mailing.RenderMarkdownPageHTML output renderWorkshopBodyHTML wraps
+// (#0519's remedy: heading levels demoted since this body sits under the
+// workshop's own title <h1>).
 func TestRender_WorkshopDetailServesTitleDateVenueAndBody(t *testing.T) {
 	md := "Bring your own **tools**."
 	w := Workshop{
@@ -130,15 +132,36 @@ func TestRender_WorkshopDetailServesTitleDateVenueAndBody(t *testing.T) {
 	if !strings.Contains(body, "2169 Mission St, San Francisco, CA") {
 		t.Errorf("location address not found in body: %s", body)
 	}
-	want, err := mailing.RenderMarkdownHTML(md)
+	want, err := mailing.RenderMarkdownPageHTML(md)
 	if err != nil {
-		t.Fatalf("RenderMarkdownHTML: %v", err)
+		t.Fatalf("RenderMarkdownPageHTML: %v", err)
 	}
 	if !strings.Contains(body, want) {
-		t.Errorf("body does not contain the exact RenderMarkdownHTML output %q: %s", want, body)
+		t.Errorf("body does not contain the exact RenderMarkdownPageHTML output %q: %s", want, body)
 	}
 	if !strings.Contains(body, `<a href="/workshops">`) {
 		t.Errorf("missing 'see all workshops' link: %s", body)
+	}
+}
+
+// TestRender_WorkshopDetailBodyHeadingDoesNotBecomeSecondH1 is #0519's
+// review-bounced defect 1, for the workshop detail page: a body starting
+// with a Markdown "# Heading" must not itself render as an <h1> alongside
+// the page's own title <h1>.
+func TestRender_WorkshopDetailBodyHeadingDoesNotBecomeSecondH1(t *testing.T) {
+	w := Workshop{
+		Slug: "heading-body", Title: "Heading Body Workshop", Status: WorkshopPublished, Published: true,
+		BodyMD: "# Body Heading\n\nSome text.",
+	}
+	source := fakeWorkshopSource{"heading-body": w}
+	r := newTestRenderer(source)
+	body := string(r.Render("/workshops/heading-body"))
+
+	if got := strings.Count(body, "<h1"); got != 1 {
+		t.Fatalf("want exactly one <h1>, got %d: %s", got, body)
+	}
+	if !strings.Contains(body, "<h2>Body Heading</h2>") {
+		t.Errorf("expected the body heading demoted to <h2>, got: %s", body)
 	}
 }
 
@@ -260,8 +283,8 @@ func TestRender_ArchiveIndexListsOnlyPublished(t *testing.T) {
 
 // TestRender_ArchiveDetailBodyIsTheAPIRenderersOutput is acceptance
 // criterion 2: the archive detail page's body is byte-for-byte
-// mailing.RenderMarkdownHTML's own output over the campaign's BodyMD -- the
-// same call PublicArchiveHandler.GetBySlug makes.
+// mailing.RenderMarkdownPageHTML's own output over the campaign's BodyMD --
+// the same call PublicArchiveHandler.GetBySlug makes (#0519's remedy).
 func TestRender_ArchiveDetailBodyIsTheAPIRenderersOutput(t *testing.T) {
 	md := "Thanks for coming! Next month: **PCB design**."
 	source := fakeArchiveSource{
@@ -270,15 +293,78 @@ func TestRender_ArchiveDetailBodyIsTheAPIRenderersOutput(t *testing.T) {
 	r := newTestRendererWithArchive(source)
 	body := string(r.Render("/archive/sept-recap"))
 
-	want, err := mailing.RenderMarkdownHTML(md)
+	want, err := mailing.RenderMarkdownPageHTML(md)
 	if err != nil {
-		t.Fatalf("RenderMarkdownHTML: %v", err)
+		t.Fatalf("RenderMarkdownPageHTML: %v", err)
 	}
 	if !strings.Contains(body, want) {
-		t.Errorf("archive detail body does not contain the exact RenderMarkdownHTML output %q: %s", want, body)
+		t.Errorf("archive detail body does not contain the exact RenderMarkdownPageHTML output %q: %s", want, body)
 	}
 	if !strings.Contains(body, `<a href="/archive">`) {
 		t.Errorf("missing 'see the archive' link: %s", body)
+	}
+}
+
+// TestRender_ArchiveDetailBodyHeadingDoesNotBecomeSecondH1 is #0519's
+// review-bounced defect 1: the real September newsletter's body starts with
+// a Markdown "# Heading", which rendered as a second <h1> beneath the
+// archive page's own subject <h1>. Both the raw HTML and the API's
+// body_html (via mailing.RenderMarkdownPageHTML directly) must show exactly
+// one <h1> total and zero inside the body.
+func TestRender_ArchiveDetailBodyHeadingDoesNotBecomeSecondH1(t *testing.T) {
+	md := "# Solder Night Recap\n\nGreat turnout this month."
+	source := fakeArchiveSource{
+		"sept-recap": {Slug: "sept-recap", Subject: "September Recap", Published: true, UpdatedAt: "2026-09-01", BodyMD: md},
+	}
+	r := newTestRendererWithArchive(source)
+	body := string(r.Render("/archive/sept-recap"))
+
+	if got := strings.Count(body, "<h1"); got != 1 {
+		t.Fatalf("want exactly one <h1> on the page, got %d: %s", got, body)
+	}
+	if !strings.Contains(body, "<h2>Solder Night Recap</h2>") {
+		t.Errorf("expected the body heading demoted to <h2>, got: %s", body)
+	}
+
+	bodyHTML, err := mailing.RenderMarkdownPageHTML(md)
+	if err != nil {
+		t.Fatalf("RenderMarkdownPageHTML: %v", err)
+	}
+	if strings.Contains(bodyHTML, "<h1") {
+		t.Errorf("the API's body_html (the same call) must contain no <h1>: %s", bodyHTML)
+	}
+}
+
+// TestRender_ArchiveDateIsLosAngelesNotUTC is #0519's review-bounced defect
+// 2: an archived_at just after midnight UTC is the previous evening in
+// America/Los_Angeles, and both the archive list and the detail page must
+// show that Pacific calendar date, matching web/src/lib/archive.ts's
+// formatArchivedDate (which formats in the viewer's own zone) rather than
+// the UTC date the fallback served before this fix.
+func TestRender_ArchiveDateIsLosAngelesNotUTC(t *testing.T) {
+	source := fakeArchiveSource{
+		"sept-recap": {
+			Slug: "sept-recap", Subject: "September Recap", Published: true,
+			UpdatedAt:  "2026-09-13", // the stale UTC-truncated date this fix stops using for display
+			ArchivedAt: "2026-09-13T01:18:11Z",
+		},
+	}
+	r := newTestRendererWithArchive(source)
+
+	list := string(r.Render("/archive"))
+	if !strings.Contains(list, "Sep 12, 2026") {
+		t.Errorf("archive list: want Sep 12, 2026 (Pacific), got: %s", list)
+	}
+	if strings.Contains(list, "Sep 13, 2026") {
+		t.Errorf("archive list: UTC date Sep 13, 2026 leaked through: %s", list)
+	}
+
+	detail := string(r.Render("/archive/sept-recap"))
+	if !strings.Contains(detail, "Sep 12, 2026") {
+		t.Errorf("archive detail: want Sep 12, 2026 (Pacific), got: %s", detail)
+	}
+	if strings.Contains(detail, "Sep 13, 2026") {
+		t.Errorf("archive detail: UTC date Sep 13, 2026 leaked through: %s", detail)
 	}
 }
 

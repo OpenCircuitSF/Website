@@ -606,7 +606,7 @@ func (r *Renderer) Render(path string) []byte {
 	}
 
 	body, cacheable := r.substitute(meta)
-	// #0519: a source error (or a RenderMarkdownHTML error) inside
+	// #0519: a source error (or a RenderMarkdownPageHTML error) inside
 	// renderPage still produces a usable body -- the <h1>, lede, and nav,
 	// with an empty list -- but cacheable=false, so a transient store
 	// failure doesn't freeze that list-less page for the whole TTL. Only a
@@ -656,7 +656,7 @@ func (r *Renderer) store(key string, body []byte) {
 // matched.
 //
 // cacheable mirrors renderPage's own return: false when a source error (or
-// a RenderMarkdownHTML error) meant the page's list/body couldn't be built,
+// a RenderMarkdownPageHTML error) meant the page's list/body couldn't be built,
 // so Render (the sole caller) knows not to freeze that degraded body in the
 // cache for the whole TTL.
 func (r *Renderer) substitute(m RouteMeta) (body []byte, cacheable bool) {

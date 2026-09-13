@@ -190,10 +190,15 @@ type workshopListItem struct {
 
 // archiveListItem is one row of the /archive index.
 type archiveListItem struct {
-	Slug      string
-	Subject   string
-	DateAttr  string // ArchiveEntry.UpdatedAt, verbatim, for <time datetime="...">
-	DateLabel string // "Jan 2, 2006"
+	Slug    string
+	Subject string
+	// DateAttr is ArchiveEntry.ArchivedAt (a full RFC 3339 UTC timestamp),
+	// verbatim, for <time datetime="...">. Deliberately NOT UpdatedAt
+	// (#0519): UpdatedAt is a bare UTC calendar date for Sitemap's
+	// <lastmod>, which would show the wrong calendar day for a campaign
+	// archived after ~5pm Pacific -- see archiveDateLabel's own doc comment.
+	DateAttr  string
+	DateLabel string // "Jan 2, 2006", in America/Los_Angeles -- see archiveDateLabel
 	Preheader string
 }
 
@@ -235,7 +240,7 @@ type pageTemplateData struct {
 	LocationLines []string
 
 	// pageArchiveEntry
-	DateAttr string // raw date, for <time datetime="...">
+	DateAttr string // ArchiveEntry.ArchivedAt, raw RFC 3339, for <time datetime="...">
 
 	// pageWorkshop and pageArchiveEntry share this: the rendered body.
 	// template.HTML is the ONLY escaping exemption in this whole template
@@ -274,7 +279,7 @@ const pageTemplateSource = `
 // issue.
 //
 // cacheable is false when a WorkshopSource/ArchiveSource error, or a
-// mailing.RenderMarkdownHTML error, meant a list or body couldn't be
+// mailing.RenderMarkdownPageHTML error, meant a list or body couldn't be
 // built -- Render (seo.go) skips storing that degraded body so a transient
 // store failure doesn't freeze a list-less page for the whole TTL. The
 // <h1>, lede, and nav are still produced in that case (see the pageTemplate
@@ -322,7 +327,7 @@ func (r *Renderer) renderPage(p pageContent) (pageHTML string, cacheable bool) {
 		bodyHTML, cacheable := renderMarkdownOrEmpty(e.BodyMD)
 		return r.execTemplate(pageTemplateData{
 			Kind: "archiveEntry", H1: e.Subject,
-			DateAttr: e.UpdatedAt, DateLabel: archiveDateLabel(e.UpdatedAt),
+			DateAttr: e.ArchivedAt, DateLabel: archiveDateLabel(e.ArchivedAt),
 			BodyHTML: bodyHTML,
 		}), cacheable
 	default:
@@ -345,27 +350,32 @@ func (r *Renderer) execTemplate(data pageTemplateData) string {
 	return buf.String()
 }
 
-// renderMarkdownOrEmpty renders md through mailing.RenderMarkdownHTML --
+// renderMarkdownOrEmpty renders md through mailing.RenderMarkdownPageHTML --
 // the SAME call PublicArchiveHandler.GetBySlug (#0042) and
 // internal/handlers/admin_workshop_preview.go's renderWorkshopBodyHTML make
 // -- for a workshop or archive detail page's body (acceptance criterion 2:
-// "the two must not diverge"). An empty md renders to "" without calling
-// the renderer, matching renderWorkshopBodyHTML's own "empty is not a
-// crash" posture.
+// "the two must not diverge"). RenderMarkdownPageHTML (not
+// RenderMarkdownHTML) is required here specifically: this body renders
+// inside <main> below the page's own <h1> (the workshop title or archive
+// subject), so a body Markdown heading must not itself become an <h1> --
+// see RenderMarkdownPageHTML's own doc comment. An empty md renders to ""
+// without calling the renderer, matching renderWorkshopBodyHTML's own
+// "empty is not a crash" posture.
 //
 // The returned template.HTML is the ONLY template.HTML conversion anywhere
 // in this file (#0519's plan §4). It is safe specifically because goldmark
 // runs in safe mode here (no raw HTML, no <script>, no dangerous-scheme
-// hrefs -- RenderMarkdownHTML's own doc comment) -- the exact same
-// sanitized bytes the SPA already inserts unescaped via Svelte's {@html}.
-// Running html/template's own escaping over it a second time would
+// hrefs -- RenderMarkdownHTML's own doc comment, which RenderMarkdownPageHTML
+// shares via the same campaignMarkdown instance) -- the exact same sanitized
+// bytes the SPA already inserts unescaped via Svelte's {@html}. Running
+// html/template's own escaping over it a second time would
 // HTML-entity-encode the tags this fragment is made of, corrupting it
 // rather than protecting anything.
 func renderMarkdownOrEmpty(md string) (template.HTML, bool) {
 	if md == "" {
 		return "", true
 	}
-	rendered, err := mailing.RenderMarkdownHTML(md)
+	rendered, err := mailing.RenderMarkdownPageHTML(md)
 	if err != nil {
 		return "", false
 	}
@@ -504,25 +514,36 @@ func buildArchiveIndexItems(all []ArchiveEntry) []archiveListItem {
 		}
 		items = append(items, archiveListItem{
 			Slug: e.Slug, Subject: e.Subject,
-			DateAttr: e.UpdatedAt, DateLabel: archiveDateLabel(e.UpdatedAt),
+			DateAttr: e.ArchivedAt, DateLabel: archiveDateLabel(e.ArchivedAt),
 			Preheader: e.Preheader,
 		})
 	}
 	return items
 }
 
-// archiveDateLabel formats ArchiveEntry.UpdatedAt (a bare "2006-01-02" date
-// -- cmd/opencircuit/campaign_archive_seo_source.go's toSEOArchiveEntry's
-// own format) as "Jan 2, 2006". Empty or unparseable input returns "".
-func archiveDateLabel(updatedAt string) string {
-	if updatedAt == "" {
+// archiveDateLabel formats ArchiveEntry.ArchivedAt (a full RFC 3339 UTC
+// timestamp -- cmd/opencircuit/campaign_archive_seo_source.go's
+// toSEOArchiveEntry's own format) as "Jan 2, 2006" in America/Los_Angeles,
+// mirroring web/src/lib/archive.ts's formatArchivedDate (#0519), which
+// formats in the viewer's own browser timezone. Fixed to Pacific rather
+// than a per-request timezone for the same reason workshopDateLabel below
+// is -- there is no browser, and no per-request timezone, at HTML
+// generation time. This is deliberately NOT ArchiveEntry.UpdatedAt (a bare
+// UTC calendar date meant only for Sitemap's <lastmod>): parsing a bare
+// date and reformatting it in another zone cannot recover the calendar day
+// a Pacific viewer actually sees for a timestamp like 2026-09-13T01:18:11Z
+// (evening of Sep 12 in San Francisco) -- only the full timestamp carries
+// enough information to convert correctly. Empty or unparseable input
+// returns "".
+func archiveDateLabel(archivedAt string) string {
+	if archivedAt == "" {
 		return ""
 	}
-	t, err := time.Parse("2006-01-02", updatedAt)
+	t, err := time.Parse(time.RFC3339, archivedAt)
 	if err != nil {
 		return ""
 	}
-	return t.Format("Jan 2, 2006")
+	return t.In(losAngelesLocation()).Format("Jan 2, 2006")
 }
 
 // losAngelesLocation loads America/Los_Angeles once (time.LoadLocation is

@@ -278,9 +278,15 @@ from the corresponding `.svelte` view with `{APP_NAME}` expanded and inline
 same `WorkshopSource`/`ArchiveSource` this package already reads for meta
 tags, mirroring `internal/workshops/store.go`'s `ListVisible` exactly for
 filtering and order. A workshop or archive detail page's body goes through
-`mailing.RenderMarkdownHTML` — the *same* call the JSON API makes
+`mailing.RenderMarkdownPageHTML` — the *same* call the JSON API makes
 (`renderWorkshopBodyHTML`, `PublicArchiveHandler.GetBySlug`), so the two can
-never diverge. One `html/template` set (`pageTemplate`, parsed once at
+never diverge. It shares `RenderMarkdownHTML`'s `campaignMarkdown` instance
+(same safe mode, same image stripping) but demotes every heading one level,
+capped at `<h6>` — this body renders under the page's own subject/title
+`<h1>`, so a campaign or workshop body starting with a Markdown `# Heading`
+must not itself become a second `<h1>` (`#0519`'s review). Email keeps
+`RenderMarkdownHTML` unchanged, since a sent message has no competing `<h1>`.
+One `html/template` set (`pageTemplate`, parsed once at
 package init) produces every page; every substituted value goes through its
 contextual escaping (text, or a URL inside an `href="…"`), except the
 rendered Markdown body, which is already-sanitized HTML from goldmark's
@@ -288,7 +294,7 @@ safe mode — the sole `template.HTML` conversion in the file.
 
 **A source error never blanks the heading.** `renderPage` returns
 `cacheable=false` when a `WorkshopSource`/`ArchiveSource` read or a
-`RenderMarkdownHTML` call fails; the `<h1>`, nav, and (for an index) empty
+`RenderMarkdownPageHTML` call fails; the `<h1>`, nav, and (for an index) empty
 list still render, and `Render` (`seo.go`) skips storing that degraded body
 so the very next request — still within the TTL — sees a recovered source's
 real content, with no `Invalidate` call needed.
@@ -303,6 +309,16 @@ shared fallback bucket, whose page content is the zero value. An *index*
 page (`/workshops`, `/archive`) is cached under its one static key, so a
 mutation there needs the ordinary `Invalidate` call (or the 60s TTL) to be
 reflected — the same bound the sitemap already has.
+
+**Archive dates are Pacific, not UTC.** `ArchiveEntry.ArchivedAt` carries the
+full RFC 3339 UTC timestamp (`UpdatedAt` stays a bare UTC calendar date, used
+only for the sitemap's `<lastmod>`), and `archiveDateLabel` formats it in
+`America/Los_Angeles` — the same zone `web/src/lib/archive.ts`'s
+`formatArchivedDate` resolves to for a Pacific viewer via `toLocaleDateString`.
+A campaign archived at `2026-09-13T01:18:11Z` (evening of Sep 12 in San
+Francisco) shows `Sep 12, 2026` on both `/archive` and `/archive/{slug}` — the
+fallback and the mounted SPA agree on the same calendar day rather than the
+fallback showing the UTC date and the SPA changing it on mount.
 
 **Scope: one slice.** This covers acceptance criteria 1–7 and 9 of `#0519`
 — one `<h1>` per public route, full archive/workshop text, plain nav links,

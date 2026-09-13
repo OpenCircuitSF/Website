@@ -188,6 +188,44 @@ func RenderMarkdownHTML(md string) (string, error) {
 	return buf.String(), nil
 }
 
+// RenderMarkdownPageHTML is RenderMarkdownHTML for a body that will be
+// embedded under a page's own <h1> (#0519: PublicArchiveHandler.GetBySlug,
+// admin_workshop_preview.go's renderWorkshopBodyHTML, and
+// internal/seo/fallback.go's renderMarkdownOrEmpty — the archive and
+// workshop web pages, never email). A page body sits under the page's own
+// title <h1> (the archive subject, the workshop title), so a body heading
+// starting at <h1> would produce two top-level headings on one page — this
+// demotes every heading in the body by one level, capped at <h6>, so the
+// body's own headings start at <h2> instead.
+//
+// Email has no competing <h1> (campaign_render.go's RenderCampaign, and the
+// RenderMarkdownHTML this function does not replace), so RenderMarkdownHTML
+// itself is unchanged and this is a separate exported function rather than
+// a mode flag on it — see this package's golden-file tests in
+// internal/mailing/testdata, which must stay byte-identical.
+//
+// Parses and renders through the SAME campaignMarkdown instance
+// RenderMarkdownHTML uses, so safe mode (no raw HTML, no <script>, no
+// dangerous-scheme hrefs) and image stripping cannot drift between the two
+// functions — only the heading levels differ.
+func RenderMarkdownPageHTML(md string) (string, error) {
+	source := []byte(md)
+	doc := campaignMarkdown.Parser().Parse(gmtext.NewReader(source))
+	ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			if h, ok := n.(*ast.Heading); ok {
+				h.Level = min(h.Level+1, 6)
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+	var buf bytes.Buffer
+	if err := campaignMarkdown.Renderer().Render(&buf, source, doc); err != nil {
+		return "", fmt.Errorf("mailing: render campaign page markdown to html: %w", err)
+	}
+	return buf.String(), nil
+}
+
 // RenderMarkdownText converts Markdown to a genuinely readable plain-text
 // alternative — not HTML with the tags stripped. Specifically:
 //

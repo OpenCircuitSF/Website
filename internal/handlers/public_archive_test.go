@@ -121,6 +121,19 @@ func TestPublicArchive_GetBySlug_VisibilityByStatus(t *testing.T) {
 				if !strings.Contains(got.BodyHTML, "Hello") {
 					t.Errorf("BodyHTML = %q, want it to contain the rendered body", got.BodyHTML)
 				}
+				// #0519: the seeded body is "# Hello\n\n...", and this page
+				// renders under the archive page's own subject <h1> (the
+				// SPA's ArchiveEntry.svelte and the fallback in
+				// internal/seo/fallback.go both add one) -- GetBySlug must
+				// use mailing.RenderMarkdownPageHTML, not RenderMarkdownHTML,
+				// so this body-level heading demotes to <h2> rather than
+				// producing a second <h1> when the page renders.
+				if strings.Contains(got.BodyHTML, "<h1") {
+					t.Errorf("BodyHTML contains <h1> (want it demoted to <h2>, #0519): %s", got.BodyHTML)
+				}
+				if !strings.Contains(got.BodyHTML, "<h2>Hello</h2>") {
+					t.Errorf("BodyHTML = %q, want the body heading demoted to <h2>Hello</h2>", got.BodyHTML)
+				}
 				// Privacy (PRD §6.8): the response must never leak a
 				// recipient count, a status/audience field, or an
 				// internal id -- assert the raw JSON has none of those

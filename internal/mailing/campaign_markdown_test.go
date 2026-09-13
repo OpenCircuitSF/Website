@@ -210,6 +210,101 @@ func TestRenderMarkdownHTML_Deterministic(t *testing.T) {
 	}
 }
 
+// --- Page-body renderer (#0519) ---
+
+// TestRenderMarkdownPageHTML_DemotesHeadingLevels pins the whole point of
+// RenderMarkdownPageHTML: a body destined for a page that already has its
+// own <h1> (the archive subject, the workshop title) must not itself emit
+// an <h1>, since that produced two top-level headings on one page
+// (#0519's review bounce). Every heading level is demoted by exactly one,
+// capped at <h6>.
+func TestRenderMarkdownPageHTML_DemotesHeadingLevels(t *testing.T) {
+	got, err := RenderMarkdownPageHTML("# A\n\n## B\n\n###### C\n")
+	if err != nil {
+		t.Fatalf("RenderMarkdownPageHTML: %v", err)
+	}
+	if strings.Contains(got, "<h1") {
+		t.Fatalf("an <h1> survived in a page body: %s", got)
+	}
+	for _, want := range []string{"<h2>A</h2>", "<h3>B</h3>", "<h6>C</h6>"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in output, got: %s", want, got)
+		}
+	}
+}
+
+// TestRenderMarkdownPageHTML_SixLevelHeadingStaysAtSix proves the h6 cap: a
+// heading already at the deepest CommonMark level (there is no <h7>) does
+// not overflow past <h6>.
+func TestRenderMarkdownPageHTML_SixLevelHeadingStaysAtSix(t *testing.T) {
+	got, err := RenderMarkdownPageHTML("###### deepest\n")
+	if err != nil {
+		t.Fatalf("RenderMarkdownPageHTML: %v", err)
+	}
+	if !strings.Contains(got, "<h6>deepest</h6>") {
+		t.Fatalf("expected <h6>deepest</h6>, got: %s", got)
+	}
+	if strings.Contains(got, "<h7") {
+		t.Fatalf("overflowed past h6: %s", got)
+	}
+}
+
+// TestRenderMarkdownPageHTML_SharesSafeModeAndImageStripping proves
+// RenderMarkdownPageHTML reuses the SAME campaignMarkdown instance
+// RenderMarkdownHTML does (#0519's remedy: "reuses the same
+// campaignMarkdown instance, so safe mode and image stripping cannot
+// drift") -- a raw <script>, a javascript: link, and a Markdown image are
+// all still suppressed exactly as they are for the email path.
+func TestRenderMarkdownPageHTML_SharesSafeModeAndImageStripping(t *testing.T) {
+	got, err := RenderMarkdownPageHTML("Hello <script>alert(1)</script> [click](javascript:alert(1)) ![alt](https://tracker.example/x.gif)")
+	if err != nil {
+		t.Fatalf("RenderMarkdownPageHTML: %v", err)
+	}
+	if strings.Contains(got, "<script>alert") {
+		t.Fatalf("raw <script> passed through: %s", got)
+	}
+	if strings.Contains(got, "javascript:") {
+		t.Fatalf("dangerous scheme leaked into href: %s", got)
+	}
+	if strings.Contains(got, "<img") || strings.Contains(got, "tracker.example") {
+		t.Fatalf("image leaked through: %s", got)
+	}
+}
+
+// TestRenderMarkdownPageHTML_Deterministic mirrors
+// TestRenderMarkdownHTML_Deterministic for the page-body variant.
+func TestRenderMarkdownPageHTML_Deterministic(t *testing.T) {
+	md := "# Heading\n\nSome **bold** text with a [link](https://example.com).\n"
+	a, err := RenderMarkdownPageHTML(md)
+	if err != nil {
+		t.Fatalf("RenderMarkdownPageHTML: %v", err)
+	}
+	b, err := RenderMarkdownPageHTML(md)
+	if err != nil {
+		t.Fatalf("RenderMarkdownPageHTML: %v", err)
+	}
+	if a != b {
+		t.Fatalf("non-deterministic output:\n--- a ---\n%s\n--- b ---\n%s", a, b)
+	}
+}
+
+// TestRenderMarkdownHTML_UnaffectedByPageVariant is the golden proof the
+// remedy names explicitly: RenderMarkdownHTML itself -- the email path --
+// must render the exact same bytes it always has, headings included, since
+// email has no competing <h1>. This is the same md
+// TestRenderMarkdownPageHTML_Deterministic feeds the page variant, so the
+// two tests directly show the divergence is only ever in heading level.
+func TestRenderMarkdownHTML_UnaffectedByPageVariant(t *testing.T) {
+	md := "# Heading\n\nSome **bold** text with a [link](https://example.com).\n"
+	got, err := RenderMarkdownHTML(md)
+	if err != nil {
+		t.Fatalf("RenderMarkdownHTML: %v", err)
+	}
+	if !strings.Contains(got, "<h1>Heading</h1>") {
+		t.Fatalf("email path's <h1> must be unchanged, got: %s", got)
+	}
+}
+
 // --- Plain-text renderer ---
 
 func TestRenderMarkdownText_LinkRendersAsTextThenURL(t *testing.T) {

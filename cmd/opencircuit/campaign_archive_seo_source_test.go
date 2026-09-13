@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 )
@@ -54,6 +55,41 @@ func TestToSEOArchiveEntry_PublishedRequiresSentAndArchivePublished(t *testing.T
 		c.ArchiveStatus = mailing.ArchiveStatusPublished
 		if got := toSEOArchiveEntry(c); got.Published {
 			t.Errorf("Published = true, want false when Status is not sent, even with ArchiveStatus published")
+		}
+	})
+
+	t.Run("ArchivedAt is carried as a full RFC 3339 UTC timestamp", func(t *testing.T) {
+		// #0519's fix for the UTC-vs-Pacific date defect: ArchiveEntry needs
+		// the full timestamp (not just UpdatedAt's bare date) for
+		// fallback.go's archiveDateLabel to convert into America/Los_Angeles
+		// correctly.
+		c := base
+		c.Status = mailing.CampaignStatusSent
+		c.ArchiveStatus = mailing.ArchiveStatusPublished
+		archived := time.Date(2026, 9, 13, 1, 18, 11, 0, time.UTC)
+		c.ArchivedAt = &archived
+		got := toSEOArchiveEntry(c)
+		wantArchivedAt := "2026-09-13T01:18:11Z"
+		if got.ArchivedAt != wantArchivedAt {
+			t.Errorf("ArchivedAt = %q, want %q", got.ArchivedAt, wantArchivedAt)
+		}
+		wantUpdatedAt := "2026-09-13"
+		if got.UpdatedAt != wantUpdatedAt {
+			t.Errorf("UpdatedAt = %q, want %q (unchanged, for the sitemap's <lastmod>)", got.UpdatedAt, wantUpdatedAt)
+		}
+	})
+
+	t.Run("nil ArchivedAt carries through as empty string", func(t *testing.T) {
+		c := base
+		c.Status = mailing.CampaignStatusSent
+		c.ArchiveStatus = mailing.ArchiveStatusPublished
+		c.ArchivedAt = nil
+		got := toSEOArchiveEntry(c)
+		if got.ArchivedAt != "" {
+			t.Errorf("ArchivedAt = %q, want \"\" for a nil ArchivedAt", got.ArchivedAt)
+		}
+		if got.UpdatedAt != "" {
+			t.Errorf("UpdatedAt = %q, want \"\" for a nil ArchivedAt", got.UpdatedAt)
 		}
 	})
 }

@@ -23,9 +23,11 @@
 // (campaign_markdown.go, #0042) with zero raw HTML, no images, and every
 // dangerous-scheme href dropped — proven safe against exactly this bypass
 // class already. renderWorkshopBodyHTML below is a thin wrapper over that
-// same goldmark instance (mailing.RenderMarkdownHTML), so a workshop body
-// gets the identical security posture without a second sanitizer to keep in
-// sync with the first.
+// same goldmark instance (mailing.RenderMarkdownPageHTML, #0519 — heading
+// levels demoted since the body sits under the page's own title <h1>, same
+// campaignMarkdown parse/render otherwise), so a workshop body gets the
+// identical security posture without a second sanitizer to keep in sync
+// with the first.
 //
 // # Preview and publish share one function, not two goldmark configurations
 //
@@ -91,12 +93,14 @@ func (h *AdminWorkshopsHandler) Preview(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, workshopPreviewResponse{HTML: html})
 }
 
-// renderWorkshopBodyHTML renders an optional body_md through the exact same
-// goldmark pipeline email_campaigns bodies use
-// (internal/mailing.RenderMarkdownHTML, #0042/#0043): safe mode (no raw
-// HTML, no <script>, no dangerous-scheme hrefs — html.WithUnsafe() is never
-// passed), and Markdown-native images stripped to an inert "[image not
-// included: ...]" marker (campaign_markdown.go's campaignImageRenderer) —
+// renderWorkshopBodyHTML renders an optional body_md through the same
+// campaignMarkdown goldmark instance email_campaigns bodies use
+// (internal/mailing.RenderMarkdownPageHTML, #0042/#0043/#0519): safe mode
+// (no raw HTML, no <script>, no dangerous-scheme hrefs — html.WithUnsafe()
+// is never passed), heading levels demoted one level (capped at <h6>) since
+// this body sits under the workshop's own title <h1>, and Markdown-native
+// images stripped to an inert "[image not included: ...]" marker
+// (campaign_markdown.go's campaignImageRenderer) —
 // the workshop admin's hand-rolled client renderer never supported inline
 // images either (its link regex only matched `[text](url)`, never
 // `![alt](url)`), so this is not a regression for workshop bodies. A nil or
@@ -114,7 +118,7 @@ func renderWorkshopBodyHTML(bodyMD *string) (string, error) {
 	if bodyMD == nil || *bodyMD == "" {
 		return "", nil
 	}
-	return mailing.RenderMarkdownHTML(*bodyMD)
+	return mailing.RenderMarkdownPageHTML(*bodyMD)
 }
 
 // renderWorkshopBodyHTMLPtr adapts renderWorkshopBodyHTML for

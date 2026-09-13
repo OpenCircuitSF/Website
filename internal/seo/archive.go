@@ -14,10 +14,19 @@ type ArchiveEntry struct {
 	Published bool   // archive_status == 'published' AND status == 'sent' (#0519 tightens this; see toSEOArchiveEntry)
 
 	// BodyMD is the campaign's Markdown body (mailing.Campaign.BodyMD).
-	// #0519's fallback.go renders it through mailing.RenderMarkdownHTML --
-	// the SAME call PublicArchiveHandler.GetBySlug makes (#0042) -- for the
-	// server-rendered archive detail page, so the two never diverge.
+	// #0519's fallback.go renders it through mailing.RenderMarkdownPageHTML
+	// -- the SAME call PublicArchiveHandler.GetBySlug makes (#0042) -- for
+	// the server-rendered archive detail page, so the two never diverge.
 	BodyMD string
+
+	// ArchivedAt (#0519) is the campaign's archived_at as a full RFC 3339
+	// UTC timestamp ("" when never archived) -- unlike UpdatedAt below, this
+	// carries the time-of-day so fallback.go's archiveDateLabel can format
+	// it in America/Los_Angeles rather than a UTC calendar date, matching
+	// web/src/lib/archive.ts's formatArchivedDate (which formats in the
+	// viewer's own zone). UpdatedAt stays a bare UTC date for Sitemap's
+	// <lastmod>, which has no timezone-correctness requirement.
+	ArchivedAt string
 }
 
 // ArchiveSource supplies published-campaign data to the SEO renderer

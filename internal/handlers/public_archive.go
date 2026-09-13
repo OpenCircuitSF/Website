@@ -10,15 +10,17 @@
 //
 // # Rendering: the web renderer, not the email renderer (#0042 reused, not duplicated)
 //
-// GetBySlug renders campaign.BodyMD through mailing.RenderMarkdownHTML —
-// the exact same goldmark parse #0042 built and #0043's email pipeline
-// (RenderCampaign/wrapCampaignHTML) also calls. It deliberately does NOT
-// call RenderCampaign or styleCampaignBodyHTML: those two apply the
+// GetBySlug renders campaign.BodyMD through mailing.RenderMarkdownPageHTML
+// (#0519) — the same goldmark parse #0042 built and #0043's email pipeline
+// (RenderCampaign/wrapCampaignHTML) also calls, via the same campaignMarkdown
+// instance, but with every heading demoted one level (capped at <h6>) since
+// this body renders under the page's own subject <h1>. It deliberately does
+// NOT call RenderCampaign or styleCampaignBodyHTML: those two apply the
 // email-specific output — a complete mail-safe HTML document, inline
 // mail-client styling, the campaign footer with its manage/unsubscribe
-// links. RenderMarkdownHTML alone returns a plain, unstyled HTML fragment
-// (the exact same one public_workshops.go's renderWorkshopBodyHTML wraps
-// for a workshop's body — see that file's own doc comment for the
+// links. RenderMarkdownPageHTML alone returns a plain, unstyled HTML
+// fragment (the exact same one public_workshops.go's renderWorkshopBodyHTML
+// wraps for a workshop's body — see that file's own doc comment for the
 // identical reuse), which ArchiveEntry.svelte renders inside the site's
 // own shell and its own CSS, so it reads as a web page that happens to
 // contain a newsletter, not an email screenshotted into a page (PRD §6.8).
@@ -143,7 +145,8 @@ func (h *PublicArchiveHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // GetBySlug handles GET /api/archive/{slug}. See this file's package doc
 // comment for the full visibility rule (404/410/200) and why rendering
-// goes through mailing.RenderMarkdownHTML rather than the email pipeline.
+// goes through mailing.RenderMarkdownPageHTML rather than the email
+// pipeline.
 func (h *PublicArchiveHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	c, err := h.store.GetBySlug(r.Context(), slug)
@@ -195,7 +198,7 @@ func (h *PublicArchiveHandler) GetBySlug(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	bodyHTML, err := mailing.RenderMarkdownHTML(c.BodyMD)
+	bodyHTML, err := mailing.RenderMarkdownPageHTML(c.BodyMD)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return

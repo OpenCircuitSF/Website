@@ -78,9 +78,10 @@ func (s workshopSEOSource) Workshops() ([]seo.Workshop, error) {
 //
 // BodyMD (#0519) is dereferenced the same way CoverImage/Summary are -- ""
 // for an unwritten body. internal/seo/fallback.go's renderPage renders it
-// through mailing.RenderMarkdownHTML for the server-rendered workshop
-// detail page, the same pipeline internal/handlers/admin_workshop_preview.go's
-// renderWorkshopBodyHTML wraps.
+// through mailing.RenderMarkdownPageHTML for the server-rendered workshop
+// detail page, the same campaignMarkdown instance
+// internal/handlers/admin_workshop_preview.go's renderWorkshopBodyHTML
+// wraps.
 func toSEOWorkshop(w workshops.Workshop) seo.Workshop {
 	var cover, summary, bodyMD string
 	if w.CoverImage != nil {

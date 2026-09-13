@@ -464,9 +464,16 @@ func TestAdminWorkshopPreview_MatchesPublishedRender(t *testing.T) {
 			preview.HTML, *published.BodyHTML)
 	}
 	// And a positive check that this is genuinely the rendered content, not
-	// two empty strings trivially matching each other.
-	if !strings.Contains(preview.HTML, "<h1>Soldering 101</h1>") ||
+	// two empty strings trivially matching each other. The body's own
+	// Markdown heading renders as <h2>, not <h1> (#0519): this fragment sits
+	// under the workshop page's own title <h1>, so renderWorkshopBodyHTML
+	// goes through mailing.RenderMarkdownPageHTML, which demotes every
+	// heading level by one.
+	if !strings.Contains(preview.HTML, "<h2>Soldering 101</h2>") ||
 		!strings.Contains(preview.HTML, `<a href="/safety"><strong>safety guide</strong></a>`) {
 		t.Fatalf("preview.HTML does not look like the expected rendered body: %s", preview.HTML)
+	}
+	if strings.Contains(preview.HTML, "<h1") {
+		t.Fatalf("preview.HTML must contain no <h1> (#0519): %s", preview.HTML)
 	}
 }
