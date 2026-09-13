@@ -1,8 +1,9 @@
 # Unsubscribe & List Hygiene
 
-Not yet implemented — Phase 4 (`#0033`–`#0039`) in the issue tracker. This
-is a stub with real headings pending that work; `PRD.md` §6.5 (93 lines) is
-authoritative:
+Built and shipped. Phase 4 (`#0033`–`#0039`) landed paths 1 and 2, and
+`#0057`/`#0058` built the inbound `mailto:` path's code — one production
+step for path 3 is still outstanding, noted under that path below.
+`PRD.md` §6.5 is the design authority:
 
 ```bash
 sed -n '/^### 6\.5 /,/^#\{2,3\} [0-9]/p' PRD.md
@@ -13,7 +14,7 @@ get wrong, and getting it wrong is what lands a domain in spam folders.
 Gmail and Yahoo bulk-sender requirements (effective 2024) make paths 1 and
 2 below mandatory in practice, not optional niceties.
 
-## Three paths, all required (except path 3, see below)
+## Three paths, all required
 
 ### Path 1 — One-click unsubscribe (RFC 8058)
 
@@ -70,9 +71,16 @@ carries its own MX pointed at SES inbound. **Never point the apex
 domain's MX at SES** — that would hijack all mail to `opencircuitsf.com`,
 including any human mailboxes (`CLAUDE.md` §9).
 
-**This path is optional in v1.** A simpler fallback — point the `mailto:`
-at a real monitored mailbox and process unsubscribes manually — is honest
-and workable at launch volume. Ship paths 1 and 2 first.
+**Code shipped; the AWS plumbing is not applied yet.** The PRD kept this
+path optional in v1 with a manual-mailbox fallback, but `#0057`/`#0058`
+built it instead: the signature-verified handler, the S3 fetch, the
+token/`From:` matching, and the parked-review audit trail above are all
+merged and deployed. What is not: the SNS topic, receipt rule, rule-set
+activation, `lists.` MX record, and instance-role grant (A6–A11), plus the
+`SES_INBOUND_BUCKET`/`SES_INBOUND_TOPIC_ARN` config — until
+[`email-setup.md`](email-setup.md)'s "Inbound unsubscribe" runbook runs, a
+reply to `unsubscribe@lists.opencircuitsf.com` cannot arrive anywhere: D2's
+MX record does not exist yet.
 
 ## Unsubscribe state machine
 
@@ -89,11 +97,11 @@ and workable at launch volume. Ship paths 1 and 2 first.
 clear that state (`CLAUDE.md` §9) — a complaint is a strong deliverability
 signal that must not be silently overridden by the subscriber re-signing-up.
 
-## Where to look (once built)
+## Where to look
 
-| Concern | Package (planned) |
+| Concern | Where |
 |---|---|
-| Unsubscribe endpoints, preference center | `internal/subscribers` |
-| Suppression list, bounce/complaint state machine | `internal/subscribers` |
-| Inbound `mailto:` processing | `internal/inbound` |
+| Unsubscribe endpoints, preference center (HTTP) | `internal/handlers/unsubscribe.go`, `internal/handlers/preferences.go` |
+| Subscriber state machine, suppression list | `internal/subscribers` |
+| Inbound `mailto:` processing | `internal/inbound`, handler in `internal/handlers/ses_inbound.go` |
 | SES bounce/complaint event ingestion | `internal/sesnotify` — see [`email-setup.md`](email-setup.md) |

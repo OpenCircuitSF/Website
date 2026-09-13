@@ -1674,7 +1674,7 @@ Instance role policy, scoped tightly:
 
 - `ses:SendEmail`, `ses:SendRawEmail` restricted to the verified identity ARN
   and the configuration set.
-- `s3:GetObject`, `s3:DeleteObject` on `arn:aws:s3:::opencircuitsf-inbound/*`.
+- `s3:GetObject`, `s3:DeleteObject` on `arn:aws:s3:::opencircuitsf-inbound/unsubscribe/*`.
 - Nothing else. No `ses:*`, no wildcard resources.
 
 ### 10.6 Backups

@@ -301,8 +301,11 @@ profile, and the profile is associated with `i-0e3bd89e87d1c2364`.
 
 ### What is deliberately *not* in it
 
-- **No `s3:*`.** PRD §10.5 lists `s3:GetObject`/`s3:DeleteObject` on
-  `arn:aws:s3:::opencircuitsf-inbound/*`, but that is for the **inbound**
+- **No `s3:*`.** ~~PRD §10.5 lists `s3:GetObject`/`s3:DeleteObject` on
+  `arn:aws:s3:::opencircuitsf-inbound/*`~~ — **Correction (`#0505`,
+  2026-09-13):** PRD §10.5 now reads the `unsubscribe/` prefix
+  (`arn:aws:s3:::opencircuitsf-inbound/unsubscribe/*`), matching row A11 and
+  the policy document below. The grant is for the **inbound**
   `mailto:` unsubscribe path (PRD §6.5 path 3, issue `#0057`, Phase 4), and
   inbound is out of scope for this pass. **Corrected `#0057`, 2026-09-11:**
   the PRD's `/*` is bucket-wide; `#0057`'s plan narrows this to the

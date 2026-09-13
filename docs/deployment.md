@@ -1707,9 +1707,12 @@ ready-to-apply version of this exact statement is
 [`deploy/aws/A11-iam-inline-policy.json`](../deploy/aws/A11-iam-inline-policy.json).
 `docs/aws-iam-setup.md`'s "What is deliberately *not* in it" section carries
 the same correction as of this pass — narrowed to the `unsubscribe/` prefix,
-matching row A11 above. `PRD.md` §10.5 is the one place this disagreement
+matching row A11 above. ~~`PRD.md` §10.5 is the one place this disagreement
 still stands: it is unedited by this pass (out of scope for `#0057`) and
-still reads the bucket-wide form; reported to the orchestrator for filing.
+still reads the bucket-wide form; reported to the orchestrator for filing.~~
+**Correction (`#0505`, 2026-09-13):** `PRD.md` §10.5 now reads the
+`unsubscribe/` prefix too — every copy of the grant across `PRD.md`,
+`docs/`, and `deploy/aws/` agrees.
 
 **Correction (`#0426`, 2026-09-04) — region, account ID, and identity were
 all wrong.** This block previously read
