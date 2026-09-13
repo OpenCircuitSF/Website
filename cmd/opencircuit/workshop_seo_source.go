@@ -75,13 +75,22 @@ func (s workshopSEOSource) Workshops() ([]seo.Workshop, error) {
 // UTC offset (time.RFC3339, e.g. "2026-09-12T18:00:00Z"), unlike UpdatedAt's
 // bare date -- JSON-LD's startDate/endDate need an offset to validate
 // against Google's Rich Results Test, a bare date does not carry one.
+//
+// BodyMD (#0519) is dereferenced the same way CoverImage/Summary are -- ""
+// for an unwritten body. internal/seo/fallback.go's renderPage renders it
+// through mailing.RenderMarkdownHTML for the server-rendered workshop
+// detail page, the same pipeline internal/handlers/admin_workshop_preview.go's
+// renderWorkshopBodyHTML wraps.
 func toSEOWorkshop(w workshops.Workshop) seo.Workshop {
-	var cover, summary string
+	var cover, summary, bodyMD string
 	if w.CoverImage != nil {
 		cover = *w.CoverImage
 	}
 	if w.Summary != nil {
 		summary = *w.Summary
+	}
+	if w.BodyMD != nil {
+		bodyMD = *w.BodyMD
 	}
 	var updatedAt string
 	if !w.UpdatedAt.IsZero() {
@@ -113,5 +122,6 @@ func toSEOWorkshop(w workshops.Workshop) seo.Workshop {
 		EndsAt:          endsAt,
 		LocationName:    locationName,
 		LocationAddress: locationAddress,
+		BodyMD:          bodyMD,
 	}
 }

@@ -11,7 +11,13 @@ type ArchiveEntry struct {
 	Subject   string
 	Preheader string // "" falls back to a generic description
 	UpdatedAt string // RFC 3339 date (YYYY-MM-DD is sufficient for <lastmod>); "" omits it
-	Published bool   // archive_status == 'published' (PRD §6.8 — 'pending'/'withheld' are both false)
+	Published bool   // archive_status == 'published' AND status == 'sent' (#0519 tightens this; see toSEOArchiveEntry)
+
+	// BodyMD is the campaign's Markdown body (mailing.Campaign.BodyMD).
+	// #0519's fallback.go renders it through mailing.RenderMarkdownHTML --
+	// the SAME call PublicArchiveHandler.GetBySlug makes (#0042) -- for the
+	// server-rendered archive detail page, so the two never diverge.
+	BodyMD string
 }
 
 // ArchiveSource supplies published-campaign data to the SEO renderer

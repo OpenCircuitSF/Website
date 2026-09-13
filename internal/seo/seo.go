@@ -73,6 +73,21 @@ const (
 	// URL is one more thing to drift out of sync.
 	tokenTwitterTitle       = "%%OC_TWITTER_TITLE%%"
 	tokenTwitterDescription = "%%OC_TWITTER_DESCRIPTION%%"
+
+	// tokenBody (#0519) is substituted inside web/index.html's <div
+	// id="app">...</div> with server-rendered fallback content -- an
+	// <h1>, the route's main text, and plain nav links -- for every public
+	// route, and with the empty string for every private/token/unknown
+	// route (see fallback.go's renderPage). This is what makes a crawler
+	// that never executes JavaScript, or a link-preview fetcher, see a
+	// heading and text at all: web/src/main.ts's prepareMountTarget clears
+	// #app before Svelte's mount() appends the real view, so the two never
+	// coexist. Do NOT spell this token literally in an explanatory HTML
+	// comment -- TestSourceTemplate_EachTokenAppearsExactlyOnce counts it,
+	// and strings.NewReplacer would substitute a second, commented-out
+	// occurrence just as readily as the real one (the #0055 review bounce
+	// this rule was written from).
+	tokenBody = "%%OC_BODY%%"
 )
 
 // defaultCacheTTL is the short TTL PRD §7.4 calls for on the rendered
@@ -138,6 +153,13 @@ type RouteMeta struct {
 	// -- it is already-escaped, self-contained JSON built by
 	// encoding/json.Marshal.
 	JSONLD string
+
+	// page (#0519) carries what renderPage (fallback.go) needs to build the
+	// server-rendered fallback content substituted into tokenBody: which
+	// kind of page this route is, and (for a workshop or archive detail
+	// page) the already-fetched record. Unexported -- it is populated by
+	// this package's own route-meta functions below, never by a caller.
+	page pageContent
 }
 
 // Renderer holds the built index.html template in memory and produces a
@@ -210,6 +232,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGURL:         baseURL + "/",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
+			page:          pageContent{kind: pageStatic, path: "/"},
 		},
 		"/about": {
 			Title:         "About — Open Circuit SF",
@@ -220,6 +243,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGURL:         baseURL + "/about",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
+			page:          pageContent{kind: pageStatic, path: "/about"},
 		},
 		"/privacy": {
 			Title:         "Privacy Policy — Open Circuit SF",
@@ -230,6 +254,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGURL:         baseURL + "/privacy",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
+			page:          pageContent{kind: pageStatic, path: "/privacy"},
 		},
 		"/workshops": {
 			Title:         "Workshops — Open Circuit SF",
@@ -240,6 +265,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGURL:         baseURL + "/workshops",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
+			page:          pageContent{kind: pageWorkshopsIndex},
 		},
 		"/subscribe": {
 			Title:         "Subscribe — Open Circuit SF",
@@ -250,6 +276,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGURL:         baseURL + "/subscribe",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
+			page:          pageContent{kind: pageStatic, path: "/subscribe"},
 		},
 		// #0123, PRD §6.8: the archive index -- past campaign emails as a
 		// permanent, indexable page. "the only recurring indexable content
@@ -263,6 +290,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGURL:         baseURL + "/archive",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
+			page:          pageContent{kind: pageArchiveIndex},
 		},
 	}
 }
@@ -400,6 +428,11 @@ func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 		// JSON-LD isn't shared with any other slug.
 		m := r.fallback
 		m.JSONLD = jsonld
+		// #0519: page is set on the COPIED m (not r.fallback itself), so the
+		// canceled workshop's own body still renders into tokenBody even
+		// though its <title>/og:* stay generic -- see renderPage's
+		// pageWorkshop case for the canceled-notice text this produces.
+		m.page = pageContent{kind: pageWorkshop, workshop: w}
 		return m, true
 	}
 
@@ -434,6 +467,7 @@ func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 		OGType:        "website",
 		TwitterCard:   "summary_large_image",
 		JSONLD:        jsonld,
+		page:          pageContent{kind: pageWorkshop, workshop: w},
 	}, true
 }
 
@@ -516,6 +550,7 @@ func (r *Renderer) archiveRouteMeta(slug string) (RouteMeta, bool) {
 		OGURL:         r.baseURL + "/archive/" + slug,
 		OGType:        "article",
 		TwitterCard:   "summary_large_image",
+		page:          pageContent{kind: pageArchiveEntry, archive: e},
 	}, true
 }
 
@@ -570,8 +605,15 @@ func (r *Renderer) Render(path string) []byte {
 		return entry.body
 	}
 
-	body := r.substitute(meta)
-	r.store(key, body)
+	body, cacheable := r.substitute(meta)
+	// #0519: a source error (or a RenderMarkdownHTML error) inside
+	// renderPage still produces a usable body -- the <h1>, lede, and nav,
+	// with an empty list -- but cacheable=false, so a transient store
+	// failure doesn't freeze that list-less page for the whole TTL. Only a
+	// cacheable render is stored.
+	if cacheable {
+		r.store(key, body)
+	}
 	return body
 }
 
@@ -600,7 +642,25 @@ func (r *Renderer) store(key string, body []byte) {
 // which HTML-escapes <, >, and & itself. Running html.EscapeString over it a
 // second time would corrupt the JSON (e.g. turn a literal `"` the JSON
 // syntax needs into `&#34;`) rather than making it safer.
-func (r *Renderer) substitute(m RouteMeta) []byte {
+//
+// tokenBody (#0519) is likewise substituted UNESCAPED, like tokenJSONLD:
+// renderPage's own html/template set already produces a complete,
+// self-contained HTML fragment with every interpolated value contextually
+// escaped at render time (renderPage's doc comment), so a second escaping
+// pass here would corrupt that markup rather than protect anything.
+// strings.NewReplacer makes exactly one pass over the template and never
+// rescans replacement text -- see this method's own doc comment -- so
+// admin-authored text that happens to contain a token-shaped string (e.g. a
+// campaign body containing the literal text "%%OC_BODY%%") cannot trigger a
+// second substitution: only tokens present in r.template itself are ever
+// matched.
+//
+// cacheable mirrors renderPage's own return: false when a source error (or
+// a RenderMarkdownHTML error) meant the page's list/body couldn't be built,
+// so Render (the sole caller) knows not to freeze that degraded body in the
+// cache for the whole TTL.
+func (r *Renderer) substitute(m RouteMeta) (body []byte, cacheable bool) {
+	pageHTML, cacheable := r.renderPage(m.page)
 	replacer := strings.NewReplacer(
 		tokenTitle, html.EscapeString(m.Title),
 		tokenDescription, html.EscapeString(m.Description),
@@ -613,8 +673,9 @@ func (r *Renderer) substitute(m RouteMeta) []byte {
 		tokenTwitterTitle, html.EscapeString(m.OGTitle),
 		tokenTwitterDescription, html.EscapeString(m.OGDescription),
 		tokenJSONLD, m.JSONLD,
+		tokenBody, pageHTML,
 	)
-	return []byte(replacer.Replace(string(r.template)))
+	return []byte(replacer.Replace(string(r.template))), cacheable
 }
 
 // Invalidate clears every cached rendering. Named InvalidateWorkshops until

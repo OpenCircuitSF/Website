@@ -80,7 +80,18 @@
     </script>
   </head>
   <body>
-    <div id="app"></div>
+    <!-- #0519: the body token below is substituted server-side, same as the
+         head tokens documented above -- an <h1>, the route's main text, and
+         plain nav links, for every public route (empty string for a
+         private/token-bearing/unknown route). It exists so a client that
+         never executes JavaScript (a crawler with limited rendering, a
+         link-preview fetcher) still sees a heading and text, not an empty
+         page. web/src/lib/mountTarget.ts's prepareMountTarget clears this
+         element's children before Svelte's mount() appends the real view --
+         mount() APPENDS rather than replaces, so the two must never coexist
+         in the DOM at once. See internal/seo/fallback.go's package doc
+         comment for the full design. -->
+    <div id="app">%%OC_BODY%%</div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

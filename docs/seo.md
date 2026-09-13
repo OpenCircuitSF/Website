@@ -224,6 +224,94 @@ invent. The render TTL is 60 seconds, so a mutation that reaches the
 database without going through `Site.Invalidate` (a manual fix, say) is
 still visible within a minute.
 
+## Server-rendered fallback content (`#0519`)
+
+Bing's first crawl of the home page reported "H1 tag missing" — accurately:
+the server's HTML for every route was `<div id="app"></div>`, empty until
+the SPA bundle ran. `#0019`'s meta injection above solved this for `<title>`
+and Open Graph tags, but never touched the visible body, so any client that
+does not execute JavaScript (a crawler with limited rendering, a
+link-preview fetcher, Bing's on-page check) saw a page with no heading, no
+text, and no links.
+
+**Decision: server fallback content inside `#app`, not Svelte SSR or
+prerendering.** SSR/prerendering was ruled out for four reasons specific to
+this codebase: there is no JavaScript runtime at request time (the box has
+neither Node nor, per `#0509`, a Go toolchain — see `CLAUDE.md` §7), the
+views are not hydration-shaped (`Home.svelte` draws a canvas in `onMount`,
+every data view fetches in `onMount`, `App.svelte` shows a `Loading…`
+placeholder until session-check resolves), the release pipeline would need
+a second build target, and — the deciding factor — `#0019`'s token
+substitution, cache, and `Invalidate()` path already do exactly the work
+this needs.
+
+**Shape.** `web/index.html` (and the `web/dist/index.html` placeholder)
+gained one more token, `tokenBody` (`%%OC_BODY%%`), substituted inside
+`<div id="app">…</div>` the same way the `<head>` tokens are substituted —
+unescaped, like `tokenJSONLD`, because the value is already a complete,
+contextually-escaped HTML fragment (see below), not raw text. For a route
+with content, the substituted value is a `<header>` with the site nav, then
+a `<main id="main-content">` holding one `<h1>` and the route's own body.
+For every other route (private/token-bearing routes, an unknown path, a
+draft workshop, a withheld/unsent archive entry) the substituted value is
+`""`, so the served HTML is byte-for-byte what it was before this issue.
+
+**Never coexists with the SPA.** Svelte 5's `mount()` *appends* to its
+target rather than replacing it, so the server's fallback nodes would
+duplicate once Svelte mounts, unless cleared first. `web/src/lib/mountTarget.ts`'s
+`prepareMountTarget()` empties `#app` synchronously, immediately before
+`web/src/main.ts` calls `mount()` — the server's nodes are gone before
+Svelte creates its first one, so the fallback and the real view never share
+the DOM or the accessibility tree at any point, and a screen reader can
+never encounter either one twice. The fallback's `<h1>` deliberately
+carries no `tabindex` — `App.svelte`'s `#0238` focus effect and `#0517`'s
+styling both key off `h1[tabindex="-1"]`, so the fallback heading can never
+become a spurious focus target even if it somehow survived past mount.
+
+**Where the content lives:** `internal/seo/fallback.go`. `staticPageCopy`
+holds the `/`, `/about`, `/privacy`, and `/subscribe` copy — a deliberate
+first-slice cut for `/about` and `/privacy` (the intro paragraph and a
+couple of sections, not the whole page) — plus the `/workshops` and
+`/archive` index headings/ledes/empty-state strings, all copied verbatim
+from the corresponding `.svelte` view with `{APP_NAME}` expanded and inline
+`<strong>` dropped. `/workshops` and `/archive` build their lists from the
+same `WorkshopSource`/`ArchiveSource` this package already reads for meta
+tags, mirroring `internal/workshops/store.go`'s `ListVisible` exactly for
+filtering and order. A workshop or archive detail page's body goes through
+`mailing.RenderMarkdownHTML` — the *same* call the JSON API makes
+(`renderWorkshopBodyHTML`, `PublicArchiveHandler.GetBySlug`), so the two can
+never diverge. One `html/template` set (`pageTemplate`, parsed once at
+package init) produces every page; every substituted value goes through its
+contextual escaping (text, or a URL inside an `href="…"`), except the
+rendered Markdown body, which is already-sanitized HTML from goldmark's
+safe mode — the sole `template.HTML` conversion in the file.
+
+**A source error never blanks the heading.** `renderPage` returns
+`cacheable=false` when a `WorkshopSource`/`ArchiveSource` read or a
+`RenderMarkdownHTML` call fails; the `<h1>`, nav, and (for an index) empty
+list still render, and `Render` (`seo.go`) skips storing that degraded body
+so the very next request — still within the TTL — sees a recovered source's
+real content, with no `Invalidate` call needed.
+
+**Caching and invalidation need no new mechanism.** The fallback lives
+inside the same cached rendered bytes the meta tags do, so `Renderer.Invalidate`
+clears it on the exact call that already clears the sitemap. A withheld
+`/archive/{slug}` (or an unpublished workshop slug) drops its body
+immediately, without waiting for `Invalidate`: `resolve` re-runs on every
+request, and once the entry no longer qualifies, the request moves to the
+shared fallback bucket, whose page content is the zero value. An *index*
+page (`/workshops`, `/archive`) is cached under its one static key, so a
+mutation there needs the ordinary `Invalidate` call (or the 60s TTL) to be
+reflected — the same bound the sitemap already has.
+
+**Scope: one slice.** This covers acceptance criteria 1–7 and 9 of `#0519`
+— one `<h1>` per public route, full archive/workshop text, plain nav links,
+nothing on private routes, escaping, caching, invalidation. Full static copy
+for `/about`/`/privacy`, removing the `Loading…` flash for public routes,
+410/404 status codes for a withheld/unknown archive or workshop page,
+Home's "Next up" list, and workshop `signup_url` in raw HTML are deliberate
+follow-ups, filed separately rather than folded into this slice.
+
 ## Per-workshop Open Graph card (`#0273`)
 
 Before `#0273`, a workshop without a `cover_image` shared the single

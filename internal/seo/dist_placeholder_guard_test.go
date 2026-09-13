@@ -112,6 +112,7 @@ var distPlaceholderTokens = []string{
 	tokenTwitterTitle,
 	tokenTwitterDescription,
 	tokenJSONLD,
+	tokenBody,
 }
 
 // hashedAssetPattern matches a Vite-emitted hashed asset reference, e.g.
@@ -203,7 +204,7 @@ func TestValidateDistPlaceholder(t *testing.T) {
 <meta name="twitter:title" content="%%OC_TWITTER_TITLE%%" />
 <meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
 %%OC_JSONLD%%
-</head><body><div id="app"></div></body></html>`
+</head><body><div id="app">%%OC_BODY%%</div></body></html>`
 
 	t.Run("accepts a minimal placeholder", func(t *testing.T) {
 		if got := validateDistPlaceholder(goodPlaceholder); len(got) != 0 {
@@ -279,7 +280,7 @@ func TestValidateDistPlaceholder(t *testing.T) {
 <meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
 %%OC_JSONLD%%
 <script type="module" crossorigin src="/static/index-Cs2-8eM1.js"></script>
-</head><body><div id="app"></div></body></html>`
+</head><body><div id="app">%%OC_BODY%%</div></body></html>`
 		got := validateDistPlaceholder(nonDefaultBase)
 		if len(got) == 0 {
 			t.Fatal("validateDistPlaceholder(nonDefaultBase) = no problems, want the missing-marker signal (hashedAssetPattern does not match a non-default base)")

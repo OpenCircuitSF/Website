@@ -56,6 +56,14 @@ type Workshop struct {
 	// will accept).
 	LocationName    string
 	LocationAddress string
+
+	// BodyMD is the workshop's Markdown body (workshops.Workshop.BodyMD,
+	// dereferenced by the adapter; "" when unset). #0519's fallback.go
+	// renders it through mailing.RenderMarkdownHTML -- the same pipeline
+	// internal/handlers/admin_workshop_preview.go's renderWorkshopBodyHTML
+	// wraps -- for the server-rendered workshop detail page, so a crawler
+	// that never executes JavaScript still sees the workshop's own text.
+	BodyMD string
 }
 
 // WorkshopSource supplies workshop data to the SEO renderer (#0019) and

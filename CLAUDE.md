@@ -320,7 +320,7 @@ delete that row to reconcile the count — the guard requires it.
 | `internal/db` | the repo root — `issues/`, `PRD.md`, `CLAUDE.md`, `migrations/`, `docs/database.md` |
 | `internal/outbox` | `internal/` and `cmd/` (both the claim-kinds and claim-comment guards) |
 | `internal/subscribers` | all of `internal/` |
-| `internal/seo` | `web/index.html` and `web/dist/index.html` (`#0141`'s placeholder guard) |
+| `internal/seo` | `web/index.html` and `web/dist/index.html` (`#0141`'s placeholder guard); since `#0519`, also the six static `web/src/views/*.svelte` sources (`Home`, `About`, `PrivacyPolicy`, `Subscribe`, `WorkshopsIndex`, `ArchiveIndex`), `web/src/lib/Header.svelte`, `Footer.svelte`, and `branding.ts` — `TestStaticFallbackCopyMatchesSvelteViews` and `TestFallbackNavCoversHeaderNav` (`fallback_copy_guard_test.go`) |
 | `cmd/opencircuit` | every `internal/*` package `servePostgres` imports, parsed for `*seo.Site` flow |
 | `internal/mailing` | `internal/outbox` |
 | `internal/config` | `.env.example` at the repo root — `TestEnvExampleCoversLoaderVariables` (`#0423`) re-derives the loader's variable set from `config.go`'s own AST and asserts each appears in `.env.example`, which `docs/deployment.md`'s install step copies verbatim onto production |

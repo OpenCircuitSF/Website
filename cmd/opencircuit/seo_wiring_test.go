@@ -515,6 +515,22 @@ func TestMountAndServe_CampaignArchiveMutationInvalidatesSharedSEOSite(t *testin
 		t.Fatalf("sitemap.xml missing published campaign %s right after seeding:\n%s", archiveURL, sitemapBody)
 	}
 
+	// #0519: the same *seo.Site now also injects server-rendered fallback
+	// content into the archive detail/index pages' raw HTML -- prove the
+	// published campaign's <h1>/subject/link are there before the withhold,
+	// through the SAME real server this whole test already stands up.
+	detailBody := getBody(t, archiveURL)
+	if !strings.Contains(detailBody, "<h1") {
+		t.Fatalf("GET %s missing <h1> before withhold:\n%s", archiveURL, detailBody)
+	}
+	if !strings.Contains(detailBody, subject) {
+		t.Fatalf("GET %s missing campaign subject %q before withhold:\n%s", archiveURL, subject, detailBody)
+	}
+	indexBody := getBody(t, "/archive")
+	if !strings.Contains(indexBody, `href="`+archiveURL+`"`) {
+		t.Fatalf("GET /archive missing link to %s before withhold:\n%s", archiveURL, indexBody)
+	}
+
 	// Withhold it through AdminCampaignArchiveHandler over the real mux --
 	// this is the call this whole test exists to prove reaches the SAME
 	// *seo.Site the sitemap route above just read from.
@@ -544,5 +560,23 @@ func TestMountAndServe_CampaignArchiveMutationInvalidatesSharedSEOSite(t *testin
 	sitemapAfterWithhold := getBody(t, "/sitemap.xml")
 	if strings.Contains(sitemapAfterWithhold, archiveURL) {
 		t.Fatalf("sitemap.xml still lists withheld campaign %s -- the invalidator and the site the sitemap route reads from are not the same instance:\n%s", archiveURL, sitemapAfterWithhold)
+	}
+
+	// #0519: the fallback content must drop just as promptly. The detail
+	// page's own <h1> is gone immediately without needing Invalidate at all
+	// (resolve/archiveRouteMeta re-run on every request -- see
+	// internal/seo/seo.go's resolve doc comment), and the index list drops
+	// the entry via the SAME Invalidate call the sitemap assertion above
+	// already proved reached this *seo.Site.
+	detailAfterWithhold := getBody(t, archiveURL)
+	if strings.Contains(detailAfterWithhold, "<h1") {
+		t.Fatalf("GET %s still has an <h1> after withhold:\n%s", archiveURL, detailAfterWithhold)
+	}
+	if strings.Contains(detailAfterWithhold, subject) {
+		t.Fatalf("GET %s still shows campaign subject %q after withhold:\n%s", archiveURL, subject, detailAfterWithhold)
+	}
+	indexAfterWithhold := getBody(t, "/archive")
+	if strings.Contains(indexAfterWithhold, `href="`+archiveURL+`"`) {
+		t.Fatalf("GET /archive still links to withheld campaign %s:\n%s", archiveURL, indexAfterWithhold)
 	}
 }

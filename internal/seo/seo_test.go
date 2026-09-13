@@ -26,7 +26,7 @@ const testTemplate = `<!doctype html>
 <meta name="twitter:title" content="%%OC_TWITTER_TITLE%%" />
 <meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
 %%OC_JSONLD%%
-</head><body><div id="app"></div></body></html>`
+</head><body><div id="app">%%OC_BODY%%</div></body></html>`
 
 const testBaseURL = "https://www.opencircuitsf.com"
 
@@ -524,7 +524,7 @@ func TestRender_AllTokensSubstituted(t *testing.T) {
 	tokens := []string{
 		tokenTitle, tokenDescription, tokenOGTitle, tokenOGDescription,
 		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard,
-		tokenTwitterTitle, tokenTwitterDescription, tokenJSONLD,
+		tokenTwitterTitle, tokenTwitterDescription, tokenJSONLD, tokenBody,
 	}
 	for _, path := range []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/nonexistent", "/workshops/some-slug"} {
 		body := string(r.Render(path))
@@ -560,7 +560,7 @@ func TestSourceTemplate_EachTokenAppearsExactlyOnce(t *testing.T) {
 	tokens := []string{
 		tokenTitle, tokenDescription, tokenOGTitle, tokenOGDescription,
 		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard,
-		tokenTwitterTitle, tokenTwitterDescription, tokenJSONLD,
+		tokenTwitterTitle, tokenTwitterDescription, tokenJSONLD, tokenBody,
 	}
 	for _, tok := range tokens {
 		if n := strings.Count(body, tok); n != 1 {

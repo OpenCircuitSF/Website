@@ -66,6 +66,22 @@ func (s campaignArchiveSEOSource) ArchiveEntries() ([]seo.ArchiveEntry, error) {
 // sufficient, and a nil ArchivedAt (a campaign that has never been sent)
 // renders as "" so Sitemap omits <lastmod> entirely, same as
 // toSEOWorkshop's identical zero-time handling.
+//
+// Published (#0519) is tightened to require BOTH c.Status ==
+// mailing.CampaignStatusSent AND c.ArchiveStatus ==
+// mailing.ArchiveStatusPublished -- PublicArchiveHandler.GetBySlug's full
+// two-part rule (internal/handlers/public_archive.go), not archive_status
+// alone. This makes "body text visible in raw HTML" (#0519) depend on the
+// exact same predicate as "body text visible in the JSON API", rather than
+// on an invariant (archive_status only reaches 'published' after a send)
+// held elsewhere: today SetArchiveStatus only toggles rows already past
+// 'pending', so this changes no currently-published row, but it stops that
+// invariant from being the only thing standing between an unsent draft and
+// a real archive page. BodyMD is carried unconditionally (a zero value for
+// an unsent campaign, same "narrow first, gate later" shape the rest of
+// this struct already uses) -- internal/seo/fallback.go's renderPage only
+// ever reaches it through archiveRouteMeta, which already requires
+// Published before returning ok=true.
 func toSEOArchiveEntry(c mailing.Campaign) seo.ArchiveEntry {
 	var preheader string
 	if c.Preheader != nil {
@@ -80,6 +96,7 @@ func toSEOArchiveEntry(c mailing.Campaign) seo.ArchiveEntry {
 		Subject:   c.Subject,
 		Preheader: preheader,
 		UpdatedAt: updatedAt,
-		Published: c.ArchiveStatus == mailing.ArchiveStatusPublished,
+		Published: c.Status == mailing.CampaignStatusSent && c.ArchiveStatus == mailing.ArchiveStatusPublished,
+		BodyMD:    c.BodyMD,
 	}
 }
