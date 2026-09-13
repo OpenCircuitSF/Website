@@ -31,12 +31,25 @@ installed during server setup — no separate module-enable step is needed.
 ## Obtain the Let's Encrypt certificate
 
 The vhost references certificate paths under
-`/etc/letsencrypt/live/opencircuitsf.com/`. Obtain a single certificate
-covering both names with certbot:
+`/etc/letsencrypt/live/opencircuitsf.com/`. That lineage is a **wildcard**
+certificate — `opencircuitsf.com` + `*.opencircuitsf.com`, ECDSA — issued
+through the **`dns-route53`** authenticator (DNS-01 via Route 53, which
+never touches a vhost or an ACME webroot):
 
 ```bash
-sudo certbot --apache -d opencircuitsf.com -d www.opencircuitsf.com
+sudo certbot certonly --dns-route53 -d opencircuitsf.com -d '*.opencircuitsf.com'
 ```
+
+This is the certificate `certbot-renew.timer` renews twice daily through
+the same authenticator, so renewal never rewrites Apache config either.
+
+**Do not issue a two-name `--apache` certificate into this lineage.** It
+would replace the wildcard, and the wildcard is shared: every other name
+under the domain — `go.opencircuitsf.com` (the separate ShortLinks deploy),
+`lists.opencircuitsf.com`, any future subdomain — presents this same
+certificate, so narrowing it takes those hosts offline. Let's Encrypt's
+duplicate-certificate rate limit can then block reissuing the wildcard for
+up to a week. See `docs/deployment.md` §9 for the full renewal picture.
 
 ## Notes
 

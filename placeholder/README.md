@@ -119,6 +119,14 @@ origin stays singular later:
 sudo certbot --apache -d opencircuitsf.com -d www.opencircuitsf.com
 ```
 
+**Historical — do not run against the live box.** The placeholder no longer
+serves the domain, and production now runs a *wildcard* certificate
+(`opencircuitsf.com` + `*.opencircuitsf.com`) issued and renewed by
+`certbot-renew.timer` via the `dns-route53` authenticator. The two-name
+`--apache` command above was the placeholder box's original setup; running
+it today would replace the shared wildcard and take every other subdomain
+(`go.opencircuitsf.com` included) offline. See `deploy/apache/README.md`.
+
 When the real site ships, this vhost becomes the `ProxyPass` to the Go service on
 `127.0.0.1:8080` (PRD §10, issue #0064).
 
