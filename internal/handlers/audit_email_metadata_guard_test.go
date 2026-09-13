@@ -39,7 +39,10 @@ import (
 // could carry an email-shaped value under any of a fixed set of suspect key
 // tokens (see metadataKeyIsSuspectedEmailCarrier — not just the literal key
 // "email"; #0237's own phase-3 review found that exact-match blind to
-// {"recipient_email": addr}), resolving inline map literals, the "built the
+// {"recipient_email": addr}), plus (#0502) a second, full-key suspect set
+// for header names like "from"/"sender" that must NOT be matched by token
+// because "from_status" would tokenize into a false positive (see
+// auditEmailMetadataSuspectExactKeys), resolving inline map literals, the "built the
 // map in a local variable, sometimes with a conditional index assignment"
 // shape several real call sites use, and the query-string-shaped free-text
 // case (see classifyMetadataExpr). The result is compared against
@@ -477,6 +480,16 @@ var auditEmailMetadataKnownSites = []auditEmailMetadataKnownSite{
 	{file: "internal/handlers/admin_deliverability.go", action: "ActionSubscriberSoftBounceStreakReset", count: 1, hasIP: true},
 	{file: "internal/handlers/admin_campaign_preview.go", action: "ActionEmailCampaignTestSent", count: 1, hasIP: true},
 	{file: "internal/handlers/admin_subscribers_export.go", action: "ActionSubscriberExported", count: 1, hasIP: true},
+	// #0502: recordParked (#0499's inbound-parking row) writes the
+	// correspondent's raw From: address under the "from" key whenever one
+	// was parseable — a REAL external address, though not a subscriber's
+	// (it matched nothing, or the message would not be parked). Classified
+	// only once the exact-key rule above landed; before that it read
+	// hasEmail=false, a classification miss the #0499 review measured
+	// directly. Not a subscriber's own address, so the privacy policy does
+	// not disclose it the way the six structural sites above are
+	// disclosed — #0503 is the policy half of that decision.
+	{file: "internal/handlers/ses_inbound.go", action: "ActionInboundMailParked", count: 1, hasIP: false},
 }
 
 // auditEntrySite is one audit.Entry{...} composite literal found by the
@@ -1196,12 +1209,46 @@ var auditEmailMetadataSuspectKeyTokens = map[string]bool{
 	"contact":   true,
 }
 
-// metadataKeyIsSuspectedEmailCarrier reports whether key, split on "_",
-// contains a token this guard treats as address-shaped. See
-// auditEmailMetadataSuspectKeyTokens for the exact set and why each token
-// is there.
+// auditEmailMetadataSuspectExactKeys is #0502's second matching rule: keys
+// matched by their FULL, lowercased value rather than by underscore token.
+// "from" (and its sibling "sender") cannot go into
+// auditEmailMetadataSuspectKeyTokens, because the token split makes
+// admin_campaigns.go's "from_status" key (a campaign draft→sending
+// transition record) tokenize to "from"/"status" and fire as a false
+// positive — the exact hazard the "recipients" paragraph above records for
+// substring matching, one tokenizing rule over. A full-key match reads
+// "from_status" as the single key it is and leaves it alone while still
+// catching ses_inbound.go's recordParked, which writes the canonical
+// email-bearing header name "from" holding a real correspondent address
+// (#0499's reviewer measured the miss directly by running scanAuditEntrySites
+// against that site: hasEmail=false, unresolved=""). "sender" rides along in
+// the same pass: no key in the tree equals it today, so it closes the
+// obvious next header name for zero new sites, and it must stay an
+// EXACT-key entry for the same reason "from" does — a future
+// "sender_status"-shaped key would tokenize to "sender"/"status" and
+// false-positive under a token entry. ("subject" is deliberately absent
+// from both sets: recordParked writes one, but it holds the inbound
+// message's subject line, and delivery_health.go / admin_campaigns.go keys
+// of the same name hold our own campaign copy — none is ever an address.)
+// TestAuditEmailMetadataGuardCatchesFromAndSenderKeys pins the two keys
+// stay caught; TestAuditEmailMetadataGuardFromStatusKeyNotCaught pins the
+// specific regression this split into two rules exists to prevent.
+var auditEmailMetadataSuspectExactKeys = map[string]bool{
+	"from":   true,
+	"sender": true,
+}
+
+// metadataKeyIsSuspectedEmailCarrier reports whether key is address-shaped
+// under either matching rule: any underscore-delimited token in
+// auditEmailMetadataSuspectKeyTokens, or the whole key in
+// auditEmailMetadataSuspectExactKeys (#0502 — see that var for why "from"
+// and "sender" cannot be token entries).
 func metadataKeyIsSuspectedEmailCarrier(key string) bool {
-	for _, tok := range strings.Split(strings.ToLower(key), "_") {
+	lowered := strings.ToLower(key)
+	if auditEmailMetadataSuspectExactKeys[lowered] {
+		return true
+	}
+	for _, tok := range strings.Split(lowered, "_") {
 		if auditEmailMetadataSuspectKeyTokens[tok] {
 			return true
 		}
@@ -1540,6 +1587,83 @@ func recordContactSite() {
 		if !s.hasEmail {
 			t.Fatalf("expected hasEmail=true for %s (a %q/%q/%q-shaped key), the widened token set this test pins", s.action, "to", "mail", "contact")
 		}
+	}
+}
+
+// TestAuditEmailMetadataGuardCatchesFromAndSenderKeys pins #0502's
+// exact-key rule in the catching direction: the full keys "from" (the
+// canonical email-bearing header name recordParked writes, and the whole
+// reason the rule exists) and "sender" (its sibling, added in the same pass)
+// must classify as email-bearing. If this starts failing with
+// hasEmail=false, the exact-key set was narrowed — restore it, and update
+// auditEmailMetadataSuspectExactKeys's doc comment and
+// auditEmailMetadataKnownSites together.
+func TestAuditEmailMetadataGuardCatchesFromAndSenderKeys(t *testing.T) {
+	dir := t.TempDir()
+	writeSyntheticGoFile(t, dir, "fixture.go", `package fixture
+
+func recordFromSite() {
+	metadata := map[string]any{"reason": reason}
+	if from != "" {
+		metadata["from"] = from
+	}
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionInboundMailParked,
+		Metadata: metadata,
+	})
+}
+
+func recordSenderSite() {
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionSubscriberSuppressed,
+		Metadata: map[string]any{"sender": senderAddr},
+	})
+}
+`)
+	sites, _ := scanAuditEntrySites(t, []string{dir})
+	if len(sites) != 2 {
+		t.Fatalf("expected exactly two audit.Entry sites, found %d", len(sites))
+	}
+	for _, s := range sites {
+		if s.unresolved != "" {
+			t.Fatalf("expected %s to resolve cleanly, got unresolved: %s", s.action, s.unresolved)
+		}
+		if !s.hasEmail {
+			t.Fatalf("expected hasEmail=true for %s: a full-key \"from\"/\"sender\" match is the #0502 rule this test pins", s.action)
+		}
+	}
+}
+
+// TestAuditEmailMetadataGuardFromStatusKeyNotCaught pins the specific
+// regression #0502 exists to prevent: admin_campaigns.go's "from_status"
+// key (a campaign's draft→sending transition record, written by three
+// production sites in that file and admin_campaign_archive.go) holds a
+// STATUS STRING, never an address. Under a naive "from" suspect TOKEN it
+// would tokenize to "from"/"status" and fire — which is exactly why "from"
+// and "sender" live in the full-key set (auditEmailMetadataSuspectExactKeys)
+// rather than the token set. If this fails with hasEmail=true, the exact-key
+// rule was widened back into a token or substring match; restore the split
+// and update that var's doc comment to say so.
+func TestAuditEmailMetadataGuardFromStatusKeyNotCaught(t *testing.T) {
+	dir := t.TempDir()
+	writeSyntheticGoFile(t, dir, "fixture.go", `package fixture
+
+func recordSomething() {
+	auditor.Record(ctx, audit.Entry{
+		Action:   audit.ActionEmailCampaignMarkedSending,
+		Metadata: map[string]any{"from_status": fromStatus, "campaign_id": id},
+	})
+}
+`)
+	sites, _ := scanAuditEntrySites(t, []string{dir})
+	if len(sites) != 1 {
+		t.Fatalf("expected exactly one audit.Entry site, found %d", len(sites))
+	}
+	if sites[0].unresolved != "" {
+		t.Fatalf("expected the \"from_status\"-keyed literal to resolve cleanly (not unresolved), got: %s", sites[0].unresolved)
+	}
+	if sites[0].hasEmail {
+		t.Fatal("expected hasEmail=false: \"from_status\" holds a status string, not an address — a \"from\" TOKEN would false-positive on it, which is why #0502 made \"from\" an exact-key entry instead")
 	}
 }
 
