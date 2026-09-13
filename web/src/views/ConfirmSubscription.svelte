@@ -114,10 +114,17 @@
   }
   /* #0063: matches Unsubscribe.svelte's .headline:focus -- resultHeading
      receives programmatic focus() once the confirming->success/error
-     transition lands (see the script's doc comment). */
+     transition lands (see the script's doc comment).
+
+     Correction (#0517, 2026-09-12): this h1 carries tabindex="-1" and is
+     outside the tab order, so it is not "keyboard-operable" under WCAG
+     2.4.7 and gets no visible focus indicator at all. outline: none is
+     deliberate, not a no-op: it suppresses the browser's own default focus
+     ring, which would otherwise appear on this programmatic focus move.
+     Do not restore a coloured outline here as an "accessibility fix"; see
+     app.css's h1[tabindex='-1']:focus for the fuller reasoning. */
   .confirm-shell h1:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+    outline: none;
   }
   .confirm-lede {
     margin: 0 0 var(--space-4);

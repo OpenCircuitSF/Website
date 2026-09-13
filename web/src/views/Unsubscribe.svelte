@@ -124,9 +124,16 @@
     font-size: var(--fs-xl);
     font-weight: 700;
   }
+  /* Correction (#0517, 2026-09-12): .headline carries tabindex="-1" so
+   * script.confirm's whole-panel swap can move focus to it and have a
+   * screen reader announce the new panel -- it is outside the tab order and
+   * not "keyboard-operable" under WCAG 2.4.7, so it gets no visible focus
+   * indicator at all. outline: none is deliberate: without it, this
+   * programmatic focus move would pull in the browser's own default focus
+   * ring. Do not restore a coloured outline here as an "accessibility fix";
+   * see app.css's h1[tabindex='-1']:focus for the fuller reasoning. */
   .headline:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+    outline: none;
   }
 
   .unsub-shell p {

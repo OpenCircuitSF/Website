@@ -264,11 +264,59 @@ a:hover { color: var(--accent-hover); }
  * a <details> disclosure) and `[tabindex]` (anything given programmatic focus,
  * e.g. the skip-to-content link's target or a custom widget). :where(...) is
  * used deliberately for its zero specificity, so this rule never needs an
- * !important fight with a more specific component style to win. */
-:where(a, button, summary, [tabindex]):focus-visible {
+ * !important fight with a more specific component style to win.
+ *
+ * Correction (#0517, #0535, 2026-09-12): that [tabindex] clause matched
+ * every tabindex="-1" focus target too, not just the "custom widget" case it
+ * was written for -- browsers grant :focus-visible to a programmatic focus
+ * move whenever they judge the last interaction to be a keypress (e.g. Enter
+ * on a nav link), so this rule alone painted the green ring on route
+ * headings even with h1[tabindex='-1']:focus's own outline removed below.
+ * A tabindex="-1" target (a heading, the four in-page focus targets listed
+ * at that rule, a modal container) is outside the tab order and is not
+ * "keyboard-operable" under WCAG 2.4.7, so it is excluded here rather than
+ * merely recoloured -- [tabindex]:not([tabindex='-1']) is deliberate, not a
+ * typo. Separately, the user does not want the green outline on any link or
+ * link-like control either (#0535): <a>, .nav-tab, and .subtab are excluded
+ * from *this* rule too and get the non-green underline rule below instead --
+ * they are not losing their focus indicator, they are getting a different
+ * one. .nav-tab and .subtab are ALSO real <button> elements, so
+ * button:not(.nav-tab):not(.subtab) below is load-bearing, not redundant
+ * with the exclusion in the rule below: without it, the plain `button`
+ * clause here would still match them and repaint the green ring the next
+ * rule's outline:none was written to remove, leaving the two rules to fight
+ * over source order instead of each owning a disjoint set of elements.
+ * Ordinary buttons and summary are unaffected and keep this ring. */
+:where(button:not(.nav-tab):not(.subtab), summary, [tabindex]:not([tabindex='-1'])):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 2px;
+}
+
+/* #0535: links, and the link-like .nav-tab/.subtab navigation controls (the
+ * Account/Admin header tabs and the admin section tabs), still need a
+ * visible keyboard focus indicator per WCAG 2.4.7 -- but not the green
+ * --accent outline above. The user does not want a green box around any
+ * link, anywhere, in any browser or theme (#0535). An underline in the
+ * current text colour shows which control has focus without reintroducing
+ * green, and matches the underline several of these already show on
+ * :hover (e.g. Footer.svelte's .footer-links a).
+ *
+ * text-decoration-line is !important -- the only use of !important in this
+ * file. The rule above can stay zero-specificity because nothing else sets
+ * `outline`, so there is never a fight to win; text-decoration has no such
+ * uncontested property to borrow; several components set their own
+ * `a { text-decoration: none }` at higher specificity than a bare
+ * :where(...):focus-visible rule (Header.svelte's .primary-nav a,
+ * Footer.svelte's .footer-links a, Admin.svelte's own link styles), so
+ * without !important this rule would silently lose and the focus indicator
+ * would not render. If the user later wants no focus indicator at all on
+ * links, deleting this rule is a one-line change. */
+:where(a, .nav-tab, .subtab):focus-visible {
+  outline: none;
+  text-decoration-line: underline !important;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
 }
 
 /* #0238: every route's <h1> carries tabindex="-1" so App.svelte's
@@ -280,10 +328,23 @@ a:hover { color: var(--accent-hover); }
  * own identical rule (see PreferenceCenter.svelte's .result-message:focus):
  * Safari does not reliably grant :focus-visible to a programmatic .focus()
  * call, so relying on the rule above alone would leave the ring invisible
- * exactly when this fires. */
+ * exactly when this fires.
+ *
+ * Correction (#0517, 2026-09-12): that reasoning about *which pseudo-class*
+ * to bind is unchanged and still governs this rule -- Safari's
+ * :focus-visible gap on programmatic focus is exactly why this stays a
+ * plain :focus rule instead of folding into the :focus-visible rule above.
+ * What changed is the *declaration*: a tabindex="-1" heading is outside the
+ * tab order and is not "keyboard-operable" under WCAG 2.4.7, so it gets no
+ * visible focus indicator at all, not merely a differently-coloured one.
+ * outline: none here is load-bearing, not a no-op -- without it, moving
+ * programmatic focus to any element carrying a tabindex attribute pulls in
+ * the browser's own default focus ring (both Chrome and Safari draw one),
+ * which this rule exists to suppress. Do not restore a coloured outline
+ * here as an "accessibility fix": WCAG 2.4.7 does not apply to a target
+ * that is never reachable by Tab. */
 h1[tabindex='-1']:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
 }
 
 /* ── Layout ─────────────────────────────────────────────────────────────────── */

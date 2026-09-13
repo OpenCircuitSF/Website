@@ -398,10 +398,17 @@
      focus() once their sub-form swaps to the sent state (a whole-panel
      replacement, matching Unsubscribe.svelte's .headline:focus) --
      explicit :focus, not :focus-visible, guarantees the ring shows
-     regardless of a browser's heuristics for programmatic focus. */
+     regardless of a browser's heuristics for programmatic focus.
+
+     Correction (#0517, 2026-09-12): this element carries tabindex="-1" and
+     is outside the tab order, so it is not "keyboard-operable" under WCAG
+     2.4.7 and gets no visible focus indicator at all. outline: none is
+     deliberate: it suppresses the browser's own default focus ring on this
+     programmatic focus move. Do not restore a coloured outline here as an
+     "accessibility fix"; see app.css's h1[tabindex='-1']:focus for the
+     fuller reasoning. */
   .sub-section p.text-notice:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+    outline: none;
   }
 
   @media (max-width: 480px) {
