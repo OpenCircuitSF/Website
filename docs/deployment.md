@@ -391,13 +391,20 @@ Clone the repository (into `/opt/opencircuit`, matching the ShortLinks
 placeholder):
 
 ```bash
-sudo git clone https://github.com/brennanMKE/OpenCircuitSF.git /opt/opencircuit
+sudo git clone https://github.com/OpenCircuitSF/Website.git /opt/opencircuit
 cd /opt/opencircuit
 ```
 
 (The GitHub repo rename `Website` → `OpenCircuitSF` is `CLAUDE.md` §10 item
-1, **not done** as of this writing — the clone URL above is the target name,
-not necessarily what resolves today. Confirm before running it verbatim.)
+1, **not done** as of this writing — ~~the clone URL above is the target
+name, not necessarily what resolves today. Confirm before running it
+verbatim.~~ **Correction (`#0515`, 2026-09-13):** the URL above is what
+resolves today, measured with `git ls-remote`; the previously documented
+`brennanMKE/OpenCircuitSF` returns "Repository not found". It is hardcoded
+rather than derived because the clone runs on the box, which has no `gh`
+— unlike the release steps below, which derive owner/repo with
+`gh repo view` on the workstation and survive the rename automatically.
+After the rename lands this line becomes `OpenCircuitSF/OpenCircuitSF`.)
 
 ---
 

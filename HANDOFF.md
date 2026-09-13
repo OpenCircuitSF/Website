@@ -46,12 +46,20 @@ Neither is answered yet. Both are cheap to decide and expensive to reverse.
 `#0001` writes `module <path>` into `go.mod` and every import in the tree.
 Changing it afterwards is a repo-wide rewrite plus a GitHub rename.
 
-- Current remote: `github.com/brennanMKE/Website`
-- PRD §14 Q5 recommends renaming the repo to `OpenCircuitSF` — `Website` under a
-  personal account is ambiguous once there is more than one.
+- ~~Current remote: `github.com/brennanMKE/Website`~~ **Correction
+  (#0515, 2026-09-13):** measured with `git remote -v` — the repo has
+  moved to the `OpenCircuitSF` owner; the remote is
+  `github.com/OpenCircuitSF/Website`.
+- PRD §14 Q5 recommends renaming the repo to `OpenCircuitSF` — ~~`Website` under a
+  personal account is ambiguous once there is more than one.~~
+  **Correction (#0515, 2026-09-13):** the repo is no longer under a
+  personal account; only the repo-name rename remains pending.
 
 **Decide:** keep `Website`, or rename now and use
-`github.com/brennanMKE/OpenCircuitSF`.
+~~`github.com/brennanMKE/OpenCircuitSF`.~~ `OpenCircuitSF/OpenCircuitSF` —
+the owner half is already `OpenCircuitSF`, so the rename is repo-name only
+(`CLAUDE.md` §2; the Go module path stays
+`github.com/brennanMKE/OpenCircuitSF` regardless).
 
 ### 2.2 Commit granularity for issue files
 

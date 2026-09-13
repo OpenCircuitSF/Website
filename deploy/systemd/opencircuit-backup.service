@@ -1,6 +1,6 @@
 [Unit]
 Description=Open Circuit SF nightly PostgreSQL and media backup
-Documentation=https://github.com/brennanMKE/OpenCircuitSF
+Documentation=https://github.com/OpenCircuitSF/Website
 After=network.target postgresql.service
 Wants=postgresql.service
 # #0229: this is the half of the backup story that used to be missing —

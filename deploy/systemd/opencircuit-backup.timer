@@ -1,6 +1,6 @@
 [Unit]
 Description=Schedule the Open Circuit SF nightly PostgreSQL backup
-Documentation=https://github.com/brennanMKE/OpenCircuitSF
+Documentation=https://github.com/OpenCircuitSF/Website
 
 [Timer]
 # 07:30 UTC, matching the off-peak window ShortLinks' own cron entry used

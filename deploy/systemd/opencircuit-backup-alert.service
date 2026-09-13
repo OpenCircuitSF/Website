@@ -1,6 +1,6 @@
 [Unit]
 Description=Alert a human that the Open Circuit SF backup run failed
-Documentation=https://github.com/brennanMKE/OpenCircuitSF
+Documentation=https://github.com/OpenCircuitSF/Website
 # Deliberately no OnFailure= of its own — see scripts/db/backup-alert.sh's
 # header for why this unit is written to never exit non-zero itself.
 

@@ -1,6 +1,6 @@
 [Unit]
 Description=Open Circuit SF service
-Documentation=https://github.com/brennanMKE/OpenCircuitSF
+Documentation=https://github.com/OpenCircuitSF/Website
 # The service binds a TCP socket and talks to a local PostgreSQL instance, so it
 # must come up after the network and after the database it depends on.
 After=network.target postgresql.service
