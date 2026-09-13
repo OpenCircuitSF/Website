@@ -12,7 +12,7 @@ import (
 // #0471: migrations/000009_create_interests.up.sql seeds the twelve PRD §6.1
 // interests as DML inside a migration that is frozen the moment production
 // applies it (CLAUDE.md §1 — re-derived at filing time via the read-only
-// `ssh ec2` / `schema_migrations` query, production sat at version 22, well
+// on-the-box `schema_migrations` query, production sat at version 22, well
 // past 000009). So 000009 itself can never be edited again, by this project
 // or a downstream (`#0125` is the precedent for what happens when a plan
 // instructs exactly that edit).
