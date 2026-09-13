@@ -160,6 +160,34 @@ the query string, so an indexed URL there is a token leak — and points
 crawlers at `/sitemap.xml`. It has no dynamic content, so it's built once
 at `Site` construction rather than cached with a TTL.
 
+**Three `/api` prefixes are allowed back out of that blanket disallow
+(`#0518`):** `/api/workshops`, `/api/archive`, and `/api/interests`. Every
+public page's server-rendered `<body>` is just `<div id="app"></div>` — all
+visible text (workshop listings, workshop detail, archive listings, archive
+detail) is fetched by the SPA from these three endpoints
+(`web/src/lib/api.ts`) — and Googlebot does not fetch a robots-disallowed
+resource even while it renders JavaScript, so disallowing all of `/api`
+left rendered archive and workshop pages with a header and footer but no
+body text. These three are public, read-only, and carry no token, which is
+exactly the reason `/confirm`, `/preferences`, and `/unsubscribe` stay
+disallowed above and these do not. Google and Bing both resolve a
+conflicting `Allow`/`Disallow` pair by longest match rather than line
+order, so the `Allow` lines override `Disallow: /api` for just these
+prefixes without needing to reorder anything. Every other `/api/*` route
+(`/api/me`, `/api/events`, `/api/subscribe`, `/api/preferences`,
+`/api/unsubscribe`, `/api/list-stats`, `/api/crt-session`, `/api/ses/*`) is
+session/admin-gated, token-bearing, state-changing, or a server-to-server
+webhook, and stays disallowed — see `internal/seo/robots.go`'s
+`allowedAPIPaths` doc comment for the full route-by-route audit.
+
+API responses also carry `X-Robots-Tag: noindex` (`seo.NoIndexAPIMiddleware`,
+wired around the whole mux in `cmd/opencircuit`'s `mountAndServe`), so a
+crawler may fetch the allowed JSON to render a page's text without indexing
+the JSON response itself as a search result. The header is scoped to the
+literal `/api/` path prefix only — the SPA shell, `/sitemap.xml`,
+`/robots.txt`, and the rendered archive/workshop HTML pages it exists to
+keep crawlable never carry it.
+
 `GET /favicon.svg` is **not** part of `internal/seo`. It is a plain static
 file under `web/public/` (and therefore `web/dist/`), served by
 `handlers.SPAHandler`'s ordinary embedded-file lookup like any hashed
