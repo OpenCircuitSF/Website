@@ -211,6 +211,21 @@ describe('no green/--accent outline on a link, .nav-tab, .subtab, or non-interac
     { name: "Login's .sub-section p.text-notice", el: () => attach('<div class="sub-section"><p class="text-notice" tabindex="-1">Sent</p></div>', 'p.text-notice') },
   ];
 
+  // #0517 review: the exact element in the user's Safari screenshot, and a
+  // non-h1 heading that receives programmatic focus. The generic <h1> above
+  // cannot catch a component rule keyed on a class (e.g. `.app-title:focus`),
+  // and no h1-only rule covers CampaignEditor's <h2>/<h3>.
+  nonInteractiveTargets.push(
+    {
+      name: 'Account/Admin header title (.app-header h1.app-title)',
+      el: () => attach('<div class="app-shell"><header class="app-header"><h1 class="app-title" tabindex="-1">Open Circuit SF</h1></header></div>', 'h1.app-title'),
+    },
+    {
+      name: "CampaignEditor's h2.editor-heading",
+      el: () => attach('<h2 class="editor-heading" tabindex="-1">Campaign</h2>', 'h2'),
+    },
+  );
+
   for (const { name, el } of nonInteractiveTargets) {
     it(`${name} gets no visible outline from any rule (not even a non-green one)`, () => {
       const element = el();
@@ -221,6 +236,20 @@ describe('no green/--accent outline on a link, .nav-tab, .subtab, or non-interac
           `${rule.file}: "${rule.selector}" gives ${name} a visible outline (${JSON.stringify(rule.decls)}) -- a tabindex="-1" target is outside the tab order and gets NO focus indicator, per #0517`,
         ).toBe(false);
       }
+    });
+
+    // Absence of an author outline is not enough: with no author rule at all,
+    // the browser's own UA focus ring still paints on a programmatically
+    // focused tabindex="-1" element (measured in Chromium 151 after keyboard
+    // navigation; Safari's ring follows the macOS accent colour, which can be
+    // green). A plain :focus rule -- not :focus-visible, which Safari does
+    // not grant to programmatic focus -- must actively set outline: none.
+    it(`${name} is matched by a plain :focus rule that sets outline: none (suppresses the browser's own ring)`, () => {
+      const element = el();
+      const suppressing = matchingRules(element).filter(
+        (r) => /:focus\s*$/.test(r.selector) && (r.decls.outline ?? '').trim().toLowerCase() === 'none',
+      );
+      expect(suppressing.length, `no plain :focus { outline: none } rule matches ${name}`).toBeGreaterThan(0);
     });
   }
 

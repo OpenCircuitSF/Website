@@ -347,6 +347,18 @@ h1[tabindex='-1']:focus {
   outline: none;
 }
 
+/* #0517 review: the same for every other tabindex="-1" focus target -- the
+ * non-h1 headings CampaignEditor focuses (h2.editor-heading,
+ * h3.preflight-heading), the in-page status messages, and modal dialog
+ * containers. Excluding them from the :focus-visible rule above removed the
+ * green ring but left the browser's own UA focus ring, which Chromium paints
+ * after keyboard navigation and Safari tints with the macOS accent colour.
+ * :where() keeps this at zero specificity, so it still beats the UA
+ * stylesheet (author origin) without outranking any component rule. */
+:where([tabindex='-1']):focus {
+  outline: none;
+}
+
 /* ── Layout ─────────────────────────────────────────────────────────────────── */
 .app-shell {
   max-width: 1040px;
