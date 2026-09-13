@@ -131,6 +131,16 @@ a canceled-and-published workshop gets its own cache entry
 (`"workshop:{slug}"`), not the single shared fallback bucket every other
 canceled/draft/unknown slug shares.
 
+**Validate against Google's Rich Results Test after any change here
+(`#0149`).** The tool only accepts a publicly reachable URL, so this is a
+post-deploy step that `scripts/check.sh` cannot perform. Paste a workshop
+detail URL into https://search.google.com/test/rich-results and record
+errors *and* warnings, not just errors. The first run, on 2026-09-12
+against `/workshops/programming-leds`, reported only two missing optional
+properties, `offers` and `performer`; both are deliberately not emitted.
+Repeat the run after any change to `jsonld.go`, and include a canceled
+workshop next time — `EventCancelled` has not yet been through the tool.
+
 ## Sitemap and `robots.txt`
 
 `GET /sitemap.xml` (`internal/seo/sitemap.go`) lists the curated marketing
