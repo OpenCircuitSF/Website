@@ -74,6 +74,18 @@ const (
 	tokenTwitterTitle       = "%%OC_TWITTER_TITLE%%"
 	tokenTwitterDescription = "%%OC_TWITTER_DESCRIPTION%%"
 
+	// tokenCanonical (#0529) is substituted with a complete
+	// `<link rel="canonical" href="...">` element for every indexable
+	// public route, or the empty string for every other one -- private and
+	// token routes, the generic fallback, the 404 default, and unknown or
+	// draft slugs must never emit a canonical, so the element is built
+	// server-side (canonicalLink below) rather than living statically in
+	// the template with an href that could only be blanked by hand. Like
+	// tokenJSONLD and tokenBody, the value is a self-contained HTML element
+	// substituted unescaped as a whole; the URL inside it IS
+	// html.EscapeString'd at build time (see canonicalLink).
+	tokenCanonical = "%%OC_CANONICAL%%"
+
 	// tokenBody (#0519) is substituted inside web/index.html's <div
 	// id="app">...</div> with server-rendered fallback content -- an
 	// <h1>, the route's main text, and plain nav links -- for every public
@@ -145,6 +157,18 @@ type RouteMeta struct {
 	OGURL         string
 	OGType        string
 	TwitterCard   string
+
+	// Canonical (#0529) is the route's absolute canonical URL, emitted as a
+	// whole `<link rel="canonical">` element by canonicalLink. Set ONLY for
+	// indexable public routes, and required to equal OGURL there (pinned by
+	// TestRender_CanonicalMatchesOGURLOnIndexableRoutes) — both are built
+	// from baseURL + the route's own path, so a URL variant that carries a
+	// query string still canonicalizes to the parameter-free form. Empty
+	// for every private/token route, the fallback and not-found buckets,
+	// and any unknown/draft/withheld slug: a canonical pointing at a page
+	// that is not publicly available (or at the site root from a page that
+	// is not the site root) would be worse than none, so none is emitted.
+	Canonical string
 
 	// JSONLD is the complete `<script type="application/ld+json">...</script>`
 	// block for #0055's schema.org Event data, or "" for every route that
@@ -230,6 +254,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGDescription: "A hands-on electronics workshop and community space in San Francisco.",
 			OGImage:       image,
 			OGURL:         baseURL + "/",
+			Canonical:     baseURL + "/",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
 			page:          pageContent{kind: pageStatic, path: "/"},
@@ -241,6 +266,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGDescription: "What Open Circuit SF is, who runs it, and why it exists.",
 			OGImage:       image,
 			OGURL:         baseURL + "/about",
+			Canonical:     baseURL + "/about",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
 			page:          pageContent{kind: pageStatic, path: "/about"},
@@ -252,6 +278,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGDescription: "What Open Circuit SF collects, why, and how to leave.",
 			OGImage:       image,
 			OGURL:         baseURL + "/privacy",
+			Canonical:     baseURL + "/privacy",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
 			page:          pageContent{kind: pageStatic, path: "/privacy"},
@@ -263,6 +290,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGDescription: "Upcoming hands-on electronics workshops: soldering, PCB design, and hardware hacking.",
 			OGImage:       image,
 			OGURL:         baseURL + "/workshops",
+			Canonical:     baseURL + "/workshops",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
 			page:          pageContent{kind: pageWorkshopsIndex},
@@ -274,6 +302,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGDescription: "Get notified about new workshops and events.",
 			OGImage:       image,
 			OGURL:         baseURL + "/subscribe",
+			Canonical:     baseURL + "/subscribe",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
 			page:          pageContent{kind: pageStatic, path: "/subscribe"},
@@ -288,6 +317,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			OGDescription: "Past emails from Open Circuit SF.",
 			OGImage:       image,
 			OGURL:         baseURL + "/archive",
+			Canonical:     baseURL + "/archive",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
 			page:          pageContent{kind: pageArchiveIndex},
@@ -464,6 +494,7 @@ func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 		OGDescription: w.Summary,
 		OGImage:       image,
 		OGURL:         r.baseURL + "/workshops/" + slug,
+		Canonical:     r.baseURL + "/workshops/" + slug,
 		OGType:        "website",
 		TwitterCard:   "summary_large_image",
 		JSONLD:        jsonld,
@@ -548,10 +579,27 @@ func (r *Renderer) archiveRouteMeta(slug string) (RouteMeta, bool) {
 		OGDescription: description,
 		OGImage:       r.baseURL + "/og-default.png",
 		OGURL:         r.baseURL + "/archive/" + slug,
+		Canonical:     r.baseURL + "/archive/" + slug,
 		OGType:        "article",
 		TwitterCard:   "summary_large_image",
 		page:          pageContent{kind: pageArchiveEntry, archive: e},
 	}, true
+}
+
+// canonicalLink renders meta.Canonical as a whole `<link rel="canonical">`
+// element (#0529), or the empty string when the route has none -- so private
+// and token routes, the fallback and not-found buckets, and unknown, draft,
+// or withheld slugs emit no canonical at all. The URL is HTML-escaped here,
+// at the point of injection, exactly like every %%OC_OG_*%% value in
+// substitute: baseURL comes from configuration and the path part is built
+// from route tables in this package, so no user-controlled value reaches it
+// today, but the element is constructed outside html.EscapeString's reach in
+// substitute and must therefore carry its own.
+func canonicalLink(canonical string) string {
+	if canonical == "" {
+		return ""
+	}
+	return `<link rel="canonical" href="` + html.EscapeString(canonical) + `">`
 }
 
 // absoluteURL resolves a possibly-relative asset path against baseURL. An
@@ -673,6 +721,7 @@ func (r *Renderer) substitute(m RouteMeta) (body []byte, cacheable bool) {
 		tokenTwitterTitle, html.EscapeString(m.OGTitle),
 		tokenTwitterDescription, html.EscapeString(m.OGDescription),
 		tokenJSONLD, m.JSONLD,
+		tokenCanonical, canonicalLink(m.Canonical),
 		tokenBody, pageHTML,
 	)
 	return []byte(replacer.Replace(string(r.template))), cacheable

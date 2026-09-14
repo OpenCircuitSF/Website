@@ -25,6 +25,7 @@ const testTemplate = `<!doctype html>
 <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
 <meta name="twitter:title" content="%%OC_TWITTER_TITLE%%" />
 <meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
+%%OC_CANONICAL%%
 %%OC_JSONLD%%
 </head><body><div id="app">%%OC_BODY%%</div></body></html>`
 
@@ -524,7 +525,7 @@ func TestRender_AllTokensSubstituted(t *testing.T) {
 	tokens := []string{
 		tokenTitle, tokenDescription, tokenOGTitle, tokenOGDescription,
 		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard,
-		tokenTwitterTitle, tokenTwitterDescription, tokenJSONLD, tokenBody,
+		tokenTwitterTitle, tokenTwitterDescription, tokenCanonical, tokenJSONLD, tokenBody,
 	}
 	for _, path := range []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/nonexistent", "/workshops/some-slug"} {
 		body := string(r.Render(path))
@@ -560,13 +561,120 @@ func TestSourceTemplate_EachTokenAppearsExactlyOnce(t *testing.T) {
 	tokens := []string{
 		tokenTitle, tokenDescription, tokenOGTitle, tokenOGDescription,
 		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard,
-		tokenTwitterTitle, tokenTwitterDescription, tokenJSONLD, tokenBody,
+		tokenTwitterTitle, tokenTwitterDescription, tokenCanonical, tokenJSONLD, tokenBody,
 	}
 	for _, tok := range tokens {
 		if n := strings.Count(body, tok); n != 1 {
 			t.Errorf("%s: token %q appears %d times, want exactly 1 (a duplicate is almost always a literal mention of the token inside an explanatory comment, which strings.NewReplacer substitutes just like the real substitution site)", templatePath, tok, n)
 		}
 	}
+}
+
+// --- Canonical URLs (#0529) --------------------------------------------
+
+// TestRender_CanonicalMatchesOGURLOnIndexableRoutes is #0529's criteria 1
+// and 2: every indexable public route -- the six static marketing routes,
+// a published workshop detail, and a published archive detail -- serves a
+// <link rel="canonical"> whose URL is built from BASE_URL, carries no query
+// string or fragment, and EQUALS og:url exactly. The two values are set by
+// two independent fields on RouteMeta, so this test is what fails if they
+// ever diverge.
+func TestRender_CanonicalMatchesOGURLOnIndexableRoutes(t *testing.T) {
+	source := fakeWorkshopSource{
+		"solder-101": {
+			Slug: "solder-101", Title: "Intro to Soldering", Summary: "s",
+			Status: WorkshopPublished, Published: true,
+		},
+	}
+	archive := fakeArchiveSource{
+		"09-2026": {
+			Slug: "09-2026", Subject: "September update",
+			UpdatedAt: "2026-09-01", Published: true,
+		},
+	}
+	r := NewRenderer([]byte(testTemplate), testBaseURL, source, archive)
+
+	paths := []string{"/", "/about", "/privacy", "/workshops", "/workshops/solder-101", "/subscribe", "/archive", "/archive/09-2026"}
+	for _, p := range paths {
+		body := string(r.Render(p))
+		ogURL := extractMetaContent(t, body, "og:url")
+		canon := extractCanonicalHref(t, body)
+		if canon == "" {
+			t.Errorf("path %q: no <link rel=\"canonical\"> served for an indexable public route", p)
+			continue
+		}
+		if canon != ogURL {
+			t.Errorf("path %q: canonical %q != og:url %q -- the two must never diverge", p, canon, ogURL)
+		}
+		if !strings.HasPrefix(canon, testBaseURL+"/") {
+			t.Errorf("path %q: canonical %q not built from BASE_URL %q", p, canon, testBaseURL)
+		}
+		if strings.ContainsAny(canon, "?#") {
+			t.Errorf("path %q: canonical %q carries a query string or fragment", p, canon)
+		}
+	}
+}
+
+// TestRender_NoCanonicalOnPrivateUnknownOrUnpublishedRoutes is #0529's
+// criterion 3: no canonical is emitted for private or token routes, the
+// 404 default, an unknown workshop slug, a draft workshop, a never-published
+// canceled one, or a withheld archive entry -- never point a canonical at a
+// page that is not publicly available.
+func TestRender_NoCanonicalOnPrivateUnknownOrUnpublishedRoutes(t *testing.T) {
+	source := fakeWorkshopSource{
+		"draft-1":    {Slug: "draft-1", Title: "Draft", Status: WorkshopDraft, Published: false},
+		"ghost-1":    {Slug: "ghost-1", Title: "Never published canceled", Status: WorkshopCanceled, Published: false},
+		"canceled-1": {Slug: "canceled-1", Title: "Canceled", Status: WorkshopCanceled, Published: true},
+	}
+	archive := fakeArchiveSource{
+		"withheld-1": {Slug: "withheld-1", Subject: "Withheld", Published: false},
+	}
+	r := NewRenderer([]byte(testTemplate), testBaseURL, source, archive)
+
+	for _, p := range []string{
+		"/confirm", "/preferences", "/unsubscribe", "/admin", "/account", "/auth", "/login",
+		"/this-page-does-not-exist",
+		"/workshops/unknown-slug", "/workshops/draft-1", "/workshops/ghost-1",
+		"/archive/withheld-1",
+	} {
+		body := string(r.Render(p))
+		if strings.Contains(body, `rel="canonical"`) {
+			t.Errorf("path %q: emitted a canonical link where none is allowed (private/token route, 404, or not publicly available): %s", p, body)
+		}
+	}
+}
+
+// TestCanonicalLink_EscapesTheURL pins #0529's criterion 5: the URL is
+// HTML-escaped where injected. canonicalLink builds the element outside
+// substitute's own EscapeString pass, so it must carry its own -- proven
+// here with a URL whose query separators would otherwise break out of the
+// href attribute.
+func TestCanonicalLink_EscapesTheURL(t *testing.T) {
+	if got := canonicalLink(""); got != "" {
+		t.Errorf("canonicalLink(\"\") = %q, want \"\"", got)
+	}
+	got := canonicalLink(`https://x.test/?a=1&b="2"`)
+	want := `<link rel="canonical" href="https://x.test/?a=1&amp;b=&#34;2&#34;">`
+	if got != want {
+		t.Errorf("canonicalLink = %q, want %q", got, want)
+	}
+}
+
+// extractCanonicalHref returns the href value of the first
+// <link rel="canonical" href="..."> in html, or "" when none is present.
+func extractCanonicalHref(t *testing.T, html string) string {
+	t.Helper()
+	const marker = `rel="canonical" href="`
+	start := strings.Index(html, marker)
+	if start == -1 {
+		return ""
+	}
+	start += len(marker)
+	end := strings.Index(html[start:], `"`)
+	if end == -1 {
+		t.Fatalf("canonical link href not closed in: %s", html)
+	}
+	return html[start : start+end]
 }
 
 // --- Cache + invalidation ---------------------------------------------

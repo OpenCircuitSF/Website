@@ -42,6 +42,14 @@
          drift. -->
     <meta name="twitter:title" content="%%OC_TWITTER_TITLE%%" />
     <meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
+    <!-- Per-route canonical URL (#0529). The token below is substituted with
+         a whole <link rel="canonical" href="..."> element for every
+         indexable public route, or an empty string for private/token routes,
+         the 404 default, and unknown/draft/withheld slugs — a canonical must
+         never point at a page that is not publicly available, so none is
+         emitted there at all. The URL is built from BASE_URL, equals og:url,
+         and is HTML-escaped by the injector. -->
+    %%OC_CANONICAL%%
     <!-- schema.org Event structured data for a workshop detail page (#0055,
          PRD §7.4). The JSON-LD placeholder token below is substituted with
          either a whole `<script type="application/ld+json">...</script>` block (built

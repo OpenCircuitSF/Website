@@ -111,6 +111,7 @@ var distPlaceholderTokens = []string{
 	tokenTwitterCard,
 	tokenTwitterTitle,
 	tokenTwitterDescription,
+	tokenCanonical,
 	tokenJSONLD,
 	tokenBody,
 }
@@ -203,6 +204,7 @@ func TestValidateDistPlaceholder(t *testing.T) {
 <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
 <meta name="twitter:title" content="%%OC_TWITTER_TITLE%%" />
 <meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
+%%OC_CANONICAL%%
 %%OC_JSONLD%%
 </head><body><div id="app">%%OC_BODY%%</div></body></html>`
 
@@ -278,6 +280,7 @@ func TestValidateDistPlaceholder(t *testing.T) {
 <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
 <meta name="twitter:title" content="%%OC_TWITTER_TITLE%%" />
 <meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
+%%OC_CANONICAL%%
 %%OC_JSONLD%%
 <script type="module" crossorigin src="/static/index-Cs2-8eM1.js"></script>
 </head><body><div id="app">%%OC_BODY%%</div></body></html>`

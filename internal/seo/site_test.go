@@ -111,6 +111,34 @@ func TestMiddleware_NonHTMLPassesThroughUnchanged(t *testing.T) {
 	}
 }
 
+// TestMiddleware_QueryStringYieldsParameterFreeCanonical is #0529's
+// criterion 4: a public page requested with tracking parameters still
+// serves the parameter-free canonical. The middleware passes r.URL.Path
+// (never RawQuery) into Renderer.Render, so the canonical is built from the
+// route's own path form and the variant URL cannot leak into it; the same
+// request's og:url must agree, per the pinned canonical==og:url rule.
+func TestMiddleware_QueryStringYieldsParameterFreeCanonical(t *testing.T) {
+	site := NewSite([]byte(testTemplate), testBaseURL, nil, nil)
+	next := fakeSPAHandler{knownPaths: map[string]bool{"/": true}}
+	mw := site.Middleware(next)
+
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?utm_source=newsletter&fbclid=abc123", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	canon := extractCanonicalHref(t, body)
+	ogURL := extractMetaContent(t, body, "og:url")
+	if canon != testBaseURL+"/" {
+		t.Errorf("canonical = %q, want the parameter-free %q", canon, testBaseURL+"/")
+	}
+	if canon != ogURL {
+		t.Errorf("canonical %q != og:url %q", canon, ogURL)
+	}
+}
+
 // TestSitemapHandler_ContentType covers #0020's "served with correct content
 // types" criterion for sitemap.xml.
 func TestSitemapHandler_ContentType(t *testing.T) {
