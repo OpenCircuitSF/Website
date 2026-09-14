@@ -11,12 +11,14 @@ import (
 // Site wires the meta-tag injector (#0019), sitemap.xml, robots.txt (#0020),
 // and the per-workshop Open Graph card generator (#0273) into the HTTP
 // server. It is the single type cmd/opencircuit's mountAndServe constructs
-// and mounts.
+// and mounts. #0532 added the per-archive card generator; #0531 added the
+// archive's Atom feed.
 type Site struct {
 	renderer *Renderer
 	sitemap  *Sitemap
 	robots   []byte
 	cards    *cardCache
+	feed     *Feed
 }
 
 // NewSite constructs a Site from the built index.html template bytes
@@ -32,6 +34,7 @@ func NewSite(indexHTML []byte, baseURL string, source WorkshopSource, archive Ar
 		sitemap:  NewSitemap(baseURL, source, archive),
 		robots:   BuildRobotsTxt(baseURL),
 		cards:    newCardCache(mustCardRenderer()),
+		feed:     NewFeed(baseURL, archive),
 	}
 }
 
@@ -56,6 +59,7 @@ func (s *Site) Invalidate() {
 	s.renderer.Invalidate()
 	s.sitemap.invalidate()
 	s.cards.invalidate()
+	s.feed.invalidate()
 }
 
 // Middleware wraps next (in practice, handlers.NewSPAHandler's catch-all)
@@ -106,6 +110,26 @@ func (s *Site) SitemapHandler() http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		_, _ = w.Write(body)
+	}
+}
+
+// FeedHandler serves GET /archive/feed.xml (#0531): the newsletter
+// archive's Atom feed. Registered as its own, more specific pattern in
+// cmd/opencircuit/main.go's mountAndServe -- handlers.archiveDetailPattern
+// (`^/archive/[^/]+$`) does not match the two-segment path, so no change to
+// internal/handlers/routes.go is needed. Serves from the Feed's TTL cache,
+// which Site.Invalidate clears, so withholding a campaign drops it from the
+// feed immediately (criterion 5) through the same invalidation path the
+// sitemap and archive pages use.
+func (s *Site) FeedHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := s.feed.Render()
+		if err != nil {
+			http.Error(w, "failed to build feed", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/atom+xml; charset=utf-8")
 		_, _ = w.Write(body)
 	}
 }

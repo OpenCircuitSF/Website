@@ -1729,6 +1729,13 @@ func mountAndServe(
 	mux.Handle("GET /sitemap.xml", site.SitemapHandler())
 	mux.Handle("GET /robots.txt", site.RobotsHandler())
 
+	// The newsletter archive's Atom feed (#0531) -- own, more specific
+	// pattern, resolved ahead of the "GET /" SPA catch-all (and not matched
+	// by archiveDetailPattern, which stops at one segment). Feeds off the
+	// same ArchiveSource as the sitemap, and Site.Invalidate drops a
+	// withheld campaign from it the same way.
+	mux.Handle("GET /archive/feed.xml", site.FeedHandler())
+
 	// Per-workshop Open Graph card (#0273) -- an explicit, more specific
 	// pattern than the "GET /" SPA catch-all below, so Go 1.22's ServeMux
 	// resolves it first without any change to

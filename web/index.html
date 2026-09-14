@@ -63,6 +63,12 @@
          embedding it verbatim inside <script> is safe and re-escaping it as
          HTML text would corrupt the JSON. -->
     %%OC_JSONLD%%
+    <!-- Atom feed of the newsletter archive (#0531). A static literal, not a
+         %%OC_*%% token: every public page carries the same discovery link
+         (root-relative, so it resolves correctly from any route), the same
+         way the favicons and og:site_name above are constants rather than
+         per-route values. -->
+    <link rel="alternate" type="application/atom+xml" title="Open Circuit SF newsletter" href="/archive/feed.xml" />
     <!-- SVG favicon first (currentColor-free, self-switches light/dark via its
          own internal prefers-color-scheme, so it works before app.css loads);
          favicon-32.png is the raster fallback for browsers that don't support
