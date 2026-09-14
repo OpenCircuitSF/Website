@@ -279,11 +279,15 @@ cleanup() {
 trap cleanup EXIT
 
 step "Building in a disposable worktree at $COMMIT"
-WORKTREE_DIR="$(mktemp -u "${TMPDIR:-/tmp}/opencircuit-release-worktree-XXXXXX")"
+# Scratch stays inside the repo, under gitignored .scratch/ (#0537 — operator
+# directive 2026-09-13: tooling writes never leave the project for TMPDIR).
+# mkdir -p is required: mktemp -d does not create missing parents.
+mkdir -p "$REPO_ROOT/.scratch"
+WORKTREE_DIR="$(mktemp -u "$REPO_ROOT/.scratch/release-worktree-XXXXXX")"
 git worktree add --detach --quiet "$WORKTREE_DIR" "$COMMIT"
 ok "worktree: $WORKTREE_DIR"
 
-SCRATCH_DIR="$(mktemp -d "${TMPDIR:-/tmp}/opencircuit-release-XXXXXX")"
+SCRATCH_DIR="$(mktemp -d "$REPO_ROOT/.scratch/release-XXXXXX")"
 STAGE="$SCRATCH_DIR/release-${TAG}"
 mkdir -p "$STAGE"
 
@@ -334,7 +338,7 @@ ZIP_NAME="opencircuit-${TAG}-linux-arm64.zip"
 ok "$(cat "$SCRATCH_DIR/SHA256SUMS")"
 
 # ---- release notes ------------------------------------------------------------
-NOTES_FILE="$(mktemp "${TMPDIR:-/tmp}/opencircuit-release-notes-XXXXXX")"
+NOTES_FILE="$(mktemp "$REPO_ROOT/.scratch/release-notes-XXXXXX")"
 {
   printf 'Commit: %s\n' "$COMMIT"
   printf 'Tag: %s\n' "$TAG"
