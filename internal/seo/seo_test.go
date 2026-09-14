@@ -404,10 +404,12 @@ func TestRender_JSONLD_DraftAndUnknownSlugOmitBlock(t *testing.T) {
 
 // TestRender_JSONLD_StaticRoutesHaveNoBlock confirms the token is simply
 // removed (never left as a stray empty <script> tag or leaked into a
-// non-workshop page) for every static marketing route.
+// non-workshop page) for every static marketing route except "/", which
+// #0530 gives its own Organization + WebSite block -- asserted separately
+// by TestRender_JSONLD_HomePageEmitsOrganizationAndWebSite.
 func TestRender_JSONLD_StaticRoutesHaveNoBlock(t *testing.T) {
 	r := newTestRenderer(nil)
-	for _, p := range []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/archive", "/admin"} {
+	for _, p := range []string{"/about", "/privacy", "/workshops", "/subscribe", "/archive", "/admin"} {
 		assertNoJSONLD(t, string(r.Render(p)))
 	}
 }
@@ -852,3 +854,160 @@ type fakeClock struct{ t time.Time }
 
 func (c *fakeClock) now() time.Time          { return c.t }
 func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+// ── #0530: structured data for the archive and the organisation ──────────────
+
+// TestRender_JSONLD_ArchiveEntryEmitsArticle pins criterion 1: a published
+// archive page emits a schema.org Article carrying the subject as headline,
+// archived_at as datePublished, the organisation as publisher, the
+// canonical URL, #0528's description, and #0532's card as image.
+func TestRender_JSONLD_ArchiveEntryEmitsArticle(t *testing.T) {
+	source := fakeArchiveSource{
+		"09-2026": {
+			Slug: "09-2026", Subject: "September newsletter",
+			BodyMD:    "We soldered, we debugged, we shipped.",
+			Published: true, ArchivedAt: "2026-09-01T18:00:00Z", UpdatedAt: "2026-09-01",
+		},
+	}
+	r := newTestRendererWithArchive(source)
+	body := string(r.Render("/archive/09-2026"))
+
+	article := extractJSONLD(t, body)
+	if article["@type"] != "Article" {
+		t.Errorf("@type = %v, want Article", article["@type"])
+	}
+	if article["headline"] != "September newsletter" {
+		t.Errorf("headline = %v, want the campaign subject", article["headline"])
+	}
+	if article["datePublished"] != "2026-09-01T18:00:00Z" {
+		t.Errorf("datePublished = %v, want archived_at verbatim", article["datePublished"])
+	}
+	if article["url"] != testBaseURL+"/archive/09-2026" {
+		t.Errorf("url = %v, want the archive page URL", article["url"])
+	}
+	if article["image"] != testBaseURL+"/archive/09-2026/og.png" {
+		t.Errorf("image = %v, want #0532's generated card URL", article["image"])
+	}
+	if article["description"] != "We soldered, we debugged, we shipped." {
+		t.Errorf("description = %v, want #0528's body-derived text", article["description"])
+	}
+	pub, ok := article["publisher"].(map[string]any)
+	if !ok {
+		t.Fatalf("publisher = %v, want an object", article["publisher"])
+	}
+	if pub["@type"] != "Organization" || pub["name"] != "Open Circuit SF" || pub["url"] != testBaseURL+"/" {
+		t.Errorf("publisher = %v, want the Open Circuit SF organization at the site root", pub)
+	}
+}
+
+// TestRender_JSONLD_ArchiveNothingForNonPublishedOrNeverArchived pins
+// criterion 4 plus buildArticle's own defence-in-depth gates: withheld and
+// never-sent campaigns and unknown slugs carry no JSON-LD at all, and a
+// published row with no archived_at gets no fabricated date -- no block
+// rather than an invalid one.
+func TestRender_JSONLD_ArchiveNothingForNonPublishedOrNeverArchived(t *testing.T) {
+	source := fakeArchiveSource{
+		"withheld": {Slug: "withheld", Subject: "Withheld", Published: false, ArchivedAt: "2026-09-01T18:00:00Z"},
+		"unsent":   {Slug: "unsent", Subject: "Never sent", Published: false},
+		"nodate":   {Slug: "nodate", Subject: "Published but never archived", Published: true},
+	}
+	r := newTestRendererWithArchive(source)
+	for _, slug := range []string{"withheld", "unsent", "nodate", "does-not-exist"} {
+		body := string(r.Render("/archive/" + slug))
+		assertNoJSONLD(t, body)
+	}
+}
+
+// TestRender_JSONLD_ArchiveHostileSubjectStaysValidJSON is #0055's
+// hostile-payload test applied to the Article block (criterion 3): a
+// subject and body built to break out of a <script> element must
+// round-trip through JSON escaping instead.
+func TestRender_JSONLD_ArchiveHostileSubjectStaysValidJSON(t *testing.T) {
+	tricky := `Solder & Circuits "Intro" <script>alert(1)</script> \backslash\`
+	source := fakeArchiveSource{
+		"tricky": {
+			Slug: "tricky", Subject: tricky,
+			BodyMD:    tricky + " with prose after.",
+			Published: true, ArchivedAt: "2026-09-01T18:00:00Z",
+		},
+	}
+	r := newTestRendererWithArchive(source)
+	body := string(r.Render("/archive/tricky"))
+
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Fatalf("literal, unescaped </script> sequence reached the page: %s", body)
+	}
+	article := extractJSONLD(t, body)
+	if article["headline"] != tricky {
+		t.Errorf("headline = %v, want the exact tricky subject round-tripped", article["headline"])
+	}
+}
+
+// TestRender_JSONLD_HomePageEmitsOrganizationAndWebSite pins criterion 2:
+// the home page emits one JSON-LD block whose @graph holds an Organization
+// (name, url, logo, sameAs for the organisation's real public profiles) and
+// a WebSite node.
+func TestRender_JSONLD_HomePageEmitsOrganizationAndWebSite(t *testing.T) {
+	r := newTestRenderer(nil)
+	body := string(r.Render("/"))
+
+	home := extractJSONLD(t, body)
+	if home["@context"] != "https://schema.org" {
+		t.Errorf("@context = %v, want https://schema.org", home["@context"])
+	}
+	graph, ok := home["@graph"].([]any)
+	if !ok || len(graph) != 2 {
+		t.Fatalf("@graph = %v, want two nodes", home["@graph"])
+	}
+
+	org, ok := graph[0].(map[string]any)
+	if !ok || org["@type"] != "Organization" {
+		t.Fatalf("graph[0] = %v, want the Organization node", graph[0])
+	}
+	if org["name"] != "Open Circuit SF" || org["url"] != testBaseURL+"/" {
+		t.Errorf("Organization = %v, want the site identity", org)
+	}
+	if org["logo"] != testBaseURL+"/mark-green-512.png" {
+		t.Errorf("logo = %v, want the webmanifest brand mark", org["logo"])
+	}
+	sameAs, ok := org["sameAs"].([]any)
+	if !ok || len(sameAs) != 3 {
+		t.Fatalf("sameAs = %v, want the three real public profiles", org["sameAs"])
+	}
+	for _, want := range []string{
+		"https://bsky.app/profile/opencircuitsf.com",
+		"https://discord.gg/Fq9ug6QXV3",
+		"https://luma.com/opencircuitsf",
+	} {
+		found := false
+		for _, got := range sameAs {
+			if got == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("sameAs missing %v", want)
+		}
+	}
+
+	ws, ok := graph[1].(map[string]any)
+	if !ok || ws["@type"] != "WebSite" {
+		t.Fatalf("graph[1] = %v, want the WebSite node", graph[1])
+	}
+	if ws["name"] != "Open Circuit SF" || ws["url"] != testBaseURL+"/" {
+		t.Errorf("WebSite = %v, want the site identity", ws)
+	}
+}
+
+// TestRender_JSONLD_NothingOnOtherRoutesForArchive pins that the Article
+// block stays on the archive detail route: the archive index, the workshop
+// routes, and the fallback buckets carry no archive-derived JSON-LD.
+func TestRender_JSONLD_NothingOnOtherRoutesForArchive(t *testing.T) {
+	source := fakeArchiveSource{
+		"09-2026": {Slug: "09-2026", Subject: "September newsletter", Published: true, ArchivedAt: "2026-09-01T18:00:00Z"},
+	}
+	r := newTestRendererWithArchive(source)
+	for _, path := range []string{"/archive", "/about", "/subscribe"} {
+		assertNoJSONLD(t, string(r.Render(path)))
+	}
+}

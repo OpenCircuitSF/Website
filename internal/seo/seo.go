@@ -257,7 +257,11 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			Canonical:     baseURL + "/",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
-			page:          pageContent{kind: pageStatic, path: "/"},
+			// #0530: the Organization + WebSite @graph (jsonld.go), built
+			// once at construction from fixed brand constants -- nothing
+			// here varies per request.
+			JSONLD: homeJSONLD(baseURL),
+			page:   pageContent{kind: pageStatic, path: "/"},
 		},
 		"/about": {
 			Title:         "About — Open Circuit SF",
@@ -613,7 +617,11 @@ func (r *Renderer) archiveRouteMeta(slug string) (RouteMeta, bool) {
 		Canonical:     r.baseURL + "/archive/" + slug,
 		OGType:        "article",
 		TwitterCard:   "summary_large_image",
-		page:          pageContent{kind: pageArchiveEntry, archive: e},
+		// #0530: the schema.org Article for this entry (jsonld.go) --
+		// #0528's description and #0532's card, so the structured data,
+		// the social card, and the page itself always agree.
+		JSONLD: articleJSONLD(e, r.baseURL),
+		page:   pageContent{kind: pageArchiveEntry, archive: e},
 	}, true
 }
 

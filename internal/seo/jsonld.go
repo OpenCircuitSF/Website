@@ -182,3 +182,158 @@ func eventJSONLD(w Workshop, baseURL string) string {
 	}
 	return `<script type="application/ld+json">` + string(body) + `</script>`
 }
+
+// #0530: structured data for the newsletter archive and for the
+// organisation itself. Two blocks, same builder discipline as eventJSONLD
+// above (fixed structs, encoding/json.Marshal's own HTML escaping, "" when
+// the data doesn't qualify), so database content can never break out of the
+// <script> element.
+//
+// # Article, not BlogPosting
+//
+// An archive page is an article -- a headline, a publication date, a
+// publisher -- and Article is the schema.org type that states exactly that
+// much. BlogPosting is its subtype for blog posts; a newsletter issue is
+// not a blog post, and the more general type makes no claim the data
+// can't back.
+//
+// # Which archive entries get a block at all
+//
+// Only published entries with an archived_at. archiveRouteMeta already
+// gates on Published before this is ever called, but buildArticle re-checks
+// it (defence in depth, matching sitemap.go's Build) and, like buildEvent's
+// missing-startDate gate, treats a missing ArchivedAt as "not enough data":
+// datePublished is required for Article rich results and is never
+// fabricated.
+
+// articleLD is the top-level schema.org Article object for one published
+// archive entry. Publisher reuses eventOrganizer's {Organization, name,
+// url} shape -- the same fixed Open Circuit SF identity #0055's Event
+// carries as organizer, so both blocks always agree on who published.
+type articleLD struct {
+	Context       string         `json:"@context"`
+	Type          string         `json:"@type"`
+	Headline      string         `json:"headline"`
+	DatePublished string         `json:"datePublished"`
+	Publisher     eventOrganizer `json:"publisher"`
+	Image         string         `json:"image"`
+	Description   string         `json:"description,omitempty"`
+	URL           string         `json:"url"`
+}
+
+// buildArticle decides whether e carries enough data for a spec-valid
+// Article and, if so, builds it. The image is #0532's generated card -- the
+// same URL archiveRouteMeta sets og:image to -- and the description is
+// #0528's text, so a page's structured data and its social card always
+// agree.
+func buildArticle(e ArchiveEntry, baseURL string) (articleLD, bool) {
+	if !e.Published || e.ArchivedAt == "" {
+		return articleLD{}, false
+	}
+	return articleLD{
+		Context:       "https://schema.org",
+		Type:          "Article",
+		Headline:      e.Subject,
+		DatePublished: e.ArchivedAt,
+		Publisher:     eventOrganizer{Type: "Organization", Name: "Open Circuit SF", URL: baseURL + "/"},
+		Image:         baseURL + "/archive/" + e.Slug + "/og.png",
+		Description:   archiveDescription(e),
+		URL:           baseURL + "/archive/" + e.Slug,
+	}, true
+}
+
+// articleJSONLD is eventJSONLD's archive twin: the complete JSON-LD script
+// block for e, or "" when e doesn't qualify (buildArticle's gates).
+func articleJSONLD(e ArchiveEntry, baseURL string) string {
+	a, ok := buildArticle(e, baseURL)
+	if !ok {
+		return ""
+	}
+	body, err := json.Marshal(a)
+	if err != nil {
+		// articleLD is a fixed struct of strings -- see eventJSONLD's note.
+		return ""
+	}
+	return `<script type="application/ld+json">` + string(body) + `</script>`
+}
+
+// # The organisation and the WebSite (#0530 criterion 2)
+//
+// The home page states, in machine-readable form, that opencircuitsf.com is
+// Open Circuit SF, what its logo is, and which profiles belong to it -- the
+// inputs a knowledge panel draws from. One <script> block with an @graph
+// holding both nodes, because the two describe one site and sharing the
+// block keeps them from drifting.
+//
+// The profiles are the organisation's real public ones, mirrored from the
+// only place the site itself links them: web/src/lib/links.ts (Discord,
+// Luma calendar) plus the Bluesky profile whose handle IS the domain --
+// /.well-known/atproto-did (kept on disk ahead of the proxy, per CLAUDE.md
+// §7) binds did:plc:olbggqhj2rwqv56ik53kvwfx to opencircuitsf.com, which
+// makes https://bsky.app/profile/opencircuitsf.com the profile's canonical
+// URL. The logo is /mark-green-512.png -- the opaque brand mark the
+// webmanifest itself declares, not the og-default.png social card.
+
+// organizationSameAs is the site's sameAs list, in a fixed order for
+// deterministic output.
+var organizationSameAs = []string{
+	"https://bsky.app/profile/opencircuitsf.com",
+	"https://discord.gg/Fq9ug6QXV3",
+	"https://luma.com/opencircuitsf",
+}
+
+// organizationNode is the schema.org Organization for Open Circuit SF.
+type organizationNode struct {
+	Type   string   `json:"@type"`
+	Name   string   `json:"name"`
+	URL    string   `json:"url"`
+	Logo   string   `json:"logo"`
+	SameAs []string `json:"sameAs"`
+}
+
+// websiteNode is the schema.org WebSite node for the site itself.
+type websiteNode struct {
+	Type string `json:"@type"`
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// graphLD wraps the two home-page nodes in one @graph under a single
+// @context. Graph holds *organizationNode/*websiteNode values directly --
+// each carries its own @type, so one Marshal call emits the heterogeneous
+// nodes.
+type graphLD struct {
+	Context string `json:"@context"`
+	Graph   []any  `json:"@graph"`
+}
+
+// homeJSONLD returns the complete JSON-LD block for the home page: an
+// Organization and a WebSite node in one @graph. The inputs are all fixed
+// values (brand constants, baseURL, static asset paths), so this cannot
+// fail for data reasons -- only Marshal, which cannot fail on a fixed
+// struct of strings, could, and that "" mirrors eventJSONLD's defense in
+// depth.
+func homeJSONLD(baseURL string) string {
+	g := graphLD{
+		Context: "https://schema.org",
+		Graph: []any{
+			&organizationNode{
+				Type:   "Organization",
+				Name:   "Open Circuit SF",
+				URL:    baseURL + "/",
+				Logo:   baseURL + "/mark-green-512.png",
+				SameAs: organizationSameAs,
+			},
+			&websiteNode{
+				Type: "WebSite",
+				Name: "Open Circuit SF",
+				URL:  baseURL + "/",
+			},
+		},
+	}
+	body, err := json.Marshal(g)
+	if err != nil {
+		return ""
+	}
+	return `<script type="application/ld+json">` + string(body) + `</script>`
+}

@@ -483,7 +483,8 @@ func TestRender_FallbackAddsNoScriptElement(t *testing.T) {
 		"plain-workshop":   {Slug: "plain-workshop", Title: "Plain Workshop", Status: WorkshopPublished, Published: true},
 	}
 	archiveSource := fakeArchiveSource{
-		"an-entry": {Slug: "an-entry", Subject: "An Entry", Published: true, BodyMD: "Just text."},
+		"an-entry":   {Slug: "an-entry", Subject: "An Entry", Published: true, BodyMD: "Just text."},
+		"an-article": {Slug: "an-article", Subject: "An Article", Published: true, BodyMD: "Just text.", ArchivedAt: "2026-09-01T18:00:00Z"},
 	}
 	r := NewRenderer([]byte(testTemplate), testBaseURL, workshopSource, archiveSource)
 
@@ -491,11 +492,14 @@ func TestRender_FallbackAddsNoScriptElement(t *testing.T) {
 		path      string
 		wantCount int
 	}{
-		{"/", 0}, {"/about", 0}, {"/privacy", 0}, {"/subscribe", 0},
+		// "/" carries one: #0530's Organization + WebSite JSON-LD block.
+		{"/", 1}, {"/about", 0}, {"/privacy", 0}, {"/subscribe", 0},
 		{"/workshops", 0}, {"/archive", 0},
 		{"/workshops/plain-workshop", 0},
 		{"/workshops/json-ld-workshop", 1},
+		// No archived_at, so no #0530 Article block: only the fallback body.
 		{"/archive/an-entry", 0},
+		{"/archive/an-article", 1},
 	}
 	for _, c := range cases {
 		body := string(r.Render(c.path))
