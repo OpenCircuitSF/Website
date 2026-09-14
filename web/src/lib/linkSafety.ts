@@ -28,7 +28,7 @@
 //   - workshopDetail.ts's `hasExternalSignup` (#0054) -- gates whether a
 //     workshop's signup_url is safe to render as an `<a href>` on the public
 //     detail page.
-//   - internal/handlers/admin_workshops.go's `isSafeLinkHref` (#0152) -- the
+//   - internal/handlers/admin_workshops.go's `IsSafeLinkHref` (#0152) -- the
 //     Go twin of this exact function, validating signup_url AT THE API
 //     BOUNDARY. #0157 owns keeping the two in parity (see
 //     testdata/url_validators.json and urlValidatorFixture.test.ts);

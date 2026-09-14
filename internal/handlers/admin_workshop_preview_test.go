@@ -328,9 +328,9 @@ func TestAdminWorkshopPreview_SafetyPayloads(t *testing.T) {
 //
 // It IS a narrowing of what the DELETED client-side renderer did for
 // workshop BODY content specifically: web/src/lib/linkSafety.ts's
-// renderMarkdownPreview called isSafeLinkHref on every link (including body
-// links), and isSafeLinkHref has rejected protocol-relative destinations
-// since #0138. The Go isSafeLinkHref twin (admin_workshops.go, #0152) still
+// renderMarkdownPreview called IsSafeLinkHref on every link (including body
+// links), and IsSafeLinkHref has rejected protocol-relative destinations
+// since #0138. The Go IsSafeLinkHref twin (admin_workshops.go, #0152) still
 // gates signup_url and cover_image at the API boundary exactly as before --
 // unaffected by this change -- but nothing gates a protocol-relative link
 // typed directly into a workshop's Markdown BODY, same as nothing gates one

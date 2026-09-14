@@ -29,6 +29,7 @@ import (
 	// built binary can.
 	_ "time/tzdata"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 )
 
@@ -268,6 +269,10 @@ type pageTemplateData struct {
 	DateLabel     string
 	StartsAt      string // raw RFC 3339, for <time datetime="...">
 	LocationLines []string
+	// SignupHref (#0524) is the workshop's validated external sign-up link,
+	// or "" when unset or unsafe -- see safeSignupHref. The template renders
+	// it as a plain anchor only when non-empty.
+	SignupHref string
 
 	// pageArchiveEntry
 	DateAttr string // ArchiveEntry.ArchivedAt, raw RFC 3339, for <time datetime="...">
@@ -301,7 +306,7 @@ const pageTemplateSource = `
 {{else if eq .Kind "workshopsIndex"}}<h2>{{.UpcomingHeading}}</h2>{{if .UpcomingItems}}<ul>{{range .UpcomingItems}}<li><a href="/workshops/{{.Slug}}">{{.Title}}</a><br>{{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.UpcomingEmpty}}</p>{{end}}
 <h2>{{.PastHeading}}</h2>{{if .PastItems}}<ul>{{range .PastItems}}<li><a href="/workshops/{{.Slug}}">{{.Title}}</a><br>{{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.PastEmpty}}</p>{{end}}
 {{else if eq .Kind "archiveIndex"}}<p>{{.ArchiveLede}}</p>{{if .ArchiveItems}}<ul>{{range .ArchiveItems}}<li><a href="/archive/{{.Slug}}">{{.Subject}}</a> <time datetime="{{.DateAttr}}">{{.DateLabel}}</time>{{if .Preheader}}<p>{{.Preheader}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.ArchiveEmpty}}</p>{{end}}
-{{else if eq .Kind "workshop"}}{{if .Canceled}}<p>This workshop has been canceled.</p>{{end}}<dl><dt>When</dt><dd><time datetime="{{.StartsAt}}">{{.DateLabel}}</time></dd><dt>Where</dt><dd>{{if .LocationLines}}{{range .LocationLines}}{{.}}<br>{{end}}{{else}}Location TBA{{end}}</dd></dl>{{if .BodyHTML}}<div class="workshop-body">{{.BodyHTML}}</div>{{end}}<p><a href="/workshops">See all workshops</a></p>
+{{else if eq .Kind "workshop"}}{{if .Canceled}}<p>This workshop has been canceled.</p>{{end}}<dl><dt>When</dt><dd><time datetime="{{.StartsAt}}">{{.DateLabel}}</time></dd><dt>Where</dt><dd>{{if .LocationLines}}{{range .LocationLines}}{{.}}<br>{{end}}{{else}}Location TBA{{end}}</dd></dl>{{if .SignupHref}}<p><a href="{{.SignupHref}}" target="_blank" rel="noopener noreferrer">Register for this workshop</a></p>{{end}}{{if .BodyHTML}}<div class="workshop-body">{{.BodyHTML}}</div>{{end}}<p><a href="/workshops">See all workshops</a></p>
 {{else if eq .Kind "archiveEntry"}}<p><time datetime="{{.DateAttr}}">{{.DateLabel}}</time></p>{{if .BodyHTML}}<div class="archive-body">{{.BodyHTML}}</div>{{end}}<p><a href="/archive">See the archive</a></p>
 {{end}}</main>{{end}}`
 
@@ -385,6 +390,7 @@ func (r *Renderer) renderPage(p pageContent) (pageHTML string, cacheable bool) {
 			DateLabel:     workshopDateLabel(w.StartsAt, w.EndsAt),
 			StartsAt:      w.StartsAt,
 			LocationLines: workshopLocationLines(w.LocationName, w.LocationAddress),
+			SignupHref:    safeSignupHref(w.SignUpURL),
 			BodyHTML:      bodyHTML,
 		}), cacheable
 	case pageArchiveEntry:
@@ -549,6 +555,28 @@ func workshopLocationLabel(name string) string {
 		return "Location TBA"
 	}
 	return name
+}
+
+// safeSignupHref is #0524's render gate for a workshop's external sign-up
+// link, the server-side twin of web/src/lib/workshopDetail.ts's
+// hasExternalSignup (#0054): the SAME validation the API applies at the
+// admin boundary (#0152) -- internal/handlers.IsSafeLinkHref, the one Go
+// implementation of that rule, applied to the RAW stored value. Its control
+// character and scheme checks are the reason the raw value (not a
+// pre-trimmed one) is what passes through it: a validator verdict on the
+// stored bytes is what the boundary enforces, and this sweep
+// (TestRender_WorkshopDetailSignupSweepsURLValidatorFixture) proves the
+// fallback's render decision agrees with it case for case over the shared
+// testdata/url_validators.json parity fixture. The RENDERED href is the
+// trimmed value -- cosmetic only; IsSafeLinkHref has already accepted the
+// raw form. An invalid or protocol-relative URL returns "" and the
+// fallback renders no link at all -- the same "unsafe means absent"
+// posture the SPA takes.
+func safeSignupHref(signupURL string) string {
+	if !handlers.IsSafeLinkHref(signupURL) {
+		return ""
+	}
+	return strings.TrimSpace(signupURL)
 }
 
 // workshopLocationLines mirrors web/src/lib/workshopDetail.ts's

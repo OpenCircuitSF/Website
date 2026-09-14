@@ -111,6 +111,13 @@ func toSEOWorkshop(w workshops.Workshop) seo.Workshop {
 	if w.LocationAddress != nil {
 		locationAddress = *w.LocationAddress
 	}
+	// SignUpURL (#0524): dereferenced like every other optional field above;
+	// internal/seo's fallback renders it only after its own #0152 validation
+	// gate, so the server HTML and the SPA's hasExternalSignup agree.
+	var signupURL string
+	if w.SignupURL != nil {
+		signupURL = *w.SignupURL
+	}
 	return seo.Workshop{
 		Slug:            w.Slug,
 		Title:           w.Title,
@@ -124,5 +131,6 @@ func toSEOWorkshop(w workshops.Workshop) seo.Workshop {
 		LocationName:    locationName,
 		LocationAddress: locationAddress,
 		BodyMD:          bodyMD,
+		SignUpURL:       signupURL,
 	}
 }

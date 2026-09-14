@@ -1,7 +1,7 @@
 package handlers
 
 // #0157: nothing in the build previously guarded the Go<->TypeScript
-// isSafeCoverImage/isSafeLinkHref twins against drifting apart. Parity was
+// isSafeCoverImage/IsSafeLinkHref twins against drifting apart. Parity was
 // established three separate times (#0138 x2, #0152) by throwaway sweeps
 // that were deleted right after -- one of those found a live bypass
 // (strings.TrimSpace vs JS trim() disagreeing on U+FEFF) invisible to every
@@ -27,7 +27,7 @@ package handlers
 //     //, .., %5C, %2F%2F, non-ASCII, a bare /, a 10,000+ char path)
 //
 // Every "want" was computed by executing the REAL functions -- the actual
-// web/src/lib/linkSafety.ts isSafeLinkHref and workshopAdmin.ts
+// web/src/lib/linkSafety.ts IsSafeLinkHref and workshopAdmin.ts
 // isSafeCoverImage under Node 26 (which runs .ts natively), cross-checked
 // against these same Go functions at generation time (0 mismatches across
 // all 3,139). See issues/0157.md's `## Fix` for the generation method and
@@ -35,7 +35,7 @@ package handlers
 //
 // This file is the Go side of that check: TestURLValidatorFixture and
 // urlValidatorFixture_test.ts (web/src/lib/) both read the identical file,
-// so an edit to either isSafeCoverImage/isSafeLinkHref that changes behavior
+// so an edit to either isSafeCoverImage/IsSafeLinkHref that changes behavior
 // on any of these 3,139 payloads is a red build in that language, and an
 // edit that breaks Go<->TS agreement specifically requires BOTH files to be
 // updated in lockstep -- there is no way to "fix" only one side's test.
@@ -68,7 +68,7 @@ func TestURLValidatorFixture(t *testing.T) {
 			var got bool
 			switch c.Rule {
 			case "link_href":
-				got = isSafeLinkHref(c.Value)
+				got = IsSafeLinkHref(c.Value)
 			case "cover_image":
 				got = isSafeCoverImage(c.Value)
 			default:

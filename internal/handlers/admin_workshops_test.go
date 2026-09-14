@@ -416,7 +416,7 @@ func TestIsSafeLinkHref(t *testing.T) {
 		{"empty", "", false},
 		{"whitespace only", "   ", false},
 		// #0138's control-character-scheme-bypass class, reused here verbatim
-		// per #0152's acceptance criterion (same rule as isSafeLinkHref, not
+		// per #0152's acceptance criterion (same rule as IsSafeLinkHref, not
 		// a third variant): a browser deletes ASCII tab/LF/CR before
 		// resolving a URL, so an interior control character can reassemble
 		// a dangerous scheme a naive check would miss.
@@ -430,8 +430,8 @@ func TestIsSafeLinkHref(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := isSafeLinkHref(c.value); got != c.want {
-				t.Errorf("isSafeLinkHref(%q) = %v, want %v", c.value, got, c.want)
+			if got := IsSafeLinkHref(c.value); got != c.want {
+				t.Errorf("IsSafeLinkHref(%q) = %v, want %v", c.value, got, c.want)
 			}
 		})
 	}
@@ -510,7 +510,7 @@ func TestAdminWorkshops_PatchRejectsUnsafeSignupURL(t *testing.T) {
 	// #0157 coverage nit (found by #0152's review): this used to check only
 	// 2 payloads where TestAdminWorkshops_CreateRejectsUnsafeSignupURL checks
 	// 4. Same badValues list as that test, so Patch's coverage of the shared
-	// isSafeLinkHref rule matches Create's exactly -- not a bounce (Patch
+	// IsSafeLinkHref rule matches Create's exactly -- not a bounce (Patch
 	// calls the identical function), just a widened net.
 	badValues := []string{
 		"javascript:alert(1)", "data:text/html,evil", "//evil.host/x",

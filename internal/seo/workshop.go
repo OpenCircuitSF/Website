@@ -65,6 +65,16 @@ type Workshop struct {
 	// detail page, so a crawler that never executes JavaScript still sees
 	// the workshop's own text.
 	BodyMD string
+
+	// SignUpURL (#0524) is the workshop's external sign-up link
+	// (workshops.Workshop.SignupURL, dereferenced; "" when unset).
+	// fallback.go's pageWorkshop branch renders it as the detail page's
+	// registration link ONLY after the same validation the JSON API applies
+	// at the admin boundary (#0152) and the SPA's hasExternalSignup gate
+	// (#0054) applies at render time -- internal/handlers.IsSafeLinkHref,
+	// the one Go implementation of that rule. An invalid or
+	// protocol-relative URL is never rendered.
+	SignUpURL string
 }
 
 // WorkshopSource supplies workshop data to the SEO renderer (#0019) and

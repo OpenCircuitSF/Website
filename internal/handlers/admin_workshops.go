@@ -306,7 +306,7 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	signupURL := normalizeOptionalCampaignField(req.SignupURL)
-	if signupURL != nil && !isSafeLinkHref(*signupURL) {
+	if signupURL != nil && !IsSafeLinkHref(*signupURL) {
 		writeError(w, http.StatusBadRequest, signupURLErrorMessage)
 		return
 	}
@@ -493,7 +493,7 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	signupURL := current.SignupURL
 	if req.SignupURL != nil {
 		normalized := normalizeOptionalCampaignField(req.SignupURL)
-		if normalized != nil && !isSafeLinkHref(*normalized) {
+		if normalized != nil && !IsSafeLinkHref(*normalized) {
 			writeError(w, http.StatusBadRequest, signupURLErrorMessage)
 			return
 		}
@@ -711,7 +711,7 @@ const coverImageErrorMessage = `cover_image must be a site-relative path startin
 // written but reassembles into exactly that off-site form once the browser
 // strips the control character back out. Reject the whole C0 control range
 // plus DEL up front -- the same HAS_CONTROL_CHAR rule linkSafety.ts's
-// isSafeLinkHref already uses for link destinations (#0052 pass 2) --
+// IsSafeLinkHref already uses for link destinations (#0052 pass 2) --
 // rather than adding a third, narrower definition of "safe URL" to this
 // codebase. \x00, \x0b, \x0c and \x7f don't actually resolve off-site (a
 // browser percent-encodes them into the path instead), so rejecting those
@@ -728,23 +728,23 @@ func isSafeCoverImage(v string) bool {
 }
 
 // signupURLErrorMessage is the 400 body for a signup_url that fails
-// isSafeLinkHref, shared by Create and Patch.
+// IsSafeLinkHref, shared by Create and Patch.
 const signupURLErrorMessage = `signup_url must be an http(s) URL, a mailto: link, or a same-site relative path (not a javascript:/data: scheme or a protocol-relative "//host" URL)`
 
-// isSafeLinkHref validates signup_url AT THE API BOUNDARY (#0152, found by
+// IsSafeLinkHref validates signup_url AT THE API BOUNDARY (#0152, found by
 // #0138's phase-3 review while confirming the cover_image fix): the admin
 // editor's own signup_url field check (web/src/lib/workshopAdmin.ts's
 // isHttpUrl) is a narrower client-only convenience, but the actual safety
 // gate — the one that decides whether a stored signup_url is ever allowed to
 // become a rendered `href` — is #0054's hasExternalSignup
 // (web/src/lib/workshopDetail.ts), which calls linkSafety.ts's
-// isSafeLinkHref. Nothing on the server enforced that same rule, so a
+// IsSafeLinkHref. Nothing on the server enforced that same rule, so a
 // javascript: (or control-character-smuggled) signup_url could be STORED by
 // any caller that skips the SPA, exactly the shape #0138 closed for
 // cover_image. #0152's acceptance criteria are explicit: reuse that rule,
 // don't write a third, subtly different one.
 //
-// This is the Go twin of linkSafety.ts's isSafeLinkHref, not of
+// This is the Go twin of linkSafety.ts's IsSafeLinkHref, not of
 // isSafeCoverImage: a link is a navigation the reader chooses to follow
 // (unlike a cover image, which the page loads unasked), so an absolute
 // http(s):// URL to ANY host stays allowed — a workshop's signup_url is
@@ -763,7 +763,7 @@ const signupURLErrorMessage = `signup_url must be an http(s) URL, a mailto: link
 //
 // Trim decision (#0152, following up on #0138 pass 2's pipeline-divergence
 // note): this function trims internally before testing for emptiness or a
-// scheme, exactly mirroring linkSafety.ts's isSafeLinkHref — so the value
+// scheme, exactly mirroring linkSafety.ts's IsSafeLinkHref — so the value
 // handed in does not need to be pre-trimmed by the caller, and neither
 // Create nor Patch trims it before calling this (the same convention
 // isSafeCoverImage already uses: validate the raw normalizeOptionalCampaignField
@@ -777,9 +777,9 @@ const signupURLErrorMessage = `signup_url must be an http(s) URL, a mailto: link
 // something new this issue introduces, and generalizing
 // normalizeOptionalCampaignField to trim was explicitly left for #0152 to
 // decide, not required by it — deferred again here as out of scope; the
-// rendering gate (hasExternalSignup) trims before calling isSafeLinkHref, so
+// rendering gate (hasExternalSignup) trims before calling IsSafeLinkHref, so
 // stray whitespace never affects what's shown.
-func isSafeLinkHref(href string) bool {
+func IsSafeLinkHref(href string) bool {
 	if strings.ContainsFunc(href, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		return false
 	}
@@ -798,7 +798,7 @@ func isSafeLinkHref(href string) bool {
 // String.prototype.trim() strips (ECMA-262's WhiteSpace and LineTerminator
 // productions) -- deliberately not unicode.IsSpace/strings.TrimSpace, which
 // disagree with it at two points, both confirmed by executing the real Go
-// and TypeScript isSafeLinkHref side by side over a codepoint sweep (#0152
+// and TypeScript IsSafeLinkHref side by side over a codepoint sweep (#0152
 // verification): unicode.IsSpace treats U+0085 (NEL) as whitespace, which
 // JS's trim() does not, so "trimSpace(NEL+\"javascript:...\")" strips to a
 // bare dangerous scheme and Go would (wrongly) REJECT a value TS accepts;
