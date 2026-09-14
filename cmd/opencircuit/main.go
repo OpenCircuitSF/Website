@@ -12,7 +12,9 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata" // #0156: embed the IANA tzdata database in the binary so
@@ -1823,7 +1825,13 @@ func mountAndServe(
 		handler = outerMiddleware(handler)
 	}
 
-	srv := &http.Server{Addr: addr, Handler: handler}
+	// #0536: track every connection the server reports as not-yet-idle, so
+	// a shutdown that outlives its budget can name what it was waiting on
+	// instead of returning a bare expired deadline. Wired into the server
+	// below as ConnState — purely observational, no behavioral effect.
+	activeConns := newActiveConnSet()
+
+	srv := &http.Server{Addr: addr, Handler: handler, ConnState: activeConns.track}
 
 	// #0084: bind the listener synchronously (net.Listen) instead of letting
 	// http.ListenAndServe do it inside the goroutine below. This gives a bind
@@ -1974,6 +1982,28 @@ func mountAndServe(
 		// misuse #0081 reproduced impossible.
 		shutdownErr := srv.Shutdown(shutdownCtx)
 
+		// #0536: when Shutdown hits its budget, the bare
+		// context.DeadlineExceeded it returns says nothing about WHAT was
+		// still holding connections open — the silent-decline shape #0470
+		// warns about. Read the connection tracker captured at that moment
+		// and make both the log line and the returned error name what was
+		// still active: an open GET /api/events stream produces exactly
+		// this and is benign (the SSE client reconnects), while any other
+		// state — e.g. a half-open connection that never finished sending a
+		// request — is worth an operator's attention. Only the deadline
+		// case is annotated; Shutdown can also return a listener-close
+		// error on its fast path, and wrapping that would misattribute it.
+		if shutdownErr != nil && errors.Is(shutdownErr, context.DeadlineExceeded) {
+			stillActive := activeConns.describe()
+			log.Printf("opencircuit: srv.Shutdown did not finish within %s: %v — "+
+				"connections still active at expiry: %s (a long-lived GET /api/events stream produces exactly this and is benign; "+
+				"any other shape is worth investigating)",
+				shutdownServerTimeout, shutdownErr, stillActive)
+			shutdownErr = fmt.Errorf("opencircuit: graceful shutdown incomplete after %s: %w — "+
+				"connections still active at expiry: %s",
+				shutdownServerTimeout, shutdownErr, stillActive)
+		}
+
 		// subscribeH may be nil in dev mode (STORAGE=json — see
 		// serveDevMode's comment on the call site). Its own, independent
 		// context (see shutdownServerTimeout's doc comment above for why)
@@ -2059,3 +2089,66 @@ var workerCloseTimeout = 10 * time.Second
 // outboxOrphanStaleAfter (internal/mailing/outbox_worker.go) is itself
 // derived from.
 var outboxWorkerCloseTimeout = 10 * time.Second
+
+// activeConnSet records the connections http.Server reports as not yet
+// idle, keyed by remote address, so a shutdown that outlives its grace
+// budget can name what it was still waiting on (#0536) instead of
+// surfacing a bare expired deadline that is indistinguishable between a
+// benign long-lived SSE stream and a genuine hang. It exists only for
+// that report: it is wired in as the server's ConnState callback, which
+// is purely observational, and it deliberately mirrors the states
+// http.Server's own quiescence check treats as busy — new, active and
+// hijacked connections are exactly the ones that keep shutdown waiting;
+// idle and closed ones cannot.
+//
+// The snapshot is read after the shutdown budget has already expired, so
+// a connection may have gone idle in the gap; the report is the state at
+// the moment of reading, not an atomic view of the expiry instant.
+type activeConnSet struct {
+	mu    sync.Mutex
+	conns map[string]string
+}
+
+func newActiveConnSet() *activeConnSet {
+	return &activeConnSet{conns: make(map[string]string)}
+}
+
+// track is the ConnState callback. http.ConnState transitions are
+// sequential per connection, so a state change to a busy value re-adds
+// the address and any other value retires it; the same remote address can
+// therefore only ever appear once, and only while it is busy.
+func (t *activeConnSet) track(c net.Conn, s http.ConnState) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch s {
+	case http.StateNew, http.StateActive, http.StateHijacked:
+		if t.conns == nil {
+			t.conns = make(map[string]string)
+		}
+		t.conns[c.RemoteAddr().String()] = s.String()
+	default:
+		delete(t.conns, c.RemoteAddr().String())
+	}
+}
+
+// describe returns a compact, deterministic summary of the connections
+// still recorded as busy, e.g. "1 connection(s): 127.0.0.1:52311 active",
+// or a note that the set is empty — which after a timed-out shutdown
+// means the connections went idle between the deadline and this read.
+func (t *activeConnSet) describe() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.conns) == 0 {
+		return "none (connections went idle between the deadline and this report)"
+	}
+	addrs := make([]string, 0, len(t.conns))
+	for addr := range t.conns {
+		addrs = append(addrs, addr)
+	}
+	sort.Strings(addrs)
+	parts := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		parts = append(parts, addr+" "+t.conns[addr])
+	}
+	return fmt.Sprintf("%d connection(s): %s", len(t.conns), strings.Join(parts, ", "))
+}
