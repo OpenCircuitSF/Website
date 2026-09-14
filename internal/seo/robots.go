@@ -58,16 +58,22 @@ var allowedAPIPaths = []string{
 	"/api/interests",
 }
 
-// BuildRobotsTxt renders robots.txt: allow the public site, disallow the
-// listed namespaces (carving the allowedAPIPaths exceptions back out of
-// "Disallow: /api"), and reference the sitemap so crawlers that don't
-// already know about it discover it.
+// BuildRobotsTxt renders robots.txt: disallow the listed namespaces (carving
+// the allowedAPIPaths exceptions back out of "Disallow: /api"), and reference
+// the sitemap so crawlers that don't already know about it discover it.
+//
+// There is deliberately no leading "Allow: /" (#0526): allowing everything is
+// crawlers' default behavior, so the line was redundant under longest-match —
+// and worse than redundant under first-match semantics, where it matches
+// every path (including /admin, /confirm, and /api/me) before any Disallow is
+// ever reached, silently allowing the whole site. Omission is the safe form
+// under both resolution rules, so the line is removed rather than moved
+// after the Disallow block.
 func BuildRobotsTxt(baseURL string) []byte {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 
 	var b strings.Builder
 	b.WriteString("User-agent: *\n")
-	b.WriteString("Allow: /\n")
 	for _, p := range disallowedPaths {
 		b.WriteString("Disallow: ")
 		b.WriteString(p)

@@ -175,10 +175,20 @@ conflicting `Allow`/`Disallow` pair by longest match rather than line
 order, so the `Allow` lines override `Disallow: /api` for just these
 prefixes without needing to reorder anything. Every other `/api/*` route
 (`/api/me`, `/api/events`, `/api/subscribe`, `/api/preferences`,
-`/api/unsubscribe`, `/api/list-stats`, `/api/crt-session`, `/api/ses/*`) is
-session/admin-gated, token-bearing, state-changing, or a server-to-server
-webhook, and stays disallowed — see `internal/seo/robots.go`'s
-`allowedAPIPaths` doc comment for the full route-by-route audit.
+`/api/unsubscribe`, `/api/ses/*`) is session/admin-gated, token-bearing,
+state-changing, or a server-to-server webhook. `/api/list-stats` and
+`/api/crt-session` are none of those — they are public and read-only — but
+they stay disallowed because they only feed Home's `aria-hidden` canvas
+(counts and screen text no crawler needs), not any page's server-rendered
+fallback; see `internal/seo/robots.go`'s `allowedAPIPaths` doc comment for
+the full route-by-route audit.
+
+The file deliberately carries no leading `Allow: /` (`#0526`): allowing
+everything is already a crawler's default, so the line was redundant under
+longest-match, and under first-match semantics it let every path —
+including `/admin`, `/confirm`, and `/api/me` — match an `Allow` before any
+`Disallow` was ever reached, silently allowing the whole site. Omitting it
+is safe under both resolution rules.
 
 API responses also carry `X-Robots-Tag: noindex` (`seo.NoIndexAPIMiddleware`,
 wired around the whole mux in `cmd/opencircuit`'s `mountAndServe`), so a

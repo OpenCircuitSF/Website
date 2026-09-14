@@ -8,13 +8,18 @@ import (
 )
 
 // TestBuildRobotsTxt_AllowsRootDisallowsSensitiveNamespaces is #0020's third
-// and fourth criteria: allow "/", disallow the admin/api/token namespaces,
-// and reference the sitemap URL.
+// and fourth criteria: disallow the admin/api/token namespaces and reference
+// the sitemap URL. The Allow: / line #0020 also emitted was removed at
+// #0526 — allowing everything is crawlers' default, so the line was
+// redundant under longest-match, and under first-match semantics it let
+// every path (including /admin and /api/me) match an Allow before any
+// Disallow was reached. Its absence is now asserted so it cannot quietly
+// return.
 func TestBuildRobotsTxt_AllowsRootDisallowsSensitiveNamespaces(t *testing.T) {
 	body := string(BuildRobotsTxt(testBaseURL))
 
-	if !strings.Contains(body, "Allow: /\n") {
-		t.Errorf("robots.txt does not allow /: %s", body)
+	if strings.Contains(body, "Allow: /\n") {
+		t.Errorf("robots.txt must not carry a blanket \"Allow: /\" (#0526: it is redundant under longest-match and lets a first-match crawler allow everything): %s", body)
 	}
 	for _, p := range []string{"/admin", "/account", "/api", "/auth", "/confirm", "/preferences", "/unsubscribe"} {
 		if !strings.Contains(body, "Disallow: "+p+"\n") {
