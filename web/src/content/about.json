@@ -1,0 +1,71 @@
+{
+  "h1": "About Open Circuit SF",
+  "intro": [
+    {
+      "type": "p",
+      "text": "Open Circuit SF is a San Francisco group running hands-on electronics workshops — soldering, microcontrollers, homelab, home automation, and whatever the room wants to build next. No experience required, and no membership either — if a session sounds interesting, show up."
+    }
+  ],
+  "sections": [
+    {
+      "heading": "How workshops run",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "roughly monthly, beginner-friendly by default",
+            "tools and parts provided — bring curiosity, not a kit",
+            "already know the material? bring your own project and build alongside everyone else",
+            "announced through Discord, the Luma calendar, and the mailing list"
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Venues",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Open Circuit SF doesn't have a home base. A workshop might happen in a makerspace, a co-working room, or someone's garage — the location moves depending on what's available and who's hosting that month. Wherever it lands, tools and a soldering-safe table are the only requirements."
+        }
+      ]
+    },
+    {
+      "heading": "Get involved",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "The easiest way in is Discord — that's where locations get shared and people organize builds between sessions. Upcoming sessions are listed on the Luma calendar, where you can RSVP directly."
+        },
+        {
+          "type": "links",
+          "items": [
+            { "key": "discord", "label": "Join the Discord" },
+            { "key": "luma", "label": "View the calendar" }
+          ]
+        },
+        {
+          "type": "p",
+          "muted": true,
+          "text": "An interest-based workshop mailing list is on the way, for anyone who'd rather get an email than watch Discord."
+        }
+      ]
+    },
+    {
+      "heading": "Contact",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Reach the group directly at ",
+          "link": { "key": "email", "label": "contact@opencircuitsf.com" },
+          "tail": "."
+        }
+      ]
+    }
+  ],
+  "links": {
+    "discord": "https://discord.gg/Fq9ug6QXV3",
+    "luma": "https://luma.com/opencircuitsf",
+    "email": "mailto:contact@opencircuitsf.com"
+  }
+}

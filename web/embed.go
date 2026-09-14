@@ -21,6 +21,28 @@ import (
 //go:embed all:dist
 var distFS embed.FS
 
+// staticContentFS embeds the shared static-page copy (#0520): the JSON
+// files under src/content/ are the ONE source of the full About and Privacy
+// page text, consumed by BOTH the SPA (web/src/views/About.svelte and
+// PrivacyPolicy.svelte parse them through web/src/lib/staticPage.ts) and
+// the Go server renderer (internal/seo/staticpages.go reads them through
+// this accessor). Embedding src/ here -- not only dist/ -- is what puts the
+// copy inside the compiled binary without duplicating it into a Go file.
+//
+//go:embed src/content
+var staticContentFS embed.FS
+
+// StaticContent returns an fs.FS rooted at the shared static-page copy
+// directory (web/src/content), so internal/seo can read the same about.json
+// and privacy.json the SPA imports, byte for byte, from the embedded build.
+func StaticContent() fs.FS {
+	sub, err := fs.Sub(staticContentFS, "src/content")
+	if err != nil {
+		panic("web: src/content subdirectory missing from embedded FS: " + err.Error())
+	}
+	return sub
+}
+
 // DistFS returns an fs.FS rooted at the built SPA directory (the contents of
 // dist/), so callers see index.html and assets/* at the FS root. It panics only
 // if the embedded layout is malformed, which is a compile-time guarantee in

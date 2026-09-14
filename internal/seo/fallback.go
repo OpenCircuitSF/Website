@@ -8,11 +8,11 @@ package seo
 // half: it clears #app before Svelte's mount() appends the real view, so
 // this fallback and the SPA's own rendering never coexist in the DOM.
 //
-// Scope (issue #0519's plan): a first slice. /about and /privacy get their
-// intro paragraph and a couple of sections, not their full page text; a
-// withheld/draft/unknown/private/token route gets nothing (the empty
-// string, same as today). Both are deliberate cuts, not oversights -- see
-// the issue's own "Scope" section for the follow-ups filed separately.
+// Scope (issue #0519's plan): a first slice. #0520 lifted its largest cut
+// -- /about and /privacy now serve their FULL page text from one shared
+// source (staticpages.go); the home page's "Next up" list is #0523; a
+// workshop's sign-up link is #0524. A withheld/draft/unknown/private/token
+// route still gets nothing (the empty string, same as today).
 
 import (
 	"bytes"
@@ -77,7 +77,8 @@ type staticCopy struct {
 // and inline <strong> tags dropped -- fallback_copy_guard_test.go's
 // TestStaticFallbackCopyMatchesSvelteViews proves this table hasn't drifted
 // from the .svelte sources it names, normalizing each source file the same
-// way before comparing.
+// way before comparing. (The /about and /privacy pages left this table at
+// #0520 -- see the note inside the map below.)
 //
 // /workshops and /archive are NOT pageStatic routes (they're
 // pageWorkshopsIndex/pageArchiveIndex, built from live store data below),
@@ -95,24 +96,12 @@ var staticPageCopy = map[string]staticCopy{
 			{Text: `We are deliberately venue-independent. A workshop might run in a makerspace, a co-working room, or somebody's garage. Bring curiosity; we bring the tools.`},
 		},
 	},
-	"/about": {
-		Source: "web/src/views/About.svelte",
-		H1:     "About Open Circuit SF",
-		Blocks: []copyBlock{
-			{Text: `Open Circuit SF is a San Francisco group running hands-on electronics workshops — soldering, microcontrollers, homelab, home automation, and whatever the room wants to build next. No experience required, and no membership either — if a session sounds interesting, show up.`},
-			{Heading: true, Text: "Venues"},
-			{Text: `Open Circuit SF doesn't have a home base. A workshop might happen in a makerspace, a co-working room, or someone's garage — the location moves depending on what's available and who's hosting that month. Wherever it lands, tools and a soldering-safe table are the only requirements.`},
-			{Heading: true, Text: "Get involved"},
-			{Text: `The easiest way in is Discord — that's where locations get shared and people organize builds between sessions. Upcoming sessions are listed on the Luma calendar, where you can RSVP directly.`},
-		},
-	},
-	"/privacy": {
-		Source: "web/src/views/PrivacyPolicy.svelte",
-		H1:     "Privacy Policy",
-		Blocks: []copyBlock{
-			{Text: `Open Circuit SF runs a mailing list so people can hear about upcoming workshops. This page explains what that list collects, why, how long it's kept, and how to leave it. It applies to the workshop mailing list and this website; it does not cover third-party services like Discord or Luma, which have their own privacy policies.`},
-		},
-	},
+	// /about and /privacy are deliberately NOT entries here anymore (#0520):
+	// their full page text has ONE source, web/src/content/about.json and
+	// privacy.json, loaded at package init in staticpages.go and consumed by
+	// both the server renderer and the SPA -- so there is no hand-typed copy
+	// in this table to keep in step by a guard, which was exactly the
+	// arrangement #0520 removed.
 	"/subscribe": {
 		Source: "web/src/views/Subscribe.svelte",
 		H1:     "Subscribe",
@@ -220,6 +209,13 @@ type pageTemplateData struct {
 	// pageStatic
 	Blocks []copyBlock
 
+	// pageStatic's #0520 single-source branch (staticPageData): the full
+	// About/Privacy page body, from web/src/content/*.json. Intro blocks
+	// render inside the terminal panel beneath the <h1>; Sections render as
+	// one <section> each with its own <h2>.
+	IntroBlocks []staticBlock
+	Sections    []staticSection
+
 	// pageWorkshopsIndex
 	UpcomingHeading string
 	UpcomingEmpty   string
@@ -262,9 +258,11 @@ var pageTemplate = template.Must(template.New("nav").Parse(pageTemplateSource))
 
 const pageTemplateSource = `
 {{define "nav"}}<header class="app-shell"><nav aria-label="Site"><ul>{{range .Nav}}<li><a href="{{.Href}}">{{.Label}}</a></li>{{end}}</ul></nav></header>{{end}}
+{{define "contentBlock"}}{{if eq .Type "p"}}<p{{if .Muted}} class="text-muted"{{end}}>{{if .Strong}}<strong>{{.Strong}}</strong> {{end}}{{.Text}}{{if .Link.Href}}<a href="{{.Link.Href}}">{{.Link.Label}}</a>{{end}}{{.Tail}}</p>{{else if eq .Type "list"}}<ul>{{range .Items}}<li>{{.}}</li>{{end}}</ul>{{else if eq .Type "links"}}<p>{{range $i, $l := .Links}}{{if $i}} · {{end}}<a href="{{$l.Href}}" target="_blank" rel="noopener noreferrer">{{$l.Label}}</a>{{end}}</p>{{end}}{{end}}
 {{define "body"}}{{template "nav" .}}<main id="main-content" class="app-shell">
 <h1>{{.H1}}</h1>
 {{if eq .Kind "static"}}{{range .Blocks}}{{if .Heading}}<h2>{{.Text}}</h2>{{else}}<p>{{.Text}}</p>{{end}}{{end}}
+{{else if eq .Kind "content"}}{{range .IntroBlocks}}{{template "contentBlock" .}}{{end}}{{range .Sections}}<section><h2>{{.Heading}}</h2>{{range .Blocks}}{{template "contentBlock" .}}{{end}}</section>{{end}}
 {{else if eq .Kind "workshopsIndex"}}<h2>{{.UpcomingHeading}}</h2>{{if .UpcomingItems}}<ul>{{range .UpcomingItems}}<li><a href="/workshops/{{.Slug}}">{{.Title}}</a><br>{{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.UpcomingEmpty}}</p>{{end}}
 <h2>{{.PastHeading}}</h2>{{if .PastItems}}<ul>{{range .PastItems}}<li><a href="/workshops/{{.Slug}}">{{.Title}}</a><br>{{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.PastEmpty}}</p>{{end}}
 {{else if eq .Kind "archiveIndex"}}<p>{{.ArchiveLede}}</p>{{if .ArchiveItems}}<ul>{{range .ArchiveItems}}<li><a href="/archive/{{.Slug}}">{{.Subject}}</a> <time datetime="{{.DateAttr}}">{{.DateLabel}}</time>{{if .Preheader}}<p>{{.Preheader}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.ArchiveEmpty}}</p>{{end}}
@@ -289,6 +287,18 @@ func (r *Renderer) renderPage(p pageContent) (pageHTML string, cacheable bool) {
 	case pageNone:
 		return "", true
 	case pageStatic:
+		// #0520: /about and /privacy render their full body from the shared
+		// single source (staticpages.go's package-level staticPages, the
+		// same JSON the SPA imports). The source file IS the route's source
+		// (about.json -> "/about"), so a page present in the embedded
+		// content directory is always servable here.
+		if sp, ok := staticPages[p.path]; ok {
+			return r.execTemplate(pageTemplateData{
+				Kind: "content", H1: sp.H1,
+				IntroBlocks: sp.Intro,
+				Sections:    sp.Sections,
+			}), true
+		}
 		copy := staticPageCopy[p.path]
 		return r.execTemplate(pageTemplateData{
 			Kind: "static", H1: copy.H1, Blocks: copy.Blocks,

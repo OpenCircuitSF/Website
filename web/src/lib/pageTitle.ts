@@ -47,6 +47,8 @@
 // -- the same "reported loudly, not skipped" shape #0242/#0243's guard
 // uses for the live-region classification problem.
 import { APP_NAME } from './branding';
+import aboutPage from '../content/about.json';
+import privacyPage from '../content/privacy.json';
 import type { Route, RouteName } from './router';
 
 const SUFFIX = ` — ${APP_NAME}`;
@@ -84,10 +86,12 @@ const STATIC_HEADING: Record<RouteName, string> = {
   // the campaign has loaded (status === 'loaded'); this is what a fresh
   // navigation shows in the meantime.
   'archive-detail': 'Archive',
-  // guarded — web/src/views/About.svelte
-  about: `About ${APP_NAME}`,
-  // guarded — web/src/views/PrivacyPolicy.svelte
-  privacy: 'Privacy Policy',
+  // guarded — web/src/views/About.svelte, whose <h1> is #0520's shared
+  // source (web/src/content/about.json's own h1): this table reads the same
+  // file the view and the server renderer read.
+  about: aboutPage.h1,
+  // guarded — web/src/views/PrivacyPolicy.svelte, same single-source shape.
+  privacy: privacyPage.h1,
   // guarded — web/src/views/Subscribe.svelte
   subscribe: 'Subscribe',
   // guarded — web/src/views/SubscribeThanks.svelte

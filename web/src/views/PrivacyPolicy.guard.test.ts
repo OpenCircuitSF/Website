@@ -28,19 +28,17 @@
 //      side is), but pinned here as the citation a human -- or `#0220`'s own
 //      path-citation guard -- can check against the tree.
 //
-// Reads the REAL `PrivacyPolicy.svelte` (`import.meta.glob`, the same
-// technique `citationGuard.test.ts` and `modalFocusWiring
-// .structuralGuard.test.ts` already use) and walks its own AST (svelte
-// /compiler's `parse`) to find the specific `<StatusList>` inside the
-// `aria-labelledby="leave-h"` ("How to leave") section, then reads its
-// `items` prop's array-literal elements directly off the parsed AST -- not
-// a source-text regex, and not mounting the component (`#0094`'s harness
-// would work here too, but reading the prop off the AST needs no DOM and
-// stays on the fast, non-jsdom default `CLAUDE.md` §1 describes).
+// #0520 REPOINTED this guard's source: the policy's full text moved into
+// web/src/content/privacy.json -- ONE source shared with the server
+// renderer -- so the guard now reads the "How to leave" list from that JSON
+// (the same file PrivacyPolicy.svelte and internal/seo/staticpages.go
+// consume) instead of parsing the .svelte AST. Everything else about the
+// guard is unchanged: same categories, same required phrases, same
+// mutation proofs, all now failing against the file the text actually
+// lives in.
 import { describe, it, expect } from 'vitest';
-import { parse as parseSvelte } from 'svelte/compiler';
-
-type SvelteNode = Record<string, unknown>;
+import { parseStaticPage } from '../lib/staticPage';
+import privacyRaw from '../content/privacy.json';
 
 interface RetainedCategory {
   key: string;
@@ -52,7 +50,7 @@ interface RetainedCategory {
 // (`internal/subscribers/erase.go`) and the `subscriber.erased` audit entry
 // it feeds (`internal/handlers/admin_subscribers.go`) actually leave behind
 // after a hard delete, as of `#0226`. `requiredPhrases` are matched
-// case-insensitively, substring, against a SINGLE StatusList item -- every
+// case-insensitively, substring, against a SINGLE list item -- every
 // phrase in a category's list must appear in the SAME item for that
 // category to be considered present (see matchCategories below).
 const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
@@ -117,17 +115,8 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
     // sites #0226 examined, and five more -- admin-initiated (manual add,
     // suppression removal) and SES-driven (two bounce paths, one complaint)
     // -- also write the subscriber's email and also survive erasure. The
-    // phrases below are unique to the widened wording: 'admin-initiated
-    // actions' and 'automated entries from our delivery provider' assert
-    // the item now names all three ORIGIN categories a row can come from,
-    // not just the subscriber-driven one; 'no ip at all for the automated
-    // delivery-provider entries' asserts the corrected IP claim (the three
-    // SES entries set no IP field at all -- verified directly against
-    // ses_notifications.go, not assumed); 'suppression removal', 'a
-    // bounce', and 'a complaint' assert three of the newly-disclosed
-    // email-carrying actions by name (manual add is covered by the
-    // pre-existing 'your email address' + the categories phrase together).
-    // The DURABLE version of "did we miss a sixth site" is
+    // phrases below are unique to the widened wording. The DURABLE version
+    // of "did we miss a sixth site" is
     // internal/handlers/audit_email_metadata_guard_test.go (#0237), which
     // reads the actual Go source rather than trusting this phrase list to
     // have been updated -- these phrases catch the PAGE regressing away
@@ -137,39 +126,26 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
     // #0237's own phase-3 review bounced the first pass for a real hole in
     // that Go guard (it matched only the literal key "email", missing the
     // "recipient_email"/"subscriber_address" shape a real site already
-    // used) -- fixed by widening the guard's key match, which surfaced two
-    // MORE real sites. Neither is added to the "six actions" list above
-    // (neither is a subscriber's own address: one is the admin's own
-    // address plus a synthetic test recipient, never disclosed here), but
+    // used). Two more sites it surfaced are pinned but NOT part of the
+    // structural disclosure (neither is a real subscriber's own address);
     // one -- an export's audit entry, whose Metadata carries the raw text
     // of an admin's search box -- genuinely CAN carry a subscriber's own
-    // address if that is what was searched for, so the item now discloses
-    // it too, contingently rather than as a certainty. 'search text is
-    // recorded' asserts that clause is still present; it is deliberately
-    // NOT one of the "six actions" phrases above, since this seventh
-    // disclosure is conditional, not structural, and the item's wording
-    // says so ("if a staff member ever searches ... that search text is
-    // recorded too", not "an export always records your address").
+    // address if that is what was searched for, so the item discloses it
+    // contingently rather than as a certainty. 'search text is recorded'
+    // asserts that clause is still present.
     //
     // #0503 widened the category a third way, in both directions of the
-    // same record: #0499's parked-message row (the Go guard's
-    // ActionInboundMailParked site) carries the raw From: address a
-    // correspondent sent. When the parked reason is auto_reply that
-    // address IS the subscriber's own (#0499's test asserts the recorded
-    // from equals a real seeded subscriber's Email), so the page's email
+    // same record: #0499's parked-message row carries the raw From:
+    // address a correspondent sent; when the parked reason is auto_reply
+    // that address IS the subscriber's own, so the page's email
     // enumeration gained "an automated out-of-office reply your mail
-    // program sends us" — the EIGHTH email-carrying action, disclosed
-    // like the other seven and covered by the erasure path. Every other
-    // parked reason is an unverified address with no erasure path, so the
-    // item's final clause discloses the retention sweep instead
-    // (internal/audit.RedactExpiredInboundSenders, ridden by the outbox
-    // worker): the sender's address is kept 90 days — the record still
-    // outlives the 30-day S3 object it describes, #0499 criterion 2 —
-    // then the local part is replaced with a fixed placeholder, leaving
-    // the domain and the row itself as an actionable count. The phrases
-    // below pin both halves; the mutation proof further down drops the
-    // redaction clause specifically, since it is the half a future edit is
-    // most likely to trim for length.
+    // program sends us" -- the EIGHTH email-carrying action. Every other
+    // parked reason's address is redacted after 90 days by
+    // internal/audit's RedactExpiredInboundSenders; the item's final
+    // clause discloses that sweep ('90 days', 'fixed placeholder', 'the
+    // domain' pin it). The mutation proof further down drops the redaction
+    // clause specifically, since it is the half a future edit is most
+    // likely to trim for length.
     requiredPhrases: [
       'audit log',
       'admin-initiated actions',
@@ -203,76 +179,12 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
   },
 ];
 
-function findAttr(el: SvelteNode, name: string): SvelteNode | undefined {
-  const attrs = el.attributes as SvelteNode[] | undefined;
-  return attrs?.find((a) => a.type === 'Attribute' && a.name === name);
-}
-
-function attrTextEquals(attr: SvelteNode | undefined, want: string): boolean {
-  const v = attr?.value;
-  return Array.isArray(v) && v.length === 1 && (v[0] as SvelteNode)?.type === 'Text' && (v[0] as SvelteNode).data === want;
-}
-
-function collectByType(node: unknown, types: Set<string>, out: SvelteNode[] = [], seen = new Set<unknown>()): SvelteNode[] {
-  if (node === null || typeof node !== 'object') return out;
-  if (seen.has(node)) return out;
-  seen.add(node);
-  if (Array.isArray(node)) {
-    for (const item of node) collectByType(item, types, out, seen);
-    return out;
-  }
-  const obj = node as SvelteNode;
-  if (typeof obj.type === 'string' && types.has(obj.type)) out.push(obj);
-  for (const key of Object.keys(obj)) {
-    if (key === 'parent') continue;
-    collectByType(obj[key], types, out, seen);
-  }
-  return out;
-}
-
-// findErasureStatusListItems locates the section with
-// aria-labelledby="leave-h" ("How to leave"), finds the (single)
-// <StatusList> component inside it, and returns its `items` array-literal
-// elements as plain strings, read directly off the parsed ArrayExpression
-// -- not eval'd, not regex-matched against source text.
-function findErasureStatusListItems(source: string): string[] {
-  const ast = parseSvelte(source, { filename: 'PrivacyPolicy.svelte', modern: true }) as unknown as SvelteNode;
-
-  const sections = collectByType(ast.fragment, new Set(['RegularElement'])).filter((n) => attrTextEquals(findAttr(n, 'aria-labelledby'), 'leave-h'));
-  if (sections.length !== 1) {
-    throw new Error(`expected exactly one section with aria-labelledby="leave-h", found ${sections.length}`);
-  }
-
-  const statusLists = collectByType(sections[0], new Set(['Component'])).filter((n) => n.name === 'StatusList');
-  if (statusLists.length !== 1) {
-    throw new Error(`expected exactly one <StatusList> inside the "How to leave" section, found ${statusLists.length}`);
-  }
-
-  const itemsAttr = findAttr(statusLists[0], 'items');
-  const expr = (itemsAttr?.value as SvelteNode | undefined)?.expression as SvelteNode | undefined;
-  if (!expr || expr.type !== 'ArrayExpression') {
-    throw new Error('StatusList\'s "items" prop is not a literal array expression -- cannot read it structurally');
-  }
-  const elements = (expr.elements as SvelteNode[] | undefined) ?? [];
-  return elements.map((el, i) => {
-    if (el.type !== 'Literal' || typeof el.value !== 'string') {
-      throw new Error(`StatusList items[${i}] is not a string literal`);
-    }
-    return el.value as string;
-  });
-}
-
-interface MatchResult {
-  matchedCategory: RetainedCategory | null;
-  missingPhrases: string[];
-}
-
-// matchCategories pairs each StatusList item with the FIRST category all of
-// whose requiredPhrases it contains (case-insensitive substring), and
-// reports, per item, either the matched category or which category came
+// matchItemToCategory pairs each retained-data item with the FIRST category
+// all of whose requiredPhrases it contains (case-insensitive substring),
+// and reports, per item, either the matched category or which category came
 // closest and what phrase(s) it was missing -- so a failure names the
 // reason, not just a mismatch (criterion 4).
-function matchItemToCategory(item: string, categories: RetainedCategory[]): MatchResult {
+function matchItemToCategory(item: string, categories: RetainedCategory[]): { matchedCategory: RetainedCategory | null; missingPhrases: string[] } {
   const lower = item.toLowerCase();
   let best: { category: RetainedCategory; missing: string[] } | null = null;
   for (const category of categories) {
@@ -287,23 +199,32 @@ function matchItemToCategory(item: string, categories: RetainedCategory[]): Matc
   return { matchedCategory: null, missingPhrases: best?.missing ?? [] };
 }
 
-const SOURCE_FILES = import.meta.glob('./PrivacyPolicy.svelte', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-}) as Record<string, string>;
-
-function readPrivacyPolicySource(): string {
-  const entries = Object.values(SOURCE_FILES);
-  if (entries.length !== 1) {
-    throw new Error(`expected exactly one PrivacyPolicy.svelte via import.meta.glob, found ${entries.length}`);
-  }
-  return entries[0];
+/** The policy's parsed content: privacy.json is the ONE source (#0520) the
+ * view, the server renderer, and this guard all read. */
+function readPrivacyPage() {
+  return parseStaticPage(privacyRaw);
 }
 
-describe('privacy policy erasure list guard (#0226): the "How to leave" StatusList matches what erasure actually retains', () => {
+// findErasureStatusListItems locates the "How to leave" section in the
+// shared source and returns its single list block's items -- the list the
+// old guard read off the .svelte AST, now read from the JSON that is the
+// single source for both runtimes.
+function findErasureStatusListItems(): string[] {
+  const page = readPrivacyPage();
+  const sections = page.sections.filter((s) => s.heading === 'How to leave');
+  if (sections.length !== 1) {
+    throw new Error(`expected exactly one "How to leave" section in privacy.json, found ${sections.length}`);
+  }
+  const lists = sections[0].blocks.filter((b) => b.type === 'list');
+  if (lists.length !== 1) {
+    throw new Error(`expected exactly one list block inside the "How to leave" section, found ${lists.length}`);
+  }
+  return lists[0].type === 'list' ? lists[0].items : [];
+}
+
+describe('privacy policy erasure list guard (#0226): the "How to leave" list matches what erasure actually retains', () => {
   it('names exactly the categories erasure retains, each with its required substance', () => {
-    const items = findErasureStatusListItems(readPrivacyPolicySource());
+    const items = findErasureStatusListItems();
 
     const unmatched: string[] = [];
     const matchedKeys = new Set<string>();
@@ -321,7 +242,7 @@ describe('privacy policy erasure list guard (#0226): the "How to leave" StatusLi
     if (unmatched.length > 0 || missingCategories.length > 0) {
       const detail = [
         unmatched.length > 0
-          ? `StatusList item(s) that do not match any known retained category (added without updating this guard, or reworded away from a category's required phrases):\n${unmatched.join('\n')}`
+          ? `Retained-data item(s) that do not match any known retained category (added without updating this guard, or reworded away from a category's required phrases):\n${unmatched.join('\n')}`
           : null,
         missingCategories.length > 0
           ? `Retained categor${missingCategories.length === 1 ? 'y' : 'ies'} the policy no longer names (removed from the list while erasure still keeps it -- over-promising deletion):\n${missingCategories
@@ -339,12 +260,26 @@ describe('privacy policy erasure list guard (#0226): the "How to leave" StatusLi
 });
 
 describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures)', () => {
-  const fixtureSource = (items: string[]): string => {
-    const itemsLiteral = items.map((s) => `'${s.replace(/'/g, "\\'")}'`).join(',\n          ');
-    return `<script>\n  let x = 1;\n</script>\n<section aria-labelledby="leave-h">\n  <StatusList\n    items={[\n          ${itemsLiteral},\n        ]}\n  />\n</section>`;
+  const fixturePage = (items: string[]) =>
+    ({
+      h1: 'Privacy Policy',
+      intro: [{ type: 'p', text: 'intro' }],
+      sections: [{ heading: 'How to leave', blocks: [{ type: 'p', text: 'lead' }, { type: 'list', items }] }],
+      links: {},
+    }) as unknown;
+
+  // A mutated fixture goes through the same parser the real page does, so
+  // the mutation proofs exercise the guard's actual decoding path.
+  const readFixture = (items: string[]): string[] => {
+    const page = parseStaticPage(fixturePage(items));
+    const sections = page.sections.filter((s) => s.heading === 'How to leave');
+    if (sections.length !== 1) throw new Error('fixture setup: expected one "How to leave" section');
+    const lists = sections[0].blocks.filter((b) => b.type === 'list');
+    if (lists.length !== 1) throw new Error('fixture setup: expected one list block');
+    return lists[0].type === 'list' ? lists[0].items : [];
   };
 
-  const realItems = (): string[] => findErasureStatusListItems(readPrivacyPolicySource());
+  const realItems = (): string[] => findErasureStatusListItems();
 
   it('passes against the real, current five items', () => {
     const items = realItems();
@@ -360,8 +295,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
 
   it('fails when a sixth retained thing is added without updating the policy (criterion: adding without updating fails)', () => {
     const items = [...realItems(), 'a sixth thing nobody told the policy about'];
-    const src = fixtureSource(items);
-    const parsedItems = findErasureStatusListItems(src);
+    const parsedItems = readFixture(items);
     expect(parsedItems).toHaveLength(6);
 
     const { matchedCategory } = matchItemToCategory(parsedItems[5], ERASURE_RETAINED_CATEGORIES);
@@ -375,8 +309,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     // than dropping everything after audit_log.
     const all = realItems();
     const items = [...all.slice(0, 3), all[4]];
-    const src = fixtureSource(items);
-    const parsedItems = findErasureStatusListItems(src);
+    const parsedItems = readFixture(items);
     expect(parsedItems).toHaveLength(4);
 
     const matched = new Set<string>();
@@ -393,8 +326,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     const items = realItems().map((item) =>
       item.includes('deliverability events') ? item.replace(' and to keep our own bounce/complaint handling accurate', '') : item,
     );
-    const src = fixtureSource(items);
-    const parsedItems = findErasureStatusListItems(src);
+    const parsedItems = readFixture(items);
 
     const eventsItem = parsedItems.find((i) => i.includes('deliverability events'));
     expect(eventsItem, 'fixture setup: expected a deliverability-events item').toBeDefined();
@@ -433,8 +365,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
           )
         : item,
     );
-    const src = fixtureSource(items);
-    const parsedItems = findErasureStatusListItems(src);
+    const parsedItems = readFixture(items);
 
     const auditItem = parsedItems.find((i) => i.includes('audit log entry'));
     expect(auditItem, 'fixture setup: expected an audit-log item').toBeDefined();
@@ -495,7 +426,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     // admin-initiated and automated-provider categories this widening
     // exists to disclose -- reproduced against the REAL current item text,
     // not a hand-written fixture, per #0237's acceptance criterion that
-    // this be proved against PrivacyPolicy.svelte's actual content.
+    // this be proved against the policy's actual content.
     const items = realItems().map((item) =>
       item.includes('audit log entry')
         ? item.replace(
@@ -504,8 +435,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
           )
         : item,
     );
-    const src = fixtureSource(items);
-    const parsedItems = findErasureStatusListItems(src);
+    const parsedItems = readFixture(items);
 
     const auditItem = parsedItems.find((i) => i.includes('audit log entry'));
     expect(auditItem, 'fixture setup: expected an audit-log item').toBeDefined();
@@ -532,8 +462,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
         ? item.replace(', and no IP at all for the automated delivery-provider entries, since there is no request behind them', '')
         : item,
     );
-    const src = fixtureSource(items);
-    const parsedItems = findErasureStatusListItems(src);
+    const parsedItems = readFixture(items);
 
     const auditItem = parsedItems.find((i) => i.includes('audit log entry'));
     expect(auditItem, 'fixture setup: expected an audit-log item').toBeDefined();
@@ -567,8 +496,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
           )
         : item,
     );
-    const src = fixtureSource(items);
-    const parsedItems = findErasureStatusListItems(src);
+    const parsedItems = readFixture(items);
 
     const auditItem = parsedItems.find((i) => i.includes('audit log entry'));
     expect(auditItem, 'fixture setup: expected an audit-log item').toBeDefined();
@@ -601,8 +529,7 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
           )
         : item,
     );
-    const src = fixtureSource(items);
-    const parsedItems = findErasureStatusListItems(src);
+    const parsedItems = readFixture(items);
 
     const auditItem = parsedItems.find((i) => i.includes('audit log entry'));
     expect(auditItem, 'fixture setup: expected an audit-log item').toBeDefined();

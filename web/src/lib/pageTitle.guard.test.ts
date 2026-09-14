@@ -25,11 +25,44 @@ import { parsePath } from './router';
 
 type SvelteNode = Record<string, unknown>;
 
-const SOURCE_FILES = import.meta.glob('../views/**/*.svelte', {
+const SOURCE_FILES = import.meta.glob('../views/*.svelte', {
   query: '?raw',
   import: 'default',
   eager: true,
 }) as Record<string, string>;
+
+// StaticPage.svelte is read via a plain raw import: #0520's delegated-h1
+// shape needs its template, and a static import sidesteps glob-key quirks.
+import staticPageSource from './StaticPage.svelte?raw';
+
+// #0520: About and Privacy's <h1> text now lives in the shared content JSON
+// (web/src/content/*.json) the view imports, so the guard needs those files
+// to resolve an expression like {content.h1}.
+const CONTENT_FILES = import.meta.glob('../content/*.json', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+
+function contentJSONFor(ref: string): Record<string, unknown> {
+  const key = `../content/${ref}`;
+  const raw = CONTENT_FILES[key];
+  if (raw === undefined) {
+    throw new Error(`pageTitle.guard: no content file found at web/src/content/${ref} -- glob key mismatch?`);
+  }
+  return JSON.parse(raw) as Record<string, unknown>;
+}
+
+/** Maps a view's default-content import identifier to its parsed content
+ * file, read off the view's own `import content from '../content/xxx.json'`
+ * statement -- so resolving {content.h1} follows the view's own import, not
+ * a guess. Views without a content import (every other guarded route)
+ * return null. */
+function defaultImportFor(source: string, _file: string): Record<string, unknown> | null {
+  const m = /import\s+(\w+)\s+from\s+'(\.\.\/content\/[^']+\.json)'/.exec(source);
+  if (!m) return null;
+  return contentJSONFor(m[2].replace(/^.*\/content\//, ''));
+}
 
 function rawFor(viewFile: string): string {
   const key = `../views/${viewFile}`;
@@ -40,11 +73,27 @@ function rawFor(viewFile: string): string {
   return src;
 }
 
-function childText(node: SvelteNode, file: string): string {
+function childText(node: SvelteNode, file: string, content: Record<string, unknown> | null): string {
   if (node.type === 'Text') return node.data as string;
   if (node.type === 'ExpressionTag') {
     const expr = node.expression as SvelteNode;
     if (expr.type === 'Identifier' && expr.name === 'APP_NAME') return APP_NAME;
+    // #0520: a view rendering its shared-source heading ({content.h1} from
+    // a web/src/content/*.json default import) resolves against that JSON.
+    if (expr.type === 'MemberExpression') {
+      const obj = expr.object as SvelteNode;
+      const prop = expr.property as SvelteNode;
+      if (obj.type === 'Identifier' && prop.type === 'Identifier' && content !== null) {
+        const value = content[prop.name as string];
+        if (typeof value !== 'string') {
+          throw new Error(`pageTitle.guard: ${file}'s <h1> expression {content.${prop.name as string}} did not resolve to a string in the view's imported content JSON`);
+        }
+        return value;
+      }
+      throw new Error(
+        `pageTitle.guard: ${file}'s <h1> contains a MemberExpression this guard doesn't know how to resolve -- extend childText rather than silently skipping it`,
+      );
+    }
     throw new Error(
       `pageTitle.guard: ${file}'s <h1> contains an ExpressionTag this guard doesn't know how to resolve (expression type "${expr.type}") -- extend childText rather than silently skipping it`,
     );
@@ -54,13 +103,35 @@ function childText(node: SvelteNode, file: string): string {
   );
 }
 
-/** The literal, concatenated text of the FIRST <h1> found in `file`'s
- * template (depth-first). Every "guarded" route in pageTitle.ts renders
- * exactly one <h1> per branch and all branches (when there are several,
- * e.g. PreferenceCenter's showHeading sites) use identical text, so "first
- * found" is unambiguous for all of them -- verified by the sanity check in
- * the enumeration test below, which requires each candidate to actually
- * have at least one <h1>. */
+function collectNamed(node: unknown, typeName: string, name: string, out: SvelteNode[] = [], seen = new Set<unknown>()): SvelteNode[] {
+  if (node === null || typeof node !== 'object') return out;
+  if (seen.has(node)) return out;
+  seen.add(node);
+  if (Array.isArray(node)) {
+    for (const item of node) collectNamed(item, typeName, name, out, seen);
+    return out;
+  }
+  const obj = node as SvelteNode;
+  if (obj.type === typeName && obj.name === name) out.push(obj);
+  for (const key of Object.keys(obj)) {
+    if (key === 'parent') continue;
+    collectNamed(obj[key], typeName, name, out, seen);
+  }
+  return out;
+}
+
+/** The literal, concatenated text of the guarded route's <h1>. For every
+ * view that renders its own <h1>, that is the first <h1> in the file's
+ * template (depth-first); every "guarded" route used to render exactly one
+ * <h1> per branch, with all branches using identical text.
+ *
+ * #0520 added the one sanctioned exception: About and Privacy render their
+ * <h1> through StaticPage.svelte from the content JSON they import. The
+ * guard follows the view's own wiring rather than trusting it: the view
+ * must bind its imported JSON to <StaticPage content=...>, and
+ * StaticPage.svelte's own <h1> must be a member expression over that same
+ * prop -- then the JSON's h1 IS the view's h1, by construction, and
+ * titleForRoute (which reads the same JSON) cannot drift from either. */
 function firstH1Text(file: string): string {
   const source = rawFor(file);
   const ast = parseSvelte(source, { filename: file, modern: true }) as unknown as SvelteNode;
@@ -76,7 +147,7 @@ function firstH1Text(file: string): string {
     const obj = node as SvelteNode;
     if (obj.type === 'RegularElement' && obj.name === 'h1') {
       const kids = ((obj.fragment as SvelteNode | undefined)?.nodes as SvelteNode[] | undefined) ?? [];
-      found = kids.map((k) => childText(k, file)).join('');
+      found = kids.map((k) => childText(k, file, defaultImportFor(source, file))).join('');
       return;
     }
     for (const key of Object.keys(obj)) {
@@ -86,10 +157,53 @@ function firstH1Text(file: string): string {
   }
 
   walk(ast.fragment);
-  if (found === undefined) {
-    throw new Error(`pageTitle.guard: ${file} has no <h1> at all -- cited from pageTitle.ts as a "guarded" route`);
+  if (found !== undefined) return found;
+
+  // No literal <h1> in the view: the only sanctioned shape is delegation to
+  // StaticPage with the imported content bound to its `content` prop.
+  const staticPageUses = collectNamed(ast.fragment, 'Component', 'StaticPage');
+  if (staticPageUses.length !== 1) {
+    throw new Error(`pageTitle.guard: ${file} has no <h1> and no single <StaticPage> -- cited from pageTitle.ts as a "guarded" route`);
   }
-  return found;
+  const attrs = (staticPageUses[0].attributes as SvelteNode[] | undefined) ?? [];
+  const contentAttr = attrs.find((a) => a.type === 'Attribute' && a.name === 'content');
+  // Shorthand ({content}) yields the ExpressionTag directly; a full
+  // content={...} binding yields a one-element array of it.
+  const attrValue = contentAttr?.value as SvelteNode | SvelteNode[] | undefined;
+  const exprTag: SvelteNode | undefined = Array.isArray(attrValue) ? (attrValue[0] as SvelteNode | undefined) : (attrValue as SvelteNode | undefined);
+  if (exprTag?.type !== 'ExpressionTag' || (exprTag.expression as SvelteNode | undefined)?.type !== 'Identifier') {
+    throw new Error(`pageTitle.guard: ${file}'s <StaticPage content=...> is not bound to an identifier -- extend this guard rather than silently skipping it`);
+  }
+  const viewContent = defaultImportFor(source, file);
+  if (!viewContent) {
+    throw new Error(`pageTitle.guard: ${file} passes <StaticPage content=...> but imports no content JSON -- extend defaultImportFor rather than silently skipping it`);
+  }
+
+  const staticPageAst = parseSvelte(staticPageSource, { filename: 'StaticPage.svelte', modern: true }) as unknown as SvelteNode;
+  let h1: string | undefined;
+  function walkStaticPage(node: unknown): void {
+    if (h1 !== undefined) return;
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const item of node) walkStaticPage(item);
+      return;
+    }
+    const obj = node as SvelteNode;
+    if (obj.type === 'RegularElement' && obj.name === 'h1') {
+      const kids = ((obj.fragment as SvelteNode | undefined)?.nodes as SvelteNode[] | undefined) ?? [];
+      h1 = kids.map((k) => childText(k, 'StaticPage.svelte', viewContent)).join('');
+      return;
+    }
+    for (const key of Object.keys(obj)) {
+      if (key === 'parent') continue;
+      walkStaticPage(obj[key]);
+    }
+  }
+  walkStaticPage(staticPageAst.fragment);
+  if (h1 === undefined) {
+    throw new Error('pageTitle.guard: StaticPage.svelte has no <h1> -- a view delegating its heading to it no longer renders one');
+  }
+  return h1;
 }
 
 /** route name -> the view file that owns its "guarded" heading, i.e. every
