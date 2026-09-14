@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { get } from 'svelte/store';
   import { currentUser, pendingVerifyToken } from './lib/stores';
-  import { currentRoute, initRouter, navigate } from './lib/router';
+  import { currentRoute, initRouter, navigate, needsSessionGate } from './lib/router';
   import { getMe } from './lib/api';
   import { titleForRoute, shouldAnnounceNavigation } from './lib/pageTitle';
   import Login from './views/Login.svelte';
@@ -27,6 +27,15 @@
   import NotFound from './views/NotFound.svelte';
 
   let sessionChecked = $state(false);
+
+  // #0521: only the session-gated routes (router.ts's SESSION_GATED_ROUTES)
+  // wait for GET /api/me before rendering. Every public route mounts its
+  // real view immediately, so after #0519 the server's fallback content in
+  // #app stays visible until mount() replaces it with the real view --
+  // prepareMountTarget clears #app synchronously first, so there is no
+  // intermediate "Loading…" screen between the server HTML and the mounted
+  // page, and never a moment with two copies of the content (or two <h1>s)
+  // in the DOM.
 
   // On mount, the History API router (#0014) has already parsed the current
   // URL into $currentRoute (router.ts's module-level default). Two things
@@ -124,7 +133,7 @@
   });
 </script>
 
-{#if !sessionChecked}
+{#if !sessionChecked && needsSessionGate($currentRoute.name)}
   <div class="app-shell">
     <p class="text-muted">Loading…</p>
   </div>

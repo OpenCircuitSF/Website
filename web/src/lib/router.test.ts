@@ -11,7 +11,7 @@
 // for exactly what "verified by rendering" vs "not verified at all" covers.
 
 import { describe, expect, it } from 'vitest';
-import { parsePath, shouldIntercept, STATIC_ROUTES, type InterceptCandidate } from './router';
+import { parsePath, shouldIntercept, STATIC_ROUTES, needsSessionGate, type InterceptCandidate } from './router';
 
 // Every static PRD §5.1 / auth route, paired with the route name parsePath()
 // resolves it to. Hoisted out of the test body (rather than a local const
@@ -192,5 +192,32 @@ describe('shouldIntercept', () => {
         candidate({ href: 'https://opencircuitsf.com/workshops/solder-101' }),
       ),
     ).toBe(true);
+  });
+});
+
+// #0521: the session-gated route set is the gate App.svelte applies before
+// rendering its view -- a route added to the SPA's router without being
+// classified here defaults to "public", which is the right default (server
+// fallback content + immediate mount), but these tests pin the set itself
+// and its shape so a rename of a gated route cannot silently drop it from
+// the gate.
+describe('needsSessionGate (#0521)', () => {
+  it('gates exactly the routes whose first render depends on the session', () => {
+    for (const name of ['admin', 'account', 'register-verify', 'recover-verify'] as const) {
+      expect(needsSessionGate(name), name).toBe(true);
+    }
+  });
+
+  it('renders every other route immediately (no Loading flash)', () => {
+    const allButGated = Object.values(STATIC_ROUTES).filter((name) => !needsSessionGate(name));
+    // Floor rather than an exact set: every STATIC_ROUTES route not in the
+    // gated set must be ungated, and the dynamic routes (which STATIC_ROUTES
+    // does not contain) are public by construction.
+    for (const name of allButGated) {
+      expect(needsSessionGate(name), name).toBe(false);
+    }
+    expect(needsSessionGate('workshop-detail')).toBe(false);
+    expect(needsSessionGate('not-found')).toBe(false);
+    expect(needsSessionGate('home')).toBe(false);
   });
 });

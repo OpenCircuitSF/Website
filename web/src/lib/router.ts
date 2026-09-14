@@ -95,6 +95,27 @@ export const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
 const WORKSHOP_DETAIL = /^\/workshops\/([^/]+)$/;
 const ARCHIVE_DETAIL = /^\/archive\/([^/]+)$/;
 
+/** #0521: the routes whose first render genuinely depends on GET /api/me
+ * (the admin and account views gate their contents on currentUser) or on
+ * App.svelte's magic-token redirect running before the first paint (the two
+ * /verify landings strip ?token= from the URL before their first paint).
+ * Every other route renders immediately on mount -- App.svelte no longer
+ * shows its "Loading…" placeholder for them, so the server's fallback HTML
+ * (internal/seo/fallback.go) stays on screen until the real view replaces
+ * it, with no intermediate flash. */
+export const SESSION_GATED_ROUTES: ReadonlySet<RouteName> = new Set<RouteName>([
+  'admin',
+  'account',
+  'register-verify',
+  'recover-verify',
+]);
+
+/** Whether a route must wait for sessionChecked before its view may render.
+ * Pure over the route name, so it is unit-testable without a DOM. */
+export function needsSessionGate(name: RouteName): boolean {
+  return SESSION_GATED_ROUTES.has(name);
+}
+
 /**
  * Parse a pathname + query string into a typed Route. Pure function, no DOM
  * access -- safe to call from a unit test or from the live router alike.
@@ -351,9 +372,12 @@ function onScroll(): void {
 /** How long restoreScroll() keeps re-applying an offset while it waits for the
  * document to grow tall enough to accept it. One `await tick()` is enough for a
  * view that renders synchronously, but not for one gated on a fetch -- notably
- * App.svelte, which renders a zero-height "Loading…" placeholder until
- * `GET /api/me` settles, so the very first restore after a document load would
- * otherwise clamp to 0 against a page with no height yet. */
+ * App.svelte on the session-gated routes (SESSION_GATED_ROUTES, #0521), which
+ * renders a zero-height "Loading…" placeholder until `GET /api/me` settles, so
+ * the very first restore after a document load would otherwise clamp to 0
+ * against a page with no height yet. (Public routes have rendered their real
+ * view synchronously since #0521, so this deadline now matters mainly for the
+ * gated ones and for views with async content of their own.) */
 const RESTORE_DEADLINE_MS = 1000;
 
 /** Bumped by every restoreScroll() call so a superseded one stops re-applying. */
