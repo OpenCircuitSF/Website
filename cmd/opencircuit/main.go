@@ -1737,6 +1737,11 @@ func mountAndServe(
 	// doc comment (internal/seo/site.go) for the 404-vs-fallback rules.
 	mux.Handle("GET /workshops/{slug}/og.png", site.WorkshopCardHandler())
 
+	// Per-newsletter Open Graph card (#0532) -- the archive twin of the
+	// route above, sharing its rendering, cache, and invalidation. The
+	// same second-segment reasoning applies to archiveDetailPattern.
+	mux.Handle("GET /archive/{slug}/og.png", site.ArchiveCardHandler())
+
 	// Svelte SPA — the catch-all served LAST. Under the Go 1.22 mux this
 	// "GET /" pattern is the least specific, so every explicit route above wins
 	// over it. It serves hashed assets from the embedded web/dist directly and

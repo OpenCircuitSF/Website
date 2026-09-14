@@ -135,22 +135,61 @@ func (s *Site) WorkshopCardHandler() http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
+		s.serveCard(w, r, "workshop:"+wk.Slug, wk.Title, cardMetaLine(wk))
+	}
+}
 
-		body, etag, err := s.cards.get(wk)
-		if err != nil {
-			http.Error(w, "failed to render workshop card", http.StatusInternalServerError)
+// serveCard is both card handlers' shared tail (#0532): render (or fetch
+// from cardCache under key), then serve the PNG with a one-hour
+// Cache-Control and a strong content-derived ETag carrying a 304 path.
+// The 404 gate lives in each handler, next to its own cardability lookup,
+// so each handler's doc comment can say exactly what it refuses.
+func (s *Site) serveCard(w http.ResponseWriter, r *http.Request, key, title, meta string) {
+	body, etag, err := s.cards.get(key, title, meta)
+	if err != nil {
+		http.Error(w, "failed to render card", http.StatusInternalServerError)
+		return
+	}
+
+	h := w.Header()
+	h.Set("Content-Type", "image/png")
+	h.Set("Cache-Control", "public, max-age=3600")
+	h.Set("ETag", etag)
+	if inm := r.Header.Get("If-None-Match"); inm != "" && inm == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	_, _ = w.Write(body)
+}
+
+// ArchiveCardHandler serves GET /archive/{slug}/og.png (#0532): the
+// generated per-newsletter Open Graph card, mirroring WorkshopCardHandler
+// above. handlers.archiveDetailPattern (`^/archive/[^/]+$`) does not match
+// a path with a second segment, so this route needs no change to
+// internal/handlers/routes.go -- it is registered as its own, more specific
+// pattern in cmd/opencircuit/main.go's mountAndServe, which Go 1.22's
+// ServeMux resolves ahead of the "GET /" SPA catch-all.
+//
+// Gated on Renderer.cardableArchive (seo.go), the same Published predicate
+// archiveRouteMeta applies before pointing og:image at this URL -- a draft
+// (never sent), withheld, or unknown slug 404s here rather than serving a
+// generic PNG under a campaign-specific URL, which would leak the slug's
+// existence (#0532 criterion 3). The card itself is renderCard's shared
+// workshop rendering -- same base image, fonts, title ladder -- with the
+// subject as the title and the Pacific archive date as the meta line
+// (archiveCardMeta, card.go), matching the archive page's own date label
+// (#0519). Cards cache under the "archive:"-namespaced key so an archive
+// slug can never collide with an equal workshop slug, and clear through
+// Site.Invalidate like every other cached rendering this Site holds.
+func (s *Site) ArchiveCardHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		e, ok := s.renderer.cardableArchive(slug)
+		if !ok {
+			http.NotFound(w, r)
 			return
 		}
-
-		h := w.Header()
-		h.Set("Content-Type", "image/png")
-		h.Set("Cache-Control", "public, max-age=3600")
-		h.Set("ETag", etag)
-		if inm := r.Header.Get("If-None-Match"); inm != "" && inm == etag {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		_, _ = w.Write(body)
+		s.serveCard(w, r, "archive:"+e.Slug, e.Subject, archiveCardMeta(e))
 	}
 }
 

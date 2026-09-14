@@ -548,6 +548,28 @@ func (r *Renderer) cardableWorkshop(slug string) (Workshop, bool) {
 	return w, true
 }
 
+// cardableArchive is cardableWorkshop's archive twin (#0532): it looks up
+// slug and reports whether it is a published archive entry -- the same
+// e.Published predicate archiveRouteMeta applies to the entry it already
+// has (status 'sent' AND archive_status 'published', per the adapter's
+// toSEOArchiveEntry). Draft (never sent), withheld, and unknown slugs are
+// not cardable, so Site.ArchiveCardHandler 404s them rather than serving a
+// generic PNG under a campaign-specific URL, which would leak the slug's
+// existence (#0532 criterion 3, the same rule #0273 applies to workshops).
+//
+// ok=false for: no ArchiveSource configured, an unknown slug, an archive
+// source error, or a campaign that is not Published.
+func (r *Renderer) cardableArchive(slug string) (ArchiveEntry, bool) {
+	if r.archive == nil {
+		return ArchiveEntry{}, false
+	}
+	e, ok, err := r.archive.ArchiveEntryBySlug(slug)
+	if err != nil || !ok || !e.Published {
+		return ArchiveEntry{}, false
+	}
+	return e, true
+}
+
 // archiveRouteMeta looks up slug in the configured ArchiveSource and builds
 // the RouteMeta for an /archive/{slug} request (#0123, PRD §6.8: "<title>
 // from the campaign subject, meta description from the preheader,
@@ -555,6 +577,15 @@ func (r *Renderer) cardableWorkshop(slug string) (Workshop, bool) {
 // (description.go, #0528): preheader when set, else the body's first
 // paragraph of rendered prose, else the generic sentence -- the same text
 // the Atom feed's entry summaries use (#0531).
+//
+// The og:image (#0532) is the generated per-archive card,
+// /archive/{slug}/og.png, for every campaign this function can return ok
+// for: the cardableArchive gate below IS this function's own Published
+// check, so the meta can never point a share card at a URL that would
+// 404, mirroring workshopRouteMeta's og:image branch and its own
+// cardability agreement. twitter:image needs no separate value:
+// web/index.html deliberately carries no twitter:image tag and Twitter/X
+// falls back to og:image (#0273's settled design, not re-litigated).
 //
 // ok=false (share the generic fallback bucket, resolve's caller) for: no
 // ArchiveSource configured, an unknown slug, an archive source error, or a
@@ -577,7 +608,7 @@ func (r *Renderer) archiveRouteMeta(slug string) (RouteMeta, bool) {
 		Description:   description,
 		OGTitle:       e.Subject,
 		OGDescription: description,
-		OGImage:       r.baseURL + "/og-default.png",
+		OGImage:       r.baseURL + "/archive/" + slug + "/og.png",
 		OGURL:         r.baseURL + "/archive/" + slug,
 		Canonical:     r.baseURL + "/archive/" + slug,
 		OGType:        "article",

@@ -481,33 +481,250 @@ func TestWorkshopCoverImageStillWins(t *testing.T) {
 
 // TestCardCache_CachesAndInvalidates proves cardCache actually caches
 // (rather than merely being idempotent) by mutating the workshop's Title
-// between two get() calls under the SAME slug: a real cache hit must return
+// between two get() calls under the SAME key: a real cache hit must return
 // the FIRST render's bytes unchanged, and only after invalidate() does a
 // subsequent get() reflect the new title.
 func TestCardCache_CachesAndInvalidates(t *testing.T) {
 	cache := newCardCache(mustCardRenderer())
 
-	w := Workshop{Slug: "cache-demo", Title: "Original Title"}
-	body1, etag1, err := cache.get(w)
+	key := "workshop:cache-demo"
+	body1, etag1, err := cache.get(key, "Original Title", "")
 	if err != nil {
 		t.Fatalf("get (miss): %v", err)
 	}
 
-	w.Title = "Completely Different Title Entirely"
-	body2, etag2, err := cache.get(w)
+	body2, etag2, err := cache.get(key, "Completely Different Title Entirely", "")
 	if err != nil {
 		t.Fatalf("get (should be a hit): %v", err)
 	}
 	if !bytes.Equal(body1, body2) || etag1 != etag2 {
-		t.Fatal("get() with a mutated Title but the same Slug returned different bytes -- cache did not hit, it re-rendered")
+		t.Fatal("get() with a mutated Title but the same key returned different bytes -- cache did not hit, it re-rendered")
 	}
 
 	cache.invalidate()
-	body3, etag3, err := cache.get(w)
+	body3, etag3, err := cache.get(key, "Completely Different Title Entirely", "")
 	if err != nil {
 		t.Fatalf("get (after invalidate): %v", err)
 	}
 	if bytes.Equal(body1, body3) || etag1 == etag3 {
 		t.Fatal("get() after invalidate() returned the stale pre-invalidate bytes -- invalidate() did not clear the cache")
+	}
+}
+
+// TestCardCache_NamespacedKeys (#0532): an archive slug and a workshop slug
+// are independent strings that could be equal, so a shared cache key would
+// serve one of them the other's card. The handlers namespace their keys --
+// "workshop:"+slug and "archive:"+slug -- so equal slugs render distinct
+// entries, while the same namespace+slug always hits one entry.
+func TestCardCache_NamespacedKeys(t *testing.T) {
+	cache := newCardCache(mustCardRenderer())
+
+	wsBody, _, err := cache.get("workshop:09-2026", "A Workshop Title", "Jan 2, 2026")
+	if err != nil {
+		t.Fatalf("workshop get: %v", err)
+	}
+	arBody, _, err := cache.get("archive:09-2026", "September newsletter", "Sep 1, 2026")
+	if err != nil {
+		t.Fatalf("archive get: %v", err)
+	}
+	if bytes.Equal(wsBody, arBody) {
+		t.Fatal("equal slug across namespaces returned identical bytes -- keys collided")
+	}
+
+	again, _, err := cache.get("archive:09-2026", "September newsletter", "Sep 1, 2026")
+	if err != nil {
+		t.Fatalf("archive get (hit): %v", err)
+	}
+	if !bytes.Equal(arBody, again) {
+		t.Fatal("same namespaced key returned different bytes -- cache did not hit")
+	}
+}
+
+// TestArchiveCardMeta_PacificDate pins #0532 criterion 2 through an instant
+// whose UTC calendar day differs from the Pacific one: 2026-09-13T02:30:00Z
+// is the evening of Sep 12 in San Francisco, so the card must say
+// "Sep 12, 2026" -- the same label the archive page shows (#0519) -- not
+// the UTC day.
+func TestArchiveCardMeta_PacificDate(t *testing.T) {
+	e := ArchiveEntry{Slug: "09-2026", ArchivedAt: "2026-09-13T02:30:00Z"}
+	if got := archiveCardMeta(e); got != "Sep 12, 2026" {
+		t.Errorf("archiveCardMeta = %q, want the Pacific-time label %q", got, "Sep 12, 2026")
+	}
+	if got := archiveCardMeta(ArchiveEntry{ArchivedAt: "not-a-timestamp"}); got != "" {
+		t.Errorf("archiveCardMeta(unparseable) = %q, want empty (omit, don't fabricate)", got)
+	}
+}
+
+// TestArchiveRouteMetaAndCardHandler_StatusCrossProduct mirrors
+// TestWorkshopRouteMetaAndCardHandler_StatusCrossProduct for the archive
+// (#0532): a published campaign's og:image points at its own card and the
+// URL serves one; a withheld or never-sent campaign -- and an unknown slug
+// -- 404 the card URL and keep the generic og-default.png, so a
+// campaign-specific URL never leaks the slug's existence (criterion 3).
+func TestArchiveRouteMetaAndCardHandler_StatusCrossProduct(t *testing.T) {
+	source := fakeArchiveSource{
+		"09-2026": {
+			Slug: "09-2026", Subject: "September newsletter",
+			BodyMD: "First paragraph.", Published: true,
+			ArchivedAt: "2026-09-01T18:00:00Z", UpdatedAt: "2026-09-01",
+		},
+		"withheld-08": {Slug: "withheld-08", Subject: "Withheld", Published: false},
+		"never-sent":  {Slug: "never-sent", Subject: "Draft", Published: false},
+	}
+
+	site := NewSite([]byte(testTemplate), testBaseURL, nil, source)
+	mux := http.NewServeMux()
+	mux.Handle("GET /archive/{slug}/og.png", site.ArchiveCardHandler())
+
+	cases := []struct {
+		name        string
+		slug        string
+		wantCardURL bool
+		wantStatus  int
+	}{
+		{name: "published", slug: "09-2026", wantCardURL: true, wantStatus: http.StatusOK},
+		{name: "withheld", slug: "withheld-08", wantCardURL: false, wantStatus: http.StatusNotFound},
+		{name: "never sent", slug: "never-sent", wantCardURL: false, wantStatus: http.StatusNotFound},
+		{name: "unknown slug", slug: "does-not-exist", wantCardURL: false, wantStatus: http.StatusNotFound},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := string(site.renderer.Render("/archive/" + tc.slug))
+			cardURL := "/archive/" + tc.slug + "/og.png"
+			hasCardURL := strings.Contains(body, cardURL)
+			hasDefault := strings.Contains(body, "/og-default.png")
+
+			if tc.wantCardURL {
+				if !hasCardURL {
+					t.Errorf("rendered meta missing card URL %q:\n%s", cardURL, body)
+				}
+				if hasDefault {
+					t.Error("rendered meta contains /og-default.png for a campaign that should get its own card")
+				}
+			} else {
+				if hasCardURL {
+					t.Errorf("rendered meta contains card URL %q for a non-published campaign", cardURL)
+				}
+				if !hasDefault {
+					t.Error("rendered meta missing /og-default.png fallback")
+				}
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/archive/"+tc.slug+"/og.png", nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Errorf("GET %s = %d, want %d", req.URL.Path, rec.Code, tc.wantStatus)
+			}
+			if tc.wantStatus != http.StatusOK {
+				return
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
+				t.Errorf("Content-Type = %q, want image/png", ct)
+			}
+			img, err := png.Decode(bytes.NewReader(rec.Body.Bytes()))
+			if err != nil {
+				t.Fatalf("decode card PNG: %v", err)
+			}
+			if got := img.Bounds(); got.Dx() != cardW || got.Dy() != cardH {
+				t.Errorf("card is %dx%d, want %dx%d", got.Dx(), got.Dy(), cardW, cardH)
+			}
+		})
+	}
+
+	t.Run("nil ArchiveSource", func(t *testing.T) {
+		nilSite := NewSite([]byte(testTemplate), testBaseURL, nil, nil)
+		nilMux := http.NewServeMux()
+		nilMux.Handle("GET /archive/{slug}/og.png", nilSite.ArchiveCardHandler())
+
+		body := string(nilSite.renderer.Render("/archive/anything"))
+		if !strings.Contains(body, "/og-default.png") {
+			t.Error("rendered meta with nil ArchiveSource missing /og-default.png fallback")
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/archive/anything/og.png", nil)
+		rec := httptest.NewRecorder()
+		nilMux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET .../og.png with nil ArchiveSource = %d, want 404", rec.Code)
+		}
+	})
+}
+
+// TestArchiveCard_HostileSubjectsStayInSafeArea pins #0532 criterion 6:
+// admin-entered subjects with very long words, emoji, or right-to-left text
+// neither crash the renderer nor push ink outside the card's safe area. The
+// long-word case is the real assertion here: greedy wrapping leaves a
+// single word on its own line, so without a fit-check it would overflow the
+// right margin; every line must now ellipsize to fit.
+func TestArchiveCard_HostileSubjectsStayInSafeArea(t *testing.T) {
+	cr := mustCardRenderer()
+	bg := cardTestBackground()
+
+	subjects := map[string]string{
+		"single long word":   strings.Repeat("x", 120),
+		"long word plus":     "September " + strings.Repeat("supercalifragilisticexpialidocious", 3),
+		"emoji":              "🔌 Solder Night ⚡ — bring your own project 🔧🔧🔧",
+		"right to left":      "שלום עליכם — ورشة لحام مفصلة في سان فرانسيسكو",
+		"emoji long and rtl": "⚡⚡⚡ " + strings.Repeat("workshop ", 30) + " שלום",
+	}
+
+	for name, subject := range subjects {
+		t.Run(name, func(t *testing.T) {
+			body, err := cr.renderCard(subject, "Sep 1, 2026")
+			if err != nil {
+				t.Fatalf("renderCard: %v", err)
+			}
+			img, err := png.Decode(bytes.NewReader(body))
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			full, ok := inkBBoxInRange(t, img, bg, 0, cardH)
+			if !ok {
+				t.Fatal("no non-background pixel anywhere -- card rendered blank")
+			}
+			safe := image.Rect(cardSafeInset, cardSafeInset, cardW-cardSafeInset, cardH-cardSafeInset)
+			if !full.In(safe) {
+				t.Errorf("ink bounding box %v escaped the safe area %v", full, safe)
+			}
+		})
+	}
+}
+
+// TestSiteInvalidateClearsArchiveCards pins that the shared Invalidate
+// path (#0319's callers) also drops archive cards: a subject change is
+// visible after Invalidate without waiting out any TTL, the same guarantee
+// TestCardCache_CachesAndInvalidates pins for workshop cards.
+func TestSiteInvalidateClearsArchiveCards(t *testing.T) {
+	source := fakeArchiveSource{
+		"09-2026": {Slug: "09-2026", Subject: "Original Subject", Published: true, ArchivedAt: "2026-09-01T18:00:00Z"},
+	}
+	site := NewSite([]byte(testTemplate), testBaseURL, nil, source)
+	mux := http.NewServeMux()
+	mux.Handle("GET /archive/{slug}/og.png", site.ArchiveCardHandler())
+
+	get := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/archive/09-2026/og.png", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	first := get()
+	if first.Code != http.StatusOK {
+		t.Fatalf("first GET = %d, want 200", first.Code)
+	}
+
+	source["09-2026"] = ArchiveEntry{Slug: "09-2026", Subject: "A Completely Different Subject", Published: true, ArchivedAt: "2026-09-01T18:00:00Z"}
+	stale := get()
+	if !bytes.Equal(stale.Body.Bytes(), first.Body.Bytes()) {
+		t.Fatal("GET after source mutation returned different bytes -- card was not cached")
+	}
+
+	site.Invalidate()
+	fresh := get()
+	if bytes.Equal(fresh.Body.Bytes(), first.Body.Bytes()) {
+		t.Fatal("GET after Invalidate() returned the stale pre-invalidate bytes")
 	}
 }

@@ -227,11 +227,11 @@ func (cr *cardRenderer) layoutTitle(title string, maxWidth fixed.Int26_6) titleL
 
 // wrapText greedily word-wraps text into lines no wider than maxWidth under
 // d.Face, measured with d.MeasureString. A single word wider than maxWidth
-// on its own is left on its own line unmodified -- workshop titles are
-// ordinary admin-authored English, so this does not arise in practice, and
-// ellipsize (applied only to the final line after layoutTitle's
-// cardMaxLines truncation) is what keeps the card's actual output within
-// its safe area regardless.
+// on its own -- #0532's "long words" case, reachable from an admin-entered
+// campaign subject -- is ellipsized to fit rather than left overflowing the
+// card's safe area, the same forceEllipsis treatment layoutTitle gives the
+// truncated final line; ordinary titles never hit this, so every previously
+// pinned render is unchanged.
 func wrapText(d *font.Drawer, text string, maxWidth fixed.Int26_6) []string {
 	words := strings.Fields(text)
 	if len(words) == 0 {
@@ -249,6 +249,11 @@ func wrapText(d *font.Drawer, text string, maxWidth fixed.Int26_6) []string {
 		cur = word
 	}
 	lines = append(lines, cur)
+	for i, line := range lines {
+		if d.MeasureString(line) > maxWidth {
+			lines[i] = ellipsize(d, line, maxWidth)
+		}
+	}
 	return lines
 }
 
@@ -308,6 +313,19 @@ func cardMetaLine(w Workshop) string {
 	}
 }
 
+// archiveCardMeta builds the one-line meta an archive card carries under
+// its subject (#0532): the archive date, Pacific time, archiveDateLabel's
+// "Jan 2, 2006" -- the same label the server-rendered archive detail page
+// and archive index show (#0519), so the card and the page it links to
+// always agree on the date. An empty or unparseable
+// ArchivedAt renders nothing, matching cardMetaLine's omit-don't-fabricate
+// posture; a published campaign always has archived_at set (the
+// archive-publish transition writes it), so this is defense in depth, not
+// a reachable state.
+func archiveCardMeta(e ArchiveEntry) string {
+	return archiveDateLabel(e.ArchivedAt)
+}
+
 // cardLocation is the timezone the card's date/venue line renders in.
 //
 // # Pacific, zone-labeled -- not UTC, and not per-request (#0273 review pass,
@@ -364,15 +382,28 @@ func formatCardDate(startsAt string) string {
 // doc comment -- cardCache.get is the only caller and holds its own mutex
 // across this call.
 func (cr *cardRenderer) render(w Workshop) ([]byte, error) {
+	return cr.renderCard(w.Title, cardMetaLine(w))
+}
+
+// renderCard is render generalized over its two variable inputs (#0532): a
+// title block laid out through the same size ladder and wrap rules
+// layoutTitle applies to a workshop title, and one optional muted meta line
+// beneath it (a workshop's "date · venue", or an archive entry's Pacific
+// archive date). Everything else -- base image, fonts, geometry, the fixed
+// command line -- is shared by construction, so a per-newsletter card can
+// never drift from a per-workshop one. An empty meta renders nothing, the
+// same posture cardMetaLine's "" return already takes for a minimal
+// workshop.
+func (cr *cardRenderer) renderCard(title, meta string) ([]byte, error) {
 	dst := image.NewRGBA(image.Rect(0, 0, cardW, cardH))
 	draw.Draw(dst, dst.Bounds(), cr.base, image.Point{}, draw.Src)
 
 	maxWidth := fixed.I(cardW - 2*cardMargin)
 
-	layout := cr.layoutTitle(w.Title, maxWidth)
+	layout := cr.layoutTitle(title, maxWidth)
 	cr.drawTitle(dst, layout)
 
-	if meta := cardMetaLine(w); meta != "" {
+	if meta != "" {
 		cr.drawMeta(dst, meta, maxWidth)
 	}
 	cr.drawCommand(dst)
@@ -380,7 +411,7 @@ func (cr *cardRenderer) render(w Workshop) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := png.Encoder{CompressionLevel: png.BestCompression}
 	if err := enc.Encode(&buf, dst); err != nil {
-		return nil, fmt.Errorf("card: encode png for slug %q: %w", w.Slug, err)
+		return nil, fmt.Errorf("card: encode png: %w", err)
 	}
 	return buf.Bytes(), nil
 }
@@ -448,17 +479,21 @@ type cardCacheEntry struct {
 // rather than partial eviction, for the identical reason: re-rendering is
 // cheap (measured in #0273's plan: 8-13ms) and a hard cap is simpler to
 // reason about than recency bookkeeping. The realistic keyspace is the
-// published-workshop catalog: WorkshopCardHandler only ever renders for
-// Renderer.cardableWorkshop's published-and-actually-published gate, so
-// unlike Renderer's own notfound/fallback buckets this cache is never
-// attacker-controlled by requesting distinct nonexistent paths. 64 is ample
-// headroom above a three-workshop catalog.
+// published-workshop catalog plus (#0532) the published-campaign archive:
+// both handlers only ever render past their own cardable gates
+// (workshopIsCardable / cardableArchive), so unlike Renderer's own
+// notfound/fallback buckets this cache is never attacker-controlled by
+// requesting distinct nonexistent paths. 64 is ample headroom above that
+// combined catalog.
 const maxCardCacheEntries = 64
 
-// cardCache caches rendered per-workshop card PNGs, keyed by slug, and
-// serializes every render behind its own mutex -- see this file's package
-// doc comment for why that serialization is required (golang.org/x/image/font
-// Face/Drawer are not safe for concurrent use), not just an optimization.
+// cardCache caches rendered card PNGs, keyed by a caller-namespaced key --
+// "workshop:"+slug or "archive:"+slug -- so the two namespaces can never
+// collide even though a workshop slug and a campaign slug are independent
+// strings that could in principle be equal (#0532), and serializes every
+// render behind its own mutex -- see this file's package doc comment for
+// why that serialization is required (golang.org/x/image/font Face/Drawer
+// are not safe for concurrent use), not just an optimization.
 type cardCache struct {
 	mu      sync.Mutex
 	entries map[string]cardCacheEntry
@@ -469,28 +504,28 @@ func newCardCache(render *cardRenderer) *cardCache {
 	return &cardCache{entries: make(map[string]cardCacheEntry), render: render}
 }
 
-// get returns w's cached card body and ETag, rendering and caching on a
-// miss. A burst of concurrent first-requests for the same slug renders once:
-// every caller blocks on the same mutex, and the first to acquire it
-// populates the cache for the rest.
-func (c *cardCache) get(w Workshop) ([]byte, string, error) {
+// get returns the cached card for key, rendering it from title/meta and
+// caching on a miss. A burst of concurrent first-requests for the same key
+// renders once: every caller blocks on the same mutex, and the first to
+// acquire it populates the cache for the rest.
+func (c *cardCache) get(key, title, meta string) ([]byte, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if e, ok := c.entries[w.Slug]; ok {
+	if e, ok := c.entries[key]; ok {
 		return e.body, e.etag, nil
 	}
 
-	body, err := c.render.render(w)
+	body, err := c.render.renderCard(title, meta)
 	if err != nil {
 		return nil, "", err
 	}
 	etag := cardETag(body)
 
-	if _, exists := c.entries[w.Slug]; !exists && len(c.entries) >= maxCardCacheEntries {
+	if _, exists := c.entries[key]; !exists && len(c.entries) >= maxCardCacheEntries {
 		c.entries = make(map[string]cardCacheEntry)
 	}
-	c.entries[w.Slug] = cardCacheEntry{body: body, etag: etag}
+	c.entries[key] = cardCacheEntry{body: body, etag: etag}
 	return body, etag, nil
 }
 
