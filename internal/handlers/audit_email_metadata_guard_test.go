@@ -486,9 +486,21 @@ var auditEmailMetadataKnownSites = []auditEmailMetadataKnownSite{
 	// (it matched nothing, or the message would not be parked). Classified
 	// only once the exact-key rule above landed; before that it read
 	// hasEmail=false, a classification miss the #0499 review measured
-	// directly. Not a subscriber's own address, so the privacy policy does
-	// not disclose it the way the six structural sites above are
-	// disclosed — #0503 is the policy half of that decision.
+	// directly. #0503 is the policy half of that decision, now landed:
+	// when the parked reason is auto_reply the address IS the
+	// subscriber's own (#0499's test asserts the recorded from equals a
+	// real seeded subscriber's Email), so it joins PrivacyPolicy.svelte's
+	// audit-log disclosure and the erasure path like the seven
+	// subscriber-own sites above — that page and this fixture were updated
+	// together, per #0503 criterion 3. Every other parked reason is an
+	// unverified address with no erasure path: internal/audit's
+	// RedactExpiredInboundSenders replaces its local part with a fixed
+	// placeholder 90 days after the row is written (ridden by the outbox
+	// worker; migrations/000030's partial index serves it), and the privacy
+	// policy discloses that redaction in the same item. This row itself is
+	// unchanged by #0503 — one site, count 1, no IP — because the sweep is
+	// an UPDATE of one metadata key on existing rows, never a new
+	// audit.Entry call site.
 	{file: "internal/handlers/ses_inbound.go", action: "ActionInboundMailParked", count: 1, hasIP: false},
 }
 

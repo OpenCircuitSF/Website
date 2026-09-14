@@ -87,7 +87,7 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
     sourceRef: 'internal/subscribers/erase.go doc comment: "email_events rows, untouched"; PRD §6.9\'s delivery-health circuit breaker',
   },
   {
-    key: 'audit_log (subscriber/admin/automated categories, per-request IP except automated SES entries, seven actions carry the email plus one contingent on admin search text)',
+    key: 'audit_log (subscriber/admin/automated categories, per-request IP except automated SES entries, eight actions carry the email plus one contingent on admin search text, unmatched-message senders redacted to a placeholder after 90 days)',
     // #0124 added the seventh structural site: POST
     // /admin/deliverability/{email}/reset-streak
     // (ActionSubscriberSoftBounceStreakReset) — an admin-initiated action
@@ -150,6 +150,26 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
     // disclosure is conditional, not structural, and the item's wording
     // says so ("if a staff member ever searches ... that search text is
     // recorded too", not "an export always records your address").
+    //
+    // #0503 widened the category a third way, in both directions of the
+    // same record: #0499's parked-message row (the Go guard's
+    // ActionInboundMailParked site) carries the raw From: address a
+    // correspondent sent. When the parked reason is auto_reply that
+    // address IS the subscriber's own (#0499's test asserts the recorded
+    // from equals a real seeded subscriber's Email), so the page's email
+    // enumeration gained "an automated out-of-office reply your mail
+    // program sends us" — the EIGHTH email-carrying action, disclosed
+    // like the other seven and covered by the erasure path. Every other
+    // parked reason is an unverified address with no erasure path, so the
+    // item's final clause discloses the retention sweep instead
+    // (internal/audit.RedactExpiredInboundSenders, ridden by the outbox
+    // worker): the sender's address is kept 90 days — the record still
+    // outlives the 30-day S3 object it describes, #0499 criterion 2 —
+    // then the local part is replaced with a fixed placeholder, leaving
+    // the domain and the row itself as an actionable count. The phrases
+    // below pin both halves; the mutation proof further down drops the
+    // redaction clause specifically, since it is the half a future edit is
+    // most likely to trim for length.
     requiredPhrases: [
       'audit log',
       'admin-initiated actions',
@@ -159,11 +179,15 @@ const ERASURE_RETAINED_CATEGORIES: RetainedCategory[] = [
       'suppression removal',
       'a bounce',
       'a complaint',
+      'automated out-of-office reply',
       'your email address',
       'search text is recorded',
+      '90 days',
+      'fixed placeholder',
+      'the domain',
     ],
     sourceRef:
-      'internal/handlers/audit_email_metadata_guard_test.go (#0237, widened by #0124) pins the full, current set: internal/handlers/confirm.go ActionSubscriberConfirmed, internal/handlers/admin_subscribers.go ActionSubscriberManualAdd and ActionSubscriberErased, internal/handlers/admin_suppressions.go ActionSuppressionRemoved, internal/handlers/ses_notifications.go ActionSubscriberBounced (x2) and ActionSubscriberComplained, internal/handlers/admin_deliverability.go ActionSubscriberSoftBounceStreakReset, plus (pinned but NOT part of the "seven actions" disclosure -- neither is a real subscriber\'s own address) internal/handlers/admin_campaign_preview.go ActionEmailCampaignTestSent and internal/handlers/admin_subscribers_export.go ActionSubscriberExported -- see that file for each one\'s exact line and IP-presence, re-derived from the tree on every run rather than hardcoded here a second time.',
+      'internal/handlers/audit_email_metadata_guard_test.go (#0237, widened by #0124) pins the full, current set: internal/handlers/confirm.go ActionSubscriberConfirmed, internal/handlers/admin_subscribers.go ActionSubscriberManualAdd and ActionSubscriberErased, internal/handlers/admin_suppressions.go ActionSuppressionRemoved, internal/handlers/ses_notifications.go ActionSubscriberBounced (x2) and ActionSubscriberComplained, internal/handlers/admin_deliverability.go ActionSubscriberSoftBounceStreakReset, plus (pinned but NOT part of the "seven actions" disclosure -- neither is a real subscriber\'s own address) internal/handlers/admin_campaign_preview.go ActionEmailCampaignTestSent and internal/handlers/admin_subscribers_export.go ActionSubscriberExported -- see that file for each one\'s exact line and IP-presence, re-derived from the tree on every run rather than hardcoded here a second time. #0503 adds the parked-record site\'s two halves: the auto_reply branch joins the email enumeration, and every other parked reason\'s address is redacted to a placeholder after 90 days by internal/audit\'s RedactExpiredInboundSenders (ridden by internal/mailing\'s outbox worker; migrations/000030\'s partial index serves it).',
   },
   {
     // #0126: subscriber_events is a NEW table (migrations/000022) added by
@@ -397,11 +421,14 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     // #0226's first review pass deleted exactly this clause while widening
     // the IP phrasing, and the guard at the time had no requiredPhrase that
     // would have caught it. Reproduce that exact deletion against the REAL
-    // current item text and confirm the guard now fires.
+    // current item text and confirm the guard now fires. The replace string
+    // is the CURRENT enumeration (#0503 added the out-of-office action to
+    // it), so the mutation removes the whole email clause including the
+    // eighth action.
     const items = realItems().map((item) =>
       item.includes('audit log entry')
         ? item.replace(
-            "; the confirmation entry, being added manually, a suppression removal, resetting an address's bounce streak, a bounce, a complaint, and the erasure entry itself also record your email address explicitly",
+            "; the confirmation entry, being added manually, a suppression removal, resetting an address's bounce streak, a bounce, a complaint, an automated out-of-office reply your mail program sends us, and the erasure entry itself also record your email address explicitly",
             '',
           )
         : item,
@@ -421,8 +448,11 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     // be the only place "suppression removal" and "a complaint" (as opposed
     // to "a spam complaint" in the categories intro) appear -- so three
     // phrases go missing here, not just the email one; that is a property
-    // of THIS mutation's shape, not a weaker guard.
-    expect(missingFromOwnCategory).toEqual(['suppression removal', 'a complaint', 'your email address']);
+    // of THIS mutation's shape, not a weaker guard. #0503's out-of-office
+    // phrase sits in the same clause and the redaction clause never
+    // repeats it, so it goes missing with the rest — four phrases, not
+    // three.
+    expect(missingFromOwnCategory).toEqual(['suppression removal', 'a complaint', 'automated out-of-office reply', 'your email address']);
 
     const { matchedCategory } = matchItemToCategory(auditItem ?? '', ERASURE_RETAINED_CATEGORIES);
     expect(matchedCategory, 'the audit-log item with the email disclosure dropped should no longer match ANY category').toBeNull();
@@ -436,6 +466,10 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
     expect(auditCategory, 'fixture setup: expected the audit_log category to exist').toBeDefined();
     const lower = narrowed.toLowerCase();
     const missingFromOwnCategory = (auditCategory?.requiredPhrases ?? []).filter((p) => !lower.includes(p.toLowerCase()));
+    // The narrowed fixture's own text still contains "your email address"
+    // ("this includes your email address"), so that phrase is NOT among
+    // the missing ones here — the list below is every requiredPhrase the
+    // narrowed wording lacks, in the category's own order.
     expect(missingFromOwnCategory).toEqual([
       'admin-initiated actions',
       'automated entries from our delivery provider',
@@ -444,7 +478,11 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
       'suppression removal',
       'a bounce',
       'a complaint',
+      'automated out-of-office reply',
       'search text is recorded',
+      '90 days',
+      'fixed placeholder',
+      'the domain',
     ]);
 
     const { matchedCategory } = matchItemToCategory(narrowed, ERASURE_RETAINED_CATEGORIES);
@@ -544,5 +582,42 @@ describe('privacy policy erasure list guard: mutation proofs (synthetic fixtures
 
     const { matchedCategory } = matchItemToCategory(auditItem ?? '', ERASURE_RETAINED_CATEGORIES);
     expect(matchedCategory, 'the item with the export-search disclosure dropped should no longer match ANY category').toBeNull();
+  });
+
+  it('fails when the audit-log item drops the 90-day redaction disclosure (#0503, in reverse)', () => {
+    // #0503's own regression shape: the parked-record half of the item —
+    // the retention sweep that redacts an unmatched sender's address to a
+    // placeholder after 90 days — is the clause a future edit trimming the
+    // item for length is most likely to drop, and dropping it silently
+    // over-promises deletion: the sweep would still run (internal/audit's
+    // RedactExpiredInboundSenders is policy, not prose), so the page would
+    // say LESS than the code does. Reproduced against the real current
+    // item text, like every mutation proof above.
+    const items = realItems().map((item) =>
+      item.includes('audit log entry')
+        ? item.replace(
+            "; the same log also holds the record of anything else sent to our unsubscribe address that a person needs to review: when a message came with nothing identifying, its address was not on the list, or the one-time link in its subject no longer worked, the record keeps the sender's address — where one is known — for 90 days, after which its name part is replaced with a fixed placeholder, leaving only the domain and the fact of the message, so the entry still counts toward abuse patterns without identifying a sender",
+            '',
+          )
+        : item,
+    );
+    const src = fixtureSource(items);
+    const parsedItems = findErasureStatusListItems(src);
+
+    const auditItem = parsedItems.find((i) => i.includes('audit log entry'));
+    expect(auditItem, 'fixture setup: expected an audit-log item').toBeDefined();
+    expect(auditItem, 'fixture setup: the mutation must actually remove the redaction clause').not.toContain('90 days');
+
+    const auditCategory = ERASURE_RETAINED_CATEGORIES.find((c) => c.key.startsWith('audit_log'));
+    expect(auditCategory, 'fixture setup: expected the audit_log category to exist').toBeDefined();
+    const lower = (auditItem ?? '').toLowerCase();
+    const missingFromOwnCategory = (auditCategory?.requiredPhrases ?? []).filter((p) => !lower.includes(p.toLowerCase()));
+    // All three redaction phrases live only in this clause — the email
+    // enumeration above never names the window or the placeholder — so the
+    // mutation removes exactly these three and nothing else.
+    expect(missingFromOwnCategory).toEqual(['90 days', 'fixed placeholder', 'the domain']);
+
+    const { matchedCategory } = matchItemToCategory(auditItem ?? '', ERASURE_RETAINED_CATEGORIES);
+    expect(matchedCategory, 'the item with the redaction disclosure dropped should no longer match ANY category').toBeNull();
   });
 });

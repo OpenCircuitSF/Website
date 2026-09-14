@@ -3,6 +3,12 @@
 // Every significant action in the system — authentication events, link
 // lifecycle, admin actions — writes a row to the audit_log table through this
 // package. Rows are only ever inserted; they are never updated or deleted.
+// One deliberate, narrow exception (#0503): RedactExpiredInboundSenders
+// rewrites a single metadata key — the From: address a parked-message row
+// carries — once the row is past its 90-day retention window, replacing the
+// local part with a fixed placeholder. The row itself is never deleted and
+// the action/target/who columns are never rewritten; see that method's doc
+// comment for the recorded decision this implements.
 //
 // # Write semantics and the audit-failure policy
 //

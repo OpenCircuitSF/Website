@@ -73,6 +73,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
@@ -314,10 +315,15 @@ var tokenUngatedKinds = map[outbox.Kind]string{
 }
 
 // OutboxWorker drains internal/outbox's outbound_queue. Construct with
-// NewOutboxWorker; call Run in its own goroutine, Stop to shut down.
+// NewOutboxWorker; call Run in its own goroutine, Stop to shut down. Its pass
+// loop also carries two sweeps that ride the existing cadence rather than
+// standing up their own tickers: #0128's expire-pending sweep and #0503's
+// audit retention sweep (inbound-address redaction) — both cheap, idempotent
+// UPDATE-shaped statements, both nil-tolerant on their stores.
 type OutboxWorker struct {
 	store    *outbox.Store
 	events   *subscribers.Store // RecordEvent for confirmation_sent/welcome_sent — nil-tolerant, matching every other handler
+	audit    *audit.Logger      // #0503 inbound-address retention sweep — nil-tolerant, like events above
 	mailer   Mailer
 	settings SettingsReader
 
@@ -379,6 +385,18 @@ type OutboxWorkerDeps struct {
 	Mailer   Mailer
 	Settings SettingsReader
 
+	// Audit is the #0503 retention sweep's store (internal/audit.Logger):
+	// once per pass it redacts the local part of the From: address a
+	// parked-message audit row carries once that row is past its 90-day
+	// window — the same ride-the-existing-cadence shape Events' own
+	// ExpirePendingSweep call below uses, for the same reasons (one
+	// idempotent indexed UPDATE per pass, near-zero matching rows in the
+	// common case, no fourth ticker in main.go). Nil disables the sweep,
+	// matching Events' nil-tolerance; servePostgres always wires it, and the
+	// in-memory dev mode never constructs an OutboxWorker at all (the
+	// devstore has no audit_log to sweep).
+	Audit *audit.Logger
+
 	BaseURL string
 	// ListDomain is config.Config.EmailListDomain (#0127) — see
 	// OutboxWorker.listDomain's doc comment. Empty is tolerated the same
@@ -427,6 +445,7 @@ func NewOutboxWorker(deps OutboxWorkerDeps) (*OutboxWorker, error) {
 	return &OutboxWorker{
 		store:          deps.Store,
 		events:         deps.Events,
+		audit:          deps.Audit,
 		mailer:         deps.Mailer,
 		settings:       deps.Settings,
 		baseURL:        deps.BaseURL,
@@ -621,6 +640,28 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 			w.log.Error("mailing: expire-pending-signups sweep failed", "err", expireErr)
 		} else if expired > 0 {
 			w.log.Info("mailing: expired pending signups past confirm_expires_at", "count", expired)
+		}
+	}
+
+	// #0503: redacting expired inbound sender addresses rides this loop on
+	// exactly the #0128 precedent above — one idempotent UPDATE per pass
+	// (internal/audit.Logger.RedactExpiredInboundSenders, served by
+	// migrations/000030's partial index so the per-pass cost stays off the
+	// rest of the append-only audit_log), near-zero matching rows in the
+	// common case, no fourth dedicated ticker in main.go. A failure is
+	// logged and does not abort the pass — mail still needs to go out even
+	// if the redaction sweep hiccups, and the 90-day window gives a failed
+	// pass plenty of room to be retried. nil-tolerant: w.audit may be nil
+	// (see OutboxWorkerDeps.Audit's doc comment), matching every other
+	// nil-tolerant seam in this file.
+	if w.audit != nil {
+		redactCtx, redactCancel := context.WithTimeout(ctx, writeStatusTimeout)
+		redacted, redactErr := w.audit.RedactExpiredInboundSenders(redactCtx, time.Now())
+		redactCancel()
+		if redactErr != nil {
+			w.log.Error("mailing: audit inbound-address retention sweep failed", "err", redactErr)
+		} else if redacted > 0 {
+			w.log.Info("mailing: redacted expired inbound sender addresses in audit_log", "count", redacted)
 		}
 	}
 

@@ -66,6 +66,35 @@ required. See `internal/handlers/ses_inbound.go`'s `recordParked` for the
 exact metadata shape and `internal/audit/actions.go`'s
 `ActionInboundMailParked` doc comment for the full rationale.
 
+**The recorded address has its own retention policy (`#0503`).** An
+auto-reply's `From:` is the subscriber's own address (`#0499`'s test asserts
+the recorded `from` equals a real seeded subscriber's `Email`), so it is
+retained in full and disclosed in the public privacy policy's audit-log item
+alongside the other seven email-carrying audit call sites — the erasure
+promise `#0075` built covers it. Every other parked reason is an address
+with no relationship to the list: no erasure path can reach it, so holding
+it forever is not an option the privacy policy can honestly make. Instead
+`internal/audit`'s `Logger.RedactExpiredInboundSenders` — ridden by the
+outbox worker's existing poll loop (one idempotent UPDATE per pass, served
+by `000030`'s partial index) — replaces the local part with a fixed
+placeholder (`redacted@<domain>`) once the row is **90 days** old, for every
+parked reason except `auto_reply`. The domain, the S3 key, the message id,
+the subject, and the row itself survive, so the entry stays a count an admin
+can act on; only the identifying half goes.
+
+**Where an erasure request has to reach.** A subscriber asking for erasure
+of everything the privacy policy says survives it routes to
+**`contact@opencircuitsf.com`** (`CLAUDE.md` §10 item 4; `#0075`'s policy
+page names that address) — the same inbox that already owns erasure and
+export requests. A non-subscriber writing to that address about an address
+we hold for them gets the honest answer this section documents: nothing
+manual needs to happen — the sweep redacts the local part at the 90-day
+mark on its own, the row never carried the message body, and the domain
+half is not identifying. If a request arrives sooner than the window, the
+admin's options are to point at this documented schedule or redact the row
+early by hand — the sweep's predicate makes an early manual redaction
+idempotent with it (`split_part(...) <> 'redacted'` never matches twice).
+
 **Critical DNS detail:** the dedicated `lists.opencircuitsf.com` subdomain
 carries its own MX pointed at SES inbound. **Never point the apex
 domain's MX at SES** — that would hijack all mail to `opencircuitsf.com`,

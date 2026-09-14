@@ -127,7 +127,19 @@ const (
 	// audit_log row is a record of the FAILURE, not a copy of the message —
 	// it deliberately never carries the message body — and audit_log has
 	// no equivalent retention limit, so it outlives the object it
-	// describes. See internal/handlers/ses_inbound.go's recordParked for
+	// describes. The From: address is the one part of that record with a
+	// retention policy of its own (#0503's decision): the redaction sweep
+	// (RedactExpiredInboundSenders, ridden by the outbox worker) replaces
+	// the local part with a fixed placeholder 90 days after the row is
+	// written, for every parked reason EXCEPT auto_reply — an auto-reply's
+	// From: is the subscriber's own address, which joins the privacy
+	// policy's disclosure list and the erasure path like the other seven
+	// email-carrying audit call sites, while every other parked reason is
+	// an unverified address with no erasure path, held only for the 90 days
+	// a human might need to act on it. The row, the domain half of the
+	// address, and the rest of the metadata survive the redaction, so the
+	// record stays actionable as a count.
+	// See internal/handlers/ses_inbound.go's recordParked for
 	// the exact metadata shape (the S3 key, the SNS message id, the From:
 	// address and Subject when known, and why the message wasn't acted on)
 	// and docs/unsubscribe.md for the admin-facing surface this is found

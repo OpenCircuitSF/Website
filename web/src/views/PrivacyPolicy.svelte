@@ -193,6 +193,25 @@
   //        above changed -- only the guard's own description of what it
   //        can see, and the guard's actual behavior for the one shape that
   //        was a live risk rather than a structural blind spot.
+  //      - #0503 (the policy decision #0499's reviewer flagged and declined
+  //        to make) widened this item in both directions at once, and the
+  //        Go guard's known-sites fixture moved with it (criterion 3):
+  //        ses_inbound.go's parked-record site (ActionInboundMailParked,
+  //        #0499) writes the raw From: address a correspondent sent -- a
+  //        subscriber's own address when the parked reason is auto_reply
+  //        (#0499's test asserts exactly that), so the email enumeration
+  //        above gained "an automated out-of-office reply your mail program
+  //        sends us" as an eighth email-carrying action; every other parked
+  //        reason is an unverified address with no erasure path, so the
+  //        item's final clause now also discloses the retention sweep
+  //        internal/audit's RedactExpiredInboundSenders runs (ridden by the
+  //        outbox worker): those senders' addresses are kept 90 days -- the
+  //        record still outlives the 30-day S3 object it describes, which
+  //        is the whole point of it (#0499 criterion 2) -- and then the
+  //        local part is replaced with a fixed placeholder, leaving the
+  //        domain and the row itself as an actionable count. Both the
+  //        disclosure and the redaction live in this one item because they
+  //        are the two halves of the same record.
   //  - "No third-party analytics, ad trackers, external CDNs, or email
   //    open-tracking pixels" is CLAUDE.md §9's binding restriction, stated
   //    here as a fact about how the site is built, not a promise.
@@ -342,7 +361,7 @@
           'a permanent suppression entry, so the address cannot be silently re-added by a future import or signup',
           'anonymized rows in our send history, so historical campaign counts (how many people a given email actually reached) do not silently change',
           'the raw deliverability events (bounces, complaints, deliveries) already logged against your address, kept without the link back to your identity, for spam/abuse forensics and to keep our own bounce/complaint handling accurate',
-          'an internal admin audit log entry for actions on your account — not only the ones you take yourself (signup, confirmation, unsubscribe, and preference updates) but also the erasure itself, admin-initiated actions (for example, being added to the list manually or having a suppression removed), and automated entries from our delivery provider (a bounce or a spam complaint registered against your address); each entry records the IP address behind the request that created it: yours for actions you take, the IP of the acting admin for admin-initiated ones including the erasure, and no IP at all for the automated delivery-provider entries, since there is no request behind them — a separate mechanism from the single consent-evidence IP described above; the confirmation entry, being added manually, a suppression removal, resetting an address\'s bounce streak, a bounce, a complaint, and the erasure entry itself also record your email address explicitly, and if a staff member ever searches the subscriber list by your address while exporting it, that search text is recorded too; kept so we can prove what happened and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
+          'an internal admin audit log entry for actions on your account — not only the ones you take yourself (signup, confirmation, unsubscribe, and preference updates) but also the erasure itself, admin-initiated actions (for example, being added to the list manually or having a suppression removed), and automated entries from our delivery provider (a bounce or a spam complaint registered against your address); each entry records the IP address behind the request that created it: yours for actions you take, the IP of the acting admin for admin-initiated ones including the erasure, and no IP at all for the automated delivery-provider entries, since there is no request behind them — a separate mechanism from the single consent-evidence IP described above; the confirmation entry, being added manually, a suppression removal, resetting an address\'s bounce streak, a bounce, a complaint, an automated out-of-office reply your mail program sends us, and the erasure entry itself also record your email address explicitly, and if a staff member ever searches the subscriber list by your address while exporting it, that search text is recorded too; the same log also holds the record of anything else sent to our unsubscribe address that a person needs to review: when a message came with nothing identifying, its address was not on the list, or the one-time link in its subject no longer worked, the record keeps the sender\'s address — where one is known — for 90 days, after which its name part is replaced with a fixed placeholder, leaving only the domain and the fact of the message, so the entry still counts toward abuse patterns without identifying a sender; kept so we can prove what happened and to investigate abuse; it is not exposed publicly and is not used to re-add or re-contact you',
           'an entry in our address activity log for every meaningful thing that happened to your subscription (signup, confirmation, interest changes, unsubscribe, bounces, suppressions, and the erasure itself) — kept after erasure with your email address replaced by a placeholder, so the history stays grouped as evidence the erasure was performed, but the placeholder no longer identifies you',
         ]}
       />

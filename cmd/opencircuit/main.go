@@ -436,7 +436,10 @@ func servePostgres(cfg *config.Config) error {
 	// from internal/auth, all durable now instead of an in-process
 	// goroutine lost on a crash. See newOutboxWorker's own doc comment for
 	// why this runs unconditionally (no SEND_WORKER_ENABLED-shaped gate).
-	outboxWorker, err := newOutboxWorker(pool, sesSender, store, cfg, slog.Default())
+	// auditLogger (constructed above) is #0503's retention sweep riding the
+	// worker's existing poll loop — always wired on the Postgres path, the
+	// same "every instance runs it" topology the worker itself has.
+	outboxWorker, err := newOutboxWorker(pool, sesSender, store, auditLogger, cfg, slog.Default())
 	if err != nil {
 		return fmt.Errorf("opencircuit: constructing outbox worker: %w", err)
 	}
@@ -910,11 +913,17 @@ func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, au
 // instance opted in. mailer is sesSender — the SAME mailing.Mailer the
 // campaign send worker and #0046's test-send handler use, including under
 // MAILER_NOOP=true (the no-op logger), so transactional mail behaves like
-// every other outbound path in this project under that flag.
-func newOutboxWorker(pool *pgxpool.Pool, mailer mailing.Mailer, settings mailing.SettingsReader, cfg *config.Config, log *slog.Logger) (*mailing.OutboxWorker, error) {
+// every other outbound path in this project under that flag. auditLogger is
+// wired as the worker's #0503 retention sweep (inbound-address redaction,
+// one idempotent UPDATE per pass) — non-nil on every Postgres serve path,
+// since the sweep is policy, not an optional feature; the in-memory dev
+// store never reaches this constructor (serveDevMode leaves outboxWorker
+// nil), and the devstore has no audit_log for it to sweep anyway.
+func newOutboxWorker(pool *pgxpool.Pool, mailer mailing.Mailer, settings mailing.SettingsReader, auditLogger *audit.Logger, cfg *config.Config, log *slog.Logger) (*mailing.OutboxWorker, error) {
 	return mailing.NewOutboxWorker(mailing.OutboxWorkerDeps{
 		Store:          outbox.NewStore(pool),
 		Events:         subscribers.NewStore(pool),
+		Audit:          auditLogger,
 		Mailer:         mailer,
 		Settings:       settings,
 		BaseURL:        cfg.BaseURL,

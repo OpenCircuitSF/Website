@@ -141,7 +141,7 @@ inbound path:
 | `#0500` | `ObjectKey()`'s prefix fallback is believed dead against real SES. **The first real message is the oracle** — capture its JSON and either delete the fallback or pin it with a test. Sharp edge: a 404 routes to the retryable 500 path and would retry to exhaustion. |
 | `#0501` | A `Delete` failure after a committed unsubscribe leaves a duplicate audit row on the `From:` path. Benign; the commit-then-delete ordering is correct. |
 | `#0502` | `#0237`'s audit-metadata guard does not recognise `"from"`. Must land before `#0503`. |
-| `#0503` | **Policy decision, the user's to make.** Whether a subscriber's address in the parked-path audit row joins the privacy policy's erasure list, and what retention applies to non-subscriber addresses now held permanently in an append-only table. |
+| `#0503` | **Decided 2026-09-13 and landed** (this row previously said the decision was still the user's to make). An auto-reply's `From:` is the subscriber's own address and joins the privacy policy's disclosure list and the erasure path; every other parked reason's address redacts to a `redacted@<domain>` placeholder 90 days after the row is written (`internal/audit`'s retention sweep, ridden by the outbox worker). See [`unsubscribe.md`](unsubscribe.md)'s `#0503` paragraphs. |
 
 ## 5. The escape hatch, still open
 
