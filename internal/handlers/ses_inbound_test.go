@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
@@ -91,11 +94,20 @@ func inboundRawMessage(headers map[string]string, body string) []byte {
 // inboundNotificationBody builds the SNS envelope body Notify expects: a
 // "Received" SES event (the S3 action's own TopicArn notification, #0057's
 // plan) naming objectKey, wrapped in the standard SNS Message envelope.
+//
+// The inner event's mail.messageId is derived from objectKey rather than
+// fixed: since #0501 the audit layer keys the inbound redelivery check on
+// that id, so two tests sharing one id would see each other's
+// subscriber.unsubscribed rows and the later one would be skipped as a
+// redelivery — correctly by the check's own rules, wrongly by the test's.
+// Every test here fetches a distinct object key, so every derived id is
+// distinct, and a redelivery test re-posts the SAME body, which is the
+// real shape: SNS redelivers the same notification, same id and all.
 func inboundNotificationBody(t *testing.T, objectKey string) []byte {
 	t.Helper()
 	inner := map[string]any{
 		"notificationType": "Received",
-		"mail":             map[string]any{"messageId": "ses-msg-1"},
+		"mail":             map[string]any{"messageId": strings.TrimPrefix(objectKey, "unsubscribe/")},
 		"receipt": map[string]any{
 			"action": map[string]any{
 				"type":       "S3",
@@ -823,5 +835,222 @@ func TestSESInboundHandler_UnsubscribeConfirmation_NeverFetchesOrActs(t *testing
 	}
 	if verifier.subscribeURLHits != 0 {
 		t.Error("UnsubscribeConfirmation must never fetch anything")
+	}
+}
+
+// rotateFailsSubscriberStore wraps the real *subscribers.Store with a
+// RotateManageToken that always fails — the shape a TOKEN-path redelivery
+// needs to reach handleMatch a second time (#0501). A successful rotation
+// makes the replayed message's token unresolvable, so the replay parks at
+// match's stale-token rule (pinned by
+// TestSESInboundHandler_StaleTokenDoesNotFallBackToFrom) and never reaches
+// the duplicate-audit-row case; a FAILED rotation, however, is logged only
+// and the handler carries on (#0034's tradeoff, see unsubscribe.go's Post),
+// leaving the original token still resolving — so the redelivery matches
+// via the token path again, and the message-id check is what stands
+// between it and a second subscriber.unsubscribed audit row.
+type rotateFailsSubscriberStore struct {
+	*subscribers.Store
+}
+
+func (s *rotateFailsSubscriberStore) RotateManageToken(_ context.Context, _ int64, _ time.Time) (subscribers.Subscriber, error) {
+	return subscribers.Subscriber{}, errors.New("rotation failed (simulated)")
+}
+
+// redeliveryAuditRowCount counts the subscriber.unsubscribed audit rows for
+// one subscriber id — the count both #0501 redelivery tests are about.
+func redeliveryAuditRowCount(t *testing.T, pool *pgxpool.Pool, subscriberID int64) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log WHERE action = $1 AND target_id = $2`,
+		audit.ActionSubscriberUnsubscribed, subscriberID,
+	).Scan(&count); err != nil {
+		t.Fatalf("query audit_log: %v", err)
+	}
+	return count
+}
+
+// TestSESInboundHandler_Redelivery_TokenPath_NoDuplicateAuditRow covers
+// #0501 criterion 3's token path. The first delivery unsubscribes,
+// fails to rotate (the rotateFailsSubscriberStore above), stamps its
+// subscriber.unsubscribed audit row with the SES message id, and fails to
+// delete the object — a 500, which is what makes SNS redeliver. The
+// redelivery therefore still matches via the (unrotated) token, and the
+// message-id check must make it a no-op: no second audit row, no
+// re-unsubscribe, only the object delete finally succeeding.
+func TestSESInboundHandler_Redelivery_TokenPath_NoDuplicateAuditRow(t *testing.T) {
+	pool := journeyTestPool(t)
+	subs := subscribers.NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := subs.Create(ctx, subscribers.NewSignup{Email: journeyUniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
+	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	raw := inboundRawMessage(map[string]string{
+		"From":    created.Email,
+		"Subject": "unsubscribe:" + created.ManageToken,
+	}, "please unsubscribe me\r\n")
+	const key = "unsubscribe/msg-redeliver-token"
+	objects := &fakeInboundObjectStore{
+		objects:   map[string][]byte{key: raw},
+		deleteErr: errors.New("S3 delete failed (first delivery)"),
+	}
+	h := NewSESInboundHandler(&fakeInboundVerifier{}, objects, &rotateFailsSubscriberStore{Store: subs}, audit.New(pool), nil, nil)
+
+	body := inboundNotificationBody(t, key)
+	if rr := doPostSESInbound(h, body); rr.Code != http.StatusInternalServerError {
+		t.Fatalf("first delivery status = %d, want 500 — the failed delete is exactly what makes SNS redeliver (#0501)", rr.Code)
+	}
+
+	// The first delivery did everything but the delete: unsubscribed (with
+	// the rotation failure logged only, token unchanged), one audit row
+	// already carrying the message id, object still in place.
+	first, err := subs.FindByEmail(ctx, created.Email)
+	if err != nil {
+		t.Fatalf("FindByEmail after first delivery: %v", err)
+	}
+	if first.Status != subscribers.StatusUnsubscribed || first.ManageToken != created.ManageToken {
+		t.Errorf("after first delivery: status=%q token unchanged=%v, want unsubscribed and token unchanged (rotation failed)",
+			first.Status, first.ManageToken == created.ManageToken)
+	}
+	if n := redeliveryAuditRowCount(t, pool, created.ID); n != 1 {
+		t.Fatalf("audit rows after first delivery = %d, want 1", n)
+	}
+	var messageID string
+	if err := pool.QueryRow(ctx,
+		`SELECT message_id FROM audit_log WHERE action = $1 AND target_id = $2`,
+		audit.ActionSubscriberUnsubscribed, created.ID,
+	).Scan(&messageID); err != nil {
+		t.Fatalf("query audit row message_id: %v", err)
+	}
+	if want := strings.TrimPrefix(key, "unsubscribe/"); messageID != want {
+		t.Errorf("audit row message_id = %q, want %q", messageID, want)
+	}
+
+	// The redelivery: same notification, same message id. The delete now
+	// succeeds, so this delivery returns 200 — and everything else must be
+	// a no-op.
+	objects.deleteErr = nil
+	if rr := doPostSESInbound(h, body); rr.Code != http.StatusOK {
+		t.Fatalf("redelivery status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+
+	second, err := subs.FindByEmail(ctx, created.Email)
+	if err != nil {
+		t.Fatalf("FindByEmail after redelivery: %v", err)
+	}
+	if second.Status != subscribers.StatusUnsubscribed || second.ManageToken != created.ManageToken {
+		t.Errorf("after redelivery: status=%q token unchanged=%v, want both — a redelivery must not re-run the rotation",
+			second.Status, second.ManageToken == created.ManageToken)
+	}
+	if second.UnsubscribedAt == nil || first.UnsubscribedAt == nil || !second.UnsubscribedAt.Equal(*first.UnsubscribedAt) {
+		t.Errorf("unsubscribed_at changed on redelivery: %v → %v", first.UnsubscribedAt, second.UnsubscribedAt)
+	}
+	if n := redeliveryAuditRowCount(t, pool, created.ID); n != 1 {
+		t.Errorf("audit rows after redelivery = %d, want still 1 — the duplicate row is exactly what #0501 exists to prevent", n)
+	}
+	if len(objects.deleted) != 1 || objects.deleted[0] != key {
+		t.Errorf("deleted = %v, want exactly [%s] — the redelivery's own delete attempt is the one that must succeed", objects.deleted, key)
+	}
+}
+
+// TestSESInboundHandler_Redelivery_FromPath_NoDuplicateAuditRow covers
+// #0501 criterion 3's From: path — the case the issue's Description names
+// directly: the address still matches on replay, so without the message-id
+// check the redelivery would unsubscribe an already-unsubscribed subscriber
+// and write a duplicate mailto audit row. The first delivery here rotates
+// normally (the real store) and only its delete fails; the redelivery
+// matches via From: and must be a no-op but for the delete.
+func TestSESInboundHandler_Redelivery_FromPath_NoDuplicateAuditRow(t *testing.T) {
+	pool := journeyTestPool(t)
+	subs := subscribers.NewStore(pool)
+	ctx := context.Background()
+	now := time.Now()
+
+	created, err := subs.Create(ctx, subscribers.NewSignup{Email: journeyUniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM subscribers WHERE id = $1`, created.ID) })
+	if _, err := subs.Confirm(ctx, *created.ConfirmToken, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	// No unsubscribe: token in the Subject — the From: fallback is the only
+	// path this message can ever match by.
+	raw := inboundRawMessage(map[string]string{
+		"From":    created.Email,
+		"Subject": "please take me off your list",
+	}, "no token here\r\n")
+	const key = "unsubscribe/msg-redeliver-from"
+	objects := &fakeInboundObjectStore{
+		objects:   map[string][]byte{key: raw},
+		deleteErr: errors.New("S3 delete failed (first delivery)"),
+	}
+	h := NewSESInboundHandler(&fakeInboundVerifier{}, objects, subs, audit.New(pool), nil, nil)
+
+	body := inboundNotificationBody(t, key)
+	if rr := doPostSESInbound(h, body); rr.Code != http.StatusInternalServerError {
+		t.Fatalf("first delivery status = %d, want 500 — the failed delete is exactly what makes SNS redeliver (#0501)", rr.Code)
+	}
+
+	first, err := subs.FindByEmail(ctx, created.Email)
+	if err != nil {
+		t.Fatalf("FindByEmail after first delivery: %v", err)
+	}
+	if first.Status != subscribers.StatusUnsubscribed {
+		t.Errorf("after first delivery status = %q, want %q", first.Status, subscribers.StatusUnsubscribed)
+	}
+	if n := redeliveryAuditRowCount(t, pool, created.ID); n != 1 {
+		t.Fatalf("audit rows after first delivery = %d, want 1", n)
+	}
+
+	objects.deleteErr = nil
+	if rr := doPostSESInbound(h, body); rr.Code != http.StatusOK {
+		t.Fatalf("redelivery status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+
+	second, err := subs.FindByEmail(ctx, created.Email)
+	if err != nil {
+		t.Fatalf("FindByEmail after redelivery: %v", err)
+	}
+	if second.Status != subscribers.StatusUnsubscribed {
+		t.Errorf("after redelivery status = %q, want %q (unchanged)", second.Status, subscribers.StatusUnsubscribed)
+	}
+	if second.UnsubscribedAt == nil || first.UnsubscribedAt == nil || !second.UnsubscribedAt.Equal(*first.UnsubscribedAt) {
+		t.Errorf("unsubscribed_at changed on redelivery: %v → %v", first.UnsubscribedAt, second.UnsubscribedAt)
+	}
+	if second.ManageToken != first.ManageToken {
+		t.Error("manage token changed on redelivery — the no-op must skip RotateManageToken too")
+	}
+	if n := redeliveryAuditRowCount(t, pool, created.ID); n != 1 {
+		t.Errorf("audit rows after redelivery = %d, want still 1 — the duplicate mailto row is exactly what #0501 exists to prevent", n)
+	}
+	if len(objects.deleted) != 1 || objects.deleted[0] != key {
+		t.Errorf("deleted = %v, want exactly [%s] — the redelivery's own delete attempt is the one that must succeed", objects.deleted, key)
+	}
+
+	// The mutation layer's own history must be a single transition too: the
+	// redelivery must not have re-run Unsubscribe (which on an
+	// already-unsubscribed row writes no event, but only because the store
+	// guards it — the audit-layer no-op is what keeps this true without
+	// relying on that guard).
+	var events int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM subscriber_events WHERE subscriber_id = $1 AND action = $2`,
+		created.ID, subscribers.ActionUnsubscribed,
+	).Scan(&events); err != nil {
+		t.Fatalf("query subscriber_events: %v", err)
+	}
+	if events != 1 {
+		t.Errorf("subscriber_events unsubscribed rows = %d, want 1", events)
 	}
 }

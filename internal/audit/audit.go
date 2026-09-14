@@ -62,7 +62,13 @@ type querier interface {
 // ActorID/UserID/TargetID inserts SQL NULL (e.g. pre-auth events carry a nil
 // ActorID). Metadata is marshalled to JSONB; a nil Metadata stores SQL NULL.
 // IP is the actor's client IP as a string (e.g. from the X-Forwarded-For →
-// RemoteAddr boundary helper); an empty IP stores NULL.
+// RemoteAddr boundary helper); an empty IP stores NULL. MessageID is the SES
+// message id of the inbound message a row was produced by
+// (migrations/000029's message_id column) — set only by the inbound mailto:
+// unsubscribe path, and only on the subscriber.unsubscribed row it writes on
+// a match; parked-message rows keep their SNS message id in metadata, where
+// recordParked has always put it. An empty MessageID stores SQL NULL, like
+// every writer other than that path leaves it.
 type Entry struct {
 	ActorID    *int64
 	UserID     *int64
@@ -71,6 +77,7 @@ type Entry struct {
 	TargetID   *int64
 	Metadata   any
 	IP         string
+	MessageID  string
 }
 
 // Logger is the append-only audit writer over the shared pgx pool. It is safe
@@ -118,8 +125,9 @@ func (l *Logger) Record(ctx context.Context, e Entry) {
 }
 
 // insert runs the single parameterized INSERT against any querier. Metadata is
-// JSON-marshalled into the JSONB column; nullable pointer columns and an empty
-// IP map to SQL NULL. created_at defaults to now() at the database.
+// JSON-marshalled into the JSONB column; nullable pointer columns, an empty
+// IP, and an empty MessageID map to SQL NULL. created_at defaults to now() at
+// the database.
 func insert(ctx context.Context, q querier, e Entry) error {
 	var metaJSON []byte
 	if e.Metadata != nil {
@@ -136,6 +144,13 @@ func insert(ctx context.Context, q querier, e Entry) error {
 		ip = e.IP
 	}
 
+	// An empty MessageID means "no inbound message produced this row"; the
+	// column is NULL for it, not an empty string.
+	var messageID any
+	if e.MessageID != "" {
+		messageID = e.MessageID
+	}
+
 	// metaJSON is nil when Metadata was nil, which pgx encodes as SQL NULL for the
 	// JSONB column.
 	var meta any
@@ -145,14 +160,44 @@ func insert(ctx context.Context, q querier, e Entry) error {
 
 	_, err := q.Exec(ctx,
 		`INSERT INTO audit_log
-		     (actor_id, user_id, action, target_type, target_id, metadata, ip_address)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		e.ActorID, e.UserID, e.Action, nullIfEmpty(e.TargetType), e.TargetID, meta, ip,
+		     (actor_id, user_id, action, target_type, target_id, metadata, ip_address, message_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		e.ActorID, e.UserID, e.Action, nullIfEmpty(e.TargetType), e.TargetID, meta, ip, messageID,
 	)
 	if err != nil {
 		return fmt.Errorf("audit: inserting %q: %w", e.Action, err)
 	}
 	return nil
+}
+
+// MessageProcessed reports whether an audit row already exists for the given
+// action and SES message id — the lookup the inbound mailto: unsubscribe path
+// uses to treat a redelivered message id as a no-op (#0501): the first
+// delivery of a message stamps its subscriber.unsubscribed row with
+// message_id, so a later delivery carrying the same id can skip the
+// mutation-and-audit entirely instead of writing a duplicate row. The check is
+// best-effort by nature — it reads committed rows, so two truly concurrent
+// deliveries could both miss — but SNS redeliveries are spaced far apart, and
+// the miss degrades to the duplicate row #0501 exists to prevent, never to a
+// lost unsubscribe. An empty messageID returns false without querying: a
+// payload without a mail.messageId cannot key the check at all.
+//
+// This is a read on Logger (the writer) rather than on Reader only because
+// the inbound handler holds the Logger — the reader half of the same column
+// (surfacing message_id in the admin trail) lives on Reader alongside
+// ListAuditLog.
+func (l *Logger) MessageProcessed(ctx context.Context, action, messageID string) (bool, error) {
+	if messageID == "" {
+		return false, nil
+	}
+	var exists bool
+	if err := l.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM audit_log WHERE action = $1 AND message_id = $2)`,
+		action, messageID,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("audit: checking message_id %q for %q: %w", messageID, action, err)
+	}
+	return exists, nil
 }
 
 // nullIfEmpty maps an empty string to nil so an unset target_type stores SQL

@@ -29,6 +29,7 @@ type Record struct {
 	TargetID   *int64
 	Metadata   json.RawMessage
 	IP         *string
+	MessageID  *string
 	CreatedAt  time.Time
 }
 
@@ -112,7 +113,9 @@ func (f Filter) whereClause() (string, []any) {
 //
 // ip_address is read as host(ip_address) so an INET like 203.0.113.7/32 comes
 // back as the bare address string. metadata is read as raw JSONB bytes so it
-// reaches the client as a JSON object, not a quoted string.
+// reaches the client as a JSON object, not a quoted string. message_id is
+// read as a nullable string so every non-inbound row (the NULL default,
+// migrations/000029) serializes as JSON null.
 func (r *Reader) ListAuditLog(ctx context.Context, filter Filter, limit, offset int) (rows []Record, total int64, err error) {
 	where, args := filter.whereClause()
 
@@ -127,7 +130,7 @@ func (r *Reader) ListAuditLog(ctx context.Context, filter Filter, limit, offset 
 	// limit/offset are appended after the filter args so the WHERE clause's
 	// placeholder numbers stay stable between the count and page queries.
 	pageSQL := `SELECT id, actor_id, user_id, action, target_type, target_id,
-	                   metadata, host(ip_address), created_at
+	                   metadata, host(ip_address), message_id, created_at
 	              FROM audit_log`
 	if where != "" {
 		pageSQL += " WHERE " + where
@@ -148,7 +151,7 @@ func (r *Reader) ListAuditLog(ctx context.Context, filter Filter, limit, offset 
 		var metaRaw []byte
 		if err := queryRows.Scan(
 			&rec.ID, &rec.ActorID, &rec.UserID, &rec.Action, &rec.TargetType,
-			&rec.TargetID, &metaRaw, &rec.IP, &rec.CreatedAt,
+			&rec.TargetID, &metaRaw, &rec.IP, &rec.MessageID, &rec.CreatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("audit: scanning audit_log row: %w", err)
 		}

@@ -365,3 +365,115 @@ func TestWriteTx_RollsBackWithTransaction(t *testing.T) {
 		t.Fatalf("audit rows after commit = %d, want 1", n)
 	}
 }
+
+// TestMessageProcessed_KeysOnActionAndMessageID proves the lookup the
+// inbound mailto: path uses to treat a redelivered SES message id as a
+// no-op (#0501): false before the row exists, false for an empty id (which
+// cannot key the check at all), true once the action+message_id pair has a
+// row, and false again for a different action under the same id — the
+// action scoping is what keeps the check from reading an unrelated row
+// that happens to carry the same id.
+func TestMessageProcessed_KeysOnActionAndMessageID(t *testing.T) {
+	pool := auditTestPool(t)
+	logger := New(pool)
+	ctx := context.Background()
+
+	const action = ActionSubscriberUnsubscribed
+	messageID := fmt.Sprintf("zz-audit-msgid-%d", testdb.Unique())
+
+	if seen, err := logger.MessageProcessed(ctx, action, messageID); err != nil || seen {
+		t.Fatalf("before any write: MessageProcessed = %v, %v; want false, nil", seen, err)
+	}
+	// An empty message id can never be "processed" — a payload without a
+	// mail.messageId cannot key the check, and the method must say so by
+	// answering false without querying.
+	if seen, err := logger.MessageProcessed(ctx, action, ""); err != nil || seen {
+		t.Fatalf("empty message id: MessageProcessed = %v, %v; want false, nil", seen, err)
+	}
+
+	if err := logger.Write(ctx, Entry{
+		Action:     action,
+		TargetType: TargetSubscriber,
+		MessageID:  messageID,
+		Metadata:   map[string]any{"source": "mailto"},
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if seen, err := logger.MessageProcessed(ctx, action, messageID); err != nil || !seen {
+		t.Fatalf("after write: MessageProcessed = %v, %v; want true, nil", seen, err)
+	}
+	// Same id under a different action must not read as processed.
+	if seen, err := logger.MessageProcessed(ctx, ActionLinkCreated, messageID); err != nil || seen {
+		t.Fatalf("different action, same id: MessageProcessed = %v, %v; want false, nil", seen, err)
+	}
+}
+
+// TestWrite_MessageIDRoundTrip proves migrations/000029's message_id column
+// behaves like the rest of Entry's nullable fields: a set value round-trips
+// through the write and through the admin read path (Reader.ListAuditLog),
+// and a row written without one stores SQL NULL — the default for every
+// writer other than the inbound unsubscribe path.
+func TestWrite_MessageIDRoundTrip(t *testing.T) {
+	pool := auditTestPool(t)
+	logger := New(pool)
+	reader := NewReader(pool)
+	ctx := context.Background()
+
+	messageID := fmt.Sprintf("zz-audit-msgid-%d", testdb.Unique())
+	// targetID is unique per run purely so the Reader read-back below can
+	// filter to exactly this row — audit_log.target_id carries no foreign
+	// key, so any value is legal.
+	targetID := testdb.Unique()
+
+	watermark := auditLogWatermark(t, pool)
+	if err := logger.Write(ctx, Entry{
+		Action:     ActionSubscriberUnsubscribed,
+		TargetType: TargetSubscriber,
+		TargetID:   &targetID,
+		MessageID:  messageID,
+	}); err != nil {
+		t.Fatalf("Write with MessageID: %v", err)
+	}
+
+	var got *string
+	if err := pool.QueryRow(ctx,
+		`SELECT message_id FROM audit_log WHERE id > $1 ORDER BY id ASC LIMIT 1`, watermark,
+	).Scan(&got); err != nil {
+		t.Fatalf("read back message_id: %v", err)
+	}
+	if got == nil || *got != messageID {
+		t.Errorf("message_id = %v, want %q", got, messageID)
+	}
+
+	// The admin read path must surface the same value (the trail's join key
+	// back to the inbound message is only useful if GET /admin/audit shows
+	// it).
+	records, total, err := reader.ListAuditLog(ctx, Filter{TargetType: TargetSubscriber, TargetID: &targetID}, 10, 0)
+	if err != nil {
+		t.Fatalf("ListAuditLog: %v", err)
+	}
+	if total != 1 || len(records) != 1 {
+		t.Fatalf("ListAuditLog filter returned %d rows (total %d), want exactly 1", len(records), total)
+	}
+	if records[0].MessageID == nil || *records[0].MessageID != messageID {
+		t.Errorf("Record.MessageID = %v, want %q", records[0].MessageID, messageID)
+	}
+
+	// And a row written without one stores NULL, not an empty string.
+	watermark = auditLogWatermark(t, pool)
+	if err := logger.Write(ctx, Entry{
+		Action:     ActionAccountLogin,
+		TargetType: TargetUser,
+	}); err != nil {
+		t.Fatalf("Write without MessageID: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT message_id FROM audit_log WHERE id > $1 ORDER BY id ASC LIMIT 1`, watermark,
+	).Scan(&got); err != nil {
+		t.Fatalf("read back NULL message_id: %v", err)
+	}
+	if got != nil {
+		t.Errorf("message_id = %q, want NULL for a row written without one", *got)
+	}
+}

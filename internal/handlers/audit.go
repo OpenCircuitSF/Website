@@ -56,6 +56,7 @@ type auditRecordView struct {
 	TargetID   *int64          `json:"target_id"`
 	Metadata   json.RawMessage `json:"metadata"`
 	IPAddress  *string         `json:"ip_address"`
+	MessageID  *string         `json:"message_id"`
 	CreatedAt  time.Time       `json:"created_at"`
 }
 
@@ -69,6 +70,7 @@ func toAuditRecordView(r audit.Record) auditRecordView {
 		TargetID:   r.TargetID,
 		Metadata:   r.Metadata,
 		IPAddress:  r.IP,
+		MessageID:  r.MessageID,
 		CreatedAt:  r.CreatedAt,
 	}
 }

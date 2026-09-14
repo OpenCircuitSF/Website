@@ -53,6 +53,21 @@
 // no token and no From match, an unparseable message, and an auto-reply.
 // The 30-day lifecycle rule (#0057, A5) is what eventually reclaims those.
 //
+// # A redelivered message id is a no-op (#0501)
+//
+// #0058 commits the unsubscribe before deleting the S3 object, so a failed
+// delete leaves the object in place and SNS redelivers the notification
+// (#0501). Replay used to write a duplicate subscriber.unsubscribed audit
+// row on the From: path (and could still re-run the whole match on the
+// token path when the first delivery's token rotation had failed). The fix
+// stamps the SES message id — notification.mail.messageId, carried out of
+// the already-parsed event payload — on the audit row it writes, and
+// handleMatch checks for that id BEFORE anything else: a message id that
+// already has its unsubscribed row is a no-op (skip the unsubscribe, the
+// rotation, and the audit row), leaving only the object delete to run.
+// The commit-before-delete ordering is untouched — the check is a read
+// that happens before both, and it is described with handleMatch below.
+//
 // # Parked messages get a durable record, not just a log line (#0499)
 //
 // #0058 criterion 5 says an unmatched message is "logged ... left in place
@@ -316,7 +331,7 @@ func (h *SESInboundHandler) handleNotification(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if err := h.handleMatch(ctx, sub, matchedVia, key); err != nil {
+	if err := h.handleMatch(ctx, sub, matchedVia, key, ev.Mail.MessageID); err != nil {
 		h.log.Error("ses_inbound: acting on match failed", "key", key, "subscriber_id", sub.ID, "err", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -434,7 +449,33 @@ func (h *SESInboundHandler) match(ctx context.Context, pm inbound.ParsedMessage)
 // and correctly handled, which is what "processed" means here (see this
 // file's package doc comment) — unlike the no-match/auto-reply/unparseable
 // paths above, there is nothing left for a human to review.
-func (h *SESInboundHandler) handleMatch(ctx context.Context, sub subscribers.Subscriber, matchedVia, key string) error {
+//
+// sesMessageID is the inbound message's SES message id
+// (notification.mail.messageId, threaded from the event payload this file
+// already parsed — #0501). Before anything else it drives the redelivery
+// check: an audit row for this id and action already existing means the
+// FIRST delivery of this same message already unsubscribed its sender
+// (#0058's commit-before-delete ordering left the object behind when its
+// delete failed, so SNS is redelivering) — the correct response is a
+// no-op: skip the unsubscribe, the rotation, and the audit row, and only
+// attempt the object delete again, which is the second chance that failed
+// delete needed. A nil auditor, or an empty id (a payload without
+// mail.messageId cannot key the check), falls back to the pre-#0501
+// behavior unchanged. A failed check is failed-open — the ordinary path
+// runs, degrading to the duplicate audit row #0501 exists to prevent
+// rather than ever blocking or retrying a real unsubscribe.
+func (h *SESInboundHandler) handleMatch(ctx context.Context, sub subscribers.Subscriber, matchedVia, key, sesMessageID string) error {
+	if h.auditor != nil {
+		if seen, err := h.auditor.MessageProcessed(ctx, audit.ActionSubscriberUnsubscribed, sesMessageID); err != nil {
+			h.log.Warn("ses_inbound: redelivery check failed; processing normally",
+				"key", key, "message_id", sesMessageID, "err", err)
+		} else if seen {
+			h.log.Info("ses_inbound: redelivery of an already-processed message id; no-op",
+				"key", key, "message_id", sesMessageID)
+			return h.objects.Delete(ctx, key)
+		}
+	}
+
 	updated, err := h.subs.Unsubscribe(ctx, sub.ID, subscribers.SourceMailto, h.now())
 	if err != nil {
 		return err
@@ -455,6 +496,7 @@ func (h *SESInboundHandler) handleMatch(ctx context.Context, sub subscribers.Sub
 				TargetType: audit.TargetSubscriber,
 				TargetID:   &targetID,
 				Metadata:   map[string]any{"source": subscribers.SourceMailto, "matched_via": matchedVia},
+				MessageID:  sesMessageID,
 			})
 		}
 	}
