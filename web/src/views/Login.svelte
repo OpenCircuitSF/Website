@@ -22,8 +22,10 @@
 -->
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
+  import { get } from 'svelte/store';
   import { currentUser } from '../lib/stores';
   import { currentRoute, navigate } from '../lib/router';
+  import { resolvePostLoginDestination } from '../lib/adminRouter';
   import {
     getMe,
     loginStart,
@@ -95,8 +97,20 @@
     await loginFinish(serializeAssertion(credential));
     const user = await getMe();
     currentUser.set(user);
-    navigate('/account');
+    goAfterLogin();
     return true;
+  }
+
+  // #0527 criterion 6: return the user to where they were headed. Admin.svelte
+  // hands the full pre-login URL (including the #/… hash, which is the screen)
+  // through ?next=; a next carrying a fragment needs a full document load —
+  // navigate() pushes pathname+search only, and a pushState never fires
+  // hashchange, so the hash would be silently dropped. resolvePostLoginDestination
+  // rejects anything that is not a same-origin path (default: /account).
+  function goAfterLogin(): void {
+    const dest = resolvePostLoginDestination(get(currentRoute).query.get('next'));
+    if (dest.fullLoad) window.location.assign(dest.path);
+    else navigate(dest.path);
   }
 
   function describeLoginError(err: unknown): string {

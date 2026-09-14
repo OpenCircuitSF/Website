@@ -43,26 +43,31 @@
   import WorkshopEditor from './WorkshopEditor.svelte';
 
   interface Props {
+    // #0527: the hash owns the screen — workshopId null is the list
+    // (`#/workshops`), non-null is that workshop's editor
+    // (`#/workshops/:id`). Local mode/activeWorkshopId state is gone.
+    workshopId: number | null;
+    // Hash navigations, owned by Admin.svelte (URLs via adminRouter.ts).
+    onOpenWorkshop: (id: number) => void;
+    onBackToList: () => void;
     // #0056: forwarded to WorkshopEditor's own onAnnounced -- see that
-    // component's Props doc comment. Admin.svelte uses this to switch to
-    // the Campaigns tab with the newly-created draft already open.
+    // component's Props doc comment. Admin.svelte uses this to navigate to
+    // the created draft's campaign editor (`#/campaigns/<id>`).
     onAnnounced: (campaignId: number) => void;
   }
 
-  let { onAnnounced }: Props = $props();
+  let { workshopId, onOpenWorkshop, onBackToList, onAnnounced }: Props = $props();
 
   let workshops = $state<AdminWorkshop[]>([]);
   let loading = $state(true);
   let loadError = $state<string | null>(null);
   let sortDirection = $state<SortDirection>('asc');
 
-  type ViewMode = 'list' | 'editor';
-  let mode = $state<ViewMode>('list');
-  let activeWorkshopId = $state<number | null>(null);
-  // Non-null by construction whenever mode === 'editor' -- mirrors
-  // Campaigns.svelte's activeId fallback so the template can pass a plain
-  // number prop without its own null-check.
-  let activeId = $derived(activeWorkshopId ?? -1);
+  // Derived straight from the route (#0527). Non-null by construction in
+  // the editor view — mirrors Campaigns.svelte's activeId fallback so the
+  // template can pass a plain number prop without its own null-check.
+  let mode = $derived(workshopId !== null ? ('editor' as const) : ('list' as const));
+  let activeId = $derived(workshopId ?? -1);
 
   let creating = $state(false);
   let newTitle = $state('');
@@ -113,14 +118,15 @@
     sortDirection = toggleSortDirection(sortDirection);
   }
 
+  // #0527: opening a workshop or the list is a navigation — Admin.svelte
+  // builds the #/workshops/… URL; backToList also refreshes the list, since
+  // the editor may have changed workshops while it was open.
   function openWorkshop(id: number): void {
-    mode = 'editor';
-    activeWorkshopId = id;
+    onOpenWorkshop(id);
   }
 
   function backToList(): void {
-    mode = 'list';
-    activeWorkshopId = null;
+    onBackToList();
     void load();
   }
 
@@ -148,8 +154,8 @@
       const created = await createWorkshop({ title });
       creating = false;
       workshops = [created, ...workshops];
-      mode = 'editor';
-      activeWorkshopId = created.id;
+      // #0527: the created workshop's editor is a real URL now.
+      onOpenWorkshop(created.id);
     } catch (err) {
       createError = err instanceof ApiError ? err.message : 'Could not create this workshop.';
     } finally {

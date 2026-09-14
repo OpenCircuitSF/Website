@@ -128,6 +128,7 @@ describe('shouldIntercept', () => {
       defaultPrevented: false,
       target: null,
       download: null,
+      hrefAttribute: '/about',
       href: 'https://opencircuitsf.com/about',
       currentOrigin: 'https://opencircuitsf.com',
       ...overrides,
@@ -192,6 +193,24 @@ describe('shouldIntercept', () => {
         candidate({ href: 'https://opencircuitsf.com/workshops/solder-101' }),
       ),
     ).toBe(true);
+  });
+
+  it('leaves admin hash-route links (#/…) to the browser, so hashchange owns the navigation (#0527)', () => {
+    expect(
+      shouldIntercept(
+        candidate({ hrefAttribute: '#/campaigns', href: 'https://opencircuitsf.com/admin#/campaigns' }),
+      ),
+    ).toBe(false);
+  });
+
+  it('leaves the skip link (#main-content) alone too — a same-page anchor is not a route (#0527)', () => {
+    expect(
+      shouldIntercept(candidate({ hrefAttribute: '#main-content', href: 'https://opencircuitsf.com/#main-content' })),
+    ).toBe(false);
+  });
+
+  it('still intercepts a plain same-origin path link (#0527 control)', () => {
+    expect(shouldIntercept(candidate({ hrefAttribute: '/about' }))).toBe(true);
   });
 });
 

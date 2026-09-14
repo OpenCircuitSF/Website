@@ -166,6 +166,12 @@ export interface InterceptCandidate {
   /** The anchor's `download` attribute, or null if absent. Presence alone
    * (regardless of value) means "let the browser download it". */
   download: string | null;
+  /** The anchor's raw href attribute (#0527) — getAttribute('href'), not the
+   * resolved .href. A value beginning `#` is a same-document fragment
+   * (`#/campaigns` admin routes, `#main-content` skip links): navigating it
+   * is the browser's own job, and routing it through navigate() would strip
+   * the hash entirely (navigate pushes pathname+search only). */
+  hrefAttribute: string;
   /** The anchor's resolved absolute href (HTMLAnchorElement.href, not
    * getAttribute('href') -- already resolved against the document's base). */
   href: string;
@@ -188,6 +194,12 @@ export function shouldIntercept(c: InterceptCandidate): boolean {
   if (c.metaKey || c.ctrlKey || c.shiftKey || c.altKey) return false;
   if (c.target && c.target !== '_self') return false;
   if (c.download !== null) return false;
+  // #0527: same-document fragment links are the browser's navigation, not
+  // ours — admin hash routes (`#/…`, which hashchange handles) and same-page
+  // anchors (`#main-content`) alike. Intercepting them would pushState a
+  // hashless URL (navigate() builds its target from pathname+search), losing
+  // the destination and double-handling the navigation.
+  if (c.hrefAttribute.startsWith('#')) return false;
 
   let url: URL;
   try {
@@ -215,6 +227,22 @@ interface NavigateOptions {
    * a magic-link landing URL). */
   replace?: boolean;
 }
+
+/**
+ * The pathname+search last seen on this document (#0527), updated by
+ * navigate() and by every popstate. A popstate whose pathname+search is
+ * unchanged is a hash-only traversal — a fragment navigation's own
+ * back/forward, or a skip-link hop — and must not be republished as an outer
+ * route change (that re-runs #0238's title/focus effect, double-handling an
+ * in-page navigation) nor scroll-restored (the document never changed;
+ * yanking scroll to the entry's saved offset is exactly the "unexpected
+ * jump" #0527 criterion 3 forbids). Admin.svelte listens to hashchange for
+ * these.
+ */
+let lastPathSearch: string =
+  typeof window !== 'undefined'
+    ? window.location.pathname + window.location.search
+    : '/';
 
 /**
  * Navigate to `path` client-side: push (or replace) history state, update
@@ -248,6 +276,8 @@ export function navigate(path: string, { replace = false }: NavigateOptions = {}
   } else {
     window.history.pushState({ scrollY: 0 }, '', target);
   }
+
+  lastPathSearch = url.pathname + url.search;
 
   currentRoute.set(route);
   window.scrollTo(0, 0);
@@ -289,7 +319,10 @@ function saveScrollToCurrentEntry(): void {
     window.history.replaceState(
       { scrollY },
       '',
-      window.location.pathname + window.location.search,
+      // #0527: the hash is part of the entry's URL — on /admin#/campaigns/42
+      // a stamp that wrote pathname+search only would strip the fragment and
+      // turn the next reload into a plain Overview load.
+      window.location.pathname + window.location.search + window.location.hash,
     );
   } catch {
     // Safari rate-limits history.replaceState (historically ~100 calls per 30
@@ -488,6 +521,11 @@ export function initRouter(): void {
   if (initialized) return;
   initialized = true;
 
+  // #0527: baseline for popstate's hash-only detection (the module-level
+  // initializer covers the common case; this re-reads in case anything moved
+  // between import and mount).
+  lastPathSearch = window.location.pathname + window.location.search;
+
   if ('scrollRestoration' in window.history) {
     window.history.scrollRestoration = 'manual';
   }
@@ -527,6 +565,7 @@ export function initRouter(): void {
       defaultPrevented: event.defaultPrevented,
       target: anchor.getAttribute('target'),
       download: anchor.getAttribute('download'),
+      hrefAttribute: anchor.getAttribute('href') ?? '',
       href: anchor.href,
       currentOrigin: window.location.origin,
     };
@@ -542,6 +581,14 @@ export function initRouter(): void {
     // the traversal has already committed, so replaceState would write it to
     // the incoming entry.
     cancelPendingScrollSave();
+
+    // #0527: a hash-only traversal (pathname+search unchanged) is not an
+    // outer navigation — see lastPathSearch's doc comment. Admin.svelte's
+    // hashchange listener owns these.
+    const nowPathSearch = window.location.pathname + window.location.search;
+    const hashOnly = nowPathSearch === lastPathSearch;
+    lastPathSearch = nowPathSearch;
+    if (hashOnly) return;
 
     currentRoute.set(parsePath(window.location.pathname, window.location.search));
 

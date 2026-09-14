@@ -171,11 +171,21 @@ async function renderSubscribersSection(): Promise<void> {
   listSuppressions.mockResolvedValue({ suppressions: [], count: 0 });
 
   currentUser.set(adminUser());
+  // #0527: the hash decides which screen shows, so the test loads the
+  // Subscribers section the way a deep link does — setting #/subscribers
+  // before mount — instead of clicking the (now real <a href>) subtab.
+  window.location.hash = '#/subscribers';
   render(Admin);
 
-  const subscribersTab = await screen.findByRole('button', { name: 'Subscribers' });
-  await fireEvent.click(subscribersTab);
   await waitFor(() => expect(listSubscribers).toHaveBeenCalled());
+  // The old click-based path waited on the subtab button's appearance, which
+  // incidentally let the section's other loaders settle; the deep-link path
+  // reaches this screen faster, so wait explicitly for the interest filter's
+  // options before a test tries to select one.
+  await waitFor(() => {
+    const interestSelect = screen.getByLabelText('Interest') as HTMLSelectElement;
+    expect(interestSelect.options.length).toBeGreaterThan(0);
+  });
 }
 
 describe('Admin.svelte subscribers section: CSV export link (#0219)', () => {

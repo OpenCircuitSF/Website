@@ -24,43 +24,30 @@
   import CampaignStats from './CampaignStats.svelte';
 
   interface Props {
+    // #0527: the hash owns which screen shows — campaignId is null on the
+    // list screen (`#/campaigns`) and the record id in the editor
+    // (`#/campaigns/:id`) or stats (`#/campaigns/:id/stats`); campaignMode
+    // says which. Local mode/activeCampaignId state is gone: one source of
+    // truth.
+    campaignId: number | null;
+    campaignMode: 'list' | 'editor' | 'stats';
+    // Hash navigations, owned by Admin.svelte (which builds the URLs via
+    // adminRouter.ts).
+    onOpenCampaign: (id: number) => void;
+    onOpenStats: (id: number) => void;
+    onBackToList: () => void;
     onGoToSettings: () => void;
     // #0114: takes the campaign id so the audit tab opens pre-filtered to
-    // that campaign's history (rather than the old unfiltered "just switch
-    // tabs" workaround) — see Admin.svelte's goToCampaignAudit.
+    // that campaign's history — Admin.svelte sets `#/audit?campaign=<id>`.
     onGoToAudit: (campaignId: number) => void;
-    // #0056: when Admin.svelte sets this (right after the workshops
-    // screen's announce shortcut creates a draft), the effect below jumps
-    // straight into that campaign's editor instead of the list — "the
-    // workshop screen links to the created draft" per that issue's
-    // acceptance criteria. onOpenedCampaign lets Admin.svelte clear the
-    // value once consumed, so navigating back to this tab later doesn't
-    // re-open a stale draft.
-    openCampaignId?: number | null;
-    onOpenedCampaign?: () => void;
   }
 
-  let { onGoToSettings, onGoToAudit, openCampaignId = null, onOpenedCampaign }: Props = $props();
-
-  $effect(() => {
-    if (openCampaignId !== null) {
-      openCampaign(openCampaignId);
-      onOpenedCampaign?.();
-    }
-  });
+  let { campaignId, campaignMode, onOpenCampaign, onOpenStats, onBackToList, onGoToSettings, onGoToAudit }: Props =
+    $props();
 
   let campaigns = $state<Campaign[]>([]);
   let loading = $state(true);
   let loadError = $state<string | null>(null);
-
-  // Third arm on what was a binary list/editor swap (#0049's carried-in
-  // review finding): 'list' | 'editor' | 'stats'. activeCampaignId is
-  // meaningless in 'list' mode and always set alongside a transition into
-  // either of the other two — never read without checking mode first (see
-  // hasEditorSelection/hasStatsSelection below).
-  type CampaignsViewMode = 'list' | 'editor' | 'stats';
-  let mode = $state<CampaignsViewMode>('list');
-  let activeCampaignId = $state<number | null>(null);
 
   let creating = $state(false);
   let newName = $state('');
@@ -96,13 +83,15 @@
       canStats: canViewCampaignStats(c.status),
     })),
   );
-  let isEditorView = $derived(mode === 'editor');
-  let isStatsView = $derived(mode === 'stats');
-  let isListView = $derived(mode === 'list');
-  // Non-null by construction whenever isEditorView/isStatsView is true —
+
+  // Derived straight from the route (#0527): no local mode state left to
+  // disagree with the URL. Non-null by construction in editor/stats views —
   // lets the template pass a plain number prop without a null-check of its
   // own (mirrors the pre-#0049 selectedCampaignId fallback).
-  let activeId = $derived(activeCampaignId ?? -1);
+  let isEditorView = $derived(campaignMode === 'editor' && campaignId !== null);
+  let isStatsView = $derived(campaignMode === 'stats' && campaignId !== null);
+  let isListView = $derived(campaignMode === 'list');
+  let activeId = $derived(campaignId ?? -1);
   let hasCampaigns = $derived(campaignRows.length > 0);
   let noCampaigns = $derived(campaignRows.length === 0);
   let listPanelNoPadding = $derived(hasCampaigns && !loading && loadError === null);
@@ -124,19 +113,20 @@
     void load();
   });
 
+  // #0527: opening a campaign, its stats, or the list is now a navigation —
+  // Admin.svelte builds the #/campaigns/… URL; backToList also refreshes the
+  // list, since the editor may have changed campaigns while it was open
+  // (the same refresh the pre-hash backToList did on every transition).
   function openCampaign(id: number): void {
-    mode = 'editor';
-    activeCampaignId = id;
+    onOpenCampaign(id);
   }
 
   function openStats(id: number): void {
-    mode = 'stats';
-    activeCampaignId = id;
+    onOpenStats(id);
   }
 
   function backToList(): void {
-    mode = 'list';
-    activeCampaignId = null;
+    onBackToList();
     void load();
   }
 
@@ -183,8 +173,8 @@
       });
       creating = false;
       campaigns = [created, ...campaigns];
-      mode = 'editor';
-      activeCampaignId = created.id;
+      // #0527: the created draft's editor is a real URL now.
+      onOpenCampaign(created.id);
     } catch (err) {
       createError = err instanceof ApiError ? err.message : 'Could not create this campaign.';
     } finally {

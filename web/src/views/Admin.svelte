@@ -35,9 +35,20 @@
     thin" — see that file's own doc comment.
 -->
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { currentUser } from '../lib/stores';
   import { navigate } from '../lib/router';
+  import {
+    parseAdminHash,
+    adminOverviewRoute,
+    adminSectionHash,
+    adminCampaignHash,
+    adminWorkshopHash,
+    adminAuditCampaignHash,
+    ADMIN_NAV_SECTIONS,
+    ADMIN_SECTION_LABELS,
+    type AdminRoute,
+  } from '../lib/adminRouter';
   import { isModalEscape } from '../lib/modalKeydown';
   import {
     getSettings,
@@ -129,23 +140,33 @@
   import Deliverability from './admin/Deliverability.svelte';
   import CrtCommands from './admin/CrtCommands.svelte';
 
-  type Section =
-    | 'overview'
-    | 'settings'
-    | 'users'
-    | 'audit'
-    | 'interests'
-    | 'subscribers'
-    | 'pending'
-    | 'suppressions'
-    | 'deliverability'
-    | 'campaigns'
-    | 'workshops'
-    | 'crt';
-  // #0061: the /admin landing screen (PRD §5.2's "Overview — list size,
-  // growth, recent campaigns, pending sends") is the default tab, matching
-  // what an admin who navigates straight to /admin actually sees first.
-  let section = $state<Section>('overview');
+  // #0527: the hash is the single source of truth for which admin screen
+  // (and which campaign/workshop record) shows. adminRoute is parsed from
+  // window.location.hash at mount, kept current by a hashchange listener
+  // (below), and every navigation — subtab links, cross-screen jumps —
+  // goes through setting location.hash, so reload and back/forward keep
+  // your place and every screen has a real, copyable /admin#/… URL.
+  // Deliberately local component state, not a second global store (see
+  // adminRouter.ts's design notes for the idiom decision).
+  //
+  // #0238 interplay, deliberate and recorded: a hash-only change never
+  // republishes router.ts's currentRoute (router.ts's popstate handler
+  // skips hash-only traversals), so the page title stays "Admin" and focus
+  // stays on the subtab link that was just activated — standard tab-list
+  // behaviour, and no double announcement from the route-change effect.
+  let adminRoute = $state<AdminRoute>(
+    (typeof window !== 'undefined' ? parseAdminHash(window.location.hash) : null) ??
+      adminOverviewRoute(),
+  );
+
+  // The hashchange wiring. Hashes that are not admin routes at all (the
+  // skip link's #main-content, any same-page anchor) parse to null and are
+  // ignored — only `#/…` addresses a screen (adminRouter.ts's hazard-3
+  // rule).
+  const onHashChange = (): void => {
+    const parsed = parseAdminHash(window.location.hash);
+    if (parsed) adminRoute = parsed;
+  };
 
   // ── Settings ──────────────────────────────────────────────────────────────
   let settings = $state<Setting[]>([]);
@@ -420,9 +441,17 @@
   /**
    * #0114: navigate to the audit tab pre-filtered to one campaign's history
    * — the deep link CampaignEditor's demoted banner and CampaignStats offer,
-   * replacing the old unfiltered "switch to the audit tab" workaround.
+   * now a real URL (#0527): setting the hash is the navigation; the effect
+   * below watches the parsed route and applies the filter.
    */
   function goToCampaignAudit(campaignId: number) {
+    window.location.hash = adminAuditCampaignHash(campaignId);
+  }
+
+  // Applies the audit screen's campaign filter from a #/audit?campaign=N
+  // deep link. Same state body as the pre-hash goToCampaignAudit, minus the
+  // tab switch that the hash now owns.
+  function applyAuditCampaignFilter(campaignId: number) {
     const filter = campaignAuditFilter(campaignId);
     auditUserIdRaw = '';
     auditUserIdFilter = null;
@@ -432,22 +461,49 @@
     auditTargetIdFilter = filter.targetId;
     auditFilterError = null;
     auditPage = 1;
-    section = 'audit';
     void loadAudit();
   }
 
-  // #0056: the workshops screen's announce shortcut hands back the id of
-  // the draft campaign it just created; jump to the Campaigns tab with
-  // that draft already open, mirroring goToCampaignAudit's cross-tab
-  // deep-link shape. pendingOpenCampaignId is passed to <Campaigns> below
-  // and cleared once it consumes it (see that component's onOpenedCampaign)
-  // so returning to this tab later doesn't reopen a stale draft.
-  let pendingOpenCampaignId = $state<number | null>(null);
+  // The last campaign id this effect applied (undefined = none since the
+  // audit screen was last left). Plain (non-$state) on purpose: it only
+  // dedupes re-runs, it must not itself trigger them.
+  let appliedAuditCampaign: number | null | undefined = undefined;
+  $effect(() => {
+    const r = adminRoute;
+    if (r.section !== 'audit') {
+      appliedAuditCampaign = undefined;
+      return;
+    }
+    const raw = r.query.get('campaign');
+    const id = raw !== null && /^\d+$/.test(raw) ? Number(raw) : null;
+    if (id === appliedAuditCampaign) return;
+    appliedAuditCampaign = id;
+    // No ?campaign= (a plain #/audit visit): leave whatever filter the admin
+    // last applied alone; only a real deep link decides the filter.
+    if (id !== null) applyAuditCampaignFilter(id);
+  });
 
+  // #0056: the workshops screen's announce shortcut (and the overview's
+  // campaign links) hand back a campaign id; navigate to that draft's editor
+  // — `#/campaigns/<id>` is the whole deep link, replacing the old
+  // pendingOpenCampaignId side-channel (#0527 criterion 7: cross-screen
+  // jumps are navigations).
   function goToAnnouncedCampaign(campaignId: number) {
-    pendingOpenCampaignId = campaignId;
-    section = 'campaigns';
+    window.location.hash = adminCampaignHash(campaignId);
   }
+
+  // #0527 criterion 6: a signed-out visit to a deep admin link goes to
+  // login, with the full current URL — including the hash, which is the
+  // screen — as ?next=, and Login.svelte sends the user back there after
+  // sign-in. Only a genuinely signed-out visitor (currentUser null, which
+  // App.svelte's session gate guarantees is final by the time this view
+  // mounts) is redirected; a signed-in non-admin stays on the access-denied
+  // panel below.
+  $effect(() => {
+    if ($currentUser) return;
+    const next = window.location.pathname + window.location.search + window.location.hash;
+    navigate(`/login?next=${encodeURIComponent(next)}`);
+  });
 
   // ── Interests ─────────────────────────────────────────────────────────────
   let interests = $state<Interest[]>([]);
@@ -1176,12 +1232,28 @@
   }
 
   onMount(() => {
+    // #0527 criterion 5: an empty hash normalizes to `#/` with replaceState
+    // — Overview either way, but the URL stops being ambiguous, and no
+    // history entry is added. The existing history state (any scroll stamp)
+    // is passed through untouched.
+    if (window.location.hash === '' || window.location.hash === '#') {
+      window.history.replaceState(
+        window.history.state,
+        '',
+        window.location.pathname + window.location.search + '#/',
+      );
+    }
+    window.addEventListener('hashchange', onHashChange);
     void loadSettings();
     void loadUsers();
     void loadAudit();
     void loadInterests();
     void loadSubscribers();
     void loadSuppressions();
+  });
+
+  onDestroy(() => {
+    window.removeEventListener('hashchange', onHashChange);
   });
 </script>
 
@@ -1201,101 +1273,25 @@
     </Panel>
   {:else}
     <nav class="subtabs" aria-label="Admin sections">
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'overview'}
-        aria-current={section === 'overview' ? 'page' : undefined}
-        onclick={() => (section = 'overview')}
-      >Overview</button>
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'settings'}
-        aria-current={section === 'settings' ? 'page' : undefined}
-        onclick={() => (section = 'settings')}
-      >Settings</button>
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'users'}
-        aria-current={section === 'users' ? 'page' : undefined}
-        onclick={() => (section = 'users')}
-      >Users</button>
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'audit'}
-        aria-current={section === 'audit' ? 'page' : undefined}
-        onclick={() => (section = 'audit')}
-      >Audit log</button>
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'interests'}
-        aria-current={section === 'interests' ? 'page' : undefined}
-        onclick={() => (section = 'interests')}
-      >Interests</button>
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'subscribers'}
-        aria-current={section === 'subscribers' ? 'page' : undefined}
-        onclick={() => (section = 'subscribers')}
-      >Subscribers</button>
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'pending'}
-        aria-current={section === 'pending' ? 'page' : undefined}
-        onclick={() => (section = 'pending')}
-      >Pending</button>
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'suppressions'}
-        aria-current={section === 'suppressions' ? 'page' : undefined}
-        onclick={() => (section = 'suppressions')}
-      >Suppressions</button>
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'deliverability'}
-        aria-current={section === 'deliverability' ? 'page' : undefined}
-        onclick={() => (section = 'deliverability')}
-      >Deliverability</button>
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'campaigns'}
-        aria-current={section === 'campaigns' ? 'page' : undefined}
-        onclick={() => (section = 'campaigns')}
-      >Campaigns</button>
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'workshops'}
-        aria-current={section === 'workshops' ? 'page' : undefined}
-        onclick={() => (section = 'workshops')}
-      >Workshops</button>
-      <button
-        type="button"
-        class="subtab"
-        class:active={section === 'crt'}
-        aria-current={section === 'crt' ? 'page' : undefined}
-        onclick={() => (section = 'crt')}
-      >CRT session</button>
+      {#each ADMIN_NAV_SECTIONS as s (s)}
+        <a
+          class="subtab"
+          class:active={adminRoute.section === s}
+          aria-current={adminRoute.section === s ? 'page' : undefined}
+          href={adminSectionHash(s)}
+        >{ADMIN_SECTION_LABELS[s]}</a>
+      {/each}
     </nav>
 
-    {#if section === 'overview'}
+    {#if adminRoute.section === 'overview'}
       <Dashboard onOpenCampaign={goToAnnouncedCampaign} />
     {/if}
 
-    {#if section === 'crt'}
+    {#if adminRoute.section === 'crt'}
       <CrtCommands />
     {/if}
 
-    {#if section === 'settings'}
+    {#if adminRoute.section === 'settings'}
       <Panel title="Settings">
         {#if settingsLoading}
           <p class="text-muted" role="status">Loading settings…</p>
@@ -1371,7 +1367,7 @@
       </Panel>
     {/if}
 
-    {#if section === 'users'}
+    {#if adminRoute.section === 'users'}
       <Panel title="Users" noPadding={users.length > 0 && !usersLoading && !usersError}>
         {#if usersLoading}
           <p class="text-muted" role="status">Loading users…</p>
@@ -1499,7 +1495,7 @@
       {/if}
     {/if}
 
-    {#if section === 'audit'}
+    {#if adminRoute.section === 'audit'}
       <Panel title="Audit log">
         <form class="inline-form" onsubmit={applyAuditFilter} style="margin-bottom: var(--space-3);">
           <label for="audit-user" style="white-space: nowrap;">Filter by user id</label>
@@ -1590,7 +1586,7 @@
       </Panel>
     {/if}
 
-    {#if section === 'interests'}
+    {#if adminRoute.section === 'interests'}
       <Panel title="Add an interest">
         <form class="interest-create-form" onsubmit={submitCreateInterest}>
           <div class="field">
@@ -1802,7 +1798,7 @@
       {/if}
     {/if}
 
-    {#if section === 'subscribers'}
+    {#if adminRoute.section === 'subscribers'}
       <Panel title="Subscribers by status">
         <div class="status-counts">
           {#each SUBSCRIBER_STATUSES as st (st)}
@@ -2325,11 +2321,11 @@
       {/if}
     {/if}
 
-    {#if section === 'pending'}
+    {#if adminRoute.section === 'pending'}
       <Pending />
     {/if}
 
-    {#if section === 'suppressions'}
+    {#if adminRoute.section === 'suppressions'}
       <Panel title="Suppressions" noPadding={suppressions.length > 0 && !suppressionsLoading && !suppressionsError}>
         {#if suppressionsLoading}
           <p class="text-muted" role="status">Loading suppressions…</p>
@@ -2440,21 +2436,36 @@
       {/if}
     {/if}
 
-    {#if section === 'deliverability'}
-      <Deliverability onGoToSuppressions={() => (section = 'suppressions')} />
+    {#if adminRoute.section === 'deliverability'}
+      <Deliverability onGoToSuppressions={() => (window.location.hash = adminSectionHash('suppressions'))} />
     {/if}
 
-    {#if section === 'campaigns'}
+    {#if adminRoute.section === 'campaigns'}
       <Campaigns
-        onGoToSettings={() => (section = 'settings')}
+        campaignId={adminRoute.campaign?.id ?? null}
+        campaignMode={adminRoute.campaign?.mode ?? 'list'}
+        onOpenCampaign={(id) => (window.location.hash = adminCampaignHash(id))}
+        onOpenStats={(id) => (window.location.hash = adminCampaignHash(id, 'stats'))}
+        onBackToList={() => (window.location.hash = adminSectionHash('campaigns'))}
+        onGoToSettings={() => (window.location.hash = adminSectionHash('settings'))}
         onGoToAudit={goToCampaignAudit}
-        openCampaignId={pendingOpenCampaignId}
-        onOpenedCampaign={() => (pendingOpenCampaignId = null)}
       />
     {/if}
 
-    {#if section === 'workshops'}
-      <Workshops onAnnounced={goToAnnouncedCampaign} />
+    {#if adminRoute.section === 'workshops'}
+      <Workshops
+        workshopId={adminRoute.workshopId}
+        onOpenWorkshop={(id) => (window.location.hash = adminWorkshopHash(id))}
+        onBackToList={() => (window.location.hash = adminSectionHash('workshops'))}
+        onAnnounced={goToAnnouncedCampaign}
+      />
+    {/if}
+
+    {#if adminRoute.section === 'not-found'}
+      <Panel title="Not found">
+        <p class="text-muted">That admin page doesn't exist, or its link is malformed.</p>
+        <a class="subtab" href={adminSectionHash('overview')}>Back to Overview</a>
+      </Panel>
     {/if}
   {/if}
 </div>
