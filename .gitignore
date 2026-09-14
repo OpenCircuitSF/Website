@@ -43,6 +43,12 @@ CERBERUS.md
 # mistake on the binary name silently excluded cmd/opencircuit/ in ShortLinks.
 /.claude/worktrees/
 
+# Agent scratch space: throwaway worktrees, mutation-test copies, before/after
+# snapshots. Anchored like /.claude/worktrees/ above, and for the same reason.
+# Everything an agent would otherwise put in a temp dir outside the project
+# (which the runner may not be able to access) lives here instead.
+/.scratch/
+
 # ── Workshop cover images ──────────────────────────────────────────────────────
 # Workshop cover images are NOT part of this repository at all, and do not
 # belong under web/public/ in any form -- tracked or ignored. They live on the
