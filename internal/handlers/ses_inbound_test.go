@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/inbound"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
@@ -718,12 +720,72 @@ func TestSESInboundHandler_UnresolvableObjectKey_Returns200(t *testing.T) {
 func TestSESInboundHandler_FetchError_Returns500(t *testing.T) {
 	pool := journeyTestPool(t)
 	subs := subscribers.NewStore(pool)
+	ctx := context.Background()
 	objects := &fakeInboundObjectStore{fetchErr: errors.New("s3 unavailable")}
-	h := NewSESInboundHandler(&fakeInboundVerifier{}, objects, subs, nil, nil, nil)
+	h := NewSESInboundHandler(&fakeInboundVerifier{}, objects, subs, audit.New(pool), nil, nil)
 
 	rr := doPostSESInbound(h, inboundNotificationBody(t, "unsubscribe/msg-8"))
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (object still in S3; safe to retry)", rr.Code)
+	}
+
+	// #0500: only a MISSING OBJECT takes the parked path — an operational
+	// fetch failure keeps the retryable 500 and must leave no parked row
+	// behind (SNS will redeliver, and the retry may genuinely succeed).
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE action = $1 AND metadata->>'key' = $2`,
+		audit.ActionInboundMailParked, "unsubscribe/msg-8",
+	).Scan(&count); err != nil {
+		t.Fatalf("query audit_log: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("parked rows for %q = %d, want 0 — a retryable fetch failure is not a parked outcome", "unsubscribe/msg-8", count)
+	}
+}
+
+// TestSESInboundHandler_FetchNoSuchKey_ParksAndReturns200 pins #0500
+// criterion 4: a missing object cannot succeed on retry — SNS's redelivery
+// policy would retry the same doomed notification to exhaustion before
+// dropping it — so the fetch error routes to the parked path instead: 200
+// (no redelivery loop) plus the #0499-style durable audit row, with reason
+// object_missing and neither from nor subject, since nothing was ever
+// fetched or parsed. The sibling test above proves every OTHER fetch failure
+// keeps the retryable 500.
+func TestSESInboundHandler_FetchNoSuchKey_ParksAndReturns200(t *testing.T) {
+	pool := journeyTestPool(t)
+	subs := subscribers.NewStore(pool)
+	ctx := context.Background()
+	objects := &fakeInboundObjectStore{
+		fetchErr: fmt.Errorf("inbound: fetching s3://opencircuitsf-inbound/unsubscribe/msg-10: %w", inbound.ErrNoSuchKey),
+	}
+	h := NewSESInboundHandler(&fakeInboundVerifier{}, objects, subs, audit.New(pool), nil, nil)
+
+	rr := doPostSESInbound(h, inboundNotificationBody(t, "unsubscribe/msg-10"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a missing object cannot succeed on retry, so parking must not loop", rr.Code)
+	}
+	if len(objects.deleted) != 0 {
+		t.Errorf("deleted = %v, want none — nothing was ever fetched, so nothing may be deleted", objects.deleted)
+	}
+
+	var reason string
+	var hasFrom, hasSubject bool
+	if err := pool.QueryRow(ctx,
+		`SELECT metadata->>'reason', metadata ? 'from', metadata ? 'subject'
+		   FROM audit_log WHERE action = $1 AND metadata->>'key' = $2`,
+		audit.ActionInboundMailParked, "unsubscribe/msg-10",
+	).Scan(&reason, &hasFrom, &hasSubject); err != nil {
+		t.Fatalf("query audit_log for parked record: %v", err)
+	}
+	if reason != "object_missing" {
+		t.Errorf("metadata reason = %q, want %q", reason, "object_missing")
+	}
+	if hasFrom {
+		t.Error(`metadata has key "from", want it omitted — nothing was ever fetched, so no address exists`)
+	}
+	if hasSubject {
+		t.Error(`metadata has key "subject", want it omitted — nothing was ever fetched, so no subject exists`)
 	}
 }
 
@@ -1052,5 +1114,178 @@ func TestSESInboundHandler_Redelivery_FromPath_NoDuplicateAuditRow(t *testing.T)
 	}
 	if events != 1 {
 		t.Errorf("subscriber_events unsubscribed rows = %d, want 1", events)
+	}
+}
+
+// #0500's temporary observation log. These tests need no database: the flow
+// below parks on an unparseable message (a nil auditor is a no-op) or on an
+// unresolvable key, and never reaches a subscriber lookup, so subs can be
+// nil and no pool is opened. They run against an Info-floored TextHandler —
+// the same floor production's slog.Default() has — because that is exactly
+// the condition the mechanism exists to survive: the DEBUG line must reach
+// the buffer ONLY through sesInboundDebugHandler, or the flag would enable a
+// line nothing can show.
+
+// observationTestObject is the unparseable body every fetch in the
+// observation tests hits: the notification flows past the observation point
+// (which fires right after the SES event parses) and then parks at
+// inbound.Parse, never reaching a subscriber lookup.
+func observationTestObject() *fakeInboundObjectStore {
+	return &fakeInboundObjectStore{
+		objects: map[string][]byte{"unsubscribe/msg-obs": []byte("not a valid RFC 5322 message")},
+	}
+}
+
+// newObservationHandler builds the handler around an Info-floored buffer
+// logger, mirroring production's slog.Default() floor exactly.
+func newObservationHandler(t *testing.T, buf *bytes.Buffer, objects *fakeInboundObjectStore) *SESInboundHandler {
+	t.Helper()
+	return NewSESInboundHandler(&fakeInboundVerifier{}, objects, nil, nil, nil,
+		slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+}
+
+// observationAction builds the receipt.action object for these envelopes.
+func observationAction(extra map[string]any) map[string]any {
+	action := map[string]any{
+		"type":       "S3",
+		"bucketName": "opencircuitsf-inbound",
+		"objectKey":  "unsubscribe/msg-obs",
+	}
+	for k, v := range extra {
+		action[k] = v
+	}
+	return action
+}
+
+// observationEnvelope wraps an inner SES event (whose receipt.action is
+// action) in the SNS envelope Notify expects, with a fixed message id.
+func observationEnvelope(t *testing.T, action map[string]any) []byte {
+	t.Helper()
+	inner := map[string]any{
+		"notificationType": "Received",
+		"mail":             map[string]any{"messageId": "msg-obs"},
+		"receipt":          map[string]any{"action": action},
+	}
+	innerBytes, err := json.Marshal(inner)
+	if err != nil {
+		t.Fatalf("marshal inner SES event: %v", err)
+	}
+	env := sesnotify.Message{
+		Type:      sesnotify.TypeNotification,
+		MessageId: "sns-msg-obs",
+		TopicArn:  inboundTestTopicArn,
+		Message:   string(innerBytes),
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+	envBytes, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal SNS envelope: %v", err)
+	}
+	return envBytes
+}
+
+// TestSESInboundHandler_ObservationLog_Enabled_RecordsShape: with the env
+// flag on, each notification emits exactly one labeled DEBUG line carrying
+// the receipt action's shape — the full objectKey value, its presence, the
+// absence of objectKeyPrefix in the payload, and the bucket.
+func TestSESInboundHandler_ObservationLog_Enabled_RecordsShape(t *testing.T) {
+	t.Setenv(sesInboundObservationLogEnv, "true")
+	var buf bytes.Buffer
+	h := newObservationHandler(t, &buf, observationTestObject())
+
+	rr := doPostSESInbound(h, observationEnvelope(t, observationAction(nil)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+
+	logged := buf.String()
+	const line = "OBSERVATION parsed receipt action shape"
+	if n := strings.Count(logged, line); n != 1 {
+		t.Fatalf("observation lines = %d, want exactly 1; log=%s", n, logged)
+	}
+	for _, want := range []string{
+		`message_id=sns-msg-obs`,
+		`receipt_present=true`,
+		`object_key_present=true`,
+		`object_key=unsubscribe/msg-obs`,
+		`object_key_prefix_present=false`,
+		`bucket=opencircuitsf-inbound`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log line missing %q; log=%s", want, logged)
+		}
+	}
+}
+
+// TestSESInboundHandler_ObservationLog_Enabled_RecordsPrefixWhenPresent:
+// presence is the whole point of the observation — an objectKeyPrefix that
+// DOES appear in the payload must be reported as present, distinguished from
+// absent (the real payload is expected to carry no such field at all, so
+// this fixture is deliberately hypothetical; it pins the probe's
+// absent-vs-present distinction, which the typed struct cannot express).
+func TestSESInboundHandler_ObservationLog_Enabled_RecordsPrefixWhenPresent(t *testing.T) {
+	t.Setenv(sesInboundObservationLogEnv, "true")
+	var buf bytes.Buffer
+	h := newObservationHandler(t, &buf, observationTestObject())
+
+	rr := doPostSESInbound(h, observationEnvelope(t,
+		observationAction(map[string]any{"objectKeyPrefix": "unsubscribe/"})))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, `object_key_prefix_present=true`) {
+		t.Errorf("log line missing %q; log=%s", `object_key_prefix_present=true`, logged)
+	}
+	if !strings.Contains(logged, `object_key_prefix=unsubscribe/`) {
+		t.Errorf("log line missing %q; log=%s", `object_key_prefix=unsubscribe/`, logged)
+	}
+}
+
+// TestSESInboundHandler_ObservationLog_RecordsAbsentObjectKey: the sharp
+// edge itself — a payload with NO objectKey field must log
+// object_key_present=false (and therefore expose the composed fallback key
+// question to the observation), while still answering 200 through the
+// existing no-resolvable-key path.
+func TestSESInboundHandler_ObservationLog_RecordsAbsentObjectKey(t *testing.T) {
+	t.Setenv(sesInboundObservationLogEnv, "true")
+	var buf bytes.Buffer
+	h := newObservationHandler(t, &buf, &fakeInboundObjectStore{})
+
+	action := map[string]any{"type": "S3", "bucketName": "opencircuitsf-inbound"}
+	rr := doPostSESInbound(h, observationEnvelope(t, action))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+
+	logged := buf.String()
+	for _, want := range []string{
+		`object_key_present=false`,
+		`receipt_present=true`,
+		`bucket=opencircuitsf-inbound`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log line missing %q; log=%s", want, logged)
+		}
+	}
+	if strings.Contains(logged, `object_key=unsubscribe`) {
+		t.Errorf("log line names an objectKey the payload never carried; log=%s", logged)
+	}
+}
+
+// TestSESInboundHandler_ObservationLog_Disabled_Silent: the default. With
+// the env var unset the notification must produce NO observation line —
+// production is silent until an operator deliberately enables the flag.
+func TestSESInboundHandler_ObservationLog_Disabled_Silent(t *testing.T) {
+	var buf bytes.Buffer
+	h := newObservationHandler(t, &buf, observationTestObject())
+
+	rr := doPostSESInbound(h, observationEnvelope(t, observationAction(nil)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(buf.String(), "OBSERVATION") {
+		t.Errorf("observation line emitted with the flag OFF; log=%s", buf.String())
 	}
 }

@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // fakeS3 is a minimal in-memory s3API double — no network, no AWS
@@ -71,6 +74,36 @@ func TestS3Store_FetchMissingKey(t *testing.T) {
 
 	if _, err := store.Fetch(context.Background(), "unsubscribe/missing"); err == nil {
 		t.Fatal("Fetch: want error for missing key, got nil")
+	}
+}
+
+// TestS3Store_FetchNoSuchKey_MapsToSentinel pins #0500's mapping: GetObject's
+// typed *types.NoSuchKey — as the SDK actually returns it, wrapped in an
+// operation error — crosses Fetch as ErrNoSuchKey, with the bucket/key
+// context kept in the message so the handler's log line stays useful. This
+// is what lets internal/handlers route a missing object to its parked path
+// through the narrow inboundObjectStore interface without naming any SDK
+// type.
+func TestS3Store_FetchNoSuchKey_MapsToSentinel(t *testing.T) {
+	fake := &fakeS3{getErr: fmt.Errorf("operation error S3: GetObject, %w", &types.NoSuchKey{})}
+	store := NewS3StoreForTesting(fake, "test-bucket")
+
+	_, err := store.Fetch(context.Background(), "unsubscribe/missing")
+	if !errors.Is(err, ErrNoSuchKey) {
+		t.Fatalf("Fetch err = %v, want ErrNoSuchKey", err)
+	}
+	if !strings.Contains(err.Error(), "s3://test-bucket/unsubscribe/missing") {
+		t.Errorf("Fetch err message = %q, want it to keep the bucket/key context", err)
+	}
+
+	// The mapping keys on the SDK's TYPED error, not on an error string: an
+	// ordinary error that merely spells "NoSuchKey" must not match, or any
+	// unrelated failure carrying that word in its text would silently take
+	// the parked path instead of the retryable 500.
+	fake2 := &fakeS3{getErr: errors.New("NoSuchKey")}
+	store2 := NewS3StoreForTesting(fake2, "test-bucket")
+	if _, err := store2.Fetch(context.Background(), "unsubscribe/other"); errors.Is(err, ErrNoSuchKey) {
+		t.Error("a plain error spelling NoSuchKey must not be reported as ErrNoSuchKey — only the SDK's typed error maps")
 	}
 }
 

@@ -66,6 +66,15 @@ required. See `internal/handlers/ses_inbound.go`'s `recordParked` for the
 exact metadata shape and `internal/audit/actions.go`'s
 `ActionInboundMailParked` doc comment for the full rationale.
 
+A fourth parked case exists since `#0500`: when S3 answers **NoSuchKey** for
+the key a notification names, the handler parks instead of retrying — a
+missing object cannot succeed on redelivery, and SNS's policy would otherwise
+retry the same doomed notification to exhaustion before dropping it. The row
+is the same shape (key, SNS message id, reason `object_missing`) but never
+carries a `From:`/`Subject`, since nothing was ever fetched or parsed; the
+90-day redaction sweep skips it naturally, because it never carries an
+address to redact.
+
 **The recorded address has its own retention policy (`#0503`).** An
 auto-reply's `From:` is the subscriber's own address (`#0499`'s test asserts
 the recorded `from` equals a real seeded subscriber's `Email`), so it is

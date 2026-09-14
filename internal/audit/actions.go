@@ -115,7 +115,12 @@ const (
 	// acted on — an unparseable message, one classified as an auto-reply
 	// (internal/inbound.ParsedMessage.AutoReply), or one whose subject
 	// token and From: address both fail to resolve to a subscriber (PRD
-	// §6.5 path 3, #0058 criterion 5). Actor NULL — the caller is SES/SNS,
+	// §6.5 path 3, #0058 criterion 5). Since #0500 a fourth case writes it:
+	// a notification whose S3 fetch answered NoSuchKey (reason
+	// object_missing, with neither From: nor Subject) — parked rather than
+	// retried, because a missing object cannot succeed on redelivery, so
+	// nothing was ever fetched or parsed. Actor NULL —
+	// the caller is SES/SNS,
 	// not a person, same convention as the ses.* actions above.
 	// TargetType is TargetInboundMail with TargetID left nil: no subscriber
 	// was ever identified for these, so there is nothing to attribute the

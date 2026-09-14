@@ -83,7 +83,10 @@
 // h.auditor is nil, and audit.Logger.Record itself logs-and-swallows any
 // insert failure — a failure to WRITE this record must never turn this
 // handler's 200 into a 500, since that would make SNS redeliver the SAME
-// message and loop.
+// message and loop. A fourth caller exists since #0500: an S3 fetch
+// answering NoSuchKey parks the NOTIFICATION (there is no object to leave
+// in place, but the failed request is exactly what #0499's record exists
+// to make queryable) with reason object_missing.
 //
 // # Auto-replies are checked before any lookup at all
 //
@@ -99,17 +102,20 @@
 // its own beyond Verify's (handled identically to ses_notifications.go):
 //
 //   - Body unreadable, not JSON, unrecognized Type, unparseable S3 event, no
-//     resolvable object key, an unparseable fetched message, an auto-reply,
-//     or no match at all -> 200. None of these is fixed by SNS retrying the
-//     same notification.
+//     resolvable object key, an S3 fetch answering NoSuchKey (#0500: the key
+//     names an object that does not exist, and retrying cannot create it),
+//     an unparseable fetched message, an auto-reply, or no match at all ->
+//     200. None of these is fixed by SNS retrying the same notification.
 //   - Verify fails because the certificate could not be fetched
 //     (errors.Is(err, sesnotify.ErrCertUnavailable)) -> 500, matching
 //     ses_notifications.go exactly: verification could not be performed.
 //   - Verify fails for any other reason -> 403, matching ses_notifications.go.
-//   - Fetching the object from S3, or the subscriber-store lookup/mutation on
-//     a genuine match, fails operationally -> 500: the object is still in
-//     S3 (never deleted before this point), so a retry is safe and is the
-//     only thing standing between us and losing a real unsubscribe request.
+//   - Fetching the object from S3 fails with anything OTHER than NoSuchKey
+//     (network, permissions — the NoSuchKey case is parked above), or the
+//     subscriber-store lookup/mutation on a genuine match, fails
+//     operationally -> 500: the object is still in S3 (never deleted before
+//     this point), so a retry is safe and is the only thing standing between
+//     us and losing a real unsubscribe request.
 package handlers
 
 import (
@@ -119,6 +125,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
@@ -161,11 +169,60 @@ type SESInboundHandler struct {
 	auditor *audit.Logger
 	now     func() time.Time
 	log     *slog.Logger
+
+	// observeShape is the TEMPORARY #0500 observation gate — see
+	// sesInboundObservationLogEnv and logReceiptActionShape. Read once
+	// here in the constructor (the user-approved shape: a single boolean
+	// env var, no config plumbing, so the whole mechanism is one
+	// delete-shaped block); default OFF.
+	observeShape bool
+}
+
+// sesInboundObservationLogEnv enables the TEMPORARY #0500 observation log
+// (logReceiptActionShape): the first live inbound notification is the only
+// oracle for whether SES writes receipt.action.objectKey fully prefixed and
+// whether objectKeyPrefix appears at all, and no other oracle on the box
+// could recover that shape (see the issue's Observation section). Go boolean
+// syntax ("1", "true", ...) enables it; unset, empty, or unparseable leaves
+// it OFF, so production is silent until an operator deliberately sets it.
+// This constant, the flag, the level passthrough below, and the log line
+// itself all die together once the observation is recorded in the issue —
+// removal is #0500's acceptance path.
+const sesInboundObservationLogEnv = "SES_INBOUND_OBSERVATION_LOG"
+
+// sesInboundDebugHandler is the TEMPORARY #0500 level passthrough installed
+// by NewSESInboundHandler when the observation flag is on. The service
+// logger is slog.Default(), whose floor is slog.Info — a literal Debug line
+// would be dropped on the box even with the flag set, so the observation
+// pass would see nothing and could misread that silence as "the payload
+// carried no receipt action". Enabled answers true for every level, raising
+// just this handler's ceiling to Debug; Handle, WithAttrs and WithGroup
+// delegate unchanged, so every other line keeps the wrapped handler's own
+// format and destination.
+type sesInboundDebugHandler struct{ inner slog.Handler }
+
+func (h sesInboundDebugHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h sesInboundDebugHandler) Handle(ctx context.Context, r slog.Record) error {
+	return h.inner.Handle(ctx, r)
+}
+
+func (h sesInboundDebugHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return sesInboundDebugHandler{inner: h.inner.WithAttrs(attrs)}
+}
+
+func (h sesInboundDebugHandler) WithGroup(name string) slog.Handler {
+	return sesInboundDebugHandler{inner: h.inner.WithGroup(name)}
 }
 
 // NewSESInboundHandler constructs a SESInboundHandler. A nil auditor
 // disables the audit write on a real match; a nil logger falls back to
 // slog.Default(), matching this package's existing convention.
+//
+// When the SES_INBOUND_OBSERVATION_LOG env var is truthy, the returned
+// handler additionally logs one DEBUG-level, explicitly-labeled shape
+// observation per inbound notification (#0500 — TEMPORARY, removed once the
+// issue's Observation section records the real payload). The default is OFF.
 func NewSESInboundHandler(
 	verify sesVerifier,
 	objects inboundObjectStore,
@@ -180,7 +237,20 @@ func NewSESInboundHandler(
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &SESInboundHandler{verify: verify, objects: objects, subs: subs, auditor: auditor, now: now, log: logger}
+	// TEMPORARY (#0500): read once at construction, per the user-approved
+	// plan — no config plumbing, so the whole mechanism is one removable
+	// block. Unparseable values fail safe to OFF (ParseBool's error is
+	// deliberately discarded: an operator typo must not crash the endpoint,
+	// and a silently-off observation is recoverable by reading this comment).
+	observe, _ := strconv.ParseBool(os.Getenv(sesInboundObservationLogEnv))
+	if observe {
+		logger = slog.New(sesInboundDebugHandler{inner: logger.Handler()})
+		// #0500: the issue citation stays in this comment, not in the
+		// admin-facing string itself (the citation guard's rule).
+		logger.Info("ses_inbound: OBSERVATION log ENABLED — temporary, removed with the observation code",
+			"env", sesInboundObservationLogEnv)
+	}
+	return &SESInboundHandler{verify: verify, objects: objects, subs: subs, auditor: auditor, now: now, log: logger, observeShape: observe}
 }
 
 // Notify handles POST /api/ses/inbound. See the package doc comment for the
@@ -283,6 +353,11 @@ func (h *SESInboundHandler) handleNotification(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// TEMPORARY (#0500): the shape observation — removed with the rest of
+	// the mechanism once the issue's Observation section records the real
+	// payload. Silent unless the env flag was on at construction.
+	h.logReceiptActionShape(msg, ev)
+
 	key := ev.ObjectKey()
 	if key == "" {
 		h.log.Warn("ses_inbound: notification carried no resolvable S3 object key", "message_id", msg.MessageId)
@@ -292,9 +367,27 @@ func (h *SESInboundHandler) handleNotification(w http.ResponseWriter, r *http.Re
 
 	raw, err := h.objects.Fetch(ctx, key)
 	if err != nil {
-		// Operational failure (network, permissions, the object briefly not
-		// yet visible) — the object is still in S3, so retry is safe and is
-		// the only thing standing between us and losing this request.
+		if errors.Is(err, inbound.ErrNoSuchKey) {
+			// #0500 criterion 4: S3 reported the key does not exist. SES
+			// writes the object BEFORE publishing this notification and S3
+			// reads are strongly consistent, so a missing object is not a
+			// transient condition a retry could fix — and SNS's redelivery
+			// policy would retry the same doomed notification to exhaustion
+			// before dropping it. Park instead: 200 (no redelivery loop)
+			// plus the #0499-style durable audit row (reason
+			// object_missing), which is what makes the failure queryable
+			// rather than a log line that rotates away. Nothing was
+			// fetched, so no From:/Subject exists to record.
+			h.log.Warn("ses_inbound: S3 reported the object does not exist; parking instead of retrying",
+				"key", key, "message_id", msg.MessageId, "err", err)
+			h.recordParked(ctx, key, msg.MessageId, parkedReasonObjectMissing, "", "")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// Operational failure (network, permissions — the missing-object
+		// case above is handled separately) — the object is still in S3, so
+		// retry is safe and is the only thing standing between us and
+		// losing this request.
 		h.log.Error("ses_inbound: fetching object from S3 failed", "key", key, "message_id", msg.MessageId, "err", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -339,25 +432,88 @@ func (h *SESInboundHandler) handleNotification(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusOK)
 }
 
+// logReceiptActionShape is the TEMPORARY #0500 observation log: one
+// explicitly-labeled DEBUG line per inbound notification, recording the
+// parsed receipt action's shape — whether objectKey is present in the
+// payload and its full value, whether objectKeyPrefix appears at all, and
+// the bucket — plus the SNS envelope's message id, matching every other log
+// line in this file. It never logs the raw notification body, only these
+// envelope-level fields. This exists because criterion 1 of #0500 needs the
+// real payload's shape and every oracle on the box came up empty (service
+// logs, the audit row, CloudWatch — see the issue's Observation section);
+// the whole mechanism dies once that observation is recorded.
+//
+// Presence is read by re-parsing msg.Message into the raw probe below
+// rather than from the already-parsed event: an unmarshalled string field
+// cannot distinguish a field that is absent from one that is present but
+// empty, and that distinction is exactly what #0500 asks the observation to
+// settle. The same Message string just parsed successfully into ev, so the
+// probe cannot realistically fail on real bytes; on the impossible path the
+// probe stays zero and both fields report absent.
+func (h *SESInboundHandler) logReceiptActionShape(msg *sesnotify.Message, ev sesnotify.SESEvent) {
+	if !h.observeShape {
+		return
+	}
+	var probe struct {
+		Receipt *struct {
+			Action struct {
+				ObjectKey       json.RawMessage `json:"objectKey"`
+				ObjectKeyPrefix json.RawMessage `json:"objectKeyPrefix"`
+			} `json:"action"`
+		} `json:"receipt"`
+	}
+	_ = json.Unmarshal([]byte(msg.Message), &probe)
+
+	hasReceipt := ev.Receipt != nil
+	var objectKey, objectKeyPrefix, bucket string
+	if hasReceipt {
+		objectKey = ev.Receipt.Action.ObjectKey
+		objectKeyPrefix = ev.Receipt.Action.ObjectKeyPrefix
+		bucket = ev.Receipt.Action.BucketName
+	}
+	// #0500: the issue citation stays in this comment, not in the
+	// admin-facing string itself (the citation guard's rule).
+	h.log.Debug("ses_inbound: OBSERVATION parsed receipt action shape",
+		"message_id", msg.MessageId,
+		"receipt_present", hasReceipt,
+		"object_key_present", probe.Receipt != nil && probe.Receipt.Action.ObjectKey != nil,
+		"object_key", objectKey,
+		"object_key_prefix_present", probe.Receipt != nil && probe.Receipt.Action.ObjectKeyPrefix != nil,
+		"object_key_prefix", objectKeyPrefix,
+		"bucket", bucket,
+	)
+}
+
 // Reason values recordParked writes into its audit row's metadata.reason —
 // see that function's doc comment and noMatchReason below for which
-// left-in-place outcome produces which value.
+// left-in-place outcome produces which value; object_missing is the fourth
+// (#0500's, for a notification whose key S3 reports as absent — not a
+// left-in-place outcome at all, since there was never an object).
 const (
 	parkedReasonUnparseable = "unparseable"
 	parkedReasonAutoReply   = "auto_reply"
 	parkedReasonTokenStale  = "token_not_found"
 	parkedReasonFromUnknown = "from_not_found"
 	parkedReasonNoSignal    = "no_identifying_signal"
+	// parkedReasonObjectMissing marks the NoSuchKey fetch outcome (#0500
+	// criterion 4): the notification named a key S3 says does not exist, so
+	// instead of retrying to exhaustion the request is parked with reason
+	// object_missing — the row carries the key and message id, and neither
+	// from nor subject, since nothing was ever fetched or parsed.
+	parkedReasonObjectMissing = "object_missing"
 )
 
 // recordParked writes the durable audit record #0499 added for a message
 // handleNotification is about to leave in S3 for manual review — see this
 // file's package doc comment ("Parked messages get a durable record, not
 // just a log line") for why this exists and where an admin finds the
-// result. from and subject are passed through as-is and may be "" (an
-// unparseable message has neither); the metadata omits an empty one rather
-// than storing an empty string, so a reader can distinguish "known to be
-// blank" from "not available for this outcome".
+// result. #0500 added a fourth caller: an S3 fetch answering NoSuchKey,
+// where nothing was left in S3 because nothing was ever there — the record
+// documents the failed request instead. from and subject are passed through
+// as-is and may be "" (an unparseable message has neither, and neither was
+// ever fetched on the object_missing path); the metadata omits an empty one
+// rather than storing an empty string, so a reader can distinguish "known
+// to be blank" from "not available for this outcome".
 //
 // A nil h.auditor is a no-op, matching every other audit call site in this
 // file. audit.Logger.Record itself logs-and-swallows any insert failure, so

@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
 )
@@ -75,6 +76,16 @@ func NewS3StoreForTesting(client s3API, bucket string) *S3Store {
 // maxObjectBytes.
 var ErrObjectTooLarge = errors.New("inbound: object exceeds the size limit")
 
+// ErrNoSuchKey is returned by Fetch when S3 reports the requested key does
+// not exist (#0500). GetObject's typed *types.NoSuchKey error is mapped onto
+// this sentinel — wrapped, so the message still carries the bucket and key —
+// because callers behind the narrow inboundObjectStore interface
+// (internal/handlers) cannot name an SDK error type, and #0500's criterion 4
+// needs to distinguish a missing object (which no retry can produce) from an
+// operational failure (which a retry may fix). The handler routes
+// ErrNoSuchKey to its parked path instead of the retryable 500.
+var ErrNoSuchKey = errors.New("inbound: object does not exist")
+
 // Fetch retrieves the object at key and returns its full body. Bounded by
 // maxObjectBytes: an oversized read returns ErrObjectTooLarge rather than
 // consuming unbounded memory on a webhook endpoint that carries no
@@ -85,6 +96,15 @@ func (s *S3Store) Fetch(ctx context.Context, key string) ([]byte, error) {
 		Key:    aws.String(key),
 	})
 	if err != nil {
+		var noSuchKey *types.NoSuchKey
+		if errors.As(err, &noSuchKey) {
+			// Mapped, not passed through: the caller behind
+			// inboundObjectStore cannot name an SDK error type, so the
+			// missing-object condition crosses the seam as ErrNoSuchKey
+			// (#0500). Wrapped rather than returned bare so the log line
+			// keeps the bucket and key context.
+			return nil, fmt.Errorf("inbound: fetching s3://%s/%s: %w", s.bucket, key, ErrNoSuchKey)
+		}
 		return nil, fmt.Errorf("inbound: fetching s3://%s/%s: %w", s.bucket, key, err)
 	}
 	defer out.Body.Close()
