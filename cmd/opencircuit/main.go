@@ -1765,7 +1765,23 @@ func mountAndServe(
 	// hard refresh. site.Middleware wraps it to rewrite index.html responses
 	// with the per-path meta tags, preserving whichever status code
 	// (200 known route / 404 miss, #0022) the SPA handler chose.
-	mux.Handle("GET /", site.Middleware(handlers.NewSPAHandler(web.DistFS())))
+	//
+	// #0522 wires the two public read handlers in as deep-link status
+	// resolvers, so GET /archive/{slug} and GET /workshops/{slug} answer with
+	// the SAME status their JSON APIs answer with (410 withheld / 404
+	// unknown-draft-unsent / 200 published) instead of a soft-404 200. Both
+	// handlers are nil in dev mode (STORAGE=json has no workshops- or
+	// email_campaigns-table backing), and a nil handler is never passed — a
+	// typed-nil interface would satisfy SPADeepLinkStatus and panic on its
+	// nil store, so the resolvers are collected conditionally.
+	var spaResolvers []handlers.SPADeepLinkStatus
+	if publicArchiveH != nil {
+		spaResolvers = append(spaResolvers, publicArchiveH)
+	}
+	if publicWorkshopsH != nil {
+		spaResolvers = append(spaResolvers, publicWorkshopsH)
+	}
+	mux.Handle("GET /", site.Middleware(handlers.NewSPAHandler(web.DistFS(), spaResolvers...)))
 
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
 

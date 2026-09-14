@@ -143,10 +143,41 @@ func (h *PublicArchiveHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // ── GET /api/archive/{slug} ──────────────────────────────────────────────────
 
+// archivePageStatus maps one campaign to the HTTP status its public archive
+// carries (#0522): the exact visibility rule this file's package doc comment
+// states, shared by GetBySlug's JSON route and PageStatus's HTML route so
+// the two can never disagree about what "public", "gone", and "not yet
+// existing" mean. Deliberately a closed mapping: a future archive_status
+// value 404s rather than leaking as 200, the same default GetBySlug has
+// always applied.
+func archivePageStatus(c mailing.Campaign) int {
+	if c.Status != mailing.CampaignStatusSent {
+		// Not sent yet (or never will be — canceled/failed): the page
+		// doesn't exist, same as an unknown slug. Deliberately
+		// indistinguishable from ErrCampaignNotFound — see the package doc
+		// comment. Independent of the ArchiveStatus switch below (#0318
+		// criterion 2): a non-sent campaign is unreachable regardless of
+		// what its archive_status happens to be.
+		return http.StatusNotFound
+	}
+	switch c.ArchiveStatus {
+	case mailing.ArchiveStatusPublished:
+		return http.StatusOK
+	case mailing.ArchiveStatusWithheld:
+		// A deliberate retraction, not "never existed" — 410 Gone, per
+		// #0123's "withheld must be 410, not 404" note.
+		return http.StatusGone
+	default:
+		return http.StatusNotFound
+	}
+}
+
 // GetBySlug handles GET /api/archive/{slug}. See this file's package doc
 // comment for the full visibility rule (404/410/200) and why rendering
 // goes through mailing.RenderMarkdownPageHTML rather than the email
-// pipeline.
+// pipeline. #0522 lifted the status mapping itself into archivePageStatus,
+// which PageStatus shares, so the JSON API and the HTML page can never
+// disagree about a slug's visibility.
 func (h *PublicArchiveHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	c, err := h.store.GetBySlug(r.Context(), slug)
@@ -160,37 +191,12 @@ func (h *PublicArchiveHandler) GetBySlug(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if c.Status != mailing.CampaignStatusSent {
-		// Not sent yet (or never will be — canceled/failed): the page
-		// doesn't exist, same as an unknown slug. Deliberately
-		// indistinguishable from the ErrCampaignNotFound branch above —
-		// see the package doc comment. Independent of the ArchiveStatus
-		// switch below (#0318 criterion 2): a non-sent campaign is
-		// unreachable regardless of what its archive_status happens to be.
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-
-	// #0318: switch on ArchiveStatus explicitly, with a CLOSED default.
-	// 'published' is the only value that serves 200; 'withheld' is a
-	// deliberate retraction (410 Gone, not 404 — see this file's "withheld
-	// must be 410, not 404" note above); anything else -- today only
-	// 'pending', unreachable via any supported path since SetArchiveStatus
-	// (internal/mailing/campaign_archive.go) refuses to write it, but also
-	// any value a future migration or manual fix might introduce -- 404s.
-	// This is deliberately the same predicate ListArchived (SQL-level
-	// `WHERE archive_status = 'published'`) and the SEO sitemap source
-	// (cmd/opencircuit/campaign_archive_seo_source.go's toSEOArchiveEntry,
-	// `Published: c.ArchiveStatus == mailing.ArchiveStatusPublished`) already
-	// use, so this handler, ListArchived, and the sitemap agree on what
-	// "public" means (#0318 criterion 3) rather than each having its own
-	// half of the rule.
-	switch c.ArchiveStatus {
-	case mailing.ArchiveStatusPublished:
+	switch archivePageStatus(c) {
+	case http.StatusOK:
 		// fall through to render below.
-	case mailing.ArchiveStatusWithheld:
+	case http.StatusGone:
 		// A deliberate retraction, not "never existed" — 410 Gone, per
-		// this issue's "withheld must be 410, not 404" note.
+		// #0123's "withheld must be 410, not 404" note.
 		writeError(w, http.StatusGone, "this campaign is no longer available")
 		return
 	default:
@@ -211,4 +217,42 @@ func (h *PublicArchiveHandler) GetBySlug(w http.ResponseWriter, r *http.Request)
 		BodyHTML:   bodyHTML,
 		ArchivedAt: formatTimePtr(c.ArchivedAt),
 	})
+}
+
+// PageStatus is the HTML route's twin of GetBySlug's status decision
+// (#0522): GET /archive/{slug} serves the SPA shell at the SAME status the
+// JSON API answers with, so a search engine sees 410 Gone for a withheld
+// campaign and 404 for an unknown, draft, or unsent slug instead of a
+// soft-404 200 with the SPA shell. The body is still the shell either way
+// — the SPA's own archive-detail view fetches the JSON API, shows its
+// withheld/not-found state, and keeps working.
+//
+// 500 for a store error mirrors GetBySlug: the caller can't know whether
+// the slug exists, and guessing "not found" would tell a crawler to drop a
+// URL that may simply be having a bad minute. The shell body rides the
+// same status.
+func (h *PublicArchiveHandler) PageStatus(ctx context.Context, slug string) int {
+	c, err := h.store.GetBySlug(ctx, slug)
+	switch {
+	case err == nil:
+	case errors.Is(err, mailing.ErrCampaignNotFound):
+		return http.StatusNotFound
+	default:
+		return http.StatusInternalServerError
+	}
+	return archivePageStatus(c)
+}
+
+// SPAStatus satisfies the SPAHandler deep-link resolver seam (static.go,
+// #0522): /archive/{slug} paths get the status archivePageStatus maps the
+// campaign to, everything else reports not-mine. The trailing-slash
+// normalization is ArchiveDetailSlug's own, the same one isKnownRoute and
+// SPAHandler apply, so the two never disagree about which paths this
+// resolver claims.
+func (h *PublicArchiveHandler) SPAStatus(r *http.Request) (int, bool) {
+	slug, ok := ArchiveDetailSlug(r.URL.Path)
+	if !ok {
+		return 0, false
+	}
+	return h.PageStatus(r.Context(), slug), true
 }

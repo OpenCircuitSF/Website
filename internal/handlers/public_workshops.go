@@ -199,7 +199,8 @@ func (h *PublicWorkshopsHandler) List(w http.ResponseWriter, r *http.Request) {
 // indistinguishable to the caller, so a signed-out visitor probing slugs
 // learns nothing about the existence of an unpublished workshop (mirrors
 // ConfirmHandler's and PreferencesHandler's "don't leak existence" posture
-// for token lookups).
+// for token lookups). #0522 lifted the visibility mapping into
+// workshopPageStatus, which PageStatus (the HTML route) shares.
 func (h *PublicWorkshopsHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	wk, err := h.store.GetBySlug(r.Context(), slug)
@@ -212,9 +213,63 @@ func (h *PublicWorkshopsHandler) GetBySlug(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	if wk.Status == workshops.StatusDraft || wk.PublishedAt == nil {
+	if workshopPageStatus(wk) != http.StatusOK {
 		writeError(w, http.StatusNotFound, "workshop not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, h.toPublicView(r.Context(), wk))
+}
+
+// workshopPageStatus maps one workshop row to the HTTP status its public
+// page carries (#0522): GetBySlug's own visibility rule, lifted into one
+// function so the JSON API and the HTML route's PageStatus below cannot
+// disagree — a workshop is public when its status is published or canceled
+// AND it has actually been published at some point (published_at non-NULL,
+// #0171); a draft, a never-published canceled draft, or an unknown slug
+// (the caller maps ErrNotFound to 404 itself) all 404, deliberately
+// indistinguishable.
+func workshopPageStatus(wk workshops.Workshop) int {
+	if wk.Status == workshops.StatusDraft || wk.PublishedAt == nil {
+		return http.StatusNotFound
+	}
+	return http.StatusOK
+}
+
+// PageStatus is the HTML route's twin of GetBySlug's status decision
+// (#0522): GET /workshops/{slug} serves the SPA shell at the SAME status
+// the JSON API answers with — 404 for an unknown, draft, or never-published
+// workshop instead of a soft-404 200. This is #0522 criterion 4's decision,
+// recorded here and in the issue file: the same defect the archive HTML
+// route had (a successful page where the content is gone) applies to
+// workshops, and the fix is the same; a published or canceled-once-published
+// workshop keeps its 200 with #0519's server content. The body is still
+// the shell either way — the SPA's workshop-detail view fetches the JSON
+// API and shows its not-found state.
+//
+// 500 for a store error mirrors GetBySlug: the caller can't know whether
+// the slug exists, and a guessed 404 would invite a crawler to drop a URL
+// that may simply be having a bad minute.
+func (h *PublicWorkshopsHandler) PageStatus(ctx context.Context, slug string) int {
+	wk, err := h.store.GetBySlug(ctx, slug)
+	switch {
+	case err == nil:
+	case errors.Is(err, workshops.ErrNotFound):
+		return http.StatusNotFound
+	default:
+		return http.StatusInternalServerError
+	}
+	return workshopPageStatus(wk)
+}
+
+// SPAStatus satisfies the SPAHandler deep-link resolver seam (static.go,
+// #0522): /workshops/{slug} paths get the status workshopPageStatus maps
+// the workshop to, everything else reports not-mine. Trailing-slash
+// normalization is WorkshopDetailSlug's own, the same one isKnownRoute and
+// SPAHandler apply.
+func (h *PublicWorkshopsHandler) SPAStatus(r *http.Request) (int, bool) {
+	slug, ok := WorkshopDetailSlug(r.URL.Path)
+	if !ok {
+		return 0, false
+	}
+	return h.PageStatus(r.Context(), slug), true
 }

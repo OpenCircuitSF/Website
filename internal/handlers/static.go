@@ -23,18 +23,40 @@ import (
 //     200; anything else gets 404 while still serving the same index.html,
 //     so the client-side router's NotFound view renders instead of a bare
 //     404 or (worse) an indexable soft-404 that returns 200 for every typo.
+//   - (#0522) A dynamic deep link whose live record the SPA's own JSON API
+//     would 404 or 410 gets that SAME status from the deep-link resolvers
+//     below, still with the shell as the body: an unknown/draft/unsent
+//     slug is a real 404 and a withheld archive campaign a real 410, not a
+//     200 a search engine reads as a successful page. Resolvers are
+//     optional: with none wired (STORAGE=json dev mode, existing tests),
+//     the routes table alone decides, exactly as before this issue.
 type SPAHandler struct {
 	dist    fs.FS
 	fileSrv http.Handler
+	// deepLinks, in registration order, each get first claim on a request's
+	// status before the known-route table decides. All non-nil (mountAndServe
+	// filters nil handlers out at the call site).
+	deepLinks []SPADeepLinkStatus
+}
+
+// SPADeepLinkStatus lets a live-data owner decide the HTTP status for an SPA
+// deep link whose JSON API twin already answers 404/410 (#0522). Implemented
+// by PublicArchiveHandler and PublicWorkshopsHandler over their own stores;
+// ok=false means "this path isn't mine", and the next resolver (or the
+// static route table) decides.
+type SPADeepLinkStatus interface {
+	SPAStatus(r *http.Request) (int, bool)
 }
 
 // NewSPAHandler constructs an SPAHandler over the embedded dist FS. The provided
 // fs.FS must be rooted at the build output so index.html and assets/* live at
-// its root (see web.DistFS).
-func NewSPAHandler(dist fs.FS) *SPAHandler {
+// its root (see web.DistFS). The resolvers are optional (#0522); each must be
+// non-nil.
+func NewSPAHandler(dist fs.FS, deepLinks ...SPADeepLinkStatus) *SPAHandler {
 	return &SPAHandler{
-		dist:    dist,
-		fileSrv: http.FileServerFS(dist),
+		dist:      dist,
+		fileSrv:   http.FileServerFS(dist),
+		deepLinks: deepLinks,
 	}
 }
 
@@ -62,6 +84,18 @@ func (h *SPAHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if path.Ext(name) != "" {
 		http.NotFound(w, r)
 		return
+	}
+
+	// #0522: a deep link into live data gets its status from the owner of
+	// that data, not the route table — the JSON API's own 404/410 decision
+	// is what a crawler should see on the HTML route too. The body stays
+	// the shell in every case, so the SPA's own not-found/withheld views
+	// still render on a hard refresh.
+	for _, resolver := range h.deepLinks {
+		if status, ok := resolver.SPAStatus(r); ok {
+			h.serveIndex(w, status)
+			return
+		}
 	}
 
 	status := http.StatusOK

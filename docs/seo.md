@@ -48,7 +48,11 @@ body was produced by `encoding/json.Marshal`, which already HTML-escapes
 `Site.Middleware` (`internal/seo/site.go`) wraps `handlers.NewSPAHandler`'s
 catch-all: it buffers the SPA handler's response, and if the response was
 HTML, replaces the body with `Renderer.Render(path)`'s output at whatever
-status the SPA handler chose (200 for a known route, 404 for a miss —
+status the SPA handler chose (200 for a known route, 404 for a miss, and —
+since `#0522` — 410 for a withheld archive campaign and 404 for an
+unknown/draft/unsent slug on both `/archive/{slug}` and `/workshops/{slug}`,
+decided by the handlers' own `SPAStatus` deep-link resolvers so the HTML
+route and the JSON API can never disagree;
 `#0022`'s behavior is preserved structurally, not by convention, since
 `Middleware` mirrors the upstream status rather than recomputing it). A
 non-HTML response — a hashed JS/CSS asset, a PNG favicon, a missing-asset
@@ -336,13 +340,15 @@ Francisco) shows `Sep 12, 2026` on both `/archive` and `/archive/{slug}` — the
 fallback and the mounted SPA agree on the same calendar day rather than the
 fallback showing the UTC date and the SPA changing it on mount.
 
-**Scope: one slice.** This covers acceptance criteria 1–7 and 9 of `#0519`
+**Scope: one slice.** This covered acceptance criteria 1–7 and 9 of `#0519`
 — one `<h1>` per public route, full archive/workshop text, plain nav links,
-nothing on private routes, escaping, caching, invalidation. Full static copy
-for `/about`/`/privacy`, removing the `Loading…` flash for public routes,
-410/404 status codes for a withheld/unknown archive or workshop page,
-Home's "Next up" list, and workshop `signup_url` in raw HTML are deliberate
-follow-ups, filed separately rather than folded into this slice.
+nothing on private routes, escaping, caching, invalidation. The follow-ups
+it deliberately cut have since landed: full static copy for
+`/about`/`/privacy` from one shared source (`#0520`), the `Loading…` flash
+removed for public routes (`#0521`), 410/404 status codes for a
+withheld/unknown archive and workshop page (`#0522` — including the
+workshops decision, same fix, recorded there), Home's "Next up" list
+(`#0523`), and workshop `signup_url` in raw HTML (`#0524`).
 
 ## Per-workshop Open Graph card (`#0273`)
 
