@@ -21,6 +21,21 @@ import (
 // is still asserted to be a handlers.IsKnownRoute member in sitemap_test.go,
 // so this curated list can never silently drift into advertising a URL the
 // client router would 404.
+//
+// <lastmod> per entry (#0533): only entries whose content is derived from
+// data carry one, and it is derived from that same data -- "/workshops" from
+// the newest published workshop's UpdatedAt, "/archive" from the newest
+// published archive entry's UpdatedAt, and "/" from whichever of those two
+// sources changed most recently (Home renders from both). The purely static
+// copy pages -- "/about", "/privacy", "/subscribe" -- deliberately OMIT
+// <lastmod> (the sitemap protocol allows this): nothing about their content
+// changes on a deploy, so no truthful date exists to state, and Google
+// discounts lastmod for a site where it is not consistently accurate --
+// which would also discount the genuinely accurate workshop and archive
+// dates. When a data source is absent (STORAGE=json) or has no published
+// rows, its derived entries are omitted too. No entry's date is ever taken
+// from the clock: #0533 removed the construction-time stamp that made every
+// deploy claim every static page changed.
 var marketingRoutes = []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/archive"}
 
 // urlset / sitemapURL model the sitemaps.org XML schema (only the two
@@ -41,7 +56,6 @@ type Sitemap struct {
 	baseURL string
 	source  WorkshopSource // nilable, see WorkshopSource doc
 	archive ArchiveSource  // nilable, see ArchiveSource doc (#0123)
-	built   string         // "today" in RFC 3339 date form, used as the static routes' <lastmod>
 
 	ttl time.Duration
 	now func() time.Time
@@ -52,14 +66,16 @@ type Sitemap struct {
 }
 
 // NewSitemap constructs a Sitemap over baseURL (no trailing slash) and an
-// optional WorkshopSource and ArchiveSource (#0123).
+// optional WorkshopSource and ArchiveSource (#0123). Nothing here reads the
+// clock (#0533): the sitemap's dates are derived entirely from source data,
+// so two instances built at different times render byte-identical output
+// when no data changed.
 func NewSitemap(baseURL string, source WorkshopSource, archive ArchiveSource) *Sitemap {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	return &Sitemap{
 		baseURL: baseURL,
 		source:  source,
 		archive: archive,
-		built:   time.Now().UTC().Format("2006-01-02"),
 		ttl:     defaultCacheTTL,
 		now:     time.Now,
 	}
@@ -74,46 +90,80 @@ func NewSitemap(baseURL string, source WorkshopSource, archive ArchiveSource) *S
 // construction (marketingRoutes is a curated subset asserted in
 // sitemap_test.go; workshop/archive detail paths always match their
 // dynamic pattern by construction of the URL itself).
+//
+// The static entries' <lastmod> values are data-derived (#0533, see
+// marketingRoutes' doc comment): both source lists are fetched first, the
+// newest published UpdatedAt of each becomes "/workshops" and "/archive"'s
+// lastmod, and the later of the two becomes "/"'s. The three purely static
+// copy pages carry no lastmod at all. A source error aborts the whole
+// build, as before -- a half-populated sitemap must never be served.
 func (s *Sitemap) Build() ([]byte, error) {
 	set := urlset{Xmlns: "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
-	for _, path := range marketingRoutes {
-		set.URLs = append(set.URLs, sitemapURL{
-			Loc:     s.baseURL + path,
-			LastMod: s.built,
-		})
-	}
-
+	var publishedWorkshops []Workshop
 	if s.source != nil {
-		workshops, err := s.source.Workshops()
+		ws, err := s.source.Workshops()
 		if err != nil {
 			return nil, err
 		}
-		for _, w := range workshops {
+		for _, w := range ws {
 			if w.Status != WorkshopPublished {
 				continue // draft, unpublished, canceled -- excluded
 			}
-			set.URLs = append(set.URLs, sitemapURL{
-				Loc:     s.baseURL + "/workshops/" + w.Slug,
-				LastMod: w.UpdatedAt,
-			})
+			publishedWorkshops = append(publishedWorkshops, w)
 		}
 	}
 
+	var publishedEntries []ArchiveEntry
 	if s.archive != nil {
-		entries, err := s.archive.ArchiveEntries()
+		es, err := s.archive.ArchiveEntries()
 		if err != nil {
 			return nil, err
 		}
-		for _, e := range entries {
+		for _, e := range es {
 			if !e.Published {
 				continue // pending (never sent), withheld -- excluded
 			}
-			set.URLs = append(set.URLs, sitemapURL{
-				Loc:     s.baseURL + "/archive/" + e.Slug,
-				LastMod: e.UpdatedAt,
-			})
+			publishedEntries = append(publishedEntries, e)
 		}
+	}
+
+	workshopsMax := ""
+	for _, w := range publishedWorkshops {
+		workshopsMax = laterRFC3339Date(workshopsMax, w.UpdatedAt)
+	}
+	archiveMax := ""
+	for _, e := range publishedEntries {
+		archiveMax = laterRFC3339Date(archiveMax, e.UpdatedAt)
+	}
+
+	staticLastMod := map[string]string{
+		"/":          laterRFC3339Date(workshopsMax, archiveMax),
+		"/about":     "",
+		"/privacy":   "",
+		"/workshops": workshopsMax,
+		"/subscribe": "",
+		"/archive":   archiveMax,
+	}
+	for _, path := range marketingRoutes {
+		set.URLs = append(set.URLs, sitemapURL{
+			Loc:     s.baseURL + path,
+			LastMod: staticLastMod[path],
+		})
+	}
+
+	for _, w := range publishedWorkshops {
+		set.URLs = append(set.URLs, sitemapURL{
+			Loc:     s.baseURL + "/workshops/" + w.Slug,
+			LastMod: w.UpdatedAt,
+		})
+	}
+
+	for _, e := range publishedEntries {
+		set.URLs = append(set.URLs, sitemapURL{
+			Loc:     s.baseURL + "/archive/" + e.Slug,
+			LastMod: e.UpdatedAt,
+		})
 	}
 
 	body, err := xml.MarshalIndent(set, "", "  ")
@@ -121,6 +171,48 @@ func (s *Sitemap) Build() ([]byte, error) {
 		return nil, err
 	}
 	return append([]byte(xml.Header), body...), nil
+}
+
+// laterRFC3339Date returns the later of two RFC 3339 dates (or full
+// timestamps), treating "" as "no date". Values that fail to parse as
+// either form lose to ones that parse; two unparseable non-empty values
+// fall back to lexicographic comparison so the result is at least
+// deterministic. Workshop and archive UpdatedAt values are produced by this
+// repo's own adapters as bare YYYY-MM-DD dates, but the sources' doc
+// comments only promise "RFC 3339", so both forms are accepted.
+func laterRFC3339Date(a, b string) string {
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	at, aerr := parseSitemapDate(a)
+	bt, berr := parseSitemapDate(b)
+	switch {
+	case aerr != nil && berr != nil:
+		if b > a {
+			return b
+		}
+		return a
+	case aerr != nil:
+		return b
+	case berr != nil:
+		return a
+	case bt.After(at):
+		return b
+	default:
+		return a
+	}
+}
+
+// parseSitemapDate parses the two date shapes this package's sources
+// produce: a full RFC 3339 timestamp or a bare YYYY-MM-DD date.
+func parseSitemapDate(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	return time.Parse("2006-01-02", s)
 }
 
 // Render returns the cached sitemap.xml bytes, rebuilding when the TTL has

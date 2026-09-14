@@ -1,6 +1,7 @@
 package seo
 
 import (
+	"bytes"
 	"encoding/xml"
 	"strings"
 	"testing"
@@ -22,11 +23,15 @@ func TestSitemap_MarketingRoutesAreKnownRoutes(t *testing.T) {
 	}
 }
 
-// TestSitemap_ContainsStaticRoutesWithLastmod covers #0020's first
-// criterion: valid XML with <loc> and <lastmod> for each static marketing
-// route present in the want map below -- /, /about, /privacy (#0070),
-// /workshops, /subscribe, and /archive (#0123).
-func TestSitemap_ContainsStaticRoutesWithLastmod(t *testing.T) {
+// TestSitemap_StaticRoutesPresentWithLastmodPolicy covers #0020's first
+// criterion (all six static marketing routes present as <loc>) together
+// with #0533's lastmod policy: the three purely static copy pages
+// (/about, /privacy, /subscribe) deliberately OMIT <lastmod> — no truthful
+// date exists for copy that never changes, and Google discounts lastmod for
+// a site where it is not consistently accurate. The three data-derived
+// pages (/, /workshops, /archive) also omit it here because their sources
+// are nil, so they have no data to derive a date from.
+func TestSitemap_StaticRoutesPresentWithLastmodPolicy(t *testing.T) {
 	s := NewSitemap(testBaseURL, nil, nil)
 	body, err := s.Build()
 	if err != nil {
@@ -38,26 +43,117 @@ func TestSitemap_ContainsStaticRoutesWithLastmod(t *testing.T) {
 		t.Fatalf("sitemap is not valid XML: %v\nbody:\n%s", err, body)
 	}
 
-	want := map[string]bool{
-		testBaseURL + "/":          false,
-		testBaseURL + "/about":     false,
-		testBaseURL + "/privacy":   false,
-		testBaseURL + "/workshops": false,
-		testBaseURL + "/subscribe": false,
-		testBaseURL + "/archive":   false,
-	}
+	locs := map[string]bool{}
+	lastmods := map[string]string{}
 	for _, u := range parsed.URLs {
-		if _, ok := want[u.Loc]; ok {
-			want[u.Loc] = true
-			if u.LastMod == "" {
-				t.Errorf("%s: missing <lastmod>", u.Loc)
-			}
-		}
+		locs[u.Loc] = true
+		lastmods[u.Loc] = u.LastMod
 	}
-	for loc, found := range want {
-		if !found {
+	for _, path := range marketingRoutes {
+		loc := testBaseURL + path
+		if !locs[loc] {
 			t.Errorf("sitemap missing <loc>%s</loc>", loc)
 		}
+	}
+	for _, path := range []string{"/about", "/privacy", "/subscribe"} {
+		if got := lastmods[testBaseURL+path]; got != "" {
+			t.Errorf("%s: <lastmod> = %q, want it omitted (#0533: static copy has no truthful date to state)", path, got)
+		}
+	}
+	for _, path := range []string{"/", "/workshops", "/archive"} {
+		if got := lastmods[testBaseURL+path]; got != "" {
+			t.Errorf("%s: <lastmod> = %q, want it omitted when the data source is nil (no data, no date)", path, got)
+		}
+	}
+}
+
+// TestSitemap_DataDerivedLastmodForIndexPages is #0533's criterion 2:
+// /workshops' lastmod is the newest PUBLISHED workshop's UpdatedAt,
+// /archive's is the newest published entry's, and /'s is whichever source
+// changed most recently. A draft workshop with a later date must not leak
+// into any of the three, and the entries' own <lastmod> values are
+// unchanged (criterion 5).
+func TestSitemap_DataDerivedLastmodForIndexPages(t *testing.T) {
+	source := fakeWorkshopSource{
+		"older":  {Slug: "older", Status: WorkshopPublished, Published: true, UpdatedAt: "2026-07-01"},
+		"newest": {Slug: "newest", Status: WorkshopPublished, Published: true, UpdatedAt: "2026-08-15"},
+		"draft":  {Slug: "draft", Status: WorkshopDraft, UpdatedAt: "2026-12-31"},
+	}
+	archive := fakeArchiveSource{
+		"07-2026": {Slug: "07-2026", Subject: "July", UpdatedAt: "2026-08-01", Published: true},
+		"09-2026": {Slug: "09-2026", Subject: "September", UpdatedAt: "2026-09-05", Published: true},
+	}
+	s := NewSitemap(testBaseURL, source, archive)
+	body, err := s.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	var parsed urlset
+	if err := xml.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("sitemap is not valid XML: %v\nbody:\n%s", err, body)
+	}
+	lastmods := map[string]string{}
+	for _, u := range parsed.URLs {
+		lastmods[u.Loc] = u.LastMod
+	}
+
+	want := map[string]string{
+		testBaseURL + "/":                 "2026-09-05",
+		testBaseURL + "/workshops":        "2026-08-15",
+		testBaseURL + "/archive":          "2026-09-05",
+		testBaseURL + "/workshops/newest": "2026-08-15",
+		testBaseURL + "/workshops/older":  "2026-07-01",
+		testBaseURL + "/archive/09-2026":  "2026-09-05",
+		testBaseURL + "/archive/07-2026":  "2026-08-01",
+		testBaseURL + "/about":            "",
+		testBaseURL + "/privacy":          "",
+		testBaseURL + "/subscribe":        "",
+	}
+	for loc, wantLastMod := range want {
+		if got := lastmods[loc]; got != wantLastMod {
+			t.Errorf("%s: <lastmod> = %q, want %q", loc, got, wantLastMod)
+		}
+	}
+	if _, ok := lastmods[testBaseURL+"/workshops/draft"]; ok {
+		t.Error("draft workshop appeared in the sitemap")
+	}
+}
+
+// TestSitemap_ByteIdenticalAcrossConstructions is #0533's criterion 4:
+// restarting the service (constructing a fresh Site over unchanged data)
+// must leave the sitemap byte-identical. Two Sites are constructed here
+// with a real pause between them -- before #0533 each stamped the static
+// routes with its own construction date, so this comparison is exactly the
+// check that would fail against that regression. The other half of the
+// regression shape (a construction-date stamp on the static copy pages) is
+// caught immediately by TestSitemap_StaticRoutesPresentWithLastmodPolicy,
+// which requires /about, /privacy, and /subscribe to carry NO lastmod at
+// all.
+func TestSitemap_ByteIdenticalAcrossConstructions(t *testing.T) {
+	source := fakeWorkshopSource{
+		"solder-101": {Slug: "solder-101", Status: WorkshopPublished, Published: true, UpdatedAt: "2026-08-01"},
+	}
+	archive := fakeArchiveSource{
+		"09-2026": {Slug: "09-2026", Subject: "September", UpdatedAt: "2026-09-05", Published: true},
+	}
+
+	first := NewSite([]byte(testTemplate), testBaseURL, source, archive)
+	firstBody, err := first.sitemap.Render()
+	if err != nil {
+		t.Fatalf("first Render: %v", err)
+	}
+
+	time.Sleep(1100 * time.Millisecond) // construct the second Site at a genuinely different time
+
+	second := NewSite([]byte(testTemplate), testBaseURL, source, archive)
+	secondBody, err := second.sitemap.Render()
+	if err != nil {
+		t.Fatalf("second Render: %v", err)
+	}
+
+	if !bytes.Equal(firstBody, secondBody) {
+		t.Fatalf("two Sites built at different times produced different sitemap bytes:\nfirst:\n%s\nsecond:\n%s", firstBody, secondBody)
 	}
 }
 

@@ -150,7 +150,13 @@ auth/account/token routes that must never be indexed), every workshop with
 `Status == WorkshopPublished` (draft, unpublished, **and canceled** are all
 excluded — canceled workshops are absent from the sitemap on purpose, see
 below), and every archive entry with `Published == true` (excludes pending
-and withheld, per PRD §6.8). It is cached with a 60-second TTL and rebuilt
+and withheld, per PRD §6.8). `<lastmod>` is data-derived (`#0533`):
+`/workshops` from the newest published workshop's `UpdatedAt`, `/archive`
+from the newest published entry's, `/` from whichever source changed most
+recently — and the static copy pages (`/about`, `/privacy`, `/subscribe`)
+omit it entirely, since no truthful date exists for copy that never
+changes. No date comes from the clock, so a restart never changes the
+sitemap when no data changed. It is cached with a 60-second TTL and rebuilt
 on invalidation.
 
 `GET /robots.txt` (`internal/seo/robots.go`) disallows `/admin`,
