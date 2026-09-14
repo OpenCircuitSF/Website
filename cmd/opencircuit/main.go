@@ -503,6 +503,15 @@ func servePostgres(cfg *config.Config) error {
 		subscribersStore, interestsStore, campaignsStore, campaignStatsStore, store, outbox.NewStore(pool), cfg.SESSandbox,
 	)
 
+	// Admin build info (#0516): GET /admin/version — the same version and
+	// commitHash variables the --version output reads (criterion 2), plus
+	// the schema_migrations stamp via db.SchemaReader (criterion 6's
+	// decided "yes": "which code" and "which schema" are two halves of the
+	// same deploy question). Registered unconditionally through adminRoutes,
+	// so the wiring test's authorization proof covers it like every other
+	// admin route.
+	adminVersionH := handlers.NewAdminVersionHandler(version, commitHash, &db.SchemaReader{Pool: pool})
+
 	// Admin campaign preview and test send (#0046, PRD §5.2/§6.6): POST
 	// .../preview (render without sending) and POST .../test (a real send
 	// to the requesting admin's own address, through a dedicated synthetic
@@ -619,7 +628,7 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAdminAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -1137,6 +1146,14 @@ func serveDevMode(cfg *config.Config) error {
 	var adminCrtCommandsH *handlers.AdminCrtCommandsHandler
 	var publicCrtSessionH *handlers.PublicCrtSessionHandler
 
+	// Admin build info (#0516) needs no table backing — version and
+	// commitHash are compiled-in strings — so unlike the devstore-gapped
+	// handlers above it is constructed in dev mode too, with a nil schema
+	// seam: STORAGE=json has no schema_migrations, and the handler omits
+	// the schema fields rather than reporting a fabricated value (see
+	// internal/handlers/admin_version.go's package doc comment).
+	adminVersionH := handlers.NewAdminVersionHandler(version, commitHash, nil)
+
 	// Public interests (#0029), confirm (#0030), preferences (#0031), and
 	// one-click unsubscribe (#0034) all have the same devstore gap as
 	// subscribeH/adminInterestsH above -- internal/devstore has no
@@ -1176,7 +1193,7 @@ func serveDevMode(cfg *config.Config) error {
 	var outboxWorker *mailing.OutboxWorker
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -1227,6 +1244,7 @@ func adminRoutes(
 	adminWorkshopsH *handlers.AdminWorkshopsHandler,
 	adminMediaH *handlers.AdminMediaHandler,
 	adminDashboardH *handlers.AdminDashboardHandler,
+	adminVersionH *handlers.AdminVersionHandler,
 	adminCrtCommandsH *handlers.AdminCrtCommandsHandler,
 ) []adminRoute {
 	routes := []adminRoute{
@@ -1237,6 +1255,13 @@ func adminRoutes(
 		{http.MethodPost, "/admin/users/{id}/deactivate", http.HandlerFunc(adminUsersH.Deactivate)},
 		{http.MethodPost, "/admin/users/{id}/reactivate", http.HandlerFunc(adminUsersH.Reactivate)},
 		{http.MethodGet, "/admin/audit", http.HandlerFunc(adminAuditH.List)},
+		// #0516: the running binary's version + embedded commit hash, and
+		// (Postgres mode) the schema_migrations stamp. Needs no table
+		// backing, so it sits in the unconditional block — never nil — and
+		// the loop below puts it behind requireAdmin like every other route
+		// here. Criterion 5 (#0516): deliberately an admin-scoped route, NOT
+		// a widening of the unauthenticated /health.
+		{http.MethodGet, "/admin/version", http.HandlerFunc(adminVersionH.Version)},
 	}
 	if adminInterestsH != nil {
 		routes = append(routes,
@@ -1459,6 +1484,7 @@ func mountAndServe(
 	adminWorkshopsH *handlers.AdminWorkshopsHandler,
 	adminMediaH *handlers.AdminMediaHandler,
 	adminDashboardH *handlers.AdminDashboardHandler,
+	adminVersionH *handlers.AdminVersionHandler,
 	adminCrtCommandsH *handlers.AdminCrtCommandsHandler,
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
@@ -1540,7 +1566,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 

@@ -179,7 +179,7 @@ func sesWiringStartServer(t *testing.T, pool *pgxpool.Pool, sesNotifyH *handlers
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
+			nil, nil, nil, nil, nil, nil, nil, /* authH..adminInterestsH: not exercised by this test */
 			nil, /* adminSubscribersH: not exercised by this test */
 			nil, /* adminImportsH: not exercised */
 			nil, /* adminPendingH: not exercised by this test */

@@ -14,7 +14,7 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getOverview, ApiError } from '../../lib/api';
+  import { getOverview, getAdminVersion, ApiError } from '../../lib/api';
   import { subscribeEvent } from '../../lib/events';
   import {
     CAMPAIGN_PROGRESS_EVENT,
@@ -31,8 +31,10 @@
     buildWarnings,
     hasAlertWarning,
     statusWarningsAnnouncement,
+    formatBuildLine,
+    schemaDirtyNote,
   } from '../../lib/dashboard';
-  import type { DashboardOverview, DashboardSubscriberCounts } from '../../lib/types';
+  import type { AdminBuildInfo, DashboardOverview, DashboardSubscriberCounts } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
 
@@ -46,6 +48,22 @@
   let overview = $state<DashboardOverview | null>(null);
   let loading = $state(true);
   let loadError = $state<string | null>(null);
+
+  // #0516: the running build's identity, fetched separately from the
+  // overview so a /admin/version failure can't take the whole screen down —
+  // the line then reads "unavailable" instead of inventing a value.
+  let build = $state<AdminBuildInfo | null>(null);
+  let buildError = $state(false);
+
+  async function loadBuild(): Promise<void> {
+    buildError = false;
+    try {
+      build = await getAdminVersion();
+    } catch {
+      build = null;
+      buildError = true;
+    }
+  }
 
   let warnings = $derived(overview ? buildWarnings(overview.warnings) : []);
   let anyAlert = $derived(hasAlertWarning(warnings));
@@ -86,6 +104,7 @@
 
   onMount(() => {
     void load();
+    void loadBuild();
     // The database, not this stream, is the source of truth (CLAUDE.md) —
     // re-fetching the whole overview on every (re)connect, including the
     // first, is what lets this screen notice a send that started, finished,
@@ -256,6 +275,26 @@
       </div>
     {/if}
   {/if}
+
+  <!-- #0516: the running build's version and commit hash, plus the schema
+       stamp when the server has one to give. Values render exactly as the
+       server reported them — commit "unknown" (built without -ldflags)
+       shows as "unknown", never blanked — and the full sha sits in a
+       native <details> as selectable text, so it is copyable without any
+       clipboard wiring. Supplementary by design: it renders after the
+       overview chain above, so an overview fetch failure doesn't take it
+       down, and its own failure degrades to one honest line. -->
+  <p class="build-info text-muted">
+    {#if build}
+      {formatBuildLine(build)}{schemaDirtyNote(build)}
+      <details class="build-full">
+        <summary>Full commit hash</summary>
+        <code>{build.commit_hash}</code>
+      </details>
+    {:else if buildError}
+      Build info unavailable.
+    {/if}
+  </p>
 </Panel>
 
 <style>
@@ -354,5 +393,18 @@
     text-decoration: underline;
     cursor: pointer;
     font: inherit;
+  }
+
+  .build-info {
+    margin-top: var(--space-3);
+    font-size: var(--text-sm, 0.875rem);
+  }
+
+  .build-full {
+    margin-top: var(--space-1, 0.25rem);
+  }
+
+  .build-full summary {
+    cursor: pointer;
   }
 </style>

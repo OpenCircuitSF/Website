@@ -32,6 +32,7 @@ import type {
   AdminWorkshopsListResponse,
   WorkshopPreviewResponse,
   DashboardOverview,
+  AdminBuildInfo,
   PendingListResponse,
   ResendConfirmationResponse,
   ResendInvitationResponse,
@@ -1003,6 +1004,12 @@ export function getCampaignStats(id: number): Promise<CampaignStatsResponse> {
 /** GET /admin/overview (#0061): the /admin landing screen's single data call. */
 export function getOverview(): Promise<DashboardOverview> {
   return apiGet<DashboardOverview>('/admin/overview');
+}
+
+/** GET /admin/version (#0516): the running build's version, commit hash, and
+ * schema stamp, shown on the admin overview. */
+export function getAdminVersion(): Promise<AdminBuildInfo> {
+  return apiGet<AdminBuildInfo>('/admin/version');
 }
 
 // ── Public mailing-list journey: signup, confirm, preferences (#0029-#0031) ──

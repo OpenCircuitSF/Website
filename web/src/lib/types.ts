@@ -645,6 +645,21 @@ export interface PreferencesResponse {
 }
 
 /**
+ * GET /admin/version (#0516): the running binary's build identity — the same
+ * version/commitHash variables cmd/opencircuit's --version output reads —
+ * plus the database's schema_migrations stamp. schema_version/schema_dirty
+ * are absent under STORAGE=json (no schema_migrations there); commit_hash
+ * "unknown" is the honest ldflags-less build, passed through verbatim.
+ */
+export interface AdminBuildInfo {
+  version: string;
+  commit_hash: string;
+  commit_hash_short: string;
+  schema_version?: number;
+  schema_dirty?: boolean;
+}
+
+/**
  * GET /admin/overview (#0061): the /admin landing screen's single data call.
  * Matches internal/handlers/admin_dashboard.go's dashboardOverviewResponse
  * exactly — see that file's package doc comment for why every figure here

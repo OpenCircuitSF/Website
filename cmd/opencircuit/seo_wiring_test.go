@@ -166,6 +166,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 			adminWorkshopsH,
 			nil,           /* adminMediaH: not exercised by this test */
 			nil,           /* adminDashboardH: not exercised by this test */
+			nil,           /* adminVersionH: not exercised by this test */
 			nil,           /* adminCrtCommandsH: not exercised by this test */
 			nil, nil, nil, /* eventsH, meH, subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
@@ -447,6 +448,7 @@ func TestMountAndServe_CampaignArchiveMutationInvalidatesSharedSEOSite(t *testin
 			nil,           /* adminWorkshopsH: not exercised by this test */
 			nil,           /* adminMediaH: not exercised by this test */
 			nil,           /* adminDashboardH: not exercised by this test */
+			nil,           /* adminVersionH: not exercised by this test */
 			nil,           /* adminCrtCommandsH: not exercised by this test */
 			nil, nil, nil, /* eventsH, meH, subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */

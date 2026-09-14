@@ -4,7 +4,7 @@
 // threshold).
 
 import { describe, it, expect } from 'vitest';
-import type { DashboardGrowth, DashboardWarnings } from './types';
+import type { AdminBuildInfo, DashboardGrowth, DashboardWarnings } from './types';
 import {
   formatNetGrowth,
   formatGrowthDetail,
@@ -12,6 +12,8 @@ import {
   buildWarnings,
   hasAlertWarning,
   statusWarningsAnnouncement,
+  formatBuildLine,
+  schemaDirtyNote,
 } from './dashboard';
 
 function growth(overrides: Partial<DashboardGrowth> = {}): DashboardGrowth {
@@ -211,5 +213,46 @@ describe('statusWarningsAnnouncement (#0279)', () => {
     const after = statusWarningsAnnouncement(buildWarnings(warnings({ ses_sandbox_active: false })));
     expect(before).not.toBe(after);
     expect(after).toBe('');
+  });
+});
+
+describe('formatBuildLine (#0516)', () => {
+  function build(overrides: Partial<AdminBuildInfo> = {}): AdminBuildInfo {
+    return {
+      version: '0.1.2',
+      commit_hash: '8b37cc925b73a6229ba1b5d6f238abcd8629befb',
+      commit_hash_short: '8b37cc9',
+      ...overrides,
+    };
+  }
+
+  it('joins version, short commit, and schema stamp', () => {
+    expect(formatBuildLine(build({ schema_version: 30 }))).toBe(
+      'Build 0.1.2 · commit 8b37cc9 · schema 30',
+    );
+  });
+
+  it('drops the schema part when the server omitted it (STORAGE=json), never showing a fabricated zero', () => {
+    expect(formatBuildLine(build())).toBe('Build 0.1.2 · commit 8b37cc9');
+    expect(formatBuildLine(build())).not.toContain('schema');
+  });
+
+  it('passes an ldflags-less build through verbatim instead of blanking it (#0516 criterion 4)', () => {
+    expect(formatBuildLine(build({ commit_hash: 'unknown', commit_hash_short: 'unknown' }))).toBe(
+      'Build 0.1.2 · commit unknown',
+    );
+  });
+});
+
+describe('schemaDirtyNote (#0516)', () => {
+  it('annotates a dirty schema_migrations stamp', () => {
+    expect(schemaDirtyNote({ version: '0.1.2', commit_hash: 'x', commit_hash_short: 'x', schema_dirty: true })).toBe(
+      ' (migration incomplete)',
+    );
+  });
+
+  it('is empty for a clean stamp and when the server omitted the schema fields', () => {
+    expect(schemaDirtyNote({ version: '0.1.2', commit_hash: 'x', commit_hash_short: 'x', schema_version: 30 })).toBe('');
+    expect(schemaDirtyNote({ version: '0.1.2', commit_hash: 'x', commit_hash_short: 'x' })).toBe('');
   });
 });

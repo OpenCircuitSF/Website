@@ -204,6 +204,11 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	adminDashboardH := handlers.NewAdminDashboardHandler(
 		subscribersStore, interestsStore, campaignsStore, campaignStatsStore, store, outbox.NewStore(pool), cfg.SESSandbox,
 	)
+	// #0516: exercised the same way as adminDashboardH above — needs no
+	// store at all (the values are compiled-in strings), so this test's
+	// route-table proof covers GET /admin/version too, including its
+	// session+admin authorization.
+	adminVersionH := handlers.NewAdminVersionHandler("wiring-version", "0123456789abcdef0123456789abcdef01234567", nil)
 	// #0393: exercised the same way as adminDashboardH above — a real store,
 	// so this test's guard proof covers /admin/crt-commands too.
 	crtStore := crt.NewStore(pool)
@@ -229,7 +234,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			nil, nil, nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH: not exercised by this test */
 			nil, /* publicArchiveH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
@@ -392,7 +397,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			return status != http.StatusUnauthorized && status != http.StatusForbidden
 		}},
 	}
-	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminCrtCommandsH) {
+	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH) {
 		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetSubscriber.ID, targetCampaign.ID, targetWorkshop.ID, targetCrtCommand.ID)
 		for _, c := range cases {
 			req, err := http.NewRequest(route.method, baseURL+path, nil)

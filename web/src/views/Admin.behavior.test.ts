@@ -66,6 +66,7 @@ vi.mock('../lib/events', () => ({
 
 vi.mock('../lib/api', () => ({
   getOverview: () => getOverview(),
+  getAdminVersion: vi.fn(() => Promise.reject(new Error('not exercised by this test'))),
   getSettings: () => getSettings(),
   updateSetting: vi.fn(),
   listUsers: () => listUsers(),

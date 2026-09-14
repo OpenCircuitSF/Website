@@ -7,7 +7,7 @@
 // comment) and #0094 restates: nothing in a .svelte file is covered by a
 // test.
 
-import type { DashboardGrowth, DashboardWarnings } from './types';
+import type { AdminBuildInfo, DashboardGrowth, DashboardWarnings } from './types';
 
 /**
  * Signed, comma-grouped net growth, e.g. "+12", "-3", "0". Never a bare
@@ -198,4 +198,32 @@ export function statusWarningsAnnouncement(warnings: DashboardWarning[]): string
     .filter((w) => !w.alert)
     .map((w) => w.message)
     .join(' ');
+}
+
+/**
+ * #0516: the Overview screen's one-line build identity, e.g.
+ * "Build 0.1.2 · commit 8b37cc9 · schema 22". Every value is shown as the
+ * server reported it — commit "unknown" (a binary built without -ldflags)
+ * and its short form pass through verbatim, never blanked or replaced —
+ * and the schema part is dropped entirely when the server omitted it
+ * (STORAGE=json has no schema_migrations to read), rather than shown as a
+ * fabricated zero.
+ */
+export function formatBuildLine(info: AdminBuildInfo): string {
+  const parts = [`Build ${info.version}`, `commit ${info.commit_hash_short}`];
+  if (info.schema_version !== undefined) {
+    parts.push(`schema ${info.schema_version}`);
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * #0516: the schema_dirty annotation for the build line. A dirty stamp
+ * means a migration is mid-failure — the one state where "which schema"
+ * cannot be read as a plain number — so the line says so instead of leaving
+ * a bare figure to imply a clean schema. Empty string when clean, so the
+ * caller can simply not render it.
+ */
+export function schemaDirtyNote(info: AdminBuildInfo): string {
+  return info.schema_dirty ? ' (migration incomplete)' : '';
 }

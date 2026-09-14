@@ -16,6 +16,7 @@ import type { DashboardOverview } from '../../lib/types';
 const getOverview = vi.fn<() => Promise<DashboardOverview>>();
 vi.mock('../../lib/api', () => ({
   getOverview: (...args: unknown[]) => getOverview(...(args as [])),
+  getAdminVersion: vi.fn(() => Promise.reject(new Error('not exercised by this test'))),
   ApiError: class ApiError extends Error {},
 }));
 
