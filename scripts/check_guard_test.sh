@@ -87,8 +87,9 @@
 # SAFETY (CLAUDE.md §8a, §8b)
 #
 #   * The tracked scripts/check.sh is only ever READ. Every mutant is a copy
-#     under a per-run mktemp directory, removed by the EXIT trap; nothing is
-#     written into scripts/. (db_reset_guard_test.sh has to write its copies
+#     under a per-run mktemp directory (inside gitignored .scratch/ since
+#     #0538 — the operator directive #0537 applied to release.sh/deploy.sh),
+#     removed by the EXIT trap; nothing is written into scripts/. (db_reset_guard_test.sh has to write its copies
 #     into scripts/ because db-reset.sh resolves its repo root from its own
 #     location; here that is exactly what we WANT to relocate, since check.sh
 #     scanning and cd-ing to the sandbox is what makes the sandbox work.)
@@ -119,7 +120,11 @@ command -v go     >/dev/null || { echo "error: go not on PATH (needed for the pi
 command -v gofmt  >/dev/null || { echo "error: gofmt not on PATH (check.sh's go mode runs it)" >&2; exit 1; }
 [ -f "$REAL" ] || { echo "error: $REAL not found" >&2; exit 1; }
 
-WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/check_guard_${RUNID}.XXXXXX")" || { echo "error: mktemp failed" >&2; exit 1; }
+# Scratch stays inside the repo, under gitignored .scratch/ (#0538 — the same
+# operator directive #0537 applied to release.sh/deploy.sh). mkdir -p is
+# required: mktemp -d does not create missing parents.
+mkdir -p "$REPO/.scratch" || { echo "error: cannot create $REPO/.scratch" >&2; exit 1; }
+WORKDIR="$(mktemp -d "$REPO/.scratch/check_guard_${RUNID}.XXXXXX")" || { echo "error: mktemp failed" >&2; exit 1; }
 # shellcheck disable=SC2329  # invoked indirectly via `trap cleanup EXIT`
 cleanup() { rm -rf "$WORKDIR"; }
 trap cleanup EXIT

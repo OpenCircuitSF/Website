@@ -152,7 +152,9 @@
 #
 # This script touches no database and changes nothing under version control
 # -- it only reads the three tracked files (never edits them) and writes
-# mutated copies into a private mktemp(1) directory, removed on exit.
+# mutated copies into a private mktemp(1) directory under gitignored
+# .scratch/ (#0538 -- the same operator directive #0537 applied to
+# release.sh/deploy.sh), removed on exit.
 #
 # Usage: scripts/go_file_visit_floor_guard_test.sh
 # Exit 0 = all floors plausible and all zero-mutations correctly rejected.
@@ -161,7 +163,11 @@
 set -uo pipefail  # NOT -e: several checks here are expected to "fail" (that's the assertion)
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORKDIR="$(mktemp -d)"
+# Scratch stays inside the repo, under gitignored .scratch/ (#0538 — the same
+# operator directive #0537 applied to release.sh/deploy.sh). mkdir -p is
+# required: mktemp -d does not create missing parents.
+mkdir -p "$REPO/.scratch"
+WORKDIR="$(mktemp -d "$REPO/.scratch/go_file_visit_floor_guard.XXXXXX")"
 FAILURES=0
 
 # shellcheck disable=SC2329  # invoked indirectly via `trap cleanup EXIT` below

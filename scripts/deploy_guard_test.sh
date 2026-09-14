@@ -69,7 +69,9 @@
 #     this test.
 #   * NEVER touches the tracked working tree of this repository. Every git
 #     repo used below is created fresh under WORKDIR, which is `mktemp -d`
-#     output, not a path inside this checkout.
+#     output inside gitignored .scratch/ since #0538 (the operator directive
+#     #0537 applied to release.sh/deploy.sh) — inside this checkout, but
+#     outside version control and never among the tracked files.
 #   * The mutation proof (Part 5) mutates a COPY of deploy.sh in WORKDIR —
 #     never the tracked scripts/deploy.sh — with a plain, portable `sed`
 #     substitution (no `-i`, which is spelled differently on BSD vs GNU sed;
@@ -88,7 +90,11 @@ REAL_SCRIPT="$REPO/scripts/deploy.sh"
 
 [ -f "$REAL_SCRIPT" ] || { echo "FATAL: $REAL_SCRIPT not found" >&2; exit 2; }
 
-WORKDIR="$(mktemp -d)"
+# Scratch stays inside the repo, under gitignored .scratch/ (#0538 — the same
+# operator directive #0537 applied to release.sh/deploy.sh). mkdir -p is
+# required: mktemp -d does not create missing parents.
+mkdir -p "$REPO/.scratch"
+WORKDIR="$(mktemp -d "$REPO/.scratch/deploy_guard.XXXXXX")"
 FAILURES=0
 
 cleanup() { rm -rf "$WORKDIR"; }
