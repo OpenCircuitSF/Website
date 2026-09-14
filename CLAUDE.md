@@ -317,7 +317,7 @@ delete that row to reconcile the count — the guard requires it.
 | Package | Reaches into |
 |---|---|
 | `internal/handlers` | **the whole repo tree** — `TestNoCommentCitesUnresolvedPathOrSection` walks the repo root for the set of citable paths and reads `CLAUDE.md`'s own `##` section headings; the rest of the citation-guard family, `TestNoDocCommentNamesADifferentDeclarationInSameFile`, and the audit-metadata guard scan `internal/`, `cmd/`, `web/`; plus `migrations/` (`settings_test.go`'s existing seed-value check, and, since `#0459`, `TestMigrationCitationIdentifierMatchesContent` reading every migration file's own SQL text to verify a comment's cited constraint or column identifier actually appears in the migration it names), `testdata/url_validators.json`, and three `web/src/lib/*.ts` parity fixtures |
-| `internal/db` | the repo root — `issues/`, `PRD.md`, `CLAUDE.md`, `migrations/`, `docs/database.md` |
+| `internal/db` | the repo root — `issues/`, `PRD.md`, `CLAUDE.md`, `migrations/`, `docs/database.md` — and, since `#0511`, every tracked file (`git ls-files`) for the identifier-redaction guard |
 | `internal/outbox` | `internal/` and `cmd/` (both the claim-kinds and claim-comment guards) |
 | `internal/subscribers` | all of `internal/` |
 | `internal/seo` | `web/index.html` and `web/dist/index.html` (`#0141`'s placeholder guard); since `#0519`, also the six static `web/src/views/*.svelte` sources (`Home`, `About`, `PrivacyPolicy`, `Subscribe`, `WorkshopsIndex`, `ArchiveIndex`), `web/src/lib/Header.svelte`, `Footer.svelte`, and `branding.ts` — `TestStaticFallbackCopyMatchesSvelteViews` and `TestFallbackNavCoversHeaderNav` (`fallback_copy_guard_test.go`) |
@@ -604,10 +604,18 @@ message sent to a segment) share a word and nothing else.
 
 ## 7. Production facts
 
+**Infrastructure identifiers are redacted from this public repo
+(`#0511`, 2026-09-12).** The AWS account id, the server's hostname and public
+IP, the EC2 instance ids, the Route 53 hosted zone id, and the current IAM
+role name are not published here; the values live in the private repo
+[`brennanMKE/AWS`](https://github.com/brennanMKE/AWS) (checkout
+`~/Developer/AWS`). `ssh photon` below is a local ssh-config alias — a label
+on the operator's machine, not an address — and is fine to keep.
+
 | | |
 |---|---|
 | Canonical host | **`https://www.opencircuitsf.com`** — the apex and plain HTTP both 301 to it |
-| Server | `i-01c45429c78f3adf7`, a **`t4g.small`** (arm64, 2 vCPU) in **`us-east-1`**, hostname `photon.sstools.co`, public IP `98.84.75.184`. Apache 2.4.68 on Amazon Linux 2023, OpenSSL 3.5.7. `ssh photon` gets you there — already configured, verified working. IAM instance role **`opencircuit-web-2026`**. |
+| Server | An EC2 **`t4g.small`** (arm64, 2 vCPU) in **`us-east-1`** — instance id, hostname, public IP and IAM role name in the private AWS repo (redaction note above). Apache 2.4.68 on Amazon Linux 2023, OpenSSL 3.5.7. `ssh photon` gets you there — already configured, verified working. |
 | TLS | Let's Encrypt **wildcard** (`opencircuitsf.com` + `*.opencircuitsf.com`), ECDSA, valid to 2026-11-16, renewed by `certbot-renew.timer` via the **`dns-route53`** authenticator — so renewal never touches a vhost or an ACME webroot |
 | Already on the box | PostgreSQL **15.19** (one cluster, also holding `shortlinks` and `shortlinks_ocsf`) and Apache. Ports `:8081`/`:8083` are two ShortLinks instances, `:8082` is prototypes; this project owns **`:8080`**. |
 | Currently served | **This project, since 2026-08-25.** `opencircuit.service` on `127.0.0.1:8080` behind `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf`. The static placeholder is gone. |
@@ -615,9 +623,9 @@ message sent to a segment) share a word and nothing else.
 | Machine size is real, but less tight than it was | **1846 MB RAM, 30 GB disk (23 GB free)** on the `t4g.small`, shared with Apache, PostgreSQL, and three other Go services — 4.4× the previous box's RAM (see the note below). That extra headroom turns out not to matter for `go build`: **the box has no Go toolchain and, per the user's decision (`#0509`, 2026-09-12), never will** — `docs/deployment.md`'s Redeploy procedure cross-compiles the binary on the operator's workstation (`GOOS=linux GOARCH=arm64 CGO_ENABLED=0`) and ships the finished artifact, so `go build` now runs only off-box. |
 
 > **Production moved to a new instance (`#0508`, 2026-09-12).** The row above
-> describes `i-01c45429c78f3adf7` (`photon.sstools.co`), which is what
-> actually serves `www.opencircuitsf.com` today. The original deploy-day box —
-> `i-0e3bd89e87d1c2364`, `bluesky.sstools.co`, `44.222.209.183`, a `t4g.nano`
+> describes the current deploy host (instance id and address in the private
+> AWS repo), which is what actually serves `www.opencircuitsf.com` today.
+> The original deploy-day box — a `t4g.nano`
 > with 418 MB RAM, IAM role `opencircuit-instance`, reached by the alias that
 > used to be named `ec2` — is powered down as far as this service is
 > concerned; its Apache still answers on that name but 503s this vhost. Any
@@ -1211,7 +1219,7 @@ stall silently on one.
 | # | Item | Blocks | Status |
 |---|---|---|---|
 | 1 | Rename the GitHub repo to `OpenCircuitSF` | `#0001` housekeeping | not done |
-| 2 | SES — **production access is the only piece left** | real sends to non-verified addresses | **all but done 2026-08-25.** Identity `mailing.opencircuitsf.com` verified, DKIM and custom MAIL FROM `SUCCESS`, DMARC `p=none` on the subdomain, config set + SNS + auto-confirmed HTTPS subscription live, account suppression list on, and instance role `opencircuit-instance` attached and **proven by a real delivered send**. Remaining: the account is still sandboxed (`ProductionAccessEnabled: false`) — 200/day, 1/sec, verified recipients only. When granted, flip `SES_SANDBOX=false` and `SEND_WORKER_ENABLED=true`. **Trap worth knowing:** in the sandbox SES authorizes `SendEmail` against the *recipient's* identity ARN too, so the role policy needs `identity/*`, not just the sending domain — and a test send to `success@simulator.amazonses.com` will NOT catch a policy that gets this wrong, because simulator addresses are not identities. See [`docs/aws-iam-setup.md`](docs/aws-iam-setup.md). **That role attachment was on the instance replaced by `#0508` (2026-09-12) — the live box carries `opencircuit-web-2026` instead; re-verify the send permission there rather than assuming it carried over.** |
+| 2 | SES — **production access is the only piece left** | real sends to non-verified addresses | **all but done 2026-08-25.** Identity `mailing.opencircuitsf.com` verified, DKIM and custom MAIL FROM `SUCCESS`, DMARC `p=none` on the subdomain, config set + SNS + auto-confirmed HTTPS subscription live, account suppression list on, and instance role `opencircuit-instance` attached and **proven by a real delivered send**. Remaining: the account is still sandboxed (`ProductionAccessEnabled: false`) — 200/day, 1/sec, verified recipients only. When granted, flip `SES_SANDBOX=false` and `SEND_WORKER_ENABLED=true`. **Trap worth knowing:** in the sandbox SES authorizes `SendEmail` against the *recipient's* identity ARN too, so the role policy needs `identity/*`, not just the sending domain — and a test send to `success@simulator.amazonses.com` will NOT catch a policy that gets this wrong, because simulator addresses are not identities. See [`docs/aws-iam-setup.md`](docs/aws-iam-setup.md). **That role attachment was on the instance replaced by `#0508` (2026-09-12) — the live box carries the current IAM role instead (name in the private AWS repo, §7's redaction note); re-verify the send permission there rather than assuming it carried over.** |
 | 3 | Physical mailing address (PO box) | `#0045` refuses to start a campaign without it — Phase 5 | not started |
 | 4 | Sending identity and **who reads that inbox** | Phase 3 | **both halves settled 2026-08-25.** The public contact address is `contact@opencircuitsf.com` (`#0271`), and it is a real **Google Workspace** mailbox that already exists — which is what `#0075`'s privacy policy needed, since it routes GDPR erasure and data-export requests there. Mail *sends* as `contact@mailing.opencircuitsf.com` with `Reply-To: contact@opencircuitsf.com`: the `From:` has to sit on the verified SES subdomain identity, while replies land in the Workspace inbox. Same local part on purpose, so the two read as one address |
 | 5 | Whether the domain needs human mailboxes — determines apex MX | Phase 0 DNS | **answered by observation 2026-08-25: yes, and it already has them.** The apex MX is `1 smtp.google.com` with a `google._domainkey` record — Google Workspace, predating this project. This is why list mail sends from the `mailing.` subdomain and why **the apex MX must never be touched**: doing so would hijack real human mail, not just hypothetical mail |
@@ -1269,7 +1277,7 @@ the PRD.
 | §7.5 Accessibility | 13 | `sed -n '/^### 7\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §7.6 Performance budget | 12 | `sed -n '/^### 7\.6 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | **§8 HTTP API** | 65 | `sed -n '/^## 8\. /,/^## [0-9]/p' PRD.md` |
-| **§9 Configuration** | 76 | `sed -n '/^## 9\. /,/^## [0-9]/p' PRD.md` |
+| **§9 Configuration** | 79 | `sed -n '/^## 9\. /,/^## [0-9]/p' PRD.md` |
 | **§10 Infrastructure and Deployment** | 119 | `sed -n '/^## 10\. /,/^## [0-9]/p' PRD.md` |
 | §10.1 Topology | 38 | `sed -n '/^### 10\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §10.2 DNS records (Route 53) | 16 | `sed -n '/^### 10\.2 /,/^#\{2,3\} [0-9]/p' PRD.md` |
