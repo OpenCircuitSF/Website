@@ -336,13 +336,13 @@ already on the box per `CLAUDE.md` §7.
   This bullet is only about the `migrate` *tool*, which still has to exist
   on the box by some means; **do not `go install` it on `photon`** — that
   requires exactly the toolchain this box does not have. Measured
-  2026-09-12: `command -v migrate` on `photon` finds nothing, so this has
-  not been done yet by any method (tracked as `#0513`, open). Use the
+  2026-09-12: `command -v migrate` on `photon` found nothing — tracked as
+  `#0513`; it was installed the next day, per the note below. Use the
   project's prebuilt release tarball instead (`arm64`, matching `photon`'s
   architecture):
 
   ```bash
-  MIGRATE_VERSION=v4.18.1   # confirm the current tag at
+  MIGRATE_VERSION=v4.20.1   # confirm the current tag at
                             # https://github.com/golang-migrate/migrate/releases
   curl -fsSL -o migrate.tar.gz \
     "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-arm64.tar.gz"
@@ -359,8 +359,10 @@ already on the box per `CLAUDE.md` §7.
   **Installed and verified 2026-09-13 (`#0513`):** the box now carries the
   official `v4.20.1` `migrate.linux-arm64.tar.gz` binary at
   `/usr/local/bin/migrate` — `migrate -version` reads `4.20.1` and the
-  on-box sha256 matches the release tarball byte-for-byte. Newer than the
-  `v4.18.1` pin above; the version is **pinned and updated manually**.
+  on-box sha256 matches the release tarball byte-for-byte, independently
+  re-verified 2026-09-13 against a fresh download of the official tarball.
+  The `MIGRATE_VERSION` pin in the command above matches; the version is
+  **pinned and updated manually**.
 
 - **`openssl` and `certbot`**:
 
