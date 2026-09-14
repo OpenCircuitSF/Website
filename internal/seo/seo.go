@@ -551,7 +551,10 @@ func (r *Renderer) cardableWorkshop(slug string) (Workshop, bool) {
 // archiveRouteMeta looks up slug in the configured ArchiveSource and builds
 // the RouteMeta for an /archive/{slug} request (#0123, PRD §6.8: "<title>
 // from the campaign subject, meta description from the preheader,
-// canonical URL, OG card").
+// canonical URL, OG card"). The description itself is archiveDescription
+// (description.go, #0528): preheader when set, else the body's first
+// paragraph of rendered prose, else the generic sentence -- the same text
+// the Atom feed's entry summaries use (#0531).
 //
 // ok=false (share the generic fallback bucket, resolve's caller) for: no
 // ArchiveSource configured, an unknown slug, an archive source error, or a
@@ -567,10 +570,7 @@ func (r *Renderer) archiveRouteMeta(slug string) (RouteMeta, bool) {
 		return RouteMeta{}, false
 	}
 
-	description := e.Preheader
-	if description == "" {
-		description = "Read this email from Open Circuit SF."
-	}
+	description := archiveDescription(e)
 	title := e.Subject + " — Open Circuit SF"
 	return RouteMeta{
 		Title:         title,
