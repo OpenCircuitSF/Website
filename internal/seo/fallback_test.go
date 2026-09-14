@@ -9,6 +9,7 @@ package seo
 import (
 	"errors"
 	"html"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -556,5 +557,133 @@ func TestRender_ListSourceErrorRendersHeadingAndSkipsCache(t *testing.T) {
 	second := string(r.Render("/workshops"))
 	if !strings.Contains(second, "Soon Workshop") {
 		t.Errorf("expected the recovered source's list on the next render (the error render must not have been cached): %s", second)
+	}
+}
+
+// ── #0523: the home page's "Next up" list in raw HTML ────────────────────────
+
+// TestHomeNextUpMatchesNextWorkshops is #0523 criterion 1: the home page's
+// raw HTML lists upcoming workshops with plain links to their detail pages,
+// selected and ordered exactly as the SPA's nextWorkshops (ListVisible
+// ordering capped at NEXT_UP_LIMIT). The same fixture shape
+// TestRender_WorkshopsIndexMirrorsListVisible uses, sliced to the home cap.
+func TestHomeNextUpMatchesNextWorkshops(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	source := fakeWorkshopSource{
+		"draft-ws": {Slug: "draft-ws", Title: "Draft Workshop", Status: WorkshopDraft, Published: false},
+		"soon":     {Slug: "soon", Title: "Soon Workshop", Status: WorkshopPublished, Published: true, StartsAt: "2026-09-13T18:00:00Z"},
+		"mid":      {Slug: "mid", Title: "Canceled Upcoming", Status: WorkshopCanceled, Published: true, StartsAt: "2026-09-15T18:00:00Z"},
+		"later":    {Slug: "later", Title: "Later Workshop", Status: WorkshopPublished, Published: true, StartsAt: "2026-09-20T18:00:00Z"},
+		"past":     {Slug: "past", Title: "Past Workshop", Status: WorkshopPublished, Published: true, StartsAt: "2026-09-01T18:00:00Z"},
+	}
+	r := newTestRenderer(source)
+	r.now = func() time.Time { return now }
+	body := string(r.Render("/"))
+
+	// Exactly the first three ListVisible-ordered upcoming workshops, in
+	// order, each as a plain anchor to its detail page; drafts, past, and
+	// never-published rows never appear.
+	idx := func(s string) int {
+		i := strings.Index(body, s)
+		if i == -1 {
+			t.Fatalf("expected to find %q in body: %s", s, body)
+		}
+		return i
+	}
+	if strings.Contains(body, "Draft Workshop") || strings.Contains(body, "Past Workshop") {
+		t.Errorf("invisible workshop leaked into the home page's Next up list: %s", body)
+	}
+	nextUp := idx(homeNextUpH2)
+	soon := idx(`<a href="/workshops/soon">Soon Workshop</a>`)
+	mid := idx(`<a href="/workshops/mid">Canceled Upcoming</a>`)
+	later := idx(`<a href="/workshops/later">Later Workshop</a>`)
+	if !(nextUp < soon && soon < mid) {
+		t.Errorf("Next up order wrong (want soon before canceled-upcoming): %s", body)
+	}
+	if !strings.Contains(body, "Later Workshop") {
+		t.Fatalf("expected the third upcoming workshop in the list: %s", body)
+	}
+	_ = mid
+	_ = later
+}
+
+// TestHomeNextUpCapsAtThree pins the cap: a fourth upcoming workshop stays
+// off the home page's raw HTML, exactly as web/src/lib/workshops.ts's
+// nextWorkshops caps the SPA's list.
+func TestHomeNextUpCapsAtThree(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	source := fakeWorkshopSource{
+		"a": {Slug: "a", Title: "Workshop A", Status: WorkshopPublished, Published: true, StartsAt: "2026-09-13T18:00:00Z"},
+		"b": {Slug: "b", Title: "Workshop B", Status: WorkshopPublished, Published: true, StartsAt: "2026-09-14T18:00:00Z"},
+		"c": {Slug: "c", Title: "Workshop C", Status: WorkshopPublished, Published: true, StartsAt: "2026-09-15T18:00:00Z"},
+		"d": {Slug: "d", Title: "Workshop D", Status: WorkshopPublished, Published: true, StartsAt: "2026-09-16T18:00:00Z"},
+	}
+	r := newTestRenderer(source)
+	r.now = func() time.Time { return now }
+	body := string(r.Render("/"))
+
+	for _, want := range []string{"Workshop A", "Workshop B", "Workshop C"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("home page missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "Workshop D") {
+		t.Errorf("fourth upcoming workshop exceeded the SPA's NEXT_UP_LIMIT cap: %s", body)
+	}
+}
+
+// TestHomeNextUpEmptyStateAndNoteLine covers the empty list (the SPA's own
+// empty-state sentence) and the note line's two links.
+func TestHomeNextUpEmptyStateAndNoteLine(t *testing.T) {
+	r := newTestRenderer(nil)
+	body := string(r.Render("/"))
+
+	if !strings.Contains(body, html.EscapeString(homeNextUpEmpty)) {
+		t.Errorf("missing the Next up empty state: %s", body)
+	}
+	if !strings.Contains(body, `<a href="/workshops">`+homeSeeAll+`</a>`) || !strings.Contains(body, `<a href="/archive">`+homeReadArchive+`</a>`) {
+		t.Errorf("missing the note line's links: %s", body)
+	}
+}
+
+// TestHomeNextUpInvalidationMatchesWorkshopCache is #0523 criterion 2: the
+// home page's cache entry is cleared by the same Invalidate the workshop
+// mutations call, so a newly published or canceled workshop is reflected
+// promptly. (The invalidation path itself is #0319/#0325's shared
+// Site.Invalidate; this proves the home page rides it.)
+func TestHomeNextUpInvalidationMatchesWorkshopCache(t *testing.T) {
+	source := &mutatingWorkshopSource{title: "Original Title"}
+	r := newTestRenderer(source)
+	clock := &fakeClock{t: time.Unix(0, 0)}
+	r.now = clock.now
+
+	_ = r.Render("/")
+	source.title = "Changed Title"
+	clock.advance(1 * time.Second) // within the TTL, no Invalidate yet
+	cached := string(r.Render("/"))
+	if !strings.Contains(cached, "Original Title") {
+		t.Fatalf("expected the home page to stay cached within the TTL: %s", cached)
+	}
+
+	r.Invalidate()
+	after := string(r.Render("/"))
+	if !strings.Contains(after, "Changed Title") {
+		t.Errorf("expected Invalidate to refresh the home page immediately: %s", after)
+	}
+}
+
+// TestHomeNextUpCopyMatchesSvelteView is #0523's drift guard: the "Next up"
+// heading, the empty-state sentence, and the note line's two labels are
+// Home.svelte's own strings, mirrored here -- the same normalization
+// TestStaticFallbackCopyMatchesSvelteViews applies, over Home.svelte.
+func TestHomeNextUpCopyMatchesSvelteView(t *testing.T) {
+	home, err := os.ReadFile(repoPath("web/src/views/Home.svelte"))
+	if err != nil {
+		t.Fatalf("reading Home.svelte: %v", err)
+	}
+	for _, s := range []string{homeNextUpH2, homeNextUpEmpty, homeSeeAll, homeReadArchive} {
+		if !strings.Contains(normalizeSourceForCopyGuard(string(home), extractAppName(t)), s) {
+			t.Errorf("Home.svelte no longer contains %q -- the home page's server fallback has drifted from the SPA view", s)
+		}
 	}
 }

@@ -260,8 +260,14 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			// #0530: the Organization + WebSite @graph (jsonld.go), built
 			// once at construction from fixed brand constants -- nothing
 			// here varies per request.
+			// #0530: the Organization + WebSite @graph (jsonld.go), built
+			// once at construction from fixed brand constants -- nothing
+			// here varies per request.
 			JSONLD: homeJSONLD(baseURL),
-			page:   pageContent{kind: pageStatic, path: "/"},
+			// #0523: the home page's raw HTML also carries the live "Next
+			// up" list, built from the same workshop source the /workshops
+			// index reads -- see fallback.go's pageHome branch.
+			page: pageContent{kind: pageHome},
 		},
 		"/about": {
 			Title:         "About — Open Circuit SF",

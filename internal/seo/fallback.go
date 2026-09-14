@@ -41,6 +41,7 @@ type pageKind int
 const (
 	pageNone pageKind = iota
 	pageStatic
+	pageHome
 	pageWorkshopsIndex
 	pageArchiveIndex
 	pageWorkshop
@@ -52,7 +53,7 @@ const (
 // value (which embeds this) stays a plain, comparable struct too.
 type pageContent struct {
 	kind     pageKind
-	path     string // set for pageStatic, keys staticPageCopy
+	path     string // set for pageStatic, keys staticPageCopy/staticPages
 	workshop Workshop
 	archive  ArchiveEntry
 }
@@ -132,6 +133,15 @@ var staticPageCopy = map[string]staticCopy{
 // Named constants (rather than literals inline above and again in the
 // render functions below) so staticPageCopy's guarded table and the actual
 // rendered output are provably the same bytes, not two hand-kept copies.
+// Named constants (rather than literals inline above and again in the
+// render functions below) so staticPageCopy's guarded table and the actual
+// rendered output are provably the same bytes, not two hand-kept copies.
+//
+// homeNextUpH2/homeNextUpEmpty (#0523) are Home.svelte's own "Next up"
+// section strings, and homeSeeAll/homeReadArchive are its note-line link
+// labels -- TestHomeNextUpCopyMatchesSvelteView proves they haven't drifted
+// from web/src/views/Home.svelte, the same normalization the staticPageCopy
+// guard uses.
 const (
 	workshopsH1            = "Workshops"
 	workshopsUpcomingH2    = "Upcoming"
@@ -142,6 +152,18 @@ const (
 	archiveH1    = "Archive"
 	archiveLede  = `Past emails from Open Circuit SF.`
 	archiveEmpty = `Nothing archived yet — subscribe and we'll email you the moment there's something to read.`
+
+	homeNextUpH2    = "Next up"
+	homeNextUpEmpty = `Nothing scheduled yet — check back soon, or subscribe below.`
+	homeSeeAll      = "See all workshops"
+	homeReadArchive = "Read the archive"
+
+	// nextUpLimit is Home.svelte's own cap on the "Next up" list
+	// (web/src/lib/workshops.ts's NEXT_UP_LIMIT, #0015): the server HTML
+	// and the SPA must select and order the same workshops
+	// (#0523 criterion 1). Mirrored, not imported -- two languages -- and
+	// pinned by TestHomeNextUpMatchesNextWorkshops.
+	nextUpLimit = 3
 )
 
 // navLink is one entry in the site nav rendered into every fallback page's
@@ -209,6 +231,18 @@ type pageTemplateData struct {
 	// pageStatic
 	Blocks []copyBlock
 
+	// pageHome (#0523): the static "/" copy plus the live "Next up" list.
+	// The same workshopListItem shape pageWorkshopsIndex renders, so a
+	// workshop's server fallback row and its /workshops row agree.
+	NextUpHeading string
+	NextUpEmpty   string
+	NextUpItems   []workshopListItem
+	// SeeAllLabel/ReadArchiveLabel are the note line's two link labels
+	// (homeSeeAll/homeReadArchive consts, carried as fields so the template
+	// never holds its own copy of user-visible strings).
+	SeeAllLabel      string
+	ReadArchiveLabel string
+
 	// pageStatic's #0520 single-source branch (staticPageData): the full
 	// About/Privacy page body, from web/src/content/*.json. Intro blocks
 	// render inside the terminal panel beneath the <h1>; Sections render as
@@ -263,6 +297,7 @@ const pageTemplateSource = `
 <h1>{{.H1}}</h1>
 {{if eq .Kind "static"}}{{range .Blocks}}{{if .Heading}}<h2>{{.Text}}</h2>{{else}}<p>{{.Text}}</p>{{end}}{{end}}
 {{else if eq .Kind "content"}}{{range .IntroBlocks}}{{template "contentBlock" .}}{{end}}{{range .Sections}}<section><h2>{{.Heading}}</h2>{{range .Blocks}}{{template "contentBlock" .}}{{end}}</section>{{end}}
+{{else if eq .Kind "home"}}{{range .Blocks}}{{if .Heading}}<h2>{{.Text}}</h2>{{else}}<p>{{.Text}}</p>{{end}}{{end}}<section><h2>{{.NextUpHeading}}</h2>{{if .NextUpItems}}<ul>{{range .NextUpItems}}<li><a href="/workshops/{{.Slug}}">{{.Title}}</a> — {{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.NextUpEmpty}}</p>{{end}}<p><a href="/workshops">{{.SeeAllLabel}}</a> · <a href="/archive">{{.ReadArchiveLabel}}</a></p></section>
 {{else if eq .Kind "workshopsIndex"}}<h2>{{.UpcomingHeading}}</h2>{{if .UpcomingItems}}<ul>{{range .UpcomingItems}}<li><a href="/workshops/{{.Slug}}">{{.Title}}</a><br>{{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.UpcomingEmpty}}</p>{{end}}
 <h2>{{.PastHeading}}</h2>{{if .PastItems}}<ul>{{range .PastItems}}<li><a href="/workshops/{{.Slug}}">{{.Title}}</a><br>{{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.PastEmpty}}</p>{{end}}
 {{else if eq .Kind "archiveIndex"}}<p>{{.ArchiveLede}}</p>{{if .ArchiveItems}}<ul>{{range .ArchiveItems}}<li><a href="/archive/{{.Slug}}">{{.Subject}}</a> <time datetime="{{.DateAttr}}">{{.DateLabel}}</time>{{if .Preheader}}<p>{{.Preheader}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.ArchiveEmpty}}</p>{{end}}
@@ -303,6 +338,26 @@ func (r *Renderer) renderPage(p pageContent) (pageHTML string, cacheable bool) {
 		return r.execTemplate(pageTemplateData{
 			Kind: "static", H1: copy.H1, Blocks: copy.Blocks,
 		}), true
+	case pageHome:
+		// #0523: the home page's raw HTML carries the "Next up" list -- the
+		// same selection and ordering the SPA renders (nextWorkshops caps
+		// ListVisible-ordered upcoming workshops at NEXT_UP_LIMIT, so the
+		// server mirrors buildWorkshopsIndexItems's ordering and slices at
+		// nextUpLimit). Invalidation is shared: the "/" cache entry is
+		// cleared by the same Site.Invalidate the workshop mutations call
+		// (#0319, #0325). A source error renders the static copy without
+		// the list and skips the cache, like pageWorkshopsIndex.
+		all, err := workshopsOrEmpty(r.workshop)
+		upcoming, _ := buildWorkshopsIndexItems(all, r.now())
+		if len(upcoming) > nextUpLimit {
+			upcoming = upcoming[:nextUpLimit]
+		}
+		copy := staticPageCopy["/"]
+		return r.execTemplate(pageTemplateData{
+			Kind: "home", H1: copy.H1, Blocks: copy.Blocks,
+			NextUpHeading: homeNextUpH2, NextUpEmpty: homeNextUpEmpty, NextUpItems: upcoming,
+			SeeAllLabel: homeSeeAll, ReadArchiveLabel: homeReadArchive,
+		}), err == nil
 	case pageWorkshopsIndex:
 		all, err := workshopsOrEmpty(r.workshop)
 		// #0519's plan §4: workshop filtering/order MUST mirror
