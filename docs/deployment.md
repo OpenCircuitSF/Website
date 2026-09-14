@@ -3152,22 +3152,29 @@ ssh photon "sudo cp /opt/opencircuit/releases/$TAG/opencircuit.service /etc/syst
 then continue with the `install` / `restart` / `curl /health` sequence
 above.
 
-### `scripts/release.sh` and `scripts/deploy.sh` — neither matches this procedure yet
+### `scripts/release.sh` and `scripts/deploy.sh` — the automation and its limits
 
-Both are out of this issue's scope, and both are already filed:
+Both scripts exist now; what each automates, and what still needs hands:
 
-- **The build-and-publish steps above (1 and 2) are manual** because the
-  script that automates them — build, package, `gh release create`, tag
-  scheme — is `#0514`, not yet written. Once it exists, an operator runs it
-  in place of steps 1 and 2; steps 3–7 below are unaffected either way.
-- **`scripts/deploy.sh`** still requires `go` and `npm` on the machine it
-  runs on and still describes itself as running "on the production host."
-  That was correct for the box that was live through 2026-09-11; it is not
-  correct for `photon`, which has neither tool and will not get either
-  (`#0509`), and it has not been updated to drive the release-based fetch
-  above either — that is `#0512`. **Until both land, the manual steps above
-  are the canonical redeploy procedure for `photon`**, not a fallback
-  description of what a script automates.
+- **`scripts/release.sh` (`#0514`) automates steps 1 and 2** — build, package,
+  `gh release create`, tag scheme. An operator runs it in place of those two
+  steps; steps 3–7 below are unaffected either way.
+- **`scripts/deploy.sh` (`#0512`) automates the whole remaining path as one
+  workstation command**: it rebuilds the same bundle `release.sh` assembles
+  (SPA, `GOOS=linux GOARCH=arm64 CGO_ENABLED=0` cross-compile with the
+  embedded commit hash, identifier scan), ships it with the `#0466`
+  scp-precondition discipline instead of a `curl` from a published release,
+  verifies SHA-256 on the host, proves the artifact runs, backs up the
+  previous binary, and — behind a `[Y/n]` gate — checks a restore point,
+  runs `migrate` from the bundle's `migrations/` via the on-box
+  `golang-migrate` (`#0513`), installs, restarts, and health-checks.
+  `--dry-run` prints the exact remote plan without touching the host.
+- **Neither script replaces reading this procedure.** `deploy.sh` ships by
+  `scp` from the workstation rather than by release-fetch on the box, so a
+  rollback (step 5), a config-only restart, or any step run out of order is
+  still manual — the byte-for-byte steps above remain the reference for
+  every case the scripts do not cover, and for understanding what the
+  scripts do.
 
 ---
 
@@ -3236,8 +3243,11 @@ common first:
    themselves, but `index.html` can be cached. Test with `curl` and a hard
    refresh.
 
-`scripts/deploy.sh` checks #1, #2, #3, and #7 automatically and prints a
-diagnosis for #5 — prefer it over the manual steps.
+`scripts/deploy.sh` (`#0512`) automates most of this chain: it builds a fresh
+bundle (SPA + binary), ships and SHA-256-verifies it on the host, proves the
+artifact runs, installs, restarts, and health-checks. It does not diagnose a
+stale-served-bundle mismatch (#1/#5/#7) — for that, run the manual checks
+above.
 
 ---
 
