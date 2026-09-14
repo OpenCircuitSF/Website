@@ -6,7 +6,7 @@ Status of `#0057` (AWS/DNS plumbing) and `#0058` (the handler), written
 AWS objects themselves.
 
 Everything below was measured against the live account
-(`378152330719`, `us-east-1`) and the production host, not taken from a plan.
+(account id in the private AWS repo, `us-east-1`) and the production host, not taken from a plan. Identifiers are redacted per `#0511`; concrete values live in [`brennanMKE/AWS`](https://github.com/brennanMKE/AWS).
 
 ---
 
@@ -21,7 +21,7 @@ All of these were created and verified; nothing here is outstanding.
 | A3 | Block Public Access | all four flags | on |
 | A4 | Bucket policy | `ses.amazonaws.com` `s3:PutObject` on `unsubscribe/*` only, conditioned on `AWS:SourceAccount` **and** the exact rule ARN | applied |
 | A5 | Lifecycle rule | `expire-inbound-30d`, 30 days, prefix `unsubscribe/` | applied |
-| A6 | SNS topic | `arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail` | created |
+| A6 | SNS topic | `arn:aws:sns:us-east-1:AWS_ACCOUNT_ID:opencircuit-inbound-mail` | created |
 | A7 | Topic policy | `ses.amazonaws.com` `SNS:Publish`, same two conditions | applied |
 | A8 | Receipt rule set | `opencircuit-inbound` | created, **not active** |
 | A9 | Receipt rule | `unsubscribe`, one `S3Action` with `TopicArn` set, `ObjectKeyPrefix: unsubscribe/`, `TlsPolicy: Optional`, `ScanEnabled: true` | created |
@@ -68,7 +68,7 @@ Undo: `set-active-receipt-rule-set` with no `--rule-set-name`.
 **Step 8 — the MX.** The only step that starts routing mail.
 
     aws --profile admin route53 change-resource-record-sets \
-      --hosted-zone-id Z0825067RV8QY5UIKS96 \
+      --hosted-zone-id $ROUTE53_ZONE_ID \
       --change-batch '{"Changes":[{"Action":"CREATE","ResourceRecordSet":{
         "Name":"lists.opencircuitsf.com","Type":"MX","TTL":300,
         "ResourceRecords":[{"Value":"10 inbound-smtp.us-east-1.amazonaws.com"}]}}]}'
@@ -78,7 +78,7 @@ Undo: delete that record set; the wildcard resumes within the 300s TTL.
 **The consequence to accept before running step 8.** Per RFC 4592 a wildcard
 does not apply at a name owning any record, so creating this MX stops
 `lists.opencircuitsf.com` resolving for *every* type — it currently answers
-`98.84.75.184` via the zone wildcard. Verified safe: `EMAIL_LIST_DOMAIN` is
+the web server's public IP (`$DEPLOY_IP`, private AWS repo) via the zone wildcard. Verified safe: `EMAIL_LIST_DOMAIN` is
 consumed in exactly one place, `mailing.CampaignHeaders`, and only to build the
 `mailto:unsubscribe@<listDomain>` form of `List-Unsubscribe`. Nothing builds an
 HTTPS URL on it. `List-Id` uses the deliberately different singular
@@ -95,9 +95,9 @@ The plan grants `s3:GetObject` and `s3:DeleteObject` on
 **`opencircuit-instance`**.
 
 **That role is not what production uses.** The live box runs
-**`opencircuit-web-2026`** (see `#0508`). Applying `A11` as written grants to
+**`$DEPLOY_ROLE`** (see `#0508`). Applying `A11` as written grants to
 the wrong principal and the handler would get `AccessDenied`. Grant to
-`opencircuit-web-2026`, scoped to the prefix rather than the bucket.
+`$DEPLOY_ROLE`, scoped to the prefix rather than the bucket.
 
 ### 2c. `A12` — the SNS subscription, now unblocked
 
@@ -124,13 +124,13 @@ inbound path:
    and already correct in `.env.example`:
 
        SES_INBOUND_BUCKET=opencircuitsf-inbound
-       SES_INBOUND_TOPIC_ARN=arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail
+       SES_INBOUND_TOPIC_ARN=arn:aws:sns:us-east-1:AWS_ACCOUNT_ID:opencircuit-inbound-mail
 
    Both are optional in the loader, so the service boots without them — the
    route simply is not registered. Setting them needs a restart, which is why
    it belongs in the deploy window.
 3. **Steps 7 and 8 above**, or no mail ever arrives.
-4. **`A11` corrected to `opencircuit-web-2026`**, or every fetch is denied.
+4. **`A11` corrected to `$DEPLOY_ROLE`**, or every fetch is denied.
 
 ---
 

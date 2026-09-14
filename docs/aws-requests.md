@@ -4,17 +4,17 @@ Written 2026-09-05 for an AWS operator working **outside** this repository. It
 is self-contained: every fact below was read live from the account or the box,
 and the sources are named so you can re-derive them rather than trust them.
 
-**Account `378152330719`, region `us-east-1` throughout.** Do not use
+**Account `$AWS_ACCOUNT_ID` (id in the private AWS repo — [`brennanMKE/AWS`](https://github.com/brennanMKE/AWS), checkout `~/Developer/AWS`; redacted from this public repo per `#0511`), region `us-east-1` throughout.** Do not use
 `us-west-2` — earlier versions of `PRD.md` §10.3 and `docs/email-setup.md`
 named it; both have since been corrected (`#0418`); the instance, the SES
 identity, the configuration set and the MAIL FROM MX are all in `us-east-1`.
 
 > **Correction (`#0508`, 2026-09-12): the instance named throughout this
 > document is decommissioned.** Everything below was measured against
-> `i-0e3bd89e87d1c2364` (`bluesky.sstools.co`), which no longer serves this
-> project. Production now runs on **`i-01c45429c78f3adf7`**
-> (`photon.sstools.co`, a `t4g.small`), carrying IAM role
-> **`opencircuit-web-2026`** in place of `opencircuit-instance`. Any AWS
+> the original instance (id and hostname in the private AWS repo), which no longer serves this
+> project. Production now runs on **`$DEPLOY_INSTANCE_ID`**
+> (`$DEPLOY_HOST`, a `t4g.small`), carrying IAM role
+> **`$DEPLOY_ROLE`** in place of `opencircuit-instance`. Any AWS
 > object grant or IAM change below (A11 in particular) must target the new
 > instance/role, not the values dated 2026-09-04/05/11 in the sections that
 > follow. See `CLAUDE.md` §7 for the current facts.
@@ -84,7 +84,7 @@ must land in S3 for our service to process.
 
 ### The DNS changes — two record sets
 
-Zone `Z0825067RV8QY5UIKS96` (`opencircuitsf.com.`). D1 is **already applied**
+Zone `$ROUTE53_ZONE_ID` (`opencircuitsf.com.`). D1 is **already applied**
 (see below); D2 is the one remaining `CREATE`, at a name that holds no record
 set today.
 
@@ -94,7 +94,7 @@ set today.
 | D2 | `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` | 300 |
 
 **One non-obvious consequence, already checked.** The zone has a wildcard
-`*.opencircuitsf.com` **A record** answering `98.84.75.184` (the web server).
+`*.opencircuitsf.com` **A record** answering the web server's public IP (`$DEPLOY_IP`, private AWS repo).
 Per RFC 4592 a wildcard stops applying at any name owning a record, so
 creating D2 makes `lists.opencircuitsf.com` answer NODATA for A and CNAME as
 well as gaining an MX.
@@ -116,7 +116,7 @@ used only to construct a `mailto:` header.
 | A8 | SES receipt rule set | `opencircuit-inbound` | **or a rule added to the already-active set**, per Part 1 |
 | A9 | SES receipt rule | `unsubscribe` in A8 | see below |
 | A10 | Activate A8 | `SetActiveReceiptRuleSet` | **the account-wide step** |
-| A11 | IAM inline policy | `opencircuit-inbound-s3` on role `opencircuit-web-2026` (corrected `#0508` — the live box's role, not the decommissioned `opencircuit-instance`) | `s3:GetObject`, `s3:DeleteObject` on `arn:aws:s3:::opencircuitsf-inbound/unsubscribe/*` — **the prefix, not the bucket** |
+| A11 | IAM inline policy | `opencircuit-inbound-s3` on role `$DEPLOY_ROLE` (corrected `#0508` — the live box's role, not the decommissioned `opencircuit-instance`) | `s3:GetObject`, `s3:DeleteObject` on `arn:aws:s3:::opencircuitsf-inbound/unsubscribe/*` — **the prefix, not the bucket** |
 
 **A9's shape:**
 
@@ -235,15 +235,16 @@ claim that cannot be measured that way belongs in "you must check this"
 Read live on 2026-09-04/05, read-only, with the rows below re-measured
 2026-09-11 (each says so):
 
-- Instance `i-0e3bd89e87d1c2364`, region `us-east-1`, AZ `us-east-1b` — IMDS
+- The original instance (id in the private AWS repo), region
+  `us-east-1`, AZ `us-east-1b` — IMDS
   `placement/region` and `placement/availability-zone`, read on the box
   2026-09-04. **That instance is decommissioned (`#0508`, 2026-09-12); the
-  live one is `i-01c45429c78f3adf7` (`photon.sstools.co`), same region.**
+  live one is `$DEPLOY_INSTANCE_ID` (`$DEPLOY_HOST`), same region.**
 - Instance role **`opencircuit-instance`** is attached (three ways: IMDS
   `iam/security-credentials/`, `iam/info`, and `sts get-caller-identity`
-  returning `assumed-role/opencircuit-instance/i-0e3bd89e87d1c2364`), read on
+  returning an assumed-role session for it, read on
   the box 2026-09-04. **Superseded (`#0508`): the live instance carries
-  `opencircuit-web-2026` instead — see the correction note above and A11.**
+  `$DEPLOY_ROLE` instead — see the correction note above and A11.**
 - Sending identity `mailing.opencircuitsf.com`, DKIM and SPF present —
   `aws route53 list-resource-record-sets` / `dig TXT mailing.opencircuitsf.com`,
   2026-09-04, re-confirmed 2026-09-11
@@ -252,7 +253,7 @@ Read live on 2026-09-04/05, read-only, with the rows below re-measured
   `dig MX bounce.mailing.opencircuitsf.com`, 2026-09-04, re-confirmed
   2026-09-11
 - Configuration set `opencircuit-transactional`; events topic
-  `arn:aws:sns:us-east-1:378152330719:opencircuit-ses-events` — from
+  `arn:aws:sns:us-east-1:$AWS_ACCOUNT_ID:opencircuit-ses-events` — from
   `/etc/opencircuit/config.env` on the box, 2026-09-04. **Not independently
   confirmed against AWS**: `ses:GetConfigurationSet` and
   `sns:GetTopicAttributes` are both denied to every credential available to
@@ -273,7 +274,7 @@ Read live on 2026-09-04/05, read-only, with the rows below re-measured
   `matlz3nwf4655blljbpeewyspc2delzj`, each at
   `<token>._domainkey.lists.opencircuitsf.com` pointing at
   `<token>.dkim.amazonses.com`, were read from
-  `route53 list-resource-record-sets` on zone `Z0825067RV8QY5UIKS96`
+  `route53 list-resource-record-sets` on zone `$ROUTE53_ZONE_ID`
   2026-09-11 and re-confirmed resolving via `dig CNAME` 2026-09-13. That they
   came from SES rather than from any deliberate step here follows from
   `#0057`'s own record: the plan specified the identity receive-only with no

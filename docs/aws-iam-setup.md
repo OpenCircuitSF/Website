@@ -4,21 +4,29 @@ What has to be added by hand in the AWS console before the SES work can
 finish, and why each piece exists.
 
 **Written 2026-08-25**, during the SES enablement pass. Everything below was
-measured against account `378152330719` — the policy names, ARNs, and instance
-ID are the real ones, not examples.
+measured against the production account — the policy names, ARNs, and
+instance ID are the real ones, not examples.
+
+**Placeholders (`#0511`).** The account id, the EC2 instance ids, the server
+hostnames, and the live box's IAM role name are redacted from this public
+repo; concrete values live in the private repo
+[`brennanMKE/AWS`](https://github.com/brennanMKE/AWS) (checkout
+`~/Developer/AWS`). Below, `$AWS_ACCOUNT_ID` stands in for the account id in
+ARNs, `$DEPLOY_INSTANCE_ID` for the live box's instance id, `$DEPLOY_HOST`
+for its hostname, and `$DEPLOY_ROLE` for its IAM role name.
 
 > **Correction (`#0508`, 2026-09-12): production is a different instance now.**
-> The box this document was written against (`i-0e3bd89e87d1c2364`,
-> `bluesky.sstools.co`, reached by the alias formerly named `ec2`) is dead as
+> The box this document was written against (instance id and hostname in the
+> private AWS repo; reached by the alias formerly named `ec2`) is dead as
 > far as this service is concerned. Production runs on
-> **`i-01c45429c78f3adf7`** (`photon.sstools.co`, reached by **`ssh photon`**,
+> **`$DEPLOY_INSTANCE_ID`** (`$DEPLOY_HOST`, reached by **`ssh photon`**,
 > a `t4g.small`), and the role actually attached there is
-> **`opencircuit-web-2026`**, not `opencircuit-instance`. See `CLAUDE.md` §7
+> **`$DEPLOY_ROLE`**, not `opencircuit-instance`. See `CLAUDE.md` §7
 > for the current facts. Everything below — the fact table, the role name,
 > the old SSH alias, and the instance ID — describes the original setup pass
 > against the now-decommissioned host. The permission shapes (Part 2's
 > `opencircuit-ses-send` policy, and the S3 grant `#0057`'s A11 needs) are
-> still the right ones to apply; apply them to `opencircuit-web-2026`, the
+> still the right ones to apply; apply them to `$DEPLOY_ROLE`, the
 > role the live box actually uses.
 
 ---
@@ -35,9 +43,10 @@ follows is left as the runbook that got it there and as the reference for
 the policy's actual shape (Part 2, which already stated the corrected
 `identity/*` region and ARN this issue used to fix `docs/deployment.md`'s
 `## IAM` section) — Parts 1 and 3 describe one-time setup steps that do not
-need repeating. **(That was `i-0e3bd89e87d1c2364`. `#0508`, 2026-09-12: the
-live box is now `i-01c45429c78f3adf7`/`photon.sstools.co`, carrying
-`opencircuit-web-2026` instead — see the correction note above.)**
+need repeating. **(That was the original instance, now decommissioned —
+id in the private AWS repo. `#0508`, 2026-09-12: the
+live box is now `$DEPLOY_INSTANCE_ID`/`$DEPLOY_HOST`, carrying
+`$DEPLOY_ROLE` instead — see the correction note above.)**
 
 ~~The EC2 instance has **no IAM role attached**, so the running service has no
 AWS credentials at all and cannot call SES no matter how well SES itself is
@@ -61,14 +70,14 @@ hand instead.
 
 | | |
 |---|---|
-| AWS account | `378152330719` |
-| EC2 instance | `i-0e3bd89e87d1c2364` (`t4g.nano`, **`us-east-1`**) |
+| AWS account | `$AWS_ACCOUNT_ID` (private AWS repo) |
+| EC2 instance | the original instance (id in the private AWS repo; `t4g.nano`, **`us-east-1`**) |
 | Current instance role | ~~**none** — the metadata service 404s `iam/security-credentials/`~~ **Correction (`#0426`, 2026-09-04):** `opencircuit-instance`, attached — re-confirmed against instance metadata for this issue, not copied from the filing; `CLAUDE.md` §10 item 2 records it as attached and proven by a real delivered send |
 | SES region | **`us-east-1`** — corrected 2026-09-03 (`#0418`); this row said `us-west-2`, which was never the real region (`CLAUDE.md` §7) |
-| SES identity | `arn:aws:ses:us-east-1:378152330719:identity/mailing.opencircuitsf.com` — **verified**, DKIM `SUCCESS`, custom MAIL FROM `bounce.mailing.opencircuitsf.com` `SUCCESS` |
-| SES configuration set | `arn:aws:ses:us-east-1:378152330719:configuration-set/opencircuit-transactional` |
-| SNS topic for events | `arn:aws:sns:us-east-1:378152330719:opencircuit-ses-events` |
-| Admin CLI user | `arn:aws:iam::378152330719:user/cli-admin` |
+| SES identity | `arn:aws:ses:us-east-1:$AWS_ACCOUNT_ID:identity/mailing.opencircuitsf.com` — **verified**, DKIM `SUCCESS`, custom MAIL FROM `bounce.mailing.opencircuitsf.com` `SUCCESS` |
+| SES configuration set | `arn:aws:ses:us-east-1:$AWS_ACCOUNT_ID:configuration-set/opencircuit-transactional` |
+| SNS topic for events | `arn:aws:sns:us-east-1:$AWS_ACCOUNT_ID:opencircuit-ses-events` |
+| Admin CLI user | `arn:aws:iam::$AWS_ACCOUNT_ID:user/cli-admin` |
 
 The instance and SES both sit in `us-east-1` — confirmed against
 `/etc/opencircuit/config.env`, which sets `AWS_REGION=us-east-1`, read-only
@@ -139,15 +148,15 @@ document** — `Version` and all:
                 "iam:RemoveRoleFromInstanceProfile"
             ],
             "Resource": [
-                "arn:aws:iam::378152330719:role/opencircuit-*",
-                "arn:aws:iam::378152330719:instance-profile/opencircuit-*"
+                "arn:aws:iam::$AWS_ACCOUNT_ID:role/opencircuit-*",
+                "arn:aws:iam::$AWS_ACCOUNT_ID:instance-profile/opencircuit-*"
             ]
         },
         {
             "Sid": "PassOpenCircuitRoleToEC2Only",
             "Effect": "Allow",
             "Action": "iam:PassRole",
-            "Resource": "arn:aws:iam::378152330719:role/opencircuit-*",
+            "Resource": "arn:aws:iam::$AWS_ACCOUNT_ID:role/opencircuit-*",
             "Condition": {
                 "StringEquals": {
                     "iam:PassedToService": "ec2.amazonaws.com"
@@ -246,8 +255,8 @@ PRD §10.5's "scoped tightly: no `ses:*`, no wildcard resources":
         "ses:SendRawEmail"
       ],
       "Resource": [
-        "arn:aws:ses:us-east-1:378152330719:identity/*",
-        "arn:aws:ses:us-east-1:378152330719:configuration-set/opencircuit-transactional"
+        "arn:aws:ses:us-east-1:$AWS_ACCOUNT_ID:identity/*",
+        "arn:aws:ses:us-east-1:$AWS_ACCOUNT_ID:configuration-set/opencircuit-transactional"
       ]
     }
   ]
@@ -270,7 +279,7 @@ RECIPIENT's identity ARN.** Every send to the admin address failed with:
 
 ```
 AccessDeniedException: ... is not authorized to perform 'ses:SendEmail'
-on resource 'arn:aws:ses:us-east-1:378152330719:identity/brennan@opencircuitsf.com'
+on resource 'arn:aws:ses:us-east-1:$AWS_ACCOUNT_ID:identity/brennan@opencircuitsf.com'
 ```
 
 Naming recipients in an IAM policy is not viable for a mailing list, so the
@@ -297,7 +306,8 @@ content; the mailer sends `multipart/alternative` for HTML campaigns.
 
 An instance profile is just a container that lets EC2 hand a role to an
 instance — same name as the role by convention. The role goes into the
-profile, and the profile is associated with `i-0e3bd89e87d1c2364`.
+profile, and the profile is associated with the instance that was current
+when this was written (id in the private AWS repo).
 
 ### What is deliberately *not* in it
 
@@ -338,7 +348,8 @@ Skip Part 1 entirely if you would rather not widen `cli-admin`. Console steps:
 5. Open the new role → **Permissions → Add permissions → Create inline policy
    → JSON**. Paste the `opencircuit-ses-send` document from Part 2. Name it
    **`opencircuit-ses-send`**. Create.
-6. **EC2 → Instances → `i-0e3bd89e87d1c2364` → Actions → Security → Modify IAM
+6. **EC2 → Instances → the instance this role is for (id in the private AWS
+   repo) → Actions → Security → Modify IAM
    role** → pick `opencircuit-instance` → Update.
 
 Creating the role through the console builds the matching instance profile
@@ -357,13 +368,13 @@ From your Mac (read-only is enough):
 
 ```bash
 AWS_PROFILE=admin aws ec2 describe-instances \
-  --instance-ids i-01c45429c78f3adf7 \
+  --instance-ids $DEPLOY_INSTANCE_ID \
   --query 'Reservations[].Instances[].IamInstanceProfile' --output json
 ```
 
-Expect the profile ARN, not `null`. (`i-01c45429c78f3adf7` is the current
-production instance, `photon.sstools.co` — see the correction note above;
-the original `i-0e3bd89e87d1c2364` is decommissioned as far as this service
+Expect the profile ARN, not `null`. (`$DEPLOY_INSTANCE_ID` is the current
+production instance, `$DEPLOY_HOST` — see the correction note above;
+the original instance is decommissioned as far as this service
 is concerned.)
 
 Then on the box — this is the check that actually matters, because it proves
@@ -376,7 +387,7 @@ ssh photon 'TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
   http://169.254.169.254/latest/meta-data/iam/security-credentials/'
 ```
 
-Expect `opencircuit-web-2026` (the role name the live box carries; the
+Expect `$DEPLOY_ROLE` (the role name the live box carries; the
 original `opencircuit-instance` role lived on the now-decommissioned
 instance). Before a role is attached this returns a 404 HTML body.
 

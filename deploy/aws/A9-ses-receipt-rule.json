@@ -6,7 +6,7 @@
   "Actions": [
     {
       "S3Action": {
-        "TopicArn": "arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail",
+        "TopicArn": "arn:aws:sns:us-east-1:AWS_ACCOUNT_ID:opencircuit-inbound-mail",
         "BucketName": "opencircuitsf-inbound",
         "ObjectKeyPrefix": "unsubscribe/"
       }

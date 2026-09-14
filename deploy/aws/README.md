@@ -30,15 +30,22 @@ and add `--after <name-of-its-last-rule>` to A9's `create-receipt-rule` call
 so the new rule is appended rather than inserted first. Do not create or
 activate a second rule set in that case — see `docs/email-setup.md`.
 
+**Placeholders (`#0511`).** The JSON files and commands below use
+`AWS_ACCOUNT_ID` (in ARNs), `$AWS_ACCOUNT_ID` (in shell), `$ROUTE53_ZONE_ID`,
+and `$DEPLOY_ROLE` as placeholders. Substitute them from the private repo
+[`brennanMKE/AWS`](https://github.com/brennanMKE/AWS) (checkout
+`~/Developer/AWS`), which holds the concrete account id, hosted zone id, and
+IAM role names; they are redacted from this public repo.
+
 | # | File | Plan row | Applies with |
 |---|---|---|---|
 | A4 | `A4-s3-bucket-policy.json` | S3 bucket policy: `ses.amazonaws.com` may `s3:PutObject` only under `unsubscribe/`, scoped to this account and this exact receipt rule | `aws s3api put-bucket-policy --bucket opencircuitsf-inbound --policy file://deploy/aws/A4-s3-bucket-policy.json --region us-east-1` |
 | A5 | `A5-s3-lifecycle.json` | S3 lifecycle rule `expire-inbound-30d`: expires objects under `unsubscribe/` after 30 days | `aws s3api put-bucket-lifecycle-configuration --bucket opencircuitsf-inbound --lifecycle-configuration file://deploy/aws/A5-s3-lifecycle.json --region us-east-1` |
-| A7 | `A7-sns-topic-policy.json` | SNS topic policy on `opencircuit-inbound-mail`: owner keeps full control, plus `ses.amazonaws.com` may `SNS:Publish`, scoped the same way as A4 | `aws sns set-topic-attributes --topic-arn arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail --attribute-name Policy --attribute-value file://deploy/aws/A7-sns-topic-policy.json --region us-east-1` |
+| A7 | `A7-sns-topic-policy.json` | SNS topic policy on `opencircuit-inbound-mail`: owner keeps full control, plus `ses.amazonaws.com` may `SNS:Publish`, scoped the same way as A4 | `aws sns set-topic-attributes --topic-arn arn:aws:sns:us-east-1:$AWS_ACCOUNT_ID:opencircuit-inbound-mail --attribute-name Policy --attribute-value file://deploy/aws/A7-sns-topic-policy.json --region us-east-1` |
 | A9 | `A9-ses-receipt-rule.json` | The `unsubscribe` receipt rule: single `S3Action` with `TopicArn` set (not a second, separate SNS action — see `docs/email-setup.md`), `TlsPolicy: Optional`, `ObjectKeyPrefix: "unsubscribe/"` | `aws ses create-receipt-rule --rule-set-name opencircuit-inbound --rule file://deploy/aws/A9-ses-receipt-rule.json --region us-east-1` |
-| A11 | `A11-iam-inline-policy.json` | IAM inline policy on the `opencircuit-web-2026` role (corrected `#0508`, 2026-09-12 — the live box's role; the plan originally named `opencircuit-instance`, which lived on the now-decommissioned instance): `s3:GetObject`/`s3:DeleteObject` on the `unsubscribe/` prefix only, never the whole bucket | `aws iam put-role-policy --role-name opencircuit-web-2026 --policy-name opencircuit-inbound-s3 --policy-document file://deploy/aws/A11-iam-inline-policy.json` |
-| D1 | `D1-route53-change-batch-txt.json` | SES domain-identity verification TXT for `lists.opencircuitsf.com`. **Already applied** — kept for reference and as the exact rollback undo | `aws route53 change-resource-record-sets --hosted-zone-id Z0825067RV8QY5UIKS96 --change-batch file://deploy/aws/D1-route53-change-batch-txt.json` |
-| D2 | `D2-route53-change-batch-mx.json` | The inbound MX for `lists.opencircuitsf.com`. **Apply last** — see the ordering and RFC 4592 note in `docs/email-setup.md` | `aws route53 change-resource-record-sets --hosted-zone-id Z0825067RV8QY5UIKS96 --change-batch file://deploy/aws/D2-route53-change-batch-mx.json` |
+| A11 | `A11-iam-inline-policy.json` | IAM inline policy on the live box's IAM role (`$DEPLOY_ROLE`; corrected `#0508`, 2026-09-12 — the plan originally named `opencircuit-instance`, which lived on the now-decommissioned instance): `s3:GetObject`/`s3:DeleteObject` on the `unsubscribe/` prefix only, never the whole bucket | `aws iam put-role-policy --role-name $DEPLOY_ROLE --policy-name opencircuit-inbound-s3 --policy-document file://deploy/aws/A11-iam-inline-policy.json` |
+| D1 | `D1-route53-change-batch-txt.json` | SES domain-identity verification TXT for `lists.opencircuitsf.com`. **Already applied** — kept for reference and as the exact rollback undo | `aws route53 change-resource-record-sets --hosted-zone-id $ROUTE53_ZONE_ID --change-batch file://deploy/aws/D1-route53-change-batch-txt.json` |
+| D2 | `D2-route53-change-batch-mx.json` | The inbound MX for `lists.opencircuitsf.com`. **Apply last** — see the ordering and RFC 4592 note in `docs/email-setup.md` | `aws route53 change-resource-record-sets --hosted-zone-id $ROUTE53_ZONE_ID --change-batch file://deploy/aws/D2-route53-change-batch-mx.json` |
 
 **D1 and D2's `Comment` fields are intentionally short.**
 `ChangeBatch.Comment` is Route 53's `ResourceDescription` shape, capped at

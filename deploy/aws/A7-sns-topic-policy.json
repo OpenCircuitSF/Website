@@ -16,9 +16,9 @@
         "SNS:ListSubscriptionsByTopic",
         "SNS:Publish"
       ],
-      "Resource": "arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail",
+      "Resource": "arn:aws:sns:us-east-1:AWS_ACCOUNT_ID:opencircuit-inbound-mail",
       "Condition": {
-        "StringEquals": { "AWS:SourceOwner": "378152330719" }
+        "StringEquals": { "AWS:SourceOwner": "AWS_ACCOUNT_ID" }
       }
     },
     {
@@ -26,11 +26,11 @@
       "Effect": "Allow",
       "Principal": { "Service": "ses.amazonaws.com" },
       "Action": "SNS:Publish",
-      "Resource": "arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail",
+      "Resource": "arn:aws:sns:us-east-1:AWS_ACCOUNT_ID:opencircuit-inbound-mail",
       "Condition": {
         "StringEquals": {
-          "AWS:SourceAccount": "378152330719",
-          "AWS:SourceArn": "arn:aws:ses:us-east-1:378152330719:receipt-rule-set/opencircuit-inbound:receipt-rule/unsubscribe"
+          "AWS:SourceAccount": "AWS_ACCOUNT_ID",
+          "AWS:SourceArn": "arn:aws:ses:us-east-1:AWS_ACCOUNT_ID:receipt-rule-set/opencircuit-inbound:receipt-rule/unsubscribe"
         }
       }
     }

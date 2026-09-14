@@ -11,7 +11,7 @@ exercised**, because it did not exercise all of them:
 | Section | Status |
 |---|---|
 | Production facts, prerequisites, PostgreSQL, migrations, systemd, Apache, TLS, verification | **Followed on the real host** and corrected where it was wrong. The corrections are inline. |
-| SES setup, DNS records for DKIM / MAIL FROM / inbound, IAM policy, the account-level suppression list | **Still not followed by this row's original deploy.** SES was deliberately left unconfigured for that deploy so it could be set up afterwards — see "SES is not configured yet" below. No AWS SES identity existed at that point, and ~~**the instance has no IAM role attached at all**~~ **— corrected `#0426`, 2026-09-04: that has since changed.** A later pass (`docs/aws-iam-setup.md`, same day) attached the `opencircuit-instance` role and set up SES; `CLAUDE.md` §10 item 2 and the `## IAM` section below (also corrected, `#0426`) recorded that as the current state at the time. **Superseded (`#0508`, 2026-09-12): that instance is now decommissioned and the live box carries `opencircuit-web-2026` instead** — see both sections' own corrections. |
+| SES setup, DNS records for DKIM / MAIL FROM / inbound, IAM policy, the account-level suppression list | **Still not followed by this row's original deploy.** SES was deliberately left unconfigured for that deploy so it could be set up afterwards — see "SES is not configured yet" below. No AWS SES identity existed at that point, and ~~**the instance has no IAM role attached at all**~~ **— corrected `#0426`, 2026-09-04: that has since changed.** A later pass (`docs/aws-iam-setup.md`, same day) attached the `opencircuit-instance` role and set up SES; `CLAUDE.md` §10 item 2 and the `## IAM` section below (also corrected, `#0426`) recorded that as the current state at the time. **Superseded (`#0508`, 2026-09-12): that instance is now decommissioned and the live box carries the current IAM role instead (name in the private AWS repo — identifiers are redacted from this public repo per `#0511`, see the production-facts pointer below)** — see both sections' own corrections. |
 | Backups (`opencircuit-backup.timer` and friends) | **Not installed yet.** The units exist in `deploy/systemd/`; nothing on the box runs them. `#0435` (2026-09-08) re-confirmed this read-only, found a second blocker (the on-box checkout is missing `#0434`'s media-backup scripts), and wrote an approval-ready fix in `deploy/systemd/README.md` — see the "Backups" section below. |
 
 So `#0064`'s acceptance criterion — "the whole runbook followed once on a
@@ -100,13 +100,13 @@ guessed.
 
 | Fact | Value |
 |---|---|
-| Instance ID | ~~`i-0e3bd89e87d1c2364`, hostname `bluesky.sstools.co`~~ **Correction (`#0508`, 2026-09-12): production moved to a different instance.** The one above is decommissioned as far as this service is concerned. Current: `i-01c45429c78f3adf7`, hostname `photon.sstools.co`. |
-| Instance size / type | ~~`t4g.nano` (ARM/Graviton, Amazon Linux 2023, kernel 6.1 aarch64) — **not** the `t4g.small` PRD §10.1 assumes. 418 MB RAM, backed by a 418 MB zram device plus a 2 GB swapfile; 20 GB root, 53% used. `opencircuit` itself sits at ~14 MB RSS, so the box is tight rather than strained — but it also runs Apache, PostgreSQL, two ShortLinks instances and a prototypes service. `go build` is the memory-hungry step; it succeeds, but it is the thing to suspect if a deploy is ever OOM-killed.~~ **Correction (`#0508`, 2026-09-12):** the new box (`i-01c45429c78f3adf7`) is a `t4g.small` — PRD §10.1's original assumption, ironically now the true one — with **1846 MB RAM**, 2 vCPU, and 30 GB disk (23 GB free). 4.4× the old RAM; the tight-memory framing above no longer applies with the same force, though `go build` is moot regardless — **see the next row**, the new box has no Go toolchain at all. |
+| Instance ID | ~~the original instance (id and hostname in the private AWS repo)~~ **Correction (`#0508`, 2026-09-12): production moved to a different instance.** The one above is decommissioned as far as this service is concerned. Current: `$DEPLOY_INSTANCE_ID`, hostname `$DEPLOY_HOST` (both in the private AWS repo — [`brennanMKE/AWS`](https://github.com/brennanMKE/AWS), checkout `~/Developer/AWS`; redacted from this public repo per `#0511`). |
+| Instance size / type | ~~`t4g.nano` (ARM/Graviton, Amazon Linux 2023, kernel 6.1 aarch64) — **not** the `t4g.small` PRD §10.1 assumes. 418 MB RAM, backed by a 418 MB zram device plus a 2 GB swapfile; 20 GB root, 53% used. `opencircuit` itself sits at ~14 MB RSS, so the box is tight rather than strained — but it also runs Apache, PostgreSQL, two ShortLinks instances and a prototypes service. `go build` is the memory-hungry step; it succeeds, but it is the thing to suspect if a deploy is ever OOM-killed.~~ **Correction (`#0508`, 2026-09-12):** the new box is a `t4g.small` — PRD §10.1's original assumption, ironically now the true one — with **1846 MB RAM**, 2 vCPU, and 30 GB disk (23 GB free). 4.4× the old RAM; the tight-memory framing above no longer applies with the same force, though `go build` is moot regardless — **see the next row**, the new box has no Go toolchain at all. |
 | Region | **`us-east-1`** (az `us-east-1b`) — **not** the `us-west-2` PRD §10.3 assumed (§10.1 is the topology diagram and never named a region — this cell's own citation dangled on that point until now, #0421, 2026-09-04). ~~PRD §10.3 picks `us-west-2` for *SES*, which is a separate choice from where the instance lives.~~ **Correction (#0418, 2026-09-03):** SES is in `us-east-1` too — the instance and SES share one region, verified against instance metadata `placement/region` and `AWS_REGION` in `/etc/opencircuit/config.env`. PRD §10.3 has been corrected to match. Inbound receiving (PRD §6.5 path 3) is the region-pinned part and pins to that same region. Unchanged by `#0508`'s instance replacement — the new box is also `us-east-1`. |
 | No Go toolchain on the new box | `photon` has no `go` on `PATH` and none at the usual fixed locations. **Decided (`#0509`, 2026-09-12, by the user): it stays that way.** "We won't install the Go toolchain on the EC2 instance photon. Instead we should compile before deployment." **Delivery mechanism decided in a later same-day pass:** the built artifact ships as a published GitHub Release, which `photon` fetches with a plain `curl` (`#0509` third pass, `#0514`). The **Redeploy procedure** below builds the SPA and the Go binary on the operator's workstation (or CI), packages and publishes them as a release, and has `photon` fetch and verify them — no step in it assumes a toolchain on the box, a `gh` install on the box, or the box's own git checkout being current. |
-| Public IP / DNS | ~~`44.222.209.183`. `www.opencircuitsf.com` and `opencircuitsf.com` are A records to it; `go.opencircuitsf.com` is a CNAME to `ec2.smallsharptools.com`, which resolves to the same address.~~ **Correction (`#0508`, 2026-09-12):** `www.opencircuitsf.com`, the apex, and `go.opencircuitsf.com` now all resolve to **`98.84.75.184`** (the new instance's IP, confirmed by `dig`) via the zone's `*.opencircuitsf.com` A-record wildcard (not a CNAME — see `#0057`'s DNS correction below). `ec2.smallsharptools.com` still resolves to the *old* IP, `44.222.209.183` — that name was never repointed, and the old box is still up (still answering, just no longer serving this vhost). |
-| SSH access | ~~the alias formerly named `ec2`, from the maintainer's Mac — host `ec2.sstools.co`, user `ec2-user`, key `~/.ssh/sstools-ec2.pem`. A second alias was the same host plus a `LocalForward 15432 → localhost:5432` Postgres tunnel (port 15432, not 5432, because a local PostgreSQL already owns 5432 on the Mac).~~ **Correction (`#0508`, 2026-09-12):** `ssh photon` — already configured in `~/.ssh/config`, verified working (`ec2-user@photon.sstools.co`). The old tunnel alias has not been re-created for the new host as part of this doc fix; confirm it exists before relying on it. |
-| IAM instance role | ~~**None attached** — the instance metadata service 404s `iam/security-credentials/`. This is the reason SES cannot work yet even after the domain is verified: the AWS SDK's default credential chain has nothing to find, so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false.~~ ~~**Correction (`#0426`, 2026-09-04):** attached — `opencircuit-instance`. Re-derived for this issue directly from the instance metadata service (`iam/security-credentials/`, read-only on the box), not copied from the filing; `CLAUDE.md` §10 item 2 already records this role as attached and proven by a real delivered send. Attaching a role with `ses:SendEmail`/`ses:SendRawEmail` was the prerequisite `CLAUDE.md` §10 item 2 named, and is now done — the `## IAM` section below (also corrected, `#0426`) describes the policy's actual shape. certbot's renewal never depended on this role — see the certbot row.~~ **Correction (`#0508`, 2026-09-12):** that role and that instance are both gone. The live box carries **`opencircuit-web-2026`** instead. The permission shape described in the `## IAM` section below should still apply — verify it against the new role name rather than assuming. certbot's renewal still does not depend on this role. |
+| Public IP / DNS | ~~the original IP (private AWS repo)~~. `www.opencircuitsf.com` and `opencircuitsf.com` are A records to it; `go.opencircuitsf.com` is a CNAME to `ec2.smallsharptools.com`, which resolves to the same address.~~ **Correction (`#0508`, 2026-09-12):** `www.opencircuitsf.com`, the apex, and `go.opencircuitsf.com` now all resolve to **the new instance's IP (`$DEPLOY_IP`, private AWS repo)**, confirmed by `dig`, via the zone's `*.opencircuitsf.com` A-record wildcard (not a CNAME — see `#0057`'s DNS correction below). `ec2.smallsharptools.com` still resolves to the *old* box's IP (not republished here; in the private AWS repo) — that name was never repointed, and the old box is still up (still answering, just no longer serving this vhost). |
+| SSH access | ~~the alias formerly named `ec2`, from the maintainer's Mac — host `ec2.sstools.co`, user `ec2-user`, key `~/.ssh/sstools-ec2.pem`. A second alias was the same host plus a `LocalForward 15432 → localhost:5432` Postgres tunnel (port 15432, not 5432, because a local PostgreSQL already owns 5432 on the Mac).~~ **Correction (`#0508`, 2026-09-12):** `ssh photon` — already configured in `~/.ssh/config`, verified working (as `ec2-user`; the full hostname is in the private AWS repo). The old tunnel alias has not been re-created for the new host as part of this doc fix; confirm it exists before relying on it. |
+| IAM instance role | ~~**None attached** — the instance metadata service 404s `iam/security-credentials/`. This is the reason SES cannot work yet even after the domain is verified: the AWS SDK's default credential chain has nothing to find, so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false.~~ ~~**Correction (`#0426`, 2026-09-04):** attached — `opencircuit-instance`. Re-derived for this issue directly from the instance metadata service (`iam/security-credentials/`, read-only on the box), not copied from the filing; `CLAUDE.md` §10 item 2 already records this role as attached and proven by a real delivered send. Attaching a role with `ses:SendEmail`/`ses:SendRawEmail` was the prerequisite `CLAUDE.md` §10 item 2 named, and is now done — the `## IAM` section below (also corrected, `#0426`) describes the policy's actual shape. certbot's renewal never depended on this role — see the certbot row.~~ **Correction (`#0508`, 2026-09-12):** that role and that instance are both gone. The live box carries **`$DEPLOY_ROLE`** instead. The permission shape described in the `## IAM` section below should still apply — verify it against the new role name rather than assuming. certbot's renewal still does not depend on this role. |
 | `DocumentRoot` (former static placeholder) | `/var/www/vhosts/www.opencircuitsf.com`. The placeholder HTML is no longer reachable — the Go service answers `/` — but the directory stays, because `/.well-known/` is still served from disk out of it. See "The `/.well-known/` exception" below. |
 | Installed vhost file(s) | `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf` (the proxy vhost) and `001-www.opencircuitsf.com.conf` (port 80 → HTTPS). The apex and every other `*.opencircuitsf.com` name is redirected to `www` by `002-opencircuitsf.com{,-le-ssl}.conf`, which sort *after* the 001 files. **These are not copies of `deploy/apache/opencircuitsf.com.conf`.** That file is one self-contained vhost that does its own apex→www redirect; the box splits the same behaviour across the certbot-managed 001/002 pair it already had, and adding the repo file verbatim would duplicate `ServerName www.opencircuitsf.com`. Edit the installed files; treat the repo file as the reference for the proxy / header / CSP block only. |
 | certbot renewal schedule | `certbot-renew.timer` (systemd), firing twice daily at 00:00 and 12:00 UTC. The cert named `opencircuitsf.com` is a single ECDSA **wildcard** covering `opencircuitsf.com` and `*.opencircuitsf.com`, so one cert serves `www`, `go`, and any future subdomain. The authenticator is **`dns-route53`**, not `--apache`: renewal proves control over the domain through a Route 53 TXT record and never reads the vhosts or `/.well-known/acme-challenge`, so no Apache change in this project can break it. Expiry at deploy time: 2026-11-16. |
@@ -1447,18 +1447,18 @@ link to stdout — that is the closest thing to a proof this step has.
 > **Partial correction (`#0508`, 2026-09-12) — re-measured by `dig` while
 > fixing this issue, not a full reconciliation.** `www.opencircuitsf.com`,
 > the bare apex, and `go.opencircuitsf.com` now all resolve directly to
-> **`98.84.75.184`** (production's new IP — see `CLAUDE.md` §7), not the
-> `44.222.209.183`/`ec2.smallsharptools.com` values the rows below still
+> **the production IP (`$DEPLOY_IP`, private AWS repo — see `CLAUDE.md` §7)**, not the
+> old-box values the rows below still
 > show. Whether the record *type* is still CNAME-to-`ec2.smallsharptools.com`
 > underneath, or has become a direct A record, was not re-verified row by
 > row here — that fuller reconciliation is `#0427`'s scope, not
-> this issue's. Treat every `44.222.209.183`/`ec2.smallsharptools.com` value
+> this issue's. Treat every old-IP/`ec2.smallsharptools.com` value
 > below as unconfirmed until it closes.
 
 | Name | Type | Value | Purpose |
 |---|---|---|---|
 | `www.opencircuitsf.com` | CNAME | `ec2.smallsharptools.com` (same box) | **Canonical host** — a CNAME in practice, not the A record this table stated until corrected 2026-09-05, `#0448` (same target as `go.opencircuitsf.com` below) |
-| `opencircuitsf.com` | A | `44.222.209.183` | 301 → `www` |
+| `opencircuitsf.com` | A | the original box's IP (private AWS repo) | 301 → `www` |
 | `*.opencircuitsf.com` | CNAME | `ec2.smallsharptools.com` (same box) | Wildcard — why `go.`, `_dmarc.`, and `lists.` resolve without records of their own (added 2026-09-05, `#0448`) |
 | `go.opencircuitsf.com` | CNAME | `ec2.smallsharptools.com` (same box) | ShortLinks — a CNAME in practice, not the A record PRD §10.2 planned |
 | `<sel1..3>._domainkey.mailing.opencircuitsf.com` | CNAME | `[PLACEHOLDER: issued by SES on domain verification, PRD §10.2/§10.4]` | DKIM (parent corrected 2026-09-05, #0436 — this row named the apex; see below) |
@@ -1473,8 +1473,9 @@ from `PRD.md` §10.2; where the live zone disagrees, the row is corrected in
 place and dated, not silently overwritten.
 
 **Corrected `#0431`, 2026-09-04 — the paragraph below is stale on both
-counts.** The public IP is no longer unknown — it is `44.222.209.183`, the
-same value already used two rows above in this very table, and the instance
+counts.** The public IP is no longer unknown — it is the original box's IP
+(same value the correction rows above resolve to, now in the private AWS
+repo), and the instance
 that owns it has existed since 2026-08-25. The DKIM CNAME targets are also no
 longer unknowable in principle: SES reports the `mailing.opencircuitsf.com`
 identity's DKIM as `SUCCESS` (`docs/email-setup.md`, `CLAUDE.md` §10 item 2),
@@ -1579,7 +1580,7 @@ are deliberately left out of this table, not missed:
   see `docs/email-setup.md`).
 
 Nothing else in the zone is absent from the table. Re-derived read-only via
-`aws route53 list-resource-record-sets --hosted-zone-id Z0825067RV8QY5UIKS96`;
+`aws route53 list-resource-record-sets --hosted-zone-id $ROUTE53_ZONE_ID`;
 nothing in DNS was changed and the apex MX was not touched.
 
 ---
@@ -1675,11 +1676,11 @@ filing; `CLAUDE.md` §10 item 2 already records it as attached and proven by
 a real delivered send.
 
 **Correction (`#0508`, 2026-09-12) — that instance and role are gone.**
-Production runs on a different box now (`i-01c45429c78f3adf7`,
-`photon.sstools.co`), carrying IAM role **`opencircuit-web-2026`** in place
+Production runs on a different box now (`$DEPLOY_INSTANCE_ID`,
+`$DEPLOY_HOST`), carrying IAM role **`$DEPLOY_ROLE`** in place
 of `opencircuit-instance`. The JSON policy below describes the permission
 shape that should be attached to the *current* role; it has not been
-independently re-verified against `opencircuit-web-2026` as part of this
+independently re-verified against `$DEPLOY_ROLE` as part of this
 pass.
 
 The JSON below matches `PRD.md` §10.5's **target** shape, including the
@@ -1697,8 +1698,8 @@ region, and account ID are corrected to match reality:
       "Effect": "Allow",
       "Action": ["ses:SendEmail", "ses:SendRawEmail"],
       "Resource": [
-        "arn:aws:ses:us-east-1:378152330719:identity/*",
-        "arn:aws:ses:us-east-1:378152330719:configuration-set/opencircuit-transactional"
+        "arn:aws:ses:us-east-1:AWS_ACCOUNT_ID:identity/*",
+        "arn:aws:ses:us-east-1:AWS_ACCOUNT_ID:configuration-set/opencircuit-transactional"
       ]
     },
     {
@@ -1737,7 +1738,7 @@ CLAUDE.md §10 item 2 exists]`, a `Condition` restricting `ses:configuration-set
 to `opencircuit-transactional`, and the note "**this policy has never been
 created or attached to a real role**". None of that is still true. The
 region is `us-east-1`, not `us-west-2` (`#0418`); the account is
-`378152330719`, not unknown; and the identity is `mailing.opencircuitsf.com`
+`$AWS_ACCOUNT_ID` (private AWS repo), not unknown; and the identity is `mailing.opencircuitsf.com`
 (mail sends from that subdomain, never the apex — `docs/aws-iam-setup.md`),
 not `opencircuitsf.com` — except the policy does not name that identity
 either, for the reason below.
@@ -1849,7 +1850,7 @@ actually relies on.
 building it needs an AWS account, which does not exist yet (`CLAUDE.md` §10
 item 2), and the user deferred all AWS work to deployment, same as SES.~~
 **Correction (`#0430`, 2026-09-05):** both grounds `#0229` gave have lapsed —
-the AWS account exists (`378152330719`, re-verified read-only via `aws sts
+the AWS account exists (id in the private AWS repo, re-verified read-only via `aws sts
 get-caller-identity` for this issue) with SES live in it, and deployment
 itself happened on 2026-08-25, so "deferred until deployment" has also
 passed. **No replacement decision to build S3 upload is recorded** — it
@@ -2429,7 +2430,7 @@ anything that is not a fresh scratch database:
   policy, no bucket-level encryption or public-access block, and no IAM
   policy scoped to a bucket prefix~~, because none of those AWS resources
   exist yet (`CLAUDE.md` §10 item 2)~~. **Correction (`#0430`, 2026-09-05):**
-  the AWS account now exists (`378152330719`) and SES is live in it, so that
+  the AWS account now exists (id in the private AWS repo) and SES is live in it, so that
   precondition has lapsed — these resources simply have not been built, and
   no decision to build them is recorded. `PRD.md` §10.6 still records an S3
   upload leg as addable on top of `backup.sh`, not as work that was skipped
@@ -3415,7 +3416,7 @@ that the deploy did not touch:
   `docs/configuration.md` for internal consistency (variable names, default
   values), not validated against a real AWS account, which does not exist.~~
   **Correction (`#0426`, 2026-09-04):** this no longer stands — the AWS
-  account (`378152330719`) exists and SES is live in it, per
+  account (id in the private AWS repo) exists and SES is live in it, per
   `docs/aws-iam-setup.md`'s facts table. The IAM policy shown in the `## IAM`
   section above is still not validated against a live `aws iam
   simulate-principal-policy` call or a `GetRolePolicy` read from this

@@ -3,7 +3,9 @@
 **Configured 2026-08-25, except for two things** — the EC2 instance role and
 SES production access. Everything below that describes DNS, the identity, the
 configuration set, and event ingestion is a record of what exists, measured
-against account `378152330719`; the two gaps are called out where they bite.
+against the production account (id in the private AWS repo — identifiers are
+redacted from this public repo per `#0511`; concrete values live in
+[`brennanMKE/AWS`](https://github.com/brennanMKE/AWS)); the two gaps are called out where they bite.
 See [`aws-iam-setup.md`](aws-iam-setup.md) for the instance-role work,
 [`mailing-list.md`](mailing-list.md) for the sending engine that consumes this
 setup, and [`unsubscribe.md`](unsubscribe.md) for the inbound `mailto:` design
@@ -56,7 +58,7 @@ in one place. **Do not migrate to `us-west-2`** (`#0057`'s planning pass).
 
 ## Domain verification and DNS (Route 53)
 
-Hosted zone `Z0825067RV8QY5UIKS96`. These seven records were created
+Hosted zone `$ROUTE53_ZONE_ID` (id in the private AWS repo). These seven records were created
 2026-08-25 and all resolve; SES reports the identity verified with DKIM and
 MAIL FROM both `SUCCESS`.
 
@@ -91,10 +93,10 @@ report volume is real: aggregate XML arrives daily from every receiver that
 sees your mail.
 
 **Note on the wildcard.** The zone has a `*.opencircuitsf.com` wildcard **A**
-record pointing at the web server (`98.84.75.184`, measured against the
+record pointing at the web server's public IP (`$DEPLOY_IP`, measured against the
 zone's authoritative nameserver — not a CNAME, and not
-`ec2.smallsharptools.com`, which resolves to a different IP,
-`44.222.209.183`; see `#0057`'s review). Creating explicit records at `mailing.` and
+`ec2.smallsharptools.com`, which resolves to a different,
+unrelated IP; see `#0057`'s review and the private AWS repo for the values). Creating explicit records at `mailing.` and
 `bounce.mailing.` suppresses wildcard synthesis for those exact names, so they
 no longer resolve as web hosts. Nothing served them, so nothing broke — but it
 is the kind of thing to remember before adding a record at a name you expect
@@ -120,15 +122,15 @@ sandbox is enough to develop against; it is not enough to launch.
 ## IAM
 
 > **Done 2026-08-25.** Role `opencircuit-instance` (inline policy
-> `opencircuit-ses-send`) is attached to `i-0e3bd89e87d1c2364`; the service
-> user resolves to
-> `assumed-role/opencircuit-instance/i-0e3bd89e87d1c2364` and sends
+> `opencircuit-ses-send`) is attached to the then-current instance (id in the
+> private AWS repo); the service
+> user resolves to an assumed-role session for that role and sends
 > successfully. See [`aws-iam-setup.md`](aws-iam-setup.md).
 >
 > **Correction (`#0508`, 2026-09-12):** that instance is decommissioned as
 > far as this service is concerned. Production now runs on
-> `i-01c45429c78f3adf7` (`photon.sstools.co`), and the role actually
-> attached there is **`opencircuit-web-2026`**, not `opencircuit-instance`.
+> `$DEPLOY_INSTANCE_ID` (`$DEPLOY_HOST`), and the role actually
+> attached there is **`$DEPLOY_ROLE`**, not `opencircuit-instance`.
 > The same `opencircuit-ses-send` permission shape applies — it was
 > presumably recreated for the new role when the box was provisioned — but
 > re-verify it there rather than assuming; see `CLAUDE.md` §7.
@@ -164,7 +166,7 @@ verified before anything in the body is trusted — see
 |---|---|
 | Configuration set | `opencircuit-transactional`, reputation metrics on |
 | Event destination | `sns-events` — SEND, DELIVERY, BOUNCE, COMPLAINT, REJECT, RENDERING_FAILURE, DELIVERY_DELAY |
-| SNS topic | `arn:aws:sns:us-east-1:378152330719:opencircuit-ses-events` |
+| SNS topic | `arn:aws:sns:us-east-1:AWS_ACCOUNT_ID:opencircuit-ses-events` |
 | Topic policy | owner full control, plus `sns:Publish` for `ses.amazonaws.com` conditioned on `SourceAccount` and a `SourceArn` under this account's SES |
 | Subscription | HTTPS → `https://www.opencircuitsf.com/api/ses/notifications`, **auto-confirmed** |
 | `SES_EVENTS_TOPIC_ARN` | set in `/etc/opencircuit/config.env` |
@@ -236,7 +238,7 @@ records; everything in it is outward-facing and account-wide in one step
 (A10 below), so **the user runs every command in this section**, not an
 agent (`CLAUDE.md` §8b, §9).
 
-All commands run in **`us-east-1`**, account `378152330719`. Ready-to-apply
+All commands run in **`us-east-1`**, account `$AWS_ACCOUNT_ID` (placeholder — see the `#0511` redaction note above). Ready-to-apply
 JSON documents for the policy/rule steps live in
 [`deploy/aws/`](../deploy/aws/README.md) — that directory's own `README.md`
 is the file manifest; this section is the ordering, the gate, and the
@@ -357,7 +359,7 @@ aws sns create-topic --name opencircuit-inbound-mail --region us-east-1
 ```
 
 Confirm the returned `TopicArn` is exactly
-`arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail` — that value
+`arn:aws:sns:us-east-1:$AWS_ACCOUNT_ID:opencircuit-inbound-mail` — that value
 is already baked into `.env.example`'s `SES_INBOUND_TOPIC_ARN` and into
 `deploy/aws/A7-sns-topic-policy.json` / `A9-ses-receipt-rule.json`.
 
@@ -366,7 +368,7 @@ may publish, scoped the same way as A4):
 
 ```bash
 aws sns set-topic-attributes --region us-east-1 \
-  --topic-arn arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail \
+  --topic-arn arn:aws:sns:us-east-1:$AWS_ACCOUNT_ID:opencircuit-inbound-mail \
   --attribute-name Policy --attribute-value file://deploy/aws/A7-sns-topic-policy.json
 ```
 
@@ -428,7 +430,7 @@ runbook creates, edits, or deletes any record at the bare apex.
 
 ```bash
 aws route53 change-resource-record-sets \
-  --hosted-zone-id Z0825067RV8QY5UIKS96 \
+  --hosted-zone-id $ROUTE53_ZONE_ID \
   --change-batch file://deploy/aws/D2-route53-change-batch-mx.json
 ```
 
@@ -442,7 +444,7 @@ Wait for `"Status": "INSYNC"` before treating the record as live (usually
 well under a minute).
 
 **The RFC 4592 consequence, and why it's safe.** The zone's
-`*.opencircuitsf.com` wildcard **A** record (today `98.84.75.184`, the web
+`*.opencircuitsf.com` wildcard **A** record (today `$DEPLOY_IP`, the web
 server — measured against the zone's authoritative nameserver
 `ns-923.awsdns-51.net`; a CNAME query at the name returns empty while an A
 query returns this value directly, so it is an A record, not a CNAME, and
@@ -481,11 +483,11 @@ confirmed first.
 bucket.** Last, because nothing reads the bucket until `#0058`'s deployed
 code does. **Corrected (`#0508`, 2026-09-12):** the plan's original
 `--role-name opencircuit-instance` targets the now-decommissioned instance's
-role. The live box runs `i-01c45429c78f3adf7` (`photon.sstools.co`) and
-carries the role **`opencircuit-web-2026`** instead — grant to that:
+role. The live box runs `$DEPLOY_INSTANCE_ID` (`$DEPLOY_HOST`) and
+carries the role **`$DEPLOY_ROLE`** instead — grant to that:
 
 ```bash
-aws iam put-role-policy --role-name opencircuit-web-2026 \
+aws iam put-role-policy --role-name $DEPLOY_ROLE \
   --policy-name opencircuit-inbound-s3 \
   --policy-document file://deploy/aws/A11-iam-inline-policy.json
 ```
@@ -494,7 +496,7 @@ aws iam put-role-policy --role-name opencircuit-web-2026 \
 
 **Out of scope for this issue** — belongs to `#0058`'s own deploy, not
 `#0057`'s: setting `SES_INBOUND_BUCKET=opencircuitsf-inbound` and
-`SES_INBOUND_TOPIC_ARN=arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail`
+`SES_INBOUND_TOPIC_ARN=arn:aws:sns:us-east-1:AWS_ACCOUNT_ID:opencircuit-inbound-mail`
 in `/etc/opencircuit/config.env` and restarting `opencircuit.service` so
 `POST /api/ses/inbound` actually starts verifying and processing messages.
 Both variables are already correct in `.env.example`
@@ -511,7 +513,7 @@ and restart above, not the code.
 
 ```bash
 aws sns subscribe --region us-east-1 \
-  --topic-arn arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail \
+  --topic-arn arn:aws:sns:us-east-1:$AWS_ACCOUNT_ID:opencircuit-inbound-mail \
   --protocol https \
   --notification-endpoint https://www.opencircuitsf.com/api/ses/inbound
 ```
@@ -521,7 +523,7 @@ subscription's behavior):
 
 ```bash
 aws sns list-subscriptions-by-topic --region us-east-1 \
-  --topic-arn arn:aws:sns:us-east-1:378152330719:opencircuit-inbound-mail
+  --topic-arn arn:aws:sns:us-east-1:$AWS_ACCOUNT_ID:opencircuit-inbound-mail
 ```
 
 `SubscriptionArn` should be a real ARN, not the literal string
@@ -542,7 +544,7 @@ reverse for the parts that were actually created this pass:
 | `aws sns delete-topic` on `opencircuit-inbound-mail` | removes A6/A7 |
 | Empty then delete the bucket `opencircuitsf-inbound` | removes A2–A5 — **but this bucket predates this pass; confirm nothing else depends on it before deleting** |
 | Delete the D1 record set, delete the SES identity `lists.opencircuitsf.com` | removes the verification — again, both predate this pass |
-| `aws iam delete-role-policy --role-name opencircuit-web-2026 --policy-name opencircuit-inbound-s3` | removes the instance-role grant (role name corrected `#0508`, 2026-09-12 — see step 10 above) |
+| `aws iam delete-role-policy --role-name $DEPLOY_ROLE --policy-name opencircuit-inbound-s3` | removes the instance-role grant (role name corrected `#0508`, 2026-09-12 — see step 10 above) |
 
 **Confirm apex mail still flows** after any of the above, especially after
 D2:

@@ -202,11 +202,10 @@ answers live in `CLAUDE.md` §7 and `docs/deployment.md`'s production-facts
 table. Summarised here so this section is not misleading:
 
 - **Instance / SSH** — **superseded (`#0508`, 2026-09-12): production moved to
-  a different instance.** The original deploy-day box (`i-0e3bd89e87d1c2364`,
-  `bluesky.sstools.co`, `44.222.209.183`, reached by the alias formerly named
-  `ec2`) is decommissioned as far as this service is concerned. Current:
-  `i-01c45429c78f3adf7`, a `t4g.small` (arm64, 1846 MB RAM, 2 vCPU) in
-  `us-east-1`, hostname `photon.sstools.co`, IP `98.84.75.184`. `ssh photon`
+  a different instance.** The original deploy-day box (instance id, address
+  and IP in the private AWS repo — see the redaction note in `CLAUDE.md` §7)
+  is decommissioned as far as this service is concerned. Current: a
+  `t4g.small` (arm64, 1846 MB RAM, 2 vCPU) in `us-east-1`. `ssh photon`
   (already configured) gets you there. See `CLAUDE.md` §7 for the
   authoritative current facts.
 - **`DocumentRoot`** — was `/var/www/vhosts/www.opencircuitsf.com`. The Go

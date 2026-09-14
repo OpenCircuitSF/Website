@@ -9,8 +9,8 @@
       "Resource": "arn:aws:s3:::opencircuitsf-inbound/unsubscribe/*",
       "Condition": {
         "StringEquals": {
-          "AWS:SourceAccount": "378152330719",
-          "AWS:SourceArn": "arn:aws:ses:us-east-1:378152330719:receipt-rule-set/opencircuit-inbound:receipt-rule/unsubscribe"
+          "AWS:SourceAccount": "AWS_ACCOUNT_ID",
+          "AWS:SourceArn": "arn:aws:ses:us-east-1:AWS_ACCOUNT_ID:receipt-rule-set/opencircuit-inbound:receipt-rule/unsubscribe"
         }
       }
     }
