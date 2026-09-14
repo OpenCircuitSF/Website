@@ -356,6 +356,12 @@ already on the box per `CLAUDE.md` §7.
   github.com/golang-migrate/migrate/v4/cmd/migrate@latest` (or `brew install
   golang-migrate`) is fine — that machine has Go by design.
 
+  **Installed and verified 2026-09-13 (`#0513`):** the box now carries the
+  official `v4.20.1` `migrate.linux-arm64.tar.gz` binary at
+  `/usr/local/bin/migrate` — `migrate -version` reads `4.20.1` and the
+  on-box sha256 matches the release tarball byte-for-byte. Newer than the
+  `v4.18.1` pin above; the version is **pinned and updated manually**.
+
 - **`openssl` and `certbot`**:
 
   ```bash
