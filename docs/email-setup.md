@@ -35,7 +35,7 @@ anything reached DNS.
 | Envelope / `Return-Path` | `bounce.mailing.opencircuitsf.com` (custom MAIL FROM, `SUCCESS`) |
 | **Apex MX** | **untouched.** Still Google. `CLAUDE.md` §9's "never point the apex MX at SES" is not theoretical here — it would hijack real mail |
 | **Apex SPF / TXT** | **untouched.** The apex needs no SES record at all, because nothing sends as the apex |
-| Inbound `mailto:` unsubscribe | `lists.opencircuitsf.com` (`EMAIL_LIST_DOMAIN`) — a *third*, separate subdomain, and not built yet |
+| Inbound `mailto:` unsubscribe | `lists.opencircuitsf.com` (`EMAIL_LIST_DOMAIN`) — a *third*, separate subdomain, **receive-only**: it verifies through its `_amazonses` TXT and carries Easy DKIM CNAMEs SES issued automatically on creation (`#0506`), but **nothing ever sends from it** — sending stays on `mailing.` |
 
 The apex currently has **no SPF and no DMARC record at all**. That is a
 pre-existing gap in the Google Workspace setup, not something this project
@@ -72,7 +72,10 @@ MAIL FROM both `SUCCESS`.
 2026-09-11) the MX at `lists.opencircuitsf.com` itself — see "Inbound
 unsubscribe (Phase 4, `#0057`)" below. The identity-verification TXT at
 `_amazonses.lists.opencircuitsf.com` is a different name and does already
-exist.
+exist. So do three Easy DKIM CNAMEs at `lists.opencircuitsf.com` — SES
+issues those automatically when a domain identity is created, even a
+receive-only one (`#0506`): they sign nothing, because nothing sends from
+that identity, and they are left in place rather than removed to tidy DNS.
 
 **DMARC is on the subdomain, not the apex, and that is the point.** A receiver
 resolving DMARC for `mailing.opencircuitsf.com` checks `_dmarc.mailing.…`
@@ -243,7 +246,7 @@ verification.
 
 | Row | State |
 |---|---|
-| **A1** — SES domain identity `lists.opencircuitsf.com` | Its DNS verification TXT exists (see D1 below), which only happens after `CreateEmailIdentity`/`VerifyDomainIdentity` runs — **treat A1 as created**, but re-confirm verification actually completed (step 0 below), since no credential available to this pass can call `ses:GetIdentityVerificationAttributes`. |
+| **A1** — SES domain identity `lists.opencircuitsf.com` | Its DNS verification TXT exists (see D1 below), which only happens after `CreateEmailIdentity`/`VerifyDomainIdentity` runs — **treat A1 as created**, but re-confirm verification actually completed (step 0 below), since no credential available to this pass can call `ses:GetIdentityVerificationAttributes`. **Easy DKIM is enabled on it** — the three `<token>._domainkey.lists.opencircuitsf.com` CNAMEs SES issued automatically on creation are in the zone (`#0506`, corrected from this runbook's original "receive-only; no DKIM" wording); on an identity nothing sends from, DKIM signs nothing, and the CNAMEs are left alone |
 | **D1** — `_amazonses.lists.opencircuitsf.com` TXT | **Exists**: `"APWUrtnPLURlLWOGg0ybU3t6HbptTzDE77f8JE1YHX0="`. Kept as `deploy/aws/D1-route53-change-batch-txt.json` for reference and rollback only — **do not re-run it.** |
 | **A2** — S3 bucket `opencircuitsf-inbound` | **Exists** (`head-bucket` → 403, against a random-name control returning 404 — 403 means the bucket is there and this identity just can't read it). Its public-access-block, lifecycle, and policy state could **not** be read from here — confirm each with the read commands in step 1 below before assuming any of A3/A4/A5 still need to be applied. |
 | **D2** — `lists.opencircuitsf.com` MX | **Absent.** Still served only by the zone's `*.opencircuitsf.com` wildcard A record. This is correct — D2 is deliberately last (step 8). |
@@ -294,8 +297,11 @@ aws sesv2 get-email-identity --email-identity lists.opencircuitsf.com --region u
 Expect `"VerificationStatus": "SUCCESS"` (or the v1-shaped
 `aws ses get-identity-verification-attributes --identities
 lists.opencircuitsf.com --region us-east-1` → `"VerificationStatus":
-"Success"`, depending which API originally created the identity). If it
-instead reads `"PENDING"`, the TXT record hasn't finished propagating or
+"Success"`, depending which API originally created the identity). The same
+v2 response also carries the identity's DKIM state — expect Easy DKIM
+enabled with the three CNAME tokens already in the zone (SES's default on
+creation; `#0506`). If verification instead reads `"PENDING"`, the TXT
+record hasn't finished propagating or
 SES hasn't polled it yet — wait and re-check before continuing; nothing
 past this point works until it reads `Success`.
 

@@ -106,7 +106,7 @@ used only to construct a `mailto:` header.
 
 | # | Object | Name | Notes |
 |---|---|---|---|
-| A1 | SES domain identity | `lists.opencircuitsf.com` | **the identity already exists** — its `_amazonses` TXT resolves (D1, confirmed 2026-09-11), which proves the token was published, **not** that SES finished verifying. `ses:GetEmailIdentity` is denied to every credential available to us (re-confirmed 2026-09-11), so **confirm `VerificationStatus: SUCCESS` at ordering step 2 before continuing** — receive-only; no DKIM, no MAIL FROM, never used to send |
+| A1 | SES domain identity | `lists.opencircuitsf.com` | **the identity already exists** — its `_amazonses` TXT resolves (D1, confirmed 2026-09-11), which proves the token was published, **not** that SES finished verifying. `ses:GetEmailIdentity` is denied to every credential available to us (re-confirmed 2026-09-11), so **confirm `VerificationStatus: SUCCESS` at ordering step 2 before continuing** — receive-only; no MAIL FROM, never used to send. **Corrected (`#0506`, 2026-09-13): Easy DKIM is enabled on it** — SES's automatic default when the identity was created, evidenced by the three `<token>._domainkey.lists.opencircuitsf.com` CNAMEs it issued (see the verified list below). Nothing sends from this identity and no configuration in this runbook makes it able to — sending stays on `mailing.opencircuitsf.com`. DKIM on an identity nothing sends from signs nothing; the CNAMEs are left in place rather than removed to tidy DNS |
 | A2 | S3 bucket | `opencircuitsf-inbound` | **already exists** (`head-bucket` → 403 against a random-name control's 404, confirmed 2026-09-11). Its public-access-block, lifecycle and bucket-policy state could not be read from here — read each with the matching `get-` command (ordering step 4) before applying A3/A4/A5 |
 | A3 | S3 Block Public Access | all four flags on A2 | holds inbound mail; must never be public |
 | A4 | S3 bucket policy | on A2 | allow `ses.amazonaws.com` `s3:PutObject` on `…/unsubscribe/*` **only**, conditioned on `AWS:SourceAccount` **and** `AWS:SourceArn` of the exact receipt rule |
@@ -267,6 +267,24 @@ Read live on 2026-09-04/05, read-only, with the rows below re-measured
   re-confirmed 2026-09-11) — ordering step 2 is a required check, not a
   formality. D1 must not be re-applied as `CREATE`; the record set already
   exists.
+- **A1 has Easy DKIM enabled — SES's automatic default, not a deliberate
+  step (`#0506`)** — the three CNAMEs
+  `5mmlcrvrq6cdasr7nesrsn3dccbegjxe` / `hawuw6ipm5grsf2lt2352tawz6r67rxl` /
+  `matlz3nwf4655blljbpeewyspc2delzj`, each at
+  `<token>._domainkey.lists.opencircuitsf.com` pointing at
+  `<token>.dkim.amazonses.com`, were read from
+  `route53 list-resource-record-sets` on zone `Z0825067RV8QY5UIKS96`
+  2026-09-11 and re-confirmed resolving via `dig CNAME` 2026-09-13. That they
+  came from SES rather than from any deliberate step here follows from
+  `#0057`'s own record: the plan specified the identity receive-only with no
+  DKIM, and the only change batch kept for it is D1's TXT — no runbook of
+  ours ever created these records. **That the keys are enabled at the SES
+  side specifically was not directly readable**:
+  `ses:GetIdentityDkimAttributes` and `ses:GetEmailIdentity` are denied to
+  every credential available to us (attempted 2026-09-13) — so the
+  automatic-default conclusion rests on the DNS evidence plus the plan
+  record, not on a live `DkimEnabled` read. They sign nothing either way:
+  nothing sends from this identity, and no configuration here changes that
 - **`s3://opencircuitsf-inbound` (A2) already exists** — `head-bucket` returns
   403 against it, versus 404 for a random-name control, confirmed 2026-09-11.
   **Its lockdown state (public-access-block, lifecycle, bucket policy) could
@@ -281,7 +299,10 @@ Read live on 2026-09-04/05, read-only, with the rows below re-measured
 
 **We could not read**, and did not pursue: the `opencircuit-instance` role's
 attached policy documents, `sesv2 get-account`, A1's `VerificationStatus`
-(`ses:GetEmailIdentity` denied), the configuration set and events topic
+(`ses:GetEmailIdentity` denied), A1's DKIM attributes
+(`ses:GetIdentityDkimAttributes` denied, attempted 2026-09-13 — see the
+`#0506` entry above for what the DNS evidence does establish), the
+configuration set and events topic
 above (`ses:GetConfigurationSet`/`sns:GetTopicAttributes` denied), and A2's
 public-access-block/lifecycle/policy state. All denied or unreadable from
 every identity available on the box. No credentials were created or sought.
