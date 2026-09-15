@@ -1140,12 +1140,19 @@ describes:**
 # self-signed cert (the real /etc/letsencrypt/... paths don't exist on a
 # dev machine); Include the real vhost file unmodified; set ErrorLog/
 # ServerName so httpd has somewhere to log and doesn't just warn.
-openssl req -x509 -newkey rsa:2048 -keyout /tmp/privkey.pem \
-  -out /tmp/fullchain.pem -days 1 -nodes -subj "/CN=test"
-sed "s#/etc/letsencrypt/live/opencircuitsf.com/fullchain.pem#/tmp/fullchain.pem#; \
-     s#/etc/letsencrypt/live/opencircuitsf.com/privkey.pem#/tmp/privkey.pem#" \
-  deploy/apache/opencircuitsf.com.conf > /tmp/vhost-scratch.conf
-cat > /tmp/httpd-check.conf <<EOF
+# Scratch writes go under the repo's gitignored .scratch/, not a system
+# temp dir — operator directive, 2026-09-13: every workstation write stays
+# inside the repo (#0542). Resolved to an absolute path because the
+# wrapper's ServerRoot "/usr" below makes every relative Include resolve
+# against /usr:
+SCRATCH="$PWD/.scratch/httpd-check"
+mkdir -p "$SCRATCH"
+openssl req -x509 -newkey rsa:2048 -keyout "$SCRATCH/privkey.pem" \
+  -out "$SCRATCH/fullchain.pem" -days 1 -nodes -subj "/CN=test"
+sed "s#/etc/letsencrypt/live/opencircuitsf.com/fullchain.pem#$SCRATCH/fullchain.pem#; \
+     s#/etc/letsencrypt/live/opencircuitsf.com/privkey.pem#$SCRATCH/privkey.pem#" \
+  deploy/apache/opencircuitsf.com.conf > "$SCRATCH/vhost-scratch.conf"
+cat > "$SCRATCH/httpd-check.conf" <<EOF
 ServerRoot "/usr"
 LoadModule mpm_event_module libexec/apache2/mod_mpm_event.so
 LoadModule proxy_module libexec/apache2/mod_proxy.so
@@ -1157,11 +1164,11 @@ LoadModule unixd_module libexec/apache2/mod_unixd.so
 LoadModule log_config_module libexec/apache2/mod_log_config.so
 LoadModule authz_core_module libexec/apache2/mod_authz_core.so
 Listen 8443
-Include /tmp/vhost-scratch.conf
-ErrorLog /tmp/httpd-check-error.log
+Include $SCRATCH/vhost-scratch.conf
+ErrorLog $SCRATCH/httpd-check-error.log
 ServerName localhost
 EOF
-httpd -t -f /tmp/httpd-check.conf
+httpd -t -f "$SCRATCH/httpd-check.conf"
 # → Syntax OK
 ```
 
@@ -1886,7 +1893,13 @@ followed by two people at once (an incident, a rehearsal), and it creates
 and **drops** databases: a collision is one run destroying another's target
 mid-restore, not a confusing error message. Step 1 below is where the
 namespace is actually picked, since that is the first place one is needed —
-not here, where it is easy to skip past.
+not here, where it is easy to skip past. The drill's file locations have
+since moved once more (`#0542`): `BACKUP_ROOT` and the constraint diff now
+live under the repo's gitignored `.scratch/`, per the operator directive of
+2026-09-13 that every workstation write stays inside the repo.
+`/var/backups/postgres` — #0541's durable root for the *server's* real
+backups — would be the wrong target here on purpose: rehearsal dumps are
+disposable, and this drill runs on a workstation, not the box.
 
 ```bash
 # 1. Pick a namespace for this run, then create the drill's source
@@ -1899,6 +1912,15 @@ not here, where it is easy to skip past.
 #    derived from it, which is what lets two people run this drill at the
 #    same time without colliding (#0247):
 ISSUE="${ISSUE:-$$}"
+#    The drill's own scratch files (BACKUP_ROOT, the constraint diff) live
+#    under the repo's gitignored .scratch/, not a system temp dir — operator
+#    directive, 2026-09-13: every workstation write stays inside the repo
+#    (#0542). /var/backups/postgres — #0541's durable root for the server's
+#    real backups — would be wrong here on purpose: rehearsal dumps are
+#    disposable and this runs on a workstation. backup.sh mkdir -p's the
+#    database's own subdirectory but not this root's parents, so create it:
+SCRATCH="$PWD/.scratch"
+mkdir -p "$SCRATCH"
 #    scripts/testdb.sh lowercases the database name it derives from its
 #    argument (Postgres identifiers are effectively case-folded); every
 #    OTHER ${ISSUE} interpolation below (BACKUP_ROOT, the dump path,
@@ -2014,7 +2036,7 @@ psql "$DSN" -f seed.sql                     # your own INSERT ... RETURNING id
 #    after the database (opencircuit_test_${ISSUE}src-latest.dump), so this
 #    is a second, independent layer of collision protection rather than
 #    relying on the filename alone:
-BACKUP_ROOT="/tmp/backup-drill-${ISSUE}" BACKUP_RUN_AS="" \
+BACKUP_ROOT="$SCRATCH/backup-drill-${ISSUE}" BACKUP_RUN_AS="" \
   bash scripts/db/backup.sh "opencircuit_test_${ISSUE}src"
 #    Success looks like: "ok — <size>" per database and a final
 #    "Done — all databases backed up." with exit 0. Any pg_dump failure
@@ -2025,7 +2047,7 @@ BACKUP_ROOT="/tmp/backup-drill-${ISSUE}" BACKUP_RUN_AS="" \
 DST_DSN="postgres://opencircuit:<password>@localhost:5432/opencircuit_test_${ISSUE}dst?sslmode=disable"
 BACKUP_RUN_AS="" RESTORE_CREATE=1 \
   bash scripts/db/restore.sh \
-    "/tmp/backup-drill-${ISSUE}/opencircuit_test_${ISSUE}src/opencircuit_test_${ISSUE}src-latest.dump" \
+    "$SCRATCH/backup-drill-${ISSUE}/opencircuit_test_${ISSUE}src/opencircuit_test_${ISSUE}src-latest.dump" \
     "opencircuit_test_${ISSUE}dst"
 #    Success looks like: "Done. Verify with: psql -d <target> -c '\dt'" with
 #    no pg_restore errors printed above it. pg_restore's --clean --if-exists
@@ -2093,21 +2115,21 @@ migrate -path migrations -database "$DST_DSN" up
 #        or a fixed line count; expect exactly this rule, checked below:
 diff <(psql "$DSN" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in (${EXCLUDE_SQL}) group by table_name order by 1") \
      <(psql "$DST_DSN" -tAc "select table_name, count(*) from information_schema.table_constraints where table_schema='public' and table_name not in (${EXCLUDE_SQL}) group by table_name order by 1") \
-     > /tmp/constraint-diff-${ISSUE}.txt
-cat /tmp/constraint-diff-${ISSUE}.txt
+     > "$SCRATCH/constraint-diff-${ISSUE}.txt"
+cat "$SCRATCH/constraint-diff-${ISSUE}.txt"
 if [ -n "$ALTERED_TABLES" ]; then
   echo "Expect one differing pair per name in ALTERED_TABLES (${ALTERED_TABLES}); nothing else."
 else
   echo "ALTERED_TABLES is empty for HEAD's migration — expect NO output above. Any output is a real failure."
 fi
-#    Every table name appearing in /tmp/constraint-diff-${ISSUE}.txt must
+#    Every table name appearing in "$SCRATCH/constraint-diff-${ISSUE}.txt" must
 #    be a name from $ALTERED_TABLES — a different table, or any output at
 #    all when $ALTERED_TABLES is empty, is a real failure. diff(1) itself
 #    exits 1 whenever it finds a difference, which is expected and correct
 #    whenever $ALTERED_TABLES is non-empty — see the note on exit status
 #    right after this block, and don't read a non-zero exit from THIS diff
 #    as the drill having failed on that basis alone.
-rm -f /tmp/constraint-diff-${ISSUE}.txt
+rm -f "$SCRATCH/constraint-diff-${ISSUE}.txt"
 #
 #    Row counts, sequence last_values, and index counts get the same
 #    table-exclusion treatment but with NO exception — any line of diff
@@ -2168,7 +2190,7 @@ for t in $NEW_TABLES; do psql "$DST_DSN" -c "select count(*) from ${t};"; done
 #    yours under the same template-derived naming scheme (#0247):
 scripts/testdb.sh drop "${ISSUE}src"
 scripts/testdb.sh drop "${ISSUE}dst"
-rm -rf "/tmp/backup-drill-${ISSUE}"
+rm -rf "$SCRATCH/backup-drill-${ISSUE}"
 #    `testdb.sh drop` (#0228) reports a real failure and exits non-zero
 #    instead of silently claiming "does not exist" — see "A real script bug"
 #    below. **#0249**: a database restore.sh created with RESTORE_CREATE=1
