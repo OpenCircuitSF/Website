@@ -7,77 +7,19 @@
     <meta name="theme-color" content="#0A0D0B" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#F4F6F3" media="(prefers-color-scheme: light)" />
     <title>%%OC_TITLE%%</title>
-    <!-- Per-route social preview tags. These %%OC_*%% tokens are placeholder
-         markers, not real content -- internal/seo (#0019) loads this built
-         file into memory at startup and substitutes them per request path
-         before serving, since social crawlers (Discord, Slack, iMessage, X,
-         Facebook, LinkedIn) fetch the raw HTML and never execute the SPA
-         bundle, so the values need to already be correct in the markup they
-         receive. Every substituted value is HTML-escaped by the injector. If
-         you're seeing the raw, unsubstituted title placeholder in a browser
-         tab, you're looking at `vite`/`vite preview` output directly (dev mode) rather
-         than through the Go server that performs the substitution -- use
-         `./scripts/dev.sh --built` to see the real injected values. -->
     <meta name="description" content="%%OC_DESCRIPTION%%" />
     <meta property="og:title" content="%%OC_OG_TITLE%%" />
     <meta property="og:description" content="%%OC_OG_DESCRIPTION%%" />
     <meta property="og:image" content="%%OC_OG_IMAGE%%" />
     <meta property="og:url" content="%%OC_OG_URL%%" />
     <meta property="og:type" content="%%OC_OG_TYPE%%" />
-    <!-- Static literal, not a %%OC_*%% token (#0273): the site name never
-         varies by route, so a token would add substitution surface (and a
-         distPlaceholderTokens/dist_placeholder_guard_test.go entry) for a
-         constant. -->
     <meta property="og:site_name" content="Open Circuit SF" />
     <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
-    <!-- twitter:title/twitter:description (#0273): Twitter/X documents a
-         fallback to og:title/og:description when these are absent, but the
-         card is declared summary_large_image, which is worth setting
-         explicitly rather than relying on the fallback. Both mirror
-         m.OGTitle/m.OGDescription at substitution time (internal/seo/seo.go's
-         substitute) -- deliberately not independent values, so there is one
-         thing to keep correct per route, not two that could drift.
-         twitter:image is deliberately NOT added: Twitter/X falls back to
-         og:image, and a second copy of the same URL is one more thing to
-         drift. -->
     <meta name="twitter:title" content="%%OC_TWITTER_TITLE%%" />
     <meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
-    <!-- Per-route canonical URL (#0529). The token below is substituted with
-         a whole <link rel="canonical" href="..."> element for every
-         indexable public route, or an empty string for private/token routes,
-         the 404 default, and unknown/draft/withheld slugs — a canonical must
-         never point at a page that is not publicly available, so none is
-         emitted there at all. The URL is built from BASE_URL, equals og:url,
-         and is HTML-escaped by the injector. -->
     %%OC_CANONICAL%%
-    <!-- schema.org Event structured data for a workshop detail page (#0055,
-         PRD §7.4). The JSON-LD placeholder token below is substituted with
-         either a whole `<script type="application/ld+json">...</script>` block (built
-         server-side by internal/seo/jsonld.go) or an empty string for every
-         route that isn't a workshop with enough data for a spec-valid Event
-         (name/startDate/location -- see that file's doc comments for exactly
-         which workshops qualify). Unlike the %%OC_OG_*%% tokens above, this
-         value is NOT run through html.EscapeString -- it is already a
-         complete, self-contained JSON document produced by
-         encoding/json.Marshal, which HTML-escapes <, >, and & by default, so
-         embedding it verbatim inside <script> is safe and re-escaping it as
-         HTML text would corrupt the JSON. -->
     %%OC_JSONLD%%
-    <!-- Atom feed of the newsletter archive (#0531). A static literal, not a
-         %%OC_*%% token: every public page carries the same discovery link
-         (root-relative, so it resolves correctly from any route), the same
-         way the favicons and og:site_name above are constants rather than
-         per-route values. -->
     <link rel="alternate" type="application/atom+xml" title="Open Circuit SF newsletter" href="/archive/feed.xml" />
-    <!-- SVG favicon first (currentColor-free, self-switches light/dark via its
-         own internal prefers-color-scheme, so it works before app.css loads);
-         favicon-32.png is the raster fallback for browsers that don't support
-         SVG favicons. The ?v= is a cache-buster: browsers cache favicons very
-         aggressively and will otherwise keep painting a previously-cached icon
-         (e.g. ShortLinks' old white-line one, replaced in #0018). Bump on
-         change. See docs/frontend.md for the file:// mask restriction that
-         affects the header logo (not these <link> icons, which are plain
-         <img>-equivalent references and work under file:// too). -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=1" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=4" />
@@ -94,17 +36,6 @@
     </script>
   </head>
   <body>
-    <!-- #0519: the body token below is substituted server-side, same as the
-         head tokens documented above -- a heading, the route's main text, and
-         plain nav links, for every public route (empty string for a
-         private/token-bearing/unknown route). It exists so a client that
-         never executes JavaScript (a crawler with limited rendering, a
-         link-preview fetcher) still sees a heading and text, not an empty
-         page. web/src/lib/mountTarget.ts's prepareMountTarget clears this
-         element's children before Svelte's mount() appends the real view --
-         mount() APPENDS rather than replaces, so the two must never coexist
-         in the DOM at once. See internal/seo/fallback.go's package doc
-         comment for the full design. -->
     <div id="app">%%OC_BODY%%</div>
     <script type="module" src="/src/main.ts"></script>
   </body>

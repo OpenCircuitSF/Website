@@ -29,7 +29,7 @@ work at all, not optional polish.
 template in memory and substitutes a fixed set of `%%OC_*%%` placeholder
 tokens (`web/index.html`'s markers): `TITLE`, `DESCRIPTION`, `OG_TITLE`,
 `OG_DESCRIPTION`, `OG_IMAGE`, `OG_URL`, `OG_TYPE`, `TWITTER_CARD`,
-`TWITTER_TITLE`, `TWITTER_DESCRIPTION`, and `JSONLD`. `og:site_name` is a
+`TWITTER_TITLE`, `TWITTER_DESCRIPTION`, `CANONICAL`, and `JSONLD`. `og:site_name` is a
 static literal in `web/index.html`, not a token — it never varies by
 route. `twitter:title`/`twitter:description` (`#0273`) explicitly mirror
 `og:title`/`og:description` at substitution time rather than being
@@ -44,6 +44,14 @@ attribute. The `JSONLD` token is the one exception: it is either `""` or a
 complete `<script type="application/ld+json">...</script>` block whose
 body was produced by `encoding/json.Marshal`, which already HTML-escapes
 `<`, `>`, and `&` — escaping it a second time would corrupt the JSON.
+
+The `CANONICAL` token (`#0529`) is substituted with a whole
+`<link rel="canonical" href="...">` element for every indexable public
+route, or an empty string for private/token routes, the 404 default, and
+unknown/draft/withheld slugs — a canonical must never point at a page that
+is not publicly available, so none is emitted there at all. The URL is
+built from `BASE_URL`, equals `og:url` (a test pins the equality), and is
+HTML-escaped like the other head values.
 
 `Site.Middleware` (`internal/seo/site.go`) wraps `handlers.NewSPAHandler`'s
 catch-all: it buffers the SPA handler's response, and if the response was
@@ -441,6 +449,74 @@ purpose — read the linked issue before reopening any of these.
   card image itself, so `og:type` has nothing left to add.
   `/archive/{slug}` pages keep `og:type: article`, correctly — those pages
   really are articles.
+
+## Template conventions (`#0534`)
+
+`web/index.html` carries **no HTML comments**. It used to carry one beside
+every token and static element; they survived every build into the bytes
+each visitor receives, publishing internal issue numbers and document
+references to anyone viewing source, adding bytes to every page, and twice
+fooling tooling here (a regex hunting a tag found the one inside a comment
+while #0064's CSP hash was computed, and a naive heading count found two
+headings on every page during #0519's review). The explanations were moved
+here and into the doc comments beside the token constants in `seo.go`, not
+deleted; the strip happens by removal at the source, not by a build step —
+there is no comment-stripping machinery in the build.
+
+`internal/seo`'s `TestSourceTemplate_CarriesNoHTMLComments` fails if a
+developer comment reappears in the template. Two exceptions are deliberate
+and live outside that rule:
+
+- **`web/dist/index.html`'s "MINIMAL PLACEHOLDER" marker comment stays.**
+  #0141's `TestDistIndexPlaceholder` pins its presence — it is exactly what
+  distinguishes the committed placeholder from real build output — and the
+  placeholder never ships: `npm run build` rewrites the file before
+  anything serves it.
+- **The JavaScript comments inside the bootstrap `<script>` stay.** They
+  are part of the script's bytes, not markup, and stripping them would
+  change the CSP `script-src` hash pinned in
+  `deploy/apache/opencircuitsf.com.conf`. Never reformat that script.
+
+What the removed comments said, now recorded once here:
+
+- **The token mechanism itself** is the "Per-route meta injection" section
+  above: `internal/seo` loads the *built* file at startup and substitutes
+  per request path, because social crawlers fetch raw HTML and never
+  execute the SPA bundle. If you see a raw, unsubstituted `%%OC_*%%`
+  placeholder in a browser tab, you are looking at `vite`/`vite preview`
+  output directly (dev mode) rather than through the Go server that
+  performs the substitution — use `./scripts/dev.sh --built`.
+- **`og:site_name`, and the static-vs-token split generally:** the site
+  name never varies by route, so a token (and its substitution surface,
+  and a guard entry) would buy nothing for a constant. The same reasoning
+  covers the Atom feed link below.
+- **`twitter:title`/`twitter:description`** mirror `og:title`/
+  `og:description` at substitution time rather than being independent
+  fields, so there is one thing to keep correct per route, not two that
+  could drift; `twitter:image` is deliberately absent — Twitter/X falls
+  back to `og:image`, and a second copy of the same URL is one more thing
+  to drift. (Both are in "Per-route meta injection" above.)
+- **The `CANONICAL` token** — whole element or empty string, never pointing
+  at a non-public page — is documented in "Per-route meta injection".
+- **The JSON-LD token's no-re-escaping rule** is documented in "Per-route
+  meta injection" and in `jsonld.go`'s own doc comments.
+- **The body token** and the mount-time clearing that keeps it from
+  coexisting with the SPA are documented in "Server-rendered fallback
+  content" and `internal/seo/fallback.go`'s package doc comment.
+- **The Atom feed discovery link** (`#0531`) is a static literal, not a
+  token: every public page carries the same link, root-relative so it
+  resolves correctly from any route, the same way the favicons and
+  `og:site_name` are constants rather than per-route values.
+- **The favicon links' `?v=` query is a cache-buster** (`favicon-32.png?v=1`,
+  `apple-touch-icon.png?v=4`): browsers cache favicons very aggressively
+  and will otherwise keep painting a previously-cached icon (e.g.
+  ShortLinks' old white-line one, replaced in `#0018`). Bump the version on
+  change. The SVG favicon is currentColor-free and self-switches light/dark
+  via its own internal `prefers-color-scheme`, so it works before app.css
+  loads; `favicon-32.png` is the raster fallback for browsers without SVG
+  favicon support. See docs/frontend.md for the file:// mask restriction
+  that affects the header logo (not these `<link>` icons, which are plain
+  `<img>`-equivalent references and work under file:// too).
 
 ## Where to look
 
