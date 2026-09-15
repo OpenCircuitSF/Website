@@ -844,10 +844,19 @@ web_check() {
 # not just print — `gofmt -l` exits 0 even when it lists files (the #0140
 # shape of bug: a real signal sitting in output nobody checks), so the
 # non-empty output itself is what flips FAILED here.
+#
+# #0539: gofmt's output lines naming paths under .scratch/ are filtered
+# before the non-empty check — both its listing lines and its parse-error
+# lines start with the path when the walk root is ".", as measured while
+# making this change. .scratch/ is gitignored agent scratch (#0537), so an
+# unformatted Go probe parked there by one agent must not fail every
+# agent's run; the gate's intent is that TRACKED Go code is formatted, and
+# nothing else about it changes — a TRACKED unformatted file fails exactly
+# as before.
 gofmt_check() {
   step "gofmt -l (#0161 — formatting drift)"
   local out
-  out="$(gofmt -l . 2>&1)"
+  out="$(gofmt -l . 2>&1 | grep -v '^\.scratch/')"
   if [ -n "$out" ]; then
     FAILED=1
     printf '\033[31mFAILED: gofmt -l found unformatted file(s):\033[0m\n%s\n' "$out"
