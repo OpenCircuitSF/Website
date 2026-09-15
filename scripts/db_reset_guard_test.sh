@@ -129,7 +129,13 @@ RUNID="$(printf '%s' "$RUNID_RAW" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower
 TESTDB="opencircuit${RUNID}gt"   # scoped name; no real issue id or per-agent scratch db can ever produce this
 DEMODB="opencircuit_test_${RUNID}gt_demo"   # Part 5's per-agent-shaped name, now namespaced too
 
-WORKDIR="$(mktemp -d)"
+# Scratch stays inside the repo, under gitignored .scratch/ (#0540 — the same
+# operator directive #0538 applied to the guard harnesses). Namespaced with
+# RUNID (defined above); mkdir -p is required: mktemp -d does not create
+# missing parents. The mutant copies themselves stay in scripts/ — see the
+# header comment above for why their location cannot move.
+mkdir -p "$REPO/.scratch" || { echo "error: cannot create $REPO/.scratch" >&2; exit 1; }
+WORKDIR="$(mktemp -d "$REPO/.scratch/db_reset_guard_${RUNID}.XXXXXX")" || { echo "error: mktemp failed" >&2; exit 1; }
 FAILURES=0
 BG_PIDS=()
 MUTANTS=()   # private copies written into scripts/, removed by the EXIT trap

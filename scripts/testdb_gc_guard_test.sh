@@ -70,7 +70,12 @@ RUNID="$(printf '%s' "$RUNID_RAW" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower
 [ -n "$RUNID" ] || { echo "error: empty run id (derived from ISSUE=$RUNID_RAW)" >&2; exit 1; }
 TESTPREFIX="opencircuit_test_${RUNID}gt_"   # scoped prefix; never matches a real agent's database
 
-WORKDIR="$(mktemp -d)"
+# Scratch stays inside the repo, under gitignored .scratch/ (#0540 — the same
+# operator directive #0538 applied to the three harnesses it relocated).
+# Namespaced with RUNID like check_guard_test.sh's WORKDIR; mkdir -p is
+# required: mktemp -d does not create missing parents.
+mkdir -p "$REPO/.scratch" || { echo "error: cannot create $REPO/.scratch" >&2; exit 1; }
+WORKDIR="$(mktemp -d "$REPO/.scratch/testdb_gc_guard_${RUNID}.XXXXXX")" || { echo "error: mktemp failed" >&2; exit 1; }
 FAILURES=0
 CREATED_DBS=()   # raw databases this script created, for cleanup
 BG_PIDS=()
@@ -244,9 +249,9 @@ while [ "$(psql_admin -tAc "select count(*) from pg_stat_activity where datname=
   WAITED=$((WAITED + 1))
 done
 
-"$SCOPED" gc --all >/tmp/testdb_gc_guard_test_part2.$$ 2>&1
-cat /tmp/testdb_gc_guard_test_part2.$$
-rm -f /tmp/testdb_gc_guard_test_part2.$$
+"$SCOPED" gc --all >"$WORKDIR/testdb_gc_guard_test_part2.$$" 2>&1
+cat "$WORKDIR/testdb_gc_guard_test_part2.$$"
+rm -f "$WORKDIR/testdb_gc_guard_test_part2.$$"
 
 if db_exists "$CONN_DB"; then
   pass "gc --all skipped $CONN_DB, which had a live connection"

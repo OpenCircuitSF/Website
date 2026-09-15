@@ -191,7 +191,14 @@ trap cleanup EXIT INT TERM
 
 # --- build the SPA against the CURRENT working tree (see BUILD STRATEGY above) ---
 step "Building the SPA (rsync + npm run build, not the main tree's web/dist)"
-BUILD_DIR="$(mktemp -d)"
+# Scratch stays inside the repo, under gitignored .scratch/ (#0540 — the same
+# operator directive #0538 applied to the guard harnesses). mkdir -p is
+# required: mktemp -d does not create missing parents. (No RUNID in the
+# template: this script's RUNID is raw "${ISSUE:-$$}", not folded to alnum
+# the way the other guards fold theirs, so it does not belong in a path;
+# mktemp's XXXXXX suffix already makes the directory unique per run.)
+mkdir -p "$REPO/.scratch" || { echo "error: cannot create $REPO/.scratch" >&2; exit 1; }
+BUILD_DIR="$(mktemp -d "$REPO/.scratch/browser_nav_build.XXXXXX")" || { echo "error: mktemp failed" >&2; exit 1; }
 rsync -a --exclude 'node_modules' --exclude 'dist' "$REPO/web/" "$BUILD_DIR/web/"
 ln -s "$REPO/web/node_modules" "$BUILD_DIR/web/node_modules"
 if ! ( cd "$BUILD_DIR/web" && npm run build > "$BUILD_DIR/build.log" 2>&1 ); then

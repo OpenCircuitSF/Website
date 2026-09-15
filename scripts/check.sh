@@ -232,8 +232,8 @@ runpipe() { run bash -o pipefail -c "$1"; }
 # To recompute either pinned digest after a legitimate change (a marker
 # range, not a line number, so it does not drift as the file grows):
 #   sed -n '/^# BEGIN FUNCDEF-0258/,/^# END FUNCDEF-0258/p' scripts/check.sh \
-#     > /tmp/funcdef.sh \
-#     && bash -c '. /tmp/funcdef.sh; resolve_func_hash run scripts/check.sh'
+#     > .scratch/funcdef.sh \
+#     && bash -c '. .scratch/funcdef.sh; resolve_func_hash run scripts/check.sh'
 command -v shasum >/dev/null || { echo "error: shasum not on PATH (needed by FUNCDEF-0258)" >&2; exit 2; }
 command -v mktemp >/dev/null || { echo "error: mktemp not on PATH (needed by FUNCDEF-0258)" >&2; exit 2; }
 command -v env >/dev/null || { echo "error: env not on PATH (needed by FUNCDEF-0258)" >&2; exit 2; }
@@ -276,7 +276,13 @@ funcdef_unexplained() {
 resolve_func_hash() {
   local name="$1" file="$2" tmp out
   [ -n "${BASH:-}" ] || return 1
-  tmp="$(mktemp)" || return 1
+  # #0540: the extraction file is created under gitignored .scratch/ inside
+  # the repo (the operator directive #0537/#0538/#0539 apply to this file
+  # too), not under system TMPDIR. mkdir -p is required: mktemp does not
+  # create missing parents. A failure to create it returns 1, which both
+  # callers already treat as the fail-closed "could not resolve" error.
+  mkdir -p "$REPO/.scratch" || return 1
+  tmp="$(mktemp "$REPO/.scratch/funcdef.XXXXXX")" || return 1
   grep -E "^${FUNCDEF_CANDIDATE_RE}\$" "$file" > "$tmp"
   printf 'declare -f %s\n' "$name" >> "$tmp"
   out="$(env -i "$BASH" --noprofile --norc "$tmp" 2>/dev/null)"
@@ -754,8 +760,8 @@ accounting_probe() {
 #
 # To recompute after a legitimate change to the block above:
 #   sed -n '/^# BEGIN LIVEBIND-0258/,/^# END LIVEBIND-0258/p' scripts/check.sh \
-#     > /tmp/livebind.sh \
-#     && bash -c '. /tmp/livebind.sh; declare -f accounting_probe' \
+#     > .scratch/livebind.sh \
+#     && bash -c '. .scratch/livebind.sh; declare -f accounting_probe' \
 #        | shasum -a 256
 PROBE_EXPECTED_SHA256="621524a9099d3779d3d44b89e70efb0d412233fc2c7ee3ac317b4dd524edd9ed"
 PROBE_DEFS="$(funcdef_defcount accounting_probe "$SELF")"

@@ -73,7 +73,13 @@ set -uo pipefail   # NOT -e: several steps here are expected to fail — that's 
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEVSH="$REPO/scripts/dev.sh"
-WORKDIR="$(mktemp -d)"
+# Scratch stays inside the repo, under gitignored .scratch/ (#0540 — the same
+# operator directive #0538 applied to the guard harnesses). mkdir -p is
+# required: mktemp -d does not create missing parents. (RUNID is derived
+# further down, so the template is not namespaced with it; mktemp's XXXXXX
+# suffix already makes the directory unique per run.)
+mkdir -p "$REPO/.scratch" || { echo "error: cannot create $REPO/.scratch" >&2; exit 1; }
+WORKDIR="$(mktemp -d "$REPO/.scratch/dev_guard.XXXXXX")" || { echo "error: mktemp failed" >&2; exit 1; }
 MUTANT_GLOB="$REPO/scripts/.dev_guard_test_mutant.$$."
 FAILURES=0
 BG_PIDS=()        # background processes this script forked (holders, connectors)
