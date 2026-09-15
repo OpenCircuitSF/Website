@@ -1,10 +1,12 @@
 package db
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -446,9 +448,15 @@ var issueGuardScanRoots = []string{"../.."}
 // issueGuardSkipDir reports whether dirName should be pruned from a walk
 // rooted at the repo root — vendored/generated trees (#0194's lesson) plus
 // .git, which #0196's narrower per-package roots never had to consider.
+// #0541: .scratch/ is the operator's sanctioned scratch location (directive
+// 2026-09-13), and the Go probes agents leave there are routinely
+// parse-invalid by design — mutation-proof files created to be broken, run
+// once, deleted. The walk must prune the whole tree rather than try (and
+// hard-fail) to parse it, or one broken scratch probe takes down every
+// agent's run.
 func issueGuardSkipDir(dirName string) bool {
 	switch dirName {
-	case "node_modules", "dist", ".git":
+	case "node_modules", "dist", ".git", ".scratch":
 		return true
 	}
 	return false
@@ -496,6 +504,76 @@ func collectDefinedGoTestFuncs(t *testing.T, roots []string) map[string]bool {
 		}
 	}
 	return defined
+}
+
+// #0541 proves both directions of the .scratch/ prune in issueGuardSkipDir:
+// scratch content the walk used to hard-fail on is ignored — valid and
+// parse-invalid probes alike — while the same broken content anywhere else
+// under a root still fails the walk, so the exclusion cannot silently widen
+// into a general parse-error amnesty.
+//
+// The second direction exercises the walk's hard-fail path, which ends in
+// t.Fatalf, so it runs in a subprocess of this same binary — the canonical
+// pattern for asserting a Fatal. The gate variable below keeps the child
+// from re-execing, and TEST_DATABASE_URL is stripped from the child's
+// environment so its TestMain takes no database lock the parent already
+// holds.
+func TestIssueGuardWalkSkipsScratchDir(t *testing.T) {
+	const subprocessGate = "ISSUE_GUARD_WALK_SUBPROCESS"
+	const broken = "package probe\n\nfunc broken( {\n"
+	writeFile := func(t *testing.T, path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	switch os.Getenv(subprocessGate) {
+	case "tracked-broken":
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, "broken_tracked.go"), broken)
+		// Must t.Fatalf this child process: the file is outside .scratch/.
+		collectDefinedGoTestFuncs(t, []string{root})
+		return
+	case "":
+		// fall through to the parent path below
+	default:
+		t.Fatalf("unknown %s value %q", subprocessGate, os.Getenv(subprocessGate))
+	}
+
+	// Direction 1: a .scratch/ tree holding both a valid probe (one that
+	// defines a test-named function) and a parse-invalid one is pruned
+	// entirely — no failure, and no collected name.
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".scratch", "probe", "valid_probe.go"),
+		"package probe\n\nfunc TestPlantedScratchProbe() {}\n")
+	writeFile(t, filepath.Join(root, ".scratch", "probe", "broken_probe.go"), broken)
+	defined := collectDefinedGoTestFuncs(t, []string{root})
+	if defined["TestPlantedScratchProbe"] {
+		t.Fatal("a test-named function planted under .scratch/ was collected — the walk read the directory instead of pruning it")
+	}
+
+	// Direction 2: the same broken content OUTSIDE .scratch/ still hard-fails.
+	childEnv := []string{subprocessGate + "=tracked-broken"}
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "TEST_DATABASE_URL=") || strings.HasPrefix(kv, subprocessGate+"=") {
+			continue
+		}
+		childEnv = append(childEnv, kv)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestIssueGuardWalkSkipsScratchDir")
+	cmd.Env = childEnv
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() == 0 {
+		t.Fatalf("the walk did not hard-fail over a parse-invalid file outside .scratch/ — it has gone fail-open (exec err: %v; child output:\n%s)", err, out)
+	}
+	if !strings.Contains(string(out), "broken_tracked.go") {
+		t.Fatalf("the walk's hard-fail did not name the offending file, so it may have failed for the wrong reason; child output:\n%s", out)
+	}
 }
 
 // issueCitationSectionHeaders are the level-2 sections this guard resolves

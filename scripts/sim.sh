@@ -13,10 +13,10 @@
 #
 #   URL          URL to open in Simulator Safari (default: http://localhost:8080)
 #   DEVICE_NAME  Simulator device name to use  (default: "iPhone 17")
-#   OUTPUT_PATH  Where to write the screenshot  (default: /tmp/opencircuit-sim-$$.png,
-#                namespaced by this run's own pid -- #0207: two agents running
-#                sim.sh with default arguments used to silently overwrite each
-#                other's screenshot at the same fixed /tmp path)
+#   OUTPUT_PATH  Where to write the screenshot  (default: .scratch/sim/opencircuit-sim-$$.png
+#                inside the repo, namespaced by this run's own pid -- #0207: two
+#                agents running sim.sh with default arguments used to silently
+#                overwrite each other's screenshot at the same fixed path)
 #
 # Examples:
 #   ./scripts/sim.sh
@@ -38,8 +38,15 @@ DEVICE_NAME="${2:-iPhone 17}"
 # #0207: namespaced by this run's own pid so two concurrent agents running
 # sim.sh with default arguments (docs/obstacles.md §4's port-8099 hazard
 # class) don't silently overwrite each other's screenshot at the same fixed
-# /tmp path. Pass an explicit OUTPUT_PATH to override.
-OUT="${3:-/tmp/opencircuit-sim-$$.png}"
+# path. #0541: the default lives under gitignored .scratch/ inside the repo
+# (the operator's all-writes-stay-inside-the-repo directive), not under
+# system TMPDIR. Pass an explicit OUTPUT_PATH to override.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUT="${3:-}"
+if [ -z "$OUT" ]; then
+  OUT="$SCRIPT_DIR/../.scratch/sim/opencircuit-sim-$$.png"
+  mkdir -p "${OUT%/*}"
+fi
 
 step()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 ok()    { printf '    \033[32m✓\033[0m %s\n' "$*"; }

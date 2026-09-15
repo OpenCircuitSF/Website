@@ -8,8 +8,9 @@
 #     # back up the default source into the default root (production shape)
 #     MEDIA_SOURCE_DIR=/var/www/media BACKUP_RUN_AS=postgres sudo -E bash scripts/db/backup-media.sh
 #
-#     # local dev / testing — no sudo, a scratch source and root
-#     MEDIA_SOURCE_DIR=/tmp/src BACKUP_ROOT=/tmp/dest BACKUP_RUN_AS="" bash scripts/db/backup-media.sh
+#     # local dev / testing — no sudo, a scratch source and root inside the repo
+#     MEDIA_SOURCE_DIR="$PWD/.scratch/media-src" BACKUP_ROOT="$PWD/.scratch/media-backups" \
+#       BACKUP_RUN_AS="" bash scripts/db/backup-media.sh
 #
 # Layout, mirroring backup.sh's own convention:
 #
@@ -118,7 +119,12 @@ else
   exit 2
 fi
 
-cd /tmp
+# #0541: cd to the repo checkout root (matching backup.sh's cd, and the
+# systemd unit's WorkingDirectory) rather than /tmp — same warning-suppression
+# purpose, no system-TMPDIR usage. Archives still go to BACKUP_ROOT (default
+# /var/backups/postgres, shared with backup.sh on purpose — see the header).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/../.."
 
 dir="$BACKUP_ROOT/media"
 mkdir -p "$dir"

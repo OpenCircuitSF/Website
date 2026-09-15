@@ -641,7 +641,7 @@ mut1 ordinary_helper "$P" "$A_END258" after
 assert_benign ordinary_helper "$MUT"
 
 # a whole-line comment naming every guarded token at once
-P="$(paypath comment_only)"; printf '%s\n' '# mentions run() runpipe() eval source unset and . /tmp/x all at once' > "$P"
+P="$(paypath comment_only)"; printf '%s\n' '# mentions run() runpipe() eval source unset and . .scratch/x all at once' > "$P"
 mut1 comment_only "$P" "$A_END258" after
 assert_benign comment_only "$MUT"
 

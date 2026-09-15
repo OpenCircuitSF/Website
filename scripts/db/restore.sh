@@ -99,7 +99,13 @@ if [ -n "$BACKUP_RUN_AS" ] && [ "$BACKUP_RUN_AS" != "$(id -un)" ]; then
   runner=(sudo -u "$BACKUP_RUN_AS")
 fi
 
-cd /tmp
+# #0541: cd to the repo checkout root (matching backup.sh and the systemd
+# unit's WorkingDirectory) rather than /tmp — same warning-suppression
+# purpose as backup.sh's cd, no system-TMPDIR usage. The dump path is only
+# ever used as an absolute path on the documented paths; the `-f` existence
+# check above already ran, exactly as it did before this cd existed.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/../.."
 
 # reassign_ownership TARGET OWNER — ALTER every non-system schema (#0235) and
 # every table/sequence/view/materialized view/function/procedure within one

@@ -125,9 +125,16 @@ if [ -n "$BACKUP_RUN_AS" ] && [ "$BACKUP_RUN_AS" != "$(id -un)" ]; then
   runner=(sudo -u "$BACKUP_RUN_AS")
 fi
 
-# cd somewhere world-readable so the postgres user doesn't emit the harmless
-# "could not change directory to ..." warning when run from a home dir.
-cd /tmp
+# cd to the repo checkout root — the same directory systemd's WorkingDirectory=
+# already uses (deploy/systemd/opencircuit-backup.service) — so the postgres
+# user doesn't emit the harmless "could not change directory to ..." warning
+# when invoked via `sudo -u postgres` from a home dir it cannot read. Nothing
+# is written here, and under the unit the cd is a no-op. The dumps themselves
+# stay under BACKUP_ROOT (default /var/backups/postgres, PRD §10.6's
+# local-tree-then-offsite-rsync design): durable backups do not belong in a
+# gitignored scratch directory (#0541 — the operator's all-writes rule covers
+# tooling scratch, not this documented operator-chosen backup location).
+cd "$SCRIPT_DIR/../.."
 
 timestamp="$(date -u +%Y%m%d-%H%M%SZ)"
 

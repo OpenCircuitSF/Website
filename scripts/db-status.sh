@@ -6,9 +6,11 @@
 #     bash scripts/db-status.sh                     # focus on $ADMIN_EMAIL from .env
 #     bash scripts/db-status.sh other@example.com   # focus on a specific email
 #
-# Uses `sudo -u postgres` peer auth, so no password is needed. cd /tmp first to
-# avoid the harmless "could not change directory" warning postgres emits when
-# run from a home dir it cannot read.
+# Uses `sudo -u postgres` peer auth, so no password is needed. cd's to the
+# repo checkout root first (matching deploy/systemd/opencircuit-backup.service's
+# WorkingDirectory) to avoid the harmless "could not change directory" warning
+# postgres emits when the inherited current directory is one it cannot read
+# (#0541: the checkout, not /tmp).
 
 set -euo pipefail
 
@@ -23,7 +25,7 @@ fi
 
 DB="${OPENCIRCUIT_DB:-opencircuit}"
 EMAIL="${1:-${ADMIN_EMAIL:-}}"
-cd /tmp
+cd "$SCRIPT_DIR/../.."
 
 psql() { sudo -u postgres /usr/bin/psql -d "$DB" -X -P pager=off "$@"; }
 

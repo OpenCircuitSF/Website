@@ -8,7 +8,7 @@
 #
 #     # restore the newest media backup into a scratch directory (a "restore
 #     # drill" — always do this before ever restoring over the live path)
-#     bash scripts/db/restore-media.sh /var/backups/postgres/media/media-latest.tar.gz /tmp/media-restore-test
+#     bash scripts/db/restore-media.sh /var/backups/postgres/media/media-latest.tar.gz "$PWD/.scratch/media-restore-test"
 #
 #     # restore over the live path on the server (DANGEROUS — see below;
 #     # needs root/sudo to chown to RESTORE_MEDIA_OWNER)
