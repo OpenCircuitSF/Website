@@ -312,20 +312,18 @@ func (p *Publisher) sendOne(parent context.Context, row outbox.Row) {
 	p.markDone(row)
 }
 
-// unknownOutcomeMarker is in the last_error of a post whose latest attempt
-// failed transiently (see postFailed). The attempt may have posted anyway.
-const unknownOutcomeMarker = "is unreachable or failing"
-
 // priorAttemptUnknown reports whether an earlier attempt for this post may
-// have succeeded without the site hearing of it: the queue row has been
-// claimed before (a transient failure, since a permanent one abandons the
-// row), or the post carries a transient failure from an earlier row, as after
-// a manual Retry.
-func priorAttemptUnknown(row outbox.Row, job SendJob) bool {
+// have succeeded without the site hearing of it: this row has been claimed
+// before (a transient failure, since a permanent one abandons the row), or an
+// earlier row for the same post was claimed, as after a manual Retry. Any
+// earlier claim counts, even a permanent-classified one, since a permanent
+// classification can be wrong after a write that did happen. The history
+// comes from outbound_queue, because a Retry clears the post's own last_error.
+func (p *Publisher) priorAttemptUnknown(ctx context.Context, row outbox.Row) (bool, error) {
 	if row.Attempts > 1 {
-		return true
+		return true, nil
 	}
-	return job.LastError != nil && strings.Contains(*job.LastError, unknownOutcomeMarker)
+	return p.outbox.HasPriorAttempt(ctx, row.Kind, row.Recipient, row.ID)
 }
 
 // postMastodon posts the status, or on an attempt after one of unknown
@@ -334,7 +332,11 @@ func priorAttemptUnknown(row outbox.Row, job SendJob) bool {
 // about an hour, so the key alone cannot make a late retry safe. If the look
 // fails, the error is returned and the row retries rather than posting blind.
 func (p *Publisher) postMastodon(ctx context.Context, row outbox.Row, job SendJob) (st mastodon.Status, adopted bool, err error) {
-	if priorAttemptUnknown(row, job) && job.ShortURL != nil {
+	prior, perr := p.priorAttemptUnknown(ctx, row)
+	if perr != nil {
+		return mastodon.Status{}, false, perr
+	}
+	if prior && job.ShortURL != nil {
 		found, ok, ferr := p.masto.FindRecentStatusWithURL(ctx, *job.ShortURL)
 		if ferr != nil {
 			return mastodon.Status{}, false, ferr

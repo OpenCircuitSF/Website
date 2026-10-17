@@ -954,6 +954,20 @@ func (s *Store) AbandonedCountByKind(ctx context.Context, kind Kind) (int64, err
 	return n, nil
 }
 
+// HasPriorAttempt reports whether another outbound_queue row of the same kind
+// and recipient was ever claimed (attempts > 0). Nothing deletes queue rows,
+// so this is the durable record that an earlier send may have happened.
+func (s *Store) HasPriorAttempt(ctx context.Context, kind Kind, recipient string, excludeID int64) (bool, error) {
+	var ok bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM outbound_queue WHERE kind = $1 AND recipient = $2 AND id <> $3 AND attempts > 0)`,
+		string(kind), recipient, excludeID,
+	).Scan(&ok); err != nil {
+		return false, fmt.Errorf("outbox: checking prior attempts for %q: %w", recipient, err)
+	}
+	return ok, nil
+}
+
 // Counts returns the queue-depth summary for #0061's admin overview. It
 // counts mail only: KindOutreachPost rows are social posts, not messages, and
 // are excluded so a bad social credential never reads as undelivered mail

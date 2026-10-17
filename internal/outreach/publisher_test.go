@@ -113,6 +113,15 @@ func newFakeMasto(t *testing.T) *fakeMasto {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.count++
+		if r.Method == http.MethodGet {
+			// The recent-status look made before a post that follows an earlier claimed attempt.
+			if r.URL.Path == "/api/v1/accounts/verify_credentials" {
+				io.WriteString(w, `{"id":"5"}`)
+			} else {
+				io.WriteString(w, `[]`)
+			}
+			return
+		}
 		f.keys = append(f.keys, r.Header.Get("Idempotency-Key"))
 		if f.status != 0 {
 			w.WriteHeader(f.status)
@@ -642,6 +651,40 @@ func TestPublisher_MastodonRetryAdoptsStatusWhenInstanceForgotKey(t *testing.T) 
 	}
 	if n := fm.postCount(); n != 1 {
 		t.Errorf("POSTs = %d, want 1: the retry must adopt the earlier status", n)
+	}
+}
+
+func TestPublisher_MastodonManualRetryAfterAbandonAdopts(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	fm := newForgetfulMasto(t)
+	mc, err := mastodon.New(fm.srv.URL, fakeMastoToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := NewPublisher(PublisherDeps{Store: s, Outbox: outbox.NewStore(s.pool), Settings: fakeSettings{}, Mastodon: mc, PollInterval: time.Hour})
+	_, post := seedMastodon(t, s)
+	if _, _, err := s.QueueNow(ctx, post.ID); err != nil {
+		t.Fatal(err)
+	}
+	runPass(t, pub) // posts, but answers 503: outcome unknown
+	rcpt := fmt.Sprintf("outreach_post:%d", post.ID)
+	if _, err := s.pool.Exec(ctx, `UPDATE outbound_queue SET status = 'abandoned' WHERE recipient = $1`, rcpt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE outreach_posts SET status = 'failed' WHERE id = $1`, post.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.QueueNow(ctx, post.ID); err != nil { // the manual Retry
+		t.Fatal(err)
+	}
+	runPass(t, pub)
+	got, _ := s.GetPost(ctx, post.ID)
+	if got.Status != "posted" || got.RemoteID == nil || *got.RemoteID != "900" {
+		t.Errorf("post = %+v, want posted and adopting the existing status 900", got)
+	}
+	if n := fm.postCount(); n != 1 {
+		t.Errorf("POSTs = %d, want 1: the manual Retry must adopt, not post again", n)
 	}
 }
 
