@@ -8,6 +8,7 @@
 import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FlyerSelection, FlyerView } from '../../lib/types';
+import { FLYER_FONT_LOADS } from '../../lib/flyers';
 
 const getOutreachFlyer = vi.fn<(id: number) => Promise<FlyerView>>();
 vi.mock('../../lib/api', () => ({
@@ -47,9 +48,9 @@ function view(selection: FlyerSelection[], photo: string | null = null): FlyerVi
   return {
     flyer: {
       id: 7, outreach_id: 1, workshop_id: 2, workshop_slug: 'soldering-101', workshop_title: 'Soldering 101', photo,
-      focal_x: 0.5, focal_y: 0.5, template: 'photo-top', tagline: 'Come solder', created_at: '2026-10-16T00:00:00Z', updated_at: null,
+      focal_x: 0.5, focal_y: 0.5, template: 'photo-top', tagline: 'Come solder', description: '', description_short: '', title_position: 'auto', created_at: '2026-10-16T00:00:00Z', updated_at: null,
     },
-    facts: { title: 'Soldering 101', date_line: 'Sat, Nov 14 · 10:00 AM', place_line: 'The Shop', cover_image: null },
+    facts: { title: 'Soldering 101', date_line: 'Sat, Nov 14 · 10:00 AM', place_line: 'The Shop', cover_image: null, description: '' },
     selection,
   };
 }
@@ -61,8 +62,12 @@ async function mount(v: FlyerView, layout: 'full' | 'half'): Promise<void> {
   await waitFor(() => expect(document.querySelectorAll('.sheet').length).toBeGreaterThan(0));
 }
 
+/** Let the ready gate's font step finish, so its image listeners are attached. */
+const gateReady = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
 /** Settle every image: load fires on each, as a browser would. */
 async function loadAllImages(): Promise<void> {
+  await gateReady();
   for (const img of Array.from(document.querySelectorAll('.sheet img'))) await fireEvent.load(img);
 }
 
@@ -110,9 +115,39 @@ describe('FlyerPrint', () => {
     expect(print).toHaveBeenCalledTimes(1);
   });
 
+  it('loads every flyer font before Print enables (#0561)', async () => {
+    const load = vi.fn(() => Promise.resolve([]));
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { load, ready: Promise.resolve() } });
+    try {
+      await mount(view([sel(1)]), 'full');
+      await loadAllImages();
+      const button = screen.getByRole('button', { name: 'Print' }) as HTMLButtonElement;
+      await waitFor(() => expect(button.disabled).toBe(false));
+      expect(load).toHaveBeenCalledTimes(FLYER_FONT_LOADS.length);
+      expect(load.mock.calls.map((c) => (c as unknown[])[0])).toEqual([...FLYER_FONT_LOADS]);
+    } finally {
+      Reflect.deleteProperty(document, 'fonts');
+    }
+  });
+
+  it('still enables Print when a font load rejects (#0561)', async () => {
+    const load = vi.fn(() => Promise.reject(new Error('no font')));
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { load, ready: Promise.resolve() } });
+    try {
+      await mount(view([sel(1)]), 'full');
+      await loadAllImages();
+      const button = screen.getByRole('button', { name: 'Print' }) as HTMLButtonElement;
+      await waitFor(() => expect(button.disabled).toBe(false));
+      expect(load).toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(document, 'fonts');
+    }
+  });
+
   it('names an image that failed to load', async () => {
     await mount(view([sel(1)]), 'full');
     const img = document.querySelector('.sheet img.qr-img') as HTMLImageElement;
+    await gateReady();
     await fireEvent.error(img);
     await waitFor(() => expect(screen.getByText(/Could not load: QR code for Board 1/)).toBeTruthy());
   });

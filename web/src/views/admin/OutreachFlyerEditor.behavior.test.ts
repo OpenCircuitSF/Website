@@ -63,13 +63,18 @@ function loc(id: number, over: Partial<OutreachLocation> = {}): OutreachLocation
   };
 }
 
+function fullPhoto(): FlyerView {
+  const v = flyer();
+  return { ...v, flyer: { ...v.flyer, template: 'full-photo' } };
+}
+
 function flyer(selection: FlyerView['selection'] = [], extra: Partial<FlyerView> = {}): FlyerView {
   return {
     flyer: {
       id: 7, outreach_id: 1, workshop_id: 2, workshop_slug: 'soldering-101', workshop_title: 'Soldering 101', photo: null,
-      focal_x: 0.5, focal_y: 0.5, template: 'photo-top', tagline: '', created_at: '2026-10-16T00:00:00Z', updated_at: null,
+      focal_x: 0.5, focal_y: 0.5, template: 'photo-top', tagline: '', description: '', description_short: '', title_position: 'auto', created_at: '2026-10-16T00:00:00Z', updated_at: null,
     },
-    facts: { title: 'Soldering 101', date_line: 'Sat, Nov 14 · 10:00 AM', place_line: 'The Shop', cover_image: null },
+    facts: { title: 'Soldering 101', date_line: 'Sat, Nov 14 · 10:00 AM', place_line: 'The Shop', cover_image: null, description: 'Workshop summary.' },
     selection,
     ...extra,
   };
@@ -140,7 +145,7 @@ describe('OutreachFlyerEditor', () => {
   });
 
   it('offers the print pages in a new tab, and the focal slider moves with the arrow keys', async () => {
-    await mountWith(flyer([], { facts: { title: 'T', date_line: 'd', place_line: 'p', cover_image: '/hero-crt-760.webp' } }), []);
+    await mountWith(flyer([], { facts: { title: 'T', date_line: 'd', place_line: 'p', cover_image: '/hero-crt-760.webp', description: '' } }), []);
     const half = screen.getByRole('link', { name: 'Print all · half-size double' });
     expect(half.getAttribute('href')).toBe('#/outreach?view=print&flyer=7&layout=half');
     expect(half.getAttribute('target')).toBe('_blank');
@@ -169,5 +174,33 @@ describe('OutreachFlyerEditor', () => {
     const qr = screen.getByRole('link', { name: 'QR (SVG)' });
     expect(qr.getAttribute('href')).toBe('/admin/outreach-flyer-links/10/qr.svg');
     expect(qr.hasAttribute('download')).toBe(true);
+  });
+
+  it('sends the description, short text and title position, trimmed (#0561)', async () => {
+    updateOutreachFlyer.mockResolvedValue(fullPhoto());
+    setOutreachFlyerLocations.mockResolvedValue(fullPhoto());
+    await mountWith(fullPhoto(), [loc(1)]);
+    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).placeholder).toBe('Workshop summary.');
+    await fireEvent.input(screen.getByLabelText('Description'), { target: { value: '  A long text.  ' } });
+    await fireEvent.input(screen.getByLabelText('Short description (half size)'), { target: { value: ' Short. ' } });
+    await fireEvent.click(screen.getByLabelText('Over the subject (details at the top)'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateOutreachFlyer).toHaveBeenCalled());
+    const patch = updateOutreachFlyer.mock.calls[0][1];
+    expect(patch).toMatchObject({ description: 'A long text.', description_short: 'Short.', title_position: 'above' });
+  });
+
+  it('disables Save at 361 characters and shows the error (#0561)', async () => {
+    await mountWith(fullPhoto(), [loc(1)]);
+    await fireEvent.input(screen.getByLabelText('Description'), { target: { value: 'x'.repeat(361) } });
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Description must be at most 360 characters.')).toBeTruthy();
+  });
+
+  it('omits the caption controls on photo-top (#0561)', async () => {
+    await mountWith(flyer(), [loc(1)]);
+    expect(screen.queryByLabelText('Description')).toBeNull();
+    expect(screen.queryByLabelText('Short description (half size)')).toBeNull();
+    expect(screen.queryByText('Title position')).toBeNull();
   });
 });

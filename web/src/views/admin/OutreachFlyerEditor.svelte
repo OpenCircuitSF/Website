@@ -37,13 +37,18 @@
     focalText,
     nudgeFocal,
     photoWarning,
+    FLYER_TITLE_POSITIONS,
+    FLYER_TITLE_POSITION_LABELS,
+    MAX_FLYER_DESCRIPTION,
+    MAX_FLYER_DESCRIPTION_SHORT,
     selectionSummary,
     sheetCount,
     utmSummary,
+    validateFlyerDescription,
     validateTagline,
     type Focal,
   } from '../../lib/flyers';
-  import type { FlyerTemplate, FlyerView, OutreachLocation } from '../../lib/types';
+  import type { FlyerTemplate, FlyerTitlePosition, FlyerView, OutreachLocation } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
   import FlyerFace from './FlyerFace.svelte';
@@ -60,6 +65,9 @@
   // The design and selection being edited; saved by Save and Generate.
   let template = $state<FlyerTemplate>(DEFAULT_FLYER_TEMPLATE);
   let tagline = $state('');
+  let description = $state('');
+  let descriptionShort = $state('');
+  let titlePosition = $state<FlyerTitlePosition>('auto');
   let photo = $state<string | null>(null);
   let focal = $state<Focal>({ x: 0.5, y: 0.5 });
   let copies = $state<Record<number, number>>({});
@@ -67,6 +75,9 @@
   let dragging = $state(false);
 
   const taglineError = $derived(validateTagline(tagline));
+  const descriptionError = $derived(validateFlyerDescription(description, MAX_FLYER_DESCRIPTION, 'Description'));
+  const descriptionShortError = $derived(validateFlyerDescription(descriptionShort, MAX_FLYER_DESCRIPTION_SHORT, 'Short description'));
+  const textError = $derived(taglineError ?? descriptionError ?? descriptionShortError);
   const selected = $derived(Object.keys(copies).map(Number));
   const draftSummary = $derived(selectionSummary(selected.map((id) => ({ copies: copies[id] }))));
   const shownLocations = $derived(locations.filter((l) => l.active || l.id in copies));
@@ -83,6 +94,9 @@
     view = v;
     template = v.flyer.template;
     tagline = v.flyer.tagline;
+    description = v.flyer.description;
+    descriptionShort = v.flyer.description_short;
+    titlePosition = v.flyer.title_position;
     photo = v.flyer.photo;
     focal = { x: v.flyer.focal_x, y: v.flyer.focal_y };
     const next: Record<number, number> = {};
@@ -105,6 +119,9 @@
     await updateOutreachFlyer(flyerId, {
       template,
       tagline: tagline.trim(),
+      description: description.trim(),
+      description_short: descriptionShort.trim(),
+      title_position: titlePosition,
       photo: photo ?? '',
       focal_x: focal.x,
       focal_y: focal.y,
@@ -116,7 +133,7 @@
   }
 
   async function save(): Promise<void> {
-    if (busy || taglineError) return;
+    if (busy || textError) return;
     busy = true;
     status = '';
     try {
@@ -130,7 +147,7 @@
   }
 
   async function generate(): Promise<void> {
-    if (busy || taglineError || selected.length === 0) return;
+    if (busy || textError || selected.length === 0) return;
     busy = true;
     status = 'Generating links and QR codes.';
     try {
@@ -294,6 +311,33 @@
           <p class="text-error" id="fl-tagline-err">{taglineError ?? ''}</p>
         </section>
 
+        {#if template === 'full-photo'}
+          <section aria-labelledby="fl-titlepos">
+            <h3 id="fl-titlepos">Title position</h3>
+            <div class="stack" role="radiogroup" aria-labelledby="fl-titlepos">
+              {#each FLYER_TITLE_POSITIONS as p (p)}
+                <label><input type="radio" name="fl-titlepos" value={p} bind:group={titlePosition} /> {FLYER_TITLE_POSITION_LABELS[p]}</label>
+              {/each}
+            </div>
+          </section>
+
+          <section>
+            <h3><label for="fl-desc-input">Description</label></h3>
+            <textarea id="fl-desc-input" rows="5" bind:value={description} placeholder={view.facts.description} aria-describedby="fl-desc-hint fl-desc-err"></textarea>
+            <p class="text-muted" id="fl-desc-hint">Leave empty to use the workshop summary.</p>
+            <p class="text-muted">{[...description].length} of {MAX_FLYER_DESCRIPTION}</p>
+            <p class="text-error" id="fl-desc-err">{descriptionError ?? ''}</p>
+          </section>
+
+          <section>
+            <h3><label for="fl-short-input">Short description (half size)</label></h3>
+            <input id="fl-short-input" type="text" bind:value={descriptionShort} aria-describedby="fl-short-hint fl-short-err" />
+            <p class="text-muted" id="fl-short-hint">Leave empty to shorten the description automatically.</p>
+            <p class="text-muted">{[...descriptionShort].length} of {MAX_FLYER_DESCRIPTION_SHORT}</p>
+            <p class="text-error" id="fl-short-err">{descriptionShortError ?? ''}</p>
+          </section>
+        {/if}
+
         <section aria-labelledby="fl-locs">
           <h3 id="fl-locs">Locations</h3>
           {#if shownLocations.length === 0}
@@ -322,8 +366,8 @@
         </section>
 
         <div class="row">
-          <Button variant="primary" onclick={save} disabled={busy || !!taglineError}>Save</Button>
-          <Button variant="primary" onclick={generate} disabled={busy || !!taglineError || selected.length === 0}>Generate links and QR codes</Button>
+          <Button variant="primary" onclick={save} disabled={busy || !!textError}>Save</Button>
+          <Button variant="primary" onclick={generate} disabled={busy || !!textError || selected.length === 0}>Generate links and QR codes</Button>
         </div>
       </div>
 
@@ -333,7 +377,7 @@
           <figure>
             <div class="scaled" style="--w: 8.5in; --h: 11in; --s: 0.36">
               <div class="inner full">
-                <FlyerFace {template} size="full" facts={view.facts} {tagline} photo={effectivePhoto} {focal} instance={exampleInstance} />
+                <FlyerFace {template} size="full" facts={view.facts} {tagline} {description} {descriptionShort} {titlePosition} photo={effectivePhoto} {focal} instance={exampleInstance} />
               </div>
             </div>
             <figcaption>
@@ -344,7 +388,7 @@
           <figure>
             <div class="scaled" style="--w: 5.5in; --h: 8.5in; --s: 0.46">
               <div class="inner half">
-                <FlyerFace {template} size="half" facts={view.facts} {tagline} photo={effectivePhoto} {focal} instance={exampleInstance} />
+                <FlyerFace {template} size="half" facts={view.facts} {tagline} {description} {descriptionShort} {titlePosition} photo={effectivePhoto} {focal} instance={exampleInstance} />
               </div>
             </div>
             <figcaption>
@@ -424,6 +468,16 @@
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-3);
+  }
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  textarea {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
   }
   .warn {
     color: var(--warning, #b45309);

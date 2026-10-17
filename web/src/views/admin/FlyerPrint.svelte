@@ -27,6 +27,7 @@
     missingQrCount,
     missingQrNote,
     paginate,
+    FLYER_FONT_LOADS,
     photoWarning,
     sheetCount,
   } from '../../lib/flyers';
@@ -98,6 +99,7 @@
     ready = false;
     (async () => {
       try {
+        await Promise.allSettled(FLYER_FONT_LOADS.map((f) => document.fonts?.load(f)));
         await document.fonts?.ready;
       } catch {
         // A font failure must not leave the button disabled for good.
@@ -151,6 +153,9 @@
                 size="full"
                 facts={data.facts}
                 tagline={data.flyer.tagline}
+                description={data.flyer.description}
+                descriptionShort={data.flyer.description_short}
+                titlePosition={data.flyer.title_position}
                 photo={data.flyer.photo ?? data.facts.cover_image}
                 focal={{ x: data.flyer.focal_x, y: data.flyer.focal_y }}
                 instance={inst}
@@ -167,6 +172,9 @@
                     size="half"
                     facts={data.facts}
                     tagline={data.flyer.tagline}
+                    description={data.flyer.description}
+                    descriptionShort={data.flyer.description_short}
+                    titlePosition={data.flyer.title_position}
                     photo={data.flyer.photo ?? data.facts.cover_image}
                     focal={{ x: data.flyer.focal_x, y: data.flyer.focal_y }}
                     instance={inst}

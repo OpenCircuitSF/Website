@@ -15,6 +15,7 @@ import type {
   FlyerLinkInfo,
   FlyerRow,
   FlyerTemplate,
+  FlyerTitlePosition,
   FlyerView,
   OutreachPost,
   OutreachResults,
@@ -1409,7 +1410,16 @@ export function getOutreachFlyer(id: number): Promise<FlyerView> {
 /** PATCH /admin/outreach-flyers/{id} — any subset of the design; photo "" clears it. */
 export function updateOutreachFlyer(
   id: number,
-  patch: { template?: FlyerTemplate; tagline?: string; photo?: string; focal_x?: number; focal_y?: number },
+  patch: {
+    template?: FlyerTemplate;
+    tagline?: string;
+    description?: string;
+    description_short?: string;
+    title_position?: FlyerTitlePosition;
+    photo?: string;
+    focal_x?: number;
+    focal_y?: number;
+  },
 ): Promise<FlyerView> {
   return apiPatch<FlyerView>(`/admin/outreach-flyers/${id}`, patch);
 }

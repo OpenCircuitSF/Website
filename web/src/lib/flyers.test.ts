@@ -1,7 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import type { FlyerSelection } from './types';
 import {
+  CAPTION,
   CUT_AT_IN,
+  FLYER_FONT_LOADS,
+  FLYER_TITLE_POSITIONS,
+  MAX_FLYER_DESCRIPTION,
+  MAX_FLYER_DESCRIPTION_SHORT,
+  captionPlacement,
+  captionReserve,
+  flyerDescriptions,
+  focalOnFace,
+  shortenAtBoundary,
+  titleFit,
+  titleWidthEm,
+  validateFlyerDescription,
+  type Size,
   DEFAULT_FLYER_TEMPLATE,
   FLYER_TEMPLATES,
   FULL_PHOTO_BOX,
@@ -213,18 +227,19 @@ describe('wording helpers', () => {
 describe('full-photo box (#0559)', () => {
   it('text meets WCAG AA against the fill composited over pure white', () => {
     const worst = composite(FULL_PHOTO_BOX.fill, FULL_PHOTO_BOX.alpha, '#ffffff');
-    expect(FULL_PHOTO_BOX.alpha).toBeGreaterThanOrEqual(0.8);
-    expect(FULL_PHOTO_BOX.alpha).toBeLessThanOrEqual(0.85);
+    expect(FULL_PHOTO_BOX.alpha).toBe(0.72);
+    expect(worst).toBe('#4f534f');
     for (const ink of [FULL_PHOTO_BOX.ink, FULL_PHOTO_BOX.muted, FULL_PHOTO_BOX.accent]) {
       expect(contrastRatio(ink, worst)).toBeGreaterThanOrEqual(4.5);
     }
+    expect(contrastRatio(FULL_PHOTO_BOX.muted, worst)).toBeGreaterThanOrEqual(5.5);
   });
   it('contrast helpers match known values', () => {
     expect(contrastRatio('#000000', '#ffffff')).toBeCloseTo(21, 5);
     expect(composite('#000000', 0.5, '#ffffff')).toBe('#808080');
   });
   it('quiet zone is at least 4 modules for any code up to the assumed size', () => {
-    for (const qr of [0.9, 1.25]) {
+    for (const qr of [0.9, 1.25, 1.1, 1.5]) {
       expect(qrQuietIn(qr) / (qr / QR_ASSUMED_MODULES)).toBeGreaterThanOrEqual(4);
     }
   });
@@ -233,5 +248,149 @@ describe('full-photo box (#0559)', () => {
     expect(FLYER_TEMPLATES).toContain(DEFAULT_FLYER_TEMPLATE);
     expect(noBreakHyphens('a-b c')).toBe('a‑b c');
     expect(SITE_URL_TEXT).toBe('OpenCircuitSF.com');
+  });
+});
+
+const PARAGRAPH =
+  'Wire a strip of addressable RGB LEDs to a small microcontroller, then write the code that makes them chase, pulse and fade. We start from one blinking pixel and build up to an animation of your own. No experience needed, parts are provided, and the strip and board go home with you.';
+
+describe('captionReserve (#0561)', () => {
+  it('matches the scale', () => {
+    const f = captionReserve('full');
+    const h = captionReserve('half');
+    expect(f.titleMax).toBeCloseTo(3.532, 2);
+    expect(f.footerMax).toBeCloseTo(3.33, 2);
+    expect(h.titleMax).toBeCloseTo(2.382, 2);
+    expect(Math.abs(h.footerMax - 1.94)).toBeLessThan(0.01);
+  });
+  it.each([['full', LETTER], ['half', HALF]] as const)('leaves room for both boxes (%s)', (size, face) => {
+    const c = CAPTION[size];
+    const r = captionReserve(size);
+    expect(2 * c.inset + r.titleMax + c.boxGap + r.footerMax).toBeLessThan(face.h);
+  });
+});
+
+describe('focalOnFace (#0561)', () => {
+  const tall: Size = { w: 1000, h: 4000 };
+  it('falls back to the focal y without an image', () => {
+    expect(focalOnFace(null, LETTER, { x: 0.5, y: 0.3 })).toBe(0.3);
+  });
+  it('stays inside the face and never decreases with y for a tall image', () => {
+    let prev = -1;
+    for (const y of [0, 0.25, 0.5, 0.75, 1]) {
+      const v = focalOnFace(tall, LETTER, { x: 0.5, y });
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(1);
+      expect(v).toBeGreaterThanOrEqual(prev);
+      prev = v;
+    }
+  });
+  it('equals the focal y when the image fits exactly on y', () => {
+    expect(focalOnFace({ w: 4000, h: 1000 }, { w: 4, h: 1 }, { x: 0.5, y: 0.37 })).toBeCloseTo(0.37, 9);
+  });
+});
+
+describe('captionPlacement (#0561)', () => {
+  const imgs: (Size | null)[] = [null, { w: 4000, h: 1000 }, { w: 1000, h: 4000 }];
+  const ys = [0, 0.01, 0.25, 0.49, 0.5, 0.51, 0.75, 0.99, 1];
+  it('never overlaps the title box with the footer, and keeps both inside the inset', () => {
+    for (const size of ['full', 'half'] as const) {
+      const face = size === 'full' ? LETTER : HALF;
+      const c = CAPTION[size];
+      const { titleMax, footerMax } = captionReserve(size);
+      for (const mode of FLYER_TITLE_POSITIONS) {
+        for (const y of ys) {
+          for (const img of imgs) {
+            const p = captionPlacement({ x: 0.5, y }, img, size, mode);
+            const top = p.edge === 'top' ? p.offset : face.h - p.offset - titleMax;
+            const title: [number, number] = [top, top + titleMax];
+            const foot: [number, number] = p.arrangement === 'below' ? [face.h - c.inset - footerMax, face.h - c.inset] : [c.inset, c.inset + footerMax];
+            const gap = p.arrangement === 'below' ? foot[0] - title[1] : title[0] - foot[1];
+            const label = `${size} ${mode} y=${y} ${JSON.stringify(img)}`;
+            expect(gap, label).toBeGreaterThanOrEqual(c.boxGap - 1e-9);
+            expect(title[0], label).toBeGreaterThanOrEqual(c.inset - 1e-9);
+            expect(title[1], label).toBeLessThanOrEqual(face.h - c.inset + 1e-9);
+          }
+        }
+      }
+    }
+  });
+  it('picks the arrangement from the focal point, and overrides win', () => {
+    expect(captionPlacement({ x: 0.5, y: 0.49 }, null, 'full', 'auto').arrangement).toBe('below');
+    expect(captionPlacement({ x: 0.5, y: 0.5 }, null, 'full', 'auto').arrangement).toBe('above');
+    expect(captionPlacement({ x: 0.5, y: 0.9 }, null, 'full', 'below').arrangement).toBe('below');
+    expect(captionPlacement({ x: 0.5, y: 0.1 }, null, 'full', 'above').arrangement).toBe('above');
+  });
+  it('reproduces the approved mockup placement', () => {
+    expect(captionPlacement({ x: 0.5, y: 2.15 / 11 }, null, 'full', 'auto').offset).toBeCloseTo(3.15, 2);
+    expect(captionPlacement({ x: 0.5, y: 1.7 / 8.5 }, null, 'half', 'auto').offset).toBeCloseTo(2.45, 2);
+  });
+});
+
+describe('titleFit (#0561)', () => {
+  const cases: [string, [number, number], [number, number]][] = [
+    ['Programming LEDs', [54, 2], [36, 2]],
+    ['Soldering 101', [54, 1], [36, 1]],
+    ['Microcontrollers', [42, 1], [24, 1]],
+    ['Introduction to Microcontrollers', [42, 2], [24, 2]],
+    ['Build a Synthesizer from Scratch with Arduino and Friends', [36, 3], [24, 3]],
+    ['Electroluminescent', [36, 1], [20, 1]],
+  ];
+  it.each(cases)('%s', (title, full, half) => {
+    const f = titleFit(title, 'full');
+    const h = titleFit(title, 'half');
+    expect([f.pt, f.lines]).toEqual(full);
+    expect([h.pt, h.lines]).toEqual(half);
+    expect(f.breakAnywhere).toBe(false);
+    expect(h.breakAnywhere).toBe(false);
+  });
+  it('breaks anywhere only for a word nothing fits', () => {
+    const f = titleFit('Supercalifragilisticexpialidocious', 'full');
+    const h = titleFit('Supercalifragilisticexpialidocious', 'half');
+    expect(f.pt).toBe(30);
+    expect(f.breakAnywhere).toBe(true);
+    expect(h.pt).toBe(20);
+    expect(h.breakAnywhere).toBe(true);
+  });
+  it('measures glyph advances with tracking, and counts an unknown glyph as the widest', () => {
+    expect(titleWidthEm('PROGRAMMING')).toBeCloseTo(8.481, 3);
+    expect(titleWidthEm('\u0416')).toBeCloseTo(0.98, 9);
+  });
+});
+
+describe('flyer description text (#0561)', () => {
+  it('leaves short text unchanged and collapses whitespace', () => {
+    expect(shortenAtBoundary('Short text.', 140)).toBe('Short text.');
+    expect(shortenAtBoundary('  a \n  b\t c ', 140)).toBe('a b c');
+  });
+  it('cuts the mockup paragraph at a sentence or a whole word', () => {
+    const out = shortenAtBoundary(PARAGRAPH, 140);
+    expect(out.length).toBeLessThanOrEqual(140);
+    expect(out.endsWith('.') || out.endsWith('\u2026')).toBe(true);
+    const words = out.replace(/\u2026$/, '').split(' ');
+    expect(PARAGRAPH.split(' ')).toEqual(expect.arrayContaining(words));
+  });
+  it('prefers a sentence end', () => {
+    const text = 'First sentence is here. Second sentence runs on and on past the limit of it all.';
+    expect(shortenAtBoundary(text, 40)).toBe('First sentence is here.');
+  });
+  it('keeps a single over-long token whole, with an ellipsis', () => {
+    const tok = 'x'.repeat(200);
+    expect(shortenAtBoundary(tok, 140)).toBe(tok + '\u2026');
+  });
+  it('picks the description for each size', () => {
+    expect(flyerDescriptions(' From facts. ', '', '')).toEqual({ full: 'From facts.', half: 'From facts.' });
+    expect(flyerDescriptions('Facts.', ' Mine. ', '')).toEqual({ full: 'Mine.', half: 'Mine.' });
+    expect(flyerDescriptions('Facts.', 'Mine.', ' Short. ')).toEqual({ full: 'Mine.', half: 'Short.' });
+    expect(flyerDescriptions('', '', '')).toEqual({ full: '', half: '' });
+  });
+  it('validates by code points', () => {
+    const e = '\u00e9';
+    expect(validateFlyerDescription(e.repeat(360), MAX_FLYER_DESCRIPTION, 'Description')).toBeNull();
+    expect(validateFlyerDescription(e.repeat(361), MAX_FLYER_DESCRIPTION, 'Description')).toBe('Description must be at most 360 characters.');
+    expect(validateFlyerDescription('x'.repeat(141), MAX_FLYER_DESCRIPTION_SHORT, 'Short description')).not.toBeNull();
+  });
+  it('lists the fonts the print view loads', () => {
+    expect(FLYER_FONT_LOADS).toHaveLength(5);
   });
 });

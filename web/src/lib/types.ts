@@ -992,6 +992,9 @@ export interface OutreachResultsSummary {
 
 export type FlyerTemplate = 'photo-top' | 'full-photo' | 'split';
 
+/** The full-photo title box's placement (#0561); `auto` follows the focal point. */
+export type FlyerTitlePosition = 'auto' | 'below' | 'above';
+
 export interface FlyerRow {
   id: number;
   outreach_id: number;
@@ -1003,6 +1006,9 @@ export interface FlyerRow {
   focal_y: number;
   template: FlyerTemplate;
   tagline: string;
+  description: string;
+  description_short: string;
+  title_position: FlyerTitlePosition;
   created_at: string;
   updated_at: string | null;
 }
@@ -1013,6 +1019,8 @@ export interface FlyerFacts {
   date_line: string;
   place_line: string;
   cover_image: string | null;
+  /** The workshop summary, trimmed; the default flyer description. */
+  description: string;
 }
 
 /** The (workshop, location) link every flyer for that pair shares. */
