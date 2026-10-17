@@ -2,19 +2,35 @@
   The inline composer for one outreach post (#0544): the text with an exact
   character count against the channel limit, the tracked-link box with its UTM
   chips, and Save / Regenerate / Prepare / Copy content / Mark posted /
-  Delete. Which buttons apply is decided in lib/outreach.ts
-  (composerActions); this file is markup and wiring only. Copy is a one-line
-  clipboard call so a test can stub navigator.clipboard.
+  Delete, plus (#0545) Post now / Retry and Schedule / Unschedule for an
+  automatic channel the server has credentials for. Which buttons apply is
+  decided in lib/outreach.ts (composerActions); this file is markup and
+  wiring only. Copy is a one-line clipboard call so a test can stub
+  navigator.clipboard.
 -->
 <script lang="ts">
+  import { untrack } from 'svelte';
   import {
     updateOutreachPost,
     prepareOutreachPost,
     markOutreachPosted,
     deleteOutreachPost,
+    sendOutreachPost,
+    scheduleOutreachPost,
+    unscheduleOutreachPost,
     ApiError,
   } from '../../lib/api';
-  import { composerActions, countCharacters, isOverLimit, utmChips, validateRemoteUrl } from '../../lib/outreach';
+  import {
+    channelStatusNote,
+    composerActions,
+    countCharacters,
+    defaultScheduleAt,
+    fromLocalInputValue,
+    isOverLimit,
+    toLocalInputValue,
+    utmChips,
+    validateRemoteUrl,
+  } from '../../lib/outreach';
   import type { OutreachChannel, OutreachPost, OutreachWave } from '../../lib/types';
   import { formatDateTime } from '../../lib/admin';
   import Button from '../../lib/Button.svelte';
@@ -36,12 +52,33 @@
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
 
-  // Pick up a body the server rewrote (Prepare, Regenerate).
+  // Pick up a body the server rewrote (Prepare, Regenerate). Compared against
+  // the last server body, not just re-run on every new post object: the panel
+  // refreshes while a post is queued, and that must not wipe an unsaved edit.
+  // svelte-ignore state_referenced_locally
+  let serverBody = post.body;
   $effect(() => {
-    body = post.body;
+    const incoming = post.body;
+    untrack(() => {
+      if (incoming !== serverBody) {
+        serverBody = incoming;
+        body = incoming;
+      }
+    });
   });
 
-  const actions = $derived(composerActions(post, available));
+  // The schedule picker: the post's own time when scheduled, otherwise the
+  // wave's suggestion when it is still in the future (#0545).
+  function initialScheduleValue(): string {
+    const iso = post.scheduled_at ?? defaultScheduleAt(wave.name, [wave], new Date());
+    return iso ? toLocalInputValue(iso, new Date(iso).getTimezoneOffset()) : '';
+  }
+  // svelte-ignore state_referenced_locally
+  let scheduleLocal = $state(initialScheduleValue());
+
+  const actions = $derived(composerActions(post, channel, available));
+  const channelNote = $derived(channelStatusNote(channel));
+  const locked = $derived(post.status === 'posted' || post.status === 'queued');
   const counted = $derived(countCharacters(channel, body, post.prepared));
   const over = $derived(isOverLimit(channel, counted.count));
   const dirty = $derived(body !== post.body);
@@ -93,6 +130,29 @@
       onChange(await markOutreachPosted(post.id, remoteUrl.trim() || undefined));
       notice = 'Marked as posted.';
     });
+  const sendNow = () =>
+    run(actions.canRetry ? 'retry' : 'post', async () => {
+      onChange(await sendOutreachPost(post.id));
+      notice = 'Queued. It posts within a few seconds; this page updates when it does.';
+    });
+  const schedule = () =>
+    run('schedule', async () => {
+      // Resolve the offset for the chosen moment, not today, so a date across
+      // a daylight-saving change converts correctly.
+      const offset = new Date(scheduleLocal).getTimezoneOffset();
+      const iso = fromLocalInputValue(scheduleLocal, offset);
+      if (iso === null) {
+        error = 'Pick a date and time to schedule.';
+        return;
+      }
+      onChange(await scheduleOutreachPost(post.id, iso));
+      notice = 'Scheduled.';
+    });
+  const unschedule = () =>
+    run('unschedule', async () => {
+      onChange(await unscheduleOutreachPost(post.id));
+      notice = 'Back to draft.';
+    });
   const remove = () =>
     run('delete', async () => {
       await deleteOutreachPost(post.id);
@@ -112,7 +172,7 @@
 
   <label class="field">
     <span class="field-label">Post text</span>
-    <textarea rows="7" bind:value={body} disabled={post.status === 'posted'}></textarea>
+    <textarea rows="7" bind:value={body} disabled={locked}></textarea>
   </label>
   <p class={over ? 'text-error' : 'text-muted'}>
     {counted.exact ? '' : '≈ '}{counted.count}{channel.char_limit > 0 ? ` / ${channel.char_limit}` : ''} characters{over ? ' — over the limit' : ''}
@@ -133,6 +193,19 @@
     </ul>
   </div>
 
+  {#if channelNote}
+    <p class="text-muted">{channelNote}</p>
+  {/if}
+  {#if post.held}
+    <p class="text-warn">Held — the workshop is not published, so this will not be sent.</p>
+  {/if}
+  {#if post.status === 'queued'}
+    <p class="text-notice">Queued to post. It is locked until it is sent{post.last_error ? ' or fails' : ''}.</p>
+  {/if}
+  {#if post.status === 'scheduled' && post.scheduled_at}
+    <p class="text-notice">Scheduled for {formatDateTime(post.scheduled_at)}.</p>
+  {/if}
+
   {#if post.status === 'posted'}
     <p class="text-notice">
       Posted{post.posted_at ? ` ${formatDateTime(post.posted_at)}` : ''}.
@@ -147,7 +220,30 @@
     </label>
   {/if}
 
+  {#if actions.canSchedule}
+    <div class="schedule">
+      <label class="field">
+        <span class="field-label">Schedule for</span>
+        <input type="datetime-local" bind:value={scheduleLocal} />
+      </label>
+      {#if !scheduleLocal}
+        <p class="text-muted">No suggested time for this wave, or it has passed. Pick one.</p>
+      {/if}
+    </div>
+  {/if}
+
   <div class="row">
+    {#if actions.canPostNow || actions.canRetry}
+      <Button variant="primary" onclick={sendNow} disabled={busy || dirty || over}>
+        {actions.canRetry ? 'Retry' : 'Post now'}
+      </Button>
+    {/if}
+    {#if actions.canSchedule}
+      <Button onclick={schedule} disabled={busy || dirty || over || !scheduleLocal}>Schedule</Button>
+    {/if}
+    {#if actions.canUnschedule}
+      <Button onclick={unschedule} disabled={busy}>Unschedule</Button>
+    {/if}
     {#if actions.canSave}
       <Button variant="primary" onclick={save} disabled={busy || !dirty || over}>Save</Button>
     {/if}
@@ -164,14 +260,16 @@
       <Button variant="danger" onclick={remove} disabled={busy}>Delete</Button>
     {/if}
   </div>
-  {#if dirty && post.status !== 'posted'}
-    <p class="text-muted">Save your edits before preparing, copying or marking posted.</p>
+  {#if dirty && !locked}
+    <p class="text-muted">Save your edits before preparing, copying, posting or marking posted.</p>
   {/if}
 
   {#if error}
     <p class="text-error" role="alert">{error}</p>
   {/if}
   <p class="text-notice" role="status">{notice ?? ''}</p>
+  <!-- Always rendered, so a failure the publisher records later is announced. -->
+  <p class="text-warn send-error" role="status">{post.last_error ?? ''}</p>
 </div>
 
 <style>
@@ -208,6 +306,9 @@
   }
   .dest {
     font-size: var(--fs-sm);
+  }
+  .send-error:empty {
+    display: none;
   }
   .chips {
     list-style: none;

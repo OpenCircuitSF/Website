@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 )
 
 var (
@@ -22,6 +24,16 @@ var (
 	// ErrNotPrepared is returned when an action needs the post's short link
 	// and Prepare has not run yet.
 	ErrNotPrepared = errors.New("outreach: post has no short link yet")
+	// ErrPostInFlight is returned when a write is refused because the post is
+	// queued for sending (#0545): it is locked from the moment it is queued
+	// until it is posted or fails.
+	ErrPostInFlight = errors.New("outreach: post is being sent")
+	// ErrWrongStatus is returned when a send or schedule is asked of a post
+	// whose status cannot take it (for example a manual-channel post).
+	ErrWrongStatus = errors.New("outreach: post is not in a status that can be sent")
+	// ErrWorkshopNotPublished is returned when a send or schedule is asked of
+	// a post whose workshop is canceled or unpublished (#0545).
+	ErrWorkshopNotPublished = errors.New("outreach: the workshop is not published")
 )
 
 // Outreach is one row of the outreach table.
@@ -72,11 +84,12 @@ type Summary struct {
 
 // Store is the data-access layer over outreach and outreach_posts.
 type Store struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	outbox *outbox.Store // queue rows for automatic posting (#0545)
 }
 
 // NewStore constructs a Store over the shared pool.
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool, outbox: outbox.NewStore(pool)} }
 
 const outreachColumns = `id, workshop_id, shortlinks_campaign_slug, created_at, updated_at, archived_at`
 
@@ -236,6 +249,9 @@ func (s *Store) classify(ctx context.Context, id int64, needPrepared bool) error
 	if p.Status == "posted" {
 		return ErrPostLocked
 	}
+	if p.Status == "queued" {
+		return ErrPostInFlight
+	}
 	if needPrepared && !p.Prepared() {
 		return ErrNotPrepared
 	}
@@ -248,7 +264,7 @@ func (s *Store) classify(ctx context.Context, id int64, needPrepared bool) error
 func (s *Store) UpdatePostBody(ctx context.Context, id int64, body string, fingerprint *string) (Post, error) {
 	p, err := scanPost(s.pool.QueryRow(ctx,
 		`UPDATE outreach_posts SET body = $2, source_fingerprint = COALESCE($3, source_fingerprint), updated_at = now()
-		 WHERE id = $1 AND status <> 'posted' RETURNING `+postColumns, id, body, fingerprint))
+		 WHERE id = $1 AND status NOT IN ('posted','queued') RETURNING `+postColumns, id, body, fingerprint))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Post{}, s.classify(ctx, id, false)
 	}
@@ -262,8 +278,12 @@ func (s *Store) UpdatePostBody(ctx context.Context, id int64, body string, finge
 // LinkToken in the body (appending it when the body has no token), atomically
 // with the write. status is the status to store (manual channels pass
 // "manual"). It is idempotent: an already-prepared post is returned
-// unchanged.
-func (s *Store) SetPrepared(ctx context.Context, id int64, key, shortURL, status string) (Post, error) {
+// unchanged. The bool is true only when THIS call's UPDATE changed the row,
+// so of two racing callers exactly one sees true; a caller that audits the
+// preparation must do so only then. (Comparing the stored key to the one the
+// caller holds does not work: ShortLinks de-duplicates the link, so racing
+// callers hold the same key.)
+func (s *Store) SetPrepared(ctx context.Context, id int64, key, shortURL, status string) (Post, bool, error) {
 	p, err := scanPost(s.pool.QueryRow(ctx,
 		`UPDATE outreach_posts SET
 		   short_link_key = $2, short_url = $3, status = $4,
@@ -272,27 +292,27 @@ func (s *Store) SetPrepared(ctx context.Context, id int64, key, shortURL, status
 		   updated_at = now()
 		 WHERE id = $1 AND short_link_key IS NULL AND status <> 'posted' RETURNING `+postColumns, id, key, shortURL, status))
 	if err == nil {
-		return p, nil
+		return p, true, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return Post{}, fmt.Errorf("outreach: set prepared: %w", err)
+		return Post{}, false, fmt.Errorf("outreach: set prepared: %w", err)
 	}
 	cur, gerr := s.GetPost(ctx, id)
 	if gerr != nil {
-		return Post{}, gerr
+		return Post{}, false, gerr
 	}
 	if cur.Prepared() {
-		return cur, nil
+		return cur, false, nil
 	}
-	return Post{}, ErrPostLocked
+	return Post{}, false, ErrPostLocked
 }
 
 // MarkPosted records a manual post. ErrNotPrepared before Prepare,
-// ErrPostLocked when already posted.
+// ErrPostLocked when already posted, ErrPostInFlight while queued.
 func (s *Store) MarkPosted(ctx context.Context, id int64, remoteURL *string, now time.Time) (Post, error) {
 	p, err := scanPost(s.pool.QueryRow(ctx,
 		`UPDATE outreach_posts SET status = 'posted', posted_at = $3, remote_url = $2, updated_at = now()
-		 WHERE id = $1 AND status <> 'posted' AND short_url IS NOT NULL RETURNING `+postColumns, id, remoteURL, now))
+		 WHERE id = $1 AND status NOT IN ('posted','queued') AND short_url IS NOT NULL RETURNING `+postColumns, id, remoteURL, now))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Post{}, s.classify(ctx, id, true)
 	}
@@ -302,9 +322,9 @@ func (s *Store) MarkPosted(ctx context.Context, id int64, remoteURL *string, now
 	return p, nil
 }
 
-// DeletePost removes a post that has not been posted.
+// DeletePost removes a post that has not been posted and is not queued.
 func (s *Store) DeletePost(ctx context.Context, id int64) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM outreach_posts WHERE id = $1 AND status <> 'posted'`, id)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM outreach_posts WHERE id = $1 AND status NOT IN ('posted','queued')`, id)
 	if err != nil {
 		return fmt.Errorf("outreach: delete post: %w", err)
 	}

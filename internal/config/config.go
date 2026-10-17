@@ -15,6 +15,7 @@ const (
 	defaultMaxSendRate       = 10
 	defaultSendBatchSize     = 50
 	defaultSendWorkerEnabled = true
+	defaultBlueskyPDSURL     = "https://bsky.social"
 )
 
 // Config holds all runtime configuration loaded from the environment.
@@ -148,6 +149,16 @@ type Config struct {
 	// (shortlinks.New returns a nil client) and the service still boots.
 	ShortLinksBaseURL  string
 	ShortLinksAPIToken string
+
+	// Bluesky and Mastodon posting credentials for outreach (#0545), all
+	// optional. A channel without a complete set is "not configured" and
+	// falls back to manual posting; the service still boots. The app
+	// password and token are secrets: never log them.
+	BlueskyHandle      string
+	BlueskyAppPassword string
+	BlueskyPDSURL      string
+	MastodonBaseURL    string
+	MastodonToken      string
 }
 
 // DevMode reports whether the dev store should be used instead of Postgres.
@@ -209,6 +220,14 @@ func loadFromFile(path string) (*Config, error) {
 		MediaDir:            os.Getenv("MEDIA_DIR"),
 		ShortLinksBaseURL:   os.Getenv("SHORTLINKS_BASE_URL"),
 		ShortLinksAPIToken:  os.Getenv("SHORTLINKS_API_TOKEN"),
+		BlueskyHandle:       os.Getenv("BLUESKY_HANDLE"),
+		BlueskyAppPassword:  os.Getenv("BLUESKY_APP_PASSWORD"),
+		BlueskyPDSURL:       os.Getenv("BLUESKY_PDS_URL"),
+		MastodonBaseURL:     os.Getenv("MASTODON_BASE_URL"),
+		MastodonToken:       os.Getenv("MASTODON_TOKEN"),
+	}
+	if strings.TrimSpace(cfg.BlueskyPDSURL) == "" {
+		cfg.BlueskyPDSURL = defaultBlueskyPDSURL
 	}
 
 	// Validate required fields. When STORAGE=json (dev mode) DATABASE_URL is

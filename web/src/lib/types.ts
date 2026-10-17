@@ -775,6 +775,9 @@ export interface OutreachChannel {
   /** 0 means no limit is enforced. */
   char_limit: number;
   automatic: boolean;
+  /** #0545: an automatic channel with working server credentials. When false
+   * the channel behaves like a manual one. */
+  configured: boolean;
 }
 
 export interface OutreachWave {
@@ -802,6 +805,8 @@ export interface OutreachPost {
   status: OutreachPostStatus;
   prepared: boolean;
   stale: boolean;
+  /** #0545: scheduled or queued while the workshop is not published. */
+  held: boolean;
   short_link_key: string | null;
   short_url: string | null;
   destination_url: string;

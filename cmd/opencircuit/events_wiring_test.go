@@ -114,6 +114,7 @@ func TestMountAndServe_EventsRequiresSessionAndAdmin(t *testing.T) {
 			nil, /* sesInboundH: not exercised */
 			nil, /* sendWorker: not exercised */
 			nil, /* outboxWorker: not exercised */
+			nil, /* outreachPublisher: not exercised */
 			site,
 			requireSession, requireAdmin, nil, ready)
 	}()

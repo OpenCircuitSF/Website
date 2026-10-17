@@ -32,6 +32,7 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
+	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
 	"github.com/brennanMKE/OpenCircuitSF/internal/crt"
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
@@ -41,6 +42,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/inbound"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mastodon"
 	"github.com/brennanMKE/OpenCircuitSF/internal/media"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
@@ -314,7 +316,33 @@ func servePostgres(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	adminOutreachH := handlers.NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), workshopsStore, shortLinksClient, auditLogger, cfg.BaseURL)
+
+	// Outreach posting (#0545): Bluesky and Mastodon clients, each nil when
+	// its credentials are incomplete (the channel then falls back to manual).
+	// A malformed URL fails boot; partial credentials log one warning naming
+	// the missing variable, never a value.
+	bskyClient, err := bluesky.New(cfg.BlueskyPDSURL, cfg.BlueskyHandle, cfg.BlueskyAppPassword)
+	if err != nil {
+		return err
+	}
+	mastoClient, err := mastodon.New(cfg.MastodonBaseURL, cfg.MastodonToken)
+	if err != nil {
+		return err
+	}
+	warnPartialPostingCredentials(cfg, slog.Default())
+	// Built unconditionally, like the outbox worker: SEND_WORKER_ENABLED is
+	// about SES, not about posting to social platforms.
+	outreachStore := outreach.NewStore(pool)
+	outreachPublisher := outreach.NewPublisher(outreach.PublisherDeps{
+		Store:    outreachStore,
+		Outbox:   outbox.NewStore(pool),
+		Settings: store,
+		Bluesky:  bskyClient,
+		Mastodon: mastoClient,
+		MediaDir: cfg.MediaDir,
+		Log:      slog.Default(),
+	})
+	adminOutreachH := handlers.NewAdminOutreachHandler(outreachStore, outreachStore, workshopsStore, shortLinksClient, auditLogger, cfg.BaseURL, outreachPublisher)
 
 	// Admin image upload (#0433, reopening #0153): constructed
 	// UNCONDITIONALLY here, unlike every nil-guarded devstore-gap handler
@@ -643,7 +671,7 @@ func servePostgres(cfg *config.Config) error {
 
 	return mountAndServe(cfg, pool,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, site,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, outreachPublisher, site,
 		requireSession, requireAdmin, devAdminAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -1208,10 +1236,12 @@ func serveDevMode(cfg *config.Config) error {
 	// subscribers/outbound_queue backing under STORAGE=json (see
 	// internal/handlers/subscribe.go's STORAGE=json note, CLAUDE.md §5).
 	var outboxWorker *mailing.OutboxWorker
+	// STORAGE=json has no outreach tables, so there is no publisher.
+	var outreachPublisher *outreach.Publisher
 
 	return mountAndServe(cfg, ds,
 		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH, eventsH, meH, subscribeH,
-		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, site,
+		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, outreachPublisher, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
 }
@@ -1468,6 +1498,9 @@ func adminRoutes(
 			adminRoute{http.MethodPatch, "/admin/outreach-posts/{id}", http.HandlerFunc(adminOutreachH.PatchPost)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/prepare", http.HandlerFunc(adminOutreachH.Prepare)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/posted", http.HandlerFunc(adminOutreachH.MarkPosted)},
+			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/send", http.HandlerFunc(adminOutreachH.SendPost)},
+			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/schedule", http.HandlerFunc(adminOutreachH.SchedulePost)},
+			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/unschedule", http.HandlerFunc(adminOutreachH.UnschedulePost)},
 			adminRoute{http.MethodDelete, "/admin/outreach-posts/{id}", http.HandlerFunc(adminOutreachH.DeletePost)},
 			// #0548: saved flyer locations, under /admin/outreach-locations for
 			// the same overlap reason as the post routes above.
@@ -1545,6 +1578,7 @@ func mountAndServe(
 	sesInboundH *handlers.SESInboundHandler,
 	sendWorker *mailing.Worker,
 	outboxWorker *mailing.OutboxWorker,
+	outreachPublisher *outreach.Publisher,
 	site *seo.Site,
 	requireSession func(http.Handler) http.Handler,
 	requireAdmin func(http.Handler) http.Handler,
@@ -1904,6 +1938,11 @@ func mountAndServe(
 	if outboxWorker != nil {
 		go outboxWorker.Run(context.Background())
 	}
+	// Outreach publisher (#0545): same shape — its own ctx, stopped by signal
+	// through outreachPublisher.Stop, never by cancelling this context.
+	if outreachPublisher != nil {
+		go outreachPublisher.Run(context.Background())
+	}
 
 	// Graceful shutdown (#0081): before this, mountAndServe ended in a bare
 	// http.ListenAndServe with no signal.Notify anywhere in the repo, so an
@@ -1977,6 +2016,16 @@ func mountAndServe(
 				log.Printf("opencircuit: outbox worker stop: %v", err)
 			}
 			outboxStopCancel()
+		}
+		// outreachPublisher.Stop, on its own independent budget like the
+		// workers above: it lets the row mid-send finish; a row it cannot
+		// finish is returned to the queue by the next orphan sweep.
+		if outreachPublisher != nil {
+			pubStopCtx, pubStopCancel := context.WithTimeout(context.Background(), outreachPublisherCloseTimeout)
+			if err := outreachPublisher.Stop(pubStopCtx); err != nil {
+				log.Printf("opencircuit: outreach publisher stop: %v", err)
+			}
+			pubStopCancel()
 		}
 
 		// shutdownServerTimeout and subscribeCloseTimeout each bound ONE
@@ -2131,6 +2180,28 @@ var workerCloseTimeout = 10 * time.Second
 // outboxOrphanStaleAfter (internal/mailing/outbox_worker.go) is itself
 // derived from.
 var outboxWorkerCloseTimeout = 10 * time.Second
+
+// outreachPublisherCloseTimeout bounds outreachPublisher.Stop ALONE (#0545),
+// the same independent-budget shape as the two worker timeouts above.
+var outreachPublisherCloseTimeout = 10 * time.Second
+
+// warnPartialPostingCredentials logs one warning per posting channel that has
+// some but not all of its credentials, naming the missing variable and never
+// a value.
+func warnPartialPostingCredentials(cfg *config.Config, log *slog.Logger) {
+	if cfg.BlueskyHandle != "" && cfg.BlueskyAppPassword == "" {
+		log.Warn("outreach: Bluesky is not configured: BLUESKY_APP_PASSWORD is missing")
+	}
+	if cfg.BlueskyHandle == "" && cfg.BlueskyAppPassword != "" {
+		log.Warn("outreach: Bluesky is not configured: BLUESKY_HANDLE is missing")
+	}
+	if cfg.MastodonBaseURL != "" && cfg.MastodonToken == "" {
+		log.Warn("outreach: Mastodon is not configured: MASTODON_TOKEN is missing")
+	}
+	if cfg.MastodonBaseURL == "" && cfg.MastodonToken != "" {
+		log.Warn("outreach: Mastodon is not configured: MASTODON_BASE_URL is missing")
+	}
+}
 
 // activeConnSet records the connections http.Server reports as not yet
 // idle, keyed by remote address, so a shutdown that outlives its grace

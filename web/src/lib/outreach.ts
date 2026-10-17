@@ -3,7 +3,7 @@
 // here. The channel and wave lists are not duplicated here -- the server
 // sends them with every panel view.
 
-import type { OutreachChannel, OutreachPost, WorkshopOutreach } from './types';
+import type { OutreachChannel, OutreachPost, OutreachWave, WorkshopOutreach } from './types';
 
 /** The placeholder a draft carries until Prepare swaps in the real short URL.
  * Mirrors internal/outreach's LinkToken. */
@@ -82,6 +82,10 @@ export function buildGrid(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'p
 export function cellLabel(post: OutreachPost | null): string {
   if (post === null) return 'Not drafted';
   if (post.status === 'posted') return 'Posted';
+  if (post.held) return 'Held';
+  if (post.status === 'queued') return post.last_error ? 'Retrying' : 'Posting…';
+  if (post.status === 'scheduled') return 'Scheduled';
+  if (post.status === 'failed') return 'Failed';
   if (post.status === 'manual') return 'Ready to post';
   if (post.prepared) return 'Link ready';
   return 'Draft';
@@ -98,25 +102,89 @@ export interface ComposerActions {
   canCopy: boolean;
   canMarkPosted: boolean;
   canDelete: boolean;
+  /** #0545: send through the server to Bluesky or Mastodon now. */
+  canPostNow: boolean;
+  /** #0545: the same call as Post now, for a failed post; the UI labels it Retry. */
+  canRetry: boolean;
+  canSchedule: boolean;
+  canUnschedule: boolean;
 }
 
 /**
- * Which composer buttons apply. Copy and Mark posted apply to every prepared,
- * unposted post in this phase -- automatic posting is a later issue.
+ * Which composer buttons apply. A queued post is locked: every mutating
+ * action is off while it is in flight or awaiting a retry. Automatic sending
+ * needs an automatic channel the server has credentials for; an automatic
+ * channel without them gets exactly the manual matrix (Copy content, Mark
+ * posted). Where it can send, Mark posted remains only as a by-hand fallback
+ * for a draft or failed post.
  */
 export function composerActions(
   post: Pick<OutreachPost, 'status' | 'prepared' | 'stale'>,
+  channel: Pick<OutreachChannel, 'automatic' | 'configured'>,
   available: boolean,
 ): ComposerActions {
   const posted = post.status === 'posted';
+  const queued = post.status === 'queued';
+  const locked = posted || queued;
+  const canSend = channel.automatic && channel.configured && available && post.prepared;
+  const draftLike = post.status === 'draft' || post.status === 'scheduled';
+  const sendsItself = channel.automatic && channel.configured;
   return {
-    canSave: !posted,
-    canRegenerate: post.stale && !posted,
+    canSave: !locked,
+    canRegenerate: post.stale && !locked,
     canPrepare: available && !post.prepared && !posted,
     canCopy: post.prepared && !posted,
-    canMarkPosted: post.prepared && !posted,
-    canDelete: !posted,
+    canMarkPosted: post.prepared && !locked && (!sendsItself || post.status === 'draft' || post.status === 'failed'),
+    canDelete: !locked,
+    canPostNow: canSend && draftLike,
+    canRetry: canSend && post.status === 'failed',
+    canSchedule: canSend && (draftLike || post.status === 'failed'),
+    canUnschedule: post.status === 'scheduled',
   };
+}
+
+/**
+ * The time to prefill the schedule picker with: the wave's suggested time,
+ * unless the wave is announce (whose primary action is Post now), the
+ * workshop has no start, or the suggestion has already passed. Null leaves the
+ * picker empty.
+ */
+export function defaultScheduleAt(waveName: string, waves: OutreachWave[], now: Date): string | null {
+  if (waveName === 'announce') return null;
+  const at = waves.find((w) => w.name === waveName)?.suggested_at ?? null;
+  if (at === null) return null;
+  const t = Date.parse(at);
+  return Number.isNaN(t) || t <= now.getTime() ? null : at;
+}
+
+/**
+ * An ISO instant as the value of a datetime-local input. offsetMinutes is
+ * Date.getTimezoneOffset()'s convention (UTC minus local), passed in so the
+ * result does not depend on the machine's time zone.
+ */
+export function toLocalInputValue(iso: string, offsetMinutes: number): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return '';
+  return new Date(t - offsetMinutes * 60000).toISOString().slice(0, 16);
+}
+
+/** The inverse of toLocalInputValue: an RFC 3339 UTC instant, or null for an unparseable value. */
+export function fromLocalInputValue(value: string, offsetMinutes: number): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (!m) return null;
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])) + offsetMinutes * 60000;
+  if (Number.isNaN(ms)) return null;
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** True while any post is queued, so the panel keeps refreshing until the publisher has acted. */
+export function shouldPoll(view: Pick<WorkshopOutreach, 'posts'>): boolean {
+  return view.posts.some((p) => p.status === 'queued');
+}
+
+/** The note under a channel that cannot post by itself, or null. */
+export function channelStatusNote(channel: Pick<OutreachChannel, 'automatic' | 'configured'>): string | null {
+  return channel.automatic && !channel.configured ? 'Not configured — post by hand' : null;
 }
 
 /** The UTM chips, in source, medium, campaign, content order. */

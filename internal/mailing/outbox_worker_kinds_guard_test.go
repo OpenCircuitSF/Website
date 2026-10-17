@@ -24,6 +24,7 @@ import (
 // append (a name with no reason) visibly incomplete at review time.
 var kindExceptions = map[string]string{
 	"KindSubscribeIntake": "not an email — claimed by internal/handlers.SubscribeHandler's own recovery poller instead of this worker (subscribe_intake.go), not this worker's render switch; see that Kind's own doc comment in internal/outbox/store.go",
+	"KindOutreachPost":    "not an email — claimed by internal/outreach's Publisher, which posts to Bluesky and Mastodon; see that Kind's own doc comment in internal/outbox/store.go",
 }
 
 // TestMailKindsCoversEveryOutboxKind is #0254's review-bounce regression

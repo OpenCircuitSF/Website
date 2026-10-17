@@ -34,6 +34,12 @@ type fakeShortLinker struct {
 	links     []shortlinks.CreateLinkRequest
 	linkErr   error
 	campSlug  string
+	// fixedKey, when set, makes every CreateLink return that key, as real
+	// ShortLinks does for a repeated destination (it de-duplicates).
+	fixedKey string
+	// createBarrier, when set, makes CreateLink wait until that many calls
+	// are in flight at once, so a test can force two Prepares to race.
+	createBarrier *sync.WaitGroup
 	// CampaignStats (#0546): a configurable rollup or error, with every
 	// request recorded.
 	statsRollup *shortlinks.CampaignRollup
@@ -79,11 +85,21 @@ func (f *fakeShortLinker) EnsureCampaign(_ context.Context, slug string, req sho
 }
 func (f *fakeShortLinker) CreateLink(_ context.Context, req shortlinks.CreateLinkRequest) (*shortlinks.Link, error) {
 	f.mu.Lock()
+	barrier := f.createBarrier
+	f.mu.Unlock()
+	if barrier != nil {
+		barrier.Done()
+		barrier.Wait()
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.linkErr != nil {
 		return nil, f.linkErr
 	}
 	f.links = append(f.links, req)
+	if f.fixedKey != "" {
+		return &shortlinks.Link{Key: f.fixedKey}, nil
+	}
 	return &shortlinks.Link{Key: fmt.Sprintf("k%d", len(f.links))}, nil
 }
 
@@ -102,8 +118,18 @@ func outreachMux(pool *pgxpool.Pool, links shortLinker) (http.Handler, *workshop
 }
 
 func outreachMuxWithHandler(pool *pgxpool.Pool, links shortLinker) (http.Handler, *workshops.Store, *AdminOutreachHandler) {
+	return outreachMuxPosting(pool, links, nil)
+}
+
+// fakePosting stands in for *outreach.Publisher: it says which automatic
+// channels are configured, and nothing here can post anywhere (#0545).
+type fakePosting map[string]bool
+
+func (f fakePosting) ChannelConfigured(name string) bool { return f[name] }
+
+func outreachMuxPosting(pool *pgxpool.Pool, links shortLinker, posting outreachPosting) (http.Handler, *workshops.Store, *AdminOutreachHandler) {
 	ws := workshops.NewStore(pool)
-	h := NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), ws, links, audit.New(pool), "https://site.example.test")
+	h := NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), ws, links, audit.New(pool), "https://site.example.test", posting)
 	requireSession := middleware.RequireSession(auth.NewStore(pool))
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
@@ -117,6 +143,9 @@ func outreachMuxWithHandler(pool *pgxpool.Pool, links shortLinker) (http.Handler
 	mux.Handle("POST /admin/outreach-posts/{id}/prepare", requireAdmin(http.HandlerFunc(h.Prepare)))
 	mux.Handle("POST /admin/outreach-posts/{id}/posted", requireAdmin(http.HandlerFunc(h.MarkPosted)))
 	mux.Handle("DELETE /admin/outreach-posts/{id}", requireAdmin(http.HandlerFunc(h.DeletePost)))
+	mux.Handle("POST /admin/outreach-posts/{id}/send", requireAdmin(http.HandlerFunc(h.SendPost)))
+	mux.Handle("POST /admin/outreach-posts/{id}/schedule", requireAdmin(http.HandlerFunc(h.SchedulePost)))
+	mux.Handle("POST /admin/outreach-posts/{id}/unschedule", requireAdmin(http.HandlerFunc(h.UnschedulePost)))
 	mux.Handle("GET /admin/workshops/{id}/outreach/results", requireAdmin(http.HandlerFunc(h.ResultsForWorkshop)))
 	mux.Handle("GET /admin/outreach-results", requireAdmin(http.HandlerFunc(h.ResultsSummary)))
 	mux.Handle("GET /admin/outreach-locations", requireAdmin(http.HandlerFunc(h.ListLocations)))
@@ -157,9 +186,14 @@ type outreachEnv struct {
 
 func newOutreachEnv(t *testing.T, enabled bool) *outreachEnv {
 	t.Helper()
+	return newOutreachEnvPosting(t, enabled, nil)
+}
+
+func newOutreachEnvPosting(t *testing.T, enabled bool, posting outreachPosting) *outreachEnv {
+	t.Helper()
 	pool := outreachTestPool(t)
 	links := &fakeShortLinker{enabled: enabled}
-	mux, ws := outreachMux(pool, links)
+	mux, ws, _ := outreachMuxPosting(pool, links, posting)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	admin := seedAdmin(t, pool, "admin-outreach@example.com")
@@ -251,6 +285,9 @@ func TestAdminOutreach_AuthGuards(t *testing.T) {
 		{http.MethodPost, "/admin/outreach-posts/1/prepare"},
 		{http.MethodPost, "/admin/outreach-posts/1/posted"},
 		{http.MethodDelete, "/admin/outreach-posts/1"},
+		{http.MethodPost, "/admin/outreach-posts/1/send"},
+		{http.MethodPost, "/admin/outreach-posts/1/schedule"},
+		{http.MethodPost, "/admin/outreach-posts/1/unschedule"},
 	}
 	for _, p := range paths {
 		for token, want := range map[string]int{"": http.StatusUnauthorized, "outreach-user-token": http.StatusForbidden} {

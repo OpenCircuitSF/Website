@@ -4,22 +4,28 @@ import {
   buildGrid,
   cellIsStale,
   cellLabel,
+  channelStatusNote,
   composerActions,
   countCharacters,
+  defaultScheduleAt,
+  fromLocalInputValue,
   isOverLimit,
+  shouldPoll,
+  toLocalInputValue,
   unavailableMessage,
   utmChips,
   validateRemoteUrl,
 } from './outreach';
-import type { OutreachChannel, OutreachPost, WorkshopOutreach } from './types';
+import type { ComposerActions } from './outreach';
+import type { OutreachChannel, OutreachPost, OutreachWave, WorkshopOutreach } from './types';
 
-const bluesky: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true };
-const mastodon: OutreachChannel = { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true };
-const instagram: OutreachChannel = { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false };
+const bluesky: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true };
+const mastodon: OutreachChannel = { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true, configured: false };
+const instagram: OutreachChannel = { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false };
 
 function post(over: Partial<OutreachPost> = {}): OutreachPost {
   return {
-    id: 1, outreach_id: 1, channel: 'bluesky', wave: 'announce', body: 'x', status: 'draft', prepared: false, stale: false,
+    id: 1, outreach_id: 1, channel: 'bluesky', wave: 'announce', body: 'x', status: 'draft', prepared: false, stale: false, held: false,
     short_link_key: null, short_url: null, destination_url: 'https://x/workshops/s?utm_source=bluesky',
     utm: { source: 'bluesky', medium: 'social', campaign: 's', content: 'announce' },
     scheduled_at: null, posted_at: null, remote_url: null, last_error: null, created_at: '2026-01-01T00:00:00Z', updated_at: null,
@@ -88,24 +94,132 @@ describe('buildGrid and cells', () => {
 });
 
 describe('composerActions', () => {
-  it('draft, available', () => {
-    expect(composerActions(post(), true)).toEqual({ canSave: true, canRegenerate: false, canPrepare: true, canCopy: false, canMarkPosted: false, canDelete: true });
+  const none = { canPostNow: false, canRetry: false, canSchedule: false, canUnschedule: false };
+  it('draft on a manual channel, available', () => {
+    expect(composerActions(post(), instagram, true)).toEqual({ canSave: true, canRegenerate: false, canPrepare: true, canCopy: false, canMarkPosted: false, canDelete: true, ...none });
   });
   it('draft, unavailable cannot prepare', () => {
-    expect(composerActions(post(), false).canPrepare).toBe(false);
+    expect(composerActions(post(), instagram, false).canPrepare).toBe(false);
   });
   it('stale offers regenerate', () => {
-    expect(composerActions(post({ stale: true }), true).canRegenerate).toBe(true);
+    expect(composerActions(post({ stale: true }), instagram, true).canRegenerate).toBe(true);
   });
-  it('prepared manual can copy and mark posted but not prepare', () => {
-    expect(composerActions(post({ prepared: true, status: 'manual' }), true)).toEqual({ canSave: true, canRegenerate: false, canPrepare: false, canCopy: true, canMarkPosted: true, canDelete: true });
-  });
-  it('prepared automatic draft can also copy and mark posted in this phase', () => {
-    const a = composerActions(post({ prepared: true }), true);
-    expect(a.canCopy && a.canMarkPosted).toBe(true);
+  it('prepared manual can copy and mark posted but not prepare or send', () => {
+    expect(composerActions(post({ prepared: true, status: 'manual' }), instagram, true)).toEqual({ canSave: true, canRegenerate: false, canPrepare: false, canCopy: true, canMarkPosted: true, canDelete: true, ...none });
   });
   it('posted is locked', () => {
-    expect(composerActions(post({ prepared: true, status: 'posted', stale: true }), true)).toEqual({ canSave: false, canRegenerate: false, canPrepare: false, canCopy: false, canMarkPosted: false, canDelete: false });
+    expect(composerActions(post({ prepared: true, status: 'posted', stale: true }), bluesky, true)).toEqual({ canSave: false, canRegenerate: false, canPrepare: false, canCopy: false, canMarkPosted: false, canDelete: false, ...none });
+  });
+
+  // #0545: the matrix for an automatic channel, by status, configuration and availability.
+  type Row = [status: OutreachPost['status'], configured: boolean, available: boolean, expected: Partial<ComposerActions>];
+  const rows: Row[] = [
+    ['draft', true, true, { canPostNow: true, canSchedule: true, canMarkPosted: true, canSave: true, canDelete: true }],
+    ['draft', true, false, { canMarkPosted: true, canSave: true, canDelete: true }],
+    ['draft', false, true, { canMarkPosted: true, canSave: true, canDelete: true }],
+    ['scheduled', true, true, { canPostNow: true, canSchedule: true, canUnschedule: true, canSave: true, canDelete: true }],
+    ['scheduled', false, true, { canUnschedule: true, canMarkPosted: true, canSave: true, canDelete: true }],
+    ['queued', true, true, { canCopy: true }],
+    ['queued', false, true, { canCopy: true }],
+    ['failed', true, true, { canRetry: true, canSchedule: true, canMarkPosted: true, canSave: true, canDelete: true }],
+    ['failed', true, false, { canMarkPosted: true, canSave: true, canDelete: true }],
+    ['failed', false, true, { canMarkPosted: true, canSave: true, canDelete: true }],
+    ['posted', true, true, {}],
+  ];
+  for (const [status, configured, available, expected] of rows) {
+    it(`prepared bluesky post, ${status}, configured=${configured}, available=${available}`, () => {
+      const ch = { ...bluesky, configured };
+      const got = composerActions(post({ prepared: true, status }), ch, available);
+      const want: ComposerActions = {
+        canSave: false, canRegenerate: false, canPrepare: false, canCopy: status !== 'posted', canMarkPosted: false, canDelete: false,
+        canPostNow: false, canRetry: false, canSchedule: false, canUnschedule: false,
+        ...expected,
+      };
+      expect(got).toEqual(want);
+    });
+  }
+  it('a queued post locks every mutating action', () => {
+    const a = composerActions(post({ prepared: true, status: 'queued', stale: true }), bluesky, true);
+    expect([a.canSave, a.canRegenerate, a.canMarkPosted, a.canDelete, a.canPostNow, a.canRetry, a.canSchedule, a.canUnschedule]).toEqual(Array(8).fill(false));
+  });
+  it('an unprepared automatic post cannot be sent or scheduled', () => {
+    const a = composerActions(post({ prepared: false }), bluesky, true);
+    expect(a.canPostNow || a.canSchedule).toBe(false);
+    expect(a.canPrepare).toBe(true);
+  });
+});
+
+describe('cellLabel (#0545 states)', () => {
+  it('labels the sending states', () => {
+    expect(cellLabel(post({ prepared: true, status: 'scheduled' }))).toBe('Scheduled');
+    expect(cellLabel(post({ prepared: true, status: 'queued' }))).toBe('Posting…');
+    expect(cellLabel(post({ prepared: true, status: 'queued', last_error: 'Mastodon is unreachable' }))).toBe('Retrying');
+    expect(cellLabel(post({ prepared: true, status: 'failed', last_error: 'x' }))).toBe('Failed');
+    expect(cellLabel(post({ prepared: true, status: 'scheduled', held: true }))).toBe('Held');
+    expect(cellLabel(post({ prepared: true, status: 'queued', held: true }))).toBe('Held');
+  });
+  it('posted wins over everything', () => {
+    expect(cellLabel(post({ prepared: true, status: 'posted', held: true }))).toBe('Posted');
+  });
+});
+
+describe('defaultScheduleAt', () => {
+  const now = new Date('2026-11-01T00:00:00Z');
+  const waves: OutreachWave[] = [
+    { name: 'announce', label: 'Announce', suggested_at: null },
+    { name: 'reminder', label: 'Reminder', suggested_at: '2026-11-28T18:00:00Z' },
+    { name: 'last-call', label: 'Last call', suggested_at: '2026-12-04T18:00:00Z' },
+  ];
+  it('announce has no default', () => {
+    expect(defaultScheduleAt('announce', waves, now)).toBeNull();
+    expect(defaultScheduleAt('announce', [{ ...waves[0], suggested_at: '2026-12-01T00:00:00Z' }], now)).toBeNull();
+  });
+  it('reminder and last-call use the suggestion', () => {
+    expect(defaultScheduleAt('reminder', waves, now)).toBe('2026-11-28T18:00:00Z');
+    expect(defaultScheduleAt('last-call', waves, now)).toBe('2026-12-04T18:00:00Z');
+  });
+  it('a suggestion in the past, a null one, an unknown wave and a bad date are all null', () => {
+    expect(defaultScheduleAt('reminder', waves, new Date('2026-11-29T00:00:00Z'))).toBeNull();
+    expect(defaultScheduleAt('reminder', waves, new Date('2026-11-28T18:00:00Z'))).toBeNull();
+    expect(defaultScheduleAt('reminder', [{ ...waves[1], suggested_at: null }], now)).toBeNull();
+    expect(defaultScheduleAt('nope', waves, now)).toBeNull();
+    expect(defaultScheduleAt('reminder', [{ ...waves[1], suggested_at: 'garbage' }], now)).toBeNull();
+  });
+});
+
+describe('datetime-local conversion', () => {
+  // Offsets follow Date.getTimezoneOffset: UTC minus local, so Pacific
+  // daylight time is +420 and Pacific standard time is +480.
+  it('round-trips at offset 420 (UTC-7)', () => {
+    expect(toLocalInputValue('2026-11-28T18:00:00Z', 420)).toBe('2026-11-28T11:00');
+    expect(fromLocalInputValue('2026-11-28T11:00', 420)).toBe('2026-11-28T18:00:00Z');
+  });
+  it('round-trips at offset 0', () => {
+    expect(toLocalInputValue('2026-11-28T18:00:00Z', 0)).toBe('2026-11-28T18:00');
+    expect(fromLocalInputValue('2026-11-28T18:00', 0)).toBe('2026-11-28T18:00:00Z');
+  });
+  it('crosses midnight and a year boundary correctly', () => {
+    expect(toLocalInputValue('2027-01-01T03:00:00Z', 480)).toBe('2026-12-31T19:00');
+    expect(fromLocalInputValue('2026-12-31T19:00', 480)).toBe('2027-01-01T03:00:00Z');
+    expect(toLocalInputValue('2026-11-28T18:00:00Z', -330)).toBe('2026-11-28T23:30');
+  });
+  it('rejects garbage', () => {
+    expect(toLocalInputValue('garbage', 0)).toBe('');
+    expect(fromLocalInputValue('', 0)).toBeNull();
+    expect(fromLocalInputValue('tomorrow', 0)).toBeNull();
+  });
+});
+
+describe('shouldPoll and channelStatusNote', () => {
+  it('polls only while something is queued', () => {
+    expect(shouldPoll({ posts: [] })).toBe(false);
+    expect(shouldPoll({ posts: [post({ status: 'scheduled' }), post({ status: 'failed' })] })).toBe(false);
+    expect(shouldPoll({ posts: [post({ status: 'draft' }), post({ status: 'queued' })] })).toBe(true);
+  });
+  it('flags only an automatic channel without credentials', () => {
+    expect(channelStatusNote({ ...mastodon, configured: false })).toBe('Not configured — post by hand');
+    expect(channelStatusNote(bluesky)).toBeNull();
+    expect(channelStatusNote(instagram)).toBeNull();
   });
 });
 

@@ -177,6 +177,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 			nil, /* sesInboundH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
 			nil, /* outboxWorker: not exercised */
+			nil, /* outreachPublisher: not exercised */
 			site,
 			requireSession, requireAdmin, nil, ready)
 	}()
@@ -460,6 +461,7 @@ func TestMountAndServe_CampaignArchiveMutationInvalidatesSharedSEOSite(t *testin
 			nil, /* sesInboundH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
 			nil, /* outboxWorker: not exercised */
+			nil, /* outreachPublisher: not exercised */
 			site,
 			requireSession, requireAdmin, nil, ready)
 	}()

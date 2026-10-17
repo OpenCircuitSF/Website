@@ -205,6 +205,7 @@ func sesWiringStartServer(t *testing.T, pool *pgxpool.Pool, sesNotifyH *handlers
 			nil, /* sesInboundH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
 			nil, /* outboxWorker: not exercised */
+			nil, /* outreachPublisher: not exercised */
 			site,
 			requireSession, requireAdmin, nil, ready)
 	}()

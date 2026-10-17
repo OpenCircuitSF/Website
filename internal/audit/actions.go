@@ -341,6 +341,14 @@ const (
 	ActionOutreachPostPosted   = "outreach_post.posted"
 	ActionOutreachPostDeleted  = "outreach_post.deleted"
 
+	// Automatic posting (#0545), all targeting a post. Queued is Post now and
+	// Retry alike (metadata "retry" tells them apart); Scheduled covers
+	// rescheduling too. The publisher has no admin actor and writes no audit
+	// rows: the post row and its queue row record what it did.
+	ActionOutreachPostQueued      = "outreach_post.queued"
+	ActionOutreachPostScheduled   = "outreach_post.scheduled"
+	ActionOutreachPostUnscheduled = "outreach_post.unscheduled"
+
 	// Outreach locations (#0548): saved flyer locations. Activation changes
 	// are an updated row with "active" in its changed list, not a separate
 	// action. Metadata never carries address or notes text.

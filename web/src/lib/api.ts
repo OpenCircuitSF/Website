@@ -1322,6 +1322,21 @@ export function markOutreachPosted(id: number, remoteUrl?: string): Promise<Outr
   return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/posted`, remoteUrl ? { remote_url: remoteUrl } : {});
 }
 
+/** POST /admin/outreach-posts/{id}/send — Post now, or Retry for a failed post (#0545). */
+export function sendOutreachPost(id: number): Promise<OutreachPost> {
+  return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/send`);
+}
+
+/** POST /admin/outreach-posts/{id}/schedule — scheduledAt is an RFC 3339 instant (#0545). */
+export function scheduleOutreachPost(id: number, scheduledAt: string): Promise<OutreachPost> {
+  return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/schedule`, { scheduled_at: scheduledAt });
+}
+
+/** POST /admin/outreach-posts/{id}/unschedule — a scheduled post goes back to draft (#0545). */
+export function unscheduleOutreachPost(id: number): Promise<OutreachPost> {
+  return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/unschedule`);
+}
+
 /** DELETE /admin/outreach-posts/{id} — delete a post that has not been posted. */
 export function deleteOutreachPost(id: number): Promise<unknown> {
   return apiDelete<unknown>(`/admin/outreach-posts/${id}`);

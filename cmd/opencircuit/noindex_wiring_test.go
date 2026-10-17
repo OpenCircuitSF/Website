@@ -79,7 +79,7 @@ func TestMountAndServe_NoIndexHeaderWiredAroundWholeMux(t *testing.T) {
 		errCh <- mountAndServe(cfg, okPinger{},
 			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
-			nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
 			site, requireSession, requireAdmin, nil, ready)
 	}()
 	waitForHealthy(t, &http.Client{Timeout: wiringHTTPTimeout}, baseURL, errCh, ready)

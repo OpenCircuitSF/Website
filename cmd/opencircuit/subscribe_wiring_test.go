@@ -120,6 +120,7 @@ func TestMountAndServe_RateLimitsSubscribe(t *testing.T) {
 			nil, /* sesInboundH: not exercised by this test */
 			nil, /* sendWorker: not exercised by this test */
 			nil, /* outboxWorker: not exercised */
+			nil, /* outreachPublisher: not exercised */
 			site,
 			passthrough, passthrough, nil, ready)
 	}()

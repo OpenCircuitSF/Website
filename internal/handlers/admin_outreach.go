@@ -34,9 +34,20 @@ type outreachStore interface {
 	GetPost(ctx context.Context, id int64) (outreach.Post, error)
 	CreatePost(ctx context.Context, outreachID int64, channel, wave, body, fingerprint string) (outreach.Post, error)
 	UpdatePostBody(ctx context.Context, id int64, body string, fingerprint *string) (outreach.Post, error)
-	SetPrepared(ctx context.Context, id int64, key, shortURL, status string) (outreach.Post, error)
+	// SetPrepared's bool is true only when this call's UPDATE changed the row.
+	SetPrepared(ctx context.Context, id int64, key, shortURL, status string) (outreach.Post, bool, error)
 	MarkPosted(ctx context.Context, id int64, remoteURL *string, now time.Time) (outreach.Post, error)
 	DeletePost(ctx context.Context, id int64) error
+	QueueNow(ctx context.Context, id int64) (post outreach.Post, prevStatus string, err error)
+	Schedule(ctx context.Context, id int64, at time.Time) (outreach.Post, error)
+	Unschedule(ctx context.Context, id int64) (outreach.Post, error)
+}
+
+// outreachPosting reports which automatic channels have working credentials
+// (#0545). *outreach.Publisher satisfies it, and a nil *outreach.Publisher
+// reports nothing configured.
+type outreachPosting interface {
+	ChannelConfigured(name string) bool
 }
 
 // outreachWorkshopReader loads the workshop an outreach belongs to.
@@ -67,8 +78,9 @@ type AdminOutreachHandler struct {
 	links     shortLinker
 	auditor   *audit.Logger
 	baseURL   string
-	mu        sync.Mutex
-	shortBase string // cached Me().BaseURL; a failed fetch is not cached
+	posting   outreachPosting
+	mu        sync.Mutex // guards shortBase only; never held across a network call
+	shortBase string     // cached Me().BaseURL; a failed fetch is not cached
 	// stats memoizes campaign stats for the results routes (#0546); nil when
 	// ShortLinks is not configured.
 	stats *shortlinks.StatsCache
@@ -78,9 +90,9 @@ type AdminOutreachHandler struct {
 // NewAdminOutreachHandler constructs the handler. baseURL is the site's own
 // BaseURL, used for the tracked destination URLs; a nil auditor disables
 // audit writes; a nil or unconfigured links makes Outreach report
-// unavailable.
-func NewAdminOutreachHandler(store outreachStore, locations outreachLocationStore, ws outreachWorkshopReader, links shortLinker, auditor *audit.Logger, baseURL string) *AdminOutreachHandler {
-	h := &AdminOutreachHandler{store: store, locations: locations, ws: ws, links: links, auditor: auditor, baseURL: baseURL, now: time.Now}
+// unavailable. A nil posting means no automatic channel is configured.
+func NewAdminOutreachHandler(store outreachStore, locations outreachLocationStore, ws outreachWorkshopReader, links shortLinker, auditor *audit.Logger, baseURL string, posting outreachPosting) *AdminOutreachHandler {
+	h := &AdminOutreachHandler{store: store, locations: locations, ws: ws, links: links, auditor: auditor, baseURL: baseURL, posting: posting, now: time.Now}
 	if h.linksEnabled() {
 		h.stats = shortlinks.NewStatsCache(links.CampaignStats, shortlinks.StatsCacheTTL, shortlinks.StatsCacheFailTTL)
 	}
@@ -91,12 +103,17 @@ func (h *AdminOutreachHandler) linksEnabled() bool {
 	return h.links != nil && h.links.Enabled()
 }
 
-// shortLinksBase returns the display host for short URLs, fetched once.
+// shortLinksBase returns the display host for short URLs, fetched once. The
+// mutex guards only the cached value: the network call to Me runs outside it,
+// so concurrent first callers do not queue behind one upstream round trip
+// (they may each fetch once; the result is identical and the last store
+// wins). A failed fetch is not cached.
 func (h *AdminOutreachHandler) shortLinksBase(ctx context.Context) (string, error) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.shortBase != "" {
-		return h.shortBase, nil
+	cached := h.shortBase
+	h.mu.Unlock()
+	if cached != "" {
+		return cached, nil
 	}
 	me, err := h.links.Me(ctx)
 	if err != nil {
@@ -105,8 +122,11 @@ func (h *AdminOutreachHandler) shortLinksBase(ctx context.Context) (string, erro
 	if strings.TrimSpace(me.BaseURL) == "" {
 		return "", errors.New("shortlinks: /api/me returned no base_url")
 	}
-	h.shortBase = strings.TrimRight(me.BaseURL, "/")
-	return h.shortBase, nil
+	base := strings.TrimRight(me.BaseURL, "/")
+	h.mu.Lock()
+	h.shortBase = base
+	h.mu.Unlock()
+	return base, nil
 }
 
 // writeShortLinksError maps an upstream failure to a response that never
@@ -148,14 +168,17 @@ type outreachUTMView struct {
 }
 
 type outreachPostView struct {
-	ID             int64           `json:"id"`
-	OutreachID     int64           `json:"outreach_id"`
-	Channel        string          `json:"channel"`
-	Wave           string          `json:"wave"`
-	Body           string          `json:"body"`
-	Status         string          `json:"status"`
-	Prepared       bool            `json:"prepared"`
-	Stale          bool            `json:"stale"`
+	ID         int64  `json:"id"`
+	OutreachID int64  `json:"outreach_id"`
+	Channel    string `json:"channel"`
+	Wave       string `json:"wave"`
+	Body       string `json:"body"`
+	Status     string `json:"status"`
+	Prepared   bool   `json:"prepared"`
+	Stale      bool   `json:"stale"`
+	// Held is true for a scheduled or queued post whose workshop is not
+	// published: it will not be sent while that stays true (#0545).
+	Held           bool            `json:"held"`
 	ShortLinkKey   *string         `json:"short_link_key"`
 	ShortURL       *string         `json:"short_url"`
 	DestinationURL string          `json:"destination_url"`
@@ -168,19 +191,42 @@ type outreachPostView struct {
 	UpdatedAt      *string         `json:"updated_at"`
 }
 
-func (h *AdminOutreachHandler) postView(p outreach.Post, f outreach.Facts) outreachPostView {
+func (h *AdminOutreachHandler) postView(p outreach.Post, f outreach.Facts, workshopStatus string) outreachPostView {
 	ch, _ := outreach.ChannelByName(p.Channel)
 	wv, _ := outreach.WaveByName(p.Wave)
 	return outreachPostView{
 		ID: p.ID, OutreachID: p.OutreachID, Channel: p.Channel, Wave: p.Wave, Body: p.Body,
 		Status: p.Status, Prepared: p.Prepared(),
 		Stale:        p.Status != "posted" && p.SourceFingerprint != outreach.Fingerprint(f),
+		Held:         (p.Status == "scheduled" || p.Status == "queued") && workshopStatus != "published",
 		ShortLinkKey: p.ShortLinkKey, ShortURL: p.ShortURL,
 		DestinationURL: outreach.DestinationURL(h.baseURL, f, ch, wv),
 		UTM:            outreachUTMView{Source: ch.UTMSource, Medium: ch.UTMMedium, Campaign: f.Slug, Content: wv.Name},
 		ScheduledAt:    rfc3339(p.ScheduledAt), PostedAt: rfc3339(p.PostedAt), RemoteURL: p.RemoteURL, LastError: p.LastError,
 		CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339), UpdatedAt: rfc3339(p.UpdatedAt),
 	}
+}
+
+// outreachChannelView is a channel plus whether the site can post to it
+// itself. An automatic channel that is not configured behaves exactly like a
+// manual one in the UI.
+type outreachChannelView struct {
+	outreach.Channel
+	Configured bool `json:"configured"`
+}
+
+func (h *AdminOutreachHandler) channelConfigured(name string) bool {
+	ch, ok := outreach.ChannelByName(name)
+	return ok && ch.Automatic && h.posting != nil && h.posting.ChannelConfigured(name)
+}
+
+func (h *AdminOutreachHandler) channelViews() []outreachChannelView {
+	chs := outreach.Channels()
+	out := make([]outreachChannelView, 0, len(chs))
+	for _, ch := range chs {
+		out = append(out, outreachChannelView{Channel: ch, Configured: h.channelConfigured(ch.Name)})
+	}
+	return out
 }
 
 type outreachWaveView struct {
@@ -205,19 +251,19 @@ type outreachWorkshopView struct {
 }
 
 type outreachPanelView struct {
-	Available         bool                 `json:"available"`
-	UnavailableReason string               `json:"unavailable_reason"`
-	Workshop          outreachWorkshopView `json:"workshop"`
-	Outreach          *outreachRowView     `json:"outreach"`
-	Channels          []outreach.Channel   `json:"channels"`
-	Waves             []outreachWaveView   `json:"waves"`
-	Posts             []outreachPostView   `json:"posts"`
+	Available         bool                  `json:"available"`
+	UnavailableReason string                `json:"unavailable_reason"`
+	Workshop          outreachWorkshopView  `json:"workshop"`
+	Outreach          *outreachRowView      `json:"outreach"`
+	Channels          []outreachChannelView `json:"channels"`
+	Waves             []outreachWaveView    `json:"waves"`
+	Posts             []outreachPostView    `json:"posts"`
 }
 
 func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop, o *outreach.Outreach) (outreachPanelView, error) {
 	v := outreachPanelView{
 		Workshop: outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt)},
-		Channels: outreach.Channels(),
+		Channels: h.channelViews(),
 		Waves:    []outreachWaveView{},
 		Posts:    []outreachPostView{},
 	}
@@ -245,7 +291,7 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 		}
 		f := outreachFacts(wk)
 		for _, p := range posts {
-			v.Posts = append(v.Posts, h.postView(p, f))
+			v.Posts = append(v.Posts, h.postView(p, f, wk.Status))
 		}
 	}
 	return v, nil
@@ -485,7 +531,7 @@ func (h *AdminOutreachHandler) CreatePost(w http.ResponseWriter, r *http.Request
 			IP:         clientIP(r),
 		})
 	}
-	writeJSON(w, http.StatusCreated, h.postView(p, f))
+	writeJSON(w, http.StatusCreated, h.postView(p, f, wk.Status))
 }
 
 // postContext loads a post, its outreach and its workshop; ok=false means the
@@ -567,6 +613,9 @@ func (h *AdminOutreachHandler) PatchPost(w http.ResponseWriter, r *http.Request)
 	case errors.Is(err, outreach.ErrPostLocked):
 		writeError(w, http.StatusConflict, "post is already posted")
 		return
+	case errors.Is(err, outreach.ErrPostInFlight):
+		writeError(w, http.StatusConflict, "post is being sent")
+		return
 	case errors.Is(err, outreach.ErrNotFound):
 		writeError(w, http.StatusNotFound, "post not found")
 		return
@@ -586,7 +635,7 @@ func (h *AdminOutreachHandler) PatchPost(w http.ResponseWriter, r *http.Request)
 			IP:         clientIP(r),
 		})
 	}
-	writeJSON(w, http.StatusOK, h.postView(updated, f))
+	writeJSON(w, http.StatusOK, h.postView(updated, f, wk.Status))
 }
 
 // Prepare handles POST /admin/outreach-posts/{id}/prepare: create the tagged
@@ -612,7 +661,7 @@ func (h *AdminOutreachHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 	}
 	f := outreachFacts(wk)
 	if p.Prepared() {
-		writeJSON(w, http.StatusOK, h.postView(p, f))
+		writeJSON(w, http.StatusOK, h.postView(p, f, wk.Status))
 		return
 	}
 	if wk.Status != "published" {
@@ -649,7 +698,7 @@ func (h *AdminOutreachHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 	if !ch.Automatic {
 		status = "manual"
 	}
-	updated, err := h.store.SetPrepared(r.Context(), id, link.Key, base+"/"+link.Key, status)
+	updated, changed, err := h.store.SetPrepared(r.Context(), id, link.Key, base+"/"+link.Key, status)
 	switch {
 	case err == nil:
 	case errors.Is(err, outreach.ErrPostLocked):
@@ -659,9 +708,11 @@ func (h *AdminOutreachHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	// A racing Prepare that lost returns the winner's row unchanged; only the
-	// call that actually set the key audits.
-	if h.auditor != nil && updated.ShortLinkKey != nil && *updated.ShortLinkKey == link.Key {
+	// A racing Prepare that lost gets the winner's row back with changed
+	// false, so only the call whose UPDATE actually set the key audits. (The
+	// stored key cannot decide this: ShortLinks de-duplicates the link, so
+	// racing callers hold the same key.)
+	if h.auditor != nil && changed {
 		actorID := actor.ID
 		targetID := updated.ID
 		h.auditor.Record(r.Context(), audit.Entry{
@@ -673,7 +724,7 @@ func (h *AdminOutreachHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 			IP:         clientIP(r),
 		})
 	}
-	writeJSON(w, http.StatusOK, h.postView(updated, f))
+	writeJSON(w, http.StatusOK, h.postView(updated, f, wk.Status))
 }
 
 type markOutreachPostedRequest struct {
@@ -725,6 +776,9 @@ func (h *AdminOutreachHandler) MarkPosted(w http.ResponseWriter, r *http.Request
 	case errors.Is(err, outreach.ErrPostLocked):
 		writeError(w, http.StatusConflict, "post is already posted")
 		return
+	case errors.Is(err, outreach.ErrPostInFlight):
+		writeError(w, http.StatusConflict, "post is being sent")
+		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
@@ -741,7 +795,7 @@ func (h *AdminOutreachHandler) MarkPosted(w http.ResponseWriter, r *http.Request
 			IP:         clientIP(r),
 		})
 	}
-	writeJSON(w, http.StatusOK, h.postView(updated, outreachFacts(wk)))
+	writeJSON(w, http.StatusOK, h.postView(updated, outreachFacts(wk), wk.Status))
 }
 
 // DeletePost handles DELETE /admin/outreach-posts/{id}.
@@ -767,6 +821,9 @@ func (h *AdminOutreachHandler) DeletePost(w http.ResponseWriter, r *http.Request
 	case err == nil:
 	case errors.Is(err, outreach.ErrPostLocked):
 		writeError(w, http.StatusConflict, "post is already posted")
+		return
+	case errors.Is(err, outreach.ErrPostInFlight):
+		writeError(w, http.StatusConflict, "post is being sent")
 		return
 	case errors.Is(err, outreach.ErrNotFound):
 		writeError(w, http.StatusNotFound, "post not found")

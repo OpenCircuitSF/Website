@@ -89,7 +89,7 @@ func TestMountAndServe_ShutdownTimeoutNamesWhatHeldItOpen(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, okPinger{},
-			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 			site, requireSession, requireAdmin, nil, ready)
 	}()
 	waitForHealthy(t, &http.Client{Timeout: wiringHTTPTimeout}, baseURL, errCh, ready)

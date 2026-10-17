@@ -12,6 +12,7 @@ require (
 	github.com/go-webauthn/webauthn v0.17.4
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/joho/godotenv v1.5.1
+	github.com/rivo/uniseg v0.4.7
 	github.com/yuin/goldmark v1.8.5
 	golang.org/x/image v0.40.0
 	golang.org/x/net v0.54.0

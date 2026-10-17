@@ -458,3 +458,38 @@ func TestLoad_EnvExampleValuesAreSystemdParseable(t *testing.T) {
 		}
 	})
 }
+
+// TestLoad_OutreachPostingOptional (#0545): the five Bluesky/Mastodon
+// variables load when set, the PDS URL defaults to bsky.social, and none of
+// them is required.
+func TestLoad_OutreachPostingOptional(t *testing.T) {
+	setRequired(t)
+	for _, k := range []string{"BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD", "BLUESKY_PDS_URL", "MASTODON_BASE_URL", "MASTODON_TOKEN"} {
+		t.Setenv(k, "")
+	}
+	cfg, err := loadFromFile(noEnvFile)
+	if err != nil {
+		t.Fatalf("loadFromFile with the posting variables unset: %v", err)
+	}
+	if cfg.BlueskyPDSURL != "https://bsky.social" {
+		t.Errorf("BlueskyPDSURL default = %q, want https://bsky.social", cfg.BlueskyPDSURL)
+	}
+	if cfg.BlueskyHandle != "" || cfg.MastodonToken != "" {
+		t.Errorf("unset variables should load empty, got %q / %q", cfg.BlueskyHandle, cfg.MastodonToken)
+	}
+
+	t.Setenv("BLUESKY_HANDLE", "alice.example.test")
+	t.Setenv("BLUESKY_APP_PASSWORD", "fake-app-password")
+	t.Setenv("BLUESKY_PDS_URL", "https://pds.example.test")
+	t.Setenv("MASTODON_BASE_URL", "https://social.example.test")
+	t.Setenv("MASTODON_TOKEN", "fake-token")
+	cfg, err = loadFromFile(noEnvFile)
+	if err != nil {
+		t.Fatalf("loadFromFile: %v", err)
+	}
+	if cfg.BlueskyHandle != "alice.example.test" || cfg.BlueskyAppPassword != "fake-app-password" ||
+		cfg.BlueskyPDSURL != "https://pds.example.test" || cfg.MastodonBaseURL != "https://social.example.test" ||
+		cfg.MastodonToken != "fake-token" {
+		t.Errorf("posting variables did not load: %+v", cfg)
+	}
+}

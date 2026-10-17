@@ -95,6 +95,17 @@ const (
 	// is a SEPARATE outbound_queue row, enqueued the ordinary way inside
 	// internal/subscribers.Store's own transactions.
 	KindSubscribeIntake Kind = "subscribe_intake"
+
+	// KindOutreachPost (#0545) is NOT an email. It reuses this queue's
+	// durability, retry backoff and abandon policy for a post to Bluesky or
+	// Mastodon. The payload is only {"post_id": N}: the outreach_posts row is
+	// the source of truth for what is sent, re-read at send time. Rows of
+	// this kind are claimed only by internal/outreach's Publisher, never by
+	// the mail worker, and the Recipient column carries a label rather than
+	// an address. A scheduled post is enqueued when it falls due, not when
+	// it is scheduled, so a post scheduled weeks out never inflates the
+	// queue counts the admin dashboard shows.
+	KindOutreachPost Kind = "outreach_post"
 )
 
 // AllKinds is the explicit sentinel meaning "every kind" — pass it to

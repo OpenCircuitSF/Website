@@ -17,7 +17,7 @@
   import { untrack } from 'svelte';
   import { getWorkshopOutreach, getWorkshopOutreachResults, startOutreach, createOutreachPost, ApiError } from '../../lib/api';
   import { adminOutreachResultsHash } from '../../lib/adminRouter';
-  import { buildGrid, cellLabel, cellIsStale, unavailableMessage } from '../../lib/outreach';
+  import { buildGrid, cellLabel, cellIsStale, shouldPoll, unavailableMessage } from '../../lib/outreach';
   import { cellClicksLabel, resultsStatusMessage } from '../../lib/outreachResults';
   import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
@@ -79,6 +79,24 @@
     void workshopId;
     void workshopUpdatedAt;
     untrack(() => void load());
+  });
+
+  // #0545: while a post is queued the publisher is working on it, so refresh
+  // the view quietly until it has posted or failed. The interval is cleared on
+  // unmount and whenever nothing is queued; a failed refresh is ignored (the
+  // next tick tries again) rather than replacing the grid with an error.
+  const POLL_MS = 10_000;
+  async function refreshQuietly(): Promise<void> {
+    try {
+      view = await getWorkshopOutreach(workshopId);
+    } catch {
+      /* keep what is on screen */
+    }
+  }
+  $effect(() => {
+    if (!view || !shouldPoll(view)) return;
+    const timer = setInterval(() => void refreshQuietly(), POLL_MS);
+    return () => clearInterval(timer);
   });
 
   async function start(): Promise<void> {

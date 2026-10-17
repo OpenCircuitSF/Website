@@ -80,14 +80,25 @@ func TestSetPreparedSubstitutesAndIsIdempotent(t *testing.T) {
 	s := NewStore(testPool(t))
 	ctx := context.Background()
 	_, p := seedPost(t, s, "Hello\n\nSign up: {link}")
-	got, err := s.SetPrepared(ctx, p.ID, "abc", "https://go.example/abc", "manual")
+	got, changed, err := s.SetPrepared(ctx, p.ID, "abc", "https://go.example/abc", "manual")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !changed {
+		t.Error("the first SetPrepared must report that it changed the row")
 	}
 	if got.Body != "Hello\n\nSign up: https://go.example/abc" || !got.Prepared() || got.Status != "manual" {
 		t.Errorf("prepared = %+v", got)
 	}
-	again, err := s.SetPrepared(ctx, p.ID, "zzz", "https://go.example/zzz", "manual")
+	again, changed, err := s.SetPrepared(ctx, p.ID, "zzz", "https://go.example/zzz", "manual")
+	if changed {
+		t.Error("a second SetPrepared must report false, so a racing loser does not audit (#0544 review follow-up)")
+	}
+	// Even a second call carrying the SAME key (what a racing Prepare holds,
+	// since ShortLinks de-duplicates the link) reports false.
+	if _, changed, err := s.SetPrepared(ctx, p.ID, "abc", "https://go.example/abc", "manual"); err != nil || changed {
+		t.Errorf("same-key second call: changed=%v err=%v", changed, err)
+	}
 	if err != nil || *again.ShortLinkKey != "abc" || again.Body != got.Body {
 		t.Errorf("second prepare changed the post: %+v err=%v", again, err)
 	}
@@ -96,7 +107,7 @@ func TestSetPreparedSubstitutesAndIsIdempotent(t *testing.T) {
 func TestSetPreparedAppendsWhenNoToken(t *testing.T) {
 	s := NewStore(testPool(t))
 	_, p := seedPost(t, s, "hand edited, no token")
-	got, err := s.SetPrepared(context.Background(), p.ID, "k", "https://go.example/k", "draft")
+	got, _, err := s.SetPrepared(context.Background(), p.ID, "k", "https://go.example/k", "draft")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +123,7 @@ func TestPostedRefusals(t *testing.T) {
 	if _, err := s.MarkPosted(ctx, p.ID, nil, time.Now()); !errors.Is(err, ErrNotPrepared) {
 		t.Errorf("unprepared mark err = %v", err)
 	}
-	if _, err := s.SetPrepared(ctx, p.ID, "k", "https://go.example/k", "manual"); err != nil {
+	if _, _, err := s.SetPrepared(ctx, p.ID, "k", "https://go.example/k", "manual"); err != nil {
 		t.Fatal(err)
 	}
 	u := "https://bsky.app/profile/x/post/1"
