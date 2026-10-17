@@ -314,7 +314,7 @@ func servePostgres(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	adminOutreachH := handlers.NewAdminOutreachHandler(outreach.NewStore(pool), workshopsStore, shortLinksClient, auditLogger, cfg.BaseURL)
+	adminOutreachH := handlers.NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), workshopsStore, shortLinksClient, auditLogger, cfg.BaseURL)
 
 	// Admin image upload (#0433, reopening #0153): constructed
 	// UNCONDITIONALLY here, unlike every nil-guarded devstore-gap handler
@@ -1469,6 +1469,12 @@ func adminRoutes(
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/prepare", http.HandlerFunc(adminOutreachH.Prepare)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/posted", http.HandlerFunc(adminOutreachH.MarkPosted)},
 			adminRoute{http.MethodDelete, "/admin/outreach-posts/{id}", http.HandlerFunc(adminOutreachH.DeletePost)},
+			// #0548: saved flyer locations, under /admin/outreach-locations for
+			// the same overlap reason as the post routes above.
+			adminRoute{http.MethodGet, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.ListLocations)},
+			adminRoute{http.MethodPost, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.CreateLocation)},
+			adminRoute{http.MethodPatch, "/admin/outreach-locations/{id}", http.HandlerFunc(adminOutreachH.PatchLocation)},
+			adminRoute{http.MethodDelete, "/admin/outreach-locations/{id}", http.HandlerFunc(adminOutreachH.DeleteLocation)},
 		)
 	}
 	return routes

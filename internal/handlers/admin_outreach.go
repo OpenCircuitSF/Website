@@ -61,6 +61,7 @@ type shortLinker interface {
 // to attribute audit rows. All ShortLinks calls are server-side.
 type AdminOutreachHandler struct {
 	store     outreachStore
+	locations outreachLocationStore
 	ws        outreachWorkshopReader
 	links     shortLinker
 	auditor   *audit.Logger
@@ -73,8 +74,8 @@ type AdminOutreachHandler struct {
 // BaseURL, used for the tracked destination URLs; a nil auditor disables
 // audit writes; a nil or unconfigured links makes Outreach report
 // unavailable.
-func NewAdminOutreachHandler(store outreachStore, ws outreachWorkshopReader, links shortLinker, auditor *audit.Logger, baseURL string) *AdminOutreachHandler {
-	return &AdminOutreachHandler{store: store, ws: ws, links: links, auditor: auditor, baseURL: baseURL}
+func NewAdminOutreachHandler(store outreachStore, locations outreachLocationStore, ws outreachWorkshopReader, links shortLinker, auditor *audit.Logger, baseURL string) *AdminOutreachHandler {
+	return &AdminOutreachHandler{store: store, locations: locations, ws: ws, links: links, auditor: auditor, baseURL: baseURL}
 }
 
 func (h *AdminOutreachHandler) linksEnabled() bool {

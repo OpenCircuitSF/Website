@@ -836,3 +836,17 @@ export interface OutreachSummary {
   counts: Record<string, number>;
   created_at: string;
 }
+
+/** One saved flyer location (#0548), mirroring GET /admin/outreach-locations. */
+export interface OutreachLocation {
+  id: number;
+  name: string;
+  code: string;
+  address: string;
+  notes: string;
+  active: boolean;
+  code_locked: boolean;
+  code_locked_at: string | null;
+  created_at: string;
+  updated_at: string | null;
+}

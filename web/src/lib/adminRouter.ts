@@ -195,6 +195,21 @@ export function adminAuditCampaignHash(campaignId: number): string {
   return `#/audit?campaign=${campaignId}`;
 }
 
+/** The Outreach tab's sub-views (#0548): the workshops list and the saved
+ * flyer locations. Carried in the hash query (`#/outreach?view=locations`) so
+ * no AdminRoute shape changes. */
+export type OutreachView = 'workshops' | 'locations';
+
+/** The sub-view a hash query names; unknown or missing is `workshops`. */
+export function outreachViewFromQuery(query: URLSearchParams): OutreachView {
+  return query.get('view') === 'locations' ? 'locations' : 'workshops';
+}
+
+/** The hash for an Outreach sub-view. */
+export function adminOutreachHash(view: OutreachView = 'workshops'): string {
+  return view === 'locations' ? '#/outreach?view=locations' : '#/outreach';
+}
+
 /**
  * Where Login.svelte sends the user after a successful sign-in (criterion 6:
  * a signed-out visit to a deep admin link must come back to that exact

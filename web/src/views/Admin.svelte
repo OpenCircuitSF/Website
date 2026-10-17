@@ -2463,7 +2463,7 @@
     {/if}
 
     {#if adminRoute.section === 'outreach'}
-      <Outreach />
+      <Outreach query={adminRoute.query} />
     {/if}
 
     {#if adminRoute.section === 'not-found'}

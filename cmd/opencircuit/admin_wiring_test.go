@@ -219,7 +219,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// proof covers the outreach routes' session+admin authorization too. The
 	// {id} placeholder is left unresolved for the /admin/outreach* paths (a
 	// 400 from the real handler still proves RequireAdmin let it through).
-	adminOutreachH := handlers.NewAdminOutreachHandler(outreach.NewStore(pool), workshopsStore, (*shortlinks.Client)(nil), auditLogger, cfg.BaseURL)
+	adminOutreachH := handlers.NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), workshopsStore, (*shortlinks.Client)(nil), auditLogger, cfg.BaseURL)
 	broker := events.NewBroker()
 	eventsH := handlers.NewEventsHandler(broker)
 	meH := handlers.NewMeHandler()

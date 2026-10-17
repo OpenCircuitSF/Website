@@ -1,16 +1,21 @@
 <!--
   The top-level Outreach admin tab (#0544): every workshop that has outreach,
   with its post counts per status. Results (clicks per channel and wave) are a
-  later issue. Loads on its own onMount like the other subtabs.
+  later issue. Loads when the Workshops sub-view shows; the Locations sub-view (#0548) is OutreachLocations.svelte.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { untrack } from 'svelte';
   import { listOutreach, ApiError } from '../../lib/api';
-  import { adminWorkshopHash } from '../../lib/adminRouter';
+  import { adminWorkshopHash, adminOutreachHash, outreachViewFromQuery } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
   import type { OutreachSummary } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
+  import OutreachLocations from './OutreachLocations.svelte';
+
+  // #0548: the sub-view lives in the hash query (#/outreach?view=locations).
+  let { query = new URLSearchParams() }: { query?: URLSearchParams } = $props();
+  const view = $derived(outreachViewFromQuery(query));
 
   let rows = $state<OutreachSummary[]>([]);
   let loading = $state(true);
@@ -35,9 +40,20 @@
     return parts.length > 0 ? parts.join(', ') : 'No posts yet';
   }
 
-  onMount(load);
+  // The workshops list loads whenever it becomes the visible sub-view.
+  $effect(() => {
+    if (view === 'workshops') untrack(load);
+  });
 </script>
 
+<nav class="outreach-subnav" aria-label="Outreach sections">
+  <a href={adminOutreachHash('workshops')} aria-current={view === 'workshops' ? 'page' : undefined}>Workshops</a>
+  <a href={adminOutreachHash('locations')} aria-current={view === 'locations' ? 'page' : undefined}>Locations</a>
+</nav>
+
+{#if view === 'locations'}
+  <OutreachLocations />
+{:else}
 <Panel title="Outreach">
   {#if loading}
     <p class="text-muted">Loading outreach…</p>
@@ -71,3 +87,16 @@
     </div>
   {/if}
 </Panel>
+{/if}
+
+<style>
+  .outreach-subnav {
+    display: flex;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+  .outreach-subnav a[aria-current='page'] {
+    font-weight: 700;
+    text-decoration: underline;
+  }
+</style>

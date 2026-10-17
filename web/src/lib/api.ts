@@ -11,6 +11,7 @@ import type {
   Setting,
   Interest,
   CrtCommand,
+  OutreachLocation,
   OutreachPost,
   OutreachSummary,
   WorkshopOutreach,
@@ -1312,4 +1313,35 @@ export function markOutreachPosted(id: number, remoteUrl?: string): Promise<Outr
 /** DELETE /admin/outreach-posts/{id} — delete a post that has not been posted. */
 export function deleteOutreachPost(id: number): Promise<unknown> {
   return apiDelete<unknown>(`/admin/outreach-posts/${id}`);
+}
+
+// ── Outreach locations (#0548) ──────────────────────────────────────────────
+
+/** GET /admin/outreach-locations — every saved flyer location. */
+export function listOutreachLocations(): Promise<{ locations: OutreachLocation[] }> {
+  return apiGet<{ locations: OutreachLocation[] }>('/admin/outreach-locations');
+}
+
+/** POST /admin/outreach-locations — create a location. */
+export function createOutreachLocation(input: {
+  name: string;
+  code: string;
+  address?: string;
+  notes?: string;
+  active?: boolean;
+}): Promise<OutreachLocation> {
+  return apiPost<OutreachLocation>('/admin/outreach-locations', input);
+}
+
+/** PATCH /admin/outreach-locations/{id} — any subset of the fields. */
+export function updateOutreachLocation(
+  id: number,
+  patch: { name?: string; code?: string; address?: string; notes?: string; active?: boolean },
+): Promise<OutreachLocation> {
+  return apiPatch<OutreachLocation>(`/admin/outreach-locations/${id}`, patch);
+}
+
+/** DELETE /admin/outreach-locations/{id} — only while no flyer link uses it. */
+export function deleteOutreachLocation(id: number): Promise<unknown> {
+  return apiDelete<unknown>(`/admin/outreach-locations/${id}`);
 }

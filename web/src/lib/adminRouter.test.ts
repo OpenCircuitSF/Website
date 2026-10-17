@@ -10,6 +10,8 @@ import {
   adminWorkshopHash,
   adminAuditCampaignHash,
   resolvePostLoginDestination,
+  outreachViewFromQuery,
+  adminOutreachHash,
   ADMIN_NAV_SECTIONS,
 } from './adminRouter';
 
@@ -107,5 +109,19 @@ describe('resolvePostLoginDestination (#0527 criterion 6)', () => {
     for (const next of [null, '', '//evil.example.com/x', 'https://evil.example.com', 'admin']) {
       expect(resolvePostLoginDestination(next)).toEqual({ path: '/account', fullLoad: false });
     }
+  });
+});
+
+describe('outreach sub-views (#0548)', () => {
+  it('reads the view from the hash query, defaulting to workshops', () => {
+    expect(outreachViewFromQuery(parseAdminHash('#/outreach')!.query)).toBe('workshops');
+    expect(outreachViewFromQuery(parseAdminHash('#/outreach?view=locations')!.query)).toBe('locations');
+    expect(outreachViewFromQuery(parseAdminHash('#/outreach?view=nope')!.query)).toBe('workshops');
+    expect(parseAdminHash('#/outreach?view=locations')?.section).toBe('outreach');
+  });
+  it('builds the hashes', () => {
+    expect(adminOutreachHash()).toBe('#/outreach');
+    expect(adminOutreachHash('workshops')).toBe('#/outreach');
+    expect(adminOutreachHash('locations')).toBe('#/outreach?view=locations');
   });
 });

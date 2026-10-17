@@ -75,7 +75,7 @@ func outreachTestPool(t *testing.T) *pgxpool.Pool {
 
 func outreachMux(pool *pgxpool.Pool, links shortLinker) (http.Handler, *workshops.Store) {
 	ws := workshops.NewStore(pool)
-	h := NewAdminOutreachHandler(outreach.NewStore(pool), ws, links, audit.New(pool), "https://site.example.test")
+	h := NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), ws, links, audit.New(pool), "https://site.example.test")
 	requireSession := middleware.RequireSession(auth.NewStore(pool))
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
@@ -89,6 +89,10 @@ func outreachMux(pool *pgxpool.Pool, links shortLinker) (http.Handler, *workshop
 	mux.Handle("POST /admin/outreach-posts/{id}/prepare", requireAdmin(http.HandlerFunc(h.Prepare)))
 	mux.Handle("POST /admin/outreach-posts/{id}/posted", requireAdmin(http.HandlerFunc(h.MarkPosted)))
 	mux.Handle("DELETE /admin/outreach-posts/{id}", requireAdmin(http.HandlerFunc(h.DeletePost)))
+	mux.Handle("GET /admin/outreach-locations", requireAdmin(http.HandlerFunc(h.ListLocations)))
+	mux.Handle("POST /admin/outreach-locations", requireAdmin(http.HandlerFunc(h.CreateLocation)))
+	mux.Handle("PATCH /admin/outreach-locations/{id}", requireAdmin(http.HandlerFunc(h.PatchLocation)))
+	mux.Handle("DELETE /admin/outreach-locations/{id}", requireAdmin(http.HandlerFunc(h.DeleteLocation)))
 	return mux, ws
 }
 
