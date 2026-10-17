@@ -73,7 +73,7 @@ describe('OutreachResults, one workshop', () => {
     );
     const { container } = render(OutreachResultsView, { workshopId: 5 });
     await waitFor(() => expect(screen.getByText(/ShortLinks could not be reached/)).toBeTruthy());
-    expect(screen.getByText('Bluesky')).toBeTruthy();
+    expect(screen.getAllByText('Bluesky').length).toBeGreaterThan(0);
     expect(screen.getByText('https://go.example/k1')).toBeTruthy();
     expect(container.querySelector('svg')).toBeNull();
     expect(container.querySelector('[role="status"]')?.textContent).toMatch(/could not be reached/);
@@ -257,5 +257,40 @@ describe('OutreachResults, engagement and mentions (#0547)', () => {
     expect(links).toContain('#/outreach?view=results&workshop=5');
     const untied = screen.getByText('untied one').closest('li')!;
     expect(untied.querySelector('a')).toBeNull();
+  });
+
+  it('lists every channel with its exact clicks and reactions, and says "1 click" (#0552)', async () => {
+    getWorkshopOutreachResults.mockResolvedValue(
+      results({
+        totals: { clicks: 13, excluded_bot_clicks: 0, unmatched_clicks: 1, flyer_clicks: 0 },
+        channels: [
+          { ...channels[0], clicks: 12, reactions: { likes: 3, reposts: 0, replies: 0, quotes: 0 } },
+          { ...channels[1], clicks: 1 },
+        ],
+      }),
+    );
+    render(OutreachResultsView, { workshopId: 5 });
+    const table = (await screen.findByText('Totals by channel')).closest('table')!;
+    const rows = Array.from(table.querySelectorAll('tbody tr')).map((r) => r.textContent);
+    expect(rows[0]).toContain('12 clicks');
+    expect(rows[0]).toContain('3 likes');
+    expect(rows[1]).toContain('1 click');
+    expect(rows[1]).not.toContain('1 clicks');
+    expect(screen.getByText(/1 click on other links/)).toBeTruthy();
+  });
+
+  it('discards a response for a workshop that is no longer selected (#0552)', async () => {
+    let resolveFirst!: (r: OutreachResults) => void;
+    getWorkshopOutreachResults.mockImplementationOnce(() => new Promise((res) => (resolveFirst = res)));
+    getWorkshopOutreachResults.mockResolvedValueOnce(
+      results({ workshop: { id: 6, slug: 'b', title: 'Second workshop', status: 'published', starts_at: null } }),
+    );
+    const { rerender } = render(OutreachResultsView, { workshopId: 5 });
+    await rerender({ workshopId: 6 });
+    await waitFor(() => expect(screen.getByText('Results: Second workshop')).toBeTruthy());
+    resolveFirst(results());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByText('Results: Second workshop')).toBeTruthy();
+    expect(screen.queryByText('Results: Soldering 101')).toBeNull();
   });
 });

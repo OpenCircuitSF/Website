@@ -35,7 +35,11 @@ func classifyResultsError(op string, err error) string {
 		slog.Default().Error("admin_outreach: ShortLinks rejected the API token", "op", op, "err", err)
 		return resultsRejected
 	default:
-		slog.Default().Error("admin_outreach: ShortLinks stats failed", "op", op, "err", err)
+		// A client that went away cancels the request context (#0552); that
+		// is not a ShortLinks failure and is not logged as one.
+		if !errors.Is(err, context.Canceled) {
+			slog.Default().Error("admin_outreach: ShortLinks stats failed", "op", op, "err", err)
+		}
 		return resultsUnreachable
 	}
 }

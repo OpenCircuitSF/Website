@@ -42,19 +42,30 @@
   // The summary response carries no channel list; labels are fixed server-side.
   const summaryLabels: Record<string, string> = { bluesky: 'Bluesky', mastodon: 'Mastodon', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube' };
 
+  // #0552: a response for a workshop no longer selected is discarded.
+  let loadSeq = 0;
+
   async function load(): Promise<void> {
+    const seq = ++loadSeq;
     loading = true;
     loadError = null;
     results = null;
     summary = null;
     try {
-      if (workshopId === null) summary = await listOutreachResults();
-      else results = await getWorkshopOutreachResults(workshopId);
+      if (workshopId === null) {
+        const got = await listOutreachResults();
+        if (seq !== loadSeq) return;
+        summary = got;
+      } else {
+        const got = await getWorkshopOutreachResults(workshopId);
+        if (seq !== loadSeq) return;
+        results = got;
+      }
     } catch (err) {
+      if (seq !== loadSeq) return;
       loadError = err instanceof ApiError ? err.message : 'Could not load results. Please try again.';
-    } finally {
-      loading = false;
     }
+    loading = false;
   }
 
   $effect(() => {
@@ -128,8 +139,31 @@
     {/if}
     {#if results.totals && results.totals.unmatched_clicks > 0}
       <p class="text-muted">
-        {results.totals.unmatched_clicks} clicks on other links in this campaign.
+        {formatClicks(results.totals.unmatched_clicks)} on other links in this campaign.
       </p>
+    {/if}
+    {#if results.channels.length > 0}
+      <div class="table-scroll">
+        <table>
+          <caption class="sr-only">Totals by channel</caption>
+          <thead>
+            <tr>
+              <th>Channel</th>
+              <th>Clicks</th>
+              <th>Reactions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each results.channels as ch (ch.name)}
+              <tr>
+                <td>{ch.label}</td>
+                <td>{formatClicks(ch.clicks)}</td>
+                <td>{ch.reactions ? reactionsLabel(ch.reactions) : '—'}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     {/if}
     {#if results.posts.length > 0}
       <div class="table-scroll">

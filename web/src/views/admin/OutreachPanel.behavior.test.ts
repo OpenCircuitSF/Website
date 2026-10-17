@@ -12,6 +12,7 @@ import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/
 const getWorkshopOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const startOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const getWorkshopOutreachResults = vi.fn<(id: number) => Promise<OutreachResults>>();
+const prepareOutreachPost = vi.fn<(id: number) => Promise<OutreachPost>>();
 const sendOutreachPost = vi.fn<(id: number) => Promise<OutreachPost>>();
 const scheduleOutreachPost = vi.fn<(id: number, at: string) => Promise<OutreachPost>>();
 vi.mock('../../lib/api', () => ({
@@ -20,7 +21,7 @@ vi.mock('../../lib/api', () => ({
   getWorkshopOutreachResults: (id: number) => getWorkshopOutreachResults(id),
   createOutreachPost: vi.fn(),
   updateOutreachPost: vi.fn(),
-  prepareOutreachPost: vi.fn(),
+  prepareOutreachPost: (id: number) => prepareOutreachPost(id),
   markOutreachPosted: vi.fn(),
   deleteOutreachPost: vi.fn(),
   sendOutreachPost: (id: number) => sendOutreachPost(id),
@@ -147,6 +148,18 @@ describe('OutreachPanel', () => {
     expect(getWorkshopOutreachResults).toHaveBeenCalledWith(5);
     const link = screen.getByText('View results') as HTMLAnchorElement;
     expect(link.getAttribute('href')).toBe('#/outreach?view=results&workshop=5');
+  });
+
+  it('refetches results after a post is prepared (#0552)', async () => {
+    const draft = { ...manualPost(), status: 'draft' as const, prepared: false, short_url: null, short_link_key: null };
+    getWorkshopOutreach.mockResolvedValue(view({ posts: [draft] }));
+    getWorkshopOutreachResults.mockResolvedValue(resultsFor());
+    prepareOutreachPost.mockResolvedValue({ ...draft, status: 'manual', prepared: true, short_url: 'https://go.example/k1', short_link_key: 'k1' });
+    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
+    await waitFor(() => expect(getWorkshopOutreachResults).toHaveBeenCalledTimes(1));
+    await fireEvent.click(await screen.findByText('Draft'));
+    await fireEvent.click(await screen.findByText('Prepare link'));
+    await waitFor(() => expect(getWorkshopOutreachResults).toHaveBeenCalledTimes(2));
   });
 
   it('still renders the grid, with a status line, when the results call fails', async () => {

@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -444,5 +446,25 @@ func TestAdminOutreachResults_EngagementDoesNotNeedShortLinks(t *testing.T) {
 	}
 	if !rowFound || !untied {
 		t.Errorf("summary: row reactions ok=%v, untied mention ok=%v (%s)", rowFound, untied, b)
+	}
+}
+
+// #0552: a client-cancelled request still reports unreachable but is not
+// logged as a ShortLinks failure.
+func TestClassifyResultsError_CancelledIsNotLogged(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if got := classifyResultsError("results summary", fmt.Errorf("get: %w", context.Canceled)); got != resultsUnreachable {
+		t.Errorf("status = %q, want unreachable", got)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("cancelled request was logged: %s", buf.String())
+	}
+	classifyResultsError("results summary", errors.New("boom"))
+	if !strings.Contains(buf.String(), "ShortLinks stats failed") {
+		t.Errorf("a real failure must still be logged, got %q", buf.String())
 	}
 }

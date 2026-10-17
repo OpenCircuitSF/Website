@@ -132,7 +132,10 @@
 
   function onChange(updated: OutreachPost): void {
     if (!view) return;
+    const before = view.posts.find((p) => p.id === updated.id);
     view = { ...view, posts: view.posts.map((p) => (p.id === updated.id ? updated : p)) };
+    // #0552: a prepare or mark-posted changes what the click line can show.
+    if (!before || before.prepared !== updated.prepared || before.status !== updated.status) void loadResults();
   }
 
   async function onDeleted(): Promise<void> {
