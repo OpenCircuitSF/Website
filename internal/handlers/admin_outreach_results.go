@@ -51,6 +51,24 @@ type resultsTotalsView struct {
 	Clicks            int64 `json:"clicks"`
 	ExcludedBotClicks int64 `json:"excluded_bot_clicks"`
 	UnmatchedClicks   int64 `json:"unmatched_clicks"`
+	// FlyerClicks is the clicks on this workshop's flyer links (#0549). It
+	// is part of Clicks, and no longer part of UnmatchedClicks.
+	FlyerClicks int64 `json:"flyer_clicks"`
+}
+
+// resultsFlyerLocationView is one row of the "Flyers by location" table: a
+// (workshop, location) link, with this workshop's scans and the scans of
+// every workshop's flyers at that location. A nil count means ShortLinks
+// could not say.
+type resultsFlyerLocationView struct {
+	LinkID             int64   `json:"link_id"`
+	LocationID         int64   `json:"location_id"`
+	Name               string  `json:"name"`
+	Code               string  `json:"code"`
+	ShortURL           string  `json:"short_url"`
+	PutUpAt            *string `json:"put_up_at"`
+	Clicks             *int64  `json:"clicks"`
+	ClicksAllWorkshops *int64  `json:"clicks_all_workshops"`
 }
 
 type resultsChannelView struct {
@@ -92,6 +110,11 @@ type outreachResultsView struct {
 	Channels       []resultsChannelView `json:"channels"`
 	Posts          []resultsPostView    `json:"posts"`
 	Series         []resultsSeriesView  `json:"series"`
+	// FlyerLocations and FlyerAllStatus carry #0549's flyer table.
+	// FlyerAllStatus says whether clicks_all_workshops is real: it is
+	// "ok", or why every one of them is null.
+	FlyerLocations []resultsFlyerLocationView `json:"flyer_locations"`
+	FlyerAllStatus string                     `json:"flyer_all_status"`
 }
 
 // sortPostsForDisplay orders posts channel order x wave order, as the panel.
@@ -128,6 +151,7 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 	v := outreachResultsView{
 		Workshop: outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt)},
 		Channels: []resultsChannelView{}, Posts: []resultsPostView{}, Series: []resultsSeriesView{},
+		FlyerLocations: []resultsFlyerLocationView{},
 	}
 	for _, c := range outreach.Channels() {
 		v.Channels = append(v.Channels, resultsChannelView{Name: c.Name, Label: c.Label})
@@ -169,25 +193,59 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 		}
 	}
 
+	allLinks, err := h.flyers.ListAllFlyerLinks(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	var ownLinks []outreach.FlyerLink
+	for _, l := range allLinks {
+		if l.OutreachID != o.ID {
+			continue
+		}
+		ownLinks = append(ownLinks, l.FlyerLink)
+		v.FlyerLocations = append(v.FlyerLocations, resultsFlyerLocationView{
+			LinkID: l.ID, LocationID: l.LocationID, Name: l.LocationName, Code: l.Code,
+			ShortURL: l.ShortURL, PutUpAt: rfc3339(l.PutUpAt),
+		})
+	}
+
 	if h.stats == nil {
 		v.Status = resultsNotConfigured
+		v.FlyerAllStatus = resultsNotConfigured
 		writeJSON(w, http.StatusOK, v)
 		return
 	}
 	rollup, fetchedAt, err := h.stats.Get(r.Context(), o.CampaignSlug, from, to)
 	if err != nil {
 		v.Status = classifyResultsError("results for workshop", err)
+		v.FlyerAllStatus = v.Status
 		writeJSON(w, http.StatusOK, v)
 		return
 	}
 	res := outreach.BuildResults(posts, rollup)
+	flyerClicks := outreach.FlyerClicksByKey(ownLinks, rollup)
+	var flyerTotal int64
+	for i := range v.FlyerLocations {
+		for _, l := range ownLinks {
+			if l.ID == v.FlyerLocations[i].LinkID {
+				n := flyerClicks[l.Key]
+				v.FlyerLocations[i].Clicks = &n
+				flyerTotal += n
+			}
+		}
+	}
+	// Flyer links are not posts, so BuildResults counted their clicks as
+	// unmatched; they are matched now.
+	res.UnmatchedClicks = max(0, res.UnmatchedClicks-flyerTotal)
+	v.FlyerAllStatus = h.flyerAllWorkshops(r.Context(), v.FlyerLocations, allLinks, now)
 	v.Status = resultsOK
 	if res.WindowFrom != "" && res.WindowTo != "" {
 		v.Window = &resultsWindowView{From: res.WindowFrom, To: res.WindowTo}
 	}
 	fa := fetchedAt.UTC().Format(time.RFC3339)
 	v.FetchedAt = &fa
-	v.Totals = &resultsTotalsView{Clicks: res.ClickCount, ExcludedBotClicks: res.ExcludedBotCount, UnmatchedClicks: res.UnmatchedClicks}
+	v.Totals = &resultsTotalsView{Clicks: res.ClickCount, ExcludedBotClicks: res.ExcludedBotCount, UnmatchedClicks: res.UnmatchedClicks, FlyerClicks: flyerTotal}
 	for i, c := range res.Channels {
 		clicks := c.Clicks
 		v.Channels[i].Clicks = &clicks
@@ -284,5 +342,53 @@ func (h *AdminOutreachHandler) summaryClicks(ctx context.Context, row *resultsSu
 	}
 	n := rollup.ClickCount
 	row.Clicks = &n
+	return resultsOK
+}
+
+// flyerAllWorkshops fills ClicksAllWorkshops on each row: the clicks on every
+// workshop's flyer links at that location. ShortLinks is asked one campaign
+// at a time, and the first failure ends the pass with that status and every
+// count left null, because a partial sum would read as a total. The one
+// campaign this request already fetched comes back from the stats cache.
+func (h *AdminOutreachHandler) flyerAllWorkshops(ctx context.Context, rows []resultsFlyerLocationView, all []outreach.FlyerLinkAll, now time.Time) string {
+	if len(rows) == 0 {
+		return resultsOK
+	}
+	type campaign struct {
+		from, to time.Time
+		links    []outreach.FlyerLinkAll
+	}
+	order := []string{}
+	byCampaign := map[string]*campaign{}
+	for _, l := range all {
+		c := byCampaign[l.CampaignSlug]
+		if c == nil {
+			from, to := outreach.ResultsWindow(l.OutreachCreatedAt, l.WorkshopStartsAt, now)
+			c = &campaign{from: from, to: to}
+			byCampaign[l.CampaignSlug] = c
+			order = append(order, l.CampaignSlug)
+		}
+		c.links = append(c.links, l)
+	}
+	byLocation := map[int64]int64{}
+	for _, slug := range order {
+		c := byCampaign[slug]
+		rollup, _, err := h.stats.Get(ctx, slug, c.from, c.to)
+		if err != nil {
+			return classifyResultsError("flyer clicks, all workshops", err)
+		}
+		links := make([]outreach.FlyerLink, 0, len(c.links))
+		for _, l := range c.links {
+			links = append(links, l.FlyerLink)
+		}
+		clicks := outreach.FlyerClicksByKey(links, rollup)
+		for _, l := range c.links {
+			byLocation[l.LocationID] += clicks[l.Key]
+		}
+	}
+	for i := range rows {
+		n := byLocation[rows[i].LocationID]
+		rows[i].ClicksAllWorkshops = &n
+	}
 	return resultsOK
 }

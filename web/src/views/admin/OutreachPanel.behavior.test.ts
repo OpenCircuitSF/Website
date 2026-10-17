@@ -125,12 +125,14 @@ describe('OutreachPanel', () => {
       window: { from: '2026-10-01', to: '2026-10-17' },
       partial_last_day: true,
       fetched_at: '2026-10-16T12:00:00Z',
-      totals: { clicks: 12, excluded_bot_clicks: 0, unmatched_clicks: 0 },
+      totals: { clicks: 12, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 0 },
       channels: [],
       posts: [
         { id: 3, channel: 'instagram', wave: 'announce', status: 'manual', short_link_key: 'k1', short_url: 'https://go.example/k1', posted_at: null, remote_url: null, clicks: 12 },
       ],
       series: [],
+      flyer_locations: [],
+      flyer_all_status: 'ok',
       ...over,
     };
   }

@@ -45,6 +45,15 @@ type fakeShortLinker struct {
 	statsRollup *shortlinks.CampaignRollup
 	statsErr    error
 	statsCalls  []statsCall
+	// LinkQRSVG (#0549): qrBody is returned for every key unless qrErr is
+	// set; qrKeys records each request. statsByCampaign, when set, answers
+	// CampaignStats per slug instead of statsRollup, and statsErrFor makes
+	// one slug fail.
+	qrBody          []byte
+	qrErr           error
+	qrKeys          []string
+	statsByCampaign map[string]*shortlinks.CampaignRollup
+	statsErrFor     map[string]error
 }
 
 type statsCall struct {
@@ -56,6 +65,12 @@ func (f *fakeShortLinker) CampaignStats(_ context.Context, slug string, from, to
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statsCalls = append(f.statsCalls, statsCall{slug, from, to})
+	if err := f.statsErrFor[slug]; err != nil {
+		return nil, err
+	}
+	if r, ok := f.statsByCampaign[slug]; ok {
+		return r, nil
+	}
 	if f.statsErr != nil {
 		return nil, f.statsErr
 	}
@@ -63,6 +78,16 @@ func (f *fakeShortLinker) CampaignStats(_ context.Context, slug string, from, to
 		return &shortlinks.CampaignRollup{}, nil
 	}
 	return f.statsRollup, nil
+}
+
+func (f *fakeShortLinker) LinkQRSVG(_ context.Context, key string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.qrKeys = append(f.qrKeys, key)
+	if f.qrErr != nil {
+		return nil, f.qrErr
+	}
+	return f.qrBody, nil
 }
 
 func (f *fakeShortLinker) Enabled() bool { return f.enabled }
@@ -129,7 +154,7 @@ func (f fakePosting) ChannelConfigured(name string) bool { return f[name] }
 
 func outreachMuxPosting(pool *pgxpool.Pool, links shortLinker, posting outreachPosting) (http.Handler, *workshops.Store, *AdminOutreachHandler) {
 	ws := workshops.NewStore(pool)
-	h := NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), ws, links, audit.New(pool), "https://site.example.test", posting)
+	h := NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), outreach.NewStore(pool), ws, links, audit.New(pool), "https://site.example.test", posting)
 	requireSession := middleware.RequireSession(auth.NewStore(pool))
 	requireAdmin := func(next http.Handler) http.Handler {
 		return requireSession(middleware.RequireAdmin(next))
@@ -152,6 +177,16 @@ func outreachMuxPosting(pool *pgxpool.Pool, links shortLinker, posting outreachP
 	mux.Handle("POST /admin/outreach-locations", requireAdmin(http.HandlerFunc(h.CreateLocation)))
 	mux.Handle("PATCH /admin/outreach-locations/{id}", requireAdmin(http.HandlerFunc(h.PatchLocation)))
 	mux.Handle("DELETE /admin/outreach-locations/{id}", requireAdmin(http.HandlerFunc(h.DeleteLocation)))
+	mux.Handle("GET /admin/outreach-flyers", requireAdmin(http.HandlerFunc(h.ListFlyers)))
+	mux.Handle("POST /admin/outreach-flyers", requireAdmin(http.HandlerFunc(h.CreateFlyer)))
+	mux.Handle("GET /admin/outreach-flyers/{id}", requireAdmin(http.HandlerFunc(h.GetFlyer)))
+	mux.Handle("PATCH /admin/outreach-flyers/{id}", requireAdmin(http.HandlerFunc(h.PatchFlyer)))
+	mux.Handle("PUT /admin/outreach-flyers/{id}/locations", requireAdmin(http.HandlerFunc(h.PutFlyerLocations)))
+	mux.Handle("DELETE /admin/outreach-flyers/{id}", requireAdmin(http.HandlerFunc(h.DeleteFlyer)))
+	mux.Handle("POST /admin/outreach-flyers/{id}/generate", requireAdmin(http.HandlerFunc(h.GenerateFlyer)))
+	mux.Handle("GET /admin/outreach-flyer-links/{id}/qr.svg", requireAdmin(http.HandlerFunc(h.FlyerLinkQR)))
+	mux.Handle("POST /admin/outreach-flyer-links/{id}/put-up", requireAdmin(http.HandlerFunc(h.PutUpFlyerLink)))
+	mux.Handle("DELETE /admin/outreach-flyer-links/{id}/put-up", requireAdmin(http.HandlerFunc(h.PutUpFlyerLink)))
 	return mux, ws, h
 }
 

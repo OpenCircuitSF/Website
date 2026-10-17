@@ -342,7 +342,7 @@ func servePostgres(cfg *config.Config) error {
 		MediaDir: cfg.MediaDir,
 		Log:      slog.Default(),
 	})
-	adminOutreachH := handlers.NewAdminOutreachHandler(outreachStore, outreachStore, workshopsStore, shortLinksClient, auditLogger, cfg.BaseURL, outreachPublisher)
+	adminOutreachH := handlers.NewAdminOutreachHandler(outreachStore, outreachStore, outreachStore, workshopsStore, shortLinksClient, auditLogger, cfg.BaseURL, outreachPublisher)
 
 	// Admin image upload (#0433, reopening #0153): constructed
 	// UNCONDITIONALLY here, unlike every nil-guarded devstore-gap handler
@@ -1512,6 +1512,18 @@ func adminRoutes(
 			adminRoute{http.MethodPost, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.CreateLocation)},
 			adminRoute{http.MethodPatch, "/admin/outreach-locations/{id}", http.HandlerFunc(adminOutreachH.PatchLocation)},
 			adminRoute{http.MethodDelete, "/admin/outreach-locations/{id}", http.HandlerFunc(adminOutreachH.DeleteLocation)},
+			// #0549: printable flyers. Both prefixes are hyphenated for the
+			// same overlap reason as the routes above.
+			adminRoute{http.MethodGet, "/admin/outreach-flyers", http.HandlerFunc(adminOutreachH.ListFlyers)},
+			adminRoute{http.MethodPost, "/admin/outreach-flyers", http.HandlerFunc(adminOutreachH.CreateFlyer)},
+			adminRoute{http.MethodGet, "/admin/outreach-flyers/{id}", http.HandlerFunc(adminOutreachH.GetFlyer)},
+			adminRoute{http.MethodPatch, "/admin/outreach-flyers/{id}", http.HandlerFunc(adminOutreachH.PatchFlyer)},
+			adminRoute{http.MethodPut, "/admin/outreach-flyers/{id}/locations", http.HandlerFunc(adminOutreachH.PutFlyerLocations)},
+			adminRoute{http.MethodDelete, "/admin/outreach-flyers/{id}", http.HandlerFunc(adminOutreachH.DeleteFlyer)},
+			adminRoute{http.MethodPost, "/admin/outreach-flyers/{id}/generate", http.HandlerFunc(adminOutreachH.GenerateFlyer)},
+			adminRoute{http.MethodGet, "/admin/outreach-flyer-links/{id}/qr.svg", http.HandlerFunc(adminOutreachH.FlyerLinkQR)},
+			adminRoute{http.MethodPost, "/admin/outreach-flyer-links/{id}/put-up", http.HandlerFunc(adminOutreachH.PutUpFlyerLink)},
+			adminRoute{http.MethodDelete, "/admin/outreach-flyer-links/{id}/put-up", http.HandlerFunc(adminOutreachH.PutUpFlyerLink)},
 		)
 	}
 	return routes

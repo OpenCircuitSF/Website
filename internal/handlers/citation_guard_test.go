@@ -167,7 +167,7 @@ var scanGoRoots = []string{"..", "../../cmd", "../../web"}
 // comfortably below the real total while still tripping if the roots were
 // narrowed to any one of the three — the "a real narrowing would trip it"
 // bar #0275 criterion 3 sets.
-const citationGuardMinPlausibleFileCount = 80
+const citationGuardMinPlausibleFileCount = 115
 
 type citationViolation struct {
 	pos   token.Position

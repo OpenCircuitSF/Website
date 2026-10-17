@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000033`). No ORM — every
+(`migrations/`, numbered `000001`–`000034`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -103,6 +103,7 @@ why the activity log is not a second package of its own.
 | `000031_create_outreach` | `outreach` (`#0544`) — one row per workshop (`workshop_id` UNIQUE, `ON DELETE CASCADE`) tying it to its ShortLinks campaign (`shortlinks_campaign_slug`, the slug ShortLinks returned, not assumed), plus `created_at`/`updated_at`/`archived_at`. Owned by `internal/outreach`. The campaign itself lives on the separate ShortLinks deploy and survives a workshop delete, inert |
 | `000032_create_outreach_posts` | `outreach_posts` (`#0544`) — one drafted post per `(outreach_id, channel, wave)` (`outreach_posts_slot_unique`), with `body`, the `source_fingerprint` of the workshop facts it was generated from (a changed fingerprint is what marks a draft stale), the tracked link (`short_link_key`/`short_url`, CHECKed to be both NULL or both set — "prepared" is `short_url IS NOT NULL`, not a status), `status` CHECKed to `draft`/`scheduled`/`queued`/`posted`/`failed`/`manual` (this issue writes only `draft`, `manual` and `posted`; the rest are reserved for automatic posting), a `posted_at` required once `posted`, and the remote-post columns automatic posting will fill. `channel` and `wave` are deliberately unchecked: the lists live in `internal/outreach` so adding a channel needs no migration |
 | `000033_create_outreach_locations` | `outreach_locations` (`#0548`) — saved flyer locations: `name`, a short unique `code` (`outreach_locations_code_unique`; `outreach_locations_code_format_check` enforces 2–16 lowercase letters, digits and single interior dashes, the same rule as `outreach.ValidCode`), `address`, `notes`, `active`, and `code_locked_at`, set the first time a flyer link uses the location (`outreach.Store.MarkLocationUsed`) — from then on the code cannot change and the row cannot be deleted, only deactivated. Owned by `internal/outreach` |
+| `000034_create_outreach_flyers` | `outreach_flyers`, `outreach_flyer_locations` and `outreach_flyer_links` (`#0549`) — printable flyers. A flyer is a design (`photo`, `focal_x`/`focal_y`, `template`, `tagline`, each CHECKed) plus a selection of locations with `copies` (`outreach_flyer_locations`, `CASCADE` on both sides, so deleting a never-generated location just drops it from selections). The tracked link and its cached QR belong to the pair (workshop outreach, location), not to a flyer: `outreach_flyer_links_slot_unique` is `UNIQUE (outreach_id, location_id)`, so every flyer for the same workshop and location shares one link. `qr_svg` holds the sanitized QR (rebuilt by `outreach.SanitizeQRSVG`, never ShortLinks' raw bytes) and `put_up_at` records when that location's flyer went up. `location_id` is `ON DELETE RESTRICT`: a real link blocks deleting its location, the backstop under `outreach_locations.code_locked_at`. Owned by `internal/outreach` |
 
 `internal/subscribers` (`imports.go`) owns `subscriber_imports`, alongside
 every other table that package already owns — see that file's doc comment.

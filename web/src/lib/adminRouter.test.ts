@@ -14,6 +14,10 @@ import {
   adminOutreachHash,
   outreachWorkshopFromQuery,
   adminOutreachResultsHash,
+  outreachFlyerFromQuery,
+  outreachLayoutFromQuery,
+  adminOutreachFlyersHash,
+  adminOutreachPrintHash,
   ADMIN_NAV_SECTIONS,
 } from './adminRouter';
 
@@ -145,5 +149,31 @@ describe('outreach results routing (#0546)', () => {
     expect(adminOutreachResultsHash()).toBe('#/outreach?view=results');
     expect(adminOutreachResultsHash(12)).toBe('#/outreach?view=results&workshop=12');
     expect(adminOutreachHash('results')).toBe('#/outreach?view=results');
+  });
+});
+
+describe('outreach flyers routing (#0549)', () => {
+  it('parses the flyers and print views and the flyer id', () => {
+    const f = parseAdminHash('#/outreach?view=flyers&flyer=7')!;
+    expect(f.section).toBe('outreach');
+    expect(outreachViewFromQuery(f.query)).toBe('flyers');
+    expect(outreachFlyerFromQuery(f.query)).toBe(7);
+    const p = parseAdminHash('#/outreach?view=print&flyer=7&layout=half')!;
+    expect(outreachViewFromQuery(p.query)).toBe('print');
+    expect(outreachLayoutFromQuery(p.query)).toBe('half');
+  });
+  it('rejects a malformed flyer id and defaults the layout to full', () => {
+    for (const bad of ['', '0', '-1', '1.5', 'abc', '99999999999999999999']) {
+      expect(outreachFlyerFromQuery(new URLSearchParams({ flyer: bad }))).toBeNull();
+    }
+    expect(outreachFlyerFromQuery(new URLSearchParams())).toBeNull();
+    expect(outreachLayoutFromQuery(new URLSearchParams())).toBe('full');
+    expect(outreachLayoutFromQuery(new URLSearchParams({ layout: 'poster' }))).toBe('full');
+  });
+  it('builds the hashes', () => {
+    expect(adminOutreachFlyersHash()).toBe('#/outreach?view=flyers');
+    expect(adminOutreachFlyersHash(7)).toBe('#/outreach?view=flyers&flyer=7');
+    expect(adminOutreachPrintHash(7, 'half')).toBe('#/outreach?view=print&flyer=7&layout=half');
+    expect(adminOutreachHash('flyers')).toBe('#/outreach?view=flyers');
   });
 });

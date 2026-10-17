@@ -43,7 +43,7 @@ function results(over: Partial<OutreachResults> = {}): OutreachResults {
     window: { from: '2026-10-01', to: '2026-10-05' },
     partial_last_day: false,
     fetched_at: '2026-10-04T12:00:00Z',
-    totals: { clicks: 12, excluded_bot_clicks: 1, unmatched_clicks: 0 },
+    totals: { clicks: 12, excluded_bot_clicks: 1, unmatched_clicks: 0, flyer_clicks: 0 },
     channels,
     posts: [
       { id: 1, channel: 'bluesky', wave: 'announce', status: 'posted', short_link_key: 'k1', short_url: 'https://go.example/k1', posted_at: '2026-10-02T15:00:00Z', remote_url: null, clicks: 12 },
@@ -53,6 +53,8 @@ function results(over: Partial<OutreachResults> = {}): OutreachResults {
       { id: 'bluesky', label: 'Bluesky', channels: ['bluesky'], is_other: false, days: [{ date: '2026-10-02', count: 12 }] },
       { id: 'instagram', label: 'Instagram', channels: ['instagram'], is_other: false, days: [] },
     ],
+    flyer_locations: [],
+    flyer_all_status: 'ok',
     ...over,
   };
 }
@@ -91,7 +93,7 @@ describe('OutreachResults, one workshop', () => {
 
   it('says so when a workshop has no clicks yet, without a chart', async () => {
     getWorkshopOutreachResults.mockResolvedValue(
-      results({ totals: { clicks: 0, excluded_bot_clicks: 0, unmatched_clicks: 0 }, series: [{ id: 'bluesky', label: 'Bluesky', channels: ['bluesky'], is_other: false, days: [] }] }),
+      results({ totals: { clicks: 0, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 0 }, series: [{ id: 'bluesky', label: 'Bluesky', channels: ['bluesky'], is_other: false, days: [] }] }),
     );
     const { container } = render(OutreachResultsView, { workshopId: 5 });
     await waitFor(() => expect(screen.getByText('No clicks in this window yet.')).toBeTruthy());
@@ -102,6 +104,40 @@ describe('OutreachResults, one workshop', () => {
     getWorkshopOutreachResults.mockRejectedValue(new Error('boom'));
     render(OutreachResultsView, { workshopId: 5 });
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/Could not load results/));
+  });
+});
+
+describe('OutreachResults, Flyers by location (#0549)', () => {
+  const rows = [
+    { link_id: 10, location_id: 1, name: 'Mission Library', code: 'mission', short_url: 'https://go.example/a', put_up_at: '2026-10-18T17:00:00Z', clicks: 5, clicks_all_workshops: 9 },
+    { link_id: 11, location_id: 2, name: 'Cafe', code: 'cafe', short_url: 'https://go.example/b', put_up_at: null, clicks: 0, clicks_all_workshops: 0 },
+  ];
+
+  it('shows the table with scans for this workshop and for all workshops, and "Not marked"', async () => {
+    getWorkshopOutreachResults.mockResolvedValue(results({ flyer_locations: rows }));
+    render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(screen.getByText('Flyers by location')).toBeTruthy());
+    const mission = screen.getByText('Mission Library').closest('tr')!;
+    expect(mission.textContent).toContain('5 clicks');
+    expect(mission.textContent).toContain('9 clicks');
+    expect(mission.textContent).not.toContain('Not marked');
+    expect(screen.getByText('Cafe').closest('tr')!.textContent).toContain('Not marked');
+  });
+
+  it('shows a dash, not a number, when the all-workshops count is unknown, and says why', async () => {
+    getWorkshopOutreachResults.mockResolvedValue(
+      results({ flyer_all_status: 'unreachable', flyer_locations: rows.map((r) => ({ ...r, clicks_all_workshops: null })) }),
+    );
+    render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(screen.getByText('Scans across all workshops are unavailable right now.')).toBeTruthy());
+    expect(screen.getByText('Mission Library').closest('tr')!.textContent).toContain('—');
+  });
+
+  it('has no flyers table when the workshop has no flyer links', async () => {
+    getWorkshopOutreachResults.mockResolvedValue(results());
+    render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(screen.getByText('https://go.example/k1')).toBeTruthy());
+    expect(screen.queryByText('Flyers by location')).toBeNull();
   });
 });
 

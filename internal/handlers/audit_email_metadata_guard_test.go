@@ -1410,7 +1410,7 @@ func actionShortName(s string) string {
 // package — internal/handlers alone has 40 non-test .go files, cmd/ alone
 // has 3 — which is the "a real narrowing would trip it" bar #0275
 // criterion 3 sets.
-const auditEmailMetadataMinPlausibleFileCount = 80
+const auditEmailMetadataMinPlausibleFileCount = 115
 
 // TestAuditEntryEmailMetadataMatchesKnownSites is the guard (#0237): every
 // audit.Entry{} construction in internal/ and cmd/ production Go source

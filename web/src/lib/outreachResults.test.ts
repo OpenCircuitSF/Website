@@ -34,10 +34,12 @@ function results(over: Partial<OutreachResults> = {}): OutreachResults {
     window: { from: '2026-10-01', to: '2026-10-04' },
     partial_last_day: false,
     fetched_at: '2026-10-03T12:00:00Z',
-    totals: { clicks: 9, excluded_bot_clicks: 0, unmatched_clicks: 0 },
+    totals: { clicks: 9, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 0 },
     channels,
     posts: [],
     series: [],
+    flyer_locations: [],
+    flyer_all_status: 'ok',
     ...over,
   };
 }

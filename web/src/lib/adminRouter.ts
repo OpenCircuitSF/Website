@@ -198,12 +198,12 @@ export function adminAuditCampaignHash(campaignId: number): string {
 /** The Outreach tab's sub-views: the workshops list, the saved flyer
  * locations (#0548) and click results (#0546). Carried in the hash query
  * (`#/outreach?view=locations`) so no AdminRoute shape changes. */
-export type OutreachView = 'workshops' | 'locations' | 'results';
+export type OutreachView = 'workshops' | 'locations' | 'results' | 'flyers' | 'print';
 
 /** The sub-view a hash query names; unknown or missing is `workshops`. */
 export function outreachViewFromQuery(query: URLSearchParams): OutreachView {
   const v = query.get('view');
-  return v === 'locations' || v === 'results' ? v : 'workshops';
+  return v === 'locations' || v === 'results' || v === 'flyers' || v === 'print' ? v : 'workshops';
 }
 
 /** The hash for an Outreach sub-view. */
@@ -222,6 +222,32 @@ export function outreachWorkshopFromQuery(query: URLSearchParams): number | null
 /** The results hash: the all-workshops summary, or one workshop's results. */
 export function adminOutreachResultsHash(workshopId?: number): string {
   return workshopId === undefined ? '#/outreach?view=results' : `#/outreach?view=results&workshop=${workshopId}`;
+}
+
+/** The flyer a flyers or print hash names: a positive integer `flyer` param, else null (#0549). */
+export function outreachFlyerFromQuery(query: URLSearchParams): number | null {
+  const raw = query.get('flyer');
+  if (raw === null || !/^[0-9]+$/.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+/** How a flyer prints: one per sheet, or two half-size per sheet. */
+export type FlyerPrintLayout = 'full' | 'half';
+
+/** The print layout a hash names; unknown or missing is `full`. */
+export function outreachLayoutFromQuery(query: URLSearchParams): FlyerPrintLayout {
+  return query.get('layout') === 'half' ? 'half' : 'full';
+}
+
+/** The flyers list, or one flyer's editor. */
+export function adminOutreachFlyersHash(flyerId?: number): string {
+  return flyerId === undefined ? '#/outreach?view=flyers' : `#/outreach?view=flyers&flyer=${flyerId}`;
+}
+
+/** The admin-only print page for a flyer. */
+export function adminOutreachPrintHash(flyerId: number, layout: FlyerPrintLayout): string {
+  return `#/outreach?view=print&flyer=${flyerId}&layout=${layout}`;
 }
 
 /**

@@ -63,6 +63,7 @@ type shortLinker interface {
 	Me(ctx context.Context) (*shortlinks.Me, error)
 	EnsureCampaign(ctx context.Context, slug string, req shortlinks.CreateCampaignRequest) (*shortlinks.Campaign, error)
 	CreateLink(ctx context.Context, req shortlinks.CreateLinkRequest) (*shortlinks.Link, error)
+	LinkQRSVG(ctx context.Context, key string) ([]byte, error)
 	CampaignStats(ctx context.Context, slug string, from, to time.Time) (*shortlinks.CampaignRollup, error)
 }
 
@@ -74,6 +75,7 @@ type shortLinker interface {
 type AdminOutreachHandler struct {
 	store     outreachStore
 	locations outreachLocationStore
+	flyers    outreachFlyerStore
 	ws        outreachWorkshopReader
 	links     shortLinker
 	auditor   *audit.Logger
@@ -91,8 +93,8 @@ type AdminOutreachHandler struct {
 // BaseURL, used for the tracked destination URLs; a nil auditor disables
 // audit writes; a nil or unconfigured links makes Outreach report
 // unavailable. A nil posting means no automatic channel is configured.
-func NewAdminOutreachHandler(store outreachStore, locations outreachLocationStore, ws outreachWorkshopReader, links shortLinker, auditor *audit.Logger, baseURL string, posting outreachPosting) *AdminOutreachHandler {
-	h := &AdminOutreachHandler{store: store, locations: locations, ws: ws, links: links, auditor: auditor, baseURL: baseURL, posting: posting, now: time.Now}
+func NewAdminOutreachHandler(store outreachStore, locations outreachLocationStore, flyers outreachFlyerStore, ws outreachWorkshopReader, links shortLinker, auditor *audit.Logger, baseURL string, posting outreachPosting) *AdminOutreachHandler {
+	h := &AdminOutreachHandler{store: store, locations: locations, flyers: flyers, ws: ws, links: links, auditor: auditor, baseURL: baseURL, posting: posting, now: time.Now}
 	if h.linksEnabled() {
 		h.stats = shortlinks.NewStatsCache(links.CampaignStats, shortlinks.StatsCacheTTL, shortlinks.StatsCacheFailTTL)
 	}

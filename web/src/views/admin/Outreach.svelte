@@ -11,8 +11,11 @@
     adminWorkshopHash,
     adminOutreachHash,
     adminOutreachResultsHash,
+    adminOutreachFlyersHash,
     outreachViewFromQuery,
     outreachWorkshopFromQuery,
+    outreachFlyerFromQuery,
+    outreachLayoutFromQuery,
   } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
   import type { OutreachSummary } from '../../lib/types';
@@ -20,10 +23,14 @@
   import Panel from '../../lib/Panel.svelte';
   import OutreachLocations from './OutreachLocations.svelte';
   import OutreachResults from './OutreachResults.svelte';
+  import OutreachFlyers from './OutreachFlyers.svelte';
+  import OutreachFlyerEditor from './OutreachFlyerEditor.svelte';
+  import FlyerPrint from './FlyerPrint.svelte';
 
   // #0548: the sub-view lives in the hash query (#/outreach?view=locations).
   let { query = new URLSearchParams() }: { query?: URLSearchParams } = $props();
   const view = $derived(outreachViewFromQuery(query));
+  const flyerId = $derived(outreachFlyerFromQuery(query));
 
   let rows = $state<OutreachSummary[]>([]);
   let loading = $state(true);
@@ -54,13 +61,22 @@
   });
 </script>
 
+<!-- The print view is chrome-less: it takes over the page and hides this nav. -->
+{#if view === 'print' && flyerId !== null}
+  <FlyerPrint {flyerId} layout={outreachLayoutFromQuery(query)} />
+{:else}
 <nav class="outreach-subnav" aria-label="Outreach sections">
   <a href={adminOutreachHash('workshops')} aria-current={view === 'workshops' ? 'page' : undefined}>Workshops</a>
   <a href={adminOutreachHash('locations')} aria-current={view === 'locations' ? 'page' : undefined}>Locations</a>
+  <a href={adminOutreachFlyersHash()} aria-current={view === 'flyers' || view === 'print' ? 'page' : undefined}>Flyers</a>
   <a href={adminOutreachResultsHash()} aria-current={view === 'results' ? 'page' : undefined}>Results</a>
 </nav>
 
-{#if view === 'locations'}
+{#if view === 'flyers' && flyerId !== null}
+  <OutreachFlyerEditor {flyerId} />
+{:else if view === 'flyers' || view === 'print'}
+  <OutreachFlyers />
+{:else if view === 'locations'}
   <OutreachLocations />
 {:else if view === 'results'}
   <OutreachResults workshopId={outreachWorkshopFromQuery(query)} />
@@ -98,6 +114,7 @@
     </div>
   {/if}
 </Panel>
+{/if}
 {/if}
 
 <style>

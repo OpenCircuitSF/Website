@@ -12,6 +12,10 @@ import type {
   Interest,
   CrtCommand,
   OutreachLocation,
+  FlyerLinkInfo,
+  FlyerRow,
+  FlyerTemplate,
+  FlyerView,
   OutreachPost,
   OutreachResults,
   OutreachResultsSummary,
@@ -127,6 +131,11 @@ export function apiPost<T>(path: string, body?: unknown): Promise<T> {
 /** PATCH a JSON body and parse the JSON response. */
 export function apiPatch<T>(path: string, body?: unknown): Promise<T> {
   return request<T>('PATCH', path, body);
+}
+
+/** PUT a JSON body and parse the JSON response. */
+export function apiPut<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>('PUT', path, body);
 }
 
 /** DELETE a resource and parse any JSON response. */
@@ -1371,4 +1380,61 @@ export function updateOutreachLocation(
 /** DELETE /admin/outreach-locations/{id} — only while no flyer link uses it. */
 export function deleteOutreachLocation(id: number): Promise<unknown> {
   return apiDelete<unknown>(`/admin/outreach-locations/${id}`);
+}
+
+// ── Outreach flyers (#0549) ─────────────────────────────────────────────────
+
+/** GET /admin/outreach-flyers — every flyer, newest first. */
+export function listOutreachFlyers(): Promise<{ flyers: FlyerRow[] }> {
+  return apiGet<{ flyers: FlyerRow[] }>('/admin/outreach-flyers');
+}
+
+/** POST /admin/outreach-flyers — a new flyer for an outreach. */
+export function createOutreachFlyer(input: {
+  outreach_id: number;
+  template?: FlyerTemplate;
+  tagline?: string;
+  photo?: string;
+  focal_x?: number;
+  focal_y?: number;
+}): Promise<FlyerView> {
+  return apiPost<FlyerView>('/admin/outreach-flyers', input);
+}
+
+/** GET /admin/outreach-flyers/{id}. */
+export function getOutreachFlyer(id: number): Promise<FlyerView> {
+  return apiGet<FlyerView>(`/admin/outreach-flyers/${id}`);
+}
+
+/** PATCH /admin/outreach-flyers/{id} — any subset of the design; photo "" clears it. */
+export function updateOutreachFlyer(
+  id: number,
+  patch: { template?: FlyerTemplate; tagline?: string; photo?: string; focal_x?: number; focal_y?: number },
+): Promise<FlyerView> {
+  return apiPatch<FlyerView>(`/admin/outreach-flyers/${id}`, patch);
+}
+
+/** PUT /admin/outreach-flyers/{id}/locations — replace the selection. */
+export function setOutreachFlyerLocations(id: number, locations: { location_id: number; copies: number }[]): Promise<FlyerView> {
+  return apiPut<FlyerView>(`/admin/outreach-flyers/${id}/locations`, { locations });
+}
+
+/** DELETE /admin/outreach-flyers/{id} — the shared links stay. */
+export function deleteOutreachFlyer(id: number): Promise<unknown> {
+  return apiDelete<unknown>(`/admin/outreach-flyers/${id}`);
+}
+
+/** POST /admin/outreach-flyers/{id}/generate — links and QR codes; resumable (see `remaining`). */
+export function generateOutreachFlyer(id: number): Promise<FlyerView> {
+  return apiPost<FlyerView>(`/admin/outreach-flyers/${id}/generate`);
+}
+
+/** POST /admin/outreach-flyer-links/{id}/put-up — mark a location's flyer put up (keeps the first date). */
+export function markFlyerLinkPutUp(id: number): Promise<FlyerLinkInfo> {
+  return apiPost<FlyerLinkInfo>(`/admin/outreach-flyer-links/${id}/put-up`);
+}
+
+/** DELETE /admin/outreach-flyer-links/{id}/put-up — undo a mis-click. */
+export function clearFlyerLinkPutUp(id: number): Promise<FlyerLinkInfo> {
+  return apiDelete<FlyerLinkInfo>(`/admin/outreach-flyer-links/${id}/put-up`);
 }

@@ -25,6 +25,9 @@
   const status = $derived(workshopId === null ? (summary?.status ?? 'ok') : (results?.status ?? 'ok'));
   const statusMessage = $derived(resultsStatusMessage(status));
   const folded = $derived(results ? foldedChannelsNote(results) : null);
+  const flyerAllMessage = $derived(
+    results && results.flyer_all_status && results.flyer_all_status !== 'ok' ? 'Scans across all workshops are unavailable right now.' : null,
+  );
   const channelLabel = $derived(new Map((results?.channels ?? []).map((c) => [c.name, c.label])));
 
   async function load(): Promise<void> {
@@ -102,7 +105,7 @@
     {/if}
     {#if results.totals && results.totals.unmatched_clicks > 0}
       <p class="text-muted">
-        {results.totals.unmatched_clicks} clicks on other links in this campaign, e.g. flyers.
+        {results.totals.unmatched_clicks} clicks on other links in this campaign.
       </p>
     {/if}
     {#if results.posts.length > 0}
@@ -133,6 +136,34 @@
         </table>
       </div>
     {/if}
+    {#if results.flyer_locations.length > 0}
+      <h3 class="flyers-title">Flyers by location</h3>
+      {#if flyerAllMessage}
+        <p class="text-muted">{flyerAllMessage}</p>
+      {/if}
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Location</th>
+              <th>Put up</th>
+              <th>Scans this workshop</th>
+              <th>Scans all workshops</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each results.flyer_locations as row (row.link_id)}
+              <tr>
+                <td>{row.name} <span class="mono">{row.code}</span></td>
+                <td>{row.put_up_at ? formatDateTime(row.put_up_at) : 'Not marked'}</td>
+                <td>{formatClicks(row.clicks)}</td>
+                <td>{formatClicks(row.clicks_all_workshops)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
     <p><a href={adminOutreachResultsHash()}>All workshops</a> · <a href={adminOutreachHash('workshops')}>Back to Outreach</a></p>
   {/if}
 </Panel>
@@ -147,5 +178,9 @@
   }
   .mono {
     font-family: var(--font-mono);
+  }
+  .flyers-title {
+    font-size: var(--fs-lg);
+    margin: var(--space-3) 0 var(--space-2);
   }
 </style>

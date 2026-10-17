@@ -911,10 +911,26 @@ export interface OutreachResults {
   window: { from: string; to: string } | null;
   partial_last_day: boolean;
   fetched_at: string | null;
-  totals: { clicks: number; excluded_bot_clicks: number; unmatched_clicks: number } | null;
+  totals: { clicks: number; excluded_bot_clicks: number; unmatched_clicks: number; flyer_clicks: number } | null;
   channels: OutreachResultsChannel[];
   posts: OutreachResultsPost[];
   series: OutreachResultsSeries[];
+  /** One row per (workshop, location) flyer link (#0549). */
+  flyer_locations: OutreachResultsFlyerLocation[];
+  /** Whether `clicks_all_workshops` is real, else why every one is null. */
+  flyer_all_status: OutreachResultsStatus | '';
+}
+
+/** One row of the "Flyers by location" table (#0549). A null count means ShortLinks could not say. */
+export interface OutreachResultsFlyerLocation {
+  link_id: number;
+  location_id: number;
+  name: string;
+  code: string;
+  short_url: string;
+  put_up_at: string | null;
+  clicks: number | null;
+  clicks_all_workshops: number | null;
 }
 
 export interface OutreachResultsSummaryRow {
@@ -932,4 +948,64 @@ export interface OutreachResultsSummaryRow {
 export interface OutreachResultsSummary {
   status: OutreachResultsStatus;
   rows: OutreachResultsSummaryRow[];
+}
+
+// ── Outreach flyers (#0549) ──────────────────────────────────────────────────
+// Mirrors internal/handlers/admin_outreach_flyers.go's JSON views.
+
+export type FlyerTemplate = 'photo-top' | 'full-photo' | 'split';
+
+export interface FlyerRow {
+  id: number;
+  outreach_id: number;
+  workshop_id: number;
+  workshop_slug: string;
+  workshop_title: string;
+  photo: string | null;
+  focal_x: number;
+  focal_y: number;
+  template: FlyerTemplate;
+  tagline: string;
+  created_at: string;
+  updated_at: string | null;
+}
+
+/** The workshop facts a flyer prints, shaped by the server. */
+export interface FlyerFacts {
+  title: string;
+  date_line: string;
+  place_line: string;
+  cover_image: string | null;
+}
+
+/** The (workshop, location) link every flyer for that pair shares. */
+export interface FlyerLinkInfo {
+  id: number;
+  short_link_key: string;
+  short_url: string;
+  has_qr: boolean;
+  /** Same-origin admin endpoint, used only as an img src. */
+  qr_url: string | null;
+  put_up_at: string | null;
+}
+
+export interface FlyerSelection {
+  location_id: number;
+  name: string;
+  code: string;
+  address: string;
+  active: boolean;
+  copies: number;
+  link: FlyerLinkInfo | null;
+}
+
+/** GET /admin/outreach-flyers/{id}, and the body of the writes that return it. */
+export interface FlyerView {
+  flyer: FlyerRow;
+  facts: FlyerFacts;
+  selection: FlyerSelection[];
+  /** Generate only: locations still without a complete link and QR. */
+  remaining?: number;
+  /** Generate only: why it stopped early. */
+  message?: string;
 }

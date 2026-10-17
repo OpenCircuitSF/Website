@@ -356,6 +356,17 @@ const (
 	ActionOutreachLocationUpdated = "outreach_location.updated"
 	ActionOutreachLocationDeleted = "outreach_location.deleted"
 
+	// Outreach flyers (#0549). outreach_flyer.* targets a flyer; the
+	// outreach_flyer_link.* actions target a link row. link.created is
+	// written only when a Generate really inserted the row, never for a
+	// reused one. Metadata never carries tagline text or photo paths.
+	ActionOutreachFlyerCreated          = "outreach_flyer.created"
+	ActionOutreachFlyerUpdated          = "outreach_flyer.updated"
+	ActionOutreachFlyerDeleted          = "outreach_flyer.deleted"
+	ActionOutreachFlyerLinkCreated      = "outreach_flyer_link.created"
+	ActionOutreachFlyerLinkPutUp        = "outreach_flyer_link.put_up"
+	ActionOutreachFlyerLinkPutUpCleared = "outreach_flyer_link.put_up_cleared"
+
 	// Email campaign lifecycle (PRD §5.2/§6.6/§8; #0041's campaign CRUD
 	// API). Named email_campaign.* per the deleted-constants note just
 	// below — this is a distinct concept from ShortLinks' campaigns
@@ -551,6 +562,10 @@ const (
 	// TargetOutreachLocation is the target type for the outreach_location.*
 	// actions above (#0548).
 	TargetOutreachLocation = "outreach_location"
+	// TargetOutreachFlyer and TargetOutreachFlyerLink are the target types
+	// for the outreach_flyer.* and outreach_flyer_link.* actions (#0549).
+	TargetOutreachFlyer     = "outreach_flyer"
+	TargetOutreachFlyerLink = "outreach_flyer_link"
 	// TargetInboundMail is the target type for ActionInboundMailParked
 	// (#0499). Like TargetSNSTopic above, the target has no BIGINT id — the
 	// S3 object key is a string, recorded in metadata instead — so TargetID
