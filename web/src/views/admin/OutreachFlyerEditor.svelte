@@ -121,8 +121,8 @@
     await updateOutreachFlyer(flyerId, {
       template,
       tagline: tagline.trim(),
-      description: description.trim(),
-      description_short: descriptionShort.trim(),
+      // Caption text is sent only while its controls are shown; hidden values stay local.
+      ...(template === 'full-photo' ? { description: description.trim(), description_short: descriptionShort.trim() } : {}),
       title_position: titlePosition,
       photo: photo ?? '',
       focal_x: focal.x,

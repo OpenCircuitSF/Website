@@ -204,8 +204,14 @@ describe('OutreachFlyerEditor', () => {
     await fireEvent.click(screen.getByLabelText('Photo top'));
     expect(screen.queryByLabelText('Description')).toBeNull();
     expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false);
-    await fireEvent.click(screen.getByLabelText('Full photo'));
-    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+    updateOutreachFlyer.mockResolvedValue(flyer());
+    setOutreachFlyerLocations.mockResolvedValue(flyer());
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateOutreachFlyer).toHaveBeenCalled());
+    const sent = updateOutreachFlyer.mock.calls[0][1];
+    expect(sent.template).toBe('photo-top');
+    expect('description' in sent).toBe(false);
+    expect('description_short' in sent).toBe(false);
   });
 
   it('omits the caption controls on photo-top (#0561)', async () => {
