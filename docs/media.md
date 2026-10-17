@@ -94,7 +94,7 @@ cut the SPA off from its own JS and CSS.
 > reads `-- path under /assets`. That predates this setup and is now
 > misleading twice over — the path is under `/media`, not `/assets`, and
 > `/assets/` is Vite's own embedded build output, not workshop media at all.
-> `000020` is frozen (`CLAUDE.md` §1) and cannot be edited to fix this, so the
+> `000020` is frozen (`AGENTS.md` §1) and cannot be edited to fix this, so the
 > correction is recorded instead in `isSafeCoverImage`'s doc comment
 > (`internal/handlers/admin_workshops.go`), which already quoted the same
 > wrong text when explaining why the validator rejects other-host URLs
@@ -211,7 +211,7 @@ the two from drifting apart.
     database dump. **The sentence above stays true until it is actually
     installed and running in production**, per `#0434` acceptance #5 — that
     install is blocked on `#0435` (the timer has never been installed at
-    all) and needs the user's go-ahead (`CLAUDE.md` §5b). See `#0434` for
+    all) and needs the user's go-ahead (`AGENTS.md` §5b). See `#0434` for
     what has and has not been verified so far.
 - **A redeploy does not disturb them.** `scripts/deploy.sh` never touches
   `/var/www`, so images survive `git pull` + rebuild + restart.

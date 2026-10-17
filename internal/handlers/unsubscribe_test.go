@@ -397,7 +397,7 @@ func (s *raceComplainingUnsubscribeStore) RotateManageToken(ctx context.Context,
 // rotate manage_token, and write a subscriber.unsubscribed audit row for an
 // unsubscribe that the guarded UPDATE actually refused — corrupting the
 // consent-evidence record #0038/#0060 read as fact. Seeds a throwaway
-// subscriber (CLAUDE.md §8b) rather than targeting any literal or seeded id.
+// subscriber (AGENTS.md §8b) rather than targeting any literal or seeded id.
 func TestUnsubscribeHandler_Post_ComplainedBetweenLookupAndUnsubscribe_IsNoOp(t *testing.T) {
 	pool := journeyTestPool(t)
 	realStore := subscribers.NewStore(pool)

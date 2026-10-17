@@ -1,5 +1,5 @@
 // #0393: the admin CRT-session CRUD screen's logic, kept in a plain
-// TypeScript module so it is unit-testable without a DOM (CLAUDE.md §1) —
+// TypeScript module so it is unit-testable without a DOM (AGENTS.md §1) —
 // CrtCommands.svelte stays markup and wiring only, mirroring lib/admin.ts's
 // interests taxonomy section (sortedInterests/reorderSwap/isValidInterestSlug)
 // this file is deliberately modelled on.
@@ -20,7 +20,7 @@ export { CRT_LINE_CHARS, CRT_COMMAND_LINE_CHARS };
  *  number like "in 60 seconds" would be wrong often enough to be its own
  *  annoyance. Naming the hard reload costs nothing and needs no change to
  *  either cache. Kept here, not inlined in the component, so the wording is
- *  one unit-tested string (CLAUDE.md §1). */
+ *  one unit-tested string (AGENTS.md §1). */
 export const CRT_SAVE_NOTE =
   "Saved. It can take up to a minute to appear on the home page — if it still looks out of date, a hard reload bypasses your browser's own cached copy.";
 
@@ -155,7 +155,7 @@ export function crtOverBudgetLines(output: string, max: number = CRT_LINE_CHARS)
 
 /** A human warning naming which lines of `output` are over budget, or null
  *  when every line fits. Kept here rather than inlined in the component's
- *  markup so the phrasing is one unit-tested string (CLAUDE.md §1:
+ *  markup so the phrasing is one unit-tested string (AGENTS.md §1:
  *  components stay thin). Line numbers are 1-based, matching how an admin
  *  counts lines in the textarea. */
 export function crtOverBudgetWarning(output: string, max: number = CRT_LINE_CHARS): string | null {

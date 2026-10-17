@@ -58,7 +58,7 @@ const (
 // limits documented above and returns one human-readable message per
 // breach (nil if none). It takes bytes, not a file path, so the guard-is-
 // not-vacuous test below can feed it a mutated in-memory document without
-// ever touching a file this repo has committed (CLAUDE.md §8a forbids
+// ever touching a file this repo has committed (AGENTS.md §8a forbids
 // mutating a committed file to prove a guard fails).
 func deployAWSJSONViolations(name string, data []byte) []string {
 	var violations []string
@@ -175,7 +175,7 @@ func TestDeployAWSJSONFieldLimitsCatchesOverLength(t *testing.T) {
 
 // TestDeployAWSJSONLimitConstantsMatchDocumented pins route53CommentMaxLen
 // and s3LifecycleIDMaxLen against literals spelled out independently of the
-// constants themselves. Per #0057 review (bounce #2) and CLAUDE.md's #0258
+// constants themselves. Per #0057 review (bounce #2) and AGENTS.md's #0258
 // rule ("a guard's oracle must not be the same bytes as its subject"):
 // TestDeployAWSJSONFieldLimitsCatchesOverLength builds its fixtures as
 // route53CommentMaxLen+1 / s3LifecycleIDMaxLen+1, so it moves with the

@@ -16,10 +16,10 @@ success. They share three properties:
 This document is the catalogue. It exists so a planning pass can scan it and
 write a `## Obstacles` block, and so an orchestrator can clear what it names
 **before** dispatching. The binding rules live in
-[`CLAUDE.md`](../CLAUDE.md) §5b and [`issues/Issues.md`](../issues/Issues.md);
+[`AGENTS.md`](../AGENTS.md) §5b and [`issues/Issues.md`](../issues/Issues.md);
 this is the evidence behind them.
 
-**Provenance.** Entries marked *recorded* come from the tracker or `CLAUDE.md`'s
+**Provenance.** Entries marked *recorded* come from the tracker or `AGENTS.md`'s
 incident log. Entries marked *observed* were hit directly on 2026-08-21/22 and
 are written from what happened, not from recollection.
 
@@ -65,7 +65,7 @@ did not exist. A demo would have failed live, on the first campaign screen.
 
 ## 3. Verification that runs green and proves nothing
 
-*Recorded, `CLAUDE.md` §5.* The DB-backed suites skip silently when
+*Recorded, `AGENTS.md` §5.* The DB-backed suites skip silently when
 `TEST_DATABASE_URL` is unset, so `go test ./...` exits 0 having tested nothing.
 This bit `#0002`, which verified clean and left broken `TRUNCATE` statements
 that only surfaced two issues later when `#0004` stood up a real database.
@@ -86,7 +86,7 @@ work — it lets work finish and be wrong.
 
 ## 4. Shared mutable resources
 
-*Recorded, `CLAUDE.md` §8b.* Three distinct incidents, one cause.
+*Recorded, `AGENTS.md` §8b.* Three distinct incidents, one cause.
 
 - **A port.** A subagent started a server on `:8099`, its own process died with
   `bind: address already in use`, and `curl` returned 200 — from a *different
@@ -133,7 +133,7 @@ gets skipped, quietly.
 
 ## 6. Machine load misdiagnosed as flaky tests
 
-*Recorded, `CLAUDE.md` §5.* `#0084`, `#0087`, `#0091`, `#0096`, `#0099` were all
+*Recorded, `AGENTS.md` §5.* `#0084`, `#0087`, `#0091`, `#0096`, `#0099` were all
 filed against timing failures produced by ~200 concurrent agent test runs
 peaking at **load average 320**. A day went into widening deadlines from 5s to
 20s so that `TRUNCATE` on a *local* database would stop timing out. The
@@ -156,7 +156,7 @@ failure to load at ~7.6. The reviewer reproduced it deterministically at load
 
 ## 7. Unbounded search and unbounded output
 
-*Recorded, `CLAUDE.md` §5.* A subagent ran `find / -type d -name 'go-webauthn'`
+*Recorded, `AGENTS.md` §5.* A subagent ran `find / -type d -name 'go-webauthn'`
 and it was **still running 28 minutes later**. Ask the toolchain instead —
 `go list -m -f '{{.Dir}}'` answers in milliseconds.
 
@@ -167,7 +167,7 @@ and the answer is the last few lines. Bound it or scope it.
 
 ## 8. Destructive git against another agent's work
 
-*Recorded, `CLAUDE.md` §8a.* A reviewer ran `git checkout -- issues/0068.md` to
+*Recorded, `AGENTS.md` §8a.* A reviewer ran `git checkout -- issues/0068.md` to
 undo its own edit, destroyed the implementer's uncommitted resolution notes, and
 reconstructed them by hand. It disclosed this, which is the only reason it was
 caught. At that moment a second subagent had uncommitted edits in `web/` and
@@ -202,12 +202,12 @@ announces nothing — invisible to every test that exists.
 
 ## 10. Credentials and services that do not exist yet
 
-*Recorded, `CLAUDE.md` §10.* **Corrected 2026-09-03 (`#0414`):** at the time
+*Recorded, `AGENTS.md` §10.* **Corrected 2026-09-03 (`#0414`):** at the time
 this was written, SES had never been set up — no verified domain, no DKIM, no
 production access — so no issue requiring a real send could be verified. As of
 2026-08-25 the domain is verified, DKIM and custom MAIL FROM are `SUCCESS`,
 and the identity sends real mail; **production access is the only piece still
-missing** (`CLAUDE.md` §10 item 2), so a real send to a non-verified address
+missing** (`AGENTS.md` §10 item 2), so a real send to a non-verified address
 still cannot be proved. `MAILER_NOOP=true` logs mail instead of sending and the
 send worker does not start at all, which means live send progress and the SSE
 stream have nothing to drive them in that mode.
@@ -252,7 +252,7 @@ files — over a hundred of them — to decide what to work next.
 The same session dropped two standing conventions without noticing: **six of
 seven issues got no `## Work log`** (~2.5M tokens across 20 subagents went
 unrecorded, while every issue before `#0013` carried full cost rows), and
-`issues/model-pricing.json` was never created despite `CLAUDE.md` requiring it
+`issues/model-pricing.json` was never created despite `AGENTS.md` requiring it
 from the first dispatch.
 
 A process step that is skipped silently is indistinguishable from one that does
@@ -265,7 +265,7 @@ not exist.
 *Recorded.* `#0064`'s acceptance criteria say the vhost should redirect
 `www` → apex. Production does the opposite, and `WEBAUTHN_RP_ORIGIN` depends on
 `www` staying canonical — so implementing the criterion as written would break
-passkey login. `CLAUDE.md` §7 flags it for correction before implementation.
+passkey login. `AGENTS.md` §7 flags it for correction before implementation.
 
 An issue is not automatically right. When a criterion contradicts a verified
 fact, say so, correct it, and record why — do not implement it and do not

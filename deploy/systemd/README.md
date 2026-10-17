@@ -61,7 +61,7 @@ the full approval-ready sequence (both blockers re-derived read-only against
 the box, the exact commands, what a restart interrupts, and the hash-based
 verification that the two existing images are unchanged afterward). Nothing
 has been run on the box for this issue; it needs the user's approval first
-(`CLAUDE.md` §5b, §9).
+(`AGENTS.md` §5b, §9).
 
 ## Backup timer and failure alert (`#0229`)
 
@@ -69,7 +69,7 @@ has been run on the box for this issue; it needs the user's approval first
 `/opt/opencircuit` (`WorkingDirectory=` and `ExecStart=` both reference it).
 **Corrected (`#0435`, 2026-09-08): this is the real path, not a placeholder.**
 It was written as one, mirroring ShortLinks' `/opt/shortlinks` convention,
-while `CLAUDE.md` §10 item 6 still recorded the server layout as uncaptured;
+while `AGENTS.md` §10 item 6 still recorded the server layout as uncaptured;
 that item has been done since 2026-08-25, and `#0435` re-verified directly that
 the checkout lives at `/opt/opencircuit`. Do **not** edit the unit file's paths
 before installing it — the sequence below copies that file byte for byte and
@@ -99,7 +99,7 @@ It used to default to `ec2-user@go.sstools.co`, a real ShortLinks production
 hostname inherited from the same port; run unmodified, that would have opened
 an SSH connection to another project's server instead of this one's. **Corrected
 (`#0435`, 2026-09-08): this project's own EC2 host *is* now provisioned** — it
-has been serving production since 2026-08-25 (`CLAUDE.md` §7 has the real
+has been serving production since 2026-08-25 (`AGENTS.md` §7 has the real
 hostname and IP) — so the missing piece is no longer the host, it is which
 *second* machine pulls from it. The user has mentioned a machine named "joe"
 with large external storage as the eventual puller, but its hostname and
@@ -122,7 +122,7 @@ directory, so it cannot even `stat` into it, let alone `mkdir` the
 `opencircuit` subdirectory `backup.sh` needs. Every unit `start` fails at the
 very first `mkdir -p "$BACKUP_ROOT"` until this is fixed. This must run
 **before** the install step below, and needs the user's approval like every
-other change in this section (`CLAUDE.md` §5b, §9):
+other change in this section (`AGENTS.md` §5b, §9):
 
 ```bash
 sudo chown postgres:postgres /var/backups/postgres
@@ -285,7 +285,7 @@ A zero-byte file, an empty listing, or a `tar`/`pg_restore` error here means
 stop — the backup is not real yet, whatever the unit's exit code said.
 
 **2. A real restore, into a scratch database, never over `opencircuit`**
-(`CLAUDE.md` §8b: a mutation must run against a database created for it, never
+(`AGENTS.md` §8b: a mutation must run against a database created for it, never
 a shared or production one):
 
 ```bash
@@ -358,7 +358,7 @@ units has and has not been verified against.
 now, deliberately, not as an oversight.** `/etc/opencircuit/backup-alert.env`
 has no committed template and confirmed does not exist on the box
 (2026-09-08) — there is nowhere written down that a Slack/Discord/Mattermost
-webhook or healthchecks.io URL exists for this project at all (`CLAUDE.md` §10
+webhook or healthchecks.io URL exists for this project at all (`AGENTS.md` §10
 items 2 and 6 record no such channel). Wiring one up would mean inventing a
 destination with no real endpoint behind it, which is worse than no alert.
 That part of the recommendation stands.
@@ -394,10 +394,10 @@ Two things worth recording about why that gap is not closed here:
   `mailx`, `msmtp`, `ssmtp` all absent), so nothing here can hand off an SMTP
   message to it without installing new software first. This project's own
   mail path is AWS SES, and `#0415` still blocks that (sandboxed regardless of
-  `#0415`, per `CLAUDE.md` §10 item 2). So mail to the Workspace inbox is a
+  `#0415`, per `AGENTS.md` §10 item 2). So mail to the Workspace inbox is a
   real destination, but not a currently usable one, and standing it up is new
   software on the box plus a send path — both need the user's decision and
-  approval (`CLAUDE.md` §5b, §9), not something this pass does unilaterally.
+  approval (`AGENTS.md` §5b, §9), not something this pass does unilaterally.
 - **A scheduled *pull* alone would not close the gap either, and that is why
   one was not added here.** A timer that periodically re-runs
   `systemctl --failed` and writes the result back to the journal only

@@ -23,7 +23,7 @@
 # body to it. This is written to work with a generic Slack/Discord/Mattermost
 # "incoming webhook" shape ({"text": "..."}) or a healthchecks.io-style "fail"
 # URL (which ignores the body). No such webhook is configured anywhere in this
-# repo or on this machine — CLAUDE.md §10 items 2 and 6 record that no server
+# repo or on this machine — AGENTS.md §10 items 2 and 6 record that no server
 # and no external-notification credential exists yet. This leg is therefore
 # UNVERIFIED beyond "the curl command is syntactically correct and degrades
 # gracefully with no URL configured" — see docs/deployment.md's Backups

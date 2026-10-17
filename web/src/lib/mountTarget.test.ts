@@ -3,7 +3,7 @@
 // #0519: proves prepareMountTarget clears #app before mount, and that
 // mounting a view over a server-rendered fallback leaves exactly one <h1>
 // with tabindex="-1" -- the property #0238's focus-move effect and #0517's
-// styling both depend on. jsdom is not a browser (CLAUDE.md §1): this
+// styling both depend on. jsdom is not a browser (AGENTS.md §1): this
 // proves there is no duplicate <h1> under jsdom, not in a real browser.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

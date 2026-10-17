@@ -2,7 +2,7 @@
 // PRD §7.3) -- the location block's line-by-line construction, the
 // external-signup-vs-subscribe-CTA decision, and the slug list handed to
 // SubscribeForm's `preselect` prop. Kept out of the .svelte file per
-// CLAUDE.md's "SPA logic goes in plain TypeScript modules ... Svelte
+// AGENTS.md's "SPA logic goes in plain TypeScript modules ... Svelte
 // components stay thin" -- #0094 (restated by lib/workshops.ts's own header
 // comment) means nothing in a .svelte file is covered by a test, so every
 // decision the detail view makes about location/signup/preselect routes

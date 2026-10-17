@@ -1,6 +1,6 @@
 // Pure raster-selection logic for Logo.svelte's mask technique (PRD §4.5,
 // #0018/#0017). Extracted into a plain module rather than inlined in the
-// component so it is unit-testable without mounting Svelte (CLAUDE.md: SPA
+// component so it is unit-testable without mounting Svelte (AGENTS.md: SPA
 // logic lives in web/src/lib/ as plain TypeScript; components stay thin).
 //
 // Carried in from #0018's review (2026-08-18): Logo.svelte hardcoded

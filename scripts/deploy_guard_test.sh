@@ -6,7 +6,7 @@
 # #0424: deploy.sh's preflight already ran `git status --porcelain` and
 # printed `note: working tree has uncommitted changes` — but that notice
 # fires on EVERY deploy (web/dist/index.html is always `M` after a build,
-# CLAUDE.md §8b), so it was permanently lit and carried no information. It
+# AGENTS.md §8b), so it was permanently lit and carried no information. It
 # fired for two days while two untracked workshop cover images sat in
 # web/public/ (#0416) and nobody could tell the real signal from the
 # constant noise. The fix adds a SECOND, narrower check: a hard failure on
@@ -41,7 +41,7 @@
 #      above PASSING), while bash itself resolves the duplicate to the LAST
 #      definition at runtime — so the real deploy.sh silently treats the
 #      gate's failure as a soft note and exits 0. A disarmed production gate
-#      with a green harness (CLAUDE.md §8, GUARD-0208's exactly-once rule).
+#      with a green harness (AGENTS.md §8, GUARD-0208's exactly-once rule).
 #
 # Known, accepted gap: an edit *outside* the marker pair can still neutralise
 # the gate without this harness noticing — a `git()` shim defined ahead of the
@@ -53,7 +53,7 @@
 #
 # SAFETY DESIGN — read this before changing the test
 #
-# CLAUDE.md §8a forbids `git stash`/`checkout --`/`restore`/`reset --hard`/
+# AGENTS.md §8a forbids `git stash`/`checkout --`/`restore`/`reset --hard`/
 # `clean` against any path this test did not itself create, and forbids
 # running `scripts/deploy.sh` at all outside the production host (it sudo's,
 # restarts a live service, and talks to the real public URL). So this test:
@@ -80,7 +80,7 @@
 # Usage: scripts/deploy_guard_test.sh
 # Exit 0 = all guards hold. Exit 1 = a regression was detected (message names it).
 # Exit 2 = the harness itself is broken (extraction produced nothing, etc.) —
-#          distinct from a real regression, per CLAUDE.md §8's "assert the
+#          distinct from a real regression, per AGENTS.md §8's "assert the
 #          extraction produced something" rule.
 
 set -uo pipefail  # NOT -e: several commands below are EXPECTED to fail (that's the assertion)
@@ -112,7 +112,7 @@ extract_die()  { grep -m1 '^die(){'  "$1"; }
 extract_info() { grep -m1 '^info(){' "$1"; }
 # The pre-existing general dirty-tree notice line (criterion 3) — a distinct
 # representation (a substring grep for its own user-facing text) from the
-# GATE-0424 marker pair above, per CLAUDE.md §8's "a guard's oracle must not
+# GATE-0424 marker pair above, per AGENTS.md §8's "a guard's oracle must not
 # be the same bytes as its subject" — a single edit cannot satisfy both by
 # accident.
 extract_notice() { grep -m1 'note: working tree has uncommitted changes' "$1"; }
@@ -127,7 +127,7 @@ NOTICE_LINE="$(extract_notice "$REAL_SCRIPT")"
 [ -n "$INFO_LINE" ]   || { echo "FATAL: extraction of info() from $REAL_SCRIPT produced nothing" >&2; exit 2; }
 [ -n "$NOTICE_LINE" ] || { echo "FATAL: extraction of the general dirty-tree notice from $REAL_SCRIPT produced nothing" >&2; exit 2; }
 
-# ---- exactly-once anchors (CLAUDE.md §8; GUARD-0208's BR_COUNT/ER_COUNT) ----
+# ---- exactly-once anchors (AGENTS.md §8; GUARD-0208's BR_COUNT/ER_COUNT) ----
 # grep -m1 and the awk marker sweep both take the FIRST match and ignore any
 # later one, while bash resolves a duplicated function definition to the LAST.
 # So a second `die(){` added below the first fully disarms the real gate — the
@@ -137,7 +137,7 @@ NOTICE_LINE="$(extract_notice "$REAL_SCRIPT")"
 assert_once() {
   local label="$1" count="$2"
   [ "${count:-0}" -eq 1 ] || {
-    echo "FATAL: expected $label exactly once in $REAL_SCRIPT; found $count. A duplicate shadows the real one at runtime while this harness extracts the first (CLAUDE.md §8)." >&2
+    echo "FATAL: expected $label exactly once in $REAL_SCRIPT; found $count. A duplicate shadows the real one at runtime while this harness extracts the first (AGENTS.md §8)." >&2
     exit 2
   }
 }
@@ -150,7 +150,7 @@ assert_once "info()'s definition"        "$(grep -c '^info(){'          "$REAL_S
 # A minimal repo shaped like the real one in the one way that matters here:
 # a tracked web/public/ (some design assets) and a tracked web/dist/index.html
 # placeholder that a "build" modifies in place, exactly as npm run build does
-# in the real deploy checkout (CLAUDE.md §8b).
+# in the real deploy checkout (AGENTS.md §8b).
 make_repo() {
   local dir="$1"
   mkdir -p "$dir/web/public" "$dir/web/dist"

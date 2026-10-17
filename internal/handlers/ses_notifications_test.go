@@ -142,7 +142,7 @@ func sesSignMessageV1(t *testing.T, priv *rsa.PrivateKey, m *sesnotify.Message) 
 	m.Signature = base64.StdEncoding.EncodeToString(sig)
 }
 
-// sesUniqueID returns an SNS MessageId scoped to this test run (CLAUDE.md
+// sesUniqueID returns an SNS MessageId scoped to this test run (AGENTS.md
 // §8b: never target a literal or seeded id).
 func sesUniqueID(t *testing.T, label string) string {
 	t.Helper()
@@ -663,7 +663,7 @@ func TestSESNotifications_RepeatedTransientBounce_RespectsConfiguredThreshold(t 
 }
 
 // TestSESNotifications_RepeatedTransientBounce_ComplainedStaysComplained is
-// CLAUDE.md §9's "complained subscribers never auto-resubscribe" guarantee,
+// AGENTS.md §9's "complained subscribers never auto-resubscribe" guarantee,
 // applied to the threshold path specifically (mirrors
 // TestSESNotifications_ComplainedIsNotErasedByLaterBounce for Permanent).
 func TestSESNotifications_RepeatedTransientBounce_ComplainedStaysComplained(t *testing.T) {
@@ -682,7 +682,7 @@ func TestSESNotifications_RepeatedTransientBounce_ComplainedStaysComplained(t *t
 		t.Fatalf("GetByID: %v", err)
 	}
 	if sub.Status != subscribers.StatusComplained {
-		t.Errorf("status = %q, want unchanged %q (CLAUDE.md §9)", sub.Status, subscribers.StatusComplained)
+		t.Errorf("status = %q, want unchanged %q (AGENTS.md §9)", sub.Status, subscribers.StatusComplained)
 	}
 
 	// The suppression write still happens unconditionally (#0100), same as
@@ -1513,7 +1513,7 @@ func TestSESNotifications_ComplainedIsNotErasedByLaterBounce(t *testing.T) {
 		t.Fatalf("GetByID: %v", err)
 	}
 	if sub.Status != subscribers.StatusComplained {
-		t.Errorf("subscriber status = %q, want unchanged %q (CLAUDE.md §9)", sub.Status, subscribers.StatusComplained)
+		t.Errorf("subscriber status = %q, want unchanged %q (AGENTS.md §9)", sub.Status, subscribers.StatusComplained)
 	}
 
 	// Both the event row AND the hard_bounce suppression must still be

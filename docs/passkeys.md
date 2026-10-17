@@ -12,7 +12,7 @@ The relying party is configured from `WEBAUTHN_RP_ID` (the apex domain, so a
 passkey stays valid across apex and `www`) and `WEBAUTHN_RP_ORIGIN` (the
 exact origin the browser is on). **These two are not interchangeable** — a
 mismatch fails every ceremony with an opaque error; see
-[`configuration.md`](configuration.md) and `CLAUDE.md` §7.
+[`configuration.md`](configuration.md) and `AGENTS.md` §7.
 
 ## Registration (magic-link gated)
 
@@ -24,7 +24,7 @@ email, so an attacker can't enumerate or spam-register accounts:
    `pending_registrations` row and emails a link containing a token. Always
    returns the same generic response regardless of whether the email is
    novel, already registered, or registration is closed for a *different*
-   reason — see the uniform-response requirement in `CLAUDE.md` §9 (the
+   reason — see the uniform-response requirement in `AGENTS.md` §9 (the
    same principle `#0026`'s subscribe endpoint follows later).
 2. `GET /auth/register/verify?token=…` — the SPA's `RegisterVerify.svelte`
    view calls this to exchange the token for

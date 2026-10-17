@@ -278,7 +278,7 @@ func TestPreferencesHandler_Patch_EmptyInterests_UnsubscribedStaysUnsubscribedAn
 }
 
 // TestPreferencesHandler_Patch_EmptyInterests_ComplainedStaysComplainedAndSaysSo
-// is the same guard for the CLAUDE.md §9 case specifically: "complained
+// is the same guard for the AGENTS.md §9 case specifically: "complained
 // never auto-resubscribes" is the loophole this whole issue exists to keep
 // closed, and it had no non-active-subscriber test at all before this pass.
 func TestPreferencesHandler_Patch_EmptyInterests_ComplainedStaysComplainedAndSaysSo(t *testing.T) {
@@ -322,7 +322,7 @@ func TestPreferencesHandler_Patch_EmptyInterests_ComplainedStaysComplainedAndSay
 		t.Fatalf("GetByID: %v", err)
 	}
 	if after.Status != subscribers.StatusComplained {
-		t.Errorf("Status = %q, want %q — an empty interest PATCH must not clear a complaint (CLAUDE.md §9)", after.Status, subscribers.StatusComplained)
+		t.Errorf("Status = %q, want %q — an empty interest PATCH must not clear a complaint (AGENTS.md §9)", after.Status, subscribers.StatusComplained)
 	}
 }
 
@@ -646,7 +646,7 @@ func (s *raceComplainingPreferencesStore) RecordEvent(ctx context.Context, e sub
 // real-unsubscribe branch, and write a subscriber.unsubscribed audit row
 // for an unsubscribe the guarded UPDATE actually refused — corrupting the
 // consent-evidence record #0038/#0060 read as fact. Seeds a throwaway
-// subscriber (CLAUDE.md §8b) rather than targeting any literal or seeded id.
+// subscriber (AGENTS.md §8b) rather than targeting any literal or seeded id.
 func TestPreferencesHandler_Patch_ComplainedBetweenLookupAndUnsubscribe_IsNoOp(t *testing.T) {
 	pool := journeyTestPool(t)
 	realStore := subscribers.NewStore(pool)

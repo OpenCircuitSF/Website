@@ -98,7 +98,7 @@ const (
 	// sendMessageTimeout and writeStatusTimeout bound the two detached-context
 	// operations that must survive a SIGTERM arriving mid-message (see this
 	// file's package doc comment). Neither is sized against measured machine
-	// load (CLAUDE.md §5) — sendMessageTimeout covers one SES round trip
+	// load (AGENTS.md §5) — sendMessageTimeout covers one SES round trip
 	// (including SESMailer's own internal throttling retries), and
 	// writeStatusTimeout covers one single-row UPDATE.
 	sendMessageTimeout = 30 * time.Second
@@ -229,7 +229,7 @@ var failureWriteTimeout = writeStatusTimeout
 // round trip that can hang indefinitely.
 //
 // A var, not a const, so a test can shrink it; NOT sized against measured
-// machine load (CLAUDE.md §5) — it is sized against the two hard timeouts
+// machine load (AGENTS.md §5) — it is sized against the two hard timeouts
 // that already bound one send attempt, the same way workerCloseTimeout is
 // sized against one in-flight message rather than a benchmark.
 var orphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
@@ -371,7 +371,7 @@ type WorkerDeps struct {
 	Events *subscribers.Store
 	// Stats and Outbox back #0124's circuit breaker — see Worker's own
 	// field doc comments. AdminEmail is cfg.AdminEmail (ADMIN_EMAIL,
-	// optional per CLAUDE.md §10 item 4); empty disables the alert enqueue
+	// optional per AGENTS.md §10 item 4); empty disables the alert enqueue
 	// specifically (the breaker still trips and pauses the campaign either
 	// way — the alert is a notification of that fact, not a precondition
 	// for it).
@@ -398,7 +398,7 @@ type WorkerDeps struct {
 // (internal/events.Broker, an in-memory fan-out) — a separate worker process
 // would have to reach that broker over the network, inventing an internal
 // transport for a single-box deployment. The deploy target is one EC2
-// instance with one systemd unit (CLAUDE.md §7); a second unit is a second
+// instance with one systemd unit (AGENTS.md §7); a second unit is a second
 // thing to install, monitor, and forget to restart, and SEND_WORKER_ENABLED
 // already exists precisely so that if the site is ever scaled to two
 // instances, exactly one of them runs the worker — that is the scaling
@@ -588,7 +588,7 @@ func (w *Worker) claimAndDrain(ctx context.Context) (bool, error) {
 			return false, derr
 		}
 		if demoted {
-			// The authoritative gate refusing the campaign: CLAUDE.md §9's
+			// The authoritative gate refusing the campaign: AGENTS.md §9's
 			// "not bypassable from the UI" property. Written only by
 			// whichever worker actually performed the demotion — a
 			// concurrent second worker that lost the DemoteToDraft race
@@ -664,7 +664,7 @@ func (w *Worker) drainCampaign(ctx context.Context, c *claimedCampaign) (bool, e
 }
 
 // drainLoop re-reads physical_address and reply-to fresh for this campaign
-// (never cached at boot — CLAUDE.md §9) and processes batches until nothing
+// (never cached at boot — AGENTS.md §9) and processes batches until nothing
 // remains queued, the drain is stopped by Stop, or a terminalCampaign-class
 // error halts it. The bool return reports whether this call did anything
 // real: failed or completed the campaign, or claimed at least one batch row
@@ -674,7 +674,7 @@ func (w *Worker) drainCampaign(ctx context.Context, c *claimedCampaign) (bool, e
 func (w *Worker) drainLoop(ctx context.Context, c *claimedCampaign) (bool, error) {
 	physicalAddress, settingsErr := w.settings.GetSetting(ctx, settingPhysicalAddress)
 	if settingsErr != nil || strings.TrimSpace(physicalAddress) == "" {
-		// Refusing is always correct (CLAUDE.md §9) — this branch is what
+		// Refusing is always correct (AGENTS.md §9) — this branch is what
 		// makes a resume whose address went blank after the original start
 		// claim stop rather than send non-compliant mail.
 		return true, w.failCampaign(ctx, c.ID, "physical_address_missing")
@@ -906,7 +906,7 @@ var errAbortedForTest = errors.New("mailing: simulated crash for test")
 // by killing the process mid-send in a test" — an in-process abort at the
 // exact commit boundary tests the same invariant deterministically, where a
 // real SIGKILL only adds timing nondeterminism about WHERE the process
-// died (CLAUDE.md §5 warns against exactly that class of flaky test). See
+// died (AGENTS.md §5 warns against exactly that class of flaky test). See
 // this issue's plan §11, criterion 4, for the two-worker concurrent test
 // that additionally exercises a genuinely concurrent second claimant.
 var (

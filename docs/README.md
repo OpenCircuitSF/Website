@@ -43,6 +43,6 @@ later.
 
 ## Project conventions
 
-- [`CLAUDE.md`](../CLAUDE.md) — binding project-wide guidance: identity, model policy, build/verify commands, restricted areas
+- [`AGENTS.md`](../AGENTS.md) — binding project-wide guidance: identity, model policy, build/verify commands, restricted areas
 - [`issues/Issues.md`](../issues/Issues.md) — the issue workflow: statuses, the plan → implement → review pipeline, commit conventions
 - [`PRD.md`](../PRD.md) — product scope, schema, flows, brand, infrastructure (extract the section you need — never read it whole)

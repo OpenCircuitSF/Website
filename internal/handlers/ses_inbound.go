@@ -35,7 +35,7 @@
 // # S3 is behind a narrow interface, never a concrete client
 //
 // inboundObjectStore is this file's seam onto internal/inbound.S3Store —
-// CLAUDE.md §1's "narrow interfaces, never a concrete store" applied to AWS
+// AGENTS.md §1's "narrow interfaces, never a concrete store" applied to AWS
 // S3 the same way sesVerifier (ses_notifications.go) already applies it to
 // AWS SNS/certificate fetching: no *s3.Client type reaches this file or its
 // tests.

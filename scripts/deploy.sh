@@ -27,7 +27,7 @@
 #      dirty-tree notice — retained verbatim in meaning; see the block
 #      comments below. The build runs in a throwaway git worktree at HEAD,
 #      so the deploy ships exactly the committed tree and the embedded
-#      commit hash is honest by construction (CLAUDE.md §8b's npm-build
+#      commit hash is honest by construction (AGENTS.md §8b's npm-build
 #      hazard never reaches the shared checkout).
 #   3. Build the SPA, then cross-compile the Go binary — pinned
 #      GOOS=linux GOARCH=arm64 CGO_ENABLED=0, with the commit hash embedded
@@ -63,7 +63,7 @@
 #
 set -euo pipefail
 
-# Resolve an absolute path BEFORE any cd (CLAUDE.md §8: ${BASH_SOURCE[0]}
+# Resolve an absolute path BEFORE any cd (AGENTS.md §8: ${BASH_SOURCE[0]}
 # breaks identically to $0 once the script has changed directory).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -357,7 +357,7 @@ esac
 
 step "Confirming a verified database restore point exists (docs/deployment.md step 6)"
 # Quoted assignment: this body must reach the host unexpanded, and nothing
-# in it needs a value from this workstation (CLAUDE.md §8's unquoted-heredoc
+# in it needs a value from this workstation (AGENTS.md §8's unquoted-heredoc
 # lesson — SC2016 is the point here, not a defect).
 # shellcheck disable=SC2016
 RESTORE_CHECK='set -e

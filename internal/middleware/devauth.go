@@ -162,7 +162,7 @@ type DevAdminSessionMinter func(ctx context.Context) (token string, expiresAt ti
 // only and only when explicitly enabled, automatically authenticates every
 // request as the configured admin user — the STORAGE=postgres counterpart
 // to DevAutoLogin above, closing the gap #0402 describes: STORAGE=json has
-// no mailing-list tables at all (CLAUDE.md §5), so exercising that
+// no mailing-list tables at all (AGENTS.md §5), so exercising that
 // subsystem locally requires the Postgres path, which before this had no
 // passkey-free way in.
 //

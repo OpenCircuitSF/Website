@@ -22,7 +22,7 @@ returns nothing), so a variable Archivo would render at its default instance,
 not the site's wght=800. This is the exact _woff2_to_ttf conversion
 assets/og/build-og.py already performs at *run time* for the default card;
 here it happens once, at commit time, because a Go program cannot shell out to
-fontTools in production (no Python on the deploy target, CLAUDE.md §7).
+fontTools in production (no Python on the deploy target, AGENTS.md §7).
 
 A `//go:embed` path cannot reach outside its own package directory (`..` is
 rejected), so the output lands under internal/seo/cardassets/, not

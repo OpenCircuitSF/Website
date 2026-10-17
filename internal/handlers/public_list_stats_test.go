@@ -55,7 +55,7 @@ func getStats(t *testing.T, h *PublicListStatsHandler) (int, listStatsResponse, 
 // The oracle mitigation, pinned. #0274: a live EXACT pending count would let
 // someone submit an address and poll to learn whether it was already known --
 // a narrow reopening of what POST /api/subscribe's uniform 202 exists to
-// prevent (CLAUDE.md §9). Bucketing pending is what stops one submission from
+// prevent (AGENTS.md §9). Bucketing pending is what stops one submission from
 // moving the reported number.
 func TestListStats_PendingIsBucketedSoOneSignupDoesNotMoveIt(t *testing.T) {
 	for _, pending := range []int64{5, 6, 7, 8, 9} {

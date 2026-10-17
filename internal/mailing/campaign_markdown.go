@@ -11,7 +11,7 @@
 // maintained. No other Markdown library was already present in go.sum.
 //
 // Raw HTML decision: campaign bodies are admin-authored (not public input),
-// but PRD/CLAUDE.md §9 still forbid anything that could inject a script or
+// but PRD/AGENTS.md §9 still forbid anything that could inject a script or
 // fetch a third-party resource into thousands of recipients' inboxes, and a
 // campaign body is stored and re-rendered on every send/preview/test-send —
 // worth treating carefully rather than trusting the author's browser. Two
@@ -34,7 +34,7 @@
 //     legitimately reference, so the only images that could ever appear are
 //     third-party URLs, and "an untracked remote image in a campaign body
 //     is exactly an open-tracking pixel by another name" (this issue's
-//     brief, echoing CLAUDE.md §9). Rather than allowlisting one host,
+//     brief, echoing AGENTS.md §9). Rather than allowlisting one host,
 //     images are simply not a supported campaign construct.
 //
 // No goldmark extensions (extension.GFM etc.) are enabled. Tables,

@@ -84,7 +84,7 @@ import (
 //     exists in this tree today.
 //
 // Deliberately NOT covered, all accepted gaps rather than false-positive
-// risks (per CLAUDE.md §8's #0258 history: a missed detection is the safe
+// risks (per AGENTS.md §8's #0258 history: a missed detection is the safe
 // side to err on, a false alarm is not):
 //
 //   - The alternate "migration NNNNNN" (no slash) shorthand this tree also
@@ -337,7 +337,7 @@ func migrationContentHasIdentifier(content, identifier string) bool {
 
 // migrationCitationNumberPattern is the ground truth for
 // loadMigrationContents: golang-migrate's own "NNNNNN_name.up|down.sql"
-// naming convention (CLAUDE.md's "Migrations" table, migrations/ itself).
+// naming convention (AGENTS.md's "Migrations" table, migrations/ itself).
 var migrationCitationNumberPattern = regexp.MustCompile(`^(\d{6})_`)
 
 // loadMigrationContents reads every file directly under repoRoot/migrations
@@ -345,7 +345,7 @@ var migrationCitationNumberPattern = regexp.MustCompile(`^(\d{6})_`)
 // as much "in that migration" as one it CREATEs) and returns the
 // concatenated content keyed by migration number, fresh off disk every run
 // — the same "never hardcode what the tree itself can answer" posture
-// loadClaudeMDSections (citation_target_guard_test.go) takes for CLAUDE.md's
+// loadClaudeMDSections (citation_target_guard_test.go) takes for AGENTS.md's
 // own headings.
 func loadMigrationContents(t *testing.T, repoRoot string) map[string]string {
 	t.Helper()
@@ -839,7 +839,7 @@ func TestMigrationContentHasIdentifierRejectsSubstringMatch(t *testing.T) {
 // a8e0986, both citing migrations/000010 for constraints/columns that
 // migrations/000023 actually creates) as an in-memory Go source string —
 // never by checking out or modifying the real, current
-// internal/subscribers/store.go, and never via git stash (CLAUDE.md §8a)
+// internal/subscribers/store.go, and never via git stash (AGENTS.md §8a)
 // — and confirms this guard fires on both. A guard that cannot catch the
 // case that motivated it would be decoration.
 func TestMigrationCitationGuardCatchesBothRealHistoricalCases(t *testing.T) {

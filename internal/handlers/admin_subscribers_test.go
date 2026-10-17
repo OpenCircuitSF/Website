@@ -26,7 +26,7 @@ import (
 // once in TestMain — #0091) or skips if TEST_DATABASE_URL was unset. Like
 // interestsTestPool (interests_test.go), it truncates ONLY the auth tables —
 // never `interests` (the seeded taxonomy) or `subscribers` (shared with
-// #0026's own concurrent test runs against TEST_DATABASE_URL, CLAUDE.md §8b).
+// #0026's own concurrent test runs against TEST_DATABASE_URL, AGENTS.md §8b).
 // Every row this file creates is scoped with a "zz-subtest-" email/slug
 // prefix and cleaned up individually via t.Cleanup.
 func adminSubscribersTestPool(t *testing.T) *pgxpool.Pool {
@@ -1083,7 +1083,7 @@ func TestAdminSubscribers_Create_ComplainedAddressNeverResubscribed(t *testing.T
 		t.Fatalf("decode: %v", err)
 	}
 	if out.Subscriber.Status != subscribers.StatusComplained {
-		t.Fatalf("resulting status = %q, want unchanged %q — manual add must never auto-resubscribe a complained address (CLAUDE.md §9)", out.Subscriber.Status, subscribers.StatusComplained)
+		t.Fatalf("resulting status = %q, want unchanged %q — manual add must never auto-resubscribe a complained address (AGENTS.md §9)", out.Subscriber.Status, subscribers.StatusComplained)
 	}
 }
 

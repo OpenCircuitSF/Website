@@ -48,7 +48,7 @@
 //   - literal call syntax, Ident(...), inside a comment at all -- which
 //     #0347 criterion 7 / #0323 already ban unconditionally, so this is
 //     belt-and-suspenders alongside scripts/go_file_visit_floor_guard_test.sh's
-//     external, text-based oracle (CLAUDE.md §8: the two homes are not
+//     external, text-based oracle (AGENTS.md §8: the two homes are not
 //     redundant, since that harness cannot distinguish code from comments
 //     and this one cannot see files outside claimCommentGuardScanRoots).
 //
@@ -135,7 +135,7 @@
 //
 // # Where the oracle lives (criterion 6)
 //
-// In Go, in-package, per CLAUDE.md §8's rule: the deciding question is
+// In Go, in-package, per AGENTS.md §8's rule: the deciding question is
 // whether a mutation leaves the assertion falsifiable by the thing it
 // measures. Adding a false present-tense claim to a comment -- the
 // mutation this guard exists to catch -- changes what the mode-0/
@@ -150,7 +150,7 @@
 //
 // THIS REASONING COVERS THE FINDINGS ASSERTIONS ONLY -- not the three
 // claimCommentGuardMinPlausible* floor constants below. Those are a
-// DIFFERENT comparison direction (CLAUDE.md §8: "the deciding question ...
+// DIFFERENT comparison direction (AGENTS.md §8: "the deciding question ...
 // turns on the direction of the comparison, not the kind of thing
 // mutated"), and #0347's review measured, on a private copy, that it does
 // NOT hold for two of the three: forcing
@@ -503,7 +503,7 @@ func claimCommentGuardOpenParen(s string) int {
 // claimCommentGuardDiagnoseDirectional, defined near the calibration table
 // below, calls this SAME function to decide whether a target identifier
 // falls inside the window, rather than holding a second, independently
-// -drifting copy of this arithmetic -- CLAUDE.md §8: a copy of the answer
+// -drifting copy of this arithmetic -- AGENTS.md §8: a copy of the answer
 // stored next to the question is not a check. #0358 criterion 5 / #0364
 // criterion 5 freeze the CALIBRATION this produces, not the act of naming
 // it: every constant and every clamp this function makes is unchanged from
@@ -527,7 +527,7 @@ func claimCommentGuardDirectionalWindowLo(flat string, dmStart int) int {
 // doc comment records that an earlier draft of this exact kind of helper
 // sliced by byte index,
 // split a multi-byte rune, and produced invalid UTF-8 that BSD grep then
-// silently refused to match (CLAUDE.md §8). Re-derived independently here
+// silently refused to match (AGENTS.md §8). Re-derived independently here
 // rather than trusting that scratchpad tool's claim.
 func claimCommentGuardSnippet(flat string, start, end int) string {
 	loB := start - 70
@@ -557,13 +557,13 @@ func claimCommentGuardSnippet(flat string, start, end int) string {
 // -- used to live twice, once inline in findClaimCommentGuardFindings's
 // per-comment-group loop and once inline in
 // claimCommentGuardDiagnoseDirectional, the one fragment where the two could
-// silently diverge (CLAUDE.md §8: a copy of the answer stored next to the
+// silently diverge (AGENTS.md §8: a copy of the answer stored next to the
 // question is not a check -- this applies just as much to two copies of a
 // TRANSFORM as to two copies of an ASSERTION). Folded into one function both
 // call; behaviour-preserving, since it is textually the same expression
 // moved, not rewritten.
 //
-// #0374 (recorded, not closed -- CLAUDE.md §8's #0258 caution binds on this
+// #0374 (recorded, not closed -- AGENTS.md §8's #0258 caution binds on this
 // file, six in-file mechanisms already, so a seventh is not the default
 // answer to a gap this cheap to state): the calibration table cannot detect
 // this function doing nothing. Every row in
@@ -616,7 +616,7 @@ func claimCommentGuardFlattenComment(text string) string {
 }
 
 // findClaimCommentGuardFindings is the pure, directly testable core
-// (CLAUDE.md §8: a guard's oracle must not be the same bytes as its
+// (AGENTS.md §8: a guard's oracle must not be the same bytes as its
 // subject -- this is exercised against in-memory fixtures below, not only
 // against whatever the repo currently contains, matching
 // findOutboxCallSitesInFile's own precedent in this package). It parses
@@ -787,7 +787,7 @@ func findClaimCommentGuardFindings(path string, src any, allPkgTypes map[string]
 }
 
 // claimCommentGuardMinPlausibleFileCount and its two siblings below are
-// this guard's #0275-family floors (#0347 criterion 5 / CLAUDE.md §8): a
+// this guard's #0275-family floors (#0347 criterion 5 / AGENTS.md §8): a
 // broken walk, an emptied scan-roots list, or a method-name check that
 // silently stopped matching must fail loudly rather than report an
 // all-clear built on an empty population. Measured directly against
@@ -842,7 +842,7 @@ const claimCommentGuardMinPlausibleCallCensusCount = 15
 // comment groups the ParseComments walk actually visited. #0342's second
 // review measured 4963 comment groups over its own (wider) scan; this
 // guard's scan roots are the same trees, so a healthy run should clear
-// this floor by two orders of magnitude. Set low deliberately (CLAUDE.md
+// this floor by two orders of magnitude. Set low deliberately (AGENTS.md
 // §8's #0300 lesson: a floor set close to today's population fails
 // permanently on ordinary drift) -- its job is only to catch "the
 // ParseComments walk visited nothing".
@@ -925,7 +925,7 @@ func TestNoCommentClaimsClaimMachineryCallFileCodeLacks(t *testing.T) {
 		// groups) rather than threading counters out of
 		// findClaimCommentGuardFindings -- keeps the floor measurement
 		// visibly independent of the function whose output it is meant to
-		// bound (CLAUDE.md §8: an oracle must not share its method with
+		// bound (AGENTS.md §8: an oracle must not share its method with
 		// its subject).
 		fset := token.NewFileSet()
 		facts, err := claimCommentGuardBuildFileFacts(fset, path, nil)
@@ -976,7 +976,7 @@ func TestNoCommentClaimsClaimMachineryCallFileCodeLacks(t *testing.T) {
 // complements, and does not
 // duplicate, scripts/go_file_visit_floor_guard_test.sh's external harness:
 // that harness greps file TEXT (comments included) and is the guard
-// against loosening or deleting the check itself (CLAUDE.md §8: a guard
+// against loosening or deleting the check itself (AGENTS.md §8: a guard
 // living in the file it guards is new mutable surface); this one runs
 // in-package on every `go test` and is the guard against a comment
 // introducing the literal in the first place, independent of whether the
@@ -1025,13 +1025,13 @@ func TestNoClaimMachineryCallSyntaxLiteralInAnyComment(t *testing.T) {
 }
 
 // TestGoFileVisitFloorImplausibleGuardFiresOnEmptyOrLowCount is #0347
-// criterion 5's direct proof (CLAUDE.md §8: separated from the two tests
+// criterion 5's direct proof (AGENTS.md §8: separated from the two tests
 // above so a synthetic failure does not require a real *testing.T standing
 // in for one -- claimCommentGuardFloorImplausible returns "" or a reason,
 // the same shape dangling_test_citation_guard_test.go's own
 // goFileVisitCountImplausible uses, for the identical reason given there).
 // The numbers here are chosen for THIS test alone, not copied from any
-// guard's own floor constant (CLAUDE.md §8: an oracle must not be the same
+// guard's own floor constant (AGENTS.md §8: an oracle must not be the same
 // bytes as its subject) -- a change to
 // claimCommentGuardMinPlausibleFileCount cannot make this test agree with
 // itself regardless of whether claimCommentGuardFloorImplausible still
@@ -1057,7 +1057,7 @@ func TestGoFileVisitFloorImplausibleGuardFiresOnEmptyOrLowCount(t *testing.T) {
 // confirmed by a direct grep immediately above this comment's own review
 // to contain zero mentions of any of the five target identifiers, in code
 // or in comments. This is a roots NARROWING, not a mutation of any shared
-// file (CLAUDE.md §8b): nothing in the tree is edited, and no other
+// file (AGENTS.md §8b): nothing in the tree is edited, and no other
 // session's work is touched, matching claim_kinds_call_site_guard_test.go's
 // own TestNonExemptFloorCatchesScanRootsNarrowedToSelf precedent in this
 // same package.
@@ -1105,11 +1105,11 @@ func TestClaimCommentGuardCensusFloorCatchesRootsWithNoRealPopulation(t *testing
 // equivalent reconstruction)", and an in-memory fixture is what
 // findOutboxCallSitesInFile's own sibling test
 // (TestClaimKindsGuardFiresOnFixtureWithNoKinds) already does in this
-// package, for the same CLAUDE.md §8 reason: the guard's own detection
+// package, for the same AGENTS.md §8 reason: the guard's own detection
 // logic gets proved, independent of whatever the tree currently contains.
 //
 // This session ALSO independently confirmed the fixture text matches the
-// real ffef8cf/HEAD trees, out of band, before trusting it (CLAUDE.md §8b:
+// real ffef8cf/HEAD trees, out of band, before trusting it (AGENTS.md §8b:
 // the scratchpad -- and by the same caution, any inherited claim about
 // what a historical commit contains -- is not to be trusted unverified):
 //
@@ -1208,7 +1208,7 @@ func TestClaimCommentGuardFlagsKnownStaleSiteFromFfef8cf(t *testing.T) {
 // internal/mailing/outbox_worker.go at commit db9bff7 -- the two real
 // pre-fix defects the directional axis was added to catch), extracted via
 // `git show db9bff7:internal/mailing/outbox_worker.go` and the real HEAD
-// file, not retyped -- CLAUDE.md §8's backslash-escape gotcha generalizes
+// file, not retyped -- AGENTS.md §8's backslash-escape gotcha generalizes
 // to "don't retype punctuation a human wrote, either", the same discipline
 // the ffef8cf fixtures above already follow, including the real U+2014 em
 // dash both sites' comments contain.
@@ -1358,7 +1358,7 @@ func TestClaimCommentGuardDirectionalAxisFlagsKnownStaleSitesFromDb9bff7(t *test
 // claimCommentGuardDirectionalWindowLo, claimCommentGuardIdentRe -- the
 // same vars and functions findClaimCommentGuardFindings itself calls when
 // it makes its own decision, not a second, independently-drifting copy of
-// it (CLAUDE.md §8: a copy of the answer stored next to the question is
+// it (AGENTS.md §8: a copy of the answer stored next to the question is
 // not a check). resolved is deliberately NOT computed by re-implementing
 // the "below"/"above" resolution comparison a third time -- that exact
 // comparison's case-sensitivity trap is #0363's whole subject, and a
@@ -1887,9 +1887,9 @@ var claimCommentGuardDirectionalCalibrationCases = []claimCommentGuardDirectiona
 // not duplicated here.
 //
 // #0358 criterion 3's mutation proof (run by hand against a throwaway
-// export, per that criterion and CLAUDE.md §8b -- not committed as code,
+// export, per that criterion and AGENTS.md §8b -- not committed as code,
 // since a test cannot mutate this file's own production logic without
-// becoming exactly the in-file guard CLAUDE.md §8's #0258 entry warns
+// becoming exactly the in-file guard AGENTS.md §8's #0258 entry warns
 // against): reverting the directional marker set to the broad
 // claimCommentGuardHistoricalRe fails this table's three `never`/`cannot`
 // false-positive rows (the four marker-exemption rows stay green -- a
@@ -1982,7 +1982,7 @@ var claimCommentGuardStoreGoParenSentinelRe = regexp.MustCompile(`see SelectDue[
 // TestClaimCommentGuardDirectionalAxisIsCleanOnStoreGoParenScoping is
 // #0358 criterion 2's explicit ask: name store.go's false positive as the
 // reason the parenthesis scoping exists, pinned against the REAL file
-// (extraction, not a retyped fixture -- CLAUDE.md §8), not a frozen copy of
+// (extraction, not a retyped fixture -- AGENTS.md §8), not a frozen copy of
 // it. internal/outbox/store.go's real doc comment for ClaimRow names it as
 // its own sentence's subject, then, in a trailing parenthetical, points a
 // positional word at SelectDue, a second, different identifier declared

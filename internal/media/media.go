@@ -12,7 +12,7 @@
 // repeats that shape. See jpeg.go and png.go for the two formats' allowlists.
 //
 // No new dependency is needed or wanted: the box this runs on has neither
-// exiftool nor Pillow (CLAUDE.md §1, issues/0433.md's Obstacles), and this
+// exiftool nor Pillow (AGENTS.md §1, issues/0433.md's Obstacles), and this
 // package uses only the standard library. It never calls image.Decode —
 // only image.DecodeConfig, in the handler that owns the upload request,
 // reads a header's dimensions without allocating a pixel buffer

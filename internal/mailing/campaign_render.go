@@ -273,7 +273,7 @@ func wrapCampaignHTML(subject, preheader, styledBodyHTML, manageURL, unsubscribe
 	// Footer — outside the card, same pattern templates.go's renderHTML
 	// uses: muted text on the page canvas, matched by a light-mode-safe
 	// fallback (colorMutedText reads acceptably on white too, unlike
-	// colorHeading — CLAUDE.md §8).
+	// colorHeading — AGENTS.md §8).
 	b.WriteString(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;">` + "\n")
 	b.WriteString(`<tr><td style="padding:20px 12px 0;font-family:` + fontBody + `;font-size:12px;line-height:18px;color:` + colorMutedText + `;text-align:center;">` + "\n")
 	b.WriteString(listFooterHTML(manageURL, unsubscribeURL, physicalAddress, colorMutedText))

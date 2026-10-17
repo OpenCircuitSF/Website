@@ -61,7 +61,7 @@
 # including uncommitted edits -- an implementer running this right after
 # editing App.svelte gets THAT edit tested, not last commit's; a git
 # worktree checked out at HEAD would silently test stale source. (2) it
-# sidesteps the whole git-worktree-cleanup risk class entirely (CLAUDE.md
+# sidesteps the whole git-worktree-cleanup risk class entirely (AGENTS.md
 # §8a/§8b, and #0399's note that a stray `.claude/worktrees/` copy makes
 # internal/handlers's path-citation guard fail open) -- there is no worktree
 # to forget to remove, because none is ever created. node_modules is
@@ -77,12 +77,12 @@
 # Ownership of the server actually answering is verified with a
 # BUILD-SPECIFIC detail (the hashed bundle filename this run's own `npm run
 # build` just produced), read back from `document.scripts` inside the
-# browser -- not by trusting a bare curl 200 (CLAUDE.md §8b: "a curl that
+# browser -- not by trusting a bare curl 200 (AGENTS.md §8b: "a curl that
 # succeeds is not evidence the right server answered").
 #
 # CLEANUP (#0287 criterion 6): the EXIT trap deletes the WebDriver session,
 # kills safaridriver and the static file server BY THE PIDS THIS SCRIPT
-# recorded when it started them (never a pattern-matched `pkill -f` -- CLAUDE.md
+# recorded when it started them (never a pattern-matched `pkill -f` -- AGENTS.md
 # §5a records that pattern-scoped cleanup has twice reached past its owner
 # and killed another agent's process), and removes the temp build directory.
 # Safari.app itself is left running if this script did not have to launch it
@@ -114,7 +114,7 @@ pass() { printf 'PASS: %s\n' "$1"; }
 note() { printf '  [note] %s\n' "$1"; }
 step() { printf '\n\033[1m=== %s\033[0m\n' "$1"; }
 
-# --- tool check (CLAUDE.md §5b: surface a missing obstacle, don't paper over it) ---
+# --- tool check (AGENTS.md §5b: surface a missing obstacle, don't paper over it) ---
 for tool in rsync python3 curl jq safaridriver npm; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "error: required tool '$tool' not found on PATH -- cannot run this check." >&2
@@ -410,7 +410,7 @@ JS
 )"
 OWN_RESP="$(wd_exec "$OWN_CHECK_JS" "[\"$BUNDLE_JS\"]")"
 OWN_VALUE="$(echo "$OWN_RESP" | jq -r '.value')"
-# CLAUDE.md §8b: a curl 200 is not evidence the right server answered. This
+# AGENTS.md §8b: a curl 200 is not evidence the right server answered. This
 # is: the exact hashed bundle filename THIS run's own npm run build just
 # produced, read back from document.scripts inside the actual browser page.
 if [ "$OWN_VALUE" = "true" ]; then

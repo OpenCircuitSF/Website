@@ -14,7 +14,7 @@ import (
 )
 
 // uniqueCampaignName returns a nanosecond-suffixed name unique to this call,
-// following internal/subscribers' uniqueEmail(t) convention (CLAUDE.md §8b:
+// following internal/subscribers' uniqueEmail(t) convention (AGENTS.md §8b:
 // every test seeds its own throwaway rows, never targets a literal id).
 func uniqueCampaignName(t *testing.T) string {
 	t.Helper()
@@ -642,7 +642,7 @@ func TestCampaignStore_Delete_FreesSlugForReuse(t *testing.T) {
 // violation. A still-draft campaign can never legitimately have an
 // email_sends row through this package's own API (materialization only
 // happens once a send starts — #0044), so this test creates one directly by
-// SQL — CLAUDE.md §8b: the referencing row is seeded, never a literal id,
+// SQL — AGENTS.md §8b: the referencing row is seeded, never a literal id,
 // and it is this test's own throwaway campaign, not a shared fixture.
 //
 // A third table, subscriber_events (migration 000022), also references

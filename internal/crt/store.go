@@ -5,7 +5,7 @@
 // be — the user wants to change the screen's copy from time to time without
 // a code edit, a rebuild, and a deploy.
 //
-// Modelled deliberately on internal/interests (CLAUDE.md §1, #0393's
+// Modelled deliberately on internal/interests (AGENTS.md §1, #0393's
 // Design §1): same slug/sort_order/active shape, the same
 // lowercase-hyphenated slug format, no dedicated Reorder method — reordering
 // is two Update calls swapping sort_order, exactly like the admin interests

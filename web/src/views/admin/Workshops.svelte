@@ -7,7 +7,7 @@
 
   Every decision below (row shape, sort order, the new-workshop modal's
   validity) is a call into lib/workshopAdmin.ts -- this file is markup and
-  wiring only, per CLAUDE.md's "SPA logic goes in plain TypeScript modules
+  wiring only, per AGENTS.md's "SPA logic goes in plain TypeScript modules
   ... Svelte components stay thin."
 
   Modal Escape handling: the create modal below closes on Escape from the

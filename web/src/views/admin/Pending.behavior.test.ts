@@ -9,7 +9,7 @@
 // matching every other behavior test here rather than jest-dom's
 // `toHaveTextContent`/`toBeDisabled` matchers, which are not registered.
 //
-// jsdom is not a browser (CLAUDE.md §1): this test establishes that,
+// jsdom is not a browser (AGENTS.md §1): this test establishes that,
 // mounted under jsdom, the component renders the expected rows/badges from
 // a given payload and calls listPendingSubscribers/resendConfirmation with
 // the arguments its own click handlers claim to pass — it does NOT

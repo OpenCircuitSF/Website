@@ -46,7 +46,7 @@ const campaignListID = "Open Circuit SF <list.opencircuitsf.com>"
 // two-click form.
 //
 //   - baseURL is config.Config.BaseURL, the canonical
-//     https://www.opencircuitsf.com host (CLAUDE.md §7) — never a bare
+//     https://www.opencircuitsf.com host (AGENTS.md §7) — never a bare
 //     apex. The HTTPS form points at #0034's POST/GET /api/unsubscribe
 //     endpoint, not the SPA's /unsubscribe confirmation page the
 //     campaign footer's Path-2 links use.
@@ -54,7 +54,7 @@ const campaignListID = "Open Circuit SF <list.opencircuitsf.com>"
 //     ("lists.opencircuitsf.com"). It must never be the bare apex
 //     opencircuitsf.com: #0057 points this subdomain's MX at SES for
 //     inbound Path-3 handling, and pointing the apex's own MX at SES
-//     would hijack all mail to the domain (CLAUDE.md §9). config.Load
+//     would hijack all mail to the domain (AGENTS.md §9). config.Load
 //     requires EMAIL_LIST_DOMAIN and #0045's Preflight gate independently
 //     refuses to start a send with it unset (list_domain_unset) — but this
 //     function does not trust either caller. A blank or all-whitespace

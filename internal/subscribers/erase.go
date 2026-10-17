@@ -25,7 +25,7 @@
 // item's exact wording.
 //
 // # Why hard-deleting the subscriber does not defeat the "complained never
-// # auto-resubscribes" rule (CLAUDE.md §9)
+// # auto-resubscribes" rule (AGENTS.md §9)
 //
 // That rule exists to stop a suppressed address from silently returning to
 // the list. Erasure's whole POINT is a permanent block on return, so the two
@@ -46,7 +46,7 @@
 //
 // It used to cascade-delete. #0060 widened email_sends.subscriber_id to
 // nullable with ON DELETE SET NULL (migrations/000017, edited in place —
-// greenfield, CLAUDE.md §1) specifically so this method could anonymize
+// greenfield, AGENTS.md §1) specifically so this method could anonymize
 // those rows instead of losing them: Erase overwrites `email` for every
 // email_sends row still pointing at this subscriber BEFORE deleting the
 // subscribers row, then the DELETE's cascade sets subscriber_id to NULL for
@@ -70,7 +70,7 @@
 // 'queued' or 'sending', rather than reaching into internal/mailing to fix
 // RecheckEligibleTx's join — that fix belongs to whichever issue next
 // touches internal/mailing/audience.go, and is reported, not made here (see
-// CLAUDE.md §9 and this issue's dispatch). An operator hitting this waits
+// AGENTS.md §9 and this issue's dispatch). An operator hitting this waits
 // for the campaign to finish (sent/failed/skipped) or cancels it first.
 package subscribers
 

@@ -22,7 +22,7 @@ import (
 //
 // Every filesystem-reaching idiom in this package (runtime.Caller,
 // the ".."-shaped relative path below) lives in THIS non-test file rather
-// than in a _test.go file. CLAUDE.md's repo-wide-guard table only lists
+// than in a _test.go file. AGENTS.md's repo-wide-guard table only lists
 // packages whose _test.go files reach outside their own directory —
 // internal/db's parity guard scans _test.go files for exactly that
 // pattern — so this package needs no new row there so long as the reach
@@ -153,7 +153,7 @@ var destructiveDDLPattern = regexp.MustCompile(`(?i)\bDROP\s+COLUMN\b|\bDROP\s+T
 // comments stripped, so a match here is real DDL, not prose describing it.
 // The error string deliberately does not cite an issue number: it can
 // surface to whoever is running the tests, not only a developer who can
-// open issues/ (CLAUDE.md §8, TestNoAdminFacingStringCitesInternalDocs).
+// open issues/ (AGENTS.md §8, TestNoAdminFacingStringCitesInternalDocs).
 func assertNoDestructiveDDL(f migrationFile) error {
 	if loc := destructiveDDLPattern.FindString(f.body); loc != "" {
 		return fmt.Errorf("testdb: %s contains %q — the cumulative schema census "+
@@ -436,7 +436,7 @@ func classifyVersion(dbName string, dbVersion, diskVersion int, dirty bool) (ahe
 		// branch this checkout does not have (#0339). The message below
 		// deliberately does not cite that issue number — it can surface to
 		// whoever is running the tests, not only a developer who can open
-		// issues/ (CLAUDE.md §8, TestNoAdminFacingStringCitesInternalDocs).
+		// issues/ (AGENTS.md §8, TestNoAdminFacingStringCitesInternalDocs).
 		aheadWarning = fmt.Sprintf("testdb: database %q schema_migrations version (%d) is "+
 			"AHEAD of this checkout's migrations/ (highest on disk: %d) — built from a "+
 			"migrations/ newer than this tree. That is a legitimate, recurring state, "+

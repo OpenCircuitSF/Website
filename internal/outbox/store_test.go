@@ -1183,11 +1183,11 @@ func TestOutbox_Counts_ReportsSkippedDistinctlyFromAbandoned(t *testing.T) {
 //
 // created_at is set directly via SQL (the same technique
 // TestOutbox_LatestByRecipients_ReturnsMostRecentPerRecipient already uses
-// to backdate a row) rather than by sleeping (CLAUDE.md §5 / #394 criterion
+// to backdate a row) rather than by sleeping (AGENTS.md §5 / #394 criterion
 // 6): the reported age is deterministic. The assertion below checks bounds
 // derived from the fixture's own target/poison separation rather than from
 // any tolerance constant -- so it does not rest on expected query-round-trip
-// timing at all, and cannot be defeated by a busy machine (CLAUDE.md §5: no
+// timing at all, and cannot be defeated by a busy machine (AGENTS.md §5: no
 // constant sized against measured machine load). A second queued row, left
 // at its natural (~0s) age, makes the queued status have a distinct oldest
 // and newest row, so a FILTER change that swaps MIN for MAX is
@@ -1265,7 +1265,7 @@ func TestOutbox_Counts_OldestQueuedAgeSecs(t *testing.T) {
 	}
 
 	// Both bounds come from the fixture's own separation, never from expected
-	// query timing (CLAUDE.md §5 -- no constant is sized against machine
+	// query timing (AGENTS.md §5 -- no constant is sized against machine
 	// load). LOWER: the reported age can only be >= targetAgeSecs, because the
 	// target row is the oldest queued row and wall-clock time only moves
 	// forward between its UPDATE and this Counts() call; a min -> max mutation

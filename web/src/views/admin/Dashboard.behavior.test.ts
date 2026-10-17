@@ -168,7 +168,7 @@ describe('Dashboard — populated payload', () => {
 });
 
 describe('Dashboard — outbound queue skipped figure (#0380)', () => {
-  // jsdom mount (CLAUDE.md §1: not a browser) — proves the STRUCTURAL claim
+  // jsdom mount (AGENTS.md §1: not a browser) — proves the STRUCTURAL claim
   // that `skipped` renders as a plain stat-list item alongside its
   // siblings, with none of the "Needs attention" section's alert styling,
   // and that a nonzero skipped figure does not itself cause any warning
@@ -235,7 +235,7 @@ describe('Dashboard — load error', () => {
 describe('Dashboard — persistent status announcer (#0279)', () => {
   // These assertions are STRUCTURAL (element presence, role/aria-live
   // attributes, text content) under jsdom -- not a claim that a real screen
-  // reader actually spoke anything (CLAUDE.md §5: jsdom is not a browser).
+  // reader actually spoke anything (AGENTS.md §5: jsdom is not a browser).
   // What they prove is the shape #0279's fix relies on: the announcer node
   // is present in the DOM from the very first render (before the fetch
   // resolves), so its later text change is a genuine MUTATION of an

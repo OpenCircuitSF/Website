@@ -30,12 +30,12 @@ import (
 // The tests below use their OWN literal apex/www strings (prodRPID /
 // prodRPOrigin), independent of testRPID / testRPOrigin, so a transposition
 // of either constant pair is caught here even if it silently passes
-// elsewhere. See CLAUDE.md §7 for why RP_ID is the apex and RP_ORIGIN is the
+// elsewhere. See AGENTS.md §7 for why RP_ID is the apex and RP_ORIGIN is the
 // www host: "one passkey covers apex and www" — but the two must never be
 // interchanged, since RP_ORIGIN must equal the browser's real origin.
 
 // prodRPID / prodRPOrigin are the actual production relying-party values
-// (CLAUDE.md §7), hardcoded independently of the shared testRPID /
+// (AGENTS.md §7), hardcoded independently of the shared testRPID /
 // testRPOrigin constants used elsewhere in this package. If a future edit
 // transposes testRPID and testRPOrigin (or sets them to some other
 // self-consistent-but-wrong pair), these literals give the suite an external
@@ -77,7 +77,7 @@ func newServiceForRP(t *testing.T, pool *pgxpool.Pool, mailer Mailer, rpID, rpOr
 // unrelated strings. This assertion reads wa.Config.RPOrigins[0]'s host
 // directly off the constructed instance and requires it to equal RPID or be
 // a subdomain of it — the one property that actually encodes "one passkey
-// covers apex and www" (CLAUDE.md §7). It fails, for example, if
+// covers apex and www" (AGENTS.md §7). It fails, for example, if
 // prodRPOrigin were "https://www.completely-different.test": the config
 // would still be well-formed and NewWebAuthn would still succeed, but the
 // origin host shares no suffix relationship with the RP ID.

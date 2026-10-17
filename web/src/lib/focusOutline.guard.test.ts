@@ -20,7 +20,7 @@
 // node:fs and every .svelte file's <style> block is read via
 // import.meta.glob, so an edit to the actual stylesheet changes what this
 // test evaluates -- the oracle is not satisfiable by an edit to the subject
-// (CLAUDE.md §8). Rule selectors
+// (AGENTS.md §8). Rule selectors
 // are matched against real DOM elements using jsdom's native
 // Element.matches() (nwsapi) -- the same selector semantics a browser uses
 // for :where(), :not(), and descendant combinators -- rather than a
@@ -169,7 +169,7 @@ function hasUnderline(decls: Decls): boolean {
 describe('no green/--accent outline on a link, .nav-tab, .subtab, or non-interactive tabindex="-1" target (#0517, #0535)', () => {
   const focusRules = collectFocusRules();
 
-  // Fail loudly rather than silently passing an empty scan (CLAUDE.md's
+  // Fail loudly rather than silently passing an empty scan (AGENTS.md's
   // fail-open warning) -- this guard is worthless if the CSS it exists to
   // check moved out from under the `?raw`/glob it reads.
   it('found real :focus/:focus-visible rules to check', () => {

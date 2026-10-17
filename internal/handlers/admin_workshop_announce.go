@@ -248,7 +248,7 @@ func announceWorkshopURL(baseURL, slug string) string {
 // knobs (WEBAUTHN_RP_ID is literally opencircuitsf.com in every env file
 // this repo ships, and the CAN-SPAM physical_address setting names one
 // building, not a list). PRD.md names no requirement for a second venue in
-// another timezone, and CLAUDE.md §5's standing instruction is not to build
+// another timezone, and AGENTS.md §5's standing instruction is not to build
 // for a load or a requirement that does not exist. A config knob here would
 // be one more environment variable, one more thing every deploy must get
 // right, for a value that has never needed to vary.

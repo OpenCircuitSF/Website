@@ -110,7 +110,7 @@ func getDashboard(t *testing.T, client *http.Client, url, token string) decodedD
 
 // TestAdminDashboardOverview_RequiresAdmin proves the route is wired behind
 // RequireSession then RequireAdmin at this handler's own mux -- the
-// dedicated, per-endpoint proof CLAUDE.md asks every admin handler test to
+// dedicated, per-endpoint proof AGENTS.md asks every admin handler test to
 // carry, distinct from (and in addition to) the enumerated guard proof
 // TestMountAndServe_AdminRoutesRequireSessionAndAdmin runs over the real
 // adminRoutes table in cmd/opencircuit.
@@ -330,7 +330,7 @@ func TestAdminDashboardOverview_InterestDistribution(t *testing.T) {
 // appears in recent_campaigns. Campaigns created immediately before the
 // request are, by construction, the most-recently-created rows globally
 // (monotonic id, sequential test execution, no concurrent writers against
-// this test's own database — CLAUDE.md §5a), so this does not depend on the
+// this test's own database — AGENTS.md §5a), so this does not depend on the
 // shared table being empty.
 func TestAdminDashboardOverview_RecentAndSendingCampaigns(t *testing.T) {
 	pool := adminSubscribersTestPool(t)

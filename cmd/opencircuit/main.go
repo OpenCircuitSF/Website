@@ -22,7 +22,7 @@ import (
 	// admin_workshop_announce.go) can load at package init without relying
 	// on the host having its own copy. A missing host tzdata is not the
 	// deploy target's normal case today (Amazon Linux ships it,
-	// CLAUDE.md §7), but a future scratch/distroless base would otherwise
+	// AGENTS.md §7), but a future scratch/distroless base would otherwise
 	// panic the whole binary at startup rather than just the announce
 	// path — mustLoadLocation's panic-on-missing-zone behavior is correct
 	// and stays; this only removes the host as a source of that failure.
@@ -171,7 +171,7 @@ func servePostgres(cfg *config.Config) error {
 	// static AWS credentials and no SES SMTP username/password in
 	// configuration; see #0007). MAILER_NOOP=true swaps in a stdout no-op
 	// instead, for local development against Postgres before SES domain
-	// verification/DKIM/production access is done (CLAUDE.md §10 item 2).
+	// verification/DKIM/production access is done (AGENTS.md §10 item 2).
 	// SEND_WORKER_ENABLED=false plus an unconfigured SES swaps in a third
 	// kind, mailing.UnconfiguredMailer, that fails loudly at every Send
 	// instead of either sending for real or silently no-opping (#0472) — see
@@ -362,7 +362,7 @@ func servePostgres(cfg *config.Config) error {
 	// which IS nil, for that contrast). A misconfigured or not-yet-
 	// permissioned directory is logged here at startup via
 	// media.CheckWritable rather than only discovered on first upload. The
-	// log message itself names no issue number -- CLAUDE.md §8's citation
+	// log message itself names no issue number -- AGENTS.md §8's citation
 	// guard (internal/handlers/citation_guard_test.go) treats every
 	// production string literal as a document an operator reading logs
 	// might see, not just SPA-rendered text, so the #0465 citation for
@@ -466,7 +466,7 @@ func servePostgres(cfg *config.Config) error {
 	// every branch of that decision. sendStore is non-nil whenever
 	// sendWorker would be constructible even if SEND_WORKER_ENABLED=false,
 	// so the advisory preflight adapter below still works on an instance
-	// that deliberately doesn't run the worker itself (CLAUDE.md §10 item
+	// that deliberately doesn't run the worker itself (AGENTS.md §10 item
 	// 4's "exactly one instance runs the worker" scaling story).
 	sendStore := newSendStoreIfEnabled(cfg, pool, audienceStore, store)
 	// campaignStatsStore and outbox.NewStore(pool) are both cheap, stateless
@@ -632,7 +632,7 @@ func servePostgres(cfg *config.Config) error {
 	// #0057) fetches/deletes the S3 object a matched message names;
 	// constructing it only needs cfg.AWSRegion (always set) — an empty
 	// SESInboundBucket (the bucket #0057 creates does not exist yet,
-	// CLAUDE.md §10) means Fetch/Delete calls fail operationally rather
+	// AGENTS.md §10) means Fetch/Delete calls fail operationally rather
 	// than at boot, matching sesInboundVerifier's empty-topic-ARN
 	// reject-everything convention just below. subscribersStore
 	// (constructed above) is reused directly — a mailto unsubscribe touches
@@ -688,7 +688,7 @@ func servePostgres(cfg *config.Config) error {
 // baseURLIsLoopback reports whether the given BASE_URL's host is exactly
 // "localhost" or "127.0.0.1". Extracted from mailerNoOpAllowed (#0402) so
 // newDevAdminAutoLogin's startup gate can reuse the identical predicate
-// instead of a second, independently-written one — CLAUDE.md §10 records
+// instead of a second, independently-written one — AGENTS.md §10 records
 // mailerNoOpAllowed's guard as correct and not to be weakened, and reusing
 // its host check byte-for-byte is the cheapest proof this extraction changed
 // nothing about it. An unparseable BASE_URL is treated as disallowed rather
@@ -749,7 +749,7 @@ func checkMailerNoOp(cfg *config.Config, logger *slog.Logger) error {
 //  2. baseURLIsLoopback(cfg.BaseURL) — checked BEFORE any store or pool use,
 //     so a misconfigured production BASE_URL fails here rather than after
 //     a database round trip. Reuses mailerNoOpAllowed's own predicate
-//     (CLAUDE.md §10: that guard is correct and must not be weakened; #0402
+//     (AGENTS.md §10: that guard is correct and must not be weakened; #0402
 //     extracted baseURLIsLoopback out of it rather than writing a second,
 //     independently-maintained host check).
 //  3. Resolve the configured ADMIN_EMAIL via store.LookupUserByEmail. On
@@ -817,7 +817,7 @@ func newDevAdminAutoLogin(ctx context.Context, cfg *config.Config, store *auth.S
 //     — checkMailerNoOp has already refused this outside localhost/127.0.0.1,
 //     so reaching here means it's permitted.
 //  2. SEND_WORKER_ENABLED=false AND SES_CONFIGURATION_SET is unset:
-//     mailing.NewUnconfiguredMailer(), CLAUDE.md §10 item 2's prescribed
+//     mailing.NewUnconfiguredMailer(), AGENTS.md §10 item 2's prescribed
 //     "turn SES off in production" recipe, made to actually work. Before
 //     this issue that recipe did not boot at all: case 3 below always ran
 //     when MAILER_NOOP was false, and mailing.NewSESMailer refuses to
@@ -835,7 +835,7 @@ func newDevAdminAutoLogin(ctx context.Context, cfg *config.Config, store *auth.S
 //     is the only one of the three NewSESMailer checks that config.Load
 //     does not also enforce.
 //  3. Otherwise: the real mailing.NewSESMailer(ctx, cfg), unchanged — fails
-//     construction loudly (CLAUDE.md §10) if SES_CONFIGURATION_SET is
+//     construction loudly (AGENTS.md §10) if SES_CONFIGURATION_SET is
 //     missing here despite case 2's guard, which cannot happen given (2)'s
 //     reasoning but is left to NewSESMailer's own check rather than assumed.
 //
@@ -900,7 +900,7 @@ func (noOpMailingMailer) Send(_ context.Context, msg mailing.Message) (string, e
 // Returns nil under MAILER_NOOP=true, matching mailing.NewWorker's own
 // refusal — see newSendWorkerIfEnabled below for why: nothing about
 // SEND_WORKER_ENABLED affects this decision, because the advisory preflight
-// checker is useful even on an instance that (per CLAUDE.md §10 item 4's
+// checker is useful even on an instance that (per AGENTS.md §10 item 4's
 // scaling story) does not itself run the worker.
 func newSendStoreIfEnabled(cfg *config.Config, pool *pgxpool.Pool, audienceStore *mailing.AudienceStore, settings mailing.SettingsReader) *mailing.SendStore {
 	if cfg.MailerNoOp {
@@ -951,7 +951,7 @@ func newSendWorkerIfEnabled(cfg *config.Config, sendStore *mailing.SendStore, au
 		Events:         events,       // #0126: campaign_sent
 		Stats:          stats,        // #0124: the circuit breaker's own rate read
 		Outbox:         outboxStore,
-		AdminEmail:     cfg.AdminEmail, // #0124: the alert recipient; empty skips the enqueue (CLAUDE.md §10 item 4)
+		AdminEmail:     cfg.AdminEmail, // #0124: the alert recipient; empty skips the enqueue (AGENTS.md §10 item 4)
 		BaseURL:        cfg.BaseURL,
 		ListDomain:     cfg.EmailListDomain,
 		FromAddr:       cfg.EmailFrom,
@@ -1243,7 +1243,7 @@ func serveDevMode(cfg *config.Config) error {
 	var sendWorker *mailing.Worker
 	// Outbox worker (#0126) has the same devstore gap: no
 	// subscribers/outbound_queue backing under STORAGE=json (see
-	// internal/handlers/subscribe.go's STORAGE=json note, CLAUDE.md §5).
+	// internal/handlers/subscribe.go's STORAGE=json note, AGENTS.md §5).
 	var outboxWorker *mailing.OutboxWorker
 	// STORAGE=json has no outreach tables, so there is no publisher.
 	var outreachPublisher *outreach.Publisher
@@ -1675,7 +1675,7 @@ func mountAndServe(
 
 	// SSE stream (#0048, PRD §8) — behind requireAdmin (session + is_admin),
 	// not just requireSession: its one real consumer, live campaign send
-	// progress, is admin data (CLAUDE.md §9's "admin data" framing), and
+	// progress, is admin data (AGENTS.md §9's "admin data" framing), and
 	// EventSource cannot set a custom Authorization header, so the existing
 	// session COOKIE is what carries auth here — requireAdmin composes
 	// RequireSession then RequireAdmin over that same cookie, exactly as it
@@ -2184,7 +2184,7 @@ var subscribeCloseTimeout = 15 * time.Second
 // workerCloseTimeout bounds sendWorker.Stop ALONE, on its own independent
 // budget per #0087's rule — sized to cover one in-flight message's SES call
 // (sendMessageTimeout, internal/mailing/worker.go) plus its status write
-// (writeStatusTimeout), not against any measured machine load (CLAUDE.md
+// (writeStatusTimeout), not against any measured machine load (AGENTS.md
 // §5). If this budget is exceeded, Stop returns context.DeadlineExceeded
 // and the process exits anyway; the consequence is exactly the §6 crash
 // window worker.go's package doc comment already documents as the designed

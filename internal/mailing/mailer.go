@@ -1,7 +1,7 @@
 // Package mailing provides the SES v2 API sending primitive shared by every
 // outbound mail path in the project: transactional email (internal/auth,
 // wrapped in its own auth.SESMailer) and, once #0028/#0042/#0045 land, the
-// campaign send worker. See PRD.md §6.6 for the full design and CLAUDE.md
+// campaign send worker. See PRD.md §6.6 for the full design and AGENTS.md
 // §10 item 2 for what's not yet configured on the AWS side.
 package mailing
 

@@ -99,7 +99,7 @@ var claimKindsGuardScanRoots = []string{"..", "../../cmd"}
 // Historical, not a live claim (#0487: an earlier version of this
 // paragraph asserted an exact "today" total beside this inequality, and it
 // went stale by three call sites unnoticed for exactly the reason a floor
-// only catches shrinks — CLAUDE.md §8, and see #0483 for two sibling
+// only catches shrinks — AGENTS.md §8, and see #0483 for two sibling
 // instances of the identical shape). Measured with the guard's own scan
 // roots, prune rules, and name matcher for #0487 (2026-09-09): the walk
 // finds 39 call sites named ClaimDue, OrphanSweep, or SelectDue in total,
@@ -137,7 +137,7 @@ var claimKindsGuardScanRoots = []string{"..", "../../cmd"}
 // than parsing Go. This is expected and must stay this way (do not "fix"
 // it by making the oracle parse Go — its independence from go/ast is the
 // entire reason it can catch a regression in THIS file's own parsing
-// logic; CLAUDE.md §8, an oracle must not share its method with its
+// logic; AGENTS.md §8, an oracle must not share its method with its
 // subject). The gap between the two totals is not a second number that
 // needs keeping in sync with the first: it is pinned at exactly six, the
 // count of call-site-shaped occurrences living inside
@@ -390,7 +390,7 @@ type namedCallSite struct {
 // move because this list exists.
 //
 // Why the assertion using this list can safely live IN this file, unlike
-// the floor constants above (CLAUDE.md §8, "mutate the scan roots instead
+// the floor constants above (AGENTS.md §8, "mutate the scan roots instead
 // and got itself changes — the in-package test is a legitimate,
 // non-circular oracle" vs. a static value, which needs an external
 // harness): narrowing claimKindsGuardScanRoots to exclude
@@ -414,7 +414,7 @@ type namedCallSite struct {
 // tracked copy of THIS file textually names both entries, and
 // (c) mutates a COPY of this file removing those two struct-literal lines
 // and confirms that mutation is independently detectable by a
-// non-go/ast tool. Per CLAUDE.md §8, "an edit to the subject must not be
+// non-go/ast tool. Per AGENTS.md §8, "an edit to the subject must not be
 // able to satisfy the oracle" — and a grep run from a different file, over
 // a different data source, cannot be satisfied by any edit made only to
 // the Go source it is checking.
@@ -613,7 +613,7 @@ func walkClaimKindsGuardFiles(t *testing.T, roots []string, fn func(path string)
 // findOutboxCallSitesInFile parses one file and returns every ClaimDue/
 // OrphanSweep call site it contains, tagged with whether the file lives in
 // this package's own directory (selfDir). This is the pure, directly
-// testable core (CLAUDE.md §8: a guard's oracle must not be the same bytes
+// testable core (AGENTS.md §8: a guard's oracle must not be the same bytes
 // as its subject — see TestClaimKindsGuardFiresOnFixtureWithNoKinds below,
 // which calls this exact function against an in-memory fixture rather than
 // against real repo files, so the guard's own detection logic is what gets
@@ -771,7 +771,7 @@ func TestNoUnscopedOutboxClaimCallOutsidePackage(t *testing.T) {
 // against in-memory synthetic source strings — never written into any
 // directory the real guard scans — so it proves the DETECTION LOGIC fires
 // on each dangerous shape, independent of anything currently true about
-// the real tree (CLAUDE.md §8: an oracle must not be the same bytes as
+// the real tree (AGENTS.md §8: an oracle must not be the same bytes as
 // its subject — these fixtures are hand-written prose describing the
 // dangerous calls, not a copy of any real violation this or #0281 found
 // and fixed).

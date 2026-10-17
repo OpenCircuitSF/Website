@@ -210,7 +210,7 @@ func TestWorker_CircuitBreaker_BounceRate_AtThresholdTrips(t *testing.T) {
 	w.adminEmail = adminEmail
 	// The admin_alert this test's trip enqueues is a REAL outbound_queue
 	// row, not scoped to this campaign — main_test.go's TestMain truncates
-	// outbound_queue once at package setup, not between tests (CLAUDE.md
+	// outbound_queue once at package setup, not between tests (AGENTS.md
 	// §8b: every test cleans up its own rows). Left uncleaned, it is a
 	// stray 'queued' row a LATER test's OutboxWorker.pass could claim and
 	// drain unexpectedly — this exact failure mode was caught by running

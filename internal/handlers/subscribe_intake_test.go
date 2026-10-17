@@ -116,7 +116,7 @@ func countGoroutinesIn(frame string) int {
 // nothing is in the frame and when the name it was handed matches
 // nothing at all, and TestNoLeakedIntakePollers PASSES on zero — so a
 // hand-written literal that goes stale disarms the guard silently,
-// which is CLAUDE.md §8's "an empty result must be an error, never an
+// which is AGENTS.md §8's "an empty result must be an error, never an
 // input". Measured during #0470's review: with 32 leaked pollers
 // provably alive, renaming runIntakeWorker made the guard pass in
 // 0.00s and the package go green. Written this way the same rename is
@@ -178,7 +178,7 @@ func goroutinesIn(frame string) (int, []string) {
 // to leave the frame, and a preceding test's cleanup may still be in
 // flight. This waits for the count to reach zero rather than sampling once,
 // so an in-flight shutdown is not misreported as a leak. It is NOT sized
-// against machine load (CLAUDE.md §5) — a genuine leak never reaches zero,
+// against machine load (AGENTS.md §5) — a genuine leak never reaches zero,
 // however long the window, and a clean shutdown reaches it in microseconds.
 func TestNoLeakedIntakePollers(t *testing.T) {
 	if testDBPool == nil {
@@ -207,7 +207,7 @@ func TestNoLeakedIntakePollers(t *testing.T) {
 // (criterion 4) and half of criterion 1 ("a 202 implies the signup is
 // durably recorded"). It forces the exact drop path enqueueMutation's
 // closeMu-guarded branch takes — Close() has already run, so h.closed is
-// true — and confirms Subscribe still returns its uniform 202 (CLAUDE.md
+// true — and confirms Subscribe still returns its uniform 202 (AGENTS.md
 // §9: an internal drop must never change the response) while a
 // KindSubscribeIntake row survives in Postgres, 'queued', for the
 // subscriber's own recovery poller (or an operator) to reconcile — never
@@ -232,7 +232,7 @@ func TestSubscribe_MutationDropped_IntakeRowStaysDurablyQueued(t *testing.T) {
 	email := subscribeUniqueEmail(t)
 	resp := doSubscribeFrom(t, nil, mux, subscribeBody(email, nil, time.Now()), "", "")
 	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202 (CLAUDE.md §9: a dropped mutation must not change the response)", resp.StatusCode)
+		t.Fatalf("status = %d, want 202 (AGENTS.md §9: a dropped mutation must not change the response)", resp.StatusCode)
 	}
 
 	status, ok := intakeRowStatus(t, pool, email)

@@ -93,7 +93,7 @@
 // ever run a test send. That check runs strictly after Subscribe has
 // already written the uniform 202 to the (long-since-returned) response, so
 // it cannot introduce an observable branch in that endpoint's behavior
-// (CLAUDE.md §9).
+// (AGENTS.md §9).
 //
 // # What Preflight subset a test send requires, and why
 //
@@ -105,7 +105,7 @@
 //     (CAN-SPAM §7704 for the address; PRD §6.6 for reply-to). Requiring
 //     them here would make it impossible to review a campaign's rendering
 //     before that configuration lands — exactly backwards, since testing
-//     early is how an operator notices the address is still blank. CLAUDE.md
+//     early is how an operator notices the address is still blank. AGENTS.md
 //     §9's physical_address restriction is about the SEND WORKER's gate
 //     (the one that actually delivers to subscribers) staying
 //     unbypassable from the UI; it says nothing about an internal QA copy
@@ -443,7 +443,7 @@ func (h *AdminCampaignPreviewHandler) Test(w http.ResponseWriter, r *http.Reques
 
 // testSendTimeout bounds the one SES round trip a test send makes. Matches
 // the send worker's own sendMessageTimeout (worker.go) in spirit —
-// generous enough for real network + AWS API latency under CLAUDE.md §5's
+// generous enough for real network + AWS API latency under AGENTS.md §5's
 // "check the machine before you blame the code" guidance, not sized against
 // any measured load.
 const testSendTimeout = 30 * time.Second

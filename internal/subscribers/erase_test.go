@@ -237,14 +237,14 @@ func TestErase_NotFound(t *testing.T) {
 		t.Fatalf("first Erase: %v", err)
 	}
 	// A repeat call against the now-deleted id — not a hardcoded/seeded id
-	// (CLAUDE.md §8b), the same real id this test just created and removed.
+	// (AGENTS.md §8b), the same real id this test just created and removed.
 	if _, err := store.Erase(context.Background(), sub.ID, now); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second Erase: err = %v, want ErrNotFound", err)
 	}
 }
 
 // TestErase_PreservesAndAddsToExistingSuppressions is the direct proof for
-// this issue's central design tension (CLAUDE.md §9: `complained` never
+// this issue's central design tension (AGENTS.md §9: `complained` never
 // auto-resubscribes). A subscriber that already carries a `complaint`
 // suppression row (the shape #0038's SES ingestion writes alongside a
 // status transition to complained) keeps that row untouched by Erase, which

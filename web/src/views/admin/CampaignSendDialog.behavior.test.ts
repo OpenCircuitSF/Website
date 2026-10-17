@@ -40,7 +40,7 @@
 // NOT establish that a real browser's focus/tab order, CSS-driven
 // visibility, or screen-reader announcement behave the same way; jsdom's
 // focus and event model is an approximation of a browser's, not the thing
-// itself. CLAUDE.md §1 says so directly, under a bullet headed "jsdom is not
+// itself. AGENTS.md §1 says so directly, under a bullet headed "jsdom is not
 // a browser.": "a passing jsdom test is weaker evidence than a real-browser
 // one, and a verification claim should say which it rests on." This test's
 // claim rests on jsdom, not a real browser — recorded here, in that

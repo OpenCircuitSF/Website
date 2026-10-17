@@ -27,7 +27,7 @@ No shortener code lives in this repository.
   runtime settings — all carried over from ShortLinks' proven auth stack.
 - **No third-party analytics, ad trackers, external CDNs, or email
   open-tracking pixels.** The site is self-contained by design
-  (`CLAUDE.md` §9).
+  (`AGENTS.md` §9).
 
 Not every feature above is built yet — this repository is worked phase by
 phase against `PRD.md` §12's build plan and the issue tracker in `issues/`.
@@ -46,7 +46,7 @@ ShortLinks; the mailing list, campaigns, and workshops land in later phases.
 | Hosting | Single EC2 instance, Apache 2 reverse proxy, Let's Encrypt TLS |
 | Testing | Go's standard `testing` package + a live PostgreSQL for integration tests; Vitest for the SPA's pure-TypeScript helpers |
 
-See `CLAUDE.md` for the full project identity, build/verify commands, and
+See `AGENTS.md` for the full project identity, build/verify commands, and
 code conventions, and `PRD.md` for product scope, schema, and design
 decisions.
 
@@ -69,7 +69,7 @@ cd web && npm run build && cd ..
 go build -o opencircuit ./cmd/opencircuit
 ```
 
-`go build ./...` alone is **not** sufficient verification — see `CLAUDE.md`
+`go build ./...` alone is **not** sufficient verification — see `AGENTS.md`
 §5 for the required `go vet`/`go test`/`npm run check`/`npm test` sequence.
 Full production topology (Apache vhost, systemd unit, DNS, SES setup) is
 documented in `docs/deployment.md`.
@@ -77,7 +77,7 @@ documented in `docs/deployment.md`.
 ## Documentation
 
 Start with [`docs/README.md`](docs/README.md) for the full documentation
-index, or [`CLAUDE.md`](CLAUDE.md) for the binding project conventions any
+index, or [`AGENTS.md`](AGENTS.md) for the binding project conventions any
 agent (human or AI) working in this repository should read first.
 
 ## Issue tracking

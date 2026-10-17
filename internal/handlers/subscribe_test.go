@@ -279,7 +279,7 @@ func readBody(t *testing.T, resp *http.Response) []byte {
 // alone cannot reach directly. Returns the row id.
 //
 // #0121: registers its own t.Cleanup deleting the row by the id it just
-// captured (CLAUDE.md §8b — never a literal id), so every call site gets
+// captured (AGENTS.md §8b — never a literal id), so every call site gets
 // isolation for free instead of each of them having to remember to. Two
 // call sites (admin_campaign_preflight_test.go) already registered their
 // own identical cleanup before this existed; deleting an already-deleted id
@@ -479,7 +479,7 @@ func mustSeededInterestID(t *testing.T, pool *pgxpool.Pool, slug string) int64 {
 // complained, suppressed) plus the two anti-bot short-circuits (honeypot,
 // timing gate) and asserts every single response is BYTE-IDENTICAL — not
 // merely the same shape or the same status code. This is the endpoint's
-// core security property: CLAUDE.md §9 requires it, and varying so much as
+// core security property: AGENTS.md §9 requires it, and varying so much as
 // a header would turn the endpoint into an email-enumeration oracle.
 func TestSubscribe_UniformResponseAcrossBranches(t *testing.T) {
 	pool := subscribeTestPool(t)

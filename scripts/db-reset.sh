@@ -10,7 +10,7 @@
 # WHY THIS IS SAFE TO HAVE, AND WHEN IT STOPS BEING SAFE
 #
 # This project is greenfield until the first production deploy (PRD §6.2,
-# CLAUDE.md §1): nothing is live but the static placeholder, no PostgreSQL
+# AGENTS.md §1): nothing is live but the static placeholder, no PostgreSQL
 # instance on AWS holds real data, and no subscriber has ever signed up. So
 # dropping and recreating a local database costs nothing, and editing a
 # migration in place then resetting is the cheap, correct move.
@@ -36,7 +36,7 @@
 #     refuses and reports who holds it unless --force is given. This matters
 #     more here than it did for testdb.sh gc: 'opencircuit'/'opencircuit_test'
 #     are the databases every agent falls back to sharing when it cannot get
-#     its own (CLAUDE.md §5a), and 'opencircuit' is also the user's own dev
+#     its own (AGENTS.md §5a), and 'opencircuit' is also the user's own dev
 #     database — one agent's reflexive reset can destroy another agent's
 #     in-flight work and whatever the user had loaded.
 #
@@ -115,7 +115,7 @@ case "$DB" in
       cat >&2 <<EOF
 refusing: '$DB' is not one of the two databases this script manages (opencircuit, opencircuit_test).
 
-It looks like a per-agent scratch database (CLAUDE.md §5a) — those belong to
+It looks like a per-agent scratch database (AGENTS.md §5a) — those belong to
 scripts/testdb.sh, not this script:
 
     scripts/testdb.sh drop <id>     # drop your own
@@ -197,7 +197,7 @@ if ! CONNS="$(psql "$PGHOST_URL/postgres" -tAc "select pid || '  ' || coalesce(u
 fi
 if [ -n "$CONNS" ] && [ "$FORCE" != "1" ]; then
   cat >&2 <<EOF
-refusing: '$DB' has other active connection(s) — this may be another agent (CLAUDE.md §5a) or the user's own session:
+refusing: '$DB' has other active connection(s) — this may be another agent (AGENTS.md §5a) or the user's own session:
 
 $(echo "$CONNS" | sed 's/^/  pid /')
 

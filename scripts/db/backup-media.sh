@@ -26,7 +26,7 @@
 # rare. Images are also larger and compress worse than the SQL dumps
 # backup.sh writes. A naive "tar it every night, prune after N days" policy
 # would multiply an unchanging directory's size by the retention window for
-# zero benefit — on a small instance with limited disk (CLAUDE.md §7),
+# zero benefit — on a small instance with limited disk (AGENTS.md §7),
 # that is pure waste, not safety margin.
 #
 # So this script hashes the source tree's contents (relative path + sha256 of
@@ -108,7 +108,7 @@ fi
 
 # Portable content hash: GNU coreutils' sha256sum on the production box
 # (Amazon Linux), macOS's shasum -a 256 for local dev/testing — neither
-# assumed present, checked once up front (#0434, per CLAUDE.md §8's zsh/bash
+# assumed present, checked once up front (#0434, per AGENTS.md §8's zsh/bash
 # and BSD-tool portability notes).
 if command -v sha256sum >/dev/null 2>&1; then
   HASH_BIN="sha256sum"

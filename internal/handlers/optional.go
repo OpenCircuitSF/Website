@@ -114,7 +114,7 @@ type Optional[T any] struct {
 // 249ns/4 allocs). Both are sub-microsecond, once per field per request, on
 // a handler that also does a database round trip measured in milliseconds —
 // not a cost worth trading away the single-decode-contract guarantee for,
-// and this project has no performance requirement (CLAUDE.md §5).
+// and this project has no performance requirement (AGENTS.md §5).
 func (o *Optional[T]) UnmarshalJSON(data []byte) error {
 	o.Present = true
 	if string(data) == "null" {

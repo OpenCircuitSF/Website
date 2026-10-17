@@ -2,13 +2,13 @@
 
 **Written:** 2026-08-18 · **Repo:** `github.com/OpenCircuitSF/Website` · **Live:** <https://www.opencircuitsf.com>
 
-> **Stale as of 2026-08-25 — read `CLAUDE.md` §7/§10 and `docs/deployment.md`
+> **Stale as of 2026-08-25 — read `AGENTS.md` §7/§10 and `docs/deployment.md`
 > first.** This file describes the state on 2026-08-18, when there was no
 > application code and the live site was the static placeholder. Both have
 > changed: the app is built, and **the real site was deployed on 2026-08-25**,
 > replacing the placeholder. §5 below ("Live deployment — what is known") and
 > its §5.2 list of unknowns are the most out-of-date parts — every one of
-> those questions is now answered in `CLAUDE.md` §7. Kept as written because
+> those questions is now answered in `AGENTS.md` §7. Kept as written because
 > §6's findings and §3's non-code blockers are still accurate and still cost
 > real time to rediscover — **except §3.1's SES region and rationale, which
 > are not** (corrected in place below, 2026-09-04, #0421): SES is done, not
@@ -58,7 +58,7 @@ Changing it afterwards is a repo-wide rewrite plus a GitHub rename.
 **Decide:** keep `Website`, or rename now and use
 ~~`github.com/brennanMKE/OpenCircuitSF`.~~ `OpenCircuitSF/OpenCircuitSF` —
 the owner half is already `OpenCircuitSF`, so the rename is repo-name only
-(`CLAUDE.md` §2; the Go module path stays
+(`AGENTS.md` §2; the Go module path stays
 `github.com/brennanMKE/OpenCircuitSF` regardless).
 
 ### 2.2 Commit granularity for issue files
@@ -82,11 +82,11 @@ Neither is code. Both have multi-day lead times and both block a whole phase.
 > 2026-08-25, and step 1's plan below was **not** what was decided: production
 > verified the identity in **`us-east-1`**, not `us-west-2`, matching the EC2
 > instance's own region rather than "close to SF" — that rationale was
-> retired, `CLAUDE.md` §7, `PRD.md` §10.3 (corrected 2026-09-03, `#0418`).
+> retired, `AGENTS.md` §7, `PRD.md` §10.3 (corrected 2026-09-03, `#0418`).
 > Step 3's MAIL FROM host is also different from what actually shipped:
 > `bounce.mailing.opencircuitsf.com`, not `mail.opencircuitsf.com`. The steps
 > below are left as originally written, as a record of the plan; see
-> `CLAUDE.md` §10 item 2 and `docs/email-setup.md` for the current, real
+> `AGENTS.md` §10 item 2 and `docs/email-setup.md` for the current, real
 > setup.
 
 New SES accounts are sandboxed: 200 messages/day, verified recipients only.
@@ -198,19 +198,19 @@ ceremony fails in Phase 1.
 ### 5.2 Gaps to fill in on the Mac mini — **all answered 2026-08-25**
 
 These were the open questions. They were answered by doing the deploy, and the
-answers live in `CLAUDE.md` §7 and `docs/deployment.md`'s production-facts
+answers live in `AGENTS.md` §7 and `docs/deployment.md`'s production-facts
 table. Summarised here so this section is not misleading:
 
 - **Instance / SSH** — **superseded (`#0508`, 2026-09-12): production moved to
   a different instance.** The original deploy-day box (instance id, address
-  and IP in the private AWS repo — see the redaction note in `CLAUDE.md` §7)
+  and IP in the private AWS repo — see the redaction note in `AGENTS.md` §7)
   is decommissioned as far as this service is concerned. Current: a
   `t4g.small` (arm64, 1846 MB RAM, 2 vCPU) in `us-east-1`. `ssh photon`
-  (already configured) gets you there. See `CLAUDE.md` §7 for the
+  (already configured) gets you there. See `AGENTS.md` §7 for the
   authoritative current facts.
 - **`DocumentRoot`** — was `/var/www/vhosts/www.opencircuitsf.com`. The Go
   service now answers `/`; that directory survives only to serve
-  `/.well-known/`, which holds the Bluesky DID. See `CLAUDE.md` §7.
+  `/.well-known/`, which holds the Bluesky DID. See `AGENTS.md` §7.
 - **vhost / certbot** — `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf`
   (plus the `002-…` pair that redirects the apex). Renewal is scheduled and
   working: `certbot-renew.timer`, `dns-route53` authenticator, one ECDSA

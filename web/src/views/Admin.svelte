@@ -31,7 +31,7 @@
   - CRT session — GET/POST/PATCH/DELETE /admin/crt-commands[/{id}] (#0393):
     the home hero's live CRT screen, moved from a hard-coded array into rows.
     Lives in its own component, CrtCommands.svelte, since #0393's Design §4
-    calls for one; markup/wiring only, per CLAUDE.md's "components stay
+    calls for one; markup/wiring only, per AGENTS.md's "components stay
     thin" — see that file's own doc comment.
 -->
 <script lang="ts">
@@ -849,7 +849,7 @@
         // Leave the modal open with the server's own explanation — the
         // carried-in review finding requires surfacing this rather than
         // implying the action took effect (Unsubscribe silently no-ops on
-        // an already-complained row, CLAUDE.md §9).
+        // an already-complained row, AGENTS.md §9).
         suppressError = res.message;
       } else {
         suppressingSubscriber = null;
@@ -2225,7 +2225,7 @@
               <h3 class="detail-heading">Email event history</h3>
               {#if viewingSubscriber.email_events.length === 0}
                 <!-- #0038's SES bounce/complaint ingestion is built and wired; this is empty
-                     because no SES account exists yet (CLAUDE.md §10 item 2), so nothing has
+                     because no SES account exists yet (AGENTS.md §10 item 2), so nothing has
                      ever posted an event. The copy below says "once it's set up" for that
                      reason — the missing piece is configuration, not code (#0172). -->
                 <p class="text-muted">

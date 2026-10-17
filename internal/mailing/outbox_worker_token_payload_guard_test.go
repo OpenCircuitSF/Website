@@ -42,7 +42,7 @@ import (
 //
 // # Both sides come from source, not a hand-written list
 //
-// CLAUDE.md §8: a hand-written list is a copy of the answer stored next to
+// AGENTS.md §8: a hand-written list is a copy of the answer stored next to
 // the question, and this whole issue family (#0400, and #0340 before it)
 // exists because such a copy agreed with itself. Neither side here is one:
 //

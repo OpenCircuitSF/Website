@@ -26,7 +26,7 @@
 // removing one must not touch another. Removing a reason="complaint" row is
 // refused (409) whenever a subscribers row still exists for that address —
 // AdminSubscribersHandler.ClearComplaint is the one sanctioned, audited path
-// that touches a complaint while a subscriber record exists (CLAUDE.md §9's
+// that touches a complaint while a subscriber record exists (AGENTS.md §9's
 // concentration of authority over the `complained` state), and this handler
 // deliberately does not open a second one. The refusal lifts only for an
 // ORPHANED complaint suppression (no subscribers row at all), since
@@ -228,7 +228,7 @@ func (h *AdminSuppressionsHandler) Remove(w http.ResponseWriter, r *http.Request
 	// The one refusal (package doc comment): a `complaint` row is removable
 	// here only when it is orphaned. While a subscribers row exists,
 	// AdminSubscribersHandler.ClearComplaint is the sole sanctioned,
-	// audited path (CLAUDE.md §9).
+	// audited path (AGENTS.md §9).
 	if req.Reason == subscribers.SuppressionReasonComplaint && subscriberExists {
 		writeError(w, http.StatusConflict,
 			"a subscriber record exists for this address; use Subscribers → Clear complaint instead of removing this suppression directly")

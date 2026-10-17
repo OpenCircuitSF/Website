@@ -8,7 +8,7 @@
 // in EITHER direction: a category added to what erasure retains without the
 // policy naming it (under-promising deletion, i.e. the page implies less is
 // kept than really is), or a category the policy names that erasure no
-// longer actually retains (over-promising deletion -- CLAUDE.md §9's
+// longer actually retains (over-promising deletion -- AGENTS.md §9's
 // concern, since a false "we delete this" claim about personal data is the
 // more serious failure mode of the two).
 //

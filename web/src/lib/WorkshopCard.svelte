@@ -3,7 +3,7 @@
   // interest tags. Shared by WorkshopsIndex.svelte's two sections and
   // Home.svelte's "next up" section, so the card only exists once. Deliberately
   // thin -- every decision (date formatting, the canceled badge, the location
-  // fallback) is a call into lib/workshops.ts, per CLAUDE.md's "SPA logic goes
+  // fallback) is a call into lib/workshops.ts, per AGENTS.md's "SPA logic goes
   // in plain TypeScript modules ... Svelte components stay thin."
   //
   // The title links to /workshops/{slug} -- WorkshopDetail.svelte (#0054).

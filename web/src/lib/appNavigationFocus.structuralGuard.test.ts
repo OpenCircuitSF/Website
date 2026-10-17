@@ -67,7 +67,7 @@ describe('App.svelte route-change focus() guard (#0238)', () => {
 
     // Fail loudly rather than silently passing an empty scan -- this guard
     // is worthless if the call it exists to check has moved or been
-    // renamed out from under it (CLAUDE.md's fail-open warning).
+    // renamed out from under it (AGENTS.md's fail-open warning).
     if (focusCalls.length === 0) {
       throw new Error(
         'appNavigationFocus.guard: found no .focus() call in App.svelte\'s <script> -- has the route-change focus move been removed or restructured?',

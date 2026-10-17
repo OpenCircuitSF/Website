@@ -48,7 +48,7 @@ const defaultFactory: EventSourceFactory = (url) =>
  * reports — the INITIAL connection and every automatic reconnect alike (the
  * DOM EventSource does not distinguish the two). #0048's CampaignEditor uses
  * this to re-fetch the campaign's status from the server on each (re)connect:
- * the database, not this stream, is the source of truth (CLAUDE.md), and a
+ * the database, not this stream, is the source of truth (AGENTS.md), and a
  * campaign can finish sending — or be cancelled, or fail — entirely during a
  * gap with no further batch to publish a closing frame, so a client that
  * relies solely on the next event could wait forever for one that never

@@ -390,7 +390,7 @@ func (h *PreferencesHandler) loadInterestState(ctx context.Context, subscriberID
 // preferencesSaveMessage composes the honest confirmation message for a
 // successful interests PATCH (#0031 review finding 1). SetInterests itself
 // has no status guard and always writes (deliberately — see this package's
-// preferencesInterestStore doc comment and CLAUDE.md §9's "complained never
+// preferencesInterestStore doc comment and AGENTS.md §9's "complained never
 // auto-resubscribes": the interest edit is real and takes effect the moment
 // status becomes active again), so this is never about whether the save
 // happened. It is about not asserting an active subscription that does not

@@ -14,7 +14,7 @@ import (
 
 // seedInterest inserts a throwaway interests row for workshop_interests
 // linking tests, scoped with a "zz-test-" slug and cleaned up via
-// t.Cleanup — never a literal/seeded id, per CLAUDE.md §8b.
+// t.Cleanup — never a literal/seeded id, per AGENTS.md §8b.
 func seedInterest(t *testing.T, pool *pgxpool.Pool) int64 {
 	t.Helper()
 	slug := fmt.Sprintf("zz-test-workshop-interest-%d", testdb.Unique())

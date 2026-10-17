@@ -341,7 +341,7 @@ type resendInvitationResponse struct {
 // whether a message can actually be sent with a blank physical_address,
 // because AdminResendInvitation still only ENQUEUES (never sends directly)
 // and OutboxWorker.render still refuses to build the message regardless of
-// how the row got into the queue. CLAUDE.md §9's "must not be bypassable
+// how the row got into the queue. AGENTS.md §9's "must not be bypassable
 // from the UI" is satisfied by the worker, not by this — see
 // TestAdminResendInvitation_PhysicalAddressGateNotBypassable, which proves
 // the gate holds with this pre-check removed entirely.

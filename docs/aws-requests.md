@@ -17,7 +17,7 @@ identity, the configuration set and the MAIL FROM MX are all in `us-east-1`.
 > **`$DEPLOY_ROLE`** in place of `opencircuit-instance`. Any AWS
 > object grant or IAM change below (A11 in particular) must target the new
 > instance/role, not the values dated 2026-09-04/05/11 in the sections that
-> follow. See `CLAUDE.md` §7 for the current facts.
+> follow. See `AGENTS.md` §7 for the current facts.
 
 ---
 

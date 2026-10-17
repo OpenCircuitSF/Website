@@ -313,7 +313,7 @@ func TestSESMailer_Send_RequiresABody(t *testing.T) {
 // TestNewSESMailer_FailsClearlyOnMissingConfig proves construction fails
 // loudly — rather than returning a mailer that later sends nothing — when
 // AWS_REGION, SES_CONFIGURATION_SET, or EMAIL_FROM is unset. This is the
-// property CLAUDE.md's "SES is not set up yet" caution and #0026's uniform
+// property AGENTS.md's "SES is not set up yet" caution and #0026's uniform
 // 202 response both depend on: a misconfigured mailer must not look healthy.
 func TestNewSESMailer_FailsClearlyOnMissingConfig(t *testing.T) {
 	cases := []struct {

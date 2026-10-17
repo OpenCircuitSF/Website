@@ -234,7 +234,7 @@ export const COMPLAINED_CONTACT_EMAIL = 'contact@opencircuitsf.com';
  * real mailto: anchor where the address falls. Composing LEAD +
  * COMPLAINED_CONTACT_EMAIL + TAIL gives the component that seam without a
  * second copy of the wording, and leaves every part a pure, DOM-free,
- * unit-testable value (CLAUDE.md §1).
+ * unit-testable value (AGENTS.md §1).
  *
  * COMPLAINED_NO_RESUBSCRIBE_MESSAGE is the composed whole and is what
  * inactiveStatusMessage returns. Against internal/handlers/preferences.go's
@@ -275,7 +275,7 @@ export const COMPLAINED_NO_RESUBSCRIBE_MESSAGE =
  * `bounced` can all legitimately leave that status by submitting the public
  * form again — `active` never reaches this panel at all (isActive routes it
  * to the editor instead). `complained` is deliberately excluded: per
- * CLAUDE.md §9, "complained subscribers never auto-resubscribe" — only an
+ * AGENTS.md §9, "complained subscribers never auto-resubscribe" — only an
  * admin clears that state — and the public POST /api/subscribe form cannot
  * do it either (existingSignup's StatusComplained branch sends no
  * confirmation email), so the button would offer a path that goes nowhere

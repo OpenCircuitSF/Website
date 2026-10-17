@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// #0387: CLAUDE.md §5 carries a table naming the packages that own
+// #0387: AGENTS.md §5 carries a table naming the packages that own
 // repo-wide guards — tests whose scan roots reach outside their own package
 // directory, which a scoped `ISSUE=NNNN scripts/check.sh go
 // ./internal/x/...` run cannot see. #0381 built the table after a stale
@@ -33,7 +33,7 @@ import (
 // three review rounds of #0381 tuned. So **this guard checks only the
 // table's package column — which packages are listed at all — and leaves
 // the "Reaches into" prose, and the routing sentence beneath the table,
-// entirely unguarded.** CLAUDE.md §5 itself now says so, in the sentence
+// entirely unguarded.** AGENTS.md §5 itself now says so, in the sentence
 // immediately following the table. That asymmetry is deliberate: a stale
 // "Reaches into" cell misdescribes *why* a package is listed, but a
 // *missing row* is what makes an agent skip a package and conclude clean —
@@ -41,7 +41,7 @@ import (
 // the row set is cheap to check.
 //
 // Two sides, neither a copy of the other (§8's "oracle must not be the same
-// bytes as its subject"): the table side reads CLAUDE.md's live markdown;
+// bytes as its subject"): the table side reads AGENTS.md's live markdown;
 // the source side parses the live Go AST of every _test.go file under
 // ../../internal and ../../cmd. Markdown prose in one file, Go source in
 // another, different languages — no single edit satisfies both, unlike a
@@ -76,7 +76,7 @@ import (
 // What this guard does NOT establish, stated plainly so a verification
 // claim never overstates it: it does not check that a table row's
 // "Reaches into" prose still matches what its guard scans (that column is
-// hand-maintained, per CLAUDE.md §5's own text), and it does not detect a
+// hand-maintained, per AGENTS.md §5's own text), and it does not detect a
 // *narrowed or widened* scan root that leaves a package's row present but
 // stale. Only "is this package's row present, and does source evidence for
 // it still exist" is checked.
@@ -93,7 +93,7 @@ var claudeMDGuardTableRowPattern = regexp.MustCompile("^\\|\\s*`([^`]+)`\\s*\\|"
 var claudeMDGuardTableSeparatorPattern = regexp.MustCompile(`^\|[-\s|]+\|$`)
 
 // parseClaudeMDGuardTable extracts the set of package identifiers named in
-// CLAUDE.md §5's repo-wide-guard table. Two structural checks, both from
+// AGENTS.md §5's repo-wide-guard table. Two structural checks, both from
 // §8: the header must appear exactly once (a second copy could let a decoy
 // table shadow the real one — GUARD-0208's failure shape), and the parse
 // must yield at least one row (an empty extraction is an error, never an
@@ -102,7 +102,7 @@ func parseClaudeMDGuardTable(t *testing.T, claudeMD string) map[string]bool {
 	t.Helper()
 
 	if n := strings.Count(claudeMD, claudeMDGuardTableHeader); n != 1 {
-		t.Fatalf("CLAUDE.md: expected the §5 guard-table header %q to appear exactly once, found %d — a second copy could let a decoy table shadow the real one", claudeMDGuardTableHeader, n)
+		t.Fatalf("AGENTS.md: expected the §5 guard-table header %q to appear exactly once, found %d — a second copy could let a decoy table shadow the real one", claudeMDGuardTableHeader, n)
 	}
 
 	lines := strings.Split(claudeMD, "\n")
@@ -114,7 +114,7 @@ func parseClaudeMDGuardTable(t *testing.T, claudeMD string) map[string]bool {
 		}
 	}
 	if headerIdx == -1 {
-		t.Fatalf("CLAUDE.md: header text %q was found by strings.Count but not as its own trimmed line — has the table's markdown shape changed?", claudeMDGuardTableHeader)
+		t.Fatalf("AGENTS.md: header text %q was found by strings.Count but not as its own trimmed line — has the table's markdown shape changed?", claudeMDGuardTableHeader)
 	}
 
 	pkgs := map[string]bool{}
@@ -128,13 +128,13 @@ func parseClaudeMDGuardTable(t *testing.T, claudeMD string) map[string]bool {
 		}
 		m := claudeMDGuardTableRowPattern.FindStringSubmatch(trimmed)
 		if m == nil {
-			t.Fatalf("CLAUDE.md:%d: a line inside the §5 guard table does not match the expected `| `package` | ... |` row shape: %q", i+1, trimmed)
+			t.Fatalf("AGENTS.md:%d: a line inside the §5 guard table does not match the expected `| `package` | ... |` row shape: %q", i+1, trimmed)
 		}
 		pkgs[m[1]] = true
 	}
 
 	if len(pkgs) == 0 {
-		t.Fatalf("CLAUDE.md: found the §5 guard-table header but parsed zero data rows — has the table's shape changed?")
+		t.Fatalf("AGENTS.md: found the §5 guard-table header but parsed zero data rows — has the table's shape changed?")
 	}
 	return pkgs
 }
@@ -319,7 +319,7 @@ func assertRepoWideGuardScanPlausible(t *testing.T, result repoWideGuardScanResu
 }
 
 // TestClaudeMDRepoWideGuardPackageSetParity is #0387's guard: the set of
-// packages named in CLAUDE.md §5's repo-wide-guard table must match the set
+// packages named in AGENTS.md §5's repo-wide-guard table must match the set
 // this scan finds actually reaching outside their own package directory.
 // Neither direction of mismatch is silently ignored — a package reaching
 // out with no row would leave an agent's scoped verification unable to see
@@ -351,9 +351,9 @@ func TestClaudeMDRepoWideGuardPackageSetParity(t *testing.T) {
 	sort.Strings(missingFromSource)
 
 	for _, pkg := range missingFromTable {
-		t.Errorf("%s has a _test.go file with an escaping string literal or the runtime.Caller/os.Getwd repo-root idiom, but CLAUDE.md's §5 repo-wide-guard table has no row for it — add a row naming what it reaches", pkg)
+		t.Errorf("%s has a _test.go file with an escaping string literal or the runtime.Caller/os.Getwd repo-root idiom, but AGENTS.md's §5 repo-wide-guard table has no row for it — add a row naming what it reaches", pkg)
 	}
 	for _, pkg := range missingFromSource {
-		t.Errorf("CLAUDE.md's §5 repo-wide-guard table has a row for %s, but this scan found no escaping literal or repo-root idiom left in its _test.go files — the reach that row described may have been removed; drop the row, or verify by hand if this is a detector gap", pkg)
+		t.Errorf("AGENTS.md's §5 repo-wide-guard table has a row for %s, but this scan found no escaping literal or repo-root idiom left in its _test.go files — the reach that row described may have been removed; drop the row, or verify by hand if this is a detector gap", pkg)
 	}
 }

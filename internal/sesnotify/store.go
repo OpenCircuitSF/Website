@@ -1,7 +1,7 @@
 // store.go adds Store, the data-access layer over email_events (#0038,
 // migrations/000014), to this package.
 //
-// SQL for this table lives here, not in internal/handlers (CLAUDE.md §1):
+// SQL for this table lives here, not in internal/handlers (AGENTS.md §1):
 // the handler that ingests SES notifications depends on this type, never on
 // raw SQL of its own.
 //

@@ -451,7 +451,7 @@ func TestDelete_RefusedWhenSubscribersExist(t *testing.T) {
 // workshop but selected by no subscriber used to pass the old
 // subscriber_interests-only check and be hard-deleted, cascading away the
 // workshop's tag. Seeds a throwaway interest and a throwaway workshop (never
-// a literal or seeded id, per CLAUDE.md §8b / this issue's criterion 4).
+// a literal or seeded id, per AGENTS.md §8b / this issue's criterion 4).
 func TestDelete_RefusedWhenWorkshopReferencesIt(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)

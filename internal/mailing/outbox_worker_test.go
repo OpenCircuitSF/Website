@@ -29,7 +29,7 @@ func uniqueOutboxRecipient(t *testing.T) string {
 }
 
 // newTestOutboxWorker builds an OutboxWorker over pool, a RecordingMailer
-// (no network — CLAUDE.md §10 item 2), and a fast poll interval so tests
+// (no network — AGENTS.md §10 item 2), and a fast poll interval so tests
 // never wait out a real tick.
 func newTestOutboxWorker(t *testing.T, pool *pgxpool.Pool, mailer Mailer) (*OutboxWorker, *outbox.Store) {
 	t.Helper()
@@ -1301,7 +1301,7 @@ func TestOutboxWorker_AdminResendInvitation_RendersSameProvenanceAsFirstInvitati
 }
 
 // TestAdminResendInvitation_PhysicalAddressGateNotBypassable
-// is #0312 criterion 6 / CLAUDE.md §9's "must not be bypassable from the
+// is #0312 criterion 6 / AGENTS.md §9's "must not be bypassable from the
 // UI" — proved by calling the STORE method directly (never through
 // internal/handlers.AdminPendingHandler.ResendInvitation, whose
 // physical_address pre-check is explicitly advisory, not the gate — see
@@ -1447,7 +1447,7 @@ func sentTo(mailer *RecordingMailer, recipient string) int {
 // TestOutboxWorker_SkipsConfirmationForComplainedSubscriber is #0365's
 // primary proof: a complaint that lands AFTER a confirmation row is
 // enqueued but BEFORE the worker drains it must not result in a delivered
-// confirmation (CLAUDE.md §9 — "complained subscribers never
+// confirmation (AGENTS.md §9 — "complained subscribers never
 // auto-resubscribe").
 func TestOutboxWorker_SkipsConfirmationForComplainedSubscriber(t *testing.T) {
 	pool := outboxTestPool(t)
@@ -1686,7 +1686,7 @@ func TestOutboxWorker_SkipsAlreadySubscribedForComplainedSubscriber(t *testing.T
 
 // TestOutboxWorker_SendsRegistrationToSuppressedAddress is the ungated
 // half, end to end: auth mail is not blocked by list suppression.
-// CLAUDE.md §9's "complained subscribers never auto-resubscribe" is about
+// AGENTS.md §9's "complained subscribers never auto-resubscribe" is about
 // LIST mail, and this worker's registration kind reaches a users row, not
 // a subscribers row (Row.SubscriberID is always nil for it in production —
 // verified across every producer in internal/auth, see gatedKinds' doc
@@ -1728,7 +1728,7 @@ func TestOutboxWorker_SendsRegistrationToSuppressedAddress(t *testing.T) {
 
 	status := waitForQueueStatus(t, pool, id)
 	if status != outbox.StatusSent {
-		t.Fatalf("status = %q after waiting, want %q — auth mail must not be blocked by list suppression (CLAUDE.md §9)", status, outbox.StatusSent)
+		t.Fatalf("status = %q after waiting, want %q — auth mail must not be blocked by list suppression (AGENTS.md §9)", status, outbox.StatusSent)
 	}
 	if got := sentTo(mailer, recipient); got != 1 {
 		t.Fatalf("messages sent to %s = %d, want 1", recipient, got)
@@ -1842,7 +1842,7 @@ func TestOutboxWorker_EligibilityReadFailureRetriesRatherThanSends(t *testing.T)
 // anyone can append to without an argument is a guard with a hole).
 //
 // This lives IN the package rather than an external `scripts/check.sh
-// guards` harness — CLAUDE.md §8's rule on where a guard's proof belongs
+// guards` harness — AGENTS.md §8's rule on where a guard's proof belongs
 // turns on whether mutating the SUBJECT changes what the guard itself
 // observes. Adding a kind to mailKinds, or deleting an entry from
 // gatedKinds/ungatedKinds, changes THIS test's own inputs directly, so it
@@ -1978,7 +1978,7 @@ func TestOutboxWorker_SkipsWhenRecipientDiffersFromLiveEmail(t *testing.T) {
 // What it does NOT catch, and what no in-package test can: a kind
 // DELIBERATELY moved from ungatedKinds into gatedKinds. This test iterates
 // ungatedKinds, so such a move removes the kind from the test's own inputs
-// — CLAUDE.md §8's "a guard's oracle must not be the same bytes as its
+// — AGENTS.md §8's "a guard's oracle must not be the same bytes as its
 // subject". That is a policy change rather than silent drift, and the
 // protection for it is ungatedKinds' written reason plus review.
 // TestGatedKindsPartitionEveryMailKind covers the silent case (a kind in
@@ -2044,7 +2044,7 @@ func TestOutboxWorker_SendGate_UngatedKindsNeverSkip(t *testing.T) {
 // claim-then-defer poll) and TestOutboxWorker_DefersWelcome_MissingPhysicalAddress
 // (forcing next_attempt_at due rather than waiting out Backoff's 1-minute
 // first step). The rotation goes through the REAL production path, never a
-// raw UPDATE of confirm_token itself (CLAUDE.md §8b), so this proves the
+// raw UPDATE of confirm_token itself (AGENTS.md §8b), so this proves the
 // fix against the exact mechanism that produces the hazard in production.
 //
 // Mutation (#0340's plan §8, M1): against the un-fixed code (no
@@ -2280,7 +2280,7 @@ func TestOutboxWorker_SkipsConfirmationWhoseConfirmTokenWasRotated(t *testing.T)
 // unrotated confirm_token must still take render's ordinary
 // deferMissingPhysicalAddress path when physical_address is blank — it must
 // settle back to 'queued' with attempts climbing, never 'skipped', never
-// sent. #0045/#0264's CAN-SPAM refusal (CLAUDE.md §9) is a restricted rule
+// sent. #0045/#0264's CAN-SPAM refusal (AGENTS.md §9) is a restricted rule
 // and this issue's token predicate must not be able to weaken it.
 //
 // Unlike the pre-existing TestOutboxWorker_DefersImportInvite_MissingPhysicalAddress
@@ -2395,7 +2395,7 @@ func TestOutboxWorker_TokenGateDoesNotShortCircuitPhysicalAddressDefer(t *testin
 // elig.ConfirmToken comparison — the same Mutation B shape #0340's review
 // applied to M1/M2 — delivers this row 'sent' with the stale token A
 // instead of 'skipped', in a git-archive export against a private scratch
-// database (CLAUDE.md §8b), never the tracked tree.
+// database (AGENTS.md §8b), never the tracked tree.
 func TestOutboxWorker_SkipsImportInviteAfterRestartSignup(t *testing.T) {
 	pool := outboxTestPool(t)
 	setSetting(t, pool, settingPhysicalAddress, "123 Main St, San Francisco, CA 94103")
@@ -2488,7 +2488,7 @@ func TestOutboxWorker_SkipsImportInviteAfterRestartSignup(t *testing.T) {
 		t.Errorf("error = %q, want a reason naming the confirm token", *errText)
 	}
 
-	// CLAUDE.md §8b: never let a real token value land in a committed
+	// AGENTS.md §8b: never let a real token value land in a committed
 	// artifact (outbound_queue.error is read by admins and can end up
 	// pasted into an issue file).
 	if errText != nil && (strings.Contains(*errText, preRestart) || strings.Contains(*errText, *restarted.ConfirmToken)) {
@@ -2502,7 +2502,7 @@ func TestOutboxWorker_SkipsImportInviteAfterRestartSignup(t *testing.T) {
 // tokenGatedKinds/tokenUngatedKinds — no gap, no overlap — and every
 // tokenUngatedKinds value must be non-empty (#0296 item 4's
 // kindExceptions convention). Lives in-package for the identical reason
-// its sibling does (CLAUDE.md §8: mutating mailKinds/tokenGatedKinds/
+// its sibling does (AGENTS.md §8: mutating mailKinds/tokenGatedKinds/
 // tokenUngatedKinds changes THIS test's own inputs directly, a non-circular
 // oracle).
 //

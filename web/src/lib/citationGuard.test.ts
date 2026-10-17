@@ -1,4 +1,4 @@
-// #0181: the same defect — an internal document citation (CLAUDE.md, PRD,
+// #0181: the same defect — an internal document citation (AGENTS.md, PRD,
 // or a tracker issue number) leaking into copy an admin actually reads —
 // has been found three separate times on three separate axes: #0172 swept
 // this directory (web/), #0175's review swept Go strings that render
@@ -6,11 +6,11 @@
 // was thorough within its method and blind outside it.
 //
 // This is the web/ half of the guard (see
-// internal/handlers/citation_guard_test.go for the Go half — CLAUDE.md §9
+// internal/handlers/citation_guard_test.go for the Go half — AGENTS.md §9
 // and #0172's two original findings, both in Svelte, mean a Go-only guard
 // would not have caught the case that started this). It fails if any
 // string literal or static template text under web/src — outside a
-// comment, and outside a test/type-declaration file — cites CLAUDE.md, a
+// comment, and outside a test/type-declaration file — cites AGENTS.md, a
 // PRD section, or a tracker issue number.
 //
 // Parser-based, not a text grep: comments are structurally excluded rather
@@ -69,7 +69,7 @@ import { parse as parseSvelte } from 'svelte/compiler';
 // originally closed the "PRD  §6.6" (two spaces) and "PRD§6.6" (no space)
 // variants (#0181 review, pass 2); the explicit class still closes both,
 // plus everything listed above. Issues.md, HANDOFF.md, and docs/*.md join
-// CLAUDE.md and PRD § as documents an admin cannot read either — #0178's
+// AGENTS.md and PRD § as documents an admin cannot read either — #0178's
 // own whole-tree grep already included Issues.md and HANDOFF, so there is
 // no principled reason to guard one internal document and not the others.
 //
@@ -102,10 +102,10 @@ import { parse as parseSvelte } from 'svelte/compiler';
 // PRD-whitespace fix above exists precisely because the two guards were
 // already diverged on a different term, so "the guards must share one
 // pattern shape" was never a fact this decision could rest on. The false
-// positive is also structurally unlikely to appear: CLAUDE.md §9 forbids
+// positive is also structurally unlikely to appear: AGENTS.md §9 forbids
 // external CDNs, and no docs/*.md-shaped string exists anywhere in
 // web/src outside comments (#0181 review, pass 2).
-const citationPattern = /CLAUDE\.md|PRD[\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]*§|#0\d{3}\b|Issues\.md|HANDOFF\.md|docs\/\S*\.md|issues\/\d{4}\.md/;
+const citationPattern = /(?:AGENTS|CLAUDE)\.md|PRD[\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]*§|#0\d{3}\b|Issues\.md|HANDOFF\.md|docs\/\S*\.md|issues\/\d{4}\.md/;
 
 interface Violation {
   file: string;
@@ -276,7 +276,7 @@ function toRepoRelativePath(globKey: string): string {
 }
 
 describe('citation guard (web/src)', () => {
-  it('no source file contains an admin-facing string that cites CLAUDE.md, PRD, or a tracker issue', () => {
+  it('no source file contains an admin-facing string that cites AGENTS.md, PRD, or a tracker issue', () => {
     const violations: Violation[] = [];
     for (const [path, source] of Object.entries(SOURCE_FILES)) {
       if (path.endsWith('.test.ts') || path.endsWith('.d.ts')) continue;
@@ -296,9 +296,9 @@ describe('citation guard (web/src)', () => {
 });
 
 describe('citation guard exclusions (synthetic fixtures)', () => {
-  it('does not trip on a code comment citing PRD §/CLAUDE.md/an issue number', () => {
+  it('does not trip on a code comment citing PRD §/AGENTS.md/an issue number', () => {
     const src = `
-      // This comment cites PRD §6.6, CLAUDE.md §9, and #0181 — all fine.
+      // This comment cites PRD §6.6, AGENTS.md §9, and #0181 — all fine.
       export function ok(): string {
         return 'nothing to see here';
       }
@@ -359,8 +359,8 @@ describe('citation guard catches (synthetic fixtures)', () => {
     expect(found).toHaveLength(1);
   });
 
-  it('fires on rendered Svelte template text citing CLAUDE.md', () => {
-    const src = `<p>This is disallowed per CLAUDE.md §9.</p>`;
+  it('fires on rendered Svelte template text citing AGENTS.md', () => {
+    const src = `<p>This is disallowed per AGENTS.md §9.</p>`;
     const found = scanSvelteSource('fixture.svelte', src);
     expect(found).toHaveLength(1);
   });
@@ -387,10 +387,10 @@ describe('citation guard catches (synthetic fixtures)', () => {
     expect(found.some((v) => v.text.includes('PRD §6.6'))).toBe(true);
   });
 
-  it('fires on a ternary expression citing CLAUDE.md', () => {
-    const src = `<script lang="ts">let cond = true;</script>\n<p>{cond ? 'see CLAUDE.md §9' : ''}</p>`;
+  it('fires on a ternary expression citing AGENTS.md', () => {
+    const src = `<script lang="ts">let cond = true;</script>\n<p>{cond ? 'see AGENTS.md §9' : ''}</p>`;
     const found = scanSvelteSource('fixture.svelte', src);
-    expect(found.some((v) => v.text.includes('CLAUDE.md'))).toBe(true);
+    expect(found.some((v) => v.text.includes('AGENTS.md'))).toBe(true);
   });
 
   it('fires on a template literal expression citing an issue number', () => {
@@ -701,7 +701,7 @@ const MATRIX: MatrixCase[] = [
     name: 'ternary expression',
     kind: 'svelte',
     expectMatch: true,
-    src: `<script lang="ts">let cond = true;</script>\n<p>{cond ? 'see CLAUDE.md §9' : ''}</p>`,
+    src: `<script lang="ts">let cond = true;</script>\n<p>{cond ? 'see AGENTS.md §9' : ''}</p>`,
   },
   {
     category: 'bounce',
@@ -827,7 +827,7 @@ const MATRIX: MatrixCase[] = [
     name: 'HTML comment in markup',
     kind: 'svelte',
     expectMatch: false,
-    src: `<!-- see PRD §6.6, CLAUDE.md §9, #0138, Issues.md, docs/x.md -->\n<p>hi</p>`,
+    src: `<!-- see PRD §6.6, AGENTS.md §9, #0138, Issues.md, docs/x.md -->\n<p>hi</p>`,
   },
   {
     category: 'structural-miss',
@@ -848,11 +848,11 @@ const MATRIX: MatrixCase[] = [
   // own reason a future pass can check against ----
   {
     category: 'acceptable-miss',
-    name: 'split string concatenation (CLAUDE.md)',
+    name: 'split string concatenation (AGENTS.md)',
     kind: 'ts',
     expectMatch: false,
-    src: `export const a = 'see CLAUDE' + '.md §9';`,
-    note: 'the scanner reads each literal node\'s own .text; runtime concatenation joins the two halves only after the program executes, so neither half alone matches CLAUDE\\.md — accepted because deliberately splitting a citation across two literals to dodge the guard is not a plausible authoring accident.',
+    src: `export const a = 'see AGENTS' + '.md §9';`,
+    note: 'the scanner reads each literal node\'s own .text; runtime concatenation joins the two halves only after the program executes, so neither half alone matches AGENTS\\.md — accepted because deliberately splitting a citation across two literals to dodge the guard is not a plausible authoring accident.',
   },
   {
     category: 'acceptable-miss',
@@ -860,7 +860,7 @@ const MATRIX: MatrixCase[] = [
     kind: 'ts',
     expectMatch: false,
     src: `export const a = 'see #0' + '138';`,
-    note: 'same mechanism as the CLAUDE.md split above: "#0" and "138" are two separate literal nodes, and #0[0-9]{3}\\b never sees them joined.',
+    note: 'same mechanism as the AGENTS.md split above: "#0" and "138" are two separate literal nodes, and #0[0-9]{3}\\b never sees them joined.',
   },
   {
     category: 'acceptable-miss',
@@ -884,7 +884,7 @@ const MATRIX: MatrixCase[] = [
     kind: 'pattern',
     expectMatch: false,
     src: 'see claude.md for details',
-    note: 'CLAUDE\\.md is case-sensitive by design; the real file is CLAUDE.md (all caps) and every citation in the tree spells it that way, so a hypothetical lowercase variant is not a shape this project produces.',
+    note: 'CLAUDE\\.md is case-sensitive by design; the real file is AGENTS.md (all caps) and every citation in the tree spells it that way, so a hypothetical lowercase variant is not a shape this project produces.',
   },
   {
     category: 'acceptable-miss',

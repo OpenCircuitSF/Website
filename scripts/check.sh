@@ -38,11 +38,11 @@
 # WHAT IT ENFORCES, so you cannot forget:
 #
 #   * TEST_DATABASE_URL is exported. Without it the DB-backed suites SKIP
-#     SILENTLY and a green run proves nothing (CLAUDE.md §5). If ISSUE is set,
+#     SILENTLY and a green run proves nothing (AGENTS.md §5). If ISSUE is set,
 #     this script gives you your own database via scripts/testdb.sh instead of
 #     sharing one — see that script for why that lifts the concurrency cap.
-#   * -p 2 on every Go run (CLAUDE.md §5a).
-#   * -count=N for N>1 is refused (CLAUDE.md §5a — banned for flake-hunting).
+#   * -p 2 on every Go run (AGENTS.md §5a).
+#   * -count=N for N>1 is refused (AGENTS.md §5a — banned for flake-hunting).
 #   * Output is bounded with tail, because a full run emits more tokens than
 #     the PRD.
 #   * `uptime` is printed first. Above ~8 the machine is busy and any TIMING
@@ -87,7 +87,7 @@ run()  { "$@"; local rc=$?; [ $rc -eq 0 ] || { FAILED=1; printf '\033[31mFAILED 
 # VERIFICATION PASSED) funnels through this ONE function, the single place
 # that spells the flag. #0140's original fix was a source grep asserting
 # every "run bash -c" call site individually said "-o pipefail" — reformatted
-# per CLAUDE.md §5's example set, that guard was shown (issues/0208.md) to
+# per AGENTS.md §5's example set, that guard was shown (issues/0208.md) to
 # miss `/bin/bash -c`, `env bash -c`, `$SH -c`, a bare `bash -c` outside
 # `run`, and a `bash \`-newline-`-c` split across two lines, plus a false
 # "clean" reading from a trailing `# pipefail` comment. Structure removes the
@@ -153,7 +153,7 @@ runpipe() { run bash -o pipefail -c "$1"; }
 #      meaning-bearing pair stayed distinct (`[ $r -eq 0 ]` vs
 #      `[ "$r" -eq 0 ]`, `'a b'` vs `"a b"`, `a; b` vs `a && b`, `"$@"` vs
 #      `$@`). The pinned digests the two guards below compare against are
-#      unrelated bytes to the code they verify, so CLAUDE.md §8's
+#      unrelated bytes to the code they verify, so AGENTS.md §8's
 #      oracle-independence rule still holds.
 #
 #   2. funcdef_unexplained FILE — assert that the recognised set EXPLAINS
@@ -199,7 +199,7 @@ runpipe() { run bash -o pipefail -c "$1"; }
 # list; it is LIVEBIND-0258, which measures the binding instead of
 # predicting it.
 #
-# ISOLATION (CLAUDE.md §8, from #0258's fourth review). The candidate lines
+# ISOLATION (AGENTS.md §8, from #0258's fourth review). The candidate lines
 # run in `env -i "$BASH" --noprofile --norc FILE` — a separate process with
 # an EMPTY environment — NOT in a `( ... )` subshell of this script. A
 # subshell inherits this script's own run/runpipe/step/cleanup, so whenever
@@ -363,7 +363,7 @@ BR="# BEGIN"" RUNPIPE-0208"; ER="# END"" RUNPIPE-0208"
 # computed once near the top of the file — see its own comment), not a
 # hardcoded "$REPO/scripts/check.sh" — the latter would let a mutated
 # copy of this script (used to mutation-test this very guard, per
-# CLAUDE.md §8a: never edit the shared tracked file to prove a guard
+# AGENTS.md §8a: never edit the shared tracked file to prove a guard
 # catches a regression) scan straight past its own mutation and check
 # the untouched tracked file instead, silently proving nothing. Not a
 # bare "$0" or "${BASH_SOURCE[0]}" (#0262): after "cd \"$REPO\"" above,
@@ -494,7 +494,7 @@ if [ "${RUNPIPE_DEFS:-0}" -ne 1 ]; then
   exit 2
 fi
 
-# An empty resolution is an ERROR, never an input (CLAUDE.md §8): it means
+# An empty resolution is an ERROR, never an input (AGENTS.md §8): it means
 # the extraction produced nothing bash could parse, which is exactly the
 # state pass 4 silently mistook for agreement.
 RUNPIPE_HASH="$(resolve_func_hash runpipe "$SELF")" || {
@@ -533,7 +533,7 @@ fi
 #   - pass 1 compared run()'s definition against a verbatim copy of that
 #     text sitting in a quoted heredoc a few lines below — defeated by a
 #     single sed rewriting both the real line AND the heredoc at once,
-#     since they were the same bytes in the same file (CLAUDE.md §8: an
+#     since they were the same bytes in the same file (AGENTS.md §8: an
 #     oracle must not be the same bytes as its subject).
 #   - pass 2 replaced the heredoc with a pinned SHA-256 digest of the
 #     definition LINE, extracted by the narrow anchor "^run\(\)" — an
@@ -552,7 +552,7 @@ fi
 #     of the file, and its comment-stripping sed was not quote-aware, so
 #     one ordinary helper containing a "#" inside a string blinded both
 #     digests at once.
-#   - pass 5 kept the pinned digest — CLAUDE.md §8's rule was already
+#   - pass 5 kept the pinned digest — AGENTS.md §8's rule was already
 #     satisfied and should not be re-litigated — kept bash as the
 #     recogniser, fixed both structural defects, and made the scan FAIL
 #     CLOSED: an unadmitted line that could bind either name became a
@@ -572,7 +572,7 @@ fi
 #     pinned to nothing, its alias query went through a shadowable builtin,
 #     a decoy plus a byte-identical restore straddled the two probes, and a
 #     bare `FAILED=0` discarded the verdict. That is the structural point
-#     CLAUDE.md §8 now records: the guard lives inside the file it guards,
+#     AGENTS.md §8 now records: the guard lives inside the file it guards,
 #     so each new mechanism becomes new mutable surface there, and a
 #     seventh in-file check buys a seventh bounce.
 #   - pass 7 therefore stops adding in-file mechanisms as the answer. The
@@ -660,7 +660,7 @@ fi
 # with `builtin` now, which closes that specific line. NO COMPLETENESS CLAIM
 # IS MADE FOR THEM: a probe reached through shadowable names is not a proof of
 # anything, and `builtin` is itself a name a function can take. That is not a
-# hole to be closed by a further in-file check -- CLAUDE.md §8 records why six
+# hole to be closed by a further in-file check -- AGENTS.md §8 records why six
 # passes of those lost -- it is closed from OUTSIDE, by
 # scripts/check_guard_test.sh, which runs THIS FILE in a sandbox where the
 # steps genuinely fail and asserts the verdict is honest. An edit to this file
@@ -676,7 +676,7 @@ fi
 # WHAT REMAINS OPEN HERE, named rather than glossed. The sixth review found
 # the first of these by shadowing the probe itself, and it was right to: every
 # mechanism added to defend this file lives IN this file and is therefore one
-# more thing an edit to this file can neutralise (CLAUDE.md §8). What follows
+# more thing an edit to this file can neutralise (AGENTS.md §8). What follows
 # is what an IN-FILE check cannot close, and the reason
 # scripts/check_guard_test.sh exists.
 #   * This probe is reached through a name, and so are the primitives it
@@ -783,7 +783,7 @@ accounting_probe "before the dispatch"
 for a in "$@"; do
   case "$a" in
     -count=1|-count) ;;
-    -count=*) echo "error: $a is banned (CLAUDE.md §5a). A test that fails only under load is not flaky." >&2; exit 2 ;;
+    -count=*) echo "error: $a is banned (AGENTS.md §5a). A test that fails only under load is not flaky." >&2; exit 2 ;;
   esac
 done
 
@@ -827,7 +827,7 @@ go_test() {
   # never run again under the command every issue is told to use — exactly
   # what happened to #0141's first guard placement before it was relocated to
   # internal/seo. Add a new top-level Go package here when it is created;
-  # don't rely on `scripts/check.sh all`, which CLAUDE.md reserves for a
+  # don't rely on `scripts/check.sh all`, which AGENTS.md reserves for a
   # batch's single review pass.
   local pkgs="$*"; [ -n "$pkgs" ] || pkgs="./internal/... ./cmd/... ./web/..."
   step "go test $pkgs -p 2"
@@ -874,7 +874,7 @@ gofmt_check() {
 
 # #0489: the external oracle for the internal/handlers guard family's
 # "plausible file count" floor constants runs HERE, on the ordinary path,
-# not only under `guards`. #0300 wired it into `guards` alone, and CLAUDE.md
+# not only under `guards`. #0300 wired it into `guards` alone, and AGENTS.md
 # §5 keeps that whole bundle out of every default scope for a reason that is
 # real but belongs to a DIFFERENT script in it: dev_guard_test.sh costs ~48s
 # and binds :5173. This one is about two seconds of filesystem reads, binds
@@ -963,7 +963,7 @@ case "$MODE" in
        # explicit package list ("./internal/... ./cmd/..."), a second source
        # of truth that go_test()'s default-list edit never reached — so
        # ./web/... joined the `go` mode's scope but not the BARE default's,
-       # which is the command CLAUDE.md §5 and every issue actually tells
+       # which is the command AGENTS.md §5 and every issue actually tells
        # agents to run. Calling go_test with no arguments makes this arm read
        # the exact same default list `go)` reads when given none, so there is
        # only one place that list is spelled.

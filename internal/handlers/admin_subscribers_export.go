@@ -104,7 +104,7 @@
 // to abort a response deliberately, and it was considered. Reasons against,
 // for now: (1) it would change observable behavior for the admin console's
 // own download on a failure mode — the backing store erroring mid-scan —
-// that is not this project's normal operating condition (CLAUDE.md §5: no
+// that is not this project's normal operating condition (AGENTS.md §5: no
 // performance requirement, a marketing-site mailing list, not a bulk-data
 // platform); (2) it interacts with the audit fix above in a way that is
 // easy to get backwards — the panic must happen strictly AFTER

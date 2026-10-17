@@ -277,7 +277,7 @@ func TestAdminWorkshopAnnounce_UnknownWorkshopNotFound(t *testing.T) {
 //
 // Targets the same nonexistent sentinel id
 // TestAdminWorkshopAnnounce_UnknownWorkshopNotFound uses above, not a
-// literal small id (CLAUDE.md §8b — see #0376): RequireAdmin sits in the
+// literal small id (AGENTS.md §8b — see #0376): RequireAdmin sits in the
 // mux chain ahead of AdminWorkshopsHandler.Announce, so it fires before the
 // handler ever calls h.store.GetByID. A sentinel proves the guard
 // discriminates before lookup. This also means a mutated-guard proof can

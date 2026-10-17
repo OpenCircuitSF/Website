@@ -29,20 +29,20 @@ import (
 //
 // # Why this belongs in Go, not an external harness (criterion 5)
 //
-// CLAUDE.md §8's placement rule is the falsifiability test: after a
+// AGENTS.md §8's placement rule is the falsifiability test: after a
 // mutation, is the assertion still falsifiable by the thing it measures?
 // This guard's subject is a specific function's SOURCE TEXT
 // (cmd/opencircuit/main.go), and it reads that file fresh with
 // parser.ParseFile on every run, exactly like admin_routes_ast_test.go does
 // -- there is no compiled/cached form of servePostgres's wiring for a
 // mutation to hide behind, and no subprocess boundary that would let a
-// stale binary answer instead of the edited source (the trap CLAUDE.md's
+// stale binary answer instead of the edited source (the trap AGENTS.md's
 // "self-check can start measuring the process instead of the file" entry
 // warns about). An external shell harness would have to reimplement Go
 // parsing to inspect the same source text, for no falsifiability the
 // in-process go/ast form doesn't already have. Kept as a normal Go test
 // (not a *_guard_test.sh, and not in scripts/check.sh's `guards` bucket)
-// because, unlike the shell guards CLAUDE.md §8 catalogs, nothing here
+// because, unlike the shell guards AGENTS.md §8 catalogs, nothing here
 // re-executes scripts/check.sh itself or risks the fail-open shape those
 // guard against -- it is a closed, single-pass AST read.
 //
@@ -121,7 +121,7 @@ func TestServePostgres_OneSEOSiteFlowsToEveryConsumer(t *testing.T) {
 	switch len(buildCalls) {
 	case 0:
 		t.Fatal("found zero buildSEOSite calls in servePostgres — either this scan is broken " +
-			"(fail closed, per CLAUDE.md's #0275/#0300 lesson) or servePostgres no longer builds " +
+			"(fail closed, per AGENTS.md's #0275/#0300 lesson) or servePostgres no longer builds " +
 			"its own *seo.Site, which this whole guard assumes")
 	case 1:
 		// expected

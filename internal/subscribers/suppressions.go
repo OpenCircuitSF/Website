@@ -296,7 +296,7 @@ func (s *SuppressionStore) ListByEmail(ctx context.Context, email string) ([]Sup
 // one reason cleared while the other stays in force. reason must be one of
 // the four SuppressionReason* constants (ErrInvalidSuppressionReason
 // otherwise). Removing a suppression must always be an explicit, audited
-// admin action (PRD §6.2, CLAUDE.md §9's spirit for `complained` applies
+// admin action (PRD §6.2, AGENTS.md §9's spirit for `complained` applies
 // equally here) — this method itself does not check "is the caller an
 // admin" or write an audit row; that is the caller's responsibility (see
 // internal/handlers/admin_subscribers.go's ClearComplaint and

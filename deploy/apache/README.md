@@ -5,7 +5,7 @@ terminates TLS and reverse-proxies all traffic for `www.opencircuitsf.com` to
 the Go service listening on `127.0.0.1:8080`. The vhost also answers for the
 apex (`opencircuitsf.com`, via `ServerAlias`) but a `RewriteRule` 301-redirects
 any request that didn't arrive on `www` before it reaches the proxy rules —
-`www` is the canonical host, per PRD §10.2 and `CLAUDE.md` §7.
+`www` is the canonical host, per PRD §10.2 and `AGENTS.md` §7.
 
 Tested on **Amazon Linux 2023** with `httpd` and `mod_ssl`.
 
@@ -63,7 +63,7 @@ up to a week. See `docs/deployment.md` §9 for the full renewal picture.
 - `www` is the canonical host; a request on any other name is redirected to
   it, never proxied directly. This matches production and is the opposite of
   an old, now-corrected reading of `#0064`'s acceptance criteria — see
-  `CLAUDE.md` §7.
+  `AGENTS.md` §7.
 - **Security headers** (HSTS, `X-Content-Type-Options`, `X-Frame-Options`,
   `Referrer-Policy`, and a `Content-Security-Policy` with no `unsafe-inline`
   for scripts) are set with `Header always set …`, which needs `mod_headers`.
@@ -88,4 +88,4 @@ up to a week. See `docs/deployment.md` §9 for the full renewal picture.
   the `002` file does the apex→www redirect this file does inline. Adding this
   file verbatim would duplicate `ServerName www.opencircuitsf.com`. Treat it
   as the reference for the proxy / header / CSP block; edit the installed
-  files. `CLAUDE.md` §7 names them.
+  files. `AGENTS.md` §7 names them.

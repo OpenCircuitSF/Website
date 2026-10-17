@@ -113,7 +113,7 @@ npm test        # vitest run — pure-TS helper modules only, no DOM
 ```
 
 Both must pass, in addition to the Go suite, for any issue touching `web/`
-(`CLAUDE.md` §5). There is no component-level (DOM) testing in this stack —
+(`AGENTS.md` §5). There is no component-level (DOM) testing in this stack —
 `lib/*.test.ts` files test pure functions extracted out of the `.svelte`
 files specifically so they're unit-testable without a browser.
 

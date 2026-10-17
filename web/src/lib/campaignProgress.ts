@@ -267,7 +267,7 @@ export type ProgressVerdict = 'running' | 'stalled' | 'not-sending';
 
 // How long without a batch update before a `sending` campaign is called
 // "stalled" rather than "running". Not sized against measured machine load
-// (CLAUDE.md §5) — it is sized against the worker's own cadence: a 2s poll
+// (AGENTS.md §5) — it is sized against the worker's own cadence: a 2s poll
 // interval (PRD §6.6) plus one batch's send time at the default 50-row
 // batch / 10-per-second rate (~5s), several times over, so ordinary
 // send-to-send gaps never read as stalled.

@@ -71,7 +71,7 @@ LockPersonality=true
 # own — /var/www/media also needs group ownership `opencircuit` and mode
 # `2775` on the box (docs/deployment.md §7, "Workshop media upload
 # enablement"); fixing only one of the two leaves the write still failing.
-# Pending the user's approval (CLAUDE.md §5b, §9) — see docs/deployment.md
+# Pending the user's approval (AGENTS.md §5b, §9) — see docs/deployment.md
 # §7 for the full instruction. Not yet installed on the box as of #0465.
 ReadWritePaths=/var/www/media
 

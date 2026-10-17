@@ -270,7 +270,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	targetUserID := seedAdminWiringUser(t, pool, "wiring-target@example.com", false)
 
 	// A dedicated throwaway interest for the /admin/interests/{id} family,
-	// seeded through the real store rather than a literal id. CLAUDE.md §8b
+	// seeded through the real store rather than a literal id. AGENTS.md §8b
 	// exists because of exactly this test: #0024's first pass targeted a
 	// hardcoded /admin/interests/1 — the real seeded "microcontrollers"
 	// taxonomy row — and a guard-removal mutation against DELETE permanently
@@ -293,7 +293,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	})
 
 	// A dedicated throwaway subscriber for the /admin/subscribers/{id} family,
-	// seeded through the real store — never a literal id, same CLAUDE.md §8b
+	// seeded through the real store — never a literal id, same AGENTS.md §8b
 	// reasoning as targetInterest above. The admin-session case for
 	// GET/POST .../{id} routes below reaches the real handler and may act on
 	// this row for real (POST .../clear-complaint 409s since it's never
@@ -313,7 +313,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	})
 
 	// A dedicated throwaway campaign for the /admin/campaigns/{id} family,
-	// seeded through the real store — never a literal id, same CLAUDE.md §8b
+	// seeded through the real store — never a literal id, same AGENTS.md §8b
 	// reasoning as targetInterest/targetSubscriber above. The admin-session
 	// case reaches the real handler for every verb (GET, PATCH, POST
 	// .../send, POST .../cancel); this test sends no body on any route, so
@@ -337,7 +337,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	})
 
 	// A dedicated throwaway workshop for the /admin/workshops/{id} family,
-	// seeded through the real store — never a literal id, same CLAUDE.md
+	// seeded through the real store — never a literal id, same AGENTS.md
 	// §8b reasoning as targetInterest/targetSubscriber/targetCampaign above.
 	// The admin-session case reaches the real handler for every verb (GET,
 	// PATCH, DELETE); this test sends no body on any route, so PATCH 400s
@@ -362,7 +362,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 
 	// A dedicated throwaway crt_commands row for the
 	// /admin/crt-commands/{id} family (#0393), seeded through the real
-	// store — never a literal id, same CLAUDE.md §8b reasoning as every
+	// store — never a literal id, same AGENTS.md §8b reasoning as every
 	// other target* above. The admin-session case reaches the real handler
 	// for every verb (GET, POST, PATCH, DELETE); this test sends no body on
 	// PATCH, so it 400s on the empty/invalid JSON body, and DELETE
@@ -435,7 +435,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 
 // resolveAdminRoutePath substitutes an adminRoute's {id} path parameter, if
 // present, with an id this test seeded itself — never a literal or seeded
-// one (CLAUDE.md §8b: "Never target a literal or seeded id in a test").
+// one (AGENTS.md §8b: "Never target a literal or seeded id in a test").
 // /admin/users/... routes take a user id; /admin/interests/... routes take
 // an interest id; /admin/subscribers/... routes (#0032) take a subscriber
 // id; /admin/campaigns/... routes (#0041) take a campaign id, including its

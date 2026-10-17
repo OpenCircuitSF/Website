@@ -660,7 +660,7 @@ export function validateSuppressionNote(note: string): { note: string } | { erro
  * reason="complaint" row is removable directly ONLY when no subscribers row
  * exists for the address (an orphan, #0060) — while a subscriber record
  * exists, Subscribers → Clear complaint is the sole sanctioned, audited path
- * (CLAUDE.md §9). Pre-disabling the button here, the same pattern the
+ * (AGENTS.md §9). Pre-disabling the button here, the same pattern the
  * Interests section's disabled Delete already uses, means the admin never
  * discovers this as a failed request.
  */

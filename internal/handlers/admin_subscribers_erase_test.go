@@ -152,7 +152,7 @@ func TestAdminSubscribers_Erase_Success(t *testing.T) {
 }
 
 // TestAdminSubscribers_Erase_NotFound covers both a subscriber id that never
-// existed under this test's control and, per CLAUDE.md §8b (never target a
+// existed under this test's control and, per AGENTS.md §8b (never target a
 // literal or seeded id), a repeat erase against a real id this test itself
 // already erased — the closest thing to a guaranteed-absent id that isn't a
 // hardcoded literal.
@@ -244,7 +244,7 @@ func TestAdminSubscribers_Erase_ThenAddressStaysBlockedFromResubscribing(t *test
 	subResp := doSubscribe(t, h, mux, subscribeBody(email, nil, time.Now()))
 	defer subResp.Body.Close()
 	if subResp.StatusCode != http.StatusAccepted {
-		t.Errorf("resubscribe attempt after erasure: status = %d, want 202 (uniform — CLAUDE.md §9)", subResp.StatusCode)
+		t.Errorf("resubscribe attempt after erasure: status = %d, want 202 (uniform — AGENTS.md §9)", subResp.StatusCode)
 	}
 
 	if subscriberExistsByID(t, pool, id) {

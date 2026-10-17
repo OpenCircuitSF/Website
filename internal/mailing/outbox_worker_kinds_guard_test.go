@@ -18,7 +18,7 @@ import (
 // second deliberately-not-mail Kind meant restructuring this into a set
 // first, and nothing forced the restructuring to also require a reason —
 // an allowlist anyone can append to without argument is a guard with a
-// hole (CLAUDE.md's #0280 lesson, cited by this issue for the same
+// hole (AGENTS.md's #0280 lesson, cited by this issue for the same
 // reason). A map keyed by name makes "is this exempt" an O(1) lookup
 // exactly like the old `==` did, while the string value makes a bare
 // append (a name with no reason) visibly incomplete at review time.

@@ -11,7 +11,7 @@ import (
 
 // #0471: migrations/000009_create_interests.up.sql seeds the twelve PRD §6.1
 // interests as DML inside a migration that is frozen the moment production
-// applies it (CLAUDE.md §1 — re-derived at filing time via the read-only
+// applies it (AGENTS.md §1 — re-derived at filing time via the read-only
 // on-the-box `schema_migrations` query, production sat at version 22, well
 // past 000009). So 000009 itself can never be edited again, by this project
 // or a downstream (`#0125` is the precedent for what happens when a plan
@@ -29,7 +29,7 @@ import (
 //  2. A change to what a FRESH install seeds by default (PRD §6.1's canonical
 //     list itself changing) goes in a new, additively-numbered migration,
 //     never a 000009 edit — exactly the same "ALTER TABLE in a new file, not
-//     an edit to the CREATE TABLE that owns it" shape CLAUDE.md §1 already
+//     an edit to the CREATE TABLE that owns it" shape AGENTS.md §1 already
 //     requires for schema changes, applied here to content.
 //
 // This test enforces the two invariants any such future migration must
@@ -54,10 +54,10 @@ import (
 // in-memory filename->content map rather than one that reads migrationsDir
 // directly, so the mutation tests below can prove it actually catches both
 // violations (and clears an idempotent one) without touching a single real
-// file on disk — the same "prove, don't assert" shape CLAUDE.md §5's guard
+// file on disk — the same "prove, don't assert" shape AGENTS.md §5's guard
 // discussion asks for, applied here in Go rather than an external harness
 // because the thing being mutated is the scan input, not the checker's own
-// source (CLAUDE.md §5's floor/ceiling distinction: this is exactly the case
+// source (AGENTS.md §5's floor/ceiling distinction: this is exactly the case
 // where an in-package oracle is legitimate).
 func interestTaxonomyGuardViolations(files map[string]string) []string {
 	var violations []string

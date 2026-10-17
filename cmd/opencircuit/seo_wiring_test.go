@@ -186,7 +186,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 	waitForHealthy(t, client, baseURL, errCh, ready)
 
 	// Seed a throwaway draft workshop through the real store (never a
-	// literal/seeded id, CLAUDE.md §8b) with a unique title/slug per run.
+	// literal/seeded id, AGENTS.md §8b) with a unique title/slug per run.
 	origTitle := fmt.Sprintf("SEO Wiring Workshop %d", testdb.Unique())
 	created, err := workshopsStore.Create(context.Background(), workshops.CreateInput{Title: origTitle})
 	if err != nil {
@@ -476,7 +476,7 @@ func TestMountAndServe_CampaignArchiveMutationInvalidatesSharedSEOSite(t *testin
 	// 'sent'/'published' (via CompleteIfDone), and this test is at the
 	// handler/wiring layer, not the worker's (that path is
 	// TestWorker_CompleteIfDone_InvalidatesArchiveCache, per the scope note
-	// above). Never a literal/seeded id (CLAUDE.md §8b) -- a fresh row via
+	// above). Never a literal/seeded id (AGENTS.md §8b) -- a fresh row via
 	// the real store, cleaned up in t.Cleanup.
 	subject := fmt.Sprintf("SEO Wiring Archive Campaign %d", testdb.Unique())
 	created, err := campaignsStore.Create(context.Background(), mailing.CampaignInput{

@@ -43,7 +43,7 @@ asset embedding, favicon, and SPA deep-link handling before deploying.
 ## Running against Postgres
 
 `STORAGE=json` has no mailing list at all — no interests, subscribers,
-campaigns, or suppressions (`CLAUDE.md` §5) — so the subscribers, imports,
+campaigns, or suppressions (`AGENTS.md` §5) — so the subscribers, imports,
 pending, suppressions, deliverability, and campaigns admin screens can only
 be exercised against the real database:
 
@@ -70,7 +70,7 @@ scripts/db-reset.sh
 ```
 
 If another process already holds the database, `db-reset.sh` refuses
-without `--force` (`CLAUDE.md` §5a) — seed the existing database directly
+without `--force` (`AGENTS.md` §5a) — seed the existing database directly
 instead:
 
 ```bash
@@ -80,7 +80,7 @@ go run ./cmd/opencircuit seed
 **`DEV_ADMIN_LOGIN`'s localhost-only refusal.** The service refuses to
 start at all — not just to skip the bypass — if `DEV_ADMIN_LOGIN=true` and
 `BASE_URL`'s host is anything but `localhost`/`127.0.0.1`, the same shape as
-`MAILER_NOOP` (`CLAUDE.md` §10). This can only happen if you override
+`MAILER_NOOP` (`AGENTS.md` §10). This can only happen if you override
 `BASE_URL` yourself; `scripts/dev.sh --postgres` never sets it to anything
 else.
 
@@ -192,7 +192,7 @@ If the simulator is already booted, `sim.sh` reuses it (no error).
 ### What to check
 
 - **Responsive layout**: nav collapses, tables scroll horizontally, no
-  clipped content at narrow viewport widths (CLAUDE.md §8 notes headless
+  clipped content at narrow viewport widths (AGENTS.md §8 notes headless
   Chromium's ~485px minimum window width, which the Simulator does not
   share — the Simulator is the more trustworthy check for anything narrower).
 - **Dark mode**: colors match the design tokens on both Light and Dark
@@ -200,7 +200,7 @@ If the simulator is already booted, `sim.sh` reuses it (no error).
   menu). See `docs/design.md` once #0011/#0013 land the terminal design
   tokens.
 - **Favicon**: the mark favicon should appear in the Safari address bar and
-  in the browser's tab strip (CLAUDE.md §8: use the `mark-*` assets below
+  in the browser's tab strip (AGENTS.md §8: use the `mark-*` assets below
   ~96px, never the full logo).
 
 ### Limitations

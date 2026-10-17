@@ -1,6 +1,6 @@
 // #0270: the live perspective-warped CRT screen, ported from
 // prototypes/crt-live-screen (#0233). Pure TypeScript so it is unit-testable
-// without a DOM (CLAUDE.md §1); the component supplies the elements.
+// without a DOM (AGENTS.md §1); the component supplies the elements.
 //
 // The corner calibration is the user's own hand-dragged measurement from
 // #0233, as a percentage of the photograph, so it survives any resize.
@@ -183,7 +183,7 @@ export const CRT_COMMAND_LINE_CHARS = CRT_LINE_CHARS - CRT_COMMAND_PREFIX.length
 /** Renders one script step's command line exactly as both Home.svelte draw
  *  sites must show it (#0397): the "> " prompt prefix followed by the
  *  command text truncated to CRT_COMMAND_LINE_CHARS. A single shared helper
- *  used at both call sites so they cannot diverge -- CLAUDE.md §1: SPA logic
+ *  used at both call sites so they cannot diverge -- AGENTS.md §1: SPA logic
  *  lives in lib/ so it is unit-testable without a DOM, and two call sites
  *  that must agree are exactly what drifts apart when duplicated. */
 export function crtCommandLine(cmd: string): string {
@@ -298,7 +298,7 @@ export function crtEnrichStep(step: CrtScriptStep, live: CrtLiveData | undefined
 
 /** #0393 review bounce: the fetch-and-fallback orchestration that used to
  *  live in Home.svelte's onMount as loadSession()/loadLiveData(), moved here
- *  verbatim (CLAUDE.md §1 -- SPA logic in lib/, components stay thin) so the
+ *  verbatim (AGENTS.md §1 -- SPA logic in lib/, components stay thin) so the
  *  acceptance criteria "with GET /api/crt-session returning 404 or 500 the
  *  home CRT still runs the compiled-in CRT_SESSION" and "a live-source row's
  *  own fetch failing shows its stored fallback lines" are unit-tested

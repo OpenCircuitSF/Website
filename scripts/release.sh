@@ -81,7 +81,7 @@
 # its OWN internal worktree regardless of what HEAD looks like in the
 # caller's checkout, so the two detachments never interact: gates run
 # against the originating checkout's HEAD before any worktree exists, and
-# CLAUDE.md §8b's "npm run build overwrites the tracked web/dist/index.html
+# AGENTS.md §8b's "npm run build overwrites the tracked web/dist/index.html
 # placeholder" hazard never reaches the shared checkout at all, because the
 # build never touches it — only the disposable worktree.
 #
@@ -112,7 +112,7 @@
 #
 set -euo pipefail
 
-# Resolve an absolute path BEFORE any `cd` (CLAUDE.md §8: ${BASH_SOURCE[0]}
+# Resolve an absolute path BEFORE any `cd` (AGENTS.md §8: ${BASH_SOURCE[0]}
 # holds the same relative string as $0 and breaks identically once the
 # script has changed directory).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // #0549: mounts FlyerPrint.svelte under jsdom with '../../lib/api' mocked.
-// jsdom is not a browser (CLAUDE.md §1): this proves the wiring (which
+// jsdom is not a browser (AGENTS.md §1): this proves the wiring (which
 // instances land on which sheet, labels, QR src, the ready gate, the page
 // rule's lifetime), NOT the print layout. The layout is checked in a real
 // browser's print preview; lib/flyers.test.ts covers the geometry maths.

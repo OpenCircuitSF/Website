@@ -35,7 +35,7 @@ import (
 // (subscribers.NewSignup.ConfirmTTL) — the "expires in N days" line is
 // derived from it, not a separately hand-typed number, so the two can't
 // drift apart. physicalAddress is settings.physical_address; passing "" (its
-// current seed value — CLAUDE.md §10 item 3, not yet resolved) simply omits
+// current seed value — AGENTS.md §10 item 3, not yet resolved) simply omits
 // the address line rather than fabricating one.
 func BuildConfirmationEmail(to, baseURL, confirmToken, manageToken string, ttl time.Duration, physicalAddress string) Message {
 	confirmURL := baseURL + "/confirm?token=" + confirmToken

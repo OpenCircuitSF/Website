@@ -1,6 +1,6 @@
 // subscribe_intake.go is #0254's durability backstop for
 // SubscribeHandler.mutateQueue — the in-memory, per-process channel #0088
-// introduced to keep POST /api/subscribe's response uniform (CLAUDE.md §9)
+// introduced to keep POST /api/subscribe's response uniform (AGENTS.md §9)
 // by moving every branch-dependent write off the request goroutine. #0126
 // made "committed signup ⇒ queued confirmation" durable (the INSERT and the
 // outbound_queue enqueue share one transaction in internal/subscribers.Store),
@@ -15,7 +15,7 @@
 //
 // Subscribe (subscribe.go) writes one outbox.KindSubscribeIntake row per
 // accepted request, synchronously, before writing the 202 — see that
-// method's own comment for why this is safe against CLAUDE.md §9's
+// method's own comment for why this is safe against AGENTS.md §9's
 // uniform-202/timing rule (it is a third fixed-cost step, identical in
 // shape for every branch, exactly like the suppression/FindByEmail reads
 // #0088 already established). By the time a client observes the 202, that
@@ -71,13 +71,13 @@ const (
 	// row waits before it becomes eligible for the recovery poller to
 	// claim — see the package doc comment above. Sized generously against
 	// mutateJobTimeout (the fast path's own bound) rather than against
-	// measured machine load (CLAUDE.md §5): the fast path must be
+	// measured machine load (AGENTS.md §5): the fast path must be
 	// GENUINELY stuck or gone, not merely slow, before the recovery
 	// poller's re-processing is worth the redundant work.
 	intakeGraceDelay = 3 * mutateJobTimeout
 
 	// intakeBatchSize mirrors mailing.outboxDefaultBatchSize — transactional
-	// volume here is a handful of signups a minute (CLAUDE.md §5: no
+	// volume here is a handful of signups a minute (AGENTS.md §5: no
 	// performance requirement in this project), so this is generous
 	// headroom, not a sizing exercise.
 	intakeBatchSize = 20
@@ -173,7 +173,7 @@ const (
 // single-term figure an earlier version of that test checked.
 //
 // A var, not a const, so a test can shrink it; NOT sized against measured
-// machine load (CLAUDE.md §5).
+// machine load (AGENTS.md §5).
 var intakeOrphanStaleAfter = 3 * intakeRowTimeout
 
 // subscribeIntakePayload is a KindSubscribeIntake row's payload — the

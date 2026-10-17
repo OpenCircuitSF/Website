@@ -372,7 +372,7 @@ func assertGoFileVisitCountPlausible(t *testing.T, guardName string, roots []str
 // and with a plausible-looking roots list paired with a too-low count, and
 // asserts each is reported implausible — then asserts a count that clears
 // the floor is reported plausible, so this test cannot pass by having the
-// function always return a non-empty string. Per CLAUDE.md §8, the oracle
+// function always return a non-empty string. Per AGENTS.md §8, the oracle
 // here is not a copy of any guard's own floor constant — the numbers below
 // (0, 3, 150) are chosen for this test alone, so a change to e.g.
 // auditEmailMetadataMinPlausibleFileCount cannot make this test agree with

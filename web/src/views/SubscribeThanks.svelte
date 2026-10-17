@@ -4,7 +4,7 @@
   // onSubscribeSuccess. Its copy is static and does not read anything from
   // the previous response, by construction: that is what keeps this page
   // from ever becoming a place #0026's uniform-202 guarantee could leak
-  // through (CLAUDE.md §9).
+  // through (AGENTS.md §9).
   import Panel from '../lib/Panel.svelte';
 </script>
 

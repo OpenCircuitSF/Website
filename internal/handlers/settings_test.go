@@ -25,7 +25,7 @@ import (
 
 // TestValidSettingValue_MaxSendRate is #0045's carried-in obligation: only
 // registrations_enabled was validated before this issue, which is exactly
-// how a whitespace physical_address became possible (CLAUDE.md's own Notes
+// how a whitespace physical_address became possible (AGENTS.md's own Notes
 // on #0045). max_send_rate must be a positive integer in 1..1000 — an admin
 // saving "fast" must get a 400, not a worker that silently falls back to
 // MAX_SEND_RATE.

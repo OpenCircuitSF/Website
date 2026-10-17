@@ -8,9 +8,9 @@
 // (e.g. "web/src/views/Admin.escapeWiring.structuralGuard.test.ts" and two
 // siblings). Neither shape is Go, so #0196's guard could not have caught
 // either. This file is the TypeScript/Svelte half of the same idea, ported
-// to two more citation shapes: a repository PATH, and a "CLAUDE.md §N"
+// to two more citation shapes: a repository PATH, and a "AGENTS.md §N"
 // section reference -- resolved against their own ground truths (the files
-// actually on disk, and CLAUDE.md's own numbered headings), the same two
+// actually on disk, and AGENTS.md's own numbered headings), the same two
 // shapes internal/handlers/citation_target_guard_test.go resolves for Go
 // comments. Deliberately the SAME design as that file throughout (a regexp
 // naming the candidate shape, a set of exclusion rules mutation-tested
@@ -48,7 +48,7 @@
 // cannot see this problem (#0181's web guard scans string/template
 // literals, excludes comments; this guard scans comments, so excluding
 // .test.ts the way #0181's guard does would hide exactly the shape #0216
-// shipped, which landed in a .test.ts file). Every path or "CLAUDE.md §N"
+// shipped, which landed in a .test.ts file). Every path or "AGENTS.md §N"
 // token in this file's own REAL comments therefore must resolve -- proven
 // by TestCitationTargetGuardScansItselfCleanly below, which asserts zero
 // hits from THIS file alone, not just inferred from the tree-wide test
@@ -77,7 +77,7 @@ const citationTargetPathPattern =
 
 const citationTargetFileLikeSegmentPattern = /^[A-Za-z0-9_.-]+\.(?:go|ts|tsx|svelte|md|sql|sh|json|ya?ml|css|html|mjs|cjs)$/;
 
-const citationTargetSectionPattern = /CLAUDE\.md(?:['’]s)?\s*§\s*(\d+[A-Za-z]?)/g;
+const citationTargetSectionPattern = /AGENTS\.md(?:['’]s)?\s*§\s*(\d+[A-Za-z]?)/g;
 
 const citationTargetHypotheticalMarkers = [
   'e.g.',
@@ -262,7 +262,7 @@ function collectRepoPaths(repoRoot: string): Set<string> {
 const claudeMDHeadingPattern = /^##\s+(\d+[A-Za-z]?)\.\s/gm;
 
 function loadClaudeMDSections(repoRoot: string): Set<string> {
-  const data = readFileSync(path.join(repoRoot, 'CLAUDE.md'), 'utf-8');
+  const data = readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf-8');
   const sections = new Set<string>();
   for (const m of data.matchAll(claudeMDHeadingPattern)) {
     sections.add(m[1]);
@@ -460,8 +460,8 @@ function scanFile(rel: string, source: string, paths: Set<string>, sections: Set
   return scanBlocksForHits(rel, blocks, paths, sections);
 }
 
-describe('citation TARGET guard (#0220): every comment-cited repository path or CLAUDE.md section resolves', () => {
-  it('no .ts/.svelte comment (test files included) cites a path or CLAUDE.md section that does not resolve', () => {
+describe('citation TARGET guard (#0220): every comment-cited repository path or AGENTS.md section resolves', () => {
+  it('no .ts/.svelte comment (test files included) cites a path or AGENTS.md section that does not resolve', () => {
     const paths = collectRepoPaths(REPO_ROOT);
     const sections = loadClaudeMDSections(REPO_ROOT);
     expect(sections.size, 'loadClaudeMDSections found zero numbered headings -- the heading pattern itself is broken, not the tree').toBeGreaterThan(0);
@@ -479,7 +479,7 @@ describe('citation TARGET guard (#0220): every comment-cited repository path or 
         .map((h) => `  ${h.file}:${h.line}: [${h.kind}] ${h.cited}`)
         .join('\n');
       throw new Error(
-        `comment cites a repository path or CLAUDE.md section that does not resolve -- fix the citation or the target (see #0196, #0216, #0220):\n${detail}`,
+        `comment cites a repository path or AGENTS.md section that does not resolve -- fix the citation or the target (see #0196, #0216, #0220):\n${detail}`,
       );
     }
     expect(hits).toHaveLength(0);
@@ -518,11 +518,11 @@ describe('citation target guard: catches (synthetic fixtures)', () => {
     expect(hits.some((h) => h.cited === fictitiousPath)).toBe(true);
   });
 
-  it('fires on a .svelte <script> comment citing a nonexistent CLAUDE.md section', () => {
-    const src = `<script lang="ts">\n  // see CLAUDE.md §${'9999'} for the rationale\n  let x = 1;\n</script>\n<p>{x}</p>`;
+  it('fires on a .svelte <script> comment citing a nonexistent AGENTS.md section', () => {
+    const src = `<script lang="ts">\n  // see AGENTS.md §${'9999'} for the rationale\n  let x = 1;\n</script>\n<p>{x}</p>`;
     const blocks = collectSvelteCommentBlocks('fixture.svelte', src);
     const sections = loadClaudeMDSections(REPO_ROOT);
-    expect(sections.has('9999'), 'fixture setup: CLAUDE.md unexpectedly has section 9999').toBe(false);
+    expect(sections.has('9999'), 'fixture setup: AGENTS.md unexpectedly has section 9999').toBe(false);
     const hits = scanBlocksForHits('fixture.svelte', blocks, collectRepoPaths(REPO_ROOT), sections);
     expect(hits.some((h) => h.kind === 'section' && h.cited.includes('9999'))).toBe(true);
   });
@@ -578,8 +578,8 @@ describe('citation target guard: exclusions (synthetic fixtures)', () => {
     expect(hits).toHaveLength(0);
   });
 
-  it('does not fire on "PRD/CLAUDE.md §9" (bare document names joined, not a nested path)', () => {
-    const src = `// PRD/CLAUDE.md §9 still forbid anything unsafe\nexport function ok(): void {}`;
+  it('does not fire on "PRD/AGENTS.md §9" (bare document names joined, not a nested path)', () => {
+    const src = `// PRD/AGENTS.md §9 still forbid anything unsafe\nexport function ok(): void {}`;
     const blocks = collectTsCommentBlocks('fixture.ts', src);
     const hits = scanBlocksForHits('fixture.ts', blocks, collectRepoPaths(REPO_ROOT), loadClaudeMDSections(REPO_ROOT));
     expect(hits).toHaveLength(0);
@@ -612,8 +612,8 @@ describe('citation target guard: exclusions (synthetic fixtures)', () => {
     expect(hits).toHaveLength(0);
   });
 
-  it('resolves a genuine, existing CLAUDE.md section', () => {
-    const src = `// see CLAUDE.md §1 for the jsdom caveat\nexport function ok(): void {}`;
+  it('resolves a genuine, existing AGENTS.md section', () => {
+    const src = `// see AGENTS.md §1 for the jsdom caveat\nexport function ok(): void {}`;
     const blocks = collectTsCommentBlocks('fixture.ts', src);
     const hits = scanBlocksForHits('fixture.ts', blocks, collectRepoPaths(REPO_ROOT), loadClaudeMDSections(REPO_ROOT));
     expect(hits).toHaveLength(0);

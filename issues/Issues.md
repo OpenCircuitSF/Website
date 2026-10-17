@@ -154,7 +154,7 @@ Any additional context, guesses at root cause, related code locations.
 4. Set status to `open`.
 5. Use today's date for First seen.
 6. Phrase the title as a single declarative sentence describing the bug, not a question or a fix description.
-7. **Plan it (phase 1).** Dispatch a fresh subagent on the **planning model (Opus)** to read this guide, `CLAUDE.md`, the new issue, and the relevant code, then write a `## Plan` section into `issues/NNNN.md` (after `## Description`). It writes no code and leaves status at `open`. This gives whoever picks the issue up a running start. Record the planner's usage in `## Work log`. Skip if the user is jotting a quick note and doesn't want planning yet.
+7. **Plan it (phase 1).** Dispatch a fresh subagent on the **planning model (Opus)** to read this guide, `AGENTS.md`, the new issue, and the relevant code, then write a `## Plan` section into `issues/NNNN.md` (after `## Description`). It writes no code and leaves status at `open`. This gives whoever picks the issue up a running start. Record the planner's usage in `## Work log`. Skip if the user is jotting a quick note and doesn't want planning yet.
 8. **If `issues/` is tracked by git**, commit the new file with message `#NNNN <issue title>` so the issue enters git history with its `open` status — the `## Plan` rides along if it's landed, else commit it separately as `#NNNN Plan`. If ignored, skip.
 
 **This path has the same timing gap, in miniature (`#0478`).** A freshly
@@ -171,7 +171,7 @@ a new check: when step 7's planning pass runs, that subagent already has a
 shell open before its own commit, so have it run
 `ISSUE=NNNN scripts/check.sh go ./internal/db/...` there, folding the re-run
 into a pass that already exists rather than adding one. When phase 1 is
-skipped — most issues, per `CLAUDE.md` §Model policy — there is no subagent
+skipped — most issues, per `AGENTS.md` §Model policy — there is no subagent
 between drafting and commit, and this note does not create one; the filed text
 is caught, or not, by the next dispatch's ordinary run. `issues/0478.md` itself
 was filed exactly this way.
@@ -203,13 +203,13 @@ Issues move from filed to resolved through a **three-phase pipeline**. Each phas
 
 | Phase | When | Model | The subagent does | Status after |
 |---|---|---|---|---|
-| **1. Planning** | selectively, before an issue is worked (see `CLAUDE.md` §Model policy) | **Opus** | reads conventions + issue, writes `## Plan`; no code | `open` |
+| **1. Planning** | selectively, before an issue is worked (see `AGENTS.md` §Model policy) | **Opus** | reads conventions + issue, writes `## Plan`; no code | `open` |
 | **2. Implementation** | when the issue is worked | **Sonnet** | follows the plan, fixes, builds + verifies, code commit, drafts resolution sections | `in-progress` |
 | **3. Review** | after implementation returns | **Opus** | independently re-verifies the diff, then approves or bounces | `resolved` or `open` |
 
-Fresh context per phase is deliberate: each subagent reloads this guide and `CLAUDE.md` cleanly, so edits to those files take effect on the next dispatch. Planning and review both run *only* in a subagent, never in the orchestrator's own context — the orchestrator stays cheap and holds the queue, not the code.
+Fresh context per phase is deliberate: each subagent reloads this guide and `AGENTS.md` cleanly, so edits to those files take effect on the next dispatch. Planning and review both run *only* in a subagent, never in the orchestrator's own context — the orchestrator stays cheap and holds the queue, not the code.
 
-**Fable is not used on this project.** Planning runs on Opus. See `CLAUDE.md` §Model policy for which issues get a planning pass at all — most of this tracker's issues already carry acceptance criteria and skip phase 1.
+**Fable is not used on this project.** Planning runs on Opus. See `AGENTS.md` §Model policy for which issues get a planning pass at all — most of this tracker's issues already carry acceptance criteria and skip phase 1.
 
 ### Obstacles come first, in every phase
 
@@ -231,12 +231,12 @@ Look for:
 - **Permissions and privileges** — a database role that cannot `CREATEDB`, a
   file the agent cannot write, a keychain or credential prompt, an `sudo` step.
 - **Tool availability** — `migrate`, `psql`, `npm`, a linter. Ask the toolchain
-  (`command -v`), never scan the filesystem (`CLAUDE.md` §5).
+  (`command -v`), never scan the filesystem (`AGENTS.md` §5).
 - **Credentials that do not exist yet** — SES is the standing example; an issue
   that needs a real send cannot be verified today and must say so up front
   rather than discovering it at the verification step.
 - **Shared mutable resources** — ports, the test database, `web/dist`. Name
-  which ones the work will touch and how it will avoid colliding (`CLAUDE.md`
+  which ones the work will touch and how it will avoid colliding (`AGENTS.md`
   §8b).
 - **Approval-gated actions** — anything destructive or outward-facing that will
   stop and wait for a human. If a step needs approval, say so in the plan so
@@ -255,7 +255,7 @@ Known grants this project needs locally, already applied:
 
 | Grant | Why | Undo |
 |---|---|---|
-| `ALTER ROLE opencircuit CREATEDB` | per-agent test databases (`scripts/testdb.sh`) and scratch databases for guard-removal tests (`CLAUDE.md` §8b) | `ALTER ROLE opencircuit NOCREATEDB` |
+| `ALTER ROLE opencircuit CREATEDB` | per-agent test databases (`scripts/testdb.sh`) and scratch databases for guard-removal tests (`AGENTS.md` §8b) | `ALTER ROLE opencircuit NOCREATEDB` |
 
 **When an obstacle is hit anyway**, the rule is: clear it properly, or bail and
 say so. Never route around it in a way that leaves the next agent to rediscover
@@ -327,10 +327,10 @@ A subagent starts with fresh context, so its first job is loading the project's 
 
 1. **Orient in the project.** Read, every time, in order:
    - **`issues/Issues.md`** (this file) — status vocabulary, module conventions, build/verify command, commit conventions, project rules. **Authoritative for issue-tracking workflow.**
-   - **`CLAUDE.md`** at the repo root, if it exists — project-wide guidance, code conventions, restricted areas, build/test commands. **Binding.**
+   - **`AGENTS.md`** at the repo root, if it exists — project-wide guidance, code conventions, restricted areas, build/test commands. **Binding.**
    - **`issues/NNNN.md`** — the issue in full, **including its `## Plan`** and any attachments in `issues/NNNN/`.
 
-   If the two guides disagree, prefer `CLAUDE.md` for code/repo conventions and this file for issue-tracking specifics.
+   If the two guides disagree, prefer `AGENTS.md` for code/repo conventions and this file for issue-tracking specifics.
 
 2. **Set status to `in-progress` now, before step 3's first code change.** Do
    this even if your dispatch brief only describes the issue file's *end*
@@ -338,7 +338,7 @@ A subagent starts with fresh context, so its first job is loading the project's 
    `scripts/list-issues-by-phase` reads the working tree directly, so the flip
    is visible the instant you save, and this pipeline dispatches phase 2 from
    one checkout, so nothing needs a second checkout to see it. This is the
-   queue's only signal that the issue is taken — `CLAUDE.md` §4 treats a stray
+   queue's only signal that the issue is taken — `AGENTS.md` §4 treats a stray
    `in-progress` row as abandoned work worth resuming, while a stray `open`
    row mid-fix is indistinguishable from untouched and invites a second agent
    to start the same fix. A commit here would only buy a second, status-only
@@ -392,11 +392,11 @@ A subagent starts with fresh context, so its first job is loading the project's 
    which is what began this convention. Run
    `ISSUE=NNNN scripts/check.sh go ./internal/db/...` by default — it is the
    cheap package. Add `./internal/handlers/...` only when this pass touched a
-   Go comment or renamed/renumbered a `CLAUDE.md` `##` heading (`CLAUDE.md`
-   §5 explains why that package alone reads `CLAUDE.md`'s own section
-   headings); it costs roughly 8× `internal/db` (`CLAUDE.md` §5a), so don't run
+   Go comment or renamed/renumbered a `AGENTS.md` `##` heading (`AGENTS.md`
+   §5 explains why that package alone reads `AGENTS.md`'s own section
+   headings); it costs roughly 8× `internal/db` (`AGENTS.md` §5a), so don't run
    it by default. If the re-run fails, rephrase the offending line — never
-   relocate it under an unscanned heading (`CLAUDE.md` §8) — and run again
+   relocate it under an unscanned heading (`AGENTS.md` §8) — and run again
    before moving on.
 9. **Do not commit the markdown draft.** Return to the orchestrator with a one-line summary. The reviewer makes the single resolution commit in phase 3.
 
@@ -404,7 +404,7 @@ A subagent starts with fresh context, so its first job is loading the project's 
 
 An independent reviewer is the gate between "code landed" and "issue resolved". It owns the `resolved` transition; the implementation subagent never sets it.
 
-1. **Orient** the same way (this file, `CLAUDE.md`, `issues/NNNN.md` including the `## Plan` and the drafted resolution sections).
+1. **Orient** the same way (this file, `AGENTS.md`, `issues/NNNN.md` including the `## Plan` and the drafted resolution sections).
 2. **Inspect the code commit** — read its diff (`git show <hash>`). Does it actually address the reported bug? Right scope? Any correctness, security, or regression risk?
 3. **Re-run the verification command yourself** and read the output — don't trust the drafted `## Verification`. Confirm tests actually executed and passed (same standard as phase 2, step 4). This independent run is the core of the review.
 4. **Decide:**
@@ -421,7 +421,7 @@ An independent reviewer is the gate between "code landed" and "issue resolved". 
      notes` is inside both the status filter and the section filter. Run
      `ISSUE=NNNN scripts/check.sh go ./internal/db/...` by default; add
      `./internal/handlers/...` only if you touched a Go comment or a
-     `CLAUDE.md` `##` heading. Once it is clean, step 6 commits directly.
+     `AGENTS.md` `##` heading. Once it is clean, step 6 commits directly.
    - **Approve**, as two ordered sub-steps — do not run the second without
      the first:
      1. **Run `ISSUE=NNNN scripts/check.sh go ./internal/db/...` now, while
@@ -445,7 +445,7 @@ An independent reviewer is the gate between "code landed" and "issue resolved". 
         together cost under a second (`#0479` measured 0.533s and 0.484s);
         that is not worth optimising away.
 6. **Make the commit.** Check `git diff --cached --name-only` first
-   (`CLAUDE.md` §8a) — a bare `git commit` takes whatever is staged, so if
+   (`AGENTS.md` §8a) — a bare `git commit` takes whatever is staged, so if
    anything besides `issues/NNNN.md` is sitting in the index, commit with a
    pathspec instead of bare. **If `issues/` is tracked**: on approve, stage
    `issues/NNNN.md`, message `#NNNN Resolve: <title>`, body noting the code
@@ -472,7 +472,7 @@ scripts/check.sh all                                     # whole suite — a bat
 
 **Always set `ISSUE=NNNN`.** It gives the run its own PostgreSQL database,
 cloned from a template in about 0.2s and dropped afterwards. That is what lets
-two agents test at the same time — see `CLAUDE.md` §5a.
+two agents test at the same time — see `AGENTS.md` §5a.
 
 Database management:
 
@@ -507,7 +507,7 @@ go test ./internal/handlers/... -p 2 2>&1 | tail -40
 (cd web && npm test 2>&1 | tail -40)
 ```
 
-See `CLAUDE.md` §5.
+See `AGENTS.md` §5.
 
 **`go build ./...` passing is not verification.** Tests must actually execute and their output must be read. Issues touching the SPA require `npm run check` and `npm test` in addition to the Go suite. Issues touching email rendering or the send worker require the relevant unit tests to run and be named in `## Verification`.
 
@@ -642,7 +642,7 @@ Use these canonical module names in the `**Module**` row. Multiple modules are s
 | `inbound` | `internal/inbound` — inbound `mailto:` unsubscribe processing |
 | `workshops` | `internal/workshops` — workshop records and public pages |
 | `deploy` | Apache, systemd, Route 53, SES/IAM setup, backups, runbooks |
-| `docs` | `docs/`, `CLAUDE.md`, `README.md` |
+| `docs` | `docs/`, `AGENTS.md`, `README.md` |
 
 ## Phases
 

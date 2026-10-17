@@ -54,7 +54,7 @@ const (
 
 // SESMailer sends email through the AWS SES v2 API. Credentials come from the
 // AWS SDK's default credential chain — the EC2 instance role in production,
-// falling back to ~/.aws/credentials locally (PRD §6.6; CLAUDE.md §10 item 2
+// falling back to ~/.aws/credentials locally (PRD §6.6; AGENTS.md §10 item 2
 // records that the instance role itself is the only thing not yet in place).
 // There is no static-credential configuration anywhere in this project.
 //
@@ -80,7 +80,7 @@ type SESMailer struct {
 // sends without a configuration set so #0038 never sees the event) when
 // AWS_REGION, SES_CONFIGURATION_SET, or EMAIL_FROM is unset. That distinction
 // matters here specifically because #0026's subscribe endpoint returns a
-// uniform 202 by design (CLAUDE.md §9) and would otherwise mask a
+// uniform 202 by design (AGENTS.md §9) and would otherwise mask a
 // misconfigured mailer completely.
 func NewSESMailer(ctx context.Context, cfg *config.Config) (*SESMailer, error) {
 	var missing []string

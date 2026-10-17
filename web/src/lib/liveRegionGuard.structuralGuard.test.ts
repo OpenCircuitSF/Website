@@ -135,7 +135,7 @@
 // (what used to be isGoverningBranchDynamic) dead code: it never controlled
 // WHAT got scanned, only WHETHER scanning happened, and now scanning always
 // happens. Removed rather than kept as an inert second mechanism sitting
-// beside the real one (CLAUDE.md §8's warning about two overlapping,
+// beside the real one (AGENTS.md §8's warning about two overlapping,
 // unexplained mechanisms) -- see the removal note in its old location,
 // just above the `Site` interface, for the fuller history.
 //
@@ -332,7 +332,7 @@ function elementCountInSubtree(root: unknown, seen = new Set<unknown>()): number
 const KNOWN_STABLE_BRANCH_MIN_ELEMENT_COUNT = 8;
 
 // #0286 removed isGoverningBranchDynamic (the single-child-container-unwrap
-// classifier that used to live here) as no longer needed -- CLAUDE.md §8:
+// classifier that used to live here) as no longer needed -- AGENTS.md §8:
 // "the single-child unwrap is either removed as no longer needed or
 // retained with its reasoning restated." It computed whether a status
 // site's governing branch was "single-purpose" (unwrapping single-child
@@ -904,7 +904,7 @@ const KNOWN_STABLE_BRANCH_REASON_MAIN_FORM =
  * until someone updates both, and the real-tree test's own
  * `toHaveLength(KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT)` assertion is what
  * makes that disagreement fail loudly instead of silently -- the same drift
- * class CLAUDE.md §11 documents for the PRD section index (`#0406`). Bump
+ * class AGENTS.md §11 documents for the PRD section index (`#0406`). Bump
  * this by hand whenever an entry is added to or removed from the array, and
  * update the measurement comment's prose and per-entry table to match -- see
  * the sensitivity test below (`describe('KNOWN_STABLE_BRANCH_SITES recorded
@@ -1278,7 +1278,7 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
     // #0279's change (each measured by swapping Dashboard.svelte, and this
     // file's own KNOWN_DYNAMIC_ROLE_SITES entry, back to their prior
     // committed content -- git-hash-verified restored afterwards, per
-    // CLAUDE.md §8a). BEFORE (i.e. the tree as #0242's review last measured
+    // AGENTS.md §8a). BEFORE (i.e. the tree as #0242's review last measured
     // it, PLUS whatever unrelated work landed since -- #0244, and the
     // #0233/#0270/#0274 session): alertSites 60, statusSites 31 -- already
     // 4 and 1 higher than the "56"/"30" this comment previously recorded,
@@ -1297,7 +1297,7 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
     // then-current KNOWN_STABLE_BRANCH_SITES entry's actual governing
     // branch (via a temporary console.log in this loop, since checkFile
     // does not return per-entry sizes -- removed after measuring, per
-    // CLAUDE.md §8's "prove it, don't leave it running" spirit), file
+    // AGENTS.md §8's "prove it, don't leave it running" spirit), file
     // order matching the array above:
     //
     //   Admin.svelte settingsNotice              14
@@ -1353,8 +1353,8 @@ describe('live-region structural guard (#0242, #0243): role="status" persists or
 // `toHaveLength(KNOWN_STABLE_BRANCH_SITES_RECORDED_COUNT)` assertion just
 // above is the mechanism that ties the measurement comment's prose to the
 // array. This describe proves that mechanism is a real, sensitive oracle --
-// not a copy of the thing it checks (CLAUDE.md §8, the #0258 rule) -- by
-// mutating an IN-MEMORY COPY of the array (CLAUDE.md §8a: never the file on
+// not a copy of the thing it checks (AGENTS.md §8, the #0258 rule) -- by
+// mutating an IN-MEMORY COPY of the array (AGENTS.md §8a: never the file on
 // disk, never the real KNOWN_STABLE_BRANCH_SITES binding itself) and showing
 // the count it would be asserted against no longer agrees.
 describe('KNOWN_STABLE_BRANCH_SITES recorded count (#0406)', () => {
@@ -1411,7 +1411,7 @@ describe('checkFile (synthetic fixtures)', () => {
 
   // Same shape, now WITH a stable-branch allowlist entry naming this exact
   // site's raw source -- proves the escape hatch's MATCHING mechanism works
-  // (CLAUDE.md §8: its oracle isn't just "any non-empty entry" -- a
+  // (AGENTS.md §8: its oracle isn't just "any non-empty entry" -- a
   // stale/mismatched match still fails, proved separately, #0280-style,
   // below), matching the settingsNotice/audience-count shape #0242's now-
   // removed single-child unwrap used to infer structurally instead.
@@ -1706,7 +1706,7 @@ describe('checkFile (synthetic fixtures)', () => {
 
   // #0280 criterion 4: both new allowlist rules proven with their own
   // throwaway entries, distinct bytes from checkFile's own violation-message
-  // template (CLAUDE.md §8) -- these fixtures assert on independently
+  // template (AGENTS.md §8) -- these fixtures assert on independently
   // written expectation text, not a copy of the string checkFile emits.
   it('#0280: fails a dynamic-role allowlist entry that carries no justification text, even though it matches a real site', () => {
     const src = `{#each items as it}<li role={it.alert ? 'alert' : 'status'}>{it.message}</li>{/each}`;
@@ -1750,7 +1750,7 @@ describe('checkFile (synthetic fixtures)', () => {
   // #0298: unscannedFileViolations proven directly, distinct from checkFile's
   // own per-file checks -- this is a once-per-run, cross-file pass, so it
   // cannot be exercised through checkFile (which only ever sees one file at
-  // a time). Assertions read for independently written substrings (CLAUDE.md
+  // a time). Assertions read for independently written substrings (AGENTS.md
   // §8: oracle != subject), not a copy of the message the function emits.
   it('#0298: fails an allowlist entry naming a file the scan never visited, even with a bogus match and an empty reason', () => {
     const scanned = new Set(['web/src/views/Real.svelte']);

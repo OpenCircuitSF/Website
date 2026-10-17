@@ -1,6 +1,6 @@
 // Pure, framework-free helpers backing Unsubscribe.svelte (#0036, PRD §6.5
 // path 1). Kept out of the .svelte file so the "no error state" guarantee is
-// unit-testable without a DOM (CLAUDE.md §1) -- see unsubscribe.test.ts.
+// unit-testable without a DOM (AGENTS.md §1) -- see unsubscribe.test.ts.
 // Mirrors subscribe.ts's convention of putting the logic here and leaving
 // the component a thin shell.
 //

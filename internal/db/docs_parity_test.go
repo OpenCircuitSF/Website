@@ -24,7 +24,7 @@ import (
 //
 //  1. A doc row naming a migration that has been deleted from disk. The
 //     original check ran file -> doc only, never doc -> file.
-//  2. A numbering gap. Both docs/database.md and CLAUDE.md claim a
+//  2. A numbering gap. Both docs/database.md and AGENTS.md claim a
 //     *contiguous* range; nothing enforced it.
 //  3. A *.up.sql with no matching *.down.sql -- listMigrations globbed only
 //     *.up.sql, so an up-only migration with a doc row passed green even
@@ -35,12 +35,12 @@ import (
 //     honors matches found on lines that (a) start with "|" and (b) are not
 //     inside a ``` fence -- see docTableRowLines.
 //
-// CLAUDE.md's migration-range sentence drifted twice on top of that (see
+// AGENTS.md's migration-range sentence drifted twice on top of that (see
 // its "Repository layout" table row) -- the fourth drift of this class
 // overall, and across a second file. #0083's fix is one table-driven test
-// over both docs/database.md and CLAUDE.md, not a second, near-identical
+// over both docs/database.md and AGENTS.md, not a second, near-identical
 // test: the two files differ only in wording ("numbered" vs "contiguous")
-// and in whether migrations are enumerated per-row at all (CLAUDE.md states
+// and in whether migrations are enumerated per-row at all (AGENTS.md states
 // only the range, docs/database.md also lists every migration). A sibling
 // test would duplicate the row/fence parsing and the en-dash handling and
 // become a second thing that can itself drift out of step with its twin --
@@ -85,7 +85,7 @@ import (
 const (
 	migrationsDir = "../../migrations"
 	docsPath      = "../../docs/database.md"
-	claudeMDPath  = "../../CLAUDE.md"
+	claudeMDPath  = "../../AGENTS.md"
 )
 
 // migrationVersionName matches a migration file's stem: a 6-digit version
@@ -161,7 +161,7 @@ func verifyDownPairs(t *testing.T, stems []migrationStem) {
 }
 
 // verifyContiguous is drift mode 2 (#0083): both docs/database.md and
-// CLAUDE.md claim the on-disk migrations are a *contiguous* numbered range
+// AGENTS.md claim the on-disk migrations are a *contiguous* numbered range
 // starting at 000001. Nothing previously enforced that a version wasn't
 // skipped -- moving 000009 off disk while leaving 000008 and 000010 in place
 // left every prior assertion green.
@@ -425,7 +425,7 @@ func verifyDocRowsHaveMigration(t *testing.T, path string, rowLines []string, on
 
 // docRangePattern extracts the "`000001`–`000011`" range prose from a doc's
 // migration-range sentence. docs/database.md phrases it "numbered
-// `NNNNNN`-`NNNNNN`"; CLAUDE.md's "Repository layout" table row phrases the
+// `NNNNNN`-`NNNNNN`"; AGENTS.md's "Repository layout" table row phrases the
 // same fact "contiguous `NNNNNN`-`NNNNNN`" -- the loosened
 // "(?:numbered|contiguous)" alternation (#0083) is what lets one
 // table-driven test cover both files' wording rather than needing a sibling
@@ -442,7 +442,7 @@ var docRangePattern = regexp.MustCompile("\\b(?:numbered|contiguous) `(\\d{6})`[
 // claim. checkRows gates the per-migration row checks (drift modes 1 and 4,
 // plus the forward check #0082 originally added): docs/database.md
 // enumerates every migration as its own table row, so all three apply.
-// CLAUDE.md's "Repository layout" table states only the aggregate range, not
+// AGENTS.md's "Repository layout" table states only the aggregate range, not
 // a per-migration row, so only the range check (drift mode 2's contiguity
 // aside, which is disk-only and runs once above) applies to it.
 type docParityCase struct {
@@ -453,7 +453,7 @@ type docParityCase struct {
 // TestDocTableRowLines exercises docTableRowLines directly against markdown
 // forms that don't occur in the real docs today (#0086's reviewer proved
 // each by probe against synthetic input, not against docs/database.md or
-// CLAUDE.md). "rejects" is every form that must NOT satisfy the row check
+// AGENTS.md). "rejects" is every form that must NOT satisfy the row check
 // even though it contains a "|"-leading line somewhere; "accepts" is every
 // form docTableRowLines correctly handled before this fix and must keep
 // handling afterward.
@@ -693,7 +693,7 @@ func TestDocTableRowLinesParityFlipMaskingRegression(t *testing.T) {
 
 // TestDatabaseDocMigrationParity is #0082's guard, extended by #0083 to be
 // bidirectional, contiguity-aware, down-file-aware, and row-structure-aware,
-// and to cover CLAUDE.md's migration-range sentence in the same table as
+// and to cover AGENTS.md's migration-range sentence in the same table as
 // docs/database.md's rather than in a sibling test.
 func TestDatabaseDocMigrationParity(t *testing.T) {
 	stems := listMigrations(t)

@@ -10,20 +10,20 @@ import "testing"
 // TestOutboxOrphanStaleAfterCoversFullBatch accordingly ("FullBatch" no
 // longer describes the model at all) rather than deleted, per this
 // project's "update, don't delete" convention for a superseded invariant
-// test (CLAUDE.md / issues/0297.md criterion 5).
+// test (AGENTS.md / issues/0297.md criterion 5).
 //
 // Modeled directly on worker.go's own
 // TestOrphanStaleAfterCoversLegitimateSingleRowHold (#0295) — the two
 // workers' windows now share the identical shape, since #0297 gave this
 // worker the same select-then-per-row-claim model worker.go always had.
 // The oracle is a DIFFERENT expression from the subject (no "2 *" margin
-// factor), not the same bytes with a name change (CLAUDE.md's "a guard's
+// factor), not the same bytes with a name change (AGENTS.md's "a guard's
 // oracle must not be the same bytes as its subject", #0258): an edit to
 // the subject that drops or shrinks its margin factor changes `got`
 // without moving `want`.
 //
 // Proof this fails against reversion (verified by hand in a scratch copy,
-// not left in the tree — CLAUDE.md's "an oracle must not share its method
+// not left in the tree — AGENTS.md's "an oracle must not share its method
 // with its subject" applies equally to leaving a reverted formula
 // sitting nearby): pointing `got` at the pre-#0297 800s batch-derived
 // value against today's oracle still passes trivially (800s > 35s), which

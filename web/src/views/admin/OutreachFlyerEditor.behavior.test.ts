@@ -4,7 +4,7 @@
 // mocked. Proves the wiring: Generate saves the design, then the selection,
 // then asks the server (in that order), the server's remaining count and
 // message reach the status line, a refused save does not Generate, and Put up
-// toggles. jsdom is not a browser (CLAUDE.md §1): no layout is claimed.
+// toggles. jsdom is not a browser (AGENTS.md §1): no layout is claimed.
 import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FlyerView, OutreachLocation } from '../../lib/types';

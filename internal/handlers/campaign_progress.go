@@ -72,7 +72,7 @@ func NewCampaignProgressPublisher(broker *events.Broker, log *slog.Logger) maili
 // default branch — see broker.go), so there is nothing here that could
 // block long enough for a context deadline to matter, and the send worker's
 // own correctness must not depend on this call succeeding or even being
-// watched by anyone (CLAUDE.md: "the worker's correctness path must not
+// watched by anyone (AGENTS.md: "the worker's correctness path must not
 // depend on anyone watching").
 func (p *campaignProgressPublisher) PublishCampaignProgress(_ context.Context, cp mailing.CampaignProgress) {
 	payload, err := json.Marshal(cp)

@@ -43,7 +43,7 @@ const (
 // GetSetting(ctx, key) takes no querier parameter, so — unlike the
 // events/subs/suppr stores ses_notifications.go holds concretely (see that
 // file's package doc comment) — this CAN be a genuine narrow interface per
-// CLAUDE.md §1. *auth.Store satisfies it via its existing GetSetting method;
+// AGENTS.md §1. *auth.Store satisfies it via its existing GetSetting method;
 // no change to internal/auth was needed. Settings reads are deliberately NOT
 // transaction-scoped: unlike a subscriber's own streak column (which the
 // transaction just incremented and must see fresh), the threshold

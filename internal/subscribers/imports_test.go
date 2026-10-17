@@ -497,7 +497,7 @@ func TestImportStore_Commit_SkipsSuppressedAddress(t *testing.T) {
 // TestImportStore_Commit_SkipsExistingSubscriberRegardlessOfStatus proves
 // an import never overwrites an existing row, whatever status it's in —
 // tested against a COMPLAINED row specifically, since that is the status
-// CLAUDE.md §9 says must never be resurrected by any path.
+// AGENTS.md §9 says must never be resurrected by any path.
 func TestImportStore_Commit_SkipsExistingSubscriberRegardlessOfStatus(t *testing.T) {
 	pool := testPool(t)
 	subStore := NewStore(pool)
@@ -1540,7 +1540,7 @@ func TestExpirePendingSweep_InvitedRow_RecordsInviteExpired(t *testing.T) {
 // write (confirmed_at/unsubscribed_at/updated_at). Order-independence
 // across rows is proved by running this test under `go test -shuffle=on`
 // and a fixed non-default seed, not `-count=N` (banned for flake-hunting,
-// CLAUDE.md §5a) — see this issue's Verification section.
+// AGENTS.md §5a) — see this issue's Verification section.
 func TestGrowth30Days_TruthTable_0336(t *testing.T) {
 	type scenario struct {
 		row  string

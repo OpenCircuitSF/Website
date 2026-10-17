@@ -8,7 +8,7 @@
 // a public signup can: a brand-new address goes to `pending` with a
 // confirmation email queued, an existing `active` address gets the
 // "already subscribed" notice, `unsubscribed`/`bounced` restarts double
-// opt-in, and `complained` never auto-resubscribes (CLAUDE.md §9). That
+// opt-in, and `complained` never auto-resubscribes (AGENTS.md §9). That
 // dispatch — newSignup/existingSignup/restartSignup — already lives in
 // subscribe.go (#0026), reviewed repeatedly for exactly the failure modes a
 // second implementation would risk reintroducing (the once-per-hour resend
@@ -509,7 +509,7 @@ type suppressRequest struct {
 type suppressResponse struct {
 	Subscriber subscriberView `json:"subscriber"`
 	// NoOp is true when the target was already `complained`: Unsubscribe is
-	// a guaranteed no-op on a complained row (CLAUDE.md §9 —
+	// a guaranteed no-op on a complained row (AGENTS.md §9 —
 	// subscribers.Store's package doc comment), so the request "succeeded"
 	// (200, no error) without changing the subscribers-table status. #0032's
 	// carried-in review finding requires the screen to surface this rather
@@ -645,7 +645,7 @@ type clearComplaintResponse struct {
 
 // ClearComplaint handles POST /admin/subscribers/{id}/clear-complaint, the
 // only sanctioned exit from `complained` (subscribers.Store.
-// AdminClearComplaint; CLAUDE.md §9). Returns 409 when the target isn't
+// AdminClearComplaint; AGENTS.md §9). Returns 409 when the target isn't
 // currently complained (ErrNotComplained) — #0032's own screen is expected
 // to offer this action only on complained rows, so reaching this state is a
 // caller bug worth surfacing, not a case to paper over.
@@ -828,7 +828,7 @@ func manualAddMessage(status string) string {
 // why it dispatches through *SubscribeHandler's own newSignup/existingSignup
 // rather than writing subscribers rows itself. Unlike the public endpoint,
 // this is an authenticated admin action, so there is no uniform-response
-// requirement (CLAUDE.md §9's enumeration-oracle concern is specific to the
+// requirement (AGENTS.md §9's enumeration-oracle concern is specific to the
 // unauthenticated public signup form) — the response reports exactly what
 // happened.
 //
@@ -968,7 +968,7 @@ type eraseSubscriberResponse struct {
 // the subscriber, cascading its subscriber_interests rows, after
 // anonymizing its email_sends rows and adding a permanent `manual`
 // suppression for its address — see internal/subscribers/erase.go's package
-// doc comment for the full design, and CLAUDE.md §9 for why a hard delete
+// doc comment for the full design, and AGENTS.md §9 for why a hard delete
 // here does not defeat the "complained never auto-resubscribes" rule (the
 // suppression added below outlives the row and blocks return either way).
 //

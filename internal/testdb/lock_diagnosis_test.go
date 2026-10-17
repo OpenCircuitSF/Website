@@ -561,7 +561,7 @@ func TestDiagnoseLockHolders_IgnoresLocksInOtherDatabase(t *testing.T) {
 
 	for _, db := range []string{ourDB, otherDB} {
 		if _, err := adminConn.Exec(ctx, "CREATE DATABASE "+db+" TEMPLATE "+templateDB); err != nil {
-			t.Fatalf("CREATE DATABASE %s TEMPLATE %s: %v — does the connecting role have CREATEDB, and does the template exist (scripts/testdb.sh template)? (CLAUDE.md §5b)", db, templateDB, err)
+			t.Fatalf("CREATE DATABASE %s TEMPLATE %s: %v — does the connecting role have CREATEDB, and does the template exist (scripts/testdb.sh template)? (AGENTS.md §5b)", db, templateDB, err)
 		}
 	}
 

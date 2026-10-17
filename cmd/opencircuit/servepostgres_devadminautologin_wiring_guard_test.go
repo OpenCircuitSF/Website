@@ -90,7 +90,7 @@ import (
 // for the wrong call site) would silently pass both. Two small, direct
 // tests -- each reading exactly one function's source for exactly one
 // shape -- cost roughly this file's length in duplication and buy back
-// exactly the property CLAUDE.md §8 keeps naming as worth paying for:
+// exactly the property AGENTS.md §8 keeps naming as worth paying for:
 // a mutation to one call site can only ever be caught or missed by the test
 // that reads that call site, never by a shared mechanism neither reviewer
 // has separately proved against both shapes. #0490's guard is proved

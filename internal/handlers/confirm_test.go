@@ -227,7 +227,7 @@ func TestConfirmHandler_ComplainedSubscriber_NeverReactivatedByConfirm(t *testin
 		t.Fatalf("GetByID: %v", err)
 	}
 	if after.Status != subscribers.StatusComplained {
-		t.Errorf("Status = %q, want %q (CLAUDE.md §9: complained never auto-resubscribes)", after.Status, subscribers.StatusComplained)
+		t.Errorf("Status = %q, want %q (AGENTS.md §9: complained never auto-resubscribes)", after.Status, subscribers.StatusComplained)
 	}
 }
 

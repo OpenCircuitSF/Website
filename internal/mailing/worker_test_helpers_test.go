@@ -1,6 +1,6 @@
 // worker_test_helpers_test.go: shared fixtures for worker_store_test.go and
 // worker_test.go, following campaigns_test.go/audience_test.go's own
-// conventions (CLAUDE.md §8b: every test seeds its own throwaway rows, never
+// conventions (AGENTS.md §8b: every test seeds its own throwaway rows, never
 // targets a literal or seeded id).
 package mailing
 

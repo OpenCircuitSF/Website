@@ -35,7 +35,7 @@ anything reached DNS.
 | `From:` | `Open Circuit SF <contact@mailing.opencircuitsf.com>` (`EMAIL_FROM`) |
 | `Reply-To:` | `contact@opencircuitsf.com` (`EMAIL_REPLY_TO`) — replies land in the normal Google inbox, so the subdomain never needs to receive mail |
 | Envelope / `Return-Path` | `bounce.mailing.opencircuitsf.com` (custom MAIL FROM, `SUCCESS`) |
-| **Apex MX** | **untouched.** Still Google. `CLAUDE.md` §9's "never point the apex MX at SES" is not theoretical here — it would hijack real mail |
+| **Apex MX** | **untouched.** Still Google. `AGENTS.md` §9's "never point the apex MX at SES" is not theoretical here — it would hijack real mail |
 | **Apex SPF / TXT** | **untouched.** The apex needs no SES record at all, because nothing sends as the apex |
 | Inbound `mailto:` unsubscribe | `lists.opencircuitsf.com` (`EMAIL_LIST_DOMAIN`) — a *third*, separate subdomain, **receive-only**: it verifies through its `_amazonses` TXT and carries Easy DKIM CNAMEs SES issued automatically on creation (`#0506`), but **nothing ever sends from it** — sending stays on `mailing.` |
 
@@ -133,7 +133,7 @@ sandbox is enough to develop against; it is not enough to launch.
 > attached there is **`$DEPLOY_ROLE`**, not `opencircuit-instance`.
 > The same `opencircuit-ses-send` permission shape applies — it was
 > presumably recreated for the new role when the box was provisioned — but
-> re-verify it there rather than assuming; see `CLAUDE.md` §7.
+> re-verify it there rather than assuming; see `AGENTS.md` §7.
 >
 > **One trap, recorded because it cost a live debugging round:** the policy's
 > `Resource` must be `identity/*`, not just the sending domain's identity.
@@ -236,7 +236,7 @@ topic, and that topic POSTs to `POST /api/ses/inbound` — the handler
 This section is the step-by-step runbook for the AWS objects and DNS
 records; everything in it is outward-facing and account-wide in one step
 (A10 below), so **the user runs every command in this section**, not an
-agent (`CLAUDE.md` §8b, §9).
+agent (`AGENTS.md` §8b, §9).
 
 All commands run in **`us-east-1`**, account `$AWS_ACCOUNT_ID` (placeholder — see the `#0511` redaction note above). Ready-to-apply
 JSON documents for the policy/rule steps live in
@@ -561,7 +561,7 @@ D2:
 Nothing in this section touches the apex, `bounce.mailing.`, `www`, the
 zone wildcard, or the `/.well-known/` Apache exception.
 
-## Open items (tracked in `CLAUDE.md` §10)
+## Open items (tracked in `AGENTS.md` §10)
 
 Two left, in the order they block things:
 
@@ -582,8 +582,8 @@ Resolved, no longer open:
 - The sending identity question (`PRD.md` §14 Q2) — it is
   `contact@mailing.opencircuitsf.com`, with `Reply-To: contact@opencircuitsf.com`
   so replies reach a Google Workspace inbox that a human already reads. That
-  also settles the "who reads that inbox" half of `CLAUDE.md` §10 item 4.
+  also settles the "who reads that inbox" half of `AGENTS.md` §10 item 4.
 
 Still not resolved, and not an SES problem: **campaigns refuse to start
 without a `physical_address` setting** (`#0045`, CAN-SPAM §7704,
-`CLAUDE.md` §10 item 3). That needs a PO box.
+`AGENTS.md` §10 item 3). That needs a PO box.

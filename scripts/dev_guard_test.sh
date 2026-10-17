@@ -61,7 +61,7 @@
 # trap.
 #
 # Every port used is a high, arbitrary number, verified free before use
-# (CLAUDE.md §8b) — a part aborts rather than forcing through, since forcing
+# (AGENTS.md §8b) — a part aborts rather than forcing through, since forcing
 # would be exactly the hazard #0117 exists to prevent. :5173 (Vite's hardcoded
 # dev port) is real and shared: the parts that reach Vite require it free and
 # abort (not force) if it is not.
@@ -98,7 +98,7 @@ port_accepts_connection() { ( exec 3<>"/dev/tcp/127.0.0.1/$1" ) 2>/dev/null; }
 
 # #0253: every port below used to be a fixed literal (54301, 54311, ...,
 # 54381), so two concurrent runs of this script were guaranteed to collide —
-# CLAUDE.md §5a makes concurrent agents the norm. Derive a per-run base
+# AGENTS.md §5a makes concurrent agents the norm. Derive a per-run base
 # instead, using the project's existing ISSUE (falling back to $$, the same
 # convention #0247 used for the restore drill) rather than inventing a second
 # scheme. `cksum` gives a numeric hash regardless of whether ISSUE is
@@ -451,7 +451,7 @@ run_foreign_survives_scenario() {  # <label> <script-path> <go-port> -> sets RES
     return
   fi
 
-  # A foreign process — standing in for another agent (CLAUDE.md §5a) — takes
+  # A foreign process — standing in for another agent (AGENTS.md §5a) — takes
   # over the now-free port.
   foreign="$(bind_holder "$port")"
   if ! wait_for 10 port_bound "$port"; then

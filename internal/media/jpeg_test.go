@@ -7,7 +7,7 @@ import (
 
 // jpegMarkersPresent walks data's header section and returns the set of
 // marker codes found — the structural, non-text-search way this package
-// proves a marker is present or absent (CLAUDE.md §8: BSD grep -P silently
+// proves a marker is present or absent (AGENTS.md §8: BSD grep -P silently
 // reports zero hits on bytes that are present, and issues/0433.md's plan
 // requires walking the marker/chunk stream rather than searching text).
 func jpegMarkersPresent(t *testing.T, data []byte) map[byte]bool {
@@ -62,7 +62,7 @@ func TestStripJPEG_PositiveControl_MetadataPresentBeforeStrip(t *testing.T) {
 // APP1 (which carries both Exif device tags and GPS) and APP13 (IPTC) must
 // both be gone from the stripped output, proven by walking the marker
 // stream — never by searching for "Apple"/"iPhone" text in the output,
-// which is exactly the shape CLAUDE.md §8 warns can silently prove nothing.
+// which is exactly the shape AGENTS.md §8 warns can silently prove nothing.
 func TestStripJPEG_RemovesDeviceAndGPSMetadata(t *testing.T) {
 	input := buildJPEGWithMetadata(t)
 

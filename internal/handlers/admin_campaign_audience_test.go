@@ -67,7 +67,7 @@ func TestAdminCampaignAudience_Preview_Success(t *testing.T) {
 	cleanupAdminCampaign(t, pool, c.ID)
 
 	// Three throwaway active subscribers, scoped and cleaned up like every
-	// other row in this package (CLAUDE.md §8b) — proves the count is real,
+	// other row in this package (AGENTS.md §8b) — proves the count is real,
 	// not a stub.
 	for i := 0; i < 3; i++ {
 		seedTestSubscriber(t, pool, subscribers.StatusActive)
@@ -149,7 +149,7 @@ func TestAdminCampaignAudience_Preview_UnknownCampaignNotFound(t *testing.T) {
 	seedSession(t, pool, admin, "admin-token-campaign-audience-404")
 
 	// A genuinely-missing id: seed through the real store, then delete it
-	// immediately — never a literal id (CLAUDE.md §8b).
+	// immediately — never a literal id (AGENTS.md §8b).
 	campaignStore := mailing.NewCampaignStore(pool)
 	c, err := campaignStore.Create(context.Background(), mailing.CampaignInput{
 		Name: uniqueAdminCampaignName(t), Subject: "s", BodyMD: "b", AudienceMode: mailing.AudienceAll,

@@ -93,7 +93,7 @@ describe('pendingExpiredBadgeClass', () => {
 // inviteResendButtonTitle has no plain-module test until #0367 — the only
 // prior coverage was indirect, through a jsdom mount of Pending.svelte
 // (Pending.behavior.test.ts). These call the pure function directly (no
-// DOM), per CLAUDE.md §1's "cheap path" — and, since #0367, the function no
+// DOM), per AGENTS.md §1's "cheap path" — and, since #0367, the function no
 // longer reads invite_resent_at at all (see its own doc comment), so these
 // exercise only invite_resend_available.
 describe('inviteResendButtonTitle', () => {

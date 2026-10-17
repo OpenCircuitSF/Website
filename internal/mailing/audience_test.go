@@ -14,7 +14,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
-// ── helpers (CLAUDE.md §8b: every test seeds its own throwaway rows, never
+// ── helpers (AGENTS.md §8b: every test seeds its own throwaway rows, never
 // targets a literal or seeded id) ────────────────────────────────────────────
 
 func uniqueMailingSubscriberEmail(t *testing.T) string {
@@ -192,7 +192,7 @@ func TestAudienceStore_Materialize_OnlyActiveIncluded(t *testing.T) {
 		t.Error("a pending subscriber was materialized; double opt-in requires confirmed consent")
 	}
 	if contains(complained) {
-		t.Error("a complained subscriber was materialized; CLAUDE.md §9 makes that state terminal")
+		t.Error("a complained subscriber was materialized; AGENTS.md §9 makes that state terminal")
 	}
 	if contains(unsubscribed) {
 		t.Error("an unsubscribed subscriber was materialized")

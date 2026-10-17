@@ -21,7 +21,7 @@ Group=postgres
 
 # scripts/db/backup.sh assumes it can find the project's .env two directories
 # up (for its BACKUP_DATABASES fallback) when run from the repo checkout.
-# Adjust this to wherever the repo actually lives on the box — CLAUDE.md §10
+# Adjust this to wherever the repo actually lives on the box — AGENTS.md §10
 # item 6 records the real server layout as still undocumented; /opt/opencircuit
 # mirrors ShortLinks' own /opt/shortlinks convention (its DEPLOYMENT.md) and is
 # a placeholder until the real path is captured.

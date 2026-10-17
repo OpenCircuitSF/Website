@@ -7,7 +7,7 @@
 #     PostgreSQL, no migrations needed. The dev auto-login middleware
 #     (internal/middleware.DevAutoLogin) opens the account view immediately
 #     as the mock admin. STORAGE=json has NO mailing list at all — no
-#     interests, subscribers, campaigns, or suppressions (CLAUDE.md §5) — so
+#     interests, subscribers, campaigns, or suppressions (AGENTS.md §5) — so
 #     it cannot exercise that subsystem.
 #   --postgres/-p — the real Postgres path (STORAGE unset), for the mailing
 #     subsystem. Requires a local database already migrated and seeded with
@@ -17,9 +17,9 @@
 #     set automatically so the account view opens as that seeded admin with
 #     no passkey ceremony (internal/middleware.DevAdminAutoLogin, #0402) —
 #     refused at startup unless BASE_URL's host is localhost/127.0.0.1
-#     (CLAUDE.md §10). MAILER_NOOP=true is also set automatically: without
+#     (AGENTS.md §10). MAILER_NOOP=true is also set automatically: without
 #     it the real SES mailer construction refuses to start without
-#     SES_CONFIGURATION_SET (CLAUDE.md §10).
+#     SES_CONFIGURATION_SET (AGENTS.md §10).
 #
 # Usage:
 #   ./scripts/dev.sh                      # hot-reload, STORAGE=json: Go API on :$PORT + Vite on :5173
@@ -44,7 +44,7 @@
 #
 # If :$PORT or :5173 is already held by another process, dev.sh refuses to
 # start rather than killing it (#0117) — it may be another agent's server, or
-# the user's own editor preview (CLAUDE.md §8b). To reclaim a port you are
+# the user's own editor preview (AGENTS.md §8b). To reclaim a port you are
 # sure is your own stale dev.sh, e.g. re-running after a terminal was closed
 # without Ctrl-C:
 #   RECLAIM_PORTS=1 ./scripts/dev.sh
@@ -66,7 +66,7 @@ ok()   { printf '    \033[32m✓\033[0m %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 
 # is_true mirrors strconv.ParseBool's truthy set ("1", "t", "T", "TRUE",
-# "true", "True"), lowercased first since bash 3.2.57 (CLAUDE.md §8) has no
+# "true", "True"), lowercased first since bash 3.2.57 (AGENTS.md §8) has no
 # ${var,,}. Used below to decide whether the "logs in automatically" banner
 # is honest when DEV_ADMIN_LOGIN was overridden by the caller rather than
 # left at this script's own default.
@@ -116,7 +116,7 @@ export WEBAUTHN_RP_ID="${WEBAUTHN_RP_ID:-localhost}"
 # attempted through hot-reload mode against either backend, WOULD hit this
 # mismatch, which is why it's threaded to $PORT anyway: so --built mode is
 # correct and so the value stays honest about which port dev.sh actually
-# started, rather than silently naming a fixed 8080 (CLAUDE.md §7).
+# started, rather than silently naming a fixed 8080 (AGENTS.md §7).
 export WEBAUTHN_RP_ORIGIN="${WEBAUTHN_RP_ORIGIN:-http://localhost:${PORT}}"
 export SESSION_SECRET="${SESSION_SECRET:-dev-session-secret-not-for-production}"
 export ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
@@ -129,7 +129,7 @@ export ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
 # production config: EMAIL_FROM uses a "dev@" local part (production is
 # "contact@mailing…", corrected 2026-09-03 #0414 — this comment previously
 # said "hello@…") and EMAIL_LIST_DOMAIN uses "lists.localhost" rather than the
-# real "lists.opencircuitsf.com" (CLAUDE.md §9), so nobody mistakes a dev run
+# real "lists.opencircuitsf.com" (AGENTS.md §9), so nobody mistakes a dev run
 # for a production one. AWS_REGION is inert under both backends here (no AWS
 # SDK call is ever made — MAILER_NOOP swaps in the no-op mailer on the
 # --postgres path too), so it is left at the real SES region — us-east-1,
@@ -163,7 +163,7 @@ for c in go node npm; do
 done
 ok "repo:    $REPO"
 if [ "$STORAGE" = "json" ]; then
-  ok "storage: json (in-memory dev store, no Postgres, no mailing list — CLAUDE.md §5)"
+  ok "storage: json (in-memory dev store, no Postgres, no mailing list — AGENTS.md §5)"
 else
   ok "storage: postgres"
   ok "database: ${DATABASE_URL:-<unset>}"
@@ -249,7 +249,7 @@ own_holds_port() {  # <port> <root-pid> — true when a pid WE forked is LISTENi
 # keeps serving an OLD build.
 #
 # But a held port is not necessarily OUR stale process (#0117): it may be
-# another agent's dev.sh (CLAUDE.md §5a permits several running at once), or
+# another agent's dev.sh (AGENTS.md §5a permits several running at once), or
 # the user's own editor preview (§8b — "never bind a fixed, shared port ...
 # without verifying ownership" applies just as much to killing one). Default
 # to refusing and naming the holder, the same shape §4/#0150 settled on for
@@ -288,7 +288,7 @@ free_port() {
     [ -z "$cmd" ] && cmd="(process exited before it could be inspected)"
     printf '    pid %s: %s\n' "$pid" "$cmd" >&2
   done
-  printf '  This may be another agent'"'"'s dev.sh (CLAUDE.md section 5a) or an unrelated process — not necessarily yours to kill.\n' >&2
+  printf '  This may be another agent'"'"'s dev.sh (AGENTS.md section 5a) or an unrelated process — not necessarily yours to kill.\n' >&2
   printf '  Options:\n' >&2
   printf '    - if it is genuinely yours (e.g. an orphaned dev.sh from a closed terminal), stop it: kill %s\n' "$(printf '%s' "$pids" | tr '\n' ' ')" >&2
   printf '    - or force dev.sh to reclaim it: RECLAIM_PORTS=1 ./scripts/dev.sh\n' >&2

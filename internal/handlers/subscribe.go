@@ -4,7 +4,7 @@
 // per-IP rate limiter (wired in cmd/opencircuit/main.go via
 // middleware.RateLimiter, matching the pattern used for the auth routes).
 //
-// # The uniform 202 — CLAUDE.md §9's single most important rule for this file
+// # The uniform 202 — AGENTS.md §9's single most important rule for this file
 //
 // Every branch through Subscribe ends by calling writeSubscribeUniform202,
 // which writes the exact same status code, headers, and JSON body
@@ -126,7 +126,7 @@
 // What this costs: a client that gets the 202 no longer has any timing or
 // status signal for whether its specific submission was accepted, retried,
 // or silently dropped by the async worker (queue-full, shutdown-in-flight)
-// — but the endpoint already promised nothing about that (CLAUDE.md §9);
+// — but the endpoint already promised nothing about that (AGENTS.md §9);
 // this removes a side channel that was never a supported guarantee. The
 // classification (new/active/pending/complained/suppressed/bot) itself is
 // still decided synchronously (the two fixed reads), so it does not
@@ -855,7 +855,7 @@ func (h *SubscribeHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 	// branch here gains or loses request-path work by this write existing.
 	//
 	// An enqueue failure is logged, not surfaced — this endpoint's
-	// contract (CLAUDE.md §9) is a byte-identical 202 regardless of any
+	// contract (AGENTS.md §9) is a byte-identical 202 regardless of any
 	// internal failure. It leaves intakeID at its zero value, which
 	// markIntakeDone (called once dispatchMutation finishes, either by the
 	// fast path below or never at all if enqueueMutation also drops the
@@ -983,7 +983,7 @@ func (h *SubscribeHandler) existingSignup(ctx context.Context, existing subscrib
 		h.restartSignup(ctx, existing, interestIDs, evidence, now)
 
 	case subscribers.StatusComplained:
-		// CLAUDE.md §9 / PRD notes: complained never auto-resubscribes.
+		// AGENTS.md §9 / PRD notes: complained never auto-resubscribes.
 		// No store call, no mailer call — falls straight through to the
 		// same uniform 202 every other branch produces.
 

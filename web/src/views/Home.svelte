@@ -216,7 +216,7 @@
     // (reduced-motion renders synchronously below). The fetch/fallback/
     // live-enrichment orchestration itself lives in lib/crtScreen.ts's
     // crtLoadScript (review bounce on #0393: moved out of this component so
-    // it is unit-testable without a DOM, per CLAUDE.md §1) -- this is now
+    // it is unit-testable without a DOM, per AGENTS.md §1) -- this is now
     // just a thin wrapper that calls it and reassigns `script`.
     let script: CrtScriptStep[] = crtFallbackScript();
 

@@ -8,14 +8,14 @@ import (
 	"testing"
 )
 
-// #0113: CLAUDE.md §11 indexes every PRD.md section with a stated line count
+// #0113: AGENTS.md §11 indexes every PRD.md section with a stated line count
 // and the exact `sed` command that extracts it — the table an orchestrator
 // consults instead of reading PRD.md's ~1,800 lines whole. Three rows had
 // drifted from the file when this issue was filed, and nothing caught it:
 // grep -rln 'PRD.md' --include='*_test.go' . found prd_index_parity_test.go,
 // but that file (despite its name) guards §6.2's SQL schema against
 // migrations/ — it never reads §11's table. docs_parity_test.go guards
-// docs/database.md and CLAUDE.md's migration-range sentence, not this table
+// docs/database.md and AGENTS.md's migration-range sentence, not this table
 // either. So the table was hand-maintained, and it drifted twice on the same
 // three-row shape: once before #0113 was filed, and again after its first
 // fix, when #0148 widened §6.2 by 30 lines (and its §6 parent along with it)
@@ -29,7 +29,7 @@ import (
 // semantics `sed -n '/START/,/END/p'` has: begin at the first line matching
 // START, print through and including the first *subsequent* line matching
 // END, or to end-of-file if END never matches again (true only for §14, the
-// last section — CLAUDE.md §11 documents this and says not to "fix" it into
+// last section — AGENTS.md §11 documents this and says not to "fix" it into
 // an off-by-one).
 //
 // What this actually checks, and what it does not (#0218): it verifies the
@@ -56,13 +56,13 @@ const prdSectionIndexHeading = "## 11. PRD section index"
 // prdIndexRow is one data row of §11's table.
 type prdIndexRow struct {
 	label      string
-	statedLine int // 1-based line number in CLAUDE.md, for error messages
+	statedLine int // 1-based line number in AGENTS.md, for error messages
 	stated     int
 	startPat   string
 	endPat     string
 }
 
-// parsePRDIndexTable extracts §11's table rows from CLAUDE.md, scoped to the
+// parsePRDIndexTable extracts §11's table rows from AGENTS.md, scoped to the
 // text between the "## 11. PRD section index" heading and the next "## "
 // heading (or EOF), so a table row shape appearing anywhere else in the file
 // can never be mistaken for one of §11's rows.
@@ -78,7 +78,7 @@ func parsePRDIndexTable(t *testing.T, claudeMD string) []prdIndexRow {
 		}
 	}
 	if start == -1 {
-		t.Fatalf("CLAUDE.md: heading %q not found — has §11 been renamed or renumbered? Update prdSectionIndexHeading.", prdSectionIndexHeading)
+		t.Fatalf("AGENTS.md: heading %q not found — has §11 been renamed or renumbered? Update prdSectionIndexHeading.", prdSectionIndexHeading)
 	}
 
 	end := len(lines)
@@ -114,23 +114,23 @@ func parsePRDIndexTable(t *testing.T, claudeMD string) []prdIndexRow {
 
 		m := rowPattern.FindStringSubmatch(extractCell)
 		if m == nil {
-			t.Errorf("CLAUDE.md §11 row %q: Extract cell %q is not a single backtick-quoted command", label, extractCell)
+			t.Errorf("AGENTS.md §11 row %q: Extract cell %q is not a single backtick-quoted command", label, extractCell)
 			continue
 		}
 		startPat, endPat, ok := parseSedRangeCmd(m[1])
 		if !ok {
-			t.Errorf("CLAUDE.md §11 row %q: Extract command %q does not match the expected `sed -n '/START/,/END/p' PRD.md` shape", label, m[1])
+			t.Errorf("AGENTS.md §11 row %q: Extract command %q does not match the expected `sed -n '/START/,/END/p' PRD.md` shape", label, m[1])
 			continue
 		}
 
 		// #0218: reject anything sedBREToGoRegex cannot translate faithfully
 		// before it is ever compiled — see sedPatternUnsafeConstruct.
 		if construct, safe := sedPatternUnsafeConstruct(startPat); !safe {
-			t.Errorf("CLAUDE.md:%d §11 row %q: START pattern /%s/ contains %s — this cannot be translated from sed's BRE to Go's RE2 faithfully, so the row's count cannot be trusted. Rewrite the pattern to avoid it, or teach sedBREToGoRegex and sedPatternUnsafeConstruct together.", i+1, label, startPat, construct)
+			t.Errorf("AGENTS.md:%d §11 row %q: START pattern /%s/ contains %s — this cannot be translated from sed's BRE to Go's RE2 faithfully, so the row's count cannot be trusted. Rewrite the pattern to avoid it, or teach sedBREToGoRegex and sedPatternUnsafeConstruct together.", i+1, label, startPat, construct)
 			continue
 		}
 		if construct, safe := sedPatternUnsafeConstruct(endPat); !safe {
-			t.Errorf("CLAUDE.md:%d §11 row %q: END pattern /%s/ contains %s — this cannot be translated from sed's BRE to Go's RE2 faithfully, so the row's count cannot be trusted. Rewrite the pattern to avoid it, or teach sedBREToGoRegex and sedPatternUnsafeConstruct together.", i+1, label, endPat, construct)
+			t.Errorf("AGENTS.md:%d §11 row %q: END pattern /%s/ contains %s — this cannot be translated from sed's BRE to Go's RE2 faithfully, so the row's count cannot be trusted. Rewrite the pattern to avoid it, or teach sedBREToGoRegex and sedPatternUnsafeConstruct together.", i+1, label, endPat, construct)
 			continue
 		}
 
@@ -144,7 +144,7 @@ func parsePRDIndexTable(t *testing.T, claudeMD string) []prdIndexRow {
 	}
 
 	if len(rows) == 0 {
-		t.Fatalf("CLAUDE.md §11: found the heading but parsed zero table rows — has the table's shape changed?")
+		t.Fatalf("AGENTS.md §11: found the heading but parsed zero table rows — has the table's shape changed?")
 	}
 	return rows
 }
@@ -208,7 +208,7 @@ func parseSedRangeCmd(cmd string) (startPat, endPat string, ok bool) {
 	return "", "", false
 }
 
-// sedBREToGoRegex translates the one BRE-specific escape CLAUDE.md's §11
+// sedBREToGoRegex translates the one BRE-specific escape AGENTS.md's §11
 // `sed` commands use into Go's RE2 syntax. Sed's basic regular expressions
 // require `\{...\}` to write an interval expression — a bare `{`/`}` is
 // literal — which is exactly backwards from RE2, where a bare `{n,m}` is the
@@ -264,7 +264,7 @@ func sedBREToGoRegex(pat string) string {
 //
 // `\+` `\?` `\|` are omitted: they are literal on this repo's sed (BSD) and
 // remain literal, unrewritten, in RE2 — agreement, not divergence. They only
-// diverge under GNU sed, which this project does not use (CLAUDE.md §5). A
+// diverge under GNU sed, which this project does not use (AGENTS.md §5). A
 // leading `^` and a trailing `$` are omitted for the same reason: both
 // dialects treat them as anchors there.
 //
@@ -397,7 +397,7 @@ func countPRDSection(t *testing.T, prdLines []string, startPat, endPat string) (
 
 // TestSedPatternUnsafeConstruct exercises sedPatternUnsafeConstruct directly
 // against shapes #0230's review found undercovered by the 48 rows in
-// CLAUDE.md today. "unsafe" cases must be rejected (safe == false); "safe"
+// AGENTS.md today. "unsafe" cases must be rejected (safe == false); "safe"
 // cases must pass through untouched (safe == true) so a legitimate pattern
 // isn't refused.
 func TestSedPatternUnsafeConstruct(t *testing.T) {
@@ -501,7 +501,7 @@ func TestSedPatternUnsafeConstruct(t *testing.T) {
 	})
 }
 
-// TestPRDSectionIndexParity is #0113's guard: every row of CLAUDE.md §11
+// TestPRDSectionIndexParity is #0113's guard: every row of AGENTS.md §11
 // must match what its own Extract command actually produces against the
 // current PRD.md.
 func TestPRDSectionIndexParity(t *testing.T) {
@@ -525,15 +525,15 @@ func TestPRDSectionIndexParity(t *testing.T) {
 	for _, row := range rows {
 		actual, found, mayRestart := countPRDSection(t, prdLines, row.startPat, row.endPat)
 		if !found {
-			t.Errorf("CLAUDE.md:%d §11 row %q: start pattern /%s/ matches nothing in PRD.md — has this section moved, been renamed, or been deleted? The row's Extract command is now broken, not just its count.", row.statedLine, row.label, row.startPat)
+			t.Errorf("AGENTS.md:%d §11 row %q: start pattern /%s/ matches nothing in PRD.md — has this section moved, been renamed, or been deleted? The row's Extract command is now broken, not just its count.", row.statedLine, row.label, row.startPat)
 			continue
 		}
 		if mayRestart {
-			t.Errorf("CLAUDE.md:%d §11 row %q: START pattern /%s/ matches PRD.md again after this row's computed range ends — real `sed` would restart a new START/END range there and print more lines, but countPRDSection only computes the first range (known limit, #0218), so the count below cannot be trusted for this row. Narrow the START pattern to match exactly once, or verify this row's count by hand.", row.statedLine, row.label, row.startPat)
+			t.Errorf("AGENTS.md:%d §11 row %q: START pattern /%s/ matches PRD.md again after this row's computed range ends — real `sed` would restart a new START/END range there and print more lines, but countPRDSection only computes the first range (known limit, #0218), so the count below cannot be trusted for this row. Narrow the START pattern to match exactly once, or verify this row's count by hand.", row.statedLine, row.label, row.startPat)
 			continue
 		}
 		if actual != row.stated {
-			t.Errorf("CLAUDE.md:%d §11 row %q: stated %d lines, PRD.md's current text is %d — run `%s` (with the trailing terminator line, if any, one more than this count) and correct the row.", row.statedLine, row.label, row.stated, actual, "sed -n '/"+row.startPat+"/,/"+row.endPat+"/p' PRD.md")
+			t.Errorf("AGENTS.md:%d §11 row %q: stated %d lines, PRD.md's current text is %d — run `%s` (with the trailing terminator line, if any, one more than this count) and correct the row.", row.statedLine, row.label, row.stated, actual, "sed -n '/"+row.startPat+"/,/"+row.endPat+"/p' PRD.md")
 		}
 	}
 }
@@ -552,11 +552,11 @@ func TestPRDSectionIndexTotalMatchesFile(t *testing.T) {
 	}
 	m := prdMDLineCountPattern.FindStringSubmatch(string(claudeBytes))
 	if m == nil {
-		t.Fatalf("CLAUDE.md §11: preamble sentence \"`PRD.md` is N,NNN lines\" not found — has the wording changed? Update prdMDLineCountPattern.")
+		t.Fatalf("AGENTS.md §11: preamble sentence \"`PRD.md` is N,NNN lines\" not found — has the wording changed? Update prdMDLineCountPattern.")
 	}
 	stated, err := strconv.Atoi(strings.ReplaceAll(m[1], ",", ""))
 	if err != nil {
-		t.Fatalf("CLAUDE.md §11: preamble line count %q does not parse as an integer: %v", m[1], err)
+		t.Fatalf("AGENTS.md §11: preamble line count %q does not parse as an integer: %v", m[1], err)
 	}
 
 	prdBytes, err := os.ReadFile(prdPath)
@@ -570,6 +570,6 @@ func TestPRDSectionIndexTotalMatchesFile(t *testing.T) {
 	actual := len(lines)
 
 	if stated != actual {
-		t.Errorf("CLAUDE.md §11 preamble states PRD.md is %d lines; `wc -l PRD.md` says %d. Update the preamble sentence.", stated, actual)
+		t.Errorf("AGENTS.md §11 preamble states PRD.md is %d lines; `wc -l PRD.md` says %d. Update the preamble sentence.", stated, actual)
 	}
 }

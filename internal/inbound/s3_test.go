@@ -15,7 +15,7 @@ import (
 )
 
 // fakeS3 is a minimal in-memory s3API double — no network, no AWS
-// credentials, matching CLAUDE.md §10's "develop against mocks" for
+// credentials, matching AGENTS.md §10's "develop against mocks" for
 // anything gated on #0057's not-yet-created bucket.
 type fakeS3 struct {
 	objects map[string][]byte

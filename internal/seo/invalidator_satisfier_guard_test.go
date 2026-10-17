@@ -78,7 +78,7 @@ import (
 // regardless of //go:build constraints, so a `//go:build linux` file
 // declaring an accidental Invalidate() was caught even on a developer's
 // mac. A naive go/types replacement running under the host's default
-// GOOS/GOARCH would lose that: production is linux/arm64 (CLAUDE.md §7), so
+// GOOS/GOARCH would lose that: production is linux/arm64 (AGENTS.md §7), so
 // a linux-only satisfier would be invisible to a darwin type-check. This
 // guard closes that gap deliberately rather than losing it silently: its
 // packages.Config.Env pins GOOS=linux and GOARCH=arm64, matching production
@@ -130,7 +130,7 @@ func TestInvalidatorSatisfierSet(t *testing.T) {
 	// full shape, including the package-scope alias case (#0353).
 	got, concreteTypesChecked := scanInvalidatorSatisfiers(scope, invalidateOnly)
 
-	// Fail closed (CLAUDE.md §8 / #0275's lesson): finding zero named
+	// Fail closed (AGENTS.md §8 / #0275's lesson): finding zero named
 	// concrete types is never legitimate evidence there is nothing to
 	// check -- it means the scan itself broke.
 	if concreteTypesChecked == 0 {
@@ -192,7 +192,7 @@ func TestInvalidatorSatisfierSet(t *testing.T) {
 // package instead of re-deriving the same assertion by hand -- the same
 // function runs in both tests, so a future edit that breaks the alias
 // handling breaks both, and the synthetic test is not merely a second copy
-// of the same claim (CLAUDE.md §8, "a guard's oracle must not be the same
+// of the same claim (AGENTS.md §8, "a guard's oracle must not be the same
 // bytes as its subject").
 //
 // It records every named or aliased, non-interface type in scope whose
@@ -397,7 +397,7 @@ type AliasToIfaceLiteral = interface{ Invalidate() }
 	got, concreteTypesChecked := scanInvalidatorSatisfiers(pkg.Scope(), invalidateOnly)
 
 	// Fail closed: prove the harness itself found something before trusting
-	// its negative assertions below (CLAUDE.md §8's fail-open lesson).
+	// its negative assertions below (AGENTS.md §8's fail-open lesson).
 	if concreteTypesChecked == 0 {
 		t.Fatal("fail closed: scanInvalidatorSatisfiers found zero concrete types in the synthetic " +
 			"package -- the harness itself is broken, not evidence there is nothing to check")
@@ -452,7 +452,7 @@ type AliasToIfaceLiteral = interface{ Invalidate() }
 
 // loadSeoPackageForProductionTarget type-checks internal/seo (this
 // package's own directory) via golang.org/x/tools/go/packages, targeting
-// production's GOOS/GOARCH (linux/arm64, CLAUDE.md §7) rather than the
+// production's GOOS/GOARCH (linux/arm64, AGENTS.md §7) rather than the
 // host's default, so a build-tag-gated file that would actually ship is not
 // invisible to this guard on a developer's mac. It runs with
 // GOFLAGS=-mod=readonly explicitly forced (never -mod=mod): a type-checking

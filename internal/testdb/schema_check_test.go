@@ -18,7 +18,7 @@ import (
 //
 // Every fixture in this file lives under t.TempDir(), and no test in this
 // file uses runtime.Caller, os.Getwd, or a ".."-shaped path literal —
-// deliberately: CLAUDE.md §5's repo-wide-guard parity test
+// deliberately: AGENTS.md §5's repo-wide-guard parity test
 // (internal/db's TestClaudeMDRepoWideGuardPackageSetParity) recognizes a
 // package reaching outside its own directory only via those idioms
 // appearing in a _test.go file, and the plan for #0360 keeps that reach
@@ -124,7 +124,7 @@ ALTER TABLE widgets
 }
 
 // TestStripLineComments_ProseDescribingDDLYieldsNoObject is #0360's plan
-// Finding 2, pinned as an asserted string literal per CLAUDE.md §8's
+// Finding 2, pinned as an asserted string literal per AGENTS.md §8's
 // prescription for a citation-guard-shaped example (#0384): without
 // comment stripping, a scan of migrations/ reported 10 false positives on
 // a healthy opencircuit_test, because prose like this fixture's reads as
@@ -305,7 +305,7 @@ func TestClassifyVersion_Equal(t *testing.T) {
 }
 
 // TestCheckSchema_PrivateDatabase_DroppedColumnsDetected is #0360's own
-// reproduction, DB-backed, against a private database (CLAUDE.md §8b —
+// reproduction, DB-backed, against a private database (AGENTS.md §8b —
 // never the shared opencircuit_test or opencircuit). It migrates a fresh
 // private database all the way up from this checkout's real migrations/
 // (via migrate up, the same tool scripts/testdb.sh uses), confirms
@@ -320,7 +320,7 @@ func TestCheckSchema_PrivateDatabase_DroppedColumnsDetected(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL not set")
 	}
 	if _, err := exec.LookPath("migrate"); err != nil {
-		t.Skip("migrate not on PATH (CLAUDE.md §5b)")
+		t.Skip("migrate not on PATH (AGENTS.md §5b)")
 	}
 	ctx := context.Background()
 
@@ -337,7 +337,7 @@ func TestCheckSchema_PrivateDatabase_DroppedColumnsDetected(t *testing.T) {
 	}
 
 	// zz_ prefix keeps this outside the opencircuit_test_% pool
-	// scripts/testdb.sh's gc sweeps (CLAUDE.md §5a), matching the
+	// scripts/testdb.sh's gc sweeps (AGENTS.md §5a), matching the
 	// convention TestDiagnoseLockHolders_IgnoresLocksInOtherDatabase
 	// already uses in this package.
 	dbName := fmt.Sprintf("zz_testdb_0360_%d", Unique())
@@ -350,7 +350,7 @@ func TestCheckSchema_PrivateDatabase_DroppedColumnsDetected(t *testing.T) {
 	})
 
 	if _, err := adminConn.Exec(ctx, "CREATE DATABASE "+dbName); err != nil {
-		t.Fatalf("CREATE DATABASE %s: %v — does the connecting role have CREATEDB? (CLAUDE.md §5b)", dbName, err)
+		t.Fatalf("CREATE DATABASE %s: %v — does the connecting role have CREATEDB? (AGENTS.md §5b)", dbName, err)
 	}
 
 	dir, err := migrationsDir()

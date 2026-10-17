@@ -29,10 +29,10 @@ var envVarNameLiteral = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 // The oracle is config.go itself, re-derived by parsing its AST for every
 // call whose first argument is a string literal shaped like an environment
 // variable name (envVarNameLiteral: `^[A-Z][A-Z0-9_]*$`) — not a hand-copied
-// list of names living next to the thing it checks (CLAUDE.md §8: "a guard's
+// list of names living next to the thing it checks (AGENTS.md §8: "a guard's
 // oracle must not be the same bytes as its subject"). Mutating config.go's
 // scan root — adding a new call reading a variable — changes what this test
-// extracts and so changes `got`, which is exactly the shape CLAUDE.md §8
+// extracts and so changes `got`, which is exactly the shape AGENTS.md §8
 // calls a legitimate, non-circular in-package Go check ("mutate the scan
 // roots and `got` itself changes").
 //
@@ -55,7 +55,7 @@ var envVarNameLiteral = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 // a string literal that looks like an environment variable name.
 // `env("EMAIL_FROM")`, `os.Getenv("EMAIL_FROM")`, and
 // `someFutureHelper("EMAIL_FROM")` all extract identically. This closes the
-// wrapper-rename case above without a second mechanism (CLAUDE.md §8's
+// wrapper-rename case above without a second mechanism (AGENTS.md §8's
 // #0258 warning) — it is the same single AST walk with its match condition
 // changed.
 //
@@ -94,7 +94,7 @@ var envVarNameLiteral = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 // appears as a `NAME=` line somewhere in the file) — it says nothing about
 // whether the shipped value works, is required, or is a secret; those are
 // judgment calls #0423's issue file and docs/configuration.md's table make
-// by hand, deliberately not automated (CLAUDE.md §8's ceiling-vs-floor
+// by hand, deliberately not automated (AGENTS.md §8's ceiling-vs-floor
 // distinction: whether a value is safe to publish is not a fact `got` can
 // observe). It also does not examine the VALUE side of a `NAME=value` line
 // at all — whether that value parses the same way under both systemd's
@@ -145,7 +145,7 @@ func TestEnvExampleCoversLoaderVariables(t *testing.T) {
 	// count on purpose; the constant below is the only number that has to
 	// stay accurate. Falling below the floor means the walk stopped seeing
 	// reads it used to see, not that config.go reads fewer variables —
-	// assert this before trusting the result, per CLAUDE.md §8's "assert the
+	// assert this before trusting the result, per AGENTS.md §8's "assert the
 	// extraction produced something before hashing/using it" rule. Lower
 	// this constant only when a variable is genuinely and deliberately
 	// removed from config.go — a loud, reviewed edit — never to make a
@@ -227,7 +227,7 @@ var envTrailingComment = regexp.MustCompile(`[ \t]#`)
 // `PRICE=cost$(FOO)` loads as `cost)` rather than `cost` or `cost$(FOO)`.
 // Verified by probing godotenv.Unmarshal directly, in a throwaway module
 // against the real v1.5.1 dependency (never by reasoning from the regex
-// alone — CLAUDE.md §5, and the exact way the group-numbering bug was
+// alone — AGENTS.md §5, and the exact way the group-numbering bug was
 // missed the first time):
 //
 //	value              godotenv loads   diverges from systemd's literal text?
@@ -303,7 +303,7 @@ var envTrailingComment = regexp.MustCompile(`[ \t]#`)
 //
 // Verified by probing godotenv.Unmarshal directly, in a throwaway module
 // against the real v1.5.1 dependency (never by reasoning from the regex
-// alone — CLAUDE.md §5):
+// alone — AGENTS.md §5):
 //
 //	value          godotenv loads  diverges?
 //	cost\$FOO      cost$FOO        yes (backslash stripped; unlike the
@@ -360,7 +360,7 @@ var envDollarExpansion = regexp.MustCompile(`\\\$|\$\(?\{?[A-Z0-9_]+\}?`)
 // re-derived that sweep independently (see issues/0461.md's ## Work log for
 // the corpus construction and counts, which differ from the earlier
 // review's own count because that review's exact corpus is not reproducible
-// from its write-up alone — CLAUDE.md §8's "every number inherited without
+// from its write-up alone — AGENTS.md §8's "every number inherited without
 // measurement in this lineage has been wrong at least once" is exactly why
 // this was re-run rather than copied). That finding is oracle-dependent, and
 // the dependence is the point. Against a systemd model that keeps the raw
@@ -376,7 +376,7 @@ var envDollarExpansion = regexp.MustCompile(`\\\$|\$\(?\{?[A-Z0-9_]+\}?`)
 //
 // Read from extractVarValue (parser.go) and confirmed by probing
 // godotenv.Unmarshal directly — never by reasoning from the source alone
-// (CLAUDE.md §5) — a leading quote changes the parsing path entirely:
+// (AGENTS.md §5) — a leading quote changes the parsing path entirely:
 //
 //   - Only the quote character itself is trimmed from each end, not
 //     whitespace. Interior whitespace, including a space adjacent to either
@@ -404,12 +404,12 @@ var envDollarExpansion = regexp.MustCompile(`\\\$|\$\(?\{?[A-Z0-9_]+\}?`)
 // separate grammar — not the one #0450's, #0453's and #0457's reviews
 // verified is at least internally consistent for godotenv's own expansion
 // and escaping — and this repository has no systemd parser to probe the way
-// CLAUDE.md §5 and this issue's own criterion 3 require for godotenv.
+// AGENTS.md §5 and this issue's own criterion 3 require for godotenv.
 // Modelling both grammars and keeping them in lockstep is exactly the shape
 // that has produced five issues in this lineage (#0441, #0450, #0453,
 // #0457, #0461) for ONE mechanism (dollar expansion) alone. #0461 decided
 // not to build a sixth: quoted values are forbidden outright in this file,
-// the same policy #0441 already chose for "export " (CLAUDE.md §8, #0258 —
+// the same policy #0441 already chose for "export " (AGENTS.md §8, #0258 —
 // no second mechanism where a blanket rule closes the whole family).
 //
 // This is deliberately a FIFTH shape, not a widening of one of the other
@@ -429,7 +429,7 @@ var envQuotedValuePrefix = regexp.MustCompile(`^[ \t]*(['"])`)
 // #0441 — systemd's EnvironmentFile= and joho/godotenv v1.5.1 (the library
 // config.go's loadFromFile actually uses) — would read differently. It
 // returns the number of assignment-shaped lines it recognized (for the
-// caller's own fail-closed floor check, CLAUDE.md §8) and one formatted
+// caller's own fail-closed floor check, AGENTS.md §8) and one formatted
 // violation string per offending line, naming the line number, the variable,
 // and which parser would disagree and how.
 //
@@ -526,7 +526,7 @@ func scanEnvExampleValueShapes(content []byte) (scanned int, violations []string
 }
 
 // minScannedEnvExampleAssignments is the fail-closed floor for
-// scanEnvExampleValueShapes (CLAUDE.md §8: "assert the scan saw a plausible
+// scanEnvExampleValueShapes (AGENTS.md §8: "assert the scan saw a plausible
 // number of lines before concluding anything" — the exact lesson #0258 and
 // #0428 both taught the hard way, the latter in this same package). Its
 // prose used to carry the same defect #0483 found and removed from
@@ -584,14 +584,14 @@ func checkScannedFloor(scanned, floor int) error {
 // .env.example's text currently contains. This test proves the opposite
 // half: that .env.example's CURRENT text contains none of the four
 // divergent shapes, for every line, not just the two #0429 fixed. Per
-// CLAUDE.md §8 ("the two homes are not exclusive"), a shape worth guarding
+// AGENTS.md §8 ("the two homes are not exclusive"), a shape worth guarding
 // against a specific past incident is worth guarding both as text-shape
 // (here) and as loader-behavior (there).
 //
 // #0441 criterion 4: this test does not scan production's own
 // /etc/opencircuit/config.env. Reading it needs sudo on a secrets file that
 // #0415 separately owns the contents of, and .env.example is the thing this
-// repo can see and is the documented install source (CLAUDE.md §5's
+// repo can see and is the documented install source (AGENTS.md §5's
 // internal/config row, #0423) — a production drift from .env.example is a
 // different, out-of-band failure mode this repo's test suite has no way to
 // observe at all, sudo or not.
@@ -625,7 +625,7 @@ func TestEnvExampleValuesAvoidDivergentParserShapes(t *testing.T) {
 
 // TestEnvExampleValueShapeFloorFailsClosedOnEmptyExtraction is #0441
 // criterion 2's direct proof (a floor is the legitimate in-package case per
-// CLAUDE.md §8's floor-vs-ceiling distinction): it feeds
+// AGENTS.md §8's floor-vs-ceiling distinction): it feeds
 // scanEnvExampleValueShapes content that is deliberately not .env.example —
 // all comments and blank lines, zero assignment-shaped lines — and asserts
 // that checkScannedFloor returns a non-nil error for that result, calling it

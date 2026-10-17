@@ -9,7 +9,7 @@ import "testing"
 // invariant worth checking is now a single-row one, not a batch multiple.
 // Renamed from TestIntakeOrphanStaleAfterCoversFullBatch accordingly
 // rather than deleted, per this project's "update, don't delete"
-// convention for a superseded invariant test (CLAUDE.md /
+// convention for a superseded invariant test (AGENTS.md /
 // issues/0297.md criterion 5).
 //
 // #0297's review bounce (defect 3): this test's oracle was originally
@@ -22,7 +22,7 @@ import "testing"
 // worst case, 2 * intakeRowTimeout, so it actually enforces what the doc
 // comment claims. It remains a different expression from the subject's
 // `3 * intakeRowTimeout` initializer, not the same bytes with a name
-// change (CLAUDE.md's "a guard's oracle must not be the same bytes as its
+// change (AGENTS.md's "a guard's oracle must not be the same bytes as its
 // subject", #0258): an edit to the subject that drops its margin term (the
 // extra `* intakeRowTimeout`) changes `got` without moving `want`. Modeled
 // on the same shape as internal/mailing's

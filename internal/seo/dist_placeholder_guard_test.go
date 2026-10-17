@@ -18,7 +18,7 @@
 // itself sits, and not in a standalone test binary. Two reasons. First, the
 // default per-issue `ISSUE=NNNN scripts/check.sh` (no subcommand) only runs
 // `go test ./internal/... ./cmd/...` (scripts/check.sh's `*)` case) --
-// `./web/...` is exercised only by `scripts/check.sh all`, which CLAUDE.md
+// `./web/...` is exercised only by `scripts/check.sh all`, which AGENTS.md
 // §4 calls out as "a batch's single review pass, not for every
 // implementer". A guard placed in package web would in practice run far
 // less often than intended, exactly the gap this test exists to close.
@@ -73,7 +73,7 @@
 //  2. A hashed /assets/*.js or *.css reference: real `npm run build` output
 //     (#0054 finding 3, reproduced live while writing this guard by running
 //     `npm run build` in a throwaway git worktree, never in this shared
-//     checkout -- see CLAUDE.md §8b) emits
+//     checkout -- see AGENTS.md §8b) emits
 //     `<script type="module" crossorigin src="/assets/index-<hash>.js">`
 //     and a matching stylesheet `<link>`. Note that a real build still
 //     contains every %%OC_*%% token (Vite does not touch literal text it
@@ -181,7 +181,7 @@ func TestDistIndexPlaceholder(t *testing.T) {
 				"`git checkout HEAD -- web/dist/index.html` (only if you did not "+
 				"intentionally edit it this session; if you did, restore its %%%%OC_*%%%% "+
 				"tokens by hand instead) and do NOT commit `npm run build` output over this "+
-				"file. See this file's package doc comment and CLAUDE.md §8a.",
+				"file. See this file's package doc comment and AGENTS.md §8a.",
 			distIndexPath, strings.Join(problems, "; "),
 		)
 	}

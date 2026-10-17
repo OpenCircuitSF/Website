@@ -11,12 +11,12 @@ exercised**, because it did not exercise all of them:
 | Section | Status |
 |---|---|
 | Production facts, prerequisites, PostgreSQL, migrations, systemd, Apache, TLS, verification | **Followed on the real host** and corrected where it was wrong. The corrections are inline. |
-| SES setup, DNS records for DKIM / MAIL FROM / inbound, IAM policy, the account-level suppression list | **Still not followed by this row's original deploy.** SES was deliberately left unconfigured for that deploy so it could be set up afterwards — see "SES is not configured yet" below. No AWS SES identity existed at that point, and ~~**the instance has no IAM role attached at all**~~ **— corrected `#0426`, 2026-09-04: that has since changed.** A later pass (`docs/aws-iam-setup.md`, same day) attached the `opencircuit-instance` role and set up SES; `CLAUDE.md` §10 item 2 and the `## IAM` section below (also corrected, `#0426`) recorded that as the current state at the time. **Superseded (`#0508`, 2026-09-12): that instance is now decommissioned and the live box carries the current IAM role instead (name in the private AWS repo — identifiers are redacted from this public repo per `#0511`, see the production-facts pointer below)** — see both sections' own corrections. |
+| SES setup, DNS records for DKIM / MAIL FROM / inbound, IAM policy, the account-level suppression list | **Still not followed by this row's original deploy.** SES was deliberately left unconfigured for that deploy so it could be set up afterwards — see "SES is not configured yet" below. No AWS SES identity existed at that point, and ~~**the instance has no IAM role attached at all**~~ **— corrected `#0426`, 2026-09-04: that has since changed.** A later pass (`docs/aws-iam-setup.md`, same day) attached the `opencircuit-instance` role and set up SES; `AGENTS.md` §10 item 2 and the `## IAM` section below (also corrected, `#0426`) recorded that as the current state at the time. **Superseded (`#0508`, 2026-09-12): that instance is now decommissioned and the live box carries the current IAM role instead (name in the private AWS repo — identifiers are redacted from this public repo per `#0511`, see the production-facts pointer below)** — see both sections' own corrections. |
 | Backups (`opencircuit-backup.timer` and friends) | **Not installed yet.** The units exist in `deploy/systemd/`; nothing on the box runs them. `#0435` (2026-09-08) re-confirmed this read-only, found a second blocker (the on-box checkout is missing `#0434`'s media-backup scripts), and wrote an approval-ready fix in `deploy/systemd/README.md` — see the "Backups" section below. |
 
 So `#0064`'s acceptance criterion — "the whole runbook followed once on a
 clean instance and corrected where it was wrong" — is now **partly** met: the
-serving path is proven, the email path is not. `PRD.md` §10 and `CLAUDE.md`
+serving path is proven, the email path is not. `PRD.md` §10 and `AGENTS.md`
 §7/§10 remain authoritative wherever this document is silent or wrong.
 
 ### SES is not configured yet (historical — the section title describes the 2026-08-25 deploy, not today)
@@ -26,7 +26,7 @@ after. Two things follow that are easy to get wrong.
 
 **Correction (`#0431`, 2026-09-04): SES has since been configured.** The
 deferral this heading describes ended the same day it started — see
-`docs/email-setup.md` ("Configured 2026-08-25") and `CLAUDE.md` §10 item 2 for
+`docs/email-setup.md` ("Configured 2026-08-25") and `AGENTS.md` §10 item 2 for
 the current-state record: the `mailing.opencircuitsf.com` identity is
 verified, DKIM and custom MAIL FROM are `SUCCESS`, and a real message has been
 delivered through it. The account remains **sandboxed** (production access
@@ -78,9 +78,9 @@ not the current constraint, per the correction above:
 - A visitor who subscribes previously got the uniform `202` (`#0026`) but no
   confirmation mail; with SES live, a subscribe request can now actually
   deliver one, subject to the sandbox's verified-recipient restriction
-  (`CLAUDE.md` §10 item 2) until production access is granted.
+  (`AGENTS.md` §10 item 2) until production access is granted.
 
-## Current production facts (`CLAUDE.md` §7)
+## Current production facts (`AGENTS.md` §7)
 
 | | |
 |---|---|
@@ -94,7 +94,7 @@ not the current constraint, per the correction above:
 production facts above are measured, not aspirational. **This project's own
 configuration now exists on that box too**: `opencircuit.service` has served
 `www.opencircuitsf.com` since **2026-08-25**, replacing the static
-placeholder. The operational details `CLAUDE.md` §10 item 6 asked for were
+placeholder. The operational details `AGENTS.md` §10 item 6 asked for were
 captured during that deploy and are recorded below — measured on the box, not
 guessed.
 
@@ -106,7 +106,7 @@ guessed.
 | No Go toolchain on the new box | `photon` has no `go` on `PATH` and none at the usual fixed locations. **Decided (`#0509`, 2026-09-12, by the user): it stays that way.** "We won't install the Go toolchain on the EC2 instance photon. Instead we should compile before deployment." **Delivery mechanism decided in a later same-day pass:** the built artifact ships as a published GitHub Release, which `photon` fetches with a plain `curl` (`#0509` third pass, `#0514`). The **Redeploy procedure** below builds the SPA and the Go binary on the operator's workstation (or CI), packages and publishes them as a release, and has `photon` fetch and verify them — no step in it assumes a toolchain on the box, a `gh` install on the box, or the box's own git checkout being current. |
 | Public IP / DNS | ~~the original IP (private AWS repo)~~. `www.opencircuitsf.com` and `opencircuitsf.com` are A records to it; `go.opencircuitsf.com` is a CNAME to `ec2.smallsharptools.com`, which resolves to the same address.~~ **Correction (`#0508`, 2026-09-12):** `www.opencircuitsf.com`, the apex, and `go.opencircuitsf.com` now all resolve to **the new instance's IP (`$DEPLOY_IP`, private AWS repo)**, confirmed by `dig`, via the zone's `*.opencircuitsf.com` A-record wildcard (not a CNAME — see `#0057`'s DNS correction below). `ec2.smallsharptools.com` still resolves to the *old* box's IP (not republished here; in the private AWS repo) — that name was never repointed, and the old box is still up (still answering, just no longer serving this vhost). |
 | SSH access | ~~the alias formerly named `ec2`, from the maintainer's Mac — host `ec2.sstools.co`, user `ec2-user`, key `~/.ssh/sstools-ec2.pem`. A second alias was the same host plus a `LocalForward 15432 → localhost:5432` Postgres tunnel (port 15432, not 5432, because a local PostgreSQL already owns 5432 on the Mac).~~ **Correction (`#0508`, 2026-09-12):** `ssh photon` — already configured in `~/.ssh/config`, verified working (as `ec2-user`; the full hostname is in the private AWS repo). The old tunnel alias has not been re-created for the new host as part of this doc fix; confirm it exists before relying on it. |
-| IAM instance role | ~~**None attached** — the instance metadata service 404s `iam/security-credentials/`. This is the reason SES cannot work yet even after the domain is verified: the AWS SDK's default credential chain has nothing to find, so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false.~~ ~~**Correction (`#0426`, 2026-09-04):** attached — `opencircuit-instance`. Re-derived for this issue directly from the instance metadata service (`iam/security-credentials/`, read-only on the box), not copied from the filing; `CLAUDE.md` §10 item 2 already records this role as attached and proven by a real delivered send. Attaching a role with `ses:SendEmail`/`ses:SendRawEmail` was the prerequisite `CLAUDE.md` §10 item 2 named, and is now done — the `## IAM` section below (also corrected, `#0426`) describes the policy's actual shape. certbot's renewal never depended on this role — see the certbot row.~~ **Correction (`#0508`, 2026-09-12):** that role and that instance are both gone. The live box carries **`$DEPLOY_ROLE`** instead. The permission shape described in the `## IAM` section below should still apply — verify it against the new role name rather than assuming. certbot's renewal still does not depend on this role. |
+| IAM instance role | ~~**None attached** — the instance metadata service 404s `iam/security-credentials/`. This is the reason SES cannot work yet even after the domain is verified: the AWS SDK's default credential chain has nothing to find, so `docs/configuration.md`'s "the EC2 instance role supplies them" is currently false.~~ ~~**Correction (`#0426`, 2026-09-04):** attached — `opencircuit-instance`. Re-derived for this issue directly from the instance metadata service (`iam/security-credentials/`, read-only on the box), not copied from the filing; `AGENTS.md` §10 item 2 already records this role as attached and proven by a real delivered send. Attaching a role with `ses:SendEmail`/`ses:SendRawEmail` was the prerequisite `AGENTS.md` §10 item 2 named, and is now done — the `## IAM` section below (also corrected, `#0426`) describes the policy's actual shape. certbot's renewal never depended on this role — see the certbot row.~~ **Correction (`#0508`, 2026-09-12):** that role and that instance are both gone. The live box carries **`$DEPLOY_ROLE`** instead. The permission shape described in the `## IAM` section below should still apply — verify it against the new role name rather than assuming. certbot's renewal still does not depend on this role. |
 | `DocumentRoot` (former static placeholder) | `/var/www/vhosts/www.opencircuitsf.com`. The placeholder HTML is no longer reachable — the Go service answers `/` — but the directory stays, because `/.well-known/` is still served from disk out of it. See "The `/.well-known/` exception" below. |
 | Installed vhost file(s) | `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf` (the proxy vhost) and `001-www.opencircuitsf.com.conf` (port 80 → HTTPS). The apex and every other `*.opencircuitsf.com` name is redirected to `www` by `002-opencircuitsf.com{,-le-ssl}.conf`, which sort *after* the 001 files. **These are not copies of `deploy/apache/opencircuitsf.com.conf`.** That file is one self-contained vhost that does its own apex→www redirect; the box splits the same behaviour across the certbot-managed 001/002 pair it already had, and adding the repo file verbatim would duplicate `ServerName www.opencircuitsf.com`. Edit the installed files; treat the repo file as the reference for the proxy / header / CSP block only. |
 | certbot renewal schedule | `certbot-renew.timer` (systemd), firing twice daily at 00:00 and 12:00 UTC. The cert named `opencircuitsf.com` is a single ECDSA **wildcard** covering `opencircuitsf.com` and `*.opencircuitsf.com`, so one cert serves `www`, `go`, and any future subdomain. The authenticator is **`dns-route53`**, not `--apache`: renewal proves control over the domain through a Route 53 TXT record and never reads the vhosts or `/.well-known/acme-challenge`, so no Apache change in this project can break it. Expiry at deploy time: 2026-11-16. |
@@ -235,7 +235,7 @@ topology.
 These are the same regardless of whether the box already exists (per the
 production facts above, it likely does) or is provisioned fresh. Confirm what
 is already installed before reinstalling anything — Apache and PostgreSQL are
-already on the box per `CLAUDE.md` §7.
+already on the box per `AGENTS.md` §7.
 
 - **EC2 instance**, Amazon Linux 2023. The real one is a **`t4g.small`** in
   `us-east-1` — ARM/Graviton, so every arch-specific tarball below needs the
@@ -250,7 +250,7 @@ already on the box per `CLAUDE.md` §7.
   **Redeploy procedure** near the end of this document for the actual
   build-and-ship steps.)
 - **Apache (`httpd`) with `mod_ssl`, `mod_proxy`, `mod_proxy_http`,
-  `mod_rewrite`, and `mod_headers`.** Already on the box per `CLAUDE.md` §7;
+  `mod_rewrite`, and `mod_headers`.** Already on the box per `AGENTS.md` §7;
   if provisioning fresh:
 
   ```bash
@@ -262,7 +262,7 @@ already on the box per `CLAUDE.md` §7.
   loaded by default — confirm with `httpd -M | grep -E 'ssl|proxy|rewrite|headers'`
   rather than assuming.
 
-- **PostgreSQL 15.18.** Already on the box per `CLAUDE.md` §7 — confirm the
+- **PostgreSQL 15.18.** Already on the box per `AGENTS.md` §7 — confirm the
   major version with `psql --version` before assuming anything else. 15 is
   proven for this schema: the migrations applied cleanly on 15.18 and the
   whole Go suite passes against PostgreSQL 15.14 (`#0062`/`#0228`'s drills
@@ -403,7 +403,7 @@ sudo git clone https://github.com/OpenCircuitSF/Website.git /opt/opencircuit
 cd /opt/opencircuit
 ```
 
-(The GitHub repo rename `Website` → `OpenCircuitSF` is `CLAUDE.md` §10 item
+(The GitHub repo rename `Website` → `OpenCircuitSF` is `AGENTS.md` §10 item
 1, **not done** as of this writing — ~~the clone URL above is the target
 name, not necessarily what resolves today. Confirm before running it
 verbatim.~~ **Correction (`#0515`, 2026-09-13):** the URL above is what
@@ -449,14 +449,14 @@ already exists" error on that one statement.
 > `scripts/db-reset.sh` does the local dev-loop version of this (drop,
 > recreate, migrate, seed) and refuses to run against anything but
 > localhost/127.0.0.1 and a database name starting with `opencircuit` — it is
-> a development convenience, not a production tool, ~~and per `CLAUDE.md` §1
+> a development convenience, not a production tool, ~~and per `AGENTS.md` §1
 > this project's greenfield exception for rewriting migrations ends at the
 > first production deploy.~~
 >
 > **Correction (`#0293`, 2026-08-27).** That exception ended on **2026-08-25**,
 > the day `www.opencircuitsf.com` first served this project and production's
 > PostgreSQL applied migrations through `schema_migrations.version = 22`.
-> `CLAUDE.md` §1 now treats `migrations/000001`–`000022` as append-only,
+> `AGENTS.md` §1 now treats `migrations/000001`–`000022` as append-only,
 > without qualification — no in-place rewrite is legitimate against any of
 > them any more.
 
@@ -529,13 +529,13 @@ Fill in every value `.env.example` ships blank or with a placeholder:
   (1 message/second cap). This is a deploy-time fact the code cannot enforce
   on its own — nothing in this codebase can detect sandbox-vs-production SES
   status (`docs/configuration.md`'s "Developing against the SES sandbox"
-  section). `CLAUDE.md` §5: there is no performance requirement in this
+  section). `AGENTS.md` §5: there is no performance requirement in this
   project: this value paces for SES's quota, not for throughput.
 
 `BASE_URL` and `WEBAUTHN_RP_ORIGIN` must both be the **www** form
 (`https://www.opencircuitsf.com`) — the apex 301s to www, and
 `WEBAUTHN_RP_ORIGIN` must match the browser's actual origin exactly or every
-passkey ceremony fails with an opaque error (`CLAUDE.md` §7).
+passkey ceremony fails with an opaque error (`AGENTS.md` §7).
 
 **Corrected `#0431`, 2026-09-04 — this has since been verified on a real
 box.** The paragraph below described the pre-deploy state. Since 2026-08-25,
@@ -609,7 +609,7 @@ git diff --name-only <last-deployed-sha>..HEAD -- migrations/   # any output => 
 migrate -path migrations -database "$DATABASE_URL" version       # or compare against the DB's applied version
 ```
 
-~~Per `CLAUDE.md` §1, this project is greenfield until the **first** production
+~~Per `AGENTS.md` §1, this project is greenfield until the **first** production
 deploy — after that, migrations become append-only and must never be edited
 in place again. The first real run of this step, against a database that
 matters, is the event that ends the greenfield exception.~~
@@ -617,7 +617,7 @@ matters, is the event that ends the greenfield exception.~~
 **Correction (`#0293`, 2026-08-27).** That first real run happened on
 **2026-08-25**, when this exact `migrate ... up` step was applied to
 production's PostgreSQL and left it at `schema_migrations.version = 22`. The
-greenfield exception is over: `CLAUDE.md` §1 now treats
+greenfield exception is over: `AGENTS.md` §1 now treats
 `migrations/000001`–`000022` as append-only, without qualification, and any
 new schema change is a new migration file above `000022`.
 
@@ -735,7 +735,7 @@ permissions bug someone already fixed:
 
 **Re-derived read-only against the box, 2026-09-08 — do not trust the figures
 below without re-checking; re-derive them yourself first if time has passed**
-(`CLAUDE.md` §5b). Both blockers hold exactly as `#0433`'s planning pass
+(`AGENTS.md` §5b). Both blockers hold exactly as `#0433`'s planning pass
 measured:
 
 ```
@@ -960,7 +960,7 @@ it reaches the proxy rules, and proxies `/api/events` with
 `ProxyPass` top-to-bottom, so the SSE route must come first or the wildcard
 would swallow it and response buffering would not be disabled.
 
-### Security headers (`#0064`, `PRD.md` §11 / `CLAUDE.md` §11)
+### Security headers (`#0064`, `PRD.md` §11 / `AGENTS.md` §11)
 
 The vhost now also sets, via `mod_headers`:
 
@@ -984,11 +984,11 @@ avoidable here").
 `base64(sha256(<the child text content of web/index.html's one bare
 <script> element, i.e. everything between the '>' that closes its opening
 tag and its '</script>', exactly as the browser sees it>))`, computed
-directly (Python's `hashlib`/`base64`, not typed by hand — `CLAUDE.md` §8
+directly (Python's `hashlib`/`base64`, not typed by hand — `AGENTS.md` §8
 warns that hand-typed escapes can land as the literal bytes rather than
 describing them). **This was computed from the unminified source, not from
 a real `npm run build` output.** `web/dist/` is explicitly out of this
-pass's scope (`CLAUDE.md` §8b flags it as a shared mutable resource other
+pass's scope (`AGENTS.md` §8b flags it as a shared mutable resource other
 concurrent agents may be building into, and the dispatch instructions for
 this pass named `web/` as off-limits), so this hash was never checked
 against what Vite's HTML/JS minifier actually emits — minification can
@@ -1211,12 +1211,12 @@ as it previously stood would have obtained a certificate for
 `opencircuitsf.com`/`www.opencircuitsf.com` only under that same certificate
 name, discarding the wildcard SAN and, with it, coverage for every other
 subdomain: **`go.opencircuitsf.com`**, a *different project*'s deploy
-(ShortLinks, `CLAUDE.md` §1) hosted on this same box, and any future
+(ShortLinks, `AGENTS.md` §1) hosted on this same box, and any future
 subdomain. It would also switch the authenticator from `dns-route53` back to
 the Apache plugin, which (re-)couples renewal to `/.well-known/acme-challenge`
 and to whatever it rewrites in the installed vhosts — including the
 `/.well-known/` `ProxyPass … !` carve-out this box depends on to serve
-`atproto-did` from disk (`CLAUDE.md` §7; the Go service itself 404s that
+`atproto-did` from disk (`AGENTS.md` §7; the Go service itself 404s that
 path). There is no scenario in this project where the narrower cert is wanted,
 so the command is corrected below rather than kept as an option.
 
@@ -1326,7 +1326,7 @@ Expect:
 ```
 
 **This is a change to production and needs the user's explicit approval
-before any of it runs on the box** (`CLAUDE.md` §5b, §9). Nothing below has
+before any of it runs on the box** (`AGENTS.md` §5b, §9). Nothing below has
 been run. In order (from `/opt/opencircuit`, per the precondition above):
 
 ```bash
@@ -1404,17 +1404,17 @@ an account that exists but has no passkey yet (mirrors ShortLinks
    page.
 2. Enter the `ADMIN_EMAIL` address and submit. The page shows a generic
    confirmation regardless of whether the address exists (email enumeration
-   is a first-class concern here, `CLAUDE.md` §9).
+   is a first-class concern here, `AGENTS.md` §9).
 3. **Email delivery must be working** — SES configured, `MAILER_NOOP=false`
    in `/etc/opencircuit/config.env` — before this step succeeds. See **SES
    setup** below; SES exists but the account is still sandboxed, so a
    recovery mail only reaches an address that is itself a verified SES
-   identity until production access lands (`CLAUDE.md` §10 item 2).
+   identity until production access lands (`AGENTS.md` §10 item 2).
    `MAILER_NOOP=true` logs the recovery link to stdout instead
    (`docs/configuration.md`), which is a `dev.sh`/local-only substitute,
    never a production setting — `cmd/opencircuit/main.go`'s
    `checkMailerNoOp` refuses to start it outright on a production
-   `BASE_URL` (`CLAUDE.md` §10).
+   `BASE_URL` (`AGENTS.md` §10).
 4. Follow the magic link from the recovery email. The browser opens the
    recovery ceremony page and calls `navigator.credentials.create()` —
    WebAuthn requires HTTPS, so TLS (step 9) must already be live.
@@ -1429,7 +1429,7 @@ step.
 
 **Corrected `#0431`, 2026-09-04 — both premises below are now false.** SES is
 live (`mailing.opencircuitsf.com` verified, DKIM and MAIL FROM `SUCCESS`,
-`CLAUDE.md` §10 item 2), and the instance has served `www.opencircuitsf.com`
+`AGENTS.md` §10 item 2), and the instance has served `www.opencircuitsf.com`
 since 2026-08-25 — re-verified read-only for this pass with a live `curl`
 (see the Production-facts correction above). **What is still genuinely
 unverified is this specific ceremony, not the infrastructure it needs**: this
@@ -1442,7 +1442,7 @@ specific step has — that much of the original note still stands.
 
 **Original note, left for context — accurate only for the pre-deploy
 state:** Not run against a real deploy — no SES account exists to send the
-recovery email through yet (`CLAUDE.md` §10 item 2), and no live instance
+recovery email through yet (`AGENTS.md` §10 item 2), and no live instance
 exists to receive the HTTPS request. Locally, `#0008`'s manual verification
 procedure exercises the equivalent flow with `MAILER_NOOP=true` logging the
 link to stdout — that is the closest thing to a proof this step has.
@@ -1454,7 +1454,7 @@ link to stdout — that is the closest thing to a proof this step has.
 > **Partial correction (`#0508`, 2026-09-12) — re-measured by `dig` while
 > fixing this issue, not a full reconciliation.** `www.opencircuitsf.com`,
 > the bare apex, and `go.opencircuitsf.com` now all resolve directly to
-> **the production IP (`$DEPLOY_IP`, private AWS repo — see `CLAUDE.md` §7)**, not the
+> **the production IP (`$DEPLOY_IP`, private AWS repo — see `AGENTS.md` §7)**, not the
 > old-box values the rows below still
 > show. Whether the record *type* is still CNAME-to-`ec2.smallsharptools.com`
 > underneath, or has become a direct A record, was not re-verified row by
@@ -1472,7 +1472,7 @@ link to stdout — that is the closest thing to a proof this step has.
 | `bounce.mailing.opencircuitsf.com` | MX | `10 feedback-smtp.us-east-1.amazonses.com` | Custom MAIL FROM (host and region corrected 2026-09-04, #0421 — this row read `mail.opencircuitsf.com`/`us-west-2`; see below) |
 | `bounce.mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com ~all` | SPF alignment |
 | `mailing.opencircuitsf.com` | TXT | `v=spf1 include:amazonses.com -all` | SPF for the `From:` domain — added 2026-09-05, `#0452`, present in the live zone and in `docs/email-setup.md` but previously missing from this table entirely. **Hard-fail `-all`, not `~all`** like the `bounce.mailing.` row above: nothing but SES ever sends as this exact name, so a hard fail is safe and stronger — a future editor softening it to `~all` should do so knowingly, not by copying the envelope-domain row's qualifier |
-| `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` *(planned — not created yet)* | **Inbound unsubscribe only** — never the apex MX, `CLAUDE.md` §9 (region corrected 2026-09-04, #0421 — was `us-west-2`; existence checked 2026-09-05, `#0448` — the zone has no record at this name today, matching `docs/email-setup.md`'s "Not created, on purpose"; Phase 4, `#0057`) |
+| `lists.opencircuitsf.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` *(planned — not created yet)* | **Inbound unsubscribe only** — never the apex MX, `AGENTS.md` §9 (region corrected 2026-09-04, #0421 — was `us-west-2`; existence checked 2026-09-05, `#0448` — the zone has no record at this name today, matching `docs/email-setup.md`'s "Not created, on purpose"; Phase 4, `#0057`) |
 | `_dmarc.mailing.opencircuitsf.com` | TXT | `v=DMARC1; p=none; rua=mailto:contact@opencircuitsf.com; fo=1` | DMARC — **deliberately on the `mailing.` subdomain, not the apex** (name, value, and alignment tags corrected 2026-09-05, `#0427` — this row previously named `_dmarc.opencircuitsf.com`, which has no DMARC record in the live zone, and asserted `adkim=s; aspf=s`, which the real record does not carry; see below) |
 
 Every record name, type, and static value above started as a verbatim copy
@@ -1485,7 +1485,7 @@ counts.** The public IP is no longer unknown — it is the original box's IP
 repo), and the instance
 that owns it has existed since 2026-08-25. The DKIM CNAME targets are also no
 longer unknowable in principle: SES reports the `mailing.opencircuitsf.com`
-identity's DKIM as `SUCCESS` (`docs/email-setup.md`, `CLAUDE.md` §10 item 2),
+identity's DKIM as `SUCCESS` (`docs/email-setup.md`, `AGENTS.md` §10 item 2),
 which means domain verification completed and the real selector tokens exist
 in Route 53 today. This pass did not read them out of the AWS console or DNS
 to duplicate them here — `docs/email-setup.md` is the place to look, and
@@ -1498,7 +1498,7 @@ the apex. Those are different hostnames; this document did not resolve which
 one is correct or reconcile the two, and it should not be trusted to name
 the right hostname until that is checked.~~ **Corrected 2026-09-05, #0436:**
 the `mailing.` form is right, matching `docs/email-setup.md`'s own row and
-`CLAUDE.md` §9's rule that the apex carries real Google Workspace mail and is
+`AGENTS.md` §9's rule that the apex carries real Google Workspace mail and is
 restricted — a DKIM record published at the bare apex would be both wrong and
 adjacent to that restriction. The table row above now names the same
 `mailing.opencircuitsf.com` parent.
@@ -1507,7 +1507,7 @@ adjacent to that restriction. The table row above now names the same
 state:** the two things that could not be known before an instance existed
 were the Elastic IP and the SES-issued DKIM CNAME targets — both explicitly
 placeholdered rather than guessed, per that pass's instructions not to
-invent `CLAUDE.md` §10 item 6 facts. **Re-synced 2026-09-04 (#0421)** with the
+invent `AGENTS.md` §10 item 6 facts. **Re-synced 2026-09-04 (#0421)** with the
 MAIL FROM host and region `#0418` corrected in `PRD.md` §10.2 on 2026-09-03 —
 this table had drifted from its own cited source in the interim, which is the
 fact `#0301`'s "correctly scoped" verdict on this file's `us-west-2`
@@ -1530,7 +1530,7 @@ rua=mailto:contact@opencircuitsf.com; fo=1`, matching
 [`email-setup.md`](email-setup.md) and confirmed by `aws route53
 list-resource-record-sets` and `dig`), and that placement is deliberate: list
 mail sends from the `mailing.` subdomain precisely so the apex — which
-carries real Google Workspace mail (`CLAUDE.md` §9, §10 item 5) — is
+carries real Google Workspace mail (`AGENTS.md` §9, §10 item 5) — is
 untouched. Publishing a DMARC policy at the apex would govern that Workspace
 mail, not this project's. The live record also does **not** carry
 `adkim=s; aspf=s` — this pass records that as the current state, not as an
@@ -1577,10 +1577,10 @@ are deliberately left out of this table, not missed:
 - The apex `MX` (`1 SMTP.GOOGLE.COM.`), the apex `TXT`
   (`google-site-verification=…`), and `google._domainkey.opencircuitsf.com`
   `TXT` all belong to the pre-existing Google Workspace mailboxes at the
-  apex (`CLAUDE.md` §7, §9, §10 item 5) — human mail this project must never
+  apex (`AGENTS.md` §7, §9, §10 item 5) — human mail this project must never
   touch, not part of the `mailing.` subsystem this table documents. The apex
   MX in particular is covered by its own restriction elsewhere in this
-  document and in `CLAUDE.md` §9 rather than by a row in this DNS table.
+  document and in `AGENTS.md` §9 rather than by a row in this DNS table.
 - The three DKIM `CNAME` records under `mailing.opencircuitsf.com` are
   already represented by this table's single `<sel1..3>._domainkey…`
   placeholder row (real selector tokens deliberately not reproduced here —
@@ -1594,7 +1594,7 @@ nothing in DNS was changed and the apex MX was not touched.
 
 ## SES setup
 
-`CLAUDE.md` §10 item 2 recorded this as **not started** when this section was
+`AGENTS.md` §10 item 2 recorded this as **not started** when this section was
 written (deferred to deployment, user, 2026-08-23) — the only AWS credentials
 available in this development environment (`certbot-dns-updater`) cannot even
 `ses:ListEmailIdentities`, so nothing below had been run, and nothing in the
@@ -1604,7 +1604,7 @@ planned to run **on the real box, once the AWS account exists**.
 > **This plan was not what actually happened (2026-09-04, #0421).** SES has
 > since been set up for real, and item 1 below was decided differently: the
 > real deploy used **`us-east-1`**, not `us-west-2` — matching the EC2
-> instance's own region, not "closest to San Francisco" (`CLAUDE.md` §7,
+> instance's own region, not "closest to San Francisco" (`AGENTS.md` §7,
 > `PRD.md` §10.3, corrected by `#0418`). The custom MAIL FROM host is also
 > different from item 3 below: `bounce.mailing.opencircuitsf.com`, not
 > `mail.opencircuitsf.com`. The numbered steps are left as originally written
@@ -1632,7 +1632,7 @@ planned to run **on the real box, once the AWS account exists**.
 6. **A configuration set with open/click tracking disabled.** This is a
    deploy-time fact the code cannot enforce and no test in this repo can
    observe — an enabled configuration set injects a tracking pixel
-   **server-side**, at send time, which would violate `CLAUDE.md` §9's
+   **server-side**, at send time, which would violate `AGENTS.md` §9's
    no-open-tracking rule with zero code change and no visible symptom until
    someone inspects a delivered message's HTML. Create
    `opencircuit-transactional` (matching `.env.example`'s
@@ -1661,7 +1661,7 @@ a transcription of `PRD.md` §10.2–§10.4 and `email-setup.md` into deploy
 order, and most of it *was* substantially executed on 2026-08-25 — with the
 region and MAIL FROM host the blockquote above already names as different
 from what is written here. What genuinely was not executed by that pass:
-step 5's production-access request (`CLAUDE.md` §10 item 2 — the account
+step 5's production-access request (`AGENTS.md` §10 item 2 — the account
 remains sandboxed) and step 8's IAM role (also since done — see `## IAM`
 below). Treat this numbered list as the plan as originally transcribed, not
 as a checklist of what remains; `email-setup.md` and the Production-facts
@@ -1679,7 +1679,7 @@ credential chain picks up the instance role automatically
 **The role is attached** — `opencircuit-instance`. Re-derived for this issue
 (`#0426`, 2026-09-04) directly from the instance metadata service
 (`iam/security-credentials/`, read-only on the box), not copied from the
-filing; `CLAUDE.md` §10 item 2 already records it as attached and proven by
+filing; `AGENTS.md` §10 item 2 already records it as attached and proven by
 a real delivered send.
 
 **Correction (`#0508`, 2026-09-12) — that instance and role are gone.**
@@ -1741,7 +1741,7 @@ still reads the bucket-wide form; reported to the orchestrator for filing.~~
 all wrong.** This block previously read
 `arn:aws:ses:us-west-2:<ACCOUNT_ID>:identity/opencircuitsf.com` with
 `<ACCOUNT_ID>` marked `[PLACEHOLDER: unknown until the account from
-CLAUDE.md §10 item 2 exists]`, a `Condition` restricting `ses:configuration-set`
+AGENTS.md §10 item 2 exists]`, a `Condition` restricting `ses:configuration-set`
 to `opencircuit-transactional`, and the note "**this policy has never been
 created or attached to a real role**". None of that is still true. The
 region is `us-east-1`, not `us-west-2` (`#0418`); the account is
@@ -1751,7 +1751,7 @@ not `opencircuitsf.com` — except the policy does not name that identity
 either, for the reason below.
 
 **Why `identity/*` and not the one identity mail actually sends from.**
-`CLAUDE.md` §10 item 2 records the trap: **while the account sits in the
+`AGENTS.md` §10 item 2 records the trap: **while the account sits in the
 SES sandbox, `ses:SendEmail`/`ses:SendRawEmail` are authorized against the
 *recipient's* identity ARN as well as the sender's**, so a policy naming
 only `identity/mailing.opencircuitsf.com` fails every send to a recipient
@@ -1854,7 +1854,7 @@ copy — but until then, `host-backup-db.timer` is what today's redeploy
 actually relies on.
 
 **S3 upload is a deferred option, not abandoned.** ~~`#0229`'s `## Decision`:
-building it needs an AWS account, which does not exist yet (`CLAUDE.md` §10
+building it needs an AWS account, which does not exist yet (`AGENTS.md` §10
 item 2), and the user deferred all AWS work to deployment, same as SES.~~
 **Correction (`#0430`, 2026-09-05):** both grounds `#0229` gave have lapsed —
 the AWS account exists (id in the private AWS repo, re-verified read-only via `aws sts
@@ -1885,7 +1885,7 @@ do so).
 
 **#0247: every database, directory, and filename below is namespaced per
 run, reusing this project's own `ISSUE=NNNN` / `scripts/testdb.sh` convention
-(`CLAUDE.md` §5a) rather than a second scheme invented for this drill.** The
+(`AGENTS.md` §5a) rather than a second scheme invented for this drill.** The
 drill used to hardcode `0062src`, `opencircuit_test_0062dst`, and
 `/tmp/backup-drill` (including a fixed `…-latest.dump` inside it) — fine for
 one person running it alone, but this is also the document most likely to be
@@ -1904,7 +1904,7 @@ disposable, and this drill runs on a workstation, not the box.
 ```bash
 # 1. Pick a namespace for this run, then create the drill's source
 #    database. Reuse the project's own ISSUE=NNNN convention
-#    (CLAUDE.md §5a / scripts/testdb.sh) rather than inventing a second
+#    (AGENTS.md §5a / scripts/testdb.sh) rather than inventing a second
 #    naming scheme — set ISSUE to your own issue number if you have one, or
 #    any short alphanumeric token two concurrent runs are unlikely to pick
 #    in common (your shell's PID, the default below, is a reasonable
@@ -2015,7 +2015,7 @@ psql "$DSN" -c "select version, dirty from schema_migrations"
 #    migration after 000009/000017 has since added to that list.
 #    Coverage for $NEW_TABLES comes from step 8 below, once HEAD's
 #    migration lands on the restored target. Seed throwaway rows — never
-#    target a literal or seeded id (CLAUDE.md §8b). The two enums you'll
+#    target a literal or seeded id (AGENTS.md §8b). The two enums you'll
 #    actually need here (checked against the CHECK constraints in
 #    migrations/000012 and 000010, not guessed): suppressions.reason is one
 #    of hard_bounce | complaint | manual | repeated_soft_bounce (NOT
@@ -2451,7 +2451,7 @@ anything that is not a fresh scratch database:
   oversight — nothing here talks to AWS. There is no bucket, no lifecycle
   policy, no bucket-level encryption or public-access block, and no IAM
   policy scoped to a bucket prefix~~, because none of those AWS resources
-  exist yet (`CLAUDE.md` §10 item 2)~~. **Correction (`#0430`, 2026-09-05):**
+  exist yet (`AGENTS.md` §10 item 2)~~. **Correction (`#0430`, 2026-09-05):**
   the AWS account now exists (id in the private AWS repo) and SES is live in it, so that
   precondition has lapsed — these resources simply have not been built, and
   no decision to build them is recorded. `PRD.md` §10.6 still records an S3
@@ -2475,7 +2475,7 @@ anything that is not a fresh scratch database:
   a second time should report zero changes), and confirm a file deleted
   server-side (past retention) is pruned locally too on the next pull.
 - **Volume and timing at production scale are unmeasured.** This drill's
-  database has a handful of rows per table. `CLAUDE.md` §5 is explicit that
+  database has a handful of rows per table. `AGENTS.md` §5 is explicit that
   there is no performance requirement on this project, so this is not a
   gap that needs closing — just don't assume the drill's sub-second timings
   say anything about a production-sized dump/restore.
@@ -2508,7 +2508,7 @@ project's server rather than this one's — worse than the `BACKUP_DATABASES`
 defect above, because the failure mode there was a wrong local database name
 while this one reaches out over the network to infrastructure this project
 does not own. There is no correct host to substitute yet (this project's own
-EC2 host is not provisioned — `CLAUDE.md` §10 item 6), so the script now
+EC2 host is not provisioned — `AGENTS.md` §10 item 6), so the script now
 exits 2 before any network call, naming exactly what's missing:
 
 ```bash
@@ -2554,7 +2554,7 @@ triggers the alert unit the way the unit graph implies, or that `journalctl
   `backup.sh` expects, and has room for `BACKUP_RETENTION_DAYS` of dumps at
   real data volume. **Corrected (`#0435`, 2026-09-08):** the
   `/opt/opencircuit` `WorkingDirectory=`/`ExecStart=` path is no longer a
-  placeholder — `CLAUDE.md` §10 item 6 has recorded it as the real, confirmed
+  placeholder — `AGENTS.md` §10 item 6 has recorded it as the real, confirmed
   checkout location since 2026-08-25, and `#0435` re-verified directly that
   the repo lives there. The real blocker on disk paths turned out to be
   ownership, not path correctness — see below.
@@ -2602,11 +2602,11 @@ its "Fix the `/var/backups/postgres` permission blocker", "Bring the on-box
 checkout current for the media leg", and "Verify the dump is real, and prove
 a restore" subsections. Nothing in this pass was applied to the box —
 everything above was read-only, and installation still needs the user's
-explicit approval (`CLAUDE.md` §5b, §9) before any of those commands run.
+explicit approval (`AGENTS.md` §5b, §9) before any of those commands run.
 
 `BACKUP_ALERT_WEBHOOK_URL` remains deliberately unconfigured: no
 Slack/Discord/Mattermost/healthchecks.io channel exists anywhere in this
-project (`CLAUDE.md` §10 items 2 and 6), so `#0435` recommends leaving it
+project (`AGENTS.md` §10 items 2 and 6), so `#0435` recommends leaving it
 unset rather than inventing a destination with nothing behind it.
 **Corrected (`#0468`, 2026-09-08): `journalctl -p err` and `systemctl
 --failed` are not an interim alert — they are pull commands, and nothing on
@@ -2645,7 +2645,7 @@ GOARCH=arm64 CGO_ENABLED=0` pinned explicitly; the commit hash embedded via
 binary because of `//go:embed all:dist`; proving the artifact runs before it
 replaces anything live; backing up the previous binary; verifying a database
 restore point before any migration; and migrate-before-install
-(`CLAUDE.md` §1's `#0125` precedent).
+(`AGENTS.md` §1's `#0125` precedent).
 
 **What changes:** instead of `scp`-ing a bare binary to a scratch path, the
 workstation publishes a **GitHub Release** and `photon` fetches it with a
@@ -2757,11 +2757,11 @@ cd web && npm ci && npm run build
 cd ..
 ```
 
-**Hazard (`CLAUDE.md` §8b): a real `npm run build` overwrites the tracked
+**Hazard (`AGENTS.md` §8b): a real `npm run build` overwrites the tracked
 `web/dist/index.html` placeholder** with real hashed-asset markup, which
 `git status --porcelain -- web/dist/` will then show as modified. If this is
 a shared checkout (not a throwaway clone or worktree), restore it afterward
-— **never `git checkout -- web/dist/index.html`** (`CLAUDE.md` §8a forbids
+— **never `git checkout -- web/dist/index.html`** (`AGENTS.md` §8a forbids
 that class of command against a path someone else may be mid-edit on):
 
 ```bash
@@ -2769,7 +2769,7 @@ git show HEAD:web/dist/index.html > web/dist/index.html
 git status --porcelain -- web/dist/   # confirm clean
 ```
 
-Better still, build in a throwaway `git worktree` (`CLAUDE.md` §5a) pinned
+Better still, build in a throwaway `git worktree` (`AGENTS.md` §5a) pinned
 to the commit being deployed, so the shared checkout is never touched at
 all — this is what this issue's own verification build did.
 
@@ -2784,7 +2784,7 @@ TAG="v0.1.0-${SHORT}"   # illustrative — #0514 owns the actual tag scheme;
                         # everything below works with whatever tag it produces
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"   # e.g. org/repo —
                         # derived, not hardcoded, so it survives the pending
-                        # rename in CLAUDE.md §2 automatically; used in every
+                        # rename in AGENTS.md §2 automatically; used in every
                         # release URL below (steps 2, 3, and 5's rollback)
 
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
@@ -2873,7 +2873,7 @@ rm -rf "$STAGE" "$BUNDLE" SHA256SUMS opencircuit
 git status --porcelain   # confirm clean again
 ```
 
-A throwaway `git worktree` (`CLAUDE.md` §5a) pinned to the commit being
+A throwaway `git worktree` (`AGENTS.md` §5a) pinned to the commit being
 deployed avoids this entirely, and is still the recommended way to run this
 step — the cleanup above is only needed for a shared checkout.
 
@@ -2943,7 +2943,7 @@ irreversible step in this whole procedure. Running the free checks *after*
 the irreversible one meant a mis-built artifact could be discovered only
 once the schema had already moved, with the *old* binary — which predates
 every migration just applied — still the one running. **Migrate-before-install
-is still correct and stays that way** (`CLAUDE.md` §1's `#0125` note is
+is still correct and stays that way** (`AGENTS.md` §1's `#0125` note is
 exactly why: never install a binary whose migrations haven't run yet). The
 order is: prove the artifact runs (step 4) → back up the previous binary
 (step 5) → migrations, if any (step 6) → install and restart (step 7).
@@ -3035,7 +3035,7 @@ with the binary.** Naming which failure each path actually covers:
   release's binary puts a build that predates those migrations in front of
   a schema that already has them, which is not a working configuration.
 - **`migrate ... down` is not the reflex here.** The down migrations for
-  `000023`–`000028` have never run against production, and `CLAUDE.md` §1's
+  `000023`–`000028` have never run against production, and `AGENTS.md` §1's
   append-only discipline governs what happens to a migration once it is
   applied there — reaching for `down` on a live database with real
   subscriber rows is not a tested path.
@@ -3047,7 +3047,7 @@ with the binary.** Naming which failure each path actually covers:
 Keep at least the immediately-previous release's directory under
 `/opt/opencircuit/releases/`, in addition to the flat `opencircuit-previous`
 copy; pruning older ones is routine disk hygiene (`/opt/opencircuit` has
-23 GB free per `CLAUDE.md` §7) and not covered further here.
+23 GB free per `AGENTS.md` §7) and not covered further here.
 
 ### Step 6 — apply migrations, if this deploy adds any, reading them from the release bundle
 
@@ -3078,7 +3078,7 @@ git diff --name-only <last-deployed-sha>..HEAD -- migrations/   # any output => 
 first-deploy exception already rely on. On this first deploy there is
 nothing to diff against, because the installed binary predates `commitHash`
 entirely; the authoritative check instead is the `schema_migrations` query
-`CLAUDE.md` §1 already mandates before trusting any carried-forward version
+`AGENTS.md` §1 already mandates before trusting any carried-forward version
 number, and the paragraph immediately below gives that query's answer as of
 2026-09-12: version 22, so `000023`–`000028` are the migrations this first
 deploy needs.
@@ -3102,7 +3102,7 @@ BACKUP_CHECK
 
 (the quoted heredoc delimiter, `<<'BACKUP_CHECK'`, keeps `$d` and `$(...)`
 from being expanded by the *local* shell before it ever reaches `photon` —
-see `CLAUDE.md` §8's unquoted-heredoc warning for why that distinction
+see `AGENTS.md` §8's unquoted-heredoc warning for why that distinction
 matters)
 
 If the directory is missing, `opencircuit.dump` is zero-byte or absent, or
@@ -3127,7 +3127,7 @@ migration files exist on disk, so a real deploy today would apply
 — running a migration is outside this issue's hard limits (see its own
 `## Verification` for what was and was not done on `photon`). Applying
 `000023`–`000028` is ordinary next-deploy work, following **Migrations**
-above and re-deriving the production version first, per `CLAUDE.md` §1's
+above and re-deriving the production version first, per `AGENTS.md` §1's
 standing instruction never to trust a carried-forward number.
 
 **`golang-migrate` itself is still not installed on `photon` by any method**
@@ -3313,13 +3313,13 @@ this tracker (`#0010`) point at this heading directly.
 
 ---
 
-## Open items blocking a real deploy (`CLAUDE.md` §10)
+## Open items blocking a real deploy (`AGENTS.md` §10)
 
 Tracked so a phase doesn't stall silently on one of these — none are code:
 
-Items 2, 4, 5, 6 and 7 below were an unupdated mirror of `CLAUDE.md` §10's
+Items 2, 4, 5, 6 and 7 below were an unupdated mirror of `AGENTS.md` §10's
 table; their status lines are corrected in place here, 2026-09-03 (`#0414`),
-to match it. `CLAUDE.md` §10 remains authoritative if the two ever disagree
+to match it. `AGENTS.md` §10 remains authoritative if the two ever disagree
 again.
 
 1. Rename the GitHub repo `Website` → `OpenCircuitSF`. **Status: not done.**
@@ -3376,7 +3376,7 @@ What the deploy actually established, each item measured rather than assumed:
 - **The `script-src` CSP hash is now verified against a real build** — the
   limitation stated in earlier versions of this section is closed. The hash
   was recomputed from `web/dist/index.html` after an actual `npm run build`,
-  using Python's `html.parser` rather than a regex (`CLAUDE.md` §8 records
+  using Python's `html.parser` rather than a regex (`AGENTS.md` §8 records
   that regex getting this wrong twice), and then re-verified against the bytes
   Apache actually serves. The live page contains exactly two `<script>`
   elements — one inline, whose hash matches the CSP, and one external module.
@@ -3401,7 +3401,7 @@ Still **not** verified against anything real, unchanged from the original pass:
   facts table records a verified SES identity (`mailing.opencircuitsf.com`,
   DKIM and custom MAIL FROM `SUCCESS`), a live configuration set and SNS
   event pipeline, and the IAM role attached (`opencircuit-instance`) — the
-  same facts `CLAUDE.md` §10 item 2 and this document's Production-facts
+  same facts `AGENTS.md` §10 item 2 and this document's Production-facts
   table (also corrected, `#0426`) now record. What is genuinely still not
   run: real SES **production access** (the account remains sandboxed —
   `docs/aws-iam-setup.md`, "After the role is attached" step 4) and, for
@@ -3432,7 +3432,7 @@ that the deploy did not touch:
   The local-Apache-2.4.67 check below is real but superseded, not the
   current limit on what is known.**
 - The `script-src` CSP hash was computed programmatically (not hand-typed,
-  `CLAUDE.md` §8) from `web/index.html`'s source. **That limitation is now
+  `AGENTS.md` §8) from `web/index.html`'s source. **That limitation is now
   closed** — see the verified list above; the committed hash turned out to be
   correct against a real build and against the live response.
 - ~~`deploy/systemd/opencircuit.service`'s hardening directives were confirmed
@@ -3454,7 +3454,7 @@ that the deploy did not touch:
   simulate-principal-policy` call or a `GetRolePolicy` read from this
   project's own tooling — the box's default CLI identity is denied IAM
   reads, checked read-only for this issue (see that section).
-- `CLAUDE.md` §10 item 6's unknowns (instance ID, size, region, SSH access,
+- `AGENTS.md` §10 item 6's unknowns (instance ID, size, region, SSH access,
   `DocumentRoot`, installed vhost, certbot schedule, target Postgres) were
   **all captured on 2026-08-25** and are in the production-facts table at the
   top. The `[PLACEHOLDER: ...]` markers that remain are the ones that depend

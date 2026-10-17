@@ -26,7 +26,7 @@
 // column and leak nothing if a URL ends up in a referrer header or a
 // screenshot.
 //
-// complained never auto-resubscribes (CLAUDE.md §9): every status mutator in
+// complained never auto-resubscribes (AGENTS.md §9): every status mutator in
 // this package — Confirm, Unsubscribe, MarkBounced(Tx), MarkComplained(Tx)
 // (via the shared setStatusTx), and RestartSignup — refuses to move a
 // subscriber out of the complained status. The check lives in one place
@@ -164,7 +164,7 @@ var ErrTokenInvalid = errors.New("subscribers: confirm token invalid or expired"
 
 // ErrComplainedLocked is returned by Confirm when the token's subscriber is
 // already in the complained status. Only an admin can clear that state
-// (CLAUDE.md §9); a confirmation click can never do it.
+// (AGENTS.md §9); a confirmation click can never do it.
 var ErrComplainedLocked = errors.New("subscribers: subscriber has complained and cannot be reactivated by confirmation")
 
 // ErrNotComplained is returned by AdminClearComplaint when the target
@@ -174,7 +174,7 @@ var ErrComplainedLocked = errors.New("subscribers: subscriber has complained and
 var ErrNotComplained = errors.New("subscribers: subscriber is not complained; nothing to clear")
 
 // statusLockedFromNonAdmin is the status that no non-admin mutator in this
-// package may move a subscriber out of (CLAUDE.md §9). Every status write
+// package may move a subscriber out of (AGENTS.md §9). Every status write
 // except AdminClearComplaint must consult this constant rather than writing
 // status unconditionally — see the package doc comment.
 const statusLockedFromNonAdmin = StatusComplained
@@ -424,7 +424,7 @@ func nullIfEmpty(s string) any {
 // already exists for that (normalized) address — the caller (the #0026
 // subscribe handler) is responsible for mapping that to the same uniform 202
 // response as a brand-new signup, so the endpoint never becomes an
-// email-enumeration oracle (CLAUDE.md §9).
+// email-enumeration oracle (AGENTS.md §9).
 //
 // confirm_sent_at is deliberately left NULL here rather than stamped with
 // now: #0026's review carried in the observation that stamping it at INSERT
@@ -841,7 +841,7 @@ func (s *Store) ClaimAndEnqueueConfirmation(ctx context.Context, sub Subscriber,
 // already_subscribed_sent_at/updated_at), so the predicate cannot become a
 // path toward resubscribing anyone: a complained row can never win this
 // claim, and even if it somehow did, no status write would occur. Consistent
-// with CLAUDE.md §9 — complained subscribers never auto-resubscribe, and
+// with AGENTS.md §9 — complained subscribers never auto-resubscribe, and
 // this claim only ever gates a notification, never a status transition.
 func (s *Store) ClaimAndEnqueueAlreadySubscribed(ctx context.Context, sub Subscriber, now time.Time, cooldown time.Duration) (claimed bool, err error) {
 	tx, err := s.pool.Begin(ctx)
@@ -1663,7 +1663,7 @@ func (s *Store) MarkBouncedTx(ctx context.Context, q querier, id int64, now time
 // no-op (setStatusTx's guard only ever preserves complained, and complained
 // is what it's already setting). Nothing in this package other than
 // AdminClearComplaint ever transitions a subscriber back out of complained —
-// per CLAUDE.md §9, only an admin clears that state.
+// per AGENTS.md §9, only an admin clears that state.
 func (s *Store) MarkComplained(ctx context.Context, id int64, now time.Time) (Subscriber, error) {
 	return s.setStatusTx(ctx, s.pool, id, StatusComplained, now)
 }
@@ -1721,7 +1721,7 @@ func (s *Store) setStatusTx(ctx context.Context, q querier, id int64, status str
 // changed.
 //
 // Deliberately does NOT consult statusLockedFromNonAdmin: streak tracking
-// is orthogonal to the status guard that protects `complained` (CLAUDE.md
+// is orthogonal to the status guard that protects `complained` (AGENTS.md
 // §9). A complained subscriber accumulating a streak is harmless — they are
 // already suppressed and mail has already stopped regardless of what this
 // number does — and refusing to increment it here would just make the
@@ -1778,7 +1778,7 @@ func (s *Store) RecordDeliveryTx(ctx context.Context, q querier, id int64, now t
 // ResetSoftBounceStreakByEmail zeroes soft_bounce_streak through the shared
 // pool for the subscriber matching email. Pool-only (not a q querier
 // parameter) so it can sit behind a genuine narrow interface in
-// internal/handlers (CLAUDE.md §1) — its one external caller, POST
+// internal/handlers (AGENTS.md §1) — its one external caller, POST
 // /admin/deliverability/{email}/reset-streak (an explicit, audited admin
 // action). suppressions.go's SuppressionStore.Remove has the identical
 // #0124 criterion ("removing a suppression resets the streak to 0") but
@@ -1834,7 +1834,7 @@ func (s *Store) GetByID(ctx context.Context, id int64) (Subscriber, error) {
 }
 
 // AdminClearComplaint is the one method in this package allowed to move a
-// subscriber out of the complained status (CLAUDE.md §9: "only an admin
+// subscriber out of the complained status (AGENTS.md §9: "only an admin
 // clears that state"). It is deliberately the single exception to
 // statusLockedFromNonAdmin rather than a parameter on an existing method,
 // so every other call site stays impossible to abuse into an
@@ -2033,7 +2033,7 @@ var qualifiedSubscriberColumns = deriveQualifiedColumns(subscriberColumns, "subs
 // to unit-test against a small literal input independent of
 // subscriberColumns itself (TestDeriveQualifiedColumns in store_test.go),
 // so that test's oracle is not a copy of subscriberColumns/
-// qualifiedSubscriberColumns sitting next to the question (CLAUDE.md §8).
+// qualifiedSubscriberColumns sitting next to the question (AGENTS.md §8).
 //
 // #0373: it does NOT handle a multi-argument wrapped call such as
 // coalesce(a, b) — the naive split on "," cuts through the inner comma and
@@ -2125,7 +2125,7 @@ type InterestCount struct {
 // full reasoning) because a live exact pending count would let an attacker
 // submit an address and poll to learn whether it was already on the list --
 // a narrow reopening of what POST /api/subscribe's uniform 202 exists to
-// prevent (CLAUDE.md §9). These per-interest counts carry no such risk and
+// prevent (AGENTS.md §9). These per-interest counts carry no such risk and
 // are exact for exactly the same reason `confirmed` is exact: moving one
 // requires confirming a subscription, which requires clicking a link in an
 // email only the address's owner receives. An attacker cannot move an

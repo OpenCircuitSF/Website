@@ -11,7 +11,7 @@ Group=postgres
 WorkingDirectory=/opt/opencircuit
 # Optional: a Slack/Discord/Mattermost incoming-webhook URL, or a
 # healthchecks.io-style "fail" URL. Not present by default — no such channel
-# is configured anywhere in this repo or on this machine yet (CLAUDE.md §10
+# is configured anywhere in this repo or on this machine yet (AGENTS.md §10
 # items 2 and 6). The leading `-` makes this file optional so the unit still
 # starts (and still logs to the journal) before it exists.
 EnvironmentFile=-/etc/opencircuit/backup-alert.env

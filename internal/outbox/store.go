@@ -73,7 +73,7 @@ const (
 	// KindSubscribeIntake (#0254) is NOT an email — it is not one of the
 	// kinds internal/mailing.OutboxWorker's render switch knows how to
 	// build a message for. It is this queue's mechanism reused (per
-	// CLAUDE.md's "reuse #0126's queue rather than build a second one") for
+	// AGENTS.md's "reuse #0126's queue rather than build a second one") for
 	// a different durability gap: #0126 made "committed signup ⇒ queued
 	// confirmation" durable (Store.Create/ClaimAndEnqueueConfirmation
 	// commit the outbound_queue INSERT in the same transaction as the

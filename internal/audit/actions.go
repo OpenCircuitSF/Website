@@ -159,7 +159,7 @@ const (
 	// (source=admin) AND, as of #0033, subscribers.SuppressionStore.Add
 	// (reason=manual) — a real `suppressions` table row, not just a status
 	// change. The metadata records `no_op` (true when the target was already
-	// complained, per CLAUDE.md §9 — Unsubscribe changes nothing in that
+	// complained, per AGENTS.md §9 — Unsubscribe changes nothing in that
 	// case) and `suppression_added` (whether the real suppressions-table
 	// write happened).
 	//
@@ -203,7 +203,7 @@ const (
 	// an orphan), and `subscriber_status_unchanged: true` — reversing a
 	// suppression never flips a subscriber's status; the address is still
 	// not a subscriber and must return through double opt-in (§6 of
-	// issues/0100.md's plan; CLAUDE.md §9's `complained` guard is what makes
+	// issues/0100.md's plan; AGENTS.md §9's `complained` guard is what makes
 	// this true for a complaint-reason removal specifically, since the
 	// handler refuses to remove a `complaint` row while a subscribers row
 	// still exists — see admin_suppressions.go).
@@ -519,7 +519,7 @@ const (
 // campaigns.Store (grouping short links) — that package was deleted in #0002
 // and nothing in this codebase referenced these constants. They are NOT this
 // project's email_campaigns concept (a message sent to a mailing-list
-// segment, PRD §6.6) and must not be reused for it — CLAUDE.md §6 and PRD
+// segment, PRD §6.6) and must not be reused for it — AGENTS.md §6 and PRD
 // §3.2 both warn the two share only a word. If Phase 5 (#0044-#0048) needs
 // campaign-lifecycle audit actions for email_campaigns, define new
 // email_campaign.* constants; do not resurrect these.

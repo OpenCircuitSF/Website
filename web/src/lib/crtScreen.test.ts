@@ -86,7 +86,7 @@ describe('crtTruncate is a no-op on the seeded active CRT_SESSION rows', () => {
 // step.cmd, so an operator typing a long command (the entire point of the
 // feature) got it drawn past the edge of the tube with no warning. Both
 // draw sites now go through this one shared helper instead of a bare
-// `'> ' + step.cmd`, so they cannot diverge (CLAUDE.md §1's "two call sites
+// `'> ' + step.cmd`, so they cannot diverge (AGENTS.md §1's "two call sites
 // that must agree are exactly what drifts" -- see crtScreen.ts's own doc
 // comment on crtCommandLine).
 describe('crtCommandLine (#0397)', () => {

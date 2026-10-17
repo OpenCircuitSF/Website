@@ -5,7 +5,7 @@
 // anonymous visitor never learns a deactivated row's id or that it exists at
 // all.
 //
-// STORAGE=json (CLAUDE.md §5) has no crt_commands-table backing —
+// STORAGE=json (AGENTS.md §5) has no crt_commands-table backing —
 // internal/devstore does not implement crtCommandStore — so this handler is
 // nil under STORAGE=json (see cmd/opencircuit/main.go's serveDevMode) and
 // GET /api/crt-session is simply absent from the route table in that mode

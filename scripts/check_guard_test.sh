@@ -8,7 +8,7 @@
 # check.sh's job is to report VERIFICATION PASSED only when every step it ran
 # actually passed. #0140 found it could report success over a failing step;
 # #0208, #0251, #0258 and #0262 each hardened it, and every one of those
-# hardenings lives INSIDE check.sh. That is the problem CLAUDE.md §8 now
+# hardenings lives INSIDE check.sh. That is the problem AGENTS.md §8 now
 # records: a guard inside the file it guards becomes new mutable surface in
 # that file. Six review rounds of #0258 each closed the shape they were shown
 # and each lost to the adjacent one — and by the sixth, the newest mechanism
@@ -84,7 +84,7 @@
 #           unguarded (#0493). Part 1b's isolation rows are the sound part;
 #           this row is the early warning that a new one needs a row.
 #
-# SAFETY (CLAUDE.md §8a, §8b)
+# SAFETY (AGENTS.md §8a, §8b)
 #
 #   * The tracked scripts/check.sh is only ever READ. Every mutant is a copy
 #     under a per-run mktemp directory (inside gitignored .scratch/ since
@@ -676,7 +676,7 @@ echo "== Part 6: parity of FAILED=1 assignment sites (#0493) =="
 #
 # This reads the FILE, not the running shell -- the same trap #0258's fourth
 # pass hit by sourcing candidates into a subshell of the executing check.sh
-# and silently falling back to ITS live definitions (CLAUDE.md §8). Every
+# and silently falling back to ITS live definitions (AGENTS.md §8). Every
 # grep/awk below runs against "$REAL" on disk.
 PINNED_FAILED1_FUNCS="floor_guard_check
 gofmt_check

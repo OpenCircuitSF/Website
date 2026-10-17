@@ -5,14 +5,14 @@
 (`#0273`) a generated per-workshop Open Graph card. This document describes
 the subsystem as it exists in this tree — every claim below was checked
 against the package's source, not against the previous draft of this file.
-It deliberately says nothing about what is deployed; `CLAUDE.md` §7 is the
+It deliberately says nothing about what is deployed; `AGENTS.md` §7 is the
 record of what production runs, and parts of what follows post-date it.
 
 `PRD.md` §7.4 was corrected against this file's account on 2026-09-04
 (`#0422`) and no longer describes the pre-implementation plan — see `## PRD
 §7.4's correction` at the bottom for what changed. This file remains the
 fuller reference for implementation detail; §7.4 stays a short summary by
-design (`CLAUDE.md` §11 is the index of those sections).
+design (`AGENTS.md` §11 is the index of those sections).
 
 ## Why this matters here specifically
 
@@ -265,7 +265,7 @@ text, and no links.
 **Decision: server fallback content inside `#app`, not Svelte SSR or
 prerendering.** SSR/prerendering was ruled out for four reasons specific to
 this codebase: there is no JavaScript runtime at request time (the box has
-neither Node nor, per `#0509`, a Go toolchain — see `CLAUDE.md` §7), the
+neither Node nor, per `#0509`, a Go toolchain — see `AGENTS.md` §7), the
 views are not hydration-shaped (`Home.svelte` draws a canvas in `onMount`,
 every data view fetches in `onMount`, `App.svelte` shows a `Loading…`
 placeholder until session-check resolves), the release pipeline would need

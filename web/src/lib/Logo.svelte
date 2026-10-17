@@ -8,7 +8,7 @@
   // measured contrast that makes --logo-color a separate token from
   // --accent rather than an alias.
   //
-  // CSS masks fail silently under file:// (CLAUDE.md §8, docs/frontend.md) —
+  // CSS masks fail silently under file:// (AGENTS.md §8, docs/frontend.md) —
   // always preview over an actual HTTP origin (`./scripts/dev.sh` or
   // `python3 -m http.server`), never by opening dist/index.html directly.
   //
@@ -16,7 +16,7 @@
   // role="img" + aria-label instead.
   //
   // "mark" (the chip only) is the default and is what most call sites want —
-  // the full logo is illegible below ~96px (CLAUDE.md §8), so "full" is only
+  // the full logo is illegible below ~96px (AGENTS.md §8), so "full" is only
   // appropriate at 128px and above (e.g. a footer or hero placement, not the
   // header nav bar). #0017 (site header) is the first real consumer of this
   // component.

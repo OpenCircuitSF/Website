@@ -62,7 +62,7 @@ const importMaxFileBytes = 5 << 20 // 5 MiB
 
 // importMaxDataRows bounds the number of CSV data rows (excluding the
 // header) a single import may carry — import is explicitly the SECONDARY,
-// low-volume path (PRD §6.10's Notes; CLAUDE.md's issue notes: "not
+// low-volume path (PRD §6.10's Notes; AGENTS.md's issue notes: "not
 // expected to carry much volume"), not a bulk-data tool.
 const importMaxDataRows = 5000
 

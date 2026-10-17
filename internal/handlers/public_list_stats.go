@@ -10,7 +10,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
 
-// ListStatsStore is the narrow store interface this handler needs (CLAUDE.md
+// ListStatsStore is the narrow store interface this handler needs (AGENTS.md
 // §1): the same aggregate query the admin dashboard uses, plus the
 // per-interest active-subscriber breakdown #0393 adds below.
 type ListStatsStore interface {
@@ -49,7 +49,7 @@ type listStatsResponse struct {
 //
 // # Why pending is bucketed and confirmed is not
 //
-// CLAUDE.md §9 forbids weakening POST /api/subscribe's uniform 202, which
+// AGENTS.md §9 forbids weakening POST /api/subscribe's uniform 202, which
 // exists so the endpoint cannot be used to test whether an address is already
 // on the list. A live, exact `pending` count reopens a narrow version of that:
 // submit an address, poll the count, and a +1 says the address was new while

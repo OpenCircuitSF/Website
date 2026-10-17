@@ -44,7 +44,7 @@ type exportSeedOpts struct {
 // seedExportSubscriber inserts a subscribers row with caller-controlled
 // UTM/interest/synthetic fields the shared seedTestSubscriber helper
 // (admin_subscribers_test.go) doesn't expose, and registers per-row cleanup
-// keyed by id — never a hardcoded or seeded id (CLAUDE.md §8b).
+// keyed by id — never a hardcoded or seeded id (AGENTS.md §8b).
 func seedExportSubscriber(t *testing.T, pool *pgxpool.Pool, opts exportSeedOpts) (id int64, email string) {
 	t.Helper()
 	ctx := context.Background()

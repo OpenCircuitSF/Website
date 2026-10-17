@@ -8,7 +8,7 @@
 
   Every decision not already covered by lib/admin.ts's shared helpers
   (formatDateTime) is a call into lib/crtCommands.ts -- this file is markup
-  and wiring only, per CLAUDE.md's "SPA logic goes in plain TypeScript
+  and wiring only, per AGENTS.md's "SPA logic goes in plain TypeScript
   modules ... Svelte components stay thin."
 
   Rows are edited inline (a "Save" button per row commits its own PATCH)

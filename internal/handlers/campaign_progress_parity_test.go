@@ -48,7 +48,7 @@ import (
 //
 // Only the KEY SET is compared, matching #0241's acceptance criteria ("a
 // field added on either side alone fails") -- not field types. A name match
-// is not a type match (CLAUDE.md's #0282 note), but this guard doesn't need
+// is not a type match (AGENTS.md's #0282 note), but this guard doesn't need
 // go/types to avoid that trap: it never claims type equivalence in the first
 // place, only "does this name appear as a key on both sides," which a plain
 // string-set comparison answers honestly.
@@ -292,7 +292,7 @@ func TestCampaignProgressParity_KeySet(t *testing.T) {
 //
 // Every fixture is built from double-quoted Go string literals joined with
 // explicit "\n" separators, never a backtick multi-line raw string, per
-// CLAUDE.md §8's "a backslash escape you type may land as the real
+// AGENTS.md §8's "a backslash escape you type may land as the real
 // character" / malformed-fixture gotcha: the failure mode there is a
 // fixture that looks right, parses as "0 matches" because it is malformed,
 // and reports a false pass. Building line-by-line with explicit "\n" keeps

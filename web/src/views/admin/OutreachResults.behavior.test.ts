@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // #0546: mounts OutreachResults.svelte under jsdom with '../../lib/api'
-// mocked. jsdom is not a browser (CLAUDE.md §1): this proves the structure
+// mocked. jsdom is not a browser (AGENTS.md §1): this proves the structure
 // the payload produces (message, table, one polyline per series, a marker),
 // not how the chart looks.
 import { render, cleanup, waitFor, screen } from '@testing-library/svelte';

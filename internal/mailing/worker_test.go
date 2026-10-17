@@ -78,7 +78,7 @@ func sesMessageRejected() error     { return &types.MessageRejected{} }
 // nil.
 func strPtr(s string) *string { return &s }
 
-// ── 1. The physical_address refusal (CLAUDE.md §9) ─────────────────────────
+// ── 1. The physical_address refusal (AGENTS.md §9) ─────────────────────────
 
 // TestWorker_RefusesCampaignWhenPhysicalAddressBlank proves the send worker
 // itself — not just Preflight in isolation — refuses to start a campaign
@@ -146,7 +146,7 @@ func TestWorker_RefusesCampaignWhenPhysicalAddressBlank(t *testing.T) {
 	}
 }
 
-// ── 2. Not bypassable from the UI (CLAUDE.md §9) ────────────────────────────
+// ── 2. Not bypassable from the UI (AGENTS.md §9) ────────────────────────────
 
 // TestWorker_RefusesCampaignForcedToScheduledBySQL inserts a campaign
 // straight into 'scheduled' with a blank physical_address via raw SQL —
@@ -336,7 +336,7 @@ func TestWorker_TwoWorkersOneCampaign_OrphanSweepDuringLiveClaim_NoDuplicate(t *
 // sustained for the whole ~70s orphanStaleAfter window and independent of
 // pollInterval, because the spin path never reached time.After.
 //
-// This asserts a COUNT, not a deadline (CLAUDE.md §5 — a day was already
+// This asserts a COUNT, not a deadline (AGENTS.md §5 — a day was already
 // spent undoing exactly that class of test): claimAndDrainHook counts every
 // pass Run performs while it runs for a FIXED wall-clock window against a
 // campaign in precisely this state. A throttled worker performs at most
@@ -653,7 +653,7 @@ func TestWorker_AllFourSuppressionReasons_AreSkipped(t *testing.T) {
 	}
 }
 
-// ── 6. No open-tracking pixel (CLAUDE.md §9) ────────────────────────────────
+// ── 6. No open-tracking pixel (AGENTS.md §9) ────────────────────────────────
 
 var trackingImgTag = regexp.MustCompile(`(?i)<img[^>]*>`)
 var trackingImgSrc = regexp.MustCompile(`(?i)src="([^"]+)"`)
@@ -1765,7 +1765,7 @@ func TestWorker_SendOne_SESCallAndStatusWriteSurviveAmbientCancellation(t *testi
 // own `UPDATE ... WHERE id = $1 AND status = 'queued'` genuinely blocks at
 // the database level, exactly as it would against a slow query ahead of
 // it. failureWriteTimeout is shrunk for this test only (restored via
-// t.Cleanup, CLAUDE.md's "a var, not a const, so a test can shrink it"
+// t.Cleanup, AGENTS.md's "a var, not a const, so a test can shrink it"
 // convention) so the assertion does not have to wait out the real
 // production value to prove the point.
 //
@@ -1783,7 +1783,7 @@ func TestWorker_SendOne_SESCallAndStatusWriteSurviveAmbientCancellation(t *testi
 // process's own cleanup never running (the test never got a chance to
 // finish), so the hang is real, not simulated. Worktree removed and
 // pruned afterward; not left in this tree, since a permanently-hanging
-// mutation fixture is worse than a documented manual proof (CLAUDE.md's
+// mutation fixture is worse than a documented manual proof (AGENTS.md's
 // "an oracle must not share its method with its subject" spirit applied
 // to a liveness proof rather than a value comparison).
 func TestWorker_SendOne_ClaimRowTimesOutRatherThanHangingIndefinitely(t *testing.T) {

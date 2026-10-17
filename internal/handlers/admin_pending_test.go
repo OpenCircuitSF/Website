@@ -246,7 +246,7 @@ func TestAdminPending_List_SortOrder(t *testing.T) {
 // ── Resend ────────────────────────────────────────────────────────────────────
 
 // TestAdminPending_Resend_RequiresSession targets a throwaway seeded row's
-// own id, not a literal (#0372, CLAUDE.md §8b). A hardcoded
+// own id, not a literal (#0372, AGENTS.md §8b). A hardcoded
 // /admin/subscribers/1/... is harmless only while the 401 holds — mutating
 // the auth guard to prove this test discriminates would otherwise send a
 // real POST at whatever subscriber id 1 is on the target database, minting
@@ -486,7 +486,7 @@ type decodedResendInvitationResponse struct {
 }
 
 // TestAdminPending_ResendInvitation_RequiresSession targets a throwaway
-// seeded row's own id, not a literal (#0372, CLAUDE.md §8b). This is the
+// seeded row's own id, not a literal (#0372, AGENTS.md §8b). This is the
 // test #0367's review named as the hazard: invite_resent_at is write-once
 // (#0312) and never cleared, so mutating the auth guard against a literal
 // /admin/subscribers/1/... would permanently burn subscriber 1's one-ever
@@ -636,7 +636,7 @@ func TestAdminPending_ResendInvitation_SecondCallReturns409(t *testing.T) {
 // TestAdminResendInvitation_PhysicalAddressGateNotBypassable
 // (internal/mailing/outbox_worker_test.go, #0312), which calls the STORE
 // method directly with this pre-check entirely out of the picture. #0367
-// criterion 3 / CLAUDE.md §9: a test at this layer must not encode the
+// criterion 3 / AGENTS.md §9: a test at this layer must not encode the
 // pre-check as *the* gate, so this one asserts only the 409 and nothing
 // about OutboxWorker's own behavior.
 func TestAdminPending_ResendInvitation_BlankPhysicalAddressReturns409(t *testing.T) {

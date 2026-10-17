@@ -144,7 +144,7 @@ func startDevAdminWiringServer(t *testing.T, pool handlers.Pinger, cfg *config.C
 }
 
 // devWiringPort allocates an ephemeral, currently-free 127.0.0.1 port
-// (CLAUDE.md §8b — never bind a fixed, shared port for a verification
+// (AGENTS.md §8b — never bind a fixed, shared port for a verification
 // server) the same way admin_wiring_test.go does: bind, read the assigned
 // port, close the probe listener, and hand the number to mountAndServe's
 // own cfg.Port to bind for real moments later.
@@ -168,7 +168,7 @@ func devWiringPort(t *testing.T) int {
 // and — deliberately — no truncateAdminWiringTables/registerWiringTest,
 // since this test seeds a uniquely-named admin
 // (fmt.Sprintf("devadmin-%d@localhost", time.Now().UnixNano())) and cleans
-// up only that user's own rows, never a literal or seeded id (CLAUDE.md
+// up only that user's own rows, never a literal or seeded id (AGENTS.md
 // §8b).
 //
 // Five assertions now, matching #0402's original three plus the two #0484

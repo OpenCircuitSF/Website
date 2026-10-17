@@ -147,7 +147,7 @@ var issueLineCitationDiagnosticSuffixPattern = regexp.MustCompile(`^:[0-9]+:`)
 var issueLineCitationTestMarkerPattern = regexp.MustCompile(`(?m)^\s*(?:===\s+RUN\b|---\s+(?:FAIL|PASS|SKIP):)`)
 
 // issueLineCitationGuardMinPlausibleFileCount is this guard's fail-closed
-// floor on the issues directory read below — CLAUDE.md §8's "a check that
+// floor on the issues directory read below — AGENTS.md §8's "a check that
 // cannot fail pins nothing" applied to this guard's own directory read, so
 // an emptied or misdirected issues/ read is a hard failure rather than a
 // silent, narrowed "clean". 389 numbered issue files exist under issues/ at
@@ -344,7 +344,7 @@ func TestNoOpenIssueEvidenceCitesGoFileByLineNumber(t *testing.T) {
 }
 
 // TestIssueLineCitationGuardScanIsImplausibleBelowFloor pins
-// issueLineCitationGuardScanIsImplausible's boundary directly, per CLAUDE.md
+// issueLineCitationGuardScanIsImplausible's boundary directly, per AGENTS.md
 // §8's "a check that cannot fail pins nothing": zero files, and one short of
 // the floor, must both be implausible; the floor itself must not be.
 func TestIssueLineCitationGuardScanIsImplausibleBelowFloor(t *testing.T) {
@@ -361,7 +361,7 @@ func TestIssueLineCitationGuardScanIsImplausibleBelowFloor(t *testing.T) {
 
 // TestIssueLineCitationGuardCatchesPlantedStaleCitationAndSparesCorrectingQuotation
 // is criterion 3's discrimination proof, run against an isolated t.TempDir()
-// fixture (CLAUDE.md §8a: never plant a failure into a shared file another
+// fixture (AGENTS.md §8a: never plant a failure into a shared file another
 // agent may be mid-edit on). It asserts all three things #0384 requires at
 // once: a citation in an evidence-asserting section fires and names the
 // file and line; a correcting quotation of the same shape in Description —

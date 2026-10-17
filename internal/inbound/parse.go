@@ -3,7 +3,7 @@
 // deliberately free of any database or HTTP dependency — see this file's
 // Parse and s3.go's S3Store for the two independently-testable halves —
 // so internal/handlers' SESInboundHandler can depend on narrow interfaces
-// (CLAUDE.md §1) rather than on net/mail parsing details or a concrete
+// (AGENTS.md §1) rather than on net/mail parsing details or a concrete
 // *s3.Client.
 package inbound
 

@@ -149,7 +149,7 @@ describe('demotionExplanation', () => {
     expect(msg).toContain('draft');
   });
 
-  it('does not name an internal component as the agent of the refusal (CLAUDE.md §9)', () => {
+  it('does not name an internal component as the agent of the refusal (AGENTS.md §9)', () => {
     // #0175 dropped "the send worker" deliberately: the property that
     // matters to an admin is that sending was refused, not who refused it.
     const msg = demotionExplanation(

@@ -77,5 +77,5 @@ the two that use the apache authenticator.
 Per `#0447` criterion 6, nothing here edits the installed vhosts,
 `/etc/letsencrypt/renewal/opencircuitsf.com.conf`, or adds an `installer =`
 line to that renewal config. The `/.well-known/` carve-out serving this
-domain's Bluesky DID (`CLAUDE.md` §7) lives in the vhost, not in certbot's
+domain's Bluesky DID (`AGENTS.md` §7) lives in the vhost, not in certbot's
 renewal path, and stays untouched by this hook.

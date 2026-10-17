@@ -329,7 +329,7 @@ func (s *Store) AdminResendConfirmation(ctx context.Context, id int64, now time.
 //     ImportStore.Commit used for the first invitation, so the re-send says
 //     the same thing the first one said.
 //
-// The physical_address gate (#0129, CAN-SPAM §7704, CLAUDE.md §9) is NOT
+// The physical_address gate (#0129, CAN-SPAM §7704, AGENTS.md §9) is NOT
 // re-implemented here. OutboxWorker.render's KindImportInvite arm already
 // refuses to build a message when physical_address is unset and defers the
 // row rather than sending — see errImportInviteMissingPhysicalAddress in

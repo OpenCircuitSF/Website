@@ -484,7 +484,7 @@ The SPA learns the mode from a new unauthenticated `GET /api/config` → `{"auth
 | | **#0003** | Also strip `RegisterVerify.svelte`, `RecoverVerify.svelte`, and the ceremony halves of `Login.svelte`/`webauthn.ts` (keep `Account.svelte` shell). |
 | | **#0004** | Migration set shrinks: keep users (reshaped as shadow: +`subject`, −nothing else), sessions (+`refresh_token_enc`, `identity_checked_at`), settings, audit_log. Drop passkey_credentials / webauthn_challenges / pending_registrations / backup-flags / session-passkey-NOT-NULL (ShortLinks migrations 000004/000009/000013 — the PRD §3.1 table row listing them shortens). |
 | | **#0005** | Devstore: drop passkey/challenge/pending entities; `DevAutoLogin` unchanged (it never touched ceremonies — `internal/middleware/devauth.go:43`). |
-| | **#0006** | `CLAUDE.md`/docs mention federation; `docs/auth.md` (www copy) documents RP-mode auth. |
+| | **#0006** | `AGENTS.md`/docs mention federation; `docs/auth.md` (www copy) documents RP-mode auth. |
 | | **#0007** | Env var set per above. |
 | | **#0009** | `/admin/users` manages **shadow rows + per-property roles** (add role toggle — ShortLinks has no promote/demote UI, `docs/auth.md` §"Who is an admin"; www needs one since registration-time promotion is gone). Settings/audit screens unchanged. |
 | | **#0010** | Seed creates the ADMIN_EMAIL **shadow row** (`is_admin=true`, subject NULL until first sign-in claims it via §9.4 email matching). |

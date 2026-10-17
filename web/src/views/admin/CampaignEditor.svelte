@@ -413,7 +413,7 @@
   // function's own scope) on the stream's initial connect, every automatic
   // reconnect, and — since #0048's review, point 1 — every progress frame
   // that isTerminalSnapshot reports as possibly closing (onProgressEvent
-  // above). The database is the source of truth, not this stream (CLAUDE.md):
+  // above). The database is the source of truth, not this stream (AGENTS.md):
   // a campaign can finish/fail/be cancelled entirely during a connection gap
   // with no further batch to publish a closing frame, so relying solely on
   // reconnect-driven resyncs could leave this view showing "Sending…" for as

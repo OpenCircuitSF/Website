@@ -14,7 +14,7 @@ import (
 // 'published'` to `status <> 'draft'` and #0142 renamed it to
 // idx_workshops_visible, and PRD.md:671 kept saying neither. Nothing caught
 // it mechanically; TestDatabaseDocMigrationParity (docs_parity_test.go)
-// guards docs/database.md and CLAUDE.md against the migrations, but nothing
+// guards docs/database.md and AGENTS.md against the migrations, but nothing
 // played that role for PRD.md.
 //
 // This guard is deliberately narrower than that one, for a reason that is
@@ -459,7 +459,7 @@ type indexDef struct {
 // migrations/*.up.sql — in version order, and in the order each statement
 // appears within a file — to compute each index's *current* definition. Most
 // index changes in this codebase land as an in-place edit to the
-// still-unapplied migration file itself (CLAUDE.md §1's greenfield
+// still-unapplied migration file itself (AGENTS.md §1's greenfield
 // exception: idx_workshops_published's rename and predicate widen both
 // happened this way, directly inside migrations/000020), so simply reading
 // the final file content already gives the live definition for those. The
@@ -1048,7 +1048,7 @@ func normalizeSQL(s string) string {
 
 // extractPRDSection returns the text between a heading line matching
 // "^headingPrefix" and the next "## N" or "### N" heading, mirroring
-// CLAUDE.md §11's extraction command for this exact section —
+// AGENTS.md §11's extraction command for this exact section —
 // `sed -n '/^### 6\.2 /,/^#{2,3} [0-9]/p' PRD.md` — so this test reads
 // precisely the slice an agent following that instruction would read, never
 // PRD.md's 1,769 lines whole.
@@ -1088,7 +1088,7 @@ var sqlFencePattern = regexp.MustCompile("(?s)```sql\r?\n(.*?)\r?\n```")
 // tokenizes it as if every byte were SQL. That is usually harmless (prose
 // rarely contains SQL punctuation in a way that confuses the tokenizer) but
 // not reliably so: §6.2 has one unpaired apostrophe in an ordinary sentence
-// ("...CLAUDE.md §1's append-only rule..." — the contraction pairs with none
+// ("...AGENTS.md §1's append-only rule..." — the contraction pairs with none
 // of the section's SQL string literals), which opens a runaway kindString
 // span that runs to the next apostrophe found anywhere later in the section,
 // blanking 867 of §6.2's 18,660 bytes including part of unrelated prose nowhere

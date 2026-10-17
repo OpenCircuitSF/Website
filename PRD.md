@@ -744,7 +744,7 @@ Plus the copied auth tables: `users`, `passkey_credentials`,
 > rewritten as a deliberate act, and the development database may be dropped and
 > recreated from scratch. No backfill logic is owed to data that does not exist.~~
 >
-> ~~This is a scoped, temporary exception to CLAUDE.md §1's append-only rule, and
+> ~~This is a scoped, temporary exception to AGENTS.md §1's append-only rule, and
 > it expires the moment the first production deploy applies a migration to a
 > database anyone cares about. After that, append-only is absolute again —
 > `migrations/000007` exists because ShortLinks broke it once. An issue that
@@ -759,7 +759,7 @@ Plus the copied auth tables: `users`, `passkey_credentials`,
 > **2026-08-25**: that is the day `www.opencircuitsf.com` first served this
 > project and production's PostgreSQL applied migrations up to
 > `schema_migrations.version = 22`. Migrations `000001`–`000022` are now frozen
-> and append-only, without qualification — see CLAUDE.md §1. Any schema change
+> and append-only, without qualification — see AGENTS.md §1. Any schema change
 > from here on, including one that would once have gone straight into `000010`
 > or another already-shipped file, belongs in a new migration. The three
 > paragraphs above are struck through rather than deleted, as the record of
@@ -1556,7 +1556,7 @@ EMAIL_FROM=Open Circuit SF <contact@mailing.opencircuitsf.com>  # corrected 2026
 EMAIL_REPLY_TO=contact@opencircuitsf.com  # corrected 2026-09-03 (#0414): was hello@opencircuitsf.com
 EMAIL_LIST_DOMAIN=lists.opencircuitsf.com
 SES_INBOUND_BUCKET=opencircuitsf-inbound
-SES_SANDBOX=true          # flip to false once AWS grants production access (CLAUDE.md §10 item 2); no live AWS call detects status, so this is manual (#0423)
+SES_SANDBOX=true          # flip to false once AWS grants production access (AGENTS.md §10 item 2); no live AWS call detects status, so this is manual (#0423)
 # No static credentials — the EC2 instance role provides them.
 
 # ── Sending ────────────────────────────────────────────────────────────────
@@ -1579,7 +1579,7 @@ MAILER_NOOP=false         # true drops outbound mail instead of calling SES, so 
                           # from the route table entirely when this is set.
 SES_EVENTS_TOPIC_ARN=arn:aws:sns:us-east-1:AWS_ACCOUNT_ID:opencircuit-ses-events
                           # corrected 2026-09-04 (#0423): was blank — the topic has
-                          # existed since 2026-08-25 (CLAUDE.md §10 item 2, #0107).
+                          # existed since 2026-08-25 (AGENTS.md §10 item 2, #0107).
                           # AWS_ACCOUNT_ID is a placeholder: the account id is
                           # redacted from this public repo (#0511) and lives in
                           # the private repo brennanMKE/AWS.
@@ -1658,7 +1658,7 @@ Start DMARC at `p=none` for two weeks, read the aggregate reports, then move to
 
 ### 10.3 SES region choice
 
-Production uses `us-east-1`, not `us-west-2` (`CLAUDE.md` §7; corrected
+Production uses `us-east-1`, not `us-west-2` (`AGENTS.md` §7; corrected
 2026-09-03, #0418). The original reasoning — closest to San Francisco — does
 not carry over, and no record explains why. `us-east-1` does support SES
 **inbound** receiving (§6.5 path 3) and matches the instance's own region.
@@ -1706,7 +1706,7 @@ public-access block, and IAM scoped to the bucket prefix. None of that is
 built, and this section no longer specifies it as the target.
 
 **Corrected 2026-09-05, `#0430`:** this passage originally reasoned that S3
-needed an AWS account, which did not exist yet (`CLAUDE.md` §10 item 2), and
+needed an AWS account, which did not exist yet (`AGENTS.md` §10 item 2), and
 that building it would mean writing against credentials nobody had — the
 same reasoning applied to SES. The account now exists (verified read-only,
 `aws sts get-caller-identity`) and SES is live in it, so that precondition
@@ -1761,7 +1761,7 @@ Each phase ends at a state worth deploying.
 ### Phase 0 — Foundation
 Copy the ShortLinks skeleton, rewrite the module path, strip every shortener
 package and migration, get `go build ./...` and `go test ./...` green on the
-reduced tree, stand up `scripts/dev.sh`, write `CLAUDE.md` and `docs/README.md`.
+reduced tree, stand up `scripts/dev.sh`, write `AGENTS.md` and `docs/README.md`.
 
 ### Phase 1 — Auth carried over
 Auth migrations renumbered and applied; passkey registration, login, recovery,
@@ -1825,7 +1825,7 @@ gotchas). Proposed first pass:
 
 **Phase 0** — 0001 repo scaffold & module rename · 0002 strip shortener packages
 · 0003 strip shortener frontend · 0004 renumber auth migrations · 0005 dev
-script & devstore adaptation · 0006 CLAUDE.md + docs skeleton
+script & devstore adaptation · 0006 AGENTS.md + docs skeleton
 
 **Phase 1** — 0007 config loader for new vars · 0008 auth stack verification
 pass · 0009 admin users/settings/audit screens · 0010 seed command

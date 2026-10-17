@@ -60,7 +60,7 @@ type decodedCampaignStats struct {
 }
 
 // seedStatsCampaign creates a throwaway draft campaign for these tests,
-// following CLAUDE.md §8b: never a literal/hardcoded id.
+// following AGENTS.md §8b: never a literal/hardcoded id.
 func seedStatsCampaign(t *testing.T, pool *pgxpool.Pool) int64 {
 	t.Helper()
 	store := mailing.NewCampaignStore(pool)

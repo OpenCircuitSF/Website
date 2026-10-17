@@ -12,7 +12,7 @@
 // checks a plain, testable property (TestPreflight_FailureOrderIsStable)
 // rather than something that could vary with map iteration or query timing.
 //
-// # Why this is not bypassable from the UI (CLAUDE.md §9)
+// # Why this is not bypassable from the UI (AGENTS.md §9)
 //
 // This function is not a flag the UI sets and the worker trusts — there is
 // no "force send" parameter, no override column, no admin route that skips

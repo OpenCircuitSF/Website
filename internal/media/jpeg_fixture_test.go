@@ -43,7 +43,7 @@ func leRational(buf *bytes.Buffer, num, den uint32) {
 // coordinates). Every offset below is computed by hand and cross-checked by
 // the t.Fatalf assertions inline — see the doc comment on each block for the
 // arithmetic. This is deliberately NOT built through image/tiff or any
-// Exif library: none is available (CLAUDE.md §1, issues/0433.md's
+// Exif library: none is available (AGENTS.md §1, issues/0433.md's
 // Obstacles), and the whole point is bytes this package's own stripper can
 // be tested against structurally.
 func buildFakeTIFFWithGPSAndDevice(t *testing.T) []byte {

@@ -162,12 +162,12 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 		t.Errorf("MailerNoOp = %v, want default false — production must default to the real SES mailer", cfg.MailerNoOp)
 	}
 	if cfg.SESSandbox != true {
-		t.Errorf("SESSandbox = %v, want default true — no SES production-access request has been made yet (CLAUDE.md §10 item 2)", cfg.SESSandbox)
+		t.Errorf("SESSandbox = %v, want default true — no SES production-access request has been made yet (AGENTS.md §10 item 2)", cfg.SESSandbox)
 	}
 }
 
 // TestLoad_SESEventsTopicARNOptional proves SES_EVENTS_TOPIC_ARN is NOT a
-// required variable (#0037): the topic is not provisioned yet (CLAUDE.md §10
+// required variable (#0037): the topic is not provisioned yet (AGENTS.md §10
 // item 2), so the binary must still boot with it unset, loading to "". A
 // verifier that treats an empty configured topic ARN as "reject everything"
 // (rather than "check nothing") is what keeps this safe — see
@@ -400,7 +400,7 @@ func TestLoad_RemovedVariablesIgnored(t *testing.T) {
 // TestEnvExampleValuesAvoidDivergentParserShapes, which scans .env.example's
 // actual text instead of simulating one parser's output for two hardcoded
 // lines. The two are not duplicates — see that test's own doc comment for
-// why CLAUDE.md §8's "the two homes are not exclusive" applies here — and
+// why AGENTS.md §8's "the two homes are not exclusive" applies here — and
 // this one keeps its original two subtests unchanged.
 func TestLoad_EnvExampleValuesAreSystemdParseable(t *testing.T) {
 	const preFixMaxSendRate = "10          # messages/second, keep below the SES quota"

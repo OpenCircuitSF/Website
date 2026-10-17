@@ -190,7 +190,7 @@ const maxSlugAttempts = 1000
 // lowercase ASCII letter or digit, for collapsing into a single hyphen.
 // A byte-for-byte copy of workshops.slugNonAlnum (internal/workshops/store.go)
 // — the two packages don't share an internal/slug helper package because
-// each is the only file in its own package that needs it, and PRD/CLAUDE.md
+// each is the only file in its own package that needs it, and PRD/AGENTS.md
 // carry no rule requiring code shared this thinly to be factored out.
 var campaignSlugNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 

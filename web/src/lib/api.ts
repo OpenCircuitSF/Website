@@ -520,7 +520,7 @@ export interface SubscriberActionResult {
  * of #0033, writes a real suppressions-table row (reason: manual) — a future
  * resignup by this address is blocked at #0026's send gate, not just marked
  * unsubscribed. `no_op` is true when the target had already complained,
- * since Unsubscribe is a guaranteed no-op on a complained row (CLAUDE.md
+ * since Unsubscribe is a guaranteed no-op on a complained row (AGENTS.md
  * §9) — the caller must show that rather than imply the subscriber's status
  * changed; it is independent of `suppression_added` (the suppressions-table
  * write still happens even when `no_op` is true).

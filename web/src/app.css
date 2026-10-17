@@ -8,7 +8,7 @@
    blocking inline script in index.html's <head>.
 
    Ported from placeholder/index.html, the validated reference implementation
-   (CLAUDE.md §6). Do not add hex literals outside this block — ShortLinks
+   (AGENTS.md §6). Do not add hex literals outside this block — ShortLinks
    accumulated stray hex in components that had to be hunted down later; every
    color anywhere else in the app must come from one of these custom
    properties.
@@ -187,7 +187,7 @@
 
 /* ── Webfonts ───────────────────────────────────────────────────────────────
    Self-hosted, Latin-subsetted woff2 (PRD §4.3) — served from our own origin
-   under web/public/fonts/, never from Google Fonts or any other CDN (CLAUDE.md
+   under web/public/fonts/, never from Google Fonts or any other CDN (AGENTS.md
    §9). Total payload for all three files is ~76 KB, under the 120 KB budget.
 
    font-display: swap matters here specifically because the display headline

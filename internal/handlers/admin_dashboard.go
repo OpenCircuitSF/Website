@@ -248,7 +248,7 @@ type dashboardWarnings struct {
 	ComplaintRateHigh   bool `json:"complaint_rate_high"`
 	// ComplaintRatePct is omitted (nil) when the account-wide sample is
 	// below dashboardComplaintMinSample — see this file's doc comment on
-	// that constant. Never fabricated as 0 in that case, per CLAUDE.md §5's
+	// that constant. Never fabricated as 0 in that case, per AGENTS.md §5's
 	// "say so in the UI rather than presenting it as exact."
 	ComplaintRatePct       *float64 `json:"complaint_rate_pct,omitempty"`
 	ComplaintSampleSize    int64    `json:"complaint_sample_size"`

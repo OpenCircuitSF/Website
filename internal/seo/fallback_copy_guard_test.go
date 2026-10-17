@@ -7,7 +7,7 @@
 // what drifted, the same shape as internal/db/docs_parity_test.go and
 // internal/handlers/routes_parity_test.go's existing content-parity guards.
 //
-// Not circular (CLAUDE.md §8): the oracle (the .svelte source file, read
+// Not circular (AGENTS.md §8): the oracle (the .svelte source file, read
 // fresh off disk) and the subject (fallback.go's Go tables) are different
 // bytes in different files/languages -- an edit to one cannot also satisfy
 // the guard by construction the way a copy of the answer stored next to the
@@ -35,7 +35,7 @@ var appNamePattern = regexp.MustCompile(`APP_NAME\s*=\s*'([^']+)'`)
 
 // extractAppName reads web/src/lib/branding.ts's own APP_NAME constant, the
 // single source of truth staticPageCopy's {APP_NAME} expansion mirrors.
-// Fails the test outright (CLAUDE.md §8's self-check rule) if extraction
+// Fails the test outright (AGENTS.md §8's self-check rule) if extraction
 // comes back empty, rather than silently comparing against "".
 func extractAppName(t *testing.T) string {
 	t.Helper()
@@ -105,7 +105,7 @@ func TestStaticFallbackCopyMatchesSvelteViews(t *testing.T) {
 		})
 	}
 
-	// Mutation proof (CLAUDE.md §8): the comparison above must actually be
+	// Mutation proof (AGENTS.md §8): the comparison above must actually be
 	// capable of failing, not vacuously pass because of a normalization bug
 	// that empties both sides. Change one word in the REAL Home.svelte
 	// source and confirm staticCopyMismatches reports it.

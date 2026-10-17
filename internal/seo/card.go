@@ -98,7 +98,7 @@ var (
 	cardTextColor  = color.RGBA{R: 0xE8, G: 0xF0, B: 0xE8, A: 0xFF}
 	cardMutedColor = color.RGBA{R: 0x9A, G: 0xA7, B: 0x9E, A: 0xFF}
 	// cardGreenColor is brand green at its 14.8:1-on-dark-ground
-	// measurement (CLAUDE.md §8) -- the card's ground is always the dark
+	// measurement (AGENTS.md §8) -- the card's ground is always the dark
 	// brand color, so this never hits the 1.32:1-on-white case that forces
 	// a tinted variant elsewhere in the site.
 	cardGreenColor = color.RGBA{R: 0x68, G: 0xFF, B: 0x23, A: 0xFF}
@@ -530,7 +530,7 @@ func (c *cardCache) get(key, title, meta string) ([]byte, string, error) {
 }
 
 // invalidate clears every cached card. Deliberately unexported, mirroring
-// Sitemap.invalidate (#0337) -- CLAUDE.md §8's satisfier-set entry is why:
+// Sitemap.invalidate (#0337) -- AGENTS.md §8's satisfier-set entry is why:
 // an exported Invalidate() here would structurally (if accidentally) satisfy
 // handlers.seoCacheInvalidator and mailing.ArchiveCacheInvalidator, both
 // single-method interfaces requiring exactly that shape. See

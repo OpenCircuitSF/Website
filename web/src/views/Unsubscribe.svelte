@@ -18,7 +18,7 @@
   // server at all (offline) folds onto that same done state with a fixed
   // fallback message rather than a distinct error UI.
   //
-  // No dark patterns (CLAUDE.md §9, PRD §6.5): the single button below IS
+  // No dark patterns (AGENTS.md §9, PRD §6.5): the single button below IS
   // the unsubscribe action — there is no muted "actually, keep me
   // subscribed" link competing with it. The preference center is offered
   // once, plainly, in the done state, as the lighter alternative for next

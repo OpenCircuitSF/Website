@@ -73,7 +73,7 @@ export default defineConfig({
   server: {
     // #0214: previously unset, so 5173 was only Vite's own default rather
     // than something this file stated — a bare `npm run dev` with 5173 taken
-    // would slide silently to 5174 while README.md, docs/dev.md, CLAUDE.md,
+    // would slide silently to 5174 while README.md, docs/dev.md, AGENTS.md,
     // and scripts/dev.sh's messages all still say 5173. Stated explicitly so
     // the port matches what every doc claims, and strictPort:true makes a
     // collision fail loudly (matching this project's general preference for

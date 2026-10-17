@@ -55,7 +55,7 @@ func TestCampaignHeaders_ListUnsubscribe_CarriesMailtoFormOnListDomain(t *testin
 	if !strings.Contains(got, "<mailto:unsubscribe@lists.opencircuitsf.com?subject=") {
 		t.Errorf("List-Unsubscribe missing mailto form on lists.opencircuitsf.com: got %q", got)
 	}
-	// CLAUDE.md §9: never point anything at the apex MX. Path 3's inbound
+	// AGENTS.md §9: never point anything at the apex MX. Path 3's inbound
 	// mailbox lives on the dedicated lists.opencircuitsf.com subdomain
 	// (#0057), not the apex.
 	if strings.Contains(got, "mailto:unsubscribe@opencircuitsf.com?") {

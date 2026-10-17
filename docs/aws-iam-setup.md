@@ -21,7 +21,7 @@ for its hostname, and `$DEPLOY_ROLE` for its IAM role name.
 > far as this service is concerned. Production runs on
 > **`$DEPLOY_INSTANCE_ID`** (`$DEPLOY_HOST`, reached by **`ssh photon`**,
 > a `t4g.small`), and the role actually attached there is
-> **`$DEPLOY_ROLE`**, not `opencircuit-instance`. See `CLAUDE.md` §7
+> **`$DEPLOY_ROLE`**, not `opencircuit-instance`. See `AGENTS.md` §7
 > for the current facts. Everything below — the fact table, the role name,
 > the old SSH alias, and the instance ID — describes the original setup pass
 > against the now-decommissioned host. The permission shapes (Part 2's
@@ -37,7 +37,7 @@ for its hostname, and `$DEPLOY_ROLE` for its IAM role name.
 the `opencircuit-instance` role — re-confirmed for this issue directly
 against instance metadata (`iam/security-credentials/`, read-only on the
 box; it returns `opencircuit-instance`, not the 404 the next paragraph
-describes), not copied from any issue text. `CLAUDE.md` §10 item 2 already
+describes), not copied from any issue text. `AGENTS.md` §10 item 2 already
 records the role as attached and proven by a real delivered send. What
 follows is left as the runbook that got it there and as the reference for
 the policy's actual shape (Part 2, which already stated the corrected
@@ -72,8 +72,8 @@ hand instead.
 |---|---|
 | AWS account | `$AWS_ACCOUNT_ID` (private AWS repo) |
 | EC2 instance | the original instance (id in the private AWS repo; `t4g.nano`, **`us-east-1`**) |
-| Current instance role | ~~**none** — the metadata service 404s `iam/security-credentials/`~~ **Correction (`#0426`, 2026-09-04):** `opencircuit-instance`, attached — re-confirmed against instance metadata for this issue, not copied from the filing; `CLAUDE.md` §10 item 2 records it as attached and proven by a real delivered send |
-| SES region | **`us-east-1`** — corrected 2026-09-03 (`#0418`); this row said `us-west-2`, which was never the real region (`CLAUDE.md` §7) |
+| Current instance role | ~~**none** — the metadata service 404s `iam/security-credentials/`~~ **Correction (`#0426`, 2026-09-04):** `opencircuit-instance`, attached — re-confirmed against instance metadata for this issue, not copied from the filing; `AGENTS.md` §10 item 2 records it as attached and proven by a real delivered send |
+| SES region | **`us-east-1`** — corrected 2026-09-03 (`#0418`); this row said `us-west-2`, which was never the real region (`AGENTS.md` §7) |
 | SES identity | `arn:aws:ses:us-east-1:$AWS_ACCOUNT_ID:identity/mailing.opencircuitsf.com` — **verified**, DKIM `SUCCESS`, custom MAIL FROM `bounce.mailing.opencircuitsf.com` `SUCCESS` |
 | SES configuration set | `arn:aws:ses:us-east-1:$AWS_ACCOUNT_ID:configuration-set/opencircuit-transactional` |
 | SNS topic for events | `arn:aws:sns:us-east-1:$AWS_ACCOUNT_ID:opencircuit-ses-events` |
@@ -421,7 +421,7 @@ it is not a precedent for adding more.
 
 ## After the role is attached
 
-The remaining SES work, in order — see `docs/email-setup.md` and `CLAUDE.md`
+The remaining SES work, in order — see `docs/email-setup.md` and `AGENTS.md`
 §10 item 2 for the full picture:
 
 1. ~~DNS records~~ — **done.** Three DKIM CNAMEs, the MAIL FROM MX and SPF
@@ -452,5 +452,5 @@ enabled** — `SuppressedReasons` is already `["BOUNCE", "COMPLAINT"]`. No actio
 needed there.
 
 One thing enabling SES will *not* unblock: campaigns still refuse to start
-without a `physical_address` setting (`#0045`, CAN-SPAM §7704, `CLAUDE.md` §10
+without a `physical_address` setting (`#0045`, CAN-SPAM §7704, `AGENTS.md` §10
 item 3). That needs a PO box, not an IAM change.

@@ -58,7 +58,7 @@ type Config struct {
 	// unsubscribe address that may not route. Must never be the bare apex
 	// opencircuitsf.com: #0057 points this subdomain's MX at SES for inbound
 	// Path-3 handling, and pointing the apex's own MX at SES would hijack
-	// all mail to the domain (CLAUDE.md §9).
+	// all mail to the domain (AGENTS.md §9).
 	EmailListDomain  string
 	SESInboundBucket string
 
@@ -67,7 +67,7 @@ type Config struct {
 	// signature only proves SNS sent a message, not that it came through our
 	// topic — any AWS account can subscribe our public endpoint to a topic of
 	// their own. This is deliberately NOT in the `required` table below: the
-	// topic does not exist yet (CLAUDE.md §10 item 2), and until it is
+	// topic does not exist yet (AGENTS.md §10 item 2), and until it is
 	// provisioned an empty value means sesnotify rejects every message rather
 	// than failing to boot.
 	SESEventsTopicARN string
@@ -89,7 +89,7 @@ type Config struct {
 	// MailerNoOp selects auth.NoOpMailer instead of the real SES v2 API mailer
 	// on the Postgres serve path (#0027). Default false: production always
 	// gets the real mailer. Set true for local development against Postgres
-	// before SES is set up (CLAUDE.md §10 item 2) — NoOpMailer logs the full
+	// before SES is set up (AGENTS.md §10 item 2) — NoOpMailer logs the full
 	// verification/recovery link to stdout instead of sending it, which is how
 	// #0008's manual passkey verification procedure reads the magic link.
 	MailerNoOp bool
@@ -103,13 +103,13 @@ type Config struct {
 	// refuses to start the service otherwise, the same shape as MailerNoOp
 	// above and mailerNoOpAllowed's own guard. Set true for local
 	// development against Postgres, where STORAGE=json's DevAutoLogin has no
-	// mailing-list tables to exercise (CLAUDE.md §5).
+	// mailing-list tables to exercise (AGENTS.md §5).
 	DevAdminLogin bool
 
 	// SESSandbox reports whether the SES account is still sandboxed (200
 	// messages/day, verified recipients only — PRD §10.4). There is no live
 	// AWS call anywhere in this codebase that could detect this (the
-	// account doesn't exist yet as of CLAUDE.md §10 item 2, "not started"),
+	// account doesn't exist yet as of AGENTS.md §10 item 2, "not started"),
 	// so this is a manually-set operational flag, the same shape as
 	// MailerNoOp above: it defaults to true (sandboxed, the safe assumption
 	// for a project that has never requested production access) and an

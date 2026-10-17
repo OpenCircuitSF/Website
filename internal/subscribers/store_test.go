@@ -547,7 +547,7 @@ func TestConfirm_UnknownTokenInvalid(t *testing.T) {
 }
 
 // TestConfirm_ComplainedNeverAutoResubscribes is the direct test of
-// CLAUDE.md §9's rule: a complained subscriber is never reactivated by
+// AGENTS.md §9's rule: a complained subscriber is never reactivated by
 // confirming a (still theoretically live) confirm token. Only an admin
 // clears that state. See this issue's Verification for the mutation proof
 // against the guard in Store.Confirm.
@@ -896,7 +896,7 @@ func TestComplainedLaundering_ChainBroken(t *testing.T) {
 }
 
 // TestAdminClearComplaint_Success is the deliberate, tested admin-only path
-// out of complained that CLAUDE.md §9 requires to exist somewhere.
+// out of complained that AGENTS.md §9 requires to exist somewhere.
 func TestAdminClearComplaint_Success(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
@@ -2534,7 +2534,7 @@ func TestGrowth30Days_BoundaryAndSyntheticExclusion(t *testing.T) {
 // left to remember to edit. The three tests below are, in order: an
 // independent unit test of the derivation function itself (not compared
 // against subscriberColumns/qualifiedSubscriberColumns, so it is not "a
-// copy of the answer stored next to the question", CLAUDE.md §8); a guard
+// copy of the answer stored next to the question", AGENTS.md §8); a guard
 // against qualifiedSubscriberColumns ever being reassigned back to a
 // separately-maintained literal (the literal shape of #0312's actual
 // mistake); and a VALUE-based round trip that pins scanSubscriber's
@@ -2589,7 +2589,7 @@ func TestQualifiedSubscriberColumns_IsDerivedFromSubscriberColumns(t *testing.T)
 // scanSubscriber's `row.Scan(...)` argument identifiers against
 // subscriberColumns' column identifiers, in order, would be disproportionate
 // machinery for a defect that — unlike qualifiedSubscriberColumns — has not
-// actually fired (#0369's own description). Per CLAUDE.md §5/#0369
+// actually fired (#0369's own description). Per AGENTS.md §5/#0369
 // criterion 5 ("if the sound fix needs more machinery than the defect
 // costs, say so and stop"): stopped short of that, in favor of the cheaper
 // value-based check below.

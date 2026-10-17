@@ -105,7 +105,7 @@
   onMount(() => {
     void load();
     void loadBuild();
-    // The database, not this stream, is the source of truth (CLAUDE.md) —
+    // The database, not this stream, is the source of truth (AGENTS.md) —
     // re-fetching the whole overview on every (re)connect, including the
     // first, is what lets this screen notice a send that started, finished,
     // or was canceled entirely during a gap with no frame to report it,

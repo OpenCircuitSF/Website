@@ -21,18 +21,18 @@
 // campaignEditorSlugAndDeleteWiring.structuralGuard.test.ts: parse
 // Home.svelte with svelte/compiler and check the real AST, never raw text
 // (a regex hunting for `crtLoadScript` could as easily match the identifier
-// inside a comment -- CLAUDE.md's `#0064` hazard -- so every check below
+// inside a comment -- AGENTS.md's `#0064` hazard -- so every check below
 // walks the parsed tree, not source-text search).
 //
 // checkCrtWiring below is BOTH the guard's own oracle (called against the
 // real, unmodified file) and the thing the self-test drives against
 // in-memory mutated copies of that same source (never a file written to
-// disk -- CLAUDE.md §8a: do not move the shared tree out from under other
+// disk -- AGENTS.md §8a: do not move the shared tree out from under other
 // agents). Its pass/fail decision is built entirely from distinct,
 // hand-typed identifier names (`crtLoadScript`, `then`, `crtFallbackScript`,
 // `session`) matched against AST node shapes -- never from a copied
 // fragment of Home.svelte's own source compared byte-for-byte against
-// itself, which is the CLAUDE.md §8 (`#0258`) failure this file is written
+// itself, which is the AGENTS.md §8 (`#0258`) failure this file is written
 // to avoid: an oracle built that way can be edited in lockstep with its
 // subject by the very same change and never notice. The two mutation
 // helpers below (`withoutCrtLoadScriptCall`, `withDiscardedResult`) use a
@@ -127,7 +127,7 @@ function findScriptBufferDeclarator(instanceContent: unknown): SvelteNode {
  * Finds a `crtLoadScript().then(...)` call -- by AST shape (a CallExpression
  * whose callee is `<expr>.then` and whose object is itself a call to the
  * identifier `crtLoadScript`), never by scanning source text for the
- * substring "crtLoadScript" (CLAUDE.md's `#0064` hazard: a regex finds the
+ * substring "crtLoadScript" (AGENTS.md's `#0064` hazard: a regex finds the
  * occurrence inside a comment as readily as the real call -- and this file's
  * own header comment contains that exact identifier several times over).
  */
@@ -269,7 +269,7 @@ describe('Home.svelte CRT-session wiring (#0398)', () => {
   // over an in-memory mutated copy of the file and asserts they fail on it
   // -- never against the file on disk". Both mutations below are pure
   // string transforms of `componentSource`, held only in memory; nothing is
-  // written to disk (CLAUDE.md §8a).
+  // written to disk (AGENTS.md §8a).
   describe('self-test: checkCrtWiring actually detects both failure shapes', () => {
     it('fails when the crtLoadScript() call itself is removed', () => {
       const mutated = withoutCrtLoadScriptCall(componentSource);

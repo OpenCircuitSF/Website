@@ -149,7 +149,7 @@ func importHTTPEmail(t *testing.T) string {
 // handler suite's convention.
 //
 // The revoke sub-assertion targets a nonexistent sentinel id, not a literal
-// small id (CLAUDE.md §8b — see #0376): RequireAdmin sits in the mux chain
+// small id (AGENTS.md §8b — see #0376): RequireAdmin sits in the mux chain
 // ahead of the handler, so it fires before AdminImportsHandler.Revoke ever
 // parses the path or touches the store. A sentinel proves exactly that —
 // the guard discriminates before lookup — without a mutated guard's proof
@@ -468,7 +468,7 @@ func TestAdminImports_Revoke_UnsubscribesAndAudits(t *testing.T) {
 // TestAdminImports_Revoke_RequiresReason proves the JSON body's reason is
 // mandatory: POST .../revoke with an empty reason returns 400.
 //
-// Targets a nonexistent sentinel id, not a literal small id (CLAUDE.md §8b
+// Targets a nonexistent sentinel id, not a literal small id (AGENTS.md §8b
 // — see #0376), so the sentinel is reachable regardless of whether the
 // target id resolves to a real row.
 //

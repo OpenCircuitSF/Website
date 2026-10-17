@@ -31,7 +31,7 @@
 // build (internal/mailing/preflight.go) — so Send depends on the narrow,
 // LOCALLY-typed campaignPreflightChecker interface below instead of an
 // undefined mailing symbol. See that type's doc comment for exactly what
-// #0045 needs to wire in, and CLAUDE.md §9 for why a nil checker here is not
+// #0045 needs to wire in, and AGENTS.md §9 for why a nil checker here is not
 // a compliance gap: the worker's own copy of the gate is the sole
 // authoritative enforcement point regardless of whether this advisory one is
 // wired up.
@@ -125,7 +125,7 @@ type campaignPreflightFailure struct {
 // preflight argument at the cmd/opencircuit/main.go call site. Until then,
 // nil is passed (see main.go): Send simply skips this advisory check and
 // proceeds straight to the state transition. That is NOT a compliance gap —
-// CLAUDE.md §9 and #0045's plan are explicit that the worker's own copy of
+// AGENTS.md §9 and #0045's plan are explicit that the worker's own copy of
 // the gate, evaluated immediately before a campaign leaves 'scheduled', is
 // the sole authoritative enforcement point. A nil checker only means the
 // operator loses the courtesy of finding out before scheduling; a campaign
@@ -154,7 +154,7 @@ type campaignPreflightStore interface {
 // check calls, over the exact same GatherPreflight read; the worker's own
 // evaluation (immediately before a campaign leaves 'scheduled') remains the
 // sole authoritative enforcement point regardless of whether this advisory
-// one is wired in (CLAUDE.md §9).
+// one is wired in (AGENTS.md §9).
 type campaignPreflightAdapter struct {
 	store campaignPreflightStore
 }

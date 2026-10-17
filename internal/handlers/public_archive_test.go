@@ -41,7 +41,7 @@ func cleanupArchiveCampaign(t *testing.T, pool *pgxpool.Pool, id int64) {
 }
 
 // seedArchiveCampaign creates a draft campaign via the real store (never a
-// literal/seeded id, CLAUDE.md §8b) and, if status != "draft", force-sets
+// literal/seeded id, AGENTS.md §8b) and, if status != "draft", force-sets
 // status/archive_status directly via SQL — this package's own store API has
 // no path to 'sending'/'sent'/etc short of a real worker run, mirroring
 // internal/mailing's own setCampaignStatus test helper.

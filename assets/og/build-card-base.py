@@ -43,11 +43,11 @@ LOGO_MASK = ROOT / "assets" / "logo" / "mark-mask-512.png"
 
 W, H = 1200, 630
 MARGIN = 70
-LOGO_SIZE = 120  # above CLAUDE.md §8's ~96px illegibility floor for the mark asset
+LOGO_SIZE = 120  # above AGENTS.md §8's ~96px illegibility floor for the mark asset
 RULE_Y = 540  # must match card.go's cardRuleY
 
 BG = (0x0A, 0x0D, 0x0B)
-GREEN = (0x68, 0xFF, 0x23)  # 14.8:1 on BG (CLAUDE.md §8) -- never the 1.32:1 light-ground case
+GREEN = (0x68, 0xFF, 0x23)  # 14.8:1 on BG (AGENTS.md §8) -- never the 1.32:1 light-ground case
 RULE = (0x24, 0x30, 0x28)
 
 

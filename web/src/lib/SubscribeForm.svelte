@@ -18,7 +18,7 @@
   // Response invariance: on any 2xx response this component ALWAYS
   // navigates to the fixed /subscribe/thanks route without ever reading the
   // response body (see lib/subscribe.ts's onSubscribeSuccess) -- #0026's
-  // uniform 202 is a security property (CLAUDE.md §9), and inspecting the
+  // uniform 202 is a security property (AGENTS.md §9), and inspecting the
   // body here would be the one place this form could reintroduce the
   // distinction the server just eliminated. There is also no client-side
   // branching on elapsed time: the try/catch below does exactly one await,

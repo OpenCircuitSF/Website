@@ -682,7 +682,7 @@ const coverImageErrorMessage = `cover_image must be a site-relative path startin
 // invalid `image` URL in JSON-LD (#0055) and `og:image` (#0019).
 //
 // The accepted set mirrors the TypeScript twin exactly, and for the same
-// reason: CLAUDE.md §9 ("no external CDNs ... self-contained by design") and
+// reason: AGENTS.md §9 ("no external CDNs ... self-contained by design") and
 // PRD §6.2's own schema comment ("cover_image TEXT, -- path under /assets")
 // both say a cover image belongs on THIS site, so an absolute URL to any
 // other host -- which loads that host's asset (and leaks a referer) on
@@ -700,7 +700,7 @@ const coverImageErrorMessage = `cover_image must be a site-relative path startin
 // /assets/ is Vite's own embedded build output (see docs/media.md for why
 // excluding /assets/ from the Apache proxy would cut the SPA off from its
 // own JS and CSS). migrations/000020's cover_image comment is frozen
-// (CLAUDE.md §1) and cannot be edited to fix it, so the correction is
+// (AGENTS.md §1) and cannot be edited to fix it, so the correction is
 // recorded here and in docs/media.md; PRD.md §6.2's own copy of the comment
 // was not frozen the same way, and #0438 corrected it directly, so the
 // quotation above is now history rather than PRD.md's current text.

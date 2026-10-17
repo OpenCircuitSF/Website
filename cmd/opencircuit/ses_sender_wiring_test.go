@@ -30,7 +30,7 @@ func TestNewSESSender_MailerNoOp_ReturnsNoOpMailer(t *testing.T) {
 }
 
 // TestNewSESSender_SendWorkerDisabledAndSESUnconfigured_ReturnsUnconfiguredMailer
-// is the core #0472 fix: CLAUDE.md §10 item 2 prescribes
+// is the core #0472 fix: AGENTS.md §10 item 2 prescribes
 // "SEND_WORKER_ENABLED=false plus an unconfigured SES" as how to turn SES
 // off in production. Before this issue, that combination made servePostgres
 // return an error and the service never started (mailing.NewSESMailer
@@ -45,7 +45,7 @@ func TestNewSESSender_SendWorkerDisabledAndSESUnconfigured_ReturnsUnconfiguredMa
 	}
 	sender, err := newSESSender(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("newSESSender: %v, want nil error — CLAUDE.md §10's prescribed no-SES recipe must actually boot", err)
+		t.Fatalf("newSESSender: %v, want nil error — AGENTS.md §10's prescribed no-SES recipe must actually boot", err)
 	}
 	if _, ok := sender.(*mailing.UnconfiguredMailer); !ok {
 		t.Fatalf("newSESSender = %T, want *mailing.UnconfiguredMailer", sender)
@@ -85,7 +85,7 @@ func TestNewSESSender_SendWorkerEnabledDefaultAndSESUnconfigured_StillFailsLoudA
 // TestNewSESSender_SendWorkerDisabledButSESConfigured_ConstructsRealMailer
 // proves the new case is scoped to "SES is unconfigured," not to
 // "SEND_WORKER_ENABLED=false" alone — a genuinely SES-configured second
-// instance (CLAUDE.md §10 item 4's scaling story) must still get the real
+// instance (AGENTS.md §10 item 4's scaling story) must still get the real
 // mailing.SESMailer, not the loud-failure stand-in.
 func TestNewSESSender_SendWorkerDisabledButSESConfigured_ConstructsRealMailer(t *testing.T) {
 	cfg := &config.Config{

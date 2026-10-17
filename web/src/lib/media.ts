@@ -3,7 +3,7 @@
 // trip, the HEIC-specific copy, building the multipart body, and mapping a
 // server refusal to the message the editor shows. Kept as a plain,
 // unit-testable module with WorkshopEditor.svelte staying thin markup and
-// wiring — CLAUDE.md §1's default, and issues/0433.md's plan explicitly
+// wiring — AGENTS.md §1's default, and issues/0433.md's plan explicitly
 // recommends AGAINST a structural guard here (unlike #0444's autosave
 // guard): if the returned path is never assigned into the cover field, the
 // field visibly stays empty, so the failure this module could silently let

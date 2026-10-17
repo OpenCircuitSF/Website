@@ -161,7 +161,7 @@ export function canResumeCampaign(status: string): boolean {
  * moment the campaign leaves draft — 'scheduled' still offers the rest of
  * the editor (canEditCampaign) but never this field. This is an offer gate
  * only; the server independently refuses a changed slug outside draft with
- * ErrCampaignSlugNotEditable regardless of what this returns (CLAUDE.md §9).
+ * ErrCampaignSlugNotEditable regardless of what this returns (AGENTS.md §9).
  */
 export function canEditCampaignSlug(status: string): boolean {
   return status === 'draft';
@@ -178,7 +178,7 @@ export function canEditCampaignSlug(status: string): boolean {
  * published archive page whose URL is already in delivered mail (PRD
  * §6.8). This is an offer gate only; the server independently refuses a
  * delete outside draft with ErrCampaignNotDeletable regardless of what this
- * returns (CLAUDE.md §9).
+ * returns (AGENTS.md §9).
  */
 export function canDeleteCampaign(status: string): boolean {
   return status === 'draft';
@@ -376,7 +376,7 @@ export function resumeCopy(): string {
  * Whether a typed confirmation matches campaignSubject for the Resume
  * dialog — POST /admin/campaigns/{id}/resume's own server-side check
  * (admin_campaigns.go's Resume), restated here ONLY to gate the client's
- * button as an offer, never as enforcement (CLAUDE.md §9, #0047's
+ * button as an offer, never as enforcement (AGENTS.md §9, #0047's
  * "typed confirmation enforced only in the browser is theatre" — the
  * server independently re-checks and refuses a mismatch with 400
  * regardless of what this returns). Trimmed, case-sensitive exact match,

@@ -41,9 +41,9 @@
 // Every check below throws with a specific, file-and-expression-quoting
 // message the moment its own extraction step finds nothing, rather than
 // silently reporting zero violations for a scan that found no subject at
-// all (CLAUDE.md's fail-open warning -- #0258, #0428). None of the checks
+// all (AGENTS.md's fail-open warning -- #0258, #0428). None of the checks
 // compares against a quoted copy of the expected source sitting next to the
-// component (CLAUDE.md #8's "oracle must not be the same bytes as its
+// component (AGENTS.md #8's "oracle must not be the same bytes as its
 // subject"): each expected identifier/call name is a distinct string
 // (`slug`, `slugEditable`, `deleteCampaign`, `canDeleteCampaign`) compared
 // against the AST node it names, never against a re-typed fragment of

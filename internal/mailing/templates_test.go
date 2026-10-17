@@ -730,7 +730,7 @@ func TestConfirmationEmail_CarriesConfirmLinkAndIfYouDidntRequestLine(t *testing
 }
 
 // TestButtonTextIsNeverBrightGreen is a structural guard against the
-// CLAUDE.md §8 contrast trap: colorHeading (#68ff23, only 1.32:1 on white)
+// AGENTS.md §8 contrast trap: colorHeading (#68ff23, only 1.32:1 on white)
 // must never be used as the CTA button's own text color. The button's
 // background can plausibly be stripped independently of the card behind it,
 // so its text must stay legible on its own — colorButtonText (near-black) is

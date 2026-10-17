@@ -34,7 +34,7 @@ import (
 // is the right home for the POPULATION check: adding a `<file>.go:<int>`
 // citation to any Go comment under internal/ or cmd/ moves `got` from 0
 // toward 1, so `got == 0` is a non-circular oracle a copy-pasted answer
-// cannot satisfy (CLAUDE.md §8's direction-of-comparison rule). But this
+// cannot satisfy (AGENTS.md §8's direction-of-comparison rule). But this
 // file cannot detect its OWN disarmament — a loosened regex, a weakened
 // exemption, or a zeroed floor constant all still compile and still run,
 // and an in-package test agreeing with its own edited self is exactly
@@ -57,7 +57,7 @@ import (
 // scan time rather than kept in a list anyone has to remember to update:
 //
 //  1. lineCitationCommentIsIndented — the comment line is `//` immediately
-//     followed by a TAB, the one indentation gofmt leaves alone (CLAUDE.md
+//     followed by a TAB, the one indentation gofmt leaves alone (AGENTS.md
 //     §8's smart-quote/backtick entry is about the same preformatted-block
 //     exemption).
 //  2. lineCitationIsSelfCitation — the cited path resolves to the file the
@@ -249,7 +249,7 @@ func collectLineCitationHits(t *testing.T, repoRoot string, roots []string) ([]l
 // conjunction holds. The assertion is zero non-exempt citations —
 // deliberately not a count compared against a retained population: #0356's
 // plan rejected grandfathering the 13 citations that were accurate when
-// measured, on the same reasoning CLAUDE.md §8 gives for why
+// measured, on the same reasoning AGENTS.md §8 gives for why
 // `#0337`'s `embeddingReviewed` allowlist did not stay true — a retained
 // population is an allowlist wearing a number.
 func TestNoCommentCitesGoFileByLineNumber(t *testing.T) {
@@ -292,7 +292,7 @@ func TestNoCommentCitesGoFileByLineNumber(t *testing.T) {
 
 // TestLineCitationIsExemptRequiresAllThreePredicates proves the exemption
 // is a genuine conjunction, at the level of the pure boolean combiner: no
-// single true predicate, nor any two, is enough on its own. Per CLAUDE.md
+// single true predicate, nor any two, is enough on its own. Per AGENTS.md
 // §8, the want values below are chosen for this test alone, not copied
 // from lineCitationIsExempt's own body, so an edit that weakens the
 // conjunction (e.g. "||" in place of "&&") is what this test exists to

@@ -1,5 +1,5 @@
 // Pure logic for the pending-subscriber admin screen (#0128) — no DOM, no
-// fetch, unit-testable without jsdom (CLAUDE.md §1's "SPA logic goes in
+// fetch, unit-testable without jsdom (AGENTS.md §1's "SPA logic goes in
 // plain TypeScript modules" convention, mirroring lib/dashboard.ts and
 // lib/admin.ts). Pending.svelte calls these; it makes no formatting or
 // classification decisions of its own.

@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// #0181: the same defect — an internal document citation (CLAUDE.md, PRD, or
+// #0181: the same defect — an internal document citation (AGENTS.md, PRD, or
 // an issue number) leaking into copy an admin actually reads — was found
 // three separate times on three separate axes: #0172 swept web/, #0175's
 // review swept Go strings that render verbatim, and #0178's review swept
@@ -93,7 +93,7 @@ import (
 // originally closed the "PRD  §6.6" (two spaces) and "PRD§6.6" (no space)
 // variants (#0181 review, pass 2); the explicit class still closes both,
 // plus everything listed above.
-// Issues.md, HANDOFF.md, and docs/*.md join CLAUDE.md and PRD § as
+// Issues.md, HANDOFF.md, and docs/*.md join AGENTS.md and PRD § as
 // documents an admin cannot read either — #0178's own whole-tree grep
 // already included Issues.md and HANDOFF, and there is no principled
 // reason to guard one internal document and not the others.
@@ -125,7 +125,7 @@ import (
 // exists precisely because the two guards were already diverged on a
 // different term, so "the guards must share one pattern shape" was never a
 // fact this decision could rest on.
-var citationPattern = regexp.MustCompile(`CLAUDE\.md|PRD[\t\n\v\f\r \x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]*§|#0[0-9]{3}\b|Issues\.md|HANDOFF\.md|docs/\S*\.md|issues/[0-9]{4}\.md`)
+var citationPattern = regexp.MustCompile(`(?:AGENTS|CLAUDE)\.md|PRD[\t\n\v\f\r \x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]*§|#0[0-9]{3}\b|Issues\.md|HANDOFF\.md|docs/\S*\.md|issues/[0-9]{4}\.md`)
 
 // #0181 review, pass 2: rather than reasoning a fixed set of directories
 // into scope by hand (internal/mailing had to be added that way on the
@@ -269,7 +269,7 @@ func scanFileForCitations(fset *token.FileSet, file *ast.File) []citationViolati
 
 // TestNoAdminFacingStringCitesInternalDocs is the actual guard: it fails if
 // any string literal in the packages that can put text into an
-// admin-facing HTTP body cites CLAUDE.md, a PRD section, or an issue
+// admin-facing HTTP body cites AGENTS.md, a PRD section, or an issue
 // number.
 func TestNoAdminFacingStringCitesInternalDocs(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
@@ -312,14 +312,14 @@ func TestNoAdminFacingStringCitesInternalDocs(t *testing.T) {
 // exclusions this guard must respect, against a synthetic source file so
 // the proof does not depend on the current state of the real tree:
 //
-//  1. code comments citing PRD §/CLAUDE.md/an issue number do not trip it
+//  1. code comments citing PRD §/AGENTS.md/an issue number do not trip it
 //     (that is exactly where #0172 and #0178 moved these citations to);
 //  2. CAN-SPAM §7704 — a statute an admin can look up — does not trip it;
 //  3. the EMAIL_REPLY_TO / EMAIL_LIST_DOMAIN env var names do not trip it.
 func TestCitationScanExcludesCommentsAndAllowedCitations(t *testing.T) {
 	const src = `package fixture
 
-// This comment cites PRD §6.6, CLAUDE.md §9, and #0181 — all fine, since
+// This comment cites PRD §6.6, AGENTS.md §9, and #0181 — all fine, since
 // comments are for the next engineer, not for the admin reading the UI.
 func Messages() []string {
 	return []string{

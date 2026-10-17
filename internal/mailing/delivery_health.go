@@ -65,7 +65,7 @@
 //     (an operator reviewing /admin/audit sees it) AND enqueues an
 //     outbox.KindAdminAlert to ADMIN_EMAIL (#0126's queue — durable, not a
 //     synchronous SES call that could itself fail silently) naming the
-//     campaign, the observed rate(s), and the threshold(s). CLAUDE.md §10
+//     campaign, the observed rate(s), and the threshold(s). AGENTS.md §10
 //     item 4 notes ADMIN_EMAIL/who-reads-it is still undecided; this issue
 //     does not block on that being resolved — an empty AdminEmail simply
 //     skips the enqueue (enqueueDeliveryHealthAlert's own doc comment), and
@@ -282,7 +282,7 @@ func (w *Worker) auditPausedDeliveryHealth(ctx context.Context, campaignID int64
 // enqueueDeliveryHealthAlert enqueues one outbox.KindAdminAlert (#0126's
 // queue, built for exactly this caller — see that issue's plan §7) naming
 // the campaign, the observed rate(s), and the threshold(s). A nil
-// w.outbox or an empty w.adminEmail (ADMIN_EMAIL unset — CLAUDE.md §10 item
+// w.outbox or an empty w.adminEmail (ADMIN_EMAIL unset — AGENTS.md §10 item
 // 4 notes this is still undecided) skips the enqueue entirely: the trip
 // itself (the paused status and the audit row) is NOT conditioned on
 // either, since those are the load-bearing safety action — the alert is a

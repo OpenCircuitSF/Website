@@ -93,7 +93,7 @@ can act on; only the identifying half goes.
 
 **Where an erasure request has to reach.** A subscriber asking for erasure
 of everything the privacy policy says survives it routes to
-**`contact@opencircuitsf.com`** (`CLAUDE.md` §10 item 4; `#0075`'s policy
+**`contact@opencircuitsf.com`** (`AGENTS.md` §10 item 4; `#0075`'s policy
 page names that address) — the same inbox that already owns erasure and
 export requests. A non-subscriber writing to that address about an address
 we hold for them gets the honest answer this section documents: nothing
@@ -107,7 +107,7 @@ idempotent with it (`split_part(...) <> 'redacted'` never matches twice).
 **Critical DNS detail:** the dedicated `lists.opencircuitsf.com` subdomain
 carries its own MX pointed at SES inbound. **Never point the apex
 domain's MX at SES** — that would hijack all mail to `opencircuitsf.com`,
-including any human mailboxes (`CLAUDE.md` §9).
+including any human mailboxes (`AGENTS.md` §9).
 
 **Code shipped; the AWS plumbing is not applied yet.** The PRD kept this
 path optional in v1 with a manual-mailbox fallback, but `#0057`/`#0058`
@@ -132,7 +132,7 @@ MX record does not exist yet.
 | `complained` | new signup | *(no change)* | return `202`, send nothing |
 
 **`complained` subscribers never auto-resubscribe.** Only an admin can
-clear that state (`CLAUDE.md` §9) — a complaint is a strong deliverability
+clear that state (`AGENTS.md` §9) — a complaint is a strong deliverability
 signal that must not be silently overridden by the subscriber re-signing-up.
 
 ## Where to look

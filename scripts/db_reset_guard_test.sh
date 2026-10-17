@@ -8,7 +8,7 @@
 # recreate it — the same shape #0150 fixed for `testdb.sh gc` (a script that
 # assumes it's alone is what caused that incident), except this script's
 # blast radius is larger: 'opencircuit'/'opencircuit_test' are the databases
-# every agent falls back to sharing when it cannot get its own (CLAUDE.md
+# every agent falls back to sharing when it cannot get its own (AGENTS.md
 # §5a), and 'opencircuit' is also the user's own dev database. The old
 # 'opencircuit*' name glob also admitted a per-agent scratch database name
 # like opencircuit_test_0055, which belongs to scripts/testdb.sh, not here.
@@ -67,7 +67,7 @@
 #
 # SAFETY DESIGN — read this before changing the test
 #
-# CLAUDE.md §8b and docs/obstacles.md §4 are explicit: a mutation test that
+# AGENTS.md §8b and docs/obstacles.md §4 are explicit: a mutation test that
 # disables a guard must run against databases this test creates and owns,
 # never against a real agent's database or the shared opencircuit/
 # opencircuit_test databases, and never by editing the shared tracked script
@@ -538,7 +538,7 @@ echo "== Part 11b: \$CLIENT_WHERE and \$HOLDER_WHERE are two distinct fragments,
 # The static counterpart to Part 11 and 12, and the fallback the issue asked
 # for if a live non-client backend could not be constructed at all: reads
 # the TRACKED source directly (not a copy of expected text stored in this
-# test -- see CLAUDE.md's GUARD-0208 note on why an oracle must not be the
+# test -- see AGENTS.md's GUARD-0208 note on why an oracle must not be the
 # same bytes as its subject).
 #
 # This is where the FIRST #0309 attempt actually broke, per the review on

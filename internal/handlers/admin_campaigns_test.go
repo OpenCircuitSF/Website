@@ -949,7 +949,7 @@ func TestAdminCampaigns_Send_RealPreflightAdapter_Returns409UnmetShape(t *testin
 }
 
 // TestNewCampaignPreflightChecker_NilStore_ReturnsGenuinelyNilInterface
-// proves the typed-nil trap CLAUDE.md §9 and this issue's plan both warn
+// proves the typed-nil trap AGENTS.md §9 and this issue's plan both warn
 // about cannot happen through this constructor: passing a nil
 // *mailing.SendStore must produce an untyped nil campaignPreflightChecker,
 // not a non-nil interface wrapping a nil pointer (which would defeat Send's

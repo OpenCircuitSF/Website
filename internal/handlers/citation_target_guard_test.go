@@ -18,11 +18,11 @@ import (
 // (#0196's guard, in dangling_test_citation_guard_test.go, this same
 // package), and then, in #0216's own fix, a citation of a repository PATH
 // that does not exist (e.g. "web/HANDOFF", found by #0094's review and
-// folded into #0216) and a CLAUDE.md section reference. #0196's guard resolves one
+// folded into #0216) and a AGENTS.md section reference. #0196's guard resolves one
 // citation shape (Test* identifiers) against one ground truth (defined Go
 // functions). This file resolves two more shapes — a repo-relative PATH,
-// and a "CLAUDE.md §N" section reference — against their own ground truths:
-// the files actually on disk, and CLAUDE.md's own numbered "## N. " /
+// and a "AGENTS.md §N" section reference — against their own ground truths:
+// the files actually on disk, and AGENTS.md's own numbered "## N. " /
 // "## Na. " headings. Same technique as #0196 throughout (go/ast comment
 // walk, a regexp naming the candidate shape, a set of exclusion rules
 // mutation-tested against the real tree, a repo-relative pasteable failure
@@ -41,7 +41,7 @@ import (
 // #0181's.
 //
 // Self-scan: this file is itself a _test.go file the guard below will
-// walk, so every "path-shaped" or "CLAUDE.md §N" token in ITS OWN real Go
+// walk, so every "path-shaped" or "AGENTS.md §N" token in ITS OWN real Go
 // comments must resolve. It does — every path cited above and below names
 // a file this repo actually has (verified as part of writing this file,
 // and re-verified every time TestNoCommentCitesUnresolvedPathOrSection runs
@@ -79,21 +79,21 @@ var citationTargetPathPattern = regexp.MustCompile(`\b[A-Za-z0-9_][A-Za-z0-9_.\-
 // signal, not a name-based allowlist.
 var citationTargetFileLikeSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9_.\-]+\.(?:go|ts|tsx|svelte|md|sql|sh|json|ya?ml|css|html|mjs|cjs)$`)
 
-// citationTargetSectionPattern matches "CLAUDE.md §N" / "CLAUDE.md's §N".
-// Deliberately anchored to "CLAUDE.md" appearing immediately before the
+// citationTargetSectionPattern matches "AGENTS.md §N" / "AGENTS.md's §N".
+// Deliberately anchored to "AGENTS.md" appearing immediately before the
 // "§" (allowing an ASCII or curly possessive "'s"/"’s" and ordinary
 // whitespace in between) rather than matching a bare "§N" and asking
-// separately whether CLAUDE.md was mentioned nearby: a dry run of every
-// bare "§\d+" in the tree not already preceded by "CLAUDE" or "PRD" within
+// separately whether AGENTS.md was mentioned nearby: a dry run of every
+// bare "§\d+" in the tree not already preceded by "AGENTS" or "CLAUDE" or "PRD" within
 // 25 characters found 138 hits, and every single one was a citation of a
 // COMPLETELY DIFFERENT numbering scheme — an issue's own plan section
 // ("#0038 §4", "this issue's plan §11") or a tracker-file section
-// ("issues/0045.md §2") — that has no relationship to CLAUDE.md's headings
+// ("issues/0045.md §2") — that has no relationship to AGENTS.md's headings
 // at all (issues/0220.md's Implementation notes list the sample). Widening
 // this to a bare "§N" would flood the guard with false candidates from
-// that unrelated convention; anchoring to "CLAUDE.md" is what keeps it
+// that unrelated convention; anchoring to "AGENTS.md" is what keeps it
 // scoped to the one citation shape this guard can actually resolve.
-var citationTargetSectionPattern = regexp.MustCompile(`CLAUDE\.md(?:['’]s)?\s*§\s*(\d+[A-Za-z]?)`)
+var citationTargetSectionPattern = regexp.MustCompile(`(?:AGENTS|CLAUDE)\.md(?:['’]s)?\s*§\s*(\d+[A-Za-z]?)`)
 
 // citationTargetHypotheticalMarkers, checked case-insensitively in the text
 // immediately preceding a candidate match, is the "deliberately
@@ -148,8 +148,8 @@ var citationTargetPlaceholderSegments = map[string]bool{
 // INTERMEDIATE segment of a joined-names citation as "this is also a
 // known document, not a directory" (see pathCitationIsExcluded) — the
 // real instance, campaign_markdown.go's Raw-HTML-decision comment's
-// "PRD/CLAUDE.md §9" (meaning
-// "PRD §9 and CLAUDE.md §9", not a nested path under a "PRD/" directory
+// "PRD/AGENTS.md §9" (meaning
+// "PRD §9 and AGENTS.md §9", not a nested path under a "PRD/" directory
 // that does not exist), is what motivates including "PRD" here even
 // though citationTargetPathPattern's own bare-suffix alternation
 // (HANDOFF|README|LICENSE) does not.
@@ -255,9 +255,9 @@ func pathCitationIsExcluded(text string, start, end int) bool {
 	// campaigns_test.go/audience_test.go's own conventions"),
 	// "Campaigns.svelte/CampaignEditor.svelte" (the equivalent web/
 	// shape, found in the parallel dry run behind citationGuard.test.ts),
-	// "PRD/CLAUDE.md" (campaign_markdown.go's Raw-HTML-decision comment,
+	// "PRD/AGENTS.md" (campaign_markdown.go's Raw-HTML-decision comment,
 	// meaning "PRD §9 and
-	// CLAUDE.md §9", not a nested path), or admin_workshops.go's
+	// AGENTS.md §9", not a nested path), or admin_workshops.go's
 	// package-header comment's
 	// own FOUR-segment list citation (not spelled out here as a literal
 	// slash-joined token, since this comment is itself scanned by the
@@ -372,7 +372,7 @@ func pathExistsDirectly(paths map[string]bool, cited string) bool {
 // make every one of those legitimate citations unresolvable.
 //
 // ".claude" IS pruned, and must be, for the opposite reason "dist" is not:
-// #0399 found CLAUDE.md §5a's own encouraged workflow — "Use a worktree
+// #0399 found AGENTS.md §5a's own encouraged workflow — "Use a worktree
 // when two agents would otherwise edit the same files" — puts a full
 // second copy of this repository on disk at
 // .claude/worktrees/<agent-name>/, gitignored so `git status` never shows
@@ -422,22 +422,22 @@ func collectRepoPaths(t *testing.T, repoRoot string) map[string]bool {
 	return paths
 }
 
-// claudeMDHeadingPattern matches CLAUDE.md's own numbered top-level
+// claudeMDHeadingPattern matches AGENTS.md's own numbered top-level
 // headings ("## 1. What this is", "## 5a. Concurrency …", "## 11. PRD
 // section index") — the ground truth for section 2. `##` (not `###`) and a
 // leading digit are what keep this from matching an un-numbered "###"
 // subsection heading.
 var claudeMDHeadingPattern = regexp.MustCompile(`(?m)^##\s+(\d+[A-Za-z]?)\.\s`)
 
-// loadClaudeMDSections reads CLAUDE.md fresh off disk every run — so this
-// guard tracks CLAUDE.md's actual current section numbering automatically,
+// loadClaudeMDSections reads AGENTS.md fresh off disk every run — so this
+// guard tracks AGENTS.md's actual current section numbering automatically,
 // the same way #0113/#0148's PRD-section-index guard tracks PRD.md, rather
 // than hardcoding a section list that would itself drift.
 func loadClaudeMDSections(t *testing.T, repoRoot string) map[string]bool {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot, "CLAUDE.md"))
+	data, err := os.ReadFile(filepath.Join(repoRoot, "AGENTS.md"))
 	if err != nil {
-		t.Fatalf("read CLAUDE.md: %v", err)
+		t.Fatalf("read AGENTS.md: %v", err)
 	}
 	sections := map[string]bool{}
 	for _, m := range claudeMDHeadingPattern.FindAllStringSubmatch(string(data), -1) {
@@ -471,7 +471,7 @@ type citationTargetHit struct {
 // goldmark exclusion's whole-group lookback depends on.
 //
 // Not the FURTHER cross-line reconstruction collectTestCitations does for
-// an identifier wrapped with no separator at all: a path or "CLAUDE.md
+// an identifier wrapped with no separator at all: a path or "AGENTS.md
 // §N" citation split mid-token across a line break does not occur
 // anywhere in the tree today (checked as part of writing this guard).
 // Accepted as a residual gap for the same reason #0199 accepted the
@@ -555,7 +555,7 @@ func collectCitationTargetHits(t *testing.T, roots []string, paths map[string]bo
 
 // TestNoCommentCitesUnresolvedPathOrSection is the guard: it fails if any
 // Go comment anywhere in the tree (test files included) cites a
-// repository path that does not exist, or a "CLAUDE.md §N" section CLAUDE.md
+// repository path that does not exist, or a "AGENTS.md §N" section AGENTS.md
 // itself does not define, after excluding the shapes pathCitationIsExcluded
 // discounts.
 func TestNoCommentCitesUnresolvedPathOrSection(t *testing.T) {
@@ -574,7 +574,7 @@ func TestNoCommentCitesUnresolvedPathOrSection(t *testing.T) {
 	paths := collectRepoPaths(t, repoRoot)
 	sections := loadClaudeMDSections(t, repoRoot)
 	if len(sections) == 0 {
-		t.Fatal("loadClaudeMDSections found zero numbered headings in CLAUDE.md — the heading pattern itself is broken, not the tree")
+		t.Fatal("loadClaudeMDSections found zero numbered headings in AGENTS.md — the heading pattern itself is broken, not the tree")
 	}
 	hits, visited := collectCitationTargetHits(t, roots, paths, sections)
 
@@ -594,7 +594,7 @@ func TestNoCommentCitesUnresolvedPathOrSection(t *testing.T) {
 		return hits[i].pos.Line < hits[j].pos.Line
 	})
 	var b strings.Builder
-	b.WriteString("comment cites a repository path or CLAUDE.md section that does not resolve — fix the citation or the target (see #0196, #0216, #0220):\n")
+	b.WriteString("comment cites a repository path or AGENTS.md section that does not resolve — fix the citation or the target (see #0196, #0216, #0220):\n")
 	for _, h := range hits {
 		b.WriteString("  " + toRepoRelativePath(repoRoot, h.pos.Filename) + ":" + strconv.Itoa(h.pos.Line) + ": [" + h.kind + "] " + h.cited + "\n")
 	}
@@ -646,11 +646,11 @@ func TestCitationTargetPathPatternCatchesSyntheticExample(t *testing.T) {
 }
 
 // TestCitationTargetSectionPatternCatchesSyntheticExample is the section-
-// citation half of the same proof: a "CLAUDE.md §N" reference to a section
-// number CLAUDE.md does not define.
+// citation half of the same proof: a "AGENTS.md §N" reference to a section
+// number AGENTS.md does not define.
 func TestCitationTargetSectionPatternCatchesSyntheticExample(t *testing.T) {
 	src := "package fixture\n\n" +
-		"// see CLAUDE.md §" + "9999" + " for the rationale\n" +
+		"// see AGENTS.md §" + "9999" + " for the rationale\n" +
 		"func Example() {}\n"
 
 	fset := token.NewFileSet()
@@ -675,7 +675,7 @@ func TestCitationTargetSectionPatternCatchesSyntheticExample(t *testing.T) {
 	repoRoot = filepath.Join(repoRoot, "..", "..")
 	sections := loadClaudeMDSections(t, repoRoot)
 	if sections["9999"] {
-		t.Fatalf("fixture setup: CLAUDE.md unexpectedly has a section %q — pick a different fictitious number", "9999")
+		t.Fatalf("fixture setup: AGENTS.md unexpectedly has a section %q — pick a different fictitious number", "9999")
 	}
 }
 

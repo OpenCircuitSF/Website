@@ -10,7 +10,7 @@
 # pointed at the SAME database serialise behind each other, and two agents
 # pointed at DIFFERENT databases do not contend at all.
 #
-# That is the whole reason CLAUDE.md §5a capped concurrency at "only one
+# That is the whole reason AGENTS.md §5a capped concurrency at "only one
 # subagent may be running tests". Give each agent its own database and the cap
 # lifts. Cloning from a template makes it cheap: ~0.2s, versus ~2s to run 19
 # migrations.
@@ -366,7 +366,7 @@ note: $side.
 Provisioning $db directly from migrations/ instead of cloning $TEMPLATE, so
 the schema matches THIS working tree exactly (slower: a full 'migrate up'
 instead of the ~0.2s clone, but correct regardless of which side moved — see
-CLAUDE.md §5a and issue #0315).
+AGENTS.md §5a and issue #0315).
 
 This is expected, not a broken environment: another agent or git worktree has
 moved migrations/ forward without you (or vice versa). Nothing here rebuilds

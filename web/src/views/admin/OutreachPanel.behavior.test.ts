@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // #0544: mounts OutreachPanel.svelte under jsdom with '../../lib/api' mocked,
-// following Pending.behavior.test.ts. jsdom is not a browser (CLAUDE.md §1):
+// following Pending.behavior.test.ts. jsdom is not a browser (AGENTS.md §1):
 // this proves the panel renders what the payload says and wires the right
 // calls, not layout or clipboard permissions. navigator.clipboard does not
 // exist under jsdom, so it is stubbed.

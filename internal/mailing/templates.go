@@ -29,7 +29,7 @@ import (
 // blocks at all), so the same brand colors are baked into inline
 // styles/attributes at every call site instead of referenced by name.
 //
-// CLAUDE.md §8: #68FF23 measures 14.8:1 against the dark terminal ground but
+// AGENTS.md §8: #68FF23 measures 14.8:1 against the dark terminal ground but
 // only 1.32:1 on white. That fact drives one rule followed everywhere below:
 // colorHeading (the bright green) is used ONLY inside an element that also
 // carries its own bgcolor="colorCardBG" attribute (not just a CSS

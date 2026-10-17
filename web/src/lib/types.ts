@@ -739,7 +739,7 @@ export interface DashboardCampaignRow {
 /**
  * The "what needs attention" row. complaint_rate_pct is absent when the
  * account-wide sample is below the server's minimum-sample floor — never
- * fabricated as 0 (CLAUDE.md §5: "say so in the UI rather than presenting
+ * fabricated as 0 (AGENTS.md §5: "say so in the UI rather than presenting
  * it as exact"). inbound_mail_unavailable is always true today: PRD §6.5
  * path 3 (#0058) is not built, so there is no count this figure could ever
  * report — see admin_dashboard.go's package doc comment.

@@ -26,7 +26,7 @@ interest comes from type and color, not illustration or photography
   `build-og.py`). `placeholder/index.html` is the porting source for
   `#0011` and `#0013`.
 
-## Known gotchas (`CLAUDE.md` §8 — read before touching any of this)
+## Known gotchas (`AGENTS.md` §8 — read before touching any of this)
 
 - **CSS masks fail silently under `file://`.** The logo uses
   `mask-image` tinted by `currentColor`; under `file://` the mask never

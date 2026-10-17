@@ -23,7 +23,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 
 // uniqueSNSMessageID returns an SNS MessageId scoped to this test run, so
 // every test's rows are disjoint under email_events' UNIQUE
-// (sns_message_id, recipient) constraint (CLAUDE.md §8b: seed throwaway
+// (sns_message_id, recipient) constraint (AGENTS.md §8b: seed throwaway
 // rows, never target a literal or seeded id).
 func uniqueSNSMessageID(t *testing.T) string {
 	t.Helper()

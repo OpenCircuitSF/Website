@@ -50,7 +50,7 @@ func (f *fakeInboundVerifier) FetchSubscribeURL(ctx context.Context, subscribeUR
 }
 
 // fakeInboundObjectStore is an in-memory inboundObjectStore double — no S3
-// client, no network, matching CLAUDE.md §10's "develop against mocks" for
+// client, no network, matching AGENTS.md §10's "develop against mocks" for
 // #0057's not-yet-created bucket.
 type fakeInboundObjectStore struct {
 	objects   map[string][]byte

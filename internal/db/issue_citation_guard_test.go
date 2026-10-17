@@ -117,7 +117,7 @@ import (
 //     produced the contradiction this pass fixes.
 //
 // That is not a coincidence of a small sample; it is the project's own
-// mutation-testing convention (`CLAUDE.md` §8b, §8a: copy a file aside,
+// mutation-testing convention (`AGENTS.md` §8b, §8a: copy a file aside,
 // plant a failure, observe it, restore) working exactly as intended. Issues
 // #0199, #0208, #0209, #0211, #0212, #0215, #0251, #0252, #0255, #0258 and
 // others document a scratch or plant test file created to *prove a guard
@@ -968,7 +968,7 @@ func TestNoOpenIssueVerificationCitesUndefinedTestFunction(t *testing.T) {
 
 // TestIssueVerificationCitationGuardCatchesPlantedFalseCitation is #0265's
 // mutation proof, run against an isolated t.TempDir() fixture rather than a
-// real issues/*.md file — per CLAUDE.md §8a a shared file another agent may
+// real issues/*.md file — per AGENTS.md §8a a shared file another agent may
 // be mid-edit on is not something to plant a failure into, even temporarily,
 // and an isolated fixture proves the same mechanism without that risk.
 func TestIssueVerificationCitationGuardCatchesPlantedFalseCitation(t *testing.T) {
@@ -1199,7 +1199,7 @@ func TestIssueSectionTitleNormalizesRealCorpusHeadings(t *testing.T) {
 }
 
 // TestIssueCitationGuardScansEvidenceSectionsNotSubjectMatter is #0268's
-// mechanism proof, on an isolated t.TempDir() fixture (CLAUDE.md §8a: never
+// mechanism proof, on an isolated t.TempDir() fixture (AGENTS.md §8a: never
 // plant a failure into a shared file another agent may be mid-edit on). It
 // asserts the two halves of #0268's scope decision at once:
 //

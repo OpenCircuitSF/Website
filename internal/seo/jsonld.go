@@ -268,7 +268,7 @@ func articleJSONLD(e ArchiveEntry, baseURL string) string {
 // The profiles are the organisation's real public ones, mirrored from the
 // only place the site itself links them: web/src/lib/links.ts (Discord,
 // Luma calendar) plus the Bluesky profile whose handle IS the domain --
-// /.well-known/atproto-did (kept on disk ahead of the proxy, per CLAUDE.md
+// /.well-known/atproto-did (kept on disk ahead of the proxy, per AGENTS.md
 // §7) binds did:plc:olbggqhj2rwqv56ik53kvwfx to opencircuitsf.com, which
 // makes https://bsky.app/profile/opencircuitsf.com the profile's canonical
 // URL. The logo is /mark-green-512.png -- the opaque brand mark the

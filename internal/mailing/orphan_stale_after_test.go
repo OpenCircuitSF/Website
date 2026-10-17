@@ -16,7 +16,7 @@ import "testing"
 // worst-case hold time, sendMessageTimeout + writeStatusTimeout. The
 // oracle below computes that bound directly, WITHOUT the subject's own
 // "2 *" margin factor — a different expression from the subject, not the
-// same bytes with a name change (CLAUDE.md's "a guard's oracle must not
+// same bytes with a name change (AGENTS.md's "a guard's oracle must not
 // be the same bytes as its subject", from #0258): an edit to the subject
 // that drops or shrinks the margin factor changes `got` without changing
 // `want`, so the two diverge instead of moving together.

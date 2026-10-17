@@ -13,7 +13,7 @@
 // inserts one email_sends row per eligible subscriber at that moment. That
 // snapshot can go stale before a given row is actually sent — a subscriber
 // can unsubscribe, hard-bounce, complain, or be manually suppressed in the
-// window between materialization and send. PRD §6.5 and CLAUDE.md §9 make
+// window between materialization and send. PRD §6.5 and AGENTS.md §9 make
 // that a correctness question: a suppressed or unsubscribed address must
 // not receive mail even though it is in the snapshot. The authority is
 // therefore RecheckEligibleTx, run inside the same transaction that holds

@@ -48,7 +48,7 @@
 //
 // # Store dependencies are held concretely, not behind narrow interfaces
 //
-// CLAUDE.md §1 asks for narrow store interfaces "never a concrete store".
+// AGENTS.md §1 asks for narrow store interfaces "never a concrete store".
 // The three stores below that participate in the shared transaction
 // (events, subs, suppr) are a deliberate, documented exception: each one's
 // …Tx method takes that PACKAGE's own unexported querier interface
@@ -558,7 +558,7 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 			return fmt.Errorf("adding repeated_soft_bounce suppression for %q: %w", recipient, err)
 		}
 		// setStatusTx (via MarkBouncedTx) preserves complained against every
-		// non-admin write (CLAUDE.md §9) — the same guarantee the Permanent
+		// non-admin write (AGENTS.md §9) — the same guarantee the Permanent
 		// case above relies on, not reimplemented here.
 		if _, err := h.subs.MarkBouncedTx(ctx, tx, sub.ID, now); err != nil {
 			return fmt.Errorf("marking %q bounced (repeated soft bounce): %w", recipient, err)
@@ -599,7 +599,7 @@ func (h *SESNotificationsHandler) applyBounce(ctx context.Context, tx pgx.Tx, ev
 
 // applyComplaint is #0038 §4's Complaint mapping. complained is terminal —
 // nothing here (or anywhere in this handler) ever moves a subscriber OUT of
-// complained; only an admin can (CLAUDE.md §9, subscribers.AdminClearComplaint).
+// complained; only an admin can (AGENTS.md §9, subscribers.AdminClearComplaint).
 func (h *SESNotificationsHandler) applyComplaint(ctx context.Context, tx pgx.Tx, ev sesnotify.SESEvent, recipient string, hasSub bool, sub subscribers.Subscriber, now time.Time) error {
 	if ev.ComplaintFeedbackType() == sesnotify.ComplaintFeedbackTypeNotSpam {
 		// A feedback-loop report that a message was moved OUT of spam — the
@@ -653,7 +653,7 @@ func (h *SESNotificationsHandler) applyComplaint(ctx context.Context, tx pgx.Tx,
 // mailbox, regardless of the subscriber's current status.
 // RecordDeliveryTx never touches status — only soft_bounce_streak and
 // last_delivery_at — so this can never resurrect a complained subscriber
-// (CLAUDE.md §9's rule is about status, and status is untouched here) or
+// (AGENTS.md §9's rule is about status, and status is untouched here) or
 // silently reverse an admin's or SES's hard-bounce/complaint suppression.
 func (h *SESNotificationsHandler) applyDelivery(ctx context.Context, tx pgx.Tx, recipient string, hasSub bool, sub subscribers.Subscriber, now time.Time) error {
 	if !hasSub {

@@ -14,7 +14,7 @@
 // (mailing.Preflight over a mailing.SendStore.GatherPreflight read) those two
 // call sites use, so there remains exactly one copy of every requirement —
 // see mailing.Preflight's own doc comment. It adds no requirement, no
-// override, no bypass: CLAUDE.md §9's "never make the physical_address check
+// override, no bypass: AGENTS.md §9's "never make the physical_address check
 // bypassable from the UI" is untouched, because this endpoint cannot cause a
 // send.
 //

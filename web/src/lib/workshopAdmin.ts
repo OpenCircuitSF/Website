@@ -3,7 +3,7 @@
 // copy, the create/edit form validation gate, datetime-local <-> RFC 3339
 // conversion, interest-tag toggling, and date-sortable list ordering.
 //
-// Per CLAUDE.md ("SPA logic goes in plain TypeScript modules ... Svelte
+// Per AGENTS.md ("SPA logic goes in plain TypeScript modules ... Svelte
 // components stay thin") and #0094 (nothing in a .svelte file is covered by
 // a test), every decision Workshops.svelte/WorkshopEditor.svelte make about
 // validity, status offers, or sort order is a call into this module -- never
@@ -43,7 +43,7 @@
 // #0138 also closed a hole in what path entry accepted: isSafeCoverImage
 // used to also accept a full http(s) URL, including one to another host --
 // entirely reasonable-looking, since an admin might paste a photo's URL --
-// but CLAUDE.md §9 ("no external CDNs ... self-contained by design") and
+// but AGENTS.md §9 ("no external CDNs ... self-contained by design") and
 // PRD §6.2's own schema comment ("cover_image TEXT, -- path under /assets")
 // both say a cover image belongs on THIS site. An absolute URL to another
 // host loads that host's asset on every page view (a referer leak, and a
@@ -65,7 +65,7 @@
 // /assets/ is Vite's own embedded build output (see docs/media.md for why
 // excluding /assets/ from the Apache proxy would cut the SPA off from its
 // own JS and CSS). migrations/000020's cover_image comment is frozen
-// (CLAUDE.md §1) and cannot be edited to fix it, so the correction is
+// (AGENTS.md §1) and cannot be edited to fix it, so the correction is
 // recorded here (the Go twin, internal/handlers/admin_workshops.go, already
 // carries the identical note per #0432) and in docs/media.md and PRD.md
 // §6.2 (#0438 corrected the PRD's own copy of the comment, since unlike the

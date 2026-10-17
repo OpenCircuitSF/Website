@@ -81,5 +81,5 @@ A8 (`create-receipt-rule-set`), A10 (`set-active-receipt-rule-set`), and A12
 
 Every file here validates as JSON (`python3 -m json.tool <file>`); none has
 been checked against a live AWS API call, since applying any of them is the
-user's step, not an agent's (`CLAUDE.md` §8b, §9; this issue's own plan,
+user's step, not an agent's (`AGENTS.md` §8b, §9; this issue's own plan,
 "Split: user versus agent").

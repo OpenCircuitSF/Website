@@ -519,7 +519,7 @@ func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 // Extracted into a pure function over data already in hand -- rather than
 // left as inline conditions duplicated in both places, or as a second
 // WorkshopBySlug lookup repeating cardableWorkshop's own -- is #0273's
-// answer to CLAUDE.md §8's general lesson that a boolean condition
+// answer to AGENTS.md §8's general lesson that a boolean condition
 // duplicated in two places eventually drifts, without adding a second store
 // read that a real request doesn't need: workshopRouteMeta already has w in
 // hand from its own lookup, and

@@ -44,7 +44,7 @@ import (
 // changes nothing about today's pass/fail outcome — it only closes the gap
 // that would open the next time an issue is marked `closed` directly rather
 // than through `resolved`. `wontfix` is deliberately left unguarded: 2 of
-// the 3 live `wontfix` issues (`#0096`, `#0099` — both named in CLAUDE.md §5
+// the 3 live `wontfix` issues (`#0096`, `#0099` — both named in AGENTS.md §5
 // as legitimate `wontfix` closures) have no `**Closed**` row, and
 // Issues.md's text never asks for one there. Enforcing it here would invent
 // a requirement the project's own procedure does not state and immediately
@@ -58,7 +58,7 @@ import (
 //
 // This guard reads issues/*.md from disk — external data, not the bytes of
 // this test file itself — so it is the "mutate the scan roots and got
-// itself changes" shape CLAUDE.md §8 describes as a legitimate, non-circular
+// itself changes" shape AGENTS.md §8 describes as a legitimate, non-circular
 // oracle for an in-package test, in the shape of docs_parity_test.go and
 // prd_section_index_test.go rather than the scripts/*_guard_test.sh
 // external-harness shape those same notes reserve for a checker that could

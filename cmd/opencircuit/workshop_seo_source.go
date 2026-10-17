@@ -24,7 +24,7 @@ import (
 // no request context to thread through here. context.Background() is safe:
 // both underlying store reads are single indexed queries (GetBySlug's unique
 // index on slug, List's primary-key scan over a catalog PRD sizes in the
-// tens of rows -- CLAUDE.md §5, this project has no performance requirement)
+// tens of rows -- AGENTS.md §5, this project has no performance requirement)
 // and are themselves shielded from repeated execution by internal/seo's own
 // cache, not called on every request.
 type workshopSEOSource struct {

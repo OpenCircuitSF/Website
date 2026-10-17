@@ -12,7 +12,7 @@ import (
 var ErrSESUnconfigured = errors.New("mailing: SES is not configured on this instance")
 
 // UnconfiguredMailer is a Mailer for an instance that has deliberately been
-// booted with no SES configuration at all (#0472) — CLAUDE.md §10 item 2's
+// booted with no SES configuration at all (#0472) — AGENTS.md §10 item 2's
 // "Turn SES off in production is expressed as SEND_WORKER_ENABLED=false plus
 // an unconfigured SES" recipe. Before #0472, that recipe did not actually
 // work: NewSESMailer refuses to construct without SES_CONFIGURATION_SET, so
@@ -24,15 +24,15 @@ var ErrSESUnconfigured = errors.New("mailing: SES is not configured on this inst
 // noOpMailingMailer (MAILER_NOOP's backing type). noOpMailingMailer's whole
 // job is to look like success — it logs the message and returns a fake
 // "noop" message ID, which is exactly right for local development but is
-// confined to localhost by checkMailerNoOp (CLAUDE.md §10) precisely
+// confined to localhost by checkMailerNoOp (AGENTS.md §10) precisely
 // because it would silently swallow every outbound email anywhere else.
 // UnconfiguredMailer does the opposite: every Send call fails, loudly, with
 // ErrSESUnconfigured, so nothing this project sends is ever silently
-// discarded (CLAUDE.md §9's standing concern). A failed Send is not a new
+// discarded (AGENTS.md §9's standing concern). A failed Send is not a new
 // failure mode for a caller to handle — internal/mailing.OutboxWorker and
 // mailing.Worker already retry a Send error on outbound_queue's existing
 // backoff schedule and eventually mark the row abandoned (PRD §6.11;
-// CLAUDE.md §10's own "a magic link requested before SES exists is simply
+// AGENTS.md §10's own "a magic link requested before SES exists is simply
 // burned — request it after" already documents exactly this outcome for
 // the pre-SES-setup window that motivated MAILER_NOOP in the first place).
 //

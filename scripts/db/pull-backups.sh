@@ -38,7 +38,7 @@ set -euo pipefail
 # infrastructure this project has no business touching, and if that host
 # happened to accept the connection, backups would land somewhere nobody here
 # is looking for them. There is no correct value to substitute (this
-# project's own EC2 host is not yet provisioned — CLAUDE.md §10 item 6), so
+# project's own EC2 host is not yet provisioned — AGENTS.md §10 item 6), so
 # this now fails closed before making any network call, rather than guessing.
 if [ -z "${BACKUP_SSH_HOST:-}" ]; then
   cat >&2 <<EOF
@@ -54,7 +54,7 @@ Fix: set BACKUP_SSH_HOST to this project's own EC2 host, e.g.:
 
     BACKUP_SSH_HOST=ec2-user@<this-project's-host> bash scripts/db/pull-backups.sh
 
-(CLAUDE.md §10 item 6: the real server layout, including its hostname, is not
+(AGENTS.md §10 item 6: the real server layout, including its hostname, is not
 yet documented — capture it there once the box exists.)
 EOF
   exit 2

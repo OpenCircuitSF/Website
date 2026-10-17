@@ -20,7 +20,7 @@
 #
 # SAFETY DESIGN — read this before changing the test
 #
-# CLAUDE.md §8b and docs/obstacles.md §4 are explicit: a mutation test that
+# AGENTS.md §8b and docs/obstacles.md §4 are explicit: a mutation test that
 # disables a guard must run against databases this test creates and owns,
 # never against a real agent's database, and never by editing the shared
 # tracked script file in place while other agents might invoke it.

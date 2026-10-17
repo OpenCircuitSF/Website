@@ -42,7 +42,7 @@
 // an import never overwrites an existing row, regardless of what state it's
 // in) and suppressions (any reason) before insert. This is not a
 // convenience filter; it is the mechanism that keeps an import from being
-// the tool that resurrects a hard-bounced or complained address (CLAUDE.md
+// the tool that resurrects a hard-bounced or complained address (AGENTS.md
 // §9, #0033/#0038/#0100).
 package subscribers
 
@@ -550,7 +550,7 @@ func (s *ImportStore) Commit(ctx context.Context, in CommitInput, now time.Time)
 		// CONSTRUCTION, not by omission — but it stays here, loud, so a
 		// future third consent_mode value added to consentModes without a
 		// corresponding case here fails this Commit call with a named error
-		// instead of silently taking the prior_consent branch (CLAUDE.md §9:
+		// instead of silently taking the prior_consent branch (AGENTS.md §9:
 		// consent provenance is the whole point of this file).
 		switch in.ConsentMode {
 		case ConsentModeInvite:

@@ -259,7 +259,7 @@ func TestAdminDeliverability_ResetStreak_ClearsStreakAndAudits(t *testing.T) {
 }
 
 // TestAdminDeliverability_ResetStreak_NeverChangesComplainedStatus is
-// CLAUDE.md §9's guarantee, applied to this new write path: resetting the
+// AGENTS.md §9's guarantee, applied to this new write path: resetting the
 // streak must never move a subscriber out of `complained` — the streak and
 // the status are orthogonal columns, and this proves the reset path
 // (unlike AdminClearComplaint, the sole sanctioned exit from `complained`)
@@ -286,7 +286,7 @@ func TestAdminDeliverability_ResetStreak_NeverChangesComplainedStatus(t *testing
 		t.Fatalf("GetByID: %v", err)
 	}
 	if sub.Status != subscribers.StatusComplained {
-		t.Errorf("status = %q, want unchanged %q (CLAUDE.md §9)", sub.Status, subscribers.StatusComplained)
+		t.Errorf("status = %q, want unchanged %q (AGENTS.md §9)", sub.Status, subscribers.StatusComplained)
 	}
 	if sub.SoftBounceStreak != 0 {
 		t.Errorf("soft_bounce_streak = %d, want 0 — the reset itself must still work for a complained address", sub.SoftBounceStreak)

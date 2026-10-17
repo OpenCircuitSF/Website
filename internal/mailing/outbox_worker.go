@@ -55,7 +55,7 @@
 // while a campaign is draining at the same time transactional mail is
 // flowing. Accepted deliberately: transactional volume here is a handful of
 // messages a minute, SES's account-level rate is the real ceiling, and
-// CLAUDE.md §5 is explicit that this project has no performance
+// AGENTS.md §5 is explicit that this project has no performance
 // requirement to protect against that overlap.
 package mailing
 
@@ -160,7 +160,7 @@ const (
 // (outbox_orphan_stale_after_test.go) for the invariant this maintains.
 //
 // A var, not a const, so a test can shrink it; NOT sized against measured
-// machine load (CLAUDE.md §5).
+// machine load (AGENTS.md §5).
 var outboxOrphanStaleAfter = 2 * (sendMessageTimeout + writeStatusTimeout)
 
 // mailKinds is every outbox.Kind this worker's render switch knows how to
@@ -287,7 +287,7 @@ var ungatedKinds = map[outbox.Kind]string{
 // issue's alternative — keep map[Kind]bool and add a loop asserting every
 // value is true — was rejected: it adds a check that itself could be
 // deleted or skipped, the same "one more thing that has to be maintained"
-// shape CLAUDE.md's in-file-guard entry warns about, where the type change
+// shape AGENTS.md's in-file-guard entry warns about, where the type change
 // removes the hazard structurally instead.)
 var tokenGatedKinds = map[outbox.Kind]struct{}{
 	outbox.KindConfirmation: {},
@@ -760,7 +760,7 @@ func (w *OutboxWorker) pass(ctx context.Context) (bool, error) {
 // §5. That ordering keeps three things true: the #0045/#0264
 // physical-address gates inside render are untouched (an ineligible row
 // returns before ever reaching them, and nothing here is reachable from
-// the UI — CLAUDE.md §9); a welcome/import-invite row parked indefinitely
+// the UI — AGENTS.md §9); a welcome/import-invite row parked indefinitely
 // by deferMissingPhysicalAddress still gets re-checked on every later
 // reclaim, which is how this closes that kind's much wider window; and
 // nothing is rendered for a message that will not be sent.
@@ -973,7 +973,7 @@ func (w *OutboxWorker) sendGate(ctx context.Context, row outbox.Row) (skip bool,
 //
 // Reason strings deliberately never include either token value — they land
 // in outbound_queue.error, which admins read and which gets pasted into
-// issue files (CLAUDE.md §8b, #0277's live-magic-link lesson; matches
+// issue files (AGENTS.md §8b, #0277's live-magic-link lesson; matches
 // finishSkipped's own Warn already omitting the recipient for the same
 // reason).
 func (w *OutboxWorker) tokenGate(row outbox.Row, elig subscribers.SendEligibility) (skip bool, reason string, err error) {
@@ -1020,7 +1020,7 @@ func (w *OutboxWorker) tokenGate(row outbox.Row, elig subscribers.SendEligibilit
 // confirmation" would duplicate evidence the log already holds.
 //
 // The Warn deliberately omits the recipient address — #0277's lesson
-// (CLAUDE.md §8b): a prior pass published a live token into a committed
+// (AGENTS.md §8b): a prior pass published a live token into a committed
 // issue transcript, and this file's logs get pasted into issue files the
 // same way. id/kind/reason are enough to diagnose from outbound_queue
 // directly.
@@ -1060,7 +1060,7 @@ const welcomeAddressDeferMaxRetries = math.MaxInt32
 // workshops CTA and RFC 8058 one-click unsubscribe headers — #0127's own
 // phase-3 review judged that this makes it commercial rather than
 // transactional, so CAN-SPAM §7704's physical-address requirement applies
-// to it the same way #0045's CLAUDE.md §9 rule applies to the campaign
+// to it the same way #0045's AGENTS.md §9 rule applies to the campaign
 // worker. sendOne recognizes this specific sentinel and routes it to
 // deferMissingPhysicalAddress instead of the ordinary finishFailed path.
 // The literal carries no issue citation (TestNoAdminFacingStringCitesInternalDocs,
@@ -1084,7 +1084,7 @@ var errImportInviteMissingPhysicalAddress = errors.New("mailing: import invite e
 // message render refused to build because settings.physical_address is
 // unset — using the ordinary backoff schedule and
 // welcomeAddressDeferMaxRetries so it is never abandoned. Logged at Warn,
-// not Error: this is expected operational state (CLAUDE.md §10 item 3 —
+// not Error: this is expected operational state (AGENTS.md §10 item 3 —
 // the physical mailing address is not yet configured), not a bug. The
 // state that produced this row already succeeded and is not at risk:
 // neither internal/subscribers.Store.Confirm nor ImportStore.Commit reads
@@ -1216,7 +1216,7 @@ type importInvitePayload struct {
 // deliberately does NOT refuse to send confirmation, already_subscribed,
 // registration, recovery, sessions_revoked, or admin_alert for a missing
 // physical_address the way #0045's CAMPAIGN send worker refuses to start a
-// campaign (CLAUDE.md §9's rule is scoped to that worker;
+// campaign (AGENTS.md §9's rule is scoped to that worker;
 // BuildConfirmationEmail/BuildAlreadySubscribedEmail already document "" as
 // simply omitting the line) — refusing here would turn a cosmetic gap into a
 // broken signup flow, and none of those six messages is commercial.

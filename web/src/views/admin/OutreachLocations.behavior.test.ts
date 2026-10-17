@@ -2,7 +2,7 @@
 //
 // #0548: mounts OutreachLocations.svelte under jsdom with '../../lib/api'
 // mocked (same pattern as OutreachPanel.behavior.test.ts). jsdom is not a
-// browser (CLAUDE.md §1): this proves the form wiring, not layout.
+// browser (AGENTS.md §1): this proves the form wiring, not layout.
 import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OutreachLocation } from '../../lib/types';

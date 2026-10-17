@@ -24,7 +24,7 @@ import (
 
 	// Loads the IANA timezone database into the binary so
 	// America/Los_Angeles resolves regardless of the host's own zoneinfo --
-	// the production binary is cross-compiled with CGO off (CLAUDE.md §7),
+	// the production binary is cross-compiled with CGO off (AGENTS.md §7),
 	// so it cannot rely on the box's /usr/share/zoneinfo the way a locally
 	// built binary can.
 	_ "time/tzdata"
@@ -668,7 +668,7 @@ func losAngelesLocation() *time.Location {
 // generation time (#0519's plan §3). "" or an unparseable StartsAt returns
 // "Date TBA". Otherwise: "Jan 2, 2006, 3:04 PM" in that zone; with a
 // parseable EndsAt, "-3:04 PM" is appended (an en dash in real output --
-// this comment stays ASCII per CLAUDE.md §8's backslash-escape gotcha); the
+// this comment stays ASCII per AGENTS.md §8's backslash-escape gotcha); the
 // whole label always ends with a space and the zone abbreviation from that
 // same instant's own "MST"-layout format (e.g. "PDT" in September), e.g.
 // "Sep 12, 2026, 11:00 AM-12:30 PM PDT".

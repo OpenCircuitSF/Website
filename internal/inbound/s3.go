@@ -18,7 +18,7 @@ import (
 // internal/mailing's sesAPI seam: defining it locally, rather than
 // depending on the concrete *s3.Client everywhere, is what lets
 // internal/handlers depend on a narrow interface for S3 access
-// (CLAUDE.md §1) instead of the SDK client reaching a handler signature —
+// (AGENTS.md §1) instead of the SDK client reaching a handler signature —
 // see this issue's design notes. Tests inject a fake that never dials AWS.
 type s3API interface {
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
@@ -46,7 +46,7 @@ type S3Store struct {
 // NewS3Store constructs an S3Store backed by a real S3 client, using
 // cfg.AWSRegion (required config, so always set) and cfg.SESInboundBucket
 // (#0057's bucket name — optional in internal/config, since the bucket
-// does not exist yet: CLAUDE.md §10). An empty bucket is not itself a
+// does not exist yet: AGENTS.md §10). An empty bucket is not itself a
 // construction error, matching sesnotify.NewVerifier's empty-topic-ARN
 // convention: the endpoint should still start, and simply have nothing to
 // fetch successfully until the bucket is configured — Fetch/Delete calls
@@ -66,7 +66,7 @@ func NewS3Store(ctx context.Context, cfg *config.Config) (*S3Store, error) {
 // NewS3StoreForTesting builds an S3Store around a fake s3API, for tests
 // that need to exercise Fetch/Delete without a network dependency (mirrors
 // internal/mailing's NewSESMailerForTesting-shaped seams for the same
-// reason: CLAUDE.md §10's "develop against mocks", since the bucket #0057
+// reason: AGENTS.md §10's "develop against mocks", since the bucket #0057
 // creates does not exist yet).
 func NewS3StoreForTesting(client s3API, bucket string) *S3Store {
 	return &S3Store{client: client, bucket: bucket}

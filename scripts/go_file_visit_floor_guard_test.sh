@@ -25,7 +25,7 @@
 # this -- deliberately: it calls goFileVisitCountImplausible with its OWN
 # literals (0, 3, 150), not any guard's real constant, which is what keeps
 # it oracle-independent. It proves the mechanism fires; it cannot pin a
-# value. CLAUDE.md §8 names the general shape ("a guard inside the file it
+# value. AGENTS.md §8 names the general shape ("a guard inside the file it
 # guards becomes new mutable surface") and the remedy: an external harness
 # that mutates a COPY of the subject and checks the result from outside,
 # exactly as scripts/db_reset_guard_test.sh, scripts/testdb_gc_guard_test.sh,
@@ -45,7 +45,7 @@
 # package green"). Chasing a `go test` exit code as the pass/fail oracle for
 # this specific mutation would therefore either (a) silently degenerate
 # into asserting something already true regardless of the floor, which is
-# the "guard that agrees with itself" failure CLAUDE.md §8 warns about, or
+# the "guard that agrees with itself" failure AGENTS.md §8 warns about, or
 # (b) require ALSO mutating the scan-roots list in the same step to force a
 # failure some other way, which would stop isolating what a floor-only
 # regression does and start re-proving #0275's already-covered roots-empty
@@ -55,7 +55,7 @@
 # independent, from-scratch computation, in a different language (bash) over
 # a different data source (a live `find` over the tree, not the guard's own
 # `filepath.WalkDir`) than the mechanism it is checking on. A single edit to
-# the Go source cannot touch both at once. Per CLAUDE.md §8 ("a copy of the
+# the Go source cannot touch both at once. Per AGENTS.md §8 ("a copy of the
 # answer stored next to the question is not a check" / "can an edit to the
 # subject also satisfy the oracle"), that independence -- not merely being
 # "external" in the sense of living in a different file -- is what this
@@ -67,7 +67,7 @@
 #      the tracked file itself -- this script only ever reads it), with the
 #      constant's numeric value re-extracted via the same grep pipeline
 #      whether the copy is unmutated or mutated -- never a hand-typed "0"
-#      substituted for what a mutation "would" produce (CLAUDE.md §8's
+#      substituted for what a mutation "would" produce (AGENTS.md §8's
 #      "assert the extraction produced something" and "oracle must not be
 #      the same bytes as its subject" both apply: the number this script
 #      judges always comes from parsing bytes on disk, in both the real and
@@ -140,7 +140,7 @@
 #
 #      WHY THIS SCRIPT IS ALSO WIRED INTO THE ORDINARY RUN (#0489): a
 #      ceiling nobody runs catches nothing. #0300 wired this script into
-#      `scripts/check.sh guards` and nowhere else, and CLAUDE.md §5
+#      `scripts/check.sh guards` and nowhere else, and AGENTS.md §5
 #      deliberately keeps that bundle out of every default scope because
 #      dev_guard_test.sh, in the same bundle, costs ~48s and binds :5173.
 #      So this check went unrun long enough for two floors to fall through
@@ -183,7 +183,7 @@ fatal() { printf 'FATAL: %s\n' "$1" >&2; exit 1; }
 command -v find   >/dev/null || fatal "find not on PATH"
 command -v grep   >/dev/null || fatal "grep not on PATH"
 command -v sed    >/dev/null || fatal "sed not on PATH"
-command -v shasum >/dev/null || fatal "shasum not on PATH -- required for the byte-identity check at the end of this script; without it, the check would compare two empty strings and PASS having measured nothing (CLAUDE.md §8's fail-open shape)"
+command -v shasum >/dev/null || fatal "shasum not on PATH -- required for the byte-identity check at the end of this script; without it, the check would compare two empty strings and PASS having measured nothing (AGENTS.md §8's fail-open shape)"
 command -v awk    >/dev/null || fatal "awk not on PATH -- required alongside shasum for the byte-identity check"
 
 # extract_const <file> <const-name> -- reads FILE (real or mutated copy,
@@ -191,7 +191,7 @@ command -v awk    >/dev/null || fatal "awk not on PATH -- required alongside sha
 # Calls fatal() rather than returning an empty/guessed value if the pattern
 # is not found or is not a plain non-negative integer -- an extraction that
 # silently produced nothing must never be treated as "0 files" or "floor 0"
-# by accident (CLAUDE.md §8).
+# by accident (AGENTS.md §8).
 #
 # CAUTION for every call site: this function is always invoked inside a
 # `$(...)` command substitution (e.g. `x="$(extract_const ...)"`), so its
@@ -239,7 +239,7 @@ count_go_files() {
 # return an empty or malformed value: absent `shasum`, `shasum -a 256 ... |
 # awk '{print $1}'` would previously produce an empty string, and comparing
 # two empty strings at the end of this script would PASS having measured
-# nothing (CLAUDE.md §8's "assert the extraction produced something" -- an
+# nothing (AGENTS.md §8's "assert the extraction produced something" -- an
 # empty result must be an error, never an input). The preflight `command -v
 # shasum`/`command -v awk` checks above catch the missing-tool case before
 # this ever runs; this function is the second, independent layer that also
@@ -260,7 +260,7 @@ sha_of() {
 # choosing a floor in this family: the population divided by the square root
 # of two, rounded up, which places the population at the geometric centre of
 # the [floor, 2*floor+1] window floor_plausible accepts. Integer arithmetic
-# only (bash 3.2 has no floating point, CLAUDE.md §8): 1/sqrt(2) to five
+# only (bash 3.2 has no floating point, AGENTS.md §8): 1/sqrt(2) to five
 # decimal places is 0.70711, and adding 99999 before dividing is the ceiling.
 # Printed in the FAIL message so a ceiling trip names its own remedy rather
 # than leaving the next agent to invent one.
@@ -357,7 +357,7 @@ while [ "$i" -lt "${#FLOOR_NAMES[@]}" ]; do
   MUTANT="$WORKDIR/$(basename "$REL_FILE")"
   sed "s/const ${CONST} = [0-9][0-9]*/const ${CONST} = 0/" "$SRC" > "$MUTANT"
   if ! grep -q "const ${CONST} = 0" "$MUTANT"; then
-    fatal "mutation did not take on the copy of ${REL_FILE} for ${CONST} -- aborting before judging anything, rather than judging a copy that is silently identical to the original (CLAUDE.md §8's 'assert the extraction produced something')."
+    fatal "mutation did not take on the copy of ${REL_FILE} for ${CONST} -- aborting before judging anything, rather than judging a copy that is silently identical to the original (AGENTS.md §8's 'assert the extraction produced something')."
   fi
   MUT_VALUE="$(extract_const "$MUTANT" "$CONST")" || fatal "extract_const fatal-exited while extracting ${CONST} from the mutated copy $MUTANT -- see the FATAL line above for the reason. Aborting rather than judging a mutation this script cannot even read back."
   if [ "$MUT_VALUE" != "0" ]; then
@@ -378,7 +378,7 @@ for f in "${FLOOR_FILES[@]}"; do
   SHA_AFTER="${SHA_AFTER}${digest} "
 done
 if [ -z "$SHA_BEFORE" ] || [ -z "$SHA_AFTER" ]; then
-  fail "CRITICAL: sha256 digest computation produced an empty result (SHA_BEFORE='${SHA_BEFORE}' SHA_AFTER='${SHA_AFTER}') -- refusing to treat two blanks as a match. This is the exact fail-open CLAUDE.md §8 warns against: an empty result must be an error, never an input, and this check must have MEASURED something to pass."
+  fail "CRITICAL: sha256 digest computation produced an empty result (SHA_BEFORE='${SHA_BEFORE}' SHA_AFTER='${SHA_AFTER}') -- refusing to treat two blanks as a match. This is the exact fail-open AGENTS.md §8 warns against: an empty result must be an error, never an input, and this check must have MEASURED something to pass."
 elif [ "$SHA_BEFORE" = "$SHA_AFTER" ]; then
   pass "all three tracked guard files unchanged across this run -- every mutation happened on a private copy in $WORKDIR, never the tracked file"
 else
@@ -430,7 +430,7 @@ fi
 # exactly the single value 0 (redundant with the in-package regression
 # test); for the total floor it is the full `0 < floor <= population` range,
 # which has no in-package protection at all. What earns this section its
-# place regardless, per CLAUDE.md §8's remedy for "a guard inside the file
+# place regardless, per AGENTS.md §8's remedy for "a guard inside the file
 # it guards becomes new mutable surface": that protection SURVIVES an edit
 # to the file it guards, which no in-file check -- including
 # TestNonExemptFloorCatchesScanRootsNarrowedToSelf itself -- can do by
@@ -480,7 +480,7 @@ OUTBOX_SRC="$REPO/$OUTBOX_GUARD_FILE"
 # text, not an AST parse like the guard itself uses -- same looseness as
 # count_go_files above, and for the same reason: this is a plausibility
 # oracle from a different tool and a different data source than go/ast,
-# not a re-implementation of the guard's own parser (CLAUDE.md §8: "can an
+# not a re-implementation of the guard's own parser (AGENTS.md §8: "can an
 # edit to the subject also satisfy the oracle" -- a change to
 # findOutboxCallSitesInFile's AST logic cannot touch this grep, and a
 # change to this grep cannot touch that AST logic).
@@ -493,7 +493,7 @@ OUTBOX_SRC="$REPO/$OUTBOX_GUARD_FILE"
 # measured 35 and 32 respectively, against the pre-#0303 two-method
 # pattern). Both of those absolute counts went stale by the same three
 # call sites of ordinary tree growth -- undetected for exactly the reason a
-# floor only catches shrinks (CLAUDE.md §8; #0483 and #0487 are three
+# floor only catches shrinks (AGENTS.md §8; #0483 and #0487 are three
 # earlier instances of the identical shape). #0487 fixed the Go file's copy
 # but not this one, so the two files came to actively DISAGREE -- this
 # paragraph named that Go declaration while describing a total it no
@@ -647,7 +647,7 @@ done
 # Outbox claim-comment-referent guard floors (#0347 B3, review bounce)
 #
 # internal/outbox/claim_comment_referent_guard_test.go (#0347) carries
-# three fail-closed floor consts of the exact CLAUDE.md §8
+# three fail-closed floor consts of the exact AGENTS.md §8
 # direction-of-comparison shape this whole script exists for. #0347's
 # review measured all three directly, on a private copy, never the tracked
 # file:
@@ -820,7 +820,7 @@ fi
 # WHY THIS SECTION EXISTS EVEN THOUGH THE PRESENCE CHECK ALSO HAS AN
 # IN-PACKAGE PROOF (TestPresenceCheckCatchesMailingOnlyNarrowing)
 #
-# CLAUDE.md §8's own distinction applies here, the same one the floor
+# AGENTS.md §8's own distinction applies here, the same one the floor
 # sections above rely on: a MUTATION OF SCAN ROOTS changes what the walk
 # actually finds (got), so an in-package go test proving that is a
 # legitimate, non-circular oracle -- TestPresenceCheckCatchesMailingOnlyNarrowing
@@ -872,7 +872,7 @@ fi
 #      == 0) and neither carries that claim alone.
 #   4. Confirms the tracked guard file contains the text
 #      "requiredNonExemptSitePresent(allSites," on EXACTLY ONE line
-#      (CLAUDE.md §8, GUARD-0208's marker-block rule). Items 1-3 above
+#      (AGENTS.md §8, GUARD-0208's marker-block rule). Items 1-3 above
 #      prove the LIST still names both sites; they say nothing about
 #      whether anything still READS it. #0330's first review measured
 #      that deleting the presence-check loop from
@@ -900,7 +900,7 @@ fi
 #
 #      DO NOT ADD A FIFTH TEXTUAL CHECK HERE. Scoping this grep to the
 #      function body closes the first of those and does nothing for the
-#      second, and the shape after that is the one CLAUDE.md §8 records as
+#      second, and the shape after that is the one AGENTS.md §8 records as
 #      costing #0258 six passes. A grep cannot establish that a Go
 #      assertion is live; only compiling and running it can. If this gap
 #      is ever judged worth closing, the instrument is a DIFFERENT KIND of
@@ -969,7 +969,7 @@ done
 # leaving the var intact leaves `go test` green (the var stays referenced by
 # TestPresenceCheckCatchesMailingOnlyNarrowing, so it is not even an
 # unused-variable error) AND leaves this script green -- measured in #0330's
-# review, not assumed. So the call site that reads the list gets CLAUDE.md
+# review, not assumed. So the call site that reads the list gets AGENTS.md
 # §8's marker-block treatment: assert it appears EXACTLY ONCE. This
 # catches outright deletion and nothing more -- see item 4's limit note
 # in the header comment above for the two measured mutations that keep
@@ -983,7 +983,7 @@ case "$LOOP_N" in '' | *[!0-9]*) fatal "count_presence_loop_call returned a non-
 if [ "$LOOP_N" -eq 1 ]; then
   pass "tracked ${OUTBOX_GUARD_FILE} names requiredNonExemptSitePresent(allSites, ...) on exactly one line -- the presence assertion has not been deleted outright. NOT proof it is live: see item 4's limit note in this section's header comment"
 else
-  fail "REGRESSION #0330: tracked ${OUTBOX_GUARD_FILE} calls requiredNonExemptSitePresent(allSites, ...) ${LOOP_N} time(s), want exactly 1 -- 0 means the presence assertion was deleted from TestNoUnscopedOutboxClaimCallOutsidePackage, which leaves both go test AND the required-list checks above green; >1 means a second, possibly shadowing copy was added (CLAUDE.md §8, GUARD-0208's exactly-once rule)"
+  fail "REGRESSION #0330: tracked ${OUTBOX_GUARD_FILE} calls requiredNonExemptSitePresent(allSites, ...) ${LOOP_N} time(s), want exactly 1 -- 0 means the presence assertion was deleted from TestNoUnscopedOutboxClaimCallOutsidePackage, which leaves both go test AND the required-list checks above green; >1 means a second, possibly shadowing copy was added (AGENTS.md §8, GUARD-0208's exactly-once rule)"
 fi
 
 LOOP_MUTANT="$WORKDIR/$(basename "$OUTBOX_GUARD_FILE").presence_loop_disabled"
@@ -1025,7 +1025,7 @@ fi
 # into the shared FLOOR_NAMES loop (it walks the identical citedTestScanRoots
 # with the identical include-tests walk, so it needed no new machinery). What
 # is NOT covered by that loop, or by anything else in this script, is the
-# guard's own SHAPE -- per CLAUDE.md §8 ("the guard's own shape belongs in
+# guard's own SHAPE -- per AGENTS.md §8 ("the guard's own shape belongs in
 # the external harness... the other failure mode is 'the checker was
 # edited'"), #0356's plan named two specific edits that would silently
 # disarm this guard while leaving it green: weakening the three-predicate
@@ -1033,7 +1033,7 @@ fi
 # matches nothing. Neither is a `const NNN = 0` shape the FLOOR_NAMES loop's
 # mutate-and-recheck already handles, so each gets its own oracle here --
 # both textual/independent (this script never compiles or runs Go, per the
-# header comment), and per CLAUDE.md §8's `#0258` lesson, the oracle for
+# header comment), and per AGENTS.md §8's `#0258` lesson, the oracle for
 # each is NOT a heredoc copy of the guard's own text: the exemption check's
 # conjunct count is re-derived from the tracked file itself, and compared
 # against a literal "2" that lives in a different file from its subject, so
@@ -1048,7 +1048,7 @@ echo "== line citation guard shape (#0356) =="
 LINE_GUARD_FILE="internal/handlers/line_citation_guard_test.go"
 LINE_GUARD_SRC="$REPO/$LINE_GUARD_FILE"
 [ -f "$LINE_GUARD_SRC" ] || fatal "$LINE_GUARD_FILE not found -- has it moved? Update LINE_GUARD_FILE."
-command -v python3 >/dev/null || fatal "python3 not on PATH -- required for this section's regex-loosening oracle (a second, independent regex engine from Go's RE2, per CLAUDE.md §8)"
+command -v python3 >/dev/null || fatal "python3 not on PATH -- required for this section's regex-loosening oracle (a second, independent regex engine from Go's RE2, per AGENTS.md §8)"
 
 LINE_GUARD_SHA_BEFORE="$(sha_of "$LINE_GUARD_SRC")" || fatal "sha_of fatal-exited hashing $LINE_GUARD_SRC -- see the FATAL line above."
 
@@ -1059,7 +1059,7 @@ LINE_GUARD_SHA_BEFORE="$(sha_of "$LINE_GUARD_SRC")" || fatal "sha_of fatal-exite
 # predicates required, or "||" in place of "&&") changes that count. The
 # oracle locates the exemption by lineCitationIsExempt's own function
 # SIGNATURE and judges the line immediately after it, so the locator and
-# the judged text are different bytes -- CLAUDE.md §8's question is "can an
+# the judged text are different bytes -- AGENTS.md §8's question is "can an
 # edit to the subject also satisfy the oracle", and a first version of this
 # check that greped for the return line itself, and then judged that same
 # match, could not tell "weakened in place, decoy elsewhere" from "clean":
@@ -1068,7 +1068,7 @@ LINE_GUARD_SHA_BEFORE="$(sha_of "$LINE_GUARD_SRC")" || fatal "sha_of fatal-exite
 # signature instead means weakening or renaming the body cannot also make
 # the locator miss the real declaration. The re-derived conjunct count is
 # then compared against a literal "2" that lives here, in this script, not
-# in the tracked file -- CLAUDE.md §8's #0258 lesson: it is the fact that
+# in the tracked file -- AGENTS.md §8's #0258 lesson: it is the fact that
 # the "2" lives in a DIFFERENT file from the guard it judges (so one `sed`
 # applied to both cannot satisfy both) that is the protection, not the
 # re-derivation step alone.
@@ -1086,7 +1086,7 @@ LINE_GUARD_SHA_BEFORE="$(sha_of "$LINE_GUARD_SRC")" || fatal "sha_of fatal-exite
 # declarations at column 0, so the decoy is not exotic. `go vet` stays
 # clean and this sub-check still reports PASS while the live exemption
 # (now under a different name) requires only one predicate. No textual
-# oracle over a Go file can tell a decoy from a declaration -- CLAUDE.md
+# oracle over a Go file can tell a decoy from a declaration -- AGENTS.md
 # §8's "a regex that hunts for a tag finds the one inside a comment", one
 # language over; its stated remedy is a parser, and this harness
 # deliberately does not use one (see this section's header comment
@@ -1100,7 +1100,7 @@ EXEMPT_FUNC_SIG_PATTERN='^func lineCitationIsExempt\(commentIsIndented, isSelfCi
 EXEMPT_RETURN_PATTERN='^[[:space:]]*return commentIsIndented && isSelfCitation && groupHasTranscriptMarker[[:space:]]*$'
 EXEMPT_FUNC_SIG_COUNT="$(grep -cE "$EXEMPT_FUNC_SIG_PATTERN" "$LINE_GUARD_SRC" || true)"
 if [ "$EXEMPT_FUNC_SIG_COUNT" -ne 1 ]; then
-  fail "REGRESSION #0356: lineCitationIsExempt's own function signature appears ${EXEMPT_FUNC_SIG_COUNT} time(s) in $LINE_GUARD_FILE, not exactly 1 -- 0 means it was renamed or its parameter list changed. This oracle locates the exemption by its SIGNATURE and judges the line after it, so the locator and the judged text are different bytes (CLAUDE.md §8's 'can an edit to the subject also satisfy the oracle')."
+  fail "REGRESSION #0356: lineCitationIsExempt's own function signature appears ${EXEMPT_FUNC_SIG_COUNT} time(s) in $LINE_GUARD_FILE, not exactly 1 -- 0 means it was renamed or its parameter list changed. This oracle locates the exemption by its SIGNATURE and judges the line after it, so the locator and the judged text are different bytes (AGENTS.md §8's 'can an edit to the subject also satisfy the oracle')."
 else
   REAL_RETURN_LINE="$(grep -A1 -E "$EXEMPT_FUNC_SIG_PATTERN" "$LINE_GUARD_SRC" | sed -n '2p')"
   if ! printf '%s\n' "$REAL_RETURN_LINE" | grep -qE "$EXEMPT_RETURN_PATTERN"; then
@@ -1160,7 +1160,7 @@ LINE_CITATION_MUST_NOT_MATCH=("PRD.md:671" "citationGuard.test.ts:76" "Workshops
 LINE_CITATION_PATTERN_DECL_PATTERN='^var lineCitationPattern = regexp\.MustCompile\(`'
 LINE_CITATION_PATTERN_DECL_COUNT="$(grep -cE "$LINE_CITATION_PATTERN_DECL_PATTERN" "$LINE_GUARD_SRC" || true)"
 if [ "$LINE_CITATION_PATTERN_DECL_COUNT" -ne 1 ]; then
-  fail "REGRESSION #0356: lineCitationPattern's declaration ('var lineCitationPattern = regexp.MustCompile(\`...\`)') appears ${LINE_CITATION_PATTERN_DECL_COUNT} time(s) in $LINE_GUARD_FILE, not exactly 1 -- 0 means it was renamed or removed; >1 means a decoy declaration elsewhere in the file shadows the real (possibly loosened) one for this oracle's extraction, which is CLAUDE.md §8's GUARD-0208 begin/end-count rule and #0356 criterion 9's 'appears exactly once'."
+  fail "REGRESSION #0356: lineCitationPattern's declaration ('var lineCitationPattern = regexp.MustCompile(\`...\`)') appears ${LINE_CITATION_PATTERN_DECL_COUNT} time(s) in $LINE_GUARD_FILE, not exactly 1 -- 0 means it was renamed or removed; >1 means a decoy declaration elsewhere in the file shadows the real (possibly loosened) one for this oracle's extraction, which is AGENTS.md §8's GUARD-0208 begin/end-count rule and #0356 criterion 9's 'appears exactly once'."
 fi
 
 extract_line_citation_pattern() {
