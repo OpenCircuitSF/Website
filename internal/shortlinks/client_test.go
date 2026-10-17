@@ -349,7 +349,7 @@ func TestEnsureCampaignNamesCampaignWithSlug(t *testing.T) {
 
 func TestEnsureLink(t *testing.T) {
 	const dest = "https://x.test/w"
-	run := func(existingDest string, getStatus int) (*Link, error, int) {
+	run := func(reqDest, existingDest string, getStatus int) (*Link, error, int) {
 		var posts int
 		c := newTest(t, func(w http.ResponseWriter, r *http.Request) {
 			switch {
@@ -370,21 +370,27 @@ func TestEnsureLink(t *testing.T) {
 				io.WriteString(w, `{"id":5,"key":"k1","destination_url":"`+existingDest+`"}`)
 			}
 		})
-		req := CreateLinkRequest{DestinationURL: dest, Key: "k1"}
+		req := CreateLinkRequest{DestinationURL: reqDest, Key: "k1"}
 		if _, err := c.EnsureLink(context.Background(), req); err != nil {
 			t.Fatalf("first create: %v", err)
 		}
 		l, err := c.EnsureLink(context.Background(), req)
 		return l, err, posts
 	}
-	if l, err, posts := run(dest, 200); err != nil || l.ID != 5 || posts != 2 {
+	if l, err, posts := run(dest, dest, 200); err != nil || l.ID != 5 || posts != 2 {
 		t.Fatalf("matching retry: %+v %v posts=%d", l, err, posts)
 	}
-	if _, err, _ := run("https://other.test/", 200); !errors.Is(err, ErrConflict) {
+	if _, err, _ := run(dest, "https://other.test/", 200); !errors.Is(err, ErrConflict) {
 		t.Fatalf("mismatched destination: %v", err)
 	}
-	if _, err, _ := run(dest, 500); err == nil || errors.Is(err, ErrConflict) {
+	if _, err, _ := run(dest, dest, 500); err == nil || errors.Is(err, ErrConflict) {
 		t.Fatalf("GET failure: %v", err)
+	}
+	if _, err, _ := run(dest, dest, 404); !errors.Is(err, ErrConflict) || errors.Is(err, ErrNotFound) {
+		t.Fatalf("GET 404 after 409 must stay ErrConflict: %v", err)
+	}
+	if l, err, _ := run("  "+dest+"\n", dest, 200); err != nil || l.ID != 5 {
+		t.Fatalf("padded destination retry: %+v %v", l, err)
 	}
 	c := newTest(t, func(w http.ResponseWriter, r *http.Request) { t.Error("no request expected") })
 	if _, err := c.EnsureLink(context.Background(), CreateLinkRequest{DestinationURL: dest}); err == nil {

@@ -221,7 +221,7 @@ func (c *Client) CreateLink(ctx context.Context, req CreateLinkRequest) (*Link, 
 
 // EnsureLink creates a link with a custom Key idempotently: on 409 it fetches
 // the existing link with GetLink and accepts it only when its destination
-// matches req.DestinationURL (any other holder of the key stays ErrConflict).
+// matches strings.TrimSpace(req.DestinationURL), the value ShortLinks stores (any other holder of the key stays ErrConflict).
 // req.Key must be set.
 func (c *Client) EnsureLink(ctx context.Context, req CreateLinkRequest) (*Link, error) {
 	if req.Key == "" {
@@ -233,9 +233,14 @@ func (c *Client) EnsureLink(ctx context.Context, req CreateLinkRequest) (*Link, 
 	}
 	got, gerr := c.GetLink(ctx, req.Key)
 	if gerr != nil {
+		if errors.Is(gerr, ErrNotFound) {
+			// GET is scoped to the caller: a 404 after a 409 means the key
+			// belongs to another user.
+			return nil, err
+		}
 		return nil, gerr
 	}
-	if got.DestinationURL != req.DestinationURL {
+	if got.DestinationURL != strings.TrimSpace(req.DestinationURL) {
 		return nil, err
 	}
 	return got, nil
