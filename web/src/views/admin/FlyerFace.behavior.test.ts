@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 // The full-photo template (#0559): the boxes, the printed site address, and the QR label.
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, it, expect } from 'vitest';
 import { cleanup, render } from '@testing-library/svelte';
 import FlyerFace from './FlyerFace.svelte';
@@ -71,5 +72,25 @@ describe('FlyerFace other templates keep the short link', () => {
     const { container } = mount(t, 'full');
     expect(container.querySelector('.fp')).toBeNull();
     expect(container.textContent).toContain('go.example/k1');
+  });
+});
+
+describe('FlyerFace full-photo CSS declarations (#0560)', () => {
+  // jsdom does not apply scoped Svelte styles, so pin the source text.
+  const src = readFileSync('src/views/admin/FlyerFace.svelte', 'utf-8');
+  const rule = (sel: string) => {
+    const m = src.match(new RegExp(sel.replace(/[.]/g, '\\.') + ' \\{([^}]*)\\}'));
+    return m ? m[1] : '';
+  };
+
+  it('.fp-label breaks an over-long token', () => {
+    expect(rule('.t-full-photo .fp-label')).toContain('overflow-wrap: anywhere;');
+  });
+
+  it('.fp-text has an rgba fallback on the line before its color-mix fill', () => {
+    const lines = rule('.t-full-photo .fp-text').split('\n').map((l) => l.trim());
+    const i = lines.findIndex((l) => l.startsWith('background: color-mix('));
+    expect(i).toBeGreaterThan(0);
+    expect(lines[i - 1]).toBe('background: rgba(11, 16, 10, 0.84);');
   });
 });

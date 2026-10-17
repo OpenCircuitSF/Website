@@ -265,6 +265,7 @@
     box-sizing: border-box;
     padding: 0.2in;
     border-radius: 0.08in;
+    background: rgba(11, 16, 10, 0.84);
     background: color-mix(in srgb, var(--box-fill) calc(var(--box-alpha) * 100%), transparent);
     color: var(--box-ink);
   }
@@ -303,7 +304,7 @@
     font-weight: 700;
     line-height: 1.2;
     color: var(--ink);
-    overflow-wrap: normal;
+    overflow-wrap: anywhere;
     word-break: normal;
   }
 
