@@ -80,6 +80,7 @@
   import { onMount, tick } from 'svelte';
   import {
     getAdminWorkshop,
+    createWorkshop,
     updateWorkshop,
     deleteWorkshop,
     announceWorkshop,
@@ -107,6 +108,8 @@
     isDeleteConflict,
     workshopToFormFields,
     isPreviewStale,
+    cloneDefaultEndLocal,
+    cloneWorkshopFields,
     type WorkshopFormFields,
   } from '../../lib/workshopAdmin';
   import { sortedInterests } from '../../lib/admin';
@@ -123,9 +126,12 @@
     // "the workshop screen links to the created draft" per this issue's
     // acceptance criteria.
     onAnnounced: (campaignId: number) => void;
+    // Called with the new draft's id once "Clone with new date" succeeds,
+    // so the caller (Workshops.svelte) can navigate to the copy's editor.
+    onCloned: (workshopId: number) => void;
   }
 
-  let { workshopId, onBack, onAnnounced }: Props = $props();
+  let { workshopId, onBack, onAnnounced, onCloned }: Props = $props();
 
   // ── Load state ──────────────────────────────────────────────────────────
   let workshop = $state<AdminWorkshop | null>(null);
@@ -249,9 +255,22 @@
   let announceError = $state<string | null>(null);
   let announcedCampaignId = $state<number | null>(null);
 
+  // ── Clone with a new date ─────────────────────────────────────────────────
+  // Copies the SAVED workshop (not unsaved edits in the form) into a new
+  // draft via lib/workshopAdmin.ts's cloneWorkshopFields -- cover image
+  // included. cloneEndTouched stops a later start change from overwriting
+  // an end the admin typed by hand.
+  let cloneOpen = $state(false);
+  let cloneStartLocal = $state('');
+  let cloneEndLocal = $state('');
+  let cloneEndTouched = $state(false);
+  let cloning = $state(false);
+  let cloneError = $state<string | null>(null);
+
   // ── Modal focus (#0052 review, finding 2) ───────────────────────────────
   let transitionModalEl = $state<HTMLDivElement | null>(null);
   let deleteModalEl = $state<HTMLDivElement | null>(null);
+  let cloneModalEl = $state<HTMLDivElement | null>(null);
 
   $effect(() => {
     if (transitionOpen) void tick().then(() => transitionModalEl?.focus());
@@ -259,6 +278,10 @@
 
   $effect(() => {
     if (deleteOpen) void tick().then(() => deleteModalEl?.focus());
+  });
+
+  $effect(() => {
+    if (cloneOpen) void tick().then(() => cloneModalEl?.focus());
   });
 
   let interestOptions = $derived(
@@ -422,6 +445,46 @@
   function switchToCancel(): void {
     deleteOpen = false;
     openTransition('cancel');
+  }
+
+  // ── Clone with a new date ─────────────────────────────────────────────────
+
+  function openClone(): void {
+    cloneStartLocal = '';
+    cloneEndLocal = '';
+    cloneEndTouched = false;
+    cloneError = null;
+    cloneOpen = true;
+  }
+
+  function closeClone(): void {
+    if (cloning) return;
+    cloneOpen = false;
+  }
+
+  function cloneStartChanged(): void {
+    if (!cloneEndTouched && workshop) cloneEndLocal = cloneDefaultEndLocal(workshop, cloneStartLocal);
+  }
+
+  async function submitClone(e: SubmitEvent): Promise<void> {
+    e.preventDefault();
+    if (!workshop) return;
+    const payload = cloneWorkshopFields(workshop, cloneStartLocal, cloneEndLocal);
+    if ('error' in payload) {
+      cloneError = payload.error;
+      return;
+    }
+    cloning = true;
+    cloneError = null;
+    try {
+      const created = await createWorkshop(payload);
+      cloneOpen = false;
+      onCloned(created.id);
+    } catch (err) {
+      cloneError = err instanceof ApiError ? err.message : 'Could not clone this workshop.';
+    } finally {
+      cloning = false;
+    }
   }
 
   // ── Announce-to-list shortcut ─────────────────────────────────────────────
@@ -677,6 +740,7 @@
       {#if cancelOffered}
         <Button variant="danger" onclick={() => openTransition('cancel')}>Cancel workshop</Button>
       {/if}
+      <Button onclick={openClone}>Clone with new date</Button>
       <Button variant="danger" onclick={openDelete}>Delete</Button>
     </div>
   </Panel>
@@ -775,6 +839,67 @@
           </Button>
           <Button disabled={transitioning} onclick={closeTransition}>Keep as is</Button>
         </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if cloneOpen}
+    <div
+      class="modal-backdrop"
+      role="presentation"
+      onclick={closeClone}
+      onkeydown={(e) => {
+        if (e.key === 'Escape') closeClone();
+      }}
+    >
+      <div
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Clone workshop"
+        tabindex="-1"
+        bind:this={cloneModalEl}
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => {
+          if (e.key === 'Escape') closeClone();
+        }}
+      >
+        <h2 class="modal-title">Clone with a new date</h2>
+        <p class="text-muted clone-hint">
+          Creates a new draft with this workshop's saved details, interests, and cover image.
+          Unsaved edits above are not copied.
+        </p>
+        <form onsubmit={submitClone}>
+          <div class="field">
+            <label for="clone-starts-at">New start</label>
+            <input
+              id="clone-starts-at"
+              type="datetime-local"
+              bind:value={cloneStartLocal}
+              oninput={cloneStartChanged}
+              disabled={cloning}
+            />
+          </div>
+          <div class="field">
+            <label for="clone-ends-at">New end</label>
+            <input
+              id="clone-ends-at"
+              type="datetime-local"
+              bind:value={cloneEndLocal}
+              oninput={() => (cloneEndTouched = true)}
+              disabled={cloning}
+            />
+          </div>
+          {#if cloneError}
+            <p class="text-error" role="alert">{cloneError}</p>
+          {/if}
+          <div class="row" style="margin-top: var(--space-3);">
+            <Button type="submit" variant="primary" disabled={cloning}>
+              {cloning ? 'Cloning…' : 'Create copy'}
+            </Button>
+            <Button disabled={cloning} onclick={closeClone}>Cancel</Button>
+          </div>
+        </form>
       </div>
     </div>
   {/if}
@@ -911,6 +1036,9 @@
   }
   .status-actions {
     flex-wrap: wrap;
+  }
+  .clone-hint {
+    margin: 0 0 var(--space-3);
   }
   .modal-backdrop {
     position: fixed;

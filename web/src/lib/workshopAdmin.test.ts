@@ -25,6 +25,8 @@ import {
   workshopToFormFields,
   blankWorkshopFormFields,
   isPreviewStale,
+  cloneDefaultEndLocal,
+  cloneWorkshopFields,
   type WorkshopFormFields,
 } from './workshopAdmin';
 import type { AdminWorkshop } from './types';
@@ -668,5 +670,91 @@ describe('workshopToFormFields / blankWorkshopFormFields', () => {
     const w = workshop({ capacity: 0 });
     // capacity 0 is falsy but not null/undefined -- must still render as '0', not ''.
     expect(workshopToFormFields(w).capacity).toBe('0');
+  });
+});
+
+describe('cloneWorkshopFields', () => {
+  const source = workshop({
+    id: 7,
+    slug: 'soldering-101',
+    status: 'published',
+    published_at: '2026-02-01T00:00:00Z',
+    summary: 'Learn to solder.',
+    body_md: '# Bring safety glasses',
+    starts_at: '2026-03-01T18:00:00Z',
+    ends_at: '2026-03-01T20:30:00Z',
+    location_name: 'Noisebridge',
+    location_address: '272 Capp St',
+    location_note: 'Ring the bell',
+    capacity: 12,
+    signup_url: 'https://example.com/signup',
+    cover_image: '/media/soldering.jpg',
+    interest_ids: [3, 5],
+  });
+
+  it('copies every content field, including the cover image, onto the new date', () => {
+    const start = toDatetimeLocalValue('2026-04-05T18:00:00Z');
+    const end = toDatetimeLocalValue('2026-04-05T20:30:00Z');
+    expect(cloneWorkshopFields(source, start, end)).toEqual({
+      title: 'Soldering fundamentals',
+      summary: 'Learn to solder.',
+      body_md: '# Bring safety glasses',
+      starts_at: '2026-04-05T18:00:00.000Z',
+      ends_at: '2026-04-05T20:30:00.000Z',
+      location_name: 'Noisebridge',
+      location_address: '272 Capp St',
+      location_note: 'Ring the bell',
+      capacity: 12,
+      signup_url: 'https://example.com/signup',
+      cover_image: '/media/soldering.jpg',
+      interest_ids: [3, 5],
+    });
+  });
+
+  it('never carries slug, status, or published_at into the create payload', () => {
+    const out = cloneWorkshopFields(source, toDatetimeLocalValue('2026-04-05T18:00:00Z'), '');
+    expect(out).not.toHaveProperty('slug');
+    expect(out).not.toHaveProperty('status');
+    expect(out).not.toHaveProperty('published_at');
+  });
+
+  it('does not share the interest_ids array with the source', () => {
+    const out = cloneWorkshopFields(source, toDatetimeLocalValue('2026-04-05T18:00:00Z'), '');
+    if ('error' in out) throw new Error(out.error);
+    expect(out.interest_ids).not.toBe(source.interest_ids);
+  });
+
+  it('allows an empty end', () => {
+    const out = cloneWorkshopFields(source, toDatetimeLocalValue('2026-04-05T18:00:00Z'), '');
+    expect(out).toMatchObject({ ends_at: undefined });
+  });
+
+  it('requires a start', () => {
+    expect(cloneWorkshopFields(source, '', '')).toEqual({
+      error: 'Pick a start date and time for the copy.',
+    });
+  });
+
+  it('rejects an end that is not after the start', () => {
+    const start = toDatetimeLocalValue('2026-04-05T18:00:00Z');
+    expect(cloneWorkshopFields(source, start, start)).toEqual({
+      error: 'The end must be after the start.',
+    });
+  });
+});
+
+describe('cloneDefaultEndLocal', () => {
+  it("keeps the source's duration relative to the new start", () => {
+    const source = workshop({ starts_at: '2026-03-01T18:00:00Z', ends_at: '2026-03-01T20:30:00Z' });
+    expect(cloneDefaultEndLocal(source, toDatetimeLocalValue('2026-04-05T18:00:00Z'))).toBe(
+      toDatetimeLocalValue('2026-04-05T20:30:00Z'),
+    );
+  });
+
+  it('is empty when the source has no end, or no new start was picked', () => {
+    const noEnd = workshop({ starts_at: '2026-03-01T18:00:00Z' });
+    expect(cloneDefaultEndLocal(noEnd, toDatetimeLocalValue('2026-04-05T18:00:00Z'))).toBe('');
+    const both = workshop({ starts_at: '2026-03-01T18:00:00Z', ends_at: '2026-03-01T20:30:00Z' });
+    expect(cloneDefaultEndLocal(both, '')).toBe('');
   });
 });

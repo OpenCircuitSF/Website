@@ -88,6 +88,7 @@
 // workshop form/status logic, not image handling.
 
 import type { AdminWorkshop } from './types';
+import type { CreateWorkshopFields } from './api';
 
 // ── Status vocabulary (migration 000020's workshops_status_check) ──────────
 
@@ -761,5 +762,64 @@ export function blankWorkshopFormFields(): WorkshopFormFields {
     signupUrl: '',
     coverImage: '',
     interestIds: [],
+  };
+}
+
+// ── Clone with a new date ───────────────────────────────────────────────────
+//
+// "Clone" is a client-side composition over the existing POST
+// /admin/workshops: every content field of the SAVED source workshop
+// (title, copy, location, capacity, signup link, cover image, interest
+// tags) is copied into a fresh create payload with a new start/end. The
+// cover image is a shared same-site path (admin_media_upload.go ties no
+// upload to a workshop id, and deleting a workshop never deletes its
+// image), so both workshops pointing at one file is safe. The copy is
+// always a draft with its own server-generated slug -- status,
+// published_at, and slug are deliberately not copied.
+
+/**
+ * The end time a clone should default to when the admin picks
+ * `newStartLocal`: the source's own duration (ends_at - starts_at) added to
+ * the new start, as a datetime-local value. '' when the source has no
+ * start/end pair, the duration is not positive, or the new start is empty.
+ */
+export function cloneDefaultEndLocal(source: AdminWorkshop, newStartLocal: string): string {
+  const newStartIso = fromDatetimeLocalValue(newStartLocal);
+  if (!newStartIso || !source.starts_at || !source.ends_at) return '';
+  const duration = new Date(source.ends_at).getTime() - new Date(source.starts_at).getTime();
+  if (!(duration > 0)) return '';
+  return toDatetimeLocalValue(new Date(new Date(newStartIso).getTime() + duration).toISOString());
+}
+
+/**
+ * The POST /admin/workshops payload that clones `source` onto a new date,
+ * or `{ error }` when the new start is missing or the end is not after it.
+ * The end is optional, matching the editor's own form.
+ */
+export function cloneWorkshopFields(
+  source: AdminWorkshop,
+  startsAtLocal: string,
+  endsAtLocal: string,
+): CreateWorkshopFields | { error: string } {
+  const startsAt = fromDatetimeLocalValue(startsAtLocal);
+  if (!startsAt) return { error: 'Pick a start date and time for the copy.' };
+  const endsAt = fromDatetimeLocalValue(endsAtLocal);
+  if (endsAtLocal.trim() !== '' && !endsAt) return { error: 'The end date and time is not valid.' };
+  if (endsAt && new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
+    return { error: 'The end must be after the start.' };
+  }
+  return {
+    title: source.title,
+    summary: source.summary,
+    body_md: source.body_md,
+    starts_at: startsAt,
+    ends_at: endsAt,
+    location_name: source.location_name,
+    location_address: source.location_address,
+    location_note: source.location_note,
+    capacity: source.capacity,
+    signup_url: source.signup_url,
+    cover_image: source.cover_image,
+    interest_ids: [...source.interest_ids],
   };
 }

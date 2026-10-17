@@ -130,6 +130,13 @@
     void load();
   }
 
+  // A clone from the editor is a navigation to the copy's editor; reload
+  // the list behind it so Back shows the new draft.
+  function openClone(id: number): void {
+    onOpenWorkshop(id);
+    void load();
+  }
+
   function openCreate(): void {
     creating = true;
     newTitle = '';
@@ -166,7 +173,12 @@
 
 {#if mode === 'editor'}
   {#key activeId}
-    <WorkshopEditor workshopId={activeId} onBack={backToList} {onAnnounced} />
+    <WorkshopEditor
+      workshopId={activeId}
+      onBack={backToList}
+      {onAnnounced}
+      onCloned={openClone}
+    />
   {/key}
 {:else}
   <Panel title="Workshops" noPadding={listPanelNoPadding}>
