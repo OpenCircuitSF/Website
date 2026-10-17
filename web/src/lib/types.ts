@@ -850,3 +850,81 @@ export interface OutreachLocation {
   created_at: string;
   updated_at: string | null;
 }
+
+// ── Outreach results (#0546) ─────────────────────────────────────────────────
+
+/** Why click numbers are or are not present. Anything but 'ok' means no clicks. */
+export type OutreachResultsStatus =
+  | 'ok'
+  | 'not_configured'
+  | 'not_started'
+  | 'campaign_missing'
+  | 'rejected'
+  | 'unreachable';
+
+export interface OutreachResultsChannel {
+  name: string;
+  label: string;
+  clicks: number | null;
+  has_daily_series: boolean;
+  prepared: number;
+}
+
+export interface OutreachResultsPost {
+  id: number;
+  channel: string;
+  wave: string;
+  status: OutreachPostStatus;
+  short_link_key: string | null;
+  short_url: string | null;
+  posted_at: string | null;
+  remote_url: string | null;
+  /** Null unless the status is 'ok' and the post has a short link. */
+  clicks: number | null;
+}
+
+export interface OutreachResultsDay {
+  date: string;
+  count: number;
+}
+
+export interface OutreachResultsSeries {
+  /** A channel name, or 'other'. */
+  id: string;
+  label: string;
+  channels: string[];
+  is_other: boolean;
+  days: OutreachResultsDay[];
+}
+
+/** GET /admin/workshops/{id}/outreach/results. */
+export interface OutreachResults {
+  status: OutreachResultsStatus;
+  workshop: { id: number; slug: string; title: string; status: string; starts_at: string | null };
+  campaign_slug: string | null;
+  /** Half-open UTC-day window [from, to), "YYYY-MM-DD". */
+  window: { from: string; to: string } | null;
+  partial_last_day: boolean;
+  fetched_at: string | null;
+  totals: { clicks: number; excluded_bot_clicks: number; unmatched_clicks: number } | null;
+  channels: OutreachResultsChannel[];
+  posts: OutreachResultsPost[];
+  series: OutreachResultsSeries[];
+}
+
+export interface OutreachResultsSummaryRow {
+  workshop_id: number;
+  workshop_slug: string;
+  workshop_title: string;
+  starts_at: string | null;
+  posts_total: number;
+  posts_posted: number;
+  clicks: number | null;
+  status: OutreachResultsStatus;
+}
+
+/** GET /admin/outreach-results. */
+export interface OutreachResultsSummary {
+  status: OutreachResultsStatus;
+  rows: OutreachResultsSummaryRow[];
+}

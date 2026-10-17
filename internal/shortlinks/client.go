@@ -260,10 +260,59 @@ func (c *Client) LinkQRSVG(ctx context.Context, key string) ([]byte, error) {
 	return c.do(ctx, http.MethodGet, "/api/links/"+url.PathEscape(key)+"/qr.svg", nil, nil)
 }
 
-// CampaignStats calls GET /api/campaigns/{slug}/stats and returns the raw
-// CampaignRollup JSON. from and to are optional ("YYYY-MM-DD", UTC); a zero
-// time leaves that bound to ShortLinks' default window.
-func (c *Client) CampaignStats(ctx context.Context, slug string, from, to time.Time) (json.RawMessage, error) {
+// Bucket is one value/count pair in a rollup breakdown.
+type Bucket struct {
+	Value string `json:"value"`
+	Count int64  `json:"count"`
+}
+
+// DayBucket is one UTC day's click count; Date is "YYYY-MM-DD".
+type DayBucket struct {
+	Date  string `json:"date"`
+	Count int64  `json:"count"`
+}
+
+// LinkBucket is one link's click total. Key is "" when the link was deleted.
+type LinkBucket struct {
+	LinkID *int64 `json:"link_id"`
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	Count  int64  `json:"count"`
+}
+
+// LinkSeries is one link's daily clicks. ShortLinks names at most six links
+// and folds the remainder into one IsOther series.
+type LinkSeries struct {
+	LinkID  *int64      `json:"link_id"`
+	Key     string      `json:"key"`
+	Title   string      `json:"title"`
+	IsOther bool        `json:"is_other"`
+	Days    []DayBucket `json:"days"`
+}
+
+// CampaignRollup is GET /api/campaigns/{slug}/stats. ShortLinks embeds its
+// stats struct in the response, so these fields are top-level. Every count
+// excludes bot clicks; the window is half-open, [WindowFrom, WindowTo).
+type CampaignRollup struct {
+	ClickCount       int64    `json:"click_count"`
+	ExcludedBotCount int64    `json:"excluded_bot_count"`
+	BySource         []Bucket `json:"by_source"`
+	ByMedium         []Bucket `json:"by_medium"`
+	ByContent        []Bucket `json:"by_content"`
+	ByReferer        []Bucket `json:"by_referer"`
+	WindowFrom       string   `json:"window_from"`
+	WindowTo         string   `json:"window_to"`
+	Timeseries       struct {
+		Days []DayBucket `json:"days"`
+	} `json:"timeseries"`
+	ByLink       []LinkBucket `json:"by_link"`
+	SeriesByLink []LinkSeries `json:"series_by_link"`
+}
+
+// CampaignStats calls GET /api/campaigns/{slug}/stats. from and to are
+// optional ("YYYY-MM-DD", UTC); a zero time leaves that bound to ShortLinks'
+// default window, which is the campaign's own start-to-end span.
+func (c *Client) CampaignStats(ctx context.Context, slug string, from, to time.Time) (*CampaignRollup, error) {
 	q := url.Values{}
 	if !from.IsZero() {
 		q.Set("from", from.UTC().Format("2006-01-02"))
@@ -271,11 +320,11 @@ func (c *Client) CampaignStats(ctx context.Context, slug string, from, to time.T
 	if !to.IsZero() {
 		q.Set("to", to.UTC().Format("2006-01-02"))
 	}
-	b, err := c.do(ctx, http.MethodGet, "/api/campaigns/"+url.PathEscape(slug)+"/stats", q, nil)
-	if err != nil {
+	var out CampaignRollup
+	if err := c.doJSON(ctx, http.MethodGet, "/api/campaigns/"+url.PathEscape(slug)+"/stats", q, nil, &out); err != nil {
 		return nil, err
 	}
-	return json.RawMessage(b), nil
+	return &out, nil
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, q url.Values, body, out any) error {

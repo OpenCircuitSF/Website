@@ -70,12 +70,11 @@
   --danger-hover-bg: #F5D6D2;
 
   /*
-   * Chart series (categorical) — reserved for a future categorical chart's
-   * per-series lines/legend swatches. Not part of the terminal rebrand
-   * (PRD §4.2 has no chart palette) and unused anywhere in the app yet;
-   * carried forward unchanged from ShortLinks pending real dataviz work —
-   * see docs/frontend.md and the dataviz skill's color-formula for how to
-   * pick a real set when that work starts.
+   * Chart series (categorical) — the per-channel lines and legend swatches of
+   * the Outreach click chart (#0546), which assigns them by channel order.
+   * Not part of the terminal rebrand (PRD §4.2 has no chart palette);
+   * carried forward unchanged from ShortLinks — see docs/frontend.md and the
+   * dataviz skill's color-formula for how the set was picked.
    */
   --series-1: #2a78d6;
   --series-2: #eb6834;

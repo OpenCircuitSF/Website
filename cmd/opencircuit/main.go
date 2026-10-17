@@ -1471,6 +1471,10 @@ func adminRoutes(
 			adminRoute{http.MethodDelete, "/admin/outreach-posts/{id}", http.HandlerFunc(adminOutreachH.DeletePost)},
 			// #0548: saved flyer locations, under /admin/outreach-locations for
 			// the same overlap reason as the post routes above.
+			// #0546: click results read from ShortLinks. Hyphenated like the
+			// siblings so it never overlaps /admin/outreach/{id}/posts.
+			adminRoute{http.MethodGet, "/admin/workshops/{id}/outreach/results", http.HandlerFunc(adminOutreachH.ResultsForWorkshop)},
+			adminRoute{http.MethodGet, "/admin/outreach-results", http.HandlerFunc(adminOutreachH.ResultsSummary)},
 			adminRoute{http.MethodGet, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.ListLocations)},
 			adminRoute{http.MethodPost, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.CreateLocation)},
 			adminRoute{http.MethodPatch, "/admin/outreach-locations/{id}", http.HandlerFunc(adminOutreachH.PatchLocation)},

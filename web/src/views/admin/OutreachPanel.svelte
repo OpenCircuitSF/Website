@@ -15,9 +15,11 @@
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { getWorkshopOutreach, startOutreach, createOutreachPost, ApiError } from '../../lib/api';
+  import { getWorkshopOutreach, getWorkshopOutreachResults, startOutreach, createOutreachPost, ApiError } from '../../lib/api';
+  import { adminOutreachResultsHash } from '../../lib/adminRouter';
   import { buildGrid, cellLabel, cellIsStale, unavailableMessage } from '../../lib/outreach';
-  import type { OutreachPost, WorkshopOutreach } from '../../lib/types';
+  import { cellClicksLabel, resultsStatusMessage } from '../../lib/outreachResults';
+  import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import OutreachComposer from './OutreachComposer.svelte';
 
@@ -33,7 +35,14 @@
   let actionError = $state<string | null>(null);
   let busy = $state(false);
   let selectedPostId = $state<number | null>(null);
+  // #0546: click results load after the grid, separately, so a ShortLinks or
+  // network problem only sets a status line and never hides the grid.
+  let results = $state<OutreachResults | null>(null);
+  let resultsError = $state<string | null>(null);
 
+  const resultsLine = $derived(
+    resultsError ?? (results && results.status !== 'not_started' ? (resultsStatusMessage(results.status) ?? '') : ''),
+  );
   const grid = $derived(view ? buildGrid(view) : []);
   const selected = $derived(view?.posts.find((p) => p.id === selectedPostId) ?? null);
   const selectedChannel = $derived(selected && view ? (view.channels.find((c) => c.name === selected.channel) ?? null) : null);
@@ -41,6 +50,16 @@
 
   function message(err: unknown, fallback: string): string {
     return err instanceof ApiError ? err.message : fallback;
+  }
+
+  async function loadResults(): Promise<void> {
+    resultsError = null;
+    try {
+      results = await getWorkshopOutreachResults(workshopId);
+    } catch {
+      results = null;
+      resultsError = 'Click counts could not be loaded.';
+    }
   }
 
   async function load(): Promise<void> {
@@ -52,6 +71,7 @@
     } finally {
       loading = false;
     }
+    if (view?.outreach) await loadResults();
   }
 
   $effect(() => {
@@ -153,6 +173,9 @@
                       onclick={() => openCell(row.channel.name, cell.wave.name, cell.post)}
                     >
                       {cellLabel(cell.post)}{cellIsStale(cell.post) ? ' (stale)' : ''}
+                      {#if cell.post && cellClicksLabel(cell.post, results)}
+                        <span class="clicks">{cellClicksLabel(cell.post, results)}</span>
+                      {/if}
                     </button>
                   </td>
                 {/each}
@@ -161,6 +184,7 @@
           </tbody>
         </table>
       </div>
+      <p><a href={adminOutreachResultsHash(workshopId)}>View results</a></p>
     {/if}
 
     {#if selected && selectedChannel && selectedWave}
@@ -180,6 +204,8 @@
       <p class="text-error" role="alert">{actionError}</p>
     {/if}
   {/if}
+  <!-- Always rendered, so a late results message is announced. -->
+  <p class="text-muted results-status" role="status">{resultsLine}</p>
 </div>
 
 <style>
@@ -203,6 +229,14 @@
   }
   .cell.active {
     border-color: var(--accent);
+  }
+  .results-status:empty {
+    display: none;
+  }
+  .clicks {
+    display: block;
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
   }
   .cell:disabled {
     opacity: 0.5;

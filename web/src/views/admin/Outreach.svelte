@@ -1,17 +1,25 @@
 <!--
   The top-level Outreach admin tab (#0544): every workshop that has outreach,
-  with its post counts per status. Results (clicks per channel and wave) are a
-  later issue. Loads when the Workshops sub-view shows; the Locations sub-view (#0548) is OutreachLocations.svelte.
+  with its post counts per status. Loads when the Workshops sub-view shows; the
+  Locations sub-view (#0548) is OutreachLocations.svelte and the Results
+  sub-view (#0546) is OutreachResults.svelte.
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
   import { listOutreach, ApiError } from '../../lib/api';
-  import { adminWorkshopHash, adminOutreachHash, outreachViewFromQuery } from '../../lib/adminRouter';
+  import {
+    adminWorkshopHash,
+    adminOutreachHash,
+    adminOutreachResultsHash,
+    outreachViewFromQuery,
+    outreachWorkshopFromQuery,
+  } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
   import type { OutreachSummary } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
   import OutreachLocations from './OutreachLocations.svelte';
+  import OutreachResults from './OutreachResults.svelte';
 
   // #0548: the sub-view lives in the hash query (#/outreach?view=locations).
   let { query = new URLSearchParams() }: { query?: URLSearchParams } = $props();
@@ -49,10 +57,13 @@
 <nav class="outreach-subnav" aria-label="Outreach sections">
   <a href={adminOutreachHash('workshops')} aria-current={view === 'workshops' ? 'page' : undefined}>Workshops</a>
   <a href={adminOutreachHash('locations')} aria-current={view === 'locations' ? 'page' : undefined}>Locations</a>
+  <a href={adminOutreachResultsHash()} aria-current={view === 'results' ? 'page' : undefined}>Results</a>
 </nav>
 
 {#if view === 'locations'}
   <OutreachLocations />
+{:else if view === 'results'}
+  <OutreachResults workshopId={outreachWorkshopFromQuery(query)} />
 {:else}
 <Panel title="Outreach">
   {#if loading}

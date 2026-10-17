@@ -207,17 +207,42 @@ func TestCampaignStatsWindow(t *testing.T) {
 		if r.URL.Path != "/api/campaigns/spring/stats" {
 			t.Errorf("path %s", r.URL.Path)
 		}
-		io.WriteString(w, `{"stats":{"click_count":3}}`)
+		io.WriteString(w, `{"click_count":42,"excluded_bot_count":3,"window_from":"2026-10-01","window_to":"2026-10-09",
+"timeseries":{"days":[{"date":"2026-10-03","count":5}]},
+"by_link":[{"link_id":7,"key":"aB3x","title":"t","count":12}],
+"series_by_link":[{"link_id":7,"key":"aB3x","title":"t","is_other":false,"days":[{"date":"2026-10-03","count":5}]},
+{"link_id":null,"key":"","title":"Other","is_other":true,"days":[]}]}`)
 	})
 	ctx := context.Background()
 	from := time.Date(2026, 10, 1, 15, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
-	raw, err := c.CampaignStats(ctx, "spring", from, to)
-	if err != nil || gotQuery != "from=2026-10-01&to=2026-10-09" || !strings.Contains(string(raw), "click_count") {
-		t.Fatalf("%q %q %v", raw, gotQuery, err)
+	r, err := c.CampaignStats(ctx, "spring", from, to)
+	if err != nil || gotQuery != "from=2026-10-01&to=2026-10-09" {
+		t.Fatalf("%q %v", gotQuery, err)
+	}
+	if r.ClickCount != 42 || r.ExcludedBotCount != 3 || r.WindowTo != "2026-10-09" || len(r.ByLink) != 1 || r.ByLink[0].Key != "aB3x" {
+		t.Fatalf("decoded %+v", r)
+	}
+	if len(r.SeriesByLink) != 2 || !r.SeriesByLink[1].IsOther || r.SeriesByLink[0].Days[0].Count != 5 || len(r.Timeseries.Days) != 1 {
+		t.Fatalf("series %+v", r.SeriesByLink)
 	}
 	if _, err := c.CampaignStats(ctx, "spring", time.Time{}, time.Time{}); err != nil || gotQuery != "" {
 		t.Fatalf("zero window query %q err %v", gotQuery, err)
+	}
+}
+
+func TestCampaignStatsDecodeError(t *testing.T) {
+	c := newTest(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"click_count":"x"}`)
+	})
+	_, err := c.CampaignStats(context.Background(), "spring", time.Time{}, time.Time{})
+	if err == nil {
+		t.Fatal("expected a decode error")
+	}
+	for _, s := range []error{ErrUnauthenticated, ErrForbidden, ErrNotFound, ErrConflict, ErrRateLimited, ErrUnavailable} {
+		if errors.Is(err, s) {
+			t.Fatalf("decode error matched sentinel %v", s)
+		}
 	}
 }
 

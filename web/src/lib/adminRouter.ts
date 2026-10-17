@@ -195,19 +195,33 @@ export function adminAuditCampaignHash(campaignId: number): string {
   return `#/audit?campaign=${campaignId}`;
 }
 
-/** The Outreach tab's sub-views (#0548): the workshops list and the saved
- * flyer locations. Carried in the hash query (`#/outreach?view=locations`) so
- * no AdminRoute shape changes. */
-export type OutreachView = 'workshops' | 'locations';
+/** The Outreach tab's sub-views: the workshops list, the saved flyer
+ * locations (#0548) and click results (#0546). Carried in the hash query
+ * (`#/outreach?view=locations`) so no AdminRoute shape changes. */
+export type OutreachView = 'workshops' | 'locations' | 'results';
 
 /** The sub-view a hash query names; unknown or missing is `workshops`. */
 export function outreachViewFromQuery(query: URLSearchParams): OutreachView {
-  return query.get('view') === 'locations' ? 'locations' : 'workshops';
+  const v = query.get('view');
+  return v === 'locations' || v === 'results' ? v : 'workshops';
 }
 
 /** The hash for an Outreach sub-view. */
 export function adminOutreachHash(view: OutreachView = 'workshops'): string {
-  return view === 'locations' ? '#/outreach?view=locations' : '#/outreach';
+  return view === 'workshops' ? '#/outreach' : `#/outreach?view=${view}`;
+}
+
+/** The workshop a results hash names: a positive integer `workshop` param, else null. */
+export function outreachWorkshopFromQuery(query: URLSearchParams): number | null {
+  const raw = query.get('workshop');
+  if (raw === null || !/^[0-9]+$/.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+/** The results hash: the all-workshops summary, or one workshop's results. */
+export function adminOutreachResultsHash(workshopId?: number): string {
+  return workshopId === undefined ? '#/outreach?view=results' : `#/outreach?view=results&workshop=${workshopId}`;
 }
 
 /**

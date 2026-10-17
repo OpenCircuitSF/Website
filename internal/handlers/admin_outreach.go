@@ -52,6 +52,7 @@ type shortLinker interface {
 	Me(ctx context.Context) (*shortlinks.Me, error)
 	EnsureCampaign(ctx context.Context, slug string, req shortlinks.CreateCampaignRequest) (*shortlinks.Campaign, error)
 	CreateLink(ctx context.Context, req shortlinks.CreateLinkRequest) (*shortlinks.Link, error)
+	CampaignStats(ctx context.Context, slug string, from, to time.Time) (*shortlinks.CampaignRollup, error)
 }
 
 // AdminOutreachHandler serves the admin-only Outreach routes (#0544): start
@@ -68,6 +69,10 @@ type AdminOutreachHandler struct {
 	baseURL   string
 	mu        sync.Mutex
 	shortBase string // cached Me().BaseURL; a failed fetch is not cached
+	// stats memoizes campaign stats for the results routes (#0546); nil when
+	// ShortLinks is not configured.
+	stats *shortlinks.StatsCache
+	now   func() time.Time
 }
 
 // NewAdminOutreachHandler constructs the handler. baseURL is the site's own
@@ -75,7 +80,11 @@ type AdminOutreachHandler struct {
 // audit writes; a nil or unconfigured links makes Outreach report
 // unavailable.
 func NewAdminOutreachHandler(store outreachStore, locations outreachLocationStore, ws outreachWorkshopReader, links shortLinker, auditor *audit.Logger, baseURL string) *AdminOutreachHandler {
-	return &AdminOutreachHandler{store: store, locations: locations, ws: ws, links: links, auditor: auditor, baseURL: baseURL}
+	h := &AdminOutreachHandler{store: store, locations: locations, ws: ws, links: links, auditor: auditor, baseURL: baseURL, now: time.Now}
+	if h.linksEnabled() {
+		h.stats = shortlinks.NewStatsCache(links.CampaignStats, shortlinks.StatsCacheTTL, shortlinks.StatsCacheFailTTL)
+	}
+	return h
 }
 
 func (h *AdminOutreachHandler) linksEnabled() bool {

@@ -12,6 +12,8 @@ import {
   resolvePostLoginDestination,
   outreachViewFromQuery,
   adminOutreachHash,
+  outreachWorkshopFromQuery,
+  adminOutreachResultsHash,
   ADMIN_NAV_SECTIONS,
 } from './adminRouter';
 
@@ -123,5 +125,25 @@ describe('outreach sub-views (#0548)', () => {
     expect(adminOutreachHash()).toBe('#/outreach');
     expect(adminOutreachHash('workshops')).toBe('#/outreach');
     expect(adminOutreachHash('locations')).toBe('#/outreach?view=locations');
+  });
+});
+
+describe('outreach results routing (#0546)', () => {
+  it('reads the results view and the workshop param', () => {
+    const r = parseAdminHash('#/outreach?view=results&workshop=12')!;
+    expect(r.section).toBe('outreach');
+    expect(outreachViewFromQuery(r.query)).toBe('results');
+    expect(outreachWorkshopFromQuery(r.query)).toBe(12);
+  });
+  it('accepts only a positive integer workshop', () => {
+    for (const bad of ['', '0', '-3', '1.5', 'abc', '1e3', '99999999999999999999']) {
+      expect(outreachWorkshopFromQuery(new URLSearchParams({ workshop: bad }))).toBeNull();
+    }
+    expect(outreachWorkshopFromQuery(new URLSearchParams())).toBeNull();
+  });
+  it('builds the results hashes', () => {
+    expect(adminOutreachResultsHash()).toBe('#/outreach?view=results');
+    expect(adminOutreachResultsHash(12)).toBe('#/outreach?view=results&workshop=12');
+    expect(adminOutreachHash('results')).toBe('#/outreach?view=results');
   });
 });

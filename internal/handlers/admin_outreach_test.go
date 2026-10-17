@@ -34,6 +34,29 @@ type fakeShortLinker struct {
 	links     []shortlinks.CreateLinkRequest
 	linkErr   error
 	campSlug  string
+	// CampaignStats (#0546): a configurable rollup or error, with every
+	// request recorded.
+	statsRollup *shortlinks.CampaignRollup
+	statsErr    error
+	statsCalls  []statsCall
+}
+
+type statsCall struct {
+	slug     string
+	from, to time.Time
+}
+
+func (f *fakeShortLinker) CampaignStats(_ context.Context, slug string, from, to time.Time) (*shortlinks.CampaignRollup, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statsCalls = append(f.statsCalls, statsCall{slug, from, to})
+	if f.statsErr != nil {
+		return nil, f.statsErr
+	}
+	if f.statsRollup == nil {
+		return &shortlinks.CampaignRollup{}, nil
+	}
+	return f.statsRollup, nil
 }
 
 func (f *fakeShortLinker) Enabled() bool { return f.enabled }
@@ -74,6 +97,11 @@ func outreachTestPool(t *testing.T) *pgxpool.Pool {
 }
 
 func outreachMux(pool *pgxpool.Pool, links shortLinker) (http.Handler, *workshops.Store) {
+	mux, ws, _ := outreachMuxWithHandler(pool, links)
+	return mux, ws
+}
+
+func outreachMuxWithHandler(pool *pgxpool.Pool, links shortLinker) (http.Handler, *workshops.Store, *AdminOutreachHandler) {
 	ws := workshops.NewStore(pool)
 	h := NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), ws, links, audit.New(pool), "https://site.example.test")
 	requireSession := middleware.RequireSession(auth.NewStore(pool))
@@ -89,11 +117,13 @@ func outreachMux(pool *pgxpool.Pool, links shortLinker) (http.Handler, *workshop
 	mux.Handle("POST /admin/outreach-posts/{id}/prepare", requireAdmin(http.HandlerFunc(h.Prepare)))
 	mux.Handle("POST /admin/outreach-posts/{id}/posted", requireAdmin(http.HandlerFunc(h.MarkPosted)))
 	mux.Handle("DELETE /admin/outreach-posts/{id}", requireAdmin(http.HandlerFunc(h.DeletePost)))
+	mux.Handle("GET /admin/workshops/{id}/outreach/results", requireAdmin(http.HandlerFunc(h.ResultsForWorkshop)))
+	mux.Handle("GET /admin/outreach-results", requireAdmin(http.HandlerFunc(h.ResultsSummary)))
 	mux.Handle("GET /admin/outreach-locations", requireAdmin(http.HandlerFunc(h.ListLocations)))
 	mux.Handle("POST /admin/outreach-locations", requireAdmin(http.HandlerFunc(h.CreateLocation)))
 	mux.Handle("PATCH /admin/outreach-locations/{id}", requireAdmin(http.HandlerFunc(h.PatchLocation)))
 	mux.Handle("DELETE /admin/outreach-locations/{id}", requireAdmin(http.HandlerFunc(h.DeleteLocation)))
-	return mux, ws
+	return mux, ws, h
 }
 
 func seedOutreachWorkshop(t *testing.T, pool *pgxpool.Pool, ws *workshops.Store, status string) workshops.Workshop {

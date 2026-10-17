@@ -13,6 +13,8 @@ import type {
   CrtCommand,
   OutreachLocation,
   OutreachPost,
+  OutreachResults,
+  OutreachResultsSummary,
   OutreachSummary,
   WorkshopOutreach,
   Subscriber,
@@ -1283,6 +1285,16 @@ export function startOutreach(workshopId: number): Promise<WorkshopOutreach> {
 /** GET /admin/outreach — every workshop that has outreach. */
 export function listOutreach(): Promise<{ outreach: OutreachSummary[] }> {
   return apiGet<{ outreach: OutreachSummary[] }>('/admin/outreach');
+}
+
+/** GET /admin/workshops/{id}/outreach/results — clicks from ShortLinks (#0546). Always 200 for a known workshop; `status` says whether the numbers are real. */
+export function getWorkshopOutreachResults(workshopId: number): Promise<OutreachResults> {
+  return apiGet<OutreachResults>(`/admin/workshops/${workshopId}/outreach/results`);
+}
+
+/** GET /admin/outreach-results — one row per workshop with outreach (#0546). */
+export function listOutreachResults(): Promise<OutreachResultsSummary> {
+  return apiGet<OutreachResultsSummary>('/admin/outreach-results');
 }
 
 /** POST /admin/outreach/{id}/posts — create a draft; an omitted body is generated server-side. */
