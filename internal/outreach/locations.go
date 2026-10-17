@@ -133,13 +133,17 @@ func (s *Store) CreateLocation(ctx context.Context, in LocationInput) (Location,
 
 // UpdateLocation applies a partial update in one statement. Changing the code
 // of a location a flyer link already uses is ErrCodeLocked; re-sending its
-// current code is fine.
+// current code is fine. A patch that changes nothing leaves updated_at alone.
 func (s *Store) UpdateLocation(ctx context.Context, id int64, p LocationPatch) (Location, error) {
 	l, err := scanLocation(s.pool.QueryRow(ctx,
 		`UPDATE outreach_locations SET
 		     name = COALESCE($2, name), code = COALESCE($3, code),
 		     address = COALESCE($4, address), notes = COALESCE($5, notes),
-		     active = COALESCE($6, active), updated_at = now()
+		     active = COALESCE($6, active),
+		     updated_at = CASE WHEN ROW(COALESCE($2, name), COALESCE($3, code), COALESCE($4, address),
+		                                COALESCE($5, notes), COALESCE($6, active))
+		                            IS DISTINCT FROM ROW(name, code, address, notes, active)
+		                       THEN now() ELSE updated_at END
 		 WHERE id = $1 AND (code_locked_at IS NULL OR $3::text IS NULL OR $3::text = code)
 		 RETURNING `+locationCols,
 		id, p.Name, p.Code, p.Address, p.Notes, p.Active))

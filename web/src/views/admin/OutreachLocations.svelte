@@ -36,6 +36,7 @@
   let loading = $state(true);
   let loadError = $state<string | null>(null);
   let status = $state('');
+  let statusIsError = $state(false);
 
   // null = form closed; 'new' = creating; a location = editing it.
   let editing = $state<OutreachLocation | 'new' | null>(null);
@@ -78,6 +79,7 @@
     active = true;
     codeEdited = false;
     status = '';
+    statusIsError = false;
   }
 
   function openEdit(loc: OutreachLocation): void {
@@ -89,6 +91,7 @@
     active = loc.active;
     codeEdited = true;
     status = '';
+    statusIsError = false;
   }
 
   function closeForm(): void {
@@ -109,21 +112,25 @@
     if (!valid || saving || editing === null) return;
     saving = true;
     status = '';
+    statusIsError = false;
     try {
       if (editing === 'new') {
         await createOutreachLocation({ name: name.trim(), code, address: address.trim(), notes: notes.trim(), active });
         status = 'Location added.';
+        statusIsError = false;
       } else {
         const patch = locationPatch(editing, { name, code, address, notes });
         const body: Record<string, unknown> = { ...(patch ?? {}) };
         if (active !== editing.active) body.active = active;
         if (Object.keys(body).length > 0) await updateOutreachLocation(editing.id, body);
         status = 'Location saved.';
+        statusIsError = false;
       }
       editing = null;
       await load();
     } catch (err) {
       status = message(err, 'Could not save the location. Please try again.');
+      statusIsError = true;
     } finally {
       saving = false;
     }
@@ -131,25 +138,31 @@
 
   async function toggleActive(loc: OutreachLocation): Promise<void> {
     status = '';
+    statusIsError = false;
     try {
       await updateOutreachLocation(loc.id, { active: !loc.active });
       status = loc.active ? `${loc.name} deactivated.` : `${loc.name} reactivated.`;
+      statusIsError = false;
       await load();
     } catch (err) {
       status = message(err, 'Could not update the location. Please try again.');
+      statusIsError = true;
     }
   }
 
   async function confirmDelete(loc: OutreachLocation): Promise<void> {
     status = '';
+    statusIsError = false;
     try {
       await deleteOutreachLocation(loc.id);
       confirmDeleteId = null;
       status = `${loc.name} deleted.`;
+      statusIsError = false;
       await load();
     } catch (err) {
       confirmDeleteId = null;
       status = message(err, 'Could not delete the location. Please try again.');
+      statusIsError = true;
     }
   }
 
@@ -158,7 +171,7 @@
 
 <Panel title="Flyer locations">
   <p class="text-muted">Places flyers go. Each flyer run makes one tracked link per active location.</p>
-  <p class="loc-status" class:text-muted={status !== ''} role="status">{status}</p>
+  <p class="loc-status" class:text-muted={status !== '' && !statusIsError} class:text-error={statusIsError} role="status">{status}</p>
 
   {#if editing === null}
     <Button variant="primary" onclick={openNew}>Add location</Button>

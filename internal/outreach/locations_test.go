@@ -7,8 +7,33 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
+
+func TestLocationNoOpUpdateKeepsUpdatedAt(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	l := seedLocation(t, s)
+	if _, err := s.pool.Exec(ctx, `UPDATE outreach_locations SET updated_at = now() - interval '1 day' WHERE id = $1`, l.ID); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.GetLocation(ctx, l.ID)
+	same := l.Name
+	got, err := s.UpdateLocation(ctx, l.ID, LocationPatch{Name: &same, Code: &l.Code, Active: &l.Active})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.UpdatedAt.Equal(*before.UpdatedAt) {
+		t.Errorf("no-op patch bumped updated_at: %v -> %v", before.UpdatedAt, got.UpdatedAt)
+	}
+	other := same + " x"
+	got, err = s.UpdateLocation(ctx, l.ID, LocationPatch{Name: &other})
+	if err != nil || !got.UpdatedAt.After(*before.UpdatedAt) {
+		t.Errorf("real change should bump updated_at: %+v %v", got, err)
+	}
+}
 
 // The case list below is mirrored by hand in web/src/lib/outreachLocations.test.ts
 // (no shared fixture file: that would make this package a repo-wide reacher).
@@ -82,6 +107,11 @@ func TestLocationCheckConstraintRejectsBadCode(t *testing.T) {
 		if err == nil {
 			t.Errorf("raw insert of code %q succeeded; CHECK should reject it", bad)
 			_, _ = s.pool.Exec(context.Background(), `DELETE FROM outreach_locations WHERE code = $1`, bad)
+			continue
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+			t.Errorf("raw insert of code %q: want SQLSTATE 23514, got %v", bad, err)
 		}
 	}
 }

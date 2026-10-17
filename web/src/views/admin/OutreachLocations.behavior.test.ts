@@ -135,4 +135,21 @@ describe('OutreachLocations', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Deactivate' }));
     await waitFor(() => expect(updateOutreachLocation).toHaveBeenCalledWith(1, { active: false }));
   });
+  it('styles a server error as an error and a success as a notice, in one always-mounted live region', async () => {
+    const { ApiError } = await import('../../lib/api');
+    deleteOutreachLocation.mockRejectedValueOnce(new ApiError(409, 'Location is in use', null));
+    updateOutreachLocation.mockResolvedValue(loc({ active: false }));
+    await mountWith([loc()]);
+    await screen.findByText('Mission Library');
+    const region = screen.getByRole('status');
+    expect(region.classList.contains('text-error')).toBe(false);
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Yes' }));
+    await waitFor(() => expect(region.textContent).toBe('Location is in use'));
+    expect(region.classList.contains('text-error')).toBe(true);
+    await fireEvent.click(screen.getByRole('button', { name: 'Deactivate' }));
+    await waitFor(() => expect(region.textContent).toContain('deactivated'));
+    expect(region.classList.contains('text-error')).toBe(false);
+    expect(screen.getByRole('status')).toBe(region);
+  });
 });
