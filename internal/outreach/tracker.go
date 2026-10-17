@@ -342,7 +342,7 @@ func (t *Tracker) mastoMentions(ctx context.Context) (inserted int) {
 			t.failed(ctx, ch, "store mention", err, "")
 			return inserted
 		}
-		if len(items) > 0 {
+		if len(items) > 0 && t.cursorSafe(ch, items[0].ID) {
 			if err := t.store.SetMentionCursor(ctx, ch, items[0].ID); err != nil {
 				t.failed(ctx, ch, "write cursor", err, "")
 			}
@@ -362,6 +362,9 @@ func (t *Tracker) mastoMentions(ctx context.Context) (inserted int) {
 			t.failed(ctx, ch, "store mention", err, "")
 			return inserted
 		}
+		if !t.cursorSafe(ch, items[0].ID) {
+			return inserted
+		}
 		cursor = items[0].ID
 		if err := t.store.SetMentionCursor(ctx, ch, cursor); err != nil {
 			t.failed(ctx, ch, "write cursor", err, "")
@@ -375,6 +378,18 @@ func (t *Tracker) mastoMentions(ctx context.Context) (inserted int) {
 		}
 	}
 	return inserted
+}
+
+// cursorSafe reports whether id can be saved as a mention cursor. An id with
+// a NUL byte cannot be written to a Postgres text column, and stripping it
+// would name a different notification, so it is rejected and logged and the
+// stored cursor stays as it was (#0558).
+func (t *Tracker) cursorSafe(ch, id string) bool {
+	if !strings.ContainsRune(id, 0) {
+		return true
+	}
+	t.log.Warn("outreach tracker: notification id contains NUL, cursor not saved", "channel", ch, "remote_id", strings.ReplaceAll(id, "\x00", `\x00`))
+	return false
 }
 
 // mastoMention maps one notification to a Mention. A mention of ours that

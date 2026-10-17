@@ -606,6 +606,32 @@ func TestTracker_MastodonMentionsUseMinID(t *testing.T) {
 	}
 }
 
+func TestTracker_MastodonNULCursorIDIsRejected(t *testing.T) {
+	s := NewStore(testPool(t))
+	resetCursors(t, s)
+	ctx := context.Background()
+	tag := uniq()
+	cleanMentions(t, s.pool, tag)
+	mf := newTrackerMasto(t)
+	if err := s.SetMentionCursor(ctx, "mastodon", "10"); err != nil {
+		t.Fatal(err)
+	}
+	// JSON carries the NUL as a \u0000 escape (a raw NUL byte is not valid JSON).
+	nulID := `20\u000021`
+	mf.notifs["10"] = fmt.Sprintf(`[{"id":"%s","type":"mention","created_at":"2026-10-16T10:00:00.000Z","account":{"acct":"bob@other.example.test"},"status":{"id":"s1","uri":"https://other.example.test/users/bob/statuses/n%s","url":"https://other.example.test/@bob/n","created_at":"2026-10-16T10:00:00.000Z","content":"<p>hi</p>"}}]`, nulID, tag)
+	tr, buf := newTracker(t, s, nil, mf.client(t))
+	tr.pass(ctx)
+	if c, ok, _ := s.MentionCursor(ctx, "mastodon"); !ok || c != "10" {
+		t.Errorf("cursor = %q, want unchanged 10", c)
+	}
+	if got := mentionKinds(t, s, tag); got["https://other.example.test/users/bob/statuses/n"+tag] != "mention:-" {
+		t.Errorf("mention row from the page not processed: %v", got)
+	}
+	if out := buf.String(); !strings.Contains(out, "cursor not saved") || strings.Contains(out, "write cursor") {
+		t.Errorf("log = %s", out)
+	}
+}
+
 func TestTracker_FailureLogsKeepsCursorAndOtherChannelRuns(t *testing.T) {
 	s := NewStore(testPool(t))
 	resetCursors(t, s)
