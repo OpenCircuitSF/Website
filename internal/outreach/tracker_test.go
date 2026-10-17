@@ -114,6 +114,12 @@ func TestMastoMention(t *testing.T) {
 	if m.RemoteID != base.StatusURI || m.Author != "@bob@other.example.test" || m.Text != "hi & bye" || m.URL == nil || *m.URL != base.StatusURL {
 		t.Errorf("fields = %+v", m)
 	}
+	nul := with(func(n *mastodon.Notification) {
+		n.Acct, n.StatusURI = "bo\x00b@other.example.test", "https://other.example.test/users/bob/statuses/9\x0000"
+	})
+	if m, ok := mastoMention(nul, ours, time.Time{}); !ok || m.Author != "@bob@other.example.test" || m.RemoteID != "https://other.example.test/users/bob/statuses/900" {
+		t.Errorf("NUL not stripped: ok=%v %+v", ok, m)
+	}
 	if m, _ := mastoMention(with(func(n *mastodon.Notification) { n.StatusURL = "javascript:alert(1)" }), ours, time.Time{}); m.URL != nil {
 		t.Errorf("a non-https url was kept: %q", *m.URL)
 	}

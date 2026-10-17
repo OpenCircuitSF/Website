@@ -381,6 +381,9 @@ func (t *Tracker) mastoMentions(ctx context.Context) (inserted int) {
 // replies to one of our posts is a reply; a quote is tied to the post it
 // quotes. floor, when non-zero, drops anything created before it.
 func mastoMention(n mastodon.Notification, remoteIDs map[string]int64, floor time.Time) (Mention, bool) {
+	// Postgres text columns reject NUL; remote_id and author come straight
+	// from the JSON, so strip them as bskyMention does.
+	n.StatusURI, n.Acct = stripNUL(n.StatusURI), stripNUL(n.Acct)
 	if !n.HasStatus || n.StatusURI == "" {
 		return Mention{}, false
 	}
