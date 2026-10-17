@@ -488,9 +488,18 @@ func (h *AdminOutreachHandler) flyerAllWorkshops(ctx context.Context, rows []res
 		from, to time.Time
 		links    []outreach.FlyerLinkAll
 	}
+	wanted := make(map[int64]bool, len(rows))
+	for _, r := range rows {
+		wanted[r.LocationID] = true
+	}
 	order := []string{}
 	byCampaign := map[string]*campaign{}
 	for _, l := range all {
+		// Only links at this workshop's selected locations contribute, so a
+		// campaign with none of them is never asked for (#0554).
+		if !wanted[l.LocationID] {
+			continue
+		}
 		c := byCampaign[l.CampaignSlug]
 		if c == nil {
 			from, to := outreach.ResultsWindow(l.OutreachCreatedAt, l.WorkshopStartsAt, now)

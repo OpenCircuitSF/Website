@@ -1404,8 +1404,8 @@ func actionShortName(s string) string {
 // about: a floor that reads as headroom while actually measuring nothing
 // about the coverage it claims to protect.
 //
-// 80 is the corrected floor, chosen the same way 150 was: comfortably below
-// the real parsed population (110, room for the tree to shrink without a
+// 115 is the current floor (raised from 80 by #0549), chosen the same way 150
+// was: below the real parsed population (162 at #0549, room for the tree to shrink without a
 // false alarm) while still tripping if the roots were narrowed to any one
 // package — internal/handlers alone has 40 non-test .go files, cmd/ alone
 // has 3 — which is the "a real narrowing would trip it" bar #0275

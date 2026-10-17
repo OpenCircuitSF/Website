@@ -161,10 +161,10 @@ var scanGoRoots = []string{"..", "../../cmd", "../../web"}
 // parses non-test .go files only (scanDirForCitations filters _test.go
 // before parsing, not after — see that function). Measured directly:
 // `find .. ../../cmd ../../web -name '*.go' -not -name '*_test.go' -not
-// -path '*/node_modules/*' -not -path '*/dist/*'` counts 111 files today,
+// -path '*/node_modules/*' -not -path '*/dist/*'` counts 163 files at #0549,
 // and the single largest package under these roots (internal/handlers, this
-// guard's own directory) has 40 non-test files, cmd/ has 3. 80 sits
-// comfortably below the real total while still tripping if the roots were
+// guard's own directory) has 40 non-test files, cmd/ has 3. 115 sits
+// below the real total (163 at #0549) while still tripping if the roots were
 // narrowed to any one of the three — the "a real narrowing would trip it"
 // bar #0275 criterion 3 sets.
 const citationGuardMinPlausibleFileCount = 115

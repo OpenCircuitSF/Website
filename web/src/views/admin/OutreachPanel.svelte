@@ -52,11 +52,18 @@
     return err instanceof ApiError ? err.message : fallback;
   }
 
+  // #0554: onChange can refetch while an earlier fetch is in flight, so only
+  // the newest request may write its answer.
+  let resultsSeq = 0;
   async function loadResults(): Promise<void> {
+    const seq = ++resultsSeq;
     resultsError = null;
     try {
-      results = await getWorkshopOutreachResults(workshopId);
+      const r = await getWorkshopOutreachResults(workshopId);
+      if (seq !== resultsSeq) return;
+      results = r;
     } catch {
+      if (seq !== resultsSeq) return;
       results = null;
       resultsError = 'Click counts could not be loaded.';
     }

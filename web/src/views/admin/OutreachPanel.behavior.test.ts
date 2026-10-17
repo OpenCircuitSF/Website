@@ -162,6 +162,27 @@ describe('OutreachPanel', () => {
     await waitFor(() => expect(getWorkshopOutreachResults).toHaveBeenCalledTimes(2));
   });
 
+  it('discards a stale results response that arrives after a newer one (#0554)', async () => {
+    const draft = { ...manualPost(), status: 'draft' as const, prepared: false, short_url: null, short_link_key: null };
+    getWorkshopOutreach.mockResolvedValue(view({ posts: [draft] }));
+    const stale = resultsFor();
+    stale.posts = [{ ...stale.posts[0], clicks: 5 }];
+    let releaseStale: (r: OutreachResults) => void = () => {};
+    getWorkshopOutreachResults
+      .mockImplementationOnce(() => new Promise<OutreachResults>((res) => { releaseStale = res; }))
+      .mockResolvedValue(resultsFor());
+    prepareOutreachPost.mockResolvedValue({ ...draft, status: 'manual', prepared: true, short_url: 'https://go.example/k1', short_link_key: 'k1' });
+    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
+    await waitFor(() => expect(getWorkshopOutreachResults).toHaveBeenCalledTimes(1));
+    await fireEvent.click(await screen.findByText('Draft'));
+    await fireEvent.click(await screen.findByText('Prepare link'));
+    expect(await screen.findByText('12 clicks')).toBeTruthy();
+    releaseStale(stale);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText('5 clicks')).toBeNull();
+    expect(screen.getByText('12 clicks')).toBeTruthy();
+  });
+
   it('still renders the grid, with a status line, when the results call fails', async () => {
     getWorkshopOutreach.mockResolvedValue(view({ posts: [manualPost()] }));
     getWorkshopOutreachResults.mockRejectedValue(new Error('network'));

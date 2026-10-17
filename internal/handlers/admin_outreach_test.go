@@ -51,6 +51,7 @@ type fakeShortLinker struct {
 	// one slug fail.
 	qrBody          []byte
 	qrErr           error
+	qrBlock         bool // LinkQRSVG waits for its context to end (#0554)
 	qrKeys          []string
 	statsByCampaign map[string]*shortlinks.CampaignRollup
 	statsErrFor     map[string]error
@@ -80,10 +81,17 @@ func (f *fakeShortLinker) CampaignStats(_ context.Context, slug string, from, to
 	return f.statsRollup, nil
 }
 
-func (f *fakeShortLinker) LinkQRSVG(_ context.Context, key string) ([]byte, error) {
+func (f *fakeShortLinker) LinkQRSVG(ctx context.Context, key string) ([]byte, error) {
+	f.mu.Lock()
+	f.qrKeys = append(f.qrKeys, key)
+	block := f.qrBlock
+	f.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.qrKeys = append(f.qrKeys, key)
 	if f.qrErr != nil {
 		return nil, f.qrErr
 	}

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
@@ -522,6 +523,79 @@ func TestAdminOutreachFlyers_ResultsFlyerLocations(t *testing.T) {
 	for _, fl := range r.FlyerLocations {
 		if fl.Clicks == nil || fl.ClicksAllWorkshops != nil {
 			t.Errorf("after failure %+v", fl)
+		}
+	}
+}
+
+func TestAdminOutreachFlyers_GenerateDeadlineReportsProgressAndResumes(t *testing.T) {
+	old := flyerGenerateTimeout
+	flyerGenerateTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { flyerGenerateTimeout = old })
+
+	e := newFlyerEnv(t, true, 2)
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	v := e.flyerFor(t, w, e.locs[0], e.locs[1])
+	e.links.mu.Lock()
+	e.links.qrBlock = true
+	e.links.mu.Unlock()
+
+	code, got, b := e.generate(t, v.Flyer.ID)
+	if code != http.StatusOK || got.Remaining == nil || *got.Remaining != 2 || got.Message != msgFlyerGenerateTimeout {
+		t.Fatalf("deadline generate = %d remaining=%v msg=%q (%s)", code, got.Remaining, got.Message, b)
+	}
+	if got.Selection[0].Link == nil || got.Selection[0].Link.HasQR {
+		t.Errorf("first link should be saved without a QR: %+v", got.Selection[0])
+	}
+	if got.Selection[1].Link != nil {
+		t.Errorf("second location should not have been reached: %+v", got.Selection[1])
+	}
+
+	e.links.mu.Lock()
+	e.links.qrBlock = false
+	e.links.mu.Unlock()
+	code, got, b = e.generate(t, v.Flyer.ID)
+	if code != http.StatusOK || got.Remaining == nil || *got.Remaining != 0 || got.Message != "" {
+		t.Fatalf("resume = %d remaining=%v msg=%q (%s)", code, got.Remaining, got.Message, b)
+	}
+	for _, s := range got.Selection {
+		if s.Link == nil || !s.Link.HasQR {
+			t.Errorf("after resume %+v is incomplete", s)
+		}
+	}
+	if len(e.links.links) != 2 {
+		t.Errorf("resume re-created links: %d CreateLink calls, want 2", len(e.links.links))
+	}
+}
+
+func TestAdminOutreachFlyers_AllWorkshopsIgnoresCampaignsAtOtherLocations(t *testing.T) {
+	e := newFlyerEnv(t, true, 2)
+	w1 := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	w2 := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	v1 := e.flyerFor(t, w1, e.locs[0])
+	v2 := e.flyerFor(t, w2, e.locs[1])
+	_, g1, _ := e.generate(t, v1.Flyer.ID)
+	e.generate(t, v2.Flyer.ID)
+	e.links.statsByCampaign = map[string]*shortlinks.CampaignRollup{
+		w1.Slug: {ClickCount: 3, ByLink: []shortlinks.LinkBucket{{Key: g1.Selection[0].Link.Key, Count: 3}}},
+	}
+	// w2's campaign sits only at a location w1 never selected, so it must not
+	// be queried, and its failure must not blank w1's column.
+	e.links.statsErrFor = map[string]error{w2.Slug: fmt.Errorf("boom: %w", shortlinks.ErrRateLimited)}
+	type allResults struct {
+		FlyerAllStatus string `json:"flyer_all_status"`
+		FlyerLocations []struct {
+			ClicksAllWorkshops *int64 `json:"clicks_all_workshops"`
+		} `json:"flyer_locations"`
+	}
+	r := decodeOutreach[allResults](t, mustBody(t, e, http.MethodGet, fmt.Sprintf("/admin/workshops/%d/outreach/results", w1.ID), ""))
+	if r.FlyerAllStatus != "ok" || len(r.FlyerLocations) != 1 || r.FlyerLocations[0].ClicksAllWorkshops == nil || *r.FlyerLocations[0].ClicksAllWorkshops != 3 {
+		t.Fatalf("results = %+v", r)
+	}
+	e.links.mu.Lock()
+	defer e.links.mu.Unlock()
+	for _, c := range e.links.statsCalls {
+		if c.slug == w2.Slug {
+			t.Errorf("unrelated campaign %s was queried", w2.Slug)
 		}
 	}
 }
