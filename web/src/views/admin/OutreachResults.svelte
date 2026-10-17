@@ -10,10 +10,19 @@
   import { getWorkshopOutreachResults, listOutreachResults, ApiError } from '../../lib/api';
   import { adminOutreachResultsHash, adminOutreachHash } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
-  import { foldedChannelsNote, formatClicks, resultsStatusMessage, dayLabel } from '../../lib/outreachResults';
+  import {
+    foldedChannelsNote,
+    formatClicks,
+    formatReactionTotal,
+    mastodonCountsNote,
+    reactionsLabel,
+    resultsStatusMessage,
+    dayLabel,
+  } from '../../lib/outreachResults';
   import type { OutreachResults as Results, OutreachResultsSummary } from '../../lib/types';
   import Panel from '../../lib/Panel.svelte';
   import OutreachClicksChart from './OutreachClicksChart.svelte';
+  import OutreachMentions from './OutreachMentions.svelte';
 
   let { workshopId = null }: { workshopId?: number | null } = $props();
 
@@ -29,6 +38,9 @@
     results && results.flyer_all_status && results.flyer_all_status !== 'ok' ? 'Scans across all workshops are unavailable right now.' : null,
   );
   const channelLabel = $derived(new Map((results?.channels ?? []).map((c) => [c.name, c.label])));
+  const mastodonNote = $derived(results ? mastodonCountsNote(results) : null);
+  // The summary response carries no channel list; labels are fixed server-side.
+  const summaryLabels: Record<string, string> = { bluesky: 'Bluesky', mastodon: 'Mastodon', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube' };
 
   async function load(): Promise<void> {
     loading = true;
@@ -74,6 +86,7 @@
               <th>Date</th>
               <th>Posts</th>
               <th>Clicks</th>
+              <th>Reactions</th>
             </tr>
           </thead>
           <tbody>
@@ -83,11 +96,15 @@
                 <td>{row.starts_at ? formatDateTime(row.starts_at) : 'Date TBA'}</td>
                 <td>{row.posts_posted} of {row.posts_total} posted</td>
                 <td>{formatClicks(row.clicks)}</td>
+                <td>{formatReactionTotal(row.reactions)}</td>
               </tr>
             {/each}
           </tbody>
         </table>
       </div>
+    {/if}
+    {#if summary}
+      <OutreachMentions mentions={summary.mentions} channelLabel={(n) => summaryLabels[n] ?? n} showWorkshop />
     {/if}
   {:else if results}
     {#if results.totals}
@@ -97,6 +114,12 @@
         <span class="text-muted">
           ({results.totals.excluded_bot_clicks} bot clicks excluded{results.fetched_at ? `, as of ${formatDateTime(results.fetched_at)}` : ''})
         </span>
+      </p>
+    {/if}
+    {#if results.reactions}
+      <p>
+        <strong>Reactions:</strong>
+        {reactionsLabel(results.reactions)}
       </p>
     {/if}
     <OutreachClicksChart {results} />
@@ -119,6 +142,7 @@
               <th>Posted</th>
               <th>Short link</th>
               <th>Clicks</th>
+              <th>Reactions</th>
             </tr>
           </thead>
           <tbody>
@@ -130,11 +154,15 @@
                 <td>{post.posted_at ? formatDateTime(post.posted_at) : '—'}</td>
                 <td>{#if post.short_url}<span class="mono">{post.short_url}</span>{:else}—{/if}</td>
                 <td>{formatClicks(post.clicks)}</td>
+                <td>{post.engagement ? reactionsLabel(post.engagement) : '—'}</td>
               </tr>
             {/each}
           </tbody>
         </table>
       </div>
+    {/if}
+    {#if mastodonNote}
+      <p class="text-muted">{mastodonNote}</p>
     {/if}
     {#if results.flyer_locations.length > 0}
       <h3 class="flyers-title">Flyers by location</h3>
@@ -164,6 +192,7 @@
         </table>
       </div>
     {/if}
+    <OutreachMentions mentions={results.mentions} channelLabel={(n) => channelLabel.get(n) ?? n} />
     <p><a href={adminOutreachResultsHash()}>All workshops</a> · <a href={adminOutreachHash('workshops')}>Back to Outreach</a></p>
   {/if}
 </Panel>

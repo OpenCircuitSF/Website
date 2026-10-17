@@ -873,6 +873,34 @@ export interface OutreachResultsChannel {
   clicks: number | null;
   has_daily_series: boolean;
   prepared: number;
+  /** Sum of the channel's posts' latest snapshots; null when none has one (#0547). */
+  reactions: OutreachReactions | null;
+}
+
+/** Engagement counts (#0547). */
+export interface OutreachReactions {
+  likes: number;
+  reposts: number;
+  replies: number;
+  quotes: number;
+}
+
+/**
+ * One mention, reply or quote of our accounts (#0547). `author`, `text` and
+ * `url` are third-party content: render as text, and link only an https url.
+ */
+export interface OutreachMention {
+  id: number;
+  channel: string;
+  kind: 'mention' | 'reply' | 'quote';
+  author: string;
+  text: string;
+  url: string | null;
+  created_at: string;
+  post_id: number | null;
+  wave: string | null;
+  workshop_id: number | null;
+  workshop_title: string | null;
 }
 
 export interface OutreachResultsPost {
@@ -886,6 +914,8 @@ export interface OutreachResultsPost {
   remote_url: string | null;
   /** Null unless the status is 'ok' and the post has a short link. */
   clicks: number | null;
+  /** The latest engagement snapshot; null until the first capture (#0547). */
+  engagement: (OutreachReactions & { captured_at: string }) | null;
 }
 
 export interface OutreachResultsDay {
@@ -919,6 +949,10 @@ export interface OutreachResults {
   flyer_locations: OutreachResultsFlyerLocation[];
   /** Whether `clicks_all_workshops` is real, else why every one is null. */
   flyer_all_status: OutreachResultsStatus | '';
+  /** Workshop total of every post's latest snapshot; null when none (#0547). */
+  reactions: OutreachReactions | null;
+  /** Mentions tied to this workshop's posts, newest first (#0547). */
+  mentions: OutreachMention[];
 }
 
 /** One row of the "Flyers by location" table (#0549). A null count means ShortLinks could not say. */
@@ -942,12 +976,15 @@ export interface OutreachResultsSummaryRow {
   posts_posted: number;
   clicks: number | null;
   status: OutreachResultsStatus;
+  reactions: OutreachReactions | null;
 }
 
 /** GET /admin/outreach-results. */
 export interface OutreachResultsSummary {
   status: OutreachResultsStatus;
   rows: OutreachResultsSummaryRow[];
+  /** Newest mentions across every workshop, untied ones included (#0547). */
+  mentions: OutreachMention[];
 }
 
 // ── Outreach flyers (#0549) ──────────────────────────────────────────────────

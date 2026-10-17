@@ -29,6 +29,9 @@ const (
 	MaxThumbBytes = 1_000_000
 	// DefaultPDSURL is where an unset BLUESKY_PDS_URL points.
 	DefaultPDSURL = "https://bsky.social"
+	// DefaultAppViewURL is the public, unauthenticated AppView that serves
+	// engagement counts (#0547).
+	DefaultAppViewURL = "https://public.api.bsky.app"
 
 	maxResponseBytes = 4 << 20
 	postCollection   = "app.bsky.feed.post"
@@ -37,6 +40,7 @@ const (
 // Client talks to one PDS as one account.
 type Client struct {
 	base        *url.URL
+	appView     *url.URL
 	handle      string
 	appPassword string
 	http        *http.Client
@@ -62,7 +66,8 @@ func New(pdsURL, handle, appPassword string) (*Client, error) {
 		return nil, errors.New("bluesky: BLUESKY_PDS_URL must be an absolute http(s) URL")
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
-	return &Client{base: u, handle: handle, appPassword: appPassword, http: &http.Client{Timeout: DefaultTimeout}}, nil
+	av, _ := url.Parse(DefaultAppViewURL)
+	return &Client{base: u, appView: av, handle: handle, appPassword: appPassword, http: &http.Client{Timeout: DefaultTimeout}}, nil
 }
 
 // Enabled reports whether the client is usable; safe on a nil receiver.
@@ -198,7 +203,13 @@ func (c *Client) uploadBlob(ctx context.Context, data []byte, mime string) (json
 // roundTrip performs one HTTP call. A network failure is returned as a plain
 // (transient) error; any HTTP response comes back as status plus body.
 func (c *Client) roundTrip(ctx context.Context, method, path string, q url.Values, contentType, bearer string, payload []byte) (int, []byte, error) {
-	u := *c.base
+	return c.roundTripTo(ctx, c.base, nil, method, path, q, contentType, bearer, payload)
+}
+
+// roundTripTo is roundTrip against an explicit base URL (the PDS or the
+// AppView) with optional extra request headers.
+func (c *Client) roundTripTo(ctx context.Context, base *url.URL, extra http.Header, method, path string, q url.Values, contentType, bearer string, payload []byte) (int, []byte, error) {
+	u := *base
 	u.Path += path
 	u.RawQuery = q.Encode()
 	var rd io.Reader
@@ -210,6 +221,11 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, q url.Value
 		return 0, nil, fmt.Errorf("bluesky: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	for k, vs := range extra {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}

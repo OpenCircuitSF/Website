@@ -35,6 +35,9 @@ const (
 var (
 	// ErrAuth is a credential or scope failure (401/403). Permanent.
 	ErrAuth = errors.New("mastodon: authentication failed")
+	// ErrNotFound is a 404: the status is gone, or the token cannot see it.
+	// Permanent (#0547).
+	ErrNotFound = errors.New("mastodon: not found")
 	// ErrInvalid is a rejected status (422 and other 4xx). Permanent.
 	ErrInvalid = errors.New("mastodon: invalid request")
 	// ErrRateLimited is a 429. Transient.
@@ -186,6 +189,8 @@ func (c *Client) apiError(status int, body []byte) *APIError {
 		e.kind = ErrServer
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		e.kind, e.Permanent = ErrAuth, true
+	case status == http.StatusNotFound:
+		e.kind, e.Permanent = ErrNotFound, true
 	default:
 		e.kind, e.Permanent = ErrInvalid, true
 	}

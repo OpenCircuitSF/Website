@@ -4,7 +4,8 @@
 //
 // Days are UTC throughout, matching ShortLinks' own day buckets. The chart
 // geometry and tick helpers follow the charts module in the ShortLinks repo.
-import type { OutreachResults, OutreachResultsPost, OutreachResultsStatus } from './types';
+import { isSafeLinkHref } from './linkSafety';
+import type { OutreachMention, OutreachReactions, OutreachResults, OutreachResultsPost, OutreachResultsStatus } from './types';
 
 export interface ChartGeo {
   width: number;
@@ -234,4 +235,68 @@ export function foldedChannelsNote(results: OutreachResults): string | null {
   const names = other.channels.map((c) => labels.get(c) ?? c);
   const verb = names.length === 1 ? 'is' : 'are';
   return `${joinNames(names)} ${verb} included in Other links: ShortLinks charts the 6 most-clicked links separately.`;
+}
+
+// ── Engagement and mentions (#0547) ──────────────────────────────────────────
+
+/** The sum of the four counts. */
+export function reactionTotal(r: OutreachReactions): number {
+  return r.likes + r.reposts + r.replies + r.quotes;
+}
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** "" for null, "No reactions yet" when all zero, else the non-zero parts: "3 likes, 1 repost, 2 replies, 1 quote". */
+export function reactionsLabel(r: OutreachReactions | null): string {
+  if (!r) return '';
+  if (reactionTotal(r) === 0) return 'No reactions yet';
+  const parts: string[] = [];
+  if (r.likes > 0) parts.push(plural(r.likes, 'like', 'likes'));
+  if (r.reposts > 0) parts.push(plural(r.reposts, 'repost', 'reposts'));
+  if (r.replies > 0) parts.push(plural(r.replies, 'reply', 'replies'));
+  if (r.quotes > 0) parts.push(plural(r.quotes, 'quote', 'quotes'));
+  return parts.join(', ');
+}
+
+/** "—" for unknown, else "1 reaction" / "N reactions". */
+export function formatReactionTotal(r: OutreachReactions | null): string {
+  if (!r) return '—';
+  const n = reactionTotal(r);
+  return n === 1 ? '1 reaction' : `${n} reactions`;
+}
+
+/**
+ * What a panel cell shows for a post's engagement. Unlike the clicks label it
+ * does not depend on the results status: engagement comes from our own
+ * database, so it is real even when ShortLinks is down or unconfigured.
+ */
+export function cellReactionsLabel(post: { id: number }, results: OutreachResults | null): string {
+  if (!results) return '';
+  const match = results.posts.find((p) => p.id === post.id);
+  if (!match || !match.engagement) return '';
+  return reactionsLabel(match.engagement);
+}
+
+/** "Mention" / "Reply" / "Quote". */
+export function mentionKindLabel(kind: OutreachMention['kind']): string {
+  return kind === 'reply' ? 'Reply' : kind === 'quote' ? 'Quote' : 'Mention';
+}
+
+/** The caveat to show when any Mastodon post has engagement, else null. */
+export function mastodonCountsNote(results: { posts: OutreachResultsPost[] }): string | null {
+  const any = results.posts.some((p) => p.channel === 'mastodon' && p.engagement !== null);
+  return any ? 'Mastodon counts are as seen by our instance, so they can lag what other servers show.' : null;
+}
+
+/**
+ * A mention's link, only when it is a safe absolute https URL. The server
+ * checks this when it stores the URL; this repeats the check because the text
+ * and link are third-party content.
+ */
+export function mentionHref(m: { url: string | null }): string | null {
+  if (!m.url) return null;
+  if (!/^https:\/\//i.test(m.url.trim())) return null;
+  return isSafeLinkHref(m.url) ? m.url.trim() : null;
 }

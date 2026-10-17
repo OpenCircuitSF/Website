@@ -128,11 +128,13 @@ describe('OutreachPanel', () => {
       totals: { clicks: 12, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 0 },
       channels: [],
       posts: [
-        { id: 3, channel: 'instagram', wave: 'announce', status: 'manual', short_link_key: 'k1', short_url: 'https://go.example/k1', posted_at: null, remote_url: null, clicks: 12 },
+        { id: 3, channel: 'instagram', wave: 'announce', status: 'manual', short_link_key: 'k1', short_url: 'https://go.example/k1', posted_at: null, remote_url: null, clicks: 12, engagement: null },
       ],
       series: [],
       flyer_locations: [],
       flyer_all_status: 'ok',
+    reactions: null,
+    mentions: [],
       ...over,
     };
   }
@@ -153,6 +155,16 @@ describe('OutreachPanel', () => {
     render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
     expect(await screen.findByText('Ready to post')).toBeTruthy();
     await waitFor(() => expect(screen.getByText('Click counts could not be loaded.')).toBeTruthy());
+    expect(screen.queryByText(/clicks?$/)).toBeNull();
+  });
+
+  it('shows a posted cell\'s reactions even when ShortLinks is not configured (#0547)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ posts: [{ ...manualPost(), id: 4, channel: 'bluesky', status: 'posted' }] }));
+    const r = resultsFor({ status: 'not_configured', totals: null });
+    r.posts = [{ ...r.posts[0], id: 4, channel: 'bluesky', clicks: null, engagement: { likes: 3, reposts: 0, replies: 0, quotes: 0, captured_at: '2026-10-16T12:00:00Z' } }];
+    getWorkshopOutreachResults.mockResolvedValue(r);
+    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
+    expect(await screen.findByText('3 likes')).toBeTruthy();
     expect(screen.queryByText(/clicks?$/)).toBeNull();
   });
 

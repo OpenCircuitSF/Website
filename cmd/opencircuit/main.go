@@ -333,7 +333,16 @@ func servePostgres(cfg *config.Config) error {
 	// Built unconditionally, like the outbox worker: SEND_WORKER_ENABLED is
 	// about SES, not about posting to social platforms.
 	outreachStore := outreach.NewStore(pool)
+	// The tracker (#0547) polls engagement and mentions for whichever of the
+	// two channels is configured; the publisher starts and stops it.
+	outreachTracker := outreach.NewTracker(outreach.TrackerDeps{
+		Store:    outreachStore,
+		Bluesky:  bskyClient,
+		Mastodon: mastoClient,
+		Log:      slog.Default(),
+	})
 	outreachPublisher := outreach.NewPublisher(outreach.PublisherDeps{
+		Tracker:  outreachTracker,
 		Store:    outreachStore,
 		Outbox:   outbox.NewStore(pool),
 		Settings: store,
@@ -2194,7 +2203,8 @@ var workerCloseTimeout = 10 * time.Second
 var outboxWorkerCloseTimeout = 10 * time.Second
 
 // outreachPublisherCloseTimeout bounds outreachPublisher.Stop ALONE (#0545),
-// the same independent-budget shape as the two worker timeouts above.
+// the same independent-budget shape as the two worker timeouts above. That
+// call also stops the publisher's tracker (#0547), within this same budget.
 var outreachPublisherCloseTimeout = 10 * time.Second
 
 // warnPartialPostingCredentials logs one warning per posting channel that has

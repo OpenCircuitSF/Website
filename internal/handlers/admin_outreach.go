@@ -41,6 +41,11 @@ type outreachStore interface {
 	QueueNow(ctx context.Context, id int64) (post outreach.Post, prevStatus string, err error)
 	Schedule(ctx context.Context, id int64, at time.Time) (outreach.Post, error)
 	Unschedule(ctx context.Context, id int64) (outreach.Post, error)
+	// Engagement and mentions (#0547), read from our own database.
+	LatestEngagement(ctx context.Context, postIDs []int64) (map[int64]outreach.Engagement, error)
+	ReactionTotalsByOutreach(ctx context.Context) (map[int64]outreach.Counts, error)
+	ListMentionsForOutreach(ctx context.Context, outreachID int64, limit int) ([]outreach.Mention, error)
+	ListRecentMentions(ctx context.Context, limit int) ([]outreach.Mention, error)
 }
 
 // outreachPosting reports which automatic channels have working credentials

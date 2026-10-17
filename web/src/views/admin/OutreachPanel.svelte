@@ -18,7 +18,7 @@
   import { getWorkshopOutreach, getWorkshopOutreachResults, startOutreach, createOutreachPost, ApiError } from '../../lib/api';
   import { adminOutreachResultsHash } from '../../lib/adminRouter';
   import { buildGrid, cellLabel, cellIsStale, shouldPoll, unavailableMessage } from '../../lib/outreach';
-  import { cellClicksLabel, resultsStatusMessage } from '../../lib/outreachResults';
+  import { cellClicksLabel, cellReactionsLabel, resultsStatusMessage } from '../../lib/outreachResults';
   import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import OutreachComposer from './OutreachComposer.svelte';
@@ -193,6 +193,9 @@
                       {cellLabel(cell.post)}{cellIsStale(cell.post) ? ' (stale)' : ''}
                       {#if cell.post && cellClicksLabel(cell.post, results)}
                         <span class="clicks">{cellClicksLabel(cell.post, results)}</span>
+                      {/if}
+                      {#if cell.post && cellReactionsLabel(cell.post, results)}
+                        <span class="clicks">{cellReactionsLabel(cell.post, results)}</span>
                       {/if}
                     </button>
                   </td>

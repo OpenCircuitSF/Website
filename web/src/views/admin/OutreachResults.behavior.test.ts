@@ -31,8 +31,8 @@ afterEach(() => {
 });
 
 const channels = [
-  { name: 'bluesky', label: 'Bluesky', clicks: 12, has_daily_series: true, prepared: 1 },
-  { name: 'instagram', label: 'Instagram', clicks: 0, has_daily_series: true, prepared: 1 },
+  { name: 'bluesky', label: 'Bluesky', clicks: 12, has_daily_series: true, prepared: 1, reactions: null },
+  { name: 'instagram', label: 'Instagram', clicks: 0, has_daily_series: true, prepared: 1, reactions: null },
 ];
 
 function results(over: Partial<OutreachResults> = {}): OutreachResults {
@@ -46,8 +46,8 @@ function results(over: Partial<OutreachResults> = {}): OutreachResults {
     totals: { clicks: 12, excluded_bot_clicks: 1, unmatched_clicks: 0, flyer_clicks: 0 },
     channels,
     posts: [
-      { id: 1, channel: 'bluesky', wave: 'announce', status: 'posted', short_link_key: 'k1', short_url: 'https://go.example/k1', posted_at: '2026-10-02T15:00:00Z', remote_url: null, clicks: 12 },
-      { id: 2, channel: 'instagram', wave: 'reminder', status: 'draft', short_link_key: null, short_url: null, posted_at: null, remote_url: null, clicks: null },
+      { id: 1, channel: 'bluesky', wave: 'announce', status: 'posted', short_link_key: 'k1', short_url: 'https://go.example/k1', posted_at: '2026-10-02T15:00:00Z', remote_url: null, clicks: 12, engagement: null },
+      { id: 2, channel: 'instagram', wave: 'reminder', status: 'draft', short_link_key: null, short_url: null, posted_at: null, remote_url: null, clicks: null, engagement: null },
     ],
     series: [
       { id: 'bluesky', label: 'Bluesky', channels: ['bluesky'], is_other: false, days: [{ date: '2026-10-02', count: 12 }] },
@@ -55,6 +55,8 @@ function results(over: Partial<OutreachResults> = {}): OutreachResults {
     ],
     flyer_locations: [],
     flyer_all_status: 'ok',
+    reactions: null,
+    mentions: [],
     ...over,
   };
 }
@@ -146,9 +148,10 @@ describe('OutreachResults, all workshops', () => {
     listOutreachResults.mockResolvedValue({
       status: 'ok',
       rows: [
-        { workshop_id: 5, workshop_slug: 'a', workshop_title: 'Soldering 101', starts_at: null, posts_total: 6, posts_posted: 4, clicks: 31, status: 'ok' },
-        { workshop_id: 6, workshop_slug: 'b', workshop_title: 'Arduino Night', starts_at: null, posts_total: 3, posts_posted: 0, clicks: 0, status: 'ok' },
+        { workshop_id: 5, workshop_slug: 'a', workshop_title: 'Soldering 101', starts_at: null, posts_total: 6, posts_posted: 4, clicks: 31, status: 'ok', reactions: { likes: 3, reposts: 1, replies: 2, quotes: 1 } },
+        { workshop_id: 6, workshop_slug: 'b', workshop_title: 'Arduino Night', starts_at: null, posts_total: 3, posts_posted: 0, clicks: 0, status: 'ok', reactions: null },
       ],
+      mentions: [],
     });
     const { container } = render(OutreachResultsView, { workshopId: null });
     await waitFor(() => expect(screen.getByText('Soldering 101')).toBeTruthy());
@@ -161,11 +164,98 @@ describe('OutreachResults, all workshops', () => {
   it('keeps the rows and shows the message when ShortLinks is down', async () => {
     listOutreachResults.mockResolvedValue({
       status: 'unreachable',
-      rows: [{ workshop_id: 5, workshop_slug: 'a', workshop_title: 'Soldering 101', starts_at: null, posts_total: 6, posts_posted: 4, clicks: null, status: 'unreachable' }],
+      rows: [{ workshop_id: 5, workshop_slug: 'a', workshop_title: 'Soldering 101', starts_at: null, posts_total: 6, posts_posted: 4, clicks: null, status: 'unreachable', reactions: { likes: 1, reposts: 0, replies: 0, quotes: 0 } }],
+      mentions: [],
     });
     render(OutreachResultsView, { workshopId: null });
     await waitFor(() => expect(screen.getByText(/ShortLinks could not be reached/)).toBeTruthy());
     expect(screen.getByText('Soldering 101')).toBeTruthy();
     expect(screen.getByText('—')).toBeTruthy();
+  });
+});
+
+describe('OutreachResults, engagement and mentions (#0547)', () => {
+  const eng = (likes: number) => ({ likes, reposts: 0, replies: 0, quotes: 0, captured_at: '2026-10-16T12:00:00Z' });
+  const mention = (over: Record<string, unknown> = {}) => ({
+    id: 1, channel: 'bluesky', kind: 'reply' as const, author: '@alice.example.test', text: 'See you there', url: 'https://bsky.app/profile/alice.example.test/post/1',
+    created_at: '2026-10-16T10:00:00Z', post_id: 1, wave: 'announce', workshop_id: 5, workshop_title: 'Soldering 101', ...over,
+  });
+
+  it('shows the reactions line, a Reactions column and the mentions feed', async () => {
+    const base = results();
+    getWorkshopOutreachResults.mockResolvedValue(
+      results({
+        reactions: { likes: 3, reposts: 1, replies: 0, quotes: 0 },
+        posts: [{ ...base.posts[0], engagement: eng(3) }, base.posts[1]],
+        mentions: [mention()],
+      }),
+    );
+    const { container } = render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(screen.getByText('Mentions and replies')).toBeTruthy());
+    expect(container.textContent).toContain('3 likes, 1 repost');
+    const row = screen.getByText('https://go.example/k1').closest('tr')!;
+    expect(row.textContent).toContain('3 likes');
+    expect(screen.getByText('See you there')).toBeTruthy();
+    const open = screen.getByText('Open') as HTMLAnchorElement;
+    expect(open.getAttribute('href')).toBe('https://bsky.app/profile/alice.example.test/post/1');
+    expect(open.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(open.getAttribute('target')).toBe('_blank');
+  });
+
+  it('shows reactions even when ShortLinks is unreachable', async () => {
+    const base = results();
+    getWorkshopOutreachResults.mockResolvedValue(
+      results({ status: 'unreachable', totals: null, series: [], posts: [{ ...base.posts[0], clicks: null, engagement: eng(2) }, base.posts[1]] }),
+    );
+    render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(screen.getByText(/ShortLinks could not be reached/)).toBeTruthy());
+    expect(screen.getByText('https://go.example/k1').closest('tr')!.textContent).toContain('2 likes');
+  });
+
+  it('shows the Mastodon note only when a Mastodon post has engagement', async () => {
+    const base = results();
+    const masto = { ...base.posts[0], id: 9, channel: 'mastodon', engagement: eng(1) };
+    getWorkshopOutreachResults.mockResolvedValue(results({ posts: [base.posts[0], masto] }));
+    const { unmount } = render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(screen.getByText(/Mastodon counts are as seen by our instance/)).toBeTruthy());
+    unmount();
+    getWorkshopOutreachResults.mockResolvedValue(results({ posts: [base.posts[0], { ...masto, engagement: null }] }));
+    render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(screen.getByText('Mentions and replies')).toBeTruthy());
+    expect(screen.queryByText(/as seen by our instance/)).toBeNull();
+  });
+
+  it('renders third-party text as text and gives a javascript: url no link', async () => {
+    getWorkshopOutreachResults.mockResolvedValue(
+      results({ mentions: [mention({ text: '<img src=x onerror=alert(1)> hi', author: '@<b>evil</b>', url: 'javascript:alert(1)' })] }),
+    );
+    const { container } = render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(screen.getByText('Mentions and replies')).toBeTruthy());
+    expect(container.querySelector('.mentions img')).toBeNull();
+    expect(container.querySelector('.mentions b')).toBeNull();
+    expect(container.querySelector('.mentions')!.textContent).toContain('<img src=x onerror=alert(1)> hi');
+    expect(screen.queryByText('Open')).toBeNull();
+    expect(container.querySelector('.mentions a')).toBeNull();
+  });
+
+  it('has an empty state for no mentions', async () => {
+    getWorkshopOutreachResults.mockResolvedValue(results());
+    render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(screen.getByText('No mentions or replies yet.')).toBeTruthy());
+  });
+
+  it('all-workshops view: a Reactions column and a feed linking each tied item to its workshop', async () => {
+    listOutreachResults.mockResolvedValue({
+      status: 'ok',
+      rows: [{ workshop_id: 5, workshop_slug: 'a', workshop_title: 'Soldering 101', starts_at: null, posts_total: 6, posts_posted: 4, clicks: 31, status: 'ok', reactions: { likes: 2, reposts: 0, replies: 0, quotes: 1 } }],
+      mentions: [mention({ id: 7, text: 'tied one' }), mention({ id: 8, text: 'untied one', post_id: null, wave: null, workshop_id: null, workshop_title: null, url: null })],
+    });
+    const { container } = render(OutreachResultsView, { workshopId: null });
+    await waitFor(() => expect(screen.getByText('tied one')).toBeTruthy());
+    expect(screen.getByText('3 reactions')).toBeTruthy();
+    const links = [...container.querySelectorAll('.mentions a')].map((a) => a.getAttribute('href'));
+    expect(links).toContain('#/outreach?view=results&workshop=5');
+    const untied = screen.getByText('untied one').closest('li')!;
+    expect(untied.querySelector('a')).toBeNull();
   });
 });

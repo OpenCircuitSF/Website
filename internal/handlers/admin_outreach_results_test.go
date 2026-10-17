@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -299,5 +300,149 @@ func TestAdminOutreachResults_SummaryOK(t *testing.T) {
 	}
 	if !found {
 		t.Error("workshop row missing")
+	}
+}
+
+// testEngagement decodes the #0547 additions to the results responses.
+type testEngagement struct {
+	Reactions *struct{ Likes, Reposts, Replies, Quotes int } `json:"reactions"`
+	Channels  []struct {
+		Name      string                                         `json:"name"`
+		Reactions *struct{ Likes, Reposts, Replies, Quotes int } `json:"reactions"`
+	} `json:"channels"`
+	Posts []struct {
+		ID         int64 `json:"id"`
+		Engagement *struct {
+			Likes, Reposts, Replies, Quotes int
+			CapturedAt                      string `json:"captured_at"`
+		} `json:"engagement"`
+	} `json:"posts"`
+	Mentions []struct {
+		ID       int64   `json:"id"`
+		Kind     string  `json:"kind"`
+		Author   string  `json:"author"`
+		Text     string  `json:"text"`
+		URL      *string `json:"url"`
+		PostID   *int64  `json:"post_id"`
+		Wave     *string `json:"wave"`
+		Workshop *int64  `json:"workshop_id"`
+	} `json:"mentions"`
+}
+
+type testEngagementSummary struct {
+	Rows []struct {
+		WorkshopID int64                                          `json:"workshop_id"`
+		Reactions  *struct{ Likes, Reposts, Replies, Quotes int } `json:"reactions"`
+	} `json:"rows"`
+	Mentions []struct {
+		Text     string  `json:"text"`
+		PostID   *int64  `json:"post_id"`
+		Workshop *int64  `json:"workshop_id"`
+		Title    *string `json:"workshop_title"`
+	} `json:"mentions"`
+}
+
+// TestAdminOutreachResults_EngagementDoesNotNeedShortLinks proves the
+// engagement, reaction totals and mentions come from our own database: a
+// deployment with no ShortLinks client still carries them (#0547).
+func TestAdminOutreachResults_EngagementDoesNotNeedShortLinks(t *testing.T) {
+	e := newOutreachEnv(t, false)
+	ctx := context.Background()
+	store := outreach.NewStore(e.pool)
+
+	// not_started: mentions is an empty array, reactions null.
+	empty := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	code, b := e.do(t, http.MethodGet, fmt.Sprintf("/admin/workshops/%d/outreach/results", empty.ID), "")
+	if code != http.StatusOK || !strings.Contains(string(b), `"mentions":[]`) || !strings.Contains(string(b), `"reactions":null`) {
+		t.Errorf("not_started = %d %s", code, b)
+	}
+
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	o, _, err := store.Create(ctx, w.ID, w.Slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pb, err := store.CreatePost(ctx, o.ID, "bluesky", "announce", "hello", "fp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm, err := store.CreatePost(ctx, o.ID, "mastodon", "announce", "hello", "fp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := fmt.Sprintf("hx%dy", time.Now().UnixNano())
+	for _, id := range []int64{pb.ID, pm.ID} {
+		if _, err := e.pool.Exec(ctx, `UPDATE outreach_posts SET status='posted', posted_at=now(), remote_id=$2 WHERE id=$1`, id, fmt.Sprintf("r%d%s", id, tag)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = e.pool.Exec(ctx, `DELETE FROM outreach_mentions WHERE remote_id LIKE '%' || $1 || '%'`, tag)
+	})
+	now := time.Now()
+	store.RecordEngagement(ctx, pb.ID, now.Add(-time.Hour), outreach.Counts{Likes: 1})
+	store.RecordEngagement(ctx, pb.ID, now, outreach.Counts{Likes: 3, Reposts: 1})
+	store.RecordEngagement(ctx, pm.ID, now, outreach.Counts{Likes: 2, Replies: 2})
+	link := "https://bsky.app/profile/alice.example.test/post/1"
+	if _, err := store.InsertMention(ctx, outreach.Mention{Channel: "bluesky", RemoteID: "tied" + tag, PostID: &pb.ID, Kind: "reply", Author: "@alice.example.test", Text: "<b>see you</b>", URL: &link, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InsertMention(ctx, outreach.Mention{Channel: "bluesky", RemoteID: "untied" + tag, Kind: "mention", Author: "@bob.example.test", Text: "untied " + tag, CreatedAt: now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, b = e.do(t, http.MethodGet, fmt.Sprintf("/admin/workshops/%d/outreach/results", w.ID), "")
+	if code != http.StatusOK {
+		t.Fatalf("results = %d", code)
+	}
+	var base testResults
+	json.Unmarshal(b, &base)
+	if base.Status != "not_configured" {
+		t.Fatalf("status = %q, want not_configured", base.Status)
+	}
+	r := decodeOutreach[testEngagement](t, b)
+	if r.Reactions == nil || *r.Reactions != (struct{ Likes, Reposts, Replies, Quotes int }{5, 1, 2, 0}) {
+		t.Errorf("workshop reactions = %+v, want latest-per-post sum 5/1/2/0", r.Reactions)
+	}
+	for _, p := range r.Posts {
+		if p.ID == pb.ID && (p.Engagement == nil || p.Engagement.Likes != 3 || p.Engagement.CapturedAt == "") {
+			t.Errorf("bluesky post engagement = %+v", p.Engagement)
+		}
+	}
+	for _, c := range r.Channels {
+		switch c.Name {
+		case "bluesky":
+			if c.Reactions == nil || c.Reactions.Likes != 3 {
+				t.Errorf("bluesky channel reactions = %+v", c.Reactions)
+			}
+		case "instagram":
+			if c.Reactions != nil {
+				t.Errorf("a channel with no snapshots must report null reactions: %+v", c.Reactions)
+			}
+		}
+	}
+	if len(r.Mentions) != 1 || r.Mentions[0].Kind != "reply" || r.Mentions[0].PostID == nil || *r.Mentions[0].PostID != pb.ID ||
+		r.Mentions[0].Wave == nil || *r.Mentions[0].Wave != "announce" || r.Mentions[0].Text != "<b>see you</b>" {
+		t.Errorf("mentions = %+v (only the tied one belongs to this workshop; text is returned verbatim for the SPA to render as text)", r.Mentions)
+	}
+
+	code, b = e.do(t, http.MethodGet, "/admin/outreach-results", "")
+	if code != http.StatusOK {
+		t.Fatalf("summary = %d", code)
+	}
+	sum := decodeOutreach[testEngagementSummary](t, b)
+	var rowFound, untied bool
+	for _, row := range sum.Rows {
+		if row.WorkshopID == w.ID {
+			rowFound = row.Reactions != nil && row.Reactions.Likes == 5
+		}
+	}
+	for _, m := range sum.Mentions {
+		if strings.Contains(m.Text, "untied "+tag) {
+			untied = m.PostID == nil && m.Workshop == nil && m.Title == nil
+		}
+	}
+	if !rowFound || !untied {
+		t.Errorf("summary: row reactions ok=%v, untied mention ok=%v (%s)", rowFound, untied, b)
 	}
 }

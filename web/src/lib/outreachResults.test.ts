@@ -9,6 +9,13 @@ import {
   fillSeries,
   foldedChannelsNote,
   formatClicks,
+  formatReactionTotal,
+  cellReactionsLabel,
+  mastodonCountsNote,
+  mentionHref,
+  mentionKindLabel,
+  reactionsLabel,
+  reactionTotal,
   resultsStatusMessage,
   seriesColor,
   utcDays,
@@ -24,6 +31,7 @@ const channels = ['bluesky', 'mastodon', 'instagram', 'tiktok', 'youtube'].map((
   clicks: 0,
   has_daily_series: true,
   prepared: 1,
+  reactions: null,
 }));
 
 function results(over: Partial<OutreachResults> = {}): OutreachResults {
@@ -40,6 +48,8 @@ function results(over: Partial<OutreachResults> = {}): OutreachResults {
     series: [],
     flyer_locations: [],
     flyer_all_status: 'ok',
+    reactions: null,
+    mentions: [],
     ...over,
   };
 }
@@ -150,7 +160,7 @@ describe('buildChart', () => {
   });
   it('groups markers by UTC day and drops posts outside the window', () => {
     const post = (id: number, channel: string, wave: string, posted_at: string | null) => ({
-      id, channel, wave, status: 'posted' as const, short_link_key: `k${id}`, short_url: null, posted_at, remote_url: null, clicks: 0,
+      id, channel, wave, status: 'posted' as const, short_link_key: `k${id}`, short_url: null, posted_at, remote_url: null, clicks: 0, engagement: null,
     });
     const m = buildChart(
       results({
@@ -207,7 +217,7 @@ describe('formatClicks', () => {
 });
 
 describe('cellClicksLabel', () => {
-  const post = { id: 1, channel: 'bluesky', wave: 'announce', status: 'posted' as const, short_link_key: 'k', short_url: null, posted_at: null, remote_url: null, clicks: 12 };
+  const post = { id: 1, channel: 'bluesky', wave: 'announce', status: 'posted' as const, short_link_key: 'k', short_url: null, posted_at: null, remote_url: null, clicks: 12, engagement: null };
   it('shows clicks only for a prepared post with real results', () => {
     expect(cellClicksLabel({ id: 1, prepared: true }, results({ posts: [post] }))).toBe('12 clicks');
     expect(cellClicksLabel({ id: 1, prepared: true }, null)).toBe('');
@@ -230,5 +240,52 @@ describe('foldedChannelsNote', () => {
     );
     expect(foldedChannelsNote(results({ series: [other(['tiktok'])] }))).toMatch(/^TikTok is included/);
     expect(foldedChannelsNote(results({ series: [other(['bluesky', 'mastodon', 'tiktok'])] }))).toMatch(/^Bluesky, Mastodon and TikTok are/);
+  });
+});
+
+describe('reactions (#0547)', () => {
+  const z = { likes: 0, reposts: 0, replies: 0, quotes: 0 };
+  it('totals and labels', () => {
+    expect(reactionTotal({ likes: 3, reposts: 1, replies: 2, quotes: 1 })).toBe(7);
+    expect(reactionsLabel(null)).toBe('');
+    expect(reactionsLabel(z)).toBe('No reactions yet');
+    expect(reactionsLabel({ likes: 3, reposts: 1, replies: 2, quotes: 1 })).toBe('3 likes, 1 repost, 2 replies, 1 quote');
+    expect(reactionsLabel({ ...z, likes: 1 })).toBe('1 like');
+    expect(reactionsLabel({ ...z, replies: 1, quotes: 4 })).toBe('1 reply, 4 quotes');
+  });
+  it('formats a total', () => {
+    expect(formatReactionTotal(null)).toBe('—');
+    expect(formatReactionTotal(z)).toBe('0 reactions');
+    expect(formatReactionTotal({ ...z, likes: 1 })).toBe('1 reaction');
+    expect(formatReactionTotal({ ...z, likes: 2, quotes: 1 })).toBe('3 reactions');
+  });
+  const eng = { likes: 3, reposts: 0, replies: 0, quotes: 0, captured_at: '2026-10-16T12:00:00Z' };
+  const base = { short_link_key: 'k', short_url: null, posted_at: null, remote_url: null, clicks: null, status: 'posted' as const, wave: 'announce' };
+  it('cell label ignores the results status', () => {
+    const posts = [{ ...base, id: 1, channel: 'bluesky', engagement: eng }, { ...base, id: 2, channel: 'bluesky', engagement: null }];
+    for (const status of ['ok', 'not_configured', 'unreachable', 'rejected'] as const) {
+      expect(cellReactionsLabel({ id: 1 }, results({ status, posts }))).toBe('3 likes');
+    }
+    expect(cellReactionsLabel({ id: 2 }, results({ posts }))).toBe('');
+    expect(cellReactionsLabel({ id: 9 }, results({ posts }))).toBe('');
+    expect(cellReactionsLabel({ id: 1 }, null)).toBe('');
+  });
+  it('shows the Mastodon note only when a Mastodon post has engagement', () => {
+    const m = { ...base, id: 1, channel: 'mastodon', engagement: eng };
+    expect(mastodonCountsNote({ posts: [m] })).toMatch(/as seen by our instance/);
+    expect(mastodonCountsNote({ posts: [{ ...m, engagement: null }] })).toBeNull();
+    expect(mastodonCountsNote({ posts: [{ ...m, channel: 'bluesky' }] })).toBeNull();
+  });
+});
+
+describe('mentions (#0547)', () => {
+  it('labels kinds', () => {
+    expect([mentionKindLabel('mention'), mentionKindLabel('reply'), mentionKindLabel('quote')]).toEqual(['Mention', 'Reply', 'Quote']);
+  });
+  it('links https only', () => {
+    expect(mentionHref({ url: 'https://bsky.app/profile/alice.example.test/post/1' })).toBe('https://bsky.app/profile/alice.example.test/post/1');
+    for (const url of [null, '', 'javascript:alert(1)', 'http://example.test/x', 'mailto:a@example.test', '//example.test/x', 'data:text/html,x', 'HTTPS://example.test/\u0000']) {
+      expect(mentionHref({ url })).toBeNull();
+    }
   });
 });

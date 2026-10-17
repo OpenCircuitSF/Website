@@ -77,7 +77,64 @@ type resultsChannelView struct {
 	Clicks         *int64 `json:"clicks"`
 	HasDailySeries bool   `json:"has_daily_series"`
 	Prepared       int    `json:"prepared"`
+	// Reactions is the sum of the channel's posts' latest snapshots (#0547);
+	// null when none has one.
+	Reactions *reactionsView `json:"reactions"`
 }
+
+// reactionsView is a set of engagement counts (#0547).
+type reactionsView struct {
+	Likes   int `json:"likes"`
+	Reposts int `json:"reposts"`
+	Replies int `json:"replies"`
+	Quotes  int `json:"quotes"`
+}
+
+func toReactions(c outreach.Counts) *reactionsView {
+	return &reactionsView{Likes: c.Likes, Reposts: c.Reposts, Replies: c.Replies, Quotes: c.Quotes}
+}
+
+// engagementView is a post's latest snapshot; the counts sit flat beside
+// captured_at.
+type engagementView struct {
+	reactionsView
+	CapturedAt string `json:"captured_at"`
+}
+
+// mentionView is one mention, reply or quote (#0547). Author, text and url are
+// third-party content: the SPA renders them as text and links only an https
+// url, and the url is also checked when it is stored.
+type mentionView struct {
+	ID            int64   `json:"id"`
+	Channel       string  `json:"channel"`
+	Kind          string  `json:"kind"`
+	Author        string  `json:"author"`
+	Text          string  `json:"text"`
+	URL           *string `json:"url"`
+	CreatedAt     string  `json:"created_at"`
+	PostID        *int64  `json:"post_id"`
+	Wave          *string `json:"wave"`
+	WorkshopID    *int64  `json:"workshop_id"`
+	WorkshopTitle *string `json:"workshop_title"`
+}
+
+func toMentionViews(ms []outreach.Mention) []mentionView {
+	out := make([]mentionView, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, mentionView{
+			ID: m.ID, Channel: m.Channel, Kind: m.Kind, Author: m.Author, Text: m.Text, URL: m.URL,
+			CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339), PostID: m.PostID, Wave: m.Wave,
+			WorkshopID: m.WorkshopID, WorkshopTitle: m.WorkshopTitle,
+		})
+	}
+	return out
+}
+
+// maxResultsMentions bounds the mentions feed in the per-workshop response.
+const maxResultsMentions = 100
+
+// maxSummaryMentions bounds the all-workshops feed.
+const maxSummaryMentions = 50
 
 type resultsPostView struct {
 	ID           int64   `json:"id"`
@@ -89,6 +146,8 @@ type resultsPostView struct {
 	PostedAt     *string `json:"posted_at"`
 	RemoteURL    *string `json:"remote_url"`
 	Clicks       *int64  `json:"clicks"`
+	// Engagement is the latest snapshot; null until the first capture (#0547).
+	Engagement *engagementView `json:"engagement"`
 }
 
 type resultsSeriesView struct {
@@ -115,6 +174,11 @@ type outreachResultsView struct {
 	// "ok", or why every one of them is null.
 	FlyerLocations []resultsFlyerLocationView `json:"flyer_locations"`
 	FlyerAllStatus string                     `json:"flyer_all_status"`
+	// Reactions is the workshop total of every post's latest snapshot, and
+	// Mentions the feed tied to its posts (#0547). Both come from our own
+	// database, so they are filled for every status but not_started.
+	Reactions *reactionsView `json:"reactions"`
+	Mentions  []mentionView  `json:"mentions"`
 }
 
 // sortPostsForDisplay orders posts channel order x wave order, as the panel.
@@ -151,7 +215,7 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 	v := outreachResultsView{
 		Workshop: outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt)},
 		Channels: []resultsChannelView{}, Posts: []resultsPostView{}, Series: []resultsSeriesView{},
-		FlyerLocations: []resultsFlyerLocationView{},
+		FlyerLocations: []resultsFlyerLocationView{}, Mentions: []mentionView{},
 	}
 	for _, c := range outreach.Channels() {
 		v.Channels = append(v.Channels, resultsChannelView{Name: c.Name, Label: c.Label})
@@ -191,6 +255,9 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 				v.Channels[i].Prepared++
 			}
 		}
+	}
+	if !h.fillEngagement(w, r, &v, posts, o.ID) {
+		return
 	}
 
 	allLinks, err := h.flyers.ListAllFlyerLinks(r.Context())
@@ -272,6 +339,49 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, v)
 }
 
+// fillEngagement adds each post's latest snapshot, the channel and workshop
+// reaction totals, and the mentions feed (#0547). It runs before any
+// ShortLinks call, because none of it depends on ShortLinks. It writes the
+// 500 itself and returns false on a store error.
+func (h *AdminOutreachHandler) fillEngagement(w http.ResponseWriter, r *http.Request, v *outreachResultsView, posts []outreach.Post, outreachID int64) bool {
+	ids := make([]int64, 0, len(posts))
+	for _, p := range posts {
+		ids = append(ids, p.ID)
+	}
+	latest, err := h.store.LatestEngagement(r.Context(), ids)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return false
+	}
+	var total outreach.Counts
+	haveTotal := false
+	byChannel := map[string]outreach.Counts{}
+	for i, p := range v.Posts {
+		e, ok := latest[p.ID]
+		if !ok {
+			continue
+		}
+		v.Posts[i].Engagement = &engagementView{reactionsView: *toReactions(e.Counts), CapturedAt: e.CapturedAt.UTC().Format(time.RFC3339)}
+		total, haveTotal = total.Add(e.Counts), true
+		byChannel[p.Channel] = byChannel[p.Channel].Add(e.Counts)
+	}
+	for i := range v.Channels {
+		if c, ok := byChannel[v.Channels[i].Name]; ok {
+			v.Channels[i].Reactions = toReactions(c)
+		}
+	}
+	if haveTotal {
+		v.Reactions = toReactions(total)
+	}
+	mentions, err := h.store.ListMentionsForOutreach(r.Context(), outreachID, maxResultsMentions)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return false
+	}
+	v.Mentions = toMentionViews(mentions)
+	return true
+}
+
 func outreachUTCDate(t time.Time) time.Time {
 	y, m, d := t.UTC().Date()
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
@@ -286,6 +396,9 @@ type resultsSummaryRow struct {
 	PostsPosted   int     `json:"posts_posted"`
 	Clicks        *int64  `json:"clicks"`
 	Status        string  `json:"status"`
+	// Reactions is the sum of the workshop's posts' latest snapshots (#0547);
+	// null when none has one.
+	Reactions *reactionsView `json:"reactions"`
 }
 
 // ResultsSummary handles GET /admin/outreach-results: one row per workshop
@@ -294,6 +407,16 @@ type resultsSummaryRow struct {
 // upstream costs one timeout rather than one per row.
 func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Request) {
 	sums, err := h.store.ListSummaries(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	totals, err := h.store.ReactionTotalsByOutreach(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	recent, err := h.store.ListRecentMentions(r.Context(), maxSummaryMentions)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
@@ -309,6 +432,9 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 		row := resultsSummaryRow{
 			WorkshopID: s.WorkshopID, WorkshopSlug: s.WorkshopSlug, WorkshopTitle: s.WorkshopTitle, StartsAt: rfc3339(s.StartsAt),
 			PostsPosted: s.Counts["posted"],
+		}
+		if c, ok := totals[s.OutreachID]; ok {
+			row.Reactions = toReactions(c)
 		}
 		for _, n := range s.Counts {
 			row.PostsTotal += n
@@ -329,7 +455,7 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 		}
 		rows = append(rows, row)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": status, "rows": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"status": status, "rows": rows, "mentions": toMentionViews(recent)})
 }
 
 // summaryClicks fills row.Clicks from the campaign's rollup and returns the

@@ -38,7 +38,8 @@ type fakePDS struct {
 	access   string // access token currently accepted
 	refresh  string // refresh token currently accepted
 	gen      int
-	records  map[string]bool // rkeys that exist
+	records  map[string]bool   // rkeys that exist
+	notif    map[string]string // listNotifications bodies by cursor query value (#0547)
 	override map[string]func(w http.ResponseWriter, r *http.Request)
 }
 
@@ -145,6 +146,14 @@ func (f *fakePDS) serve(w http.ResponseWriter, r *http.Request) {
 			f.records[in.RKey] = true
 			f.mu.Unlock()
 			json.NewEncoder(w).Encode(map[string]string{"uri": "at://" + fakeDID + "/app.bsky.feed.post/" + in.RKey, "cid": "fakecid"})
+		case "/xrpc/app.bsky.notification.listNotifications":
+			f.mu.Lock()
+			b, ok := f.notif[r.URL.Query().Get("cursor")]
+			f.mu.Unlock()
+			if !ok {
+				b = `{"notifications":[]}`
+			}
+			io.WriteString(w, b)
 		case "/xrpc/com.atproto.repo.uploadBlob":
 			io.WriteString(w, `{"blob":{"$type":"blob","ref":{"$link":"fakeblobcid"},"mimeType":"image/jpeg","size":4}}`)
 		default:

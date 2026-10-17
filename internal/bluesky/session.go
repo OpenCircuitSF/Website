@@ -111,11 +111,16 @@ func isAuthFailure(status int, body []byte) bool {
 // the refresh itself is refused it logs in afresh once and retries; a second
 // auth failure is a permanent ErrAuth.
 func (c *Client) authed(ctx context.Context, method, path string, q url.Values, contentType string, payload []byte, out any) error {
+	return c.authedWith(ctx, nil, method, path, q, contentType, payload, out)
+}
+
+// authedWith is authed with extra request headers on every attempt.
+func (c *Client) authedWith(ctx context.Context, extra http.Header, method, path string, q url.Values, contentType string, payload []byte, out any) error {
 	s, err := c.session(ctx)
 	if err != nil {
 		return err
 	}
-	status, body, err := c.roundTrip(ctx, method, path, q, contentType, s.access, payload)
+	status, body, err := c.roundTripTo(ctx, c.base, extra, method, path, q, contentType, s.access, payload)
 	if err != nil {
 		return err
 	}
@@ -124,7 +129,7 @@ func (c *Client) authed(ctx context.Context, method, path string, q url.Values, 
 		if err != nil {
 			return err
 		}
-		status, body, err = c.roundTrip(ctx, method, path, q, contentType, s.access, payload)
+		status, body, err = c.roundTripTo(ctx, c.base, extra, method, path, q, contentType, s.access, payload)
 		if err != nil {
 			return err
 		}

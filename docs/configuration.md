@@ -48,9 +48,21 @@ each row below that `#0423` touched.
 | `BLUESKY_APP_PASSWORD` | no | *(unset → Bluesky falls back to manual)* | A Bluesky **app password** (Settings → Privacy and security → App passwords), never the account password. A secret: never log, commit, or paste it; the client never includes it, or any session token, in an error. |
 | `BLUESKY_PDS_URL` | no | `https://bsky.social` | Base URL of the PDS to log in to and post through. Only change it for a self-hosted PDS. |
 | `MASTODON_BASE_URL` | no | *(unset → Mastodon falls back to manual)* | Base URL of the Mastodon instance Outreach posts to (`https` required; `http` only for `localhost`). Optional, as above. |
-| `MASTODON_TOKEN` | no | *(unset → Mastodon falls back to manual)* | Access token for the posting account (Preferences → Development, `write:statuses` only), sent only as `Authorization: Bearer`. A secret, handled as the Bluesky password is. |
+| `MASTODON_TOKEN` | no | *(unset → Mastodon falls back to manual)* | Access token for the posting account (Preferences → Development, scopes `write:statuses read:statuses read:notifications` — the two read scopes are for the engagement tracker, `#0547`; without them every read is a 403, which the tracker logs naming the scope), sent only as `Authorization: Bearer`. A secret, handled as the Bluesky password is. |
 | `ADMIN_EMAIL` | yes | — | Pre-authorized as admin on first registration when no users exist yet |
 | `MEDIA_DIR` | no | *(unset → 503)* | Directory `POST /admin/media/upload` (`#0433`) writes EXIF-stripped image uploads to — `/var/www/media` in production, once `#0465`'s group-ownership and `ReadWritePaths=` change lands. Left unset, the endpoint refuses with a named 503 rather than the service failing to boot or the route being silently omitted; the `scp` workflow (`docs/media.md`) is unaffected either way. Every test in `internal/media`/`internal/handlers` points this at a `t.TempDir()`. |
+
+**Outreach engagement tracking (`#0547`) has no variables of its own.** Each
+half runs exactly when its channel's client is configured (Bluesky: handle and
+app password; Mastodon: base URL and token). Every 15 minutes it reads mention,
+reply and quote notifications, and it captures likes, reposts, replies and
+quotes for each automatically posted post hourly for 7 days, then daily to 30
+days, then stops. Bluesky counts come from the public AppView
+(`public.api.bsky.app`), unauthenticated; Mastodon counts come from our own
+instance's copy of the status, so they can lag what other servers show. A post
+marked posted by hand has no remote id and is never tracked. Nothing is
+polled until a channel is configured, and none of it has been exercised
+against a live platform: it is tested against local fakes only.
 
 **`WEBAUTHN_RP_ID` and `WEBAUTHN_RP_ORIGIN` are not interchangeable.** A
 mismatch between `RP_ORIGIN` and the browser's actual origin fails every

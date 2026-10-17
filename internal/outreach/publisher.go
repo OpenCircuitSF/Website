@@ -58,7 +58,10 @@ type PublisherDeps struct {
 	// thumbnails.
 	MediaDir     string
 	PollInterval time.Duration // default 15s
-	Log          *slog.Logger
+	// Tracker, when set, is started and stopped with the publisher (#0547), so
+	// the process wires one background type and one shutdown budget.
+	Tracker *Tracker
+	Log     *slog.Logger
 }
 
 // Publisher promotes due scheduled posts onto the outbound queue and posts
@@ -72,6 +75,7 @@ type Publisher struct {
 	mediaDir string
 	poll     time.Duration
 	log      *slog.Logger
+	tracker  *Tracker
 
 	stopCh   chan struct{}
 	doneCh   chan struct{}
@@ -90,7 +94,7 @@ func NewPublisher(d PublisherDeps) *Publisher {
 	}
 	return &Publisher{
 		store: d.Store, outbox: d.Outbox, settings: d.Settings, bsky: d.Bluesky, masto: d.Mastodon,
-		mediaDir: d.MediaDir, poll: d.PollInterval, log: d.Log,
+		mediaDir: d.MediaDir, poll: d.PollInterval, log: d.Log, tracker: d.Tracker,
 		stopCh: make(chan struct{}), doneCh: make(chan struct{}),
 	}
 }
@@ -117,6 +121,9 @@ func (p *Publisher) Run(ctx context.Context) {
 	p.running = true
 	p.runMu.Unlock()
 	defer close(p.doneCh)
+	if p.tracker != nil {
+		go p.tracker.Run(ctx)
+	}
 	for {
 		select {
 		case <-p.stopCh:
@@ -146,18 +153,30 @@ func (p *Publisher) Run(ctx context.Context) {
 // for ctx. It claims and releases nothing itself: a row mid-send when ctx
 // expires is left sending and returned to the queue by the next orphan sweep.
 // Safe to call more than once, and safe when Run was never started.
+//
+// A tracker given in the deps is stopped within the same ctx, first: it
+// cancels its own in-flight request, so it returns promptly and a slow remote
+// answer cannot eat the publisher's share of the budget. The first error is
+// returned.
 func (p *Publisher) Stop(ctx context.Context) error {
 	p.stopOnce.Do(func() { close(p.stopCh) })
+	var terr error
+	if p.tracker != nil {
+		terr = p.tracker.Stop(ctx)
+	}
 	p.runMu.Lock()
 	running := p.running
 	p.runMu.Unlock()
 	if !running {
-		return nil
+		return terr
 	}
 	select {
 	case <-p.doneCh:
-		return nil
+		return terr
 	case <-ctx.Done():
+		if terr != nil {
+			return terr
+		}
 		return ctx.Err()
 	}
 }
