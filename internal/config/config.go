@@ -141,6 +141,13 @@ type Config struct {
 	// is not configured" section) or the service failing to boot over a
 	// feature that has a documented manual fallback.
 	MediaDir string
+
+	// ShortLinksBaseURL and ShortLinksAPIToken configure the outreach
+	// client for the separate ShortLinks deploy (#0543). Both optional:
+	// when either is empty, outreach features are reported unavailable
+	// (shortlinks.New returns a nil client) and the service still boots.
+	ShortLinksBaseURL  string
+	ShortLinksAPIToken string
 }
 
 // DevMode reports whether the dev store should be used instead of Postgres.
@@ -200,6 +207,8 @@ func loadFromFile(path string) (*Config, error) {
 		SendWorkerEnabled:   getBool("SEND_WORKER_ENABLED", defaultSendWorkerEnabled, &errs),
 		AdminEmail:          os.Getenv("ADMIN_EMAIL"),
 		MediaDir:            os.Getenv("MEDIA_DIR"),
+		ShortLinksBaseURL:   os.Getenv("SHORTLINKS_BASE_URL"),
+		ShortLinksAPIToken:  os.Getenv("SHORTLINKS_API_TOKEN"),
 	}
 
 	// Validate required fields. When STORAGE=json (dev mode) DATABASE_URL is
