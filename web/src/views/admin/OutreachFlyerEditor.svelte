@@ -27,6 +27,7 @@
   import { formatDateTime } from '../../lib/admin';
   import { precheckFile, messageForPrecheckReason, messageForUploadError } from '../../lib/media';
   import {
+    DEFAULT_FLYER_TEMPLATE,
     FLYER_TEMPLATES,
     FLYER_TEMPLATE_LABELS,
     MAX_TAGLINE,
@@ -57,7 +58,7 @@
   let confirmDelete = $state(false);
 
   // The design and selection being edited; saved by Save and Generate.
-  let template = $state<FlyerTemplate>('photo-top');
+  let template = $state<FlyerTemplate>(DEFAULT_FLYER_TEMPLATE);
   let tagline = $state('');
   let photo = $state<string | null>(null);
   let focal = $state<Focal>({ x: 0.5, y: 0.5 });

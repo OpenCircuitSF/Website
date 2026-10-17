@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { FlyerSelection } from './types';
 import {
   CUT_AT_IN,
+  DEFAULT_FLYER_TEMPLATE,
+  FLYER_TEMPLATES,
+  FULL_PHOTO_BOX,
+  QR_ASSUMED_MODULES,
+  SITE_URL_TEXT,
+  composite,
+  contrastRatio,
+  noBreakHyphens,
+  qrQuietIn,
   HALF,
   LETTER,
   PRINT_PAGE_CSS,
@@ -198,5 +207,31 @@ describe('wording helpers', () => {
     expect(validateTagline('x'.repeat(141))).toBe('Tagline must be at most 140 characters.');
     expect(validateTagline('😀'.repeat(140))).toBeNull();
     expect(validateTagline(`  ${'x'.repeat(140)}  `)).toBeNull();
+  });
+});
+
+describe('full-photo box (#0559)', () => {
+  it('text meets WCAG AA against the fill composited over pure white', () => {
+    const worst = composite(FULL_PHOTO_BOX.fill, FULL_PHOTO_BOX.alpha, '#ffffff');
+    expect(FULL_PHOTO_BOX.alpha).toBeGreaterThanOrEqual(0.8);
+    expect(FULL_PHOTO_BOX.alpha).toBeLessThanOrEqual(0.85);
+    for (const ink of [FULL_PHOTO_BOX.ink, FULL_PHOTO_BOX.muted, FULL_PHOTO_BOX.accent]) {
+      expect(contrastRatio(ink, worst)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+  it('contrast helpers match known values', () => {
+    expect(contrastRatio('#000000', '#ffffff')).toBeCloseTo(21, 5);
+    expect(composite('#000000', 0.5, '#ffffff')).toBe('#808080');
+  });
+  it('quiet zone is at least 4 modules for any code up to the assumed size', () => {
+    for (const qr of [0.9, 1.25]) {
+      expect(qrQuietIn(qr) / (qr / QR_ASSUMED_MODULES)).toBeGreaterThanOrEqual(4);
+    }
+  });
+  it('defaults to full-photo and keeps hyphenated labels whole', () => {
+    expect(DEFAULT_FLYER_TEMPLATE).toBe('full-photo');
+    expect(FLYER_TEMPLATES).toContain(DEFAULT_FLYER_TEMPLATE);
+    expect(noBreakHyphens('a-b c')).toBe('a‑b c');
+    expect(SITE_URL_TEXT).toBe('OpenCircuitSF.com');
   });
 });

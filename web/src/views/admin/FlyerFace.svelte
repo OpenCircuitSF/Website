@@ -8,7 +8,7 @@
 -->
 <script lang="ts">
   import type { FlyerFacts, FlyerTemplate } from '../../lib/types';
-  import { displayShortUrl, objectPosition, photoBox, type Focal, type FlyerInstance, type Size } from '../../lib/flyers';
+  import { FULL_PHOTO_BOX, SITE_URL_TEXT, displayShortUrl, noBreakHyphens, objectPosition, photoBox, qrQuietIn, type Focal, type FlyerInstance, type Size } from '../../lib/flyers';
 
   interface Props {
     template: FlyerTemplate;
@@ -25,6 +25,12 @@
   let natural = $state<Size | null>(null);
   const position = $derived(objectPosition(natural, photoBox(template, size), focal));
   const shortText = $derived(instance ? displayShortUrl(instance.shortUrl) : 'go.opencircuitsf.com/…');
+
+  const qrIn = $derived(size === 'half' ? 0.9 : 1.25);
+  const qrPad = $derived(`${qrQuietIn(qrIn).toFixed(4)}in`);
+  const boxVars = $derived(
+    `--box-fill: ${FULL_PHOTO_BOX.fill}; --box-alpha: ${FULL_PHOTO_BOX.alpha}; --box-ink: ${FULL_PHOTO_BOX.ink}; --box-muted: ${FULL_PHOTO_BOX.muted}; --box-accent: ${FULL_PHOTO_BOX.accent}`,
+  );
 
   function onPhotoLoad(e: Event): void {
     const img = e.currentTarget as HTMLImageElement;
@@ -71,9 +77,19 @@
     {@render footBlock()}
   {:else if template === 'full-photo'}
     {@render photoBlock()}
-    <div class="band">
-      {@render textBlock()}
-      {@render footBlock()}
+    <div class="fp" style={boxVars}>
+      <div class="fp-text">
+        {@render textBlock()}
+        <p class="fp-site">{SITE_URL_TEXT}</p>
+      </div>
+      <div class="fp-qr" style:--qpad={qrPad}>
+        {#if instance}
+          <img class="qr-img" src={instance.qrSrc} alt="QR code for {instance.label}" />
+          <p class="fp-label">{noBreakHyphens(instance.label)}</p>
+        {:else}
+          <div class="qr-img qr-placeholder"><span>QR</span></div>
+        {/if}
+      </div>
     </div>
   {:else}
     {@render photoBlock()}
@@ -111,6 +127,9 @@
     --short: 18pt;
     --qr: 1.25in;
     --label-size: 7pt;
+    --fp-label: 8pt;
+    --label-max: 3.4in;
+    --site: 16pt;
   }
   .s-half {
     width: 5.5in;
@@ -121,6 +140,9 @@
     --short: 12pt;
     --qr: 0.9in;
     --label-size: 6pt;
+    --fp-label: 7pt;
+    --label-max: 2.4in;
+    --site: 12pt;
   }
   p,
   h2 {
@@ -224,22 +246,65 @@
     overflow: hidden;
   }
 
-  /* Full photo: the photo bleeds across the flyer; a white band inside the safe area holds the text and QR. */
+  /* Full photo: the photo fills the whole face. One semi-transparent dark
+     box holds the text; a separate box holds the QR code. The fill is a
+     background-colour with alpha so the text itself stays fully opaque. */
   .t-full-photo .photo {
     position: absolute;
     inset: 0;
   }
-  .t-full-photo .band {
+  .t-full-photo .fp {
     position: absolute;
-    left: 0.25in;
-    right: 0.25in;
-    bottom: 0.25in;
+    inset: 0.25in;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  .t-full-photo .fp-text {
     box-sizing: border-box;
     padding: 0.2in;
-    background: #fff;
+    border-radius: 0.08in;
+    background: color-mix(in srgb, var(--box-fill) calc(var(--box-alpha) * 100%), transparent);
+    color: var(--box-ink);
   }
-  .t-full-photo .band .foot {
-    margin-top: 0.15in;
+  .t-full-photo .fp-text .tagline {
+    color: var(--box-muted);
+  }
+  .t-full-photo .fp-text .line {
+    color: var(--box-accent);
+  }
+  .t-full-photo .fp-site {
+    margin-top: 0.12in;
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+    font-size: var(--site);
+    font-weight: 700;
+    color: var(--box-ink);
+  }
+  .t-full-photo .fp-qr {
+    align-self: flex-end;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: 100%;
+    padding: var(--qpad);
+    border-radius: 0.06in;
+    background: #fff;
+    color: var(--ink);
+  }
+  .t-full-photo .fp-qr .qr-img {
+    margin: 0 auto;
+  }
+  .t-full-photo .fp-label {
+    margin-top: 0.04in;
+    max-width: var(--label-max);
+    text-align: center;
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+    font-size: var(--fp-label);
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--ink);
+    overflow-wrap: normal;
+    word-break: normal;
   }
 
   /* Split: the photo takes the left half, the text column the right. */

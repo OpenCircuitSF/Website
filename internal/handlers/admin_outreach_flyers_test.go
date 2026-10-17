@@ -158,7 +158,7 @@ func TestAdminOutreachFlyers_CRUDWorksWithoutShortLinks(t *testing.T) {
 		t.Fatalf("create = %d (%s)", code, b)
 	}
 	v := decodeOutreach[testFlyerView](t, b)
-	if v.Flyer.Template != "photo-top" || v.Flyer.FocalX != 0.25 || v.Flyer.FocalY != 0.5 || v.Flyer.Photo == nil || v.Facts.Title != w.Title {
+	if v.Flyer.Template != "full-photo" || v.Flyer.FocalX != 0.25 || v.Flyer.FocalY != 0.5 || v.Flyer.Photo == nil || v.Facts.Title != w.Title {
 		t.Errorf("created view = %+v", v)
 	}
 	if !strings.HasPrefix(v.Facts.DateLine, "Sat, Dec 5 · 10:00 AM") || v.Facts.PlaceLine != "The Shop" {

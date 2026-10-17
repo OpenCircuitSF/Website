@@ -255,7 +255,7 @@ func (h *AdminOutreachHandler) CreateFlyer(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	in := outreach.FlyerInput{OutreachID: *req.OutreachID, FocalX: 0.5, FocalY: 0.5, Template: "photo-top"}
+	in := outreach.FlyerInput{OutreachID: *req.OutreachID, FocalX: 0.5, FocalY: 0.5, Template: "full-photo"}
 	if req.Template != nil {
 		in.Template = *req.Template
 	}

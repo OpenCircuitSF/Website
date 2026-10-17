@@ -286,3 +286,70 @@ export function utmSummary(slug: string): string {
 export function validateTagline(tagline: string): string | null {
   return [...tagline.trim()].length > MAX_TAGLINE ? `Tagline must be at most ${MAX_TAGLINE} characters.` : null;
 }
+
+/** The general site address printed on the full-photo flyer (the QR code carries the tracked link). */
+export const SITE_URL_TEXT = 'OpenCircuitSF.com';
+
+/** The template a new flyer starts with. Go's create handler defaults to the same value. */
+export const DEFAULT_FLYER_TEMPLATE: FlyerTemplate = 'full-photo';
+
+/**
+ * The full-photo text box: a dark brand-toned fill at 84% opacity with light
+ * text. The photo behind it is unknown, so legibility is judged against the
+ * worst case, the fill composited over pure white.
+ */
+export const FULL_PHOTO_BOX = {
+  fill: '#0b100a',
+  alpha: 0.84,
+  ink: '#f2f6ee',
+  muted: '#d5ddd0',
+  accent: '#68ff23',
+} as const;
+
+/** The QR box's quiet zone: at least this many modules of opaque white on every side. */
+export const QR_QUIET_MODULES = 4;
+/**
+ * The module count assumed when sizing the quiet zone. Location links give
+ * small codes (version 2-4, 25-33 modules); 41 (version 6) is a deliberately
+ * generous bound, so the padding is never under 4 real modules.
+ */
+export const QR_ASSUMED_MODULES = 41;
+
+/** The opaque white padding, in inches, around a QR image `qrIn` inches wide. */
+export function qrQuietIn(qrIn: number): number {
+  return (qrIn * QR_QUIET_MODULES) / QR_ASSUMED_MODULES;
+}
+
+/** Replace hyphens with U+2011 so a label wraps only at spaces ("cafe-noir" stays whole). */
+export function noBreakHyphens(s: string): string {
+  return s.replace(/-/g, '\u2011');
+}
+
+function channel(v: number): number {
+  const c = v / 255;
+  return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+function rgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+/** WCAG relative luminance of a #rrggbb color. */
+export function luminance(hex: string): number {
+  const [r, g, b] = rgb(hex);
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/** WCAG contrast ratio between two #rrggbb colors. */
+export function contrastRatio(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** `fill` at `alpha` over an opaque `under`, as #rrggbb. */
+export function composite(fill: string, alpha: number, under: string): string {
+  const f = rgb(fill);
+  const u = rgb(under);
+  return '#' + f.map((v, i) => Math.round(v * alpha + u[i] * (1 - alpha)).toString(16).padStart(2, '0')).join('');
+}
