@@ -178,3 +178,72 @@ func PlainText(contentHTML string) string {
 	walk(root)
 	return strings.TrimSpace(b.String())
 }
+
+// maxRecentStatuses bounds how far back FindRecentStatusWithURL looks.
+const maxRecentStatuses = 40
+
+// FindRecentStatusWithURL looks through this account's most recent statuses
+// for one whose text carries link, and returns it (found false when none
+// does). It exists for #0553: an Idempotency-Key is forgotten by the instance
+// after about an hour, so a retry after an attempt of unknown outcome checks
+// for the post it may already have made instead of posting again. The match
+// is on the link as a whole token, so a link that merely starts with another
+// one does not match.
+func (c *Client) FindRecentStatusWithURL(ctx context.Context, link string) (Status, bool, error) {
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return Status{}, false, &APIError{Message: "empty link", Permanent: true, kind: ErrInvalid}
+	}
+	var me struct {
+		ID string `json:"id"`
+	}
+	if err := c.get(ctx, "/api/v1/accounts/verify_credentials", nil, &me); err != nil {
+		return Status{}, false, err
+	}
+	if me.ID == "" || strings.ContainsAny(me.ID, "/?#\\") {
+		return Status{}, false, &APIError{Message: "malformed response", kind: ErrServer}
+	}
+	var list []struct {
+		ID      string `json:"id"`
+		URL     string `json:"url"`
+		URI     string `json:"uri"`
+		Content string `json:"content"`
+		Card    *struct {
+			URL string `json:"url"`
+		} `json:"card"`
+	}
+	q := url.Values{"limit": {strconv.Itoa(maxRecentStatuses)}, "exclude_reblogs": {"true"}}
+	if err := c.get(ctx, "/api/v1/accounts/"+me.ID+"/statuses", q, &list); err != nil {
+		return Status{}, false, err
+	}
+	for _, st := range list {
+		if st.ID == "" {
+			continue
+		}
+		if containsLinkToken(PlainText(st.Content), link) || containsLinkToken(st.Content, `"`+link+`"`) ||
+			(st.Card != nil && st.Card.URL == link) {
+			return Status{ID: st.ID, URL: st.URL, URI: st.URI}, true, nil
+		}
+	}
+	return Status{}, false, nil
+}
+
+// containsLinkToken reports whether text contains link not immediately
+// followed by another URL character.
+func containsLinkToken(text, link string) bool {
+	for i := 0; ; {
+		j := strings.Index(text[i:], link)
+		if j < 0 {
+			return false
+		}
+		end := i + j + len(link)
+		if end >= len(text) || !isURLChar(text[end]) {
+			return true
+		}
+		i += j + 1
+	}
+}
+
+func isURLChar(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || strings.IndexByte("-._~/?#%&=+", c) >= 0
+}

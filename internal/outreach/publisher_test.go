@@ -258,6 +258,7 @@ func TestPublisher_ThumbnailRules(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "ok.png"), append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, 1, 2), 0o644)
 	os.WriteFile(filepath.Join(dir, "big.jpg"), append([]byte{0xFF, 0xD8, 0xFF}, make([]byte, bluesky.MaxThumbBytes)...), 0o644)
 	os.WriteFile(filepath.Join(dir, "x.gif"), []byte("GIF89a...."), 0o644)
+	os.Mkdir(filepath.Join(dir, "dir.png"), 0o755)
 	pub := NewPublisher(PublisherDeps{MediaDir: dir})
 	str := func(s string) *string { return &s }
 	cases := []struct {
@@ -269,6 +270,7 @@ func TestPublisher_ThumbnailRules(t *testing.T) {
 		{"too big", str("/media/big.jpg"), ""},
 		{"gif refused", str("/media/x.gif"), ""},
 		{"missing", str("/media/nope.jpg"), ""},
+		{"not a regular file", str("/media/dir.png"), ""},
 		{"absolute url never fetched", str("https://example.test/a.jpg"), ""},
 		{"non-media path", str("/assets/ok.png"), ""},
 		{"traversal flattened", str("/media/" + strings.Repeat(string(rune(46)), 2) + "/etc/passwd"), ""},
@@ -560,5 +562,104 @@ func TestPublisher_StopWithoutRun(t *testing.T) {
 	}
 	if err := pub.Stop(ctx); err != nil {
 		t.Errorf("second Stop: %v", err)
+	}
+}
+
+// forgetfulMasto is a Mastodon fake that, like an instance an hour later,
+// has forgotten every Idempotency-Key: each POST creates a new status. The
+// first POST creates the status but answers 503, as a timeout after the
+// write would look.
+type forgetfulMasto struct {
+	srv      *httptest.Server
+	mu       sync.Mutex
+	posts    int
+	statuses []string // html contents, newest first
+}
+
+func newForgetfulMasto(t *testing.T) *forgetfulMasto {
+	t.Helper()
+	f := &forgetfulMasto{}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		switch {
+		case r.Method == http.MethodPost:
+			f.posts++
+			var in struct {
+				Status string `json:"status"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			f.statuses = append([]string{in.Status}, f.statuses...)
+			if f.posts == 1 {
+				w.WriteHeader(503)
+				io.WriteString(w, `{"error":"upstream timeout"}`)
+				return
+			}
+			fmt.Fprintf(w, `{"id":"%d","url":"https://social.example.test/@alice/%d","uri":"u"}`, 100+f.posts, 100+f.posts)
+		case r.URL.Path == "/api/v1/accounts/verify_credentials":
+			io.WriteString(w, `{"id":"5"}`)
+		case r.URL.Path == "/api/v1/accounts/5/statuses":
+			var parts []string
+			for i, c := range f.statuses {
+				b, _ := json.Marshal(map[string]string{"id": fmt.Sprint(900 - i), "url": fmt.Sprintf("https://social.example.test/@alice/%d", 900-i), "uri": "u", "content": "<p>" + c + "</p>"})
+				parts = append(parts, string(b))
+			}
+			io.WriteString(w, "["+strings.Join(parts, ",")+"]")
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *forgetfulMasto) postCount() int { f.mu.Lock(); defer f.mu.Unlock(); return f.posts }
+
+func TestPublisher_MastodonRetryAdoptsStatusWhenInstanceForgotKey(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	fm := newForgetfulMasto(t)
+	mc, err := mastodon.New(fm.srv.URL, fakeMastoToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := NewPublisher(PublisherDeps{Store: s, Outbox: outbox.NewStore(s.pool), Settings: fakeSettings{}, Mastodon: mc, PollInterval: time.Hour})
+	_, post := seedMastodon(t, s)
+	if _, _, err := s.QueueNow(ctx, post.ID); err != nil {
+		t.Fatal(err)
+	}
+	runPass(t, pub) // posts, but answers 503: outcome unknown
+	if got, _ := s.GetPost(ctx, post.ID); got.Status != "queued" {
+		t.Fatalf("after the 503: %+v", got)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE outbound_queue SET next_attempt_at = now() WHERE recipient = $1`, fmt.Sprintf("outreach_post:%d", post.ID)); err != nil {
+		t.Fatal(err)
+	}
+	runPass(t, pub) // must adopt, not post again
+	got, _ := s.GetPost(ctx, post.ID)
+	if got.Status != "posted" || got.RemoteID == nil || *got.RemoteID != "900" {
+		t.Errorf("post = %+v, want posted and adopting the existing status 900", got)
+	}
+	if n := fm.postCount(); n != 1 {
+		t.Errorf("POSTs = %d, want 1: the retry must adopt the earlier status", n)
+	}
+}
+
+func TestPublisher_MastodonFirstAttemptDoesNotLookFirst(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	fm := newForgetfulMasto(t)
+	// A status already carrying the link must not be adopted on attempt 1.
+	_, post := seedMastodon(t, s)
+	fm.statuses = []string{"older " + *post.ShortURL}
+	fm.posts = 1 // so this POST succeeds
+	mc, _ := mastodon.New(fm.srv.URL, fakeMastoToken)
+	pub := NewPublisher(PublisherDeps{Store: s, Outbox: outbox.NewStore(s.pool), Settings: fakeSettings{}, Mastodon: mc, PollInterval: time.Hour})
+	if _, _, err := s.QueueNow(ctx, post.ID); err != nil {
+		t.Fatal(err)
+	}
+	runPass(t, pub)
+	if got, _ := s.GetPost(ctx, post.ID); got.Status != "posted" || got.RemoteID == nil || *got.RemoteID != "102" {
+		t.Errorf("post = %+v, want a fresh post (102)", got)
 	}
 }

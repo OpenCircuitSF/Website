@@ -1544,3 +1544,39 @@ func TestMarkSkipped_OnlyFromSending(t *testing.T) {
 		t.Fatalf("second MarkSkipped on an already-skipped row reported done=true")
 	}
 }
+
+// TestOutbox_Counts_ExcludesOutreachPosts is #0553's proof: a social post
+// row, queued or abandoned, never moves the mail queue-depth summary, so a
+// bad social credential cannot light the dashboard's abandoned warning.
+func TestOutbox_Counts_ExcludesOutreachPosts(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	before, err := store.Counts(ctx)
+	if err != nil {
+		t.Fatalf("Counts (before): %v", err)
+	}
+	queuedID, err := store.Enqueue(ctx, Item{Kind: KindOutreachPost, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue queued post: %v", err)
+	}
+	abandonedID, err := store.Enqueue(ctx, Item{Kind: KindOutreachPost, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue abandoned post: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM outbound_queue WHERE id = ANY($1)`, []int64{queuedID, abandonedID})
+	})
+	if _, err := pool.Exec(ctx, `UPDATE outbound_queue SET status = $2 WHERE id = $1`, abandonedID, StatusAbandoned); err != nil {
+		t.Fatalf("abandoning post row: %v", err)
+	}
+	after, err := store.Counts(ctx)
+	if err != nil {
+		t.Fatalf("Counts (after): %v", err)
+	}
+	if after.Queued != before.Queued || after.Abandoned != before.Abandoned {
+		t.Errorf("Counts moved after outreach_post rows: queued %d->%d abandoned %d->%d; social posts must not count as mail",
+			before.Queued, after.Queued, before.Abandoned, after.Abandoned)
+	}
+}

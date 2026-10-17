@@ -2209,18 +2209,32 @@ var outreachPublisherCloseTimeout = 10 * time.Second
 
 // warnPartialPostingCredentials logs one warning per posting channel that has
 // some but not all of its credentials, naming the missing variable and never
-// a value.
+// a value. The clients trim their credentials, so values are compared trimmed
+// here too, and a variable set to whitespace only is reported as such rather
+// than silently read as unset (#0553).
 func warnPartialPostingCredentials(cfg *config.Config, log *slog.Logger) {
-	if cfg.BlueskyHandle != "" && cfg.BlueskyAppPassword == "" {
+	vars := []struct{ name, val string }{
+		{"BLUESKY_HANDLE", cfg.BlueskyHandle},
+		{"BLUESKY_APP_PASSWORD", cfg.BlueskyAppPassword},
+		{"MASTODON_BASE_URL", cfg.MastodonBaseURL},
+		{"MASTODON_TOKEN", cfg.MastodonToken},
+	}
+	for _, v := range vars {
+		if v.val != "" && strings.TrimSpace(v.val) == "" {
+			log.Warn("outreach: " + v.name + " is set but contains only whitespace; it is treated as unset")
+		}
+	}
+	has := func(v string) bool { return strings.TrimSpace(v) != "" }
+	if has(cfg.BlueskyHandle) && !has(cfg.BlueskyAppPassword) {
 		log.Warn("outreach: Bluesky is not configured: BLUESKY_APP_PASSWORD is missing")
 	}
-	if cfg.BlueskyHandle == "" && cfg.BlueskyAppPassword != "" {
+	if !has(cfg.BlueskyHandle) && has(cfg.BlueskyAppPassword) {
 		log.Warn("outreach: Bluesky is not configured: BLUESKY_HANDLE is missing")
 	}
-	if cfg.MastodonBaseURL != "" && cfg.MastodonToken == "" {
+	if has(cfg.MastodonBaseURL) && !has(cfg.MastodonToken) {
 		log.Warn("outreach: Mastodon is not configured: MASTODON_TOKEN is missing")
 	}
-	if cfg.MastodonBaseURL == "" && cfg.MastodonToken != "" {
+	if !has(cfg.MastodonBaseURL) && has(cfg.MastodonToken) {
 		log.Warn("outreach: Mastodon is not configured: MASTODON_BASE_URL is missing")
 	}
 }

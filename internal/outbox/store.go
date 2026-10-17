@@ -954,7 +954,10 @@ func (s *Store) AbandonedCountByKind(ctx context.Context, kind Kind) (int64, err
 	return n, nil
 }
 
-// Counts returns the queue-depth summary for #0061's admin overview.
+// Counts returns the queue-depth summary for #0061's admin overview. It
+// counts mail only: KindOutreachPost rows are social posts, not messages, and
+// are excluded so a bad social credential never reads as undelivered mail
+// (#0553).
 func (s *Store) Counts(ctx context.Context) (Counts, error) {
 	var c Counts
 	var oldestSecs *float64
@@ -966,8 +969,9 @@ func (s *Store) Counts(ctx context.Context) (Counts, error) {
 		    count(*) FILTER (WHERE status = $4),
 		    count(*) FILTER (WHERE status = $5),
 		    extract(epoch FROM now() - min(created_at) FILTER (WHERE status = $1))
-		 FROM outbound_queue`,
+		 FROM outbound_queue WHERE kind <> $6`,
 		StatusQueued, StatusSending, StatusSent, StatusAbandoned, StatusSkipped,
+		string(KindOutreachPost),
 	).Scan(&c.Queued, &c.Sending, &c.Sent, &c.Abandoned, &c.Skipped, &oldestSecs)
 	if err != nil {
 		return Counts{}, fmt.Errorf("outbox: counting: %w", err)

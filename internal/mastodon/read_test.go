@@ -136,3 +136,41 @@ func TestPlainText(t *testing.T) {
 		t.Errorf("escaped markup must stay literal text: %q", got)
 	}
 }
+
+func TestFindRecentStatusWithURL(t *testing.T) {
+	var s seen
+	c := fake(t, &s, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/accounts/verify_credentials":
+			io.WriteString(w, `{"id":"77"}`)
+		case "/api/v1/accounts/77/statuses":
+			io.WriteString(w, `[
+			 {"id":"3","url":"https://m.test/@a/3","uri":"u3","content":"<p>other <a href=\"https://go.test/abc123\">go.test/abc12…</a></p>"},
+			 {"id":"2","url":"https://m.test/@a/2","uri":"u2","content":"<p>Join us <a href=\"https://go.test/abc\">go.test/abc</a>.</p>"},
+			 {"id":"1","url":"https://m.test/@a/1","uri":"u1","content":"<p>old</p>"}]`)
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	st, found, err := c.FindRecentStatusWithURL(context.Background(), "https://go.test/abc")
+	if err != nil || !found || st.ID != "2" || st.URL != "https://m.test/@a/2" {
+		t.Fatalf("found=%v st=%+v err=%v (a longer link sharing the prefix must not match)", found, st, err)
+	}
+	if r := s.last(); r.Header.Get("Authorization") != "Bearer "+fakeToken {
+		t.Error("request not authenticated")
+	}
+	if _, found, err := c.FindRecentStatusWithURL(context.Background(), "https://go.test/zzz"); err != nil || found {
+		t.Errorf("unknown link: found=%v err=%v", found, err)
+	}
+	if _, _, err := c.FindRecentStatusWithURL(context.Background(), " "); !errors.Is(err, ErrInvalid) {
+		t.Errorf("empty link: %v", err)
+	}
+}
+
+func TestFindRecentStatusWithURL_ServerErrorIsReturned(t *testing.T) {
+	var s seen
+	c := fake(t, &s, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) })
+	if _, found, err := c.FindRecentStatusWithURL(context.Background(), "https://go.test/abc"); found || !errors.Is(err, ErrServer) {
+		t.Errorf("found=%v err=%v", found, err)
+	}
+}

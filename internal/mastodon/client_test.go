@@ -120,6 +120,10 @@ func TestCountCharacters(t *testing.T) {
 		{"short url also 23", "go https://a.test/x now", 3 + 23 + 4},
 		{"two urls", long + " " + long, 23 + 1 + 23},
 		{"empty", "", 0},
+		{"trailing period is text", "see https://a.test/x.", 4 + 23 + 1},
+		{"trailing punctuation run", "go https://a.test/x?!) ok", 3 + 23 + 3 + 3},
+		{"paren kept when balanced", "(https://a.test/x_(y))", 1 + 23 + 0},
+		{"paren wrapping a url", "(see https://a.test/x)", 5 + 23 + 1},
 	}
 	for _, tc := range cases {
 		if got := CountCharacters(tc.s); got != tc.want {

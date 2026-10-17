@@ -115,10 +115,35 @@ func CountCharacters(text string) int {
 	n := 0
 	last := 0
 	for _, m := range urlRE.FindAllStringIndex(text, -1) {
+		// Mastodon's own matcher stops before trailing punctuation, which
+		// then counts as ordinary text (#0553). Same rule as the Bluesky
+		// facet code's trimLinkEnd.
+		end := trimLinkEnd(text, m[0], m[1])
+		if end <= m[0] {
+			continue
+		}
 		n += utf8.RuneCountInString(text[last:m[0]]) + urlWeight
-		last = m[1]
+		last = end
 	}
 	return n + utf8.RuneCountInString(text[last:])
+}
+
+// trimLinkEnd drops trailing sentence punctuation from a matched URL, and a
+// closing parenthesis when the URL has no opening one. It mirrors the Bluesky
+// facet code so both channels agree on where a link ends.
+func trimLinkEnd(text string, start, end int) int {
+	for end > start {
+		c := text[end-1]
+		switch {
+		case strings.IndexByte(".,;:!?'\"", c) >= 0:
+			end--
+		case c == ')' && !strings.Contains(text[start:end], "("):
+			end--
+		default:
+			return end
+		}
+	}
+	return end
 }
 
 // PostStatus creates a public status. idempotencyKey makes a retry of the

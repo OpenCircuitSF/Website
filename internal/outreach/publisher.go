@@ -285,12 +285,15 @@ func (p *Publisher) sendOne(parent context.Context, row outbox.Row) {
 			p.log.Warn("outreach: thumbnail upload failed, posted without it", "post_id", job.ID, "err", res.ThumbErr)
 		}
 	case "mastodon":
-		st, err := p.masto.PostStatus(ctx, job.Body, "opencircuitsf-outreach-post-"+strconv.FormatInt(job.ID, 10))
+		st, adopted, err := p.postMastodon(ctx, row, job)
 		if err != nil {
 			p.postFailed(row, job, ch, err, mastodon.IsPermanent(err))
 			return
 		}
 		remoteID, remoteURL = st.ID, st.URL
+		if adopted {
+			p.log.Info("outreach: adopted an existing Mastodon status instead of posting again", "post_id", job.ID)
+		}
 	}
 
 	wctx, wcancel := context.WithTimeout(context.WithoutCancel(parent), writeBudget)
@@ -307,6 +310,41 @@ func (p *Publisher) sendOne(parent context.Context, row outbox.Row) {
 		p.log.Warn("outreach: posted but the post was no longer queued", "post_id", job.ID)
 	}
 	p.markDone(row)
+}
+
+// unknownOutcomeMarker is in the last_error of a post whose latest attempt
+// failed transiently (see postFailed). The attempt may have posted anyway.
+const unknownOutcomeMarker = "is unreachable or failing"
+
+// priorAttemptUnknown reports whether an earlier attempt for this post may
+// have succeeded without the site hearing of it: the queue row has been
+// claimed before (a transient failure, since a permanent one abandons the
+// row), or the post carries a transient failure from an earlier row, as after
+// a manual Retry.
+func priorAttemptUnknown(row outbox.Row, job SendJob) bool {
+	if row.Attempts > 1 {
+		return true
+	}
+	return job.LastError != nil && strings.Contains(*job.LastError, unknownOutcomeMarker)
+}
+
+// postMastodon posts the status, or on an attempt after one of unknown
+// outcome first looks for a recent status of ours carrying the post's short
+// link and adopts it (#0553). The instance forgets an Idempotency-Key after
+// about an hour, so the key alone cannot make a late retry safe. If the look
+// fails, the error is returned and the row retries rather than posting blind.
+func (p *Publisher) postMastodon(ctx context.Context, row outbox.Row, job SendJob) (st mastodon.Status, adopted bool, err error) {
+	if priorAttemptUnknown(row, job) && job.ShortURL != nil {
+		found, ok, ferr := p.masto.FindRecentStatusWithURL(ctx, *job.ShortURL)
+		if ferr != nil {
+			return mastodon.Status{}, false, ferr
+		}
+		if ok {
+			return found, true, nil
+		}
+	}
+	st, err = p.masto.PostStatus(ctx, job.Body, "opencircuitsf-outreach-post-"+strconv.FormatInt(job.ID, 10))
+	return st, false, err
 }
 
 func label(ch Channel, name string) string {
@@ -349,7 +387,12 @@ func (p *Publisher) thumbnail(cover *string) ([]byte, string) {
 	if name == "." || name == "/" || name == ".." || name == "" {
 		return nil, ""
 	}
-	data, err := os.ReadFile(filepath.Join(p.mediaDir, name))
+	full := filepath.Join(p.mediaDir, name)
+	// Check the size before reading so an oversized file is never loaded.
+	if fi, err := os.Stat(full); err != nil || !fi.Mode().IsRegular() || fi.Size() == 0 || fi.Size() > int64(bluesky.MaxThumbBytes) {
+		return nil, ""
+	}
+	data, err := os.ReadFile(full)
 	if err != nil || len(data) == 0 || len(data) > bluesky.MaxThumbBytes {
 		return nil, ""
 	}
