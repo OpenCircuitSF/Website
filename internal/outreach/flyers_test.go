@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
 )
 
@@ -328,5 +330,54 @@ func TestFlyerCascadeOnOutreachDelete(t *testing.T) {
 		if err := s.pool.QueryRow(ctx, q).Scan(&n); err != nil || n != 0 {
 			t.Errorf("%s = %d %v", q, n, err)
 		}
+	}
+}
+
+func TestFlyerCaptionFields(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	o, _, _ := seedFlyerFixture(t, s)
+
+	f, err := s.CreateFlyer(ctx, FlyerInput{OutreachID: o.ID, FocalX: 0.5, FocalY: 0.5, Template: "full-photo", TitlePosition: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Description != "" || f.DescriptionShort != "" || f.TitlePosition != "auto" {
+		t.Errorf("defaults: %+v", f)
+	}
+	d, ds, tp := "Long text", "Short", "below"
+	got, err := s.UpdateFlyer(ctx, f.ID, FlyerPatch{Description: &d, DescriptionShort: &ds, TitlePosition: &tp})
+	if err != nil || got.Description != d || got.DescriptionShort != ds || got.TitlePosition != tp || got.UpdatedAt == nil {
+		t.Fatalf("round trip: %+v %v", got, err)
+	}
+	above := "above"
+	got, err = s.UpdateFlyer(ctx, f.ID, FlyerPatch{TitlePosition: &above})
+	if err != nil || got.TitlePosition != "above" || got.Description != d || got.DescriptionShort != ds {
+		t.Errorf("position only: %+v %v", got, err)
+	}
+	// A no-op patch leaves updated_at alone.
+	before := got.UpdatedAt
+	got, err = s.UpdateFlyer(ctx, f.ID, FlyerPatch{Description: &d, DescriptionShort: &ds, TitlePosition: &above})
+	if err != nil || got.UpdatedAt == nil || !got.UpdatedAt.Equal(*before) {
+		t.Errorf("no-op patch moved updated_at: %v -> %+v %v", before, got.UpdatedAt, err)
+	}
+
+	for name, c := range map[string]struct{ sql, constraint string }{
+		"description":       {`UPDATE outreach_flyers SET description = repeat('x', 361) WHERE id = $1`, "outreach_flyers_description_check"},
+		"description_short": {`UPDATE outreach_flyers SET description_short = repeat('x', 141) WHERE id = $1`, "outreach_flyers_description_short_check"},
+		"title_position":    {`UPDATE outreach_flyers SET title_position = 'middle' WHERE id = $1`, "outreach_flyers_title_position_check"},
+	} {
+		_, err := s.pool.Exec(ctx, c.sql, f.ID)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.ConstraintName != c.constraint {
+			t.Errorf("%s: err = %v, want constraint %s", name, err, c.constraint)
+		}
+	}
+	long := strings.Repeat("é", MaxFlyerDescriptionRunes)
+	if got, err := s.UpdateFlyer(ctx, f.ID, FlyerPatch{Description: &long}); err != nil || got.Description != long {
+		t.Errorf("360 multi-byte runes: %v", err)
+	}
+	if !ValidFlyerTitlePosition("auto") || ValidFlyerTitlePosition("middle") {
+		t.Error("ValidFlyerTitlePosition")
 	}
 }

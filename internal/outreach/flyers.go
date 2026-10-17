@@ -28,12 +28,33 @@ func ValidFlyerTemplate(t string) bool {
 	return false
 }
 
+// FlyerTitlePositions lists the caption title placements. The same list lives
+// in the outreach_flyers_title_position_check constraint and in
+// web/src/lib/flyers.ts.
+var FlyerTitlePositions = []string{"auto", "below", "above"}
+
+// ValidFlyerTitlePosition reports whether s names a title position.
+func ValidFlyerTitlePosition(s string) bool {
+	for _, x := range FlyerTitlePositions {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
 // Flyer selection bounds.
 const (
 	MaxFlyerLocations = 40
 	MinFlyerCopies    = 1
 	MaxFlyerCopies    = 50
 	MaxTaglineRunes   = 140
+
+	// MaxFlyerDescriptionRunes and MaxFlyerDescriptionShortRunes mirror the
+	// outreach_flyers_description_check and
+	// outreach_flyers_description_short_check constraints.
+	MaxFlyerDescriptionRunes      = 360
+	MaxFlyerDescriptionShortRunes = 140
 )
 
 var (
@@ -55,18 +76,21 @@ var (
 
 // Flyer is one row of outreach_flyers.
 type Flyer struct {
-	ID            int64
-	OutreachID    int64
-	Photo         *string
-	FocalX        float64
-	FocalY        float64
-	Template      string
-	Tagline       string
-	CreatedAt     time.Time
-	UpdatedAt     *time.Time
-	WorkshopID    int64  // filled by ListFlyers
-	WorkshopSlug  string // filled by ListFlyers
-	WorkshopTitle string // filled by ListFlyers
+	ID               int64
+	OutreachID       int64
+	Photo            *string
+	FocalX           float64
+	FocalY           float64
+	Template         string
+	Tagline          string
+	Description      string
+	DescriptionShort string
+	TitlePosition    string
+	CreatedAt        time.Time
+	UpdatedAt        *time.Time
+	WorkshopID       int64  // filled by ListFlyers
+	WorkshopSlug     string // filled by ListFlyers
+	WorkshopTitle    string // filled by ListFlyers
 }
 
 // FlyerInput is the data for a new flyer.
@@ -77,6 +101,10 @@ type FlyerInput struct {
 	FocalY     float64
 	Template   string
 	Tagline    string
+
+	Description      string
+	DescriptionShort string
+	TitlePosition    string
 }
 
 // FlyerPatch is a partial update; a nil field is left unchanged. ClearPhoto
@@ -88,6 +116,10 @@ type FlyerPatch struct {
 	FocalY     *float64
 	Template   *string
 	Tagline    *string
+
+	Description      *string
+	DescriptionShort *string
+	TitlePosition    *string
 }
 
 // FlyerLink is one row of outreach_flyer_links without its QR bytes.
@@ -198,11 +230,11 @@ func FlyerClicksByKey(links []FlyerLink, r *shortlinks.CampaignRollup) map[strin
 	return out
 }
 
-const flyerCols = `f.id, f.outreach_id, f.photo, f.focal_x, f.focal_y, f.template, f.tagline, f.created_at, f.updated_at`
+const flyerCols = `f.id, f.outreach_id, f.photo, f.focal_x, f.focal_y, f.template, f.tagline, f.description, f.description_short, f.title_position, f.created_at, f.updated_at`
 
 func scanFlyer(row pgx.Row) (Flyer, error) {
 	var f Flyer
-	err := row.Scan(&f.ID, &f.OutreachID, &f.Photo, &f.FocalX, &f.FocalY, &f.Template, &f.Tagline, &f.CreatedAt, &f.UpdatedAt)
+	err := row.Scan(&f.ID, &f.OutreachID, &f.Photo, &f.FocalX, &f.FocalY, &f.Template, &f.Tagline, &f.Description, &f.DescriptionShort, &f.TitlePosition, &f.CreatedAt, &f.UpdatedAt)
 	return f, err
 }
 
@@ -223,7 +255,7 @@ func (s *Store) ListFlyers(ctx context.Context, outreachID int64) ([]Flyer, erro
 	out := []Flyer{}
 	for rows.Next() {
 		var f Flyer
-		if err := rows.Scan(&f.ID, &f.OutreachID, &f.Photo, &f.FocalX, &f.FocalY, &f.Template, &f.Tagline, &f.CreatedAt, &f.UpdatedAt, &f.WorkshopID, &f.WorkshopSlug, &f.WorkshopTitle); err != nil {
+		if err := rows.Scan(&f.ID, &f.OutreachID, &f.Photo, &f.FocalX, &f.FocalY, &f.Template, &f.Tagline, &f.Description, &f.DescriptionShort, &f.TitlePosition, &f.CreatedAt, &f.UpdatedAt, &f.WorkshopID, &f.WorkshopSlug, &f.WorkshopTitle); err != nil {
 			return nil, fmt.Errorf("outreach: scan flyer: %w", err)
 		}
 		out = append(out, f)
@@ -240,14 +272,17 @@ func (s *Store) GetFlyer(ctx context.Context, id int64) (Flyer, error) {
 	return f, err
 }
 
-// CreateFlyer inserts a flyer.
+// CreateFlyer inserts a flyer. An empty TitlePosition is stored as "auto".
 func (s *Store) CreateFlyer(ctx context.Context, in FlyerInput) (Flyer, error) {
+	if in.TitlePosition == "" {
+		in.TitlePosition = "auto"
+	}
 	return scanFlyer(s.pool.QueryRow(ctx, `
 		WITH f AS (
-		  INSERT INTO outreach_flyers (outreach_id, photo, focal_x, focal_y, template, tagline)
-		  VALUES ($1, $2, $3, $4, $5, $6)
+		  INSERT INTO outreach_flyers (outreach_id, photo, focal_x, focal_y, template, tagline, description, description_short, title_position)
+		  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		  RETURNING *)
-		SELECT `+flyerCols+` FROM f`, in.OutreachID, in.Photo, in.FocalX, in.FocalY, in.Template, in.Tagline))
+		SELECT `+flyerCols+` FROM f`, in.OutreachID, in.Photo, in.FocalX, in.FocalY, in.Template, in.Tagline, in.Description, in.DescriptionShort, in.TitlePosition))
 }
 
 // UpdateFlyer applies a partial update in one statement. updated_at moves
@@ -259,14 +294,18 @@ func (s *Store) UpdateFlyer(ctx context.Context, id int64, p FlyerPatch) (Flyer,
 		    photo = CASE WHEN $2 THEN NULL ELSE COALESCE($3::text, photo) END,
 		    focal_x = COALESCE($4::double precision, focal_x), focal_y = COALESCE($5::double precision, focal_y),
 		    template = COALESCE($6::text, template), tagline = COALESCE($7::text, tagline),
+		    description = COALESCE($8::text, description), description_short = COALESCE($9::text, description_short),
+		    title_position = COALESCE($10::text, title_position),
 		    updated_at = CASE WHEN
 		      (CASE WHEN $2 THEN NULL ELSE COALESCE($3::text, photo) END) IS NOT DISTINCT FROM photo
 		      AND COALESCE($4::double precision, focal_x) = focal_x AND COALESCE($5::double precision, focal_y) = focal_y
 		      AND COALESCE($6::text, template) = template AND COALESCE($7::text, tagline) = tagline
+		      AND COALESCE($8::text, description) = description AND COALESCE($9::text, description_short) = description_short
+		      AND COALESCE($10::text, title_position) = title_position
 		    THEN updated_at ELSE now() END
 		  WHERE id = $1
 		  RETURNING *)
-		SELECT `+flyerCols+` FROM f`, id, p.ClearPhoto, p.Photo, p.FocalX, p.FocalY, p.Template, p.Tagline))
+		SELECT `+flyerCols+` FROM f`, id, p.ClearPhoto, p.Photo, p.FocalX, p.FocalY, p.Template, p.Tagline, p.Description, p.DescriptionShort, p.TitlePosition))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Flyer{}, ErrFlyerNotFound
 	}

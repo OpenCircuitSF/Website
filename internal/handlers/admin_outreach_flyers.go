@@ -51,18 +51,21 @@ const (
 )
 
 type flyerRowView struct {
-	ID            int64   `json:"id"`
-	OutreachID    int64   `json:"outreach_id"`
-	WorkshopID    int64   `json:"workshop_id"`
-	WorkshopSlug  string  `json:"workshop_slug"`
-	WorkshopTitle string  `json:"workshop_title"`
-	Photo         *string `json:"photo"`
-	FocalX        float64 `json:"focal_x"`
-	FocalY        float64 `json:"focal_y"`
-	Template      string  `json:"template"`
-	Tagline       string  `json:"tagline"`
-	CreatedAt     string  `json:"created_at"`
-	UpdatedAt     *string `json:"updated_at"`
+	ID               int64   `json:"id"`
+	OutreachID       int64   `json:"outreach_id"`
+	WorkshopID       int64   `json:"workshop_id"`
+	WorkshopSlug     string  `json:"workshop_slug"`
+	WorkshopTitle    string  `json:"workshop_title"`
+	Photo            *string `json:"photo"`
+	FocalX           float64 `json:"focal_x"`
+	FocalY           float64 `json:"focal_y"`
+	Template         string  `json:"template"`
+	Tagline          string  `json:"tagline"`
+	Description      string  `json:"description"`
+	DescriptionShort string  `json:"description_short"`
+	TitlePosition    string  `json:"title_position"`
+	CreatedAt        string  `json:"created_at"`
+	UpdatedAt        *string `json:"updated_at"`
 }
 
 type flyerFactsView struct {
@@ -70,6 +73,8 @@ type flyerFactsView struct {
 	DateLine   string  `json:"date_line"`
 	PlaceLine  string  `json:"place_line"`
 	CoverImage *string `json:"cover_image"`
+	// Description is the workshop's trimmed summary, or "" when it has none.
+	Description string `json:"description"`
 }
 
 type flyerLinkView struct {
@@ -114,6 +119,7 @@ func flyerRowViewOf(f outreach.Flyer, o outreach.Outreach, slug, title string) f
 	return flyerRowView{
 		ID: f.ID, OutreachID: f.OutreachID, WorkshopID: o.WorkshopID, WorkshopSlug: slug, WorkshopTitle: title,
 		Photo: f.Photo, FocalX: f.FocalX, FocalY: f.FocalY, Template: f.Template, Tagline: f.Tagline,
+		Description: f.Description, DescriptionShort: f.DescriptionShort, TitlePosition: f.TitlePosition,
 		CreatedAt: f.CreatedAt.UTC().Format(time.RFC3339), UpdatedAt: rfc3339(f.UpdatedAt),
 	}
 }
@@ -143,6 +149,9 @@ func (h *AdminOutreachHandler) buildFlyerView(w http.ResponseWriter, r *http.Req
 			PlaceLine: outreach.FlyerPlaceLine(wk.LocationName, wk.LocationAddress), CoverImage: wk.CoverImage,
 		},
 		Selection: make([]flyerSelectionView, 0, len(sel)),
+	}
+	if wk.Summary != nil {
+		v.Facts.Description = strings.TrimSpace(*wk.Summary)
 	}
 	for _, s := range sel {
 		sv := flyerSelectionView{LocationID: s.LocationID, Name: s.Name, Code: s.Code, Address: s.Address, Active: s.Active, Copies: s.Copies}
@@ -198,6 +207,10 @@ type flyerRequest struct {
 	FocalY     *float64 `json:"focal_y"`
 	Template   *string  `json:"template"`
 	Tagline    *string  `json:"tagline"`
+
+	Description      *string `json:"description"`
+	DescriptionShort *string `json:"description_short"`
+	TitlePosition    *string `json:"title_position"`
 }
 
 // validateFlyerFields trims the tagline and photo in place and returns the
@@ -217,6 +230,23 @@ func validateFlyerFields(req *flyerRequest) string {
 		if utf8.RuneCountInString(t) > outreach.MaxTaglineRunes {
 			return "tagline must be at most 140 characters"
 		}
+	}
+	if req.Description != nil {
+		t := strings.TrimSpace(*req.Description)
+		req.Description = &t
+		if utf8.RuneCountInString(t) > outreach.MaxFlyerDescriptionRunes {
+			return "description must be at most 360 characters"
+		}
+	}
+	if req.DescriptionShort != nil {
+		t := strings.TrimSpace(*req.DescriptionShort)
+		req.DescriptionShort = &t
+		if utf8.RuneCountInString(t) > outreach.MaxFlyerDescriptionShortRunes {
+			return "short description must be at most 140 characters"
+		}
+	}
+	if req.TitlePosition != nil && !outreach.ValidFlyerTitlePosition(*req.TitlePosition) {
+		return "unknown title position"
 	}
 	if req.Photo != nil {
 		t := strings.TrimSpace(*req.Photo)
@@ -255,7 +285,7 @@ func (h *AdminOutreachHandler) CreateFlyer(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	in := outreach.FlyerInput{OutreachID: *req.OutreachID, FocalX: 0.5, FocalY: 0.5, Template: "full-photo"}
+	in := outreach.FlyerInput{OutreachID: *req.OutreachID, FocalX: 0.5, FocalY: 0.5, Template: "full-photo", TitlePosition: "auto"}
 	if req.Template != nil {
 		in.Template = *req.Template
 	}
@@ -267,6 +297,15 @@ func (h *AdminOutreachHandler) CreateFlyer(w http.ResponseWriter, r *http.Reques
 	}
 	if req.Tagline != nil {
 		in.Tagline = *req.Tagline
+	}
+	if req.Description != nil {
+		in.Description = *req.Description
+	}
+	if req.DescriptionShort != nil {
+		in.DescriptionShort = *req.DescriptionShort
+	}
+	if req.TitlePosition != nil {
+		in.TitlePosition = *req.TitlePosition
 	}
 	if req.Photo != nil && *req.Photo != "" {
 		in.Photo = req.Photo
@@ -285,7 +324,7 @@ func (h *AdminOutreachHandler) CreateFlyer(w http.ResponseWriter, r *http.Reques
 }
 
 // auditFlyer records a flyer action. extra adds to the always-present
-// outreach_id; it must never carry tagline text or a photo path.
+// outreach_id; it must never carry tagline or description text or a photo path.
 func (h *AdminOutreachHandler) auditFlyer(r *http.Request, actorID int64, action string, flyerID, outreachID int64, extra map[string]any) {
 	if h.auditor == nil {
 		return
@@ -333,7 +372,8 @@ func (h *AdminOutreachHandler) PatchFlyer(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Photo == nil && req.FocalX == nil && req.FocalY == nil && req.Template == nil && req.Tagline == nil {
+	if req.Photo == nil && req.FocalX == nil && req.FocalY == nil && req.Template == nil && req.Tagline == nil &&
+		req.Description == nil && req.DescriptionShort == nil && req.TitlePosition == nil {
 		writeError(w, http.StatusBadRequest, "no fields to update")
 		return
 	}
@@ -345,7 +385,8 @@ func (h *AdminOutreachHandler) PatchFlyer(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	p := outreach.FlyerPatch{FocalX: req.FocalX, FocalY: req.FocalY, Template: req.Template, Tagline: req.Tagline}
+	p := outreach.FlyerPatch{FocalX: req.FocalX, FocalY: req.FocalY, Template: req.Template, Tagline: req.Tagline,
+		Description: req.Description, DescriptionShort: req.DescriptionShort, TitlePosition: req.TitlePosition}
 	if req.Photo != nil {
 		if *req.Photo == "" {
 			p.ClearPhoto = true
@@ -374,7 +415,7 @@ func (h *AdminOutreachHandler) PatchFlyer(w http.ResponseWriter, r *http.Request
 }
 
 // changedFlyerFields lists the design fields whose value differs, by name
-// only: the audit row never carries tagline text or a photo path.
+// only: the audit row never carries tagline or description text or a photo path.
 func changedFlyerFields(before, after outreach.Flyer) []string {
 	changed := []string{}
 	same := func(a, b *string) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
@@ -389,6 +430,15 @@ func changedFlyerFields(before, after outreach.Flyer) []string {
 	}
 	if before.Tagline != after.Tagline {
 		changed = append(changed, "tagline")
+	}
+	if before.Description != after.Description {
+		changed = append(changed, "description")
+	}
+	if before.DescriptionShort != after.DescriptionShort {
+		changed = append(changed, "description_short")
+	}
+	if before.TitlePosition != after.TitlePosition {
+		changed = append(changed, "title_position")
 	}
 	return changed
 }

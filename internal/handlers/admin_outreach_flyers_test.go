@@ -18,19 +18,23 @@ import (
 
 type testFlyerView struct {
 	Flyer struct {
-		ID         int64   `json:"id"`
-		OutreachID int64   `json:"outreach_id"`
-		WorkshopID int64   `json:"workshop_id"`
-		Photo      *string `json:"photo"`
-		FocalX     float64 `json:"focal_x"`
-		FocalY     float64 `json:"focal_y"`
-		Template   string  `json:"template"`
-		Tagline    string  `json:"tagline"`
+		ID               int64   `json:"id"`
+		OutreachID       int64   `json:"outreach_id"`
+		WorkshopID       int64   `json:"workshop_id"`
+		Photo            *string `json:"photo"`
+		FocalX           float64 `json:"focal_x"`
+		FocalY           float64 `json:"focal_y"`
+		Template         string  `json:"template"`
+		Tagline          string  `json:"tagline"`
+		Description      string  `json:"description"`
+		DescriptionShort string  `json:"description_short"`
+		TitlePosition    string  `json:"title_position"`
 	} `json:"flyer"`
 	Facts struct {
-		Title     string `json:"title"`
-		DateLine  string `json:"date_line"`
-		PlaceLine string `json:"place_line"`
+		Title       string `json:"title"`
+		DateLine    string `json:"date_line"`
+		PlaceLine   string `json:"place_line"`
+		Description string `json:"description"`
 	} `json:"facts"`
 	Selection []struct {
 		LocationID int64  `json:"location_id"`
@@ -198,6 +202,9 @@ func TestAdminOutreachFlyers_Validation(t *testing.T) {
 		"focal":            fmt.Sprintf(`{"outreach_id":%d,"focal_x":1.5}`, o.ID),
 		"tagline":          fmt.Sprintf(`{"outreach_id":%d,"tagline":%q}`, o.ID, strings.Repeat("é", 141)),
 		"off-site photo":   fmt.Sprintf(`{"outreach_id":%d,"photo":"//evil.example/x.jpg"}`, o.ID),
+		"description":      fmt.Sprintf(`{"outreach_id":%d,"description":%q}`, o.ID, strings.Repeat("é", 361)),
+		"short desc":       fmt.Sprintf(`{"outreach_id":%d,"description_short":%q}`, o.ID, strings.Repeat("é", 141)),
+		"title position":   fmt.Sprintf(`{"outreach_id":%d,"title_position":"middle"}`, o.ID),
 		"absolute photo":   fmt.Sprintf(`{"outreach_id":%d,"photo":"https://evil.example/x.jpg"}`, o.ID),
 	} {
 		code, b := e.do(t, http.MethodPost, "/admin/outreach-flyers", body)
@@ -212,6 +219,61 @@ func TestAdminOutreachFlyers_Validation(t *testing.T) {
 	// 140 multi-byte runes is fine: the limit counts characters.
 	if code, b := e.do(t, http.MethodPost, "/admin/outreach-flyers", fmt.Sprintf(`{"outreach_id":%d,"tagline":%q}`, o.ID, strings.Repeat("é", 140))); code != http.StatusCreated {
 		t.Errorf("140 runes = %d (%s)", code, b)
+	}
+	if code, b := e.do(t, http.MethodPost, "/admin/outreach-flyers", fmt.Sprintf(`{"outreach_id":%d,"description":%q}`, o.ID, strings.Repeat("é", 360))); code != http.StatusCreated {
+		t.Errorf("360 rune description = %d (%s)", code, b)
+	}
+	code, b := e.do(t, http.MethodPost, "/admin/outreach-flyers", fmt.Sprintf(`{"outreach_id":%d,"description":%q}`, o.ID, strings.Repeat("é", 361)))
+	if code != http.StatusBadRequest || !strings.Contains(string(b), "description must be at most 360 characters") {
+		t.Errorf("361 rune message = %d (%s)", code, b)
+	}
+}
+
+func TestAdminOutreachFlyers_CaptionFields(t *testing.T) {
+	e := newFlyerEnv(t, true, 1)
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	o := e.start(t, w).Outreach
+	code, b := e.do(t, http.MethodPost, "/admin/outreach-flyers", fmt.Sprintf(`{"outreach_id":%d}`, o.ID))
+	if code != http.StatusCreated {
+		t.Fatalf("create = %d (%s)", code, b)
+	}
+	v := decodeOutreach[testFlyerView](t, b)
+	if v.Flyer.TitlePosition != "auto" || v.Flyer.Description != "" || v.Flyer.DescriptionShort != "" || v.Facts.Description != "" {
+		t.Errorf("defaults = %+v / %+v", v.Flyer, v.Facts)
+	}
+	path := fmt.Sprintf("/admin/outreach-flyers/%d", v.Flyer.ID)
+
+	// facts.description is the trimmed workshop summary.
+	if _, err := e.pool.Exec(context.Background(), `UPDATE workshops SET summary = $2 WHERE id = $1`, w.ID, "  Solder an LED badge.  \n"); err != nil {
+		t.Fatal(err)
+	}
+	code, b = e.do(t, http.MethodGet, path, "")
+	if got := decodeOutreach[testFlyerView](t, b); code != http.StatusOK || got.Facts.Description != "Solder an LED badge." {
+		t.Errorf("facts.description = %d %q", code, got.Facts.Description)
+	}
+
+	// A patch with only title_position is accepted.
+	code, b = e.do(t, http.MethodPatch, path, `{"title_position":"above"}`)
+	if got := decodeOutreach[testFlyerView](t, b); code != http.StatusOK || got.Flyer.TitlePosition != "above" {
+		t.Errorf("patch title_position = %d (%s)", code, b)
+	}
+
+	// Description text is trimmed on save, and the audit row names fields only.
+	code, b = e.do(t, http.MethodPatch, path, `{"description":"  Secret flyer words  ","description_short":" Short words "}`)
+	got := decodeOutreach[testFlyerView](t, b)
+	if code != http.StatusOK || got.Flyer.Description != "Secret flyer words" || got.Flyer.DescriptionShort != "Short words" || got.Flyer.TitlePosition != "above" {
+		t.Errorf("patch descriptions = %d (%s)", code, b)
+	}
+	var meta string
+	if err := e.pool.QueryRow(context.Background(),
+		`SELECT metadata::text FROM audit_log WHERE action = 'outreach_flyer.updated' AND target_id = $1 ORDER BY id DESC LIMIT 1`, v.Flyer.ID).Scan(&meta); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(meta, "description") || !strings.Contains(meta, "description_short") || strings.Contains(meta, "Secret") || strings.Contains(meta, "Short words") {
+		t.Errorf("audit metadata = %s", meta)
+	}
+	if code, b := e.do(t, http.MethodPatch, path, `{"title_position":"middle"}`); code != http.StatusBadRequest {
+		t.Errorf("bad position = %d (%s)", code, b)
 	}
 }
 
