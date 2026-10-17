@@ -27,11 +27,14 @@ const (
 )
 
 // TrackerDeps are the Tracker's collaborators. A nil Bluesky or Mastodon
-// client switches that half off.
+// client switches that half off. Clients, when set, supersedes the two fixed
+// clients so a connection saved in admin Settings takes effect without a
+// restart (#0564).
 type TrackerDeps struct {
 	Store    *Store
 	Bluesky  *bluesky.Client
 	Mastodon *mastodon.Client
+	Clients  ClientSource
 	Interval time.Duration    // default 15 minutes
 	Now      func() time.Time // default time.Now; tests pin it
 	Log      *slog.Logger
@@ -43,7 +46,8 @@ type TrackerDeps struct {
 // insert is idempotent and a position is stored only after the work it covers.
 type Tracker struct {
 	store    *Store
-	bsky     *bluesky.Client
+	clients  ClientSource
+	bsky     *bluesky.Client // refreshed from clients at the top of every pass; only the run goroutine touches it
 	masto    *mastodon.Client
 	interval time.Duration
 	now      func() time.Time
@@ -73,15 +77,19 @@ func NewTracker(d TrackerDeps) *Tracker {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
+	if d.Clients == nil {
+		d.Clients = staticClients{d.Bluesky, d.Mastodon}
+	}
 	return &Tracker{
-		store: d.Store, bsky: d.Bluesky, masto: d.Mastodon, interval: d.Interval, now: d.Now, log: d.Log,
+		store: d.Store, clients: d.Clients, bsky: d.Clients.Bluesky(), masto: d.Clients.Mastodon(), interval: d.Interval, now: d.Now, log: d.Log,
 		attempted: map[int64]time.Time{},
 		stopCh:    make(chan struct{}), doneCh: make(chan struct{}),
 	}
 }
 
 // Run blocks, passing at once and then every interval, until Stop is called
-// or ctx is done. With neither channel configured it returns immediately.
+// or ctx is done. With neither channel configured it idles: a channel
+// configured later starts being polled without a restart.
 func (t *Tracker) Run(ctx context.Context) {
 	defer close(t.doneCh)
 	select {
@@ -89,6 +97,7 @@ func (t *Tracker) Run(ctx context.Context) {
 		return
 	default:
 	}
+	t.bsky, t.masto = t.clients.Bluesky(), t.clients.Mastodon()
 	if !t.bsky.Enabled() {
 		t.log.Info("outreach tracker: bluesky tracking off (not configured)")
 	}
@@ -96,8 +105,7 @@ func (t *Tracker) Run(ctx context.Context) {
 		t.log.Info("outreach tracker: mastodon tracking off (not configured)")
 	}
 	if !t.bsky.Enabled() && !t.masto.Enabled() {
-		t.log.Info("outreach tracker: no channel configured, not polling")
-		return
+		t.log.Info("outreach tracker: no channel configured yet, idling")
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -146,6 +154,10 @@ func (t *Tracker) Stop(ctx context.Context) error {
 // pass is one mentions-then-engagement sweep. A failure in one half never
 // stops the others, and the pass always ends with one summary line.
 func (t *Tracker) pass(ctx context.Context) {
+	t.bsky, t.masto = t.clients.Bluesky(), t.clients.Mastodon()
+	if !t.bsky.Enabled() && !t.masto.Enabled() {
+		return
+	}
 	var bskyIn, mastoIn int
 	if t.bsky.Enabled() {
 		bskyIn = t.bskyMentions(ctx)

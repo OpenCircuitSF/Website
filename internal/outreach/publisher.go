@@ -46,14 +46,33 @@ type Settings interface {
 	GetSetting(ctx context.Context, key string) (string, error)
 }
 
+// ClientSource yields the current Bluesky and Mastodon clients; either may be
+// nil. Admin Settings can replace a client at runtime (#0564), so consumers
+// ask the source each time instead of holding a client from boot.
+type ClientSource interface {
+	Bluesky() *bluesky.Client
+	Mastodon() *mastodon.Client
+}
+
+// staticClients is a ClientSource over two fixed clients.
+type staticClients struct {
+	bs *bluesky.Client
+	ma *mastodon.Client
+}
+
+func (s staticClients) Bluesky() *bluesky.Client   { return s.bs }
+func (s staticClients) Mastodon() *mastodon.Client { return s.ma }
+
 // PublisherDeps are the Publisher's collaborators. A nil Bluesky or Mastodon
-// client means that channel is not configured.
+// client means that channel is not configured. Clients, when set, supersedes
+// the two fixed clients so the connection can change at runtime.
 type PublisherDeps struct {
 	Store    *Store
 	Outbox   *outbox.Store
 	Settings Settings
 	Bluesky  *bluesky.Client
 	Mastodon *mastodon.Client
+	Clients  ClientSource
 	// MediaDir is where /media/ cover images live on disk; empty disables
 	// thumbnails.
 	MediaDir     string
@@ -70,8 +89,7 @@ type Publisher struct {
 	store    *Store
 	outbox   *outbox.Store
 	settings Settings
-	bsky     *bluesky.Client
-	masto    *mastodon.Client
+	clients  ClientSource
 	mediaDir string
 	poll     time.Duration
 	log      *slog.Logger
@@ -92,8 +110,11 @@ func NewPublisher(d PublisherDeps) *Publisher {
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
+	if d.Clients == nil {
+		d.Clients = staticClients{d.Bluesky, d.Mastodon}
+	}
 	return &Publisher{
-		store: d.Store, outbox: d.Outbox, settings: d.Settings, bsky: d.Bluesky, masto: d.Mastodon,
+		store: d.Store, outbox: d.Outbox, settings: d.Settings, clients: d.Clients,
 		mediaDir: d.MediaDir, poll: d.PollInterval, log: d.Log, tracker: d.Tracker,
 		stopCh: make(chan struct{}), doneCh: make(chan struct{}),
 	}
@@ -107,9 +128,21 @@ func (p *Publisher) ChannelConfigured(name string) bool {
 	}
 	switch name {
 	case "bluesky":
-		return p.bsky.Enabled()
+		return p.clients.Bluesky().Enabled()
 	case "mastodon":
-		return p.masto.Enabled()
+		return p.clients.Mastodon().Enabled()
+	}
+	return false
+}
+
+// channelEnabled reports whether the named automatic channel has a client in
+// the captured pair.
+func channelEnabled(name string, bs *bluesky.Client, ma *mastodon.Client) bool {
+	switch name {
+	case "bluesky":
+		return bs.Enabled()
+	case "mastodon":
+		return ma.Enabled()
 	}
 	return false
 }
@@ -258,8 +291,11 @@ func (p *Publisher) sendOne(parent context.Context, row outbox.Row) {
 		p.hold(row, job)
 		return
 	}
+	// Captured once: a Settings save in the middle of a send must not hand a
+	// nil client to Post.
+	bs, ma := p.clients.Bluesky(), p.clients.Mastodon()
 	ch, ok := ChannelByName(job.Channel)
-	if !ok || !p.ChannelConfigured(job.Channel) {
+	if !ok || !channelEnabled(ch.Name, bs, ma) {
 		p.fail(row, job, label(ch, job.Channel)+" is not configured on this server", true)
 		return
 	}
@@ -275,7 +311,7 @@ func (p *Publisher) sendOne(parent context.Context, row outbox.Row) {
 	var remoteID, remoteURL string
 	switch ch.Name {
 	case "bluesky":
-		res, err := p.postBluesky(ctx, job)
+		res, err := p.postBluesky(ctx, bs, job)
 		if err != nil {
 			p.postFailed(row, job, ch, err, bluesky.IsPermanent(err))
 			return
@@ -285,7 +321,7 @@ func (p *Publisher) sendOne(parent context.Context, row outbox.Row) {
 			p.log.Warn("outreach: thumbnail upload failed, posted without it", "post_id", job.ID, "err", res.ThumbErr)
 		}
 	case "mastodon":
-		st, adopted, err := p.postMastodon(ctx, row, job)
+		st, adopted, err := p.postMastodon(ctx, ma, row, job)
 		if err != nil {
 			p.postFailed(row, job, ch, err, mastodon.IsPermanent(err))
 			return
@@ -331,13 +367,13 @@ func (p *Publisher) priorAttemptUnknown(ctx context.Context, row outbox.Row) (bo
 // link and adopts it (#0553). The instance forgets an Idempotency-Key after
 // about an hour, so the key alone cannot make a late retry safe. If the look
 // fails, the error is returned and the row retries rather than posting blind.
-func (p *Publisher) postMastodon(ctx context.Context, row outbox.Row, job SendJob) (st mastodon.Status, adopted bool, err error) {
+func (p *Publisher) postMastodon(ctx context.Context, masto *mastodon.Client, row outbox.Row, job SendJob) (st mastodon.Status, adopted bool, err error) {
 	prior, perr := p.priorAttemptUnknown(ctx, row)
 	if perr != nil {
 		return mastodon.Status{}, false, perr
 	}
 	if prior && job.ShortURL != nil {
-		found, ok, ferr := p.masto.FindRecentStatusWithURL(ctx, *job.ShortURL)
+		found, ok, ferr := masto.FindRecentStatusWithURL(ctx, *job.ShortURL)
 		if ferr != nil {
 			return mastodon.Status{}, false, ferr
 		}
@@ -345,7 +381,7 @@ func (p *Publisher) postMastodon(ctx context.Context, row outbox.Row, job SendJo
 			return found, true, nil
 		}
 	}
-	st, err = p.masto.PostStatus(ctx, job.Body, "opencircuitsf-outreach-post-"+strconv.FormatInt(job.ID, 10))
+	st, err = masto.PostStatus(ctx, job.Body, "opencircuitsf-outreach-post-"+strconv.FormatInt(job.ID, 10))
 	return st, false, err
 }
 
@@ -356,7 +392,7 @@ func label(ch Channel, name string) string {
 	return name
 }
 
-func (p *Publisher) postBluesky(ctx context.Context, job SendJob) (bluesky.PostResult, error) {
+func (p *Publisher) postBluesky(ctx context.Context, bsky *bluesky.Client, job SendJob) (bluesky.PostResult, error) {
 	in := bluesky.PostInput{
 		Text:      job.Body,
 		RKey:      bluesky.TID(job.CreatedAt.UnixMicro(), uint16(job.ID&1023)),
@@ -366,7 +402,7 @@ func (p *Publisher) postBluesky(ctx context.Context, job SendJob) (bluesky.PostR
 		},
 	}
 	in.Embed.Thumb, in.Embed.ThumbMIME = p.thumbnail(job.CoverImage)
-	return p.bsky.Post(ctx, in)
+	return bsky.Post(ctx, in)
 }
 
 func deref(s *string) string {

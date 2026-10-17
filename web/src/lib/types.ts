@@ -1054,3 +1054,34 @@ export interface FlyerView {
   /** Generate only: why it stopped early. */
   message?: string;
 }
+
+// ── Outreach connections ─────────────────────────────────────────────────────
+
+/** Where a connection field's effective value comes from. */
+export type ConnectionSource = 'database' | 'environment' | 'default' | 'unset';
+
+/**
+ * One connection field, mirroring GET /admin/outreach-connections. A secret
+ * field carries `set` and never a value; the server has no way to send one.
+ */
+export type ConnectionField =
+  | { key: string; env_var: string; secret: false; source: ConnectionSource; value: string }
+  | { key: string; env_var: string; secret: true; source: ConnectionSource; set: boolean };
+
+export interface ConnectionGroup {
+  name: 'shortlinks' | 'bluesky' | 'mastodon';
+  configured: boolean;
+  error: string;
+  fields: ConnectionField[];
+}
+
+export interface OutreachConnections {
+  groups: ConnectionGroup[];
+}
+
+/** POST /admin/outreach-connections/{group}/test. Always 200; `ok` says whether it worked. */
+export interface ConnectionTestResult {
+  ok: boolean;
+  detail?: string;
+  error?: string;
+}

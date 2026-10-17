@@ -196,11 +196,11 @@ export function resultsStatusMessage(status: OutreachResultsStatus): string | nu
     case 'ok':
       return null;
     case 'not_configured':
-      return 'Click results need the ShortLinks connection, which is not configured on this server.';
+      return 'Click results need the ShortLinks connection, which is not configured. Set it up under Settings → Outreach connections.';
     case 'unreachable':
       return 'ShortLinks could not be reached, so click counts are unavailable right now. Posts are listed below.';
     case 'rejected':
-      return "ShortLinks rejected this server's API token — check SHORTLINKS_API_TOKEN.";
+      return "ShortLinks rejected this server's API token — check it under Settings → Outreach connections.";
     case 'campaign_missing':
       return "This workshop's ShortLinks campaign was not found.";
     case 'not_started':

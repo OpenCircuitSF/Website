@@ -16,7 +16,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { getWorkshopOutreach, getWorkshopOutreachResults, startOutreach, createOutreachPost, ApiError } from '../../lib/api';
-  import { adminOutreachResultsHash } from '../../lib/adminRouter';
+  import { adminOutreachResultsHash, adminSectionHash } from '../../lib/adminRouter';
   import { buildGrid, cellLabel, cellIsStale, shouldPoll, unavailableMessage } from '../../lib/outreach';
   import { cellClicksLabel, cellReactionsLabel, resultsStatusMessage } from '../../lib/outreachResults';
   import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
@@ -159,7 +159,12 @@
     <Button onclick={load}>Retry</Button>
   {:else if view}
     {#if !view.available}
-      <p class="text-muted">{unavailableMessage(view.unavailable_reason)}</p>
+      <p class="text-muted">
+        {unavailableMessage(view.unavailable_reason)}
+        {#if view.unavailable_reason === 'shortlinks_not_configured'}
+          <a href={adminSectionHash('settings')}>Open Settings</a>
+        {/if}
+      </p>
     {/if}
 
     {#if view.outreach === null}

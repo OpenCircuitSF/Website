@@ -168,3 +168,18 @@ func (c *Client) renew(ctx context.Context, stale session) (session, error) {
 	}
 	return session{}, err
 }
+
+// VerifyCredentials checks the handle and app password and returns the
+// account handle. On a fresh client it performs exactly one createSession;
+// on one with a cached session it returns that session's handle without a
+// call. A nil client is an authentication failure, not a panic (#0564).
+func (c *Client) VerifyCredentials(ctx context.Context) (handle string, err error) {
+	if c == nil {
+		return "", &APIError{Message: "client not configured", Permanent: true, kind: ErrAuth}
+	}
+	_, h, err := c.identity(ctx)
+	if err != nil {
+		return "", err
+	}
+	return h, nil
+}

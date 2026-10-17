@@ -90,7 +90,8 @@ describe('OutreachPanel', () => {
       view({ available: false, unavailable_reason: 'shortlinks_not_configured', outreach: null }),
     );
     render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    await waitFor(() => expect(screen.getByText(/SHORTLINKS_BASE_URL/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Settings → Outreach connections/)).toBeTruthy());
+    expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('#/settings');
     expect(screen.queryByText('Start outreach')).toBeNull();
   });
 

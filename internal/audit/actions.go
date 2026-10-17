@@ -367,6 +367,11 @@ const (
 	ActionOutreachFlyerLinkPutUp        = "outreach_flyer_link.put_up"
 	ActionOutreachFlyerLinkPutUpCleared = "outreach_flyer_link.put_up_cleared"
 
+	// ActionOutreachConnectionsUpdated records a save of the outreach
+	// connection credentials in admin Settings (#0564). Its metadata names
+	// field keys only, never values.
+	ActionOutreachConnectionsUpdated = "outreach_connections.updated"
+
 	// Email campaign lifecycle (PRD §5.2/§6.6/§8; #0041's campaign CRUD
 	// API). Named email_campaign.* per the deleted-constants note just
 	// below — this is a distinct concept from ShortLinks' campaigns
@@ -566,6 +571,10 @@ const (
 	// for the outreach_flyer.* and outreach_flyer_link.* actions (#0549).
 	TargetOutreachFlyer     = "outreach_flyer"
 	TargetOutreachFlyerLink = "outreach_flyer_link"
+	// TargetOutreachConnections is the target type for
+	// ActionOutreachConnectionsUpdated (#0564). The connections are a set of
+	// keyed rows, not one bigint-id row, so TargetID is left nil.
+	TargetOutreachConnections = "outreach_connections"
 	// TargetInboundMail is the target type for ActionInboundMailParked
 	// (#0499). Like TargetSNSTopic above, the target has no BIGINT id — the
 	// S3 object key is a string, recorded in metadata instead — so TargetID

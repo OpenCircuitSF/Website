@@ -201,7 +201,7 @@ export function utmChips(post: Pick<OutreachPost, 'utm'>): { label: string; valu
 export function unavailableMessage(reason: string): string {
   switch (reason) {
     case 'shortlinks_not_configured':
-      return 'Outreach needs the ShortLinks connection (SHORTLINKS_BASE_URL and SHORTLINKS_API_TOKEN), which is not configured on this server.';
+      return 'Outreach needs the ShortLinks connection, which is not configured. Set it up under Settings → Outreach connections.';
     case 'workshop_not_published':
       return 'Publish this workshop to start outreach.';
     default:

@@ -42,15 +42,39 @@ each row below that `#0423` touched.
 | `MAX_SEND_RATE` | no | `10` | Messages/second ceiling; keep below the SES quota. This is the environment-level ceiling, not the operator dial — see below. |
 | `SEND_BATCH_SIZE` | no | `50` | Messages per send-worker batch |
 | `SEND_WORKER_ENABLED` | no | `true` | Set `false` on a second instance to avoid double-sending. Has no effect when `MAILER_NOOP=true` — the worker never starts regardless (see above). `#0472`: set `false` together with a blank `SES_CONFIGURATION_SET` to turn SES off entirely (`AGENTS.md` §10 item 2's prescribed recipe, made to actually boot as of this issue). `sesSender` becomes `mailing.UnconfiguredMailer`, which fails every `Send` loudly (`mailing.ErrSESUnconfigured`) instead of sending for real or silently no-opping the way `MAILER_NOOP` does — registration/recovery/etc. still enqueue onto `outbound_queue` and simply retry-then-abandon on its existing backoff, the same outcome already documented above for "a magic link requested before SES exists." `SEND_WORKER_ENABLED=false` with `SES_CONFIGURATION_SET` still set constructs the real SES mailer as usual — this combination is scoped to an actually-unconfigured SES, not to the flag alone. |
-| `SHORTLINKS_BASE_URL` | no | *(unset → outreach unavailable)* | Base URL of the ShortLinks server whose REST API `internal/shortlinks` calls (`#0543`) — `https://go.opencircuitsf.com` in production, `http://localhost:5173` against a local dev server. Optional: when this or the token is blank, `shortlinks.New` returns a nil client, outreach is reported unavailable, and the service boots normally. |
-| `SHORTLINKS_API_TOKEN` | no | *(unset → outreach unavailable)* | ShortLinks API token (`slk_…`), sent only as `Authorization: Bearer`. A secret: never log, commit, or paste it; the client never includes it in an error. Create one under Account → API tokens on the ShortLinks site, and prefer a dedicated token per environment. Optional, as above. |
-| `BLUESKY_HANDLE` | no | *(unset → Bluesky falls back to manual)* | Handle of the Bluesky account Outreach posts as (`#0545`). Optional: the Bluesky channel is "configured" only when this and the app password are both set; otherwise it shows "not configured" in the Outreach panel and behaves like a manual channel, and boot logs one warning naming the missing variable. |
-| `BLUESKY_APP_PASSWORD` | no | *(unset → Bluesky falls back to manual)* | A Bluesky **app password** (Settings → Privacy and security → App passwords), never the account password. A secret: never log, commit, or paste it; the client never includes it, or any session token, in an error. |
-| `BLUESKY_PDS_URL` | no | `https://bsky.social` | Base URL of the PDS to log in to and post through. Only change it for a self-hosted PDS. |
-| `MASTODON_BASE_URL` | no | *(unset → Mastodon falls back to manual)* | Base URL of the Mastodon instance Outreach posts to (`https` required; `http` only for `localhost`). Optional, as above. |
-| `MASTODON_TOKEN` | no | *(unset → Mastodon falls back to manual)* | Access token for the posting account (Preferences → Development, scopes `write:statuses read:statuses read:notifications` — the two read scopes are for the engagement tracker, `#0547`; without them every read is a 403, which the tracker logs naming the scope), sent only as `Authorization: Bearer`. A secret, handled as the Bluesky password is. |
+| `SHORTLINKS_BASE_URL` | no | *(unset → outreach unavailable)* | Base URL of the ShortLinks server whose REST API `internal/shortlinks` calls (`#0543`) — `https://go.opencircuitsf.com` in production, `http://localhost:5173` against a local dev server. Fallback when no value is saved in admin Settings → Outreach connections. When this or the token is blank, `shortlinks.New` returns a nil client, outreach is reported unavailable, and the service boots normally. |
+| `SHORTLINKS_API_TOKEN` | no | *(unset → outreach unavailable)* | ShortLinks API token (`slk_…`), sent only as `Authorization: Bearer`. A secret: never log, commit, or paste it; the client never includes it in an error. Create one under Account → API tokens on the ShortLinks site, and prefer a dedicated token per environment. Fallback when no value is saved in admin Settings → Outreach connections. |
+| `BLUESKY_HANDLE` | no | *(unset → Bluesky falls back to manual)* | Handle of the Bluesky account Outreach posts as (`#0545`). Fallback when no value is saved in admin Settings → Outreach connections. The Bluesky channel is "configured" only when this and the app password are both set; otherwise it shows "not configured" in the Outreach panel and behaves like a manual channel, and boot logs one warning naming the missing variable. |
+| `BLUESKY_APP_PASSWORD` | no | *(unset → Bluesky falls back to manual)* | A Bluesky **app password** (Settings → Privacy and security → App passwords), never the account password. A secret: never log, commit, or paste it; the client never includes it, or any session token, in an error. Fallback when no value is saved in admin Settings → Outreach connections. |
+| `BLUESKY_PDS_URL` | no | `https://bsky.social` | Base URL of the PDS to log in to and post through. Only change it for a self-hosted PDS. Fallback when no value is saved in admin Settings → Outreach connections. |
+| `MASTODON_BASE_URL` | no | *(unset → Mastodon falls back to manual)* | Base URL of the Mastodon instance Outreach posts to (`https` required; `http` only for `localhost`). Fallback when no value is saved in admin Settings → Outreach connections. |
+| `MASTODON_TOKEN` | no | *(unset → Mastodon falls back to manual)* | Access token for the posting account (Preferences → Development, scopes `write:statuses read:statuses read:notifications profile` — the two read scopes are for the engagement tracker, `#0547`, and `profile` (or `read:accounts` on instances older than 4.3) is for Test connection in Settings; without a read scope every read is a 403, which the tracker logs naming the scope), sent only as `Authorization: Bearer`. A secret, handled as the Bluesky password is. Fallback when no value is saved in admin Settings → Outreach connections. |
 | `ADMIN_EMAIL` | yes | — | Pre-authorized as admin on first registration when no users exist yet |
 | `MEDIA_DIR` | no | *(unset → 503)* | Directory `POST /admin/media/upload` (`#0433`) writes EXIF-stripped image uploads to — `/var/www/media` in production, once `#0465`'s group-ownership and `ReadWritePaths=` change lands. Left unset, the endpoint refuses with a named 503 rather than the service failing to boot or the route being silently omitted; the `scp` workflow (`docs/media.md`) is unaffected either way. Every test in `internal/media`/`internal/handlers` points this at a `t.TempDir()`. |
+
+**Outreach connections in Settings (`#0564`).** The seven outreach variables
+above (ShortLinks, Bluesky, Mastodon) can also be saved in admin Settings →
+Outreach connections, which stores them in the `outreach_connection_values`
+table and applies them immediately, with no restart. Precedence is per field:
+a value saved in Settings wins; otherwise the environment variable is used
+when it is non-blank; otherwise the built-in default (only
+`BLUESKY_PDS_URL` has one); otherwise the field is unset. Clearing a saved
+value in Settings deletes it, so the field falls back to its environment
+variable. There is no override that turns off a channel configured through
+the environment: to disable it, remove the variable from `config.env`.
+Secrets (the ShortLinks token, the Bluesky app password, the Mastodon token)
+are write-only: Settings shows only "Set" or "Not set" and where the value
+comes from, and no API response, log line, or audit entry carries one. They
+are stored in plaintext, protected like the rest of the database and its
+backups, because the only available encryption key would be an environment
+variable on the same box as the database; each can be revoked at its
+service, and revisit this if backups ever leave operator-controlled hosts.
+A malformed value no longer stops the service from booting: it leaves only
+its own group unconfigured, logs one warning naming the group (never a
+value), and Settings shows the group's error. Test connection checks the
+saved values with a harmless read (ShortLinks `GET /api/me`, a Bluesky
+sign-in, Mastodon `verify_credentials`), and the Mastodon token needs the
+`profile` scope (or `read:accounts` on instances older than 4.3) for it.
 
 **Outreach engagement tracking (`#0547`) has no variables of its own.** Each
 half runs exactly when its channel's client is configured (Bluesky: handle and

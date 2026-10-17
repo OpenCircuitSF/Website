@@ -281,13 +281,13 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 		})
 	}
 
-	if h.stats == nil {
+	if !h.linksEnabled() {
 		v.Status = resultsNotConfigured
 		v.FlyerAllStatus = resultsNotConfigured
 		writeJSON(w, http.StatusOK, v)
 		return
 	}
-	rollup, fetchedAt, err := h.stats.Get(r.Context(), o.CampaignSlug, from, to)
+	rollup, fetchedAt, err := h.statsCache().Get(r.Context(), o.CampaignSlug, from, to)
 	if err != nil {
 		v.Status = classifyResultsError("results for workshop", err)
 		v.FlyerAllStatus = v.Status
@@ -426,7 +426,7 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 		return
 	}
 	status := resultsOK
-	if h.stats == nil {
+	if !h.linksEnabled() {
 		status = resultsNotConfigured
 	}
 	stopped := "" // set to the first unreachable/rejected status
@@ -444,7 +444,7 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 			row.PostsTotal += n
 		}
 		switch {
-		case h.stats == nil:
+		case !h.linksEnabled():
 			row.Status = resultsNotConfigured
 		case stopped != "":
 			row.Status = stopped
@@ -466,7 +466,7 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 // row's status.
 func (h *AdminOutreachHandler) summaryClicks(ctx context.Context, row *resultsSummaryRow, s outreach.Summary, now time.Time) string {
 	from, to := outreach.ResultsWindow(s.CreatedAt, s.StartsAt, now)
-	rollup, _, err := h.stats.Get(ctx, s.CampaignSlug, from, to)
+	rollup, _, err := h.statsCache().Get(ctx, s.CampaignSlug, from, to)
 	if err != nil {
 		return classifyResultsError("results summary", err)
 	}
@@ -512,7 +512,7 @@ func (h *AdminOutreachHandler) flyerAllWorkshops(ctx context.Context, rows []res
 	byLocation := map[int64]int64{}
 	for _, slug := range order {
 		c := byCampaign[slug]
-		rollup, _, err := h.stats.Get(ctx, slug, c.from, c.to)
+		rollup, _, err := h.statsCache().Get(ctx, slug, c.from, c.to)
 		if err != nil {
 			return classifyResultsError("flyer clicks, all workshops", err)
 		}

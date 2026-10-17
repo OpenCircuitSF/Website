@@ -706,21 +706,28 @@ func TestTracker_StopCancelsABlockedRequest(t *testing.T) {
 	}
 }
 
-func TestTracker_NothingConfiguredReturnsImmediately(t *testing.T) {
+func TestTracker_NothingConfiguredIdlesUntilStop(t *testing.T) {
 	log, buf := captureLog()
-	tr := NewTracker(TrackerDeps{Log: log})
+	tr := NewTracker(TrackerDeps{Log: log, Interval: 10 * time.Millisecond})
 	done := make(chan struct{})
 	go func() { tr.Run(context.Background()); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Run with no channel configured must return")
+		t.Fatal("Run with no channel configured must idle, not return")
+	case <-time.After(50 * time.Millisecond):
 	}
 	if !strings.Contains(buf.String(), "bluesky tracking off (not configured)") || !strings.Contains(buf.String(), "mastodon tracking off (not configured)") {
 		t.Errorf("the off halves must be logged:\n%s", buf.String())
 	}
-	if err := tr.Stop(context.Background()); err != nil {
+	sc, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := tr.Stop(sc); err != nil {
 		t.Errorf("Stop: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run must return after Stop")
 	}
 }
 

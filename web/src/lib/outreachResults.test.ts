@@ -203,7 +203,8 @@ describe('resultsStatusMessage', () => {
     expect(resultsStatusMessage('unreachable')).toBe(
       'ShortLinks could not be reached, so click counts are unavailable right now. Posts are listed below.',
     );
-    expect(resultsStatusMessage('rejected')).toContain('SHORTLINKS_API_TOKEN');
+    expect(resultsStatusMessage('rejected')).toContain('Settings → Outreach connections');
+    expect(resultsStatusMessage('rejected')).not.toContain('SHORTLINKS_');
   });
 });
 

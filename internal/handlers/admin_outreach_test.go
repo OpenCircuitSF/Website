@@ -593,3 +593,37 @@ func TestAdminOutreach_ListSummaries(t *testing.T) {
 	}
 	t.Error("workshop missing from list")
 }
+
+// baseLinker is a fakeShortLinker whose Me answers a base URL the test can
+// change.
+type baseLinker struct {
+	*fakeShortLinker
+	bmu  sync.Mutex
+	base string
+}
+
+func (b *baseLinker) Me(context.Context) (*shortlinks.Me, error) {
+	b.bmu.Lock()
+	defer b.bmu.Unlock()
+	return &shortlinks.Me{BaseURL: b.base}, nil
+}
+
+func (b *baseLinker) setBase(s string) { b.bmu.Lock(); b.base = s; b.bmu.Unlock() }
+
+func TestAdminOutreach_ResetShortLinksDropsCachedBase(t *testing.T) {
+	pool := outreachTestPool(t)
+	bl := &baseLinker{fakeShortLinker: &fakeShortLinker{enabled: true}, base: "https://a.example.test"}
+	_, _, h := outreachMuxPosting(pool, bl, nil)
+	ctx := context.Background()
+	if b, err := h.shortLinksBase(ctx); err != nil || b != "https://a.example.test" {
+		t.Fatalf("first: %q %v", b, err)
+	}
+	bl.setBase("https://b.example.test")
+	if b, _ := h.shortLinksBase(ctx); b != "https://a.example.test" {
+		t.Fatalf("the base must be cached until reset, got %q", b)
+	}
+	h.ResetShortLinks()
+	if b, err := h.shortLinksBase(ctx); err != nil || b != "https://b.example.test" {
+		t.Errorf("after reset: %q %v", b, err)
+	}
+}

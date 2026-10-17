@@ -32,7 +32,6 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
-	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
 	"github.com/brennanMKE/OpenCircuitSF/internal/crt"
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
@@ -42,14 +41,13 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/inbound"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
-	"github.com/brennanMKE/OpenCircuitSF/internal/mastodon"
 	"github.com/brennanMKE/OpenCircuitSF/internal/media"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outreachconn"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
-	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 	"github.com/brennanMKE/OpenCircuitSF/web"
@@ -308,50 +306,58 @@ func servePostgres(cfg *config.Config) error {
 	adminCrtCommandsH := handlers.NewAdminCrtCommandsHandler(crtStore, auditLogger)
 	publicCrtSessionH := handlers.NewPublicCrtSessionHandler(crtStore)
 
-	// Outreach (#0544): per-workshop social drafts with ShortLinks tracking.
-	// A nil client (SHORTLINKS_BASE_URL or SHORTLINKS_API_TOKEN unset) is
-	// valid and makes the panel report itself unavailable; only a malformed
-	// base URL fails boot, as SES misconfiguration does.
-	shortLinksClient, err := shortlinks.New(cfg.ShortLinksBaseURL, cfg.ShortLinksAPIToken)
-	if err != nil {
-		return err
+	// Outreach connections (#0564): the ShortLinks client and the Bluesky and
+	// Mastodon posters are built from values saved in admin Settings, with the
+	// environment variables as a per-field fallback, and rebuilt in place when
+	// a value is saved. A group whose credentials are incomplete stays
+	// unconfigured (the panel reports itself unavailable, and posting falls
+	// back to manual). A malformed value leaves only its own group
+	// unconfigured, with one warning that names the group and never a value, so
+	// the admin can still reach the Settings screen that fixes it; only a
+	// failed database read fails boot.
+	conns := outreachconn.NewManager(outreachconn.NewStore(pool), map[string]string{
+		outreachconn.KeyShortLinksBaseURL:  cfg.ShortLinksBaseURL,
+		outreachconn.KeyShortLinksAPIToken: cfg.ShortLinksAPIToken,
+		outreachconn.KeyBlueskyHandle:      cfg.BlueskyHandle,
+		outreachconn.KeyBlueskyAppPassword: cfg.BlueskyAppPassword,
+		outreachconn.KeyBlueskyPDSURL:      cfg.BlueskyPDSURL,
+		outreachconn.KeyMastodonBaseURL:    cfg.MastodonBaseURL,
+		outreachconn.KeyMastodonToken:      cfg.MastodonToken,
+	}, slog.Default())
+	if err := conns.Reload(ctx); err != nil {
+		return fmt.Errorf("outreach connections: %w", err)
 	}
-
-	// Outreach posting (#0545): Bluesky and Mastodon clients, each nil when
-	// its credentials are incomplete (the channel then falls back to manual).
-	// A malformed URL fails boot; partial credentials log one warning naming
-	// the missing variable, never a value.
-	bskyClient, err := bluesky.New(cfg.BlueskyPDSURL, cfg.BlueskyHandle, cfg.BlueskyAppPassword)
-	if err != nil {
-		return err
+	// The warning names environment variables, so it is only accurate when no
+	// saved value can be completing the pair.
+	if !conns.HasDatabaseValues() {
+		warnPartialPostingCredentials(cfg, slog.Default())
 	}
-	mastoClient, err := mastodon.New(cfg.MastodonBaseURL, cfg.MastodonToken)
-	if err != nil {
-		return err
-	}
-	warnPartialPostingCredentials(cfg, slog.Default())
 	// Built unconditionally, like the outbox worker: SEND_WORKER_ENABLED is
 	// about SES, not about posting to social platforms.
 	outreachStore := outreach.NewStore(pool)
 	// The tracker (#0547) polls engagement and mentions for whichever of the
 	// two channels is configured; the publisher starts and stops it.
 	outreachTracker := outreach.NewTracker(outreach.TrackerDeps{
-		Store:    outreachStore,
-		Bluesky:  bskyClient,
-		Mastodon: mastoClient,
-		Log:      slog.Default(),
+		Store:   outreachStore,
+		Clients: conns,
+		Log:     slog.Default(),
 	})
 	outreachPublisher := outreach.NewPublisher(outreach.PublisherDeps{
 		Tracker:  outreachTracker,
 		Store:    outreachStore,
 		Outbox:   outbox.NewStore(pool),
 		Settings: store,
-		Bluesky:  bskyClient,
-		Mastodon: mastoClient,
+		Clients:  conns,
 		MediaDir: cfg.MediaDir,
 		Log:      slog.Default(),
 	})
-	adminOutreachH := handlers.NewAdminOutreachHandler(outreachStore, outreachStore, outreachStore, workshopsStore, shortLinksClient, auditLogger, cfg.BaseURL, outreachPublisher)
+	adminOutreachH := handlers.NewAdminOutreachHandler(outreachStore, outreachStore, outreachStore, workshopsStore, conns.ShortLinker(), auditLogger, cfg.BaseURL, outreachPublisher)
+	conns.OnChange(func(c outreachconn.Changed) {
+		if c.ShortLinks {
+			adminOutreachH.ResetShortLinks()
+		}
+	})
+	adminOutreachH.SetConnections(handlers.NewAdminOutreachConnectionsHandler(conns, auditLogger))
 
 	// Admin image upload (#0433, reopening #0153): constructed
 	// UNCONDITIONALLY here, unlike every nil-guarded devstore-gap handler
@@ -1534,6 +1540,16 @@ func adminRoutes(
 			adminRoute{http.MethodPost, "/admin/outreach-flyer-links/{id}/put-up", http.HandlerFunc(adminOutreachH.PutUpFlyerLink)},
 			adminRoute{http.MethodDelete, "/admin/outreach-flyer-links/{id}/put-up", http.HandlerFunc(adminOutreachH.PutUpFlyerLink)},
 		)
+		if c := adminOutreachH.Connections(); c != nil {
+			routes = append(routes,
+				// #0564: outreach connection credentials, saved in the database.
+				adminRoute{http.MethodGet, "/admin/outreach-connections", http.HandlerFunc(c.Get)},
+				adminRoute{http.MethodPatch, "/admin/outreach-connections", http.HandlerFunc(c.Patch)},
+				adminRoute{http.MethodPost, "/admin/outreach-connections/shortlinks/test", http.HandlerFunc(c.TestShortLinks)},
+				adminRoute{http.MethodPost, "/admin/outreach-connections/bluesky/test", http.HandlerFunc(c.TestBluesky)},
+				adminRoute{http.MethodPost, "/admin/outreach-connections/mastodon/test", http.HandlerFunc(c.TestMastodon)},
+			)
+		}
 	}
 	return routes
 }

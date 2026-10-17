@@ -174,3 +174,21 @@ func TestFindRecentStatusWithURL_ServerErrorIsReturned(t *testing.T) {
 		t.Errorf("found=%v err=%v", found, err)
 	}
 }
+
+func TestVerifyCredentials(t *testing.T) {
+	var s seen
+	c := fake(t, &s, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"acct":"opencircuit","url":"https://example.social/@opencircuit"}`)
+	})
+	got, err := c.VerifyCredentials(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Acct != "opencircuit" {
+		t.Errorf("acct = %q", got.Acct)
+	}
+	r := s.last()
+	if r.URL.Path != "/api/v1/accounts/verify_credentials" || r.Header.Get("Authorization") != "Bearer "+fakeToken {
+		t.Errorf("request path=%q auth ok=%v", r.URL.Path, r.Header.Get("Authorization") == "Bearer "+fakeToken)
+	}
+}

@@ -466,3 +466,30 @@ func TestNilClientPostIsPermanentError(t *testing.T) {
 }
 
 func errorsIs(err, target error) bool { return errors.Is(err, target) }
+
+func TestVerifyCredentials(t *testing.T) {
+	f := newFakePDS(t)
+	c, err := New(f.srv.URL, fakeHandle, fakePassword)
+	if err != nil || c == nil {
+		t.Fatal(err)
+	}
+	h, err := c.VerifyCredentials(context.Background())
+	if err != nil || h != fakeHandle {
+		t.Fatalf("handle=%q err=%v", h, err)
+	}
+	if n := f.count("/xrpc/com.atproto.server.createSession"); n != 1 {
+		t.Errorf("createSession hits = %d, want 1", n)
+	}
+
+	bad, _ := New(f.srv.URL, fakeHandle, "wrong-password")
+	if _, err := bad.VerifyCredentials(context.Background()); !errors.Is(err, ErrAuth) {
+		t.Errorf("a wrong password must be ErrAuth, got %v", err)
+	}
+}
+
+func TestVerifyCredentialsNilClient(t *testing.T) {
+	var c *Client
+	if _, err := c.VerifyCredentials(context.Background()); !errors.Is(err, ErrAuth) {
+		t.Errorf("nil client must report ErrAuth, got %v", err)
+	}
+}

@@ -10,6 +10,8 @@
     the settings table at send time and refuses to start a campaign while it
     is empty (CAN-SPAM requires a physical postal address in every commercial
     message).
+    Below it, OutreachConnections.svelte (#0564) holds the ShortLinks, Bluesky
+    and Mastodon credentials, saved in the database.
   - Users      — GET /admin/users plus POST .../{id}/deactivate|reactivate:
     list with status, deactivate a non-admin (reason dropdown + note, note
     required for "other"), reactivate with an optional note.
@@ -139,6 +141,7 @@
   import Dashboard from './admin/Dashboard.svelte';
   import Pending from './admin/Pending.svelte';
   import Deliverability from './admin/Deliverability.svelte';
+  import OutreachConnections from './admin/OutreachConnections.svelte';
   import CrtCommands from './admin/CrtCommands.svelte';
 
   // #0527: the hash is the single source of truth for which admin screen
@@ -1366,6 +1369,7 @@
           </div>
         {/if}
       </Panel>
+      <OutreachConnections />
     {/if}
 
     {#if adminRoute.section === 'users'}

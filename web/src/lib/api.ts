@@ -11,6 +11,9 @@ import type {
   Setting,
   Interest,
   CrtCommand,
+  OutreachConnections,
+  ConnectionGroup,
+  ConnectionTestResult,
   OutreachLocation,
   FlyerLinkInfo,
   FlyerRow,
@@ -1447,4 +1450,21 @@ export function markFlyerLinkPutUp(id: number): Promise<FlyerLinkInfo> {
 /** DELETE /admin/outreach-flyer-links/{id}/put-up — undo a mis-click. */
 export function clearFlyerLinkPutUp(id: number): Promise<FlyerLinkInfo> {
   return apiDelete<FlyerLinkInfo>(`/admin/outreach-flyer-links/${id}/put-up`);
+}
+
+// ── Outreach connections (#0564) ────────────────────────────────────────────
+
+/** GET /admin/outreach-connections — state of the three groups; secrets are never included. */
+export function getOutreachConnections(): Promise<OutreachConnections> {
+  return apiGet<OutreachConnections>('/admin/outreach-connections');
+}
+
+/** PATCH /admin/outreach-connections — set fields, or clear one with an empty string. */
+export function updateOutreachConnections(values: Record<string, string>): Promise<OutreachConnections> {
+  return apiPatch<OutreachConnections>('/admin/outreach-connections', { values });
+}
+
+/** POST /admin/outreach-connections/{group}/test — checks the saved values with a harmless read. */
+export function testOutreachConnection(group: ConnectionGroup['name']): Promise<ConnectionTestResult> {
+  return apiPost<ConnectionTestResult>(`/admin/outreach-connections/${group}/test`);
 }

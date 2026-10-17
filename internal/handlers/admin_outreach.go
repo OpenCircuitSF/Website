@@ -86,11 +86,15 @@ type AdminOutreachHandler struct {
 	auditor   *audit.Logger
 	baseURL   string
 	posting   outreachPosting
-	mu        sync.Mutex // guards shortBase only; never held across a network call
+	mu        sync.Mutex // guards shortBase and stats; never held across a network call
 	shortBase string     // cached Me().BaseURL; a failed fetch is not cached
-	// stats memoizes campaign stats for the results routes (#0546); nil when
-	// ShortLinks is not configured.
+	// stats memoizes campaign stats for the results routes (#0546). Always
+	// built; fetchStats answers ErrUnavailable while ShortLinks is not
+	// configured, and ResetShortLinks replaces it when the connection changes.
 	stats *shortlinks.StatsCache
+	// conns serves the connection-settings routes; nil when the server runs
+	// without a database.
+	conns *AdminOutreachConnectionsHandler
 	now   func() time.Time
 }
 
@@ -100,10 +104,49 @@ type AdminOutreachHandler struct {
 // unavailable. A nil posting means no automatic channel is configured.
 func NewAdminOutreachHandler(store outreachStore, locations outreachLocationStore, flyers outreachFlyerStore, ws outreachWorkshopReader, links shortLinker, auditor *audit.Logger, baseURL string, posting outreachPosting) *AdminOutreachHandler {
 	h := &AdminOutreachHandler{store: store, locations: locations, flyers: flyers, ws: ws, links: links, auditor: auditor, baseURL: baseURL, posting: posting, now: time.Now}
-	if h.linksEnabled() {
-		h.stats = shortlinks.NewStatsCache(links.CampaignStats, shortlinks.StatsCacheTTL, shortlinks.StatsCacheFailTTL)
-	}
+	h.stats = shortlinks.NewStatsCache(h.fetchStats, shortlinks.StatsCacheTTL, shortlinks.StatsCacheFailTTL)
 	return h
+}
+
+// fetchStats is the stats cache's source: it reads the live ShortLinks
+// connection on every miss.
+func (h *AdminOutreachHandler) fetchStats(ctx context.Context, slug string, from, to time.Time) (*shortlinks.CampaignRollup, error) {
+	if !h.linksEnabled() {
+		return nil, shortlinks.ErrUnavailable
+	}
+	return h.links.CampaignStats(ctx, slug, from, to)
+}
+
+// statsCache returns the current stats cache.
+func (h *AdminOutreachHandler) statsCache() *shortlinks.StatsCache {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.stats
+}
+
+// ResetShortLinks drops the cached short-URL host and every memoized stat;
+// called when the ShortLinks connection changes (#0564).
+func (h *AdminOutreachHandler) ResetShortLinks() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.shortBase = ""
+	h.stats = shortlinks.NewStatsCache(h.fetchStats, shortlinks.StatsCacheTTL, shortlinks.StatsCacheFailTTL)
+}
+
+// SetConnections attaches the connection-settings handler, so its routes are
+// mounted exactly when Outreach is.
+func (h *AdminOutreachHandler) SetConnections(c *AdminOutreachConnectionsHandler) {
+	if h != nil {
+		h.conns = c
+	}
+}
+
+// Connections returns the attached connection-settings handler, or nil.
+func (h *AdminOutreachHandler) Connections() *AdminOutreachConnectionsHandler {
+	if h == nil {
+		return nil
+	}
+	return h.conns
 }
 
 func (h *AdminOutreachHandler) linksEnabled() bool {

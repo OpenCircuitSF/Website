@@ -706,3 +706,44 @@ func TestPublisher_MastodonFirstAttemptDoesNotLookFirst(t *testing.T) {
 		t.Errorf("post = %+v, want a fresh post (102)", got)
 	}
 }
+
+// mutableClients is a ClientSource whose Mastodon client a test can swap.
+type mutableClients struct {
+	mu sync.Mutex
+	bs *bluesky.Client
+	ma *mastodon.Client
+}
+
+func (m *mutableClients) Bluesky() *bluesky.Client {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.bs
+}
+
+func (m *mutableClients) Mastodon() *mastodon.Client {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ma
+}
+
+func TestPublisher_ChannelConfiguredFollowsClientSource(t *testing.T) {
+	src := &mutableClients{}
+	p := NewPublisher(PublisherDeps{Clients: src})
+	if p.ChannelConfigured("mastodon") {
+		t.Fatal("mastodon must not be configured while the source has no client")
+	}
+	fm := newFakeMasto(t)
+	mc, err := mastodon.New(fm.srv.URL, fakeMastoToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.mu.Lock()
+	src.ma = mc
+	src.mu.Unlock()
+	if !p.ChannelConfigured("mastodon") {
+		t.Fatal("mastodon must be configured once the source holds a client")
+	}
+	if p.ChannelConfigured("bluesky") {
+		t.Error("bluesky must stay unconfigured")
+	}
+}

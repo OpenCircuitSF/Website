@@ -247,3 +247,21 @@ func containsLinkToken(text, link string) bool {
 func isURLChar(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || strings.IndexByte("-._~/?#%&=+", c) >= 0
 }
+
+// Account is the part of the authenticated account that Test connection
+// reports.
+type Account struct{ Acct, URL string }
+
+// VerifyCredentials calls GET /api/v1/accounts/verify_credentials, a harmless
+// read that proves the token is valid. It needs the profile scope (or
+// read:accounts on instances older than 4.3) (#0564).
+func (c *Client) VerifyCredentials(ctx context.Context) (Account, error) {
+	var out struct {
+		Acct string `json:"acct"`
+		URL  string `json:"url"`
+	}
+	if err := c.get(ctx, "/api/v1/accounts/verify_credentials", nil, &out); err != nil {
+		return Account{}, err
+	}
+	return Account{Acct: out.Acct, URL: out.URL}, nil
+}
