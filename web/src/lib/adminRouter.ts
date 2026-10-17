@@ -41,6 +41,7 @@ export type AdminSection =
   | 'deliverability'
   | 'campaigns'
   | 'workshops'
+  | 'outreach'
   | 'crt'
   | 'not-found';
 
@@ -58,6 +59,7 @@ export const ADMIN_NAV_SECTIONS: readonly Exclude<AdminSection, 'not-found'>[] =
   'deliverability',
   'campaigns',
   'workshops',
+  'outreach',
   'crt',
 ];
 
@@ -75,6 +77,7 @@ export const ADMIN_SECTION_LABELS: Readonly<Record<AdminSection, string>> = {
   deliverability: 'Deliverability',
   campaigns: 'Campaigns',
   workshops: 'Workshops',
+  outreach: 'Outreach',
   crt: 'CRT session',
   'not-found': 'Not found',
 };

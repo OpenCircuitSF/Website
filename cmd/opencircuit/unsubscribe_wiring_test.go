@@ -110,6 +110,7 @@ func TestMountAndServe_UnsubscribePost_NeverRateLimited(t *testing.T) {
 			nil, /* adminDashboardH: not exercised by this test */
 			nil, /* adminVersionH: not exercised by this test */
 			nil, /* adminCrtCommandsH: not exercised by this test */
+			nil, /* adminOutreachH: not exercised */
 			nil, nil, nil,
 			nil, nil, nil, /* publicInterestsH, preferencesH, confirmH: not exercised by this test */
 			unsubscribeH,
@@ -238,6 +239,7 @@ func TestMountAndServe_UnsubscribePost_NoSessionNoCSRF(t *testing.T) {
 			nil, /* adminDashboardH: not exercised by this test */
 			nil, /* adminVersionH: not exercised by this test */
 			nil, /* adminCrtCommandsH: not exercised by this test */
+			nil, /* adminOutreachH: not exercised */
 			nil, nil, nil,
 			nil, nil, nil,
 			unsubscribeH,

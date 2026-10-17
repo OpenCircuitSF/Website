@@ -48,6 +48,11 @@ describe('parseAdminHash', () => {
     });
   });
 
+  it('parses #/outreach as the Outreach section, listed right after Workshops (#0544)', () => {
+    expect(parseAdminHash('#/outreach')?.section).toBe('outreach');
+    expect(ADMIN_NAV_SECTIONS.indexOf('outreach')).toBe(ADMIN_NAV_SECTIONS.indexOf('workshops') + 1);
+  });
+
   it('parses #/workshops/:id as the workshop editor', () => {
     expect(parseAdminHash('#/workshops/7')).toMatchObject({
       section: 'workshops',
@@ -78,6 +83,7 @@ describe('hash builders', () => {
     expect(adminSectionHash('overview')).toBe('#/');
     expect(adminSectionHash('settings')).toBe('#/settings');
     expect(adminSectionHash('crt')).toBe('#/crt');
+    expect(adminSectionHash('outreach')).toBe('#/outreach');
   });
 
   it('builds campaign editor, stats, workshop, and audit-filter URLs', () => {

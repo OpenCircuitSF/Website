@@ -1,0 +1,227 @@
+<!--
+  The inline composer for one outreach post (#0544): the text with an exact
+  character count against the channel limit, the tracked-link box with its UTM
+  chips, and Save / Regenerate / Prepare / Copy content / Mark posted /
+  Delete. Which buttons apply is decided in lib/outreach.ts
+  (composerActions); this file is markup and wiring only. Copy is a one-line
+  clipboard call so a test can stub navigator.clipboard.
+-->
+<script lang="ts">
+  import {
+    updateOutreachPost,
+    prepareOutreachPost,
+    markOutreachPosted,
+    deleteOutreachPost,
+    ApiError,
+  } from '../../lib/api';
+  import { composerActions, countCharacters, isOverLimit, utmChips, validateRemoteUrl } from '../../lib/outreach';
+  import type { OutreachChannel, OutreachPost, OutreachWave } from '../../lib/types';
+  import { formatDateTime } from '../../lib/admin';
+  import Button from '../../lib/Button.svelte';
+
+  interface Props {
+    post: OutreachPost;
+    channel: OutreachChannel;
+    wave: OutreachWave;
+    available: boolean;
+    onChange: (post: OutreachPost) => void;
+    onDeleted: () => void;
+  }
+  let { post, channel, wave, available, onChange, onDeleted }: Props = $props();
+
+  // svelte-ignore state_referenced_locally
+  let body = $state(post.body);
+  let remoteUrl = $state('');
+  let busy = $state(false);
+  let error = $state<string | null>(null);
+  let notice = $state<string | null>(null);
+
+  // Pick up a body the server rewrote (Prepare, Regenerate).
+  $effect(() => {
+    body = post.body;
+  });
+
+  const actions = $derived(composerActions(post, available));
+  const counted = $derived(countCharacters(channel, body, post.prepared));
+  const over = $derived(isOverLimit(channel, counted.count));
+  const dirty = $derived(body !== post.body);
+
+  function message(err: unknown, fallback: string): string {
+    return err instanceof ApiError ? err.message : fallback;
+  }
+
+  async function run(label: string, fn: () => Promise<void>): Promise<void> {
+    busy = true;
+    error = null;
+    notice = null;
+    try {
+      await fn();
+    } catch (err) {
+      error = message(err, `Could not ${label}. Please try again.`);
+    } finally {
+      busy = false;
+    }
+  }
+
+  const save = () =>
+    run('save', async () => {
+      onChange(await updateOutreachPost(post.id, { body }));
+      notice = 'Saved.';
+    });
+  const regenerate = () =>
+    run('regenerate', async () => {
+      onChange(await updateOutreachPost(post.id, { regenerate: true }));
+      notice = 'Regenerated from the current workshop details.';
+    });
+  const prepare = () =>
+    run('prepare the link', async () => {
+      onChange(await prepareOutreachPost(post.id));
+      notice = 'Tracked link created.';
+    });
+  const copy = () =>
+    run('copy', async () => {
+      await navigator.clipboard.writeText(post.body);
+      notice = 'Copied.';
+    });
+  const markPosted = () =>
+    run('mark posted', async () => {
+      const bad = validateRemoteUrl(remoteUrl);
+      if (bad) {
+        error = bad;
+        return;
+      }
+      onChange(await markOutreachPosted(post.id, remoteUrl.trim() || undefined));
+      notice = 'Marked as posted.';
+    });
+  const remove = () =>
+    run('delete', async () => {
+      await deleteOutreachPost(post.id);
+      onDeleted();
+    });
+</script>
+
+<div class="composer">
+  <h3 class="composer-title">{channel.label} &middot; {wave.label}</h3>
+
+  {#if actions.canRegenerate}
+    <p class="text-warn">
+      The workshop's title, date or place changed since this was drafted.
+      <Button onclick={regenerate} disabled={busy}>Regenerate</Button>
+    </p>
+  {/if}
+
+  <label class="field">
+    <span class="field-label">Post text</span>
+    <textarea rows="7" bind:value={body} disabled={post.status === 'posted'}></textarea>
+  </label>
+  <p class={over ? 'text-error' : 'text-muted'}>
+    {counted.exact ? '' : '≈ '}{counted.count}{channel.char_limit > 0 ? ` / ${channel.char_limit}` : ''} characters{over ? ' — over the limit' : ''}
+  </p>
+
+  <div class="link-box">
+    <p class="field-label">Tracked link</p>
+    {#if post.short_url}
+      <p class="mono">{post.short_url}</p>
+    {:else}
+      <p class="text-muted">Not created yet. Prepare puts the real short URL in the text.</p>
+    {/if}
+    <p class="text-muted dest">Goes to <span class="mono">{post.destination_url}</span></p>
+    <ul class="chips">
+      {#each utmChips(post) as chip (chip.label)}
+        <li class="chip"><span class="text-muted">{chip.label}</span> {chip.value}</li>
+      {/each}
+    </ul>
+  </div>
+
+  {#if post.status === 'posted'}
+    <p class="text-notice">
+      Posted{post.posted_at ? ` ${formatDateTime(post.posted_at)}` : ''}.
+      {#if post.remote_url}<a href={post.remote_url} rel="noopener noreferrer">View post</a>{/if}
+    </p>
+  {/if}
+
+  {#if actions.canMarkPosted}
+    <label class="field">
+      <span class="field-label">Post URL (optional)</span>
+      <input type="url" bind:value={remoteUrl} placeholder="https://…" />
+    </label>
+  {/if}
+
+  <div class="row">
+    {#if actions.canSave}
+      <Button variant="primary" onclick={save} disabled={busy || !dirty || over}>Save</Button>
+    {/if}
+    {#if actions.canPrepare}
+      <Button onclick={prepare} disabled={busy || dirty}>Prepare link</Button>
+    {/if}
+    {#if actions.canCopy}
+      <Button onclick={copy} disabled={busy || dirty}>Copy content</Button>
+    {/if}
+    {#if actions.canMarkPosted}
+      <Button onclick={markPosted} disabled={busy || dirty}>Mark posted</Button>
+    {/if}
+    {#if actions.canDelete}
+      <Button variant="danger" onclick={remove} disabled={busy}>Delete</Button>
+    {/if}
+  </div>
+  {#if dirty && post.status !== 'posted'}
+    <p class="text-muted">Save your edits before preparing, copying or marking posted.</p>
+  {/if}
+
+  {#if error}
+    <p class="text-error" role="alert">{error}</p>
+  {/if}
+  <p class="text-notice" role="status">{notice ?? ''}</p>
+</div>
+
+<style>
+  .composer {
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: var(--border-w) solid var(--border);
+  }
+  .composer-title {
+    font-size: var(--fs-lg);
+    margin: 0 0 var(--space-3);
+  }
+  .field {
+    display: block;
+    margin-bottom: var(--space-2);
+  }
+  .field-label {
+    display: block;
+    margin: 0 0 var(--space-1);
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+  }
+  textarea {
+    width: 100%;
+    font-family: var(--font);
+    font-size: var(--fs-base);
+  }
+  .link-box {
+    margin: var(--space-3) 0;
+  }
+  .mono {
+    font-family: var(--font-mono);
+    overflow-wrap: anywhere;
+  }
+  .dest {
+    font-size: var(--fs-sm);
+  }
+  .chips {
+    list-style: none;
+    padding: 0;
+    margin: var(--space-2) 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .chip {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    border: var(--border-w) solid var(--border);
+    border-radius: var(--radius);
+    padding: 0 var(--space-2);
+  }
+</style>

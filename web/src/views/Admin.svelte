@@ -135,6 +135,7 @@
   import { APP_NAME } from '../lib/branding';
   import Campaigns from './admin/Campaigns.svelte';
   import Workshops from './admin/Workshops.svelte';
+  import Outreach from './admin/Outreach.svelte';
   import Dashboard from './admin/Dashboard.svelte';
   import Pending from './admin/Pending.svelte';
   import Deliverability from './admin/Deliverability.svelte';
@@ -2459,6 +2460,10 @@
         onBackToList={() => (window.location.hash = adminSectionHash('workshops'))}
         onAnnounced={goToAnnouncedCampaign}
       />
+    {/if}
+
+    {#if adminRoute.section === 'outreach'}
+      <Outreach />
     {/if}
 
     {#if adminRoute.section === 'not-found'}

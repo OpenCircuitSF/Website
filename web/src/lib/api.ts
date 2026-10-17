@@ -11,6 +11,9 @@ import type {
   Setting,
   Interest,
   CrtCommand,
+  OutreachPost,
+  OutreachSummary,
+  WorkshopOutreach,
   Subscriber,
   SubscribersPage,
   Suppression,
@@ -1262,4 +1265,51 @@ export function announceWorkshop(id: number): Promise<Campaign> {
  */
 export function previewWorkshop(id: number): Promise<WorkshopPreviewResponse> {
   return apiPost<WorkshopPreviewResponse>(`/admin/workshops/${id}/preview`);
+}
+
+// ── Outreach (#0544) ────────────────────────────────────────────────────────
+
+/** GET /admin/workshops/{id}/outreach — the panel view (always 200 for a known workshop). */
+export function getWorkshopOutreach(workshopId: number): Promise<WorkshopOutreach> {
+  return apiGet<WorkshopOutreach>(`/admin/workshops/${workshopId}/outreach`);
+}
+
+/** POST /admin/workshops/{id}/outreach — ensure the ShortLinks campaign and start outreach. */
+export function startOutreach(workshopId: number): Promise<WorkshopOutreach> {
+  return apiPost<WorkshopOutreach>(`/admin/workshops/${workshopId}/outreach`);
+}
+
+/** GET /admin/outreach — every workshop that has outreach. */
+export function listOutreach(): Promise<{ outreach: OutreachSummary[] }> {
+  return apiGet<{ outreach: OutreachSummary[] }>('/admin/outreach');
+}
+
+/** POST /admin/outreach/{id}/posts — create a draft; an omitted body is generated server-side. */
+export function createOutreachPost(
+  outreachId: number,
+  channel: string,
+  wave: string,
+  body?: string,
+): Promise<OutreachPost> {
+  return apiPost<OutreachPost>(`/admin/outreach/${outreachId}/posts`, body === undefined ? { channel, wave } : { channel, wave, body });
+}
+
+/** PATCH /admin/outreach-posts/{id} — edit the body, or regenerate it from the workshop. */
+export function updateOutreachPost(id: number, change: { body: string } | { regenerate: true }): Promise<OutreachPost> {
+  return apiPatch<OutreachPost>(`/admin/outreach-posts/${id}`, change);
+}
+
+/** POST /admin/outreach-posts/{id}/prepare — create the tracked short link (idempotent). */
+export function prepareOutreachPost(id: number): Promise<OutreachPost> {
+  return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/prepare`);
+}
+
+/** POST /admin/outreach-posts/{id}/posted — record that the post went out, with an optional URL. */
+export function markOutreachPosted(id: number, remoteUrl?: string): Promise<OutreachPost> {
+  return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/posted`, remoteUrl ? { remote_url: remoteUrl } : {});
+}
+
+/** DELETE /admin/outreach-posts/{id} — delete a post that has not been posted. */
+export function deleteOutreachPost(id: number): Promise<unknown> {
+  return apiDelete<unknown>(`/admin/outreach-posts/${id}`);
 }

@@ -168,6 +168,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 			nil,           /* adminDashboardH: not exercised by this test */
 			nil,           /* adminVersionH: not exercised by this test */
 			nil,           /* adminCrtCommandsH: not exercised by this test */
+			nil,           /* adminOutreachH: not exercised */
 			nil, nil, nil, /* eventsH, meH, subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
 			nil, nil, nil, /* publicWorkshopsH, publicListStatsH, publicCrtSessionH: not exercised by this test -- this test hits the SEO-rendered detail page, not the JSON API */
@@ -450,6 +451,7 @@ func TestMountAndServe_CampaignArchiveMutationInvalidatesSharedSEOSite(t *testin
 			nil,           /* adminDashboardH: not exercised by this test */
 			nil,           /* adminVersionH: not exercised by this test */
 			nil,           /* adminCrtCommandsH: not exercised by this test */
+			nil,           /* adminOutreachH: not exercised */
 			nil, nil, nil, /* eventsH, meH, subscribeH: not exercised by this test */
 			nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH: not exercised by this test */
 			nil, nil, nil, /* publicWorkshopsH, publicListStatsH, publicCrtSessionH: not exercised by this test */

@@ -330,6 +330,17 @@ const (
 	// case to distinguish here.
 	ActionCrtCommandDeleted = "crt_command.deleted"
 
+	// Outreach (#0544): a workshop's ShortLinks campaign and its drafted
+	// social posts. ActionOutreachStarted targets an outreach row; the
+	// outreach_post.* actions target a post. A no-op Prepare on an already
+	// prepared post writes nothing.
+	ActionOutreachStarted      = "outreach.started"
+	ActionOutreachPostCreated  = "outreach_post.created"
+	ActionOutreachPostUpdated  = "outreach_post.updated"
+	ActionOutreachPostPrepared = "outreach_post.prepared"
+	ActionOutreachPostPosted   = "outreach_post.posted"
+	ActionOutreachPostDeleted  = "outreach_post.deleted"
+
 	// Email campaign lifecycle (PRD §5.2/§6.6/§8; #0041's campaign CRUD
 	// API). Named email_campaign.* per the deleted-constants note just
 	// below — this is a distinct concept from ShortLinks' campaigns
@@ -517,6 +528,10 @@ const (
 	// TargetCrtCommand is the target type for the crt_command.* actions
 	// above (#0393).
 	TargetCrtCommand = "crt_command"
+	// TargetOutreach and TargetOutreachPost are the target types for the
+	// outreach.* and outreach_post.* actions above (#0544).
+	TargetOutreach     = "outreach"
+	TargetOutreachPost = "outreach_post"
 	// TargetInboundMail is the target type for ActionInboundMailParked
 	// (#0499). Like TargetSNSTopic above, the target has no BIGINT id — the
 	// S3 object key is a string, recorded in metadata instead — so TargetID

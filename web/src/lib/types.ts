@@ -762,3 +762,77 @@ export interface DashboardWarnings {
   /** At least one outbound_queue row has reached the terminal 'abandoned' state (#0126). */
   outbound_queue_abandoned: boolean;
 }
+
+// ── Outreach (#0544) ─────────────────────────────────────────────────────────
+// Mirrors internal/handlers/admin_outreach.go's JSON views exactly. The
+// channel and wave lists come from the server; there is no local copy.
+
+export interface OutreachChannel {
+  name: string;
+  label: string;
+  utm_source: string;
+  utm_medium: string;
+  /** 0 means no limit is enforced. */
+  char_limit: number;
+  automatic: boolean;
+}
+
+export interface OutreachWave {
+  name: string;
+  label: string;
+  /** RFC 3339; null for announce or when the workshop has no start. */
+  suggested_at: string | null;
+}
+
+export interface OutreachUtm {
+  source: string;
+  medium: string;
+  campaign: string;
+  content: string;
+}
+
+export type OutreachPostStatus = 'draft' | 'scheduled' | 'queued' | 'posted' | 'failed' | 'manual';
+
+export interface OutreachPost {
+  id: number;
+  outreach_id: number;
+  channel: string;
+  wave: string;
+  body: string;
+  status: OutreachPostStatus;
+  prepared: boolean;
+  stale: boolean;
+  short_link_key: string | null;
+  short_url: string | null;
+  destination_url: string;
+  utm: OutreachUtm;
+  scheduled_at: string | null;
+  posted_at: string | null;
+  remote_url: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface WorkshopOutreach {
+  available: boolean;
+  /** '', 'shortlinks_not_configured' or 'workshop_not_published'. */
+  unavailable_reason: string;
+  workshop: { id: number; slug: string; title: string; status: string; starts_at: string | null };
+  outreach: { id: number; workshop_id: number; campaign_slug: string; created_at: string } | null;
+  channels: OutreachChannel[];
+  waves: OutreachWave[];
+  posts: OutreachPost[];
+}
+
+export interface OutreachSummary {
+  outreach_id: number;
+  workshop_id: number;
+  workshop_slug: string;
+  workshop_title: string;
+  workshop_status: string;
+  campaign_slug: string;
+  starts_at: string | null;
+  counts: Record<string, number>;
+  created_at: string;
+}

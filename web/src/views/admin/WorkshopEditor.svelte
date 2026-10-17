@@ -116,6 +116,7 @@
   import type { AdminWorkshop, Interest } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
+  import OutreachPanel from './OutreachPanel.svelte';
 
   interface Props {
     workshopId: number;
@@ -801,6 +802,10 @@
         <Button variant="primary" onclick={openAnnouncedCampaign}>Open draft campaign</Button>
       {/if}
     </div>
+  </Panel>
+
+  <Panel title="Outreach">
+    <OutreachPanel {workshopId} workshopUpdatedAt={workshop.updated_at} />
   </Panel>
 
   {#if transitionOpen}

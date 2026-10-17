@@ -44,8 +44,10 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/media"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
+	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 	"github.com/brennanMKE/OpenCircuitSF/web"
@@ -303,6 +305,16 @@ func servePostgres(cfg *config.Config) error {
 	crtStore := crt.NewStore(pool)
 	adminCrtCommandsH := handlers.NewAdminCrtCommandsHandler(crtStore, auditLogger)
 	publicCrtSessionH := handlers.NewPublicCrtSessionHandler(crtStore)
+
+	// Outreach (#0544): per-workshop social drafts with ShortLinks tracking.
+	// A nil client (SHORTLINKS_BASE_URL or SHORTLINKS_API_TOKEN unset) is
+	// valid and makes the panel report itself unavailable; only a malformed
+	// base URL fails boot, as SES misconfiguration does.
+	shortLinksClient, err := shortlinks.New(cfg.ShortLinksBaseURL, cfg.ShortLinksAPIToken)
+	if err != nil {
+		return err
+	}
+	adminOutreachH := handlers.NewAdminOutreachHandler(outreach.NewStore(pool), workshopsStore, shortLinksClient, auditLogger, cfg.BaseURL)
 
 	// Admin image upload (#0433, reopening #0153): constructed
 	// UNCONDITIONALLY here, unlike every nil-guarded devstore-gap handler
@@ -630,7 +642,7 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAdminAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -1146,6 +1158,9 @@ func serveDevMode(cfg *config.Config) error {
 	// CRT_SESSION constant (web/src/lib/crtScreen.ts) -- see that file's own
 	// doc comment.
 	var adminCrtCommandsH *handlers.AdminCrtCommandsHandler
+	// Outreach (#0544) has the same devstore gap: no outreach tables under
+	// STORAGE=json, so the handler is nil and adminRoutes omits its routes.
+	var adminOutreachH *handlers.AdminOutreachHandler
 	var publicCrtSessionH *handlers.PublicCrtSessionHandler
 
 	// Admin build info (#0516) needs no table backing — version and
@@ -1195,7 +1210,7 @@ func serveDevMode(cfg *config.Config) error {
 	var outboxWorker *mailing.OutboxWorker
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -1248,6 +1263,7 @@ func adminRoutes(
 	adminDashboardH *handlers.AdminDashboardHandler,
 	adminVersionH *handlers.AdminVersionHandler,
 	adminCrtCommandsH *handlers.AdminCrtCommandsHandler,
+	adminOutreachH *handlers.AdminOutreachHandler,
 ) []adminRoute {
 	routes := []adminRoute{
 		{http.MethodGet, "/admin/settings", http.HandlerFunc(settingsH.List)},
@@ -1440,6 +1456,21 @@ func adminRoutes(
 			adminRoute{http.MethodDelete, "/admin/crt-commands/{id}", http.HandlerFunc(adminCrtCommandsH.Delete)},
 		)
 	}
+	if adminOutreachH != nil {
+		routes = append(routes,
+			// #0544: workshop outreach. The post routes live under
+			// /admin/outreach-posts, not /admin/outreach/posts, which would
+			// overlap /admin/outreach/{id}/posts and panic the mux.
+			adminRoute{http.MethodGet, "/admin/outreach", http.HandlerFunc(adminOutreachH.List)},
+			adminRoute{http.MethodGet, "/admin/workshops/{id}/outreach", http.HandlerFunc(adminOutreachH.Get)},
+			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach", http.HandlerFunc(adminOutreachH.Start)},
+			adminRoute{http.MethodPost, "/admin/outreach/{id}/posts", http.HandlerFunc(adminOutreachH.CreatePost)},
+			adminRoute{http.MethodPatch, "/admin/outreach-posts/{id}", http.HandlerFunc(adminOutreachH.PatchPost)},
+			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/prepare", http.HandlerFunc(adminOutreachH.Prepare)},
+			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/posted", http.HandlerFunc(adminOutreachH.MarkPosted)},
+			adminRoute{http.MethodDelete, "/admin/outreach-posts/{id}", http.HandlerFunc(adminOutreachH.DeletePost)},
+		)
+	}
 	return routes
 }
 
@@ -1488,6 +1519,7 @@ func mountAndServe(
 	adminDashboardH *handlers.AdminDashboardHandler,
 	adminVersionH *handlers.AdminVersionHandler,
 	adminCrtCommandsH *handlers.AdminCrtCommandsHandler,
+	adminOutreachH *handlers.AdminOutreachHandler,
 	eventsH *handlers.EventsHandler,
 	meH *handlers.MeHandler,
 	subscribeH *handlers.SubscribeHandler,
@@ -1568,7 +1600,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 

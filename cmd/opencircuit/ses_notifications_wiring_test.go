@@ -195,6 +195,7 @@ func sesWiringStartServer(t *testing.T, pool *pgxpool.Pool, sesNotifyH *handlers
 			nil, /* adminMediaH: not exercised by this test */
 			nil, /* adminDashboardH: not exercised by this test */
 			nil, /* adminCrtCommandsH: not exercised by this test */
+			nil, /* adminOutreachH: not exercised */
 			nil, nil, nil,
 			nil, nil, nil, /* publicInterestsH, preferencesH, confirmH: not exercised by this test */
 			nil,           /* unsubscribeH: not exercised by this test */
