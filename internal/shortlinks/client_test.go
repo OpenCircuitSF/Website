@@ -124,10 +124,10 @@ func TestEnsureCampaign(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
-	if got, err := c.EnsureCampaign(ctx, "exists", "exists", CreateCampaignRequest{}); err != nil || got.ID != 1 || posts != 0 {
+	if got, err := c.EnsureCampaign(ctx, "exists", CreateCampaignRequest{Name: "Ignored"}); err != nil || got.ID != 1 || posts != 0 {
 		t.Fatalf("existing: %+v %v posts=%d", got, err, posts)
 	}
-	got, err := c.EnsureCampaign(ctx, "fresh", "fresh", CreateCampaignRequest{DefaultUTMMedium: "social"})
+	got, err := c.EnsureCampaign(ctx, "fresh", CreateCampaignRequest{Name: "Fresh Display Name", Description: "Fresh Display Name", DefaultUTMMedium: "social"})
 	if err != nil || got.Slug != "fresh" || posts != 1 {
 		t.Fatalf("fresh: %+v %v posts=%d", got, err, posts)
 	}
@@ -140,7 +140,7 @@ func TestEnsureCampaignPropagatesNon404(t *testing.T) {
 		}
 		w.WriteHeader(500)
 	})
-	if _, err := c.EnsureCampaign(context.Background(), "x", "x", CreateCampaignRequest{}); err == nil {
+	if _, err := c.EnsureCampaign(context.Background(), "x", CreateCampaignRequest{}); err == nil {
 		t.Fatal("want error")
 	}
 }
@@ -265,6 +265,16 @@ func TestTokenNeverInErrors(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), testToken) {
 		t.Fatalf("err = %v", err)
 	}
+	// JSON error body echoing the token.
+	c3 := newTest(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		io.WriteString(w, `{"error":"bad header `+r.Header.Get("Authorization")+` seen"}`)
+	})
+	_, err = c3.Me(context.Background())
+	var ae *APIError
+	if !errors.As(err, &ae) || strings.Contains(err.Error(), testToken) || strings.Contains(ae.Message, testToken) || !strings.Contains(ae.Message, "bad header") {
+		t.Fatalf("json err = %v", err)
+	}
 	// Connection failure.
 	srv := httptest.NewServer(http.NotFoundHandler())
 	base := srv.URL
@@ -314,5 +324,70 @@ func TestLiveMe(t *testing.T) {
 	}
 	if me.BaseURL == "" {
 		t.Error("empty base_url")
+	}
+}
+
+func TestEnsureCampaignNamesCampaignWithSlug(t *testing.T) {
+	c := newTest(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(404)
+			return
+		}
+		var b CreateCampaignRequest
+		json.NewDecoder(r.Body).Decode(&b)
+		if b.Name != "spring-2027" || b.Description != "Spring 2027 posters" {
+			t.Errorf("body %+v", b)
+		}
+		w.WriteHeader(201)
+		io.WriteString(w, `{"id":3,"name":"spring-2027","slug":"spring-2027"}`)
+	})
+	got, err := c.EnsureCampaign(context.Background(), "spring-2027", CreateCampaignRequest{Name: "Spring 2027!", Description: "Spring 2027 posters"})
+	if err != nil || got.Slug != "spring-2027" {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestEnsureLink(t *testing.T) {
+	const dest = "https://x.test/w"
+	run := func(existingDest string, getStatus int) (*Link, error, int) {
+		var posts int
+		c := newTest(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == "POST":
+				posts++
+				if posts == 1 {
+					w.WriteHeader(201)
+					io.WriteString(w, `{"id":5,"key":"k1","destination_url":"`+dest+`"}`)
+					return
+				}
+				w.WriteHeader(409)
+				io.WriteString(w, `{"error":"key taken"}`)
+			case r.Method == "GET":
+				if getStatus != 200 {
+					w.WriteHeader(getStatus)
+					return
+				}
+				io.WriteString(w, `{"id":5,"key":"k1","destination_url":"`+existingDest+`"}`)
+			}
+		})
+		req := CreateLinkRequest{DestinationURL: dest, Key: "k1"}
+		if _, err := c.EnsureLink(context.Background(), req); err != nil {
+			t.Fatalf("first create: %v", err)
+		}
+		l, err := c.EnsureLink(context.Background(), req)
+		return l, err, posts
+	}
+	if l, err, posts := run(dest, 200); err != nil || l.ID != 5 || posts != 2 {
+		t.Fatalf("matching retry: %+v %v posts=%d", l, err, posts)
+	}
+	if _, err, _ := run("https://other.test/", 200); !errors.Is(err, ErrConflict) {
+		t.Fatalf("mismatched destination: %v", err)
+	}
+	if _, err, _ := run(dest, 500); err == nil || errors.Is(err, ErrConflict) {
+		t.Fatalf("GET failure: %v", err)
+	}
+	c := newTest(t, func(w http.ResponseWriter, r *http.Request) { t.Error("no request expected") })
+	if _, err := c.EnsureLink(context.Background(), CreateLinkRequest{DestinationURL: dest}); err == nil {
+		t.Fatal("want error without Key")
 	}
 }

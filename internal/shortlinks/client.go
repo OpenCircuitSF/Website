@@ -188,12 +188,14 @@ func (c *Client) CreateCampaign(ctx context.Context, req CreateCampaignRequest) 
 
 // EnsureCampaign returns the campaign whose slug is slug, creating it when
 // GET answers 404. ShortLinks has no client-chosen slug and no idempotency
-// key: the slug is derived from the name, so callers name the campaign with
-// the slug itself (ShortLinks' slugify leaves an already-slugged string
-// unchanged). The create response's own slug is authoritative and is what the
-// returned Campaign carries. Idempotent by convention only: two concurrent
-// callers can both see 404 and the second create then gets a suffixed slug.
-func (c *Client) EnsureCampaign(ctx context.Context, slug, name string, req CreateCampaignRequest) (*Campaign, error) {
+// key: the slug is derived from the name, so the campaign is always named
+// with the slug itself (ShortLinks' slugify leaves an already-slugged string
+// unchanged) and req.Name is overwritten. A separate display name therefore
+// cannot exist; put a human-readable label in req.Description. The create
+// response's own slug is authoritative and is what the returned Campaign
+// carries. Idempotent by convention only: two concurrent callers can both see
+// 404 and the second create then gets a suffixed slug.
+func (c *Client) EnsureCampaign(ctx context.Context, slug string, req CreateCampaignRequest) (*Campaign, error) {
 	got, err := c.GetCampaign(ctx, slug)
 	if err == nil {
 		return got, nil
@@ -201,21 +203,42 @@ func (c *Client) EnsureCampaign(ctx context.Context, slug, name string, req Crea
 	if !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
-	if name == "" {
-		name = slug
-	}
-	req.Name = name
+	req.Name = slug
 	return c.CreateCampaign(ctx, req)
 }
 
-// CreateLink calls POST /api/links. A retried create with the same
-// destination returns the existing link (Duplicate true).
+// CreateLink calls POST /api/links. Without a custom Key, a retried create
+// with the same destination returns the existing link (Duplicate true). That
+// de-duplication does NOT apply when req.Key is set: a retry then answers 409
+// (ErrConflict). Use EnsureLink for an idempotent create with a custom key.
 func (c *Client) CreateLink(ctx context.Context, req CreateLinkRequest) (*Link, error) {
 	var out Link
 	if err := c.doJSON(ctx, http.MethodPost, "/api/links", nil, req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// EnsureLink creates a link with a custom Key idempotently: on 409 it fetches
+// the existing link with GetLink and accepts it only when its destination
+// matches req.DestinationURL (any other holder of the key stays ErrConflict).
+// req.Key must be set.
+func (c *Client) EnsureLink(ctx context.Context, req CreateLinkRequest) (*Link, error) {
+	if req.Key == "" {
+		return nil, errors.New("shortlinks: EnsureLink requires a Key")
+	}
+	l, err := c.CreateLink(ctx, req)
+	if err == nil || !errors.Is(err, ErrConflict) {
+		return l, err
+	}
+	got, gerr := c.GetLink(ctx, req.Key)
+	if gerr != nil {
+		return nil, gerr
+	}
+	if got.DestinationURL != req.DestinationURL {
+		return nil, err
+	}
+	return got, nil
 }
 
 // GetLink calls GET /api/links/{key}.
@@ -309,16 +332,21 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, payl
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return b, nil
 	}
-	return nil, decodeError(resp, b)
+	return nil, decodeError(resp, b, c.token)
 }
 
-func decodeError(resp *http.Response, body []byte) *APIError {
+func decodeError(resp *http.Response, body []byte, token string) *APIError {
 	e := &APIError{Status: resp.StatusCode}
 	var eb struct {
 		Error string `json:"error"`
 	}
 	if json.Unmarshal(body, &eb) == nil {
 		e.Message = eb.Error
+		if token != "" {
+			// A server (or proxy) could echo the Authorization header into
+			// its error text; never let the token reach err.Error().
+			e.Message = strings.ReplaceAll(e.Message, token, "[redacted]")
+		}
 	}
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
