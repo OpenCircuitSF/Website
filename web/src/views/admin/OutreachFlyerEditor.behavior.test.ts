@@ -197,6 +197,17 @@ describe('OutreachFlyerEditor', () => {
     expect(screen.getByText('Description must be at most 360 characters.')).toBeTruthy();
   });
 
+  it('re-enables Save and Generate after switching away from full-photo with an over-long description (#0562)', async () => {
+    await mountWith(fullPhoto(), [loc(1)]);
+    await fireEvent.input(screen.getByLabelText('Description'), { target: { value: 'x'.repeat(361) } });
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+    await fireEvent.click(screen.getByLabelText('Photo top'));
+    expect(screen.queryByLabelText('Description')).toBeNull();
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false);
+    await fireEvent.click(screen.getByLabelText('Full photo'));
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('omits the caption controls on photo-top (#0561)', async () => {
     await mountWith(flyer(), [loc(1)]);
     expect(screen.queryByLabelText('Description')).toBeNull();

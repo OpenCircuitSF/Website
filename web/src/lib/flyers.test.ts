@@ -374,9 +374,24 @@ describe('flyer description text (#0561)', () => {
     const text = 'First sentence is here. Second sentence runs on and on past the limit of it all.';
     expect(shortenAtBoundary(text, 40)).toBe('First sentence is here.');
   });
-  it('keeps a single over-long token whole, with an ellipsis', () => {
-    const tok = 'x'.repeat(200);
-    expect(shortenAtBoundary(tok, 140)).toBe(tok + '\u2026');
+  it('cuts a single over-long token so the ellipsis fits in max', () => {
+    expect(shortenAtBoundary('x'.repeat(200), 140)).toBe('x'.repeat(139) + '\u2026');
+  });
+  it('cuts an exactly-max first word followed by more text within max', () => {
+    const out = shortenAtBoundary('x'.repeat(10) + ' tail', 10);
+    expect(out).toBe('x'.repeat(9) + '\u2026');
+    expect([...out].length).toBeLessThanOrEqual(10);
+  });
+  it('counts code points, not UTF-16 units', () => {
+    const e = '\u{1F600}';
+    const ten = e.repeat(10); // 10 code points, 20 UTF-16 units
+    expect(shortenAtBoundary(ten, 10)).toBe(ten);
+    const out = shortenAtBoundary(ten + ' ' + ten, 10);
+    expect(out).toBe(e.repeat(9) + '\u2026');
+    expect([...out].length).toBe(10);
+    const words = shortenAtBoundary(`${e}${e} ${e}${e} ${e}${e} ${e}${e}`, 6);
+    expect([...words].length).toBeLessThanOrEqual(6);
+    expect(words).toBe(`${e}${e} ${e}${e}\u2026`);
   });
   it('picks the description for each size', () => {
     expect(flyerDescriptions(' From facts. ', '', '')).toEqual({ full: 'From facts.', half: 'From facts.' });

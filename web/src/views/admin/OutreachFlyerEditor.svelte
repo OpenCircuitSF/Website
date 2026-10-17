@@ -75,9 +75,11 @@
   let dragging = $state(false);
 
   const taglineError = $derived(validateTagline(tagline));
+  // The description limits apply only while their controls are shown (full-photo,
+  // #0562). Hidden values are kept, not cleared, and are ignored by validation.
   const descriptionError = $derived(validateFlyerDescription(description, MAX_FLYER_DESCRIPTION, 'Description'));
   const descriptionShortError = $derived(validateFlyerDescription(descriptionShort, MAX_FLYER_DESCRIPTION_SHORT, 'Short description'));
-  const textError = $derived(taglineError ?? descriptionError ?? descriptionShortError);
+  const textError = $derived(taglineError ?? (template === 'full-photo' ? (descriptionError ?? descriptionShortError) : null));
   const selected = $derived(Object.keys(copies).map(Number));
   const draftSummary = $derived(selectionSummary(selected.map((id) => ({ copies: copies[id] }))));
   const shownLocations = $derived(locations.filter((l) => l.active || l.id in copies));

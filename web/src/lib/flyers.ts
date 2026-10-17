@@ -578,20 +578,23 @@ export function validateFlyerDescription(text: string, max: number, what: string
 /**
  * Trim and collapse whitespace, then fit `max` characters without cutting
  * inside a word: at a sentence end when that keeps at least half of `max`,
- * otherwise at a word boundary with an ellipsis.
+ * otherwise at a word boundary with an ellipsis. Counts code points and never
+ * returns more than `max` of them, ellipsis included.
  */
 export function shortenAtBoundary(text: string, max: number): string {
   const t = text.trim().replace(/\s+/g, ' ');
-  if (t.length <= max) return t;
+  const cp = [...t];
+  if (cp.length <= max) return t;
+  const head = (n: number): string => cp.slice(0, n).join('');
   let sentence = -1;
-  for (let i = 0; i + 1 <= max && i < t.length - 1; i++) {
-    if ('.!?'.includes(t[i]) && t[i + 1] === ' ') sentence = i;
+  for (let i = 0; i + 1 <= max && i < cp.length - 1; i++) {
+    if ('.!?'.includes(cp[i]) && cp[i + 1] === ' ') sentence = i;
   }
-  if (sentence >= 0 && sentence + 1 >= max / 2) return t.slice(0, sentence + 1);
-  const cut = t.lastIndexOf(' ', max - 1);
-  if (cut > 0) return t.slice(0, cut).replace(/[\s,;:]+$/, '') + '\u2026';
-  const space = t.indexOf(' ');
-  return (space < 0 ? t : t.slice(0, space)) + '\u2026';
+  if (sentence >= 0 && sentence + 1 >= max / 2) return head(sentence + 1);
+  const cut = cp.lastIndexOf(' ', max - 1);
+  if (cut > 0) return head(cut).replace(/[\s,;:]+$/, '') + '\u2026';
+  // One over-long first word: cut inside it so the ellipsis still fits in max.
+  return head(Math.max(max - 1, 0)) + '\u2026';
 }
 
 /** The description text for the full and half faces. An empty string means no paragraph. */

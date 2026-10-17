@@ -333,6 +333,20 @@ func TestFlyerCascadeOnOutreachDelete(t *testing.T) {
 	}
 }
 
+func TestCreateFlyerEmptyTitlePositionDefaultsToAuto(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	o, _, _ := seedFlyerFixture(t, s)
+	f, err := s.CreateFlyer(ctx, FlyerInput{OutreachID: o.ID, FocalX: 0.5, FocalY: 0.5, Template: "full-photo"})
+	if err != nil || f.TitlePosition != "auto" {
+		t.Fatalf("created: %+v %v", f, err)
+	}
+	got, err := s.GetFlyer(ctx, f.ID)
+	if err != nil || got.TitlePosition != "auto" {
+		t.Errorf("read back: %+v %v", got, err)
+	}
+}
+
 func TestFlyerCaptionFields(t *testing.T) {
 	s := NewStore(testPool(t))
 	ctx := context.Background()
