@@ -69,6 +69,12 @@ func TestBskyMention(t *testing.T) {
 	if _, ok := bskyMention(with(func(n *bluesky.Notification) { n.Reason, n.URI = "mention", "" }), ours); ok {
 		t.Error("a notification with no uri was kept")
 	}
+	nul := with(func(n *bluesky.Notification) {
+		n.Reason, n.Text, n.AuthorHandle = "mention", "he\x00llo\x00", "al\x00ice.example.test"
+	})
+	if m, ok := bskyMention(nul, ours); !ok || m.Text != "hello" || m.Author != "@alice.example.test" || strings.Contains(m.RemoteID, "\x00") {
+		t.Errorf("NUL not stripped: ok=%v %+v", ok, m)
+	}
 	long := with(func(n *bluesky.Notification) { n.Reason, n.Text = "mention", strings.Repeat("é", 1500) })
 	if m, _ := bskyMention(long, ours); len([]rune(m.Text)) != 1000 {
 		t.Errorf("text not capped at 1000 runes: %d", len([]rune(m.Text)))
@@ -493,6 +499,64 @@ func TestTracker_BlueskyMentionsAcrossPages(t *testing.T) {
 	}
 	if n := len(mentionKinds(t, s, tag)); n != 3 {
 		t.Errorf("mentions after pass 2 = %d, want 3 (nothing new)", n)
+	}
+}
+
+func TestTracker_BlueskyPageCapLogsWarn(t *testing.T) {
+	s := NewStore(testPool(t))
+	resetCursors(t, s)
+	bf := newTrackerBsky(t)
+	at := time.Now().Add(-time.Minute).UTC().Format("2006-01-02T15:04:05.000Z")
+	tag := uniq()
+	for p := 0; p < maxNotificationPages; p++ {
+		var items []string
+		for i := 0; i < bskyPage; i++ {
+			items = append(items, fmt.Sprintf(`{"uri":"at://did:plc:cap%s/app.bsky.feed.post/p%di%d","reason":"like","indexedAt":%q}`, tag, p, i, at))
+		}
+		key := ""
+		if p > 0 {
+			key = fmt.Sprintf("p%d", p)
+		}
+		bf.pages[key] = fmt.Sprintf(`{"cursor":"p%d","notifications":[%s]}`, p+1, strings.Join(items, ","))
+	}
+	tr, buf := newTracker(t, s, bf.client(t), nil)
+	tr.pass(context.Background())
+	if n := len(bf.notifCalls()); n != maxNotificationPages {
+		t.Errorf("listNotifications calls = %d, want %d", n, maxNotificationPages)
+	}
+	if out := buf.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "page cap reached") || !strings.Contains(out, "channel=bluesky") {
+		t.Errorf("no page-cap warning in log:\n%s", out)
+	}
+}
+
+func TestTracker_MastodonPageCapLogsWarn(t *testing.T) {
+	s := NewStore(testPool(t))
+	resetCursors(t, s)
+	ctx := context.Background()
+	mf := newTrackerMasto(t)
+	if err := s.SetMentionCursor(ctx, "mastodon", "1000"); err != nil {
+		t.Fatal(err)
+	}
+	// Every page is full (80 items) so the walk never reaches a short page;
+	// the items are favourites, which the tracker skips, so nothing is stored.
+	// Chain: min_id -> page whose first id is the next min_id.
+	minID := "1000"
+	for p := 0; p < maxNotificationPages; p++ {
+		first := 2000 + p*100 + mastodonPage
+		var items []string
+		for i := 0; i < mastodonPage; i++ {
+			items = append(items, fmt.Sprintf(`{"id":"%d","type":"favourite","created_at":"2026-10-16T10:00:00.000Z","account":{"acct":"bob@other.example.test"}}`, first-i))
+		}
+		mf.notifs[minID] = "[" + strings.Join(items, ",") + "]"
+		minID = fmt.Sprintf("%d", first)
+	}
+	tr, buf := newTracker(t, s, nil, mf.client(t))
+	tr.pass(ctx)
+	if n := mf.matching("/api/v1/notifications"); n != maxNotificationPages {
+		t.Errorf("notification requests = %d, want %d", n, maxNotificationPages)
+	}
+	if out := buf.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "page cap reached") || !strings.Contains(out, "channel=mastodon") {
+		t.Errorf("no page-cap warning in log:\n%s", out)
 	}
 }
 

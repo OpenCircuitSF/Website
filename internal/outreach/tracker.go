@@ -255,6 +255,10 @@ func (t *Tracker) bskyMentions(ctx context.Context) (inserted int) {
 // root, quoted record or reason subject is one of ours; a plain mention never
 // is.
 func bskyMention(n bluesky.Notification, remoteIDs map[string]int64) (Mention, bool) {
+	// Postgres rejects NUL in text columns, and JSON lets a post carry an
+	// escaped one (#0555). Strip it from every string stored below, or one
+	// such item fails InsertMention on every pass and stalls the walk.
+	n.URI, n.AuthorHandle, n.Text = stripNUL(n.URI), stripNUL(n.AuthorHandle), stripNUL(n.Text)
 	if n.URI == "" {
 		return Mention{}, false
 	}
@@ -511,6 +515,14 @@ func (t *Tracker) engagement(ctx context.Context) (written, failed int) {
 }
 
 // ---- helpers ----
+
+// stripNUL removes NUL bytes, which Postgres text columns cannot hold.
+func stripNUL(s string) string {
+	if !strings.Contains(s, "\x00") {
+		return s
+	}
+	return strings.ReplaceAll(s, "\x00", "")
+}
 
 // capRunes truncates s to at most n runes.
 func capRunes(s string, n int) string {
