@@ -61,7 +61,7 @@ const sampleLinkURL = "https://go.opencircuitsf.com/aBcDeF"
 const manualCaptionLimit = 2200
 
 // Draft generates the post text (#0570): a sentence that carries the date and
-// venue, the workshop summary cut at a sentence boundary to fit the channel,
+// venue (never the clock time, #0579), the workshop summary cut at a sentence boundary to fit the channel,
 // the channel's call to action, then the hashtag line. Bluesky and Instagram
 // drafts carry no link (the Bluesky card holds it; Instagram links the bio);
 // the rest carry LinkToken, which Prepare replaces with the real short URL.
@@ -129,14 +129,13 @@ func draftParts(ch Channel, w Wave, f Facts) (lead, cta string, keepSummary bool
 	if f.LocationName != nil {
 		venue = strings.TrimSpace(*f.LocationName)
 	}
-	at, on, clock := "", "", ""
+	at, on := "", ""
 	if venue != "" {
 		at = " at " + venue
 	}
 	if f.StartsAt != nil {
 		t := f.StartsAt.In(pacific)
-		on = t.Format("Monday, Jan 2") + " at " + t.Format("3:04 PM")
-		clock = t.Format("3:04 PM")
+		on = t.Format("Monday, Jan 2")
 	}
 	// sentence joins a clause and, when known, "on <date and time>".
 	sentence := func(head string) string {
@@ -154,8 +153,8 @@ func draftParts(ch Channel, w Wave, f Facts) (lead, cta string, keepSummary bool
 			lead = sentence("One week out: " + title + " is happening")
 			cta = "A few seats may still be open."
 		case "last-call":
-			if clock != "" {
-				lead = "Tomorrow at " + clock + ": " + title + at + ". Last call to sign up."
+			if f.StartsAt != nil {
+				lead = "Tomorrow: " + title + at + ". Last call to sign up."
 			} else {
 				lead = sentence("Last call: " + title + " is happening")
 			}
@@ -170,8 +169,8 @@ func draftParts(ch Channel, w Wave, f Facts) (lead, cta string, keepSummary bool
 			cta = "Sign up here: " + LinkToken
 		case "last-call":
 			lead = "Last call for " + title + at
-			if clock != "" {
-				lead += ", tomorrow at " + clock
+			if f.StartsAt != nil {
+				lead += ", tomorrow"
 			}
 			lead += "."
 			cta = "Sign up here: " + LinkToken
@@ -191,7 +190,7 @@ func draftParts(ch Channel, w Wave, f Facts) (lead, cta string, keepSummary bool
 	return lead, cta, keepSummary
 }
 
-// titleWithDetails is "Title: Monday, Oct 19 at 6:30 PM at Venue.", leaving
+// titleWithDetails is "Title: Monday, Oct 19 at Venue.", leaving
 // out whichever of the date and venue is unknown.
 func titleWithDetails(title, on, venue string) string {
 	details := on

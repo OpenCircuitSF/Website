@@ -2,6 +2,7 @@ package outreach
 
 import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -97,14 +98,14 @@ func ledsFacts() Facts {
 
 func TestDraftGolden(t *testing.T) {
 	want := map[string]string{
-		"bluesky/announce":   "We're running Programming LEDs at Sequoia Fabrica on Monday, Oct 19 at 6:30 PM.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\n#SanFrancisco #Electronics",
-		"bluesky/reminder":   "One week out: Programming LEDs is happening at Sequoia Fabrica on Monday, Oct 19 at 6:30 PM.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nA few seats may still be open.\n\n#SanFrancisco #Electronics",
-		"bluesky/last-call":  "Tomorrow at 6:30 PM: Programming LEDs at Sequoia Fabrica. Last call to sign up.\n\n#SanFrancisco #Electronics",
-		"mastodon/announce":  "Join us for Programming LEDs at Sequoia Fabrica on Monday, Oct 19 at 6:30 PM.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSpots are limited, so you can sign up here: {link}\n\n#SanFrancisco #Electronics",
-		"mastodon/reminder":  "One week to go until Programming LEDs at Sequoia Fabrica on Monday, Oct 19 at 6:30 PM.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSign up here: {link}\n\n#SanFrancisco #Electronics",
-		"mastodon/last-call": "Last call for Programming LEDs at Sequoia Fabrica, tomorrow at 6:30 PM.\n\nSign up here: {link}\n\n#SanFrancisco #Electronics",
-		"instagram/announce": "Programming LEDs: Monday, Oct 19 at 6:30 PM at Sequoia Fabrica.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSign up at the link in our bio.\n\n#SanFrancisco #Electronics",
-		"youtube/announce":   "Programming LEDs: Monday, Oct 19 at 6:30 PM at Sequoia Fabrica.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something.\n\nSign up: {link}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics",
+		"bluesky/announce":   "We're running Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\n#SanFrancisco #Electronics",
+		"bluesky/reminder":   "One week out: Programming LEDs is happening at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nA few seats may still be open.\n\n#SanFrancisco #Electronics",
+		"bluesky/last-call":  "Tomorrow: Programming LEDs at Sequoia Fabrica. Last call to sign up.\n\n#SanFrancisco #Electronics",
+		"mastodon/announce":  "Join us for Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSpots are limited, so you can sign up here: {link}\n\n#SanFrancisco #Electronics",
+		"mastodon/reminder":  "One week to go until Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSign up here: {link}\n\n#SanFrancisco #Electronics",
+		"mastodon/last-call": "Last call for Programming LEDs at Sequoia Fabrica, tomorrow.\n\nSign up here: {link}\n\n#SanFrancisco #Electronics",
+		"instagram/announce": "Programming LEDs: Monday, Oct 19 at Sequoia Fabrica.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSign up at the link in our bio.\n\n#SanFrancisco #Electronics",
+		"youtube/announce":   "Programming LEDs: Monday, Oct 19 at Sequoia Fabrica.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something.\n\nSign up: {link}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics",
 	}
 	f := ledsFacts()
 	for _, ch := range Channels() {
@@ -117,6 +118,19 @@ func TestDraftGolden(t *testing.T) {
 				body := strings.ReplaceAll(got, LinkToken, "https://go.opencircuitsf.com/pcNPlc")
 				if err := ValidateForSend(ch, body); err != nil {
 					t.Errorf("%s/%s: %v", ch.Name, w.Name, err)
+				}
+			}
+		}
+	}
+}
+
+func TestDraftsCarryNoClockTime(t *testing.T) {
+	timeRe := regexp.MustCompile(`\d{1,2}:\d{2}|\b[AP]M\b`)
+	for _, f := range []Facts{ledsFacts(), {Title: "T", StartsAt: ledsFacts().StartsAt}} {
+		for _, ch := range Channels() {
+			for _, w := range Waves() {
+				if d := Draft(ch, w, f); timeRe.MatchString(d) {
+					t.Errorf("%s/%s carries a clock time: %q", ch.Name, w.Name, d)
 				}
 			}
 		}
