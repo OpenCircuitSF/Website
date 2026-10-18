@@ -58,7 +58,7 @@ describe('Mastodon preview', () => {
     expect(container.querySelector('.hashtag')?.textContent).toBe('#soldering');
     expect(container.querySelector('.link')?.textContent).toBe('https://go.example/m');
     expect(container.querySelector('.card img')?.getAttribute('src')).toBe('/workshops/solder-101/og.png');
-    expect(container.querySelector('.card-host')?.textContent).toBe('go.example');
+    expect(container.querySelector('.card-host')?.textContent).toBe('Open Circuit SF');
   });
   it('draws no link preview when the text has no URL', () => {
     const { container } = render(OutreachPostPreview, { view: { workshop: workshop() }, channel: mast, post: post({ channel: 'mastodon', body: 'no link' }) });
@@ -72,11 +72,15 @@ describe('Mastodon preview', () => {
   it('shows the image with an ALT badge when alt text is set', () => {
     const { container } = render(OutreachPostPreview, { view: { workshop: workshop({ cover_alt: 'A soldering iron' }) }, channel: mast, post: mPost() });
     expect(container.querySelector('.attachment .alt-badge')?.textContent).toBe('ALT');
+    // Mastodon draws no link preview for a status that carries media.
+    expect(container.querySelector('.card')).toBeNull();
   });
   it('says the image cannot go out when alt text is missing', () => {
     const { container } = render(OutreachPostPreview, { view: { workshop: workshop({ cover_alt: '' }) }, channel: mast, post: mPost() });
     expect(container.querySelector('.attachment')).toBeNull();
     expect(screen.getByText(/No image: alt text missing/)).toBeTruthy();
+    // Nothing is attached, so the link preview comes back with its picture.
+    expect(container.querySelector('.card img')?.getAttribute('src')).toBe('/media/cover.png');
   });
 });
 

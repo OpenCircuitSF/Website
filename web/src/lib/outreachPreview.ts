@@ -4,6 +4,7 @@
 
 import type { OutreachPost, WorkshopOutreach } from './types';
 import { isSafeLinkHref } from './linkSafety';
+import { APP_NAME } from './branding';
 
 export interface Segment {
   kind: 'text' | 'hashtag' | 'link';
@@ -59,16 +60,22 @@ export function blueskyCard(view: CardView, post: Pick<OutreachPost, 'short_url'
   };
 }
 
-/** The preview Mastodon builds from the link; null when the body carries no URL. */
-export function mastodonLinkCard(view: CardView, body: string, fallbackHost: string): LinkCard | null {
+/**
+ * The preview Mastodon builds from the link; null when the body carries no URL.
+ * It mirrors the workshop page's og tags (internal/seo workshopRouteMeta): the
+ * image is the cover as given (a same-site path or an absolute URL), else the
+ * generated og.png. The byline is the page's og:site_name, which Mastodon shows
+ * in place of a host whenever the page names one (web/index.html always does).
+ */
+export function mastodonLinkCard(view: CardView, body: string): LinkCard | null {
   const first = segments(body).find((s) => s.kind === 'link');
   if (!first) return null;
   const cover = view.workshop.cover_image;
   return {
     title: view.workshop.title,
     description: (view.workshop.summary ?? '').trim(),
-    image: cover && isSafeLinkHref(cover) && cover.startsWith('/') ? cover : `/workshops/${view.workshop.slug}/og.png`,
-    host: hostOf(first.text, fallbackHost),
+    image: cover && isSafeLinkHref(cover) && /^(\/|https?:)/i.test(cover) ? cover : `/workshops/${view.workshop.slug}/og.png`,
+    host: APP_NAME,
   };
 }
 

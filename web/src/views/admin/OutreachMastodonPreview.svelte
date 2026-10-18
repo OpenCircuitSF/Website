@@ -1,6 +1,7 @@
 <!--
   A Mastodon post as it will look (#0583): links and hashtags styled, the link
-  preview Mastodon builds from the first URL, and the character count (every
+  preview Mastodon builds from the first URL (none when the image is
+  attached, as Mastodon draws no card for a status with media), and the character count (every
   URL counts as 23). When the workshop exposes its cover's alt text (#0572) an
   image-attachment block shows the cover with an ALT badge, or says the image
   cannot go out because the alt text is missing.
@@ -19,13 +20,15 @@
   let { view, channel, post, body }: Props = $props();
 
   const text = $derived(body ?? post.body);
-  const card = $derived(mastodonLinkCard(view, text, typeof location === 'undefined' ? '' : location.host));
+  const card = $derived(mastodonLinkCard(view, text));
   const counted = $derived(countCharacters(channel, text, post.prepared));
   const over = $derived(isOverLimit(channel, counted.count));
   const cover = $derived(view.workshop.cover_image ?? null);
   // Only a workshop that exposes cover_alt can attach the image.
   const attachment = $derived(cover !== null && view.workshop.cover_alt !== undefined);
   const alt = $derived((view.workshop.cover_alt ?? '').trim());
+  // Mastodon draws no link preview for a status that carries media.
+  const attached = $derived(attachment && alt !== '');
 </script>
 
 <div class="preview mastodon">
@@ -40,9 +43,9 @@
       <p class="text-warn">No image: alt text missing. Add the cover's alt text so the picture can go out.</p>
     {/if}
   {/if}
-  {#if card}
+  {#if card && !attached}
     <div class="card">
-      {#if card.image && !attachment}<img src={card.image} alt="" loading="lazy" />{/if}
+      {#if card.image}<img src={card.image} alt="" loading="lazy" />{/if}
       <div class="card-text">
         <p class="card-host text-muted">{card.host}</p>
         <p class="card-title">{card.title}</p>
