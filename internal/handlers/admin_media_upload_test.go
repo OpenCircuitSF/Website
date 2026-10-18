@@ -214,8 +214,8 @@ func TestAdminMedia_NotConfigured(t *testing.T) {
 		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
 	}
 	body := readBody(t, resp)
-	if !strings.Contains(string(body), "MEDIA_DIR") {
-		t.Errorf("503 body = %q, want it to name MEDIA_DIR", body)
+	if !strings.Contains(string(body), "Settings → Server settings") {
+		t.Errorf("503 body = %q, want it to point at Settings → Server settings", body)
 	}
 }
 
@@ -614,5 +614,28 @@ func TestAdminMedia_MissingFileField(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		body := readBody(t, resp)
 		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+}
+
+// An unwritable directory is a named 503 that points at the setup script, not
+// a bare 500.
+func TestAdminMediaUpload_UnwritableDirNamesScript(t *testing.T) {
+	pool := adminMediaTestPool(t)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	srv := httptest.NewServer(adminMediaMux(pool, dir))
+	defer srv.Close()
+
+	admin := seedAdminUser(t, pool, "admin-media-unwritable@example.com")
+	seedSession(t, pool, admin, "admin-token-unwritable")
+
+	resp := doMediaUpload(t, srv.Client(), srv.URL+"/admin/media/upload", "admin-token-unwritable", buildTestJPEG(t, 8, 8, false), "photo.jpg")
+	defer resp.Body.Close()
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "enable-media-upload.sh") {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
 	}
 }

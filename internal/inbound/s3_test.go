@@ -20,12 +20,14 @@ import (
 type fakeS3 struct {
 	objects map[string][]byte
 	deleted []string
+	buckets []string
 
 	getErr    error
 	deleteErr error
 }
 
 func (f *fakeS3) GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	f.buckets = append(f.buckets, aws.ToString(params.Bucket))
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -37,6 +39,7 @@ func (f *fakeS3) GetObject(ctx context.Context, params *s3.GetObjectInput, optFn
 }
 
 func (f *fakeS3) DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	f.buckets = append(f.buckets, aws.ToString(params.Bucket))
 	if f.deleteErr != nil {
 		return nil, f.deleteErr
 	}
@@ -123,5 +126,23 @@ func TestS3Store_DeleteError(t *testing.T) {
 
 	if err := store.Delete(context.Background(), "unsubscribe/msg-1"); err == nil {
 		t.Fatal("Delete: want error, got nil")
+	}
+}
+
+// SetBucketSource makes Fetch and Delete follow a live bucket name.
+func TestS3Store_BucketSourceIsLive(t *testing.T) {
+	fake := &fakeS3{objects: map[string][]byte{"k": []byte("x")}}
+	store := NewS3StoreForTesting(fake, "static-bucket")
+	name := "first-bucket"
+	store.SetBucketSource(func() string { return name })
+	if _, err := store.Fetch(context.Background(), "k"); err != nil {
+		t.Fatal(err)
+	}
+	name = "second-bucket"
+	if err := store.Delete(context.Background(), "k"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.buckets) != 2 || fake.buckets[0] != "first-bucket" || fake.buckets[1] != "second-bucket" {
+		t.Errorf("buckets = %v", fake.buckets)
 	}
 }

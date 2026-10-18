@@ -40,6 +40,25 @@ type SettingsHandler struct {
 	// now is injectable so updated_at and the audit timestamp are deterministic
 	// in tests; defaults to time.Now.
 	now func() time.Time
+	// server is the Server settings handler, attached at wiring; nil when the
+	// process runs without a database.
+	server *AdminServerSettingsHandler
+}
+
+// SetServerSettings attaches the server settings handler, so its routes are
+// mounted exactly when it is present.
+func (h *SettingsHandler) SetServerSettings(s *AdminServerSettingsHandler) {
+	if h != nil {
+		h.server = s
+	}
+}
+
+// ServerSettings returns the attached server settings handler, or nil.
+func (h *SettingsHandler) ServerSettings() *AdminServerSettingsHandler {
+	if h == nil {
+		return nil
+	}
+	return h.server
 }
 
 // NewSettingsHandler constructs a SettingsHandler over the data layer. A nil

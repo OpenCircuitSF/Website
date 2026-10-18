@@ -1079,6 +1079,31 @@ export interface OutreachConnections {
   groups: ConnectionGroup[];
 }
 
+// ── Server settings ──────────────────────────────────────────────────────────
+
+export type ServerSettingGroupName = 'media' | 'email' | 'ses' | 'sending';
+
+/** One server setting, mirroring GET /admin/server-settings. */
+export interface ServerSettingField {
+  key: string;
+  env_var: string;
+  source: ConnectionSource;
+  value: string;
+  default: string;
+  restart_required: boolean;
+  pending_restart: boolean;
+}
+
+export interface ServerSettingGroup {
+  name: ServerSettingGroupName;
+  error: string;
+  fields: ServerSettingField[];
+}
+
+export interface ServerSettings {
+  groups: ServerSettingGroup[];
+}
+
 /** POST /admin/outreach-connections/{group}/test. Always 200; `ok` says whether it worked. */
 export interface ConnectionTestResult {
   ok: boolean;

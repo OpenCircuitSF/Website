@@ -1,7 +1,7 @@
 // Pure logic for the Outreach connections area of admin Settings. Kept out of
 // the component so it is unit-testable without a DOM.
 
-import type { ConnectionField, ConnectionGroup } from './types';
+import type { ConnectionField, ConnectionGroup, ConnectionSource } from './types';
 
 export const GROUP_LABELS: Record<ConnectionGroup['name'], string> = {
   shortlinks: 'ShortLinks',
@@ -23,7 +23,7 @@ export const PRECEDENCE_NOTE =
   'A value saved here takes effect immediately and overrides the matching environment variable. Clear a saved value to fall back to the environment variable.';
 
 /** Where a field's effective value comes from, in words. */
-export function sourceLabel(f: ConnectionField): string {
+export function sourceLabel(f: { source: ConnectionSource; env_var: string }): string {
   switch (f.source) {
     case 'database':
       return 'Saved in Settings';

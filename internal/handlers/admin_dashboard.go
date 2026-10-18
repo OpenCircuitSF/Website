@@ -136,6 +136,9 @@ type AdminDashboardHandler struct {
 	// sesSandbox mirrors config.Config.SESSandbox — see that field's doc
 	// comment for why this is a manually-set flag, not a live query.
 	sesSandbox bool
+	// sesSandboxFn, when set, replaces sesSandbox so the flag can change at
+	// runtime (set under Settings → Server settings).
+	sesSandboxFn func() bool
 	// now is injectable so the 30-day growth window is deterministic in
 	// tests, the same convention every other now-sensitive handler in this
 	// package follows.
@@ -170,6 +173,11 @@ func NewAdminDashboardHandler(
 		now: time.Now,
 	}
 }
+
+// SetSESSandboxSource makes the handler read the SES sandbox flag from fn on
+// every request instead of the constructor's value. It is called once at
+// wiring, before serving.
+func (h *AdminDashboardHandler) SetSESSandboxSource(fn func() bool) { h.sesSandboxFn = fn }
 
 // ── Response shapes ──────────────────────────────────────────────────────────
 
@@ -474,8 +482,12 @@ func recentAndSendingCampaigns(campaigns []mailing.Campaign) (recent []dashboard
 // than fetched by a dedicated query, since ListSettings already reads the
 // whole (small) table.
 func (h *AdminDashboardHandler) buildWarnings(complained, sent int64, settings []auth.Setting) dashboardWarnings {
+	sandbox := h.sesSandbox
+	if h.sesSandboxFn != nil {
+		sandbox = h.sesSandboxFn()
+	}
 	w := dashboardWarnings{
-		SESSandboxActive: h.sesSandbox,
+		SESSandboxActive: sandbox,
 		// PRD §6.5 path 3 / #0058 is not built — see this file's package
 		// doc comment. Always true until that ships.
 		InboundMailUnavailable: true,

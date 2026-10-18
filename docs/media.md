@@ -120,8 +120,9 @@ this box specifically.** The endpoint is fully built and tested (see
 `internal/media` and `internal/handlers/admin_media_upload_test.go`), but
 the service cannot yet write `/var/www/media` in production — that
 directory's group ownership and the systemd unit's `ReadWritePaths=` are
-`#0465`'s approval-gated change, not this one's. A 503 naming `MEDIA_DIR`
-means exactly that: the code works, the box isn't wired up for it yet. The
+`#0465`'s approval-gated change, not this one's (`scripts/enable-media-upload.sh`
+performs it). A 503 that mentions `scripts/enable-media-upload.sh` means
+exactly that: the code works, the box isn't wired up for it yet. The
 `scp` workflow below is unaffected and stays the fallback for exactly this
 case.
 
@@ -220,8 +221,10 @@ the two from drifting apart.
   actor, filename, stored path, format, byte size, and dimensions — no
   target row, since the upload is not tied to any one workshop (`#0433`).
 - **`MEDIA_DIR` (`docs/configuration.md`) controls where uploads land.**
-  Unset (the default until `#0465`), the upload endpoint 503s naming the
-  variable rather than the route being silently omitted. `#0434`'s nightly
+  It defaults to `/var/www/media` in production and can be changed under
+  Settings → Server settings (`#0566`), where it takes effect without a
+  restart. With no directory set (a local `BASE_URL`), the upload endpoint
+  503s pointing at Settings rather than the route being silently omitted. `#0434`'s nightly
   media backup already covers whatever this directory holds, so uploads
   growing the directory changes that backup's size, not its scope.
 - **Populated as of 2026-09-04.** The two live workshop covers,
@@ -244,7 +247,7 @@ the two from drifting apart.
 | 403 | File mode — the file needs to be readable by the `apache` user |
 | Image loads but a stale version | The week-long `Cache-Control`; rename the file and update `cover_image` |
 | Save rejects the path | `isSafeCoverImage` — check it starts with exactly one `/` |
-| Upload button gives a 503 naming `MEDIA_DIR` | Expected until `#0465` lands — use the `scp` workflow above |
+| Upload button gives a 503 about the media directory | Either none is set (Settings → Server settings) or the service cannot write to it yet: run `scripts/enable-media-upload.sh` on the server. The `scp` workflow above works meanwhile |
 | Upload gives a 415 naming HEIC | Export/share the photo as JPEG first (see "What gets stripped") — this server does not convert HEIC |
 | Upload gives a 507 | The media directory is out of disk space |
 

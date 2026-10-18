@@ -12,6 +12,7 @@ import type {
   Interest,
   CrtCommand,
   OutreachConnections,
+  ServerSettings,
   ConnectionGroup,
   ConnectionTestResult,
   OutreachLocation,
@@ -766,7 +767,7 @@ export interface MediaUploadResult {
  * writes it under the configured media directory. Throws ApiError on any
  * refusal: 415 (unsupported format, including a specific message for HEIC),
  * 400 (oversize, absurd dimensions, corrupt file), 503 (uploads not
- * configured on this server — MEDIA_DIR unset, #0465 not yet deployed), or
+ * configured, or the media directory is not writable by the service), or
  * 507 (the media directory is out of disk space). Every one of those
  * carries its own specific `error` message — see
  * web/src/lib/media.ts's messageForUploadError for how the editor turns
@@ -1462,6 +1463,16 @@ export function getOutreachConnections(): Promise<OutreachConnections> {
 /** PATCH /admin/outreach-connections — set fields, or clear one with an empty string. */
 export function updateOutreachConnections(values: Record<string, string>): Promise<OutreachConnections> {
   return apiPatch<OutreachConnections>('/admin/outreach-connections', { values });
+}
+
+/** GET /admin/server-settings — the operational settings, each with its source. */
+export function getServerSettings(): Promise<ServerSettings> {
+  return apiGet<ServerSettings>('/admin/server-settings');
+}
+
+/** PATCH /admin/server-settings — set fields, or clear one with an empty string. */
+export function updateServerSettings(values: Record<string, string>): Promise<ServerSettings> {
+  return apiPatch<ServerSettings>('/admin/server-settings', { values });
 }
 
 /** POST /admin/outreach-connections/{group}/test — checks the saved values with a harmless read. */

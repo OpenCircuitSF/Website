@@ -45,8 +45,10 @@ type Config struct {
 	// Locally the chain falls back to ~/.aws/credentials.
 	AWSRegion           string
 	SESConfigurationSet string
-	EmailFrom           string
-	EmailReplyTo        string
+	// EmailFrom and EmailReplyTo: a value saved in admin Settings → Server
+	// settings overrides these, read once at boot (#0566).
+	EmailFrom    string
+	EmailReplyTo string
 
 	// EmailListDomain is the subdomain mailing.CampaignHeaders (#0035)
 	// interpolates into the mailto: form of every campaign's List-Unsubscribe
@@ -58,8 +60,11 @@ type Config struct {
 	// unsubscribe address that may not route. Must never be the bare apex
 	// opencircuitsf.com: #0057 points this subdomain's MX at SES for inbound
 	// Path-3 handling, and pointing the apex's own MX at SES would hijack
-	// all mail to the domain (AGENTS.md §9).
-	EmailListDomain  string
+	// all mail to the domain (AGENTS.md §9). A value saved in admin Settings →
+	// Server settings overrides this, read once at boot (#0566).
+	EmailListDomain string
+	// SESInboundBucket: a value saved in admin Settings → Server settings
+	// overrides this, read on every use (#0566).
 	SESInboundBucket string
 
 	// SESEventsTopicARN is the single SNS topic ARN internal/sesnotify (#0037)
@@ -116,13 +121,16 @@ type Config struct {
 	// operator flips it to false once AWS approves the production-access
 	// request. #0061's admin overview dashboard surfaces it as a warning
 	// while true, so the operator sees "still sandboxed" on every visit
-	// rather than needing to remember to check.
+	// rather than needing to remember to check. A value saved in admin
+	// Settings → Server settings overrides this, read on every use (#0566).
 	SESSandbox bool
 
 	// Sending. These are the environment-level ceiling/toggles; the operator
 	// dial beneath MaxSendRate and the signup/registration toggles live in the
 	// settings table, not here.
-	MaxSendRate       int
+	MaxSendRate int
+	// SendBatchSize: a value saved in admin Settings → Server settings
+	// overrides this, read once at boot (#0566).
 	SendBatchSize     int
 	SendWorkerEnabled bool
 
@@ -141,6 +149,12 @@ type Config struct {
 	// route being omitted (issues/0433.md's "Behaviour when the directory
 	// is not configured" section) or the service failing to boot over a
 	// feature that has a documented manual fallback.
+	//
+	// This is now the environment fallback for admin Settings → Server
+	// settings (#0566), which overrides it and is read on every upload.
+	// cmd/opencircuit applies the default /var/www/media unless BASE_URL is
+	// loopback, so a blank value here no longer means "not configured" in
+	// production.
 	MediaDir string
 
 	// ShortLinksBaseURL and ShortLinksAPIToken configure the outreach

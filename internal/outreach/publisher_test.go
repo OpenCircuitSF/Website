@@ -296,6 +296,23 @@ func TestPublisher_ThumbnailRules(t *testing.T) {
 	}
 }
 
+// MediaDirFn is read on every thumbnail, so a directory that appears later is
+// picked up without rebuilding the publisher.
+func TestPublisher_MediaDirFnIsLive(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "ok.png"), append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, 1, 2), 0o644)
+	current := ""
+	pub := NewPublisher(PublisherDeps{MediaDirFn: func() string { return current }})
+	cover := "/media/ok.png"
+	if _, mime := pub.thumbnail(&cover); mime != "" {
+		t.Errorf("empty dir: mime = %q", mime)
+	}
+	current = dir
+	if _, mime := pub.thumbnail(&cover); mime != "image/png" {
+		t.Errorf("after switch: mime = %q", mime)
+	}
+}
+
 func TestPublisher_BlueskyExistingRecordNotRecreated(t *testing.T) {
 	s := NewStore(testPool(t))
 	ctx := context.Background()

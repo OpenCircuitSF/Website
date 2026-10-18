@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -47,6 +48,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreachconn"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
+	"github.com/brennanMKE/OpenCircuitSF/internal/serversettings"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
@@ -147,6 +149,23 @@ func servePostgres(cfg *config.Config) error {
 		return err
 	}
 	defer pool.Close()
+
+	// Server settings (#0566): operational values saved in admin Settings, each
+	// falling back to its environment variable. Restart-time fields are copied
+	// into cfg here, before anything that reads them is built.
+	serverSettings := serversettings.NewManager(serversettings.NewStore(pool), map[string]string{
+		serversettings.KeyMediaDir:         cfg.MediaDir,
+		serversettings.KeyEmailFrom:        cfg.EmailFrom,
+		serversettings.KeyEmailReplyTo:     cfg.EmailReplyTo,
+		serversettings.KeyEmailListDomain:  cfg.EmailListDomain,
+		serversettings.KeySESSandbox:       strconv.FormatBool(cfg.SESSandbox),
+		serversettings.KeySESInboundBucket: cfg.SESInboundBucket,
+		serversettings.KeySendBatchSize:    strconv.Itoa(cfg.SendBatchSize),
+	}, serverSettingsDefaults(cfg), media.CheckWritable, slog.Default())
+	if err := serverSettings.Reload(ctx); err != nil {
+		return fmt.Errorf("server settings: %w", err)
+	}
+	applyBootSettings(cfg, serverSettings)
 
 	wa, err := auth.NewWebAuthn(cfg)
 	if err != nil {
@@ -343,13 +362,13 @@ func servePostgres(cfg *config.Config) error {
 		Log:     slog.Default(),
 	})
 	outreachPublisher := outreach.NewPublisher(outreach.PublisherDeps{
-		Tracker:  outreachTracker,
-		Store:    outreachStore,
-		Outbox:   outbox.NewStore(pool),
-		Settings: store,
-		Clients:  conns,
-		MediaDir: cfg.MediaDir,
-		Log:      slog.Default(),
+		Tracker:    outreachTracker,
+		Store:      outreachStore,
+		Outbox:     outbox.NewStore(pool),
+		Settings:   store,
+		Clients:    conns,
+		MediaDirFn: serverSettings.MediaDir,
+		Log:        slog.Default(),
 	})
 	adminOutreachH := handlers.NewAdminOutreachHandler(outreachStore, outreachStore, outreachStore, workshopsStore, conns.ShortLinker(), auditLogger, cfg.BaseURL, outreachPublisher)
 	conns.OnChange(func(c outreachconn.Changed) {
@@ -374,10 +393,11 @@ func servePostgres(cfg *config.Config) error {
 	// might see, not just SPA-rendered text, so the #0465 citation for
 	// "this is the production enablement that fixes it" stays here, in a
 	// comment, rather than in the string.
-	if err := media.CheckWritable(cfg.MediaDir); err != nil {
-		slog.Default().Warn("media directory is not writable -- uploads will be refused until this is fixed", "err", err)
+	if err := media.CheckWritable(serverSettings.MediaDir()); err != nil {
+		slog.Default().Warn("media directory is not writable -- uploads will be refused until this is fixed in Settings → Server settings", "err", err)
 	}
-	adminMediaH := handlers.NewAdminMediaHandler(cfg.MediaDir, auditLogger)
+	adminMediaH := handlers.NewAdminMediaHandlerLive(serverSettings.MediaDir, auditLogger)
+	settingsH.SetServerSettings(handlers.NewAdminServerSettingsHandler(serverSettings, auditLogger))
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,
 	// manual suppress, clear-complaint, and manual add. manualAdd (subscribeH)
@@ -559,6 +579,7 @@ func servePostgres(cfg *config.Config) error {
 	adminDashboardH := handlers.NewAdminDashboardHandler(
 		subscribersStore, interestsStore, campaignsStore, campaignStatsStore, store, outbox.NewStore(pool), cfg.SESSandbox,
 	)
+	adminDashboardH.SetSESSandboxSource(serverSettings.SESSandbox)
 
 	// Admin build info (#0516): GET /admin/version — the same version and
 	// commitHash variables the --version output reads (criterion 2), plus
@@ -649,6 +670,7 @@ func servePostgres(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("constructing inbound S3 store: %w", err)
 	}
+	inboundObjects.SetBucketSource(serverSettings.SESInboundBucket)
 	sesInboundVerifier := sesnotify.NewVerifier(cfg.AWSRegion, cfg.SESInboundTopicARN, slog.Default())
 	sesInboundH := handlers.NewSESInboundHandler(
 		sesInboundVerifier, inboundObjects, subscribersStore, auditLogger, nil, slog.Default(),
@@ -689,6 +711,29 @@ func servePostgres(cfg *config.Config) error {
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, outreachPublisher, site,
 		requireSession, requireAdmin, devAdminAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
+}
+
+// serverSettingsDefaults returns per-instance overrides of serversettings'
+// static defaults. A loopback BASE_URL is a dev box with no /var/www/media, so
+// the media directory has no default there.
+func serverSettingsDefaults(cfg *config.Config) map[string]string {
+	if baseURLIsLoopback(cfg.BaseURL) {
+		return map[string]string{serversettings.KeyMediaDir: ""}
+	}
+	return nil
+}
+
+// applyBootSettings copies the restart-time server settings into cfg. Values
+// are already validated (saved values on write, env values by config.Load),
+// and the two required fields keep their env floor, so this cannot leave cfg
+// unbootable.
+func applyBootSettings(cfg *config.Config, s interface{ Value(string) string }) {
+	cfg.EmailFrom = s.Value(serversettings.KeyEmailFrom)
+	cfg.EmailReplyTo = s.Value(serversettings.KeyEmailReplyTo)
+	cfg.EmailListDomain = s.Value(serversettings.KeyEmailListDomain)
+	if n, err := strconv.Atoi(s.Value(serversettings.KeySendBatchSize)); err == nil && n > 0 {
+		cfg.SendBatchSize = n
+	}
 }
 
 // baseURLIsLoopback reports whether the given BASE_URL's host is exactly
@@ -1325,6 +1370,13 @@ func adminRoutes(
 		// here. Criterion 5 (#0516): deliberately an admin-scoped route, NOT
 		// a widening of the unauthenticated /health.
 		{http.MethodGet, "/admin/version", http.HandlerFunc(adminVersionH.Version)},
+	}
+	if s := settingsH.ServerSettings(); s != nil {
+		routes = append(routes,
+			// #0566: operational settings saved in the database.
+			adminRoute{http.MethodGet, "/admin/server-settings", http.HandlerFunc(s.Get)},
+			adminRoute{http.MethodPatch, "/admin/server-settings", http.HandlerFunc(s.Patch)},
+		)
 	}
 	if adminInterestsH != nil {
 		routes = append(routes,

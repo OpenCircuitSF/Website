@@ -783,3 +783,27 @@ func TestAdminDashboardBuildWarnings_ComplaintRateBandBoundaries(t *testing.T) {
 		})
 	}
 }
+
+// SetSESSandboxSource makes the flag follow a live source: one handler, two
+// requests, two different answers.
+func TestAdminDashboardOverview_SESSandboxSourceIsLive(t *testing.T) {
+	pool := adminSubscribersTestPool(t)
+	admin := seedAdmin(t, pool, "dashboard-sandbox-live@example.com")
+	seedSession(t, pool, admin, "dashboard-sandbox-live-token")
+	authStore := auth.NewStore(pool)
+	h := NewAdminDashboardHandler(subscribers.NewStore(pool), interests.NewStore(pool), mailing.NewCampaignStore(pool), mailing.NewCampaignStatsStore(pool), authStore, outbox.NewStore(pool), true)
+	flag := true
+	h.SetSESSandboxSource(func() bool { return flag })
+	requireSession := middleware.RequireSession(authStore)
+	mux := http.NewServeMux()
+	mux.Handle("GET /admin/overview", requireSession(middleware.RequireAdmin(http.HandlerFunc(h.Overview))))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	for _, want := range []bool{true, false} {
+		flag = want
+		out := getDashboard(t, srv.Client(), srv.URL+"/admin/overview", "dashboard-sandbox-live-token")
+		if out.Warnings.SESSandboxActive != want {
+			t.Errorf("ses_sandbox_active = %v, want %v", out.Warnings.SESSandboxActive, want)
+		}
+	}
+}

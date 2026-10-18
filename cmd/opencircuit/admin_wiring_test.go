@@ -26,6 +26,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
+	"github.com/brennanMKE/OpenCircuitSF/internal/serversettings"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
 	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
@@ -119,6 +120,9 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	authH := handlers.NewAuthHandler(regSvc, loginSvc, recoverSvc, slog.Default())
 	credsH := handlers.NewCredentialsHandler(store, auditLogger)
 	settingsH := handlers.NewSettingsHandler(store, auditLogger)
+	// #0566: attach the server settings handler so both of its routes are
+	// swept by the 401/403 proof below.
+	settingsH.SetServerSettings(handlers.NewAdminServerSettingsHandler(serversettings.NewManager(serversettings.NewStore(pool), nil, nil, nil, nil), auditLogger))
 	adminUsersH := handlers.NewAdminUsersHandler(store, auditLogger)
 	adminAuditH := handlers.NewAdminAuditHandler(audit.NewReader(pool))
 	interestsStore := interests.NewStore(pool)

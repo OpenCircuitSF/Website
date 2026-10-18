@@ -372,6 +372,11 @@ const (
 	// field keys only, never values.
 	ActionOutreachConnectionsUpdated = "outreach_connections.updated"
 
+	// ActionServerSettingsUpdated records a save of the server settings in
+	// admin Settings (#0566). Its metadata names field keys only, never
+	// values.
+	ActionServerSettingsUpdated = "server_settings.updated"
+
 	// Email campaign lifecycle (PRD §5.2/§6.6/§8; #0041's campaign CRUD
 	// API). Named email_campaign.* per the deleted-constants note just
 	// below — this is a distinct concept from ShortLinks' campaigns
@@ -575,6 +580,9 @@ const (
 	// ActionOutreachConnectionsUpdated (#0564). The connections are a set of
 	// keyed rows, not one bigint-id row, so TargetID is left nil.
 	TargetOutreachConnections = "outreach_connections"
+	// TargetServerSettings is the target type for ActionServerSettingsUpdated
+	// (#0566). The settings are keyed rows, so TargetID is left nil.
+	TargetServerSettings = "server_settings"
 	// TargetInboundMail is the target type for ActionInboundMailParked
 	// (#0499). Like TargetSNSTopic above, the target has no BIGINT id — the
 	// S3 object key is a string, recorded in metadata instead — so TargetID

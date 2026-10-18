@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000037`). No ORM — every
+(`migrations/`, numbered `000001`–`000038`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -107,6 +107,7 @@ why the activity log is not a second package of its own.
 | `000035_create_outreach_engagement` | `outreach_engagement`, `outreach_mentions` and `outreach_mention_cursors` (`#0547`). Engagement is one snapshot row per capture of a posted Bluesky/Mastodon post (`likes`, `reposts`, `replies`, `quotes`, `outreach_engagement_counts_check` keeps them non-negative; `CASCADE` from the post), read latest-per-post. `outreach_mentions` holds mentions, replies and quotes of our accounts: `remote_id` is globally unique (`outreach_mentions_remote_id_unique`: the Bluesky `at://` URI or the Mastodon status `uri`), `kind` is CHECKed to `mention`/`reply`/`quote` (`outreach_mentions_kind_check`), and `post_id` is nullable and `SET NULL` when the post is deleted. `outreach_mention_cursors` is one row per channel holding the poller's position (a Bluesky `indexedAt` high-water mark or a Mastodon notification id). Owned by `internal/outreach` |
 | `000036_add_outreach_flyer_caption` | Three `outreach_flyers` columns for the full-photo caption layout (`#0561`): `description` (`outreach_flyers_description_check`, at most 360 characters), `description_short` (`outreach_flyers_description_short_check`, at most 140) and `title_position` (`outreach_flyers_title_position_check`, one of `auto`/`below`/`above`, default `auto`). The two text columns are `NOT NULL DEFAULT ''` where empty means use the default (the workshop `summary`, shortened), the same convention as `tagline`. Owned by `internal/outreach` |
 | `000037_create_outreach_connection_values` | `outreach_connection_values`, one row per saved outreach connection field (`#0564`): `key` (primary key, `outreach_connection_values_key_check` limits it to the seven ShortLinks, Bluesky and Mastodon field keys), `value` (`outreach_connection_values_value_check`, non-empty and at most 2048 characters) and `updated_at`. No row means fall back to the environment variable. Secrets are plaintext at rest, protected like the rest of the database. Owned by `internal/outreachconn` |
+| `000038_create_server_setting_values` | Operational settings saved from admin Settings → Server settings; one row per field with a saved value. Owned by `internal/serversettings` |
 
 `internal/subscribers` (`imports.go`) owns `subscriber_imports`, alongside
 every other table that package already owns — see that file's doc comment.

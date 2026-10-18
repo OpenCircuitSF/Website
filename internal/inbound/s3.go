@@ -41,6 +41,19 @@ const maxObjectBytes = 5 << 20
 type S3Store struct {
 	client s3API
 	bucket string
+	// bucketFn, when set, replaces bucket so the name can change at runtime.
+	bucketFn func() string
+}
+
+// SetBucketSource makes the store read the bucket name from fn on every
+// call. It is called once at wiring, before serving.
+func (s *S3Store) SetBucketSource(fn func() string) { s.bucketFn = fn }
+
+func (s *S3Store) bucketName() string {
+	if s.bucketFn != nil {
+		return s.bucketFn()
+	}
+	return s.bucket
 }
 
 // NewS3Store constructs an S3Store backed by a real S3 client, using
@@ -91,8 +104,9 @@ var ErrNoSuchKey = errors.New("inbound: object does not exist")
 // consuming unbounded memory on a webhook endpoint that carries no
 // authentication of its own beyond #0037's SNS signature check.
 func (s *S3Store) Fetch(ctx context.Context, key string) ([]byte, error) {
+	b := s.bucketName()
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket),
+		Bucket: aws.String(b),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -103,19 +117,19 @@ func (s *S3Store) Fetch(ctx context.Context, key string) ([]byte, error) {
 			// missing-object condition crosses the seam as ErrNoSuchKey
 			// (#0500). Wrapped rather than returned bare so the log line
 			// keeps the bucket and key context.
-			return nil, fmt.Errorf("inbound: fetching s3://%s/%s: %w", s.bucket, key, ErrNoSuchKey)
+			return nil, fmt.Errorf("inbound: fetching s3://%s/%s: %w", b, key, ErrNoSuchKey)
 		}
-		return nil, fmt.Errorf("inbound: fetching s3://%s/%s: %w", s.bucket, key, err)
+		return nil, fmt.Errorf("inbound: fetching s3://%s/%s: %w", b, key, err)
 	}
 	defer out.Body.Close()
 
 	limited := io.LimitReader(out.Body, maxObjectBytes+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, fmt.Errorf("inbound: reading s3://%s/%s: %w", s.bucket, key, err)
+		return nil, fmt.Errorf("inbound: reading s3://%s/%s: %w", b, key, err)
 	}
 	if len(body) > maxObjectBytes {
-		return nil, fmt.Errorf("inbound: s3://%s/%s: %w", s.bucket, key, ErrObjectTooLarge)
+		return nil, fmt.Errorf("inbound: s3://%s/%s: %w", b, key, ErrObjectTooLarge)
 	}
 	return body, nil
 }
@@ -125,11 +139,12 @@ func (s *S3Store) Fetch(ctx context.Context, key string) ([]byte, error) {
 // auto-reply/no-match and left for the OTHER path, never this one; see
 // SESInboundHandler's doc comment for exactly which outcomes delete).
 func (s *S3Store) Delete(ctx context.Context, key string) error {
+	b := s.bucketName()
 	if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(s.bucket),
+		Bucket: aws.String(b),
 		Key:    aws.String(key),
 	}); err != nil {
-		return fmt.Errorf("inbound: deleting s3://%s/%s: %w", s.bucket, key, err)
+		return fmt.Errorf("inbound: deleting s3://%s/%s: %w", b, key, err)
 	}
 	return nil
 }

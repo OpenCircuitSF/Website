@@ -15,7 +15,7 @@
 // package points mediaDir at a t.TempDir() — and is deliberately mounted
 // unconditionally on the Postgres serve path (never nil-guarded out of
 // adminRoutes the way, say, a nil workshopsStore would be), returning a
-// named 503 when mediaDir is empty rather than omitting the route entirely.
+// named 503 when the media directory is empty rather than omitting the route entirely.
 // Omitting it would reproduce docs/obstacles.md §11's failure shape: a run
 // mode that silently lacks a subsystem while everything else looks
 // healthy. See NewAdminMediaHandler's doc comment for the startup-time
@@ -69,8 +69,10 @@ import (
 	_ "image/jpeg" // register the JPEG decoder for image.DecodeConfig
 	_ "image/png"  // register the PNG decoder for image.DecodeConfig
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"syscall"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/media"
@@ -115,7 +117,7 @@ type AdminMediaHandler struct {
 	// production (once #0465 lands), a t.TempDir() in every test. An empty
 	// string means "not configured": Upload refuses with 503 rather than
 	// attempting to write anywhere.
-	mediaDir string
+	mediaDir func() string
 	auditor  *audit.Logger
 }
 
@@ -132,6 +134,13 @@ type AdminMediaHandler struct {
 // real permission) is visible in the logs immediately rather than only on
 // the first upload attempt.
 func NewAdminMediaHandler(mediaDir string, auditor *audit.Logger) *AdminMediaHandler {
+	return &AdminMediaHandler{mediaDir: func() string { return mediaDir }, auditor: auditor}
+}
+
+// NewAdminMediaHandlerLive is NewAdminMediaHandler with a directory read on
+// every upload, so a media directory saved under Settings → Server settings
+// takes effect without a restart.
+func NewAdminMediaHandlerLive(mediaDir func() string, auditor *audit.Logger) *AdminMediaHandler {
 	return &AdminMediaHandler{mediaDir: mediaDir, auditor: auditor}
 }
 
@@ -150,9 +159,10 @@ func (h *AdminMediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.mediaDir == "" {
+	dir := h.mediaDir()
+	if dir == "" {
 		writeError(w, http.StatusServiceUnavailable,
-			"image uploads are not configured on this server (MEDIA_DIR is unset) — use the cover image path field and the documented scp workflow instead")
+			"image uploads are not configured: set the media directory under Settings → Server settings. The directory must also be writable by the service (scripts/enable-media-upload.sh). The cover image path field and the scp workflow still work.")
 		return
 	}
 
@@ -232,12 +242,17 @@ func (h *AdminMediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := media.WriteAtomic(h.mediaDir, filename, stripped); err != nil {
+	if err := media.WriteAtomic(dir, filename, stripped); err != nil {
 		if media.IsOutOfSpace(err) {
 			writeError(w, http.StatusInsufficientStorage, "no space left on the media directory — the image was not saved")
 			return
 		}
-		slog.Default().Error("admin_media_upload: write failed", "err", err, "dir", h.mediaDir)
+		slog.Default().Error("admin_media_upload: write failed", "err", err, "dir", dir)
+		if errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.EROFS) {
+			writeError(w, http.StatusServiceUnavailable,
+				"the media directory is not writable by the service: run scripts/enable-media-upload.sh on the server, or choose another directory under Settings → Server settings")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}

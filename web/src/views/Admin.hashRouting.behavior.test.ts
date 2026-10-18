@@ -46,6 +46,7 @@ vi.mock('../lib/api', () => ({
   getSettings: () => getSettings(),
   updateSetting: vi.fn(),
   getOutreachConnections: vi.fn(() => Promise.resolve({ groups: [] })),
+  getServerSettings: vi.fn(() => Promise.resolve({ groups: [] })),
   updateOutreachConnections: vi.fn(),
   testOutreachConnection: vi.fn(),
   listUsers: () => listUsers(),

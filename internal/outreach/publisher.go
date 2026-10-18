@@ -75,7 +75,10 @@ type PublisherDeps struct {
 	Clients  ClientSource
 	// MediaDir is where /media/ cover images live on disk; empty disables
 	// thumbnails.
-	MediaDir     string
+	MediaDir string
+	// MediaDirFn, when set, is read on every thumbnail instead of MediaDir,
+	// so a directory saved in Settings takes effect without a restart.
+	MediaDirFn   func() string
 	PollInterval time.Duration // default 15s
 	// Tracker, when set, is started and stopped with the publisher (#0547), so
 	// the process wires one background type and one shutdown budget.
@@ -90,7 +93,7 @@ type Publisher struct {
 	outbox   *outbox.Store
 	settings Settings
 	clients  ClientSource
-	mediaDir string
+	mediaDir func() string
 	poll     time.Duration
 	log      *slog.Logger
 	tracker  *Tracker
@@ -113,9 +116,14 @@ func NewPublisher(d PublisherDeps) *Publisher {
 	if d.Clients == nil {
 		d.Clients = staticClients{d.Bluesky, d.Mastodon}
 	}
+	mediaDirFn := d.MediaDirFn
+	if mediaDirFn == nil {
+		dir := d.MediaDir
+		mediaDirFn = func() string { return dir }
+	}
 	return &Publisher{
 		store: d.Store, outbox: d.Outbox, settings: d.Settings, clients: d.Clients,
-		mediaDir: d.MediaDir, poll: d.PollInterval, log: d.Log, tracker: d.Tracker,
+		mediaDir: mediaDirFn, poll: d.PollInterval, log: d.Log, tracker: d.Tracker,
 		stopCh: make(chan struct{}), doneCh: make(chan struct{}),
 	}
 }
@@ -413,19 +421,20 @@ func deref(s *string) string {
 }
 
 // thumbnail loads a workshop cover from local disk only. The value must be a
-// same-site /media/ path and MEDIA_DIR must be set; the file must sniff as
+// same-site /media/ path and a media directory must be configured; the file must sniff as
 // JPEG or PNG and fit Bluesky's blob limit. Anything else yields no
 // thumbnail and the card is sent without one. A server-side URL fetch is
 // never made.
 func (p *Publisher) thumbnail(cover *string) ([]byte, string) {
-	if cover == nil || p.mediaDir == "" || !strings.HasPrefix(*cover, "/media/") {
+	dir := p.mediaDir()
+	if cover == nil || dir == "" || !strings.HasPrefix(*cover, "/media/") {
 		return nil, ""
 	}
 	name := filepath.Base(*cover)
 	if name == "." || name == "/" || name == ".." || name == "" {
 		return nil, ""
 	}
-	full := filepath.Join(p.mediaDir, name)
+	full := filepath.Join(dir, name)
 	// Check the size before reading so an oversized file is never loaded.
 	if fi, err := os.Stat(full); err != nil || !fi.Mode().IsRegular() || fi.Size() == 0 || fi.Size() > int64(bluesky.MaxThumbBytes) {
 		return nil, ""
