@@ -141,26 +141,23 @@ describe('defaultScheduleAt', () => {
   });
 });
 
-describe('datetime-local conversion', () => {
-  // Offsets follow Date.getTimezoneOffset: UTC minus local, so Pacific
-  // daylight time is +420 and Pacific standard time is +480.
-  it('round-trips at offset 420 (UTC-7)', () => {
-    expect(toLocalInputValue('2026-11-28T18:00:00Z', 420)).toBe('2026-11-28T11:00');
-    expect(fromLocalInputValue('2026-11-28T11:00', 420)).toBe('2026-11-28T18:00:00Z');
+describe('datetime-local conversion (Pacific, #0585)', () => {
+  it('round-trips in Pacific daylight time (UTC-7)', () => {
+    expect(toLocalInputValue('2026-10-31T18:00:00Z')).toBe('2026-10-31T11:00');
+    expect(fromLocalInputValue('2026-10-31T11:00')).toBe('2026-10-31T18:00:00Z');
   });
-  it('round-trips at offset 0', () => {
-    expect(toLocalInputValue('2026-11-28T18:00:00Z', 0)).toBe('2026-11-28T18:00');
-    expect(fromLocalInputValue('2026-11-28T18:00', 0)).toBe('2026-11-28T18:00:00Z');
+  it('round-trips in Pacific standard time (UTC-8)', () => {
+    expect(toLocalInputValue('2026-11-28T18:00:00Z')).toBe('2026-11-28T10:00');
+    expect(fromLocalInputValue('2026-11-28T10:00')).toBe('2026-11-28T18:00:00Z');
   });
   it('crosses midnight and a year boundary correctly', () => {
-    expect(toLocalInputValue('2027-01-01T03:00:00Z', 480)).toBe('2026-12-31T19:00');
-    expect(fromLocalInputValue('2026-12-31T19:00', 480)).toBe('2027-01-01T03:00:00Z');
-    expect(toLocalInputValue('2026-11-28T18:00:00Z', -330)).toBe('2026-11-28T23:30');
+    expect(toLocalInputValue('2027-01-01T03:00:00Z')).toBe('2026-12-31T19:00');
+    expect(fromLocalInputValue('2026-12-31T19:00')).toBe('2027-01-01T03:00:00Z');
   });
   it('rejects garbage', () => {
-    expect(toLocalInputValue('garbage', 0)).toBe('');
-    expect(fromLocalInputValue('', 0)).toBeNull();
-    expect(fromLocalInputValue('tomorrow', 0)).toBeNull();
+    expect(toLocalInputValue('garbage')).toBe('');
+    expect(fromLocalInputValue('')).toBeNull();
+    expect(fromLocalInputValue('tomorrow')).toBeNull();
   });
 });
 

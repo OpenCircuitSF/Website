@@ -173,12 +173,12 @@ describe('OutreachAnnouncement', () => {
       Promise.resolve(post({ id, channel: id === 1 ? 'bluesky' : 'mastodon', status: 'scheduled', scheduled_at: at })),
     );
     await fireEvent.click(screen.getByRole('button', { name: 'Schedule for later…' }));
-    await fireEvent.input(screen.getByLabelText('Schedule for'), { target: { value: '2099-11-28T10:00' } });
+    await fireEvent.input(screen.getByLabelText('Schedule for (Pacific time)'), { target: { value: '2099-11-28T10:00' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
     await waitFor(() => expect(scheduleOutreachPost).toHaveBeenCalledTimes(2));
     expect(scheduleOutreachPost.mock.calls.map((c) => c[0])).toEqual([1, 2]);
     expect(scheduleOutreachPost.mock.calls[0][1]).toBe(scheduleOutreachPost.mock.calls[1][1]);
-    expect(scheduleOutreachPost.mock.calls[0][1]).toMatch(/^2099-11-2[78]T\d{2}:\d{2}:00Z$/);
+    expect(scheduleOutreachPost.mock.calls[0][1]).toBe('2099-11-28T18:00:00Z');
     expect(await screen.findByRole('button', { name: 'Unschedule' })).toBeTruthy();
   });
 

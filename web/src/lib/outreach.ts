@@ -3,6 +3,7 @@
 // here. The channel and wave lists are not duplicated here -- the server
 // sends them with every panel view.
 
+import { fromPacificInput, toPacificInput } from './pacificTime';
 import type { OutreachChannel, OutreachPost, OutreachWave, WorkshopOutreach } from './types';
 
 /** The placeholder a draft carries until Prepare swaps in the real short URL.
@@ -120,24 +121,14 @@ export function defaultScheduleAt(waveName: string, waves: OutreachWave[], now: 
   return Number.isNaN(t) || t <= now.getTime() ? null : at;
 }
 
-/**
- * An ISO instant as the value of a datetime-local input. offsetMinutes is
- * Date.getTimezoneOffset()'s convention (UTC minus local), passed in so the
- * result does not depend on the machine's time zone.
- */
-export function toLocalInputValue(iso: string, offsetMinutes: number): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return '';
-  return new Date(t - offsetMinutes * 60000).toISOString().slice(0, 16);
+/** An ISO instant as the value of a datetime-local input, in Pacific time (#0585). */
+export function toLocalInputValue(iso: string): string {
+  return toPacificInput(iso);
 }
 
-/** The inverse of toLocalInputValue: an RFC 3339 UTC instant, or null for an unparseable value. */
-export function fromLocalInputValue(value: string, offsetMinutes: number): string | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
-  if (!m) return null;
-  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])) + offsetMinutes * 60000;
-  if (Number.isNaN(ms)) return null;
-  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+/** The inverse of toLocalInputValue: a Pacific wall-clock value as an RFC 3339 UTC instant, or null when unparseable. */
+export function fromLocalInputValue(value: string): string | null {
+  return fromPacificInput(value);
 }
 
 /** True while any post is queued, so the panel keeps refreshing until the publisher has acted. */

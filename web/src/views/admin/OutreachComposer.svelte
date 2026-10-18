@@ -77,7 +77,7 @@
   // wave's suggestion when it is still in the future (#0545).
   function initialScheduleValue(): string {
     const iso = post.scheduled_at ?? defaultScheduleAt(wave.name, [wave], new Date());
-    return iso ? toLocalInputValue(iso, new Date(iso).getTimezoneOffset()) : '';
+    return iso ? toLocalInputValue(iso) : '';
   }
   // svelte-ignore state_referenced_locally
   let scheduleLocal = $state(initialScheduleValue());
@@ -150,10 +150,8 @@
     });
   const schedule = () =>
     run('schedule', async () => {
-      // Resolve the offset for the chosen moment, not today, so a date across
-      // a daylight-saving change converts correctly.
-      const offset = new Date(scheduleLocal).getTimezoneOffset();
-      const iso = fromLocalInputValue(scheduleLocal, offset);
+      // The picker is Pacific time, converted per-date (lib/pacificTime.ts).
+      const iso = fromLocalInputValue(scheduleLocal);
       if (iso === null) {
         error = 'Pick a date and time to schedule.';
         return;
@@ -228,7 +226,7 @@
   {#if actions.canSchedule}
     <div class="schedule">
       <label class="field">
-        <span class="field-label">Schedule for</span>
+        <span class="field-label">Schedule for (Pacific time)</span>
         <input type="datetime-local" bind:value={scheduleLocal} />
       </label>
       {#if !scheduleLocal}

@@ -601,7 +601,7 @@
 
     <Panel title="Date and location">
       <div class="field">
-        <label for="workshop-starts">Starts</label>
+        <label for="workshop-starts">Starts (Pacific time)</label>
         <input
           id="workshop-starts"
           type="datetime-local"
@@ -610,7 +610,7 @@
         />
       </div>
       <div class="field">
-        <label for="workshop-ends">Ends</label>
+        <label for="workshop-ends">Ends (Pacific time)</label>
         <input
           id="workshop-ends"
           type="datetime-local"
@@ -876,7 +876,7 @@
         </p>
         <form onsubmit={submitClone}>
           <div class="field">
-            <label for="clone-starts-at">New start</label>
+            <label for="clone-starts-at">New start (Pacific time)</label>
             <input
               id="clone-starts-at"
               type="datetime-local"
@@ -886,7 +886,7 @@
             />
           </div>
           <div class="field">
-            <label for="clone-ends-at">New end</label>
+            <label for="clone-ends-at">New end (Pacific time)</label>
             <input
               id="clone-ends-at"
               type="datetime-local"

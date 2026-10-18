@@ -6,6 +6,7 @@
 // a DOM — see admin.test.ts.
 
 import type { AdminUser, AuditEntry, Interest, Subscriber } from './types';
+import { formatPacificDateTime } from './pacificTime';
 import type { ImportCommitResult } from './api';
 
 // ── Deactivation reasons (user management) ───────────────────────────────────
@@ -145,20 +146,12 @@ export function formatMetadata(metadata: unknown): string {
 }
 
 /**
- * Format an RFC 3339 timestamp as a human date-time for the audit table (e.g.
- * "May 25, 2026, 12:00 PM"). Falls back to the raw string when it does not parse
+ * Format an RFC 3339 timestamp as a human date-time in Pacific time (e.g.
+ * "May 25, 2026, 12:00 PM PT"; #0585). Falls back to the raw string when it does not parse
  * so a malformed server value is shown rather than swallowed.
  */
 export function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return formatPacificDateTime(iso);
 }
 
 // ── Pagination math ──────────────────────────────────────────────────────────

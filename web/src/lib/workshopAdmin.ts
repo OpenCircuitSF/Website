@@ -88,6 +88,7 @@
 // workshop form/status logic, not image handling.
 
 import type { AdminWorkshop } from './types';
+import { fromPacificInput, toPacificInput } from './pacificTime';
 import type { CreateWorkshopFields } from './api';
 
 // ── Status vocabulary (migration 000020's workshops_status_check) ──────────
@@ -430,31 +431,21 @@ export function isSlugEditable(): boolean {
 
 // ── datetime-local <-> RFC 3339 ─────────────────────────────────────────────
 //
-// `<input type="datetime-local">` reads/writes "YYYY-MM-DDTHH:mm" in the
-// browser's OWN local timezone, no offset -- the same "viewer's local
-// timezone" convention lib/workshops.ts's formatWorkshopDate uses for
-// display. The API stores/returns RFC 3339 (UTC) -- see
+// `<input type="datetime-local">` reads/writes "YYYY-MM-DDTHH:mm" with no
+// offset. The admin treats it as PACIFIC time (#0585, lib/pacificTime.ts),
+// never the browser's zone. The API stores/returns RFC 3339 (UTC) -- see
 // internal/handlers/admin_workshops.go's formatTimePtr / parseOptionalTime.
-
-function pad2(n: number): string {
-  return String(n).padStart(2, '0');
-}
 
 /** An RFC 3339 timestamp (or absent) as a datetime-local input value, or '' when absent/unparseable. */
 export function toDatetimeLocalValue(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return toPacificInput(iso);
 }
 
 /** A datetime-local input value as an RFC 3339 timestamp, or undefined when empty/unparseable. */
 export function fromDatetimeLocalValue(value: string): string | undefined {
   const trimmed = value.trim();
   if (trimmed === '') return undefined;
-  const d = new Date(trimmed);
-  if (Number.isNaN(d.getTime())) return undefined;
-  return d.toISOString();
+  return fromPacificInput(trimmed) ?? undefined;
 }
 
 // ── Interest tagging ─────────────────────────────────────────────────────────

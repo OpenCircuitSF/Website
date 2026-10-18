@@ -97,7 +97,7 @@
 
   function initialSchedule(): string {
     const iso = defaultScheduleAt(wave, view.waves, new Date());
-    return iso ? toLocalInputValue(iso, new Date(iso).getTimezoneOffset()) : '';
+    return iso ? toLocalInputValue(iso) : '';
   }
 
   function msg(err: unknown, fallback: string): string {
@@ -161,7 +161,7 @@
 
   const schedule = () =>
     guarded('Could not schedule the posts. Please try again.', async () => {
-      const iso = fromLocalInputValue(scheduleLocal, new Date(scheduleLocal).getTimezoneOffset());
+      const iso = fromLocalInputValue(scheduleLocal);
       if (iso === null) {
         errorText = 'Pick a date and time to schedule.';
         return;
@@ -279,7 +279,7 @@
     {#if scheduling}
       <div class="schedule">
         <label class="field">
-          <span class="field-label">Schedule for</span>
+          <span class="field-label">Schedule for (Pacific time)</span>
           <input type="datetime-local" bind:value={scheduleLocal} />
         </label>
         <p class="row">

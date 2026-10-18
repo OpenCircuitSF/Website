@@ -2,6 +2,7 @@
 // wave, the plain status line, the summary line and which buttons a card
 // shows. No DOM, so it is unit-testable; the Svelte components stay thin.
 import { formatDateTime } from './admin';
+import { formatPacificWeekdayTime } from './pacificTime';
 import { composerActions } from './outreach';
 import type { OutreachChannel, OutreachPost, OutreachResults, OutreachWave, WorkshopOutreach } from './types';
 
@@ -40,12 +41,10 @@ export interface StatusLine {
   href: string | null;
 }
 
-/** "Mon, Oct 12, 10:00 AM" in the viewer's zone: weekday and date, since a
- * scheduled time can be weeks out (#0574). */
+/** "Mon, Oct 12, 10:00 AM PT" in Pacific time: weekday and date, since a
+ * scheduled time can be weeks out (#0574, #0585). */
 export function weekdayTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return formatPacificWeekdayTime(iso);
 }
 
 /** The one plain-English status line for a card. */
