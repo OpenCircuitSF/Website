@@ -16,7 +16,7 @@
 <script lang="ts">
   import { untrack, type Snippet } from 'svelte';
   import { getWorkshopOutreach, getWorkshopOutreachResults, startOutreach, createOutreachPost, ApiError } from '../../lib/api';
-  import { adminOutreachResultsHash, adminSectionHash, adminWorkshopHash } from '../../lib/adminRouter';
+  import { adminOutreachResultsHash, adminSettingsHash, adminWorkshopHash } from '../../lib/adminRouter';
   import { buildGrid, cellLabel, cellIsStale, shouldPoll, unavailableMessage } from '../../lib/outreach';
   import { cellClicksLabel, cellReactionsLabel, resultsStatusMessage, resultsSummaryLine } from '../../lib/outreachResults';
   import { linkReportMessage } from '../../lib/outreachLinks';
@@ -181,7 +181,7 @@
       <p class="text-muted">
         {unavailableMessage(view.unavailable_reason)}
         {#if view.unavailable_reason === 'shortlinks_not_configured'}
-          <a href={adminSectionHash('settings')}>Open Settings</a>
+          <a href={adminSettingsHash('outreach')}>Open Settings</a>
         {:else if view.unavailable_reason === 'workshop_not_published'}
           <a href={adminWorkshopHash(workshopId)}>Open the workshop editor</a>
         {/if}

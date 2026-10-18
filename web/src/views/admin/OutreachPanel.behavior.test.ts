@@ -92,7 +92,7 @@ describe('OutreachPanel', () => {
     );
     render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
     await waitFor(() => expect(screen.getByText(/Settings → Outreach connections/)).toBeTruthy());
-    expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('#/settings');
+    expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('#/settings?section=outreach');
     expect(screen.queryByText('Start outreach')).toBeNull();
   });
 

@@ -78,8 +78,10 @@ describe('ServerSettings', () => {
   it('renders four groups with restart and live notes beside the right fields', async () => {
     await mount();
     expect(document.querySelectorAll('fieldset').length).toBe(4);
-    expect(fieldBlock('From address').textContent).toContain('Takes effect after the service restarts');
-    expect(fieldBlock('Media directory').textContent).toContain('Takes effect immediately.');
+    // One badge per group instead of a sentence per field (#0584).
+    const badges = [...document.querySelectorAll('fieldset')].map((fs) => fs.querySelector('.apply-badge')?.textContent);
+    expect(badges).toEqual(['Applies immediately', 'Applies at next deploy', 'Applies immediately', 'Applies at next deploy']);
+    expect(document.body.textContent).not.toContain('Takes effect');
   });
 
   it('shows the pending-restart note only when pending', async () => {

@@ -46,6 +46,10 @@
     parseAdminHash,
     adminOverviewRoute,
     adminSectionHash,
+    adminSettingsHash,
+    settingsSectionFromQuery,
+    SETTINGS_SECTIONS,
+    type SettingsSection,
     adminCampaignHash,
     adminWorkshopHash,
     adminAuditCampaignHash,
@@ -136,6 +140,7 @@
   } from '../lib/types';
   import Button from '../lib/Button.svelte';
   import Panel from '../lib/Panel.svelte';
+  import ApplyBadge from '../lib/ApplyBadge.svelte';
   import { APP_NAME } from '../lib/branding';
   import Campaigns from './admin/Campaigns.svelte';
   import Workshops from './admin/Workshops.svelte';
@@ -1238,6 +1243,20 @@
     navigate('/login');
   }
 
+  // #0584: `#/settings?section=outreach` lands on that Settings section. The
+  // scroll waits for the settings panel to finish its own load so the target
+  // exists; jsdom has no scrollIntoView, hence the guard.
+  function scrollToSettingsSection(id: SettingsSection): void {
+    void tick().then(() =>
+      document.getElementById(`settings-${id}`)?.scrollIntoView?.({ block: 'start' }),
+    );
+  }
+  $effect(() => {
+    if (adminRoute.section !== 'settings' || settingsLoading) return;
+    const wanted = settingsSectionFromQuery(adminRoute.query);
+    if (wanted) scrollToSettingsSection(wanted);
+  });
+
   onMount(() => {
     // #0527 criterion 5: an empty hash normalizes to `#/` with replaceState
     // — Overview either way, but the URL stops being ambiguous, and no
@@ -1299,7 +1318,14 @@
     {/if}
 
     {#if adminRoute.section === 'settings'}
+      <nav class="settings-jump" aria-label="Settings sections">
+        {#each SETTINGS_SECTIONS as s (s.id)}
+          <a href={adminSettingsHash(s.id)} onclick={() => scrollToSettingsSection(s.id)}>{s.label}</a>
+        {/each}
+      </nav>
+      <div id="settings-general">
       <Panel title="Settings">
+        <p class="settings-badge"><ApplyBadge kind="immediate" /></p>
         {#if settingsLoading}
           <p class="text-muted" role="status">Loading settings…</p>
         {:else if settingsError}
@@ -1372,8 +1398,17 @@
           </div>
         {/if}
       </Panel>
-      <ServerSettings />
-      <OutreachConnections />
+      </div>
+      <div id="settings-server">
+        <ServerSettings scope="server" />
+      </div>
+      <div id="settings-outreach">
+        <Panel title="Outreach">
+          <ServerSettings scope="outreach" bare />
+          <h3 class="settings-sub">Connections</h3>
+          <OutreachConnections bare />
+        </Panel>
+      </div>
     {/if}
 
     {#if adminRoute.section === 'users'}
@@ -2518,6 +2553,20 @@
     gap: var(--space-2);
     margin-bottom: var(--space-4);
     flex-wrap: wrap;
+  }
+  .settings-jump {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+  .settings-badge {
+    margin: 0 0 var(--space-3);
+  }
+  .settings-sub {
+    margin: var(--space-4) 0 var(--space-2);
+    font-size: var(--fs-base);
+    font-weight: 600;
   }
   .subtab {
     background: var(--bg-panel);

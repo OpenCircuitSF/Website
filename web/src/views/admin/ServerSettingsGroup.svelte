@@ -11,20 +11,22 @@
     GROUP_LABELS,
     FIELD_LABELS,
     RESTART_NOTE,
-    LIVE_NOTE,
     PENDING_NOTE,
     initialDraft,
     buildPatch,
     fieldHint,
     isSaved,
+    applyKind,
   } from '../../lib/serverSettings';
   import { sourceLabel } from '../../lib/outreachConnections';
   import type { ServerSettingGroup, ServerSettings } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
+  import ApplyBadge from '../../lib/ApplyBadge.svelte';
 
   let { group, onupdate }: { group: ServerSettingGroup; onupdate: (next: ServerSettings) => void } = $props();
 
   const label = $derived(GROUP_LABELS[group.name]);
+  const kind = $derived(applyKind(group.fields));
 
   let draft = $state<Record<string, string>>(untrack(() => initialDraft(group)));
   let saving = $state(false);
@@ -63,6 +65,7 @@
 
 <fieldset class="srv-group">
   <legend>{label}</legend>
+  <p class="srv-badge"><ApplyBadge {kind} /></p>
   {#if group.error}
     <p class="text-error">{group.error}</p>
   {/if}
@@ -97,7 +100,9 @@
       {/if}
       <p class="text-muted srv-desc">{sourceLabel(f)}</p>
       <p class="text-muted srv-desc">{info.help}</p>
-      <p class="text-muted srv-desc">{f.restart_required ? RESTART_NOTE : LIVE_NOTE}</p>
+      {#if kind === 'mixed'}
+        <p class="text-muted srv-desc">{f.restart_required ? RESTART_NOTE : 'Applies immediately.'}</p>
+      {/if}
       {#if f.pending_restart}
         <p class="text-notice srv-desc">{PENDING_NOTE}</p>
       {/if}
@@ -130,6 +135,9 @@
     font-weight: 600;
     color: var(--text);
     padding: 0 var(--space-2);
+  }
+  .srv-badge {
+    margin: 0;
   }
   .srv-field {
     margin-top: var(--space-3);

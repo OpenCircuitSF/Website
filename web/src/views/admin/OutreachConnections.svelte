@@ -5,7 +5,8 @@
   OutreachConnectionGroup.svelte; this component loads the state and shows
   the precedence note.
 
-  Test connection checks the SAVED values, so the flow is save, then test.
+  Test connection checks the SAVED values, so it is disabled while a group has
+  unsaved edits (#0584): save, then test.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -15,6 +16,8 @@
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
   import OutreachConnectionGroup from './OutreachConnectionGroup.svelte';
+
+  let { bare = false }: { bare?: boolean } = $props();
 
   let conns = $state<OutreachConnections | null>(null);
   let loading = $state(true);
@@ -38,7 +41,7 @@
   onMount(load);
 </script>
 
-<Panel title="Outreach connections">
+{#snippet body()}
   {#if loading}
     <p class="text-muted">Loading outreach connections…</p>
   {:else if unavailable}
@@ -52,7 +55,15 @@
       <OutreachConnectionGroup group={g} onupdate={(next) => (conns = next)} />
     {/each}
   {/if}
-</Panel>
+{/snippet}
+
+{#if bare}
+  {@render body()}
+{:else}
+  <Panel title="Outreach connections">
+    {@render body()}
+  </Panel>
+{/if}
 
 <style>
   .conn-note {

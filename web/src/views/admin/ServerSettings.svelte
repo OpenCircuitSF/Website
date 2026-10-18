@@ -14,6 +14,11 @@
   import Panel from '../../lib/Panel.svelte';
   import ServerSettingsGroup from './ServerSettingsGroup.svelte';
 
+  // `scope` splits the groups between Settings sections (#0584): the Outreach
+  // group lives in the Outreach section, the rest under Server settings.
+  // `bare` drops the panel chrome when a parent section already supplies it.
+  let { scope = 'all', bare = false }: { scope?: 'all' | 'server' | 'outreach'; bare?: boolean } = $props();
+
   let settings = $state<ServerSettings | null>(null);
   let loading = $state(true);
   let loadError = $state<string | null>(null);
@@ -36,7 +41,7 @@
   onMount(load);
 </script>
 
-<Panel title="Server settings">
+{#snippet body()}
   {#if loading}
     <p class="text-muted">Loading server settings…</p>
   {:else if unavailable}
@@ -46,11 +51,19 @@
     <Button variant="primary" onclick={load}>Retry</Button>
   {:else if settings}
     <p class="text-muted srv-note">{PRECEDENCE_NOTE}</p>
-    {#each settings.groups as g (g.name)}
+    {#each settings.groups.filter((g) => scope === 'all' || (scope === 'outreach') === (g.name === 'outreach')) as g (g.name)}
       <ServerSettingsGroup group={g} onupdate={(next) => (settings = next)} />
     {/each}
   {/if}
-</Panel>
+{/snippet}
+
+{#if bare}
+  {@render body()}
+{:else}
+  <Panel title="Server settings">
+    {@render body()}
+  </Panel>
+{/if}
 
 <style>
   .srv-note {

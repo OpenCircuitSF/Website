@@ -98,7 +98,7 @@ describe('OutreachLinks', () => {
     getWorkshopOutreachLinks.mockResolvedValue(view({ available: false, unavailable_reason: 'shortlinks_not_configured', links: [], outreach: null }));
     render(OutreachLinks, { workshopId: 5, available: false });
     const link = await screen.findByRole('link', { name: 'Open Settings' });
-    expect(link.getAttribute('href')).toBe('#/settings');
+    expect(link.getAttribute('href')).toBe('#/settings?section=outreach');
   });
 
   it('refetches when reloadKey changes', async () => {

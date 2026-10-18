@@ -6,6 +6,8 @@ import { describe, it, expect } from 'vitest';
 import {
   parseAdminHash,
   adminSectionHash,
+  adminSettingsHash,
+  settingsSectionFromQuery,
   adminCampaignHash,
   adminWorkshopHash,
   adminAuditCampaignHash,
@@ -189,5 +191,20 @@ describe('outreach workshop page (#0568)', () => {
   });
   it('builds the hash', () => {
     expect(adminOutreachWorkshopHash(6)).toBe('#/outreach?view=workshop&workshop=6');
+  });
+});
+
+describe('settings sections (#0584)', () => {
+  it('builds and parses the section deep link', () => {
+    expect(adminSettingsHash()).toBe('#/settings');
+    expect(adminSettingsHash('outreach')).toBe('#/settings?section=outreach');
+    const route = parseAdminHash(adminSettingsHash('outreach'));
+    expect(route?.section).toBe('settings');
+    expect(settingsSectionFromQuery(route!.query)).toBe('outreach');
+  });
+
+  it('ignores an unknown section', () => {
+    expect(settingsSectionFromQuery(new URLSearchParams('section=nope'))).toBeNull();
+    expect(settingsSectionFromQuery(new URLSearchParams())).toBeNull();
   });
 });

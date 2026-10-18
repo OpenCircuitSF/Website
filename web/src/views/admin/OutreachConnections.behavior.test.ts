@@ -139,10 +139,44 @@ describe('OutreachConnections', () => {
     await fireEvent.click(buttons[2]);
     await waitFor(() => expect(testOutreachConnection).toHaveBeenCalledWith('mastodon'));
     const status = document.querySelectorAll('fieldset')[2].querySelector('[role="status"]');
-    await waitFor(() => expect(status?.textContent).toBe('Signed in to Mastodon as @opencircuit'));
+    await waitFor(() => expect(status?.textContent).toBe('Tested the saved credentials: Signed in to Mastodon as @opencircuit'));
+    expect(document.querySelectorAll('fieldset')[2].textContent).toContain('Configured · last test passed');
     testOutreachConnection.mockResolvedValueOnce({ ok: false, error: 'Mastodon rejected the access token.' });
     await fireEvent.click(buttons[2]);
-    await waitFor(() => expect(status?.textContent).toBe('Mastodon rejected the access token.'));
+    const alert = document.querySelectorAll('fieldset')[2].querySelector('[role="alert"]');
+    await waitFor(() => expect(alert?.textContent).toBe('Could not connect: Mastodon rejected the access token.'));
+    expect(alert?.classList.contains('text-error')).toBe(true);
+    expect(status?.textContent).toBe('');
+    expect(document.querySelectorAll('fieldset')[2].textContent).toContain('Configured · last test failed');
+  });
+
+  it('disables Test connection and says Save, then test while a group has unsaved edits', async () => {
+    await mount();
+    const mastodon = () => document.querySelectorAll('fieldset')[2];
+    const testBtn = () => mastodon().querySelectorAll('button')[mastodon().querySelectorAll('button').length - 1] as HTMLButtonElement;
+    expect(testBtn().textContent?.trim()).toBe('Test connection');
+    expect(testBtn().disabled).toBe(false);
+    await fireEvent.input(screen.getByLabelText('Access token'), { target: { value: 'new-token' } });
+    expect(testBtn().textContent?.trim()).toBe('Save, then test');
+    expect(testBtn().disabled).toBe(true);
+    // Another group's button is unaffected.
+    expect((document.querySelectorAll('fieldset')[0].querySelectorAll('button')[1] as HTMLButtonElement).disabled).toBe(false);
+    await fireEvent.input(screen.getByLabelText('Access token'), { target: { value: '' } });
+    expect(testBtn().textContent?.trim()).toBe('Test connection');
+  });
+
+  it('shows a masked placeholder and a Saved badge for a saved secret, and none for an unset one', async () => {
+    const data = fixture();
+    const token = data.groups[2].fields[1];
+    if (token.secret) token.source = 'database';
+    await mount(data);
+    const mastodon = document.querySelectorAll('fieldset')[2];
+    expect(mastodon.querySelector('.conn-saved')?.textContent).toBe('Saved');
+    expect((screen.getByLabelText('Access token') as HTMLInputElement).placeholder).toBe('••••••••');
+    const shortlinks = document.querySelectorAll('fieldset')[0];
+    expect(shortlinks.querySelector('.conn-saved')).toBeNull();
+    expect((screen.getByLabelText('API token') as HTMLInputElement).placeholder).toBe('');
+    expect(mastodon.querySelector('.apply-badge')?.textContent).toBe('Applies immediately');
   });
 
   it('shows a note when the server has no database', async () => {

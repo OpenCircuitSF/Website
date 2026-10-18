@@ -9,7 +9,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { getWorkshopOutreachLinks, createWorkshopOutreachLinks, ApiError } from '../../lib/api';
-  import { adminSectionHash, adminWorkshopHash } from '../../lib/adminRouter';
+  import { adminSettingsHash, adminWorkshopHash } from '../../lib/adminRouter';
   import { linksEmptyState, linkReportMessage, linkRowLabel, linkClicksLabel } from '../../lib/outreachLinks';
   import type { OutreachLinksView } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
@@ -88,7 +88,7 @@
       <p class="text-muted">
         {empty.message}
         {#if empty.kind === 'not_connected'}
-          <a href={adminSectionHash('settings')}>Open Settings</a>
+          <a href={adminSettingsHash('outreach')}>Open Settings</a>
         {:else if empty.kind === 'not_published'}
           <a href={adminWorkshopHash(workshopId)}>Open the workshop editor</a>
         {/if}

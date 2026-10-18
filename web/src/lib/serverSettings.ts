@@ -70,6 +70,20 @@ export const RESTART_NOTE = 'Takes effect after the service restarts (for exampl
 export const PENDING_NOTE = 'Saved. The running service still uses the previous value until it restarts.';
 export const LIVE_NOTE = 'Takes effect immediately.';
 
+/** How a section's saved changes take effect. */
+export type ApplyKind = 'immediate' | 'deploy' | 'mixed';
+
+/** Words for the section badge. */
+export function applyBadgeText(kind: ApplyKind): string {
+  return kind === 'immediate' ? 'Applies immediately' : kind === 'deploy' ? 'Applies at next deploy' : 'Some fields apply at next deploy';
+}
+
+/** One badge for a section: all live, all restart-bound, or a mix. */
+export function applyKind(fields: readonly { restart_required: boolean }[]): ApplyKind {
+  const n = fields.filter((f) => f.restart_required).length;
+  return n === 0 ? 'immediate' : n === fields.length ? 'deploy' : 'mixed';
+}
+
 /** The starting draft for a group: saved values only, everything else blank. */
 export function initialDraft(group: ServerSettingGroup): Record<string, string> {
   const draft: Record<string, string> = {};

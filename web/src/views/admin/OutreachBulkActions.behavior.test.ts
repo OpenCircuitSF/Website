@@ -110,7 +110,7 @@ describe('OutreachBulkActions', () => {
       view: wo({ channels: [ch('bluesky', true, false), ch('instagram', false, false)] }),
     });
     expect((screen.getByRole('button', { name: 'Schedule all' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('#/settings');
+    expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('#/settings?section=outreach');
     expect((screen.getByRole('button', { name: 'Draft all' }) as HTMLButtonElement).disabled).toBe(false);
   });
 

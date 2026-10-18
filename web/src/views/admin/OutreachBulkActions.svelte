@@ -7,7 +7,7 @@
 -->
 <script lang="ts">
   import { draftAllOutreach, scheduleAllOutreach, ApiError } from '../../lib/api';
-  import { adminSectionHash, adminWorkshopHash } from '../../lib/adminRouter';
+  import { adminSettingsHash, adminWorkshopHash } from '../../lib/adminRouter';
   import { draftAllMessage, scheduleAllMessage, canScheduleAll } from '../../lib/outreachLinks';
   import type { OutreachScheduleAllResult, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
@@ -104,7 +104,7 @@
       {#if view.workshop.status !== 'published'}
         <a href={adminWorkshopHash(workshopId)}>Open the workshop editor</a>
       {:else}
-        <a href={adminSectionHash('settings')}>Open Settings</a>
+        <a href={adminSettingsHash('outreach')}>Open Settings</a>
       {/if}
     </p>
   {/if}

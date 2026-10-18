@@ -22,6 +22,7 @@
   } from '../../lib/outreachConnections';
   import type { ConnectionGroup, OutreachConnections } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
+  import ApplyBadge from '../../lib/ApplyBadge.svelte';
 
   let { group, onupdate }: { group: ConnectionGroup; onupdate: (next: OutreachConnections) => void } = $props();
 
@@ -31,7 +32,16 @@
   let draft = $state<Record<string, string>>(untrack(() => initialDraft(group)));
   let saving = $state(false);
   let testing = $state(false);
+  // Saved / cleared confirmations and successful tests go to the role=status
+  // line; failures go to the role=alert line (#0584), so colour is never the
+  // only signal. `lastTest` feeds the Configured line.
   let message = $state('');
+  let failure = $state('');
+  let lastTest = $state<'ok' | 'failed' | null>(null);
+
+  // Test connection checks the SAVED values, never the form, so it is only
+  // offered when there is nothing unsaved.
+  const dirty = $derived(Object.keys(buildPatch(group, draft)).length > 0);
 
   function urlHint(key: string): string | null {
     return URL_KEYS.has(key) ? validateServiceUrl(draft[key] ?? '') : null;
@@ -46,14 +56,16 @@
   async function submit(values: Record<string, string>, success: string): Promise<void> {
     saving = true;
     message = '';
+    failure = '';
     try {
       const res = await updateOutreachConnections(values);
       const next = res.groups.find((g) => g.name === group.name);
       if (next) draft = initialDraft(next);
       onupdate(res);
       message = success;
+      lastTest = null;
     } catch (e) {
-      message = e instanceof ApiError && e.message ? e.message : 'Could not save. Please try again.';
+      failure = e instanceof ApiError && e.message ? e.message : 'Could not save. Please try again.';
     } finally {
       saving = false;
     }
@@ -70,11 +82,19 @@
   async function runTest(): Promise<void> {
     testing = true;
     message = '';
+    failure = '';
     try {
       const res = await testOutreachConnection(group.name);
-      message = res.ok ? (res.detail ?? 'Connected.') : (res.error ?? 'The connection check failed.');
+      if (res.ok) {
+        lastTest = 'ok';
+        message = `Tested the saved credentials: ${res.detail ?? 'Connected.'}`;
+      } else {
+        lastTest = 'failed';
+        failure = `Could not connect: ${res.error ?? 'The connection check failed.'}`;
+      }
     } catch {
-      message = 'Could not run the connection check. Please try again.';
+      lastTest = null;
+      failure = 'Could not run the connection check. Please try again.';
     } finally {
       testing = false;
     }
@@ -83,16 +103,35 @@
 
 <fieldset class="conn-group">
   <legend>{label}</legend>
-  <p class="text-muted conn-status">{group.configured ? 'Configured' : 'Not configured'}</p>
+  <p class="conn-badge"><ApplyBadge kind="immediate" /></p>
+  <p class="text-muted conn-status">
+    {group.configured ? 'Configured' : 'Not configured'}{lastTest === 'failed'
+      ? ' · last test failed'
+      : lastTest === 'ok'
+        ? ' · last test passed'
+        : ''}
+  </p>
   {#if group.error}
     <p class="text-error">{group.error}</p>
   {/if}
   {#each group.fields as f (f.key)}
     {@const id = `conn-${f.key}`}
     <div class="conn-field">
-      <label class="conn-name" for={id}>{FIELD_LABELS[f.key].label}</label>
+      <div class="conn-label-row">
+        <label class="conn-name" for={id}>{FIELD_LABELS[f.key].label}</label>
+        {#if f.secret && f.set}
+          <span class="conn-saved">{f.source === 'database' ? 'Saved' : 'From environment'}</span>
+        {/if}
+      </div>
       {#if f.secret}
-        <input {id} type="password" autocomplete="new-password" bind:value={draft[f.key]} disabled={saving} />
+        <input
+          {id}
+          type="password"
+          autocomplete="new-password"
+          bind:value={draft[f.key]}
+          disabled={saving}
+          placeholder={f.set ? '••••••••' : ''}
+        />
         <p class="text-muted conn-desc">{secretStatus(f)}</p>
         {#if f.source === 'database'}
           <Button disabled={saving} onclick={() => clearSaved(f.key)}>Clear saved value</Button>
@@ -116,14 +155,15 @@
     <Button variant="primary" disabled={!canSave} onclick={save}>
       {saving ? 'Saving…' : `Save ${label}`}
     </Button>
-    <Button disabled={testing} onclick={runTest}>
-      {testing ? 'Testing…' : 'Test connection'}
+    <Button disabled={testing || saving || dirty} onclick={runTest}>
+      {testing ? 'Testing…' : dirty ? 'Save, then test' : 'Test connection'}
     </Button>
   </div>
   <!-- Unconditionally rendered, empty when there is nothing to say: an
        {#if}-created element with its text already in it is not reliably
        announced. Console-wide decision. -->
   <p class="text-notice" role="status">{message}</p>
+  <p class="text-error conn-alert" role="alert">{failure}</p>
 </fieldset>
 
 <style>
@@ -136,6 +176,27 @@
     font-weight: 600;
     color: var(--text);
     padding: 0 var(--space-2);
+  }
+  .conn-label-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .conn-badge {
+    margin: 0 0 var(--space-1);
+  }
+  .conn-saved {
+    display: inline-block;
+    padding: 0 var(--space-2);
+    border: var(--border-w) solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--bg-subtle);
+    color: var(--text);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+  }
+  .conn-alert:empty {
+    margin: 0;
   }
   .conn-status {
     margin: 0 0 var(--space-2);

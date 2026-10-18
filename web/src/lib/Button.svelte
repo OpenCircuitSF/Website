@@ -46,6 +46,13 @@
     border-color: var(--accent);
     color: var(--accent-text);
   }
+  /* #0584: a disabled primary is neutral, not a pale tint of the accent. */
+  .btn-primary:disabled {
+    background: var(--bg-subtle);
+    border-color: var(--border);
+    color: var(--text-muted);
+    opacity: 1;
+  }
   .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 
   .btn-subtle {

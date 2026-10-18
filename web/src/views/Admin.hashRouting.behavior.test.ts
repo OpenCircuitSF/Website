@@ -173,6 +173,25 @@ describe('Admin.svelte hash routing (#0527)', () => {
     expect(activeLink.getAttribute('href')).toBe('#/settings');
   });
 
+  it('lands on the Outreach section from #/settings?section=outreach and lists every section (#0584)', async () => {
+    const scrolled: string[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id);
+    };
+    try {
+      window.history.replaceState(null, '', '/admin#/settings?section=outreach');
+      render(Admin);
+      await waitFor(() => expect(scrolled).toContain('settings-outreach'));
+      const jump = screen.getByRole('navigation', { name: 'Settings sections' });
+      const hrefs = [...jump.querySelectorAll('a')].map((a) => a.getAttribute('href'));
+      expect(hrefs).toEqual(['#/settings?section=general', '#/settings?section=server', '#/settings?section=outreach']);
+      expect(document.getElementById('settings-outreach')?.textContent).toContain('Connections');
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
   it('applies the audit campaign filter from a #/audit?campaign=42 deep link', async () => {
     window.history.replaceState(null, '', '/admin#/audit?campaign=42');
     render(Admin);

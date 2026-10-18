@@ -178,6 +178,26 @@ export function adminSectionHash(section: Exclude<AdminSection, 'not-found'>): s
   return section === 'overview' ? '#/' : `#/${section}`;
 }
 
+/** The addressable parts of the Settings screen (#0584), carried in the hash
+ * query (`#/settings?section=outreach`). */
+export type SettingsSection = 'general' | 'server' | 'outreach';
+export const SETTINGS_SECTIONS: readonly { id: SettingsSection; label: string }[] = [
+  { id: 'general', label: 'General' },
+  { id: 'server', label: 'Server settings' },
+  { id: 'outreach', label: 'Outreach' },
+];
+
+/** The Settings section a hash query names, else null. */
+export function settingsSectionFromQuery(query: URLSearchParams): SettingsSection | null {
+  const v = query.get('section');
+  return SETTINGS_SECTIONS.find((s) => s.id === v)?.id ?? null;
+}
+
+/** The hash for Settings, optionally landing on one section. */
+export function adminSettingsHash(section?: SettingsSection): string {
+  return section ? `#/settings?section=${section}` : '#/settings';
+}
+
 /** The hash for one campaign's editor (default) or stats view. */
 export function adminCampaignHash(id: number, mode: 'editor' | 'stats' = 'editor'): string {
   return mode === 'stats' ? `#/campaigns/${id}/stats` : `#/campaigns/${id}`;
