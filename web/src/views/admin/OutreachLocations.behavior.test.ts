@@ -175,3 +175,21 @@ describe('OutreachLocations', () => {
     expect(screen.getByRole('status')).toBe(region);
   });
 });
+
+// #0590 (J1): under 480px the table renders as one card per location. jsdom
+// does not evaluate media queries, so this proves the hooks the CSS needs (a
+// labelled cell for every column, the table class) and that the source carries
+// the 480px rule for them; it does not prove 390px has no horizontal scroll.
+describe('OutreachLocations card layout (#0590)', () => {
+  it('labels every data cell so the card layout can show it, and keeps one set of buttons', async () => {
+    await mountWith([loc(), loc({ id: 2, name: 'Cafe', code: 'cafe', active: false })]);
+    await waitFor(() => expect(screen.getByText('Cafe')).toBeTruthy());
+    const table = document.querySelector('table.loc-table')!;
+    expect(table).not.toBeNull();
+    const first = table.querySelector('tbody tr')!;
+    const labels = [...first.querySelectorAll('td[data-label]')].map((td) => td.getAttribute('data-label'));
+    expect(labels).toEqual(['Name', 'Address', 'Code', 'Notes', 'Status']);
+    expect(screen.getAllByRole('button', { name: 'Edit' }).length).toBe(2);
+    expect(document.querySelector('.fit')).not.toBeNull();
+  });
+});

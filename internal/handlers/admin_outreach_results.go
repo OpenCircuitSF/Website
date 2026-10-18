@@ -73,6 +73,9 @@ type resultsFlyerLocationView struct {
 	PutUpAt            *string `json:"put_up_at"`
 	Clicks             *int64  `json:"clicks"`
 	ClicksAllWorkshops *int64  `json:"clicks_all_workshops"`
+	// WorkshopsAtLocation is how many workshops have a flyer link at this
+	// location; the SPA shows the all-workshops column only above one (#0590).
+	WorkshopsAtLocation int `json:"workshops_at_location"`
 }
 
 type resultsChannelView struct {
@@ -310,6 +313,16 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 	// unmatched; they are matched now.
 	res.UnmatchedClicks = max(0, res.UnmatchedClicks-flyerTotal)
 	v.FlyerAllStatus = h.flyerAllWorkshops(r.Context(), v.FlyerLocations, allLinks, now)
+	atLocation := map[int64]map[int64]bool{}
+	for _, l := range allLinks {
+		if atLocation[l.LocationID] == nil {
+			atLocation[l.LocationID] = map[int64]bool{}
+		}
+		atLocation[l.LocationID][l.OutreachID] = true
+	}
+	for i := range v.FlyerLocations {
+		v.FlyerLocations[i].WorkshopsAtLocation = len(atLocation[v.FlyerLocations[i].LocationID])
+	}
 	v.Status = resultsOK
 	if res.WindowFrom != "" && res.WindowTo != "" {
 		v.Window = &resultsWindowView{From: res.WindowFrom, To: res.WindowTo}
@@ -398,8 +411,13 @@ type resultsSummaryRow struct {
 	StartsAt      *string `json:"starts_at"`
 	PostsTotal    int     `json:"posts_total"`
 	PostsPosted   int     `json:"posts_posted"`
-	Clicks        *int64  `json:"clicks"`
-	Status        string  `json:"status"`
+	// PostedChannels names the channels with a posted post, in channel order,
+	// and Scheduled counts scheduled posts (#0590): the overview reads
+	// "Posted: Bluesky, Mastodon · 4 scheduled" rather than "3 of 15".
+	PostedChannels []string `json:"posted_channels"`
+	Scheduled      int      `json:"scheduled"`
+	Clicks         *int64   `json:"clicks"`
+	Status         string   `json:"status"`
 	// Reactions is the sum of the workshop's posts' latest snapshots (#0547);
 	// null when none has one.
 	Reactions *reactionsView `json:"reactions"`
@@ -435,7 +453,21 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 	for _, s := range sums {
 		row := resultsSummaryRow{
 			WorkshopID: s.WorkshopID, WorkshopSlug: s.WorkshopSlug, WorkshopTitle: s.WorkshopTitle, StartsAt: rfc3339(s.StartsAt),
-			PostsPosted: s.Counts["posted"],
+			PostsPosted: s.Counts["posted"], Scheduled: s.Counts["scheduled"], PostedChannels: []string{},
+		}
+		posts, err := h.store.ListPosts(r.Context(), s.OutreachID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		posted := map[string]bool{}
+		for _, p := range posts {
+			posted[p.Channel] = posted[p.Channel] || p.Status == "posted"
+		}
+		for _, c := range outreach.Channels() {
+			if posted[c.Name] {
+				row.PostedChannels = append(row.PostedChannels, c.Name)
+			}
 		}
 		if c, ok := totals[s.OutreachID]; ok {
 			row.Reactions = toReactions(c)

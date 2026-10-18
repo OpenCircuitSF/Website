@@ -3,6 +3,10 @@ import {
   CHART_GEO,
   buildChart,
   cellClicksLabel,
+  clickDefinitionNote,
+  legendTotals,
+  postsCellText,
+  showFlyerAllColumn,
   channelColor,
   chartDescription,
   dayLabel,
@@ -106,7 +110,7 @@ describe('dayLabel and waveLabel', () => {
 });
 
 describe('buildChart', () => {
-  const g = CHART_GEO; // innerW 588, innerH 172, three days -> x 40, 334, 628
+  const g = CHART_GEO; // innerW 576, innerH 172, three days -> x 40, 328, 616
   it('draws the exact polylines for two series', () => {
     const m = buildChart(
       results({
@@ -123,11 +127,11 @@ describe('buildChart', () => {
       id: 'bluesky',
       label: 'Bluesky',
       color: 'var(--series-1)',
-      points: `40,${base} 334,${g.padTop} 628,${base}`,
+      points: `40,${base} 328,${g.padTop} 616,${base}`,
       total: 4,
     });
     expect(m.lines[1].color).toBe('var(--series-other)');
-    expect(m.lines[1].points).toBe(`40,${base} 334,${base} 628,${g.padTop + 86}`);
+    expect(m.lines[1].points).toBe(`40,${base} 328,${base} 616,${g.padTop + 86}`);
     expect(m.lines[1].total).toBe(2);
     expect(m.xLabels.map((l) => l.label)).toEqual(['Oct 1', 'Oct 2', 'Oct 3']);
     expect(m.yTicks.map((t) => t.value)).toEqual([0, 1, 2, 3, 4]);
@@ -139,7 +143,7 @@ describe('buildChart', () => {
   it('centres a single day', () => {
     const m = buildChart(results({ window: { from: '2026-10-05', to: '2026-10-06' } }))!;
     expect(m.dates).toEqual(['2026-10-05']);
-    expect(m.xLabels).toEqual([{ x: 40 + 588 / 2, label: 'Oct 5' }]);
+    expect(m.xLabels).toEqual([{ x: 40 + 576 / 2, label: 'Oct 5', anchor: 'middle' }]);
   });
   it('flags an all-zero window as empty with a usable axis', () => {
     const m = buildChart(
@@ -179,7 +183,7 @@ describe('buildChart', () => {
     expect(m.markers.map((x) => x.date)).toEqual(['2026-10-02', '2026-10-03']);
     expect(m.markers[0].labels).toEqual(['Bluesky · Announce', 'Bluesky · Reminder', 'Instagram · Announce']);
     expect(m.markers[0].color).toBe('var(--text-muted)');
-    expect(m.markers[0].x).toBe(334);
+    expect(m.markers[0].x).toBe(328);
     expect(m.markers[1].color).toBe('var(--series-4)');
   });
   it('passes partialLastDay through', () => {
@@ -305,5 +309,55 @@ describe('resultsSummaryLine (#0568)', () => {
     expect(resultsSummaryLine(null)).toBe('');
     expect(resultsSummaryLine(results({ status: 'unreachable' }))).toBe('');
     expect(resultsSummaryLine(results({ totals: null }))).toBe('');
+  });
+});
+
+describe('batch 10 (#0590)', () => {
+  it('postsCellText names posted channels and counts scheduled posts', () => {
+    expect(postsCellText({ posted_channels: ['bluesky', 'mastodon'], scheduled: 4 }, LABELS)).toBe('Posted: Bluesky, Mastodon · 4 scheduled');
+    expect(postsCellText({ posted_channels: [], scheduled: 0 }, LABELS)).toBe('Nothing posted yet');
+    expect(postsCellText({ posted_channels: ['bluesky'] }, LABELS)).toBe('Posted: Bluesky');
+    expect(postsCellText({}, LABELS)).toBe('Nothing posted yet');
+  });
+
+  it('postsCellText filters by the enabled predicate (the hook #0588 fills in)', () => {
+    const row = { posted_channels: ['bluesky', 'tiktok'], scheduled: 1 };
+    expect(postsCellText(row, LABELS, (c) => c !== 'tiktok')).toBe('Posted: Bluesky · 1 scheduled');
+  });
+
+  const fixture = (blueskyClicks: number) =>
+    results({
+      totals: { clicks: 12, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 0 },
+      channels: channels.map((c) => (c.name === 'bluesky' ? { ...c, clicks: blueskyClicks } : { ...c, clicks: 0 })),
+      series: [
+        { id: 'bluesky', label: 'Bluesky', channels: ['bluesky'], is_other: false, days: [{ date: '2026-10-02', count: 7 }, { date: '2026-10-03', count: 5 }] },
+      ],
+    });
+
+  it('legend totals equal the channel table totals for a consistent fixture, with no note', () => {
+    const r = fixture(12);
+    const legend = legendTotals(r);
+    for (const l of legend) expect(r.channels.find((c) => c.name === l.id)?.clicks).toBe(l.total);
+    expect(clickDefinitionNote(r)).toBeNull();
+  });
+
+  it('says so when the legend and the table disagree', () => {
+    expect(clickDefinitionNote(fixture(15))).toMatch(/chart counts clicks on each day/);
+  });
+
+  it('right-aligns the last x label so it cannot clip', () => {
+    const m = buildChart(fixture(12))!;
+    expect(m.xLabels[m.xLabels.length - 1].anchor).toBe('end');
+    expect(m.xLabels[0].anchor).toBe('middle');
+    // Room right of the last tick for an end-anchored label.
+    expect(m.geo.width - m.xLabels[m.xLabels.length - 1].x).toBeGreaterThanOrEqual(CHART_GEO.padRight);
+  });
+
+  it('shows the all-workshops flyer column only above one workshop per location', () => {
+    const row = { link_id: 1, location_id: 1, name: 'A', code: 'a', short_url: 'u', put_up_at: null, clicks: 1, clicks_all_workshops: 1 };
+    expect(showFlyerAllColumn([])).toBe(false);
+    expect(showFlyerAllColumn([row])).toBe(false);
+    expect(showFlyerAllColumn([{ ...row, workshops_at_location: 1 }])).toBe(false);
+    expect(showFlyerAllColumn([row, { ...row, workshops_at_location: 2 }])).toBe(true);
   });
 });

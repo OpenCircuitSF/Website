@@ -57,11 +57,13 @@ type testResults struct {
 type testResultsSummary struct {
 	Status string `json:"status"`
 	Rows   []struct {
-		WorkshopID  int64  `json:"workshop_id"`
-		PostsTotal  int    `json:"posts_total"`
-		PostsPosted int    `json:"posts_posted"`
-		Clicks      *int64 `json:"clicks"`
-		Status      string `json:"status"`
+		WorkshopID  int64    `json:"workshop_id"`
+		PostsTotal  int      `json:"posts_total"`
+		PostsPosted int      `json:"posts_posted"`
+		Scheduled   int      `json:"scheduled"`
+		Posted      []string `json:"posted_channels"`
+		Clicks      *int64   `json:"clicks"`
+		Status      string   `json:"status"`
 	} `json:"rows"`
 }
 
@@ -295,7 +297,7 @@ func TestAdminOutreachResults_SummaryOK(t *testing.T) {
 	for _, row := range sum.Rows {
 		if row.WorkshopID == w.ID {
 			found = true
-			if row.Clicks == nil || *row.Clicks != 21 || row.PostsTotal != 3 || row.PostsPosted != 0 || row.Status != "ok" {
+			if row.Clicks == nil || *row.Clicks != 21 || row.PostsTotal != 3 || row.PostsPosted != 0 || row.Scheduled != 0 || row.Posted == nil || len(row.Posted) != 0 || row.Status != "ok" {
 				t.Errorf("row = %+v", row)
 			}
 		}
@@ -467,4 +469,42 @@ func TestClassifyResultsError_CancelledIsNotLogged(t *testing.T) {
 	if !strings.Contains(buf.String(), "ShortLinks stats failed") {
 		t.Errorf("a real failure must still be logged, got %q", buf.String())
 	}
+}
+
+// #0590: the overview row names the channels that have posted, in channel
+// order, and counts scheduled posts, so the cell reads
+// "Posted: Bluesky, Mastodon · 4 scheduled" instead of "3 of 15".
+func TestAdminOutreachResults_SummaryNamesPostedChannels(t *testing.T) {
+	e := newOutreachEnv(t, true)
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	o := e.start(t, w).Outreach
+	ctx := context.Background()
+	mast := e.createPost(t, o.ID, "mastodon", "announce")
+	bsky := e.createPost(t, o.ID, "bluesky", "announce")
+	ig := e.createPost(t, o.ID, "instagram", "announce")
+	e.createPost(t, o.ID, "tiktok", "announce")
+	for _, id := range []int64{mast.ID, bsky.ID} {
+		if _, err := e.pool.Exec(ctx, `UPDATE outreach_posts SET status='posted', posted_at=now() WHERE id=$1`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.pool.Exec(ctx, `UPDATE outreach_posts SET status='scheduled', scheduled_at=now() + interval '1 day' WHERE id=$1`, ig.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.links.statsRollup = &shortlinks.CampaignRollup{ClickCount: 1}
+	code, b := e.do(t, http.MethodGet, "/admin/outreach-results", "")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	sum := decodeOutreach[testResultsSummary](t, b)
+	for _, row := range sum.Rows {
+		if row.WorkshopID != w.ID {
+			continue
+		}
+		if got := strings.Join(row.Posted, ","); got != "bluesky,mastodon" || row.Scheduled != 1 {
+			t.Errorf("posted_channels = %q scheduled = %d, want bluesky,mastodon / 1", got, row.Scheduled)
+		}
+		return
+	}
+	t.Error("workshop row missing")
 }

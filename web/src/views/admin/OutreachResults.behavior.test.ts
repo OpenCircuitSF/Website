@@ -111,8 +111,8 @@ describe('OutreachResults, one workshop', () => {
 
 describe('OutreachResults, Flyers by location (#0549)', () => {
   const rows = [
-    { link_id: 10, location_id: 1, name: 'Mission Library', code: 'mission', short_url: 'https://go.example/a', put_up_at: '2026-10-18T17:00:00Z', clicks: 5, clicks_all_workshops: 9 },
-    { link_id: 11, location_id: 2, name: 'Cafe', code: 'cafe', short_url: 'https://go.example/b', put_up_at: null, clicks: 0, clicks_all_workshops: 0 },
+    { link_id: 10, location_id: 1, name: 'Mission Library', code: 'mission', short_url: 'https://go.example/a', put_up_at: '2026-10-18T17:00:00Z', clicks: 5, clicks_all_workshops: 9, workshops_at_location: 2 },
+    { link_id: 11, location_id: 2, name: 'Cafe', code: 'cafe', short_url: 'https://go.example/b', put_up_at: null, clicks: 0, clicks_all_workshops: 0, workshops_at_location: 1 },
   ];
 
   it('shows the table with scans for this workshop and for all workshops, and "Not marked"', async () => {
@@ -135,6 +135,19 @@ describe('OutreachResults, Flyers by location (#0549)', () => {
     expect(screen.getByText('Mission Library').closest('tr')!.textContent).toContain('—');
   });
 
+  it('hides the all-workshops column when only one workshop has links, and its message', async () => {
+    getWorkshopOutreachResults.mockResolvedValue(
+      results({ flyer_all_status: 'unreachable', flyer_locations: rows.map((r) => ({ ...r, workshops_at_location: 1, clicks_all_workshops: null })) }),
+    );
+    const { container } = render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(screen.getByText('Flyers by location')).toBeTruthy());
+    expect(screen.queryByText('Scans all workshops')).toBeNull();
+    expect(screen.queryByText(/unavailable right now/)).toBeNull();
+    const table = screen.getByText('Flyers by location').parentElement!.querySelector('table')!;
+    expect(table.querySelectorAll('thead th').length).toBe(3);
+    expect(container).toBeTruthy();
+  });
+
   it('has no flyers table when the workshop has no flyer links', async () => {
     getWorkshopOutreachResults.mockResolvedValue(results());
     render(OutreachResultsView, { workshopId: 5 });
@@ -148,7 +161,7 @@ describe('OutreachResults, all workshops', () => {
     listOutreachResults.mockResolvedValue({
       status: 'ok',
       rows: [
-        { workshop_id: 5, workshop_slug: 'a', workshop_title: 'Soldering 101', starts_at: null, posts_total: 6, posts_posted: 4, clicks: 31, status: 'ok', reactions: { likes: 3, reposts: 1, replies: 2, quotes: 1 } },
+        { workshop_id: 5, workshop_slug: 'a', workshop_title: 'Soldering 101', starts_at: null, posts_total: 6, posts_posted: 4, posted_channels: ['bluesky', 'mastodon'], scheduled: 4, clicks: 31, status: 'ok', reactions: { likes: 3, reposts: 1, replies: 2, quotes: 1 } },
         { workshop_id: 6, workshop_slug: 'b', workshop_title: 'Arduino Night', starts_at: null, posts_total: 3, posts_posted: 0, clicks: 0, status: 'ok', reactions: null },
       ],
       mentions: [],
@@ -156,7 +169,9 @@ describe('OutreachResults, all workshops', () => {
     const { container } = render(OutreachResultsView, { workshopId: null });
     await waitFor(() => expect(screen.getByText('Soldering 101')).toBeTruthy());
     expect(container.querySelectorAll('tbody tr').length).toBe(2);
-    expect(screen.getByText('4 of 6 posted')).toBeTruthy();
+    expect(screen.getByText('Posted: Bluesky, Mastodon · 4 scheduled')).toBeTruthy();
+    expect(screen.getByText('Nothing posted yet')).toBeTruthy();
+    expect(container.textContent).not.toMatch(/of \d+ posted/);
     expect(screen.getByText('31 clicks')).toBeTruthy();
     expect((screen.getByText('Arduino Night') as HTMLAnchorElement).getAttribute('href')).toBe('#/outreach?view=results&workshop=6');
   });
@@ -247,7 +262,7 @@ describe('OutreachResults, engagement and mentions (#0547)', () => {
   it('all-workshops view: a Reactions column and a feed linking each tied item to its workshop', async () => {
     listOutreachResults.mockResolvedValue({
       status: 'ok',
-      rows: [{ workshop_id: 5, workshop_slug: 'a', workshop_title: 'Soldering 101', starts_at: null, posts_total: 6, posts_posted: 4, clicks: 31, status: 'ok', reactions: { likes: 2, reposts: 0, replies: 0, quotes: 1 } }],
+      rows: [{ workshop_id: 5, workshop_slug: 'a', workshop_title: 'Soldering 101', starts_at: null, posts_total: 6, posts_posted: 4, posted_channels: ['bluesky', 'mastodon'], scheduled: 4, clicks: 31, status: 'ok', reactions: { likes: 2, reposts: 0, replies: 0, quotes: 1 } }],
       mentions: [mention({ id: 7, text: 'tied one' }), mention({ id: 8, text: 'untied one', post_id: null, wave: null, workshop_id: null, workshop_title: null, url: null })],
     });
     const { container } = render(OutreachResultsView, { workshopId: null });
@@ -292,5 +307,49 @@ describe('OutreachResults, engagement and mentions (#0547)', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.getByText('Results: Second workshop')).toBeTruthy();
     expect(screen.queryByText('Results: Soldering 101')).toBeNull();
+  });
+});
+
+describe('OutreachResults, batch 10 (#0590)', () => {
+  it('puts the summary and chart before a per-link table that is collapsed by default', async () => {
+    getWorkshopOutreachResults.mockResolvedValue(results());
+    const { container } = render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(container.querySelector('svg')).not.toBeNull());
+    const details = container.querySelector('details.links') as HTMLDetailsElement;
+    expect(details).not.toBeNull();
+    expect(details.open).toBe(false);
+    expect(details.querySelector('summary')?.textContent).toBe('Every link (2)');
+    const svg = container.querySelector('svg')!;
+    expect(svg.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector('strong')?.textContent).toBe('12 clicks');
+  });
+
+  it('labels the legend and the channel table, and their totals agree', async () => {
+    getWorkshopOutreachResults.mockResolvedValue(results());
+    const { container } = render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(container.querySelector('ul.legend')).not.toBeNull());
+    expect(container.querySelector('.legend-title')?.textContent).toMatch(/Clicks in the chart \(Oct 1 to Oct 4 \(UTC\)\)/);
+    const legend = container.querySelector('ul.legend li')!.textContent!.replace(/\s+/g, ' ').trim();
+    const row = screen.getAllByText('Bluesky').map((e) => e.closest('tr')).find((tr) => tr && tr.closest('table')?.querySelector('caption')?.textContent === 'Totals by channel')!;
+    expect(legend).toBe('Bluesky: 12 clicks');
+    expect(row.textContent).toContain('12 clicks');
+    expect(screen.queryByText(/chart counts clicks on each day/)).toBeNull();
+  });
+
+  it('explains a legend/table disagreement instead of printing two bare numbers', async () => {
+    getWorkshopOutreachResults.mockResolvedValue(
+      results({ channels: channels.map((c) => (c.name === 'bluesky' ? { ...c, clicks: 55 } : c)) }),
+    );
+    render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(screen.getByText(/chart counts clicks on each day/)).toBeTruthy());
+    expect(screen.getByText('Clicks (all links in the window)')).toBeTruthy();
+  });
+
+  it('right-aligns the last axis label', async () => {
+    getWorkshopOutreachResults.mockResolvedValue(results());
+    const { container } = render(OutreachResultsView, { workshopId: 5 });
+    await waitFor(() => expect(container.querySelector('svg')).not.toBeNull());
+    const labels = [...container.querySelectorAll('svg text.axis')].filter((t) => /^[A-Z][a-z]{2} \d+$/.test(t.textContent ?? ''));
+    expect(labels[labels.length - 1].getAttribute('text-anchor')).toBe('end');
   });
 });

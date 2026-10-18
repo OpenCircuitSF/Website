@@ -581,4 +581,18 @@ tbody tr:last-child td { border-bottom: none; }
   .app-title {
     flex: none;
   }
+
+  /*
+   * #0590 (J3): an Outreach post card's button row stacks, full width, in DOM
+   * order (primary first), instead of wrapping into cramped clusters with the
+   * "Open flyer" link squeezed between buttons.
+   */
+  article.card > .row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  article.card > .row > * {
+    width: 100%;
+    text-align: center;
+  }
 }

@@ -1045,6 +1045,8 @@ export interface OutreachResultsFlyerLocation {
   put_up_at: string | null;
   clicks: number | null;
   clicks_all_workshops: number | null;
+  /** #0590: workshops with a flyer link at this location; the all-workshops column shows above one. */
+  workshops_at_location?: number;
 }
 
 export interface OutreachResultsSummaryRow {
@@ -1054,6 +1056,10 @@ export interface OutreachResultsSummaryRow {
   starts_at: string | null;
   posts_total: number;
   posts_posted: number;
+  /** #0590: channel names with a posted post, in channel order. */
+  posted_channels?: string[];
+  /** #0590: scheduled posts. */
+  scheduled?: number;
   clicks: number | null;
   status: OutreachResultsStatus;
   reactions: OutreachReactions | null;

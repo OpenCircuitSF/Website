@@ -210,6 +210,7 @@
   onMount(load);
 </script>
 
+<div class="fit">
 <Panel title="Flyer locations">
   <p class="text-muted">Places flyers go. Each flyer run makes one tracked link per active location.</p>
   <p class="loc-status" class:text-muted={status !== '' && !statusIsError} class:text-error={statusIsError} role="status">{status}</p>
@@ -287,8 +288,8 @@
     <p class="text-muted">No locations yet.</p>
   {:else}
     <div class="table-scroll">
-      <table>
-        <thead>
+      <table class="loc-table">
+        <thead class="loc-head">
           <tr>
             <th>Name</th>
             <th>Address</th>
@@ -301,11 +302,11 @@
         <tbody>
           {#each rows as loc (loc.id)}
             <tr>
-              <td>{loc.name}</td>
-              <td>{loc.address}</td>
-              <td class="mono">{loc.code}</td>
-              <td class="loc-notes" title={loc.notes}>{loc.notes}</td>
-              <td>{locationStatusLabel(loc)}</td>
+              <td class="loc-name" data-label="Name">{loc.name}</td>
+              <td data-label="Address">{loc.address}</td>
+              <td class="mono" data-label="Code">{loc.code}</td>
+              <td class="loc-notes" data-label="Notes" title={loc.notes}>{loc.notes}</td>
+              <td data-label="Status">{locationStatusLabel(loc)}</td>
               <td class="loc-row-actions">
                 <Button variant="subtle" onclick={() => openEdit(loc)}>Edit</Button>
                 <Button variant="subtle" onclick={() => toggleActive(loc)}>{loc.active ? 'Deactivate' : 'Reactivate'}</Button>
@@ -326,8 +327,14 @@
     </div>
   {/if}
 </Panel>
+</div>
 
 <style>
+  .fit {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
   .loc-form {
     margin: var(--space-3) 0;
     padding: var(--space-3) 0;
@@ -367,6 +374,61 @@
   }
   .loc-row-actions {
     white-space: nowrap;
+  }
+  /*
+   * #0590 (J1): under 480px the table becomes one card per location (name,
+   * address, code, notes, status, then the actions stacked full width), so
+   * nothing is off-screen and the page does not scroll sideways.
+   */
+  @media (max-width: 480px) {
+    .loc-table,
+    .loc-table tbody,
+    .loc-table tr,
+    .loc-table td {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .loc-head {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+    }
+    .loc-table tr {
+      border: var(--border-w) solid var(--border);
+      border-radius: var(--radius);
+      padding: var(--space-2) var(--space-3);
+      margin-bottom: var(--space-3);
+    }
+    .loc-table td {
+      border: 0;
+      padding: var(--space-1) 0;
+      overflow-wrap: anywhere;
+    }
+    .loc-table td[data-label]::before {
+      content: attr(data-label) ': ';
+      color: var(--text-muted);
+      font-size: var(--fs-sm);
+    }
+    .loc-table td.loc-name {
+      font-weight: 600;
+    }
+    .loc-notes {
+      max-width: none;
+      white-space: normal;
+    }
+    .loc-row-actions {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-2);
+      white-space: normal;
+    }
+    .loc-row-actions > :global(*) {
+      width: 100%;
+    }
   }
   .loc-status:empty {
     margin: 0;

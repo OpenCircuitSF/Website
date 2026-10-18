@@ -546,6 +546,7 @@ func TestAdminOutreachFlyers_ResultsFlyerLocations(t *testing.T) {
 			Code               string `json:"code"`
 			Clicks             *int64 `json:"clicks"`
 			ClicksAllWorkshops *int64 `json:"clicks_all_workshops"`
+			WorkshopsAt        int    `json:"workshops_at_location"`
 		} `json:"flyer_locations"`
 	}
 	get := func() flyerResults {
@@ -564,9 +565,15 @@ func TestAdminOutreachFlyers_ResultsFlyerLocations(t *testing.T) {
 			if *fl.Clicks != 5 || *fl.ClicksAllWorkshops != 9 {
 				t.Errorf("shared location: %d / %d, want 5 / 9", *fl.Clicks, *fl.ClicksAllWorkshops)
 			}
+			if fl.WorkshopsAt != 2 {
+				t.Errorf("shared location workshops_at_location = %d, want 2 (#0590)", fl.WorkshopsAt)
+			}
 		case e.locs[1].ID:
 			if *fl.Clicks != 2 || *fl.ClicksAllWorkshops != 2 {
 				t.Errorf("own location: %d / %d, want 2 / 2", *fl.Clicks, *fl.ClicksAllWorkshops)
+			}
+			if fl.WorkshopsAt != 1 {
+				t.Errorf("own location workshops_at_location = %d, want 1 (#0590)", fl.WorkshopsAt)
 			}
 		}
 	}

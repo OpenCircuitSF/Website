@@ -11,10 +11,13 @@
   import { adminOutreachResultsHash, adminOutreachHash } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
   import {
+    clickDefinitionNote,
     foldedChannelsNote,
     formatClicks,
     formatReactionTotal,
     mastodonCountsNote,
+    postsCellText,
+    showFlyerAllColumn,
     reactionsLabel,
     resultsStatusMessage,
     dayLabel,
@@ -38,6 +41,10 @@
     results && results.flyer_all_status && results.flyer_all_status !== 'ok' ? 'Scans across all workshops are unavailable right now.' : null,
   );
   const channelLabel = $derived(new Map((results?.channels ?? []).map((c) => [c.name, c.label])));
+  const clickNote = $derived(results ? clickDefinitionNote(results) : null);
+  const showAll = $derived(results ? showFlyerAllColumn(results.flyer_locations) : false);
+  // #0588 will let a channel be switched off; until then every channel counts.
+  const channelEnabled = (_name: string): boolean => true;
   const mastodonNote = $derived(results ? mastodonCountsNote(results) : null);
   // The summary response carries no channel list; labels are fixed server-side.
   const summaryLabels: Record<string, string> = { bluesky: 'Bluesky', mastodon: 'Mastodon', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube' };
@@ -80,6 +87,7 @@
   }
 </script>
 
+<div class="fit">
 <Panel title={workshopId === null ? 'Results' : results ? `Results: ${results.workshop.title}` : 'Results'}>
   <!-- Always rendered, so a late status message is announced. -->
   <p class="status" role="status">{loading ? 'Loading results…' : (statusMessage ?? '')}</p>
@@ -105,7 +113,7 @@
               <tr>
                 <td><a href={adminOutreachResultsHash(row.workshop_id)}>{row.workshop_title}</a></td>
                 <td>{row.starts_at ? formatDateTime(row.starts_at) : 'Date TBA'}</td>
-                <td>{row.posts_posted} of {row.posts_total} posted</td>
+                <td>{postsCellText(row, summaryLabels, channelEnabled)}</td>
                 <td>{formatClicks(row.clicks)}</td>
                 <td>{formatReactionTotal(row.reactions)}</td>
               </tr>
@@ -133,7 +141,7 @@
         {reactionsLabel(results.reactions)}
       </p>
     {/if}
-    <OutreachClicksChart {results} />
+    <OutreachClicksChart {results} windowText={results.window ? windowText(results) : 'chart window'} />
     {#if folded}
       <p class="text-muted">{folded}</p>
     {/if}
@@ -149,7 +157,7 @@
           <thead>
             <tr>
               <th>Channel</th>
-              <th>Clicks</th>
+              <th>Clicks (all links in the window)</th>
               <th>Reactions</th>
             </tr>
           </thead>
@@ -165,7 +173,12 @@
         </table>
       </div>
     {/if}
+    {#if clickNote}
+      <p class="text-muted">{clickNote}</p>
+    {/if}
     {#if results.posts.length > 0}
+      <details class="links">
+        <summary>Every link ({results.posts.length})</summary>
       <div class="table-scroll">
         <table>
           <thead>
@@ -194,13 +207,14 @@
           </tbody>
         </table>
       </div>
+      </details>
     {/if}
     {#if mastodonNote}
       <p class="text-muted">{mastodonNote}</p>
     {/if}
     {#if results.flyer_locations.length > 0}
       <h3 class="flyers-title">Flyers by location</h3>
-      {#if flyerAllMessage}
+      {#if flyerAllMessage && showAll}
         <p class="text-muted">{flyerAllMessage}</p>
       {/if}
       <div class="table-scroll">
@@ -209,8 +223,8 @@
             <tr>
               <th>Location</th>
               <th>Put up</th>
-              <th>Scans this workshop</th>
-              <th>Scans all workshops</th>
+              <th>{showAll ? 'Scans this workshop' : 'Scans'}</th>
+              {#if showAll}<th>Scans all workshops</th>{/if}
             </tr>
           </thead>
           <tbody>
@@ -219,7 +233,7 @@
                 <td>{row.name} <span class="mono">{row.code}</span></td>
                 <td>{row.put_up_at ? formatDateTime(row.put_up_at) : 'Not marked'}</td>
                 <td>{formatClicks(row.clicks)}</td>
-                <td>{formatClicks(row.clicks_all_workshops)}</td>
+                {#if showAll}<td>{formatClicks(row.clicks_all_workshops)}</td>{/if}
               </tr>
             {/each}
           </tbody>
@@ -230,8 +244,27 @@
     <p><a href={adminOutreachResultsHash()}>All workshops</a> · <a href={adminOutreachHash('workshops')}>Back to Outreach</a></p>
   {/if}
 </Panel>
+</div>
 
 <style>
+  .fit {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+  .fit :global(.table-scroll) {
+    max-width: 100%;
+  }
+  .links {
+    margin: var(--space-3) 0;
+  }
+  .links summary {
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .mono {
+    overflow-wrap: anywhere;
+  }
   .status {
     margin: 0 0 var(--space-2);
     color: var(--text-muted);

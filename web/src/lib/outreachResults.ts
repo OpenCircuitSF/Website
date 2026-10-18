@@ -5,7 +5,15 @@
 // Days are UTC throughout, matching ShortLinks' own day buckets. The chart
 // geometry and tick helpers follow the charts module in the ShortLinks repo.
 import { isSafeLinkHref } from './linkSafety';
-import type { OutreachMention, OutreachReactions, OutreachResults, OutreachResultsPost, OutreachResultsStatus } from './types';
+import type {
+  OutreachMention,
+  OutreachReactions,
+  OutreachResults,
+  OutreachResultsFlyerLocation,
+  OutreachResultsPost,
+  OutreachResultsStatus,
+  OutreachResultsSummaryRow,
+} from './types';
 
 export interface ChartGeo {
   width: number;
@@ -16,7 +24,7 @@ export interface ChartGeo {
   padBottom: number;
 }
 
-export const CHART_GEO: ChartGeo = { width: 640, height: 220, padLeft: 40, padRight: 12, padTop: 16, padBottom: 32 };
+export const CHART_GEO: ChartGeo = { width: 640, height: 220, padLeft: 40, padRight: 24, padTop: 16, padBottom: 32 };
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -88,7 +96,7 @@ export interface ChartModel {
   /** No clicks anywhere in the window. */
   empty: boolean;
   max: number;
-  xLabels: { x: number; label: string }[];
+  xLabels: { x: number; label: string; anchor: 'start' | 'middle' | 'end' }[];
   yTicks: { y: number; value: number }[];
   lines: ChartLine[];
   markers: ChartMarker[];
@@ -138,7 +146,8 @@ export function buildChart(results: OutreachResults, geo: ChartGeo = CHART_GEO):
   for (let i = 0; i < n - 1; i += step) idx.push(i);
   if (idx.length > 0 && n - 1 - idx[idx.length - 1] < Math.ceil(step / 2)) idx.pop();
   idx.push(n - 1);
-  const xLabels = idx.map((i) => ({ x: x(i), label: dayLabel(dates[i]) }));
+  // The last label is right-aligned to the plot edge, so it is never clipped (#0590).
+  const xLabels = idx.map((i) => ({ x: x(i), label: dayLabel(dates[i]), anchor: (i === n - 1 && n > 1 ? 'end' : 'middle') as 'end' | 'middle' }));
 
   // A marker per UTC day on which something was posted, inside the window.
   const channelLabel = new Map(results.channels.map((c) => [c.name, c.label]));
@@ -307,4 +316,49 @@ export function resultsSummaryLine(results: OutreachResults | null): string {
   const { clicks, flyer_clicks } = results.totals;
   const base = `${clicks} ${clicks === 1 ? 'click' : 'clicks'} since outreach started`;
   return flyer_clicks > 0 ? `${base} (${flyer_clicks} from flyers).` : `${base}.`;
+}
+
+// ── Batch 10 (#0590) ─────────────────────────────────────────────────────────
+
+/**
+ * The overview's posts cell: "Posted: Bluesky, Mastodon · 4 scheduled". Only
+ * channels `isEnabled` accepts are named; until per-channel enable toggles
+ * exist (#0588) every channel the view reports counts.
+ */
+export function postsCellText(
+  row: Pick<OutreachResultsSummaryRow, 'posted_channels' | 'scheduled'>,
+  labels: Record<string, string>,
+  isEnabled: (channel: string) => boolean = () => true,
+): string {
+  const names = (row.posted_channels ?? []).filter(isEnabled).map((n) => labels[n] ?? n);
+  const posted = names.length > 0 ? `Posted: ${names.join(', ')}` : 'Nothing posted yet';
+  const n = row.scheduled ?? 0;
+  return n > 0 ? `${posted} · ${n} scheduled` : posted;
+}
+
+/** One legend entry per line of the chart, as the legend prints it: the line's own total. */
+export function legendTotals(results: OutreachResults): { id: string; label: string; total: number }[] {
+  const model = buildChart(results);
+  return model ? model.lines.map((l) => ({ id: l.id, label: l.label, total: l.total })) : [];
+}
+
+/**
+ * Says so when a legend total and the channel table's total for the same
+ * channel disagree, so the page never prints two unlabelled numbers for one
+ * channel (#0590, I2). Null when every shared channel agrees.
+ */
+export function clickDefinitionNote(results: OutreachResults): string | null {
+  const table = new Map(results.channels.map((c) => [c.name, c.clicks]));
+  const differs = legendTotals(results).some((l) => {
+    const t = table.get(l.id);
+    return t !== undefined && t !== null && t !== l.total;
+  });
+  return differs
+    ? 'The chart counts clicks on each day it shows; the table counts every click on the channel’s links, so the two can differ.'
+    : null;
+}
+
+/** The all-workshops flyer column adds nothing until a second workshop has a link at some location (#0590, I4). */
+export function showFlyerAllColumn(rows: OutreachResultsFlyerLocation[]): boolean {
+  return rows.some((r) => (r.workshops_at_location ?? 1) > 1);
 }

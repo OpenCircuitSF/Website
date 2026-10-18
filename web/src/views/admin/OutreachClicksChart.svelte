@@ -9,7 +9,7 @@
   import { buildChart, chartDescription, formatClicks } from '../../lib/outreachResults';
   import type { OutreachResults } from '../../lib/types';
 
-  let { results }: { results: OutreachResults } = $props();
+  let { results, windowText = 'chart window' }: { results: OutreachResults; windowText?: string } = $props();
 
   const model = $derived(buildChart(results));
   const description = $derived(chartDescription(results));
@@ -33,7 +33,7 @@
         <text class="axis" x={model.geo.padLeft - 6} y={tick.y} text-anchor="end" dominant-baseline="middle">{tick.value}</text>
       {/each}
       {#each model.xLabels as label (label.x)}
-        <text class="axis" x={label.x} y={model.geo.height - 10} text-anchor="middle">{label.label}</text>
+        <text class="axis" x={label.x} y={model.geo.height - 10} text-anchor={label.anchor}>{label.label}</text>
       {/each}
       {#each model.markers as marker (marker.date)}
         <g>
@@ -57,6 +57,7 @@
       Days are UTC.{model.partialLastDay ? ' The last day is today so far.' : ''}
       {#if model.markers.length > 0}Dashed lines mark days posts went out.{/if}
     </p>
+    <p class="legend-title text-muted">Clicks in the chart ({windowText})</p>
     <ul class="legend">
       {#each model.lines as line (line.id)}
         <li>
@@ -116,13 +117,17 @@
     font-size: var(--fs-sm);
     margin: var(--space-1) 0;
   }
+  .legend-title {
+    font-size: var(--fs-sm);
+    margin: var(--space-2) 0 0;
+  }
   .legend {
     list-style: none;
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-3);
     padding: 0;
-    margin: var(--space-2) 0 0;
+    margin: var(--space-1) 0 0;
   }
   .swatch {
     display: inline-block;
