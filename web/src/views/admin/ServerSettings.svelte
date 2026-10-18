@@ -17,7 +17,13 @@
   // `scope` splits the groups between Settings sections (#0584): the Outreach
   // group lives in the Outreach section, the rest under Server settings.
   // `bare` drops the panel chrome when a parent section already supplies it.
-  let { scope = 'all', bare = false }: { scope?: 'all' | 'server' | 'outreach'; bare?: boolean } = $props();
+  // `onloaded` fires once the first load settles (success or not), so a
+  // section deep link below this panel can wait for it to reach full height.
+  let {
+    scope = 'all',
+    bare = false,
+    onloaded,
+  }: { scope?: 'all' | 'server' | 'outreach'; bare?: boolean; onloaded?: () => void } = $props();
 
   let settings = $state<ServerSettings | null>(null);
   let loading = $state(true);
@@ -35,6 +41,7 @@
       else loadError = 'Could not load server settings. Please try again.';
     } finally {
       loading = false;
+      onloaded?.();
     }
   }
 

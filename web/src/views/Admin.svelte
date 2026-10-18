@@ -1244,17 +1244,26 @@
   }
 
   // #0584: `#/settings?section=outreach` lands on that Settings section. The
-  // scroll waits for the settings panel to finish its own load so the target
-  // exists; jsdom has no scrollIntoView, hence the guard.
+  // scroll waits until everything ABOVE the target has finished loading — the
+  // General panel for any section, plus the Server settings panel for
+  // Outreach — because a one-shot scrollIntoView does not follow the target
+  // when content above it grows afterwards (Safari has no scroll anchoring).
+  // jsdom has no scrollIntoView, hence the guard.
+  let serverSettingsReady = $state(false);
   function scrollToSettingsSection(id: SettingsSection): void {
     void tick().then(() =>
       document.getElementById(`settings-${id}`)?.scrollIntoView?.({ block: 'start' }),
     );
   }
   $effect(() => {
-    if (adminRoute.section !== 'settings' || settingsLoading) return;
+    if (adminRoute.section !== 'settings') {
+      serverSettingsReady = false;
+      return;
+    }
+    if (settingsLoading) return;
     const wanted = settingsSectionFromQuery(adminRoute.query);
-    if (wanted) scrollToSettingsSection(wanted);
+    if (!wanted || (wanted === 'outreach' && !serverSettingsReady)) return;
+    scrollToSettingsSection(wanted);
   });
 
   onMount(() => {
@@ -1400,7 +1409,7 @@
       </Panel>
       </div>
       <div id="settings-server">
-        <ServerSettings scope="server" />
+        <ServerSettings scope="server" onloaded={() => (serverSettingsReady = true)} />
       </div>
       <div id="settings-outreach">
         <Panel title="Outreach">

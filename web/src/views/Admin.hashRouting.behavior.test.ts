@@ -22,6 +22,7 @@ import type {
   AdminWorkshop,
 } from '../lib/types';
 import type { AuditPage } from '../lib/api';
+import { getServerSettings } from '../lib/api';
 
 const getOverview = vi.fn<() => Promise<DashboardOverview>>();
 const getAdminVersion = vi.fn<() => Promise<{ version: string; commit_hash: string; commit_hash_short: string }>>();
@@ -187,6 +188,30 @@ describe('Admin.svelte hash routing (#0527)', () => {
       const hrefs = [...jump.querySelectorAll('a')].map((a) => a.getAttribute('href'));
       expect(hrefs).toEqual(['#/settings?section=general', '#/settings?section=server', '#/settings?section=outreach']);
       expect(document.getElementById('settings-outreach')?.textContent).toContain('Connections');
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it('waits for the Server settings panel above it to load before landing on Outreach (#0584)', async () => {
+    // A one-shot scroll fired while the panel above is still loading lands
+    // short once that panel grows, so the deep link must hold until it settles.
+    const scrolled: string[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id);
+    };
+    let release: (v: { groups: [] }) => void = () => {};
+    const pending = new Promise<{ groups: [] }>((r) => (release = r));
+    vi.mocked(getServerSettings).mockImplementationOnce(() => pending as never);
+    try {
+      window.history.replaceState(null, '', '/admin#/settings?section=outreach');
+      render(Admin);
+      await waitFor(() => expect(getSettings).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 20));
+      expect(scrolled).not.toContain('settings-outreach');
+      release({ groups: [] });
+      await waitFor(() => expect(scrolled).toContain('settings-outreach'));
     } finally {
       Element.prototype.scrollIntoView = original;
     }
