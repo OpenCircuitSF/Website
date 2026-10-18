@@ -174,7 +174,9 @@
   <p class="loc-status" class:text-muted={status !== '' && !statusIsError} class:text-error={statusIsError} role="status">{status}</p>
 
   {#if editing === null}
-    <Button variant="primary" onclick={openNew}>Add location</Button>
+    <div class="loc-add">
+      <Button variant="primary" onclick={openNew}>Add location</Button>
+    </div>
   {:else}
     <form class="loc-form" onsubmit={save}>
       <h3 class="loc-form-title">{editing === 'new' ? 'Add location' : `Edit ${editing.name}`}</h3>
@@ -322,5 +324,8 @@
   }
   .loc-status {
     min-height: 1.5em;
+  }
+  .loc-add {
+    margin: var(--space-3) 0;
   }
 </style>
