@@ -105,7 +105,7 @@
         </fieldset>
       {/if}
       {#if chosen.length === 0}
-        <p class="text-muted">Tick Reminder or Last call above to schedule those posts too.</p>
+        <p class="text-muted">Tick a post above to schedule it.</p>
       {/if}
       <ul>
         {#each chosen as item (item.post_id)}

@@ -169,7 +169,8 @@
   {#if loading}
     <p class="text-muted">Loading outreach…</p>
   {:else if notFound}
-    <!-- The page around this panel says so; there is nothing to retry. -->
+    <!-- The page around this panel says so when it passes onNotFound; there is nothing to retry. -->
+    {#if !onNotFound}<p class="text-muted">This workshop no longer exists.</p>{/if}
   {:else if loadError}
     <p class="text-error">{loadError}</p>
     <Button onclick={load}>Retry</Button>

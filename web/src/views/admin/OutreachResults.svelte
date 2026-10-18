@@ -21,6 +21,7 @@
     reactionsLabel,
     resultsStatusMessage,
     dayLabel,
+    waveLabel,
   } from '../../lib/outreachResults';
   import type { OutreachResults as Results, OutreachResultsSummary } from '../../lib/types';
   import Panel from '../../lib/Panel.svelte';
@@ -198,7 +199,7 @@
             {#each results.posts as post (post.id)}
               <tr>
                 <td>{channelLabel.get(post.channel) ?? post.channel}</td>
-                <td>{post.wave}</td>
+                <td>{waveLabel(post.wave)}</td>
                 <td>{post.status}</td>
                 <td>{post.posted_at ? formatDateTime(post.posted_at) : '—'}</td>
                 <td>{#if post.short_url}<span class="mono">{post.short_url}</span>{:else}—{/if}</td>

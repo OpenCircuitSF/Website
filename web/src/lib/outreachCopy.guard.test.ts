@@ -39,7 +39,12 @@ function esLiterals(node: unknown, out: string[], parent: Node | null = null, ke
   if (!node || typeof node !== 'object') return;
   const n = node as Node;
   if (typeof n.type !== 'string') return;
-  if (n.type.startsWith('TS')) return;
+  // A type is not copy, but an expression wrapped in one is: `{ held: 'Held' } as const`,
+  // `x satisfies T` and `y!` still show their strings, so only the wrapped expression is walked.
+  if (n.type.startsWith('TS')) {
+    if (['TSAsExpression', 'TSSatisfiesExpression', 'TSNonNullExpression', 'TSTypeAssertion'].includes(n.type)) esLiterals(n.expression, out, n, 'expression');
+    return;
+  }
   if (n.type === 'ImportDeclaration' || n.type === 'ExportAllDeclaration') return;
   if (n.type === 'Literal' && typeof n.value === 'string') {
     const skip =
@@ -155,6 +160,7 @@ describe('outreach copy has no internal jargon (#0591)', () => {
     expect(svelte('<input placeholder="the PDS URL">')).toHaveLength(1);
     expect(svelte('<script lang="ts">let n = $state(1); const s = "Held for review"; </script><p>{s}</p>')).toHaveLength(1);
     expect(svelte('<p>{ok ? "a wave goes out" : "b"}</p>')).toHaveLength(1);
+    expect(svelte('<script lang="ts">const LABELS = { held: "Held" } as const; const t = ("PDS URL" satisfies string);</script><p>ok</p>')).toHaveLength(2);
     // Not visible, or not copy.
     expect(svelte('<p class="wave campaign">ok</p>')).toEqual([]);
     expect(svelte('<!-- a wave of campaign copy --><p>ok</p>')).toEqual([]);
