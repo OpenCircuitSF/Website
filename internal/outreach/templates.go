@@ -218,13 +218,15 @@ func (f Facts) paragraph() string {
 	return ""
 }
 
-// splitSentences cuts s after each sentence-ending mark followed by a space.
+// splitSentences cuts s after each sentence-ending mark followed by a space,
+// except after an abbreviation ("e.g.", "Dr."), so a summary is never cut to
+// a dangling fragment.
 func splitSentences(s string) []string {
 	var out []string
 	start := 0
 	rs := []rune(s)
 	for i, r := range rs {
-		if (r == '.' || r == '!' || r == '?') && (i+1 == len(rs) || rs[i+1] == ' ') {
+		if (r == '.' || r == '!' || r == '?') && (i+1 == len(rs) || rs[i+1] == ' ') && !(r == '.' && i+1 < len(rs) && abbreviationAt(rs, i)) {
 			if seg := strings.TrimSpace(string(rs[start : i+1])); seg != "" {
 				out = append(out, seg)
 			}
@@ -238,6 +240,24 @@ func splitSentences(s string) []string {
 		out = []string{s}
 	}
 	return out
+}
+
+// abbreviationAt reports whether the "." at rs[i] closes an abbreviation: a
+// word with an inner dot ("e.g.", "U.S.") or a common title.
+func abbreviationAt(rs []rune, i int) bool {
+	j := i
+	for j > 0 && rs[j-1] != ' ' {
+		j--
+	}
+	word := strings.ToLower(string(rs[j:i]))
+	if strings.Contains(word, ".") {
+		return true
+	}
+	switch strings.Trim(word, "(\"'") {
+	case "mr", "mrs", "ms", "dr", "st", "vs", "jr", "sr", "approx":
+		return true
+	}
+	return false
 }
 
 // Fingerprint hashes the facts a draft is generated from, so a later change

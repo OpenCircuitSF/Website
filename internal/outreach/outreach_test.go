@@ -159,6 +159,15 @@ func TestDraftTruncatesSummaryToFit(t *testing.T) {
 	}
 }
 
+// An abbreviation is not a sentence end, so a cut never leaves "e.g." alone.
+func TestSplitSentencesKeepsAbbreviations(t *testing.T) {
+	got := splitSentences("Learn the basics, e.g. soldering and Ohm's law. Meet Dr. Ada at St. Mary's. Bring a laptop!")
+	want := []string{"Learn the basics, e.g. soldering and Ohm's law.", "Meet Dr. Ada at St. Mary's.", "Bring a laptop!"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("splitSentences = %q, want %q", got, want)
+	}
+}
+
 func TestFingerprint(t *testing.T) {
 	start := time.Date(2026, 11, 7, 19, 30, 0, 0, time.UTC)
 	base := Facts{Slug: "s", Title: "T", StartsAt: &start, LocationName: strp("A"), LocationAddress: strp("B")}

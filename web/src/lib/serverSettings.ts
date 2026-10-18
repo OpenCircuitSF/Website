@@ -55,7 +55,7 @@ export const FIELD_LABELS: Record<string, { label: string; placeholder: string; 
   outreach_hashtags: {
     label: 'Outreach hashtags',
     placeholder: '#SanFrancisco #Electronics',
-    help: 'Appended to new drafts on their own line. Up to 6, each # followed by letters or digits. Use CamelCase (#SanFrancisco, not #sanfrancisco) so screen readers say the words apart.',
+    help: 'Appended to new drafts on their own line. Up to 6, each # followed by up to 40 letters or digits. Use CamelCase (#SanFrancisco, not #sanfrancisco) so screen readers say the words apart.',
   },
   outreach_post_hour: {
     label: 'Suggested posting hour',
@@ -115,9 +115,9 @@ export function fieldHint(key: string, value: string): string | null {
     }
     case 'outreach_hashtags': {
       const tags = v.split(/\s+/);
-      return tags.length <= 6 && tags.every((x) => /^#[\p{L}\p{N}]+$/u.test(x))
+      return tags.length <= 6 && tags.every((x) => /^#[\p{L}\p{N}]{1,40}$/u.test(x) && /\p{L}/u.test(x))
         ? null
-        : 'Up to 6 hashtags, each # followed by letters or digits.';
+        : 'Up to 6 hashtags, each # followed by up to 40 letters or digits (not digits alone).';
     }
     case 'email_list_domain':
       return v.replace(/\.$/, '').split('.').length >= 3

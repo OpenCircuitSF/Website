@@ -40,6 +40,9 @@ const (
 	DefaultOutreachPostHour = "10"
 	// MaxOutreachHashtags bounds the site-wide set.
 	MaxOutreachHashtags = 6
+	// MaxHashtagRunes bounds one tag after its "#"; Bluesky's tag facet
+	// allows 64 graphemes, and a tag this long is unreadable anyway.
+	MaxHashtagRunes = 40
 )
 
 // DefaultMediaDir is the production media directory.

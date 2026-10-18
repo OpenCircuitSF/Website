@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const maxValueLen = 2048
@@ -24,7 +25,7 @@ const (
 	msgBucket     = "must be an S3 bucket name (3 to 63 lowercase letters, digits, dots or hyphens)"
 	msgBatch      = "must be a whole number from 1 to 500"
 	msgCardURL    = "must be short or canonical"
-	msgHashtags   = "must be up to 6 hashtags, each # followed by letters or digits, such as #SanFrancisco"
+	msgHashtags   = "must be up to 6 hashtags, each # followed by up to 40 letters or digits (not digits alone), such as #SanFrancisco"
 	msgPostHour   = "must be a whole hour from 0 to 23 (Pacific time)"
 )
 
@@ -147,7 +148,8 @@ func validBucket(b string) bool {
 }
 
 // NormalizeHashtags splits s on whitespace and checks that every token is a
-// "#" followed by letters or digits (CamelCase is recommended, so screen
+// "#" followed by letters or digits, at least one a letter and at most
+// MaxHashtagRunes in all (CamelCase is recommended, so screen
 // readers say the words apart) and that there are at most MaxOutreachHashtags.
 // Duplicates, ignoring case, are dropped.
 func NormalizeHashtags(s string) ([]string, bool) {
@@ -155,13 +157,19 @@ func NormalizeHashtags(s string) ([]string, bool) {
 	seen := map[string]bool{}
 	for _, tok := range strings.Fields(s) {
 		body := strings.TrimPrefix(tok, "#")
-		if body == tok || body == "" {
+		if body == tok || body == "" || utf8.RuneCountInString(body) > MaxHashtagRunes {
 			return nil, false
 		}
+		letter := false
 		for _, r := range body {
 			if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
 				return nil, false
 			}
+			letter = letter || unicode.IsLetter(r)
+		}
+		// Bluesky and Mastodon do not make an all-digit token a hashtag.
+		if !letter {
+			return nil, false
 		}
 		if k := strings.ToLower(tok); !seen[k] {
 			seen[k] = true

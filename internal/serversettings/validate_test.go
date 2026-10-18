@@ -64,7 +64,8 @@ func TestNormalizeOutreachFields(t *testing.T) {
 	bad := [][2]string{
 		{KeyBlueskyCardURL, "long"}, {KeyOutreachPostHour, "24"}, {KeyOutreachPostHour, "-1"},
 		{KeyOutreachHashtags, "SanFrancisco"}, {KeyOutreachHashtags, "#San-Francisco"}, {KeyOutreachHashtags, "#"},
-		{KeyOutreachHashtags, "#a #b #c #d #e #f #g"},
+		{KeyOutreachHashtags, "#a #b #c #d #e #f #g"}, {KeyOutreachHashtags, "#2026"},
+		{KeyOutreachHashtags, "#" + strings.Repeat("a", MaxHashtagRunes+1)},
 	}
 	for _, in := range bad {
 		if _, err := Normalize(in[0], in[1]); err == nil {
