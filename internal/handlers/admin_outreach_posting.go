@@ -108,7 +108,7 @@ func (h *AdminOutreachHandler) SendPost(w http.ResponseWriter, r *http.Request) 
 			IP:         clientIP(r),
 		})
 	}
-	writeJSON(w, http.StatusAccepted, h.postView(queued, outreachFacts(wk), wk.Status))
+	writeJSON(w, http.StatusAccepted, h.postView(queued, h.facts(wk), wk.Status))
 }
 
 type scheduleOutreachPostRequest struct {
@@ -168,7 +168,7 @@ func (h *AdminOutreachHandler) SchedulePost(w http.ResponseWriter, r *http.Reque
 			IP:         clientIP(r),
 		})
 	}
-	writeJSON(w, http.StatusOK, h.postView(updated, outreachFacts(wk), wk.Status))
+	writeJSON(w, http.StatusOK, h.postView(updated, h.facts(wk), wk.Status))
 }
 
 // UnschedulePost handles POST /admin/outreach-posts/{id}/unschedule: a
@@ -204,5 +204,5 @@ func (h *AdminOutreachHandler) UnschedulePost(w http.ResponseWriter, r *http.Req
 			IP:         clientIP(r),
 		})
 	}
-	writeJSON(w, http.StatusOK, h.postView(updated, outreachFacts(wk), wk.Status))
+	writeJSON(w, http.StatusOK, h.postView(updated, h.facts(wk), wk.Status))
 }
