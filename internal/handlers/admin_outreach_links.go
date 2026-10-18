@@ -45,7 +45,7 @@ type outreachLinkReport struct {
 // de-duplication is what heals a crash between the upstream call and the
 // local insert.
 func (h *AdminOutreachHandler) postLinkRequest(o outreach.Outreach, wk workshops.Workshop, ch outreach.Channel, wv outreach.Wave) shortlinks.CreateLinkRequest {
-	f := outreachFacts(wk)
+	f := h.facts(wk)
 	return shortlinks.CreateLinkRequest{
 		DestinationURL: outreach.DestinationURL(h.baseURL, f, ch, wv),
 		Title:          wk.Title + " — " + ch.Label + " " + wv.Label,
@@ -329,7 +329,7 @@ func (h *AdminOutreachHandler) linksView(ctx context.Context, wk workshops.Works
 		flyerByLoc[l.LocationID] = l
 	}
 
-	f := outreachFacts(wk)
+	f := h.facts(wk)
 	for _, ch := range outreach.Channels() {
 		for _, wv := range outreach.Waves() {
 			slot := [2]string{ch.Name, wv.Name}
@@ -547,7 +547,7 @@ func (h *AdminOutreachHandler) DraftAll(w http.ResponseWriter, r *http.Request) 
 		}
 		wantWave[name] = true
 	}
-	f := outreachFacts(wk)
+	f := h.facts(wk)
 	rep := draftAllReport{Created: []draftAllCreated{}}
 	for _, ch := range outreach.Channels() {
 		for _, wv := range outreach.Waves() {

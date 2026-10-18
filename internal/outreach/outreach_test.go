@@ -1,6 +1,7 @@
 package outreach
 
 import (
+	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
 	"strings"
 	"testing"
 	"time"
@@ -191,5 +192,40 @@ func TestFingerprint(t *testing.T) {
 	same.Slug = "other-slug"
 	if Fingerprint(same) != fp {
 		t.Error("slug must not affect the fingerprint")
+	}
+}
+
+// The hashtag line is the draft's own last paragraph, Bluesky makes each tag a
+// facet, and the length check counts it (#0573).
+func TestDraftHashtagsAreFacetsAndCounted(t *testing.T) {
+	f := ledsFacts()
+	f.Summary = strings.Repeat("A sentence that fills the space. ", 20)
+	bs, _ := ChannelByName("bluesky")
+	an, _ := WaveByName("announce")
+	d := Draft(bs, an, f)
+	if !strings.HasSuffix(d, "\n\n#SanFrancisco #Electronics") {
+		t.Fatalf("hashtags are not the final line: %q", d)
+	}
+	var tags []string
+	for _, fc := range bluesky.DetectFacets(d) {
+		for _, ft := range fc.Features {
+			if ft.Tag != "" {
+				tags = append(tags, ft.Tag)
+				if got := d[fc.Index.ByteStart:fc.Index.ByteEnd]; got != "#"+ft.Tag {
+					t.Errorf("facet covers %q, want %q", got, "#"+ft.Tag)
+				}
+			}
+		}
+	}
+	if strings.Join(tags, ",") != "SanFrancisco,Electronics" {
+		t.Errorf("tag facets = %v", tags)
+	}
+	// The tags are inside the limit: the summary gave way to them, not the reverse.
+	if n := Length(bs, d); n > bs.CharLimit {
+		t.Errorf("draft is %d graphemes, over %d", n, bs.CharLimit)
+	}
+	f.Hashtags = ""
+	if without := Draft(bs, an, f); Length(bs, without) <= Length(bs, d) || strings.Contains(without, "#") {
+		t.Errorf("tags not counted against the summary budget: %d vs %d", Length(bs, without), Length(bs, d))
 	}
 }

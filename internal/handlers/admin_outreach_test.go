@@ -667,3 +667,20 @@ func TestAdminOutreach_ResetShortLinksDropsCachedBase(t *testing.T) {
 		t.Errorf("after reset: %q %v", b, err)
 	}
 }
+
+// Drafts end with the site-wide hashtag line (#0573).
+func TestAdminOutreach_DraftEndsWithSiteHashtags(t *testing.T) {
+	e := newOutreachEnv(t, true)
+	e.h.SetHashtags(func() string { return "#SanFrancisco #Electronics" })
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	o := e.start(t, w).Outreach
+	for _, ch := range []string{"bluesky", "mastodon", "instagram"} {
+		p := e.createPost(t, o.ID, ch, "announce")
+		if !strings.HasSuffix(p.Body, "\n\n#SanFrancisco #Electronics") {
+			t.Errorf("%s draft does not end with the hashtag line: %q", ch, p.Body)
+		}
+		if p.Stale {
+			t.Errorf("%s draft stale straight after drafting", ch)
+		}
+	}
+}

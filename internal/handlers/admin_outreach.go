@@ -84,6 +84,7 @@ type shortLinker interface {
 // to attribute audit rows. All ShortLinks calls are server-side.
 type AdminOutreachHandler struct {
 	hourFn    func() int
+	tagsFn    func() string
 	store     outreachStore
 	locations outreachLocationStore
 	flyers    outreachFlyerStore
@@ -216,8 +217,17 @@ func (h *AdminOutreachHandler) postHour() int {
 	return h.hourFn()
 }
 
-func outreachFacts(wk workshops.Workshop) outreach.Facts {
-	return outreach.Facts{Slug: wk.Slug, Title: wk.Title, StartsAt: wk.StartsAt, LocationName: wk.LocationName, LocationAddress: wk.LocationAddress, Summary: strings.TrimSpace(derefOrEmpty(wk.Summary))}
+// SetHashtags sets the source of the site-wide hashtag line drafts end with
+// (#0573); unset, drafts carry none. Read per request.
+func (h *AdminOutreachHandler) SetHashtags(fn func() string) { h.tagsFn = fn }
+
+// facts is the slice of a workshop that drafts are written from.
+func (h *AdminOutreachHandler) facts(wk workshops.Workshop) outreach.Facts {
+	f := outreach.Facts{Slug: wk.Slug, Title: wk.Title, StartsAt: wk.StartsAt, LocationName: wk.LocationName, LocationAddress: wk.LocationAddress, Summary: strings.TrimSpace(derefOrEmpty(wk.Summary))}
+	if h.tagsFn != nil {
+		f.Hashtags = h.tagsFn()
+	}
+	return f
 }
 
 func rfc3339(t *time.Time) *string {
@@ -356,7 +366,7 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 		if err != nil {
 			return v, err
 		}
-		f := outreachFacts(wk)
+		f := h.facts(wk)
 		for _, p := range posts {
 			v.Posts = append(v.Posts, h.postView(p, f, wk.Status))
 		}
@@ -581,7 +591,7 @@ func (h *AdminOutreachHandler) CreatePost(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	f := outreachFacts(wk)
+	f := h.facts(wk)
 	body := req.Body
 	if strings.TrimSpace(body) == "" {
 		body = outreach.Draft(ch, wv, f)
@@ -686,7 +696,7 @@ func (h *AdminOutreachHandler) PatchPost(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	f := outreachFacts(wk)
+	f := h.facts(wk)
 	var updated outreach.Post
 	var err error
 	if regen {
@@ -760,7 +770,7 @@ func (h *AdminOutreachHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	f := outreachFacts(wk)
+	f := h.facts(wk)
 	if p.Prepared() {
 		writeJSON(w, http.StatusOK, h.postView(p, f, wk.Status))
 		return
@@ -904,7 +914,7 @@ func (h *AdminOutreachHandler) MarkPosted(w http.ResponseWriter, r *http.Request
 			IP:         clientIP(r),
 		})
 	}
-	writeJSON(w, http.StatusOK, h.postView(updated, outreachFacts(wk), wk.Status))
+	writeJSON(w, http.StatusOK, h.postView(updated, h.facts(wk), wk.Status))
 }
 
 // DeletePost handles DELETE /admin/outreach-posts/{id}.
