@@ -170,6 +170,14 @@ describe('OutreachBulkActions', () => {
     await waitFor(() => expect(scheduleAllOutreach).toHaveBeenLastCalledWith(5, { dry_run: false, post_ids: [10, 11], times: { 10: '2099-11-27T17:30:00Z' } }));
   });
 
+  it('opening a row edit without changing it sends no override (#0587)', async () => {
+    const d = await open();
+    await fireEvent.click(d.getByRole('button', { name: 'Change time for Bluesky Reminder' }));
+    scheduleAllOutreach.mockResolvedValueOnce({ dry_run: false, to_schedule: twoWaves.to_schedule, skipped: [] });
+    await fireEvent.click(d.getByRole('button', { name: 'Schedule 2 posts' }));
+    await waitFor(() => expect(scheduleAllOutreach).toHaveBeenLastCalledWith(5, { dry_run: false, post_ids: [10, 11] }));
+  });
+
   it('a row time in the past blocks Schedule (#0587)', async () => {
     const d = await open();
     await fireEvent.click(d.getByRole('button', { name: 'Change time for Bluesky Reminder' }));

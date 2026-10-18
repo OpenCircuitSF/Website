@@ -18,6 +18,25 @@ const (
 	maxScheduleLead = 366 * 24 * time.Hour
 )
 
+// parseScheduleAt validates a requested schedule time: an RFC 3339 instant
+// within the lead window. It returns the instant in UTC, or a non-empty
+// reason (phrased to follow a field name) when the time is refused. Single
+// Schedule and Schedule all's per-post overrides (#0587) share it so their
+// windows cannot drift apart.
+func parseScheduleAt(raw string, now time.Time) (time.Time, string) {
+	at, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, "must be an RFC 3339 time"
+	}
+	if at.Before(now.Add(minScheduleLead)) {
+		return time.Time{}, "must be at least a minute from now"
+	}
+	if at.After(now.Add(maxScheduleLead)) {
+		return time.Time{}, "must be within a year from now"
+	}
+	return at.UTC(), ""
+}
+
 // postingGate does the checks Post now, Retry and Schedule share, writing the
 // response and returning ok=false when one fails. It resolves the post, its
 // workshop and its channel; the channel must be automatic and configured.
@@ -133,18 +152,9 @@ func (h *AdminOutreachHandler) SchedulePost(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	at, err := time.Parse(time.RFC3339, req.ScheduledAt)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "scheduled_at must be an RFC 3339 time")
-		return
-	}
-	now := h.now()
-	if at.Before(now.Add(minScheduleLead)) {
-		writeError(w, http.StatusBadRequest, "scheduled_at must be at least a minute from now")
-		return
-	}
-	if at.After(now.Add(maxScheduleLead)) {
-		writeError(w, http.StatusBadRequest, "scheduled_at must be within a year from now")
+	at, msg := parseScheduleAt(req.ScheduledAt, h.now())
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, "scheduled_at "+msg)
 		return
 	}
 	_, wk, _, ok := h.postingGate(w, r, id)

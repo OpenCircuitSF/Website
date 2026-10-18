@@ -205,7 +205,10 @@ describe('scheduleHint (#0587)', () => {
     expect(scheduleHint('announce', waves)).toBe('The announcement usually goes out now. Pick a time only if you want to wait.');
   });
   it('a passed suggestion is named with its Pacific date', () => {
-    expect(scheduleHint('reminder', waves)).toBe('The suggested time (Sat, Oct 24, 5:00 PM PT) has passed. Pick one.');
+    expect(scheduleHint('reminder', waves, new Date('2026-10-26T00:00:00Z'))).toBe('The suggested time (Sat, Oct 24, 5:00 PM PT) has passed. Pick one.');
+  });
+  it('a suggestion still ahead is not called passed', () => {
+    expect(scheduleHint('reminder', waves, new Date('2026-10-20T00:00:00Z'))).toBe('The suggested time is Sat, Oct 24, 5:00 PM PT. Pick a time.');
   });
   it('a wave with no suggestion says so', () => {
     expect(scheduleHint('nope', waves)).toBe('There is no suggested time for this wave. Pick one.');

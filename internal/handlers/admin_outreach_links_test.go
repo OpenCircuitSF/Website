@@ -660,20 +660,80 @@ func TestAdminOutreachLinks_ScheduleAllTimeOverride(t *testing.T) {
 	}
 	id := d.ToSchedule[0].PostID
 
-	for _, bad := range []string{now.Add(-time.Hour).Format(time.RFC3339), "soon"} {
-		code, _ := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), fmt.Sprintf(`{"dry_run":false,"post_ids":[%d],"times":{"%d":%q}}`, id, id, bad))
-		if code != http.StatusBadRequest {
+	status := func(postID int64) (st string, at *time.Time) {
+		_ = e.pool.QueryRow(context.Background(), `SELECT status, scheduled_at FROM outreach_posts WHERE id = $1`, postID).Scan(&st, &at)
+		return st, at
+	}
+	confirm := func(postIDs, times string) (int, testScheduleAll) {
+		code, b := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), fmt.Sprintf(`{"dry_run":false,"post_ids":%s,"times":%s}`, postIDs, times))
+		var c testScheduleAll
+		if code == http.StatusOK {
+			c = decodeOutreach[testScheduleAll](t, b)
+		}
+		return code, c
+	}
+
+	// The window is single Schedule's: under a minute ahead, more than 366
+	// days ahead, or not RFC 3339 is refused, and a refusal schedules nothing.
+	for _, bad := range []string{
+		now.Add(-time.Hour).Format(time.RFC3339),
+		now.Add(30 * time.Second).Format(time.RFC3339),
+		now.Add(367 * 24 * time.Hour).Format(time.RFC3339),
+		"soon",
+	} {
+		if code, _ := confirm(fmt.Sprintf("[%d]", id), fmt.Sprintf(`{"%d":%q}`, id, bad)); code != http.StatusBadRequest {
 			t.Errorf("override %q = %d, want 400", bad, code)
 		}
+		if st, _ := status(id); st != "draft" {
+			t.Fatalf("after refused override %q, status = %s, want draft", bad, st)
+		}
 	}
+
+	// Another workshop's post cannot be scheduled through this workshop's map.
+	w2 := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	e.startHTTP(t, w2)
+	if code, b := e.do(t, http.MethodPost, e.linksPath(w2, "draft-all"), `{"waves":["last-call"]}`); code != http.StatusOK {
+		t.Fatalf("draft-all w2 = %d (%s)", code, b)
+	}
+	_, b = e.do(t, http.MethodPost, e.linksPath(w2, "schedule-all"), `{"dry_run":true}`)
+	d2 := decodeOutreach[testScheduleAll](t, b)
+	if len(d2.ToSchedule) == 0 {
+		t.Fatalf("w2 dry run planned nothing: %s", b)
+	}
+	foreign := d2.ToSchedule[0].PostID
+	code, c := confirm(fmt.Sprintf("[%d]", foreign), fmt.Sprintf(`{"%d":%q}`, foreign, now.Add(26*time.Hour).Format(time.RFC3339)))
+	if code != http.StatusOK || len(c.ToSchedule) != 0 {
+		t.Errorf("foreign override = %d %+v, want 200 with nothing scheduled", code, c)
+	}
+	if st, _ := status(foreign); st != "draft" {
+		t.Errorf("foreign post status = %s, want draft", st)
+	}
+
+	// An override for an id not in post_ids is ignored, even an invalid one.
 	want := now.Add(26 * time.Hour).UTC().Truncate(time.Second)
-	code, b := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), fmt.Sprintf(`{"dry_run":false,"post_ids":[%d],"times":{"%d":%q}}`, id, id, want.Format(time.RFC3339)))
+	code, c = confirm(fmt.Sprintf("[%d]", id), fmt.Sprintf(`{"%d":%q,"%d":"soon"}`, id, want.Format(time.RFC3339), foreign))
 	if code != http.StatusOK {
-		t.Fatalf("confirm = %d (%s)", code, b)
+		t.Fatalf("confirm = %d", code)
 	}
-	var got time.Time
-	_ = e.pool.QueryRow(context.Background(), `SELECT scheduled_at FROM outreach_posts WHERE id = $1`, id).Scan(&got)
-	if !got.Equal(want) {
+	if len(c.ToSchedule) != 1 || c.ToSchedule[0].ScheduledAt != want.Format(time.RFC3339) {
+		t.Errorf("confirm reports %+v, want the override time %s", c.ToSchedule, want.Format(time.RFC3339))
+	}
+	if _, got := status(id); got == nil || !got.Equal(want) {
 		t.Errorf("scheduled_at = %v, want %v", got, want)
+	}
+	var overridden bool
+	if err := e.pool.QueryRow(context.Background(),
+		`SELECT (metadata->>'time_overridden')::bool FROM audit_log WHERE action = $1 AND target_id = $2 ORDER BY id DESC LIMIT 1`,
+		audit.ActionOutreachPostScheduled, id).Scan(&overridden); err != nil || !overridden {
+		t.Errorf("audit time_overridden = %v (%v), want true", overridden, err)
+	}
+
+	// A post already scheduled is out of the plan: a second override does not move it.
+	code, c = confirm(fmt.Sprintf("[%d]", id), fmt.Sprintf(`{"%d":%q}`, id, now.Add(30*time.Hour).Format(time.RFC3339)))
+	if code != http.StatusOK || len(c.ToSchedule) != 0 {
+		t.Errorf("re-override = %d %+v, want nothing scheduled", code, c)
+	}
+	if _, got := status(id); got == nil || !got.Equal(want) {
+		t.Errorf("after re-override scheduled_at = %v, want %v", got, want)
 	}
 }

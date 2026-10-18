@@ -680,20 +680,12 @@ func (h *AdminOutreachHandler) ScheduleAll(w http.ResponseWriter, r *http.Reques
 			if !has {
 				continue
 			}
-			at, perr := time.Parse(time.RFC3339, raw)
-			if perr != nil {
-				writeError(w, http.StatusBadRequest, "times must be RFC 3339 instants")
+			at, msg := parseScheduleAt(raw, now)
+			if msg != "" {
+				writeError(w, http.StatusBadRequest, "a chosen time "+msg)
 				return
 			}
-			if at.Before(now.Add(minScheduleLead)) {
-				writeError(w, http.StatusBadRequest, "a chosen time is in the past; pick a later one")
-				return
-			}
-			if at.After(now.Add(maxScheduleLead)) {
-				writeError(w, http.StatusBadRequest, "a chosen time is too far ahead")
-				return
-			}
-			overrides[id] = at.UTC()
+			overrides[id] = at
 		}
 	}
 	ctx := r.Context()
@@ -734,7 +726,8 @@ func (h *AdminOutreachHandler) ScheduleAll(w http.ResponseWriter, r *http.Reques
 		if !wanted[it.PostID] {
 			continue
 		}
-		if at, has := overrides[it.PostID]; has {
+		at, overridden := overrides[it.PostID]
+		if overridden {
 			it.ScheduledAt = at
 		}
 		updated, err := h.store.Schedule(ctx, it.PostID, it.ScheduledAt)
@@ -748,7 +741,7 @@ func (h *AdminOutreachHandler) ScheduleAll(w http.ResponseWriter, r *http.Reques
 			actorID, targetID := actor.ID, updated.ID
 			h.auditor.Record(ctx, audit.Entry{
 				ActorID: &actorID, Action: audit.ActionOutreachPostScheduled, TargetType: audit.TargetOutreachPost, TargetID: &targetID,
-				Metadata: map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "scheduled_at": it.ScheduledAt.UTC().Format(time.RFC3339), "bulk": true},
+				Metadata: map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "scheduled_at": it.ScheduledAt.UTC().Format(time.RFC3339), "bulk": true, "time_overridden": overridden},
 				IP:       clientIP(r),
 			})
 		}

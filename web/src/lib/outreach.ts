@@ -123,14 +123,18 @@ export function defaultScheduleAt(waveName: string, waves: OutreachWave[], now: 
 
 /**
  * The hint under an empty schedule picker (#0587). Announce usually goes out
- * now; a suggestion that has passed is named with its date; otherwise the wave
- * has no suggestion at all.
+ * now; a suggestion that has passed is named with its date; one still ahead
+ * (the admin cleared the prefilled picker) is named without calling it passed;
+ * otherwise the wave has no suggestion at all.
  */
-export function scheduleHint(waveName: string, waves: OutreachWave[]): string {
+export function scheduleHint(waveName: string, waves: OutreachWave[], now: Date = new Date()): string {
   if (waveName === 'announce') return 'The announcement usually goes out now. Pick a time only if you want to wait.';
   const at = waves.find((w) => w.name === waveName)?.suggested_at ?? null;
-  if (at !== null && !Number.isNaN(Date.parse(at))) {
-    return `The suggested time (${formatPacificWeekdayTime(at)}) has passed. Pick one.`;
+  const t = at === null ? Number.NaN : Date.parse(at);
+  if (at !== null && !Number.isNaN(t)) {
+    return t <= now.getTime()
+      ? `The suggested time (${formatPacificWeekdayTime(at)}) has passed. Pick one.`
+      : `The suggested time is ${formatPacificWeekdayTime(at)}. Pick a time.`;
   }
   return 'There is no suggested time for this wave. Pick one.';
 }

@@ -43,7 +43,8 @@
       const v = edits[i.post_id];
       if (v === undefined) continue;
       const iso = fromPacificInput(v);
-      if (iso) out[i.post_id] = iso;
+      // An opened-but-unchanged row is not an override.
+      if (iso && iso !== i.scheduled_at) out[i.post_id] = iso;
     }
     return out;
   });
