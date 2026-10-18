@@ -40,6 +40,7 @@
   let loadError = $state<string | null>(null);
   let ready = $state(false);
   let failedImages = $state<string[]>([]);
+  let failedPhotos = $state(0);
   let photoWarn = $state<string | null>(null);
   let root = $state<HTMLElement | null>(null);
 
@@ -107,7 +108,13 @@
       const imgs = Array.from(el.querySelectorAll<HTMLImageElement>('.sheet img'));
       const results = await Promise.all(imgs.map(settle));
       if (cancelled) return;
-      failedImages = imgs.filter((_, i) => !results[i]).map((img) => img.getAttribute('alt') || 'photo');
+      const failed = imgs.filter((_, i) => !results[i]);
+      // Photos are named by the count of flyers they affect; a failed photo is
+      // hidden and its slot shows a visible placeholder on the sheet (#0589).
+      const failedPhotoImgs = failed.filter((img) => img.closest('.photo'));
+      for (const img of failedPhotoImgs) img.closest('.photo')?.setAttribute('data-photo-missing', '');
+      failedPhotos = failedPhotoImgs.length;
+      failedImages = failed.filter((img) => !img.closest('.photo')).map((img) => img.getAttribute('alt') || 'image');
       const photo = imgs.find((img) => img.closest('.photo'));
       photoWarn = photo && photo.naturalWidth > 0 ? photoWarning(photo.naturalWidth, photo.naturalHeight, layout) : null;
       ready = true;
@@ -139,6 +146,11 @@
     </p>
     {#if missingNote}<p class="note warn">{missingNote}</p>{/if}
     {#if photoWarn}<p class="note warn">{photoWarn}</p>{/if}
+    {#if failedPhotos > 0}
+      <p class="note warn">
+        The photo could not be loaded for {failedPhotos} {failedPhotos === 1 ? 'flyer' : 'flyers'}. {failedPhotos === 1 ? 'It prints' : 'They print'} with a plain tint.
+      </p>
+    {/if}
     {#if failedImages.length > 0}<p class="note warn">Could not load: {failedImages.join(', ')}.</p>{/if}
   </div>
 
@@ -243,6 +255,33 @@
   }
   .warn {
     color: #8a2d00;
+  }
+  /* A photo that failed to load: hide the broken image, show a tint and a
+     note on the sheet. The note is screen-only, so the printed flyer is the
+     plain tint. */
+  :global(.flyer-print-root .photo[data-photo-missing]) {
+    background: #3a4a36;
+    position: relative;
+  }
+  :global(.flyer-print-root .photo[data-photo-missing] img) {
+    visibility: hidden;
+  }
+  :global(.flyer-print-root .photo[data-photo-missing])::after {
+    content: 'Photo could not be loaded: prints as a plain tint';
+    position: absolute;
+    top: 0.2in;
+    left: 0.2in;
+    right: 0.2in;
+    padding: 0.06in 0.1in;
+    font-size: 10pt;
+    color: #10140f;
+    background: #fff3cd;
+    border: 1px dashed #8a2d00;
+  }
+  @media print {
+    :global(.flyer-print-root .photo[data-photo-missing])::after {
+      display: none;
+    }
   }
   .sheet {
     position: relative;

@@ -52,6 +52,7 @@ const { default: OutreachFlyerEditor } = await import('./OutreachFlyerEditor.sve
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   calls.length = 0;
   for (const m of [getOutreachFlyer, updateOutreachFlyer, setOutreachFlyerLocations, generateOutreachFlyer, markFlyerLinkPutUp, clearFlyerLinkPutUp, listOutreachLocations]) m.mockReset();
 });
@@ -92,47 +93,92 @@ async function mountWith(v: FlyerView, locs: OutreachLocation[]): Promise<void> 
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Photo' })).toBeTruthy());
 }
 
+const printUrl = '#/outreach?view=print&flyer=7&layout=full';
+
 describe('OutreachFlyerEditor', () => {
-  it('Generate saves the design, then the selection, then generates, and reports remaining and the message', async () => {
+  it('a new flyer defaults to the cover image, every active location and one copy (#0589)', async () => {
+    const v = flyer([], { facts: { title: 'T', date_line: 'd', place_line: 'p', cover_image: '/cover.webp', description: '' } });
+    await mountWith(v, [loc(1), loc(2), loc(3, { active: false })]);
+    expect((screen.getByLabelText(/Board 1/) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText(/Board 2/) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByLabelText(/Board 3/)).toBeNull();
+    expect(document.querySelector('.focal-box img')?.getAttribute('src')).toBe('/cover.webp');
+    expect(document.querySelectorAll('.preview img').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Print 2 flyers' })).toBeTruthy();
+  });
+
+  it('Print N flyers saves, generates missing links, then opens the print view, naming each step', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
     updateOutreachFlyer.mockResolvedValue(flyer());
-    setOutreachFlyerLocations.mockResolvedValue(flyer());
-    generateOutreachFlyer.mockResolvedValue(
-      flyer([{ location_id: 1, name: 'Board 1', code: 'b1', address: '', active: true, copies: 2, link: link(10, false) }], {
-        remaining: 1,
-        message: 'Some links or QR codes could not be fetched.',
-      }),
-    );
-    await mountWith(flyer(), [loc(1), loc(2)]);
-    await fireEvent.click(screen.getByLabelText(/Board 1/));
+    const selection = (hasQr: boolean) => [{ location_id: 1, name: 'Board 1', code: 'b1', address: '', active: true, copies: 2, link: hasQr ? link(10, true) : null }];
+    setOutreachFlyerLocations.mockResolvedValue(flyer(selection(false)));
+    generateOutreachFlyer.mockResolvedValue(flyer(selection(true), { remaining: 0 }));
+    await mountWith(flyer(), [loc(1)]);
     await fireEvent.change(screen.getByLabelText('Copies'), { target: { value: '2' } });
-    await fireEvent.click(screen.getByRole('button', { name: 'Generate links and QR codes' }));
-    await waitFor(() => expect(generateOutreachFlyer).toHaveBeenCalledWith(7));
+    await fireEvent.click(screen.getByRole('button', { name: 'Print 2 flyers' }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith(printUrl, '_blank', 'noopener'));
     expect(calls).toEqual(['update', 'select', 'generate']);
     expect(setOutreachFlyerLocations).toHaveBeenCalledWith(7, [{ location_id: 1, copies: 2 }]);
-    const status = screen.getByRole('status');
-    await waitFor(() => expect(status.textContent).toContain('1 of 1 locations still need a link or QR code. Some links or QR codes could not be fetched.'));
-    expect(screen.getByText('No QR code yet')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('print view is open'));
+    expect(screen.queryByRole('button', { name: /Generate links/ })).toBeNull();
+  });
+
+  it('skips generate when every link and QR code already exists', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const sel = [{ location_id: 1, name: 'Board 1', code: 'b1', address: '', active: true, copies: 1, link: link(10, true) }];
+    updateOutreachFlyer.mockResolvedValue(flyer(sel));
+    setOutreachFlyerLocations.mockResolvedValue(flyer(sel));
+    await mountWith(flyer(sel), [loc(1)]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Print 1 flyer' }));
+    await waitFor(() => expect(open).toHaveBeenCalled());
+    expect(generateOutreachFlyer).not.toHaveBeenCalled();
+  });
+
+  it('a partial generate opens nothing and reports the remaining count and message', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const sel = [{ location_id: 1, name: 'Board 1', code: 'b1', address: '', active: true, copies: 1, link: null }];
+    updateOutreachFlyer.mockResolvedValue(flyer());
+    setOutreachFlyerLocations.mockResolvedValue(flyer(sel));
+    generateOutreachFlyer.mockResolvedValue(flyer(sel, { remaining: 1, message: 'Some links could not be fetched.' }));
+    await mountWith(flyer(), [loc(1)]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Print 1 flyer' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('1 of 1 locations still need a link or QR code'));
+    expect(screen.getByRole('status').textContent).toContain('Some links could not be fetched.');
+    expect(open).not.toHaveBeenCalled();
   });
 
   it('does not generate when saving the selection is refused, and shows the server message', async () => {
     updateOutreachFlyer.mockResolvedValue(flyer());
     setOutreachFlyerLocations.mockRejectedValue(new FakeApiError(400, 'an inactive location cannot be added'));
     await mountWith(flyer(), [loc(1)]);
-    await fireEvent.click(screen.getByLabelText(/Board 1/));
-    await fireEvent.click(screen.getByRole('button', { name: 'Generate links and QR codes' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Print 1 flyer' }));
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('an inactive location cannot be added'));
     expect(generateOutreachFlyer).not.toHaveBeenCalled();
   });
 
-  it('keeps Generate disabled with nothing selected and with an over-long tagline', async () => {
+  it('disables Print with nothing ticked (with the reason shown) and with an over-long tagline', async () => {
+    await mountWith(flyer(), []);
+    const print = screen.getByRole('button', { name: 'Print 0 flyers' }) as HTMLButtonElement;
+    expect(print.disabled).toBe(true);
+    screen.getByText('Tick at least one location to print.');
+    cleanup();
     await mountWith(flyer(), [loc(1)]);
-    const gen = screen.getByRole('button', { name: 'Generate links and QR codes' }) as HTMLButtonElement;
-    expect(gen.disabled).toBe(true);
-    await fireEvent.click(screen.getByLabelText(/Board 1/));
-    expect(gen.disabled).toBe(false);
+    const print2 = screen.getByRole('button', { name: 'Print 1 flyer' }) as HTMLButtonElement;
+    expect(print2.disabled).toBe(false);
     await fireEvent.input(screen.getByLabelText('Tagline'), { target: { value: 'x'.repeat(141) } });
-    expect(gen.disabled).toBe(true);
+    expect(print2.disabled).toBe(true);
     expect(screen.getByText('Tagline must be at most 140 characters.')).toBeTruthy();
+  });
+
+  it('renders generated links as a table with the five columns', async () => {
+    const generated = { location_id: 1, name: 'Board 1', code: 'b1', address: '', active: true, copies: 1, link: link(10, true) };
+    await mountWith(flyer([generated]), [loc(1)]);
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent?.trim());
+    expect(headers).toEqual(['Location', 'Code', 'Short link', 'QR', 'Put up']);
+    const row = screen.getAllByRole('row')[1];
+    expect(row.textContent).toContain('Board 1');
+    expect(row.textContent).toContain('b1');
+    expect(screen.getByRole('link', { name: /Download QR for Board 1/ }).getAttribute('href')).toBe('/admin/outreach-flyer-links/10/qr.svg');
   });
 
   it('lists active locations plus already-selected inactive ones', async () => {
@@ -157,23 +203,21 @@ describe('OutreachFlyerEditor', () => {
     expect(slider.getAttribute('aria-valuetext')).toBe('x 52%, y 60%');
   });
 
-  it('marks a location put up and undoes it', async () => {
+  it('toggles Put up on and off', async () => {
     const generated = { location_id: 1, name: 'Board 1', code: 'b1', address: '', active: true, copies: 1, link: link(10, true) };
     const marked = { ...generated, link: link(10, true, '2026-10-18T17:00:00Z') };
     await mountWith(flyer([generated]), [loc(1)]);
     markFlyerLinkPutUp.mockResolvedValue({});
     getOutreachFlyer.mockResolvedValue(flyer([marked]));
-    await fireEvent.click(screen.getByRole('button', { name: 'Mark put up' }));
+    const box = screen.getByRole('checkbox', { name: 'Put up: Board 1' }) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    await fireEvent.click(box);
     await waitFor(() => expect(markFlyerLinkPutUp).toHaveBeenCalledWith(10));
-    const undo = await screen.findByRole('button', { name: 'Undo' });
+    await waitFor(() => expect((screen.getByRole('checkbox', { name: 'Put up: Board 1' }) as HTMLInputElement).checked).toBe(true));
     clearFlyerLinkPutUp.mockResolvedValue({});
     getOutreachFlyer.mockResolvedValue(flyer([generated]));
-    await fireEvent.click(undo);
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Put up: Board 1' }));
     await waitFor(() => expect(clearFlyerLinkPutUp).toHaveBeenCalledWith(10));
-    await screen.findByRole('button', { name: 'Mark put up' });
-    const qr = screen.getByRole('link', { name: 'QR (SVG)' });
-    expect(qr.getAttribute('href')).toBe('/admin/outreach-flyer-links/10/qr.svg');
-    expect(qr.hasAttribute('download')).toBe(true);
   });
 
   it('sends the description, short text and title position, trimmed (#0561)', async () => {
@@ -197,7 +241,7 @@ describe('OutreachFlyerEditor', () => {
     expect(screen.getByText('Description must be at most 360 characters.')).toBeTruthy();
   });
 
-  it('re-enables Save and Generate after switching away from full-photo with an over-long description (#0562)', async () => {
+  it('re-enables Save and Print after switching away from full-photo with an over-long description (#0562)', async () => {
     await mountWith(fullPhoto(), [loc(1)]);
     await fireEvent.input(screen.getByLabelText('Description'), { target: { value: 'x'.repeat(361) } });
     expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);

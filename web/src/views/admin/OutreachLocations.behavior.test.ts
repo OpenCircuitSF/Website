@@ -88,16 +88,13 @@ describe('OutreachLocations', () => {
     expect((screen.getByLabelText('Code') as HTMLInputElement).value).toBe('mission-public-2');
   });
 
-  it('disables Save while invalid and creates with the form values', async () => {
+  it('creates with the form values (code suggested from the name)', async () => {
     createOutreachLocation.mockResolvedValue(loc());
     await mountWith([]);
     await screen.findByText('No locations yet.');
     await fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
-    const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement;
-    expect(save.disabled).toBe(true);
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'Bernal Co-op' } });
-    expect(save.disabled).toBe(false);
-    await fireEvent.click(save);
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(createOutreachLocation).toHaveBeenCalledWith({
         name: 'Bernal Co-op',
@@ -107,6 +104,31 @@ describe('OutreachLocations', () => {
         active: true,
       }),
     );
+  });
+
+  it('shows no field error on the untouched empty form, then after blur or submit (#0589)', async () => {
+    await mountWith([]);
+    await screen.findByText('No locations yet.');
+    await fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    expect(screen.queryByText('Name is required.')).toBeNull();
+    expect(screen.queryByText('Code is required.')).toBeNull();
+    screen.getByText(/Letters, digits and hyphens/);
+    await fireEvent.blur(screen.getByLabelText('Name'));
+    screen.getByText('Name is required.');
+    expect(screen.queryByText('Code is required.')).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    screen.getByText('Code is required.');
+    expect(createOutreachLocation).not.toHaveBeenCalled();
+  });
+
+  it('offers Undo after Deactivate and reactivates (#0589)', async () => {
+    updateOutreachLocation.mockResolvedValue(loc({ active: false }));
+    await mountWith([loc()]);
+    await screen.findByText('Mission Library');
+    await fireEvent.click(screen.getByRole('button', { name: 'Deactivate' }));
+    const undo = await screen.findByRole('button', { name: /Undo: reactivate Mission Library/ });
+    await fireEvent.click(undo);
+    await waitFor(() => expect(updateOutreachLocation).toHaveBeenLastCalledWith(1, { active: true }));
   });
 
   it('disables the code of a locked location and offers no Delete', async () => {

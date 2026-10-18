@@ -1,13 +1,17 @@
 <!--
   One flyer's editor (#0549): photo with a draggable focal point, template,
-  tagline, which locations to print for and how many copies, then Generate
-  (one ShortLinks link and QR code per location, shared by every flyer for
-  that workshop and location), a live preview at both sizes, the generated
-  links with Put up, and links to the print page. Maths and wording are in
-  lib/flyers.ts. Designing works without ShortLinks; only Generate needs it.
-  Generate saves the design, then the selection, then asks the server, and
-  shows the server's remaining count and message in the role="status" line,
-  so a partial run can simply be repeated.
+  tagline, which locations to print for and how many copies, a live preview at
+  both sizes, the generated links (a table, with a Put up toggle) and links to
+  the print page. Maths and wording are in lib/flyers.ts. Designing works
+  without ShortLinks; only making links needs it.
+
+  #0589: a new flyer opens ready to print (cover image, every active location,
+  one copy each). The one primary action, "Print N flyers", saves the design,
+  then the selection, generates any missing link or QR code, then opens the
+  print view, naming each step in the role="status" line; a partial generate
+  stops there with the server's remaining count and message, so it can simply
+  be repeated. The preview column is sticky on wide screens and comes first
+  on narrow ones.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -81,6 +85,7 @@
   const descriptionShortError = $derived(validateFlyerDescription(descriptionShort, MAX_FLYER_DESCRIPTION_SHORT, 'Short description'));
   const textError = $derived(taglineError ?? (template === 'full-photo' ? (descriptionError ?? descriptionShortError) : null));
   const selected = $derived(Object.keys(copies).map(Number));
+  const printCount = $derived(selected.reduce((n, id) => n + (copies[id] ?? 0), 0));
   const draftSummary = $derived(selectionSummary(selected.map((id) => ({ copies: copies[id] }))));
   const shownLocations = $derived(locations.filter((l) => l.active || l.id in copies));
   const printable = $derived(view ? expandCopies(view.selection) : []);
@@ -111,6 +116,14 @@
       const [v, l] = await Promise.all([getOutreachFlyer(flyerId), listOutreachLocations()]);
       locations = l.locations;
       adopt(v);
+      // A new flyer (nothing chosen yet) starts ready to print: the cover
+      // image and every active location, one copy each.
+      if (v.selection.length === 0 && v.flyer.photo === null) {
+        photo = v.facts.cover_image;
+        const next: Record<number, number> = {};
+        for (const loc of l.locations) if (loc.active) next[loc.id] = 1;
+        copies = next;
+      }
       status = '';
     } catch (err) {
       status = message(err, 'Could not load the flyer. Please try again.');
@@ -148,17 +161,28 @@
     }
   }
 
-  async function generate(): Promise<void> {
+  /** Save, make any missing link or QR code, then open the print view. */
+  async function printAll(): Promise<void> {
     if (busy || textError || selected.length === 0) return;
     busy = true;
-    status = 'Generating links and QR codes.';
+    status = 'Saving the flyer.';
     try {
-      await saveAll();
-      const v = await generateOutreachFlyer(flyerId);
+      let v = await saveAll();
+      const missing = v.selection.filter((s) => !s.link || !s.link.has_qr).length;
+      if (missing > 0) {
+        status = `Generating ${missing} ${missing === 1 ? 'link and QR code' : 'links and QR codes'}.`;
+        v = await generateOutreachFlyer(flyerId);
+      }
       adopt(v);
-      status = v.remaining ? `${v.remaining} of ${v.selection.length} locations still need a link or QR code. ${v.message ?? ''}`.trim() : 'Links and QR codes are ready.';
+      if (v.remaining) {
+        status = `${v.remaining} of ${v.selection.length} locations still need a link or QR code, so nothing was opened. ${v.message ?? ''} Press Print again to retry.`.trim();
+        return;
+      }
+      status = 'Opening the print view.';
+      window.open(adminOutreachPrintHash(flyerId, 'full'), '_blank', 'noopener');
+      status = 'The print view is open in a new tab.';
     } catch (err) {
-      status = message(err, 'Could not generate. Everything saved so far is kept; try again.');
+      status = message(err, 'Could not print. Everything saved so far is kept; try again.');
     } finally {
       busy = false;
     }
@@ -243,6 +267,34 @@
 
   {#if view}
     <div class="editor">
+      <div class="preview">
+        <h3>Preview</h3>
+        <div class="previews">
+          <figure>
+            <div class="scaled" style="--w: 8.5in; --h: 11in; --s: 0.36">
+              <div class="inner full">
+                <FlyerFace {template} size="full" facts={view.facts} {tagline} {description} {descriptionShort} {titlePosition} photo={effectivePhoto} {focal} instance={exampleInstance} />
+              </div>
+            </div>
+            <figcaption>
+              Full page · {sheetCount(printable.length, 'full')} {sheetCount(printable.length, 'full') === 1 ? 'sheet' : 'sheets'}
+              <a href={adminOutreachPrintHash(flyerId, 'full')} target="_blank" rel="noopener">Print all · full page</a>
+            </figcaption>
+          </figure>
+          <figure>
+            <div class="scaled" style="--w: 5.5in; --h: 8.5in; --s: 0.46">
+              <div class="inner half">
+                <FlyerFace {template} size="half" facts={view.facts} {tagline} {description} {descriptionShort} {titlePosition} photo={effectivePhoto} {focal} instance={exampleInstance} />
+              </div>
+            </div>
+            <figcaption>
+              Half-size double · {sheetCount(printable.length, 'half')} {sheetCount(printable.length, 'half') === 1 ? 'sheet' : 'sheets'}
+              <a href={adminOutreachPrintHash(flyerId, 'half')} target="_blank" rel="noopener">Print all · half-size double</a>
+            </figcaption>
+          </figure>
+        </div>
+        <p class="text-muted">In the print dialog choose Letter, portrait, scale Actual size (100%), margins None, and turn headers and footers off.</p>
+      </div>
       <div class="setup">
         <section aria-labelledby="fl-photo">
           <h3 id="fl-photo">Photo</h3>
@@ -369,67 +421,68 @@
 
         <div class="row">
           <Button variant="primary" onclick={save} disabled={busy || !!textError}>Save</Button>
-          <Button variant="primary" onclick={generate} disabled={busy || !!textError || selected.length === 0}>Generate links and QR codes</Button>
+          <Button variant="primary" onclick={printAll} disabled={busy || !!textError || selected.length === 0}>
+            Print {printCount} {printCount === 1 ? 'flyer' : 'flyers'}
+          </Button>
         </div>
-      </div>
-
-      <div class="preview">
-        <h3>Preview</h3>
-        <div class="previews">
-          <figure>
-            <div class="scaled" style="--w: 8.5in; --h: 11in; --s: 0.36">
-              <div class="inner full">
-                <FlyerFace {template} size="full" facts={view.facts} {tagline} {description} {descriptionShort} {titlePosition} photo={effectivePhoto} {focal} instance={exampleInstance} />
-              </div>
-            </div>
-            <figcaption>
-              Full page · {sheetCount(printable.length, 'full')} {sheetCount(printable.length, 'full') === 1 ? 'sheet' : 'sheets'}
-              <a href={adminOutreachPrintHash(flyerId, 'full')} target="_blank" rel="noopener">Print all · full page</a>
-            </figcaption>
-          </figure>
-          <figure>
-            <div class="scaled" style="--w: 5.5in; --h: 8.5in; --s: 0.46">
-              <div class="inner half">
-                <FlyerFace {template} size="half" facts={view.facts} {tagline} {description} {descriptionShort} {titlePosition} photo={effectivePhoto} {focal} instance={exampleInstance} />
-              </div>
-            </div>
-            <figcaption>
-              Half-size double · {sheetCount(printable.length, 'half')} {sheetCount(printable.length, 'half') === 1 ? 'sheet' : 'sheets'}
-              <a href={adminOutreachPrintHash(flyerId, 'half')} target="_blank" rel="noopener">Print all · half-size double</a>
-            </figcaption>
-          </figure>
-        </div>
-        <p class="text-muted">In the print dialog choose Letter, portrait, scale Actual size (100%), margins None, and turn headers and footers off.</p>
-
-        <h3>Generated links</h3>
-        {#if view.selection.length === 0}
-          <p class="text-muted">Choose locations and save.</p>
+        {#if selected.length === 0}
+          <p class="text-muted">Tick at least one location to print.</p>
         {:else}
-          <ul class="links">
-            {#each view.selection as s (s.location_id)}
-              <li>
-                <strong>{s.name}</strong> <span class="mono">{s.code}</span>
-                {#if s.link}
-                  <span class="mono">{displayShortUrl(s.link.short_url)}</span>
-                  {#if s.link.has_qr && s.link.qr_url}
-                    <img class="thumb" src={s.link.qr_url} alt="QR code for {s.name}" />
-                    <a href={s.link.qr_url} download>QR (SVG)</a>
-                  {:else}
-                    <span class="warn">No QR code yet</span>
-                  {/if}
-                  {#if s.link.put_up_at}
-                    <span>Put up {formatDateTime(s.link.put_up_at)}</span>
-                    <Button variant="subtle" onclick={() => togglePutUp(s.link!.id, true)}>Undo</Button>
-                  {:else}
-                    <Button variant="subtle" onclick={() => togglePutUp(s.link!.id, false)}>Mark put up</Button>
-                  {/if}
-                {:else}
-                  <span class="text-muted">Not generated yet</span>
-                {/if}
-              </li>
-            {/each}
-          </ul>
+          <p class="text-muted">Print saves the flyer, makes any missing links and QR codes, and opens the print view.</p>
         {/if}
+
+        <section aria-labelledby="fl-links">
+          <h3 id="fl-links">Generated links</h3>
+          {#if view.selection.length === 0}
+            <p class="text-muted">Tick locations and press Print; links are made then.</p>
+          {:else}
+            <div class="table-scroll">
+              <table class="links">
+                <thead>
+                  <tr>
+                    <th>Location</th>
+                    <th>Code</th>
+                    <th>Short link</th>
+                    <th>QR</th>
+                    <th>Put up</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each view.selection as s (s.location_id)}
+                    <tr>
+                      <td>{s.name}</td>
+                      <td class="mono">{s.code}</td>
+                      {#if s.link}
+                        <td class="mono">{displayShortUrl(s.link.short_url)}</td>
+                        <td>
+                          {#if s.link.has_qr && s.link.qr_url}
+                            <img class="thumb" src={s.link.qr_url} alt="QR code for {s.name}" />
+                            <a href={s.link.qr_url} download aria-label="Download QR for {s.name} (SVG)">Download</a>
+                          {:else}
+                            <span class="warn">No QR code yet</span>
+                          {/if}
+                        </td>
+                        <td>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={!!s.link.put_up_at}
+                              aria-label="Put up: {s.name}"
+                              onchange={() => togglePutUp(s.link!.id, !!s.link!.put_up_at)}
+                            />
+                            {s.link.put_up_at ? formatDateTime(s.link.put_up_at) : 'Not yet'}
+                          </label>
+                        </td>
+                      {:else}
+                        <td colspan="3" class="text-muted">Not generated yet</td>
+                      {/if}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+        </section>
 
         <p>
           {#if confirmDelete}
@@ -441,6 +494,7 @@
           {/if}
         </p>
       </div>
+
     </div>
   {/if}
 </Panel>
@@ -456,9 +510,22 @@
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
   }
+  /* Narrow: the preview comes first (it is first in the DOM). Wide: the form
+     on the left, the preview pinned beside it while the form scrolls. */
   @media (min-width: 64rem) {
     .editor {
       grid-template-columns: minmax(0, 24rem) minmax(0, 1fr);
+      align-items: start;
+    }
+    .setup {
+      grid-column: 1;
+      grid-row: 1;
+    }
+    .preview {
+      grid-column: 2;
+      grid-row: 1;
+      position: sticky;
+      top: var(--space-3);
     }
   }
   h3 {
@@ -561,17 +628,8 @@
     width: 5.5in;
     height: 8.5in;
   }
-  .links {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-  .links li {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2) var(--space-3);
-    align-items: center;
-    margin-bottom: var(--space-2);
+  .links td {
+    vertical-align: middle;
   }
   .thumb {
     width: 3rem;

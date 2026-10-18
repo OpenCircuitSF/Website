@@ -152,6 +152,18 @@ describe('FlyerPrint', () => {
     await waitFor(() => expect(screen.getByText(/Could not load: QR code for Board 1/)).toBeTruthy());
   });
 
+  it('says how many flyers lost their photo and marks each sheet (#0589)', async () => {
+    await mount(view([sel(1, 2)], '/media/gone.jpg'), 'full');
+    await gateReady();
+    for (const img of Array.from(document.querySelectorAll('.sheet img'))) {
+      if (img.closest('.photo')) await fireEvent.error(img);
+      else await fireEvent.load(img);
+    }
+    await waitFor(() => expect(screen.getByText(/The photo could not be loaded for 2 flyers\. They print with a plain tint\./)).toBeTruthy());
+    expect(document.querySelectorAll('.sheet .photo[data-photo-missing]').length).toBe(2);
+    expect(screen.queryByText(/Could not load: photo/)).toBeNull();
+  });
+
   it('adds the page rule and body class while mounted and removes them on unmount', async () => {
     await mount(view([sel(1)]), 'full');
     const rule = document.head.querySelector('style[data-flyer-print]');
