@@ -7,7 +7,7 @@
 -->
 <script lang="ts">
   import { draftAllOutreach, scheduleAllOutreach, ApiError } from '../../lib/api';
-  import { adminSectionHash } from '../../lib/adminRouter';
+  import { adminSectionHash, adminWorkshopHash } from '../../lib/adminRouter';
   import { draftAllMessage, scheduleAllMessage, canScheduleAll } from '../../lib/outreachLinks';
   import type { OutreachScheduleAllResult, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
@@ -92,7 +92,11 @@
   {#if !gate.ok && gate.reason}
     <p class="text-muted">
       {gate.reason}
-      <a href={adminSectionHash('settings')}>Open Settings</a>
+      {#if view.workshop.status !== 'published'}
+        <a href={adminWorkshopHash(workshopId)}>Open the workshop editor</a>
+      {:else}
+        <a href={adminSectionHash('settings')}>Open Settings</a>
+      {/if}
     </p>
   {/if}
   <p class="text-muted" role="status">{status}</p>

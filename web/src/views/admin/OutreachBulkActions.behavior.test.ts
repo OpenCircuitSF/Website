@@ -99,6 +99,16 @@ describe('OutreachBulkActions', () => {
     expect((screen.getByRole('button', { name: 'Draft all' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it('points an unpublished workshop at the editor, not Settings', () => {
+    render(OutreachBulkActions, {
+      workshopId: 5, onDone: vi.fn(),
+      view: wo({ workshop: { id: 5, slug: 'w', title: 'W', status: 'draft', starts_at: '2026-12-05T18:00:00Z' } }),
+    });
+    expect((screen.getByRole('button', { name: 'Schedule all' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('link', { name: 'Open the workshop editor' }).getAttribute('href')).toBe('#/workshops/5');
+    expect(screen.queryByRole('link', { name: 'Open Settings' })).toBeNull();
+  });
+
   it('Escape closes the dialog without scheduling', async () => {
     scheduleAllOutreach.mockResolvedValue(plan);
     render(OutreachBulkActions, { workshopId: 5, view: wo(), onDone: vi.fn() });

@@ -10,7 +10,9 @@
   import { unavailableMessage } from '../../lib/outreach';
   import type { WorkshopOutreach } from '../../lib/types';
 
-  let { workshopId }: { workshopId: number } = $props();
+  // workshopUpdatedAt changes when the editor saves (e.g. publishes), so the
+  // summary line refetches instead of going stale.
+  let { workshopId, workshopUpdatedAt = '' }: { workshopId: number; workshopUpdatedAt?: string } = $props();
 
   let view = $state<WorkshopOutreach | null>(null);
   let loadError = $state<string | null>(null);
@@ -26,6 +28,7 @@
 
   $effect(() => {
     void workshopId;
+    void workshopUpdatedAt;
     untrack(() => void load());
   });
 

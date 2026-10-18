@@ -522,7 +522,7 @@
   </div>
 
   <Panel title="Outreach">
-    <OutreachEditorSummary {workshopId} />
+    <OutreachEditorSummary {workshopId} workshopUpdatedAt={workshop.updated_at} />
   </Panel>
 
   <form onsubmit={save}>
