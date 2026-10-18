@@ -137,7 +137,7 @@ func draftParts(ch Channel, w Wave, f Facts) (lead, cta string, keepSummary bool
 		t := f.StartsAt.In(pacific)
 		on = t.Format("Monday, Jan 2")
 	}
-	// sentence joins a clause and, when known, "on <date and time>".
+	// sentence joins a clause and, when known, "on <date>".
 	sentence := func(head string) string {
 		s := head + at
 		if on != "" {
