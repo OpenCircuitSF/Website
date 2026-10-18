@@ -136,7 +136,7 @@
       touched = false;
       status =
         `Saved to ${names(done)}.` +
-        (customizedLeft.length > 0 ? ` ${names(customizedLeft.map((a) => a.channel.label))} ${customizedLeft.length > 1 ? 'are' : 'is'} customized and was left alone.` : '');
+        (customizedLeft.length > 0 ? ` ${names(customizedLeft.map((a) => a.channel.label))} ${customizedLeft.length > 1 ? 'are customized and were' : 'is customized and was'} left alone.` : '');
     });
 
   const useShared = (post: OutreachPost) =>

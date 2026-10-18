@@ -84,6 +84,14 @@ describe('planSaveMessage', () => {
     const long = planSaveMessage(view([bPost, mPost]), 'announce', 'x'.repeat(400));
     expect(long.map((i) => i.over)).toEqual([true, false]);
   });
+  it('never drops the Mastodon link line or the hashtags, even when the message itself holds the URL (#0582 review)', () => {
+    const plan = planSaveMessage(view([bPost, mPost]), 'announce', `New words.\n\nSee ${MURL}`);
+    expect(plan[1].body).toBe(`New words.\n\nSee ${MURL}\n\nSpots are limited, so you can sign up here: ${MURL}\n\n#soldering #sf`);
+    const unprepared = { ...mPost, prepared: false, short_url: null, body: mast.replace(MURL, '{link}') };
+    expect(planSaveMessage(view([unprepared]), 'announce', 'New words.')[0].body).toBe(
+      'New words.\n\nSpots are limited, so you can sign up here: {link}\n\n#soldering #sf',
+    );
+  });
   it('leaves customized posts out', () => {
     expect(planSaveMessage(view([bPost, { ...mPost, customized: true }]), 'announce', 'a').map((i) => i.post.id)).toEqual([1]);
   });

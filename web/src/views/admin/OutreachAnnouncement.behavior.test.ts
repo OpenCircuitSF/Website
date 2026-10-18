@@ -182,6 +182,19 @@ describe('OutreachAnnouncement', () => {
     expect(await screen.findByRole('button', { name: 'Unschedule' })).toBeTruthy();
   });
 
+  it('Unschedule returns every scheduled post to draft (#0582 review)', async () => {
+    const at = '2099-11-28T18:00:00Z';
+    mountView([post({ status: 'scheduled', scheduled_at: at }), post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL, status: 'scheduled', scheduled_at: at })]);
+    unscheduleOutreachPost.mockImplementation((id: number) =>
+      Promise.resolve(id === 1 ? bPost() : mPost()),
+    );
+    await fireEvent.click(screen.getByRole('button', { name: 'Unschedule' }));
+    await waitFor(() => expect(unscheduleOutreachPost).toHaveBeenCalledTimes(2));
+    expect(unscheduleOutreachPost.mock.calls.map((c) => c[0])).toEqual([1, 2]);
+    expect(await screen.findByText('Back to draft.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Unschedule' })).toBeNull();
+  });
+
   it('with no posts, shows the empty state and Write the announcement drafts and reloads', async () => {
     const m = mountView([]);
     draftAllOutreach.mockResolvedValue({ created: [], skipped: 0, without_link: 0 });
