@@ -108,6 +108,10 @@
 
 <section class="cards" aria-labelledby="outreach-posts-heading">
   <h3 id="outreach-posts-heading">Posts</h3>
+  <!-- The both-networks result (D6). Always rendered (a persistent live
+       region), and at the top, beside the Announce heading and its button,
+       not after the last card (C5, M3). -->
+  <p class="text-muted" role="status">{listStatus}</p>
   {#snippet card(c: PostCard, wave: { label: string })}
     <OutreachPostCard
       card={c}
@@ -145,7 +149,6 @@
       </details>
     {/if}
   {/each}
-  <p class="text-muted" role="status">{listStatus}</p>
 </section>
 
 {#if bothOpen}

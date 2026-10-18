@@ -225,6 +225,7 @@ describe('post cards (#0569)', () => {
     expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy();
     await vi.advanceTimersByTimeAsync(1);
     expect(screen.getByRole('button', { name: 'Copy text' })).toBeTruthy();
+    expect(screen.getByRole('article', { name: 'Reddit Announce' }).querySelector('.notice')?.textContent).toBe('');
     vi.useRealTimers();
   });
 
@@ -330,7 +331,13 @@ describe('post cards: both networks (#0581)', () => {
     await waitFor(() => expect(sendOutreachPost).toHaveBeenCalledTimes(2));
     expect(sendOutreachPost.mock.calls.map((c) => c[0])).toEqual([1, 2]);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(screen.getByText('Bluesky: queued · Mastodon: could not post (please try again)')).toBeTruthy();
+    const line = screen.getByText('Bluesky: queued · Mastodon: could not post (please try again)');
+    // C5: the result sits under the Announce heading, before the first card, not after the last.
+    const firstCard = screen.getByRole('article', { name: 'Bluesky Announce' });
+    expect(line.compareDocumentPosition(firstCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Each card also carries its own result.
+    expect(screen.getByRole('article', { name: 'Bluesky Announce' }).querySelector('.notice')?.textContent).toMatch(/^Queued\./);
+    expect(screen.getByRole('article', { name: 'Mastodon Announce' }).querySelector('.notice')?.textContent).toBe('Could not post: please try again');
   });
 
   it('is not offered when only one network can post', async () => {

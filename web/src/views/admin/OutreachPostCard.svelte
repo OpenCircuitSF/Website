@@ -155,7 +155,9 @@
       clearTimeout(copyTimer);
       copyTimer = setTimeout(() => {
         copied = null;
-        if (notice === n) onNotice(null);
+        // Compared by content, not identity: the list stores notices in $state,
+        // which hands back a proxy, so `notice === n` is never true.
+        if (notice && notice.text === n.text && notice.kind === n.kind && notice.status === n.status) onNotice(null);
       }, 2000);
     });
   }
