@@ -42,7 +42,7 @@ afterEach(() => {
 });
 
 const channels = [
-  { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true },
+  { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' },
 ];
 const waves = [{ name: 'announce', label: 'Announce', suggested_at: null }];
 

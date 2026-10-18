@@ -19,9 +19,9 @@ import {
 import type { ComposerActions } from './outreach';
 import type { OutreachChannel, OutreachPost, OutreachWave, WorkshopOutreach } from './types';
 
-const bluesky: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true };
-const mastodon: OutreachChannel = { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true, configured: false };
-const instagram: OutreachChannel = { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false };
+const bluesky: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' };
+const mastodon: OutreachChannel = { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true, configured: false, account: '' };
+const instagram: OutreachChannel = { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false, account: '' };
 
 function post(over: Partial<OutreachPost> = {}): OutreachPost {
   return {

@@ -3,7 +3,7 @@
 // #0569: mounts OutreachWorkshop.svelte (real OutreachPanel, OutreachPostCards,
 // OutreachComposer) under jsdom with '../../lib/api' mocked. jsdom is not a
 // browser (AGENTS.md §1): no browser was run for this change.
-import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
+import { render, cleanup, waitFor, screen, fireEvent, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OutreachLinksView, OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
 
@@ -39,11 +39,12 @@ afterEach(() => {
   getWorkshopOutreach.mockReset();
   sendOutreachPost.mockReset();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const channels = [
-  { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true },
-  { name: 'reddit', label: 'Reddit', utm_source: 'reddit', utm_medium: 'social', char_limit: 0, automatic: false, configured: false },
+  { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '@club.test' },
+  { name: 'reddit', label: 'Reddit', utm_source: 'reddit', utm_medium: 'social', char_limit: 0, automatic: false, configured: false, account: '' },
 ];
 const waves = [
   { name: 'announce', label: 'Announce', suggested_at: null },
@@ -142,36 +143,89 @@ describe('post cards (#0569)', () => {
     expect(screen.getByText('Brand new words')).toBeTruthy();
   });
 
-  it('opening a second card closes the first, asking first when edits are unsaved (#0579)', async () => {
+  it('opening a second card asks first in an in-app dialog when edits are unsaved (#0579, #0581)', async () => {
+    const confirmFn = vi.fn(() => true);
+    vi.stubGlobal('confirm', confirmFn);
     setup([post({ id: 1 }), post({ id: 2, wave: 'reminder', body: 'Second post' })]);
     await screen.findAllByText('Not scheduled');
-    const edits = () => screen.getAllByRole('button', { name: 'Edit' });
-    await fireEvent.click(edits()[0]);
-    await fireEvent.input(screen.getByLabelText('Post text'), { target: { value: 'dirty' } });
-    const confirmFn = vi.fn(() => false);
-    vi.stubGlobal('confirm', confirmFn);
     await fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
-    expect(confirmFn).toHaveBeenCalled();
+    await fireEvent.input(screen.getByLabelText('Post text'), { target: { value: 'dirty' } });
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+    const dlg = screen.getByRole('dialog');
+    expect(dlg.textContent).toContain('Discard your unsaved changes?');
     expect(document.querySelectorAll('textarea').length).toBe(1);
     expect((screen.getByLabelText('Post text') as HTMLTextAreaElement).value).toBe('dirty');
-    confirmFn.mockReturnValue(true);
+    await fireEvent.click(within(dlg).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect((screen.getByLabelText('Post text') as HTMLTextAreaElement).value).toBe('dirty');
     await fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+    await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Discard changes' }));
     expect(document.querySelectorAll('textarea').length).toBe(1);
     expect((screen.getByLabelText('Post text') as HTMLTextAreaElement).value).toBe('Second post');
+    expect(confirmFn).not.toHaveBeenCalled();
   });
 
-  it('Post now asks for confirmation and does not send when declined', async () => {
+  it('Post now opens a dialog with the text and account; Cancel sends nothing, Post sends once (#0581)', async () => {
+    const confirmFn = vi.fn(() => true);
+    vi.stubGlobal('confirm', confirmFn);
     setup([post({ id: 1 })]);
     await screen.findByText('Not scheduled');
-    const confirmFn = vi.fn(() => false);
-    vi.stubGlobal('confirm', confirmFn);
     await fireEvent.click(screen.getByRole('button', { name: 'Post now' }));
-    expect(confirmFn).toHaveBeenCalledWith('Post this to Bluesky now?');
+    const dlg = screen.getByRole('dialog');
+    expect(dlg.textContent).toContain('Come solder with us');
+    expect(dlg.textContent).toContain('Posts publicly as @club.test on Bluesky');
+    expect(dlg.textContent).toContain('cannot be unsent');
+    await fireEvent.click(within(dlg).getByRole('button', { name: 'Cancel' }));
     expect(sendOutreachPost).not.toHaveBeenCalled();
-    confirmFn.mockReturnValue(true);
+    expect(screen.queryByRole('dialog')).toBeNull();
     sendOutreachPost.mockResolvedValue(post({ id: 1, status: 'queued' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Post now' }));
-    await waitFor(() => expect(sendOutreachPost).toHaveBeenCalledWith(1));
+    await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Post now' }));
+    await waitFor(() => expect(sendOutreachPost).toHaveBeenCalledTimes(1));
+    expect(sendOutreachPost).toHaveBeenCalledWith(1);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(confirmFn).not.toHaveBeenCalled();
+  });
+
+  it('the notice lands under the right card, not on a sibling (#0581)', async () => {
+    setup([post({ id: 1 }), post({ id: 2, wave: 'reminder', body: 'Second post' })]);
+    await screen.findAllByText('Not scheduled');
+    sendOutreachPost.mockResolvedValue(post({ id: 2, wave: 'reminder', body: 'Second post', status: 'queued' }));
+    const reminder = screen.getByRole('article', { name: 'Bluesky Reminder' });
+    await fireEvent.click(within(reminder).getByRole('button', { name: 'Post now' }));
+    await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Post now' }));
+    await waitFor(() => expect(within(reminder).getByRole('status').textContent).toMatch(/^Queued\./));
+    const announce = screen.getByRole('article', { name: 'Bluesky Announce' });
+    expect(within(announce).getByRole('status').textContent).toBe('');
+    expect(reminder.querySelector('.spinner')).toBeTruthy();
+    expect(reminder.textContent).toContain('usually under ten seconds');
+  });
+
+  it('Mark posted opens a dialog whose link field rejects a non-http URL (#0581)', async () => {
+    setup([post({ id: 2, channel: 'reddit', status: 'manual', body: 'Reddit body' })]);
+    await screen.findByText('Reddit body');
+    await fireEvent.click(screen.getByRole('button', { name: 'Mark posted' }));
+    const dlg = screen.getByRole('dialog');
+    await fireEvent.input(within(dlg).getByLabelText(/Link to the post/), { target: { value: 'ftp://x.example/1' } });
+    expect((within(dlg).getByRole('button', { name: 'Mark posted' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(dlg.textContent).toContain('http(s)');
+  });
+
+  it('Copy text flips to Copied for two seconds (#0581)', async () => {
+    setup([post({ id: 2, channel: 'reddit', status: 'manual', body: 'Reddit body' })]);
+    await screen.findByText('Reddit body');
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy text' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writeText).toHaveBeenCalledWith('Reddit body');
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(screen.getByRole('button', { name: 'Copy text' })).toBeTruthy();
+    vi.useRealTimers();
   });
 
   it('the tracked links table is collapsed by default and counts links', async () => {
@@ -191,8 +245,8 @@ describe('post cards (#0569)', () => {
 describe('post cards: one link, Instagram, video channels (#0576)', () => {
   const chans = [
     ...channels,
-    { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false },
-    { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false },
+    { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false, account: '' },
+    { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' },
   ];
   function setupAll(posts: OutreachPost[]): void {
     getWorkshopOutreach.mockResolvedValue({
@@ -242,5 +296,46 @@ describe('post cards: one link, Instagram, video channels (#0576)', () => {
     expect(details?.textContent).toContain('TikTok');
     expect(details?.textContent).toContain('TikTok description block');
     expect(screen.getByRole('article', { name: 'Bluesky Announce' }).closest('details.video')).toBeNull();
+  });
+});
+
+describe('post cards: both networks (#0581)', () => {
+  const two = [
+    { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '@club.test' },
+    { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true, configured: true, account: 'social.test' },
+  ];
+  function setupTwo(): void {
+    getWorkshopOutreach.mockResolvedValue({
+      available: true, unavailable_reason: '',
+      workshop: { id: 5, slug: 's', title: 'Soldering 101', status: 'published', starts_at: '2026-12-05T18:00:00Z' },
+      outreach: { id: 9, workshop_id: 5, campaign_slug: 's', created_at: '' },
+      channels: two, waves: [waves[0]],
+      posts: [post({ id: 1, body: 'Bluesky words' }), post({ id: 2, channel: 'mastodon', body: 'Mastodon words' })],
+    });
+    render(OutreachWorkshop, { workshopId: 5 });
+  }
+
+  it('posts both from one dialog and reports both on one line', async () => {
+    setupTwo();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Post to Bluesky and Mastodon' }));
+    const dlg = screen.getByRole('dialog');
+    expect(dlg.textContent).toContain('Bluesky words');
+    expect(dlg.textContent).toContain('Mastodon words');
+    expect(dlg.textContent).toContain('@club.test');
+    expect(dlg.textContent).toContain('social.test');
+    sendOutreachPost.mockImplementation((id: number) =>
+      id === 1 ? Promise.resolve(post({ id: 1, status: 'queued' })) : Promise.reject(new Error('boom')),
+    );
+    await fireEvent.click(within(dlg).getByRole('button', { name: 'Post now' }));
+    await waitFor(() => expect(sendOutreachPost).toHaveBeenCalledTimes(2));
+    expect(sendOutreachPost.mock.calls.map((c) => c[0])).toEqual([1, 2]);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByText('Bluesky: queued · Mastodon: could not post (please try again)')).toBeTruthy();
+  });
+
+  it('is not offered when only one network can post', async () => {
+    setup([post({ id: 1 })]);
+    await screen.findByText('Not scheduled');
+    expect(screen.queryByRole('button', { name: /^Post to / })).toBeNull();
   });
 });

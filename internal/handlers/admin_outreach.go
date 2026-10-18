@@ -88,6 +88,7 @@ type shortLinker interface {
 type AdminOutreachHandler struct {
 	hourFn    func() int
 	tagsFn    func() string
+	accountFn func(string) string
 	store     outreachStore
 	locations outreachLocationStore
 	flyers    outreachFlyerStore
@@ -224,6 +225,11 @@ func (h *AdminOutreachHandler) postHour() int {
 // (#0573); unset, drafts carry none. Read per request.
 func (h *AdminOutreachHandler) SetHashtags(fn func() string) { h.tagsFn = fn }
 
+// SetAccounts sets the source of the public account name an automatic channel
+// posts as (#0581), shown in the Post now confirmation. Read per request;
+// unset, every account is empty and the SPA words the line without a name.
+func (h *AdminOutreachHandler) SetAccounts(fn func(string) string) { h.accountFn = fn }
+
 // facts is the slice of a workshop that drafts are written from.
 func (h *AdminOutreachHandler) facts(wk workshops.Workshop) outreach.Facts {
 	f := outreach.Facts{Slug: wk.Slug, Title: wk.Title, StartsAt: wk.StartsAt, LocationName: wk.LocationName, LocationAddress: wk.LocationAddress, Summary: strings.TrimSpace(derefOrEmpty(wk.Summary))}
@@ -294,6 +300,9 @@ func (h *AdminOutreachHandler) postView(p outreach.Post, f outreach.Facts, works
 type outreachChannelView struct {
 	outreach.Channel
 	Configured bool `json:"configured"`
+	// Account is the public account the channel posts as (#0581), empty for a
+	// manual channel or one with nothing set.
+	Account string `json:"account"`
 }
 
 func (h *AdminOutreachHandler) channelConfigured(name string) bool {
@@ -305,7 +314,11 @@ func (h *AdminOutreachHandler) channelViews() []outreachChannelView {
 	chs := outreach.Channels()
 	out := make([]outreachChannelView, 0, len(chs))
 	for _, ch := range chs {
-		out = append(out, outreachChannelView{Channel: ch, Configured: h.channelConfigured(ch.Name)})
+		v := outreachChannelView{Channel: ch, Configured: h.channelConfigured(ch.Name)}
+		if ch.Automatic && h.accountFn != nil {
+			v.Account = h.accountFn(ch.Name)
+		}
+		out = append(out, v)
 	}
 	return out
 }

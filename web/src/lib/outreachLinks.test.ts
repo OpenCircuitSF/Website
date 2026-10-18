@@ -127,7 +127,7 @@ describe('draftAllMessage and scheduleAllMessage', () => {
 
 describe('canScheduleAll', () => {
   const ch = (name: string, automatic: boolean, configured: boolean) => ({
-    name, label: name, utm_source: name, utm_medium: 'social', char_limit: 0, automatic, configured,
+    name, label: name, utm_source: name, utm_medium: 'social', char_limit: 0, automatic, configured, account: '',
   });
   function wo(status: string, channels: ReturnType<typeof ch>[]): WorkshopOutreach {
     return {

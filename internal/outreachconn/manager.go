@@ -257,6 +257,29 @@ func (m *Manager) Apply(ctx context.Context, values map[string]string, now time.
 	return Applied{Set: setKeys, Cleared: clear}, nil
 }
 
+// Account names the public account a channel posts as, from the current
+// values and with no network call (#0581): "@handle" for Bluesky, the
+// instance host for Mastodon (only the base URL is stored, so no @user), and
+// "" for anything else or when unset.
+func (m *Manager) Account(channel string) string {
+	v := m.cur.Load().values
+	switch channel {
+	case "bluesky":
+		h := strings.TrimPrefix(strings.TrimSpace(v[KeyBlueskyHandle]), "@")
+		if h == "" {
+			return ""
+		}
+		return "@" + h
+	case "mastodon":
+		u, err := url.Parse(strings.TrimSpace(v[KeyMastodonBaseURL]))
+		if err != nil {
+			return ""
+		}
+		return u.Host
+	}
+	return ""
+}
+
 // Snapshot returns the current state. Secret fields never carry a value.
 func (m *Manager) Snapshot() Snapshot {
 	s := m.cur.Load()

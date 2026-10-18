@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 function ch(name: string, automatic: boolean, configured: boolean) {
-  return { name, label: name, utm_source: name, utm_medium: 'social', char_limit: 0, automatic, configured };
+  return { name, label: name, utm_source: name, utm_medium: 'social', char_limit: 0, automatic, configured, account: '' };
 }
 
 function wo(over: Partial<WorkshopOutreach> = {}): WorkshopOutreach {

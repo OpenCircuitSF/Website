@@ -253,3 +253,26 @@ func TestConcurrentReadsDuringApply(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+// Account names the public account without any network call (#0581).
+func TestAccount(t *testing.T) {
+	m := newMgr(t, newFakeStore(nil), map[string]string{
+		KeyBlueskyHandle: "alice.example.test", KeyMastodonBaseURL: "https://social.example.test/",
+	})
+	if got := m.Account("bluesky"); got != "@alice.example.test" {
+		t.Errorf("bluesky = %q", got)
+	}
+	if got := m.Account("mastodon"); got != "social.example.test" {
+		t.Errorf("mastodon = %q", got)
+	}
+	if got := m.Account("instagram"); got != "" {
+		t.Errorf("instagram = %q", got)
+	}
+	m2 := newMgr(t, newFakeStore(nil), map[string]string{KeyBlueskyHandle: "@bob.example.test"})
+	if got := m2.Account("bluesky"); got != "@bob.example.test" {
+		t.Errorf("handle with @ = %q", got)
+	}
+	if got := m2.Account("mastodon"); got != "" {
+		t.Errorf("unset mastodon = %q", got)
+	}
+}

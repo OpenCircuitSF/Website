@@ -778,6 +778,8 @@ export interface OutreachChannel {
   /** #0545: an automatic channel with working server credentials. When false
    * the channel behaves like a manual one. */
   configured: boolean;
+  /** #0581: the public account an automatic channel posts as; empty when unknown. */
+  account: string;
 }
 
 export interface OutreachWave {

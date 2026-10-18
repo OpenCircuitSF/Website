@@ -34,6 +34,7 @@
   import type { OutreachChannel, OutreachPost, OutreachWave } from '../../lib/types';
   import { formatDateTime } from '../../lib/admin';
   import Button from '../../lib/Button.svelte';
+  import OutreachConfirmDialog from './OutreachConfirmDialog.svelte';
 
   interface Props {
     post: OutreachPost;
@@ -80,7 +81,13 @@
   // svelte-ignore state_referenced_locally
   let scheduleLocal = $state(initialScheduleValue());
 
-  const actions = $derived(composerActions(post, channel, available));
+  // In card mode (onClose set) the card owns Post now, Retry and Mark posted,
+  // each behind its confirmation dialog (#0581); the composer keeps text edits
+  // and scheduling. Grid mode keeps them all.
+  const actions = $derived.by(() => {
+    const a = composerActions(post, channel, available);
+    return onClose ? { ...a, canPostNow: false, canRetry: false, canMarkPosted: false } : a;
+  });
   const channelNote = $derived(channelStatusNote(channel));
   const locked = $derived(post.status === 'posted' || post.status === 'queued');
   const counted = $derived(countCharacters(channel, body, post.prepared));
@@ -95,8 +102,16 @@
   $effect(() => {
     if (onClose && textarea && !textarea.disabled) untrack(() => textarea?.focus());
   });
+  let discardOpen = $state(false);
   function cancel(): void {
-    if (dirty && !confirm('Discard your unsaved changes?')) return;
+    if (dirty) {
+      discardOpen = true;
+      return;
+    }
+    onClose?.();
+  }
+  function discard(): void {
+    discardOpen = false;
     onClose?.();
   }
 
@@ -292,6 +307,19 @@
   <!-- Always rendered, so a failure the publisher records later is announced. -->
   <p class="text-warn send-error" role="status">{post.last_error ?? ''}</p>
 </div>
+{#if discardOpen}
+  <OutreachConfirmDialog
+    title="Discard your unsaved changes?"
+    inFlight={false}
+    errorMessage={null}
+    confirmLabel="Discard changes"
+    danger
+    onConfirm={discard}
+    onClose={() => (discardOpen = false)}
+  >
+    <p>The text of this post has changes that have not been saved.</p>
+  </OutreachConfirmDialog>
+{/if}
 
 <style>
   .composer {

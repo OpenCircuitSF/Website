@@ -50,11 +50,11 @@ afterEach(() => {
 });
 
 const channels = [
-  { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true },
-  { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true, configured: false },
-  { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false },
-  { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false },
-  { name: 'youtube', label: 'YouTube', utm_source: 'youtube', utm_medium: 'video', char_limit: 0, automatic: false, configured: false },
+  { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' },
+  { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true, configured: false, account: '' },
+  { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false, account: '' },
+  { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' },
+  { name: 'youtube', label: 'YouTube', utm_source: 'youtube', utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' },
 ];
 const waves = [
   { name: 'announce', label: 'Announce', suggested_at: null },
@@ -301,24 +301,39 @@ describe('OutreachPanel', () => {
     expect(await screen.findByText(/workshop is not published/)).toBeTruthy();
   });
 
-  it('refreshes every 10 s while a post is queued and stops on unmount', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  it('backs off 1 s, 2 s, 4 s then 10 s while a post is queued and stops on unmount (#0581)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     getWorkshopOutreach.mockResolvedValue(view({ posts: [autoPost({ status: 'queued' })] }));
     const { unmount } = render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    await waitFor(() => expect(screen.getAllByText('Posting…').length).toBeGreaterThan(0));
-    const before = getWorkshopOutreach.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(0);
+    const calls = () => getWorkshopOutreach.mock.calls.length;
+    const before = calls();
+    expect(before).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(calls()).toBe(before);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls()).toBe(before + 1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(calls()).toBe(before + 2);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(calls()).toBe(before + 3);
+    await vi.advanceTimersByTimeAsync(9999);
+    expect(calls()).toBe(before + 3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls()).toBe(before + 4);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(getWorkshopOutreach.mock.calls.length).toBe(before + 1);
+    expect(calls()).toBe(before + 5);
     unmount();
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(getWorkshopOutreach.mock.calls.length).toBe(before + 1);
+    expect(calls()).toBe(before + 5);
   });
 
   it('does not poll when nothing is queued', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     getWorkshopOutreach.mockResolvedValue(view({ posts: [autoPost()] }));
     render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    await screen.findByText('Link ready');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByText('Link ready')).toBeTruthy();
     const before = getWorkshopOutreach.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(getWorkshopOutreach.mock.calls.length).toBe(before);

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { cardButtons, groupByWave, statusLine, summaryLine } from './outreachCards';
+import { cardButtons, combinedPostResult, copyLabel, groupByWave, pollDelay, postableAutomatic, postDialogCopy, statusLine, summaryLine, visibleNotice } from './outreachCards';
 import type { OutreachChannel, OutreachPost, OutreachResults } from './types';
 
-const auto: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'b', utm_medium: 'social', char_limit: 300, automatic: true, configured: true };
+const auto: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'b', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' };
 const manual: OutreachChannel = { ...auto, name: 'reddit', label: 'Reddit', automatic: false, configured: false };
 const waves = [
   { name: 'announce', label: 'Announce', suggested_at: null },
@@ -89,5 +89,55 @@ describe('summaryLine', () => {
   it('reports posts per wave that exist, never a fifteen-post headline', () => {
     const waves = [{ name: 'announce', label: 'Announce', suggested_at: null }, { name: 'reminder', label: 'Reminder', suggested_at: null }, { name: 'last-call', label: 'Last call', suggested_at: null }];
     expect(summaryLine({ waves, posts: [post(), post({ id: 2, channel: 'mastodon' }), post({ id: 3, wave: 'reminder' })] }, null)).toBe('Drafted: Announce 2, Reminder 1 · 0 scheduled · 0 posted');
+  });
+});
+
+describe('post feedback helpers (#0581)', () => {
+  it('pollDelay backs off 1 s, 2 s, 4 s then 10 s', () => {
+    expect([0, 1, 2, 3, 9].map(pollDelay)).toEqual([1000, 2000, 4000, 10_000, 10_000]);
+  });
+
+  it('postableAutomatic lists automatic cards that can post or retry, in channel order', () => {
+    const view = {
+      available: true,
+      channels: [auto, { ...auto, name: 'mastodon', label: 'Mastodon' }, manual],
+      waves: [],
+      posts: [
+        { ...({} as OutreachPost), id: 1, channel: 'bluesky', wave: 'announce', status: 'draft', prepared: true, held: false, stale: false, scheduled_at: null, last_error: null },
+        { ...({} as OutreachPost), id: 2, channel: 'mastodon', wave: 'announce', status: 'failed', prepared: true, held: false, stale: false, scheduled_at: null, last_error: 'x' },
+        { ...({} as OutreachPost), id: 3, channel: 'reddit', wave: 'announce', status: 'manual', prepared: true, held: false, stale: false, scheduled_at: null, last_error: null },
+      ] as OutreachPost[],
+    };
+    expect(postableAutomatic(view, 'announce').map((x) => x.post.id)).toEqual([1, 2]);
+    expect(postableAutomatic(view, 'reminder')).toEqual([]);
+  });
+
+  it('visibleNotice shows only while the post status matches', () => {
+    const n = { text: 'Queued.', kind: 'status' as const, status: 'draft' };
+    expect(visibleNotice(n, { status: 'draft' })).toBe('Queued.');
+    expect(visibleNotice(n, { status: 'posted' })).toBe('');
+    expect(visibleNotice(null, { status: 'draft' })).toBe('');
+  });
+
+  it('postDialogCopy names the account, or the Settings account when unknown', () => {
+    const c = postDialogCopy('post', [{ label: 'Bluesky', account: '@a.test' }, { label: 'Mastodon', account: '' }]);
+    expect(c.warning).toContain('cannot be unsent');
+    expect(c.accountLine).toEqual(['Posts publicly as @a.test on Bluesky', 'Posts publicly from the Mastodon account set in Settings']);
+    expect(c.title).toBe('Post to Bluesky and Mastodon now?');
+    expect(postDialogCopy('retry', [{ label: 'Bluesky', account: '' }]).confirmLabel).toBe('Retry');
+    const m = postDialogCopy('markPosted', [{ label: 'Instagram', account: '' }]);
+    expect(m.warning).toContain('by hand');
+    expect(m.accountLine).toEqual([]);
+  });
+
+  it('combinedPostResult joins one result per network', () => {
+    expect(combinedPostResult([{ label: 'Bluesky', ok: true }, { label: 'Mastodon', ok: false, error: 'rate limited' }])).toBe(
+      'Bluesky: queued · Mastodon: could not post (rate limited)',
+    );
+  });
+
+  it('copyLabel flips to Copied', () => {
+    expect(copyLabel('Copy text', true)).toBe('Copied');
+    expect(copyLabel('Copy text', false)).toBe('Copy text');
   });
 });

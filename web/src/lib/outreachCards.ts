@@ -123,3 +123,77 @@ export function summaryLine(view: Pick<WorkshopOutreach, 'posts'> & { waves?: Ou
   }
   return parts.join(' · ');
 }
+
+/** Polling backoff while a post is queued (#0581): 1 s, 2 s, 4 s, then every 10 s. */
+export function pollDelay(attempt: number): number {
+  return [1000, 2000, 4000][attempt] ?? 10_000;
+}
+
+/** Automatic, configured cards in a wave that can post right now (Post now or Retry), in the server's channel order. */
+export function postableAutomatic(
+  view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts' | 'available'>,
+  wave: string,
+): { post: OutreachPost; channel: OutreachChannel }[] {
+  const out: { post: OutreachPost; channel: OutreachChannel }[] = [];
+  for (const channel of view.channels) {
+    const post = view.posts.find((p) => p.channel === channel.name && p.wave === wave);
+    if (!post) continue;
+    const b = cardButtons(post, channel, view.available);
+    if (b.postNow || b.retry) out.push({ post, channel });
+  }
+  return out;
+}
+
+/** A card's own feedback line (#0581). `status` is the post status it was written under. */
+export interface CardNotice {
+  text: string;
+  kind: 'status' | 'error';
+  status: string | null;
+}
+
+/** The notice text, only while the post is still in the state it was written for, so "Queued…" vanishes once polling brings back posted or failed. */
+export function visibleNotice(n: CardNotice | null, post: Pick<OutreachPost, 'status'> | null): string {
+  if (!n) return '';
+  return (post?.status ?? null) === n.status ? n.text : '';
+}
+
+export type PostDialogMode = 'post' | 'retry' | 'markPosted';
+export interface PostDialogCopy {
+  title: string;
+  warning: string;
+  accountLine: string[];
+  confirmLabel: string;
+}
+
+/** Wording for the post confirmation dialog (#0581). */
+export function postDialogCopy(mode: PostDialogMode, channels: { label: string; account: string }[]): PostDialogCopy {
+  if (mode === 'markPosted') {
+    const label = channels[0]?.label ?? 'the channel';
+    return {
+      title: `Mark as posted on ${label}?`,
+      warning: `Records that you posted this on ${label} by hand. Edit and Copy go away.`,
+      accountLine: [],
+      confirmLabel: 'Mark posted',
+    };
+  }
+  const accountLine = channels.map((c) =>
+    c.account ? `Posts publicly as ${c.account} on ${c.label}` : `Posts publicly from the ${c.label} account set in Settings`,
+  );
+  const names = channels.map((c) => c.label).join(' and ');
+  return {
+    title: mode === 'retry' ? `Retry posting to ${names}?` : `Post to ${names} now?`,
+    warning: 'This goes out publicly, right now, and cannot be unsent.',
+    accountLine,
+    confirmLabel: mode === 'retry' ? 'Retry' : 'Post now',
+  };
+}
+
+/** "Bluesky: queued · Mastodon: could not post (reason)". */
+export function combinedPostResult(results: { label: string; ok: boolean; error?: string }[]): string {
+  return results.map((r) => `${r.label}: ${r.ok ? 'queued' : `could not post${r.error ? ` (${r.error})` : ''}`}`).join(' · ');
+}
+
+/** The Copy buttons flip to "Copied" for two seconds. */
+export function copyLabel(base: string, copied: boolean): string {
+  return copied ? 'Copied' : base;
+}

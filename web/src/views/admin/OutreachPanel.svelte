@@ -20,6 +20,7 @@
   import { buildGrid, cellLabel, cellIsStale, shouldPoll, unavailableMessage } from '../../lib/outreach';
   import { cellClicksLabel, cellReactionsLabel, resultsStatusMessage, resultsSummaryLine } from '../../lib/outreachResults';
   import { linkReportMessage } from '../../lib/outreachLinks';
+  import { pollDelay } from '../../lib/outreachCards';
   import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import OutreachComposer from './OutreachComposer.svelte';
@@ -103,11 +104,15 @@
     untrack(() => void load());
   });
 
-  // #0545: while a post is queued the publisher is working on it, so refresh
-  // the view quietly until it has posted or failed. The interval is cleared on
-  // unmount and whenever nothing is queued; a failed refresh is ignored (the
-  // next tick tries again) rather than replacing the grid with an error.
-  const POLL_MS = 10_000;
+  // #0545, #0581: while a post is queued the publisher is working on it, so
+  // refresh the view quietly until it has posted or failed, at 1 s, 2 s, 4 s
+  // and then every 10 s (pollDelay). The timer is cleared on unmount and
+  // whenever nothing is queued; a failed refresh is ignored (the next tick
+  // tries again) rather than replacing the grid with an error. pollAttempt is
+  // deliberately not reactive; pollTick is what re-arms the timer after a
+  // refresh that changed nothing.
+  let pollAttempt = 0;
+  let pollTick = $state(0);
   async function refreshQuietly(): Promise<void> {
     try {
       view = await getWorkshopOutreach(workshopId);
@@ -117,9 +122,17 @@
     }
   }
   $effect(() => {
-    if (!view || !shouldPoll(view)) return;
-    const timer = setInterval(() => void refreshQuietly(), POLL_MS);
-    return () => clearInterval(timer);
+    void pollTick;
+    if (!view || !shouldPoll(view)) {
+      pollAttempt = 0;
+      return;
+    }
+    const timer = setTimeout(async () => {
+      pollAttempt++;
+      await refreshQuietly();
+      pollTick++;
+    }, pollDelay(pollAttempt));
+    return () => clearTimeout(timer);
   });
 
   async function start(): Promise<void> {
@@ -158,6 +171,8 @@
   function onChange(updated: OutreachPost): void {
     if (!view) return;
     const before = view.posts.find((p) => p.id === updated.id);
+    // A post that just became queued starts the fast end of the backoff again.
+    if (updated.status === 'queued' && before?.status !== 'queued') pollAttempt = 0;
     view = { ...view, posts: view.posts.map((p) => (p.id === updated.id ? updated : p)) };
     onLoaded?.(view);
     // #0552: a prepare or mark-posted changes what the click line can show.

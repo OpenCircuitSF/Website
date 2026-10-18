@@ -685,3 +685,27 @@ func TestAdminOutreach_DraftEndsWithSiteHashtags(t *testing.T) {
 		}
 	}
 }
+
+// The channel list carries the public account an automatic channel posts as
+// (#0581), and an empty one for a manual channel.
+func TestAdminOutreach_ChannelsCarryAccount(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	e.h.SetAccounts(func(ch string) string {
+		if ch == "bluesky" {
+			return "@alice.example.test"
+		}
+		return "should-not-appear"
+	})
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	panel := e.start(t, w)
+	seen := map[string]any{}
+	for _, c := range panel.Channels {
+		seen[c["name"].(string)] = c["account"]
+	}
+	if seen["bluesky"] != "@alice.example.test" {
+		t.Errorf("bluesky account = %v", seen["bluesky"])
+	}
+	if seen["instagram"] != "" {
+		t.Errorf("instagram account = %v, want empty", seen["instagram"])
+	}
+}
