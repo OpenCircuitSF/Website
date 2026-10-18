@@ -267,3 +267,14 @@ func (m *Manager) OutreachPostHour() int {
 	}
 	return n
 }
+
+// OutreachChannels returns the channel names outreach is switched on for
+// (#0588), in display order. A value that does not parse falls back to the
+// default set.
+func (m *Manager) OutreachChannels() []string {
+	if names, ok := NormalizeChannels(m.Value(KeyOutreachChannels)); ok {
+		return names
+	}
+	names, _ := NormalizeChannels(DefaultOutreachChannels)
+	return names
+}

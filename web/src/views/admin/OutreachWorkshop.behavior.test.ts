@@ -12,6 +12,7 @@ const getWorkshopOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const getWorkshopOutreachResults = vi.fn<(id: number) => Promise<OutreachResults>>();
 const startOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const resetOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
+const listOutreachFlyers = vi.fn<() => Promise<{ flyers: { id: number; workshop_id: number }[] }>>();
 vi.mock('../../lib/api', () => ({
   getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
   startOutreach: (id: number) => startOutreach(id),
@@ -19,6 +20,7 @@ vi.mock('../../lib/api', () => ({
   createWorkshopOutreachLinks: vi.fn(),
   draftAllOutreach: vi.fn(),
   resetOutreach: (id: number) => resetOutreach(id),
+  listOutreachFlyers: () => listOutreachFlyers(),
   scheduleAllOutreach: vi.fn(),
   createOutreachPost: vi.fn(),
   ApiError: class ApiError extends Error {
@@ -38,6 +40,7 @@ afterEach(() => {
   getWorkshopOutreachResults.mockReset();
   startOutreach.mockReset();
   resetOutreach.mockReset();
+  listOutreachFlyers.mockReset();
 });
 
 const channels = [
@@ -199,5 +202,43 @@ describe('OutreachWorkshop', () => {
     [...dialog.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset outreach')!.click();
     await waitFor(() => expect(dialog.querySelector('[role="alert"]')?.textContent).toMatch(/already been posted/));
     expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  describe('Instagram flyer link (#0588)', () => {
+    const igChannels = [
+      ...channels,
+      { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false, account: '' },
+    ];
+    const igPost = {
+      id: 3, outreach_id: 9, channel: 'instagram', wave: 'announce', body: 'Link in bio.', status: 'manual', prepared: true, stale: false, customized: false,
+      held: false, short_link_key: 'k', short_url: 'https://go.example/k', destination_url: 'https://x', utm: { source: '', medium: '', campaign: '', content: '' },
+      scheduled_at: null, posted_at: null, remote_url: null, last_error: null, created_at: '', updated_at: null,
+    } as OutreachPost;
+
+    async function openFlyerLink(): Promise<HTMLAnchorElement> {
+      getWorkshopOutreach.mockResolvedValue(view({ channels: igChannels, posts: [igPost] }));
+      getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [] } as unknown as OutreachResults);
+      render(OutreachWorkshop, { workshopId: 5 });
+      await waitFor(() => expect(document.querySelector('a.open-flyer')).toBeTruthy());
+      return document.querySelector('a.open-flyer') as HTMLAnchorElement;
+    }
+
+    it("opens this workshop's flyer when it has one", async () => {
+      listOutreachFlyers.mockResolvedValue({ flyers: [{ id: 7, workshop_id: 5 }, { id: 2, workshop_id: 6 }] });
+      await openFlyerLink();
+      await waitFor(() => expect((document.querySelector('a.open-flyer') as HTMLAnchorElement).textContent).toBe('Open flyer'));
+      expect((document.querySelector('a.open-flyer') as HTMLAnchorElement).getAttribute('href')).toBe('#/outreach?view=flyers&flyer=7');
+    });
+
+    it('offers Make a flyer for this workshop when it has none, and when the list cannot load', async () => {
+      listOutreachFlyers.mockResolvedValue({ flyers: [{ id: 2, workshop_id: 6 }] });
+      const a = await openFlyerLink();
+      await waitFor(() => expect(a.textContent).toBe('Make a flyer'));
+      expect(a.getAttribute('href')).toBe('#/outreach?view=flyers&workshop=5');
+      cleanup();
+      listOutreachFlyers.mockRejectedValue(new Error('down'));
+      const b = await openFlyerLink();
+      expect(b.textContent).toBe('Make a flyer');
+    });
   });
 });

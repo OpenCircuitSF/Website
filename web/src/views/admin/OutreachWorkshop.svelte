@@ -10,7 +10,7 @@
 <script lang="ts">
   import { adminOutreachFlyersHash, adminOutreachHash, adminOutreachResultsHash, adminWorkshopHash } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
-  import type { WorkshopOutreach } from '../../lib/types';
+  import type { FlyerRow, WorkshopOutreach } from '../../lib/types';
   import Panel from '../../lib/Panel.svelte';
   import OutreachPanel from './OutreachPanel.svelte';
   import OutreachAnnouncement from './OutreachAnnouncement.svelte';
@@ -19,8 +19,9 @@
   import OutreachPostCards from './OutreachPostCards.svelte';
   import OutreachResetDialog from './OutreachResetDialog.svelte';
   import Button from '../../lib/Button.svelte';
-  import { resetOutreach, ApiError } from '../../lib/api';
-  import { sendsItself, summaryLine } from '../../lib/outreachCards';
+  import { onMount } from 'svelte';
+  import { resetOutreach, listOutreachFlyers, ApiError } from '../../lib/api';
+  import { flyerLinkFor, sendsItself, summaryLine } from '../../lib/outreachCards';
   import { manualRowStatus } from '../../lib/outreachMessage';
   import { linkReportMessage } from '../../lib/outreachLinks';
   import { resultsSummaryLine } from '../../lib/outreachResults';
@@ -31,6 +32,17 @@
   let reloadKey = $state(0);
   // Set from Start's response, the only one that carries a link report.
   let linkWarning = $state<string | null>(null);
+
+  // This workshop's flyers, so the Instagram card can open the right one (#0588).
+  let flyers = $state<FlyerRow[]>([]);
+  const flyer = $derived(flyerLinkFor(flyers, workshopId));
+  onMount(async () => {
+    try {
+      flyers = (await listOutreachFlyers()).flyers;
+    } catch {
+      // The link then falls back to "Make a flyer" for this workshop.
+    }
+  });
 
   let resetOpen = $state(false);
   let resetBusy = $state(false);
@@ -86,7 +98,7 @@
       <OutreachBulkActions {workshopId} view={v} onDone={() => reloadKey++} />
       <details class="row-details">
         <summary><strong>Post by hand</strong> <span class="text-muted">· {manualRowStatus(v)}</span></summary>
-        <OutreachPostCards view={v} {results} {onChange} reload={() => reloadKey++} channelFilter={(c) => !sendsItself(c)} />
+        <OutreachPostCards view={v} {results} {onChange} reload={() => reloadKey++} channelFilter={(c) => !sendsItself(c)} {flyer} />
       </details>
       <div class="row-details row spread">
         <span><strong>Flyers</strong> <span class="text-muted">· print and post at saved locations</span></span>

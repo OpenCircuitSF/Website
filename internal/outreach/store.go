@@ -335,6 +335,26 @@ func (s *Store) MarkPosted(ctx context.Context, id int64, remoteURL *string, now
 	return p, nil
 }
 
+// MarkUnposted reverts a post marked posted back to its prepared manual state
+// (#0588): status 'manual', no posted_at, no remote URL. Only a posted post
+// qualifies; ErrWrongStatus otherwise. Whether the channel allows it is the
+// caller's rule, since a post the site itself sent is really public.
+func (s *Store) MarkUnposted(ctx context.Context, id int64) (Post, error) {
+	p, err := scanPost(s.pool.QueryRow(ctx,
+		`UPDATE outreach_posts SET status = 'manual', posted_at = NULL, remote_url = NULL, updated_at = now()
+		 WHERE id = $1 AND status = 'posted' AND short_url IS NOT NULL RETURNING `+postColumns, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, gerr := s.GetPost(ctx, id); gerr != nil {
+			return Post{}, gerr
+		}
+		return Post{}, ErrWrongStatus
+	}
+	if err != nil {
+		return Post{}, fmt.Errorf("outreach: mark unposted: %w", err)
+	}
+	return p, nil
+}
+
 // DeletePost removes a post that has not been posted and is not queued.
 func (s *Store) DeletePost(ctx context.Context, id int64) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM outreach_posts WHERE id = $1 AND status NOT IN ('posted','queued')`, id)

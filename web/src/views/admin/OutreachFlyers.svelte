@@ -14,6 +14,9 @@
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
 
+  /** The workshop the "Make a flyer" link came from (#0588); preselected below. */
+  let { workshopId = null }: { workshopId?: number | null } = $props();
+
   let flyers = $state<FlyerRow[]>([]);
   let workshops = $state<OutreachSummary[]>([]);
   let loaded = $state(false);
@@ -30,7 +33,7 @@
       const [f, o] = await Promise.all([listOutreachFlyers(), listOutreach()]);
       flyers = f.flyers;
       workshops = o.outreach;
-      outreachId = outreachId ?? workshops[0]?.outreach_id ?? null;
+      outreachId = outreachId ?? workshops.find((w) => w.workshop_id === workshopId)?.outreach_id ?? workshops[0]?.outreach_id ?? null;
       status = '';
     } catch (err) {
       status = message(err, 'Could not load flyers. Please try again.');

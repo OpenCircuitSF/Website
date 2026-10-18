@@ -208,6 +208,26 @@ func sortPostsForDisplay(posts []outreach.Post) []outreach.Post {
 	return out
 }
 
+// hideDisabledChannels drops the channels switched off in Settings (#0588), and
+// their posts, from a results response. It runs last, because the click and
+// reaction fillers above index Channels by the full channel list's position.
+func (h *AdminOutreachHandler) hideDisabledChannels(v *outreachResultsView) {
+	chs := v.Channels[:0:0]
+	for _, c := range v.Channels {
+		if h.channelEnabled(c.Name) {
+			chs = append(chs, c)
+		}
+	}
+	v.Channels = chs
+	posts := v.Posts[:0:0]
+	for _, p := range v.Posts {
+		if h.channelEnabled(p.Channel) {
+			posts = append(posts, p)
+		}
+	}
+	v.Posts = posts
+}
+
 // ResultsForWorkshop handles GET /admin/workshops/{id}/outreach/results: the
 // workshop's clicks from ShortLinks, matched to its posts by short link key.
 func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http.Request) {
@@ -232,6 +252,7 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 	case err == nil:
 	case errors.Is(err, outreach.ErrNotFound):
 		v.Status = resultsNotStarted
+		h.hideDisabledChannels(&v)
 		writeJSON(w, http.StatusOK, v)
 		return
 	default:
@@ -287,6 +308,7 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 	if !h.linksEnabled() {
 		v.Status = resultsNotConfigured
 		v.FlyerAllStatus = resultsNotConfigured
+		h.hideDisabledChannels(&v)
 		writeJSON(w, http.StatusOK, v)
 		return
 	}
@@ -294,6 +316,7 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 	if err != nil {
 		v.Status = classifyResultsError("results for workshop", err)
 		v.FlyerAllStatus = v.Status
+		h.hideDisabledChannels(&v)
 		writeJSON(w, http.StatusOK, v)
 		return
 	}
@@ -353,6 +376,7 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 		}
 		v.Series = append(v.Series, resultsSeriesView{ID: s.ID, Label: s.Label, Channels: chs, IsOther: s.IsOther, Days: days})
 	}
+	h.hideDisabledChannels(&v)
 	writeJSON(w, http.StatusOK, v)
 }
 
@@ -460,11 +484,21 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
+		// Switched-off channels are not counted (#0588): totals come from the
+		// enabled posts, not the store's per-status counts.
+		posts = h.enabledPosts(posts)
+		row.PostsPosted, row.Scheduled = 0, 0
 		posted := map[string]bool{}
 		for _, p := range posts {
 			posted[p.Channel] = posted[p.Channel] || p.Status == "posted"
+			switch p.Status {
+			case "posted":
+				row.PostsPosted++
+			case "scheduled":
+				row.Scheduled++
+			}
 		}
-		for _, c := range outreach.Channels() {
+		for _, c := range h.enabledChannels() {
 			if posted[c.Name] {
 				row.PostedChannels = append(row.PostedChannels, c.Name)
 			}
@@ -472,9 +506,7 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 		if c, ok := totals[s.OutreachID]; ok {
 			row.Reactions = toReactions(c)
 		}
-		for _, n := range s.Counts {
-			row.PostsTotal += n
-		}
+		row.PostsTotal = len(posts)
 		switch {
 		case !h.linksEnabled():
 			row.Status = resultsNotConfigured
@@ -491,7 +523,11 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 		}
 		rows = append(rows, row)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": status, "rows": rows, "mentions": toMentionViews(recent)})
+	enabled := []string{}
+	for _, c := range h.enabledChannels() {
+		enabled = append(enabled, c.Name)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": status, "rows": rows, "mentions": toMentionViews(recent), "enabled_channels": enabled})
 }
 
 // summaryClicks fills row.Clicks from the campaign's rollup and returns the

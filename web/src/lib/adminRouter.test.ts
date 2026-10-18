@@ -176,6 +176,7 @@ describe('outreach flyers routing (#0549)', () => {
   it('builds the hashes', () => {
     expect(adminOutreachFlyersHash()).toBe('#/outreach?view=flyers');
     expect(adminOutreachFlyersHash(7)).toBe('#/outreach?view=flyers&flyer=7');
+    expect(adminOutreachFlyersHash(undefined, 5)).toBe('#/outreach?view=flyers&workshop=5');
     expect(adminOutreachPrintHash(7, 'half')).toBe('#/outreach?view=print&flyer=7&layout=half');
     expect(adminOutreachHash('flyers')).toBe('#/outreach?view=flyers');
   });

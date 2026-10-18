@@ -145,7 +145,7 @@ func (h *AdminOutreachHandler) ensureLinks(r *http.Request, actorID int64, o out
 	}
 
 	var tasks []linkTask
-	for _, ch := range outreach.Channels() {
+	for _, ch := range h.enabledChannels() {
 		for _, wv := range outreach.Waves() {
 			slot := [2]string{ch.Name, wv.Name}
 			if haveLink[slot] {
@@ -330,7 +330,7 @@ func (h *AdminOutreachHandler) linksView(ctx context.Context, wk workshops.Works
 	}
 
 	f := h.facts(wk)
-	for _, ch := range outreach.Channels() {
+	for _, ch := range h.enabledChannels() {
 		for _, wv := range outreach.Waves() {
 			slot := [2]string{ch.Name, wv.Name}
 			row := outreachLinkRowView{
@@ -549,7 +549,7 @@ func (h *AdminOutreachHandler) DraftAll(w http.ResponseWriter, r *http.Request) 
 	}
 	f := h.facts(wk)
 	rep := draftAllReport{Created: []draftAllCreated{}}
-	for _, ch := range outreach.Channels() {
+	for _, ch := range h.enabledChannels() {
 		for _, wv := range outreach.Waves() {
 			if !wantWave[wv.Name] {
 				continue
@@ -694,6 +694,7 @@ func (h *AdminOutreachHandler) ScheduleAll(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+	posts = h.enabledPosts(posts)
 	items, skips := outreach.PlanScheduleAll(posts, wk.StartsAt, h.now(), minScheduleLead, maxScheduleLead, h.postHour(), h.channelConfigured)
 
 	resp := scheduleAllResponse{DryRun: req.DryRun, ToSchedule: []scheduleAllItemView{}, Skipped: []scheduleAllSkipView{}}

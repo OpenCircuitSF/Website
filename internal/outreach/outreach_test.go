@@ -2,6 +2,7 @@ package outreach
 
 import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
+	"github.com/brennanMKE/OpenCircuitSF/internal/serversettings"
 	"regexp"
 	"strings"
 	"testing"
@@ -250,5 +251,23 @@ func TestDraftHashtagsAreFacetsAndCounted(t *testing.T) {
 	f.Hashtags = ""
 	if without := Draft(bs, an, f); Length(bs, without) <= Length(bs, d) || strings.Contains(without, "#") {
 		t.Errorf("tags not counted against the summary budget: %d vs %d", Length(bs, without), Length(bs, d))
+	}
+}
+
+// serversettings spells the channel names out (it cannot import this
+// package); this keeps its list equal to the real one (#0588).
+func TestServerSettingsChannelNamesMatchChannels(t *testing.T) {
+	var names []string
+	for _, c := range Channels() {
+		names = append(names, c.Name)
+	}
+	got := serversettings.OutreachChannelNames
+	if len(got) != len(names) {
+		t.Fatalf("serversettings.OutreachChannelNames = %v, want %v", got, names)
+	}
+	for i := range names {
+		if got[i] != names[i] {
+			t.Fatalf("serversettings.OutreachChannelNames = %v, want %v", got, names)
+		}
 	}
 }

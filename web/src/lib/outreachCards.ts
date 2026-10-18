@@ -4,7 +4,8 @@
 import { formatDateTime } from './admin';
 import { formatPacificWeekdayTime } from './pacificTime';
 import { composerActions } from './outreach';
-import type { OutreachChannel, OutreachPost, OutreachResults, OutreachWave, WorkshopOutreach } from './types';
+import { adminOutreachFlyersHash } from './adminRouter';
+import type { FlyerRow, OutreachChannel, OutreachPost, OutreachResults, OutreachWave, WorkshopOutreach } from './types';
 
 export interface PostCard {
   channel: OutreachChannel;
@@ -79,12 +80,14 @@ export interface CardButtons {
   retry: boolean;
   copy: boolean;
   markPosted: boolean;
+  /** Take back a Mark posted (#0588): only a hand-posted channel's posted card. */
+  unmark: boolean;
   draft: boolean;
 }
 
 /** Which buttons a card shows; the rules themselves come from composerActions. */
 export function cardButtons(post: OutreachPost | null, channel: OutreachChannel, available: boolean): CardButtons {
-  const none: CardButtons = { edit: false, postNow: false, schedule: false, unschedule: false, retry: false, copy: false, markPosted: false, draft: false };
+  const none: CardButtons = { edit: false, postNow: false, schedule: false, unschedule: false, retry: false, copy: false, markPosted: false, unmark: false, draft: false };
   if (post === null) return { ...none, draft: available };
   const a = composerActions(post, channel, available);
   const auto = sendsItself(channel);
@@ -99,6 +102,7 @@ export function cardButtons(post: OutreachPost | null, channel: OutreachChannel,
     retry: auto && a.canRetry,
     copy: !auto && !posted && !queued && post.prepared,
     markPosted: !auto && a.canMarkPosted,
+    unmark: !auto && posted,
   };
 }
 
@@ -157,7 +161,7 @@ export function visibleNotice(n: CardNotice | null, post: Pick<OutreachPost, 'st
   return (post?.status ?? null) === n.status ? n.text : '';
 }
 
-export type PostDialogMode = 'post' | 'retry' | 'markPosted';
+export type PostDialogMode = 'post' | 'retry' | 'markPosted' | 'unmark';
 export interface PostDialogCopy {
   title: string;
   warning: string;
@@ -174,6 +178,15 @@ export function postDialogCopy(mode: PostDialogMode, channels: { label: string; 
       warning: `Records that you posted this on ${label} by hand. Edit and Copy go away.`,
       accountLine: [],
       confirmLabel: 'Mark posted',
+    };
+  }
+  if (mode === 'unmark') {
+    const label = channels[0]?.label ?? 'the channel';
+    return {
+      title: `Unmark the ${label} post?`,
+      warning: `Puts this back to a post you still have to make by hand. Edit and Copy come back. Nothing is removed from ${label}; delete the post there yourself if you took it down.`,
+      accountLine: [],
+      confirmLabel: 'Unmark',
     };
   }
   const accountLine = channels.map((c) =>
@@ -196,4 +209,25 @@ export function combinedPostResult(results: { label: string; ok: boolean; error?
 /** The Copy buttons flip to "Copied" for two seconds. */
 export function copyLabel(base: string, copied: boolean): string {
   return copied ? 'Copied' : base;
+}
+
+/**
+ * Whether a hand-posted card shows its "Put this in your bio" link row (#0588):
+ * only when the post has a short link and the body does not already carry it
+ * (TikTok and YouTube captions print the sign-up link themselves).
+ */
+export function showBioLink(post: Pick<OutreachPost, 'short_url' | 'body'> | null, channel: Pick<OutreachChannel, 'automatic' | 'configured'>): boolean {
+  return post !== null && !!post.short_url && !sendsItself(channel) && !post.body.includes(post.short_url);
+}
+
+/**
+ * Where the Instagram card's flyer link goes (#0588): this workshop's newest
+ * flyer when it has one, otherwise the flyers page with this workshop
+ * preselected in the "new flyer" form. `flyers` is newest first.
+ */
+export function flyerLinkFor(flyers: Pick<FlyerRow, 'id' | 'workshop_id'>[], workshopId: number): { href: string; label: string } {
+  const own = flyers.find((f) => f.workshop_id === workshopId);
+  return own
+    ? { href: adminOutreachFlyersHash(own.id), label: 'Open flyer' }
+    : { href: adminOutreachFlyersHash(undefined, workshopId), label: 'Make a flyer' };
 }

@@ -73,3 +73,21 @@ func TestNormalizeOutreachFields(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeOutreachChannels(t *testing.T) {
+	ok := map[string]string{
+		"bluesky,mastodon,instagram":  "bluesky,mastodon,instagram",
+		" YouTube , bluesky ,bluesky": "bluesky,youtube",
+		"tiktok":                      "tiktok",
+	}
+	for in, want := range ok {
+		if got, err := Normalize(KeyOutreachChannels, in); err != nil || got != want {
+			t.Errorf("Normalize(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", ",", "bluesky,", "facebook", "bluesky;mastodon"} {
+		if _, err := Normalize(KeyOutreachChannels, in); err == nil {
+			t.Errorf("Normalize(%q) accepted", in)
+		}
+	}
+}

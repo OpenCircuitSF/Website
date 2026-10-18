@@ -26,6 +26,7 @@ const (
 	msgBatch      = "must be a whole number from 1 to 500"
 	msgCardURL    = "must be short or canonical"
 	msgHashtags   = "must be up to 6 hashtags, each # followed by up to 40 letters or digits (not digits alone), such as #SanFrancisco"
+	msgChannels   = "must name at least one of bluesky, mastodon, instagram, tiktok, youtube, separated by commas"
 	msgPostHour   = "must be a whole hour from 0 to 23 (Pacific time)"
 )
 
@@ -42,6 +43,7 @@ func Normalize(key, value string) (string, error) {
 		KeyEmailListDomain: msgListDomain, KeySESSandbox: msgBool,
 		KeySESInboundBucket: msgBucket, KeySendBatchSize: msgBatch,
 		KeyBlueskyCardURL: msgCardURL, KeyOutreachHashtags: msgHashtags, KeyOutreachPostHour: msgPostHour,
+		KeyOutreachChannels: msgChannels,
 	}[key]
 	if value == "" || len(value) > maxValueLen || hasControl(value) {
 		return bad(msg)
@@ -86,6 +88,12 @@ func Normalize(key, value string) (string, error) {
 			return bad(msg)
 		}
 		return strings.Join(tags, " "), nil
+	case KeyOutreachChannels:
+		names, ok := NormalizeChannels(value)
+		if !ok {
+			return bad(msg)
+		}
+		return strings.Join(names, ","), nil
 	case KeyOutreachPostHour:
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 0 || n > 23 {
@@ -177,4 +185,29 @@ func NormalizeHashtags(s string) ([]string, bool) {
 		}
 	}
 	return out, len(out) <= MaxOutreachHashtags
+}
+
+// NormalizeChannels parses a comma-separated channel list: every name must be
+// a known channel (case and spacing ignored), duplicates collapse, and the
+// result is in display order. It reports false for an empty or unknown entry.
+func NormalizeChannels(s string) ([]string, bool) {
+	want := map[string]bool{}
+	for _, tok := range strings.Split(s, ",") {
+		name := strings.ToLower(strings.TrimSpace(tok))
+		known := false
+		for _, n := range OutreachChannelNames {
+			known = known || n == name
+		}
+		if !known {
+			return nil, false
+		}
+		want[name] = true
+	}
+	var out []string
+	for _, n := range OutreachChannelNames {
+		if want[n] {
+			out = append(out, n)
+		}
+	}
+	return out, len(out) > 0
 }

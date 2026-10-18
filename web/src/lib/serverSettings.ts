@@ -57,12 +57,42 @@ export const FIELD_LABELS: Record<string, { label: string; placeholder: string; 
     placeholder: '#SanFrancisco #Electronics',
     help: 'Appended to new drafts on their own line. Up to 6, each # followed by up to 40 letters or digits. Use CamelCase (#SanFrancisco, not #sanfrancisco) so screen readers say the words apart.',
   },
+  outreach_channels: {
+    label: 'Channels',
+    placeholder: '',
+    help: 'Channels outreach drafts, counts and shows. A channel that is off is left out of Draft all, the summary line, results and the Post by hand list; posts it already has are kept and return if you switch it on again. TikTok and YouTube need a video, so they start off.',
+  },
   outreach_post_hour: {
     label: 'Suggested posting hour',
     placeholder: '10',
     help: 'The hour of day (0 to 23, Pacific time) Reminder and Last call posts are suggested for.',
   },
 };
+
+/** The outreach channels in display order, as internal/serversettings spells them. */
+export const OUTREACH_CHANNEL_CHOICES: readonly { name: string; label: string }[] = [
+  { name: 'bluesky', label: 'Bluesky' },
+  { name: 'mastodon', label: 'Mastodon' },
+  { name: 'instagram', label: 'Instagram' },
+  { name: 'tiktok', label: 'TikTok' },
+  { name: 'youtube', label: 'YouTube' },
+];
+
+/** The channel names a comma list switches on, in display order; unknown entries are ignored. */
+export function channelsOn(csv: string): string[] {
+  const want = new Set(csv.split(',').map((s) => s.trim().toLowerCase()));
+  return OUTREACH_CHANNEL_CHOICES.filter((c) => want.has(c.name)).map((c) => c.name);
+}
+
+/** The comma list after switching one channel on or off, in display order. */
+export function toggleChannel(csv: string, name: string, on: boolean): string {
+  const set = new Set(channelsOn(csv));
+  if (on) set.add(name);
+  else set.delete(name);
+  return OUTREACH_CHANNEL_CHOICES.filter((c) => set.has(c.name))
+    .map((c) => c.name)
+    .join(',');
+}
 
 export const PRECEDENCE_NOTE =
   'A value saved here overrides the matching environment variable. Clear a saved value to fall back to the environment variable or the default.';
@@ -127,6 +157,8 @@ export function fieldHint(key: string, value: string): string | null {
       const n = Number(v);
       return /^\d+$/.test(v) && n >= 0 && n <= 23 ? null : 'Must be a whole hour from 0 to 23.';
     }
+    case 'outreach_channels':
+      return channelsOn(v).length > 0 ? null : 'Turn on at least one channel.';
     case 'outreach_hashtags': {
       const tags = v.split(/\s+/);
       return tags.length <= 6 && tags.every((x) => /^#[\p{L}\p{N}]{1,40}$/u.test(x) && /\p{L}/u.test(x))

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardButtons, combinedPostResult, copyLabel, groupByWave, pollDelay, postableAutomatic, postDialogCopy, statusLine, summaryLine, visibleNotice } from './outreachCards';
+import { cardButtons, combinedPostResult, copyLabel, flyerLinkFor, groupByWave, showBioLink, pollDelay, postableAutomatic, postDialogCopy, statusLine, summaryLine, visibleNotice } from './outreachCards';
 import type { OutreachChannel, OutreachPost, OutreachResults } from './types';
 
 const auto: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'b', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' };
@@ -139,5 +139,42 @@ describe('post feedback helpers (#0581)', () => {
   it('copyLabel flips to Copied', () => {
     expect(copyLabel('Copy text', true)).toBe('Copied');
     expect(copyLabel('Copy text', false)).toBe('Copy text');
+  });
+});
+
+describe('Unmark and the bio link (#0588)', () => {
+  const posted = post({ status: 'posted', posted_at: '2026-10-17T20:00:00Z' });
+
+  it('only a hand-posted card can be unmarked', () => {
+    expect(cardButtons(posted, manual, true).unmark).toBe(true);
+    expect(cardButtons(post({ status: 'manual' }), manual, true).unmark).toBe(false);
+    expect(cardButtons(posted, auto, true).unmark).toBe(false);
+    expect(cardButtons(null, manual, true).unmark).toBe(false);
+    // An automatic channel without credentials behaves like a manual one.
+    expect(cardButtons(posted, { ...auto, configured: false }, true).unmark).toBe(true);
+  });
+
+  it('the unmark dialog says nothing is removed from the network', () => {
+    const c = postDialogCopy('unmark', [{ label: 'Instagram', account: '' }]);
+    expect(c.title).toBe('Unmark the Instagram post?');
+    expect(c.confirmLabel).toBe('Unmark');
+    expect(c.warning).toContain('Nothing is removed from Instagram');
+  });
+
+  it('shows the bio link row only for a hand-posted post whose body lacks the link', () => {
+    const url = 'https://go.example/k';
+    expect(showBioLink(post({ body: 'See bio' }), manual)).toBe(true);
+    expect(showBioLink(post({ body: `Sign up: ${url}` }), manual)).toBe(false);
+    expect(showBioLink(post({ body: 'See bio' }), auto)).toBe(false);
+    expect(showBioLink(post({ body: 'See bio', short_url: null }), manual)).toBe(false);
+    expect(showBioLink(null, manual)).toBe(false);
+  });
+
+  it('the flyer link opens this workshop\'s newest flyer, else makes one for it', () => {
+    const flyers = [{ id: 9, workshop_id: 5 }, { id: 4, workshop_id: 5 }, { id: 3, workshop_id: 6 }];
+    expect(flyerLinkFor(flyers, 5)).toEqual({ href: '#/outreach?view=flyers&flyer=9', label: 'Open flyer' });
+    expect(flyerLinkFor(flyers, 6)).toEqual({ href: '#/outreach?view=flyers&flyer=3', label: 'Open flyer' });
+    expect(flyerLinkFor(flyers, 7)).toEqual({ href: '#/outreach?view=flyers&workshop=7', label: 'Make a flyer' });
+    expect(flyerLinkFor([], 7).label).toBe('Make a flyer');
   });
 });

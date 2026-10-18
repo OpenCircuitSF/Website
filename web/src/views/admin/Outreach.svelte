@@ -76,7 +76,7 @@
 {#if view === 'flyers' && flyerId !== null}
   <OutreachFlyerEditor {flyerId} />
 {:else if view === 'flyers' || view === 'print'}
-  <OutreachFlyers />
+  <OutreachFlyers workshopId={outreachWorkshopFromQuery(query)} />
 {:else if view === 'workshop' && outreachWorkshopFromQuery(query) !== null}
   <OutreachWorkshop workshopId={outreachWorkshopFromQuery(query) ?? 0} />
 {:else if view === 'locations'}

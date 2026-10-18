@@ -1370,6 +1370,11 @@ export function markOutreachPosted(id: number, remoteUrl?: string): Promise<Outr
   return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/posted`, remoteUrl ? { remote_url: remoteUrl } : {});
 }
 
+/** POST /admin/outreach-posts/{id}/unmark (#0588) — take back a Mark posted on a hand-posted channel. */
+export function unmarkOutreachPosted(id: number): Promise<OutreachPost> {
+  return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/unmark`);
+}
+
 /** POST /admin/outreach-posts/{id}/send — Post now, or Retry for a failed post (#0545). */
 export function sendOutreachPost(id: number): Promise<OutreachPost> {
   return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/send`);

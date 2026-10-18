@@ -17,12 +17,14 @@
     sendOutreachPost,
     unscheduleOutreachPost,
     markOutreachPosted,
+    unmarkOutreachPosted,
     ApiError,
   } from '../../lib/api';
   import { copyablePostLink } from '../../lib/outreachPreview';
   import {
     cardButtons,
     copyLabel,
+    showBioLink,
     statusLine,
     visibleNotice,
     type CardNotice,
@@ -54,6 +56,8 @@
     onCloseEditor: (id: number) => void;
     onDirtyChange: (dirty: boolean) => void;
     onDeleted: () => void;
+    /** Where Open flyer goes on the Instagram card (#0588); defaults to the flyers list. */
+    flyer?: { href: string; label: string };
   }
   let {
     card: c,
@@ -71,6 +75,7 @@
     onCloseEditor,
     onDirtyChange,
     onDeleted,
+    flyer = { href: adminOutreachFlyersHash(), label: 'Open flyer' },
   }: Props = $props();
 
   const p = $derived(c.post);
@@ -135,6 +140,10 @@
         const updated = await markOutreachPosted(post.id, remoteUrl);
         onChange(updated);
         onNotice({ text: 'Marked as posted.', kind: 'status', status: updated.status });
+      } else if (mode === 'unmark') {
+        const updated = await unmarkOutreachPosted(post.id);
+        onChange(updated);
+        onNotice({ text: 'Unmarked. It is a post to make by hand again.', kind: 'status', status: updated.status });
       } else {
         const updated = await sendOutreachPost(post.id);
         onChange(updated);
@@ -142,7 +151,10 @@
       }
       dialog = null;
     } catch (err) {
-      dialogError = message(err, mode === 'markPosted' ? 'Could not mark posted. Please try again.' : 'Could not post. Please try again.');
+      dialogError = message(
+        err,
+        mode === 'markPosted' ? 'Could not mark posted. Please try again.' : mode === 'unmark' ? 'Could not unmark. Please try again.' : 'Could not post. Please try again.',
+      );
     } finally {
       busy = false;
     }
@@ -190,9 +202,9 @@
     </p>
     {#if p && cellClicksLabel(p, results)}<p class="text-muted">{cellClicksLabel(p, results)}</p>{/if}
     {#if p && cellReactionsLabel(p, results)}<p class="text-muted">{cellReactionsLabel(p, results)}</p>{/if}
-    {#if p && p.short_url && !c.channel.automatic}
+    {#if showBioLink(p, c.channel) && p}
       <p class="link-row">
-        <span class="link-label">Link to paste</span>
+        <span class="link-label">Put this in your bio</span>
         <span class="mono short">{p.short_url}</span>
         <Button onclick={() => copy('link', p.short_url ?? '')} disabled={busy}>{copyLabel('Copy link', copied === 'link')}</Button>
       </p>
@@ -215,16 +227,19 @@
           <Button onclick={() => unschedule(p)} disabled={busy}>Unschedule</Button>
         {/if}
         {#if btn.copy}
-          <Button onclick={() => copy('text', p.body)} disabled={busy}>{copyLabel('Copy text', copied === 'text')}</Button>
+          <Button onclick={() => copy('text', p.body)} disabled={busy}>{copyLabel('Copy caption', copied === 'text')}</Button>
         {/if}
         {#if btn.copy && c.channel.name === 'instagram'}
-          <a class="open-flyer" href={adminOutreachFlyersHash()}>Open flyer</a>
+          <a class="open-flyer" href={flyer.href}>{flyer.label}</a>
         {/if}
         {#if p.status === 'posted' && copyablePostLink(p)}
           <Button onclick={() => copy('postlink', copyablePostLink(p) ?? '')} disabled={busy}>{copyLabel('Copy link to post', copied === 'postlink')}</Button>
         {/if}
         {#if btn.markPosted}
           <Button onclick={() => openDialog('markPosted')} disabled={busy}>Mark posted</Button>
+        {/if}
+        {#if btn.unmark}
+          <Button onclick={() => openDialog('unmark')} disabled={busy}>Unmark</Button>
         {/if}
         {#if btn.edit}
           <Button onclick={() => onEdit(p)} data-edit-for={p.id}>Edit</Button>

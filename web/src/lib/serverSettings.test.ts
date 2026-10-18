@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPatch,
+  channelsOn,
   fieldHint,
   initialDraft,
   LIVE_NOTE,
   PENDING_NOTE,
   PRECEDENCE_NOTE,
   RESTART_NOTE,
+  toggleChannel,
 } from './serverSettings';
 import type { ServerSettingGroup } from './types';
 
@@ -81,5 +83,23 @@ describe('outreach field hints', () => {
     expect(fieldHint('outreach_hashtags', '#SanFrancisco #Electronics')).toBeNull();
     expect(fieldHint('outreach_hashtags', 'SanFrancisco')).not.toBeNull();
     expect(fieldHint('outreach_hashtags', '#a #b #c #d #e #f #g')).not.toBeNull();
+  });
+});
+
+describe('outreach channel list (#0588)', () => {
+  it('parses a comma list into display order and ignores unknown names', () => {
+    expect(channelsOn('youtube, bluesky ,nope')).toEqual(['bluesky', 'youtube']);
+    expect(channelsOn('')).toEqual([]);
+  });
+
+  it('toggles one channel and keeps display order', () => {
+    expect(toggleChannel('bluesky,mastodon,instagram', 'tiktok', true)).toBe('bluesky,mastodon,instagram,tiktok');
+    expect(toggleChannel('bluesky,instagram', 'mastodon', true)).toBe('bluesky,mastodon,instagram');
+    expect(toggleChannel('bluesky,mastodon', 'bluesky', false)).toBe('mastodon');
+  });
+
+  it('hints only when nothing is on', () => {
+    expect(fieldHint('outreach_channels', 'bluesky')).toBeNull();
+    expect(fieldHint('outreach_channels', 'nope')).not.toBeNull();
   });
 });

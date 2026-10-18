@@ -43,8 +43,9 @@
   const channelLabel = $derived(new Map((results?.channels ?? []).map((c) => [c.name, c.label])));
   const clickNote = $derived(results ? clickDefinitionNote(results) : null);
   const showAll = $derived(results ? showFlyerAllColumn(results.flyer_locations) : false);
-  // #0588 will let a channel be switched off; until then every channel counts.
-  const channelEnabled = (_name: string): boolean => true;
+  // #0588: a channel switched off in Settings is not named; the server also
+  // leaves it out of the row, so this is the second of two agreeing filters.
+  const channelEnabled = (name: string): boolean => !summary?.enabled_channels || summary.enabled_channels.includes(name);
   const mastodonNote = $derived(results ? mastodonCountsNote(results) : null);
   // The summary response carries no channel list; labels are fixed server-side.
   const summaryLabels: Record<string, string> = { bluesky: 'Bluesky', mastodon: 'Mastodon', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube' };

@@ -267,9 +267,13 @@ export function outreachLayoutFromQuery(query: URLSearchParams): FlyerPrintLayou
   return query.get('layout') === 'half' ? 'half' : 'full';
 }
 
-/** The flyers list, or one flyer's editor. */
-export function adminOutreachFlyersHash(flyerId?: number): string {
-  return flyerId === undefined ? '#/outreach?view=flyers' : `#/outreach?view=flyers&flyer=${flyerId}`;
+/**
+ * The flyers list, or one flyer's editor. With only `workshopId` it is the
+ * list with that workshop preselected in the "new flyer" form (#0588).
+ */
+export function adminOutreachFlyersHash(flyerId?: number, workshopId?: number): string {
+  if (flyerId !== undefined) return `#/outreach?view=flyers&flyer=${flyerId}`;
+  return workshopId === undefined ? '#/outreach?view=flyers' : `#/outreach?view=flyers&workshop=${workshopId}`;
 }
 
 /** The admin-only print page for a flyer. */

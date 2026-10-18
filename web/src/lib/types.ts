@@ -1086,6 +1086,8 @@ export interface OutreachResultsSummary {
   rows: OutreachResultsSummaryRow[];
   /** Newest mentions across every workshop, untied ones included (#0547). */
   mentions: OutreachMention[];
+  /** #0588: the channels switched on in Settings; the posts cell names only these. */
+  enabled_channels?: string[];
 }
 
 // ── Outreach flyers (#0549) ──────────────────────────────────────────────────

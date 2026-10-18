@@ -27,6 +27,7 @@ const (
 	KeyBlueskyCardURL   = "bluesky_card_url"
 	KeyOutreachHashtags = "outreach_hashtags"
 	KeyOutreachPostHour = "outreach_post_hour"
+	KeyOutreachChannels = "outreach_channels"
 )
 
 // Outreach settings (#0571, #0573, #0574) and their defaults.
@@ -38,12 +39,22 @@ const (
 
 	DefaultOutreachHashtags = "#SanFrancisco #Electronics"
 	DefaultOutreachPostHour = "10"
+	// DefaultOutreachChannels is the set of channels outreach drafts, counts
+	// and shows until Settings says otherwise (#0588): the two the site posts
+	// itself and Instagram. TikTok and YouTube need a video, so they start off.
+	DefaultOutreachChannels = "bluesky,mastodon,instagram"
 	// MaxOutreachHashtags bounds the site-wide set.
 	MaxOutreachHashtags = 6
 	// MaxHashtagRunes bounds one tag after its "#"; Bluesky's tag facet
 	// allows 64 graphemes, and a tag this long is unreadable anyway.
 	MaxHashtagRunes = 40
 )
+
+// OutreachChannelNames lists every channel outreach knows, in display order.
+// It mirrors internal/outreach's channel list (a test in that package keeps
+// the two equal); it is spelled out here because this package must not import
+// outreach.
+var OutreachChannelNames = []string{"bluesky", "mastodon", "instagram", "tiktok", "youtube"}
 
 // DefaultMediaDir is the production media directory.
 const DefaultMediaDir = "/var/www/media"
@@ -68,6 +79,7 @@ var Fields = []Field{
 	{Key: KeyBlueskyCardURL, Group: GroupOutreach, Default: CardURLShort},
 	{Key: KeyOutreachHashtags, Group: GroupOutreach, Default: DefaultOutreachHashtags},
 	{Key: KeyOutreachPostHour, Group: GroupOutreach, Default: DefaultOutreachPostHour},
+	{Key: KeyOutreachChannels, Group: GroupOutreach, Default: DefaultOutreachChannels},
 }
 
 // Groups lists the group names in display order.

@@ -37,6 +37,8 @@ type outreachStore interface {
 	// SetPrepared's bool is true only when this call's UPDATE changed the row.
 	SetPrepared(ctx context.Context, id int64, key, shortURL, status string) (outreach.Post, bool, error)
 	MarkPosted(ctx context.Context, id int64, remoteURL *string, now time.Time) (outreach.Post, error)
+	// MarkUnposted undoes a hand-posted mark (#0588).
+	MarkUnposted(ctx context.Context, id int64) (outreach.Post, error)
 	DeletePost(ctx context.Context, id int64) error
 	// CanReset and Reset (#0592): start over while nothing is public.
 	CanReset(ctx context.Context, outreachID int64) (bool, error)
@@ -90,16 +92,18 @@ type AdminOutreachHandler struct {
 	tagsFn    func() string
 	accountFn func(string) string
 	cardFn    func() string
-	store     outreachStore
-	locations outreachLocationStore
-	flyers    outreachFlyerStore
-	ws        outreachWorkshopReader
-	links     shortLinker
-	auditor   *audit.Logger
-	baseURL   string
-	posting   outreachPosting
-	mu        sync.Mutex // guards shortBase and stats; never held across a network call
-	shortBase string     // cached Me().BaseURL; a failed fetch is not cached
+	// channelsFn lists the channels switched on in Settings (#0588); nil means all.
+	channelsFn func() []string
+	store      outreachStore
+	locations  outreachLocationStore
+	flyers     outreachFlyerStore
+	ws         outreachWorkshopReader
+	links      shortLinker
+	auditor    *audit.Logger
+	baseURL    string
+	posting    outreachPosting
+	mu         sync.Mutex // guards shortBase and stats; never held across a network call
+	shortBase  string     // cached Me().BaseURL; a failed fetch is not cached
 	// stats memoizes campaign stats for the results routes (#0546). Always
 	// built; fetchStats answers ErrUnavailable while ShortLinks is not
 	// configured, and ResetShortLinks replaces it when the connection changes.
@@ -231,6 +235,47 @@ func (h *AdminOutreachHandler) SetHashtags(fn func() string) { h.tagsFn = fn }
 // unset, every account is empty and the SPA words the line without a name.
 func (h *AdminOutreachHandler) SetAccounts(fn func(string) string) { h.accountFn = fn }
 
+// SetEnabledChannels sets the source of the channel names outreach is switched
+// on for (#0588), read per request so a Settings save applies at once. Unset,
+// every channel is on. A disabled channel is not drafted, no new tracked link
+// is made for it, and the panel, results and links views leave it out; posts
+// and links it already has are kept, and come back if it is switched on again.
+func (h *AdminOutreachHandler) SetEnabledChannels(fn func() []string) { h.channelsFn = fn }
+
+func (h *AdminOutreachHandler) channelEnabled(name string) bool {
+	if h.channelsFn == nil {
+		return true
+	}
+	for _, n := range h.channelsFn() {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// enabledChannels is outreach.Channels() without the switched-off ones.
+func (h *AdminOutreachHandler) enabledChannels() []outreach.Channel {
+	var out []outreach.Channel
+	for _, ch := range outreach.Channels() {
+		if h.channelEnabled(ch.Name) {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
+// enabledPosts drops the posts of switched-off channels.
+func (h *AdminOutreachHandler) enabledPosts(posts []outreach.Post) []outreach.Post {
+	out := make([]outreach.Post, 0, len(posts))
+	for _, p := range posts {
+		if h.channelEnabled(p.Channel) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // SetCardURL sets the source of the Bluesky card URL choice, "short" or
 // "canonical" (#0583). Read per request; unset, the card is "short".
 func (h *AdminOutreachHandler) SetCardURL(fn func() string) { h.cardFn = fn }
@@ -335,7 +380,7 @@ func (h *AdminOutreachHandler) channelConfigured(name string) bool {
 }
 
 func (h *AdminOutreachHandler) channelViews() []outreachChannelView {
-	chs := outreach.Channels()
+	chs := h.enabledChannels()
 	out := make([]outreachChannelView, 0, len(chs))
 	for _, ch := range chs {
 		v := outreachChannelView{Channel: ch, Configured: h.channelConfigured(ch.Name)}
@@ -420,7 +465,7 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 			return v, err
 		}
 		f := h.facts(wk)
-		for _, p := range posts {
+		for _, p := range h.enabledPosts(posts) {
 			v.Posts = append(v.Posts, h.postView(p, f, wk.Status))
 		}
 	}
@@ -626,6 +671,10 @@ func (h *AdminOutreachHandler) CreatePost(w http.ResponseWriter, r *http.Request
 	wv, wvOK := outreach.WaveByName(req.Wave)
 	if !chOK || !wvOK {
 		writeError(w, http.StatusBadRequest, "unknown channel or wave")
+		return
+	}
+	if !h.channelEnabled(ch.Name) {
+		writeError(w, http.StatusConflict, ch.Label+" is switched off in Settings")
 		return
 	}
 	if len(req.Body) > maxOutreachBodyBytes {
@@ -971,6 +1020,55 @@ func (h *AdminOutreachHandler) MarkPosted(w http.ResponseWriter, r *http.Request
 			TargetType: audit.TargetOutreachPost,
 			TargetID:   &targetID,
 			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "has_remote_url": updated.RemoteURL != nil},
+			IP:         clientIP(r),
+		})
+	}
+	writeJSON(w, http.StatusOK, h.postView(updated, h.facts(wk), wk.Status))
+}
+
+// UnmarkPosted handles POST /admin/outreach-posts/{id}/unmark (#0588): take back
+// a Mark posted, for a channel the site does not post to itself. A post the
+// site sent through a configured channel is really public and is refused.
+func (h *AdminOutreachHandler) UnmarkPosted(w http.ResponseWriter, r *http.Request) {
+	actor, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	id, ok := outreachPathID(w, r)
+	if !ok {
+		return
+	}
+	p, wk, ok := h.postContext(w, r, id)
+	if !ok {
+		return
+	}
+	if h.channelConfigured(p.Channel) {
+		writeError(w, http.StatusConflict, "this post was sent by the site and cannot be unmarked")
+		return
+	}
+	updated, err := h.store.MarkUnposted(r.Context(), id)
+	switch {
+	case err == nil:
+	case errors.Is(err, outreach.ErrWrongStatus):
+		writeError(w, http.StatusConflict, "post is not marked as posted")
+		return
+	case errors.Is(err, outreach.ErrNotFound):
+		writeError(w, http.StatusNotFound, "post not found")
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if h.auditor != nil {
+		actorID := actor.ID
+		targetID := updated.ID
+		h.auditor.Record(r.Context(), audit.Entry{
+			ActorID:    &actorID,
+			Action:     audit.ActionOutreachPostUnmarked,
+			TargetType: audit.TargetOutreachPost,
+			TargetID:   &targetID,
+			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave},
 			IP:         clientIP(r),
 		})
 	}

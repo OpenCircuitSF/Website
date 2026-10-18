@@ -34,8 +34,10 @@
     reload: () => void;
     /** Only these channels get cards (the page's "Post by hand" list). */
     channelFilter?: (channel: OutreachChannel) => boolean;
+    /** Where the Instagram card's flyer link goes (#0588). */
+    flyer?: { href: string; label: string };
   }
-  let { view, results, onChange, reload, channelFilter }: Props = $props();
+  let { view, results, onChange, reload, channelFilter, flyer }: Props = $props();
 
   let editingId = $state<number | null>(null);
   let pendingEditId = $state<number | null>(null);
@@ -130,6 +132,7 @@
       onCloseEditor={closeEditor}
       onDirtyChange={(d) => (editorDirty = d)}
       onDeleted={deleted}
+      {flyer}
     />
   {/snippet}
   {#each groups.filter((g) => g.cards.length > 0) as group (group.wave.name)}

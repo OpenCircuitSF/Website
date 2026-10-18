@@ -322,8 +322,8 @@ export function resultsSummaryLine(results: OutreachResults | null): string {
 
 /**
  * The overview's posts cell: "Posted: Bluesky, Mastodon · 4 scheduled". Only
- * channels `isEnabled` accepts are named; until per-channel enable toggles
- * exist (#0588) every channel the view reports counts.
+ * channels `isEnabled` accepts are named (the ones switched on in Settings,
+ * #0588); the default accepts every channel the row reports.
  */
 export function postsCellText(
   row: Pick<OutreachResultsSummaryRow, 'posted_channels' | 'scheduled'>,

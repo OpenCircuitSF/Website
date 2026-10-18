@@ -17,6 +17,9 @@
     fieldHint,
     isSaved,
     applyKind,
+    channelsOn,
+    toggleChannel,
+    OUTREACH_CHANNEL_CHOICES,
   } from '../../lib/serverSettings';
   import { sourceLabel } from '../../lib/outreachConnections';
   import type { ServerSettingGroup, ServerSettings } from '../../lib/types';
@@ -74,7 +77,11 @@
     {@const info = FIELD_LABELS[f.key]}
     {@const hint = fieldHint(f.key, draft[f.key] ?? '')}
     <div class="srv-field">
-      <label class="srv-name" for={id}>{info.label}</label>
+      {#if f.key === 'outreach_channels'}
+        <span class="srv-name" id="{id}-label">{info.label}</span>
+      {:else}
+        <label class="srv-name" for={id}>{info.label}</label>
+      {/if}
       {#if f.key === 'ses_sandbox'}
         <select {id} bind:value={draft[f.key]} disabled={saving}>
           <option value="">Not saved — using {sourceLabel(f)}: {f.value}</option>
@@ -87,6 +94,25 @@
           <option value="short">Short link (tracked)</option>
           <option value="canonical">Workshop page (opencircuitsf.com)</option>
         </select>
+      {:else if f.key === 'outreach_channels'}
+        <!-- One checkbox per channel, over a comma list. Until something is
+             changed the draft is blank ("not saved") and the boxes show the
+             effective value; the last box on cannot be switched off. -->
+        {@const current = channelsOn(draft[f.key] ? draft[f.key] : f.value)}
+        <div {id} class="srv-channels" role="group" aria-labelledby="{id}-label">
+          {#each OUTREACH_CHANNEL_CHOICES as ch (ch.name)}
+            {@const on = current.includes(ch.name)}
+            <label class="srv-channel">
+              <input
+                type="checkbox"
+                checked={on}
+                disabled={saving || (on && current.length === 1)}
+                onchange={(e) => (draft[f.key] = toggleChannel(draft[f.key] ? draft[f.key] : f.value, ch.name, e.currentTarget.checked))}
+              />
+              {ch.label}
+            </label>
+          {/each}
+        </div>
       {:else if f.key === 'send_batch_size'}
         <input {id} type="number" min="1" max="500" bind:value={draft[f.key]} disabled={saving} placeholder={f.source !== 'database' && f.value ? f.value : info.placeholder} />
       {:else}
@@ -160,6 +186,17 @@
   .srv-field select:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+  }
+  .srv-channels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+  }
+  .srv-channel {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
   }
   .srv-actions {
     display: flex;

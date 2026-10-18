@@ -383,6 +383,7 @@ func servePostgres(cfg *config.Config) error {
 	adminOutreachH.SetHashtags(serverSettings.OutreachHashtags)
 	adminOutreachH.SetAccounts(conns.Account)
 	adminOutreachH.SetCardURL(serverSettings.BlueskyCardURL)
+	adminOutreachH.SetEnabledChannels(serverSettings.OutreachChannels)
 	adminOutreachH.SetConnections(handlers.NewAdminOutreachConnectionsHandler(conns, auditLogger))
 
 	// Admin image upload (#0433, reopening #0153): constructed
@@ -1572,6 +1573,7 @@ func adminRoutes(
 			adminRoute{http.MethodPatch, "/admin/outreach-posts/{id}", http.HandlerFunc(adminOutreachH.PatchPost)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/prepare", http.HandlerFunc(adminOutreachH.Prepare)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/posted", http.HandlerFunc(adminOutreachH.MarkPosted)},
+			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/unmark", http.HandlerFunc(adminOutreachH.UnmarkPosted)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/send", http.HandlerFunc(adminOutreachH.SendPost)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/schedule", http.HandlerFunc(adminOutreachH.SchedulePost)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/unschedule", http.HandlerFunc(adminOutreachH.UnschedulePost)},

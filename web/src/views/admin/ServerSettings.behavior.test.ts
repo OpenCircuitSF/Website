@@ -134,3 +134,46 @@ describe('ServerSettings', () => {
     await waitFor(() => expect(screen.getByText(/not available when the server runs without a database/)).toBeTruthy());
   });
 });
+
+describe('ServerSettings: outreach channels (#0588)', () => {
+  const channelsFixture = (value: string, source: 'default' | 'database' = 'default'): ServerSettings => ({
+    groups: [
+      {
+        name: 'outreach',
+        error: '',
+        fields: [{ key: 'outreach_channels', env_var: '', source, value, default: 'bluesky,mastodon,instagram', restart_required: false, pending_restart: false }],
+      },
+    ],
+  });
+  async function mountChannels(data: ServerSettings): Promise<void> {
+    getServerSettings.mockResolvedValue(data);
+    render(ServerSettingsView, { scope: 'outreach' });
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Channels' })).toBeTruthy());
+  }
+  const box = (name: string) => screen.getByRole('checkbox', { name }) as HTMLInputElement;
+
+  it('shows the default three on and TikTok and YouTube off', async () => {
+    await mountChannels(channelsFixture('bluesky,mastodon,instagram'));
+    expect(['Bluesky', 'Mastodon', 'Instagram', 'TikTok', 'YouTube'].map((n) => box(n).checked)).toEqual([true, true, true, false, false]);
+  });
+
+  it('saves the switched set as a comma list in channel order', async () => {
+    await mountChannels(channelsFixture('bluesky,mastodon,instagram'));
+    updateServerSettings.mockResolvedValue(channelsFixture('bluesky,mastodon,tiktok', 'database'));
+    await fireEvent.click(box('TikTok'));
+    await fireEvent.click(box('Instagram'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Save Outreach' }));
+    await waitFor(() => expect(updateServerSettings).toHaveBeenCalledWith({ outreach_channels: 'bluesky,mastodon,tiktok' }));
+  });
+
+  it('the last channel left on cannot be switched off', async () => {
+    await mountChannels(channelsFixture('youtube', 'database'));
+    expect(box('YouTube').disabled).toBe(true);
+    expect(box('Bluesky').disabled).toBe(false);
+  });
+
+  it('keeps Save disabled until something changes', async () => {
+    await mountChannels(channelsFixture('bluesky,mastodon,instagram'));
+    expect((screen.getByRole('button', { name: 'Save Outreach' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});

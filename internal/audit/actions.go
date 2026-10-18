@@ -340,6 +340,9 @@ const (
 	ActionOutreachPostPrepared = "outreach_post.prepared"
 	ActionOutreachPostPosted   = "outreach_post.posted"
 	ActionOutreachPostDeleted  = "outreach_post.deleted"
+	// ActionOutreachPostUnmarked (#0588) reverts a hand-posted post to its
+	// prepared manual state.
+	ActionOutreachPostUnmarked = "outreach_post.unmarked"
 	// ActionOutreachReset (#0592) targets the outreach row; metadata counts
 	// the posts and flyers removed.
 	ActionOutreachReset = "outreach.reset"
