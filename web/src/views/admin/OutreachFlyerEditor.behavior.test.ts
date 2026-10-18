@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 //
 // #0549: mounts OutreachFlyerEditor.svelte under jsdom with '../../lib/api'
-// mocked. Proves the wiring: Generate saves the design, then the selection,
-// then asks the server (in that order), the server's remaining count and
-// message reach the status line, a refused save does not Generate, and Put up
+// mocked. Proves the wiring: Print (#0589) opens a blank tab inside the click,
+// saves the design, then the selection, generates only when a link is missing
+// (in that order), then points the tab at the print view; a partial generate
+// or a failure closes the tab and reports in the status line, and Put up
 // toggles. jsdom is not a browser (AGENTS.md §1): no layout is claimed.
 import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -95,6 +96,23 @@ async function mountWith(v: FlyerView, locs: OutreachLocation[]): Promise<void> 
 
 const printUrl = '#/outreach?view=print&flyer=7&layout=full';
 
+// A stand-in for the blank tab Print opens synchronously in the click (Safari
+// blocks a window.open after an await). Opening records 'open' in calls, so a
+// test can prove it happened before the first API call.
+function fakeTab() {
+  const tab = {
+    opener: {} as unknown,
+    location: { href: '' },
+    document: { title: '', body: { textContent: '' } },
+    close: vi.fn(),
+  };
+  const open = vi.spyOn(window, 'open').mockImplementation(() => {
+    calls.push('open');
+    return tab as unknown as Window;
+  });
+  return { tab, open };
+}
+
 describe('OutreachFlyerEditor', () => {
   it('a new flyer defaults to the cover image, every active location and one copy (#0589)', async () => {
     const v = flyer([], { facts: { title: 'T', date_line: 'd', place_line: 'p', cover_image: '/cover.webp', description: '' } });
@@ -108,7 +126,7 @@ describe('OutreachFlyerEditor', () => {
   });
 
   it('Print N flyers saves, generates missing links, then opens the print view, naming each step', async () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const { tab, open } = fakeTab();
     updateOutreachFlyer.mockResolvedValue(flyer());
     const selection = (hasQr: boolean) => [{ location_id: 1, name: 'Board 1', code: 'b1', address: '', active: true, copies: 2, link: hasQr ? link(10, true) : null }];
     setOutreachFlyerLocations.mockResolvedValue(flyer(selection(false)));
@@ -116,26 +134,32 @@ describe('OutreachFlyerEditor', () => {
     await mountWith(flyer(), [loc(1)]);
     await fireEvent.change(screen.getByLabelText('Copies'), { target: { value: '2' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Print 2 flyers' }));
-    await waitFor(() => expect(open).toHaveBeenCalledWith(printUrl, '_blank', 'noopener'));
-    expect(calls).toEqual(['update', 'select', 'generate']);
+    await waitFor(() => expect(tab.location.href.endsWith(printUrl)).toBe(true));
+    // Opened blank, synchronously in the click, before any request.
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(calls).toEqual(['open', 'update', 'select', 'generate']);
+    expect(tab.location.href).toBe(new URL(printUrl, window.location.href).href);
+    expect(tab.opener).toBeNull();
+    expect(tab.close).not.toHaveBeenCalled();
     expect(setOutreachFlyerLocations).toHaveBeenCalledWith(7, [{ location_id: 1, copies: 2 }]);
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('print view is open'));
     expect(screen.queryByRole('button', { name: /Generate links/ })).toBeNull();
   });
 
   it('skips generate when every link and QR code already exists', async () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const { tab, open } = fakeTab();
     const sel = [{ location_id: 1, name: 'Board 1', code: 'b1', address: '', active: true, copies: 1, link: link(10, true) }];
     updateOutreachFlyer.mockResolvedValue(flyer(sel));
     setOutreachFlyerLocations.mockResolvedValue(flyer(sel));
     await mountWith(flyer(sel), [loc(1)]);
     await fireEvent.click(screen.getByRole('button', { name: 'Print 1 flyer' }));
-    await waitFor(() => expect(open).toHaveBeenCalled());
+    await waitFor(() => expect(tab.location.href.endsWith(printUrl)).toBe(true));
+    expect(open).toHaveBeenCalledTimes(1);
     expect(generateOutreachFlyer).not.toHaveBeenCalled();
   });
 
   it('a partial generate opens nothing and reports the remaining count and message', async () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const { tab } = fakeTab();
     const sel = [{ location_id: 1, name: 'Board 1', code: 'b1', address: '', active: true, copies: 1, link: null }];
     updateOutreachFlyer.mockResolvedValue(flyer());
     setOutreachFlyerLocations.mockResolvedValue(flyer(sel));
@@ -144,16 +168,42 @@ describe('OutreachFlyerEditor', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Print 1 flyer' }));
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('1 of 1 locations still need a link or QR code'));
     expect(screen.getByRole('status').textContent).toContain('Some links could not be fetched.');
-    expect(open).not.toHaveBeenCalled();
+    // The blank tab is closed, never pointed at the print view.
+    expect(tab.close).toHaveBeenCalledTimes(1);
+    expect(tab.location.href).toBe('');
+  });
+
+  it('a failed save closes the blank tab; a refused open falls back to this tab', async () => {
+    const { tab } = fakeTab();
+    updateOutreachFlyer.mockRejectedValue(new FakeApiError(500, 'database is down'));
+    await mountWith(flyer(), [loc(1)]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Print 1 flyer' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('database is down'));
+    expect(tab.close).toHaveBeenCalledTimes(1);
+    expect(tab.location.href).toBe('');
+    cleanup();
+    vi.restoreAllMocks();
+
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    const sel = [{ location_id: 1, name: 'Board 1', code: 'b1', address: '', active: true, copies: 1, link: link(10, true) }];
+    updateOutreachFlyer.mockResolvedValue(flyer(sel));
+    setOutreachFlyerLocations.mockResolvedValue(flyer(sel));
+    window.location.hash = '';
+    await mountWith(flyer(sel), [loc(1)]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Print 1 flyer' }));
+    await waitFor(() => expect(window.location.hash).toBe(printUrl));
+    window.location.hash = '';
   });
 
   it('does not generate when saving the selection is refused, and shows the server message', async () => {
+    const { tab } = fakeTab();
     updateOutreachFlyer.mockResolvedValue(flyer());
     setOutreachFlyerLocations.mockRejectedValue(new FakeApiError(400, 'an inactive location cannot be added'));
     await mountWith(flyer(), [loc(1)]);
     await fireEvent.click(screen.getByRole('button', { name: 'Print 1 flyer' }));
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('an inactive location cannot be added'));
     expect(generateOutreachFlyer).not.toHaveBeenCalled();
+    expect(tab.close).toHaveBeenCalledTimes(1);
   });
 
   it('disables Print with nothing ticked (with the reason shown) and with an over-long tagline', async () => {
@@ -218,6 +268,22 @@ describe('OutreachFlyerEditor', () => {
     getOutreachFlyer.mockResolvedValue(flyer([generated]));
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Put up: Board 1' }));
     await waitFor(() => expect(clearFlyerLinkPutUp).toHaveBeenCalledWith(10));
+  });
+
+  it('a refused Put up puts the checkbox back and says why', async () => {
+    const generated = { location_id: 1, name: 'Board 1', code: 'b1', address: '', active: true, copies: 1, link: link(10, true) };
+    await mountWith(flyer([generated]), [loc(1)]);
+    markFlyerLinkPutUp.mockRejectedValue(new FakeApiError(500, 'could not mark it'));
+    const box = screen.getByRole('checkbox', { name: 'Put up: Board 1' }) as HTMLInputElement;
+    await fireEvent.click(box);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('could not mark it'));
+    expect(box.checked).toBe(false);
+  });
+
+  it('sheet counts follow the ticked copies before anything is saved', async () => {
+    await mountWith(flyer(), [loc(1), loc(2)]);
+    expect(document.querySelector('.preview')?.textContent).toContain('Full page · 2 sheets');
+    expect(document.querySelector('.preview')?.textContent).toContain('Half-size double · 1 sheet');
   });
 
   it('sends the description, short text and title position, trimmed (#0561)', async () => {

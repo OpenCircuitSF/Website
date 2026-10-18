@@ -161,9 +161,28 @@
     }
   }
 
-  /** Save, make any missing link or QR code, then open the print view. */
+  /**
+   * Save, make any missing link or QR code, then open the print view.
+   *
+   * The tab is opened here, synchronously inside the click, and pointed at the
+   * print view only once the chain succeeds: Safari (and Firefox) block a
+   * window.open that runs after an await, because the user gesture has expired
+   * by then. On a partial generate or an error the blank tab is closed. If the
+   * browser refuses even the synchronous open, the print view opens in this
+   * tab instead; the flyer is already saved, so nothing is lost.
+   */
   async function printAll(): Promise<void> {
     if (busy || textError || selected.length === 0) return;
+    const tab = window.open('', '_blank');
+    try {
+      // Same-origin about:blank, so say what is happening while it waits.
+      if (tab) {
+        tab.document.title = 'Preparing flyers';
+        tab.document.body.textContent = 'Saving the flyer and making any missing links. The print view opens here in a moment.';
+      }
+    } catch {
+      // A browser that isolates the blank tab just shows it empty.
+    }
     busy = true;
     status = 'Saving the flyer.';
     try {
@@ -175,26 +194,38 @@
       }
       adopt(v);
       if (v.remaining) {
+        tab?.close();
         status = `${v.remaining} of ${v.selection.length} locations still need a link or QR code, so nothing was opened. ${v.message ?? ''} Press Print again to retry.`.trim();
         return;
       }
       status = 'Opening the print view.';
-      window.open(adminOutreachPrintHash(flyerId, 'full'), '_blank', 'noopener');
-      status = 'The print view is open in a new tab.';
+      const hash = adminOutreachPrintHash(flyerId, 'full');
+      if (tab) {
+        // The blank tab's own URL is about:blank, so the hash must be made
+        // absolute against this page before navigating it.
+        tab.opener = null;
+        tab.location.href = new URL(hash, window.location.href).href;
+        status = 'The print view is open in a new tab.';
+      } else {
+        window.location.hash = hash;
+      }
     } catch (err) {
+      tab?.close();
       status = message(err, 'Could not print. Everything saved so far is kept; try again.');
     } finally {
       busy = false;
     }
   }
 
-  async function togglePutUp(linkId: number, isUp: boolean): Promise<void> {
+  async function togglePutUp(linkId: number, isUp: boolean, box?: HTMLInputElement): Promise<void> {
     status = '';
     try {
       if (isUp) await clearFlyerLinkPutUp(linkId);
       else await markFlyerLinkPutUp(linkId);
       adopt(await getOutreachFlyer(flyerId));
     } catch (err) {
+      // The checkbox flipped on click; put it back, since nothing changed.
+      if (box) box.checked = isUp;
       status = message(err, 'Could not update that location. Please try again.');
     }
   }
@@ -277,7 +308,7 @@
               </div>
             </div>
             <figcaption>
-              Full page · {sheetCount(printable.length, 'full')} {sheetCount(printable.length, 'full') === 1 ? 'sheet' : 'sheets'}
+              Full page · {sheetCount(printCount, 'full')} {sheetCount(printCount, 'full') === 1 ? 'sheet' : 'sheets'}
               <a href={adminOutreachPrintHash(flyerId, 'full')} target="_blank" rel="noopener">Print all · full page</a>
             </figcaption>
           </figure>
@@ -288,7 +319,7 @@
               </div>
             </div>
             <figcaption>
-              Half-size double · {sheetCount(printable.length, 'half')} {sheetCount(printable.length, 'half') === 1 ? 'sheet' : 'sheets'}
+              Half-size double · {sheetCount(printCount, 'half')} {sheetCount(printCount, 'half') === 1 ? 'sheet' : 'sheets'}
               <a href={adminOutreachPrintHash(flyerId, 'half')} target="_blank" rel="noopener">Print all · half-size double</a>
             </figcaption>
           </figure>
@@ -468,7 +499,7 @@
                               type="checkbox"
                               checked={!!s.link.put_up_at}
                               aria-label="Put up: {s.name}"
-                              onchange={() => togglePutUp(s.link!.id, !!s.link!.put_up_at)}
+                              onchange={(e) => togglePutUp(s.link!.id, !!s.link!.put_up_at, e.currentTarget)}
                             />
                             {s.link.put_up_at ? formatDateTime(s.link.put_up_at) : 'Not yet'}
                           </label>
