@@ -55,6 +55,8 @@ esac
 case "$DB" in
   opencircuit|opencircuit_test|opencircuit_live)
     echo "refusing: DEMO_DB=$DB is a database other work relies on; use the default opencircuit_demo" >&2; exit 1 ;;
+  opencircuit_test_*)
+    echo "refusing: DEMO_DB=$DB is in scripts/testdb.sh's per-agent pool; use the default opencircuit_demo" >&2; exit 1 ;;
 esac
 for c in go npm psql migrate curl; do
   command -v "$c" >/dev/null 2>&1 || { echo "error: $c not found on PATH" >&2; exit 1; }

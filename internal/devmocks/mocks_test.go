@@ -185,7 +185,9 @@ func TestRequireLocalDSN(t *testing.T) {
 		"postgres://u:p@db.example.com:5432/x":                           false,
 		"postgres://u:p@10.0.0.5/x":                                      false,
 		"postgres:///x":                                                  false,
-		"":                                                               false,
+		"postgres://u:p@localhost/x?host=db.example.com":                 false,
+		"postgres://u:p@localhost/x?hostaddr=10.0.0.5":                   false,
+		"": false,
 	} {
 		if err := devmocks.RequireLocalDSN(dsn); (err == nil) != ok {
 			t.Errorf("RequireLocalDSN(%q) = %v, want ok=%v", dsn, err, ok)

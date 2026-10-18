@@ -30,6 +30,13 @@ func RequireLocalDSN(dsn string) error {
 	if err != nil || u.Host == "" {
 		return errors.New("devmocks: DATABASE_URL must be a postgres URL with an explicit local host")
 	}
+	// pgx lets a host or hostaddr query parameter override the URL's
+	// authority, so a localhost URL carrying one could still reach another
+	// machine. Refuse both outright rather than judging their values.
+	q := u.Query()
+	if q.Has("host") || q.Has("hostaddr") {
+		return errors.New("devmocks: refusing to seed: DATABASE_URL may not set host or hostaddr as a query parameter")
+	}
 	h := u.Hostname()
 	if h == "localhost" {
 		return nil
