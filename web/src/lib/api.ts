@@ -1317,6 +1317,11 @@ export function draftAllOutreach(workshopId: number, waves: string[] = []): Prom
     : apiPost<OutreachDraftAllResult>(`/admin/workshops/${workshopId}/outreach/draft-all`, { waves });
 }
 
+/** POST /admin/workshops/{id}/outreach/reset (#0592) — remove the posts and flyers; 409 once anything is public. */
+export function resetOutreach(workshopId: number): Promise<WorkshopOutreach> {
+  return apiPost<WorkshopOutreach>(`/admin/workshops/${workshopId}/outreach/reset`);
+}
+
 /** POST /admin/workshops/{id}/outreach/schedule-all — preview (`dry_run`) or confirm the previewed ids. */
 export function scheduleAllOutreach(
   workshopId: number,

@@ -38,6 +38,9 @@ type outreachStore interface {
 	SetPrepared(ctx context.Context, id int64, key, shortURL, status string) (outreach.Post, bool, error)
 	MarkPosted(ctx context.Context, id int64, remoteURL *string, now time.Time) (outreach.Post, error)
 	DeletePost(ctx context.Context, id int64) error
+	// CanReset and Reset (#0592): start over while nothing is public.
+	CanReset(ctx context.Context, outreachID int64) (bool, error)
+	Reset(ctx context.Context, outreachID int64) (outreach.ResetResult, error)
 	// Slot links (#0568): one tracked link per channel x wave, made before any
 	// post exists. InsertPostLink's bool is true only when a row was inserted.
 	ListPostLinks(ctx context.Context, outreachID int64) ([]outreach.PostLink, error)
@@ -336,6 +339,9 @@ type outreachPanelView struct {
 	Channels          []outreachChannelView `json:"channels"`
 	Waves             []outreachWaveView    `json:"waves"`
 	Posts             []outreachPostView    `json:"posts"`
+	// CanReset is true when an outreach exists and nothing for it has gone
+	// public (#0592); the Reset button shows from it.
+	CanReset bool `json:"can_reset"`
 	// LinkReport is set only on Start's response (#0568).
 	LinkReport *outreachLinkReport `json:"link_report,omitempty"`
 }
@@ -364,6 +370,9 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 		v.Outreach = &outreachRowView{ID: o.ID, WorkshopID: o.WorkshopID, CampaignSlug: o.CampaignSlug, CreatedAt: o.CreatedAt.UTC().Format(time.RFC3339)}
 		posts, err := h.store.ListPosts(ctx, o.ID)
 		if err != nil {
+			return v, err
+		}
+		if v.CanReset, err = h.store.CanReset(ctx, o.ID); err != nil {
 			return v, err
 		}
 		f := h.facts(wk)
@@ -964,4 +973,66 @@ func (h *AdminOutreachHandler) DeletePost(w http.ResponseWriter, r *http.Request
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Reset handles POST /admin/workshops/{id}/outreach/reset (#0592): remove the
+// workshop's posts and flyers so drafting can start over. 409 when anything
+// has gone public. The outreach row and its short links are kept (ShortLinks
+// has no delete), so the next Draft reuses the same links.
+func (h *AdminOutreachHandler) Reset(w http.ResponseWriter, r *http.Request) {
+	actor, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	id, ok := outreachPathID(w, r)
+	if !ok {
+		return
+	}
+	wk, ok := h.loadWorkshop(w, r, id)
+	if !ok {
+		return
+	}
+	o, err := h.store.GetByWorkshop(r.Context(), id)
+	if errors.Is(err, outreach.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "outreach has not started for this workshop")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	res, err := h.store.Reset(r.Context(), o.ID)
+	switch {
+	case err == nil:
+	case errors.Is(err, outreach.ErrResetPosted):
+		writeError(w, http.StatusConflict, "Something has already been posted, so outreach cannot be reset.")
+		return
+	case errors.Is(err, outreach.ErrResetInFlight):
+		writeError(w, http.StatusConflict, "A post is queued or being sent, so outreach cannot be reset.")
+		return
+	case errors.Is(err, outreach.ErrResetFlyerPutUp):
+		writeError(w, http.StatusConflict, "A flyer is marked put up, so outreach cannot be reset.")
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if h.auditor != nil {
+		actorID := actor.ID
+		targetID := o.ID
+		h.auditor.Record(r.Context(), audit.Entry{
+			ActorID:    &actorID,
+			Action:     audit.ActionOutreachReset,
+			TargetType: audit.TargetOutreach,
+			TargetID:   &targetID,
+			Metadata:   map[string]any{"workshop_id": o.WorkshopID, "posts_removed": res.Posts, "flyers_removed": res.Flyers},
+			IP:         clientIP(r),
+		})
+	}
+	v, err := h.panel(r.Context(), wk, &o)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }

@@ -340,6 +340,9 @@ const (
 	ActionOutreachPostPrepared = "outreach_post.prepared"
 	ActionOutreachPostPosted   = "outreach_post.posted"
 	ActionOutreachPostDeleted  = "outreach_post.deleted"
+	// ActionOutreachReset (#0592) targets the outreach row; metadata counts
+	// the posts and flyers removed.
+	ActionOutreachReset = "outreach.reset"
 
 	// Automatic posting (#0545), all targeting a post. Queued is Post now and
 	// Retry alike (metadata "retry" tells them apart); Scheduled covers

@@ -10,6 +10,7 @@ import type { OutreachLinksView, OutreachResults, WorkshopOutreach } from '../..
 
 const getWorkshopOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const getWorkshopOutreachResults = vi.fn<(id: number) => Promise<OutreachResults>>();
+const resetOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const getWorkshopOutreachLinks = vi.fn<(id: number) => Promise<OutreachLinksView>>();
 vi.mock('../../lib/api', () => ({
   getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
@@ -18,6 +19,7 @@ vi.mock('../../lib/api', () => ({
   getWorkshopOutreachLinks: (id: number) => getWorkshopOutreachLinks(id),
   createWorkshopOutreachLinks: vi.fn(),
   draftAllOutreach: vi.fn(),
+  resetOutreach: (id: number) => resetOutreach(id),
   scheduleAllOutreach: vi.fn(),
   createOutreachPost: vi.fn(),
   ApiError: class ApiError extends Error {
@@ -36,6 +38,7 @@ afterEach(() => {
   getWorkshopOutreach.mockReset();
   getWorkshopOutreachResults.mockReset();
   getWorkshopOutreachLinks.mockReset();
+  resetOutreach.mockReset();
 });
 
 const channels = [
@@ -88,7 +91,7 @@ describe('OutreachWorkshop', () => {
   it('points at Settings when ShortLinks is not connected', async () => {
     getWorkshopOutreach.mockResolvedValue(view({ available: false, unavailable_reason: 'shortlinks_not_configured', outreach: null }));
     render(OutreachWorkshop, { workshopId: 5 });
-    await waitFor(() => expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('#/settings'));
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('#/settings?section=outreach'));
   });
 
   it('points at the editor when the workshop is not published', async () => {
@@ -96,5 +99,49 @@ describe('OutreachWorkshop', () => {
     render(OutreachWorkshop, { workshopId: 5 });
     const link = await screen.findByRole('link', { name: 'Open the workshop editor' });
     expect(link.getAttribute('href')).toBe('#/workshops/5');
+  });
+
+  it('hides Reset outreach unless the view says can_reset (#0592)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ can_reset: false }));
+    getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started' } as OutreachResults);
+    getWorkshopOutreachLinks.mockResolvedValue(links);
+    render(OutreachWorkshop, { workshopId: 5 });
+    await screen.findByRole('button', { name: 'Draft all' });
+    expect(screen.queryByRole('button', { name: 'Reset outreach' })).toBeNull();
+  });
+
+  it('opens an in-app dialog and calls the reset endpoint on confirm (#0592)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ can_reset: true }));
+    getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started' } as OutreachResults);
+    getWorkshopOutreachLinks.mockResolvedValue(links);
+    resetOutreach.mockResolvedValue(view({ can_reset: true }));
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    render(OutreachWorkshop, { workshopId: 5 });
+    (await screen.findByRole('button', { name: 'Reset outreach' })).click();
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toMatch(/Removed/);
+    expect(dialog.textContent).toMatch(/Kept/);
+    expect(resetOutreach).not.toHaveBeenCalled();
+    const inDialog = dialog.querySelectorAll('button');
+    const confirmBtn = [...inDialog].find((b) => b.textContent?.trim() === 'Reset outreach')!;
+    confirmBtn.click();
+    await waitFor(() => expect(resetOutreach).toHaveBeenCalledWith(5));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(getWorkshopOutreach.mock.calls.length).toBeGreaterThan(1);
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it('shows the server message in the dialog when reset is refused (#0592)', async () => {
+    const { ApiError } = await import('../../lib/api');
+    getWorkshopOutreach.mockResolvedValue(view({ can_reset: true }));
+    getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started' } as OutreachResults);
+    getWorkshopOutreachLinks.mockResolvedValue(links);
+    resetOutreach.mockRejectedValue(new (ApiError as unknown as new (s: number, m: string) => Error)(409, 'Something has already been posted, so outreach cannot be reset.'));
+    render(OutreachWorkshop, { workshopId: 5 });
+    (await screen.findByRole('button', { name: 'Reset outreach' })).click();
+    const dialog = await screen.findByRole('dialog');
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset outreach')!.click();
+    await waitFor(() => expect(dialog.querySelector('[role="alert"]')?.textContent).toMatch(/already been posted/));
+    expect(screen.getByRole('dialog')).toBeTruthy();
   });
 });

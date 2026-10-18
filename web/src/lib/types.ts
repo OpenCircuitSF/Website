@@ -828,6 +828,8 @@ export interface WorkshopOutreach {
   channels: OutreachChannel[];
   waves: OutreachWave[];
   posts: OutreachPost[];
+  /** True when outreach exists and nothing for it is public (#0592); the server is the authority. */
+  can_reset?: boolean;
   /** Set only on Start's response (#0568). */
   link_report?: OutreachLinkReport;
 }
