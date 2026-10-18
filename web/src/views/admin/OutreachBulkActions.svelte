@@ -52,12 +52,12 @@
     dialogError = null;
   }
 
-  async function confirm(postIds: number[]): Promise<void> {
+  async function confirm(postIds: number[], times: Record<number, string>): Promise<void> {
     if (!plan) return;
     confirming = true;
     dialogError = null;
     try {
-      const r = await scheduleAllOutreach(workshopId, { dry_run: false, post_ids: postIds });
+      const r = await scheduleAllOutreach(workshopId, Object.keys(times).length > 0 ? { dry_run: false, post_ids: postIds, times } : { dry_run: false, post_ids: postIds });
       plan = null;
       status = scheduleAllMessage(r);
       onDone();

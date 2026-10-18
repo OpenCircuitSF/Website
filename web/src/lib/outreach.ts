@@ -3,7 +3,7 @@
 // here. The channel and wave lists are not duplicated here -- the server
 // sends them with every panel view.
 
-import { fromPacificInput, toPacificInput } from './pacificTime';
+import { formatPacificWeekdayTime, fromPacificInput, toPacificInput } from './pacificTime';
 import type { OutreachChannel, OutreachPost, OutreachWave, WorkshopOutreach } from './types';
 
 /** The placeholder a draft carries until Prepare swaps in the real short URL.
@@ -119,6 +119,20 @@ export function defaultScheduleAt(waveName: string, waves: OutreachWave[], now: 
   if (at === null) return null;
   const t = Date.parse(at);
   return Number.isNaN(t) || t <= now.getTime() ? null : at;
+}
+
+/**
+ * The hint under an empty schedule picker (#0587). Announce usually goes out
+ * now; a suggestion that has passed is named with its date; otherwise the wave
+ * has no suggestion at all.
+ */
+export function scheduleHint(waveName: string, waves: OutreachWave[]): string {
+  if (waveName === 'announce') return 'The announcement usually goes out now. Pick a time only if you want to wait.';
+  const at = waves.find((w) => w.name === waveName)?.suggested_at ?? null;
+  if (at !== null && !Number.isNaN(Date.parse(at))) {
+    return `The suggested time (${formatPacificWeekdayTime(at)}) has passed. Pick one.`;
+  }
+  return 'There is no suggested time for this wave. Pick one.';
 }
 
 /** An ISO instant as the value of a datetime-local input, in Pacific time (#0585). */

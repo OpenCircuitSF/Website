@@ -5,6 +5,7 @@ import {
   composerActions,
   countCharacters,
   defaultScheduleAt,
+  scheduleHint,
   fromLocalInputValue,
   isOverLimit,
   shouldPoll,
@@ -192,5 +193,21 @@ describe('utmChips, messages, url validation', () => {
     expect(validateRemoteUrl('javascript:alert(1)')).not.toBeNull();
     expect(validateRemoteUrl('not a url')).not.toBeNull();
     expect(validateRemoteUrl('https://x.test/' + 'a'.repeat(2100))).not.toBeNull();
+  });
+});
+
+describe('scheduleHint (#0587)', () => {
+  const waves: OutreachWave[] = [
+    { name: 'announce', label: 'Announce', suggested_at: null },
+    { name: 'reminder', label: 'Reminder', suggested_at: '2026-10-25T00:00:00Z' },
+  ];
+  it('announce usually goes out now', () => {
+    expect(scheduleHint('announce', waves)).toBe('The announcement usually goes out now. Pick a time only if you want to wait.');
+  });
+  it('a passed suggestion is named with its Pacific date', () => {
+    expect(scheduleHint('reminder', waves)).toBe('The suggested time (Sat, Oct 24, 5:00 PM PT) has passed. Pick one.');
+  });
+  it('a wave with no suggestion says so', () => {
+    expect(scheduleHint('nope', waves)).toBe('There is no suggested time for this wave. Pick one.');
   });
 });

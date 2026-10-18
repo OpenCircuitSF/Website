@@ -28,6 +28,7 @@
     defaultScheduleAt,
     fromLocalInputValue,
     isOverLimit,
+    scheduleHint,
     toLocalInputValue,
     utmChips,
   } from '../../lib/outreach';
@@ -230,7 +231,7 @@
         <input type="datetime-local" bind:value={scheduleLocal} />
       </label>
       {#if !scheduleLocal}
-        <p class="text-muted">No suggested time for this wave, or it has passed. Pick one.</p>
+        <p class="text-muted">{scheduleHint(wave.name, [wave])}</p>
       {/if}
     </div>
   {/if}

@@ -1325,7 +1325,7 @@ export function resetOutreach(workshopId: number): Promise<WorkshopOutreach> {
 /** POST /admin/workshops/{id}/outreach/schedule-all — preview (`dry_run`) or confirm the previewed ids. */
 export function scheduleAllOutreach(
   workshopId: number,
-  body: { dry_run: true } | { dry_run: false; post_ids: number[] },
+  body: { dry_run: true } | { dry_run: false; post_ids: number[]; times?: Record<number, string> },
 ): Promise<OutreachScheduleAllResult> {
   return apiPost<OutreachScheduleAllResult>(`/admin/workshops/${workshopId}/outreach/schedule-all`, body);
 }

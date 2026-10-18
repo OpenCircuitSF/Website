@@ -640,3 +640,40 @@ func TestAdminOutreachLinks_ScheduleAll(t *testing.T) {
 		t.Errorf("stale ids = %+v", c)
 	}
 }
+
+// #0587: a confirm may carry per-post time overrides, validated to the same
+// window a single Schedule uses.
+func TestAdminOutreachLinks_ScheduleAllTimeOverride(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	starts := *w.StartsAt
+	now := starts.AddDate(0, 0, -3)
+	e.h.now = func() time.Time { return now }
+	e.startHTTP(t, w)
+	if code, b := e.do(t, http.MethodPost, e.linksPath(w, "draft-all"), `{"waves":["last-call"]}`); code != http.StatusOK {
+		t.Fatalf("draft-all = %d (%s)", code, b)
+	}
+	_, b := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), `{"dry_run":true}`)
+	d := decodeOutreach[testScheduleAll](t, b)
+	if len(d.ToSchedule) == 0 {
+		t.Fatalf("dry run planned nothing: %s", b)
+	}
+	id := d.ToSchedule[0].PostID
+
+	for _, bad := range []string{now.Add(-time.Hour).Format(time.RFC3339), "soon"} {
+		code, _ := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), fmt.Sprintf(`{"dry_run":false,"post_ids":[%d],"times":{"%d":%q}}`, id, id, bad))
+		if code != http.StatusBadRequest {
+			t.Errorf("override %q = %d, want 400", bad, code)
+		}
+	}
+	want := now.Add(26 * time.Hour).UTC().Truncate(time.Second)
+	code, b := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), fmt.Sprintf(`{"dry_run":false,"post_ids":[%d],"times":{"%d":%q}}`, id, id, want.Format(time.RFC3339)))
+	if code != http.StatusOK {
+		t.Fatalf("confirm = %d (%s)", code, b)
+	}
+	var got time.Time
+	_ = e.pool.QueryRow(context.Background(), `SELECT scheduled_at FROM outreach_posts WHERE id = $1`, id).Scan(&got)
+	if !got.Equal(want) {
+		t.Errorf("scheduled_at = %v, want %v", got, want)
+	}
+}

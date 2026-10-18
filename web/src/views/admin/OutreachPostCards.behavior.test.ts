@@ -132,6 +132,14 @@ describe('post cards (#0569)', () => {
     expect(manual.textContent).not.toContain('Post now');
   });
 
+  it('the composer says Announce usually goes out now instead of "no suggested time" (#0587)', async () => {
+    setup([post({ id: 1 })]);
+    await screen.findByText('Not scheduled');
+    await fireEvent.click(screen.getByRole('button', { name: 'Schedule…' }));
+    expect(screen.getByText('The announcement usually goes out now. Pick a time only if you want to wait.')).toBeTruthy();
+    expect(screen.queryByText(/No suggested time/)).toBeNull();
+  });
+
   it('Edit opens the composer inline in the card', async () => {
     setup([post({ id: 1 })]);
     await screen.findByText('Not scheduled');

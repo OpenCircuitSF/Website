@@ -599,6 +599,10 @@ func (h *AdminOutreachHandler) DraftAll(w http.ResponseWriter, r *http.Request) 
 type scheduleAllRequest struct {
 	DryRun  bool    `json:"dry_run"`
 	PostIDs []int64 `json:"post_ids"`
+	// Times optionally overrides a chosen post's planned time (#0587), keyed by
+	// post id, RFC 3339. Each must lie within the same lead window a single
+	// Schedule uses; an override for a post not in post_ids is ignored.
+	Times map[int64]string `json:"times"`
 }
 
 type scheduleAllItemView struct {
@@ -668,6 +672,30 @@ func (h *AdminOutreachHandler) ScheduleAll(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "post_ids is required unless dry_run is true")
 		return
 	}
+	overrides := map[int64]time.Time{}
+	if !req.DryRun {
+		now := h.now()
+		for _, id := range req.PostIDs {
+			raw, has := req.Times[id]
+			if !has {
+				continue
+			}
+			at, perr := time.Parse(time.RFC3339, raw)
+			if perr != nil {
+				writeError(w, http.StatusBadRequest, "times must be RFC 3339 instants")
+				return
+			}
+			if at.Before(now.Add(minScheduleLead)) {
+				writeError(w, http.StatusBadRequest, "a chosen time is in the past; pick a later one")
+				return
+			}
+			if at.After(now.Add(maxScheduleLead)) {
+				writeError(w, http.StatusBadRequest, "a chosen time is too far ahead")
+				return
+			}
+			overrides[id] = at.UTC()
+		}
+	}
 	ctx := r.Context()
 	posts, err := h.store.ListPosts(ctx, o.ID)
 	if err != nil {
@@ -705,6 +733,9 @@ func (h *AdminOutreachHandler) ScheduleAll(w http.ResponseWriter, r *http.Reques
 		planned[it.PostID] = true
 		if !wanted[it.PostID] {
 			continue
+		}
+		if at, has := overrides[it.PostID]; has {
+			it.ScheduledAt = at
 		}
 		updated, err := h.store.Schedule(ctx, it.PostID, it.ScheduledAt)
 		if err != nil {
