@@ -161,6 +161,16 @@ func TestShortLinksRoundTrip(t *testing.T) {
 	if daySum != st.ClickCount {
 		t.Fatalf("timeseries sums to %d, click_count %d", daySum, st.ClickCount)
 	}
+	// Every bucket lies inside the half-open window [WindowFrom, WindowTo),
+	// or the SPA's chart drops it and its legend disagrees with the
+	// per-link totals (#0590).
+	for _, s := range st.SeriesByLink {
+		for _, d := range s.Days {
+			if d.Date < st.WindowFrom || d.Date >= st.WindowTo {
+				t.Fatalf("series day %s outside [%s, %s)", d.Date, st.WindowFrom, st.WindowTo)
+			}
+		}
+	}
 	bad, _ := shortlinks.New(base+"/shortlinks", devmocks.BadToken)
 	if _, err := bad.Me(ctx); !errors.Is(err, shortlinks.ErrUnauthenticated) {
 		t.Fatalf("bad token err = %v, want ErrUnauthenticated", err)

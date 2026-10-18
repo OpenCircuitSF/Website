@@ -741,8 +741,12 @@ func (s *Server) rollup(slug string) map[string]any {
 	return map[string]any{
 		"click_count": total, "excluded_bot_count": total / 10,
 		"by_source": toBuckets(src), "by_medium": toBuckets(med), "by_content": toBuckets(cont),
-		"by_referer":  []bucket{{"value": "(direct)", "count": total * 6 / 10}, {"value": "bsky.app", "count": total * 3 / 10}, {"value": "mastodon.social", "count": total - total*6/10 - total*3/10}},
-		"window_from": days[0], "window_to": days[6],
+		"by_referer": []bucket{{"value": "(direct)", "count": total * 6 / 10}, {"value": "bsky.app", "count": total * 3 / 10}, {"value": "mastodon.social", "count": total - total*6/10 - total*3/10}},
+		// The window is half-open, [window_from, window_to), as ShortLinks'
+		// own is: window_to is the day after the last bucket. Reporting the
+		// last day itself made the SPA drop it from the chart, so the legend
+		// read 40 against the table's 55 (#0590).
+		"window_from": days[0], "window_to": end.AddDate(0, 0, 1).Format("2006-01-02"),
 		"timeseries": bucket{"days": ts}, "by_link": byLink, "series_by_link": series,
 	}
 }

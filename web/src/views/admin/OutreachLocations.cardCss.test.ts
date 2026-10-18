@@ -19,5 +19,7 @@ describe('OutreachLocations narrow layout CSS (#0590)', () => {
   it('stacks the action buttons full width inside it', () => {
     expect(media).toMatch(/\.loc-row-actions\s*\{[^}]*flex-direction:\s*column/);
     expect(media).toMatch(/\.loc-row-actions > :global\(\*\)\s*\{[^}]*width:\s*100%/);
+    // The flex rule must outrank `.loc-table td { display: block }`, or it is dead.
+    expect(media).toMatch(/\.loc-table td\.loc-row-actions\s*\{[^}]*display:\s*flex/);
   });
 });

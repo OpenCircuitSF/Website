@@ -419,14 +419,16 @@
       max-width: none;
       white-space: normal;
     }
-    .loc-row-actions {
+    /* td.loc-row-actions, not .loc-row-actions: `.loc-table td` above sets
+       display: block and outranks a lone class, which left this flex dead. */
+    .loc-table td.loc-row-actions {
       display: flex;
       flex-direction: column;
       align-items: stretch;
       gap: var(--space-2);
       white-space: normal;
     }
-    .loc-row-actions > :global(*) {
+    .loc-table td.loc-row-actions > :global(*) {
       width: 100%;
     }
   }
