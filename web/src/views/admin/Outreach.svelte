@@ -68,8 +68,8 @@
 {:else}
 <nav class="outreach-subnav" aria-label="Outreach sections">
   <a href={adminOutreachHash('workshops')} aria-current={view === 'workshops' || view === 'workshop' ? 'page' : undefined}>Posts</a>
-  <a href={adminOutreachHash('locations')} aria-current={view === 'locations' ? 'page' : undefined}>Locations</a>
-  <a href={adminOutreachFlyersHash()} aria-current={view === 'flyers' || view === 'print' ? 'page' : undefined}>Flyer spots</a>
+  <a href={adminOutreachHash('locations')} aria-current={view === 'locations' ? 'page' : undefined}>Flyer spots</a>
+  <a href={adminOutreachFlyersHash()} aria-current={view === 'flyers' || view === 'print' ? 'page' : undefined}>Flyers</a>
   <a href={adminOutreachResultsHash()} aria-current={view === 'results' ? 'page' : undefined}>Results</a>
 </nav>
 

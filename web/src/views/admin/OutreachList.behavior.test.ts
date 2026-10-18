@@ -60,12 +60,13 @@ describe('Outreach landing list', () => {
     expect(document.body.textContent).not.toContain('No workshop has outreach yet');
   });
 
-  it('labels the sub-nav Posts, Locations, Flyer spots, Results', async () => {
+  it('labels the sub-nav Posts, Flyer spots (the saved locations), Flyers, Results', async () => {
     listAdminWorkshops.mockResolvedValue({ workshops: [] });
     listOutreach.mockResolvedValue({ outreach: [] });
     render(Outreach);
     const nav = screen.getByRole('navigation', { name: 'Outreach sections' });
-    expect(Array.from(nav.querySelectorAll('a')).map((a) => a.textContent)).toEqual(['Posts', 'Locations', 'Flyer spots', 'Results']);
+    expect(Array.from(nav.querySelectorAll('a')).map((a) => a.textContent)).toEqual(['Posts', 'Flyer spots', 'Flyers', 'Results']);
+    expect(screen.getByRole('link', { name: 'Flyer spots' }).getAttribute('href')).toContain('locations');
   });
 });
 

@@ -11,11 +11,16 @@ export interface OutreachChip {
   tone: 'muted' | 'success';
 }
 
-/** Published workshops that start in the future, soonest first. */
+/** Published workshops that are upcoming, soonest first. "Upcoming" is the
+ * public listing's rule (workshops.ListVisible): starts_at at or after now,
+ * or no starts_at at all (date TBD), which sorts after every dated one. The
+ * server offers outreach for any published workshop, so an undated one must
+ * be reachable from this list too. */
 export function upcomingPublished(workshops: AdminWorkshop[], now: Date = new Date()): AdminWorkshop[] {
+  const at = (w: AdminWorkshop) => (w.starts_at ? Date.parse(w.starts_at) : Number.POSITIVE_INFINITY);
   return workshops
-    .filter((w) => w.status === 'published' && w.starts_at !== undefined && Date.parse(w.starts_at) > now.getTime())
-    .sort((a, b) => Date.parse(a.starts_at ?? '') - Date.parse(b.starts_at ?? ''));
+    .filter((w) => w.status === 'published' && at(w) >= now.getTime())
+    .sort((a, b) => (at(a) === at(b) ? a.id - b.id : at(a) < at(b) ? -1 : 1));
 }
 
 /** Index summaries by workshop id. */

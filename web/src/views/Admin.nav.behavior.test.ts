@@ -4,7 +4,7 @@
 // select that replaces them on narrow screens. jsdom applies no layout, so the
 // "no more than two rows at 390 px" claim is NOT proven here: the select is
 // present in the DOM and CSS shows it at <=480px, which a real browser must confirm.
-import { render, cleanup, screen, within } from '@testing-library/svelte';
+import { render, cleanup, screen, within, fireEvent } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { currentUser } from '../lib/stores';
 
@@ -45,5 +45,16 @@ describe('Admin nav groups', () => {
     const select = screen.getByRole('combobox', { name: 'Admin section' }) as HTMLSelectElement;
     expect(select.querySelectorAll('optgroup').length).toBe(3);
     expect(select.value).toBe('overview');
+  });
+
+  it('navigates when the narrow-screen select changes (keyboard or pointer both fire change)', async () => {
+    currentUser.set({ id: 1, email: 'a@b.c', is_admin: true, active: true, created_at: '' } as never);
+    window.location.hash = '#/';
+    render(Admin);
+    const select = screen.getByRole('combobox', { name: 'Admin section' }) as HTMLSelectElement;
+    await fireEvent.change(select, { target: { value: 'outreach' } });
+    expect(window.location.hash).toBe('#/outreach');
+    await fireEvent.change(select, { target: { value: 'overview' } });
+    expect(window.location.hash).toBe('#/');
   });
 });

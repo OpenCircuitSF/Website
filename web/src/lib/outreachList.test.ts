@@ -28,15 +28,19 @@ function group(name: ConnectionGroup['name'], configured: boolean): ConnectionGr
 }
 
 describe('upcomingPublished', () => {
-  it('keeps published future workshops only, soonest first', () => {
+  it('keeps published upcoming workshops only, soonest first, undated last', () => {
     const rows = [
       ws(1, { starts_at: '2026-12-01T00:00:00Z' }),
       ws(2, { status: 'draft' }),
       ws(3, { starts_at: '2026-10-01T00:00:00Z' }),
       ws(4, { starts_at: undefined }),
       ws(5, { starts_at: '2026-11-01T00:00:00Z' }),
+      ws(6, { starts_at: undefined, status: 'canceled' }),
     ];
-    expect(upcomingPublished(rows, NOW).map((w) => w.id)).toEqual([5, 1]);
+    expect(upcomingPublished(rows, NOW).map((w) => w.id)).toEqual([5, 1, 4]);
+  });
+  it('counts a workshop starting exactly now as upcoming, as the public list does', () => {
+    expect(upcomingPublished([ws(1, { starts_at: NOW.toISOString() })], NOW).map((w) => w.id)).toEqual([1]);
   });
 });
 

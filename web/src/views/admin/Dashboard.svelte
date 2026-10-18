@@ -67,7 +67,8 @@
   }
 
   // #0586: outreach needs-attention rows, loaded separately so a failure here
-  // (or in the overview) never takes the other down; on failure no rows show.
+  // never takes the overview down; on failure no rows show. They render inside
+  // the overview's own block, so an overview failure (error + Retry) hides them.
   let outreachItems = $state<OutreachAttentionItem[]>([]);
 
   async function loadOutreachItems(): Promise<void> {
