@@ -7,15 +7,16 @@
   confirmation, the Announce "Post to Bluesky and Mastodon" button with its one
   confirmation, and the per-card notices. Edit opens the existing
   OutreachComposer inline in the card. No native browser dialog: every confirmation is
-  an in-app dialog.
+  an in-app dialog. With `channelFilter` (#0582, "Post by hand") only the
+  matching channels' cards are listed, under no heading of their own.
 -->
 <script lang="ts">
   import { tick } from 'svelte';
-  import { sendOutreachPost, ApiError } from '../../lib/api';
+  import { postAll } from '../../lib/outreachPostAll';
   import {
-    combinedPostResult,
     groupByWave,
     postableAutomatic,
+    visibleNotice,
     type CardNotice,
     type PostCard,
   } from '../../lib/outreachCards';
@@ -31,21 +32,33 @@
     onChange: (post: OutreachPost) => void;
     /** Refetch the whole view (after a draft is created or a post is deleted). */
     reload: () => void;
+    /** Only these channels get cards (the page's "Post by hand" list). */
+    channelFilter?: (channel: OutreachChannel) => boolean;
   }
-  let { view, results, onChange, reload }: Props = $props();
+  let { view, results, onChange, reload, channelFilter }: Props = $props();
 
   let editingId = $state<number | null>(null);
   let pendingEditId = $state<number | null>(null);
   let notices = $state<Record<number, CardNotice | null>>({});
-  let listStatus = $state('');
+  // The both-networks result line, and the posts it reported on (#0581).
+  let listText = $state('');
+  let listIds = $state<number[]>([]);
   let bothOpen = $state(false);
   let bothBusy = $state(false);
   let bothError = $state<string | null>(null);
   // Fixed when the dialog opens: each send updates the view, which would shrink the live list mid-flight.
   let bothSnapshot = $state<{ post: OutreachPost; channel: OutreachChannel }[]>([]);
 
-  const groups = $derived(groupByWave(view));
-  const bothItems = $derived(postableAutomatic(view, 'announce'));
+  // Same rule as the cards: the line goes once none of the posts it reported on
+  // still shows its notice, so "Bluesky: queued" clears when polling brings
+  // back posted (visibleNotice), while a failure stays with its unposted card.
+  const listStatus = $derived(
+    listIds.some((id) => visibleNotice(notices[id] ?? null, view.posts.find((p) => p.id === id) ?? null) !== '') ? listText : '',
+  );
+  const groups = $derived(
+    groupByWave(view).map((g) => ({ ...g, cards: channelFilter ? g.cards.filter((c) => channelFilter(c.channel)) : g.cards })),
+  );
+  const bothItems = $derived(postableAutomatic(view, 'announce').filter((i) => !channelFilter || channelFilter(i.channel)));
   const bothLabel = $derived(`Post to ${bothItems.map((i) => i.channel.label).join(' and ')}`);
 
   /** TikTok and YouTube need a video, so their cards sit under Video channels. */
@@ -85,29 +98,17 @@
   async function postBoth(): Promise<void> {
     bothBusy = true;
     bothError = null;
-    const outcomes: { label: string; ok: boolean; error?: string }[] = [];
-    const next: Record<number, CardNotice | null> = { ...notices };
-    for (const { post, channel } of bothSnapshot) {
-      try {
-        const updated = await sendOutreachPost(post.id);
-        onChange(updated);
-        outcomes.push({ label: channel.label, ok: true });
-        next[post.id] = { text: 'Queued. It posts within a few seconds; this page updates when it does.', kind: 'status', status: updated.status };
-      } catch (err) {
-        const reason = err instanceof ApiError ? err.message : 'please try again';
-        outcomes.push({ label: channel.label, ok: false, error: reason });
-        next[post.id] = { text: `Could not post: ${reason}`, kind: 'error', status: post.status };
-      }
-    }
-    notices = next;
-    listStatus = combinedPostResult(outcomes);
+    const r = await postAll(bothSnapshot, onChange);
+    notices = { ...notices, ...r.notices };
+    listText = r.line;
+    listIds = Object.keys(r.notices).map(Number);
     bothBusy = false;
     bothOpen = false;
   }
 </script>
 
-<section class="cards" aria-labelledby="outreach-posts-heading">
-  <h3 id="outreach-posts-heading">Posts</h3>
+<section class="cards" aria-labelledby={channelFilter ? undefined : 'outreach-posts-heading'} aria-label={channelFilter ? 'Post by hand' : undefined}>
+  {#if !channelFilter}<h3 id="outreach-posts-heading">Posts</h3>{/if}
   <!-- The both-networks result (D6). Always rendered (a persistent live
        region), and at the top, beside the Announce heading and its button,
        not after the last card (C5, M3). -->
@@ -130,7 +131,7 @@
       onDeleted={deleted}
     />
   {/snippet}
-  {#each groups as group (group.wave.name)}
+  {#each groups.filter((g) => g.cards.length > 0) as group (group.wave.name)}
     <h4 class="wave">{group.wave.label}</h4>
     {#if group.wave.name === 'announce' && bothItems.length >= 2}
       <p class="row">

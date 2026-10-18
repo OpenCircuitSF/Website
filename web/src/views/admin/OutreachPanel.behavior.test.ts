@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 //
-// #0544: mounts OutreachPanel.svelte under jsdom with '../../lib/api' mocked,
-// following Pending.behavior.test.ts. jsdom is not a browser (AGENTS.md §1):
-// this proves the panel renders what the payload says and wires the right
-// calls, not layout or clipboard permissions. navigator.clipboard does not
-// exist under jsdom, so it is stubbed.
+// #0544, #0582: mounts OutreachPanel.svelte under jsdom with '../../lib/api'
+// mocked. The panel is the loader: it owns loading, the implicit start,
+// polling and the results fetch, and hands the page layout to a body snippet,
+// so these tests use a stub body. jsdom is not a browser (AGENTS.md §1).
 import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -51,16 +50,8 @@ afterEach(() => {
 
 const channels = [
   { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' },
-  { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true, configured: false, account: '' },
-  { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false, account: '' },
-  { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' },
-  { name: 'youtube', label: 'YouTube', utm_source: 'youtube', utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' },
 ];
-const waves = [
-  { name: 'announce', label: 'Announce', suggested_at: null },
-  { name: 'reminder', label: 'Reminder', suggested_at: '2026-11-28T18:00:00Z' },
-  { name: 'last-call', label: 'Last call', suggested_at: '2026-12-04T18:00:00Z' },
-];
+const waves = [{ name: 'announce', label: 'Announce', suggested_at: null }];
 
 function view(over: Partial<WorkshopOutreach> = {}): WorkshopOutreach {
   return {
@@ -75,236 +66,151 @@ function view(over: Partial<WorkshopOutreach> = {}): WorkshopOutreach {
   };
 }
 
-function manualPost(): OutreachPost {
+function post(over: Partial<OutreachPost> = {}): OutreachPost {
   return {
-    id: 3, outreach_id: 9, channel: 'instagram', wave: 'announce', body: 'Hello https://go.example/k1', status: 'manual',
-    prepared: true, stale: false, held: false, short_link_key: 'k1', short_url: 'https://go.example/k1',
-    destination_url: 'https://site/workshops/soldering-101?utm_source=instagram',
-    utm: { source: 'instagram', medium: 'social', campaign: 'soldering-101', content: 'announce' },
+    id: 4, outreach_id: 9, channel: 'bluesky', wave: 'announce', body: 'Come solder', status: 'draft',
+    prepared: true, stale: false, customized: false, held: false, short_link_key: 'k2', short_url: 'https://go.example/k2',
+    destination_url: 'https://site/workshops/soldering-101?utm_source=bluesky',
+    utm: { source: 'bluesky', medium: 'social', campaign: 'soldering-101', content: 'announce' },
     scheduled_at: null, posted_at: null, remote_url: null, last_error: null, created_at: '2026-10-01T00:00:00Z', updated_at: null,
+    ...over,
+  };
+}
+
+// The stub page: shows the post statuses and a button that reports a change.
+let changeTo: OutreachPost = post({ status: 'queued' });
+const body = createRawSnippet<[{ view: WorkshopOutreach; results: OutreachResults | null; onChange: (p: OutreachPost) => void }]>((args) => ({
+  render: () => `<div><p>BODY ${args().view.posts.map((p) => p.status).join(',')}</p><button type="button">change</button></div>`,
+  setup: (el) => {
+    el.querySelector('button')!.onclick = () => args().onChange(changeTo);
+  },
+}));
+
+function resultsFor(over: Partial<OutreachResults> = {}): OutreachResults {
+  return {
+    status: 'ok',
+    workshop: { id: 5, slug: 'soldering-101', title: 'Soldering 101', status: 'published', starts_at: null },
+    campaign_slug: 'soldering-101',
+    window: { from: '2026-10-01', to: '2026-10-17' },
+    partial_last_day: true,
+    fetched_at: '2026-10-16T12:00:00Z',
+    totals: { clicks: 12, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 0 },
+    channels: [],
+    posts: [],
+    series: [],
+    flyer_locations: [],
+    flyer_all_status: 'ok',
+    reactions: null,
+    mentions: [],
+    ...over,
   };
 }
 
 describe('OutreachPanel', () => {
-  it('explains when ShortLinks is not configured', async () => {
-    getWorkshopOutreach.mockResolvedValue(
-      view({ available: false, unavailable_reason: 'shortlinks_not_configured', outreach: null }),
-    );
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
+  it('explains when ShortLinks is not configured and never starts outreach', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ available: false, unavailable_reason: 'shortlinks_not_configured', outreach: null }));
+    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a', autoStart: true, body });
     await waitFor(() => expect(screen.getByText(/Settings → Outreach connections/)).toBeTruthy());
     expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('#/settings?section=outreach');
-    expect(screen.queryByText('Start outreach')).toBeNull();
+    expect(startOutreach).not.toHaveBeenCalled();
   });
 
-  it('offers Start outreach, then renders a 5 x 3 grid of cells', async () => {
+  it('links to the workshop editor when the workshop is not published, and does not start (#0582)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ available: false, unavailable_reason: 'workshop_not_published', outreach: null }));
+    render(OutreachPanel, { workshopId: 5, autoStart: true, body });
+    const link = await screen.findByRole('link', { name: 'Open the workshop editor' });
+    expect(link.getAttribute('href')).toBe('#/workshops/5');
+    expect(startOutreach).not.toHaveBeenCalled();
+  });
+
+  it('starts outreach once, by itself, for an available workshop with none (#0582)', async () => {
     getWorkshopOutreach.mockResolvedValue(view({ outreach: null }));
-    startOutreach.mockResolvedValue(view());
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    const start = await screen.findByText('Start outreach');
-    await fireEvent.click(start);
-    await waitFor(() => expect(screen.getAllByText('Not drafted').length).toBe(15));
+    let release: (v: WorkshopOutreach) => void = () => {};
+    startOutreach.mockImplementation(() => new Promise<WorkshopOutreach>((res) => { release = res; }));
+    getWorkshopOutreachResults.mockResolvedValue(resultsFor());
+    render(OutreachPanel, { workshopId: 5, autoStart: true, body });
+    expect(await screen.findByText('Setting up links…')).toBeTruthy();
+    expect(screen.queryByText('Start outreach')).toBeNull();
+    release(view());
+    expect(await screen.findByText(/BODY/)).toBeTruthy();
+    expect(startOutreach).toHaveBeenCalledTimes(1);
     expect(startOutreach).toHaveBeenCalledWith(5);
   });
 
-  it('shows Copy content and Mark posted for a prepared manual post', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ posts: [manualPost()] }));
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    await fireEvent.click(await screen.findByText('Ready to post'));
-    const copy = await screen.findByText('Copy content');
-    expect(screen.getByText('Mark posted')).toBeTruthy();
-    expect(screen.getByText('https://go.example/k1', { selector: 'p' })).toBeTruthy();
-    await fireEvent.click(copy);
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Hello https://go.example/k1'));
+  it('does not start outreach without autoStart (GET and plain mounts stay read-only)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ outreach: null }));
+    render(OutreachPanel, { workshopId: 5, body });
+    expect(await screen.findByText('Outreach has not started.')).toBeTruthy();
+    expect(startOutreach).not.toHaveBeenCalled();
   });
 
-  // #0546: click counts come from a separate call made after the grid renders.
-  function resultsFor(over: Partial<OutreachResults> = {}): OutreachResults {
-    return {
-      status: 'ok',
-      workshop: { id: 5, slug: 'soldering-101', title: 'Soldering 101', status: 'published', starts_at: null },
-      campaign_slug: 'soldering-101',
-      window: { from: '2026-10-01', to: '2026-10-17' },
-      partial_last_day: true,
-      fetched_at: '2026-10-16T12:00:00Z',
-      totals: { clicks: 12, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 0 },
-      channels: [],
-      posts: [
-        { id: 3, channel: 'instagram', wave: 'announce', status: 'manual', short_link_key: 'k1', short_url: 'https://go.example/k1', posted_at: null, remote_url: null, clicks: 12, engagement: null },
-      ],
-      series: [],
-      flyer_locations: [],
-      flyer_all_status: 'ok',
-    reactions: null,
-    mentions: [],
-      ...over,
-    };
-  }
-
-  it('shows clicks in a cell and a View results link when results are ok', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ posts: [manualPost()] }));
-    getWorkshopOutreachResults.mockResolvedValue(resultsFor());
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    expect(await screen.findByText('12 clicks')).toBeTruthy();
-    expect(getWorkshopOutreachResults).toHaveBeenCalledWith(5);
-    const link = screen.getByText('View results') as HTMLAnchorElement;
-    expect(link.getAttribute('href')).toBe('#/outreach?view=results&workshop=5');
+  it('shows a warning with Try again when the start fails, and does not loop (#0582)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ outreach: null }));
+    startOutreach.mockRejectedValueOnce(new Error('boom'));
+    render(OutreachPanel, { workshopId: 5, autoStart: true, body });
+    expect(await screen.findByText('Could not set up the links. Please try again.')).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(startOutreach).toHaveBeenCalledTimes(1);
+    startOutreach.mockResolvedValue(view());
+    await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText(/BODY/)).toBeTruthy();
+    expect(startOutreach).toHaveBeenCalledTimes(2);
   });
 
-  it('refetches results after a post is prepared (#0552)', async () => {
-    const draft = { ...manualPost(), status: 'draft' as const, prepared: false, short_url: null, short_link_key: null };
-    getWorkshopOutreach.mockResolvedValue(view({ posts: [draft] }));
+  it('hands the link report to onLoaded after Start (#0568)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ outreach: null }));
+    const report = { created: 14, existing: 0, stopped: false, failed: [{ kind: 'post' as const, label: 'Mastodon · Reminder', reason: 'failed' }] };
+    startOutreach.mockResolvedValue(view({ link_report: report }));
+    const onLoaded = vi.fn();
+    render(OutreachPanel, { workshopId: 5, autoStart: true, onLoaded, body });
+    await waitFor(() => expect(onLoaded.mock.calls.some((c) => c[0].link_report?.failed.length === 1)).toBe(true));
+  });
+
+  it('still renders the page, with a status line, when the results call fails', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ posts: [post()] }));
+    getWorkshopOutreachResults.mockRejectedValue(new Error('network'));
+    render(OutreachPanel, { workshopId: 5, body });
+    expect(await screen.findByText('BODY draft')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('Click counts could not be loaded.')).toBeTruthy());
+  });
+
+  it('explains an unreachable ShortLinks in one line', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ posts: [post()] }));
+    getWorkshopOutreachResults.mockResolvedValue(resultsFor({ status: 'unreachable', totals: null }));
+    render(OutreachPanel, { workshopId: 5, body });
+    await waitFor(() => expect(screen.getByText(/ShortLinks could not be reached/)).toBeTruthy());
+  });
+
+  it('refetches results when a change alters a post status (#0552)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ posts: [post()] }));
     getWorkshopOutreachResults.mockResolvedValue(resultsFor());
-    prepareOutreachPost.mockResolvedValue({ ...draft, status: 'manual', prepared: true, short_url: 'https://go.example/k1', short_link_key: 'k1' });
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
+    changeTo = post({ status: 'scheduled' });
+    render(OutreachPanel, { workshopId: 5, body });
     await waitFor(() => expect(getWorkshopOutreachResults).toHaveBeenCalledTimes(1));
-    await fireEvent.click(await screen.findByText('Draft'));
-    await fireEvent.click(await screen.findByText('Prepare link'));
+    await fireEvent.click(await screen.findByRole('button', { name: 'change' }));
     await waitFor(() => expect(getWorkshopOutreachResults).toHaveBeenCalledTimes(2));
   });
 
   it('discards a stale results response that arrives after a newer one (#0554)', async () => {
-    const draft = { ...manualPost(), status: 'draft' as const, prepared: false, short_url: null, short_link_key: null };
-    getWorkshopOutreach.mockResolvedValue(view({ posts: [draft] }));
-    const stale = resultsFor();
-    stale.posts = [{ ...stale.posts[0], clicks: 5 }];
+    getWorkshopOutreach.mockResolvedValue(view({ posts: [post()] }));
     let releaseStale: (r: OutreachResults) => void = () => {};
     getWorkshopOutreachResults
       .mockImplementationOnce(() => new Promise<OutreachResults>((res) => { releaseStale = res; }))
-      .mockResolvedValue(resultsFor());
-    prepareOutreachPost.mockResolvedValue({ ...draft, status: 'manual', prepared: true, short_url: 'https://go.example/k1', short_link_key: 'k1' });
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
+      .mockResolvedValue(resultsFor({ status: 'unreachable', totals: null }));
+    changeTo = post({ status: 'scheduled' });
+    render(OutreachPanel, { workshopId: 5, body });
     await waitFor(() => expect(getWorkshopOutreachResults).toHaveBeenCalledTimes(1));
-    await fireEvent.click(await screen.findByText('Draft'));
-    await fireEvent.click(await screen.findByText('Prepare link'));
-    expect(await screen.findByText('12 clicks')).toBeTruthy();
-    releaseStale(stale);
+    await fireEvent.click(await screen.findByRole('button', { name: 'change' }));
+    expect(await screen.findByText(/ShortLinks could not be reached/)).toBeTruthy();
+    releaseStale(resultsFor({ status: 'ok' }));
     await new Promise((r) => setTimeout(r, 20));
-    expect(screen.queryByText('5 clicks')).toBeNull();
-    expect(screen.getByText('12 clicks')).toBeTruthy();
-  });
-
-  it('still renders the grid, with a status line, when the results call fails', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ posts: [manualPost()] }));
-    getWorkshopOutreachResults.mockRejectedValue(new Error('network'));
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    expect(await screen.findByText('Ready to post')).toBeTruthy();
-    await waitFor(() => expect(screen.getByText('Click counts could not be loaded.')).toBeTruthy());
-    expect(screen.queryByText(/clicks?$/)).toBeNull();
-  });
-
-  it('shows a posted cell\'s reactions even when ShortLinks is not configured (#0547)', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ posts: [{ ...manualPost(), id: 4, channel: 'bluesky', status: 'posted' }] }));
-    const r = resultsFor({ status: 'not_configured', totals: null });
-    r.posts = [{ ...r.posts[0], id: 4, channel: 'bluesky', clicks: null, engagement: { likes: 3, reposts: 0, replies: 0, quotes: 0, captured_at: '2026-10-16T12:00:00Z' } }];
-    getWorkshopOutreachResults.mockResolvedValue(r);
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    expect(await screen.findByText('3 likes')).toBeTruthy();
-    expect(screen.queryByText(/clicks?$/)).toBeNull();
-  });
-
-  it('explains an unreachable ShortLinks in one line and shows no counts', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ posts: [manualPost()] }));
-    getWorkshopOutreachResults.mockResolvedValue(resultsFor({ status: 'unreachable', totals: null }));
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    await waitFor(() => expect(screen.getByText(/ShortLinks could not be reached/)).toBeTruthy());
-    expect(screen.queryByText('12 clicks')).toBeNull();
-  });
-
-  // #0545: automatic posting. jsdom proves the right controls render for the
-  // payload and call the right API functions; it does not prove a post
-  // reaches Bluesky or Mastodon (no credentials exist; the server side runs
-  // against httptest fakes).
-  function autoPost(over: Partial<OutreachPost> = {}): OutreachPost {
-    return {
-      ...manualPost(),
-      id: 4,
-      channel: 'bluesky',
-      wave: 'reminder',
-      status: 'draft',
-      body: 'Come solder https://go.example/k2',
-      short_url: 'https://go.example/k2',
-      short_link_key: 'k2',
-      ...over,
-    };
-  }
-  const futureWaves = [
-    { name: 'announce', label: 'Announce', suggested_at: null },
-    { name: 'reminder', label: 'Reminder', suggested_at: '2099-11-28T18:00:00Z' },
-    { name: 'last-call', label: 'Last call', suggested_at: '2099-12-04T18:00:00Z' },
-  ];
-
-  it('shows Post now and Schedule for a prepared bluesky draft, with the suggested time prefilled', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ waves: futureWaves, posts: [autoPost()] }));
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    await fireEvent.click(await screen.findByText('Link ready'));
-    expect(await screen.findByText('Post now')).toBeTruthy();
-    expect(screen.getByText('Schedule')).toBeTruthy();
-    const picker = screen.getByLabelText('Schedule for') as HTMLInputElement;
-    expect(picker.value).toMatch(/^2099-11-2[78]T\d{2}:\d{2}$/);
-    expect(screen.queryByText('Retry')).toBeNull();
-  });
-
-  it('Post now calls the send endpoint and the cell reads Posting…', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ waves: futureWaves, posts: [autoPost()] }));
-    sendOutreachPost.mockResolvedValue(autoPost({ status: 'queued' }));
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    await fireEvent.click(await screen.findByText('Link ready'));
-    await fireEvent.click(await screen.findByText('Post now'));
-    await waitFor(() => expect(sendOutreachPost).toHaveBeenCalledWith(4));
-    expect(await screen.findAllByText('Posting…')).toBeTruthy();
-    expect(screen.queryByText('Post now')).toBeNull();
-    expect(screen.queryByText('Delete')).toBeNull();
-  });
-
-  it('Schedule sends an RFC 3339 instant', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ waves: futureWaves, posts: [autoPost()] }));
-    scheduleOutreachPost.mockResolvedValue(autoPost({ status: 'scheduled', scheduled_at: '2099-11-28T18:00:00Z' }));
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    await fireEvent.click(await screen.findByText('Link ready'));
-    await fireEvent.click(await screen.findByText('Schedule'));
-    await waitFor(() => expect(scheduleOutreachPost).toHaveBeenCalledTimes(1));
-    expect(scheduleOutreachPost.mock.calls[0][0]).toBe(4);
-    expect(scheduleOutreachPost.mock.calls[0][1]).toMatch(/^2099-11-2[78]T\d{2}:\d{2}:00Z$/);
-    expect(await screen.findByText('Unschedule')).toBeTruthy();
-  });
-
-  it('a failed post shows Retry and its error in a status region', async () => {
-    getWorkshopOutreach.mockResolvedValue(
-      view({ waves: futureWaves, posts: [autoPost({ status: 'failed', last_error: 'Bluesky rejected the post: InvalidRequest' })] }),
-    );
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    await fireEvent.click(await screen.findByText('Failed'));
-    expect(await screen.findByText('Retry', { selector: 'button' })).toBeTruthy();
-    const err = screen.getByText('Bluesky rejected the post: InvalidRequest');
-    expect(err.getAttribute('role')).toBe('status');
-  });
-
-  it('a not-configured automatic channel behaves like a manual one', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ posts: [autoPost({ channel: 'mastodon' })] }));
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    await fireEvent.click(await screen.findByText('Link ready'));
-    expect(await screen.findByText('Copy content')).toBeTruthy();
-    expect(screen.getByText('Mark posted')).toBeTruthy();
-    expect(screen.getByText('Not configured — post by hand')).toBeTruthy();
-    expect(screen.queryByText('Post now')).toBeNull();
-    expect(screen.queryByText('Schedule')).toBeNull();
-  });
-
-  it('a held scheduled post says so', async () => {
-    getWorkshopOutreach.mockResolvedValue(
-      view({ posts: [autoPost({ status: 'scheduled', scheduled_at: '2099-11-28T18:00:00Z', held: true })] }),
-    );
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
-    await fireEvent.click(await screen.findByText('Held'));
-    expect(await screen.findByText(/workshop is not published/)).toBeTruthy();
+    expect(screen.getByText(/ShortLinks could not be reached/)).toBeTruthy();
   });
 
   it('backs off 1 s, 2 s, 4 s then 10 s while a post is queued and stops on unmount (#0581)', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    getWorkshopOutreach.mockResolvedValue(view({ posts: [autoPost({ status: 'queued' })] }));
-    const { unmount } = render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
+    getWorkshopOutreach.mockResolvedValue(view({ posts: [post({ status: 'queued' })] }));
+    const { unmount } = render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a', body });
     await vi.advanceTimersByTimeAsync(0);
     const calls = () => getWorkshopOutreach.mock.calls.length;
     const before = calls();
@@ -330,63 +236,23 @@ describe('OutreachPanel', () => {
 
   it('does not poll when nothing is queued', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    getWorkshopOutreach.mockResolvedValue(view({ posts: [autoPost()] }));
-    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a' });
+    getWorkshopOutreach.mockResolvedValue(view({ posts: [post()] }));
+    render(OutreachPanel, { workshopId: 5, workshopUpdatedAt: 'a', body });
     await vi.advanceTimersByTimeAsync(0);
-    expect(screen.getByText('Link ready')).toBeTruthy();
+    expect(screen.getByText('BODY draft')).toBeTruthy();
     const before = getWorkshopOutreach.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(getWorkshopOutreach.mock.calls.length).toBe(before);
   });
 
-  // #0568: the workshop outreach page injects its links table and bulk actions.
-  const marker = createRawSnippet(() => ({ render: () => '<p>BEFORE-GRID</p>' }));
-
-  it('renders beforeGrid only once outreach exists (#0568)', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ outreach: null }));
-    const { unmount } = render(OutreachPanel, { workshopId: 5, beforeGrid: marker });
-    await screen.findByText('Start outreach');
-    expect(screen.queryByText('BEFORE-GRID')).toBeNull();
-    unmount();
-    getWorkshopOutreach.mockResolvedValue(view());
-    render(OutreachPanel, { workshopId: 5, beforeGrid: marker });
-    const injected = await screen.findByText('BEFORE-GRID');
-    const grid = await screen.findByRole('columnheader', { name: 'Announce' });
-    expect(injected.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
   it('calls onLoaded with the loaded view and refetches on reloadKey (#0568)', async () => {
     getWorkshopOutreach.mockResolvedValue(view());
     const onLoaded = vi.fn();
-    const { rerender } = render(OutreachPanel, { workshopId: 5, reloadKey: 0, onLoaded });
+    const { rerender } = render(OutreachPanel, { workshopId: 5, reloadKey: 0, onLoaded, body });
     await waitFor(() => expect(onLoaded).toHaveBeenCalledTimes(1));
     expect(onLoaded.mock.calls[0][0].workshop.id).toBe(5);
-    await rerender({ workshopId: 5, reloadKey: 1, onLoaded });
+    await rerender({ workshopId: 5, reloadKey: 1, onLoaded, body });
     await waitFor(() => expect(getWorkshopOutreach).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(onLoaded).toHaveBeenCalledTimes(2));
-  });
-
-  it('shows the link report after Start when some links failed (#0568)', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ outreach: null }));
-    startOutreach.mockResolvedValue(
-      view({ link_report: { created: 14, existing: 0, stopped: false, failed: [{ kind: 'post', label: 'Mastodon · Reminder', reason: 'failed' }] } }),
-    );
-    render(OutreachPanel, { workshopId: 5 });
-    await fireEvent.click(await screen.findByText('Start outreach'));
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Mastodon · Reminder (failed)'));
-  });
-
-  it('links to the workshop editor when the workshop is not published (#0568)', async () => {
-    getWorkshopOutreach.mockResolvedValue(view({ available: false, unavailable_reason: 'workshop_not_published', outreach: null }));
-    render(OutreachPanel, { workshopId: 5 });
-    const link = await screen.findByRole('link', { name: 'Open the workshop editor' });
-    expect(link.getAttribute('href')).toBe('#/workshops/5');
-  });
-
-  it('puts the click summary in front of View results (#0568)', async () => {
-    getWorkshopOutreach.mockResolvedValue(view());
-    getWorkshopOutreachResults.mockResolvedValue(resultsFor({ totals: { clicks: 42, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 5 } }));
-    render(OutreachPanel, { workshopId: 5 });
-    expect(await screen.findByText(/42 clicks since outreach started \(5 from flyers\)\./)).toBeTruthy();
   });
 });

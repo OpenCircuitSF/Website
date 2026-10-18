@@ -1,66 +1,54 @@
 <!--
-  The workshop editor's Outreach panel (#0544): a channels x waves grid of
-  drafted social posts, with an inline composer below it for the selected
-  cell. The server owns the channel and wave lists and every URL; every
-  decision (labels, action availability) is a call into lib/outreach.ts, so
-  this file is markup and wiring only.
+  The workshop outreach page's loader (#0544, #0582): owns loading the view and
+  the click results, polling while a post is queued, and the implicit start.
+  The page's layout is the caller's `body` snippet (OutreachWorkshop); the
+  channels x waves grid and its inline composer are gone, since every post now
+  goes through the cards and the in-app dialog.
 
-  The composer opens inline under the grid, not as a modal, so it needs no
-  focus trap or Escape handling.
-
-  The panel reloads when `workshopUpdatedAt` changes, so the `stale` flag
-  refreshes after the workshop above it is saved. Status text goes through
-  always-rendered role="status" / role="alert" elements whose content
-  changes, per the live-region convention WorkshopEditor.svelte describes.
+  With `autoStart`, opening the page for an available workshop that has no
+  outreach yet creates the campaign and links once (Start is idempotent on the
+  server); a failure shows a warning with Try again and never loops. GET stays
+  read-only. Status text goes through always-rendered role="status" /
+  role="alert" elements whose content changes, per the live-region convention
+  WorkshopEditor.svelte describes.
 -->
 <script lang="ts">
   import { untrack, type Snippet } from 'svelte';
-  import { getWorkshopOutreach, getWorkshopOutreachResults, startOutreach, createOutreachPost, ApiError } from '../../lib/api';
-  import { adminOutreachResultsHash, adminSettingsHash, adminWorkshopHash } from '../../lib/adminRouter';
-  import { buildGrid, cellLabel, cellIsStale, shouldPoll, unavailableMessage } from '../../lib/outreach';
-  import { cellClicksLabel, cellReactionsLabel, resultsStatusMessage, resultsSummaryLine } from '../../lib/outreachResults';
-  import { linkReportMessage } from '../../lib/outreachLinks';
+  import { getWorkshopOutreach, getWorkshopOutreachResults, startOutreach, ApiError } from '../../lib/api';
+  import { adminSettingsHash, adminWorkshopHash } from '../../lib/adminRouter';
+  import { shouldPoll, unavailableMessage } from '../../lib/outreach';
+  import { resultsStatusMessage } from '../../lib/outreachResults';
   import { pollDelay } from '../../lib/outreachCards';
   import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
-  import OutreachComposer from './OutreachComposer.svelte';
 
   interface Props {
     workshopId: number;
     workshopUpdatedAt?: string;
-    /** #0568: rendered after the campaign line and before the grid, once outreach exists. */
-    beforeGrid?: Snippet;
-    /** #0568: bump to refetch (the links table and bulk actions change posts). */
+    /** Bump to refetch (the cards and bulk actions change posts). */
     reloadKey?: number;
-    /** #0568: called with the view after every successful load, refresh, start or change. */
+    /** Called with the view after every successful load, refresh, start or change. */
     onLoaded?: (v: WorkshopOutreach) => void;
-    /**
-     * #0569: when given, replaces the campaign line, grid and inline composer
-     * with the caller's own layout (the posts list). The panel still owns
-     * loading, polling and the results fetch and hands them over.
-     */
-    body?: Snippet<[{ view: WorkshopOutreach; results: OutreachResults | null; onChange: (p: OutreachPost) => void }]>;
+    /** Create the campaign and links once when an available workshop has none (#0582). */
+    autoStart?: boolean;
+    /** The page layout; the panel hands over the view, the results and the change callback. */
+    body: Snippet<[{ view: WorkshopOutreach; results: OutreachResults | null; onChange: (p: OutreachPost) => void }]>;
   }
-  let { workshopId, workshopUpdatedAt = '', beforeGrid, reloadKey = 0, onLoaded, body }: Props = $props();
+  let { workshopId, workshopUpdatedAt = '', reloadKey = 0, onLoaded, autoStart = false, body }: Props = $props();
 
   let view = $state<WorkshopOutreach | null>(null);
   let loading = $state(true);
   let loadError = $state<string | null>(null);
-  let actionError = $state<string | null>(null);
-  let busy = $state(false);
-  let selectedPostId = $state<number | null>(null);
-  // #0546: click results load after the grid, separately, so a ShortLinks or
-  // network problem only sets a status line and never hides the grid.
+  let startError = $state<string | null>(null);
+  let starting = $state(false);
+  // #0546: click results load separately, so a ShortLinks or network problem
+  // only sets a status line and never hides the page.
   let results = $state<OutreachResults | null>(null);
   let resultsError = $state<string | null>(null);
 
   const resultsLine = $derived(
     resultsError ?? (results && results.status !== 'not_started' ? (resultsStatusMessage(results.status) ?? '') : ''),
   );
-  const grid = $derived(view ? buildGrid(view) : []);
-  const selected = $derived(view?.posts.find((p) => p.id === selectedPostId) ?? null);
-  const selectedChannel = $derived(selected && view ? (view.channels.find((c) => c.name === selected.channel) ?? null) : null);
-  const selectedWave = $derived(selected && view ? (view.waves.find((w) => w.name === selected.wave) ?? null) : null);
 
   function message(err: unknown, fallback: string): string {
     return err instanceof ApiError ? err.message : fallback;
@@ -83,6 +71,9 @@
     }
   }
 
+  // Once per workshop: a failed start shows Try again instead of looping.
+  let autoStartTried: number | null = null;
+
   async function load(): Promise<void> {
     loadError = null;
     try {
@@ -92,6 +83,11 @@
       loadError = message(err, 'Could not load outreach. Please try again.');
     } finally {
       loading = false;
+    }
+    if (autoStart && view && view.available && view.outreach === null && autoStartTried !== workshopId) {
+      autoStartTried = workshopId;
+      await start();
+      return;
     }
     if (view?.outreach) await loadResults();
   }
@@ -108,9 +104,8 @@
   // refresh the view quietly until it has posted or failed, at 1 s, 2 s, 4 s
   // and then every 10 s (pollDelay). The timer is cleared on unmount and
   // whenever nothing is queued; a failed refresh is ignored (the next tick
-  // tries again) rather than replacing the grid with an error. pollAttempt is
-  // deliberately not reactive; pollTick is what re-arms the timer after a
-  // refresh that changed nothing.
+  // tries again). pollAttempt is deliberately not reactive; pollTick is what
+  // re-arms the timer after a refresh that changed nothing.
   let pollAttempt = 0;
   let pollTick = $state(0);
   async function refreshQuietly(): Promise<void> {
@@ -136,35 +131,16 @@
   });
 
   async function start(): Promise<void> {
-    busy = true;
-    actionError = null;
+    starting = true;
+    startError = null;
     try {
       view = await startOutreach(workshopId);
       onLoaded?.(view);
-      actionError = linkReportMessage(view.link_report);
+      if (view.outreach) await loadResults();
     } catch (err) {
-      actionError = message(err, 'Could not start outreach. Please try again.');
+      startError = message(err, 'Could not set up the links. Please try again.');
     } finally {
-      busy = false;
-    }
-  }
-
-  async function openCell(channel: string, wave: string, post: OutreachPost | null): Promise<void> {
-    actionError = null;
-    if (post) {
-      selectedPostId = post.id;
-      return;
-    }
-    if (!view?.outreach) return;
-    busy = true;
-    try {
-      const created = await createOutreachPost(view.outreach.id, channel, wave);
-      await load();
-      selectedPostId = created.id;
-    } catch (err) {
-      actionError = message(err, 'Could not create the draft. Please try again.');
-    } finally {
-      busy = false;
+      starting = false;
     }
   }
 
@@ -177,11 +153,6 @@
     onLoaded?.(view);
     // #0552: a prepare or mark-posted changes what the click line can show.
     if (!before || before.prepared !== updated.prepared || before.status !== updated.status) void loadResults();
-  }
-
-  async function onDeleted(): Promise<void> {
-    selectedPostId = null;
-    await load();
   }
 </script>
 
@@ -204,83 +175,16 @@
     {/if}
 
     {#if view.outreach === null}
-      {#if view.available}
-        <p class="text-muted">
-          Start outreach to create the ShortLinks campaign and every tracked link for this workshop.
-        </p>
-        <div class="row">
-          <Button variant="primary" onclick={start} disabled={busy}>
-            {busy ? 'Starting…' : 'Start outreach'}
-          </Button>
-        </div>
+      {#if starting}
+        <p class="text-muted">Setting up links…</p>
+      {:else if startError}
+        <p class="text-warn">{startError}</p>
+        <Button onclick={start}>Try again</Button>
+      {:else if view.available && !autoStart}
+        <p class="text-muted">Outreach has not started.</p>
       {/if}
-    {:else if body}
-      {@render body({ view, results, onChange })}
     {:else}
-      <p class="text-muted">
-        Campaign <span class="mono">{view.outreach.campaign_slug}</span>. Pick a cell to draft or open a post.
-      </p>
-      {#if beforeGrid}
-        {@render beforeGrid()}
-      {/if}
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Channel</th>
-              {#each view.waves as wave (wave.name)}
-                <th>{wave.label}</th>
-              {/each}
-            </tr>
-          </thead>
-          <tbody>
-            {#each grid as row (row.channel.name)}
-              <tr>
-                <th scope="row">{row.channel.label}</th>
-                {#each row.cells as cell (cell.wave.name)}
-                  <td>
-                    <button
-                      type="button"
-                      class="cell"
-                      class:active={cell.post !== null && cell.post.id === selectedPostId}
-                      disabled={busy}
-                      onclick={() => openCell(row.channel.name, cell.wave.name, cell.post)}
-                    >
-                      {cellLabel(cell.post)}{cellIsStale(cell.post) ? ' (stale)' : ''}
-                      {#if cell.post && cellClicksLabel(cell.post, results)}
-                        <span class="clicks">{cellClicksLabel(cell.post, results)}</span>
-                      {/if}
-                      {#if cell.post && cellReactionsLabel(cell.post, results)}
-                        <span class="clicks">{cellReactionsLabel(cell.post, results)}</span>
-                      {/if}
-                    </button>
-                  </td>
-                {/each}
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
-      <p>
-        {#if resultsSummaryLine(results)}{resultsSummaryLine(results)}{' '}{/if}<a href={adminOutreachResultsHash(workshopId)}>View results</a>
-      </p>
-    {/if}
-
-    {#if !body && selected && selectedChannel && selectedWave}
-      {#key selected.id}
-        <OutreachComposer
-          post={selected}
-          channel={selectedChannel}
-          wave={selectedWave}
-          available={view.available}
-          {onChange}
-          {onDeleted}
-        />
-      {/key}
-    {/if}
-
-    {#if actionError}
-      <p class="text-error" role="alert">{actionError}</p>
+      {@render body({ view, results, onChange })}
     {/if}
   {/if}
   <!-- Always rendered, so a late results message is announced. -->
@@ -288,37 +192,7 @@
 </div>
 
 <style>
-  .mono {
-    font-family: var(--font-mono);
-  }
-  .cell {
-    font-family: var(--font);
-    font-size: var(--fs-base);
-    background: none;
-    border: var(--border-w) solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    padding: var(--space-1) var(--space-2);
-    cursor: pointer;
-    width: 100%;
-    text-align: left;
-  }
-  .cell:hover:not(:disabled) {
-    background: var(--bg-header);
-  }
-  .cell.active {
-    border-color: var(--accent);
-  }
   .results-status:empty {
     display: none;
-  }
-  .clicks {
-    display: block;
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-  }
-  .cell:disabled {
-    opacity: 0.5;
-    cursor: default;
   }
 </style>

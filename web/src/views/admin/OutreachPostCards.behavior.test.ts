@@ -1,26 +1,18 @@
 // @vitest-environment jsdom
 //
-// #0569: mounts OutreachWorkshop.svelte (real OutreachPanel, OutreachPostCards,
-// OutreachComposer) under jsdom with '../../lib/api' mocked. jsdom is not a
-// browser (AGENTS.md §1): no browser was run for this change.
+// #0569, #0582: mounts OutreachPostCards.svelte (real OutreachPostCard,
+// OutreachComposer, dialogs) under jsdom with '../../lib/api' mocked. The list
+// owns no data, so the test plays the panel's part: onChange swaps the changed
+// post into the view and re-renders. jsdom is not a browser (AGENTS.md §1): no
+// browser was run for this change.
 import { render, cleanup, waitFor, screen, fireEvent, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { OutreachLinksView, OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
+import type { OutreachPost, WorkshopOutreach } from '../../lib/types';
 
-const getWorkshopOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const sendOutreachPost = vi.fn();
 const updateOutreachPost = vi.fn();
 vi.mock('../../lib/api', () => ({
-  getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
-  startOutreach: vi.fn(),
-  getWorkshopOutreachResults: () => Promise.resolve({ status: 'not_started', posts: [], totals: null }),
-  getWorkshopOutreachLinks: () =>
-    Promise.resolve({
-      available: true, unavailable_reason: '', outreach: { id: 9, campaign_slug: 's' }, clicks_status: 'ok', missing: 0, links: [], report: null,
-    } as OutreachLinksView),
-  createWorkshopOutreachLinks: vi.fn(),
   draftAllOutreach: vi.fn(),
-  scheduleAllOutreach: vi.fn(),
   createOutreachPost: vi.fn(),
   sendOutreachPost: (id: number) => sendOutreachPost(id),
   unscheduleOutreachPost: vi.fn(),
@@ -32,11 +24,10 @@ vi.mock('../../lib/api', () => ({
   ApiError: class ApiError extends Error {},
 }));
 
-const { default: OutreachWorkshop } = await import('./OutreachWorkshop.svelte');
+const { default: OutreachPostCards } = await import('./OutreachPostCards.svelte');
 
 afterEach(() => {
   cleanup();
-  getWorkshopOutreach.mockReset();
   sendOutreachPost.mockReset();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -54,20 +45,37 @@ const waves = [
 function post(over: Partial<OutreachPost>): OutreachPost {
   return {
     id: 1, outreach_id: 9, channel: 'bluesky', wave: 'announce', body: 'Come solder with us https://go.example/abc', status: 'draft',
-    prepared: true, stale: false, held: false, short_link_key: 'abc', short_url: 'https://go.example/abc', destination_url: 'https://x/w',
+    prepared: true, stale: false, customized: false, held: false, short_link_key: 'abc', short_url: 'https://go.example/abc', destination_url: 'https://x/w',
     utm: { source: 'bluesky', medium: 'social', campaign: 'c', content: 'announce' }, scheduled_at: null, posted_at: null, remote_url: null,
     last_error: null, created_at: '', updated_at: null, ...over,
   };
 }
 
-function setup(posts: OutreachPost[]): void {
-  getWorkshopOutreach.mockResolvedValue({
+function viewOf(over: Partial<WorkshopOutreach>): WorkshopOutreach {
+  return {
     available: true, unavailable_reason: '',
     workshop: { id: 5, slug: 's', title: 'Soldering 101', status: 'published', starts_at: '2026-12-05T18:00:00Z' },
     outreach: { id: 9, workshop_id: 5, campaign_slug: 's', created_at: '' },
-    channels, waves, posts,
+    channels, waves, posts: [], ...over,
+  };
+}
+
+/** Mounts the list and plays the panel: a change replaces the post in the view and re-renders. */
+function mountView(view: WorkshopOutreach): void {
+  let current = view;
+  const r = render(OutreachPostCards, {
+    view,
+    results: null,
+    reload: vi.fn(),
+    onChange: (p: OutreachPost) => {
+      current = { ...current, posts: current.posts.map((x) => (x.id === p.id ? p : x)) };
+      void r.rerender({ view: current });
+    },
   });
-  render(OutreachWorkshop, { workshopId: 5 });
+}
+
+function setup(posts: OutreachPost[]): void {
+  mountView(viewOf({ posts }));
 }
 
 describe('post cards (#0569)', () => {
@@ -228,19 +236,6 @@ describe('post cards (#0569)', () => {
     expect(screen.getByRole('article', { name: 'Reddit Announce' }).querySelector('.notice')?.textContent).toBe('');
     vi.useRealTimers();
   });
-
-  it('the tracked links table is collapsed by default and counts links', async () => {
-    setup([post({ id: 1 })]);
-    await screen.findByText('Not scheduled');
-    const details = screen.getByText(/Tracked links \(/).closest('details');
-    expect(details).toBeTruthy();
-    expect(details?.hasAttribute('open')).toBe(false);
-  });
-
-  it('shows the summary line', async () => {
-    setup([post({ id: 1 }), post({ id: 2, wave: 'reminder', status: 'scheduled', scheduled_at: '2026-11-30T20:00:00Z' })]);
-    expect(await screen.findByText('Drafted: Announce 1, Reminder 1 · 1 scheduled · 0 posted')).toBeTruthy();
-  });
 });
 
 describe('post cards: one link, Instagram, video channels (#0576)', () => {
@@ -250,13 +245,7 @@ describe('post cards: one link, Instagram, video channels (#0576)', () => {
     { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' },
   ];
   function setupAll(posts: OutreachPost[]): void {
-    getWorkshopOutreach.mockResolvedValue({
-      available: true, unavailable_reason: '',
-      workshop: { id: 5, slug: 's', title: 'Soldering 101', status: 'published', starts_at: '2026-12-05T18:00:00Z' },
-      outreach: { id: 9, workshop_id: 5, campaign_slug: 's', created_at: '' },
-      channels: chans, waves: [waves[0]], posts,
-    });
-    render(OutreachWorkshop, { workshopId: 5 });
+    mountView(viewOf({ channels: chans, waves: [waves[0]], posts }));
   }
   const igBody = 'Soldering 101: Saturday.\n\nSign up at the link in our bio.';
 
@@ -306,14 +295,10 @@ describe('post cards: both networks (#0581)', () => {
     { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true, configured: true, account: 'social.test' },
   ];
   function setupTwo(): void {
-    getWorkshopOutreach.mockResolvedValue({
-      available: true, unavailable_reason: '',
-      workshop: { id: 5, slug: 's', title: 'Soldering 101', status: 'published', starts_at: '2026-12-05T18:00:00Z' },
-      outreach: { id: 9, workshop_id: 5, campaign_slug: 's', created_at: '' },
+    mountView(viewOf({
       channels: two, waves: [waves[0]],
       posts: [post({ id: 1, body: 'Bluesky words' }), post({ id: 2, channel: 'mastodon', body: 'Mastodon words' })],
-    });
-    render(OutreachWorkshop, { workshopId: 5 });
+    }));
   }
 
   it('posts both from one dialog and reports both on one line', async () => {
@@ -340,9 +325,56 @@ describe('post cards: both networks (#0581)', () => {
     expect(screen.getByRole('article', { name: 'Mastodon Announce' }).querySelector('.notice')?.textContent).toBe('Could not post: please try again');
   });
 
+  it('clears the both-networks line once the posts it reported leave queued (#0582)', async () => {
+    let current = viewOf({
+      channels: two, waves: [waves[0]],
+      posts: [post({ id: 1, body: 'Bluesky words' }), post({ id: 2, channel: 'mastodon', body: 'Mastodon words' })],
+    });
+    const r = render(OutreachPostCards, {
+      view: current,
+      results: null,
+      reload: vi.fn(),
+      onChange: (p: OutreachPost) => {
+        current = { ...current, posts: current.posts.map((x) => (x.id === p.id ? p : x)) };
+        void r.rerender({ view: current });
+      },
+    });
+    await fireEvent.click(await screen.findByRole('button', { name: 'Post to Bluesky and Mastodon' }));
+    sendOutreachPost.mockImplementation((id: number) =>
+      Promise.resolve(id === 1 ? post({ id: 1, status: 'queued', body: 'Bluesky words' }) : post({ id: 2, channel: 'mastodon', status: 'queued', body: 'Mastodon words' })),
+    );
+    await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Post now' }));
+    expect(await screen.findByText('Bluesky: queued · Mastodon: queued')).toBeTruthy();
+    // Polling brings both back posted: the "queued" line must not outlive them.
+    await r.rerender({ view: { ...current, posts: current.posts.map((p) => ({ ...p, status: 'posted' as const })) } });
+    expect(screen.queryByText('Bluesky: queued · Mastodon: queued')).toBeNull();
+  });
+
   it('is not offered when only one network can post', async () => {
     setup([post({ id: 1 })]);
     await screen.findByText('Not scheduled');
+    expect(screen.queryByRole('button', { name: /^Post to / })).toBeNull();
+  });
+});
+
+describe('post cards: channelFilter (#0582, Post by hand)', () => {
+  it('lists only the matching channels, with no Posts heading or both-networks button', async () => {
+    const two = [
+      { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '@club.test' },
+      { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true, configured: true, account: 'social.test' },
+      channels[1],
+    ];
+    const v = viewOf({
+      channels: two,
+      waves: [waves[0]],
+      posts: [post({ id: 1 }), post({ id: 2, channel: 'mastodon' }), post({ id: 3, channel: 'reddit', status: 'manual', body: 'Reddit body' })],
+    });
+    render(OutreachPostCards, { view: v, results: null, reload: vi.fn(), onChange: vi.fn(), channelFilter: (c: { automatic: boolean }) => !c.automatic });
+    await screen.findByText('Reddit body');
+    expect(screen.queryByRole('article', { name: 'Bluesky Announce' })).toBeNull();
+    expect(screen.queryByRole('article', { name: 'Mastodon Announce' })).toBeNull();
+    expect(screen.getByRole('article', { name: 'Reddit Announce' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Posts' })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Post to / })).toBeNull();
   });
 });

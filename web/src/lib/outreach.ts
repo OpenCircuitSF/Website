@@ -58,43 +58,6 @@ export function isOverLimit(channel: Pick<OutreachChannel, 'char_limit'>, count:
   return channel.char_limit > 0 && count > channel.char_limit;
 }
 
-export interface GridCell {
-  wave: WorkshopOutreach['waves'][number];
-  post: OutreachPost | null;
-}
-export interface GridRow {
-  channel: OutreachChannel;
-  cells: GridCell[];
-}
-
-/** The channels x waves grid in the server's order, each cell holding its post or null. */
-export function buildGrid(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts'>): GridRow[] {
-  return view.channels.map((channel) => ({
-    channel,
-    cells: view.waves.map((wave) => ({
-      wave,
-      post: view.posts.find((p) => p.channel === channel.name && p.wave === wave.name) ?? null,
-    })),
-  }));
-}
-
-/** The short status text for a grid cell. */
-export function cellLabel(post: OutreachPost | null): string {
-  if (post === null) return 'Not drafted';
-  if (post.status === 'posted') return 'Posted';
-  if (post.held) return 'Held';
-  if (post.status === 'queued') return post.last_error ? 'Retrying' : 'Posting…';
-  if (post.status === 'scheduled') return 'Scheduled';
-  if (post.status === 'failed') return 'Failed';
-  if (post.status === 'manual') return 'Ready to post';
-  if (post.prepared) return 'Link ready';
-  return 'Draft';
-}
-
-export function cellIsStale(post: OutreachPost | null): boolean {
-  return post !== null && post.stale;
-}
-
 export interface ComposerActions {
   canSave: boolean;
   canRegenerate: boolean;

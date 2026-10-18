@@ -1,7 +1,7 @@
 <!--
-  The workshop editor's outreach summary (#0568): one line of state and a
-  prominent link to the workshop's outreach page, where the links table, the
-  grid and the bulk actions now live.
+  The workshop editor's outreach summary (#0568): one line of state (the same
+  summaryLine as the outreach page, never the campaign slug, #0582) and a
+  prominent link to the workshop's outreach page.
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
@@ -9,6 +9,7 @@
   import { adminOutreachWorkshopHash } from '../../lib/adminRouter';
   import { unavailableMessage } from '../../lib/outreach';
   import { editorOutreachLinkLabel } from '../../lib/outreachList';
+  import { summaryLine } from '../../lib/outreachCards';
   import type { WorkshopOutreach } from '../../lib/types';
 
   // workshopUpdatedAt changes when the editor saves (e.g. publishes), so the
@@ -43,8 +44,7 @@
   const line = $derived.by(() => {
     if (!view) return 'Loading outreach…';
     if (view.outreach === null) return view.available ? 'Outreach has not started.' : unavailableMessage(view.unavailable_reason);
-    const n = (s: string) => view?.posts.filter((p) => p.status === s).length ?? 0;
-    return `Campaign ${view.outreach.campaign_slug} · ${view.posts.length === 0 ? 'no posts yet' : `${n('draft')} drafted, ${n('scheduled')} scheduled, ${n('posted')} posted`}`;
+    return summaryLine(view, null);
   });
 </script>
 

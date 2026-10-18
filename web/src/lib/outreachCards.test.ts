@@ -11,7 +11,7 @@ const waves = [
 
 function post(over: Partial<OutreachPost> = {}): OutreachPost {
   return {
-    id: 1, outreach_id: 1, channel: 'bluesky', wave: 'announce', body: 'Hello', status: 'draft', prepared: true, stale: false, held: false,
+    id: 1, outreach_id: 1, channel: 'bluesky', wave: 'announce', body: 'Hello', status: 'draft', prepared: true, stale: false, customized: false, held: false,
     short_link_key: 'k', short_url: 'https://go.example/k', destination_url: 'https://x', utm: { source: '', medium: '', campaign: '', content: '' },
     scheduled_at: null, posted_at: null, remote_url: null, last_error: null, created_at: '', updated_at: null, ...over,
   };
@@ -84,7 +84,7 @@ describe('summaryLine', () => {
   });
   it('omits clicks without real results', () => {
     expect(summaryLine({ posts: [post()] }, null)).toBe('Drafted: announce 1 · 0 scheduled · 0 posted');
-    expect(summaryLine({ posts: [] }, null)).toBe('Nothing drafted yet · 0 scheduled · 0 posted');
+    expect(summaryLine({ posts: [] }, null)).toBe('No posts yet. Start with the announcement.');
   });
   it('reports posts per wave that exist, never a fifteen-post headline', () => {
     const waves = [{ name: 'announce', label: 'Announce', suggested_at: null }, { name: 'reminder', label: 'Reminder', suggested_at: null }, { name: 'last-call', label: 'Last call', suggested_at: null }];

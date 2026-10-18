@@ -52,26 +52,13 @@ const plan: OutreachScheduleAllResult = {
 };
 
 describe('OutreachBulkActions', () => {
-  it('Draft all calls the API, reports the result and calls onDone', async () => {
-    draftAllOutreach.mockResolvedValue({ created: [{ post_id: 1, channel: 'bluesky', wave: 'announce', has_link: true }], skipped: 14, without_link: 0 });
-    const onDone = vi.fn();
-    render(OutreachBulkActions, { workshopId: 5, view: wo(), onDone });
-    await fireEvent.click(screen.getByRole('button', { name: 'Draft all' }));
-    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
-    expect(draftAllOutreach).toHaveBeenCalledWith(5, []); // Announce only by default (#0574)
-    expect(screen.getByRole('status').textContent).toBe('Drafted 1 post; 14 existing posts were left alone.');
-  });
-
-  it('Reminder and Last call are unchecked checkboxes next to Draft all and are sent when ticked', async () => {
-    draftAllOutreach.mockResolvedValue({ created: [], skipped: 0, without_link: 0 });
+  it('has no Draft all button or Also draft checkboxes (#0582)', () => {
     render(OutreachBulkActions, { workshopId: 5, view: wo(), onDone: vi.fn() });
-    const reminder = screen.getByRole('checkbox', { name: 'Reminder' }) as HTMLInputElement;
-    const last = screen.getByRole('checkbox', { name: 'Last call' }) as HTMLInputElement;
-    expect(reminder.checked).toBe(false);
-    expect(last.checked).toBe(false);
-    await fireEvent.click(reminder);
-    await fireEvent.click(screen.getByRole('button', { name: 'Draft all' }));
-    await waitFor(() => expect(draftAllOutreach).toHaveBeenCalledWith(5, ['reminder']));
+    expect(screen.queryByRole('button', { name: 'Draft all' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Reminder' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Last call' })).toBeNull();
+    expect(screen.queryByText('Also draft')).toBeNull();
+    expect(draftAllOutreach).not.toHaveBeenCalled();
   });
 
   it('Schedule all previews, lists scheduled and skipped, and Cancel sends nothing', async () => {
@@ -111,7 +98,6 @@ describe('OutreachBulkActions', () => {
     });
     expect((screen.getByRole('button', { name: 'Schedule all' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('#/settings?section=outreach');
-    expect((screen.getByRole('button', { name: 'Draft all' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('points an unpublished workshop at the editor, not Settings', () => {

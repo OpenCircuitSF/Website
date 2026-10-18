@@ -807,6 +807,8 @@ export interface OutreachPost {
   status: OutreachPostStatus;
   prepared: boolean;
   stale: boolean;
+  /** #0582: hand-edited; a shared-message save leaves it alone. */
+  customized: boolean;
   /** #0545: scheduled or queued while the workshop is not published. */
   held: boolean;
   short_link_key: string | null;

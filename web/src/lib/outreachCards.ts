@@ -103,8 +103,9 @@ export function cardButtons(post: OutreachPost | null, channel: OutreachChannel,
   };
 }
 
-/** "Drafted: Announce 5, Reminder 2 · 0 scheduled · 0 posted · 0 clicks". Waves with no posts are left out; clicks are shown only when real. */
+/** "Drafted: Announce 5, Reminder 2 · 0 scheduled · 0 posted · 0 clicks". Waves with no posts are left out; clicks are shown only when real. With no posts at all it is the empty state, never a campaign slug (#0582). */
 export function summaryLine(view: Pick<WorkshopOutreach, 'posts'> & { waves?: OutreachWave[] }, results: OutreachResults | null): string {
+  if (view.posts.length === 0) return 'No posts yet. Start with the announcement.';
   const n = (s: string) => view.posts.filter((p) => p.status === s).length;
   const perWave: string[] = [];
   const names = [...new Set([...(view.waves ?? []).map((w) => w.name), ...view.posts.map((p) => p.wave)])];
@@ -113,7 +114,7 @@ export function summaryLine(view: Pick<WorkshopOutreach, 'posts'> & { waves?: Ou
     if (count > 0) perWave.push(`${view.waves?.find((w) => w.name === name)?.label ?? name} ${count}`);
   }
   const parts = [
-    perWave.length > 0 ? `Drafted: ${perWave.join(', ')}` : 'Nothing drafted yet',
+    `Drafted: ${perWave.join(', ')}`,
     `${n('scheduled')} scheduled`,
     `${n('posted')} posted`,
   ];

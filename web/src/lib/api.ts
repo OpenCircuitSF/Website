@@ -1356,7 +1356,7 @@ export function createOutreachPost(
 }
 
 /** PATCH /admin/outreach-posts/{id} — edit the body, or regenerate it from the workshop. */
-export function updateOutreachPost(id: number, change: { body: string } | { regenerate: true }): Promise<OutreachPost> {
+export function updateOutreachPost(id: number, change: { body: string; customized?: boolean } | { regenerate: true }): Promise<OutreachPost> {
   return apiPatch<OutreachPost>(`/admin/outreach-posts/${id}`, change);
 }
 

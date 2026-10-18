@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   LINK_ESTIMATE,
-  buildGrid,
-  cellIsStale,
-  cellLabel,
   channelStatusNote,
   composerActions,
   countCharacters,
@@ -25,7 +22,7 @@ const instagram: OutreachChannel = { name: 'instagram', label: 'Instagram', utm_
 
 function post(over: Partial<OutreachPost> = {}): OutreachPost {
   return {
-    id: 1, outreach_id: 1, channel: 'bluesky', wave: 'announce', body: 'x', status: 'draft', prepared: false, stale: false, held: false,
+    id: 1, outreach_id: 1, channel: 'bluesky', wave: 'announce', body: 'x', status: 'draft', prepared: false, stale: false, customized: false, held: false,
     short_link_key: null, short_url: null, destination_url: 'https://x/workshops/s?utm_source=bluesky',
     utm: { source: 'bluesky', medium: 'social', campaign: 's', content: 'announce' },
     scheduled_at: null, posted_at: null, remote_url: null, last_error: null, created_at: '2026-01-01T00:00:00Z', updated_at: null,
@@ -61,35 +58,6 @@ describe('isOverLimit', () => {
   });
   it('never fires for a limit of 0', () => {
     expect(isOverLimit(instagram, 100000)).toBe(false);
-  });
-});
-
-describe('buildGrid and cells', () => {
-  const view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts'> = {
-    channels: [bluesky, instagram],
-    waves: [
-      { name: 'announce', label: 'Announce', suggested_at: null },
-      { name: 'reminder', label: 'Reminder', suggested_at: null },
-    ],
-    posts: [post({ id: 7, channel: 'instagram', wave: 'reminder' })],
-  };
-  it('lays out channels by waves in server order with nulls for gaps', () => {
-    const g = buildGrid(view);
-    expect(g.map((r) => r.channel.name)).toEqual(['bluesky', 'instagram']);
-    expect(g[0].cells.map((c) => c.post)).toEqual([null, null]);
-    expect(g[1].cells[1].post?.id).toBe(7);
-    expect(g[1].cells[0].post).toBeNull();
-  });
-  it('labels each state', () => {
-    expect(cellLabel(null)).toBe('Not drafted');
-    expect(cellLabel(post())).toBe('Draft');
-    expect(cellLabel(post({ prepared: true }))).toBe('Link ready');
-    expect(cellLabel(post({ prepared: true, status: 'manual' }))).toBe('Ready to post');
-    expect(cellLabel(post({ prepared: true, status: 'posted' }))).toBe('Posted');
-  });
-  it('reports staleness', () => {
-    expect(cellIsStale(null)).toBe(false);
-    expect(cellIsStale(post({ stale: true }))).toBe(true);
   });
 });
 
@@ -146,20 +114,6 @@ describe('composerActions', () => {
     const a = composerActions(post({ prepared: false }), bluesky, true);
     expect(a.canPostNow || a.canSchedule).toBe(false);
     expect(a.canPrepare).toBe(true);
-  });
-});
-
-describe('cellLabel (#0545 states)', () => {
-  it('labels the sending states', () => {
-    expect(cellLabel(post({ prepared: true, status: 'scheduled' }))).toBe('Scheduled');
-    expect(cellLabel(post({ prepared: true, status: 'queued' }))).toBe('Posting…');
-    expect(cellLabel(post({ prepared: true, status: 'queued', last_error: 'Mastodon is unreachable' }))).toBe('Retrying');
-    expect(cellLabel(post({ prepared: true, status: 'failed', last_error: 'x' }))).toBe('Failed');
-    expect(cellLabel(post({ prepared: true, status: 'scheduled', held: true }))).toBe('Held');
-    expect(cellLabel(post({ prepared: true, status: 'queued', held: true }))).toBe('Held');
-  });
-  it('posted wins over everything', () => {
-    expect(cellLabel(post({ prepared: true, status: 'posted', held: true }))).toBe('Posted');
   });
 });
 
