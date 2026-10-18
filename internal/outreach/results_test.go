@@ -156,3 +156,14 @@ func TestBuildResultsEmptyRollup(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 }
+
+func TestClicksByKey(t *testing.T) {
+	if got := ClicksByKey([]string{"a"}, nil); len(got) != 0 {
+		t.Errorf("nil rollup = %v", got)
+	}
+	r := &shortlinks.CampaignRollup{ByLink: []shortlinks.LinkBucket{{Key: "a", Count: 4}, {Key: "a", Count: 1}, {Key: "z", Count: 9}}}
+	got := ClicksByKey([]string{"a", "b", ""}, r)
+	if len(got) != 2 || got["a"] != 5 || got["b"] != 0 {
+		t.Errorf("got %v", got)
+	}
+}

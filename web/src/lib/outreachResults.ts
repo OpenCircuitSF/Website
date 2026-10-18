@@ -300,3 +300,11 @@ export function mentionHref(m: { url: string | null }): string | null {
   if (!/^https:\/\//i.test(m.url.trim())) return null;
   return isSafeLinkHref(m.url) ? m.url.trim() : null;
 }
+
+/** "42 clicks since outreach started (5 from flyers).", or '' unless the numbers are real (#0568). */
+export function resultsSummaryLine(results: OutreachResults | null): string {
+  if (!results || results.status !== 'ok' || !results.totals) return '';
+  const { clicks, flyer_clicks } = results.totals;
+  const base = `${clicks} ${clicks === 1 ? 'click' : 'clicks'} since outreach started`;
+  return flyer_clicks > 0 ? `${base} (${flyer_clicks} from flyers).` : `${base}.`;
+}

@@ -828,6 +828,82 @@ export interface WorkshopOutreach {
   channels: OutreachChannel[];
   waves: OutreachWave[];
   posts: OutreachPost[];
+  /** Set only on Start's response (#0568). */
+  link_report?: OutreachLinkReport;
+}
+
+export interface OutreachLinkFailure {
+  kind: 'post' | 'flyer';
+  channel?: string;
+  wave?: string;
+  location_id?: number;
+  label: string;
+  reason: string;
+}
+
+export interface OutreachLinkReport {
+  created: number;
+  existing: number;
+  failed: OutreachLinkFailure[];
+  stopped: boolean;
+}
+
+export interface OutreachLinkRow {
+  kind: 'post' | 'flyer';
+  channel: string;
+  channel_label: string;
+  wave: string;
+  wave_label: string;
+  location_id: number | null;
+  location_name: string | null;
+  location_code: string | null;
+  short_link_key: string | null;
+  short_url: string | null;
+  destination_url: string;
+  utm: { source: string; medium: string; campaign: string; content: string };
+  clicks: number | null;
+}
+
+export interface OutreachLinksView {
+  available: boolean;
+  unavailable_reason: string;
+  outreach: { id: number; campaign_slug: string } | null;
+  /** 'ok', 'not_started', 'not_configured', 'unreachable', 'rejected' or 'campaign_missing'. */
+  clicks_status: string;
+  missing: number;
+  links: OutreachLinkRow[];
+  report: OutreachLinkReport | null;
+}
+
+export interface OutreachDraftAllResult {
+  created: { post_id: number; channel: string; wave: string; has_link: boolean }[];
+  skipped: number;
+  without_link: number;
+}
+
+export interface OutreachScheduleItem {
+  post_id: number;
+  channel: string;
+  channel_label: string;
+  wave: string;
+  wave_label: string;
+  scheduled_at: string;
+}
+
+export interface OutreachScheduleSkip {
+  post_id: number | null;
+  channel: string;
+  channel_label: string;
+  wave: string;
+  wave_label: string;
+  reason: string;
+  suggested_at: string | null;
+}
+
+export interface OutreachScheduleAllResult {
+  dry_run: boolean;
+  to_schedule: OutreachScheduleItem[];
+  skipped: OutreachScheduleSkip[];
 }
 
 export interface OutreachSummary {

@@ -33,7 +33,11 @@ type fakeShortLinker struct {
 	slugs     []string
 	links     []shortlinks.CreateLinkRequest
 	linkErr   error
-	campSlug  string
+	// linkErrFor fails one slot's link, keyed utm_source+"/"+utm_content;
+	// checked before linkErr (#0568).
+	linkErrFor map[string]error
+	byDest     map[string]string // destination -> key, for de-duplication
+	campSlug   string
 	// fixedKey, when set, makes every CreateLink return that key, as real
 	// ShortLinks does for a repeated destination (it de-duplicates).
 	fixedKey string
@@ -126,13 +130,27 @@ func (f *fakeShortLinker) CreateLink(_ context.Context, req shortlinks.CreateLin
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.linkErrFor[req.UTMSource+"/"+req.UTMContent]; err != nil {
+		return nil, err
+	}
 	if f.linkErr != nil {
 		return nil, f.linkErr
+	}
+	// Real ShortLinks de-duplicates a repeated destination when no custom
+	// key is given.
+	if f.fixedKey == "" && req.Key == "" {
+		if k, ok := f.byDest[req.DestinationURL]; ok {
+			return &shortlinks.Link{Key: k}, nil
+		}
 	}
 	f.links = append(f.links, req)
 	if f.fixedKey != "" {
 		return &shortlinks.Link{Key: f.fixedKey}, nil
 	}
+	if f.byDest == nil {
+		f.byDest = map[string]string{}
+	}
+	f.byDest[req.DestinationURL] = fmt.Sprintf("k%d", len(f.links))
 	return &shortlinks.Link{Key: fmt.Sprintf("k%d", len(f.links))}, nil
 }
 
@@ -180,6 +198,10 @@ func outreachMuxPosting(pool *pgxpool.Pool, links shortLinker, posting outreachP
 	mux.Handle("POST /admin/outreach-posts/{id}/schedule", requireAdmin(http.HandlerFunc(h.SchedulePost)))
 	mux.Handle("POST /admin/outreach-posts/{id}/unschedule", requireAdmin(http.HandlerFunc(h.UnschedulePost)))
 	mux.Handle("GET /admin/workshops/{id}/outreach/results", requireAdmin(http.HandlerFunc(h.ResultsForWorkshop)))
+	mux.Handle("GET /admin/workshops/{id}/outreach/links", requireAdmin(http.HandlerFunc(h.Links)))
+	mux.Handle("POST /admin/workshops/{id}/outreach/links", requireAdmin(http.HandlerFunc(h.CreateLinks)))
+	mux.Handle("POST /admin/workshops/{id}/outreach/draft-all", requireAdmin(http.HandlerFunc(h.DraftAll)))
+	mux.Handle("POST /admin/workshops/{id}/outreach/schedule-all", requireAdmin(http.HandlerFunc(h.ScheduleAll)))
 	mux.Handle("GET /admin/outreach-results", requireAdmin(http.HandlerFunc(h.ResultsSummary)))
 	mux.Handle("GET /admin/outreach-locations", requireAdmin(http.HandlerFunc(h.ListLocations)))
 	mux.Handle("POST /admin/outreach-locations", requireAdmin(http.HandlerFunc(h.CreateLocation)))
@@ -225,6 +247,7 @@ type outreachEnv struct {
 	pool  *pgxpool.Pool
 	ws    *workshops.Store
 	links *fakeShortLinker
+	h     *AdminOutreachHandler
 }
 
 func newOutreachEnv(t *testing.T, enabled bool) *outreachEnv {
@@ -236,14 +259,14 @@ func newOutreachEnvPosting(t *testing.T, enabled bool, posting outreachPosting) 
 	t.Helper()
 	pool := outreachTestPool(t)
 	links := &fakeShortLinker{enabled: enabled}
-	mux, ws, _ := outreachMuxPosting(pool, links, posting)
+	mux, ws, h := outreachMuxPosting(pool, links, posting)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	admin := seedAdmin(t, pool, "admin-outreach@example.com")
 	seedSession(t, pool, admin, "outreach-admin-token")
 	user := seedUser(t, pool, "user-outreach@example.com")
 	seedSession(t, pool, user, "outreach-user-token")
-	return &outreachEnv{srv: srv, pool: pool, ws: ws, links: links}
+	return &outreachEnv{srv: srv, pool: pool, ws: ws, links: links, h: h}
 }
 
 func (e *outreachEnv) do(t *testing.T, method, path, body string) (int, []byte) {
@@ -287,7 +310,24 @@ type testPost struct {
 	DestinationURL string  `json:"destination_url"`
 }
 
+// start begins outreach WITHOUT creating the tracked links, so tests that
+// exercise the lazy Prepare path (and count CreateLink calls) stay meaningful
+// after #0568 made the real Start create every link. Use startHTTP for the
+// real thing.
 func (e *outreachEnv) start(t *testing.T, w workshops.Workshop) testPanel {
+	t.Helper()
+	if _, _, err := outreach.NewStore(e.pool).Create(context.Background(), w.ID, w.Slug); err != nil {
+		t.Fatalf("start outreach: %v", err)
+	}
+	code, b := e.do(t, http.MethodGet, fmt.Sprintf("/admin/workshops/%d/outreach", w.ID), "")
+	if code != http.StatusOK {
+		t.Fatalf("panel status = %d (%s)", code, b)
+	}
+	return decodeOutreach[testPanel](t, b)
+}
+
+// startHTTP calls the real Start route.
+func (e *outreachEnv) startHTTP(t *testing.T, w workshops.Workshop) testPanel {
 	t.Helper()
 	code, b := e.do(t, http.MethodPost, fmt.Sprintf("/admin/workshops/%d/outreach", w.ID), "")
 	if code != http.StatusCreated && code != http.StatusOK {

@@ -116,7 +116,7 @@
   import type { AdminWorkshop, Interest } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
-  import OutreachPanel from './OutreachPanel.svelte';
+  import OutreachEditorSummary from './OutreachEditorSummary.svelte';
 
   interface Props {
     workshopId: number;
@@ -521,6 +521,10 @@
     <span class="badge {statusBadgeClass}">{statusLabel}</span>
   </div>
 
+  <Panel title="Outreach">
+    <OutreachEditorSummary {workshopId} />
+  </Panel>
+
   <form onsubmit={save}>
     <Panel title="Content">
       <div class="field">
@@ -802,10 +806,6 @@
         <Button variant="primary" onclick={openAnnouncedCampaign}>Open draft campaign</Button>
       {/if}
     </div>
-  </Panel>
-
-  <Panel title="Outreach">
-    <OutreachPanel {workshopId} workshopUpdatedAt={workshop.updated_at} />
   </Panel>
 
   {#if transitionOpen}

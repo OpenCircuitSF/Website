@@ -14,20 +14,27 @@
   changes, per the live-region convention WorkshopEditor.svelte describes.
 -->
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { untrack, type Snippet } from 'svelte';
   import { getWorkshopOutreach, getWorkshopOutreachResults, startOutreach, createOutreachPost, ApiError } from '../../lib/api';
-  import { adminOutreachResultsHash, adminSectionHash } from '../../lib/adminRouter';
+  import { adminOutreachResultsHash, adminSectionHash, adminWorkshopHash } from '../../lib/adminRouter';
   import { buildGrid, cellLabel, cellIsStale, shouldPoll, unavailableMessage } from '../../lib/outreach';
-  import { cellClicksLabel, cellReactionsLabel, resultsStatusMessage } from '../../lib/outreachResults';
+  import { cellClicksLabel, cellReactionsLabel, resultsStatusMessage, resultsSummaryLine } from '../../lib/outreachResults';
+  import { linkReportMessage } from '../../lib/outreachLinks';
   import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import OutreachComposer from './OutreachComposer.svelte';
 
   interface Props {
     workshopId: number;
-    workshopUpdatedAt: string;
+    workshopUpdatedAt?: string;
+    /** #0568: rendered after the campaign line and before the grid, once outreach exists. */
+    beforeGrid?: Snippet;
+    /** #0568: bump to refetch (the links table and bulk actions change posts). */
+    reloadKey?: number;
+    /** #0568: called with the view after every successful load, refresh, start or change. */
+    onLoaded?: (v: WorkshopOutreach) => void;
   }
-  let { workshopId, workshopUpdatedAt }: Props = $props();
+  let { workshopId, workshopUpdatedAt = '', beforeGrid, reloadKey = 0, onLoaded }: Props = $props();
 
   let view = $state<WorkshopOutreach | null>(null);
   let loading = $state(true);
@@ -73,6 +80,7 @@
     loadError = null;
     try {
       view = await getWorkshopOutreach(workshopId);
+      onLoaded?.(view);
     } catch (err) {
       loadError = message(err, 'Could not load outreach. Please try again.');
     } finally {
@@ -85,6 +93,7 @@
     // Re-run on a different workshop or a saved workshop edit.
     void workshopId;
     void workshopUpdatedAt;
+    void reloadKey;
     untrack(() => void load());
   });
 
@@ -96,6 +105,7 @@
   async function refreshQuietly(): Promise<void> {
     try {
       view = await getWorkshopOutreach(workshopId);
+      onLoaded?.(view);
     } catch {
       /* keep what is on screen */
     }
@@ -111,6 +121,8 @@
     actionError = null;
     try {
       view = await startOutreach(workshopId);
+      onLoaded?.(view);
+      actionError = linkReportMessage(view.link_report);
     } catch (err) {
       actionError = message(err, 'Could not start outreach. Please try again.');
     } finally {
@@ -141,6 +153,7 @@
     if (!view) return;
     const before = view.posts.find((p) => p.id === updated.id);
     view = { ...view, posts: view.posts.map((p) => (p.id === updated.id ? updated : p)) };
+    onLoaded?.(view);
     // #0552: a prepare or mark-posted changes what the click line can show.
     if (!before || before.prepared !== updated.prepared || before.status !== updated.status) void loadResults();
   }
@@ -163,6 +176,8 @@
         {unavailableMessage(view.unavailable_reason)}
         {#if view.unavailable_reason === 'shortlinks_not_configured'}
           <a href={adminSectionHash('settings')}>Open Settings</a>
+        {:else if view.unavailable_reason === 'workshop_not_published'}
+          <a href={adminWorkshopHash(workshopId)}>Open the workshop editor</a>
         {/if}
       </p>
     {/if}
@@ -170,7 +185,7 @@
     {#if view.outreach === null}
       {#if view.available}
         <p class="text-muted">
-          Start outreach to draft a post per channel and wave. This creates a ShortLinks campaign for this workshop.
+          Start outreach to create the ShortLinks campaign and every tracked link for this workshop.
         </p>
         <div class="row">
           <Button variant="primary" onclick={start} disabled={busy}>
@@ -182,6 +197,9 @@
       <p class="text-muted">
         Campaign <span class="mono">{view.outreach.campaign_slug}</span>. Pick a cell to draft or open a post.
       </p>
+      {#if beforeGrid}
+        {@render beforeGrid()}
+      {/if}
       <div class="table-scroll">
         <table>
           <thead>
@@ -220,7 +238,9 @@
           </tbody>
         </table>
       </div>
-      <p><a href={adminOutreachResultsHash(workshopId)}>View results</a></p>
+      <p>
+        {#if resultsSummaryLine(results)}{resultsSummaryLine(results)}{' '}{/if}<a href={adminOutreachResultsHash(workshopId)}>View results</a>
+      </p>
     {/if}
 
     {#if selected && selectedChannel && selectedWave}

@@ -14,6 +14,7 @@ import {
   adminOutreachHash,
   outreachWorkshopFromQuery,
   adminOutreachResultsHash,
+  adminOutreachWorkshopHash,
   outreachFlyerFromQuery,
   outreachLayoutFromQuery,
   adminOutreachFlyersHash,
@@ -175,5 +176,18 @@ describe('outreach flyers routing (#0549)', () => {
     expect(adminOutreachFlyersHash(7)).toBe('#/outreach?view=flyers&flyer=7');
     expect(adminOutreachPrintHash(7, 'half')).toBe('#/outreach?view=print&flyer=7&layout=half');
     expect(adminOutreachHash('flyers')).toBe('#/outreach?view=flyers');
+  });
+});
+
+describe('outreach workshop page (#0568)', () => {
+  it('parses view=workshop only with a valid workshop param', () => {
+    expect(outreachViewFromQuery(parseAdminHash('#/outreach?view=workshop&workshop=6')!.query)).toBe('workshop');
+    expect(outreachWorkshopFromQuery(parseAdminHash('#/outreach?view=workshop&workshop=6')!.query)).toBe(6);
+    expect(outreachViewFromQuery(parseAdminHash('#/outreach?view=workshop')!.query)).toBe('workshops');
+    expect(outreachViewFromQuery(parseAdminHash('#/outreach?view=workshop&workshop=abc')!.query)).toBe('workshops');
+    expect(outreachViewFromQuery(parseAdminHash('#/outreach?view=nope')!.query)).toBe('workshops');
+  });
+  it('builds the hash', () => {
+    expect(adminOutreachWorkshopHash(6)).toBe('#/outreach?view=workshop&workshop=6');
   });
 });

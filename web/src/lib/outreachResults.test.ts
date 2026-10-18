@@ -17,6 +17,7 @@ import {
   reactionsLabel,
   reactionTotal,
   resultsStatusMessage,
+  resultsSummaryLine,
   seriesColor,
   utcDays,
   waveLabel,
@@ -288,5 +289,21 @@ describe('mentions (#0547)', () => {
     for (const url of [null, '', 'javascript:alert(1)', 'http://example.test/x', 'mailto:a@example.test', '//example.test/x', 'data:text/html,x', 'HTTPS://example.test/\u0000']) {
       expect(mentionHref({ url })).toBeNull();
     }
+  });
+});
+
+describe('resultsSummaryLine (#0568)', () => {
+  it('reads the totals when the results are ok', () => {
+    expect(resultsSummaryLine(results({ totals: { clicks: 42, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 5 } }))).toBe(
+      '42 clicks since outreach started (5 from flyers).',
+    );
+    expect(resultsSummaryLine(results({ totals: { clicks: 1, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 0 } }))).toBe(
+      '1 click since outreach started.',
+    );
+  });
+  it('is empty unless the numbers are real', () => {
+    expect(resultsSummaryLine(null)).toBe('');
+    expect(resultsSummaryLine(results({ status: 'unreachable' }))).toBe('');
+    expect(resultsSummaryLine(results({ totals: null }))).toBe('');
   });
 });

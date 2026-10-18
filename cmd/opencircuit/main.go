@@ -1574,6 +1574,11 @@ func adminRoutes(
 			// #0546: click results read from ShortLinks. Hyphenated like the
 			// siblings so it never overlaps /admin/outreach/{id}/posts.
 			adminRoute{http.MethodGet, "/admin/workshops/{id}/outreach/results", http.HandlerFunc(adminOutreachH.ResultsForWorkshop)},
+			// #0568: tracked links, draft-all and schedule-all, keyed by workshop id.
+			adminRoute{http.MethodGet, "/admin/workshops/{id}/outreach/links", http.HandlerFunc(adminOutreachH.Links)},
+			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/links", http.HandlerFunc(adminOutreachH.CreateLinks)},
+			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/draft-all", http.HandlerFunc(adminOutreachH.DraftAll)},
+			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/schedule-all", http.HandlerFunc(adminOutreachH.ScheduleAll)},
 			adminRoute{http.MethodGet, "/admin/outreach-results", http.HandlerFunc(adminOutreachH.ResultsSummary)},
 			adminRoute{http.MethodGet, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.ListLocations)},
 			adminRoute{http.MethodPost, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.CreateLocation)},

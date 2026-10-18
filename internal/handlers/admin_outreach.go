@@ -38,6 +38,11 @@ type outreachStore interface {
 	SetPrepared(ctx context.Context, id int64, key, shortURL, status string) (outreach.Post, bool, error)
 	MarkPosted(ctx context.Context, id int64, remoteURL *string, now time.Time) (outreach.Post, error)
 	DeletePost(ctx context.Context, id int64) error
+	// Slot links (#0568): one tracked link per channel x wave, made before any
+	// post exists. InsertPostLink's bool is true only when a row was inserted.
+	ListPostLinks(ctx context.Context, outreachID int64) ([]outreach.PostLink, error)
+	GetPostLink(ctx context.Context, outreachID int64, channel, wave string) (outreach.PostLink, error)
+	InsertPostLink(ctx context.Context, outreachID int64, channel, wave, key, shortURL string) (outreach.PostLink, bool, error)
 	QueueNow(ctx context.Context, id int64) (post outreach.Post, prevStatus string, err error)
 	Schedule(ctx context.Context, id int64, at time.Time) (outreach.Post, error)
 	Unschedule(ctx context.Context, id int64) (outreach.Post, error)
@@ -308,6 +313,8 @@ type outreachPanelView struct {
 	Channels          []outreachChannelView `json:"channels"`
 	Waves             []outreachWaveView    `json:"waves"`
 	Posts             []outreachPostView    `json:"posts"`
+	// LinkReport is set only on Start's response (#0568).
+	LinkReport *outreachLinkReport `json:"link_report,omitempty"`
 }
 
 func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop, o *outreach.Outreach) (outreachPanelView, error) {
@@ -327,10 +334,7 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 	}
 	for _, w := range outreach.Waves() {
 		wv := outreachWaveView{Name: w.Name, Label: w.Label}
-		if w.DaysBefore > 0 && wk.StartsAt != nil {
-			t := wk.StartsAt.AddDate(0, 0, -w.DaysBefore)
-			wv.SuggestedAt = rfc3339(&t)
-		}
+		wv.SuggestedAt = rfc3339(outreach.SuggestedAt(w, wk.StartsAt))
 		v.Waves = append(v.Waves, wv)
 	}
 	if o != nil {
@@ -501,11 +505,21 @@ func (h *AdminOutreachHandler) Start(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	var report *outreachLinkReport
+	if created {
+		rep, lerr := h.ensureLinks(r, actor.ID, o, wk)
+		if lerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		report = &rep
+	}
 	v, err := h.panel(r.Context(), wk, &o)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+	v.LinkReport = report
 	writeJSON(w, status, v)
 }
 
@@ -569,15 +583,39 @@ func (h *AdminOutreachHandler) CreatePost(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+	// A slot whose link was created up front (#0568) opens already prepared.
+	linkApplied := false
+	switch pl, lerr := h.store.GetPostLink(r.Context(), o.ID, p.Channel, p.Wave); {
+	case lerr == nil:
+		status := p.Status
+		if !ch.Automatic {
+			status = "manual"
+		}
+		prepared, _, perr := h.store.SetPrepared(r.Context(), p.ID, pl.Key, pl.ShortURL, status)
+		if perr != nil {
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		p = prepared
+		linkApplied = true
+	case errors.Is(lerr, outreach.ErrNotFound):
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
 	if h.auditor != nil {
 		actorID := actor.ID
 		targetID := p.ID
+		meta := map[string]any{"outreach_id": o.ID, "channel": p.Channel, "wave": p.Wave}
+		if linkApplied {
+			meta["link_applied"] = true
+		}
 		h.auditor.Record(r.Context(), audit.Entry{
 			ActorID:    &actorID,
 			Action:     audit.ActionOutreachPostCreated,
 			TargetType: audit.TargetOutreachPost,
 			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": o.ID, "channel": p.Channel, "wave": p.Wave},
+			Metadata:   meta,
 			IP:         clientIP(r),
 		})
 	}
@@ -725,30 +763,38 @@ func (h *AdminOutreachHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 	}
 	ch, _ := outreach.ChannelByName(p.Channel)
 	wv, _ := outreach.WaveByName(p.Wave)
-	base, err := h.shortLinksBase(r.Context())
-	if err != nil {
-		writeShortLinksError(w, "me", err)
-		return
-	}
-	link, err := h.links.CreateLink(r.Context(), shortlinks.CreateLinkRequest{
-		DestinationURL: outreach.DestinationURL(h.baseURL, f, ch, wv),
-		Title:          wk.Title + " — " + ch.Label + " " + wv.Label,
-		CampaignSlug:   o.CampaignSlug,
-		UTMSource:      ch.UTMSource,
-		UTMMedium:      ch.UTMMedium,
-		UTMCampaign:    f.Slug,
-		UTMContent:     wv.Name,
-		Placement:      ch.Name,
-	})
-	if err != nil {
-		writeShortLinksError(w, "create link", err)
+	var linkKey, linkURL string
+	switch pl, lerr := h.store.GetPostLink(r.Context(), o.ID, p.Channel, p.Wave); {
+	case lerr == nil:
+		// Created up front (#0568): no ShortLinks call at all.
+		linkKey, linkURL = pl.Key, pl.ShortURL
+	case errors.Is(lerr, outreach.ErrNotFound):
+		base, berr := h.shortLinksBase(r.Context())
+		if berr != nil {
+			writeShortLinksError(w, "me", berr)
+			return
+		}
+		link, cerr := h.links.CreateLink(r.Context(), h.postLinkRequest(o, wk, ch, wv))
+		if cerr != nil {
+			writeShortLinksError(w, "create link", cerr)
+			return
+		}
+		// A racing Create links may have won the slot: use the stored row.
+		row, _, ierr := h.store.InsertPostLink(r.Context(), o.ID, ch.Name, wv.Name, link.Key, base+"/"+link.Key)
+		if ierr != nil {
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		linkKey, linkURL = row.Key, row.ShortURL
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	status := p.Status
 	if !ch.Automatic {
 		status = "manual"
 	}
-	updated, changed, err := h.store.SetPrepared(r.Context(), id, link.Key, base+"/"+link.Key, status)
+	updated, changed, err := h.store.SetPrepared(r.Context(), id, linkKey, linkURL, status)
 	switch {
 	case err == nil:
 	case errors.Is(err, outreach.ErrPostLocked):
@@ -770,7 +816,7 @@ func (h *AdminOutreachHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 			Action:     audit.ActionOutreachPostPrepared,
 			TargetType: audit.TargetOutreachPost,
 			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "short_link_key": link.Key},
+			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "short_link_key": linkKey},
 			IP:         clientIP(r),
 		})
 	}

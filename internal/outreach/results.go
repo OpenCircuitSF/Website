@@ -175,3 +175,25 @@ func BuildResults(posts []Post, r *shortlinks.CampaignRollup) Results {
 	}
 	return res
 }
+
+// ClicksByKey sums a rollup's per-link clicks for the given keys; every key
+// is present, with 0 when it has no clicks. A nil rollup gives an empty map.
+func ClicksByKey(keys []string, r *shortlinks.CampaignRollup) map[string]int64 {
+	out := map[string]int64{}
+	if r == nil {
+		return out
+	}
+	want := map[string]bool{}
+	for _, k := range keys {
+		if k != "" {
+			want[k] = true
+			out[k] = 0
+		}
+	}
+	for _, row := range r.ByLink {
+		if want[row.Key] {
+			out[row.Key] += row.Count
+		}
+	}
+	return out
+}

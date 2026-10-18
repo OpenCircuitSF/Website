@@ -360,10 +360,13 @@ const (
 	// outreach_flyer_link.* actions target a link row. link.created is
 	// written only when a Generate really inserted the row, never for a
 	// reused one. Metadata never carries tagline text or photo paths.
-	ActionOutreachFlyerCreated          = "outreach_flyer.created"
-	ActionOutreachFlyerUpdated          = "outreach_flyer.updated"
-	ActionOutreachFlyerDeleted          = "outreach_flyer.deleted"
-	ActionOutreachFlyerLinkCreated      = "outreach_flyer_link.created"
+	ActionOutreachFlyerCreated     = "outreach_flyer.created"
+	ActionOutreachFlyerUpdated     = "outreach_flyer.updated"
+	ActionOutreachFlyerDeleted     = "outreach_flyer.deleted"
+	ActionOutreachFlyerLinkCreated = "outreach_flyer_link.created"
+	// ActionOutreachLinkCreated (#0568) is written only when a slot link
+	// was really inserted, never for an adopted or reused row.
+	ActionOutreachLinkCreated           = "outreach_link.created"
 	ActionOutreachFlyerLinkPutUp        = "outreach_flyer_link.put_up"
 	ActionOutreachFlyerLinkPutUpCleared = "outreach_flyer_link.put_up_cleared"
 
@@ -576,6 +579,9 @@ const (
 	// for the outreach_flyer.* and outreach_flyer_link.* actions (#0549).
 	TargetOutreachFlyer     = "outreach_flyer"
 	TargetOutreachFlyerLink = "outreach_flyer_link"
+	// TargetOutreachLink is the target type for ActionOutreachLinkCreated
+	// (#0568).
+	TargetOutreachLink = "outreach_link"
 	// TargetOutreachConnections is the target type for
 	// ActionOutreachConnectionsUpdated (#0564). The connections are a set of
 	// keyed rows, not one bigint-id row, so TargetID is left nil.

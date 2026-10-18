@@ -7,6 +7,8 @@
 // the admin GET response, so there is no second copy to keep in step.
 package outreach
 
+import "time"
+
 // LinkToken is the placeholder a draft carries until Prepare substitutes the
 // real short URL for it.
 const LinkToken = "{link}"
@@ -71,4 +73,14 @@ func WaveByName(name string) (Wave, bool) {
 		}
 	}
 	return Wave{}, false
+}
+
+// SuggestedAt is when a wave is suggested for a workshop starting at
+// startsAt: nil for a wave with no offset (announce) or an undated workshop.
+func SuggestedAt(w Wave, startsAt *time.Time) *time.Time {
+	if w.DaysBefore == 0 || startsAt == nil {
+		return nil
+	}
+	t := startsAt.AddDate(0, 0, -w.DaysBefore)
+	return &t
 }

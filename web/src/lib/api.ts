@@ -15,6 +15,9 @@ import type {
   ServerSettings,
   ConnectionGroup,
   ConnectionTestResult,
+  OutreachLinksView,
+  OutreachDraftAllResult,
+  OutreachScheduleAllResult,
   OutreachLocation,
   FlyerLinkInfo,
   FlyerRow,
@@ -1294,6 +1297,29 @@ export function getWorkshopOutreach(workshopId: number): Promise<WorkshopOutreac
 /** POST /admin/workshops/{id}/outreach — ensure the ShortLinks campaign and start outreach. */
 export function startOutreach(workshopId: number): Promise<WorkshopOutreach> {
   return apiPost<WorkshopOutreach>(`/admin/workshops/${workshopId}/outreach`);
+}
+
+/** GET /admin/workshops/{id}/outreach/links — the links table (#0568). */
+export function getWorkshopOutreachLinks(workshopId: number): Promise<OutreachLinksView> {
+  return apiGet<OutreachLinksView>(`/admin/workshops/${workshopId}/outreach/links`);
+}
+
+/** POST /admin/workshops/{id}/outreach/links — create every missing tracked link (idempotent). */
+export function createWorkshopOutreachLinks(workshopId: number): Promise<OutreachLinksView> {
+  return apiPost<OutreachLinksView>(`/admin/workshops/${workshopId}/outreach/links`);
+}
+
+/** POST /admin/workshops/{id}/outreach/draft-all — draft every empty cell; never overwrites a post. */
+export function draftAllOutreach(workshopId: number): Promise<OutreachDraftAllResult> {
+  return apiPost<OutreachDraftAllResult>(`/admin/workshops/${workshopId}/outreach/draft-all`);
+}
+
+/** POST /admin/workshops/{id}/outreach/schedule-all — preview (`dry_run`) or confirm the previewed ids. */
+export function scheduleAllOutreach(
+  workshopId: number,
+  body: { dry_run: true } | { dry_run: false; post_ids: number[] },
+): Promise<OutreachScheduleAllResult> {
+  return apiPost<OutreachScheduleAllResult>(`/admin/workshops/${workshopId}/outreach/schedule-all`, body);
 }
 
 /** GET /admin/outreach — every workshop that has outreach. */

@@ -8,7 +8,7 @@
   import { untrack } from 'svelte';
   import { listOutreach, ApiError } from '../../lib/api';
   import {
-    adminWorkshopHash,
+    adminOutreachWorkshopHash,
     adminOutreachHash,
     adminOutreachResultsHash,
     adminOutreachFlyersHash,
@@ -23,6 +23,7 @@
   import Panel from '../../lib/Panel.svelte';
   import OutreachLocations from './OutreachLocations.svelte';
   import OutreachResults from './OutreachResults.svelte';
+  import OutreachWorkshop from './OutreachWorkshop.svelte';
   import OutreachFlyers from './OutreachFlyers.svelte';
   import OutreachFlyerEditor from './OutreachFlyerEditor.svelte';
   import FlyerPrint from './FlyerPrint.svelte';
@@ -66,7 +67,7 @@
   <FlyerPrint {flyerId} layout={outreachLayoutFromQuery(query)} />
 {:else}
 <nav class="outreach-subnav" aria-label="Outreach sections">
-  <a href={adminOutreachHash('workshops')} aria-current={view === 'workshops' ? 'page' : undefined}>Workshops</a>
+  <a href={adminOutreachHash('workshops')} aria-current={view === 'workshops' || view === 'workshop' ? 'page' : undefined}>Workshops</a>
   <a href={adminOutreachHash('locations')} aria-current={view === 'locations' ? 'page' : undefined}>Locations</a>
   <a href={adminOutreachFlyersHash()} aria-current={view === 'flyers' || view === 'print' ? 'page' : undefined}>Flyers</a>
   <a href={adminOutreachResultsHash()} aria-current={view === 'results' ? 'page' : undefined}>Results</a>
@@ -76,6 +77,8 @@
   <OutreachFlyerEditor {flyerId} />
 {:else if view === 'flyers' || view === 'print'}
   <OutreachFlyers />
+{:else if view === 'workshop' && outreachWorkshopFromQuery(query) !== null}
+  <OutreachWorkshop workshopId={outreachWorkshopFromQuery(query) ?? 0} />
 {:else if view === 'locations'}
   <OutreachLocations />
 {:else if view === 'results'}
@@ -88,7 +91,7 @@
     <p class="text-error">{loadError}</p>
     <Button variant="primary" onclick={load}>Retry</Button>
   {:else if rows.length === 0}
-    <p class="text-muted">No workshop has outreach yet.</p>
+    <p class="text-muted">No workshop has outreach yet. Open a published workshop under Workshops and choose Open outreach.</p>
   {:else}
     <div class="table-scroll">
       <table>
@@ -103,7 +106,7 @@
         <tbody>
           {#each rows as row (row.outreach_id)}
             <tr>
-              <td><a href={adminWorkshopHash(row.workshop_id)}>{row.workshop_title}</a></td>
+              <td><a href={adminOutreachWorkshopHash(row.workshop_id)}>{row.workshop_title}</a></td>
               <td>{row.starts_at ? formatDateTime(row.starts_at) : 'Date TBA'}</td>
               <td>{row.workshop_status}</td>
               <td>{countsLabel(row.counts)}</td>

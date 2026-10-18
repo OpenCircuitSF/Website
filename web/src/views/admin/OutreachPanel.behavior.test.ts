@@ -6,6 +6,7 @@
 // calls, not layout or clipboard permissions. navigator.clipboard does not
 // exist under jsdom, so it is stubbed.
 import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
+import { createRawSnippet } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
 
@@ -321,5 +322,56 @@ describe('OutreachPanel', () => {
     const before = getWorkshopOutreach.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(getWorkshopOutreach.mock.calls.length).toBe(before);
+  });
+
+  // #0568: the workshop outreach page injects its links table and bulk actions.
+  const marker = createRawSnippet(() => ({ render: () => '<p>BEFORE-GRID</p>' }));
+
+  it('renders beforeGrid only once outreach exists (#0568)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ outreach: null }));
+    const { unmount } = render(OutreachPanel, { workshopId: 5, beforeGrid: marker });
+    await screen.findByText('Start outreach');
+    expect(screen.queryByText('BEFORE-GRID')).toBeNull();
+    unmount();
+    getWorkshopOutreach.mockResolvedValue(view());
+    render(OutreachPanel, { workshopId: 5, beforeGrid: marker });
+    const injected = await screen.findByText('BEFORE-GRID');
+    const grid = await screen.findByRole('columnheader', { name: 'Announce' });
+    expect(injected.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('calls onLoaded with the loaded view and refetches on reloadKey (#0568)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view());
+    const onLoaded = vi.fn();
+    const { rerender } = render(OutreachPanel, { workshopId: 5, reloadKey: 0, onLoaded });
+    await waitFor(() => expect(onLoaded).toHaveBeenCalledTimes(1));
+    expect(onLoaded.mock.calls[0][0].workshop.id).toBe(5);
+    await rerender({ workshopId: 5, reloadKey: 1, onLoaded });
+    await waitFor(() => expect(getWorkshopOutreach).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(onLoaded).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows the link report after Start when some links failed (#0568)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ outreach: null }));
+    startOutreach.mockResolvedValue(
+      view({ link_report: { created: 14, existing: 0, stopped: false, failed: [{ kind: 'post', label: 'Mastodon · Reminder', reason: 'failed' }] } }),
+    );
+    render(OutreachPanel, { workshopId: 5 });
+    await fireEvent.click(await screen.findByText('Start outreach'));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Mastodon · Reminder (failed)'));
+  });
+
+  it('links to the workshop editor when the workshop is not published (#0568)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ available: false, unavailable_reason: 'workshop_not_published', outreach: null }));
+    render(OutreachPanel, { workshopId: 5 });
+    const link = await screen.findByRole('link', { name: 'Open the workshop editor' });
+    expect(link.getAttribute('href')).toBe('#/workshops/5');
+  });
+
+  it('puts the click summary in front of View results (#0568)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view());
+    getWorkshopOutreachResults.mockResolvedValue(resultsFor({ totals: { clicks: 42, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 5 } }));
+    render(OutreachPanel, { workshopId: 5 });
+    expect(await screen.findByText(/42 clicks since outreach started \(5 from flyers\)\./)).toBeTruthy();
   });
 });
