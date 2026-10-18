@@ -3,6 +3,7 @@ package outreachconn
 import (
 	"context"
 	"log/slog"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -167,6 +168,14 @@ func (m *Manager) reloadLocked(ctx context.Context) error {
 			next.errs[GroupBluesky] = errBluesky
 			m.log.Warn("outreach: connection misconfigured", "group", GroupBluesky)
 		}
+		if c != nil && loopbackURL(v[KeyBlueskyPDSURL]) {
+			// A loopback PDS is a development mock (#0580). It serves the
+			// AppView reads too, so engagement counts never leave the machine
+			// for the public AppView host.
+			if aerr := c.SetAppViewURL(v[KeyBlueskyPDSURL]); aerr != nil {
+				m.log.Warn("outreach: bluesky appview override rejected", "err", aerr)
+			}
+		}
 		next.bs = c
 		m.log.Info("outreach: connection reloaded", "group", GroupBluesky, "configured", c != nil)
 	}
@@ -298,4 +307,16 @@ func (m *Manager) OnChange(fn func(Changed)) {
 	m.lmu.Lock()
 	m.listeners = append(m.listeners, fn)
 	m.lmu.Unlock()
+}
+
+// loopbackURL reports whether raw is an http(s) URL on localhost or a
+// loopback address. Only validated saved values reach it, so a parse failure
+// is simply false.
+func loopbackURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	return h == "localhost" || h == "127.0.0.1" || h == "::1"
 }

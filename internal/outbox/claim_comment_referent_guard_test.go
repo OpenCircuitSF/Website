@@ -824,7 +824,7 @@ func findClaimCommentGuardFindings(path string, src any, allPkgTypes map[string]
 // historical and begins going stale with the next file anyone adds under
 // those roots, which is why the harness measures the population itself
 // rather than trusting a number written here.
-const claimCommentGuardMinPlausibleFileCount = 215
+const claimCommentGuardMinPlausibleFileCount = 308
 
 // claimCommentGuardMinPlausibleCallCensusCount is the floor on the SUM,
 // across every file and every target identifier, of

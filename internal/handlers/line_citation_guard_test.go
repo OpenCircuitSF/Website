@@ -129,7 +129,7 @@ var lineCitationTranscriptMarker = regexp.MustCompile(`^\t(=== RUN |--- (FAIL|PA
 // in this package can see that drift on its own, because every guard here
 // compares a live file count against the floor and never the floor against
 // the size of the tree.
-const lineCitationGuardMinPlausibleFileCount = 216
+const lineCitationGuardMinPlausibleFileCount = 309
 
 // lineCitationHit is one non-exempt `<file>.go:<int>` citation found in a
 // Go comment.

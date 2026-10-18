@@ -270,7 +270,7 @@ var citedTestScanRoots = []string{"..", "../../cmd", "../../web"}
 // detect the roots being cut back to internal alone would sit so close to
 // the full population that ordinary deletions would start failing the
 // guard.
-const citedTestScanRootsMinPlausibleFileCount = 216
+const citedTestScanRootsMinPlausibleFileCount = 309
 
 // skipVendoredDir reports whether dirName should be pruned from the walk
 // entirely. #0194 is open against #0181's guard for descending into

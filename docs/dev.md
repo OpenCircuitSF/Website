@@ -91,6 +91,81 @@ stay signed out until you sign back in". This is deliberate: see
 `internal/middleware.DevAdminAutoLogin`'s doc comment
 (`internal/middleware/devauth.go`).
 
+## Outreach demo with mocks
+
+Posting, Test connection, engagement tracking and short links all talk to
+Bluesky, Mastodon and ShortLinks, so none of the outreach screens can be
+exercised against real services in development. `cmd/devmocks` serves
+in-memory stand-ins for all three on one loopback port (`#0580`), and
+`scripts/dev-outreach-demo.sh` wires the whole thing together:
+
+```bash
+./scripts/dev-outreach-demo.sh                 # app :18080, mocks :18081
+DEMO_PORT=18180 DEMO_MOCK_PORT=18181 ./scripts/dev-outreach-demo.sh
+```
+
+It blocks until Ctrl-C (or SIGTERM) and kills exactly the pids it started;
+wait for the `DEMO READY` line before using it. In order, it builds the SPA
+and two binaries into `.scratch/demo/bin` (restoring the tracked
+`web/dist/index.html` placeholder afterwards, `AGENTS.md` §8b), **drops and
+rebuilds a dedicated `opencircuit_demo` database** (never your `opencircuit`
+one; the mocks forget everything on restart, so the database must too, unless
+`DEMO_KEEP_DB=1`), seeds the admin, starts the mocks, seeds the demo data,
+and starts the app with `DEV_ADMIN_LOGIN=true`, `MAILER_NOOP=true` and
+`OUTREACH_TRACKER_INTERVAL=20s`. Logs land in `.scratch/demo/app.log` and
+`.scratch/demo/mocks.log`.
+
+What the seed (`devmocks seed`) creates, idempotently, and only ever against a
+`DATABASE_URL` whose host is `localhost`/loopback (anything else is refused):
+
+- the published, fictional **LED Programming** workshop, two weeks out, with a
+  generated cover image in `$MEDIA_DIR` (`.scratch/demo/media`);
+- four outreach locations (`mission-lib`, `haight-coop`, `soma-hw`, `civic-mkr`);
+- saved **Settings, Outreach connections** values pointing at the mocks, so
+  all three groups show as saved and Test connection succeeds.
+
+The mocks (`/bluesky`, `/mastodon`, `/shortlinks` under the mock port) accept
+any token or app password **except `bad-token`**, which every mock answers
+with 401. Put it in a connection field in Settings to show a failed Test
+connection (`PATCH /admin/outreach-connections`, then restore a real value).
+Each post made through the app gets one mock reply and some likes, there is a
+standing mock mention on each platform, and ShortLinks returns stable,
+plausible click counts spread over the last seven days, so Results is never
+empty (engagement appears one tracker pass, about 20 seconds, after a post).
+Short links redirect, and every request is logged to `mocks.log` without
+headers. Known limits: the mock posts' public URLs are not browsable pages on
+the real platforms (the Bluesky one points at `bsky.app` with a mock handle);
+and the Go app does not serve `/media/` (Apache does in production,
+`docs/media.md`), so cover thumbnails in admin screens 404 locally.
+
+Safety: `cmd/devmocks serve` refuses any non-loopback `-addr`; the package is
+imported by nothing else and is not built or installed by `deploy.sh` or
+`release.sh`. When the saved Bluesky PDS URL is loopback, the connection
+manager also reads AppView counts from it instead of the public AppView host,
+so the demo never contacts live Bluesky. `OUTREACH_TRACKER_INTERVAL` is
+ignored unless `BASE_URL` is loopback.
+
+### Reaching it from a Tart guest
+
+The app binds `127.0.0.1` only and `DEV_ADMIN_LOGIN` is refused unless
+`BASE_URL` is loopback, so the guest cannot (and must not) browse
+`http://192.168.64.1:18080`. Instead, make the host's app appear on the
+guest's own loopback with a reverse tunnel, then browse
+`http://localhost:18080` inside the guest. `BASE_URL`, cookies and the
+login guard are then exactly what they are on the host. From the host:
+
+```bash
+ssh -N -R 127.0.0.1:18080:127.0.0.1:18080 admin@$(tart ip <vm-name>)
+```
+
+(`admin` / `admin` are the Tart base-image defaults; use the guest's real
+user otherwise. The guest's `sshd` is what accepts this; the host needs no
+Remote Login.) Or let the script open it for you, with key-based auth only:
+`DEMO_VM_SSH=admin@<guest-ip> ./scripts/dev-outreach-demo.sh`. Tunnel only
+the app port; the mock port needs no tunnel because the app, not the browser,
+talks to it. Public pages and the admin both work at that URL; the admin SPA
+is `http://localhost:18080/admin#/outreach`.
+
 ## Environment variables
 
 All variables have sensible defaults — no `.env` file is needed. Override any

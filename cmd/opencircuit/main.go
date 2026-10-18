@@ -357,9 +357,10 @@ func servePostgres(cfg *config.Config) error {
 	// The tracker (#0547) polls engagement and mentions for whichever of the
 	// two channels is configured; the publisher starts and stops it.
 	outreachTracker := outreach.NewTracker(outreach.TrackerDeps{
-		Store:   outreachStore,
-		Clients: conns,
-		Log:     slog.Default(),
+		Store:    outreachStore,
+		Clients:  conns,
+		Interval: devTrackerInterval(cfg.BaseURL, os.Getenv("OUTREACH_TRACKER_INTERVAL"), slog.Default()),
+		Log:      slog.Default(),
 	})
 	outreachPublisher := outreach.NewPublisher(outreach.PublisherDeps{
 		Tracker:     outreachTracker,
