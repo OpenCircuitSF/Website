@@ -8,6 +8,7 @@
   import { getWorkshopOutreach, ApiError } from '../../lib/api';
   import { adminOutreachWorkshopHash } from '../../lib/adminRouter';
   import { unavailableMessage } from '../../lib/outreach';
+  import { editorOutreachLinkLabel } from '../../lib/outreachList';
   import type { WorkshopOutreach } from '../../lib/types';
 
   // workshopUpdatedAt changes when the editor saves (e.g. publishes), so the
@@ -32,6 +33,13 @@
     untrack(() => void load());
   });
 
+  const linkLabel = $derived(
+    editorOutreachLinkLabel(
+      view?.outreach != null,
+      view?.posts.filter((p) => p.status === 'posted').length ?? 0,
+    ),
+  );
+
   const line = $derived.by(() => {
     if (!view) return 'Loading outreach…';
     if (view.outreach === null) return view.available ? 'Outreach has not started.' : unavailableMessage(view.unavailable_reason);
@@ -46,7 +54,7 @@
   {:else}
     <p class="text-muted">{line}</p>
   {/if}
-  <a class="open-outreach" href={adminOutreachWorkshopHash(workshopId)}>Open outreach</a>
+  <a class="open-outreach" href={adminOutreachWorkshopHash(workshopId)}>{linkLabel}</a>
 </div>
 
 <style>

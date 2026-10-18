@@ -45,22 +45,23 @@ export type AdminSection =
   | 'crt'
   | 'not-found';
 
+/** The nav as grouped on screen (#0586): Overview stands alone, then Mailing
+ * list / Workshops / System. ADMIN_NAV_SECTIONS below is derived from this so
+ * the two cannot disagree about which screens exist. */
+export const ADMIN_NAV_GROUPS: readonly {
+  label: string;
+  sections: readonly Exclude<AdminSection, 'not-found'>[];
+}[] = [
+  { label: 'Mailing list', sections: ['subscribers', 'pending', 'suppressions', 'deliverability', 'campaigns', 'interests'] },
+  { label: 'Workshops', sections: ['workshops', 'outreach'] },
+  { label: 'System', sections: ['settings', 'users', 'audit', 'crt'] },
+];
+
 /** The sections that are real screens (everything but not-found), in nav
- * order — Admin.svelte's {#each} over this is the subtab bar. */
+ * order: Overview, then each group's sections. */
 export const ADMIN_NAV_SECTIONS: readonly Exclude<AdminSection, 'not-found'>[] = [
   'overview',
-  'settings',
-  'users',
-  'audit',
-  'interests',
-  'subscribers',
-  'pending',
-  'suppressions',
-  'deliverability',
-  'campaigns',
-  'workshops',
-  'outreach',
-  'crt',
+  ...ADMIN_NAV_GROUPS.flatMap((g) => g.sections),
 ];
 
 /** The subtab bar's label for each section. Kept beside ADMIN_NAV_SECTIONS so

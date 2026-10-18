@@ -54,6 +54,7 @@
     adminWorkshopHash,
     adminAuditCampaignHash,
     ADMIN_NAV_SECTIONS,
+    ADMIN_NAV_GROUPS,
     ADMIN_SECTION_LABELS,
     type AdminRoute,
   } from '../lib/adminRouter';
@@ -1308,14 +1309,46 @@
     </Panel>
   {:else}
     <nav class="subtabs" aria-label="Admin sections">
-      {#each ADMIN_NAV_SECTIONS as s (s)}
+      <!-- #0586: wide screens show grouped links; at 480px and below the
+           select replaces them (one row), so the bar can never wrap to five. -->
+      <div class="subtab-links">
         <a
           class="subtab"
-          class:active={adminRoute.section === s}
-          aria-current={adminRoute.section === s ? 'page' : undefined}
-          href={adminSectionHash(s)}
-        >{ADMIN_SECTION_LABELS[s]}</a>
-      {/each}
+          class:active={adminRoute.section === 'overview'}
+          aria-current={adminRoute.section === 'overview' ? 'page' : undefined}
+          href={adminSectionHash('overview')}
+        >{ADMIN_SECTION_LABELS.overview}</a>
+        {#each ADMIN_NAV_GROUPS as g (g.label)}
+          <div class="subtab-group" role="group" aria-label={g.label}>
+            <span class="subtab-group-label" aria-hidden="true">{g.label}</span>
+            {#each g.sections as s (s)}
+              <a
+                class="subtab"
+                class:active={adminRoute.section === s}
+                aria-current={adminRoute.section === s ? 'page' : undefined}
+                href={adminSectionHash(s)}
+              >{ADMIN_SECTION_LABELS[s]}</a>
+            {/each}
+          </div>
+        {/each}
+      </div>
+      <select
+        class="subtab-select"
+        aria-label="Admin section"
+        value={adminRoute.section}
+        onchange={(e) => {
+          window.location.hash = adminSectionHash(e.currentTarget.value as (typeof ADMIN_NAV_SECTIONS)[number]);
+        }}
+      >
+        <option value="overview">{ADMIN_SECTION_LABELS.overview}</option>
+        {#each ADMIN_NAV_GROUPS as g (g.label)}
+          <optgroup label={g.label}>
+            {#each g.sections as s (s)}
+              <option value={s}>{ADMIN_SECTION_LABELS[s]}</option>
+            {/each}
+          </optgroup>
+        {/each}
+      </select>
     </nav>
 
     {#if adminRoute.section === 'overview'}
@@ -2558,10 +2591,39 @@
     color: var(--text);
   }
   .subtabs {
+    margin-bottom: var(--space-4);
+  }
+  .subtab-links {
     display: flex;
     gap: var(--space-2);
-    margin-bottom: var(--space-4);
     flex-wrap: wrap;
+    align-items: flex-end;
+  }
+  .subtab-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    align-items: center;
+    padding-left: var(--space-3);
+    border-left: var(--border-w) solid var(--border);
+  }
+  .subtab-group-label {
+    font-size: var(--fs-sm, 0.8em);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .subtab-select {
+    display: none;
+    width: 100%;
+    min-height: 44px;
+    font-family: var(--font);
+    font-size: var(--fs-md);
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-panel);
+    color: var(--text);
+    border: var(--border-w) solid var(--border);
+    border-radius: var(--radius);
   }
   .settings-jump {
     display: flex;
@@ -2614,7 +2676,13 @@
       font-size: var(--fs-base);
       padding: var(--space-1) var(--space-3);
     }
-    /* Sub-tabs: already flex-wrap:wrap; reduce padding so 4 fit on 2 rows */
+    /* #0586: grouped links collapse to a single select. */
+    .subtab-links {
+      display: none;
+    }
+    .subtab-select {
+      display: block;
+    }
     .subtab {
       font-size: var(--fs-base);
       padding: var(--space-2) var(--space-3);

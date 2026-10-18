@@ -14,7 +14,7 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getOverview, getAdminVersion, ApiError } from '../../lib/api';
+  import { getOverview, getAdminVersion, getOutreachConnections, listAdminWorkshops, listOutreach, ApiError } from '../../lib/api';
   import { subscribeEvent } from '../../lib/events';
   import {
     CAMPAIGN_PROGRESS_EVENT,
@@ -34,6 +34,7 @@
     formatBuildLine,
     schemaDirtyNote,
   } from '../../lib/dashboard';
+  import { outreachAttentionItems, type OutreachAttentionItem } from '../../lib/outreachList';
   import type { AdminBuildInfo, DashboardOverview, DashboardSubscriberCounts } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
@@ -62,6 +63,19 @@
     } catch {
       build = null;
       buildError = true;
+    }
+  }
+
+  // #0586: outreach needs-attention rows, loaded separately so a failure here
+  // (or in the overview) never takes the other down; on failure no rows show.
+  let outreachItems = $state<OutreachAttentionItem[]>([]);
+
+  async function loadOutreachItems(): Promise<void> {
+    try {
+      const [c, w, o] = await Promise.all([getOutreachConnections(), listAdminWorkshops(), listOutreach()]);
+      outreachItems = outreachAttentionItems(c.groups, w.workshops, o.outreach);
+    } catch {
+      outreachItems = [];
     }
   }
 
@@ -105,6 +119,7 @@
   onMount(() => {
     void load();
     void loadBuild();
+    void loadOutreachItems();
     // The database, not this stream, is the source of truth (AGENTS.md) —
     // re-fetching the whole overview on every (re)connect, including the
     // first, is what lets this screen notice a send that started, finished,
@@ -151,7 +166,7 @@
     <p class="text-error" role="alert">{loadError}</p>
     <Button variant="primary" onclick={load}>Retry</Button>
   {:else if overview}
-    {#if warnings.length > 0}
+    {#if warnings.length > 0 || outreachItems.length > 0}
       <div class="warnings" class:has-alert={anyAlert}>
         <h3 class="warnings-title">Needs attention</h3>
         <ul class="warnings-list">
@@ -161,6 +176,9 @@
             {:else}
               <li>{w.message}</li>
             {/if}
+          {/each}
+          {#each outreachItems as it (it.key)}
+            <li><a href={it.href}>{it.message}</a></li>
           {/each}
         </ul>
       </div>

@@ -28,7 +28,7 @@
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { listAdminWorkshops, createWorkshop, ApiError } from '../../lib/api';
+  import { listAdminWorkshops, listOutreach, createWorkshop, ApiError } from '../../lib/api';
   import {
     workshopStatusLabel,
     workshopStatusBadgeClass,
@@ -37,7 +37,8 @@
     type SortDirection,
   } from '../../lib/workshopAdmin';
   import { formatWorkshopDate } from '../../lib/workshops';
-  import type { AdminWorkshop } from '../../lib/types';
+  import type { AdminWorkshop, OutreachSummary } from '../../lib/types';
+  import { summariesByWorkshop, outreachChip } from '../../lib/outreachList';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
   import WorkshopEditor from './WorkshopEditor.svelte';
@@ -62,6 +63,10 @@
   let loading = $state(true);
   let loadError = $state<string | null>(null);
   let sortDirection = $state<SortDirection>('asc');
+  // #0586: per-workshop outreach summaries for the Outreach column. A failed
+  // load leaves the column showing "Not started" rather than blocking the list.
+  let outreachRows = $state<OutreachSummary[]>([]);
+  let outreachByWorkshop = $derived(summariesByWorkshop(outreachRows));
 
   // Derived straight from the route (#0527). Non-null by construction in
   // the editor view — mirrors Campaigns.svelte's activeId fallback so the
@@ -90,6 +95,7 @@
       statusLabel: workshopStatusLabel(w.status),
       statusBadgeClass: workshopStatusBadgeClass(w.status),
       dateLabel: formatWorkshopDate(w.starts_at, w.ends_at),
+      chip: outreachChip(outreachByWorkshop.get(w.id)),
     })),
   );
   let hasWorkshops = $derived(workshopRows.length > 0);
@@ -103,6 +109,11 @@
     try {
       const resp = await listAdminWorkshops();
       workshops = resp.workshops;
+      try {
+        outreachRows = (await listOutreach()).outreach;
+      } catch {
+        outreachRows = [];
+      }
     } catch (err) {
       loadError = err instanceof ApiError ? err.message : 'Could not load workshops.';
     } finally {
@@ -201,6 +212,7 @@
                   {sortButtonLabel}
                 </button>
               </th>
+              <th>Outreach</th>
             </tr>
           </thead>
           <tbody>
@@ -213,6 +225,7 @@
                 </td>
                 <td><span class="badge {row.statusBadgeClass}">{row.statusLabel}</span></td>
                 <td>{row.dateLabel}</td>
+                <td><span class="badge badge-{row.chip.tone}">{row.chip.label}</span></td>
               </tr>
             {/each}
           </tbody>
