@@ -204,7 +204,7 @@ func writeShortLinksError(w http.ResponseWriter, op string, err error) {
 }
 
 func outreachFacts(wk workshops.Workshop) outreach.Facts {
-	return outreach.Facts{Slug: wk.Slug, Title: wk.Title, StartsAt: wk.StartsAt, LocationName: wk.LocationName, LocationAddress: wk.LocationAddress}
+	return outreach.Facts{Slug: wk.Slug, Title: wk.Title, StartsAt: wk.StartsAt, LocationName: wk.LocationName, LocationAddress: wk.LocationAddress, Summary: strings.TrimSpace(derefOrEmpty(wk.Summary))}
 }
 
 func rfc3339(t *time.Time) *string {

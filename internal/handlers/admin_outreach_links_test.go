@@ -410,8 +410,8 @@ func TestAdminOutreachLinks_PrepareAndCreatePostUseTheRow(t *testing.T) {
 
 	// CreatePost applies the slot's row.
 	bs := e.createPost(t, oid, "bluesky", "reminder")
-	if !bs.Prepared || bs.ShortURL == nil || !strings.Contains(bs.Body, *bs.ShortURL) || bs.Status != "draft" {
-		t.Errorf("created post = %+v, want prepared with the short URL in the body", bs)
+	if !bs.Prepared || bs.ShortURL == nil || strings.Contains(bs.Body, *bs.ShortURL) || bs.Status != "draft" {
+		t.Errorf("created post = %+v, want prepared, with no URL in the Bluesky body (the card carries it, #0571)", bs)
 	}
 	ig := e.createPost(t, oid, "instagram", "reminder")
 	if !ig.Prepared || ig.Status != "manual" {
@@ -498,8 +498,8 @@ func TestAdminOutreachLinks_DraftAll(t *testing.T) {
 	}
 	var withToken int
 	_ = e.pool.QueryRow(context.Background(), `SELECT count(*) FROM outreach_posts WHERE outreach_id = $1 AND position('{link}' in body) > 0`, o2.ID).Scan(&withToken)
-	if withToken != 15 {
-		t.Errorf("bodies carrying {link} = %d, want 15", withToken)
+	if withToken != 9 { // Bluesky and Instagram drafts carry no link (#0570)
+		t.Errorf("bodies carrying {link} = %d, want 9", withToken)
 	}
 }
 

@@ -106,13 +106,22 @@ func TestSetPreparedSubstitutesAndIsIdempotent(t *testing.T) {
 
 func TestSetPreparedAppendsWhenNoToken(t *testing.T) {
 	s := NewStore(testPool(t))
-	_, p := seedPost(t, s, "hand edited, no token")
-	got, _, err := s.SetPrepared(context.Background(), p.ID, "k", "https://go.example/k", "draft")
+	o, bs := seedPost(t, s, "bluesky body, no link by design")
+	ma, err := s.CreatePost(context.Background(), o.ID, "mastodon", "announce", "hand edited, no token", "fp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := s.SetPrepared(context.Background(), ma.ID, "k", "https://go.example/k", "draft")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Body != "hand edited, no token\n\nhttps://go.example/k" || got.Status != "draft" {
 		t.Errorf("body = %q status=%q", got.Body, got.Status)
+	}
+	// Bluesky carries its link in the card (#0570), so Prepare leaves the body alone.
+	got, _, err = s.SetPrepared(context.Background(), bs.ID, "k2", "https://go.example/k2", "draft")
+	if err != nil || got.Body != "bluesky body, no link by design" || got.ShortURL == nil {
+		t.Errorf("bluesky body = %q err=%v", got.Body, err)
 	}
 }
 

@@ -451,7 +451,7 @@ func TestAdminOutreach_CreatePrepareAndPostFlow(t *testing.T) {
 	o := e.start(t, w).Outreach
 
 	bsky := e.createPost(t, o.ID, "bluesky", "announce")
-	if !strings.Contains(bsky.Body, w.Title) || !strings.Contains(bsky.Body, outreach.LinkToken) || bsky.Stale || bsky.Prepared {
+	if !strings.Contains(bsky.Body, w.Title) || strings.Contains(bsky.Body, outreach.LinkToken) || bsky.Stale || bsky.Prepared {
 		t.Errorf("generated draft = %+v", bsky)
 	}
 	if code, _ := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach/%d/posts", o.ID), `{"channel":"bluesky","wave":"announce"}`); code != http.StatusConflict {
@@ -469,7 +469,7 @@ func TestAdminOutreach_CreatePrepareAndPostFlow(t *testing.T) {
 	}
 	got := decodeOutreach[testPost](t, b)
 	if got.Status != "manual" || !got.Prepared || got.ShortURL == nil || *got.ShortURL != "https://go.example.test/k1" ||
-		strings.Contains(got.Body, outreach.LinkToken) || !strings.Contains(got.Body, "https://go.example.test/k1") {
+		strings.Contains(got.Body, outreach.LinkToken) || strings.Contains(got.Body, "https://go.example.test/k1") || !strings.Contains(got.Body, "link in our bio") {
 		t.Errorf("prepared instagram = %+v", got)
 	}
 	if len(e.links.links) != 1 {
@@ -597,7 +597,7 @@ func TestAdminOutreach_RegenerateClearsStale(t *testing.T) {
 		t.Fatalf("regenerate = %d (%s)", code, b)
 	}
 	got := decodeOutreach[testPost](t, b)
-	if got.Stale || strings.Contains(got.Body, outreach.LinkToken) || !strings.Contains(got.Body, *got.ShortURL) || !strings.Contains(got.Body, "Mon, Dec 7") {
+	if got.Stale || strings.Contains(got.Body, outreach.LinkToken) || strings.Contains(got.Body, *got.ShortURL) || !strings.Contains(got.Body, "Monday, Dec 7") {
 		t.Errorf("regenerated = %+v", got)
 	}
 	if n := outreachAuditCount(t, e.pool, audit.ActionOutreachPostUpdated, p.ID); n != 1 {

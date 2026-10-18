@@ -274,8 +274,14 @@ func (s *Store) UpdatePostBody(ctx context.Context, id int64, body string, finge
 	return p, nil
 }
 
+// noLinkChannels are the channels whose drafts deliberately carry no link
+// (Bluesky: the card holds it; Instagram: the bio does), so SetPrepared must
+// not append one to a body without the token.
+var noLinkChannels = []string{"bluesky", "instagram"}
+
 // SetPrepared records the post's short link and substitutes the real URL for
-// LinkToken in the body (appending it when the body has no token), atomically
+// LinkToken in the body (appending it when the body has no token, except on
+// the channels whose drafts carry no link, #0570), atomically
 // with the write. status is the status to store (manual channels pass
 // "manual"). It is idempotent: an already-prepared post is returned
 // unchanged. The bool is true only when THIS call's UPDATE changed the row,
@@ -288,9 +294,10 @@ func (s *Store) SetPrepared(ctx context.Context, id int64, key, shortURL, status
 		`UPDATE outreach_posts SET
 		   short_link_key = $2, short_url = $3, status = $4,
 		   body = CASE WHEN position('{link}' in body) > 0 THEN replace(body, '{link}', $3)
-		               ELSE body || E'\n\n' || $3 END,
+		               WHEN channel = ANY($5) THEN body
+               ELSE body || E'\n\n' || $3 END,
 		   updated_at = now()
-		 WHERE id = $1 AND short_link_key IS NULL AND status <> 'posted' RETURNING `+postColumns, id, key, shortURL, status))
+		 WHERE id = $1 AND short_link_key IS NULL AND status <> 'posted' RETURNING `+postColumns, id, key, shortURL, status, noLinkChannels))
 	if err == nil {
 		return p, true, nil
 	}
