@@ -9,24 +9,34 @@
 <script lang="ts">
   import { postDialogCopy, type PostDialogMode } from '../../lib/outreachCards';
   import { validateRemoteUrl } from '../../lib/outreach';
-  import type { OutreachChannel, OutreachPost } from '../../lib/types';
+  import { identicalAutomaticBodies } from '../../lib/outreachPreview';
+  import type { OutreachChannel, OutreachPost, WorkshopOutreach } from '../../lib/types';
   import OutreachConfirmDialog from './OutreachConfirmDialog.svelte';
+  import OutreachPostPreview from './OutreachPostPreview.svelte';
 
   interface Props {
     mode: PostDialogMode;
+    /** When given, each item is drawn as its platform preview (#0583); otherwise as plain text. */
+    view?: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical' };
     items: { channel: OutreachChannel; post: OutreachPost }[];
     inFlight: boolean;
     errorMessage: string | null;
     onConfirm: (remoteUrl?: string) => void;
     onClose: () => void;
   }
-  let { mode, items, inFlight, errorMessage, onConfirm, onClose }: Props = $props();
+  let { mode, view, items, inFlight, errorMessage, onConfirm, onClose }: Props = $props();
 
   let remoteUrl = $state('');
   const copy = $derived(
     postDialogCopy(
       mode,
       items.map((i) => ({ label: i.channel.label, account: i.channel.account })),
+    ),
+  );
+  const sameText = $derived(
+    identicalAutomaticBodies(
+      { posts: items.map((i) => ({ channel: i.channel.name, wave: i.post.wave, body: i.post.body })) },
+      items[0]?.post.wave ?? '',
     ),
   );
   const urlError = $derived(mode === 'markPosted' && remoteUrl.trim() !== '' ? validateRemoteUrl(remoteUrl) : null);
@@ -47,8 +57,13 @@
   {/each}
   {#each items as item (item.post.id)}
     <h3 class="item-label">{item.channel.label}</h3>
-    <pre class="body">{item.post.body}</pre>
+    {#if view}
+      <OutreachPostPreview {view} channel={item.channel} post={item.post} />
+    {:else}
+      <pre class="body">{item.post.body}</pre>
+    {/if}
   {/each}
+  {#if sameText && items.length > 1}<p class="text-warn">Bluesky and Mastodon will get exactly the same text.</p>{/if}
   {#if mode === 'markPosted'}
     <label class="field">
       <span class="field-label">Link to the post (optional)</span>

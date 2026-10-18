@@ -79,6 +79,23 @@ function setup(posts: OutreachPost[]): void {
 }
 
 describe('post cards (#0569)', () => {
+  it('a posted card keeps its preview and Copy link to post writes the remote URL (#0583)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    setup([post({ id: 1, status: 'posted', posted_at: '2026-10-17T20:00:00Z', remote_url: 'https://bsky.app/p/1' })]);
+    const card = await screen.findByRole('article', { name: 'Bluesky Announce' });
+    expect(card.querySelector('.preview .card')).toBeTruthy();
+    await fireEvent.click(within(card).getByRole('button', { name: 'Copy link to post' }));
+    expect(writeText).toHaveBeenCalledWith('https://bsky.app/p/1');
+    expect(await within(card).findByRole('button', { name: 'Copied' })).toBeTruthy();
+  });
+
+  it('a posted card without a stored URL offers no Copy link to post (#0583)', async () => {
+    setup([post({ id: 1, status: 'posted', posted_at: '2026-10-17T20:00:00Z', remote_url: null })]);
+    await screen.findByRole('article', { name: 'Bluesky Announce' });
+    expect(screen.queryByRole('button', { name: 'Copy link to post' })).toBeNull();
+  });
+
   it('shows the full body and each status line, grouped by wave', async () => {
     setup([
       post({ id: 1, status: 'posted', posted_at: '2026-10-17T20:00:00Z', remote_url: 'https://bsky.app/p/1' }),
@@ -129,14 +146,14 @@ describe('post cards (#0569)', () => {
     setup([post({ id: 1 })]);
     await screen.findByText('Not scheduled');
     const card = () => screen.getByRole('article', { name: 'Bluesky Announce' });
-    expect(card().querySelector('pre.body')).toBeTruthy();
+    expect(card().querySelector('.preview .text')).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    expect(card().querySelector('pre.body')).toBeNull();
+    expect(card().querySelector('.preview .text')).toBeNull();
     expect(card().textContent).not.toContain('Not scheduled');
     expect(card().querySelector('textarea')).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(card().querySelector('textarea')).toBeNull();
-    expect(card().querySelector('pre.body')).toBeTruthy();
+    expect(card().querySelector('.preview .text')).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Edit' })));
   });
 

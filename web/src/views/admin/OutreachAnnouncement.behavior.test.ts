@@ -76,6 +76,15 @@ const message = () => screen.getByLabelText('Message') as HTMLTextAreaElement;
 const type = (v: string) => fireEvent.input(message(), { target: { value: v } });
 
 describe('OutreachAnnouncement', () => {
+  it('previews each network as its platform card and warns when both texts are identical (#0583)', async () => {
+    mountView([bPost(), mPost()]);
+    expect(document.querySelectorAll('.preview .card').length).toBe(2);
+    expect(document.querySelector('.hashtag')?.textContent).toBe('#soldering');
+    expect(screen.queryByText('Bluesky and Mastodon will get exactly the same text.')).toBeNull();
+    cleanup();
+    mountView([bPost(), post({ id: 2, channel: 'mastodon', body: bsky, short_url: MURL })]);
+    expect(screen.getAllByText('Bluesky and Mastodon will get exactly the same text.').length).toBe(1);
+  });
   it('seeds the one Message field from the posts and previews each network', () => {
     mountView([bPost(), mPost()]);
     expect(message().value).toBe('Join us for Soldering 101.\n\nLearn to solder.');

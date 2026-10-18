@@ -120,6 +120,7 @@
       available={view.available}
       outreachId={view.outreach?.id ?? null}
       {results}
+      {view}
       editing={c.post !== null && editingId === c.post.id}
       notice={c.post ? (notices[c.post.id] ?? null) : null}
       onNotice={(n) => c.post && (notices[c.post.id] = n)}
@@ -155,6 +156,7 @@
 {#if bothOpen}
   <OutreachPostDialog
     mode="post"
+    {view}
     items={bothSnapshot}
     inFlight={bothBusy}
     errorMessage={bothError}

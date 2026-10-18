@@ -827,7 +827,20 @@ export interface WorkshopOutreach {
   available: boolean;
   /** '', 'shortlinks_not_configured' or 'workshop_not_published'. */
   unavailable_reason: string;
-  workshop: { id: number; slug: string; title: string; status: string; starts_at: string | null };
+  workshop: {
+    id: number;
+    slug: string;
+    title: string;
+    status: string;
+    starts_at: string | null;
+    /** #0583: what the previews draw the link card from; null when unset. */
+    summary?: string | null;
+    cover_image?: string | null;
+    /** #0572: the cover's alt text, when the workshop exposes it. */
+    cover_alt?: string | null;
+  };
+  /** #0583: which URL the Bluesky card points at. */
+  bluesky_card?: 'short' | 'canonical';
   outreach: { id: number; workshop_id: number; campaign_slug: string; created_at: string } | null;
   channels: OutreachChannel[];
   waves: OutreachWave[];

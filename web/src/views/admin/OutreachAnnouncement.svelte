@@ -23,19 +23,19 @@
     ApiError,
   } from '../../lib/api';
   import {
-    countCharacters,
     defaultScheduleAt,
     fromLocalInputValue,
-    isOverLimit,
     toLocalInputValue,
   } from '../../lib/outreach';
   import { cardButtons, postableAutomatic, sendsItself, statusLine, visibleNotice, type CardNotice } from '../../lib/outreachCards';
   import { composeBody, messageTargets, planSaveMessage, sharedMessage, splitBody } from '../../lib/outreachMessage';
   import { postAll } from '../../lib/outreachPostAll';
+  import { identicalAutomaticBodies } from '../../lib/outreachPreview';
   import type { OutreachChannel, OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import OutreachComposer from './OutreachComposer.svelte';
   import OutreachPostDialog from './OutreachPostDialog.svelte';
+  import OutreachPostPreview from './OutreachPostPreview.svelte';
 
   interface Props {
     view: WorkshopOutreach;
@@ -181,6 +181,11 @@
       status = 'Back to draft.';
     });
 
+  // What each post would go out with, so the warning follows unsaved typing too.
+  const sameText = $derived(
+    identicalAutomaticBodies({ posts: autos.map((a) => ({ channel: a.channel.name, wave, body: shownBody(a.post) })) }, wave),
+  );
+
   /** The text a post will go out with: the unsaved message while typing, else what is stored. */
   function shownBody(post: OutreachPost): string {
     if (!dirty) return post.body;
@@ -223,10 +228,9 @@
     {/if}
 
     <h4 class="how">How it will look</h4>
+    {#if sameText}<p class="text-warn">Bluesky and Mastodon will get exactly the same text.</p>{/if}
     {#each autos as { channel, post } (post.id)}
       {@const body = shownBody(post)}
-      {@const counted = countCharacters(channel, body, post.prepared)}
-      {@const over = isOverLimit(channel, counted.count)}
       {@const line = statusLine(post, channel)}
       <article class="preview" aria-label="{channel.label} preview">
         <h5 class="preview-title">
@@ -247,10 +251,7 @@
             />
           {/key}
         {:else}
-          <pre class="body">{body}</pre>
-          <p class={over ? 'text-error' : 'text-muted'}>
-            {counted.exact ? '' : '≈ '}{counted.count}{channel.char_limit > 0 ? ` / ${channel.char_limit}` : ''} characters{over ? ' — over the limit' : ''}
-          </p>
+          <OutreachPostPreview {view} {channel} {post} {body} />
           <p class="status status-{line.kind}">{line.text}</p>
           <p class="row">
             {#if post.status !== 'posted' && post.status !== 'queued'}
@@ -297,6 +298,7 @@
 {#if postOpen}
   <OutreachPostDialog
     mode={postSnapshot.every((i) => i.post.status === 'failed') ? 'retry' : 'post'}
+    {view}
     items={postSnapshot}
     inFlight={postBusy}
     errorMessage={null}
@@ -345,12 +347,6 @@
     border: var(--border-w) solid var(--border);
     border-radius: var(--radius);
     padding: 0 var(--space-2);
-  }
-  .body {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    font-family: var(--font);
-    margin: 0 0 var(--space-2);
   }
   .status {
     font-weight: 600;

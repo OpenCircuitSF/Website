@@ -382,6 +382,7 @@ func servePostgres(cfg *config.Config) error {
 	adminOutreachH.SetPostHour(serverSettings.OutreachPostHour)
 	adminOutreachH.SetHashtags(serverSettings.OutreachHashtags)
 	adminOutreachH.SetAccounts(conns.Account)
+	adminOutreachH.SetCardURL(serverSettings.BlueskyCardURL)
 	adminOutreachH.SetConnections(handlers.NewAdminOutreachConnectionsHandler(conns, auditLogger))
 
 	// Admin image upload (#0433, reopening #0153): constructed

@@ -741,3 +741,45 @@ func TestAdminOutreach_ChannelsCarryAccount(t *testing.T) {
 		t.Errorf("instagram account = %v, want empty", seen["instagram"])
 	}
 }
+
+// The panel carries what the previews draw their link card from (#0583): the
+// workshop's summary and cover image, and which URL the Bluesky card uses.
+func TestAdminOutreach_PanelCarriesCardFacts(t *testing.T) {
+	e := newOutreachEnv(t, true)
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	summary, cover := "Learn to solder.", "/media/cover.png"
+	if _, err := e.ws.Update(context.Background(), w.ID, workshops.UpdateInput{
+		Title: w.Title, StartsAt: w.StartsAt, LocationName: w.LocationName, Status: "published", Summary: &summary, CoverImage: &cover,
+	}); err != nil {
+		t.Fatalf("update workshop: %v", err)
+	}
+	type view struct {
+		Workshop struct {
+			Summary    *string `json:"summary"`
+			CoverImage *string `json:"cover_image"`
+		} `json:"workshop"`
+		BlueskyCard string `json:"bluesky_card"`
+	}
+	get := func() view {
+		code, b := e.do(t, http.MethodGet, fmt.Sprintf("/admin/workshops/%d/outreach", w.ID), "")
+		if code != http.StatusOK {
+			t.Fatalf("status = %d", code)
+		}
+		return decodeOutreach[view](t, b)
+	}
+	v := get()
+	if v.Workshop.Summary == nil || *v.Workshop.Summary != summary || v.Workshop.CoverImage == nil || *v.Workshop.CoverImage != cover {
+		t.Errorf("workshop = %+v", v.Workshop)
+	}
+	if v.BlueskyCard != "short" {
+		t.Errorf("default bluesky_card = %q, want short", v.BlueskyCard)
+	}
+	e.h.SetCardURL(func() string { return "canonical" })
+	if v = get(); v.BlueskyCard != "canonical" {
+		t.Errorf("bluesky_card = %q, want canonical", v.BlueskyCard)
+	}
+	e.h.baseURL = ""
+	if v = get(); v.BlueskyCard != "short" {
+		t.Errorf("without a base URL bluesky_card = %q, want short", v.BlueskyCard)
+	}
+}

@@ -89,6 +89,7 @@ type AdminOutreachHandler struct {
 	hourFn    func() int
 	tagsFn    func() string
 	accountFn func(string) string
+	cardFn    func() string
 	store     outreachStore
 	locations outreachLocationStore
 	flyers    outreachFlyerStore
@@ -230,6 +231,27 @@ func (h *AdminOutreachHandler) SetHashtags(fn func() string) { h.tagsFn = fn }
 // unset, every account is empty and the SPA words the line without a name.
 func (h *AdminOutreachHandler) SetAccounts(fn func(string) string) { h.accountFn = fn }
 
+// SetCardURL sets the source of the Bluesky card URL choice, "short" or
+// "canonical" (#0583). Read per request; unset, the card is "short".
+func (h *AdminOutreachHandler) SetCardURL(fn func() string) { h.cardFn = fn }
+
+// blueskyCard mirrors the publisher: "canonical" only when asked for and the
+// site's base URL is known, otherwise the publisher falls back to the short link.
+func (h *AdminOutreachHandler) blueskyCard() string {
+	if h.cardFn != nil && h.cardFn() == "canonical" && h.baseURL != "" {
+		return "canonical"
+	}
+	return "short"
+}
+
+// nonEmptyPtr drops a nil or blank optional text field.
+func nonEmptyPtr(s *string) *string {
+	if s == nil || strings.TrimSpace(*s) == "" {
+		return nil
+	}
+	return s
+}
+
 // facts is the slice of a workshop that drafts are written from.
 func (h *AdminOutreachHandler) facts(wk workshops.Workshop) outreach.Facts {
 	f := outreach.Facts{Slug: wk.Slug, Title: wk.Title, StartsAt: wk.StartsAt, LocationName: wk.LocationName, LocationAddress: wk.LocationAddress, Summary: strings.TrimSpace(derefOrEmpty(wk.Summary))}
@@ -344,6 +366,9 @@ type outreachWorkshopView struct {
 	Title    string  `json:"title"`
 	Status   string  `json:"status"`
 	StartsAt *string `json:"starts_at"`
+	// Summary and CoverImage let the previews draw the link card (#0583).
+	Summary    *string `json:"summary"`
+	CoverImage *string `json:"cover_image"`
 }
 
 type outreachPanelView struct {
@@ -357,16 +382,20 @@ type outreachPanelView struct {
 	// CanReset is true when an outreach exists and nothing for it has gone
 	// public (#0592); the Reset button shows from it.
 	CanReset bool `json:"can_reset"`
+	// BlueskyCard is which URL the Bluesky card points at, "short" or
+	// "canonical" (#0583); the preview shows the matching host.
+	BlueskyCard string `json:"bluesky_card"`
 	// LinkReport is set only on Start's response (#0568).
 	LinkReport *outreachLinkReport `json:"link_report,omitempty"`
 }
 
 func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop, o *outreach.Outreach) (outreachPanelView, error) {
 	v := outreachPanelView{
-		Workshop: outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt)},
-		Channels: h.channelViews(),
-		Waves:    []outreachWaveView{},
-		Posts:    []outreachPostView{},
+		Workshop:    outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt), Summary: nonEmptyPtr(wk.Summary), CoverImage: nonEmptyPtr(wk.CoverImage)},
+		BlueskyCard: h.blueskyCard(),
+		Channels:    h.channelViews(),
+		Waves:       []outreachWaveView{},
+		Posts:       []outreachPostView{},
 	}
 	switch {
 	case !h.linksEnabled():

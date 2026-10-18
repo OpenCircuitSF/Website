@@ -19,7 +19,7 @@
     markOutreachPosted,
     ApiError,
   } from '../../lib/api';
-  import { countCharacters, isOverLimit } from '../../lib/outreach';
+  import { copyablePostLink } from '../../lib/outreachPreview';
   import {
     cardButtons,
     copyLabel,
@@ -32,10 +32,11 @@
   import { cellClicksLabel, cellReactionsLabel } from '../../lib/outreachResults';
   import { isSafeLinkHref } from '../../lib/linkSafety';
   import { adminOutreachFlyersHash } from '../../lib/adminRouter';
-  import type { OutreachPost, OutreachResults } from '../../lib/types';
+  import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import OutreachComposer from './OutreachComposer.svelte';
   import OutreachPostDialog from './OutreachPostDialog.svelte';
+  import OutreachPostPreview from './OutreachPostPreview.svelte';
 
   interface Props {
     card: PostCard;
@@ -43,6 +44,7 @@
     available: boolean;
     outreachId: number | null;
     results: OutreachResults | null;
+    view: WorkshopOutreach;
     editing: boolean;
     notice: CardNotice | null;
     onNotice: (n: CardNotice | null) => void;
@@ -59,6 +61,7 @@
     available,
     outreachId,
     results,
+    view,
     editing,
     notice,
     onNotice,
@@ -73,11 +76,10 @@
   const p = $derived(c.post);
   const status = $derived(statusLine(p, c.channel));
   const btn = $derived(cardButtons(p, c.channel, available));
-  const counted = $derived(p ? countCharacters(c.channel, p.body, p.prepared) : null);
 
   let busy = $state(false);
   let error = $state('');
-  let copied = $state<'text' | 'link' | null>(null);
+  let copied = $state<'text' | 'link' | 'postlink' | null>(null);
   let dialog = $state<PostDialogMode | null>(null);
   let dialogError = $state<string | null>(null);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -146,11 +148,11 @@
     }
   }
 
-  async function copy(kind: 'text' | 'link', value: string): Promise<void> {
-    await run(kind === 'text' ? 'copy' : 'copy the link', async () => {
+  async function copy(kind: 'text' | 'link' | 'postlink', value: string): Promise<void> {
+    await run(kind === 'text' ? 'copy' : kind === 'link' ? 'copy the link' : 'copy the link to the post', async () => {
       await navigator.clipboard.writeText(value);
       copied = kind;
-      const n: CardNotice = { text: kind === 'text' ? 'Copied.' : 'Link copied.', kind: 'status', status: p?.status ?? null };
+      const n: CardNotice = { text: kind === 'text' ? 'Copied.' : kind === 'link' ? 'Link copied.' : 'Link to the post copied.', kind: 'status', status: p?.status ?? null };
       onNotice(n);
       clearTimeout(copyTimer);
       copyTimer = setTimeout(() => {
@@ -180,13 +182,7 @@
     {/key}
   {:else}
     {#if p}
-      <pre class="body">{p.body}</pre>
-      {#if counted}
-        {@const over = isOverLimit(c.channel, counted.count)}
-        <p class={over ? 'text-error' : 'text-muted'}>
-          {counted.exact ? '' : '≈ '}{counted.count}{c.channel.char_limit > 0 ? ` / ${c.channel.char_limit}` : ''} characters{over ? ' — over the limit' : ''}
-        </p>
-      {/if}
+      <OutreachPostPreview {view} channel={c.channel} post={p} />
     {/if}
     <p class="status status-{status.kind}">
       {#if status.kind === 'queued'}<span class="spinner" aria-hidden="true"></span>{/if}
@@ -224,6 +220,9 @@
         {#if btn.copy && c.channel.name === 'instagram'}
           <a class="open-flyer" href={adminOutreachFlyersHash()}>Open flyer</a>
         {/if}
+        {#if p.status === 'posted' && copyablePostLink(p)}
+          <Button onclick={() => copy('postlink', copyablePostLink(p) ?? '')} disabled={busy}>{copyLabel('Copy link to post', copied === 'postlink')}</Button>
+        {/if}
         {#if btn.markPosted}
           <Button onclick={() => openDialog('markPosted')} disabled={busy}>Mark posted</Button>
         {/if}
@@ -239,6 +238,7 @@
 {#if dialog && p}
   <OutreachPostDialog
     mode={dialog}
+    {view}
     items={[{ channel: c.channel, post: p }]}
     inFlight={busy}
     errorMessage={dialogError}
@@ -257,12 +257,6 @@
   .card-title {
     margin: 0 0 var(--space-2);
     font-size: var(--fs-base);
-  }
-  .body {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    font-family: var(--font);
-    margin: 0 0 var(--space-2);
   }
   .link-row {
     display: flex;
