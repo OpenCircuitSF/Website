@@ -76,15 +76,22 @@ export interface OutreachAttentionItem {
   href: string;
 }
 
-/** Needs-attention rows for outreach: disconnected services and unannounced upcoming workshops. */
+/**
+ * Needs-attention rows for outreach: disconnected services and unannounced
+ * upcoming workshops. `enabled` is the channels switched on in Settings
+ * (#0588); a network switched off there is not reported as disconnected.
+ * ShortLinks is not a channel and is always reported. Absent, every group is.
+ */
 export function outreachAttentionItems(
   groups: ConnectionGroup[],
   workshops: AdminWorkshop[],
   summaries: OutreachSummary[],
   now: Date = new Date(),
+  enabled?: string[],
 ): OutreachAttentionItem[] {
   const items: OutreachAttentionItem[] = [];
-  const missing = groups.filter((g) => !g.configured).map((g) => GROUP_LABELS[g.name] ?? g.name);
+  const wanted = (g: ConnectionGroup) => g.name === 'shortlinks' || !enabled || enabled.includes(g.name);
+  const missing = groups.filter((g) => !g.configured && wanted(g)).map((g) => GROUP_LABELS[g.name] ?? g.name);
   if (missing.length > 0) {
     items.push({
       key: 'outreach-connections',

@@ -204,7 +204,7 @@
     {#if p && cellReactionsLabel(p, results)}<p class="text-muted">{cellReactionsLabel(p, results)}</p>{/if}
     {#if showBioLink(p, c.channel) && p}
       <p class="link-row">
-        <span class="link-label">Put this in your bio</span>
+        <span class="link-label">{c.channel.automatic ? 'Link to paste' : 'Put this in your bio'}</span>
         <span class="mono short">{p.short_url}</span>
         <Button onclick={() => copy('link', p.short_url ?? '')} disabled={busy}>{copyLabel('Copy link', copied === 'link')}</Button>
       </p>

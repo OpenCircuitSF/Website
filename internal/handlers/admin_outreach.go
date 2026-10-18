@@ -238,8 +238,10 @@ func (h *AdminOutreachHandler) SetAccounts(fn func(string) string) { h.accountFn
 // SetEnabledChannels sets the source of the channel names outreach is switched
 // on for (#0588), read per request so a Settings save applies at once. Unset,
 // every channel is on. A disabled channel is not drafted, no new tracked link
-// is made for it, and the panel, results and links views leave it out; posts
-// and links it already has are kept, and come back if it is switched on again.
+// is made for it, and the panel, results and links views leave out its drafts
+// (postVisible keeps its scheduled, queued, posted and failed posts shown);
+// posts and links it already has are kept, and come back if it is switched on
+// again.
 func (h *AdminOutreachHandler) SetEnabledChannels(fn func() []string) { h.channelsFn = fn }
 
 func (h *AdminOutreachHandler) channelEnabled(name string) bool {
@@ -254,6 +256,15 @@ func (h *AdminOutreachHandler) channelEnabled(name string) bool {
 	return false
 }
 
+// enabledChannelNames lists the switched-on channel names, never nil.
+func (h *AdminOutreachHandler) enabledChannelNames() []string {
+	out := []string{}
+	for _, c := range h.enabledChannels() {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
 // enabledChannels is outreach.Channels() without the switched-off ones.
 func (h *AdminOutreachHandler) enabledChannels() []outreach.Channel {
 	var out []outreach.Channel
@@ -265,12 +276,37 @@ func (h *AdminOutreachHandler) enabledChannels() []outreach.Channel {
 	return out
 }
 
-// enabledPosts drops the posts of switched-off channels.
+// postVisible reports whether a post is shown and counted (#0588). A
+// switched-off channel hides only the posts that never left drafting (draft
+// and manual). One that is scheduled, queued, posted or failed stays: a
+// scheduled post still goes out, so hiding it would post unseen, and a posted
+// one is public history.
+func (h *AdminOutreachHandler) postVisible(p outreach.Post) bool {
+	return h.channelEnabled(p.Channel) || (p.Status != "draft" && p.Status != "manual")
+}
+
+// enabledPosts keeps the visible posts (postVisible).
 func (h *AdminOutreachHandler) enabledPosts(posts []outreach.Post) []outreach.Post {
 	out := make([]outreach.Post, 0, len(posts))
 	for _, p := range posts {
-		if h.channelEnabled(p.Channel) {
+		if h.postVisible(p) {
 			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// shownChannels is the switched-on channels plus any switched-off one that
+// still has a visible post, in channel order, so that post keeps its card.
+func (h *AdminOutreachHandler) shownChannels(posts []outreach.Post) []outreach.Channel {
+	has := map[string]bool{}
+	for _, p := range h.enabledPosts(posts) {
+		has[p.Channel] = true
+	}
+	var out []outreach.Channel
+	for _, ch := range outreach.Channels() {
+		if h.channelEnabled(ch.Name) || has[ch.Name] {
+			out = append(out, ch)
 		}
 	}
 	return out
@@ -379,8 +415,8 @@ func (h *AdminOutreachHandler) channelConfigured(name string) bool {
 	return ok && ch.Automatic && h.posting != nil && h.posting.ChannelConfigured(name)
 }
 
-func (h *AdminOutreachHandler) channelViews() []outreachChannelView {
-	chs := h.enabledChannels()
+func (h *AdminOutreachHandler) channelViews(posts []outreach.Post) []outreachChannelView {
+	chs := h.shownChannels(posts)
 	out := make([]outreachChannelView, 0, len(chs))
 	for _, ch := range chs {
 		v := outreachChannelView{Channel: ch, Configured: h.channelConfigured(ch.Name)}
@@ -438,7 +474,7 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 	v := outreachPanelView{
 		Workshop:    outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt), Summary: nonEmptyPtr(wk.Summary), CoverImage: nonEmptyPtr(wk.CoverImage)},
 		BlueskyCard: h.blueskyCard(),
-		Channels:    h.channelViews(),
+		Channels:    h.channelViews(nil),
 		Waves:       []outreachWaveView{},
 		Posts:       []outreachPostView{},
 	}
@@ -468,6 +504,7 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 		for _, p := range h.enabledPosts(posts) {
 			v.Posts = append(v.Posts, h.postView(p, f, wk.Status))
 		}
+		v.Channels = h.channelViews(posts)
 	}
 	return v, nil
 }
@@ -508,7 +545,7 @@ func (h *AdminOutreachHandler) List(w http.ResponseWriter, r *http.Request) {
 			StartsAt: rfc3339(s.StartsAt), Counts: s.Counts, CreatedAt: s.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"outreach": views})
+	writeJSON(w, http.StatusOK, map[string]any{"outreach": views, "enabled_channels": h.enabledChannelNames()})
 }
 
 // loadWorkshop writes the response and returns ok=false on failure.
@@ -1043,7 +1080,7 @@ func (h *AdminOutreachHandler) UnmarkPosted(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	if h.channelConfigured(p.Channel) {
+	if h.channelConfigured(p.Channel) || p.RemoteID != nil {
 		writeError(w, http.StatusConflict, "this post was sent by the site and cannot be unmarked")
 		return
 	}

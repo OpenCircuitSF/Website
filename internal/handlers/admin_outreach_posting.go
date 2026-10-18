@@ -54,6 +54,12 @@ func (h *AdminOutreachHandler) postingGate(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusServiceUnavailable, ch.Label+" is not configured")
 		return p, wk, ch, false
 	}
+	if !h.postVisible(p) {
+		// A hidden draft on a switched-off channel (#0588); a post already
+		// scheduled or failed there is still shown, so it can be acted on.
+		writeError(w, http.StatusConflict, ch.Label+" is switched off in Settings")
+		return p, wk, ch, false
+	}
 	switch {
 	case p.Status == "posted":
 		writeError(w, http.StatusConflict, "post is already posted")

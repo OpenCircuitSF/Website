@@ -1086,7 +1086,7 @@ export interface OutreachResultsSummary {
   rows: OutreachResultsSummaryRow[];
   /** Newest mentions across every workshop, untied ones included (#0547). */
   mentions: OutreachMention[];
-  /** #0588: the channels switched on in Settings; the posts cell names only these. */
+  /** #0588: the channels switched on in Settings. posted_channels may also name a switched-off channel that has a posted post. */
   enabled_channels?: string[];
 }
 

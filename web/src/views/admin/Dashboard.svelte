@@ -74,7 +74,7 @@
   async function loadOutreachItems(): Promise<void> {
     try {
       const [c, w, o] = await Promise.all([getOutreachConnections(), listAdminWorkshops(), listOutreach()]);
-      outreachItems = outreachAttentionItems(c.groups, w.workshops, o.outreach);
+      outreachItems = outreachAttentionItems(c.groups, w.workshops, o.outreach, new Date(), o.enabled_channels);
     } catch {
       outreachItems = [];
     }

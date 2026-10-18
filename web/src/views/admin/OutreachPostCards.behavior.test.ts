@@ -472,6 +472,15 @@ describe('post cards: manual channels (#0588)', () => {
     expect(within(tt).getByRole('button', { name: 'Copy caption' })).toBeTruthy();
   });
 
+  it('labels the link row "Link to paste", not the bio, on a hand-posted Bluesky card', async () => {
+    const offline = [{ ...channels[0], configured: false }];
+    mountView(viewOf({ channels: offline, waves: [waves[0]], posts: [post({ id: 4, channel: 'bluesky', status: 'draft', body: 'Hand Bluesky.' })] }));
+    await screen.findByText('Hand Bluesky.');
+    const bs = screen.getByRole('article', { name: 'Bluesky Announce' });
+    expect(bs.textContent).toContain('Link to paste');
+    expect(bs.textContent).not.toContain('Put this in your bio');
+  });
+
   it('the Instagram flyer link goes where the page says (F2)', async () => {
     mount([post({ id: 2, channel: 'instagram', status: 'manual', body: 'Link in bio.' })], { href: '#/outreach?view=flyers&flyer=7', label: 'Open flyer' });
     await screen.findByText('Link in bio.');

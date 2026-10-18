@@ -60,7 +60,7 @@ export const FIELD_LABELS: Record<string, { label: string; placeholder: string; 
   outreach_channels: {
     label: 'Channels',
     placeholder: '',
-    help: 'Channels outreach drafts, counts and shows. A channel that is off is left out of Draft all, the summary line, results and the Post by hand list; posts it already has are kept and return if you switch it on again. TikTok and YouTube need a video, so they start off.',
+    help: 'Channels outreach drafts, counts and shows. A channel that is off is left out of Draft all, the summary line, results and the Post by hand list; its drafts are kept and return if you switch it on again. A post already scheduled or posted there stays shown, so nothing goes out unseen. TikTok and YouTube need a video, so they start off.',
   },
   outreach_post_hour: {
     label: 'Suggested posting hour',

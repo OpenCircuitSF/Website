@@ -1331,8 +1331,9 @@ export function scheduleAllOutreach(
 }
 
 /** GET /admin/outreach — every workshop that has outreach. */
-export function listOutreach(): Promise<{ outreach: OutreachSummary[] }> {
-  return apiGet<{ outreach: OutreachSummary[] }>('/admin/outreach');
+/** `enabled_channels` (#0588) is the channels switched on in Settings. */
+export function listOutreach(): Promise<{ outreach: OutreachSummary[]; enabled_channels?: string[] }> {
+  return apiGet<{ outreach: OutreachSummary[]; enabled_channels?: string[] }>('/admin/outreach');
 }
 
 /** GET /admin/workshops/{id}/outreach/results — clicks from ShortLinks (#0546). Always 200 for a known workshop; `status` says whether the numbers are real. */

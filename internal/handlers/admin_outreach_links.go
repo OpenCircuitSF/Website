@@ -696,6 +696,15 @@ func (h *AdminOutreachHandler) ScheduleAll(w http.ResponseWriter, r *http.Reques
 	}
 	posts = h.enabledPosts(posts)
 	items, skips := outreach.PlanScheduleAll(posts, wk.StartsAt, h.now(), minScheduleLead, maxScheduleLead, h.postHour(), h.channelConfigured)
+	// A switched-off channel is not a gap (#0588): drop its "not drafted"
+	// rows. Its drafts are already gone from posts, so no item names it.
+	kept := skips[:0:0]
+	for _, s := range skips {
+		if h.channelEnabled(s.Channel) {
+			kept = append(kept, s)
+		}
+	}
+	skips = kept
 
 	resp := scheduleAllResponse{DryRun: req.DryRun, ToSchedule: []scheduleAllItemView{}, Skipped: []scheduleAllSkipView{}}
 	itemView := func(it outreach.ScheduleItem) scheduleAllItemView {

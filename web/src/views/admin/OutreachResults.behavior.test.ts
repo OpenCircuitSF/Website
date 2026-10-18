@@ -176,7 +176,7 @@ describe('OutreachResults, all workshops', () => {
     expect((screen.getByText('Arduino Night') as HTMLAnchorElement).getAttribute('href')).toBe('#/outreach?view=results&workshop=6');
   });
 
-  it('names only the channels switched on in Settings in the posts cell (#0588)', async () => {
+  it('names every posted channel the server reports, even one switched off (#0588)', async () => {
     listOutreachResults.mockResolvedValue({
       status: 'ok',
       enabled_channels: ['bluesky', 'mastodon', 'instagram'],
@@ -185,8 +185,7 @@ describe('OutreachResults, all workshops', () => {
     });
     render(OutreachResultsView, { workshopId: null });
     await waitFor(() => expect(screen.getByText('Soldering 101')).toBeTruthy());
-    expect(screen.getByText('Posted: Bluesky')).toBeTruthy();
-    expect(document.body.textContent).not.toContain('TikTok');
+    expect(screen.getByText('Posted: Bluesky, TikTok')).toBeTruthy();
   });
 
   it('keeps the rows and shows the message when ShortLinks is down', async () => {

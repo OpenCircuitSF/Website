@@ -80,6 +80,12 @@ describe('needs attention', () => {
       '1 upcoming workshop not yet announced.',
     ]);
   });
+  it('does not report a network switched off in Settings as disconnected (#0588)', () => {
+    const groups = [group('shortlinks', false), group('bluesky', false), group('mastodon', false)];
+    expect(outreachAttentionItems(groups, [], [], NOW, ['bluesky', 'instagram']).map((i) => i.message)).toEqual([
+      'Not connected: ShortLinks, Bluesky. Connect in Settings → Outreach.',
+    ]);
+  });
   it('reports nothing when all is connected and announced', () => {
     expect(outreachAttentionItems([group('bluesky', true)], [ws(1)], [sum(1, { posted: 1 })], NOW)).toEqual([]);
   });
