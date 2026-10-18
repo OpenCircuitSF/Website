@@ -33,8 +33,14 @@
     reloadKey?: number;
     /** #0568: called with the view after every successful load, refresh, start or change. */
     onLoaded?: (v: WorkshopOutreach) => void;
+    /**
+     * #0569: when given, replaces the campaign line, grid and inline composer
+     * with the caller's own layout (the posts list). The panel still owns
+     * loading, polling and the results fetch and hands them over.
+     */
+    body?: Snippet<[{ view: WorkshopOutreach; results: OutreachResults | null; onChange: (p: OutreachPost) => void }]>;
   }
-  let { workshopId, workshopUpdatedAt = '', beforeGrid, reloadKey = 0, onLoaded }: Props = $props();
+  let { workshopId, workshopUpdatedAt = '', beforeGrid, reloadKey = 0, onLoaded, body }: Props = $props();
 
   let view = $state<WorkshopOutreach | null>(null);
   let loading = $state(true);
@@ -193,6 +199,8 @@
           </Button>
         </div>
       {/if}
+    {:else if body}
+      {@render body({ view, results, onChange })}
     {:else}
       <p class="text-muted">
         Campaign <span class="mono">{view.outreach.campaign_slug}</span>. Pick a cell to draft or open a post.
@@ -243,7 +251,7 @@
       </p>
     {/if}
 
-    {#if selected && selectedChannel && selectedWave}
+    {#if !body && selected && selectedChannel && selectedWave}
       {#key selected.id}
         <OutreachComposer
           post={selected}

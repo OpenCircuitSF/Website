@@ -1,0 +1,86 @@
+import { describe, expect, it } from 'vitest';
+import { cardButtons, groupByWave, statusLine, summaryLine } from './outreachCards';
+import type { OutreachChannel, OutreachPost, OutreachResults } from './types';
+
+const auto: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'b', utm_medium: 'social', char_limit: 300, automatic: true, configured: true };
+const manual: OutreachChannel = { ...auto, name: 'reddit', label: 'Reddit', automatic: false, configured: false };
+const waves = [
+  { name: 'announce', label: 'Announce', suggested_at: null },
+  { name: 'reminder', label: 'Reminder', suggested_at: null },
+];
+
+function post(over: Partial<OutreachPost> = {}): OutreachPost {
+  return {
+    id: 1, outreach_id: 1, channel: 'bluesky', wave: 'announce', body: 'Hello', status: 'draft', prepared: true, stale: false, held: false,
+    short_link_key: 'k', short_url: 'https://go.example/k', destination_url: 'https://x', utm: { source: '', medium: '', campaign: '', content: '' },
+    scheduled_at: null, posted_at: null, remote_url: null, last_error: null, created_at: '', updated_at: null, ...over,
+  };
+}
+
+describe('groupByWave', () => {
+  it('groups cards by wave in order, one per channel, null when undrafted', () => {
+    const g = groupByWave({ channels: [auto, manual], waves, posts: [post()] });
+    expect(g.map((x) => x.wave.name)).toEqual(['announce', 'reminder']);
+    expect(g[0].cards.map((c) => c.post?.id ?? null)).toEqual([1, null]);
+    expect(g[1].cards.every((c) => c.post === null)).toBe(true);
+  });
+});
+
+describe('statusLine', () => {
+  it('covers every variant', () => {
+    expect(statusLine(null, auto).kind).toBe('not_drafted');
+    const posted = statusLine(post({ status: 'posted', posted_at: '2026-10-17T20:00:00Z', remote_url: 'https://bsky.app/p/1' }), auto);
+    expect(posted.kind).toBe('posted');
+    expect(posted.text).toMatch(/^Posted /);
+    expect(posted.href).toBe('https://bsky.app/p/1');
+    const sched = statusLine(post({ status: 'scheduled', scheduled_at: '2026-10-17T20:00:00Z' }), auto);
+    expect(sched.text).toMatch(/^Posts automatically /);
+    expect(statusLine(post(), auto).text).toBe('Not scheduled');
+    expect(statusLine(post({ status: 'manual' }), manual).text).toBe('Post by hand: copy and paste');
+    expect(statusLine(post(), manual).text).toBe('Post by hand: copy and paste');
+    expect(statusLine(post({ status: 'failed', last_error: 'secret detail' }), auto).text).toBe('Failed: the post could not be sent');
+    expect(statusLine(post({ status: 'queued' }), auto).kind).toBe('queued');
+    expect(statusLine(post({ status: 'scheduled', scheduled_at: '2026-10-17T20:00:00Z', held: true }), auto).kind).toBe('held');
+  });
+});
+
+describe('cardButtons', () => {
+  it('automatic draft: edit, post now, schedule', () => {
+    const b = cardButtons(post(), auto, true);
+    expect([b.edit, b.postNow, b.schedule, b.copy, b.markPosted]).toEqual([true, true, true, false, false]);
+  });
+  it('scheduled: unschedule', () => {
+    const b = cardButtons(post({ status: 'scheduled', scheduled_at: '2026-10-17T20:00:00Z' }), auto, true);
+    expect(b.unschedule).toBe(true);
+  });
+  it('failed: retry', () => {
+    const b = cardButtons(post({ status: 'failed' }), auto, true);
+    expect(b.retry).toBe(true);
+    expect(b.schedule).toBe(false);
+  });
+  it('manual: copy and mark posted, never post now', () => {
+    const b = cardButtons(post({ status: 'manual', channel: 'reddit' }), manual, true);
+    expect([b.edit, b.copy, b.markPosted, b.postNow, b.schedule]).toEqual([true, true, true, false, false]);
+  });
+  it('undrafted: draft only', () => {
+    const b = cardButtons(null, auto, true);
+    expect(b.draft).toBe(true);
+    expect(b.edit).toBe(false);
+  });
+  it('posted: no actions', () => {
+    const b = cardButtons(post({ status: 'posted' }), auto, true);
+    expect(Object.values(b).some(Boolean)).toBe(false);
+  });
+});
+
+describe('summaryLine', () => {
+  it('counts drafts, scheduled, posted, clicks', () => {
+    const results = { status: 'ok', totals: { clicks: 3, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 0 } } as OutreachResults;
+    expect(summaryLine({ posts: [post(), post({ id: 2, status: 'scheduled' }), post({ id: 3, status: 'posted' })] }, results)).toBe(
+      '3 posts drafted · 1 scheduled · 1 posted · 3 clicks',
+    );
+  });
+  it('omits clicks without real results', () => {
+    expect(summaryLine({ posts: [post()] }, null)).toBe('1 post drafted · 0 scheduled · 0 posted');
+  });
+});

@@ -68,17 +68,21 @@ describe('OutreachWorkshop', () => {
     expect(screen.getByRole('link', { name: 'All outreach' }).getAttribute('href')).toBe('#/outreach');
   });
 
-  it('puts the links table between the campaign line and the grid', async () => {
+  it('orders summary, bulk actions, posts, collapsed links, results', async () => {
     getWorkshopOutreach.mockResolvedValue(view());
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started' } as OutreachResults);
     getWorkshopOutreachLinks.mockResolvedValue(links);
     render(OutreachWorkshop, { workshopId: 5 });
-    const campaign = await screen.findByText(/Pick a cell to draft/);
-    const linksHeading = await screen.findByRole('heading', { name: 'Links' });
-    const gridHeader = await screen.findByRole('columnheader', { name: 'Announce' });
-    const before = Node.DOCUMENT_POSITION_FOLLOWING;
-    expect(campaign.compareDocumentPosition(linksHeading) & before).toBeTruthy();
-    expect(linksHeading.compareDocumentPosition(gridHeader) & before).toBeTruthy();
+    const summary = await screen.findByText(/posts? drafted/);
+    const bulk = await screen.findByRole('button', { name: 'Draft all' });
+    const posts = await screen.findByRole('heading', { name: 'Posts' });
+    const tracked = await screen.findByText(/Tracked links \(/);
+    const results = await screen.findByRole('link', { name: 'View results' });
+    const f = Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(summary.compareDocumentPosition(bulk) & f).toBeTruthy();
+    expect(bulk.compareDocumentPosition(posts) & f).toBeTruthy();
+    expect(posts.compareDocumentPosition(tracked) & f).toBeTruthy();
+    expect(tracked.compareDocumentPosition(results) & f).toBeTruthy();
   });
 
   it('points at Settings when ShortLinks is not connected', async () => {

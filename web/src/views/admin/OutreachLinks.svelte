@@ -18,8 +18,10 @@
     workshopId: number;
     available: boolean;
     reloadKey?: number;
+    /** #0569: the parent's "Tracked links (N)" summary shows the count. */
+    onCount?: (n: number) => void;
   }
-  let { workshopId, available, reloadKey = 0 }: Props = $props();
+  let { workshopId, available, reloadKey = 0, onCount }: Props = $props();
 
   let view = $state<OutreachLinksView | null>(null);
   let loadError = $state<string | null>(null);
@@ -38,6 +40,7 @@
     loadError = null;
     try {
       view = await getWorkshopOutreachLinks(workshopId);
+      onCount?.(view.links.length);
     } catch (err) {
       loadError = message(err, 'Could not load the links. Please try again.');
     }
@@ -56,6 +59,7 @@
     try {
       const v = await createWorkshopOutreachLinks(workshopId);
       view = v;
+      onCount?.(v.links.length);
       reportMessage = linkReportMessage(v.report);
     } catch (err) {
       actionError = message(err, 'Could not create the links. Please try again.');

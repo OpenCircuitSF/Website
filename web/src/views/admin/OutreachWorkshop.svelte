@@ -1,23 +1,26 @@
 <!--
-  One workshop's outreach page (#0568): header, then the OutreachPanel (start
-  button or campaign line, links table and bulk actions, the channel x wave
-  grid with the composer, and the results summary). The panel stays
-  self-loading; this page injects the links table and bulk actions between
-  its campaign line and its grid.
+  One workshop's outreach page (#0568): header, then (#0569) a summary line, the bulk
+  actions, the posts list, the collapsed tracked-links table and the results
+  link. The OutreachPanel stays self-loading and hands its view and results
+  to the body snippet.
 -->
 <script lang="ts">
-  import { adminOutreachHash, adminWorkshopHash } from '../../lib/adminRouter';
+  import { adminOutreachHash, adminOutreachResultsHash, adminWorkshopHash } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
   import type { WorkshopOutreach } from '../../lib/types';
   import Panel from '../../lib/Panel.svelte';
   import OutreachPanel from './OutreachPanel.svelte';
   import OutreachLinks from './OutreachLinks.svelte';
   import OutreachBulkActions from './OutreachBulkActions.svelte';
+  import OutreachPostCards from './OutreachPostCards.svelte';
+  import { summaryLine } from '../../lib/outreachCards';
+  import { resultsSummaryLine } from '../../lib/outreachResults';
 
   let { workshopId }: { workshopId: number } = $props();
 
   let view = $state<WorkshopOutreach | null>(null);
   let reloadKey = $state(0);
+  let linkCount = $state(0);
 
   function onLoaded(v: WorkshopOutreach): void {
     view = v;
@@ -43,11 +46,17 @@
 
 <Panel title="Outreach">
   <OutreachPanel {workshopId} {reloadKey} {onLoaded}>
-    {#snippet beforeGrid()}
-      <OutreachLinks {workshopId} available={view?.available ?? false} {reloadKey} />
-      {#if view}
-        <OutreachBulkActions {workshopId} {view} onDone={() => reloadKey++} />
-      {/if}
+    {#snippet body({ view: v, results, onChange })}
+      <p class="summary">{summaryLine(v, results)}</p>
+      <OutreachBulkActions {workshopId} view={v} onDone={() => reloadKey++} />
+      <OutreachPostCards view={v} {results} {onChange} reload={() => reloadKey++} />
+      <details class="links-details">
+        <summary>Tracked links ({linkCount})</summary>
+        <OutreachLinks {workshopId} available={v.available} {reloadKey} onCount={(n) => (linkCount = n)} />
+      </details>
+      <p>
+        {#if resultsSummaryLine(results)}{resultsSummaryLine(results)}{' '}{/if}<a href={adminOutreachResultsHash(workshopId)}>View results</a>
+      </p>
     {/snippet}
   </OutreachPanel>
 </Panel>
@@ -60,6 +69,12 @@
     font-size: var(--fs-lg);
     margin: 0;
     overflow-wrap: anywhere;
+  }
+  .summary {
+    font-weight: 600;
+  }
+  .links-details {
+    margin: var(--space-4) 0;
   }
   .links-row {
     gap: var(--space-3);

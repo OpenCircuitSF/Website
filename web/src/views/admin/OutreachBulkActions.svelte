@@ -89,6 +89,7 @@
     <Button onclick={draftAll} disabled={busy}>Draft all</Button>
     <Button onclick={preview} disabled={busy || !gate.ok}>Schedule all</Button>
   </div>
+  <p class="text-muted">Draft all writes a post for every empty slot and never changes an existing one. Schedule all shows a preview of the automatic posts it would schedule, then asks you to confirm.</p>
   {#if !gate.ok && gate.reason}
     <p class="text-muted">
       {gate.reason}
