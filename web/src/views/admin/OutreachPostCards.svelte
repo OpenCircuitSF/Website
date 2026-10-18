@@ -18,6 +18,7 @@
   import { cardButtons, groupByWave, statusLine, type PostCard } from '../../lib/outreachCards';
   import { cellClicksLabel, cellReactionsLabel } from '../../lib/outreachResults';
   import { isSafeLinkHref } from '../../lib/linkSafety';
+  import { adminOutreachFlyersHash } from '../../lib/adminRouter';
   import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import OutreachComposer from './OutreachComposer.svelte';
@@ -86,6 +87,15 @@
       notice = 'Copied.';
     });
 
+  const copyLink = (p: OutreachPost) =>
+    run(`p${p.id}`, 'copy the link', async () => {
+      await navigator.clipboard.writeText(p.short_url ?? '');
+      notice = 'Link copied.';
+    });
+
+  /** TikTok and YouTube need a video, so their cards sit under Video channels. */
+  const isVideo = (c: PostCard): boolean => c.channel.utm_medium === 'video';
+
   function toggleEdit(p: OutreachPost): void {
     editingId = editingId === p.id ? null : p.id;
   }
@@ -97,18 +107,15 @@
 
 <section class="cards" aria-labelledby="outreach-posts-heading">
   <h3 id="outreach-posts-heading">Posts</h3>
-  {#each groups as group (group.wave.name)}
-    <h4 class="wave">{group.wave.label}</h4>
-    {#each group.cards as c (c.channel.name)}
-      {@const p = c.post}
-      {@const status = statusLine(p, c.channel)}
-      {@const btn = cardButtons(p, c.channel, view.available)}
-      {@const counted = p ? countCharacters(c.channel, p.body, p.prepared) : null}
-      <article class="card" aria-label="{c.channel.label} {group.wave.label}">
-        <h5 class="card-title">{c.channel.label} &middot; {group.wave.label}{p?.stale ? ' (stale)' : ''}</h5>
+  {#snippet card(c: PostCard, wave: { label: string })}
+    {@const p = c.post}
+    {@const status = statusLine(p, c.channel)}
+    {@const btn = cardButtons(p, c.channel, view.available)}
+    {@const counted = p ? countCharacters(c.channel, p.body, p.prepared) : null}
+      <article class="card" aria-label="{c.channel.label} {wave.label}">
+        <h5 class="card-title">{c.channel.label} &middot; {wave.label}{p?.stale ? ' (stale)' : ''}</h5>
         {#if p}
           <pre class="body">{p.body}</pre>
-          {#if p.short_url}<p class="mono short">{p.short_url}</p>{/if}
           {#if counted}
             {@const over = isOverLimit(c.channel, counted.count)}
             <p class={over ? 'text-error' : 'text-muted'}>
@@ -121,6 +128,13 @@
         </p>
         {#if p && cellClicksLabel(p, results)}<p class="text-muted">{cellClicksLabel(p, results)}</p>{/if}
         {#if p && cellReactionsLabel(p, results)}<p class="text-muted">{cellReactionsLabel(p, results)}</p>{/if}
+        {#if p && p.short_url && !c.channel.automatic}
+          <p class="link-row">
+            <span class="link-label">Link to paste</span>
+            <span class="mono short">{p.short_url}</span>
+            <Button onclick={() => copyLink(p)} disabled={busyKey !== null}>Copy link</Button>
+          </p>
+        {/if}
         <div class="row">
           {#if btn.draft}
             <Button variant="primary" onclick={() => draft(c)} disabled={busyKey !== null}>Draft</Button>
@@ -141,6 +155,9 @@
             {#if btn.copy}
               <Button onclick={() => copyText(p)} disabled={busyKey !== null}>Copy text</Button>
             {/if}
+            {#if btn.copy && c.channel.name === 'instagram'}
+              <a class="open-flyer" href={adminOutreachFlyersHash()}>Open flyer</a>
+            {/if}
             {#if btn.markPosted}
               <Button onclick={() => markPosted(c, p)} disabled={busyKey !== null}>Mark posted</Button>
             {/if}
@@ -155,7 +172,20 @@
           {/key}
         {/if}
       </article>
+  {/snippet}
+  {#each groups as group (group.wave.name)}
+    <h4 class="wave">{group.wave.label}</h4>
+    {#each group.cards.filter((c) => !isVideo(c)) as c (c.channel.name)}
+      {@render card(c, group.wave)}
     {/each}
+    {#if group.cards.some(isVideo)}
+      <details class="video">
+        <summary>Video channels ({group.wave.label})</summary>
+        {#each group.cards.filter(isVideo) as c (c.channel.name)}
+          {@render card(c, group.wave)}
+        {/each}
+      </details>
+    {/if}
   {/each}
   <p class="text-muted" role="status">{notice}</p>
   <p class="text-error" role="alert">{error}</p>
@@ -180,6 +210,19 @@
     overflow-wrap: anywhere;
     font-family: var(--font);
     margin: 0 0 var(--space-2);
+  }
+  .link-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0 0 var(--space-2);
+  }
+  .link-label {
+    font-weight: 600;
+  }
+  .video {
+    margin-bottom: var(--space-3);
   }
   .mono {
     font-family: var(--font-mono);

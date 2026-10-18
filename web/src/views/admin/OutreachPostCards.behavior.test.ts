@@ -142,3 +142,60 @@ describe('post cards (#0569)', () => {
     expect(await screen.findByText('2 posts drafted · 1 scheduled · 0 posted')).toBeTruthy();
   });
 });
+
+describe('post cards: one link, Instagram, video channels (#0576)', () => {
+  const chans = [
+    ...channels,
+    { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false },
+    { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false },
+  ];
+  function setupAll(posts: OutreachPost[]): void {
+    getWorkshopOutreach.mockResolvedValue({
+      available: true, unavailable_reason: '',
+      workshop: { id: 5, slug: 's', title: 'Soldering 101', status: 'published', starts_at: '2026-12-05T18:00:00Z' },
+      outreach: { id: 9, workshop_id: 5, campaign_slug: 's', created_at: '' },
+      channels: chans, waves: [waves[0]], posts,
+    });
+    render(OutreachWorkshop, { workshopId: 5 });
+  }
+  const igBody = 'Soldering 101: Saturday.\n\nSign up at the link in our bio.';
+
+  it('does not print the short link under the body; manual cards get one labelled Link to paste row', async () => {
+    setupAll([
+      post({ id: 1, body: 'Bluesky text without a link' }),
+      post({ id: 2, channel: 'instagram', status: 'manual', body: igBody }),
+    ]);
+    await screen.findByText('Bluesky text without a link');
+    const bluesky = screen.getByRole('article', { name: 'Bluesky Announce' });
+    expect(bluesky.textContent).not.toContain('https://go.example/abc');
+    expect(bluesky.textContent).not.toContain('Link to paste');
+    const ig = screen.getByRole('article', { name: 'Instagram Announce' });
+    expect(ig.textContent).toContain('Link to paste');
+    expect(ig.textContent?.split('https://go.example/abc').length).toBe(2); // exactly once
+    expect(ig.querySelector('pre')?.textContent).toBe(igBody);
+    expect(screen.getByRole('button', { name: 'Copy link' })).toBeTruthy();
+  });
+
+  it('Instagram offers Copy text and Open flyer', async () => {
+    setupAll([post({ id: 2, channel: 'instagram', status: 'manual', body: igBody })]);
+    await screen.findByText(/Sign up at the link in our bio/);
+    const ig = screen.getByRole('article', { name: 'Instagram Announce' });
+    expect(ig.textContent).toContain('Copy text');
+    const link = ig.querySelector('a.open-flyer');
+    expect(link?.textContent).toBe('Open flyer');
+    expect(link?.getAttribute('href')).toMatch(/flyers/);
+    const bsky = screen.getByRole('article', { name: 'Bluesky Announce' });
+    expect(bsky.querySelector('a.open-flyer')).toBeNull();
+  });
+
+  it('collapses TikTok under Video channels by default', async () => {
+    setupAll([post({ id: 3, channel: 'tiktok', status: 'manual', body: 'TikTok description block' })]);
+    await screen.findByText('TikTok description block');
+    const details = screen.getByText(/^Video channels/).closest('details');
+    expect(details).toBeTruthy();
+    expect(details?.hasAttribute('open')).toBe(false);
+    expect(details?.textContent).toContain('TikTok');
+    expect(details?.textContent).toContain('TikTok description block');
+    expect(screen.getByRole('article', { name: 'Bluesky Announce' }).closest('details.video')).toBeNull();
+  });
+});
