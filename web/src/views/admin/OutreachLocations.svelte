@@ -212,7 +212,7 @@
 
 <div class="fit">
 <Panel title="Flyer locations">
-  <p class="text-muted">Places flyers go. Each flyer run makes one tracked link per active location.</p>
+  <p class="text-muted">Places flyers go. Each flyer run makes one short link per active location.</p>
   <p class="loc-status" class:text-muted={status !== '' && !statusIsError} class:text-error={statusIsError} role="status">{status}</p>
   {#if undoLoc}
     <p><Button onclick={undoDeactivate}>Undo: reactivate {undoLoc.name}</Button></p>

@@ -42,7 +42,7 @@ describe('statusLine', () => {
     expect(statusLine(post(), manual).text).toBe('Post by hand: copy and paste');
     expect(statusLine(post({ status: 'failed', last_error: 'secret detail' }), auto).text).toBe('Failed: the post could not be sent');
     expect(statusLine(post({ status: 'queued' }), auto).kind).toBe('queued');
-    expect(statusLine(post({ status: 'scheduled', scheduled_at: '2026-10-17T20:00:00Z', held: true }), auto).kind).toBe('held');
+    expect(statusLine(post({ status: 'scheduled', scheduled_at: '2026-10-17T20:00:00Z', held: true }), auto).kind).toBe('on_hold');
   });
 });
 

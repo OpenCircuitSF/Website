@@ -59,7 +59,7 @@ export function linksEmptyState(v: OutreachLinksView): { kind: LinksEmptyKind; m
     return { kind: 'not_published', message: 'This workshop is not published. Publish it in the workshop editor to create links.' };
   }
   if (v.outreach && v.links.length > 0 && v.links.every((l) => l.short_url === null)) {
-    return { kind: 'no_links', message: 'No links yet. Create links to make a tracked short link for every channel, wave and flyer location.' };
+    return { kind: 'no_links', message: 'No links yet. Create links to make a short link for every channel, every post and every flyer location.' };
   }
   if (v.missing > 0) {
     return {

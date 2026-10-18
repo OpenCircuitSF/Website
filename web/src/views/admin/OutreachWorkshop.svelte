@@ -30,6 +30,8 @@
 
   let view = $state<WorkshopOutreach | null>(null);
   let reloadKey = $state(0);
+  // #0591: the server said this workshop does not exist; show a not-found state, not Loading… and Retry.
+  let notFound = $state(false);
   // Set from Start's response, the only one that carries a link report.
   let linkWarning = $state<string | null>(null);
 
@@ -70,6 +72,13 @@
   }
 </script>
 
+{#if notFound}
+<Panel>
+  <h2 class="not-found">Workshop not found</h2>
+  <p>This workshop no longer exists.</p>
+  <p><a href={adminOutreachHash('workshops')}>All outreach</a></p>
+</Panel>
+{:else}
 <div class="row spread heading-row">
   {#if view}
     <h2 class="heading">{view.workshop.title}</h2>
@@ -88,7 +97,7 @@
 {/if}
 
 <Panel title="Outreach">
-  <OutreachPanel {workshopId} {reloadKey} {onLoaded} autoStart>
+  <OutreachPanel {workshopId} {reloadKey} {onLoaded} onNotFound={() => (notFound = true)} autoStart>
     {#snippet body({ view: v, results, onChange })}
       <p class="summary">{summaryLine(v, results)}</p>
       <OutreachAnnouncement view={v} {results} wave="announce" {workshopId} {onChange} reload={() => reloadKey++} />
@@ -126,6 +135,7 @@
 
 {#if resetOpen}
   <OutreachResetDialog inFlight={resetBusy} errorMessage={resetError} onConfirm={doReset} onClose={() => (resetOpen = false)} />
+{/if}
 {/if}
 
 <style>

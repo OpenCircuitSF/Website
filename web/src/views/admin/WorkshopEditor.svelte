@@ -800,7 +800,7 @@
     {/if}
     <div class="row">
       <Button onclick={announce} disabled={announcing}>
-        {announcing ? 'Creating draft…' : 'Announce to list'}
+        {announcing ? 'Creating draft…' : 'Email the list'}
       </Button>
       {#if announcedCampaignId !== null}
         <Button variant="primary" onclick={openAnnouncedCampaign}>Open draft campaign</Button>

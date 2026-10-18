@@ -14,7 +14,7 @@ export const FIELD_LABELS: Record<string, { label: string; placeholder: string }
   shortlinks_api_token: { label: 'API token', placeholder: '' },
   bluesky_handle: { label: 'Handle', placeholder: 'opencircuitsf.bsky.social' },
   bluesky_app_password: { label: 'App password', placeholder: '' },
-  bluesky_pds_url: { label: 'PDS URL', placeholder: 'https://bsky.social' },
+  bluesky_pds_url: { label: 'Bluesky server', placeholder: 'https://bsky.social' },
   mastodon_base_url: { label: 'Instance URL', placeholder: 'https://mastodon.social' },
   mastodon_token: { label: 'Access token', placeholder: '' },
 };

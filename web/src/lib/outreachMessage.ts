@@ -91,7 +91,7 @@ export function waveRowStatus(view: View, wave: string): RowStatus {
   const times = auto.filter((p) => p.status === 'scheduled' && p.scheduled_at).map((p) => p.scheduled_at as string).sort();
   if (times.length > 0) {
     const held = auto.some((p) => p.held);
-    return { text: held ? 'Scheduled · held until the workshop is published' : `Posts automatically ${weekdayTime(times[0])}`, action: 'open' };
+    return { text: held ? 'Scheduled · on hold until the workshop is published' : `Posts automatically ${weekdayTime(times[0])}`, action: 'open' };
   }
   if (posted > 0) return { text: `Posted ${posted} of ${auto.length}`, action: 'open' };
   return { text: 'Drafted · not scheduled', action: 'open' };

@@ -211,6 +211,6 @@ describe('scheduleHint (#0587)', () => {
     expect(scheduleHint('reminder', waves, new Date('2026-10-20T00:00:00Z'))).toBe('The suggested time is Sat, Oct 24, 5:00 PM PT. Pick a time.');
   });
   it('a wave with no suggestion says so', () => {
-    expect(scheduleHint('nope', waves)).toBe('There is no suggested time for this wave. Pick one.');
+    expect(scheduleHint('nope', waves)).toBe('There is no suggested time for this post. Pick one.');
   });
 });

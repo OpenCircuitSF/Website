@@ -55,7 +55,7 @@
       {#if status.action === 'open'}
         <OutreachAnnouncement {view} {results} wave={wave.name} {workshopId} {onChange} {reload} />
       {:else}
-        <p class="text-muted">Nothing written for this wave yet.</p>
+        <p class="text-muted">Nothing written for this one yet.</p>
       {/if}
     </details>
     {#if status.action === 'write'}

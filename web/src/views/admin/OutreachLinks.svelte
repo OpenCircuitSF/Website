@@ -109,7 +109,7 @@
         <thead>
           <tr>
             <th>Channel / location</th>
-            <th>Wave</th>
+            <th>Post</th>
             <th>Short URL</th>
             <th>Destination</th>
             <th>Clicks</th>

@@ -29,16 +29,19 @@
     reloadKey?: number;
     /** Called with the view after every successful load, refresh, start or change. */
     onLoaded?: (v: WorkshopOutreach) => void;
+    /** Called when the server says this workshop does not exist (404): the page shows its own not-found state and no Retry (#0591). */
+    onNotFound?: () => void;
     /** Create the campaign and links once when an available workshop has none (#0582). */
     autoStart?: boolean;
     /** The page layout; the panel hands over the view, the results and the change callback. */
     body: Snippet<[{ view: WorkshopOutreach; results: OutreachResults | null; onChange: (p: OutreachPost) => void }]>;
   }
-  let { workshopId, workshopUpdatedAt = '', reloadKey = 0, onLoaded, autoStart = false, body }: Props = $props();
+  let { workshopId, workshopUpdatedAt = '', reloadKey = 0, onLoaded, onNotFound, autoStart = false, body }: Props = $props();
 
   let view = $state<WorkshopOutreach | null>(null);
   let loading = $state(true);
   let loadError = $state<string | null>(null);
+  let notFound = $state(false);
   let startError = $state<string | null>(null);
   let starting = $state(false);
   // #0546: click results load separately, so a ShortLinks or network problem
@@ -76,11 +79,17 @@
 
   async function load(): Promise<void> {
     loadError = null;
+    notFound = false;
     try {
       view = await getWorkshopOutreach(workshopId);
       onLoaded?.(view);
     } catch (err) {
-      loadError = message(err, 'Could not load outreach. Please try again.');
+      if (err instanceof ApiError && err.status === 404) {
+        notFound = true;
+        onNotFound?.();
+      } else {
+        loadError = message(err, 'Could not load outreach. Please try again.');
+      }
     } finally {
       loading = false;
     }
@@ -159,6 +168,8 @@
 <div class="outreach">
   {#if loading}
     <p class="text-muted">Loading outreach…</p>
+  {:else if notFound}
+    <!-- The page around this panel says so; there is nothing to retry. -->
   {:else if loadError}
     <p class="text-error">{loadError}</p>
     <Button onclick={load}>Retry</Button>

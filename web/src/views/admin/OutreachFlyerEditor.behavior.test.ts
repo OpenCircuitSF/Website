@@ -330,4 +330,14 @@ describe('OutreachFlyerEditor', () => {
     expect(screen.queryByLabelText('Short description (half size)')).toBeNull();
     expect(screen.queryByText('Title position')).toBeNull();
   });
+
+  it('an unknown flyer shows a not-found state with a way back (#0591)', async () => {
+    getOutreachFlyer.mockRejectedValue(new FakeApiError(404, 'flyer not found'));
+    listOutreachLocations.mockResolvedValue({ locations: [] });
+    render(OutreachFlyerEditor, { flyerId: 999 });
+    expect(await screen.findByRole('heading', { name: 'Flyer not found' })).toBeTruthy();
+    expect(screen.getByText('This flyer no longer exists.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'All flyers' }).getAttribute('href')).toBe('#/outreach?view=flyers');
+    expect(screen.queryByText('flyer not found')).toBeNull();
+  });
 });

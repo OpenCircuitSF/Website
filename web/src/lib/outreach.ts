@@ -136,7 +136,7 @@ export function scheduleHint(waveName: string, waves: OutreachWave[], now: Date 
       ? `The suggested time (${formatPacificWeekdayTime(at)}) has passed. Pick one.`
       : `The suggested time is ${formatPacificWeekdayTime(at)}. Pick a time.`;
   }
-  return 'There is no suggested time for this wave. Pick one.';
+  return 'There is no suggested time for this post. Pick one.';
 }
 
 /** An ISO instant as the value of a datetime-local input, in Pacific time (#0585). */

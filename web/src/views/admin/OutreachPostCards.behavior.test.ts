@@ -144,6 +144,22 @@ describe('post cards (#0569)', () => {
     expect(screen.queryByText(/No suggested time/)).toBeNull();
   });
 
+  it('the editor row is Save and Cancel with Delete set apart; posting stays on the card (#0591)', async () => {
+    setup([post({ id: 1 })]);
+    await screen.findByText('Not scheduled');
+    await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const card = screen.getByRole('article', { name: 'Bluesky Announce' });
+    const row = Array.from(card.querySelectorAll('.row')).find((r) => r.textContent?.includes('Save'));
+    expect(row).toBeTruthy();
+    const names = Array.from(row!.querySelectorAll('button')).map((b) => b.textContent?.trim());
+    expect(names.slice(0, 2)).toEqual(['Save', 'Cancel']);
+    expect(names[names.length - 1]).toBe('Delete');
+    expect(row!.querySelector('.danger-end button')?.textContent?.trim()).toBe('Delete');
+    for (const gone of ['Post now', 'Retry', 'Mark posted', 'Copy content']) {
+      expect(screen.queryByRole('button', { name: gone })).toBeNull();
+    }
+  });
+
   it('Edit opens the composer inline in the card', async () => {
     setup([post({ id: 1 })]);
     await screen.findByText('Not scheduled');

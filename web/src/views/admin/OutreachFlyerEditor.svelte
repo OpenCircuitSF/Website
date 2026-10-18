@@ -62,6 +62,8 @@
   let view = $state<FlyerView | null>(null);
   let locations = $state<OutreachLocation[]>([]);
   let status = $state('Loading the flyer.');
+  // #0591: the server said this flyer does not exist; show a not-found state with a way back.
+  let notFound = $state(false);
   let busy = $state(false);
   let uploading = $state(false);
   let confirmDelete = $state(false);
@@ -126,7 +128,12 @@
       }
       status = '';
     } catch (err) {
-      status = message(err, 'Could not load the flyer. Please try again.');
+      if (err instanceof ApiError && err.status === 404) {
+        notFound = true;
+        status = '';
+      } else {
+        status = message(err, 'Could not load the flyer. Please try again.');
+      }
     }
   }
 
@@ -177,7 +184,7 @@
     try {
       // Same-origin about:blank, so say what is happening while it waits.
       if (tab) {
-        tab.document.title = 'Preparing flyers';
+        tab.document.title = 'Getting the flyers ready';
         tab.document.body.textContent = 'Saving the flyer and making any missing links. The print view opens here in a moment.';
       }
     } catch {
@@ -293,6 +300,10 @@
 </script>
 
 <Panel title={view ? `Flyer: ${view.flyer.workshop_title}` : 'Flyer'}>
+  {#if notFound}
+    <h2 class="not-found">Flyer not found</h2>
+    <p>This flyer no longer exists.</p>
+  {/if}
   <p><a href={adminOutreachFlyersHash()}>All flyers</a></p>
   <p class="status" role="status">{status}</p>
 
@@ -531,6 +542,10 @@
 </Panel>
 
 <style>
+  .not-found {
+    font-size: var(--fs-lg);
+    margin: 0 0 var(--space-2);
+  }
   .status {
     min-height: 1.5em;
     margin: 0 0 var(--space-2);

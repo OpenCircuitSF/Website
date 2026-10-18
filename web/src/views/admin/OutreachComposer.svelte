@@ -1,15 +1,16 @@
 <!--
   The composer for one outreach post (#0544): the text with an exact character
   count against the channel limit, the tracked link and its UTM chips under a
-  "Link details" disclosure (#0582), and Save / Regenerate / Prepare / Copy
-  content / Delete, plus (#0545) Schedule / Unschedule for an automatic
-  channel the server has credentials for. It always replaces a card's display
+  "Link details" disclosure (#0582), and (#0591) an action row of Save and Cancel
+  (plus Create link when the link is missing), with Delete set apart at the far
+  end; Regenerate sits with its warning, and Schedule / Unschedule (#0545) sit
+  with the schedule picker for an automatic channel the server has credentials
+  for. It always replaces a card's display
   and always has Cancel; the card owns Post now, Retry and Mark posted behind
   their confirmation dialog (#0581), and since #0582 nothing in this file posts
   or marks posted. `markCustomized` makes Save record the post as customized,
   so a shared-message save leaves it alone. Which buttons apply is decided in
-  lib/outreach.ts (composerActions); this file is markup and wiring only. Copy
-  is a one-line clipboard call so a test can stub navigator.clipboard.
+  lib/outreach.ts (composerActions); this file is markup and wiring only.
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
@@ -140,14 +141,9 @@
       notice = 'Regenerated from the current workshop details.';
     });
   const prepare = () =>
-    run('prepare the link', async () => {
+    run('create the link', async () => {
       onChange(await prepareOutreachPost(post.id));
-      notice = 'Tracked link created.';
-    });
-  const copy = () =>
-    run('copy', async () => {
-      await navigator.clipboard.writeText(post.body);
-      notice = 'Copied.';
+      notice = 'Short link created.';
     });
   const schedule = () =>
     run('schedule', async () => {
@@ -190,11 +186,11 @@
 
   <details class="link-box">
     <summary>Link details</summary>
-    <p class="field-label">Tracked link</p>
+    <p class="field-label">Short link</p>
     {#if post.short_url}
       <p class="mono">{post.short_url}</p>
     {:else}
-      <p class="text-muted">Not created yet. Prepare puts the real short URL in the text.</p>
+      <p class="text-muted">Not created yet. Create link puts the real short URL in the text.</p>
     {/if}
     <p class="text-muted dest">Goes to <span class="mono">{post.destination_url}</span></p>
     <ul class="chips">
@@ -208,7 +204,7 @@
     <p class="text-muted">{channelNote}</p>
   {/if}
   {#if post.held}
-    <p class="text-warn">Held — the workshop is not published, so this will not be sent.</p>
+    <p class="text-warn">On hold — the workshop is not published, so this will not be sent.</p>
   {/if}
   {#if post.status === 'queued'}
     <p class="text-notice">Queued to post. It is locked until it is sent{post.last_error ? ' or fails' : ''}.</p>
@@ -233,32 +229,27 @@
       {#if !scheduleLocal}
         <p class="text-muted">{scheduleHint(wave.name, [wave])}</p>
       {/if}
+      <Button onclick={schedule} disabled={busy || dirty || over || !scheduleLocal}>Schedule</Button>
     </div>
+  {/if}
+  {#if actions.canUnschedule}
+    <div class="schedule"><Button onclick={unschedule} disabled={busy}>Unschedule</Button></div>
   {/if}
 
   <div class="row">
-    {#if actions.canSchedule}
-      <Button onclick={schedule} disabled={busy || dirty || over || !scheduleLocal}>Schedule</Button>
-    {/if}
-    {#if actions.canUnschedule}
-      <Button onclick={unschedule} disabled={busy}>Unschedule</Button>
-    {/if}
     {#if actions.canSave}
       <Button variant="primary" onclick={save} disabled={busy || !dirty || over}>Save</Button>
     {/if}
+    <Button onclick={cancel}>Cancel</Button>
     {#if actions.canPrepare}
-      <Button onclick={prepare} disabled={busy || dirty}>Prepare link</Button>
-    {/if}
-    {#if actions.canCopy}
-      <Button onclick={copy} disabled={busy || dirty}>Copy content</Button>
+      <Button onclick={prepare} disabled={busy || dirty}>Create link</Button>
     {/if}
     {#if actions.canDelete}
-      <Button variant="danger" onclick={remove} disabled={busy}>Delete</Button>
+      <span class="danger-end"><Button variant="danger" onclick={remove} disabled={busy}>Delete</Button></span>
     {/if}
-    <Button onclick={cancel}>Cancel</Button>
   </div>
   {#if dirty && !locked}
-    <p class="text-muted">Save your edits before preparing, copying or scheduling.</p>
+    <p class="text-muted">Save your edits before creating the link or scheduling.</p>
   {/if}
 
   {#if error}
@@ -302,6 +293,9 @@
     width: 100%;
     font-family: var(--font);
     font-size: var(--fs-base);
+  }
+  .danger-end {
+    margin-left: auto;
   }
   .link-box {
     margin: var(--space-3) 0;

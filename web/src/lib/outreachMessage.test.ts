@@ -107,7 +107,7 @@ describe('waveRowStatus and manualRowStatus', () => {
     expect(r({ status: 'queued' }).text).toBe('Posting now…');
     expect(r({ status: 'failed' }).text).toBe('Drafted · a post failed');
     expect(r({ status: 'scheduled', scheduled_at: '2026-11-30T20:00:00Z' }).text).toMatch(/^Posts automatically /);
-    expect(r({ status: 'scheduled', scheduled_at: '2026-11-30T20:00:00Z', held: true }).text).toMatch(/^Scheduled · held/);
+    expect(r({ status: 'scheduled', scheduled_at: '2026-11-30T20:00:00Z', held: true }).text).toMatch(/^Scheduled · on hold/);
     expect(r({ status: 'posted' }).text).toBe('Posted 1 of 1');
   });
   it('counts only automatic posts', () => {

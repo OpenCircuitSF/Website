@@ -34,7 +34,7 @@ export function sendsItself(channel: Pick<OutreachChannel, 'automatic' | 'config
   return channel.automatic && channel.configured;
 }
 
-export type StatusKind = 'posted' | 'scheduled' | 'not_scheduled' | 'manual' | 'failed' | 'not_drafted' | 'queued' | 'held';
+export type StatusKind = 'posted' | 'scheduled' | 'not_scheduled' | 'manual' | 'failed' | 'not_drafted' | 'queued' | 'on_hold';
 export interface StatusLine {
   kind: StatusKind;
   text: string;
@@ -62,7 +62,7 @@ export function statusLine(post: OutreachPost | null, channel: Pick<OutreachChan
     return { kind: 'failed', text: 'Failed: the post could not be sent', href: null };
   }
   if (post.status === 'queued') return { kind: 'queued', text: 'Posting now…', href: null };
-  if (post.held) return { kind: 'held', text: 'Held: the workshop is not published', href: null };
+  if (post.held) return { kind: 'on_hold', text: 'On hold: the workshop is not published', href: null };
   if (post.status === 'scheduled' && post.scheduled_at) {
     return { kind: 'scheduled', text: `Posts automatically ${weekdayTime(post.scheduled_at)}`, href: null };
   }

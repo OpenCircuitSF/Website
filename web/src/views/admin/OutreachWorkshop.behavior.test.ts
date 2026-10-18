@@ -241,4 +241,24 @@ describe('OutreachWorkshop', () => {
       expect(b.textContent).toBe('Make a flyer');
     });
   });
+
+  it('an unknown workshop shows a not-found state with a way back, no Retry and no stale links (#0591)', async () => {
+    const { ApiError } = await import('../../lib/api');
+    getWorkshopOutreach.mockRejectedValue(new ApiError(404, 'workshop not found', null));
+    render(OutreachWorkshop, { workshopId: 999 });
+    expect(await screen.findByRole('heading', { name: 'Workshop not found' })).toBeTruthy();
+    expect(screen.getByText('This workshop no longer exists.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'All outreach' }).getAttribute('href')).toBe('#/outreach');
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Edit workshop' })).toBeNull();
+    expect(screen.queryByText('Loading…')).toBeNull();
+    expect(screen.queryByText('workshop not found')).toBeNull();
+  });
+
+  it('any other load failure still offers Retry (#0591)', async () => {
+    const { ApiError } = await import('../../lib/api');
+    getWorkshopOutreach.mockRejectedValue(new ApiError(500, 'boom', null));
+    render(OutreachWorkshop, { workshopId: 5 });
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
 });

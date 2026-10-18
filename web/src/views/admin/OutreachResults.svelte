@@ -149,7 +149,7 @@
     {/if}
     {#if results.totals && results.totals.unmatched_clicks > 0}
       <p class="text-muted">
-        {formatClicks(results.totals.unmatched_clicks)} on other links in this campaign.
+        {formatClicks(results.totals.unmatched_clicks)} on other links for this workshop.
       </p>
     {/if}
     {#if results.channels.length > 0}
@@ -186,7 +186,7 @@
           <thead>
             <tr>
               <th>Channel</th>
-              <th>Wave</th>
+              <th>Post</th>
               <th>Status</th>
               <th>Posted</th>
               <th>Short link</th>
