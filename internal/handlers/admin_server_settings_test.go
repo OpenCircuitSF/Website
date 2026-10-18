@@ -146,7 +146,7 @@ func TestServerSettings_GetShape(t *testing.T) {
 			restart[f.Key] = f.RestartRequired
 		}
 	}
-	if strings.Join(names, ",") != "media,email,ses,sending" {
+	if strings.Join(names, ",") != "media,email,ses,sending,outreach" {
 		t.Errorf("group order = %v", names)
 	}
 	for _, k := range []string{"email_from", "email_reply_to", "email_list_domain", "send_batch_size"} {
@@ -154,7 +154,7 @@ func TestServerSettings_GetShape(t *testing.T) {
 			t.Errorf("%s must be restart_required", k)
 		}
 	}
-	for _, k := range []string{"media_dir", "ses_sandbox", "ses_inbound_bucket"} {
+	for _, k := range []string{"media_dir", "ses_sandbox", "ses_inbound_bucket", "bluesky_card_url", "outreach_hashtags", "outreach_post_hour"} {
 		if restart[k] {
 			t.Errorf("%s must be live", k)
 		}

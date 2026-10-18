@@ -1,5 +1,5 @@
 <!--
-  One group (Media, Email, Amazon SES or Sending) of the Server settings area
+  One group (Media, Email, Amazon SES, Sending or Outreach) of the Server settings area
   (#0566). Owns its own draft, so saving one group never discards edits in
   another, and keeps its status line at the component's top level so the live
   region persists for the life of the group.
@@ -77,6 +77,12 @@
           <option value="">Not saved — using {sourceLabel(f)}: {f.value}</option>
           <option value="true">Sandboxed</option>
           <option value="false">Production access granted</option>
+        </select>
+      {:else if f.key === 'bluesky_card_url'}
+        <select {id} bind:value={draft[f.key]} disabled={saving}>
+          <option value="">Not saved — using {sourceLabel(f)}: {f.value}</option>
+          <option value="short">Short link (tracked)</option>
+          <option value="canonical">Workshop page (opencircuitsf.com)</option>
         </select>
       {:else if f.key === 'send_batch_size'}
         <input {id} type="number" min="1" max="500" bind:value={draft[f.key]} disabled={saving} placeholder={f.source !== 'database' && f.value ? f.value : info.placeholder} />

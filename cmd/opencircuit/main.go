@@ -362,13 +362,15 @@ func servePostgres(cfg *config.Config) error {
 		Log:     slog.Default(),
 	})
 	outreachPublisher := outreach.NewPublisher(outreach.PublisherDeps{
-		Tracker:    outreachTracker,
-		Store:      outreachStore,
-		Outbox:     outbox.NewStore(pool),
-		Settings:   store,
-		Clients:    conns,
-		MediaDirFn: serverSettings.MediaDir,
-		Log:        slog.Default(),
+		Tracker:     outreachTracker,
+		Store:       outreachStore,
+		Outbox:      outbox.NewStore(pool),
+		Settings:    store,
+		Clients:     conns,
+		MediaDirFn:  serverSettings.MediaDir,
+		CardURLFn:   serverSettings.BlueskyCardURL,
+		SiteBaseURL: cfg.BaseURL,
+		Log:         slog.Default(),
 	})
 	adminOutreachH := handlers.NewAdminOutreachHandler(outreachStore, outreachStore, outreachStore, workshopsStore, conns.ShortLinker(), auditLogger, cfg.BaseURL, outreachPublisher)
 	conns.OnChange(func(c outreachconn.Changed) {

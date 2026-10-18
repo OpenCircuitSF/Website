@@ -48,3 +48,27 @@ func TestNormalize(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeOutreachFields(t *testing.T) {
+	ok := map[[2]string]string{
+		{KeyBlueskyCardURL, " Canonical "}:                                  "canonical",
+		{KeyOutreachPostHour, "0"}:                                          "0",
+		{KeyOutreachPostHour, "23"}:                                         "23",
+		{KeyOutreachHashtags, "#SanFrancisco   #Electronics #sanfrancisco"}: "#SanFrancisco #Electronics",
+	}
+	for in, want := range ok {
+		if got, err := Normalize(in[0], in[1]); err != nil || got != want {
+			t.Errorf("Normalize(%q, %q) = %q, %v; want %q", in[0], in[1], got, err, want)
+		}
+	}
+	bad := [][2]string{
+		{KeyBlueskyCardURL, "long"}, {KeyOutreachPostHour, "24"}, {KeyOutreachPostHour, "-1"},
+		{KeyOutreachHashtags, "SanFrancisco"}, {KeyOutreachHashtags, "#San-Francisco"}, {KeyOutreachHashtags, "#"},
+		{KeyOutreachHashtags, "#a #b #c #d #e #f #g"},
+	}
+	for _, in := range bad {
+		if _, err := Normalize(in[0], in[1]); err == nil {
+			t.Errorf("Normalize(%q, %q) accepted", in[0], in[1])
+		}
+	}
+}

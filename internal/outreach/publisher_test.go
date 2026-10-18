@@ -240,6 +240,54 @@ func TestPublisher_BlueskySuccess(t *testing.T) {
 	}
 }
 
+// The card's uri follows bluesky_card_url (#0571): the tracked short link by
+// default, the workshop's canonical URL with UTM when set. The post text
+// never carries the link either way.
+func TestPublisher_BlueskyCardURISetting(t *testing.T) {
+	for _, tc := range []struct{ setting, wantPrefix string }{
+		{"", "https://go.example.test/"},
+		{"short", "https://go.example.test/"},
+		{"canonical", "https://site.example.test/workshops/"},
+	} {
+		t.Run("setting="+tc.setting, func(t *testing.T) {
+			s := NewStore(testPool(t))
+			ctx := context.Background()
+			bsky := newFakeBsky(t)
+			pub := newTestPublisher(t, s, bsky, nil, "")
+			pub.cardURL = func() string { return tc.setting }
+			pub.siteBase = "https://site.example.test"
+			_, post := seedSendable(t, s)
+			if _, _, err := s.QueueNow(ctx, post.ID); err != nil {
+				t.Fatal(err)
+			}
+			runPass(t, pub)
+			if bsky.createCount() != 1 {
+				t.Fatalf("createRecord count = %d", bsky.createCount())
+			}
+			var rec struct {
+				Record struct {
+					Text  string `json:"text"`
+					Embed struct {
+						External struct {
+							URI string `json:"uri"`
+						} `json:"external"`
+					} `json:"embed"`
+				} `json:"record"`
+			}
+			if err := json.Unmarshal([]byte(bsky.created[0]), &rec); err != nil {
+				t.Fatal(err)
+			}
+			uri := rec.Record.Embed.External.URI
+			if !strings.HasPrefix(uri, tc.wantPrefix) {
+				t.Errorf("card uri = %q, want prefix %q", uri, tc.wantPrefix)
+			}
+			if tc.setting == "canonical" && !strings.Contains(uri, "utm_source=bluesky") {
+				t.Errorf("canonical card uri lacks UTM: %q", uri)
+			}
+		})
+	}
+}
+
 func TestPublisher_BlueskyThumbnailFromMediaDir(t *testing.T) {
 	s := NewStore(testPool(t))
 	ctx := context.Background()

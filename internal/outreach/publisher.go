@@ -80,6 +80,13 @@ type PublisherDeps struct {
 	// so a directory saved in Settings takes effect without a restart.
 	MediaDirFn   func() string
 	PollInterval time.Duration // default 15s
+	// CardURLFn reports which URL the Bluesky card points at, "short" (the
+	// tracked link, default) or "canonical" (the workshop's own URL with UTM),
+	// read on every send so a Settings save applies at once (#0571).
+	CardURLFn func() string
+	// SiteBaseURL builds the canonical card URL; empty falls back to the
+	// short link.
+	SiteBaseURL string
 	// Tracker, when set, is started and stopped with the publisher (#0547), so
 	// the process wires one background type and one shutdown budget.
 	Tracker *Tracker
@@ -94,6 +101,8 @@ type Publisher struct {
 	settings Settings
 	clients  ClientSource
 	mediaDir func() string
+	cardURL  func() string
+	siteBase string
 	poll     time.Duration
 	log      *slog.Logger
 	tracker  *Tracker
@@ -123,7 +132,7 @@ func NewPublisher(d PublisherDeps) *Publisher {
 	}
 	return &Publisher{
 		store: d.Store, outbox: d.Outbox, settings: d.Settings, clients: d.Clients,
-		mediaDir: mediaDirFn, poll: d.PollInterval, log: d.Log, tracker: d.Tracker,
+		mediaDir: mediaDirFn, cardURL: d.CardURLFn, siteBase: d.SiteBaseURL, poll: d.PollInterval, log: d.Log, tracker: d.Tracker,
 		stopCh: make(chan struct{}), doneCh: make(chan struct{}),
 	}
 }
@@ -401,12 +410,20 @@ func label(ch Channel, name string) string {
 }
 
 func (p *Publisher) postBluesky(ctx context.Context, bsky *bluesky.Client, job SendJob) (bluesky.PostResult, error) {
+	cardURI := *job.ShortURL
+	if p.cardURL != nil && p.cardURL() == "canonical" && p.siteBase != "" {
+		if ch, ok := ChannelByName(job.Channel); ok {
+			if wv, ok := WaveByName(job.Wave); ok {
+				cardURI = DestinationURL(p.siteBase, Facts{Slug: job.Slug}, ch, wv)
+			}
+		}
+	}
 	in := bluesky.PostInput{
 		Text:      job.Body,
 		RKey:      bluesky.TID(job.CreatedAt.UnixMicro(), uint16(job.ID&1023)),
 		CreatedAt: time.Now(),
 		Embed: &bluesky.ExternalCard{
-			URI: *job.ShortURL, Title: job.Title, Description: deref(job.Summary),
+			URI: cardURI, Title: job.Title, Description: deref(job.Summary),
 		},
 	}
 	in.Embed.Thumb, in.Embed.ThumbMIME = p.thumbnail(job.CoverImage)

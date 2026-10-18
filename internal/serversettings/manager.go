@@ -245,3 +245,25 @@ func (m *Manager) SESSandbox() bool {
 
 // SESInboundBucket returns the current inbound mail bucket name.
 func (m *Manager) SESInboundBucket() string { return m.Value(KeySESInboundBucket) }
+
+// BlueskyCardURL reports which URL the Bluesky external card points at:
+// CardURLShort (tracked, the default) or CardURLCanonical.
+func (m *Manager) BlueskyCardURL() string {
+	if m.Value(KeyBlueskyCardURL) == CardURLCanonical {
+		return CardURLCanonical
+	}
+	return CardURLShort
+}
+
+// OutreachHashtags returns the site-wide hashtag line appended to drafts.
+func (m *Manager) OutreachHashtags() string { return m.Value(KeyOutreachHashtags) }
+
+// OutreachPostHour returns the Pacific hour suggested times use; 10 when the
+// value does not parse.
+func (m *Manager) OutreachPostHour() int {
+	n, err := strconv.Atoi(m.Value(KeyOutreachPostHour))
+	if err != nil || n < 0 || n > 23 {
+		return 10
+	}
+	return n
+}

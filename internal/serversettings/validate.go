@@ -23,6 +23,9 @@ const (
 	msgBool       = "must be true or false"
 	msgBucket     = "must be an S3 bucket name (3 to 63 lowercase letters, digits, dots or hyphens)"
 	msgBatch      = "must be a whole number from 1 to 500"
+	msgCardURL    = "must be short or canonical"
+	msgHashtags   = "must be up to 6 hashtags, each # followed by letters or digits, such as #SanFrancisco"
+	msgPostHour   = "must be a whole hour from 0 to 23 (Pacific time)"
 )
 
 // Normalize validates value for key and returns the form to store. It returns
@@ -37,6 +40,7 @@ func Normalize(key, value string) (string, error) {
 		KeyMediaDir: msgMediaDir, KeyEmailFrom: msgEmail, KeyEmailReplyTo: msgEmail,
 		KeyEmailListDomain: msgListDomain, KeySESSandbox: msgBool,
 		KeySESInboundBucket: msgBucket, KeySendBatchSize: msgBatch,
+		KeyBlueskyCardURL: msgCardURL, KeyOutreachHashtags: msgHashtags, KeyOutreachPostHour: msgPostHour,
 	}[key]
 	if value == "" || len(value) > maxValueLen || hasControl(value) {
 		return bad(msg)
@@ -69,6 +73,24 @@ func Normalize(key, value string) (string, error) {
 			return bad(msg)
 		}
 		return value, nil
+	case KeyBlueskyCardURL:
+		d := strings.ToLower(value)
+		if d != CardURLShort && d != CardURLCanonical {
+			return bad(msg)
+		}
+		return d, nil
+	case KeyOutreachHashtags:
+		tags, ok := NormalizeHashtags(value)
+		if !ok || len(tags) == 0 {
+			return bad(msg)
+		}
+		return strings.Join(tags, " "), nil
+	case KeyOutreachPostHour:
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 23 {
+			return bad(msg)
+		}
+		return strconv.Itoa(n), nil
 	default: // KeySendBatchSize
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 1 || n > 500 {
@@ -122,4 +144,29 @@ func validBucket(b string) bool {
 		}
 	}
 	return true
+}
+
+// NormalizeHashtags splits s on whitespace and checks that every token is a
+// "#" followed by letters or digits (CamelCase is recommended, so screen
+// readers say the words apart) and that there are at most MaxOutreachHashtags.
+// Duplicates, ignoring case, are dropped.
+func NormalizeHashtags(s string) ([]string, bool) {
+	var out []string
+	seen := map[string]bool{}
+	for _, tok := range strings.Fields(s) {
+		body := strings.TrimPrefix(tok, "#")
+		if body == tok || body == "" {
+			return nil, false
+		}
+		for _, r := range body {
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+				return nil, false
+			}
+		}
+		if k := strings.ToLower(tok); !seen[k] {
+			seen[k] = true
+			out = append(out, tok)
+		}
+	}
+	return out, len(out) <= MaxOutreachHashtags
 }

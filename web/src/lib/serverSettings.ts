@@ -8,6 +8,7 @@ export const GROUP_LABELS: Record<ServerSettingGroupName, string> = {
   email: 'Email',
   ses: 'Amazon SES',
   sending: 'Sending',
+  outreach: 'Outreach',
 };
 
 export const FIELD_LABELS: Record<string, { label: string; placeholder: string; help: string }> = {
@@ -45,6 +46,21 @@ export const FIELD_LABELS: Record<string, { label: string; placeholder: string; 
     label: 'Send batch size',
     placeholder: '50',
     help: 'Recipients claimed per batch, 1 to 500.',
+  },
+  bluesky_card_url: {
+    label: 'Bluesky card link',
+    placeholder: '',
+    help: 'Where the link card on a Bluesky post points. Short link: tracked by ShortLinks, but the card footer shows go.opencircuitsf.com. Workshop page: the card footer shows opencircuitsf.com, but clicks are not tracked.',
+  },
+  outreach_hashtags: {
+    label: 'Outreach hashtags',
+    placeholder: '#SanFrancisco #Electronics',
+    help: 'Appended to new drafts on their own line. Up to 6, each # followed by letters or digits. Use CamelCase (#SanFrancisco, not #sanfrancisco) so screen readers say the words apart.',
+  },
+  outreach_post_hour: {
+    label: 'Suggested posting hour',
+    placeholder: '10',
+    help: 'The hour of day (0 to 23, Pacific time) Reminder and Last call posts are suggested for.',
   },
 };
 
@@ -92,6 +108,16 @@ export function fieldHint(key: string, value: string): string | null {
     case 'send_batch_size': {
       const n = Number(v);
       return /^\d+$/.test(v) && n >= 1 && n <= 500 ? null : 'Must be a whole number from 1 to 500.';
+    }
+    case 'outreach_post_hour': {
+      const n = Number(v);
+      return /^\d+$/.test(v) && n >= 0 && n <= 23 ? null : 'Must be a whole hour from 0 to 23.';
+    }
+    case 'outreach_hashtags': {
+      const tags = v.split(/\s+/);
+      return tags.length <= 6 && tags.every((x) => /^#[\p{L}\p{N}]+$/u.test(x))
+        ? null
+        : 'Up to 6 hashtags, each # followed by letters or digits.';
     }
     case 'email_list_domain':
       return v.replace(/\.$/, '').split('.').length >= 3

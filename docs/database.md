@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000039`). No ORM — every
+(`migrations/`, numbered `000001`–`000040`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -109,6 +109,7 @@ why the activity log is not a second package of its own.
 | `000037_create_outreach_connection_values` | `outreach_connection_values`, one row per saved outreach connection field (`#0564`): `key` (primary key, `outreach_connection_values_key_check` limits it to the seven ShortLinks, Bluesky and Mastodon field keys), `value` (`outreach_connection_values_value_check`, non-empty and at most 2048 characters) and `updated_at`. No row means fall back to the environment variable. Secrets are plaintext at rest, protected like the rest of the database. Owned by `internal/outreachconn` |
 | `000038_create_server_setting_values` | Operational settings saved from admin Settings → Server settings; one row per field with a saved value. Owned by `internal/serversettings` |
 | `000039_create_outreach_links` | One tracked short link per (outreach, channel, wave), created at Start before any post exists; `outreach_links_slot_unique` makes creation idempotent. Owned by `internal/outreach` |
+| `000040_outreach_server_settings` | Widens `server_setting_values_key_check` (`000038`) with the three outreach content keys `bluesky_card_url`, `outreach_hashtags` and `outreach_post_hour` (`#0571`, `#0573`, `#0574`), edited through `internal/serversettings`. A new migration, not an edit to `000038`, which production has applied |
 
 `internal/subscribers` (`imports.go`) owns `subscriber_imports`, alongside
 every other table that package already owns — see that file's doc comment.

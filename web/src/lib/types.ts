@@ -1157,7 +1157,7 @@ export interface OutreachConnections {
 
 // ── Server settings ──────────────────────────────────────────────────────────
 
-export type ServerSettingGroupName = 'media' | 'email' | 'ses' | 'sending';
+export type ServerSettingGroupName = 'media' | 'email' | 'ses' | 'sending' | 'outreach';
 
 /** One server setting, mirroring GET /admin/server-settings. */
 export interface ServerSettingField {

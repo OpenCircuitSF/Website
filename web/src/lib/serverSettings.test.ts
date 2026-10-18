@@ -73,3 +73,13 @@ describe('notes', () => {
     expect(LIVE_NOTE).toBe('Takes effect immediately.');
   });
 });
+
+describe('outreach field hints', () => {
+  it('checks the posting hour and hashtags like the server', () => {
+    expect(fieldHint('outreach_post_hour', '10')).toBeNull();
+    expect(fieldHint('outreach_post_hour', '24')).not.toBeNull();
+    expect(fieldHint('outreach_hashtags', '#SanFrancisco #Electronics')).toBeNull();
+    expect(fieldHint('outreach_hashtags', 'SanFrancisco')).not.toBeNull();
+    expect(fieldHint('outreach_hashtags', '#a #b #c #d #e #f #g')).not.toBeNull();
+  });
+});
