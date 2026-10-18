@@ -117,7 +117,7 @@
           {/if}
         {/if}
         <p class="status status-{status.kind}">
-          {status.text}{#if status.kind === 'posted'}{' · '}{#if status.href && isSafeLinkHref(status.href)}<a href={status.href} rel="noopener noreferrer">view post</a>{:else}view post{/if}{/if}
+          {status.text}{#if status.kind === 'posted' && status.href && isSafeLinkHref(status.href)}{' · '}<a href={status.href} rel="noopener noreferrer">view post</a>{/if}
         </p>
         {#if p && cellClicksLabel(p, results)}<p class="text-muted">{cellClicksLabel(p, results)}</p>{/if}
         {#if p && cellReactionsLabel(p, results)}<p class="text-muted">{cellReactionsLabel(p, results)}</p>{/if}
