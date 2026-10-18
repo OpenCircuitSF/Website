@@ -183,6 +183,23 @@ func TestAdminOutreachReset_RefusesWhenPublic(t *testing.T) {
 			t.Errorf("queue rows = %d, want 1 untouched", n)
 		}
 	})
+	// The post's own queued status refuses on its own, with no live queue row
+	// behind it (review of #0592: the subtest above also has a live row, so
+	// it could not tell the two conditions apart).
+	t.Run("queued post without a live queue row", func(t *testing.T) {
+		e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+		wid, p := e.preparedPost(t, "bluesky")
+		if code, b := e.do(t, http.MethodPost, postPath(p.ID, "send"), ""); code != http.StatusAccepted {
+			t.Fatalf("send = %d (%s)", code, b)
+		}
+		if _, err := e.pool.Exec(context.Background(),
+			`UPDATE outbound_queue SET status = 'abandoned' WHERE kind = 'outreach_post' AND (payload->>'post_id')::bigint = $1`, p.ID); err != nil {
+			t.Fatal(err)
+		}
+		var oid int64
+		_ = e.pool.QueryRow(context.Background(), `SELECT outreach_id FROM outreach_posts WHERE id = $1`, p.ID).Scan(&oid)
+		assertRefused(t, e, wid, oid, "queued or being sent")
+	})
 	t.Run("live queue row on a draft", func(t *testing.T) {
 		e := newOutreachEnv(t, true)
 		wid, p := e.preparedPost(t, "instagram")

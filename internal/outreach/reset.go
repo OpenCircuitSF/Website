@@ -84,8 +84,18 @@ func (s *Store) Reset(ctx context.Context, outreachID int64) (ResetResult, error
 		return ResetResult{}, fmt.Errorf("outreach: reset: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	// Serialise against the publisher's promoter and other writers.
+	// Lock the outreach row first: FOR UPDATE conflicts with the FOR KEY SHARE
+	// lock every insert into outreach_posts or outreach_flyers takes on its
+	// parent row, so no post can be drafted (and then queued) after the check
+	// below and be swept up by the deletes unseen.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM outreach WHERE id = $1 FOR UPDATE`, outreachID); err != nil {
+		return ResetResult{}, fmt.Errorf("outreach: reset: %w", err)
+	}
+	// Serialise against the publisher's promoter, Post now, and flyer put-up.
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM outreach_posts WHERE outreach_id = $1 FOR UPDATE`, outreachID); err != nil {
+		return ResetResult{}, fmt.Errorf("outreach: reset: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM outreach_flyer_links WHERE outreach_id = $1 FOR UPDATE`, outreachID); err != nil {
 		return ResetResult{}, fmt.Errorf("outreach: reset: %w", err)
 	}
 	if err := resetBlock(ctx, tx, outreachID); err != nil {
