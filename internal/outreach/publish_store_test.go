@@ -142,7 +142,7 @@ func TestScheduleAndUnschedule(t *testing.T) {
 		t.Errorf("reschedule: %+v %v", got, err)
 	}
 	// A scheduled post stays editable.
-	if _, err := s.UpdatePostBody(ctx, p.ID, "edited https://go.example.test/x", nil); err != nil {
+	if _, err := s.UpdatePostBody(ctx, p.ID, "edited https://go.example.test/x", nil, nil); err != nil {
 		t.Errorf("scheduled post should be editable: %v", err)
 	}
 	un, err := s.Unschedule(ctx, p.ID)
@@ -161,7 +161,7 @@ func TestQueuedPostIsLocked(t *testing.T) {
 	if _, _, err := s.QueueNow(ctx, p.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdatePostBody(ctx, p.ID, "new", nil); !errors.Is(err, ErrPostInFlight) {
+	if _, err := s.UpdatePostBody(ctx, p.ID, "new", nil, nil); !errors.Is(err, ErrPostInFlight) {
 		t.Errorf("update err = %v", err)
 	}
 	if err := s.DeletePost(ctx, p.ID); !errors.Is(err, ErrPostInFlight) {

@@ -306,6 +306,7 @@ type testPost struct {
 	Status         string  `json:"status"`
 	Prepared       bool    `json:"prepared"`
 	Stale          bool    `json:"stale"`
+	Customized     bool    `json:"customized"`
 	ShortURL       *string `json:"short_url"`
 	ShortLinkKey   *string `json:"short_link_key"`
 	DestinationURL string  `json:"destination_url"`
@@ -603,6 +604,37 @@ func TestAdminOutreach_RegenerateClearsStale(t *testing.T) {
 	}
 	if n := outreachAuditCount(t, e.pool, audit.ActionOutreachPostUpdated, p.ID); n != 1 {
 		t.Errorf("updated audit rows = %d, want 1", n)
+	}
+}
+
+func TestAdminOutreach_PatchCustomized(t *testing.T) {
+	e := newOutreachEnv(t, true)
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	o := e.start(t, w).Outreach
+	p := e.createPost(t, o.ID, "bluesky", "announce")
+	path := fmt.Sprintf("/admin/outreach-posts/%d", p.ID)
+	patch := func(body string) testPost {
+		t.Helper()
+		code, b := e.do(t, http.MethodPatch, path, body)
+		if code != http.StatusOK {
+			t.Fatalf("patch %s = %d (%s)", body, code, b)
+		}
+		return decodeOutreach[testPost](t, b)
+	}
+	if got := patch(`{"body":"hand"}`); got.Customized {
+		t.Error("plain body edit must not customize")
+	}
+	if got := patch(`{"body":"hand","customized":true}`); !got.Customized {
+		t.Error("body + customized:true must set the flag")
+	}
+	if got := patch(`{"body":"again"}`); !got.Customized {
+		t.Error("a body edit without customized must leave the flag set")
+	}
+	if code, _ := e.do(t, http.MethodPatch, path, `{"regenerate":true,"customized":false}`); code != http.StatusBadRequest {
+		t.Errorf("regenerate + customized = %d, want 400", code)
+	}
+	if got := patch(`{"regenerate":true}`); got.Customized {
+		t.Error("regenerate must clear the flag")
 	}
 }
 

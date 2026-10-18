@@ -55,15 +55,18 @@ type Post struct {
 	Body              string
 	Status            string
 	SourceFingerprint string
-	ShortLinkKey      *string
-	ShortURL          *string
-	RemoteID          *string
-	RemoteURL         *string
-	LastError         *string
-	ScheduledAt       *time.Time
-	PostedAt          *time.Time
-	UpdatedAt         *time.Time
-	CreatedAt         time.Time
+	// Customized marks a hand-edited automatic post that a shared-message save
+	// leaves alone (#0582). A regenerate clears it.
+	Customized   bool
+	ShortLinkKey *string
+	ShortURL     *string
+	RemoteID     *string
+	RemoteURL    *string
+	LastError    *string
+	ScheduledAt  *time.Time
+	PostedAt     *time.Time
+	UpdatedAt    *time.Time
+	CreatedAt    time.Time
 }
 
 // Prepared reports whether the post's short link exists.
@@ -99,13 +102,13 @@ func scanOutreach(row pgx.Row) (Outreach, error) {
 	return o, err
 }
 
-const postColumns = `id, outreach_id, channel, wave, body, status, source_fingerprint,
+const postColumns = `id, outreach_id, channel, wave, body, status, source_fingerprint, customized,
 	short_link_key, short_url, remote_id, remote_url, last_error,
 	scheduled_at, posted_at, updated_at, created_at`
 
 func scanPost(row pgx.Row) (Post, error) {
 	var p Post
-	err := row.Scan(&p.ID, &p.OutreachID, &p.Channel, &p.Wave, &p.Body, &p.Status, &p.SourceFingerprint,
+	err := row.Scan(&p.ID, &p.OutreachID, &p.Channel, &p.Wave, &p.Body, &p.Status, &p.SourceFingerprint, &p.Customized,
 		&p.ShortLinkKey, &p.ShortURL, &p.RemoteID, &p.RemoteURL, &p.LastError,
 		&p.ScheduledAt, &p.PostedAt, &p.UpdatedAt, &p.CreatedAt)
 	return p, err
@@ -259,12 +262,15 @@ func (s *Store) classify(ctx context.Context, id int64, needPrepared bool) error
 }
 
 // UpdatePostBody replaces the body. A nil fingerprint leaves the stored one
-// alone (a hand edit); a non-nil one is a regenerate. ErrPostLocked once
-// posted.
-func (s *Store) UpdatePostBody(ctx context.Context, id int64, body string, fingerprint *string) (Post, error) {
+// alone (a hand edit); a non-nil one is a regenerate, which also clears
+// customized. A hand edit sets customized only when asked (customized
+// non-nil); nil leaves it. ErrPostLocked once posted.
+func (s *Store) UpdatePostBody(ctx context.Context, id int64, body string, fingerprint *string, customized *bool) (Post, error) {
 	p, err := scanPost(s.pool.QueryRow(ctx,
-		`UPDATE outreach_posts SET body = $2, source_fingerprint = COALESCE($3, source_fingerprint), updated_at = now()
-		 WHERE id = $1 AND status NOT IN ('posted','queued') RETURNING `+postColumns, id, body, fingerprint))
+		`UPDATE outreach_posts SET body = $2, source_fingerprint = COALESCE($3, source_fingerprint),
+		   customized = CASE WHEN $3::text IS NOT NULL THEN false ELSE COALESCE($4::boolean, customized) END,
+		   updated_at = now()
+		 WHERE id = $1 AND status NOT IN ('posted','queued') RETURNING `+postColumns, id, body, fingerprint, customized))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Post{}, s.classify(ctx, id, false)
 	}

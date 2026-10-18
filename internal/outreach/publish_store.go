@@ -98,7 +98,7 @@ func (s *Store) QueueNow(ctx context.Context, id int64) (post Post, prevStatus s
 
 // qualifiedPostColumns is postColumns with the p alias, for statements that
 // alias the table.
-const qualifiedPostColumns = `p.id, p.outreach_id, p.channel, p.wave, p.body, p.status, p.source_fingerprint,
+const qualifiedPostColumns = `p.id, p.outreach_id, p.channel, p.wave, p.body, p.status, p.source_fingerprint, p.customized,
 	p.short_link_key, p.short_url, p.remote_id, p.remote_url, p.last_error,
 	p.scheduled_at, p.posted_at, p.updated_at, p.created_at`
 
@@ -224,7 +224,7 @@ func (s *Store) LoadForSend(ctx context.Context, postID int64) (SendJob, error) 
 		`SELECT `+qualifiedPostColumns+`, w.status, w.title, w.slug, w.summary, w.cover_image
 		   FROM outreach_posts p JOIN outreach o ON o.id = p.outreach_id JOIN workshops w ON w.id = o.workshop_id
 		  WHERE p.id = $1`, postID).Scan(
-		&j.ID, &j.OutreachID, &j.Channel, &j.Wave, &j.Body, &j.Status, &j.SourceFingerprint,
+		&j.ID, &j.OutreachID, &j.Channel, &j.Wave, &j.Body, &j.Status, &j.SourceFingerprint, &j.Customized,
 		&j.ShortLinkKey, &j.ShortURL, &j.RemoteID, &j.RemoteURL, &j.LastError,
 		&j.ScheduledAt, &j.PostedAt, &j.UpdatedAt, &j.CreatedAt,
 		&j.WorkshopStatus, &j.Title, &j.Slug, &j.Summary, &j.CoverImage)

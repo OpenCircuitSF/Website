@@ -143,7 +143,7 @@ func TestPostedRefusals(t *testing.T) {
 	if _, err := s.MarkPosted(ctx, p.ID, nil, time.Now()); !errors.Is(err, ErrPostLocked) {
 		t.Errorf("second mark err = %v", err)
 	}
-	if _, err := s.UpdatePostBody(ctx, p.ID, "new", nil); !errors.Is(err, ErrPostLocked) {
+	if _, err := s.UpdatePostBody(ctx, p.ID, "new", nil, nil); !errors.Is(err, ErrPostLocked) {
 		t.Errorf("update err = %v", err)
 	}
 	if err := s.DeletePost(ctx, p.ID); !errors.Is(err, ErrPostLocked) {
@@ -158,13 +158,22 @@ func TestUpdateBodyFingerprintAndDelete(t *testing.T) {
 	s := NewStore(testPool(t))
 	ctx := context.Background()
 	_, p := seedPost(t, s, "x")
-	edited, err := s.UpdatePostBody(ctx, p.ID, "edited", nil)
+	edited, err := s.UpdatePostBody(ctx, p.ID, "edited", nil, nil)
 	if err != nil || edited.Body != "edited" || edited.SourceFingerprint != "fp" {
 		t.Fatalf("hand edit: %+v %v", edited, err)
 	}
+	tr := true
+	cust, err := s.UpdatePostBody(ctx, p.ID, "edited2", nil, &tr)
+	if err != nil || !cust.Customized {
+		t.Fatalf("customize: %+v %v", cust, err)
+	}
+	kept, err := s.UpdatePostBody(ctx, p.ID, "edited3", nil, nil)
+	if err != nil || !kept.Customized {
+		t.Fatalf("nil customized must leave the flag: %+v %v", kept, err)
+	}
 	fp2 := "fp2"
-	regen, err := s.UpdatePostBody(ctx, p.ID, "regen", &fp2)
-	if err != nil || regen.SourceFingerprint != "fp2" {
+	regen, err := s.UpdatePostBody(ctx, p.ID, "regen", &fp2, nil)
+	if err != nil || regen.SourceFingerprint != "fp2" || regen.Customized {
 		t.Fatalf("regenerate: %+v %v", regen, err)
 	}
 	if err := s.DeletePost(ctx, p.ID); err != nil {

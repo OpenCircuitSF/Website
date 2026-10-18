@@ -33,7 +33,7 @@ type outreachStore interface {
 	ListPosts(ctx context.Context, outreachID int64) ([]outreach.Post, error)
 	GetPost(ctx context.Context, id int64) (outreach.Post, error)
 	CreatePost(ctx context.Context, outreachID int64, channel, wave, body, fingerprint string) (outreach.Post, error)
-	UpdatePostBody(ctx context.Context, id int64, body string, fingerprint *string) (outreach.Post, error)
+	UpdatePostBody(ctx context.Context, id int64, body string, fingerprint *string, customized *bool) (outreach.Post, error)
 	// SetPrepared's bool is true only when this call's UPDATE changed the row.
 	SetPrepared(ctx context.Context, id int64, key, shortURL, status string) (outreach.Post, bool, error)
 	MarkPosted(ctx context.Context, id int64, remoteURL *string, now time.Time) (outreach.Post, error)
@@ -263,6 +263,8 @@ type outreachPostView struct {
 	Status     string `json:"status"`
 	Prepared   bool   `json:"prepared"`
 	Stale      bool   `json:"stale"`
+	// Customized: hand-edited, left alone by a shared-message save (#0582).
+	Customized bool `json:"customized"`
 	// Held is true for a scheduled or queued post whose workshop is not
 	// published: it will not be sent while that stays true (#0545).
 	Held           bool            `json:"held"`
@@ -283,7 +285,7 @@ func (h *AdminOutreachHandler) postView(p outreach.Post, f outreach.Facts, works
 	wv, _ := outreach.WaveByName(p.Wave)
 	return outreachPostView{
 		ID: p.ID, OutreachID: p.OutreachID, Channel: p.Channel, Wave: p.Wave, Body: p.Body,
-		Status: p.Status, Prepared: p.Prepared(),
+		Status: p.Status, Prepared: p.Prepared(), Customized: p.Customized,
 		Stale:        p.Status != "posted" && p.SourceFingerprint != outreach.Fingerprint(f),
 		Held:         (p.Status == "scheduled" || p.Status == "queued") && workshopStatus != "published",
 		ShortLinkKey: p.ShortLinkKey, ShortURL: p.ShortURL,
@@ -690,6 +692,9 @@ func (h *AdminOutreachHandler) postContext(w http.ResponseWriter, r *http.Reques
 type patchOutreachPostRequest struct {
 	Body       *string `json:"body"`
 	Regenerate *bool   `json:"regenerate"`
+	// Customized marks a hand edit so a shared-message save skips the post
+	// (#0582). Only valid with body.
+	Customized *bool `json:"customized"`
 }
 
 // PatchPost handles PATCH /admin/outreach-posts/{id}: exactly one of
@@ -714,6 +719,10 @@ func (h *AdminOutreachHandler) PatchPost(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "send exactly one of body or regenerate")
 		return
 	}
+	if regen && req.Customized != nil {
+		writeError(w, http.StatusBadRequest, "customized goes with body, not regenerate")
+		return
+	}
 	p, wk, ok := h.postContext(w, r, id)
 	if !ok {
 		return
@@ -729,7 +738,7 @@ func (h *AdminOutreachHandler) PatchPost(w http.ResponseWriter, r *http.Request)
 			body = strings.ReplaceAll(body, outreach.LinkToken, *p.ShortURL)
 		}
 		fp := outreach.Fingerprint(f)
-		updated, err = h.store.UpdatePostBody(r.Context(), id, body, &fp)
+		updated, err = h.store.UpdatePostBody(r.Context(), id, body, &fp, nil)
 	} else {
 		if strings.TrimSpace(*req.Body) == "" {
 			writeError(w, http.StatusBadRequest, "body cannot be empty")
@@ -739,7 +748,7 @@ func (h *AdminOutreachHandler) PatchPost(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusBadRequest, "body is too long")
 			return
 		}
-		updated, err = h.store.UpdatePostBody(r.Context(), id, *req.Body, nil)
+		updated, err = h.store.UpdatePostBody(r.Context(), id, *req.Body, nil, req.Customized)
 	}
 	switch {
 	case err == nil:
@@ -764,7 +773,7 @@ func (h *AdminOutreachHandler) PatchPost(w http.ResponseWriter, r *http.Request)
 			Action:     audit.ActionOutreachPostUpdated,
 			TargetType: audit.TargetOutreachPost,
 			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "regenerated": regen},
+			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "regenerated": regen, "customized": updated.Customized},
 			IP:         clientIP(r),
 		})
 	}

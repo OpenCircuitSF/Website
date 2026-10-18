@@ -576,7 +576,7 @@ func TestPublisher_OverLimitBodyFailsBeforeSending(t *testing.T) {
 	masto := newFakeMasto(t)
 	pub := newTestPublisher(t, s, nil, masto, "")
 	_, post := seedMastodon(t, s)
-	if _, err := s.UpdatePostBody(ctx, post.ID, strings.Repeat("x", 501), nil); err != nil {
+	if _, err := s.UpdatePostBody(ctx, post.ID, strings.Repeat("x", 501), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.QueueNow(ctx, post.ID); err != nil {
