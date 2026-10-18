@@ -75,12 +75,23 @@ func WaveByName(name string) (Wave, bool) {
 	return Wave{}, false
 }
 
+// DefaultPostHour is the Pacific hour suggested times use when none is set.
+const DefaultPostHour = 10
+
 // SuggestedAt is when a wave is suggested for a workshop starting at
 // startsAt: nil for a wave with no offset (announce) or an undated workshop.
-func SuggestedAt(w Wave, startsAt *time.Time) *time.Time {
+// It is hour:00 Pacific on the calendar day DaysBefore days before the
+// workshop's Pacific date, built with time.Date in the Pacific zone, so a
+// daylight-saving change in between never shifts it off that wall-clock hour
+// (#0574). An hour outside 0 to 23 falls back to DefaultPostHour.
+func SuggestedAt(w Wave, startsAt *time.Time, hour int) *time.Time {
 	if w.DaysBefore == 0 || startsAt == nil {
 		return nil
 	}
-	t := startsAt.AddDate(0, 0, -w.DaysBefore)
+	if hour < 0 || hour > 23 {
+		hour = DefaultPostHour
+	}
+	d := startsAt.In(pacific).AddDate(0, 0, -w.DaysBefore)
+	t := time.Date(d.Year(), d.Month(), d.Day(), hour, 0, 0, 0, pacific)
 	return &t
 }

@@ -83,6 +83,7 @@ type shortLinker interface {
 // behind RequireSession then RequireAdmin; the handler only reads the user
 // to attribute audit rows. All ShortLinks calls are server-side.
 type AdminOutreachHandler struct {
+	hourFn    func() int
 	store     outreachStore
 	locations outreachLocationStore
 	flyers    outreachFlyerStore
@@ -201,6 +202,18 @@ func writeShortLinksError(w http.ResponseWriter, op string, err error) {
 		slog.Default().Error("admin_outreach: ShortLinks request failed", "op", op, "err", err)
 		writeError(w, http.StatusBadGateway, "ShortLinks request failed")
 	}
+}
+
+// SetPostHour sets the source of the Pacific hour suggested times use; unset,
+// it is outreach.DefaultPostHour. Read on every request so a Settings save
+// applies at once (#0574).
+func (h *AdminOutreachHandler) SetPostHour(fn func() int) { h.hourFn = fn }
+
+func (h *AdminOutreachHandler) postHour() int {
+	if h.hourFn == nil {
+		return outreach.DefaultPostHour
+	}
+	return h.hourFn()
 }
 
 func outreachFacts(wk workshops.Workshop) outreach.Facts {
@@ -334,7 +347,7 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 	}
 	for _, w := range outreach.Waves() {
 		wv := outreachWaveView{Name: w.Name, Label: w.Label}
-		wv.SuggestedAt = rfc3339(outreach.SuggestedAt(w, wk.StartsAt))
+		wv.SuggestedAt = rfc3339(outreach.SuggestedAt(w, wk.StartsAt, h.postHour()))
 		v.Waves = append(v.Waves, wv)
 	}
 	if o != nil {

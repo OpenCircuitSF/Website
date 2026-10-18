@@ -16,12 +16,19 @@
     plan: OutreachScheduleAllResult;
     inFlight: boolean;
     errorMessage: string | null;
-    onConfirm: () => void;
+    onConfirm: (postIds: number[]) => void;
     onClose: () => void;
   }
   let { plan, inFlight, errorMessage, onConfirm, onClose }: Props = $props();
 
   let dialogEl = $state<HTMLDivElement | null>(null);
+
+  /** Reminder and Last call are opt-in (#0574): unchecked until the admin picks them. */
+  const optional = $derived(
+    [...new Map(plan.to_schedule.filter((i) => i.wave !== 'announce').map((i) => [i.wave, i.wave_label])).entries()],
+  );
+  let included = $state<Record<string, boolean>>({});
+  const chosen = $derived(plan.to_schedule.filter((i) => i.wave === 'announce' || included[i.wave] === true));
 
   $effect(() => {
     void tick().then(() => dialogEl?.focus());
@@ -49,9 +56,17 @@
     {#if plan.to_schedule.length === 0}
       <p class="text-muted">Nothing can be scheduled right now.</p>
     {:else}
+      {#if optional.length > 0}
+        <fieldset class="waves">
+          <legend class="text-muted">Include</legend>
+          {#each optional as [wave, label] (wave)}
+            <label><input type="checkbox" bind:checked={included[wave]} disabled={inFlight} /> {label}</label>
+          {/each}
+        </fieldset>
+      {/if}
       <ul>
         {#each plan.to_schedule as item (item.post_id)}
-          <li>{item.channel_label} · {item.wave_label} — {formatDateTime(item.scheduled_at)}</li>
+          <li class:muted={item.wave !== 'announce' && !included[item.wave]}>{item.channel_label} · {item.wave_label} — {formatDateTime(item.scheduled_at)}</li>
         {/each}
       </ul>
     {/if}
@@ -72,8 +87,8 @@
     {/if}
 
     <div class="row">
-      <Button variant="primary" onclick={onConfirm} disabled={inFlight || plan.to_schedule.length === 0}>
-        {inFlight ? 'Scheduling…' : `Schedule ${plan.to_schedule.length} ${plan.to_schedule.length === 1 ? 'post' : 'posts'}`}
+      <Button variant="primary" onclick={() => onConfirm(chosen.map((i) => i.post_id))} disabled={inFlight || chosen.length === 0}>
+        {inFlight ? 'Scheduling…' : `Schedule ${chosen.length} ${chosen.length === 1 ? 'post' : 'posts'}`}
       </Button>
       <Button onclick={onClose} disabled={inFlight}>Cancel</Button>
     </div>
@@ -105,6 +120,16 @@
     font-size: var(--fs-lg);
     font-weight: 600;
     margin: 0 0 var(--space-4);
+  }
+  .waves {
+    border: 0;
+    padding: 0;
+    margin: 0 0 var(--space-2);
+    display: flex;
+    gap: var(--space-3);
+  }
+  li.muted {
+    opacity: 0.6;
   }
   h3 {
     font-size: var(--fs-base);

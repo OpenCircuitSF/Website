@@ -20,6 +20,8 @@
   }
   let { workshopId, view, onDone }: Props = $props();
 
+  /** Reminder and Last call are opt-in (#0574). */
+  let extraWaves = $state<Record<string, boolean>>({ reminder: false, 'last-call': false });
   let busy = $state(false);
   let status = $state('');
   let errorText = $state('');
@@ -38,7 +40,8 @@
     status = '';
     errorText = '';
     try {
-      const r = await draftAllOutreach(workshopId);
+      const picked = Object.keys(extraWaves).filter((w) => extraWaves[w]);
+      const r = await draftAllOutreach(workshopId, picked);
       status = draftAllMessage(r);
       onDone();
     } catch (err) {
@@ -67,12 +70,12 @@
     dialogError = null;
   }
 
-  async function confirm(): Promise<void> {
+  async function confirm(postIds: number[]): Promise<void> {
     if (!plan) return;
     confirming = true;
     dialogError = null;
     try {
-      const r = await scheduleAllOutreach(workshopId, { dry_run: false, post_ids: plan.to_schedule.map((i) => i.post_id) });
+      const r = await scheduleAllOutreach(workshopId, { dry_run: false, post_ids: postIds });
       plan = null;
       status = scheduleAllMessage(r);
       onDone();
@@ -89,7 +92,12 @@
     <Button onclick={draftAll} disabled={busy}>Draft all</Button>
     <Button onclick={preview} disabled={busy || !gate.ok}>Schedule all</Button>
   </div>
-  <p class="text-muted">Draft all writes a post for every empty slot and never changes an existing one. Schedule all shows a preview of the automatic posts it would schedule, then asks you to confirm.</p>
+  <fieldset class="waves">
+    <legend class="text-muted">Also draft</legend>
+    <label><input type="checkbox" bind:checked={extraWaves.reminder} disabled={busy} /> Reminder</label>
+    <label><input type="checkbox" bind:checked={extraWaves['last-call']} disabled={busy} /> Last call</label>
+  </fieldset>
+  <p class="text-muted">Draft all writes the Announce post for every channel, and the Reminder and Last call posts you tick, and never changes an existing post. Schedule all shows a preview of the automatic posts it would schedule, then asks you to confirm.</p>
   {#if !gate.ok && gate.reason}
     <p class="text-muted">
       {gate.reason}
@@ -109,6 +117,14 @@
 {/if}
 
 <style>
+  .waves {
+    border: 0;
+    padding: 0;
+    margin: var(--space-2) 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
   [role='status']:empty,
   [role='alert']:empty {
     display: none;

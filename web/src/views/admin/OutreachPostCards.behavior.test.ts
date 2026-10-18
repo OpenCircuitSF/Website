@@ -139,7 +139,7 @@ describe('post cards (#0569)', () => {
 
   it('shows the summary line', async () => {
     setup([post({ id: 1 }), post({ id: 2, wave: 'reminder', status: 'scheduled', scheduled_at: '2026-11-30T20:00:00Z' })]);
-    expect(await screen.findByText('2 posts drafted · 1 scheduled · 0 posted')).toBeTruthy();
+    expect(await screen.findByText('Drafted: Announce 1, Reminder 1 · 1 scheduled · 0 posted')).toBeTruthy();
   });
 });
 

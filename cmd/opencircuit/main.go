@@ -378,6 +378,7 @@ func servePostgres(cfg *config.Config) error {
 			adminOutreachH.ResetShortLinks()
 		}
 	})
+	adminOutreachH.SetPostHour(serverSettings.OutreachPostHour)
 	adminOutreachH.SetConnections(handlers.NewAdminOutreachConnectionsHandler(conns, auditLogger))
 
 	// Admin image upload (#0433, reopening #0153): constructed

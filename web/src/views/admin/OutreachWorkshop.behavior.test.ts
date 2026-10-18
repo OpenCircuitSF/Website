@@ -73,7 +73,7 @@ describe('OutreachWorkshop', () => {
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started' } as OutreachResults);
     getWorkshopOutreachLinks.mockResolvedValue(links);
     render(OutreachWorkshop, { workshopId: 5 });
-    const summary = await screen.findByText(/posts? drafted/);
+    const summary = await screen.findByText(/Drafted: |Nothing drafted/);
     const bulk = await screen.findByRole('button', { name: 'Draft all' });
     const posts = await screen.findByRole('heading', { name: 'Posts' });
     const tracked = await screen.findByText(/Tracked links \(/);

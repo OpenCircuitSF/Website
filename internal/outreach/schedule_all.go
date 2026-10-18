@@ -26,10 +26,14 @@ type ScheduleSkip struct {
 // never listed. Posts whose status is not "draft" (scheduled, queued, posted,
 // failed) are not listed either: they are not unscheduled, unposted drafts.
 func PlanScheduleAll(posts []Post, startsAt *time.Time, now time.Time,
-	minLead, maxLead time.Duration, configured func(channel string) bool) ([]ScheduleItem, []ScheduleSkip) {
+	minLead, maxLead time.Duration, postHour int, configured func(channel string) bool) ([]ScheduleItem, []ScheduleSkip) {
 	bySlot := map[[2]string]Post{}
 	for _, p := range posts {
 		bySlot[[2]string{p.Channel, p.Wave}] = p
+	}
+	waveDrafted := map[string]bool{}
+	for _, p := range posts {
+		waveDrafted[p.Wave] = true
 	}
 	var items []ScheduleItem
 	var skips []ScheduleSkip
@@ -40,13 +44,18 @@ func PlanScheduleAll(posts []Post, startsAt *time.Time, now time.Time,
 		for _, wv := range Waves() {
 			p, ok := bySlot[[2]string{ch.Name, wv.Name}]
 			if !ok {
+				// Reminder and Last call are opt-in (#0574): a wave nobody
+				// drafted is not a gap worth listing.
+				if wv.DaysBefore > 0 && !waveDrafted[wv.Name] {
+					continue
+				}
 				skips = append(skips, ScheduleSkip{Channel: ch.Name, Wave: wv.Name, Reason: "not_drafted"})
 				continue
 			}
 			if p.Status != "draft" {
 				continue
 			}
-			at := SuggestedAt(wv, startsAt)
+			at := SuggestedAt(wv, startsAt, postHour)
 			skip := func(reason string) {
 				id := p.ID
 				skips = append(skips, ScheduleSkip{PostID: &id, Channel: ch.Name, Wave: wv.Name, Reason: reason, SuggestedAt: at})

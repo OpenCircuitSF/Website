@@ -35,6 +35,8 @@ describe('statusLine', () => {
     expect(posted.href).toBe('https://bsky.app/p/1');
     const sched = statusLine(post({ status: 'scheduled', scheduled_at: '2026-10-17T20:00:00Z' }), auto);
     expect(sched.text).toMatch(/^Posts automatically /);
+    expect(sched.text).toMatch(/Oct/); // the date, not just the weekday (#0574)
+    expect(sched.text).toMatch(/17/);
     expect(statusLine(post(), auto).text).toBe('Not scheduled');
     expect(statusLine(post({ status: 'manual' }), manual).text).toBe('Post by hand: copy and paste');
     expect(statusLine(post(), manual).text).toBe('Post by hand: copy and paste');
@@ -77,10 +79,15 @@ describe('summaryLine', () => {
   it('counts drafts, scheduled, posted, clicks', () => {
     const results = { status: 'ok', totals: { clicks: 3, excluded_bot_clicks: 0, unmatched_clicks: 0, flyer_clicks: 0 } } as OutreachResults;
     expect(summaryLine({ posts: [post(), post({ id: 2, status: 'scheduled' }), post({ id: 3, status: 'posted' })] }, results)).toBe(
-      '3 posts drafted · 1 scheduled · 1 posted · 3 clicks',
+      'Drafted: announce 3 · 1 scheduled · 1 posted · 3 clicks',
     );
   });
   it('omits clicks without real results', () => {
-    expect(summaryLine({ posts: [post()] }, null)).toBe('1 post drafted · 0 scheduled · 0 posted');
+    expect(summaryLine({ posts: [post()] }, null)).toBe('Drafted: announce 1 · 0 scheduled · 0 posted');
+    expect(summaryLine({ posts: [] }, null)).toBe('Nothing drafted yet · 0 scheduled · 0 posted');
+  });
+  it('reports posts per wave that exist, never a fifteen-post headline', () => {
+    const waves = [{ name: 'announce', label: 'Announce', suggested_at: null }, { name: 'reminder', label: 'Reminder', suggested_at: null }, { name: 'last-call', label: 'Last call', suggested_at: null }];
+    expect(summaryLine({ waves, posts: [post(), post({ id: 2, channel: 'mastodon' }), post({ id: 3, wave: 'reminder' })] }, null)).toBe('Drafted: Announce 2, Reminder 1 · 0 scheduled · 0 posted');
   });
 });

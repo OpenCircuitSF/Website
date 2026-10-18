@@ -1310,8 +1310,11 @@ export function createWorkshopOutreachLinks(workshopId: number): Promise<Outreac
 }
 
 /** POST /admin/workshops/{id}/outreach/draft-all — draft every empty cell; never overwrites a post. */
-export function draftAllOutreach(workshopId: number): Promise<OutreachDraftAllResult> {
-  return apiPost<OutreachDraftAllResult>(`/admin/workshops/${workshopId}/outreach/draft-all`);
+export function draftAllOutreach(workshopId: number, waves: string[] = []): Promise<OutreachDraftAllResult> {
+  // Announce is always drafted; `waves` adds the optional Reminder / Last call (#0574).
+  return waves.length === 0
+    ? apiPost<OutreachDraftAllResult>(`/admin/workshops/${workshopId}/outreach/draft-all`)
+    : apiPost<OutreachDraftAllResult>(`/admin/workshops/${workshopId}/outreach/draft-all`, { waves });
 }
 
 /** POST /admin/workshops/{id}/outreach/schedule-all — preview (`dry_run`) or confirm the previewed ids. */

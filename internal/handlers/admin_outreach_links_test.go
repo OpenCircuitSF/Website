@@ -442,8 +442,9 @@ func TestAdminOutreachLinks_PrepareAndCreatePostUseTheRow(t *testing.T) {
 
 type testDraftAll struct {
 	Created []struct {
-		PostID  int64 `json:"post_id"`
-		HasLink bool  `json:"has_link"`
+		PostID  int64  `json:"post_id"`
+		Wave    string `json:"wave"`
+		HasLink bool   `json:"has_link"`
 	} `json:"created"`
 	Skipped     int `json:"skipped"`
 	WithoutLink int `json:"without_link"`
@@ -466,8 +467,16 @@ func TestAdminOutreachLinks_DraftAll(t *testing.T) {
 		t.Fatalf("draft-all = %d (%s)", code, b)
 	}
 	d := decodeOutreach[testDraftAll](t, b)
-	if len(d.Created) != 14 || d.Skipped != 1 || d.WithoutLink != 0 {
+	if len(d.Created) != 4 || d.Skipped != 1 || d.WithoutLink != 0 { // Announce only by default (#0574)
 		t.Fatalf("draft-all = %+v", d)
+	}
+	for _, c := range d.Created {
+		if c.Wave != "announce" {
+			t.Errorf("default draft-all drafted %s", c.Wave)
+		}
+	}
+	if code, _ := e.do(t, http.MethodPost, e.linksPath(w, "draft-all"), `{"waves":["nonsense"]}`); code != http.StatusBadRequest {
+		t.Errorf("unknown wave = %d, want 400", code)
 	}
 	for _, c := range d.Created {
 		if !c.HasLink {
@@ -484,14 +493,19 @@ func TestAdminOutreachLinks_DraftAll(t *testing.T) {
 	}
 	_, b = e.do(t, http.MethodPost, e.linksPath(w, "draft-all"), "")
 	d = decodeOutreach[testDraftAll](t, b)
-	if len(d.Created) != 0 || d.Skipped != 15 {
-		t.Errorf("second run = %+v, want 0 created and 15 skipped", d)
+	if len(d.Created) != 0 || d.Skipped != 5 {
+		t.Errorf("second run = %+v, want 0 created and 5 skipped", d)
+	}
+	_, b = e.do(t, http.MethodPost, e.linksPath(w, "draft-all"), `{"waves":["reminder","last-call"]}`)
+	d = decodeOutreach[testDraftAll](t, b)
+	if len(d.Created) != 10 || d.Skipped != 5 {
+		t.Errorf("with the optional waves = %+v, want 10 created and 5 skipped", d)
 	}
 
 	// Without links: drafted with the placeholder, counted.
 	w2 := seedOutreachWorkshop(t, e.pool, e.ws, "published")
 	o2 := e.start(t, w2).Outreach
-	_, b = e.do(t, http.MethodPost, e.linksPath(w2, "draft-all"), "")
+	_, b = e.do(t, http.MethodPost, e.linksPath(w2, "draft-all"), `{"waves":["reminder","last-call"]}`)
 	d = decodeOutreach[testDraftAll](t, b)
 	if len(d.Created) != 15 || d.WithoutLink != 15 {
 		t.Fatalf("bare draft-all = %+v", d)
@@ -527,7 +541,7 @@ func TestAdminOutreachLinks_ScheduleAll(t *testing.T) {
 	e.h.now = func() time.Time { return starts.AddDate(0, 0, -3) } // reminder passed, last call ahead
 	p := e.startHTTP(t, w)
 	oid := p.Outreach.ID
-	if code, b := e.do(t, http.MethodPost, e.linksPath(w, "draft-all"), ""); code != http.StatusOK {
+	if code, b := e.do(t, http.MethodPost, e.linksPath(w, "draft-all"), `{"waves":["reminder","last-call"]}`); code != http.StatusOK {
 		t.Fatalf("draft-all = %d (%s)", code, b)
 	}
 	statuses := func() map[string]string {
@@ -551,7 +565,9 @@ func TestAdminOutreachLinks_ScheduleAll(t *testing.T) {
 		t.Fatalf("dry run = %d (%s)", code, b)
 	}
 	d := decodeOutreach[testScheduleAll](t, b)
-	wantAt := starts.AddDate(0, 0, -1).UTC().Format(time.RFC3339)
+	la, _ := time.LoadLocation("America/Los_Angeles")
+	day := starts.In(la).AddDate(0, 0, -1)
+	wantAt := time.Date(day.Year(), day.Month(), day.Day(), 10, 0, 0, 0, la).UTC().Format(time.RFC3339) // 10:00 Pacific (#0574)
 	if !d.DryRun || len(d.ToSchedule) != 1 || d.ToSchedule[0].Channel != "bluesky" || d.ToSchedule[0].Wave != "last-call" || d.ToSchedule[0].ScheduledAt != wantAt {
 		t.Fatalf("to_schedule = %+v, want only bluesky last-call at %s", d.ToSchedule, wantAt)
 	}

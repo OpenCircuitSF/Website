@@ -4,15 +4,15 @@
 // jsdom with '../../lib/api' mocked. jsdom is not a browser (AGENTS.md §1):
 // focus order and layout are approximations; this proves the calls, the
 // preview-then-confirm contract and Escape handling.
-import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
+import { render, cleanup, waitFor, screen, fireEvent, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OutreachDraftAllResult, OutreachScheduleAllResult, WorkshopOutreach } from '../../lib/types';
 
 type ScheduleBody = { dry_run: true } | { dry_run: false; post_ids: number[] };
-const draftAllOutreach = vi.fn<(id: number) => Promise<OutreachDraftAllResult>>();
+const draftAllOutreach = vi.fn<(id: number, waves?: string[]) => Promise<OutreachDraftAllResult>>();
 const scheduleAllOutreach = vi.fn<(id: number, body: ScheduleBody) => Promise<OutreachScheduleAllResult>>();
 vi.mock('../../lib/api', () => ({
-  draftAllOutreach: (id: number) => draftAllOutreach(id),
+  draftAllOutreach: (id: number, waves?: string[]) => draftAllOutreach(id, waves),
   scheduleAllOutreach: (id: number, body: ScheduleBody) => scheduleAllOutreach(id, body),
   ApiError: class ApiError extends Error {
     status: number;
@@ -58,8 +58,20 @@ describe('OutreachBulkActions', () => {
     render(OutreachBulkActions, { workshopId: 5, view: wo(), onDone });
     await fireEvent.click(screen.getByRole('button', { name: 'Draft all' }));
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
-    expect(draftAllOutreach).toHaveBeenCalledWith(5);
+    expect(draftAllOutreach).toHaveBeenCalledWith(5, []); // Announce only by default (#0574)
     expect(screen.getByRole('status').textContent).toBe('Drafted 1 post; 14 existing posts were left alone.');
+  });
+
+  it('Reminder and Last call are unchecked checkboxes next to Draft all and are sent when ticked', async () => {
+    draftAllOutreach.mockResolvedValue({ created: [], skipped: 0, without_link: 0 });
+    render(OutreachBulkActions, { workshopId: 5, view: wo(), onDone: vi.fn() });
+    const reminder = screen.getByRole('checkbox', { name: 'Reminder' }) as HTMLInputElement;
+    const last = screen.getByRole('checkbox', { name: 'Last call' }) as HTMLInputElement;
+    expect(reminder.checked).toBe(false);
+    expect(last.checked).toBe(false);
+    await fireEvent.click(reminder);
+    await fireEvent.click(screen.getByRole('button', { name: 'Draft all' }));
+    await waitFor(() => expect(draftAllOutreach).toHaveBeenCalledWith(5, ['reminder']));
   });
 
   it('Schedule all previews, lists scheduled and skipped, and Cancel sends nothing', async () => {
@@ -82,6 +94,9 @@ describe('OutreachBulkActions', () => {
     const onDone = vi.fn();
     render(OutreachBulkActions, { workshopId: 5, view: wo(), onDone });
     await fireEvent.click(screen.getByRole('button', { name: 'Schedule all' }));
+    // Last call is opt-in: nothing is schedulable until it is ticked.
+    expect((await screen.findByRole('button', { name: 'Schedule 0 posts' }) as HTMLButtonElement).disabled).toBe(true);
+    await fireEvent.click(within(screen.getByRole('dialog')).getByRole('checkbox', { name: 'Last call' }));
     await fireEvent.click(await screen.findByRole('button', { name: 'Schedule 1 post' }));
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
     expect(scheduleAllOutreach).toHaveBeenLastCalledWith(5, { dry_run: false, post_ids: [11] });

@@ -40,11 +40,12 @@ export interface StatusLine {
   href: string | null;
 }
 
-/** "Sat 6:00 PM" in the viewer's zone. */
+/** "Mon, Oct 12, 10:00 AM" in the viewer's zone: weekday and date, since a
+ * scheduled time can be weeks out (#0574). */
 export function weekdayTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, { weekday: 'long', hour: 'numeric', minute: '2-digit' });
+  return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 /** The one plain-English status line for a card. */
@@ -102,12 +103,17 @@ export function cardButtons(post: OutreachPost | null, channel: OutreachChannel,
   };
 }
 
-/** "15 posts drafted · 0 scheduled · 0 posted · 0 clicks". Clicks are shown only when real. */
-export function summaryLine(view: Pick<WorkshopOutreach, 'posts'>, results: OutreachResults | null): string {
+/** "Drafted: Announce 5, Reminder 2 · 0 scheduled · 0 posted · 0 clicks". Waves with no posts are left out; clicks are shown only when real. */
+export function summaryLine(view: Pick<WorkshopOutreach, 'posts'> & { waves?: OutreachWave[] }, results: OutreachResults | null): string {
   const n = (s: string) => view.posts.filter((p) => p.status === s).length;
-  const drafted = view.posts.length;
+  const perWave: string[] = [];
+  const names = [...new Set([...(view.waves ?? []).map((w) => w.name), ...view.posts.map((p) => p.wave)])];
+  for (const name of names) {
+    const count = view.posts.filter((p) => p.wave === name).length;
+    if (count > 0) perWave.push(`${view.waves?.find((w) => w.name === name)?.label ?? name} ${count}`);
+  }
   const parts = [
-    `${drafted} ${drafted === 1 ? 'post' : 'posts'} drafted`,
+    perWave.length > 0 ? `Drafted: ${perWave.join(', ')}` : 'Nothing drafted yet',
     `${n('scheduled')} scheduled`,
     `${n('posted')} posted`,
   ];

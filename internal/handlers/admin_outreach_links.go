@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -469,6 +472,11 @@ func (h *AdminOutreachHandler) CreateLinks(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, v)
 }
 
+type draftAllRequest struct {
+	// Waves lists the optional waves to draft besides Announce.
+	Waves []string `json:"waves"`
+}
+
 type draftAllCreated struct {
 	PostID  int64  `json:"post_id"`
 	Channel string `json:"channel"`
@@ -519,10 +527,33 @@ func (h *AdminOutreachHandler) DraftAll(w http.ResponseWriter, r *http.Request) 
 	for _, l := range links {
 		linkBySlot[[2]string{l.Channel, l.Wave}] = l
 	}
+	// Announce is always drafted; Reminder and Last call only when asked for
+	// (#0574), so a default Draft all makes a post per channel, not fifteen.
+	var req draftAllRequest
+	if raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	} else if len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	wantWave := map[string]bool{"announce": true}
+	for _, name := range req.Waves {
+		if _, ok := outreach.WaveByName(name); !ok {
+			writeError(w, http.StatusBadRequest, "unknown wave")
+			return
+		}
+		wantWave[name] = true
+	}
 	f := outreachFacts(wk)
 	rep := draftAllReport{Created: []draftAllCreated{}}
 	for _, ch := range outreach.Channels() {
 		for _, wv := range outreach.Waves() {
+			if !wantWave[wv.Name] {
+				continue
+			}
 			slot := [2]string{ch.Name, wv.Name}
 			if have[slot] {
 				rep.Skipped++
@@ -643,7 +674,7 @@ func (h *AdminOutreachHandler) ScheduleAll(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	items, skips := outreach.PlanScheduleAll(posts, wk.StartsAt, h.now(), minScheduleLead, maxScheduleLead, h.channelConfigured)
+	items, skips := outreach.PlanScheduleAll(posts, wk.StartsAt, h.now(), minScheduleLead, maxScheduleLead, h.postHour(), h.channelConfigured)
 
 	resp := scheduleAllResponse{DryRun: req.DryRun, ToSchedule: []scheduleAllItemView{}, Skipped: []scheduleAllSkipView{}}
 	itemView := func(it outreach.ScheduleItem) scheduleAllItemView {
