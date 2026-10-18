@@ -9,6 +9,7 @@ import type { OutreachLinksView, OutreachPost, OutreachResults, WorkshopOutreach
 
 const getWorkshopOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const sendOutreachPost = vi.fn();
+const updateOutreachPost = vi.fn();
 vi.mock('../../lib/api', () => ({
   getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
   startOutreach: vi.fn(),
@@ -24,7 +25,7 @@ vi.mock('../../lib/api', () => ({
   sendOutreachPost: (id: number) => sendOutreachPost(id),
   unscheduleOutreachPost: vi.fn(),
   markOutreachPosted: vi.fn(),
-  updateOutreachPost: vi.fn(),
+  updateOutreachPost: (id: number, b: unknown) => updateOutreachPost(id, b),
   prepareOutreachPost: vi.fn(),
   scheduleOutreachPost: vi.fn(),
   deleteOutreachPost: vi.fn(),
@@ -113,6 +114,50 @@ describe('post cards (#0569)', () => {
     const card = screen.getByRole('article', { name: 'Bluesky Announce' });
     expect(card.querySelector('textarea')).toBeTruthy();
     expect(card.textContent).toMatch(/\/ 300 characters/);
+  });
+
+  it('Edit replaces the card display with the composer; Cancel restores it (#0579)', async () => {
+    setup([post({ id: 1 })]);
+    await screen.findByText('Not scheduled');
+    const card = () => screen.getByRole('article', { name: 'Bluesky Announce' });
+    expect(card().querySelector('pre.body')).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(card().querySelector('pre.body')).toBeNull();
+    expect(card().textContent).not.toContain('Not scheduled');
+    expect(card().querySelector('textarea')).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(card().querySelector('textarea')).toBeNull();
+    expect(card().querySelector('pre.body')).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Edit' })));
+  });
+
+  it('Save returns to display mode showing the new text (#0579)', async () => {
+    setup([post({ id: 1 })]);
+    await screen.findByText('Not scheduled');
+    updateOutreachPost.mockResolvedValue(post({ id: 1, body: 'Brand new words' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await fireEvent.input(screen.getByLabelText('Post text'), { target: { value: 'Brand new words' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.getByRole('article', { name: 'Bluesky Announce' }).querySelector('textarea')).toBeNull());
+    expect(screen.getByText('Brand new words')).toBeTruthy();
+  });
+
+  it('opening a second card closes the first, asking first when edits are unsaved (#0579)', async () => {
+    setup([post({ id: 1 }), post({ id: 2, wave: 'reminder', body: 'Second post' })]);
+    await screen.findAllByText('Not scheduled');
+    const edits = () => screen.getAllByRole('button', { name: 'Edit' });
+    await fireEvent.click(edits()[0]);
+    await fireEvent.input(screen.getByLabelText('Post text'), { target: { value: 'dirty' } });
+    const confirmFn = vi.fn(() => false);
+    vi.stubGlobal('confirm', confirmFn);
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+    expect(confirmFn).toHaveBeenCalled();
+    expect(document.querySelectorAll('textarea').length).toBe(1);
+    expect((screen.getByLabelText('Post text') as HTMLTextAreaElement).value).toBe('dirty');
+    confirmFn.mockReturnValue(true);
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+    expect(document.querySelectorAll('textarea').length).toBe(1);
+    expect((screen.getByLabelText('Post text') as HTMLTextAreaElement).value).toBe('Second post');
   });
 
   it('Post now asks for confirmation and does not send when declined', async () => {

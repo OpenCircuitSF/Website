@@ -42,8 +42,12 @@
     available: boolean;
     onChange: (post: OutreachPost) => void;
     onDeleted: () => void;
+    /** When set (the post cards), the composer replaces the card's display (#0579): Save and Cancel call it to return to display mode. */
+    onClose?: () => void;
+    /** Reports whether the text has unsaved edits, so the card list can ask before discarding them. */
+    onDirtyChange?: (dirty: boolean) => void;
   }
-  let { post, channel, wave, available, onChange, onDeleted }: Props = $props();
+  let { post, channel, wave, available, onChange, onDeleted, onClose, onDirtyChange }: Props = $props();
 
   // svelte-ignore state_referenced_locally
   let body = $state(post.body);
@@ -82,6 +86,19 @@
   const counted = $derived(countCharacters(channel, body, post.prepared));
   const over = $derived(isOverLimit(channel, counted.count));
   const dirty = $derived(body !== post.body);
+  $effect(() => {
+    const d = dirty;
+    untrack(() => onDirtyChange?.(d));
+    return () => untrack(() => onDirtyChange?.(false));
+  });
+  let textarea = $state<HTMLTextAreaElement | undefined>();
+  $effect(() => {
+    if (onClose && textarea && !textarea.disabled) untrack(() => textarea?.focus());
+  });
+  function cancel(): void {
+    if (dirty && !confirm('Discard your unsaved changes?')) return;
+    onClose?.();
+  }
 
   function message(err: unknown, fallback: string): string {
     return err instanceof ApiError ? err.message : fallback;
@@ -104,6 +121,7 @@
     run('save', async () => {
       onChange(await updateOutreachPost(post.id, { body }));
       notice = 'Saved.';
+      onClose?.();
     });
   const regenerate = () =>
     run('regenerate', async () => {
@@ -172,7 +190,7 @@
 
   <label class="field">
     <span class="field-label">Post text</span>
-    <textarea rows="7" bind:value={body} disabled={locked}></textarea>
+    <textarea rows="7" bind:value={body} bind:this={textarea} disabled={locked}></textarea>
   </label>
   <p class={over ? 'text-error' : 'text-muted'}>
     {counted.exact ? '' : '≈ '}{counted.count}{channel.char_limit > 0 ? ` / ${channel.char_limit}` : ''} characters{over ? ' — over the limit' : ''}
@@ -258,6 +276,9 @@
     {/if}
     {#if actions.canDelete}
       <Button variant="danger" onclick={remove} disabled={busy}>Delete</Button>
+    {/if}
+    {#if onClose}
+      <Button onclick={cancel}>Cancel</Button>
     {/if}
   </div>
   {#if dirty && !locked}

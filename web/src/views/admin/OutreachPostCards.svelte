@@ -7,6 +7,7 @@
   always-rendered role="status" / role="alert" elements.
 -->
 <script lang="ts">
+  import { tick } from 'svelte';
   import {
     createOutreachPost,
     sendOutreachPost,
@@ -96,8 +97,17 @@
   /** TikTok and YouTube need a video, so their cards sit under Video channels. */
   const isVideo = (c: PostCard): boolean => c.channel.utm_medium === 'video';
 
-  function toggleEdit(p: OutreachPost): void {
-    editingId = editingId === p.id ? null : p.id;
+  let editorDirty = false;
+
+  /** Open the composer in place of this card's display; one card edits at a time (#0579). */
+  function openEditor(p: OutreachPost): void {
+    if (editingId !== null && editingId !== p.id && editorDirty && !confirm('Discard your unsaved changes?')) return;
+    editingId = p.id;
+  }
+  /** Back to display mode, with focus returned to the card's Edit button. */
+  function closeEditor(id: number): void {
+    if (editingId === id) editingId = null;
+    void tick().then(() => document.querySelector<HTMLElement>(`[data-edit-for="${id}"]`)?.focus());
   }
   function deleted(): void {
     editingId = null;
@@ -114,6 +124,20 @@
     {@const counted = p ? countCharacters(c.channel, p.body, p.prepared) : null}
       <article class="card" aria-label="{c.channel.label} {wave.label}">
         <h5 class="card-title">{c.channel.label} &middot; {wave.label}{p?.stale ? ' (stale)' : ''}</h5>
+        {#if p && editingId === p.id}
+          {#key p.id}
+            <OutreachComposer
+              post={p}
+              channel={c.channel}
+              wave={c.wave}
+              available={view.available}
+              {onChange}
+              onDeleted={deleted}
+              onClose={() => closeEditor(p.id)}
+              onDirtyChange={(d) => (editorDirty = d)}
+            />
+          {/key}
+        {:else}
         {#if p}
           <pre class="body">{p.body}</pre>
           {#if counted}
@@ -147,7 +171,7 @@
               <Button variant="primary" onclick={() => postNow(c, p)} disabled={busyKey !== null}>Retry</Button>
             {/if}
             {#if btn.schedule}
-              <Button onclick={() => (editingId = p.id)} disabled={busyKey !== null}>Schedule…</Button>
+              <Button onclick={() => openEditor(p)} disabled={busyKey !== null}>Schedule…</Button>
             {/if}
             {#if btn.unschedule}
               <Button onclick={() => unschedule(p)} disabled={busyKey !== null}>Unschedule</Button>
@@ -162,14 +186,10 @@
               <Button onclick={() => markPosted(c, p)} disabled={busyKey !== null}>Mark posted</Button>
             {/if}
             {#if btn.edit}
-              <Button onclick={() => toggleEdit(p)}>{editingId === p.id ? 'Close editor' : 'Edit'}</Button>
+              <Button onclick={() => openEditor(p)} data-edit-for={p.id}>Edit</Button>
             {/if}
           {/if}
         </div>
-        {#if p && editingId === p.id}
-          {#key p.id}
-            <OutreachComposer post={p} channel={c.channel} wave={c.wave} available={view.available} {onChange} onDeleted={deleted} />
-          {/key}
         {/if}
       </article>
   {/snippet}
