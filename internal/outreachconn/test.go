@@ -116,7 +116,9 @@ func mastodonTestError(err error) string {
 }
 
 // rememberMastodonAccount caches "@user@host" for Account. Mastodon reports a
-// local account without its host, so the instance host is appended.
+// local account without its host, so the instance host is appended. A result
+// fetched under a config that is no longer current is discarded (#0597): a
+// slow lookup for a replaced token must not overwrite the newer one's answer.
 func (m *Manager) rememberMastodonAccount(v map[string]string, acct string) {
 	acct = strings.TrimPrefix(acct, "@")
 	if !strings.Contains(acct, "@") {
@@ -127,5 +129,8 @@ func (m *Manager) rememberMastodonAccount(v map[string]string, acct string) {
 		acct += "@" + u.Host
 	}
 	key := strings.Join([]string{v[KeyMastodonBaseURL], v[KeyMastodonToken]}, "\x00")
+	if key != m.cur.Load().maKey {
+		return
+	}
 	m.maAcct.Store(&maAccount{key: key, acct: "@" + acct})
 }

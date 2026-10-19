@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -178,13 +179,14 @@ func TestTestUsesAFreshClient(t *testing.T) {
 // survives a restart without a manual Test; a failed fetch keeps the bare
 // host and logs the group name only.
 func TestMastodonAccountFetchedOnReload(t *testing.T) {
-	status := 200
+	var status atomic.Int32 // the handler goroutine reads it; a socket is no happens-before edge
+	status.Store(200)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+tokenCanary {
 			w.WriteHeader(401)
 			return
 		}
-		w.WriteHeader(status)
+		w.WriteHeader(int(status.Load()))
 		w.Write([]byte(`{"acct":"opencircuit","url":"https://m.example/@opencircuit"}`))
 	}))
 	defer srv.Close()
@@ -198,9 +200,10 @@ func TestMastodonAccountFetchedOnReload(t *testing.T) {
 	}
 
 	// A failing instance falls back to the host; the log has no token.
-	status = 500
+	status.Store(500)
 	var logs strings.Builder
 	m2 := NewManager(newFakeStore(nil), env, slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(m2.lookups.Wait)
 	if err := m2.Reload(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -210,5 +213,45 @@ func TestMastodonAccountFetchedOnReload(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "account lookup failed") || strings.Contains(logs.String(), tokenCanary) {
 		t.Errorf("log = %q, want the failure named and no token", logs.String())
+	}
+}
+
+// #0597: a slow lookup for a replaced token must not overwrite the answer the
+// newer token's lookup already cached. No network: the lookup is stubbed.
+func TestStaleMastodonAccountLookupIsDiscarded(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler()) // a loopback URL mastodon.New accepts; never called
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	m := NewManager(newFakeStore(nil), map[string]string{KeyMastodonBaseURL: srv.URL, KeyMastodonToken: "tok-a-fake"}, quietLog())
+	t.Cleanup(m.lookups.Wait)
+	entered, release := make(chan struct{}), make(chan struct{})
+	m.lookupAccount = func(context.Context, *mastodon.Client) (mastodon.Account, error) {
+		close(entered)
+		<-release // the old token's lookup answers last
+		return mastodon.Account{Acct: "old"}, nil
+	}
+	if err := m.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-entered // the old lookup has read lookupAccount; swapping it is now race-free
+	m.lookupAccount = func(context.Context, *mastodon.Client) (mastodon.Account, error) {
+		return mastodon.Account{Acct: "new"}, nil
+	}
+	if _, err := m.Apply(context.Background(), map[string]string{KeyMastodonToken: "tok-b-fake"}, time.Now()); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	want := "@new@" + host
+	for deadline := time.Now().Add(2 * time.Second); m.Account("mastodon") != want && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := m.Account("mastodon"); got != want {
+		close(release)
+		t.Fatalf("Account after the new token's lookup = %q, want %q", got, want)
+	}
+	close(release)
+	m.lookups.Wait()
+	if got := m.Account("mastodon"); got != want {
+		t.Errorf("Account after the stale lookup answered = %q, want %q kept", got, want)
 	}
 }

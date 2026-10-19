@@ -166,6 +166,7 @@ func (m *Manager) reloadLocked(ctx context.Context) error {
 	next.maKey = strings.Join([]string{v[KeyMastodonBaseURL], v[KeyMastodonToken]}, "\x00")
 
 	var ch Changed
+	var lookup bool
 	if next.slKey == prev.slKey && prev.slKey != "" {
 		next.sl, next.errs[GroupShortLinks] = prev.sl, prev.errs[GroupShortLinks]
 	} else {
@@ -209,11 +210,14 @@ func (m *Manager) reloadLocked(ctx context.Context) error {
 		}
 		next.ma = c
 		m.log.Info("outreach: connection reloaded", "group", GroupMastodon, "configured", c != nil)
-		if c != nil && !reservedHost(v[KeyMastodonBaseURL]) {
-			m.lookupMastodonAccount(c, v)
-		}
+		lookup = c != nil && !reservedHost(v[KeyMastodonBaseURL])
 	}
 	m.cur.Store(next)
+	if lookup {
+		// Started only once next is current, so a fast answer is compared
+		// against the config it was fetched under, never the previous one.
+		m.lookupMastodonAccount(next.ma, v)
+	}
 	if ch != (Changed{}) {
 		m.lmu.Lock()
 		ls := append([]func(Changed){}, m.listeners...)
@@ -281,8 +285,9 @@ func (m *Manager) Apply(ctx context.Context, values map[string]string, now time.
 
 // Account names the public account a channel posts as, from the current
 // values and with no network call (#0581): "@handle" for Bluesky, the
-// "@user@host" for Mastodon once a connection test has verified the account
-// under the current instance and token (cached in memory, not stored), the
+// "@user@host" for Mastodon once a connection test or the reload-time lookup
+// (#0597) has verified the account under the current instance and token
+// (cached in memory, not stored), the
 // bare instance host before that, and "" for anything else or when unset.
 func (m *Manager) Account(channel string) string {
 	v := m.cur.Load().values

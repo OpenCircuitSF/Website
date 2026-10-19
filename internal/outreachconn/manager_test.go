@@ -60,6 +60,9 @@ func quietLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, n
 func newMgr(t *testing.T, st *fakeStore, env map[string]string) *Manager {
 	t.Helper()
 	m := NewManager(st, env, quietLog())
+	// No reload-time account lookup may outlive the test that started it
+	// (#0597; AGENTS.md section 5's #0470 leak).
+	t.Cleanup(m.lookups.Wait)
 	if err := m.Reload(context.Background()); err != nil {
 		t.Fatal(err)
 	}
