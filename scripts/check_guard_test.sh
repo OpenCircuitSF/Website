@@ -48,6 +48,11 @@
 #     a svelte-check error), each VERIFICATION FAILED, exit 1; one clean
 #     row VERIFICATION PASSED, exit 0, with no test step run; and the
 #     clean row again with ISSUE set, asserting no database step ran.
+#   *  mode (#0608) in a sandbox holding a trivial Go module with one
+#     test-less package and four tested ones -- a failing package must give
+#     VERIFICATION FAILED, exit 1, from go test's own step; a [no test
+#     files] line above a TAIL=2 tail must still reach the skip audit; and
+#     no .scratch/gotest.* file may survive a pass, a failure, or a TERM.
 #
 # Outcomes are classified from the exit code plus the verdict line:
 #   passed    = exit 0 and VERIFICATION PASSED   (in a failing sandbox: a BYPASS)
@@ -73,6 +78,11 @@
 #   Part 1c `build` mode (#0607): a Go compile error and a failing web check
 #           each give VERIFICATION FAILED; a clean tree passes with no test
 #           step; with ISSUE set no database step runs.
+#   Part 1d go_test runs go test once (#0608): a failing package still gives
+#           VERIFICATION FAILED; a [no test files] line above the tail is
+#           still reported by the skip audit; no gotest.* temp file survives
+#           a pass, a failure, or a TERM mid-run. Part 2's gotest_tail_status
+#           and gotest_audit_tail_only rows prove those checks are sensitive.
 #   Part 2  Sensitivity. Mutants that are EXPECTED to defeat check.sh's
 #           in-file checks, proving Part 1's assertion is not vacuous. Same
 #           role as db_reset_guard_test.sh's Part 3.
@@ -232,6 +242,44 @@ mk_build_sandbox() {  # <name> <script> <go: ok|broken> <web: ok|broken> -> prin
     printf '{"name":"buildsandbox","private":true,"scripts":{"check":"exit 0"}}\n' > "$sb/web/package.json"
   fi
   printf '%s' "$sb"
+}
+
+# #0608: a trivial module for go_test's single-run shape. Package `a` has no
+# test file, so it prints a `[no test files]` line; b..e each print an `ok`
+# line, so a small TAIL pushes `a`'s line above the printed tail. `kind`
+# decides b: pass, fail (a t.Fatal), or slow (sleeps 60s, for the TERM row).
+mk_gotest_sandbox() {  # <name> <script> <kind: pass|fail|slow> -> prints sandbox dir
+  local sb="$WORKDIR/sb/$1" p
+  rm -rf "$sb"; mkdir -p "$sb/scripts" "$sb/a" "$sb/b" "$sb/c" "$sb/d" "$sb/e"
+  cp "$2" "$sb/scripts/check.sh"; chmod +x "$sb/scripts/check.sh"
+  printf 'module gotestsandbox\n\ngo 1.22\n' > "$sb/go.mod"
+  printf 'package main\n\nfunc main() {\n\tprintln("ok")\n}\n' > "$sb/main.go"
+  printf 'package a\n' > "$sb/a/a.go"
+  case "$3" in
+    fail) printf 'package b\n\nimport "testing"\n\nfunc TestFail0608(t *testing.T) { t.Fatal("sandbox-0608 failure") }\n' > "$sb/b/b_test.go" ;;
+    slow) printf 'package b\n\nimport (\n\t"testing"\n\t"time"\n)\n\nfunc TestSlow0608(t *testing.T) { time.Sleep(60 * time.Second) }\n' > "$sb/b/b_test.go" ;;
+    *)    printf 'package b\n\nimport "testing"\n\nfunc TestOK(t *testing.T) {}\n' > "$sb/b/b_test.go" ;;
+  esac
+  for p in c d e; do
+    printf 'package %s\n\nimport "testing"\n\nfunc TestOK(t *testing.T) {}\n' "$p" > "$sb/$p/${p}_test.go"
+  done
+  printf '#!/bin/sh\nexit 0\n' > "$sb/scripts/go_file_visit_floor_guard_test.sh"
+  chmod +x "$sb/scripts/go_file_visit_floor_guard_test.sh"
+  printf '%s' "$sb"
+}
+
+run_gotest_case() {  # <sandbox> <tail> -> sets RC / OUTFILE
+  OUTFILE="$1/out"
+  ( cd "$1" && env -u ISSUE TAIL="$2" "$BASHBIN" "$1/scripts/check.sh" go ./... ) > "$OUTFILE" 2>&1 < /dev/null
+  RC=$?
+}
+
+no_gotest_left() {  # <sandbox> -> 0 if no gotest.* temp file remains
+  ! ls "$1/.scratch"/gotest.* >/dev/null 2>&1
+}
+
+audit_reports_a() {  # 0 if the skip-audit section (only) names gotestsandbox/a [no test files]
+  awk '/=== skip audit/{s=1} s && /gotestsandbox\/a[[:space:]]+\[no test files\]/{f=1} END{exit !f}' "$OUTFILE"
 }
 
 RC=0; OUTFILE=""
@@ -461,6 +509,58 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
+echo "== Part 1d: go_test runs once (#0608) =="
+# go_test runs `go test` once, tees the full output to .scratch/gotest.*,
+# prints the tail, and greps the whole file for the skip audit. Without -v,
+# t.Skip and a passing package's output are never printed -- only its `ok`
+# line -- so `--- SKIP` reaches the audit only from a failing package. The
+# skip signal a row can provoke is therefore `[no test files]`, and "a skip
+# outside the tail" means package a's line sitting above TAIL=2's d/e lines.
+SB="$(mk_gotest_sandbox p1d_fail "$REAL" fail)"
+run_gotest_case "$SB" 2
+if [ "$RC" -eq 1 ] && grep -q '\[31mVERIFICATION FAILED' "$OUTFILE" \
+   && grep -q 'FAILED (1): bash -o pipefail -c go test' "$OUTFILE" && no_gotest_left "$SB"; then
+  pass "gotest_failing_package: a failing package gives VERIFICATION FAILED, exit 1, from go test's own step, and no gotest.* file is left (#0608)"
+else
+  fail "REGRESSION #0608: gotest_failing_package — a failing package was not reported honestly from go test's own status, or the temp file survived. exit=$RC, verdict=$(classify). Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
+fi
+
+SB="$(mk_gotest_sandbox p1d_skip "$REAL" pass)"
+run_gotest_case "$SB" 2
+if [ "$RC" -eq 0 ] && grep -q '\[32mVERIFICATION PASSED' "$OUTFILE" \
+   && grep -qE 'ok[[:space:]]+gotestsandbox/e' "$OUTFILE" && audit_reports_a \
+   && [ "$(grep -cE 'gotestsandbox/a[[:space:]]+\[no test files\]' "$OUTFILE")" = 1 ] \
+   && no_gotest_left "$SB"; then
+  pass "gotest_skip_outside_tail: a [no test files] line above the printed tail is still reported by the skip audit, and no gotest.* file is left (#0608)"
+else
+  fail "REGRESSION #0608: gotest_skip_outside_tail — the skip audit missed a [no test files] line outside the tail, or the temp file survived. exit=$RC, verdict=$(classify). Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
+fi
+
+SB="$(mk_gotest_sandbox p1d_int "$REAL" slow)"
+OUTFILE="$SB/out"
+# Own process group (set -m), so the TERM and KILL below reach only what this
+# row started -- never a pattern (AGENTS.md §5a).
+set -m
+( cd "$SB" && exec env -u ISSUE "$BASHBIN" "$SB/scripts/check.sh" go ./... ) > "$OUTFILE" 2>&1 < /dev/null &
+CPID=$!
+set +m
+i=0
+while [ "$i" -lt 240 ] && no_gotest_left "$SB"; do sleep 0.5; i=$((i + 1)); done
+SEEN=0; no_gotest_left "$SB" || SEEN=1
+sleep 2   # let go test reach the sleeping test binary
+kill -TERM -- "-$CPID" 2>/dev/null
+wait "$CPID"; RC=$?
+kill -KILL -- "-$CPID" 2>/dev/null || true   # own group only; a no-op when TERM sufficed
+if [ "$SEEN" -ne 1 ]; then
+  fail "REGRESSION #0608: gotest_interrupted — temp file never appeared in 120s, so the row cannot prove cleanup. Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
+elif no_gotest_left "$SB" && [ "$RC" -ne 0 ] && grep -q 'NO VERDICT' "$OUTFILE"; then
+  pass "gotest_interrupted: TERM mid-run left no gotest.* file, exit $RC, and the EXIT trap's cleanup ran (NO VERDICT) (#0608)"
+else
+  fail "REGRESSION #0608: gotest_interrupted — after TERM the temp file survived or cleanup did not run. exit=$RC. Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
+fi
+
+# ---------------------------------------------------------------------------
+echo
 echo "== Part 2: sensitivity — mutants that MUST come back dishonest =="
 # These prove Part 1 can tell an honest verdict from a dishonest one. They are
 # the only rows here that expect VERIFICATION PASSED over failing steps.
@@ -482,6 +582,36 @@ mut1 failed_zero "$P" "$A_VERDICT" before
 assert_bypass failed_zero guards bare "$MUT" "a bare FAILED=0 inserted before the verdict (#0258 sixth review, bypass 4)"
 mut1 failed_zero_go "$P" "$A_VERDICT" before
 assert_bypass failed_zero_go go bare "$MUT" "the same assignment on the piped-step path"
+
+# #0608: a verdict taken from tail, not go test. Part 1d's failing-package
+# row must notice it.
+P="$(paypath gotest_tail_status)"
+# shellcheck disable=SC2016  # literal payload text, expanded later inside the mutant
+printf '%s\n' '  runpipe "go test $pkgs -p 2 -count=1 > \"$GO_TEST_OUT\" 2>&1; tail -$TAIL \"$GO_TEST_OUT\""' > "$P"
+MUT="$WORKDIR/mut/gotest_tail_status.sh"
+awk -v pf="$P" 'index($0, "| tee ") && index($0, "go test") && index($0, "runpipe") { while ((getline l < pf) > 0) print l; close(pf); next } { print }' "$REAL" > "$MUT"
+check_mutant "$MUT" gotest_tail_status
+SB="$(mk_gotest_sandbox row_gotest_tail_status "$MUT" fail)"; run_gotest_case "$SB" 2
+if [ "$(classify)" = passed ]; then
+  pass "gotest_tail_status [go]: reported VERIFICATION PASSED over a failing package, as this row requires — Part 1d's failing-package row is sensitive to a verdict taken from tail"
+else
+  fail "gotest_tail_status [go]: expected a DISHONEST verdict here (this row exists to prove Part 1d is not vacuous) but got $(classify), exit $RC."
+fi
+
+# #0608: a skip audit that reads only the tail. Part 1d's skip row must
+# notice it.
+P="$(paypath gotest_audit_tail_only)"
+# shellcheck disable=SC2016  # literal payload text, expanded later inside the mutant
+printf '%s\n' '  tail -$TAIL "$GO_TEST_OUT" | grep -E '"'"'no test files|SKIP|--- SKIP'"'"' | head -20 || echo "(no skips)"' > "$P"
+MUT="$WORKDIR/mut/gotest_audit_tail_only.sh"
+awk -v pf="$P" 'index($0, "grep -E") && index($0, "GO_TEST_OUT") && index($0, "head -20") { while ((getline l < pf) > 0) print l; close(pf); next } { print }' "$REAL" > "$MUT"
+check_mutant "$MUT" gotest_audit_tail_only
+SB="$(mk_gotest_sandbox row_gotest_audit_tail_only "$MUT" pass)"; run_gotest_case "$SB" 2
+if ! audit_reports_a; then
+  pass "gotest_audit_tail_only [go]: the audit missed package a's [no test files] line, as this row requires — Part 1d's skip row is sensitive to an audit that reads only the tail"
+else
+  fail "gotest_audit_tail_only [go]: expected the tail-only audit to miss package a's line (this row exists to prove Part 1d is not vacuous), but it was reported. exit=$RC."
+fi
 
 # ---------------------------------------------------------------------------
 echo

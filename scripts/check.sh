@@ -806,6 +806,7 @@ fi
 MODE="${1:-default}"; shift || true
 
 OWN_DB=""
+GO_TEST_OUT=""
 if [ "$MODE" = build ]; then
   # #0607: build mode runs no tests, so it needs no database and must
   # not create one even when ISSUE is set.
@@ -829,7 +830,7 @@ fi
 # and no verdict line at all -- which a caller reading only the exit code reads
 # as success. Every exit this script makes on purpose sets EXIT_ACCOUNTED first;
 # any other one lands here and is reported.
-cleanup() { [ -n "$OWN_DB" ] && scripts/testdb.sh drop "$OWN_DB" >/dev/null 2>&1; [ "${EXIT_ACCOUNTED:-0}" -eq 1 ] || { printf '\033[31mNO VERDICT (#0258): scripts/check.sh exited without reporting VERIFICATION PASSED or VERIFICATION FAILED. Treat this as a failure: either the run was interrupted, or something ended it early -- a helper shadowed by a decoy that terminates instead of reporting would look exactly like this.\033[0m\n' >&2; exit 2; }; }
+cleanup() { [ -n "$GO_TEST_OUT" ] && rm -f "$GO_TEST_OUT"; [ -n "$OWN_DB" ] && scripts/testdb.sh drop "$OWN_DB" >/dev/null 2>&1; [ "${EXIT_ACCOUNTED:-0}" -eq 1 ] || { printf '\033[31mNO VERDICT (#0258): scripts/check.sh exited without reporting VERIFICATION PASSED or VERIFICATION FAILED. Treat this as a failure: either the run was interrupted, or something ended it early -- a helper shadowed by a decoy that terminates instead of reporting would look exactly like this.\033[0m\n' >&2; exit 2; }; }
 trap cleanup EXIT
 
 go_test() {
@@ -843,10 +844,23 @@ go_test() {
   # don't rely on `scripts/check.sh all`, which AGENTS.md reserves for a
   # batch's single review pass.
   local pkgs="$*"; [ -n "$pkgs" ] || pkgs="./internal/... ./cmd/... ./web/..."
+  # #0608: go test runs ONCE. Its full output is kept in a file under
+  # gitignored .scratch/ (the #0537/#0540 directive), the bounded tail is
+  # printed from the same pipeline, and the skip audit greps the whole file
+  # -- so a [no test files] line above the tail is still reported. The
+  # verdict still comes from go test's own exit status: with pipefail in the
+  # funnel, tee and tail exit 0 and the pipeline reports go test's status.
+  # The EXIT trap's cleanup removes the file if the run is interrupted.
+  mkdir -p "$REPO/.scratch"
+  GO_TEST_OUT="$(mktemp "$REPO/.scratch/gotest.XXXXXX")" || {
+    printf '\033[31mcould not create the go test output file under .scratch/ (#0608)\033[0m\n'
+    run false; GO_TEST_OUT=""; return 0
+  }
   step "go test $pkgs -p 2"
-  runpipe "go test $pkgs -p 2 -count=1 2>&1 | tail -$TAIL"
+  runpipe "go test $pkgs -p 2 -count=1 2>&1 | tee \"$GO_TEST_OUT\" | tail -$TAIL"
   step "skip audit — a package reporting [no test files] or 'no test files' proves nothing"
-  go test $pkgs -p 2 -count=1 2>&1 | grep -E 'no test files|SKIP|--- SKIP' | head -20 || echo "(no skips)"
+  grep -E 'no test files|SKIP|--- SKIP' "$GO_TEST_OUT" | head -20 || echo "(no skips)"
+  rm -f "$GO_TEST_OUT"; GO_TEST_OUT=""
 }
 
 web_check() {
