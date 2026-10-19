@@ -42,6 +42,7 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { currentUser } from '../lib/stores';
   import { navigate } from '../lib/router';
+  import SubNav from '../lib/SubNav.svelte';
   import {
     parseAdminHash,
     adminOverviewRoute,
@@ -1332,7 +1333,7 @@
       {/each}
     </nav>
     {#if activeGroup}
-      <nav class="subtabs" aria-label="{activeGroup.label} screens">
+      <nav class="subtabs scroll-fade-x" aria-label="{activeGroup.label} screens">
         {#each activeGroup.sections as s (s)}
           <a
             class="subtab"
@@ -1353,11 +1354,13 @@
     {/if}
 
     {#if adminRoute.section === 'settings'}
-      <nav class="settings-jump" aria-label="Settings sections">
-        {#each SETTINGS_SECTIONS as s (s.id)}
-          <a href={adminSettingsHash(s.id)} onclick={() => scrollToSettingsSection(s.id)}>{s.label}</a>
-        {/each}
-      </nav>
+      <SubNav
+        label="Settings sections"
+        items={SETTINGS_SECTIONS.map((s) => ({
+          href: adminSettingsHash(s.id),
+          label: s.label,
+          onclick: () => scrollToSettingsSection(s.id)
+        }))} />
       <div id="settings-general">
       <Panel title="Settings">
         <p class="settings-badge"><ApplyBadge kind="immediate" /></p>
@@ -2605,12 +2608,6 @@
     border-bottom: var(--border-w) solid var(--border);
     overflow-x: auto;
     white-space: nowrap;
-  }
-  .settings-jump {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-3);
-    margin-bottom: var(--space-3);
   }
   .settings-badge {
     margin: 0 0 var(--space-3);

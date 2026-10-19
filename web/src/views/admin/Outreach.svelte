@@ -6,6 +6,7 @@
   sub-view (#0546) is OutreachResults.svelte.
 -->
 <script lang="ts">
+  import SubNav from '../../lib/SubNav.svelte';
   import { untrack } from 'svelte';
   import { listOutreach, listAdminWorkshops, ApiError } from '../../lib/api';
   import {
@@ -67,12 +68,12 @@
 {#if view === 'print' && flyerId !== null}
   <FlyerPrint {flyerId} layout={outreachLayoutFromQuery(query)} />
 {:else}
-<nav class="outreach-subnav" aria-label="Outreach sections">
-  <a href={adminOutreachHash('workshops')} aria-current={view === 'workshops' || view === 'workshop' ? 'page' : undefined}>Posts</a>
-  <a href={adminOutreachHash('locations')} aria-current={view === 'locations' ? 'page' : undefined}>Flyer spots</a>
-  <a href={adminOutreachFlyersHash()} aria-current={view === 'flyers' || view === 'print' ? 'page' : undefined}>Flyers</a>
-  <a href={adminOutreachResultsHash()} aria-current={view === 'results' ? 'page' : undefined}>Results</a>
-</nav>
+<SubNav label="Outreach sections" items={[
+  { href: adminOutreachHash('workshops'), label: 'Posts', current: view === 'workshops' || view === 'workshop' },
+  { href: adminOutreachHash('locations'), label: 'Flyer spots', current: view === 'locations' },
+  { href: adminOutreachFlyersHash(), label: 'Flyers', current: view === 'flyers' || view === 'print' },
+  { href: adminOutreachResultsHash(), label: 'Results', current: view === 'results' }
+]} />
 
 {#if view === 'flyers' && flyerId !== null}
   <OutreachFlyerEditor {flyerId} />
@@ -156,11 +157,6 @@
 {/if}
 
 <style>
-  .outreach-subnav {
-    display: flex;
-    gap: var(--space-3);
-    margin-bottom: var(--space-3);
-  }
   .row-button {
     display: inline-block;
     padding: var(--space-1) var(--space-3);
@@ -168,9 +164,5 @@
     border-radius: var(--radius);
     color: var(--accent);
     text-decoration: none;
-  }
-  .outreach-subnav a[aria-current='page'] {
-    font-weight: 700;
-    text-decoration: underline;
   }
 </style>

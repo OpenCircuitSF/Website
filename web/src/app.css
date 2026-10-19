@@ -597,3 +597,16 @@ tbody tr:last-child td { border-bottom: none; }
     text-align: center;
   }
 }
+
+/* #0600: a row that scrolls sideways fades out at its right edge while more
+ * items are off-screen, so touch users can see there is more. Pure CSS: the
+ * fade is a scroll-attached background gradient and the "cover" gradient
+ * (background-attachment: local) hides it once the row is scrolled to its
+ * end, or when nothing overflows. It paints behind the content, so it never
+ * hides focus indicators, and it adds no layout width. */
+.scroll-fade-x {
+  background:
+    linear-gradient(to right, var(--bg-page) 30%, transparent) left center / 24px 100% no-repeat local,
+    linear-gradient(to left, var(--bg-page) 30%, transparent) right center / 24px 100% no-repeat local,
+    linear-gradient(to left, var(--bg-subtle), transparent) right center / 24px 100% no-repeat scroll;
+}
