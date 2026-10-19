@@ -54,7 +54,7 @@ const SiteURL = "https://www.opencircuitsf.com"
 
 // sampleLinkURL stands in for the short link while a draft is measured: the
 // real one is only known at Prepare, and Mastodon counts any URL as 23.
-const sampleLinkURL = "https://go.opencircuitsf.com/aBcDeF"
+const sampleLinkURL = "https://go.opencircuitsf.com/u/aBcDeF" // the real shape, /u/KEY (#0603)
 
 // manualCaptionLimit bounds the summary kept in a caption for channels with
 // no enforced limit (Instagram's own cap is 2,200).

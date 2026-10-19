@@ -116,7 +116,7 @@ func TestDraftGolden(t *testing.T) {
 				t.Errorf("%s/%s:\n got %q\nwant %q", ch.Name, w.Name, got, exp)
 			}
 			if ch.CharLimit > 0 {
-				body := strings.ReplaceAll(got, LinkToken, "https://go.opencircuitsf.com/pcNPlc")
+				body := strings.ReplaceAll(got, LinkToken, "https://go.opencircuitsf.com/u/pcNPlc")
 				if err := ValidateForSend(ch, body); err != nil {
 					t.Errorf("%s/%s: %v", ch.Name, w.Name, err)
 				}
@@ -157,7 +157,7 @@ func TestDraftTruncatesSummaryToFit(t *testing.T) {
 		ch, _ := ChannelByName(name)
 		for _, w := range Waves() {
 			d := Draft(ch, w, f)
-			body := strings.ReplaceAll(d, LinkToken, "https://go.opencircuitsf.com/pcNPlc")
+			body := strings.ReplaceAll(d, LinkToken, "https://go.opencircuitsf.com/u/pcNPlc")
 			if err := ValidateForSend(ch, body); err != nil {
 				t.Errorf("%s/%s: %v", name, w.Name, err)
 			}

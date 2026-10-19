@@ -3,6 +3,7 @@ package devmocks_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -149,6 +150,19 @@ func TestShortLinksRoundTrip(t *testing.T) {
 	}
 	if _, err := outreach.SanitizeQRSVG(svg); err != nil {
 		t.Fatalf("QR is not accepted by the outreach sanitizer: %v", err)
+	}
+	// The short URL the site stores (#0603) redirects; the old /KEY form does not.
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for u, want := range map[string]int{shortlinks.ShortURL(me.BaseURL, l.Key): http.StatusFound, me.BaseURL + "/" + l.Key: http.StatusNotFound} {
+		// me.BaseURL carries the mock's advertised public host; dial the test server.
+		resp, err := noFollow.Get(base + strings.TrimPrefix(u, "http://127.0.0.1:1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Fatalf("GET %s = %d, want %d", u, resp.StatusCode, want)
+		}
 	}
 	st, err := c.CampaignStats(ctx, "led-programming", time.Time{}, time.Time{})
 	if err != nil || st.ClickCount < 8 || len(st.ByLink) != 2 || len(st.SeriesByLink) != 2 {

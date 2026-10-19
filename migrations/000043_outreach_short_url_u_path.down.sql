@@ -5,13 +5,13 @@
 -- something a body should be put back to anyway.
 UPDATE outreach_links
    SET short_url = regexp_replace(short_url, '^(https?://[^/]+)/u/', '\1/')
- WHERE short_url LIKE '%/u/%';
+ WHERE short_url ~ '^https?://[^/]+/u/';
 
 UPDATE outreach_flyer_links
    SET short_url = regexp_replace(short_url, '^(https?://[^/]+)/u/', '\1/')
- WHERE short_url LIKE '%/u/%';
+ WHERE short_url ~ '^https?://[^/]+/u/';
 
 UPDATE outreach_posts
    SET short_url = regexp_replace(short_url, '^(https?://[^/]+)/u/', '\1/')
  WHERE short_url IS NOT NULL
-   AND short_url LIKE '%/u/%';
+   AND short_url ~ '^https?://[^/]+/u/';

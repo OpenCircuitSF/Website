@@ -654,7 +654,9 @@ func (s *Server) routeShortLinks(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, s.rollup(slug, r.URL.Query().Get("from"), r.URL.Query().Get("to")))
 	})
-	mux.HandleFunc("GET /shortlinks/s/{key}", func(w http.ResponseWriter, r *http.Request) {
+	// Redirects live at base_url + "/u/{key}", as in ShortLinks itself, so a
+	// URL built by shortlinks.ShortURL resolves here too (#0603).
+	mux.HandleFunc("GET /shortlinks/s/u/{key}", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		l := s.slLinks[r.PathValue("key")]
 		if l != nil {
