@@ -222,3 +222,25 @@ func TestWorkshopDeleteCascadesAndSummaries(t *testing.T) {
 		t.Errorf("posts survived: n=%d err=%v", n, err)
 	}
 }
+
+// #0593: one query returns every requested outreach's posts, grouped.
+func TestListPostsByOutreach(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	o1, p1 := seedPost(t, s, "one")
+	o2, p2 := seedPost(t, s, "two")
+	o3, _ := seedPost(t, s, "three")
+	got, err := s.ListPostsByOutreach(ctx, []int64{o1.ID, o2.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || len(got[o1.ID]) != 1 || got[o1.ID][0].ID != p1.ID || len(got[o2.ID]) != 1 || got[o2.ID][0].ID != p2.ID {
+		t.Errorf("got %+v", got)
+	}
+	if _, ok := got[o3.ID]; ok {
+		t.Error("an outreach that was not asked for came back")
+	}
+	if none, err := s.ListPostsByOutreach(ctx, nil); err != nil || len(none) != 0 {
+		t.Errorf("empty ask = %v, %v", none, err)
+	}
+}

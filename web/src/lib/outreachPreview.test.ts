@@ -37,11 +37,14 @@ describe('blueskyCard', () => {
   it('uses the short host by default and the site host when canonical', () => {
     expect(blueskyCard({ workshop: workshop() }, post, 'site.test').host).toBe('go.example');
     expect(blueskyCard({ workshop: workshop(), bluesky_card: 'canonical' }, post, 'site.test').host).toBe('site.test');
+    expect(blueskyCard({ workshop: workshop(), bluesky_card: 'canonical', card_host: 'www.example.org' }, post, 'site.test').host).toBe('www.example.org');
   });
-  it('carries the picture only for a /media/ cover', () => {
-    expect(blueskyCard({ workshop: workshop() }, post, 'h').image).toBe('/media/cover.png');
-    expect(blueskyCard({ workshop: workshop({ cover_image: '/images/x.png' }) }, post, 'h').image).toBeNull();
-    expect(blueskyCard({ workshop: workshop({ cover_image: null }) }, post, 'h').image).toBeNull();
+  it('carries the picture only when the server says the publisher would attach it', () => {
+    expect(blueskyCard({ workshop: workshop(), thumb_ok: true }, post, 'h').image).toBe('/media/cover.png');
+    expect(blueskyCard({ workshop: workshop(), thumb_ok: false }, post, 'h').image).toBeNull();
+    expect(blueskyCard({ workshop: workshop() }, post, 'h').image).toBeNull();
+    expect(blueskyCard({ workshop: workshop({ cover_image: null }), thumb_ok: true }, post, 'h').image).toBeNull();
+    expect(blueskyCard({ workshop: workshop({ cover_image: 'javascript:alert(1)' }), thumb_ok: true }, post, 'h').image).toBeNull();
   });
   it('trims the summary and tolerates a missing one', () => {
     expect(blueskyCard({ workshop: workshop({ summary: '  hi  ' }) }, post, 'h').description).toBe('hi');

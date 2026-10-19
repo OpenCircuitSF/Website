@@ -326,14 +326,31 @@ export function resultsSummaryLine(results: OutreachResults | null): string {
  * #0588); the default accepts every channel the row reports.
  */
 export function postsCellText(
-  row: Pick<OutreachResultsSummaryRow, 'posted_channels' | 'scheduled'>,
+  row: Pick<OutreachResultsSummaryRow, 'posted_channels' | 'scheduled' | 'queued'>,
   labels: Record<string, string>,
   isEnabled: (channel: string) => boolean = () => true,
 ): string {
   const names = (row.posted_channels ?? []).filter(isEnabled).map((n) => labels[n] ?? n);
   const posted = names.length > 0 ? `Posted: ${names.join(', ')}` : 'Nothing posted yet';
   const n = row.scheduled ?? 0;
-  return n > 0 ? `${posted} · ${n} scheduled` : posted;
+  const q = row.queued ?? 0;
+  let out = n > 0 ? `${posted} · ${n} scheduled` : posted;
+  if (q > 0) out += ` · ${q} posting`;
+  return out;
+}
+
+const POST_STATUS_WORDS: Record<string, string> = {
+  draft: 'Draft',
+  manual: 'Ready to post by hand',
+  scheduled: 'Scheduled',
+  queued: 'Posting now',
+  posted: 'Posted',
+  failed: 'Did not post',
+};
+
+/** A post's status in plain words, not the API's raw lowercase value (#0593). */
+export function postStatusWords(status: string): string {
+  return POST_STATUS_WORDS[status] ?? status;
 }
 
 /** One legend entry per line of the chart, as the legend prints it: the line's own total. */

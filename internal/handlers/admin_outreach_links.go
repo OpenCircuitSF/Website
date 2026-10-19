@@ -330,9 +330,18 @@ func (h *AdminOutreachHandler) linksView(ctx context.Context, wk workshops.Works
 	}
 
 	f := h.facts(wk)
-	for _, ch := range h.enabledChannels() {
+	// A switched-off channel keeps the rows of its posts that are still
+	// visible, such as a posted one (#0593), and no others.
+	visible := map[[2]string]bool{}
+	for _, p := range h.enabledPosts(posts) {
+		visible[[2]string{p.Channel, p.Wave}] = true
+	}
+	for _, ch := range h.shownChannels(posts) {
 		for _, wv := range outreach.Waves() {
 			slot := [2]string{ch.Name, wv.Name}
+			if !h.channelEnabled(ch.Name) && !visible[slot] {
+				continue
+			}
 			row := outreachLinkRowView{
 				Kind: "post", Channel: ch.Name, ChannelLabel: ch.Label, Wave: wv.Name, WaveLabel: wv.Label,
 				DestinationURL: outreach.DestinationURL(h.baseURL, f, ch, wv),

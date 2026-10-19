@@ -12,7 +12,7 @@
   import type { OutreachChannel, OutreachPost, WorkshopOutreach } from '../../lib/types';
 
   interface Props {
-    view: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical' };
+    view: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean };
     channel: OutreachChannel;
     post: OutreachPost;
     body?: string;

@@ -31,6 +31,8 @@ type outreachStore interface {
 	Create(ctx context.Context, workshopID int64, campaignSlug string) (outreach.Outreach, bool, error)
 	ListSummaries(ctx context.Context) ([]outreach.Summary, error)
 	ListPosts(ctx context.Context, outreachID int64) ([]outreach.Post, error)
+	// ListPostsByOutreach is ListPosts for many outreaches in one query (#0593).
+	ListPostsByOutreach(ctx context.Context, outreachIDs []int64) (map[int64][]outreach.Post, error)
 	GetPost(ctx context.Context, id int64) (outreach.Post, error)
 	CreatePost(ctx context.Context, outreachID int64, channel, wave, body, fingerprint string) (outreach.Post, error)
 	UpdatePostBody(ctx context.Context, id int64, body string, fingerprint *string, customized *bool) (outreach.Post, error)
@@ -325,6 +327,22 @@ func (h *AdminOutreachHandler) blueskyCard() string {
 	return "short"
 }
 
+// cardHost is the host of the site's base URL, "" when it does not parse.
+func (h *AdminOutreachHandler) cardHost() string {
+	u, err := url.Parse(strings.TrimSpace(h.baseURL))
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+// thumbOK asks the publisher whether it would attach the cover. A posting
+// seam that cannot say answers false, as the publisher would send no picture.
+func (h *AdminOutreachHandler) thumbOK(cover *string) bool {
+	t, ok := h.posting.(interface{ ThumbOK(cover *string) bool })
+	return ok && t.ThumbOK(cover)
+}
+
 // nonEmptyPtr drops a nil or blank optional text field.
 func nonEmptyPtr(s *string) *string {
 	if s == nil || strings.TrimSpace(*s) == "" {
@@ -466,6 +484,12 @@ type outreachPanelView struct {
 	// BlueskyCard is which URL the Bluesky card points at, "short" or
 	// "canonical" (#0583); the preview shows the matching host.
 	BlueskyCard string `json:"bluesky_card"`
+	// CardHost is the host of the site's base URL, which the canonical Bluesky
+	// card shows; the SPA no longer guesses it from its own location (#0593).
+	CardHost string `json:"card_host"`
+	// ThumbOK is true when the publisher would attach the workshop cover as
+	// the Bluesky card's picture (#0593).
+	ThumbOK bool `json:"thumb_ok"`
 	// LinkReport is set only on Start's response (#0568).
 	LinkReport *outreachLinkReport `json:"link_report,omitempty"`
 }
@@ -474,6 +498,8 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 	v := outreachPanelView{
 		Workshop:    outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt), Summary: nonEmptyPtr(wk.Summary), CoverImage: nonEmptyPtr(wk.CoverImage)},
 		BlueskyCard: h.blueskyCard(),
+		CardHost:    h.cardHost(),
+		ThumbOK:     h.thumbOK(wk.CoverImage),
 		Channels:    h.channelViews(nil),
 		Waves:       []outreachWaveView{},
 		Posts:       []outreachPostView{},
@@ -537,8 +563,20 @@ func (h *AdminOutreachHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+	postsBy, err := h.postsByOutreach(r.Context(), rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
 	views := make([]outreachSummaryView, 0, len(rows))
 	for _, s := range rows {
+		// A switched-off channel's drafts are not counted (#0593), the same
+		// rule the panel and the results overview apply.
+		counts := map[string]int{}
+		for _, p := range h.enabledPosts(postsBy[s.OutreachID]) {
+			counts[p.Status]++
+		}
+		s.Counts = counts
 		views = append(views, outreachSummaryView{
 			OutreachID: s.OutreachID, WorkshopID: s.WorkshopID, WorkshopSlug: s.WorkshopSlug,
 			WorkshopTitle: s.WorkshopTitle, WorkshopStatus: s.WorkshopStatus, CampaignSlug: s.CampaignSlug,
@@ -546,6 +584,15 @@ func (h *AdminOutreachHandler) List(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"outreach": views, "enabled_channels": h.enabledChannelNames()})
+}
+
+// postsByOutreach loads every summary's posts in one query.
+func (h *AdminOutreachHandler) postsByOutreach(ctx context.Context, sums []outreach.Summary) (map[int64][]outreach.Post, error) {
+	ids := make([]int64, 0, len(sums))
+	for _, s := range sums {
+		ids = append(ids, s.OutreachID)
+	}
+	return h.store.ListPostsByOutreach(ctx, ids)
 }
 
 // loadWorkshop writes the response and returns ok=false on failure.

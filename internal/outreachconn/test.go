@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
@@ -63,6 +65,9 @@ func (m *Manager) Test(ctx context.Context, group string) TestResult {
 			m.log.Warn("outreach: connection test failed", "group", group, "err", err)
 			return TestResult{Error: mastodonTestError(err)}
 		}
+		if acct.Acct != "" {
+			m.rememberMastodonAccount(v, acct.Acct)
+		}
 		return TestResult{OK: true, Detail: "Signed in to Mastodon as @" + acct.Acct}
 	}
 	return TestResult{Error: "unknown connection"}
@@ -108,4 +113,19 @@ func mastodonTestError(err error) string {
 		return fmt.Sprintf("Mastodon answered HTTP %d.", ae.Status)
 	}
 	return "Could not reach the Mastodon instance."
+}
+
+// rememberMastodonAccount caches "@user@host" for Account. Mastodon reports a
+// local account without its host, so the instance host is appended.
+func (m *Manager) rememberMastodonAccount(v map[string]string, acct string) {
+	acct = strings.TrimPrefix(acct, "@")
+	if !strings.Contains(acct, "@") {
+		u, err := url.Parse(strings.TrimSpace(v[KeyMastodonBaseURL]))
+		if err != nil || u.Host == "" {
+			return
+		}
+		acct += "@" + u.Host
+	}
+	key := strings.Join([]string{v[KeyMastodonBaseURL], v[KeyMastodonToken]}, "\x00")
+	m.maAcct.Store(&maAccount{key: key, acct: "@" + acct})
 }

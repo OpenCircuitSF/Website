@@ -652,7 +652,7 @@ func (s *Server) routeShortLinks(mux *http.ServeMux) {
 			writeJSON(w, 404, map[string]string{"error": "campaign not found"})
 			return
 		}
-		writeJSON(w, 200, s.rollup(slug))
+		writeJSON(w, 200, s.rollup(slug, r.URL.Query().Get("from"), r.URL.Query().Get("to")))
 	})
 	mux.HandleFunc("GET /shortlinks/s/{key}", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -672,15 +672,30 @@ func (s *Server) routeShortLinks(mux *http.ServeMux) {
 // rollup builds a campaign stats response over the last seven days. Each
 // link's total is spread over the days by a stable weighting that sums
 // exactly to the total, so every view agrees with every other.
-func (s *Server) rollup(slug string) map[string]any {
+//
+// The window is the requested half-open [from, to) of UTC dates (#0593), at
+// most 120 days; with no valid request it is the last seven days.
+func (s *Server) rollup(slug, from, to string) map[string]any {
 	type bucket = map[string]any
-	end := s.now().UTC()
-	days := make([]string, 7)
-	for i := range days {
-		days[i] = end.AddDate(0, 0, i-6).Format("2006-01-02")
+	const layout = "2006-01-02"
+	var days []string
+	if f, ferr := time.Parse(layout, from); ferr == nil {
+		if t, terr := time.Parse(layout, to); terr == nil && t.After(f) {
+			for d := f; d.Before(t) && len(days) < 120; d = d.AddDate(0, 0, 1) {
+				days = append(days, d.Format(layout))
+			}
+		}
 	}
+	if len(days) == 0 {
+		end := s.now().UTC()
+		for i := 0; i < 7; i++ {
+			days = append(days, end.AddDate(0, 0, i-6).Format(layout))
+		}
+	}
+	last, _ := time.Parse(layout, days[len(days)-1])
+	nd := len(days)
 	var total int64
-	dayTotals := make([]int64, 7)
+	dayTotals := make([]int64, nd)
 	src, med, cont := map[string]int64{}, map[string]int64{}, map[string]int64{}
 	byLink, series := []bucket{}, []bucket{}
 	keys := append([]string(nil), s.slOrder...)
@@ -697,7 +712,7 @@ func (s *Server) rollup(slug string) map[string]any {
 		cont[l.UTMContent] += n
 		id := l.ID
 		byLink = append(byLink, bucket{"link_id": id, "key": l.Key, "title": l.Title, "count": n})
-		var w [7]int64
+		w := make([]int64, nd)
 		var sum int64
 		for i := range w {
 			w[i] = 1 + int64(hash("day", l.Key, strconv.Itoa(i))%5)
@@ -707,7 +722,7 @@ func (s *Server) rollup(slug string) map[string]any {
 		d := []bucket{}
 		for i := range w {
 			c := n * w[i] / sum
-			if i == 6 {
+			if i == nd-1 {
 				c = rem
 			}
 			rem -= c
@@ -746,7 +761,7 @@ func (s *Server) rollup(slug string) map[string]any {
 		// own is: window_to is the day after the last bucket. Reporting the
 		// last day itself made the SPA drop it from the chart, so the legend
 		// read 40 against the table's 55 (#0590).
-		"window_from": days[0], "window_to": end.AddDate(0, 0, 1).Format("2006-01-02"),
+		"window_from": days[0], "window_to": last.AddDate(0, 0, 1).Format(layout),
 		"timeseries": bucket{"days": ts}, "by_link": byLink, "series_by_link": series,
 	}
 }

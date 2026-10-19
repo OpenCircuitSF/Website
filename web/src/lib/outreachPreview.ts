@@ -37,7 +37,7 @@ export function hostOf(url: string | null | undefined, fallbackHost: string): st
   }
 }
 
-type CardView = Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical' };
+type CardView = Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean };
 
 export interface LinkCard {
   title: string;
@@ -47,15 +47,19 @@ export interface LinkCard {
   host: string;
 }
 
-const isMedia = (cover: string | null | undefined): cover is string => !!cover && cover.startsWith('/media/') && isSafeLinkHref(cover);
-
-/** The external card Bluesky attaches: the picture only for an uploaded /media/ cover. */
+/**
+ * The external card Bluesky attaches. The picture is drawn only when the server
+ * says the publisher would attach it (thumb_ok: the file exists, is a JPEG or
+ * PNG and fits the size limit), and the canonical host is the server's own
+ * (card_host), never this browser's location (#0593).
+ */
 export function blueskyCard(view: CardView, post: Pick<OutreachPost, 'short_url'>, fallbackHost: string): LinkCard {
-  const host = view.bluesky_card === 'canonical' ? fallbackHost : hostOf(post.short_url, fallbackHost);
+  const host = view.bluesky_card === 'canonical' ? view.card_host || fallbackHost : hostOf(post.short_url, fallbackHost);
+  const cover = view.workshop.cover_image;
   return {
     title: view.workshop.title,
     description: (view.workshop.summary ?? '').trim(),
-    image: isMedia(view.workshop.cover_image) ? view.workshop.cover_image : null,
+    image: view.thumb_ok === true && cover && isSafeLinkHref(cover) ? cover : null,
     host,
   };
 }

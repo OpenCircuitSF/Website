@@ -12,7 +12,7 @@
   import type { OutreachChannel, OutreachPost, WorkshopOutreach } from '../../lib/types';
 
   interface Props {
-    view: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical' };
+    view: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean };
     channel: OutreachChannel;
     post: OutreachPost;
     /** The text to draw; defaults to the stored body. */
@@ -21,7 +21,7 @@
   let { view, channel, post, body }: Props = $props();
 
   const text = $derived(body ?? post.body);
-  const card = $derived(blueskyCard(view, post, typeof location === 'undefined' ? '' : location.host));
+  const card = $derived(blueskyCard(view, post, ''));
   const counted = $derived(countCharacters(channel, text, post.prepared));
   const over = $derived(isOverLimit(channel, counted.count));
 </script>

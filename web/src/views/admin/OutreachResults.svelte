@@ -17,6 +17,7 @@
     formatReactionTotal,
     mastodonCountsNote,
     postsCellText,
+    postStatusWords,
     showFlyerAllColumn,
     reactionsLabel,
     resultsStatusMessage,
@@ -200,7 +201,7 @@
               <tr>
                 <td>{channelLabel.get(post.channel) ?? post.channel}</td>
                 <td>{waveLabel(post.wave)}</td>
-                <td>{post.status}</td>
+                <td>{postStatusWords(post.status)}</td>
                 <td>{post.posted_at ? formatDateTime(post.posted_at) : '—'}</td>
                 <td>{#if post.short_url}<span class="mono">{post.short_url}</span>{:else}—{/if}</td>
                 <td>{formatClicks(post.clicks)}</td>

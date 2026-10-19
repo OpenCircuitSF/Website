@@ -83,7 +83,14 @@ type Manager struct {
 
 	lmu       sync.Mutex // guards listeners
 	listeners []func(Changed)
+
+	// maAcct caches the Mastodon account a successful connection test
+	// verified, keyed by the config it was verified under (#0593): a changed
+	// instance or token invalidates it without any explicit clear.
+	maAcct atomic.Pointer[maAccount]
 }
+
+type maAccount struct{ key, acct string }
 
 // state is an immutable snapshot; a new one replaces it on every reload.
 type state struct {
@@ -259,8 +266,9 @@ func (m *Manager) Apply(ctx context.Context, values map[string]string, now time.
 
 // Account names the public account a channel posts as, from the current
 // values and with no network call (#0581): "@handle" for Bluesky, the
-// instance host for Mastodon (only the base URL is stored, so no @user), and
-// "" for anything else or when unset.
+// "@user@host" for Mastodon once a connection test has verified the account
+// under the current instance and token (cached in memory, not stored), the
+// bare instance host before that, and "" for anything else or when unset.
 func (m *Manager) Account(channel string) string {
 	v := m.cur.Load().values
 	switch channel {
@@ -271,6 +279,9 @@ func (m *Manager) Account(channel string) string {
 		}
 		return "@" + h
 	case "mastodon":
+		if c := m.maAcct.Load(); c != nil && c.key == m.cur.Load().maKey && c.acct != "" {
+			return c.acct
+		}
 		u, err := url.Parse(strings.TrimSpace(v[KeyMastodonBaseURL]))
 		if err != nil {
 			return ""

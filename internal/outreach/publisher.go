@@ -437,6 +437,18 @@ func deref(s *string) string {
 	return *s
 }
 
+// ThumbOK reports whether a post for a workshop with this cover would go out
+// with a thumbnail (#0593): it is the same check the send makes, so the admin
+// preview drops the picture exactly when the publisher does. A nil publisher
+// attaches nothing.
+func (p *Publisher) ThumbOK(cover *string) bool {
+	if p == nil {
+		return false
+	}
+	data, _ := p.thumbnail(cover)
+	return data != nil
+}
+
 // thumbnail loads a workshop cover from local disk only. The value must be a
 // same-site /media/ path and a media directory must be configured; the file must sniff as
 // JPEG or PNG and fit Bluesky's blob limit. Anything else yields no

@@ -216,6 +216,29 @@ func (s *Store) ListPosts(ctx context.Context, outreachID int64) ([]Post, error)
 	return out, rows.Err()
 }
 
+// ListPostsByOutreach returns the posts of several outreaches in one query
+// (#0593), grouped by outreach id in id order; an outreach with no posts has
+// no entry. It replaces a ListPosts call per row where a list needs them all.
+func (s *Store) ListPostsByOutreach(ctx context.Context, outreachIDs []int64) (map[int64][]Post, error) {
+	out := map[int64][]Post{}
+	if len(outreachIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT `+postColumns+` FROM outreach_posts WHERE outreach_id = ANY($1) ORDER BY id`, outreachIDs)
+	if err != nil {
+		return nil, fmt.Errorf("outreach: list posts by outreach: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		p, err := scanPost(rows)
+		if err != nil {
+			return nil, fmt.Errorf("outreach: scan post: %w", err)
+		}
+		out[p.OutreachID] = append(out[p.OutreachID], p)
+	}
+	return out, rows.Err()
+}
+
 // GetPost returns one post, or ErrNotFound.
 func (s *Store) GetPost(ctx context.Context, id int64) (Post, error) {
 	p, err := scanPost(s.pool.QueryRow(ctx, `SELECT `+postColumns+` FROM outreach_posts WHERE id = $1`, id))

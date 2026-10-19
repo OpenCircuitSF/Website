@@ -77,6 +77,10 @@ describe('OutreachResults, one workshop', () => {
     expect(screen.getByText('https://go.example/k1')).toBeTruthy();
     expect(container.querySelector('svg')).toBeNull();
     expect(container.querySelector('[role="status"]')?.textContent).toMatch(/could not be reached/);
+    // Post status is in plain words, not the API's raw value (#0593).
+    expect(screen.getAllByText('Posted').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Draft').length).toBeGreaterThan(0);
+    expect(screen.queryByText('posted')).toBeNull();
   });
 
   it('draws one polyline per series, a post marker and the click count', async () => {

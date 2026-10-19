@@ -17,7 +17,7 @@
   interface Props {
     mode: PostDialogMode;
     /** When given, each item is drawn as its platform preview (#0583); otherwise as plain text. */
-    view?: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical' };
+    view?: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean };
     items: { channel: OutreachChannel; post: OutreachPost }[];
     inFlight: boolean;
     errorMessage: string | null;

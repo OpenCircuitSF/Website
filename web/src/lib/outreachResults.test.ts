@@ -6,6 +6,7 @@ import {
   clickDefinitionNote,
   legendTotals,
   postsCellText,
+  postStatusWords,
   showFlyerAllColumn,
   channelColor,
   chartDescription,
@@ -316,6 +317,8 @@ describe('batch 10 (#0590)', () => {
   it('postsCellText names posted channels and counts scheduled posts', () => {
     expect(postsCellText({ posted_channels: ['bluesky', 'mastodon'], scheduled: 4 }, LABELS)).toBe('Posted: Bluesky, Mastodon · 4 scheduled');
     expect(postsCellText({ posted_channels: [], scheduled: 0 }, LABELS)).toBe('Nothing posted yet');
+    expect(postsCellText({ posted_channels: ['bluesky'], scheduled: 0, queued: 1 }, LABELS)).toBe('Posted: Bluesky · 1 posting');
+    expect(postsCellText({ posted_channels: [], scheduled: 2, queued: 1 }, LABELS)).toBe('Nothing posted yet · 2 scheduled · 1 posting');
     expect(postsCellText({ posted_channels: ['bluesky'] }, LABELS)).toBe('Posted: Bluesky');
     expect(postsCellText({}, LABELS)).toBe('Nothing posted yet');
   });
@@ -359,5 +362,16 @@ describe('batch 10 (#0590)', () => {
     expect(showFlyerAllColumn([row])).toBe(false);
     expect(showFlyerAllColumn([{ ...row, workshops_at_location: 1 }])).toBe(false);
     expect(showFlyerAllColumn([row, { ...row, workshops_at_location: 2 }])).toBe(true);
+  });
+});
+
+describe('postStatusWords', () => {
+  it('names every post status in plain words, and passes an unknown one through', () => {
+    for (const st of ['draft', 'manual', 'scheduled', 'queued', 'posted', 'failed']) {
+      expect(postStatusWords(st)).not.toBe(st);
+      expect(postStatusWords(st)).toMatch(/^[A-Z]/);
+    }
+    expect(postStatusWords('queued')).toBe('Posting now');
+    expect(postStatusWords('mystery')).toBe('mystery');
   });
 });

@@ -841,6 +841,10 @@ export interface WorkshopOutreach {
   };
   /** #0583: which URL the Bluesky card points at. */
   bluesky_card?: 'short' | 'canonical';
+  /** #0593: the host of the site's base URL, which the canonical card shows. */
+  card_host?: string;
+  /** #0593: true when the publisher would attach the cover as the card's picture. */
+  thumb_ok?: boolean;
   outreach: { id: number; workshop_id: number; campaign_slug: string; created_at: string } | null;
   channels: OutreachChannel[];
   waves: OutreachWave[];
@@ -1075,6 +1079,8 @@ export interface OutreachResultsSummaryRow {
   posted_channels?: string[];
   /** #0590: scheduled posts. */
   scheduled?: number;
+  /** #0593: posts handed to the publisher and not yet out. */
+  queued?: number;
   clicks: number | null;
   status: OutreachResultsStatus;
   reactions: OutreachReactions | null;

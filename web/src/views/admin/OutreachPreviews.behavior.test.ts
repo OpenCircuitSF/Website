@@ -27,7 +27,7 @@ const workshop = (over: Record<string, unknown> = {}) => ({
 
 describe('Bluesky preview', () => {
   it('styles hashtags and links, and draws the card with title, summary and short host', () => {
-    const { container } = render(OutreachPostPreview, { view: { workshop: workshop() }, channel: bsky, post: post({}) });
+    const { container } = render(OutreachPostPreview, { view: { workshop: workshop(), thumb_ok: true }, channel: bsky, post: post({}) });
     expect(container.querySelector('.hashtag')?.textContent).toBe('#soldering');
     expect(container.querySelector('.link')?.textContent).toBe('https://go.example/b');
     const card = container.querySelector('.card') as HTMLElement;
@@ -37,11 +37,11 @@ describe('Bluesky preview', () => {
     expect(card.querySelector('img')?.getAttribute('src')).toBe('/media/cover.png');
   });
   it('shows the site host when the canonical URL is configured', () => {
-    const { container } = render(OutreachPostPreview, { view: { workshop: workshop(), bluesky_card: 'canonical' }, channel: bsky, post: post({}) });
-    expect(container.querySelector('.card-host')?.textContent).toBe(location.host);
+    const { container } = render(OutreachPostPreview, { view: { workshop: workshop(), bluesky_card: 'canonical', card_host: 'www.example.org' }, channel: bsky, post: post({}) });
+    expect(container.querySelector('.card-host')?.textContent).toBe('www.example.org');
   });
-  it('draws no picture for a cover that is not under /media/ and says so', () => {
-    const { container } = render(OutreachPostPreview, { view: { workshop: workshop({ cover_image: '/images/x.png' }) }, channel: bsky, post: post({}) });
+  it('draws no picture when the server says the publisher would not attach one, and says so', () => {
+    const { container } = render(OutreachPostPreview, { view: { workshop: workshop(), thumb_ok: false }, channel: bsky, post: post({}) });
     expect(container.querySelector('img')).toBeNull();
     expect(screen.getByText('No image: the card goes out without a picture.')).toBeTruthy();
   });

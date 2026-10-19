@@ -444,8 +444,10 @@ type resultsSummaryRow struct {
 	// "Posted: Bluesky, Mastodon · 4 scheduled" rather than "3 of 15".
 	PostedChannels []string `json:"posted_channels"`
 	Scheduled      int      `json:"scheduled"`
-	Clicks         *int64   `json:"clicks"`
-	Status         string   `json:"status"`
+	// Queued counts posts handed to the publisher and not yet out (#0593).
+	Queued int    `json:"queued"`
+	Clicks *int64 `json:"clicks"`
+	Status string `json:"status"`
 	// Reactions is the sum of the workshop's posts' latest snapshots (#0547);
 	// null when none has one.
 	Reactions *reactionsView `json:"reactions"`
@@ -471,6 +473,11 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+	postsBy, err := h.postsByOutreach(r.Context(), sums)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
 	status := resultsOK
 	if !h.linksEnabled() {
 		status = resultsNotConfigured
@@ -483,15 +490,11 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 			WorkshopID: s.WorkshopID, WorkshopSlug: s.WorkshopSlug, WorkshopTitle: s.WorkshopTitle, StartsAt: rfc3339(s.StartsAt),
 			PostsPosted: s.Counts["posted"], Scheduled: s.Counts["scheduled"], PostedChannels: []string{},
 		}
-		posts, err := h.store.ListPosts(r.Context(), s.OutreachID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
-		}
+		posts := postsBy[s.OutreachID]
 		// A switched-off channel's drafts are not counted (#0588): totals come
 		// from the visible posts, not the store's per-status counts.
 		posts = h.enabledPosts(posts)
-		row.PostsPosted, row.Scheduled = 0, 0
+		row.PostsPosted, row.Scheduled, row.Queued = 0, 0, 0
 		posted := map[string]bool{}
 		for _, p := range posts {
 			posted[p.Channel] = posted[p.Channel] || p.Status == "posted"
@@ -500,6 +503,8 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 				row.PostsPosted++
 			case "scheduled":
 				row.Scheduled++
+			case "queued":
+				row.Queued++
 			}
 		}
 		for _, c := range outreach.Channels() {

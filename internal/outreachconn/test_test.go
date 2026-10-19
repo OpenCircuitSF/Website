@@ -102,6 +102,9 @@ func TestMastodonConnection(t *testing.T) {
 	if !r.OK || r.Detail != "Signed in to Mastodon as @opencircuit" {
 		t.Errorf("ok result = %+v", r)
 	}
+	if got, want := m.Account("mastodon"), "@opencircuit@"+strings.TrimPrefix(srv.URL, "http://"); got != want {
+		t.Errorf("Account after a verified test = %q, want %q", got, want)
+	}
 	status = 401
 	r = m.Test(context.Background(), GroupMastodon)
 	if r.OK || r.Error != "Mastodon rejected the access token." {

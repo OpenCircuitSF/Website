@@ -171,6 +171,22 @@ func TestShortLinksRoundTrip(t *testing.T) {
 			}
 		}
 	}
+	// The requested half-open window is honoured (#0593), buckets and all.
+	from, to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
+	win, err := c.CampaignStats(ctx, "led-programming", from, to)
+	if err != nil || win.WindowFrom != "2026-09-01" || win.WindowTo != "2026-09-11" {
+		t.Fatalf("windowed CampaignStats = %+v, %v", win, err)
+	}
+	var winSum int64
+	for _, d := range win.Timeseries.Days {
+		winSum += d.Count
+		if d.Date < win.WindowFrom || d.Date >= win.WindowTo {
+			t.Fatalf("day %s outside [%s, %s)", d.Date, win.WindowFrom, win.WindowTo)
+		}
+	}
+	if winSum != win.ClickCount {
+		t.Fatalf("windowed timeseries sums to %d, click_count %d", winSum, win.ClickCount)
+	}
 	bad, _ := shortlinks.New(base+"/shortlinks", devmocks.BadToken)
 	if _, err := bad.Me(ctx); !errors.Is(err, shortlinks.ErrUnauthenticated) {
 		t.Fatalf("bad token err = %v, want ErrUnauthenticated", err)
