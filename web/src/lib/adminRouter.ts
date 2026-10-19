@@ -45,17 +45,27 @@ export type AdminSection =
   | 'crt'
   | 'not-found';
 
-/** The nav as grouped on screen (#0586): Overview stands alone, then Mailing
- * list / Workshops / System. ADMIN_NAV_SECTIONS below is derived from this so
- * the two cannot disagree about which screens exist. */
-export const ADMIN_NAV_GROUPS: readonly {
+/** The nav as grouped on screen (#0599): Overview stands alone, then
+ * Workshops / Newsletter / System, ordered by how often each is used. Each
+ * group's `landing` is the screen its section tab opens (its first screen).
+ * ADMIN_NAV_SECTIONS below is derived from this so the two cannot disagree
+ * about which screens exist. */
+export interface AdminNavGroup {
   label: string;
+  landing: Exclude<AdminSection, 'not-found'>;
   sections: readonly Exclude<AdminSection, 'not-found'>[];
-}[] = [
-  { label: 'Mailing list', sections: ['subscribers', 'pending', 'suppressions', 'deliverability', 'campaigns', 'interests'] },
-  { label: 'Workshops', sections: ['workshops', 'outreach'] },
-  { label: 'System', sections: ['settings', 'users', 'audit', 'crt'] },
+}
+export const ADMIN_NAV_GROUPS: readonly AdminNavGroup[] = [
+  { label: 'Workshops', landing: 'workshops', sections: ['workshops', 'outreach'] },
+  { label: 'Newsletter', landing: 'campaigns', sections: ['campaigns', 'subscribers', 'pending', 'deliverability', 'suppressions', 'interests'] },
+  { label: 'System', landing: 'settings', sections: ['settings', 'crt', 'users', 'audit'] },
 ];
+
+/** The nav group a section belongs to, or null for `overview` and
+ * `not-found` (neither has a second nav row). */
+export function sectionGroup(section: AdminSection): AdminNavGroup | null {
+  return ADMIN_NAV_GROUPS.find((g) => (g.sections as readonly AdminSection[]).includes(section)) ?? null;
+}
 
 /** The sections that are real screens (everything but not-found), in nav
  * order: Overview, then each group's sections. */
@@ -73,13 +83,13 @@ export const ADMIN_SECTION_LABELS: Readonly<Record<AdminSection, string>> = {
   audit: 'Audit log',
   interests: 'Interests',
   subscribers: 'Subscribers',
-  pending: 'Pending',
+  pending: 'Pending confirmations',
   suppressions: 'Suppressions',
   deliverability: 'Deliverability',
   campaigns: 'Campaigns',
   workshops: 'Workshops',
   outreach: 'Outreach',
-  crt: 'CRT session',
+  crt: 'Home screen',
   'not-found': 'Not found',
 };
 

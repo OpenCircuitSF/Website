@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 //
-// #0586: the admin nav renders Mailing list / Workshops / System groups and a
-// select that replaces them on narrow screens. jsdom applies no layout, so the
-// "no more than two rows at 390 px" claim is NOT proven here: the select is
-// present in the DOM and CSS shows it at <=480px, which a real browser must confirm.
-import { render, cleanup, screen, within, fireEvent } from '@testing-library/svelte';
+// #0599: two nav rows. Row one is Overview + the Workshops / Newsletter /
+// System sections; row two is only the active section's screens. jsdom applies
+// no layout, so "both rows are one line at 390 px" is NOT proven here; that
+// needs a real browser.
+import { render, cleanup, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { currentUser } from '../lib/stores';
 
@@ -28,33 +28,70 @@ afterEach(() => {
   currentUser.set(null);
 });
 
-describe('Admin nav groups', () => {
-  it('renders the three groups with their sections, and a select for narrow screens', async () => {
-    currentUser.set({ id: 1, email: 'a@b.c', is_admin: true, active: true, created_at: '' } as never);
-    window.location.hash = '#/';
-    render(Admin);
-    const groups: Record<string, string[]> = {
-      'Mailing list': ['Subscribers', 'Pending', 'Suppressions', 'Deliverability', 'Campaigns', 'Interests'],
-      Workshops: ['Workshops', 'Outreach'],
-      System: ['Settings', 'Users', 'Audit log', 'CRT session'],
-    };
-    for (const [label, names] of Object.entries(groups)) {
-      const g = within(document.querySelector('.subtab-links') as HTMLElement).getByRole('group', { name: label });
-      expect(Array.from(g.querySelectorAll('a')).map((a) => a.textContent)).toEqual(names);
-    }
-    const select = screen.getByRole('combobox', { name: 'Admin section' }) as HTMLSelectElement;
-    expect(select.querySelectorAll('optgroup').length).toBe(3);
-    expect(select.value).toBe('overview');
+function signIn(hash: string) {
+  currentUser.set({ id: 1, email: 'a@b.c', is_admin: true, active: true, created_at: '' } as never);
+  window.location.hash = hash;
+  render(Admin);
+}
+const rowOne = () => screen.getByRole('navigation', { name: 'Admin sections' });
+const linkNames = (nav: HTMLElement) => Array.from(nav.querySelectorAll('a')).map((a) => a.textContent);
+
+describe('Admin nav rows', () => {
+  it('row one has the four links in order with landing hrefs', () => {
+    signIn('#/');
+    const links = Array.from(rowOne().querySelectorAll('a'));
+    expect(links.map((a) => a.textContent)).toEqual(['Overview', 'Workshops', 'Newsletter', 'System']);
+    expect(links.map((a) => a.getAttribute('href'))).toEqual(['#/', '#/workshops', '#/campaigns', '#/settings']);
   });
 
-  it('navigates when the narrow-screen select changes (keyboard or pointer both fire change)', async () => {
-    currentUser.set({ id: 1, email: 'a@b.c', is_admin: true, active: true, created_at: '' } as never);
-    window.location.hash = '#/';
-    render(Admin);
-    const select = screen.getByRole('combobox', { name: 'Admin section' }) as HTMLSelectElement;
-    await fireEvent.change(select, { target: { value: 'outreach' } });
-    expect(window.location.hash).toBe('#/outreach');
-    await fireEvent.change(select, { target: { value: 'overview' } });
-    expect(window.location.hash).toBe('#/');
+  it('row two shows only the active group screens, in order, with aria-current=page on the active one', () => {
+    signIn('#/subscribers');
+    const row2 = screen.getByRole('navigation', { name: 'Newsletter screens' });
+    expect(linkNames(row2)).toEqual([
+      'Campaigns', 'Subscribers', 'Pending confirmations', 'Deliverability', 'Suppressions', 'Interests',
+    ]);
+    const current = Array.from(row2.querySelectorAll('a[aria-current="page"]'));
+    expect(current.map((a) => a.textContent)).toEqual(['Subscribers']);
+    expect(screen.queryByRole('navigation', { name: 'Workshops screens' })).toBeNull();
+  });
+
+  it('System row two lists Settings, Home screen, Users, Audit log', () => {
+    signIn('#/crt');
+    expect(linkNames(screen.getByRole('navigation', { name: 'System screens' }))).toEqual([
+      'Settings', 'Home screen', 'Users', 'Audit log',
+    ]);
+  });
+
+  it('has no row two on #/', () => {
+    signIn('#/');
+    expect(screen.queryByRole('navigation', { name: /screens$/ })).toBeNull();
+    expect(rowOne().querySelector('a[aria-current="page"]')?.textContent).toBe('Overview');
+  });
+
+  it('#/outreach?view=results lights Workshops and Outreach', () => {
+    signIn('#/outreach?view=results');
+    expect(rowOne().querySelector('a[aria-current]')?.textContent).toBe('Workshops');
+    const row2 = screen.getByRole('navigation', { name: 'Workshops screens' });
+    expect(row2.querySelector('a[aria-current="page"]')?.textContent).toBe('Outreach');
+  });
+
+  it('#/nope lights nothing', () => {
+    signIn('#/nope');
+    expect(rowOne().querySelector('[aria-current]')).toBeNull();
+    expect(screen.queryByRole('navigation', { name: /screens$/ })).toBeNull();
+  });
+
+  it('the narrow-screen select is gone', () => {
+    signIn('#/');
+    expect(screen.queryByRole('combobox', { name: 'Admin section' })).toBeNull();
+    expect(document.querySelector('.subtab-select')).toBeNull();
+  });
+
+  it('the Account link is in the header, and the Account/Admin tab row is gone', () => {
+    signIn('#/');
+    const header = document.querySelector('header.app-header') as HTMLElement;
+    expect(within(header).getByRole('link', { name: 'Account' }).getAttribute('href')).toBe('/account');
+    expect(within(header).queryByRole('navigation', { name: 'Primary' })).toBeNull();
+    expect(screen.queryByText('Mailing list')).toBeNull();
   });
 });

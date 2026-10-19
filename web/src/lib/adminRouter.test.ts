@@ -22,6 +22,9 @@ import {
   adminOutreachFlyersHash,
   adminOutreachPrintHash,
   ADMIN_NAV_SECTIONS,
+  ADMIN_NAV_GROUPS,
+  ADMIN_SECTION_LABELS,
+  sectionGroup,
 } from './adminRouter';
 
 describe('parseAdminHash', () => {
@@ -207,5 +210,33 @@ describe('settings sections (#0584)', () => {
   it('ignores an unknown section', () => {
     expect(settingsSectionFromQuery(new URLSearchParams('section=nope'))).toBeNull();
     expect(settingsSectionFromQuery(new URLSearchParams())).toBeNull();
+  });
+});
+
+describe('admin nav groups (#0599)', () => {
+  it('orders Workshops, Newsletter, System with Campaigns first in Newsletter', () => {
+    expect(ADMIN_NAV_GROUPS.map((g) => g.label)).toEqual(['Workshops', 'Newsletter', 'System']);
+    expect(ADMIN_NAV_GROUPS[1].sections[0]).toBe('campaigns');
+  });
+
+  it('gives every group a landing that is its first screen', () => {
+    for (const g of ADMIN_NAV_GROUPS) expect(g.landing).toBe(g.sections[0]);
+  });
+
+  it('sectionGroup returns the owning group, null for overview and not-found', () => {
+    expect(sectionGroup('outreach')?.label).toBe('Workshops');
+    expect(sectionGroup('pending')?.label).toBe('Newsletter');
+    expect(sectionGroup('crt')?.label).toBe('System');
+    expect(sectionGroup('overview')).toBeNull();
+    expect(sectionGroup('not-found')).toBeNull();
+  });
+
+  it('relabels pending and crt, and keeps every group section a parseable screen', () => {
+    expect(ADMIN_SECTION_LABELS.pending).toBe('Pending confirmations');
+    expect(ADMIN_SECTION_LABELS.crt).toBe('Home screen');
+    for (const g of ADMIN_NAV_GROUPS) {
+      for (const sec of g.sections) expect(ADMIN_NAV_SECTIONS).toContain(sec);
+    }
+    expect(ADMIN_NAV_SECTIONS.length).toBe(1 + ADMIN_NAV_GROUPS.flatMap((g) => g.sections).length);
   });
 });

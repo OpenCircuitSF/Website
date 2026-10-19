@@ -53,8 +53,8 @@
     adminCampaignHash,
     adminWorkshopHash,
     adminAuditCampaignHash,
-    ADMIN_NAV_SECTIONS,
     ADMIN_NAV_GROUPS,
+    sectionGroup,
     ADMIN_SECTION_LABELS,
     type AdminRoute,
   } from '../lib/adminRouter';
@@ -1231,6 +1231,8 @@
     return false;
   }
 
+  const activeGroup = $derived(sectionGroup(adminRoute.section));
+
   function go(view: 'account') {
     navigate(`/${view}`);
   }
@@ -1299,11 +1301,10 @@
 <div class="app-shell">
   <header class="app-header">
     <h1 class="app-title" tabindex="-1">{APP_NAME}</h1>
-    <nav class="nav-tabs" aria-label="Primary">
-      <button type="button" class="nav-tab" onclick={() => go('account')}>Account</button>
-      <button type="button" class="nav-tab active" aria-current="page">Admin</button>
-    </nav>
-    <Button variant="default" onclick={handleSignOut}>Sign out</Button>
+    <div class="header-actions">
+      <a class="account-link" href="/account" onclick={(e) => { e.preventDefault(); go('account'); }}>Account</a>
+      <Button variant="default" onclick={handleSignOut}>Sign out</Button>
+    </div>
   </header>
 
   {#if !$currentUser?.is_admin}
@@ -1311,48 +1312,37 @@
       <p class="text-error" role="alert">You do not have access to this area.</p>
     </Panel>
   {:else}
-    <nav class="subtabs" aria-label="Admin sections">
-      <!-- #0586: wide screens show grouped links; at 480px and below the
-           select replaces them (one row), so the bar can never wrap to five. -->
-      <div class="subtab-links">
+    <!-- #0599: row one is the four sections (each opens its landing screen);
+         row two is only the active section's screens. Overview has no row two.
+         Real links to hashes, not a tablist (#0527). -->
+    <nav class="section-tabs" aria-label="Admin sections">
+      <a
+        class="nav-tab"
+        class:active={adminRoute.section === 'overview'}
+        aria-current={adminRoute.section === 'overview' ? 'page' : undefined}
+        href={adminSectionHash('overview')}
+      >{ADMIN_SECTION_LABELS.overview}</a>
+      {#each ADMIN_NAV_GROUPS as g (g.label)}
         <a
-          class="subtab"
-          class:active={adminRoute.section === 'overview'}
-          aria-current={adminRoute.section === 'overview' ? 'page' : undefined}
-          href={adminSectionHash('overview')}
-        >{ADMIN_SECTION_LABELS.overview}</a>
-        {#each ADMIN_NAV_GROUPS as g (g.label)}
-          <div class="subtab-group" role="group" aria-label={g.label}>
-            <span class="subtab-group-label" aria-hidden="true">{g.label}</span>
-            {#each g.sections as s (s)}
-              <a
-                class="subtab"
-                class:active={adminRoute.section === s}
-                aria-current={adminRoute.section === s ? 'page' : undefined}
-                href={adminSectionHash(s)}
-              >{ADMIN_SECTION_LABELS[s]}</a>
-            {/each}
-          </div>
-        {/each}
-      </div>
-      <select
-        class="subtab-select"
-        aria-label="Admin section"
-        value={adminRoute.section}
-        onchange={(e) => {
-          window.location.hash = adminSectionHash(e.currentTarget.value as (typeof ADMIN_NAV_SECTIONS)[number]);
-        }}
-      >
-        <option value="overview">{ADMIN_SECTION_LABELS.overview}</option>
-        {#each ADMIN_NAV_GROUPS as g (g.label)}
-          <optgroup label={g.label}>
-            {#each g.sections as s (s)}
-              <option value={s}>{ADMIN_SECTION_LABELS[s]}</option>
-            {/each}
-          </optgroup>
-        {/each}
-      </select>
+          class="nav-tab"
+          class:active={activeGroup?.label === g.label}
+          aria-current={activeGroup?.label === g.label ? 'true' : undefined}
+          href={adminSectionHash(g.landing)}
+        >{g.label}</a>
+      {/each}
     </nav>
+    {#if activeGroup}
+      <nav class="subtabs" aria-label="{activeGroup.label} screens">
+        {#each activeGroup.sections as s (s)}
+          <a
+            class="subtab"
+            class:active={adminRoute.section === s}
+            aria-current={adminRoute.section === s ? 'page' : undefined}
+            href={adminSectionHash(s)}
+          >{ADMIN_SECTION_LABELS[s]}</a>
+        {/each}
+      </nav>
+    {/if}
 
     {#if adminRoute.section === 'overview'}
       <Dashboard onOpenCampaign={goToAnnouncedCampaign} />
@@ -2564,21 +2554,35 @@
 </div>
 
 <style>
-  .nav-tabs {
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-left: auto;
+  }
+  .account-link {
+    color: var(--text-muted);
+    font-size: var(--fs-md);
+    text-decoration: none;
+  }
+  .account-link:hover {
+    color: var(--text);
+  }
+  /* #0599 row one: filled active tab, the strongest mark on the page. */
+  .section-tabs {
     display: flex;
     gap: var(--space-1);
-    flex: 1;
-    padding: 0 var(--space-2);
+    margin-bottom: var(--space-2);
+    overflow-x: auto;
+    white-space: nowrap;
   }
   .nav-tab {
-    background: none;
-    border: none;
-    padding: var(--space-1) var(--space-2);
+    padding: var(--space-1) var(--space-3);
     border-radius: var(--radius);
-    cursor: pointer;
     color: var(--text-muted);
     font-size: var(--fs-md);
     font-family: var(--font);
+    text-decoration: none;
     /* Comfortable tap target on mobile */
     min-height: 40px;
     display: inline-flex;
@@ -2593,40 +2597,14 @@
     background: var(--bg-subtle);
     color: var(--text);
   }
+  /* Row two: quiet labels, active gets text colour and a 2px accent edge. */
   .subtabs {
+    display: flex;
+    gap: var(--space-4);
     margin-bottom: var(--space-4);
-  }
-  .subtab-links {
-    display: flex;
-    gap: var(--space-2);
-    flex-wrap: wrap;
-    align-items: flex-end;
-  }
-  .subtab-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    align-items: center;
-    padding-left: var(--space-3);
-    border-left: var(--border-w) solid var(--border);
-  }
-  .subtab-group-label {
-    font-size: var(--fs-sm, 0.8em);
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .subtab-select {
-    display: none;
-    width: 100%;
-    min-height: 44px;
-    font-family: var(--font);
-    font-size: var(--fs-md);
-    padding: var(--space-2) var(--space-3);
-    background: var(--bg-panel);
-    color: var(--text);
-    border: var(--border-w) solid var(--border);
-    border-radius: var(--radius);
+    border-bottom: var(--border-w) solid var(--border);
+    overflow-x: auto;
+    white-space: nowrap;
   }
   .settings-jump {
     display: flex;
@@ -2643,15 +2621,13 @@
     font-weight: 600;
   }
   .subtab {
-    background: var(--bg-panel);
-    border: var(--border-w) solid var(--border);
-    border-bottom-width: 2px;
-    border-radius: var(--radius);
-    padding: var(--space-2) var(--space-4);
-    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: var(--space-2) var(--space-1);
     font-size: var(--fs-md);
     font-family: var(--font);
     color: var(--text-muted);
+    text-decoration: none;
     /* Comfortable tap target on mobile */
     min-height: 40px;
     display: inline-flex;
@@ -2659,36 +2635,24 @@
   }
   .subtab.active {
     border-bottom-color: var(--accent);
-    color: var(--accent);
+    color: var(--text);
     font-weight: 600;
   }
   .subtab:hover:not(.active) {
-    background: var(--bg-subtle);
     color: var(--text);
   }
 
   @media (max-width: 480px) {
-    /* Stack nav-tabs below title on narrow screens */
-    .nav-tabs {
-      order: 3;
-      flex: 0 0 100%;
-      padding: 0;
-      flex-wrap: wrap;
-    }
+    /* #0599: both nav rows stay one line and scroll sideways if needed. */
     .nav-tab {
       font-size: var(--fs-base);
-      padding: var(--space-1) var(--space-3);
+      padding: var(--space-1) var(--space-2);
     }
-    /* #0586: grouped links collapse to a single select. */
-    .subtab-links {
-      display: none;
-    }
-    .subtab-select {
-      display: block;
+    .subtabs {
+      gap: var(--space-3);
     }
     .subtab {
       font-size: var(--fs-base);
-      padding: var(--space-2) var(--space-3);
     }
     /* Pager: allow center + wrap */
     .pager {
