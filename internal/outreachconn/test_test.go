@@ -105,6 +105,17 @@ func TestMastodonConnection(t *testing.T) {
 	if got, want := m.Account("mastodon"), "@opencircuit@"+strings.TrimPrefix(srv.URL, "http://"); got != want {
 		t.Errorf("Account after a verified test = %q, want %q", got, want)
 	}
+	// A changed token invalidates the verified account: back to the bare host
+	// until a test verifies the new one (#0593).
+	if _, err := m.Apply(context.Background(), map[string]string{KeyMastodonToken: "replacement-token-0593"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m.Account("mastodon"), strings.TrimPrefix(srv.URL, "http://"); got != want {
+		t.Errorf("Account after a token change = %q, want the bare host %q", got, want)
+	}
+	if _, err := m.Apply(context.Background(), map[string]string{KeyMastodonToken: tokenCanary}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	status = 401
 	r = m.Test(context.Background(), GroupMastodon)
 	if r.OK || r.Error != "Mastodon rejected the access token." {

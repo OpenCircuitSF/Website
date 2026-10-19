@@ -73,7 +73,9 @@ export function restoredTail(view: View, post: OutreachPost): string[] {
     for (const s of siblings) {
       const l = splitBody(s.body, s.short_url).tail.filter((p) => !isHashtagParagraph(p));
       if (l.length > 0) {
-        links = l.map((p) => (s.short_url ? p.split(s.short_url).join(url) : p));
+        // The sibling's link is its own short URL, or still the draft token:
+        // either way it becomes this post's link, never the sibling's.
+        links = l.map((p) => (s.short_url ? p.split(s.short_url).join(url) : p).split(LINK_TOKEN).join(url));
         break;
       }
     }

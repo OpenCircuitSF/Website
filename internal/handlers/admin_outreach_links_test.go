@@ -799,6 +799,24 @@ func TestAdminOutreachLinks_ScheduleAllRescuesTimePassed(t *testing.T) {
 		}
 	}
 
+	// A rescued row is still checked against the channel's limits: the plan
+	// reports time_passed before it looks at the body.
+	var body string
+	_ = e.pool.QueryRow(context.Background(), `SELECT body FROM outreach_posts WHERE id = $1`, passed).Scan(&body)
+	if _, err := e.pool.Exec(context.Background(), `UPDATE outreach_posts SET body = repeat('x', 400) WHERE id = $1`, passed); err != nil {
+		t.Fatal(err)
+	}
+	c = confirm(fmt.Sprintf("[%d]", passed), fmt.Sprintf(`{"%d":%q}`, passed, now.Add(26*time.Hour).Format(time.RFC3339)))
+	if len(c.ToSchedule) != 0 || len(c.Skipped) != 1 || c.Skipped[0].Reason != "invalid" {
+		t.Errorf("an over-limit rescued row: to_schedule %+v, skipped %+v, want one invalid skip", c.ToSchedule, c.Skipped)
+	}
+	if st, _ := status(passed); st != "draft" {
+		t.Errorf("over-limit rescued row status = %s, want draft", st)
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE outreach_posts SET body = $2 WHERE id = $1`, passed, body); err != nil {
+		t.Fatal(err)
+	}
+
 	// With a time inside the window the past row is scheduled at it.
 	want := now.Add(26 * time.Hour).UTC().Truncate(time.Second)
 	c = confirm(fmt.Sprintf("[%d]", passed), fmt.Sprintf(`{"%d":%q}`, passed, want.Format(time.RFC3339)))

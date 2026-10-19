@@ -144,6 +144,11 @@ describe('restoredTail (#0593)', () => {
     const sibling = { ...mPost, id: 3, channel: 'mastodon', body: mast };
     expect(restoredTail(view([bPost, lost, sibling]), lost)).toEqual(['Spots are limited, so you can sign up here: https://go.example/m2', '#soldering #sf']);
   });
+  it('turns an unprepared sibling\'s link token into this post\'s own short URL', () => {
+    const lost = { ...mPost, customized: true, body: 'Only my words.', short_url: 'https://go.example/m2' };
+    const sibling = { ...mPost, id: 3, channel: 'mastodon', body: mast.split(MURL).join('{link}'), short_url: null };
+    expect(restoredTail(view([bPost, lost, sibling]), lost)).toEqual(['Spots are limited, so you can sign up here: https://go.example/m2', '#soldering #sf']);
+  });
   it('makes a plain link line when no sibling carries one', () => {
     const lost = { ...mPost, customized: true, body: 'Only my words.' };
     expect(restoredTail(view([bPost, lost]), lost)).toEqual([`Sign up here: ${MURL}`, '#soldering #sf']);

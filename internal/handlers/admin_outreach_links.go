@@ -786,6 +786,13 @@ func (h *AdminOutreachHandler) ScheduleAll(w http.ResponseWriter, r *http.Reques
 		if sk, ok := rescuable[id]; ok {
 			if at, has := overrides[id]; has {
 				planned[id] = true
+				// The plan checks time_passed before the body, so a rescued
+				// post has not been validated yet; Schedule's own gate does
+				// this for a single post.
+				if ch, _ := outreach.ChannelByName(sk.Channel); outreach.ValidateForSend(ch, byID[id].Body) != nil {
+					resp.Skipped = append(resp.Skipped, skipView(&id, sk.Channel, sk.Wave, "invalid", sk.SuggestedAt))
+					continue
+				}
 				updated, err := h.store.Schedule(ctx, id, at)
 				if err != nil {
 					resp.Skipped = append(resp.Skipped, skipView(&id, sk.Channel, sk.Wave, "changed", &at))
