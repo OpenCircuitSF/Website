@@ -63,7 +63,6 @@ export interface ComposerActions {
   canSave: boolean;
   canRegenerate: boolean;
   canPrepare: boolean;
-  canCopy: boolean;
   canMarkPosted: boolean;
   canDelete: boolean;
   /** #0545: send through the server to Bluesky or Mastodon now. */
@@ -97,7 +96,6 @@ export function composerActions(
     canSave: !locked,
     canRegenerate: post.stale && !locked,
     canPrepare: available && !post.prepared && !posted,
-    canCopy: post.prepared && !posted,
     canMarkPosted: post.prepared && !locked && (!sendsItself || post.status === 'draft' || post.status === 'failed'),
     canDelete: !locked,
     canPostNow: canSend && draftLike,

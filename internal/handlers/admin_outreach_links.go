@@ -769,11 +769,40 @@ func (h *AdminOutreachHandler) ScheduleAll(w http.ResponseWriter, r *http.Reques
 	for _, p := range posts {
 		byID[p.ID] = p
 	}
+	// A slot skipped as time_passed can be rescued with an explicit time of
+	// its own (#0593): the editor named the post and gave a time inside the
+	// same lead window, so the planned (past) time is simply replaced.
+	rescuable := map[int64]outreach.ScheduleSkip{}
+	for _, s := range skips {
+		if s.Reason == "time_passed" && s.PostID != nil {
+			rescuable[*s.PostID] = s
+		}
+	}
 	for _, id := range req.PostIDs {
 		if planned[id] {
 			continue
 		}
 		id := id
+		if sk, ok := rescuable[id]; ok {
+			if at, has := overrides[id]; has {
+				planned[id] = true
+				updated, err := h.store.Schedule(ctx, id, at)
+				if err != nil {
+					resp.Skipped = append(resp.Skipped, skipView(&id, sk.Channel, sk.Wave, "changed", &at))
+					continue
+				}
+				resp.ToSchedule = append(resp.ToSchedule, itemView(outreach.ScheduleItem{PostID: id, Channel: sk.Channel, Wave: sk.Wave, ScheduledAt: at}))
+				if h.auditor != nil {
+					actorID, targetID := actor.ID, updated.ID
+					h.auditor.Record(ctx, audit.Entry{
+						ActorID: &actorID, Action: audit.ActionOutreachPostScheduled, TargetType: audit.TargetOutreachPost, TargetID: &targetID,
+						Metadata: map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "scheduled_at": at.UTC().Format(time.RFC3339), "bulk": true, "time_overridden": true, "rescued": true},
+						IP:       clientIP(r),
+					})
+				}
+				continue
+			}
+		}
 		p := byID[id]
 		resp.Skipped = append(resp.Skipped, skipView(&id, p.Channel, p.Wave, "changed", nil))
 	}

@@ -55,9 +55,26 @@ describe('Outreach landing list', () => {
     expect(screen.queryByText('Workshop 4')).toBeNull();
     expect(screen.getByText('Not started')).toBeTruthy();
     expect(screen.getByText('2 posted · 4 scheduled')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Promote' }).getAttribute('href')).toContain('workshop=1');
-    expect(screen.getByRole('link', { name: 'Open' }).getAttribute('href')).toContain('workshop=2');
+    expect(screen.getByRole('link', { name: 'Promote Workshop 1' }).getAttribute('href')).toContain('workshop=1');
+    expect(screen.getByRole('link', { name: 'Open outreach for Workshop 2' }).getAttribute('href')).toContain('workshop=2');
     expect(document.body.textContent).not.toContain('No workshop has outreach yet');
+  });
+
+  it('lists past workshops that had outreach under Past, and not those that did not (#0593)', async () => {
+    listAdminWorkshops.mockResolvedValue({
+      workshops: [
+        ws(1),
+        ws(4, { title: 'Old with outreach', starts_at: '2020-01-01T00:00:00Z' }),
+        ws(5, { title: 'Old without', starts_at: '2020-02-01T00:00:00Z' }),
+      ],
+    });
+    listOutreach.mockResolvedValue({ outreach: [sum(4, { posted: 3 })] });
+    render(Outreach);
+    await screen.findByText('Old with outreach');
+    expect(screen.getByText('Past', { selector: '.panel-header' })).toBeTruthy();
+    expect(screen.queryByText('Old without')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open outreach for Old with outreach' }).getAttribute('href')).toContain('workshop=4');
+    expect(screen.getByRole('link', { name: 'Results for Old with outreach' })).toBeTruthy();
   });
 
   it('labels the sub-nav Posts, Flyer spots (the saved locations), Flyers, Results', async () => {
@@ -116,5 +133,19 @@ describe('Overview needs-attention box', () => {
     render(Dashboard, { props: { onOpenCampaign: vi.fn() } });
     await screen.findByText('Not connected: Bluesky. Connect in Settings → Outreach.');
     expect(screen.getByText('2 upcoming workshops not yet announced.')).toBeTruthy();
+  });
+
+  it('keeps the unannounced count when the connections call fails, via Promise.allSettled (#0593)', async () => {
+    getOverview.mockResolvedValue({
+      subscribers: { counts: { pending: 0, active: 0, unsubscribed: 0, bounced: 0, complained: 0 }, growth_30d: { confirmed_30d: 0, imported_30d: 0, unsubscribed_30d: 0, net_30d: 0 } },
+      interests: [], recent_campaigns: [],
+      warnings: { complaint_rate_review: false, complaint_rate_high: false, complaint_sample_size: 0, physical_address_unset: false, ses_sandbox_active: false, inbound_mail_unavailable: false, outbound_queue_abandoned: false },
+    });
+    getOutreachConnections.mockRejectedValue(new Error('down'));
+    listAdminWorkshops.mockResolvedValue({ workshops: [ws(1), ws(2)] });
+    listOutreach.mockResolvedValue({ outreach: [] });
+    render(Dashboard, { props: { onOpenCampaign: vi.fn() } });
+    await screen.findByText('2 upcoming workshops not yet announced.');
+    expect(screen.queryByText(/Not connected/)).toBeNull();
   });
 });

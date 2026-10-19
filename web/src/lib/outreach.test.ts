@@ -65,7 +65,7 @@ describe('isOverLimit', () => {
 describe('composerActions', () => {
   const none = { canPostNow: false, canRetry: false, canSchedule: false, canUnschedule: false };
   it('draft on a manual channel, available', () => {
-    expect(composerActions(post(), instagram, true)).toEqual({ canSave: true, canRegenerate: false, canPrepare: true, canCopy: false, canMarkPosted: false, canDelete: true, ...none });
+    expect(composerActions(post(), instagram, true)).toEqual({ canSave: true, canRegenerate: false, canPrepare: true, canMarkPosted: false, canDelete: true, ...none });
   });
   it('draft, unavailable cannot prepare', () => {
     expect(composerActions(post(), instagram, false).canPrepare).toBe(false);
@@ -74,10 +74,10 @@ describe('composerActions', () => {
     expect(composerActions(post({ stale: true }), instagram, true).canRegenerate).toBe(true);
   });
   it('prepared manual can copy and mark posted but not prepare or send', () => {
-    expect(composerActions(post({ prepared: true, status: 'manual' }), instagram, true)).toEqual({ canSave: true, canRegenerate: false, canPrepare: false, canCopy: true, canMarkPosted: true, canDelete: true, ...none });
+    expect(composerActions(post({ prepared: true, status: 'manual' }), instagram, true)).toEqual({ canSave: true, canRegenerate: false, canPrepare: false, canMarkPosted: true, canDelete: true, ...none });
   });
   it('posted is locked', () => {
-    expect(composerActions(post({ prepared: true, status: 'posted', stale: true }), bluesky, true)).toEqual({ canSave: false, canRegenerate: false, canPrepare: false, canCopy: false, canMarkPosted: false, canDelete: false, ...none });
+    expect(composerActions(post({ prepared: true, status: 'posted', stale: true }), bluesky, true)).toEqual({ canSave: false, canRegenerate: false, canPrepare: false, canMarkPosted: false, canDelete: false, ...none });
   });
 
   // #0545: the matrix for an automatic channel, by status, configuration and availability.
@@ -88,8 +88,8 @@ describe('composerActions', () => {
     ['draft', false, true, { canMarkPosted: true, canSave: true, canDelete: true }],
     ['scheduled', true, true, { canPostNow: true, canSchedule: true, canUnschedule: true, canSave: true, canDelete: true }],
     ['scheduled', false, true, { canUnschedule: true, canMarkPosted: true, canSave: true, canDelete: true }],
-    ['queued', true, true, { canCopy: true }],
-    ['queued', false, true, { canCopy: true }],
+    ['queued', true, true, {}],
+    ['queued', false, true, {}],
     ['failed', true, true, { canRetry: true, canSchedule: true, canMarkPosted: true, canSave: true, canDelete: true }],
     ['failed', true, false, { canMarkPosted: true, canSave: true, canDelete: true }],
     ['failed', false, true, { canMarkPosted: true, canSave: true, canDelete: true }],
@@ -100,7 +100,7 @@ describe('composerActions', () => {
       const ch = { ...bluesky, configured };
       const got = composerActions(post({ prepared: true, status }), ch, available);
       const want: ComposerActions = {
-        canSave: false, canRegenerate: false, canPrepare: false, canCopy: status !== 'posted', canMarkPosted: false, canDelete: false,
+        canSave: false, canRegenerate: false, canPrepare: false, canMarkPosted: false, canDelete: false,
         canPostNow: false, canRetry: false, canSchedule: false, canUnschedule: false,
         ...expected,
       };

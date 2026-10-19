@@ -132,6 +132,17 @@
   async function save(e: Event): Promise<void> {
     e.preventDefault();
     submitted = true;
+    if (!valid && editing !== null) {
+      // Move focus to the first field with a problem (#0593).
+      for (const f of ['name', 'code', 'address', 'notes'] as const) {
+        const el = document.getElementById(`loc-${f}`) as HTMLInputElement | HTMLTextAreaElement | null;
+        if (errors[f] && el && !el.disabled) {
+          el.focus();
+          break;
+        }
+      }
+      return;
+    }
     if (!valid || saving || editing === null) return;
     saving = true;
     status = '';
@@ -211,7 +222,7 @@
 </script>
 
 <div class="fit">
-<Panel title="Flyer locations">
+<Panel title="Flyer spots">
   <p class="text-muted">Places flyers go. Each flyer run makes one short link per active location.</p>
   <p class="loc-status" class:text-muted={status !== '' && !statusIsError} class:text-error={statusIsError} role="status">{status}</p>
   {#if undoLoc}

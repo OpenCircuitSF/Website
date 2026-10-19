@@ -19,7 +19,7 @@
     outreachLayoutFromQuery,
   } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
-  import { upcomingPublished, summariesByWorkshop, outreachChip, outreachRowButtonLabel } from '../../lib/outreachList';
+  import { upcomingPublished, summariesByWorkshop, outreachChip, outreachRowButtonLabel, outreachRowAriaLabel, pastWithOutreach } from '../../lib/outreachList';
   import type { OutreachSummary, AdminWorkshop } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
@@ -39,6 +39,7 @@
   let workshops = $state<AdminWorkshop[]>([]);
   const upcoming = $derived(upcomingPublished(workshops));
   const byWorkshop = $derived(summariesByWorkshop(rows));
+  const past = $derived(pastWithOutreach(workshops, rows));
   let loading = $state(true);
   let loadError = $state<string | null>(null);
 
@@ -111,7 +112,7 @@
               <td>{w.title}</td>
               <td>{w.starts_at ? formatDateTime(w.starts_at) : 'Date TBA'}</td>
               <td><span class="badge badge-{chip.tone}">{chip.label}</span></td>
-              <td><a class="row-button" href={adminOutreachWorkshopHash(w.id)}>{outreachRowButtonLabel(s)}</a></td>
+              <td><a class="row-button" href={adminOutreachWorkshopHash(w.id)} aria-label={outreachRowAriaLabel(s, w.title)}>{outreachRowButtonLabel(s)}</a></td>
             </tr>
           {/each}
         </tbody>
@@ -119,6 +120,38 @@
     </div>
   {/if}
 </Panel>
+{#if !loading && !loadError && past.length > 0}
+  <Panel title="Past">
+    <p class="text-muted">Workshops that have happened and had outreach. Open one for its posts, or see how it did under Results.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Workshop</th>
+            <th>Date</th>
+            <th>Outreach</th>
+            <th><span class="sr-only">Action</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each past as w (w.id)}
+            {@const s = byWorkshop.get(w.id)}
+            {@const chip = outreachChip(s)}
+            <tr>
+              <td>{w.title}</td>
+              <td>{w.starts_at ? formatDateTime(w.starts_at) : 'Date TBA'}</td>
+              <td><span class="badge badge-{chip.tone}">{chip.label}</span></td>
+              <td>
+                <a class="row-button" href={adminOutreachWorkshopHash(w.id)} aria-label={outreachRowAriaLabel(s, w.title)}>{outreachRowButtonLabel(s)}</a>
+                <a href={adminOutreachResultsHash(w.id)} aria-label="Results for {w.title}">Results</a>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  </Panel>
+{/if}
 {/if}
 {/if}
 

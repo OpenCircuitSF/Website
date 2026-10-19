@@ -10,7 +10,7 @@
 <script lang="ts">
   import { adminOutreachFlyersHash, adminOutreachHash, adminOutreachResultsHash, adminWorkshopHash } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
-  import type { FlyerRow, WorkshopOutreach } from '../../lib/types';
+  import type { FlyerRow, OutreachPost, WorkshopOutreach } from '../../lib/types';
   import Panel from '../../lib/Panel.svelte';
   import OutreachPanel from './OutreachPanel.svelte';
   import OutreachAnnouncement from './OutreachAnnouncement.svelte';
@@ -66,6 +66,16 @@
     }
   }
 
+  // The reset note describes the state right after the reset; the next change
+  // (a post, a schedule, a bulk action) makes it stale, so it goes (#0593).
+  function changed(): void {
+    resetNote = '';
+  }
+  function reloadAfterChange(): void {
+    changed();
+    reloadKey++;
+  }
+
   function onLoaded(v: WorkshopOutreach): void {
     view = v;
     if (v.link_report) linkWarning = linkReportMessage(v.link_report);
@@ -98,16 +108,17 @@
 
 <Panel title="Outreach">
   <OutreachPanel {workshopId} {reloadKey} {onLoaded} onNotFound={() => (notFound = true)} autoStart>
-    {#snippet body({ view: v, results, onChange })}
+    {#snippet body({ view: v, results, onChange: panelChange })}
+      {@const onChange = (p: OutreachPost) => { changed(); panelChange(p); }}
       <p class="summary">{summaryLine(v, results)}</p>
-      <OutreachAnnouncement view={v} {results} wave="announce" {workshopId} {onChange} reload={() => reloadKey++} />
+      <OutreachAnnouncement view={v} {results} wave="announce" {workshopId} {onChange} reload={reloadAfterChange} />
       {#each v.waves.filter((w) => w.name !== 'announce') as w (w.name)}
-        <OutreachWaveRow view={v} {results} wave={w} {workshopId} {onChange} reload={() => reloadKey++} />
+        <OutreachWaveRow view={v} {results} wave={w} {workshopId} {onChange} reload={reloadAfterChange} />
       {/each}
-      <OutreachBulkActions {workshopId} view={v} onDone={() => reloadKey++} />
+      <OutreachBulkActions {workshopId} view={v} onDone={reloadAfterChange} />
       <details class="row-details">
         <summary><strong>Post by hand</strong> <span class="text-muted">· {manualRowStatus(v)}</span></summary>
-        <OutreachPostCards view={v} {results} {onChange} reload={() => reloadKey++} channelFilter={(c) => !sendsItself(c)} {flyer} />
+        <OutreachPostCards view={v} {results} {onChange} reload={reloadAfterChange} channelFilter={(c) => !sendsItself(c)} {flyer} />
       </details>
       <div class="row-details row spread">
         <span><strong>Flyers</strong> <span class="text-muted">· print and post at saved locations</span></span>

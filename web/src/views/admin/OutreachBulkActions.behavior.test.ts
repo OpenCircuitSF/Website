@@ -90,6 +90,28 @@ describe('OutreachBulkActions', () => {
     expect(screen.getByRole('status').textContent).toBe('Scheduled 1 post.');
   });
 
+  it('lets a time_passed row be rescued with a time of its own, sent with its post id (#0593)', async () => {
+    const withIds: OutreachScheduleAllResult = {
+      ...plan,
+      skipped: [{ post_id: 10, channel: 'bluesky', channel_label: 'Bluesky', wave: 'reminder', wave_label: 'Reminder', reason: 'time_passed', suggested_at: '2026-11-28T18:00:00Z' }],
+    };
+    scheduleAllOutreach.mockResolvedValueOnce(withIds).mockResolvedValueOnce({ dry_run: false, to_schedule: plan.to_schedule, skipped: [] });
+    render(OutreachBulkActions, { workshopId: 5, view: wo(), onDone: vi.fn() });
+    await fireEvent.click(screen.getByRole('button', { name: 'Schedule all' }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Pick a time for Bluesky Reminder' }));
+    const confirmBtn = screen.getByRole('button', { name: 'Schedule 2 posts' }) as HTMLButtonElement;
+    // No time picked yet: a row error blocks the button.
+    expect(confirmBtn.disabled).toBe(true);
+    const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: '2099-12-01T10:00' } });
+    expect(confirmBtn.disabled).toBe(false);
+    await fireEvent.click(confirmBtn);
+    await waitFor(() => expect(scheduleAllOutreach).toHaveBeenCalledTimes(2));
+    const body = scheduleAllOutreach.mock.calls[1][1] as unknown as { post_ids: number[]; times: Record<number, string> };
+    expect(body.post_ids).toEqual([11, 10]);
+    expect(Object.keys(body.times)).toEqual(['10']);
+  });
+
   it('is disabled with a Settings link when no automatic channel is configured', () => {
     render(OutreachBulkActions, {
       workshopId: 5, onDone: vi.fn(),

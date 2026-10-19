@@ -151,6 +151,7 @@
   import Deliverability from './admin/Deliverability.svelte';
   import OutreachConnections from './admin/OutreachConnections.svelte';
   import ServerSettings from './admin/ServerSettings.svelte';
+  import { ServerSettingsStore } from '../lib/serverSettingsStore.svelte';
   import CrtCommands from './admin/CrtCommands.svelte';
 
   // #0527: the hash is the single source of truth for which admin screen
@@ -1251,6 +1252,8 @@
   // when content above it grows afterwards (Safari has no scroll anchoring).
   // jsdom has no scrollIntoView, hence the guard.
   let serverSettingsReady = $state(false);
+  // One fetch shared by the Server settings and Outreach mounts (#0593).
+  const serverSettingsStore = new ServerSettingsStore();
   function scrollToSettingsSection(id: SettingsSection): void {
     void tick().then(() =>
       document.getElementById(`settings-${id}`)?.scrollIntoView?.({ block: 'start' }),
@@ -1442,11 +1445,11 @@
       </Panel>
       </div>
       <div id="settings-server">
-        <ServerSettings scope="server" onloaded={() => (serverSettingsReady = true)} />
+        <ServerSettings scope="server" store={serverSettingsStore} onloaded={() => (serverSettingsReady = true)} />
       </div>
       <div id="settings-outreach">
         <Panel title="Outreach">
-          <ServerSettings scope="outreach" bare />
+          <ServerSettings scope="outreach" store={serverSettingsStore} showNote={false} bare />
           <h3 class="settings-sub">Connections</h3>
           <OutreachConnections bare />
         </Panel>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composeBody, isHashtagParagraph, manualRowStatus, messageTargets, planSaveMessage, sharedMessage, splitBody, waveRowStatus } from './outreachMessage';
+import { composeBody, isHashtagParagraph, manualRowStatus, messageTargets, planSaveMessage, restoredTail, sharedMessage, splitBody, waveRowStatus } from './outreachMessage';
 import type { OutreachChannel, OutreachPost, OutreachWave } from './types';
 
 const ch = (name: string, automatic: boolean, configured: boolean, limit = 0): OutreachChannel => ({
@@ -117,5 +117,35 @@ describe('waveRowStatus and manualRowStatus', () => {
   it('the manual row counts hand-posted cards', () => {
     expect(manualRowStatus(view([bPost]))).toBe('Nothing drafted');
     expect(manualRowStatus(view([post({ id: 5, channel: 'instagram', status: 'posted' }), post({ id: 6, channel: 'instagram', wave: 'reminder', status: 'manual' })]))).toBe('Posted 1 of 2');
+  });
+});
+
+describe('a message ending in a hashtag-only paragraph (#0593)', () => {
+  it('keeps that paragraph in the message when the post also has its own hashtag line', () => {
+    const body = 'Hello.\n\n#soldering\n\n#a #b';
+    expect(splitBody(body, null)).toEqual({ message: 'Hello.\n\n#soldering', tail: ['#a #b'] });
+  });
+  it('round-trips through compose', () => {
+    const planned = planSaveMessage(view([bPost]), 'announce', 'Hello.\n\n#workshop');
+    expect(splitBody(planned[0].body, null).message).toBe('Hello.\n\n#workshop');
+  });
+});
+
+describe('restoredTail (#0593)', () => {
+  it('keeps a post\'s own tail', () => {
+    expect(restoredTail(view([bPost, mPost]), mPost)).toEqual([`Spots are limited, so you can sign up here: ${MURL}`, '#soldering #sf']);
+  });
+  it('restores the hashtags for Bluesky from a non-customized sibling, with no link', () => {
+    const lost = { ...bPost, customized: true, body: 'Only my words.' };
+    expect(restoredTail(view([lost, mPost]), lost)).toEqual(['#soldering #sf']);
+  });
+  it('restores Mastodon\'s link line (own short URL) and hashtags when both were lost', () => {
+    const lost = { ...mPost, customized: true, body: 'Only my words.', short_url: 'https://go.example/m2' };
+    const sibling = { ...mPost, id: 3, channel: 'mastodon', body: mast };
+    expect(restoredTail(view([bPost, lost, sibling]), lost)).toEqual(['Spots are limited, so you can sign up here: https://go.example/m2', '#soldering #sf']);
+  });
+  it('makes a plain link line when no sibling carries one', () => {
+    const lost = { ...mPost, customized: true, body: 'Only my words.' };
+    expect(restoredTail(view([bPost, lost]), lost)).toEqual([`Sign up here: ${MURL}`, '#soldering #sf']);
   });
 });

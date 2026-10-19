@@ -7,8 +7,9 @@
 // or a failure closes the tab and reports in the status line, and Put up
 // toggles. jsdom is not a browser (AGENTS.md §1): no layout is claimed.
 import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlyerView, OutreachLocation } from '../../lib/types';
+import { markFreshFlyer, clearFreshFlyer } from '../../lib/flyers';
 
 const calls: string[] = [];
 const getOutreachFlyer = vi.fn<(id: number) => Promise<FlyerView>>();
@@ -50,6 +51,9 @@ vi.mock('../../lib/api', () => ({
 }));
 
 const { default: OutreachFlyerEditor } = await import('./OutreachFlyerEditor.svelte');
+
+// Most tests open a flyer made in this session (#0593); the reopen test clears it.
+beforeEach(() => markFreshFlyer(7));
 
 afterEach(() => {
   cleanup();
@@ -117,12 +121,34 @@ describe('OutreachFlyerEditor', () => {
   it('a new flyer defaults to the cover image, every active location and one copy (#0589)', async () => {
     const v = flyer([], { facts: { title: 'T', date_line: 'd', place_line: 'p', cover_image: '/cover.webp', description: '' } });
     await mountWith(v, [loc(1), loc(2), loc(3, { active: false })]);
-    expect((screen.getByLabelText(/Board 1/) as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText(/Board 2/) as HTMLInputElement).checked).toBe(true);
-    expect(screen.queryByLabelText(/Board 3/)).toBeNull();
+    expect((screen.getByRole('checkbox', { name: /Board 1/ }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: /Board 2/ }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByRole('checkbox', { name: /Board 3/ })).toBeNull();
     expect(document.querySelector('.focal-box img')?.getAttribute('src')).toBe('/cover.webp');
     expect(document.querySelectorAll('.preview img').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Print 2 flyers' })).toBeTruthy();
+  });
+
+  it('a flyer saved with no photo and no locations does not get the new-flyer defaults on reopen (#0593)', async () => {
+    clearFreshFlyer(7);
+    const v = flyer([], { facts: { title: 'T', date_line: 'd', place_line: 'p', cover_image: '/cover.webp', description: '' } });
+    await mountWith(v, [loc(1), loc(2)]);
+    expect((screen.getByRole('checkbox', { name: /Board 1/ }) as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByRole('button', { name: 'Print 0 flyers' })).toBeTruthy();
+  });
+
+  it('keeps description, title position and copies under a More disclosure, and the preview can be folded (#0593)', async () => {
+    await mountWith(fullPhoto(), [loc(1)]);
+    const more = document.querySelector('details.more') as HTMLDetailsElement;
+    expect(more.querySelector('summary')?.textContent).toContain('More');
+    expect(more.open).toBe(false);
+    expect(more.querySelector('#fl-desc-input')).toBeTruthy();
+    expect(more.querySelector('input[name="fl-titlepos"]')).toBeTruthy();
+    const toggle = screen.getByRole('button', { name: 'Hide preview' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    await fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Show preview' }).getAttribute('aria-expanded')).toBe('false');
+    expect(document.getElementById('fl-preview-body')?.classList.contains('collapsed')).toBe(true);
   });
 
   it('Print N flyers saves, generates missing links, then opens the print view, naming each step', async () => {
@@ -132,7 +158,7 @@ describe('OutreachFlyerEditor', () => {
     setOutreachFlyerLocations.mockResolvedValue(flyer(selection(false)));
     generateOutreachFlyer.mockResolvedValue(flyer(selection(true), { remaining: 0 }));
     await mountWith(flyer(), [loc(1)]);
-    await fireEvent.change(screen.getByLabelText('Copies'), { target: { value: '2' } });
+    await fireEvent.change(screen.getByLabelText('Copies for Board 1'), { target: { value: '2' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Print 2 flyers' }));
     await waitFor(() => expect(tab.location.href.endsWith(printUrl)).toBe(true));
     // Opened blank, synchronously in the click, before any request.
@@ -234,9 +260,9 @@ describe('OutreachFlyerEditor', () => {
   it('lists active locations plus already-selected inactive ones', async () => {
     const selected = { location_id: 3, name: 'Board 3', code: 'b3', address: '', active: false, copies: 1, link: null };
     await mountWith(flyer([selected]), [loc(1), loc(2, { active: false }), loc(3, { active: false })]);
-    expect(screen.queryByLabelText(/Board 2/)).toBeNull();
-    expect(screen.getByLabelText(/Board 1/)).toBeTruthy();
-    expect(screen.getByLabelText(/Board 3/)).toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: /Board 2/ })).toBeNull();
+    expect(screen.getByRole('checkbox', { name: /Board 1/ })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: /Board 3/ })).toBeTruthy();
     expect(screen.getAllByText('1 location · 1 flyer').length).toBeGreaterThan(0);
   });
 

@@ -193,6 +193,30 @@ describe('Admin.svelte hash routing (#0527)', () => {
     }
   });
 
+  it('lands on the Server settings section from #/settings?section=server, with one fetch and one precedence note (#0593)', async () => {
+    const scrolled: string[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id);
+    };
+    vi.mocked(getServerSettings).mockClear();
+    vi.mocked(getServerSettings).mockResolvedValueOnce({
+      groups: [
+        { name: 'media', error: '', fields: [] },
+        { name: 'outreach', error: '', fields: [] },
+      ],
+    } as never);
+    try {
+      window.history.replaceState(null, '', '/admin#/settings?section=server');
+      render(Admin);
+      await waitFor(() => expect(scrolled).toContain('settings-server'));
+      expect(getServerSettings).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(document.querySelectorAll('.srv-note').length).toBe(1));
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
   it('waits for the Server settings panel above it to load before landing on Outreach (#0584)', async () => {
     // A one-shot scroll fired while the panel above is still loading lands
     // short once that panel grows, so the deep link must hold until it settles.

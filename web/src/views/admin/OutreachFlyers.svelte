@@ -9,7 +9,7 @@
   import { listOutreachFlyers, listOutreach, createOutreachFlyer, ApiError } from '../../lib/api';
   import { adminOutreachFlyersHash } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
-  import { FLYER_TEMPLATE_LABELS } from '../../lib/flyers';
+  import { FLYER_TEMPLATE_LABELS, markFreshFlyer } from '../../lib/flyers';
   import type { FlyerRow, OutreachSummary } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
@@ -49,6 +49,7 @@
     status = '';
     try {
       const v = await createOutreachFlyer({ outreach_id: outreachId });
+      markFreshFlyer(v.flyer.id);
       window.location.hash = adminOutreachFlyersHash(v.flyer.id);
     } catch (err) {
       status = message(err, 'Could not create the flyer. Please try again.');

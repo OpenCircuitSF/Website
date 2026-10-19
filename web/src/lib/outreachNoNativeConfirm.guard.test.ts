@@ -6,9 +6,10 @@ import { describe, expect, it } from 'vitest';
 
 const sources = import.meta.glob('../views/admin/Outreach*.svelte', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
 
-// A call to confirm with a string or template argument, not preceded by an
-// identifier character or a dot, plus any explicit window.confirm.
-const nativeConfirm = new RegExp('(?<![\\w.])(?:window\\.)?confirm\\(\\s*[`\'"]');
+// A call to confirm with a string, template or identifier argument (or none),
+// not preceded by an identifier character or a dot and not a declaration
+// (`function confirm(`), plus any explicit window.confirm.
+const nativeConfirm = new RegExp('(?<![\\w.])(?<!function\\s+)(?:window\\.)?confirm\\(\\s*[`\'"\\w$)]');
 const windowConfirm = /window\.confirm/;
 
 describe('no native confirm in the outreach pages (#0581)', () => {
@@ -28,5 +29,10 @@ describe('no native confirm in the outreach pages (#0581)', () => {
     expect(nativeConfirm.test('if (!window.confirm(`Sure?`)) return;')).toBe(true);
     expect(nativeConfirm.test('function confirm(x) {}')).toBe(false);
     expect(nativeConfirm.test('onConfirm(')).toBe(false);
+    // #0593: an identifier argument is a native confirm too.
+    expect(nativeConfirm.test('if (!confirm(message)) return;')).toBe(true);
+    expect(nativeConfirm.test('if (!confirm()) return;')).toBe(true);
+    expect(nativeConfirm.test('async function confirm(postIds: number[]) {}')).toBe(false);
+    expect(nativeConfirm.test('await confirm(postIds, times);')).toBe(true);
   });
 });

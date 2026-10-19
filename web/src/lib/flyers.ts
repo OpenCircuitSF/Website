@@ -673,3 +673,20 @@ export function composite(fill: string, alpha: number, under: string): string {
   const u = rgb(under);
   return '#' + f.map((v, i) => Math.round(v * alpha + u[i] * (1 - alpha)).toString(16).padStart(2, '0')).join('');
 }
+
+// Flyers created in this session that have not been saved yet (#0593). Only
+// these get the new-flyer defaults (cover image, every active location) when
+// the editor opens; a flyer saved with nothing chosen is left as saved.
+const freshFlyers = new Set<number>();
+
+export function markFreshFlyer(id: number): void {
+  freshFlyers.add(id);
+}
+
+export function isFreshFlyer(id: number): boolean {
+  return freshFlyers.has(id);
+}
+
+export function clearFreshFlyer(id: number): void {
+  freshFlyers.delete(id);
+}

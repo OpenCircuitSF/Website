@@ -4,7 +4,7 @@
 // OutreachAnnouncement, OutreachWaveRow and OutreachBulkActions) under jsdom with '../../lib/api'
 // mocked. jsdom is not a browser (AGENTS.md §1): DOM order is real, layout is
 // not.
-import { render, cleanup, waitFor, screen } from '@testing-library/svelte';
+import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
 
@@ -12,6 +12,7 @@ const getWorkshopOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const getWorkshopOutreachResults = vi.fn<(id: number) => Promise<OutreachResults>>();
 const startOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const resetOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
+const scheduleAllOutreach = vi.fn();
 const listOutreachFlyers = vi.fn<() => Promise<{ flyers: { id: number; workshop_id: number }[] }>>();
 vi.mock('../../lib/api', () => ({
   getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
@@ -21,7 +22,7 @@ vi.mock('../../lib/api', () => ({
   draftAllOutreach: vi.fn(),
   resetOutreach: (id: number) => resetOutreach(id),
   listOutreachFlyers: () => listOutreachFlyers(),
-  scheduleAllOutreach: vi.fn(),
+  scheduleAllOutreach: (...a: unknown[]) => scheduleAllOutreach(...a),
   createOutreachPost: vi.fn(),
   ApiError: class ApiError extends Error {
     status: number;
@@ -41,6 +42,7 @@ afterEach(() => {
   startOutreach.mockReset();
   resetOutreach.mockReset();
   listOutreachFlyers.mockReset();
+  scheduleAllOutreach.mockReset();
 });
 
 const channels = [
@@ -189,6 +191,27 @@ describe('OutreachWorkshop', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(getWorkshopOutreach.mock.calls.length).toBeGreaterThan(1);
     expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it('clears the "Outreach was reset" note on the next state change (#0593)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ can_reset: true, waves: allWaves }));
+    getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
+    resetOutreach.mockResolvedValue(view({ can_reset: true }));
+    render(OutreachWorkshop, { workshopId: 5 });
+    (await screen.findByRole('button', { name: 'Reset outreach' })).click();
+    const dialog = await screen.findByRole('dialog');
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset outreach')!.click();
+    expect(await screen.findByText(/Outreach was reset/)).toBeTruthy();
+    const plan = {
+      dry_run: true,
+      to_schedule: [{ post_id: 11, channel: 'bluesky', channel_label: 'Bluesky', wave: 'announce', wave_label: 'Announce', scheduled_at: '2099-12-04T18:00:00Z' }],
+      skipped: [],
+    };
+    scheduleAllOutreach.mockResolvedValueOnce(plan).mockResolvedValueOnce({ ...plan, dry_run: false });
+    await fireEvent.click(await screen.findByRole('button', { name: 'Schedule all' }));
+    expect(screen.queryByText(/Outreach was reset/)).not.toBeNull();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Schedule 1 post' }));
+    await waitFor(() => expect(screen.queryByText(/Outreach was reset/)).toBeNull());
   });
 
   it('shows the server message in the dialog when reset is refused (#0592)', async () => {

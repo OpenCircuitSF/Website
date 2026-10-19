@@ -24,22 +24,32 @@
 
   let dialogEl = $state<HTMLDivElement | null>(null);
 
-  /** Reminder and Last call are opt-in (#0574); a drafted one is already opted in, so it starts ticked (#0587). */
-  const optional = $derived(
-    [...new Map(plan.to_schedule.filter((i) => i.wave !== 'announce').map((i) => [i.wave, i.wave_label])).entries()],
-  );
+  /**
+   * Reminder and Last call are opt-in (#0574); a drafted one is already opted in, so it starts ticked (#0587).
+   * Announce never appears here: the server skips it as no_suggested_time, since it goes out now (#0593).
+   */
+  const optional = $derived([...new Map(plan.to_schedule.map((i) => [i.wave, i.wave_label])).entries()]);
   // svelte-ignore state_referenced_locally
-  let included = $state<Record<string, boolean>>(
-    Object.fromEntries(plan.to_schedule.filter((i) => i.wave !== 'announce').map((i) => [i.wave, true])),
+  let included = $state<Record<string, boolean>>(Object.fromEntries(plan.to_schedule.map((i) => [i.wave, true])));
+  const chosen = $derived(plan.to_schedule.filter((i) => included[i.wave] === true));
+
+  // A row skipped because its time has passed can be rescued with a time of
+  // its own (#0593); the server accepts one for any post id it names.
+  let rescue = $state<Record<number, boolean>>({});
+  const rescuable = $derived(plan.skipped.filter((s) => s.reason === 'time_passed' && s.post_id !== null));
+  const rescued = $derived(
+    rescuable
+      .filter((s) => rescue[s.post_id as number])
+      .map((s) => ({ post_id: s.post_id as number, scheduled_at: '' })),
   );
-  const chosen = $derived(plan.to_schedule.filter((i) => i.wave === 'announce' || included[i.wave] === true));
+  const rescuedIds = $derived(rescued.map((r) => r.post_id));
 
   // Per-row one-off time edits (#0587): Pacific datetime-local text per post id.
   let editing = $state<Record<number, boolean>>({});
   let edits = $state<Record<number, string>>({});
   const overrides = $derived.by(() => {
     const out: Record<number, string> = {};
-    for (const i of chosen) {
+    for (const i of [...chosen, ...rescued]) {
       const v = edits[i.post_id];
       if (v === undefined) continue;
       const iso = fromPacificInput(v);
@@ -58,10 +68,19 @@
     if (!iso) return 'Pick a date and time.';
     return Date.parse(iso) <= Date.now() + 60000 ? 'That time has passed. Pick a later one.' : '';
   }
-  const anyRowError = $derived(chosen.some((i) => rowError(i) !== ''));
+  const anyRowError = $derived([...chosen, ...rescued].some((i) => rowError(i) !== ''));
+  const total = $derived(chosen.length + rescued.length);
   function startEdit(i: { post_id: number; scheduled_at: string }): void {
     edits[i.post_id] = edits[i.post_id] ?? toPacificInput(i.scheduled_at);
     editing[i.post_id] = true;
+  }
+  function startRescue(id: number): void {
+    rescue[id] = true;
+    edits[id] = '';
+  }
+  function cancelRescue(id: number): void {
+    rescue[id] = false;
+    delete edits[id];
   }
 
   function joinNames(names: string[]): string {
@@ -136,6 +155,19 @@
         {#each plan.skipped as s (s.channel + ':' + s.wave)}
           <li>
             {s.channel_label} · {s.wave_label} — {scheduleSkipReasonLabel(s.reason)}{#if s.suggested_at}{' '}({formatPacificDateTime(s.suggested_at)}){/if}
+            {#if s.reason === 'time_passed' && s.post_id !== null}
+              {@const pid = s.post_id}
+              {#if !rescue[pid]}
+                <button type="button" class="link" onclick={() => startRescue(pid)} disabled={inFlight} aria-label={`Pick a time for ${s.channel_label} ${s.wave_label}`}>Pick a time</button>
+              {:else}
+                <label class="field">
+                  <span class="field-label">{s.channel_label} · {s.wave_label} time (Pacific)</span>
+                  <input type="datetime-local" bind:value={edits[pid]} disabled={inFlight} />
+                </label>
+                <button type="button" class="link" onclick={() => cancelRescue(pid)} disabled={inFlight}>Skip it</button>
+                {#if rowError({ post_id: pid })}<span class="text-error">{rowError({ post_id: pid })}</span>{/if}
+              {/if}
+            {/if}
           </li>
         {/each}
       </ul>
@@ -146,8 +178,8 @@
     {/if}
 
     <div class="row">
-      <Button variant="primary" onclick={() => onConfirm(chosen.map((i) => i.post_id), overrides)} disabled={inFlight || chosen.length === 0 || anyRowError}>
-        {inFlight ? 'Scheduling…' : chosen.length === 0 ? 'Nothing chosen' : `Schedule ${chosen.length} ${chosen.length === 1 ? 'post' : 'posts'}`}
+      <Button variant="primary" onclick={() => onConfirm([...chosen.map((i) => i.post_id), ...rescuedIds], overrides)} disabled={inFlight || total === 0 || anyRowError}>
+        {inFlight ? 'Scheduling…' : total === 0 ? 'Nothing chosen' : `Schedule ${total} ${total === 1 ? 'post' : 'posts'}`}
       </Button>
       <Button onclick={onClose} disabled={inFlight}>Cancel</Button>
     </div>

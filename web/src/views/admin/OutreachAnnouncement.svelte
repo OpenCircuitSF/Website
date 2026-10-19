@@ -23,12 +23,13 @@
     ApiError,
   } from '../../lib/api';
   import {
+    composerActions,
     defaultScheduleAt,
     fromLocalInputValue,
     toLocalInputValue,
   } from '../../lib/outreach';
   import { cardButtons, postableAutomatic, sendsItself, statusLine, visibleNotice, type CardNotice } from '../../lib/outreachCards';
-  import { composeBody, messageTargets, planSaveMessage, sharedMessage, splitBody } from '../../lib/outreachMessage';
+  import { composeBody, messageTargets, planSaveMessage, restoredTail, sharedMessage } from '../../lib/outreachMessage';
   import { postAll } from '../../lib/outreachPostAll';
   import { identicalAutomaticBodies } from '../../lib/outreachPreview';
   import type { OutreachChannel, OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
@@ -141,8 +142,18 @@
 
   const useShared = (post: OutreachPost) =>
     guarded('Could not use the shared message. Please try again.', async () => {
-      const { tail } = splitBody(post.body, post.short_url);
+      const tail = restoredTail(view, post);
       onChange(await updateOutreachPost(post.id, { body: composeBody(trimmed || shared, tail), customized: false }));
+    });
+
+  // The workshop changed since a post was drafted (#0593): said here, not only inside Customize….
+  const staleAutos = $derived(autos.filter((a) => composerActions(a.post, a.channel, view.available).canRegenerate));
+  // A customized post is the editor's own words: it is only regenerated from its own Customize….
+  const regenerable = $derived(staleAutos.filter((a) => !a.post.customized));
+  const regenerateStale = () =>
+    guarded('Could not regenerate. Please try again.', async () => {
+      for (const { post } of regenerable) onChange(await updateOutreachPost(post.id, { regenerate: true }));
+      status = `Regenerated ${names(regenerable.map((a) => a.channel.label))} from the current workshop details.`;
     });
 
   function openPost(): void {
@@ -211,6 +222,16 @@
       </Button>
     </p>
   {:else}
+    {#if staleAutos.length > 0}
+      <p class="text-warn">
+        The workshop's title, date or place changed since {names(staleAutos.map((a) => a.channel.label))} {staleAutos.length > 1 ? 'were' : 'was'} drafted.
+        {#if regenerable.length > 0}
+          <Button onclick={regenerateStale} disabled={busy}>Regenerate</Button>
+        {:else}
+          Open Customize… to regenerate.
+        {/if}
+      </p>
+    {/if}
     <label class="field">
       <span class="field-label">Message</span>
       <textarea

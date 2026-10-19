@@ -22,13 +22,64 @@ export function isHashtagParagraph(p: string): boolean {
 export function splitBody(body: string, shortUrl: string | null): { message: string; tail: string[] } {
   const paras = body.split('\n\n');
   const tail: string[] = [];
+  // Only the final hashtag line belongs to the tail (#0593): a hashtag-only
+  // paragraph the editor typed at the end of the message stays in the message,
+  // so it is still editable after a save.
+  let tookHashtags = false;
   while (paras.length > 1) {
     const last = paras[paras.length - 1];
+    const tags = isHashtagParagraph(last);
     const carriesLink = last.includes(LINK_TOKEN) || (shortUrl !== null && shortUrl !== '' && last.includes(shortUrl));
-    if (!isHashtagParagraph(last) && !carriesLink) break;
+    if (!tags && !carriesLink) break;
+    if (tags) {
+      if (tookHashtags) break;
+      tookHashtags = true;
+    }
     tail.unshift(paras.pop() as string);
   }
   return { message: paras.join('\n\n'), tail };
+}
+
+/** Bluesky and Instagram drafts carry no link in the text (the card or the bio holds it); the rest do. */
+function bodyCarriesLink(channel: OutreachChannel): boolean {
+  return channel.name !== 'bluesky' && channel.name !== 'instagram';
+}
+
+/**
+ * The tail "Use shared message" puts back (#0593). A post's own tail is kept
+ * when it has one. When customizing lost the hashtag line, it is taken from a
+ * non-customized sibling in the wave; when it lost the link line a channel
+ * needs (Mastodon), the sibling's link line is reused with this post's own
+ * short URL, or a plain "Sign up here" line is made from it.
+ */
+export function restoredTail(view: View, post: OutreachPost): string[] {
+  const own = splitBody(post.body, post.short_url).tail;
+  const channel = view.channels.find((c) => c.name === post.channel);
+  const needsLink = channel ? bodyCarriesLink(channel) : false;
+  const url = post.short_url || LINK_TOKEN;
+  let tags = own.filter(isHashtagParagraph);
+  let links = own.filter((p) => !isHashtagParagraph(p));
+  const siblings = view.posts.filter((p) => p.id !== post.id && p.wave === post.wave && !p.customized);
+  if (tags.length === 0) {
+    for (const s of siblings) {
+      const t = splitBody(s.body, s.short_url).tail.filter(isHashtagParagraph);
+      if (t.length > 0) {
+        tags = t;
+        break;
+      }
+    }
+  }
+  if (needsLink && links.length === 0) {
+    for (const s of siblings) {
+      const l = splitBody(s.body, s.short_url).tail.filter((p) => !isHashtagParagraph(p));
+      if (l.length > 0) {
+        links = l.map((p) => (s.short_url ? p.split(s.short_url).join(url) : p));
+        break;
+      }
+    }
+    if (links.length === 0) links = [`Sign up here: ${url}`];
+  }
+  return [...links, ...tags];
 }
 
 /** The inverse of splitBody. */

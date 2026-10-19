@@ -737,3 +737,75 @@ func TestAdminOutreachLinks_ScheduleAllTimeOverride(t *testing.T) {
 		t.Errorf("after re-override scheduled_at = %v, want %v", got, want)
 	}
 }
+
+// #0593: a row skipped as time_passed can be rescued with a time of its own;
+// without one it stays skipped, and only time_passed rows can be rescued.
+func TestAdminOutreachLinks_ScheduleAllRescuesTimePassed(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	starts := *w.StartsAt
+	now := starts.AddDate(0, 0, -3) // reminder time has passed
+	e.h.now = func() time.Time { return now }
+	e.startHTTP(t, w)
+	if code, b := e.do(t, http.MethodPost, e.linksPath(w, "draft-all"), `{"waves":["reminder"]}`); code != http.StatusOK {
+		t.Fatalf("draft-all = %d (%s)", code, b)
+	}
+	_, b := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), `{"dry_run":true}`)
+	d := decodeOutreach[testScheduleAll](t, b)
+	var passed, noTime int64
+	for _, s := range d.Skipped {
+		if s.PostID == nil || s.Channel != "bluesky" {
+			continue
+		}
+		switch s.Reason {
+		case "time_passed":
+			passed = *s.PostID
+		case "no_suggested_time":
+			noTime = *s.PostID
+		}
+	}
+	if passed == 0 {
+		t.Fatalf("no time_passed skip with a post id: %s", b)
+	}
+	status := func(id int64) (st string, at *time.Time) {
+		_ = e.pool.QueryRow(context.Background(), `SELECT status, scheduled_at FROM outreach_posts WHERE id = $1`, id).Scan(&st, &at)
+		return st, at
+	}
+	confirm := func(ids, times string) testScheduleAll {
+		code, b := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), fmt.Sprintf(`{"dry_run":false,"post_ids":%s,"times":%s}`, ids, times))
+		if code != http.StatusOK {
+			t.Fatalf("confirm = %d (%s)", code, b)
+		}
+		return decodeOutreach[testScheduleAll](t, b)
+	}
+
+	// No time given: the past row stays skipped.
+	c := confirm(fmt.Sprintf("[%d]", passed), `{}`)
+	if len(c.ToSchedule) != 0 {
+		t.Errorf("scheduled without a time: %+v", c.ToSchedule)
+	}
+	if st, _ := status(passed); st != "draft" {
+		t.Errorf("status = %s, want draft", st)
+	}
+
+	// A row skipped for another reason is not rescued by a time.
+	if noTime != 0 {
+		c = confirm(fmt.Sprintf("[%d]", noTime), fmt.Sprintf(`{"%d":%q}`, noTime, now.Add(26*time.Hour).Format(time.RFC3339)))
+		if len(c.ToSchedule) != 0 {
+			t.Errorf("rescued a no_suggested_time row: %+v", c.ToSchedule)
+		}
+		if st, _ := status(noTime); st == "scheduled" {
+			t.Error("no_suggested_time row was scheduled")
+		}
+	}
+
+	// With a time inside the window the past row is scheduled at it.
+	want := now.Add(26 * time.Hour).UTC().Truncate(time.Second)
+	c = confirm(fmt.Sprintf("[%d]", passed), fmt.Sprintf(`{"%d":%q}`, passed, want.Format(time.RFC3339)))
+	if len(c.ToSchedule) != 1 || c.ToSchedule[0].PostID != passed || c.ToSchedule[0].ScheduledAt != want.Format(time.RFC3339) {
+		t.Fatalf("confirm reports %+v, want post %d at %s", c.ToSchedule, passed, want.Format(time.RFC3339))
+	}
+	if st, got := status(passed); st != "scheduled" || got == nil || !got.Equal(want) {
+		t.Errorf("status = %s at %v, want scheduled at %v", st, got, want)
+	}
+}

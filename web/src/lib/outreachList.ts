@@ -51,6 +51,23 @@ export function outreachRowButtonLabel(summary: OutreachSummary | undefined): st
   return summary ? 'Open' : 'Promote';
 }
 
+/** The row button's accessible name: the visible word plus the workshop it acts on (#0593). */
+export function outreachRowAriaLabel(summary: OutreachSummary | undefined, title: string): string {
+  return summary ? `Open outreach for ${title}` : `Promote ${title}`;
+}
+
+/**
+ * Past workshops that had outreach (#0593), most recent first. A workshop
+ * already past is not on the upcoming list, so without this its posts and
+ * results would be unreachable from the Outreach tab. Undated ones are never past.
+ */
+export function pastWithOutreach(workshops: AdminWorkshop[], summaries: OutreachSummary[], now: Date = new Date()): AdminWorkshop[] {
+  const by = summariesByWorkshop(summaries);
+  return workshops
+    .filter((w) => w.starts_at && Date.parse(w.starts_at) < now.getTime() && by.has(w.id))
+    .sort((a, b) => Date.parse(b.starts_at as string) - Date.parse(a.starts_at as string) || a.id - b.id);
+}
+
 /** The workshop editor panel's link text: "Promote this workshop" or "Open outreach · N posted". */
 export function editorOutreachLinkLabel(started: boolean, posted: number): string {
   return started ? `Open outreach · ${posted} posted` : 'Promote this workshop';

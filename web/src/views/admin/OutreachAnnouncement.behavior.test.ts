@@ -153,6 +153,27 @@ describe('OutreachAnnouncement', () => {
     );
   });
 
+  it('Use shared message restores the link line and hashtags a customized Mastodon body lost (#0593)', async () => {
+    mountView([bPost(), { ...mPost(), customized: true, body: 'My own words.' }]);
+    updateOutreachPost.mockImplementation((id: number, b: { body: string }) => Promise.resolve(post({ id, channel: 'mastodon', body: b.body })));
+    const card = screen.getByRole('article', { name: 'Mastodon preview' });
+    await fireEvent.click(within(card).getByRole('button', { name: 'Use shared message' }));
+    await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledTimes(1));
+    const sent = updateOutreachPost.mock.calls[0][1] as { body: string; customized: boolean };
+    expect(sent.customized).toBe(false);
+    expect(sent.body).toContain(`Sign up here: ${MURL}`);
+    expect(sent.body).toContain('#soldering #sf');
+  });
+
+  it('warns on the Announcement section when a post is stale, and Regenerate rewrites only non-customized ones (#0593)', async () => {
+    mountView([{ ...bPost(), stale: true }, { ...mPost(), stale: true, customized: true }]);
+    expect(screen.getByText(/changed since Bluesky and Mastodon were drafted/)).toBeTruthy();
+    updateOutreachPost.mockImplementation((id: number) => Promise.resolve(post({ id })));
+    await fireEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
+    await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledTimes(1));
+    expect(updateOutreachPost).toHaveBeenCalledWith(1, { regenerate: true });
+  });
+
   it('Post opens the shared dialog; Cancel sends nothing, Post sends each once and clears its result line when posted', async () => {
     const m = mountView([bPost(), mPost()]);
     await fireEvent.click(screen.getByRole('button', { name: 'Post to Bluesky and Mastodon' }));

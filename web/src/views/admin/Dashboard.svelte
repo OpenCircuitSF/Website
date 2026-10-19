@@ -72,12 +72,21 @@
   let outreachItems = $state<OutreachAttentionItem[]>([]);
 
   async function loadOutreachItems(): Promise<void> {
-    try {
-      const [c, w, o] = await Promise.all([getOutreachConnections(), listAdminWorkshops(), listOutreach()]);
-      outreachItems = outreachAttentionItems(c.groups, w.workshops, o.outreach, new Date(), o.enabled_channels);
-    } catch {
-      outreachItems = [];
-    }
+    // allSettled (#0593): a failed connections call keeps the unannounced
+    // count, and the reverse. Whatever failed contributes no rows.
+    const [c, w, o] = await Promise.allSettled([
+      (async () => getOutreachConnections())(),
+      (async () => listAdminWorkshops())(),
+      (async () => listOutreach())(),
+    ]);
+    outreachItems = outreachAttentionItems(
+      c.status === 'fulfilled' ? c.value.groups : [],
+      // Without the outreach list every workshop would read as unannounced.
+      w.status === 'fulfilled' && o.status === 'fulfilled' ? w.value.workshops : [],
+      o.status === 'fulfilled' ? o.value.outreach : [],
+      new Date(),
+      o.status === 'fulfilled' ? o.value.enabled_channels : undefined,
+    );
   }
 
   let warnings = $derived(overview ? buildWarnings(overview.warnings) : []);

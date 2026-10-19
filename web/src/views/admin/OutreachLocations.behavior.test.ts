@@ -88,6 +88,15 @@ describe('OutreachLocations', () => {
     expect((screen.getByLabelText('Code') as HTMLInputElement).value).toBe('mission-public-2');
   });
 
+  it('focuses the first invalid field when a submit has errors (#0593)', async () => {
+    await mountWith([]);
+    await screen.findByText('No locations yet.');
+    await fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(document.activeElement).toBe(screen.getByLabelText('Name'));
+    expect(createOutreachLocation).not.toHaveBeenCalled();
+  });
+
   it('creates with the form values (code suggested from the name)', async () => {
     createOutreachLocation.mockResolvedValue(loc());
     await mountWith([]);

@@ -6,10 +6,9 @@
   and shows the precedence note.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { getServerSettings, ApiError } from '../../lib/api';
+  import { onMount, untrack } from 'svelte';
   import { PRECEDENCE_NOTE } from '../../lib/serverSettings';
-  import type { ServerSettings } from '../../lib/types';
+  import { ServerSettingsStore } from '../../lib/serverSettingsStore.svelte';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
   import ServerSettingsGroup from './ServerSettingsGroup.svelte';
@@ -19,47 +18,45 @@
   // `bare` drops the panel chrome when a parent section already supplies it.
   // `onloaded` fires once the first load settles (success or not), so a
   // section deep link below this panel can wait for it to reach full height.
+  // `store` lets two mounts share one fetch (#0593); without it the component
+  // owns its own. `showNote` is off for the second mount so the precedence
+  // note appears once.
   let {
     scope = 'all',
     bare = false,
     onloaded,
-  }: { scope?: 'all' | 'server' | 'outreach'; bare?: boolean; onloaded?: () => void } = $props();
+    store: sharedStore,
+    showNote = true,
+  }: {
+    scope?: 'all' | 'server' | 'outreach';
+    bare?: boolean;
+    onloaded?: () => void;
+    store?: ServerSettingsStore;
+    showNote?: boolean;
+  } = $props();
 
-  let settings = $state<ServerSettings | null>(null);
-  let loading = $state(true);
-  let loadError = $state<string | null>(null);
-  let unavailable = $state(false);
+  const store = untrack(() => sharedStore ?? new ServerSettingsStore());
 
-  async function load(): Promise<void> {
-    loading = true;
-    loadError = null;
-    unavailable = false;
-    try {
-      settings = await getServerSettings();
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) unavailable = true;
-      else loadError = 'Could not load server settings. Please try again.';
-    } finally {
-      loading = false;
-      onloaded?.();
-    }
-  }
+  onMount(() => {
+    void store.ensure().finally(() => onloaded?.());
+  });
 
-  onMount(load);
 </script>
 
 {#snippet body()}
-  {#if loading}
+  {#if store.loading}
     <p class="text-muted">Loading server settings…</p>
-  {:else if unavailable}
+  {:else if store.unavailable}
     <p class="text-muted">Server settings are not available when the server runs without a database.</p>
-  {:else if loadError}
-    <p class="text-error" role="alert">{loadError}</p>
-    <Button variant="primary" onclick={load}>Retry</Button>
-  {:else if settings}
-    <p class="text-muted srv-note">{PRECEDENCE_NOTE}</p>
-    {#each settings.groups.filter((g) => scope === 'all' || (scope === 'outreach') === (g.name === 'outreach')) as g (g.name)}
-      <ServerSettingsGroup group={g} onupdate={(next) => (settings = next)} />
+  {:else if store.loadError}
+    <p class="text-error" role="alert">{store.loadError}</p>
+    <Button variant="primary" onclick={() => store.reload().finally(() => onloaded?.())}>Retry</Button>
+  {:else if store.settings}
+    {#if showNote}
+      <p class="text-muted srv-note">{PRECEDENCE_NOTE}</p>
+    {/if}
+    {#each store.settings.groups.filter((g) => scope === 'all' || (scope === 'outreach') === (g.name === 'outreach')) as g (g.name)}
+      <ServerSettingsGroup group={g} onupdate={(next) => (store.settings = next)} />
     {/each}
   {/if}
 {/snippet}

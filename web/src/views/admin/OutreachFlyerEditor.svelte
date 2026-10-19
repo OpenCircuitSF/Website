@@ -42,6 +42,8 @@
     nudgeFocal,
     photoWarning,
     FLYER_TITLE_POSITIONS,
+    isFreshFlyer,
+    clearFreshFlyer,
     FLYER_TITLE_POSITION_LABELS,
     MAX_FLYER_DESCRIPTION,
     MAX_FLYER_DESCRIPTION_SHORT,
@@ -79,6 +81,10 @@
   let copies = $state<Record<number, number>>({});
   let photoSize = $state<{ w: number; h: number } | null>(null);
   let dragging = $state(false);
+  // The "More" disclosure (#0593): description, title position and copies.
+  let moreOpen = $state(false);
+  // Preview under 64rem can be folded away so the form is reachable (#0593).
+  let previewOpen = $state(true);
 
   const taglineError = $derived(validateTagline(tagline));
   // The description limits apply only while their controls are shown (full-photo,
@@ -94,6 +100,11 @@
   const exampleInstance = $derived(printable[0] ?? null);
   const effectivePhoto = $derived(photo ?? view?.facts.cover_image ?? null);
   const fullWarning = $derived(photoSize ? photoWarning(photoSize.w, photoSize.h, 'full') : null);
+
+  // A description error must not hide inside a closed disclosure.
+  $effect(() => {
+    if (template === 'full-photo' && (descriptionError || descriptionShortError)) moreOpen = true;
+  });
 
   function message(err: unknown, fallback: string): string {
     return err instanceof ApiError ? err.message : fallback;
@@ -118,9 +129,11 @@
       const [v, l] = await Promise.all([getOutreachFlyer(flyerId), listOutreachLocations()]);
       locations = l.locations;
       adopt(v);
-      // A new flyer (nothing chosen yet) starts ready to print: the cover
-      // image and every active location, one copy each.
-      if (v.selection.length === 0 && v.flyer.photo === null) {
+      // A flyer created in this session starts ready to print: the cover
+      // image and every active location, one copy each. Tracked explicitly
+      // (#0593) so a flyer saved with no photo and no locations is not
+      // given the defaults again when it is reopened.
+      if (isFreshFlyer(flyerId) && v.selection.length === 0 && v.flyer.photo === null) {
         photo = v.facts.cover_image;
         const next: Record<number, number> = {};
         for (const loc of l.locations) if (loc.active) next[loc.id] = 1;
@@ -160,6 +173,7 @@
     status = '';
     try {
       adopt(await saveAll());
+      clearFreshFlyer(flyerId);
       status = 'Flyer saved.';
     } catch (err) {
       status = message(err, 'Could not save the flyer. Please try again.');
@@ -194,6 +208,7 @@
     status = 'Saving the flyer.';
     try {
       let v = await saveAll();
+      clearFreshFlyer(flyerId);
       const missing = v.selection.filter((s) => !s.link || !s.link.has_qr).length;
       if (missing > 0) {
         status = `Generating ${missing} ${missing === 1 ? 'link and QR code' : 'links and QR codes'}.`;
@@ -311,6 +326,10 @@
     <div class="editor">
       <div class="preview">
         <h3>Preview</h3>
+        <button type="button" class="preview-toggle" aria-expanded={previewOpen} aria-controls="fl-preview-body" onclick={() => (previewOpen = !previewOpen)}>
+          {previewOpen ? 'Hide preview' : 'Show preview'}
+        </button>
+        <div id="fl-preview-body" class="preview-body" class:collapsed={!previewOpen}>
         <div class="previews">
           <figure>
             <div class="scaled" style="--w: 8.5in; --h: 11in; --s: 0.36">
@@ -336,6 +355,7 @@
           </figure>
         </div>
         <p class="text-muted">In the print dialog choose Letter, portrait, scale Actual size (100%), margins None, and turn headers and footers off.</p>
+        </div>
       </div>
       <div class="setup">
         <section aria-labelledby="fl-photo">
@@ -407,6 +427,30 @@
           <p class="text-error" id="fl-tagline-err">{taglineError ?? ''}</p>
         </section>
 
+
+        <section aria-labelledby="fl-locs">
+          <h3 id="fl-locs">Locations</h3>
+          {#if shownLocations.length === 0}
+            <p class="text-muted">No locations yet. <a href={adminOutreachHash('locations')}>Manage locations</a></p>
+          {:else}
+            <ul class="locs">
+              {#each shownLocations as l (l.id)}
+                <li>
+                  <label>
+                    <input type="checkbox" checked={l.id in copies} onchange={(e) => toggleLocation(l.id, e.currentTarget.checked)} />
+                    {l.name} <span class="mono">{l.code}</span>{l.active ? '' : ' (inactive)'}
+                  </label>
+                </li>
+              {/each}
+            </ul>
+            <p><a href={adminOutreachHash('locations')}>Manage locations</a></p>
+          {/if}
+          <p class="text-muted">{draftSummary}</p>
+          <p class="text-muted">Each link is tagged <span class="mono">{utmSummary(view.flyer.workshop_slug)}</span> and is shared by every flyer for this workshop and location.</p>
+        </section>
+
+        <details class="more" bind:open={moreOpen}>
+          <summary>More (description, title position, copies)</summary>
         {#if template === 'full-photo'}
           <section aria-labelledby="fl-titlepos">
             <h3 id="fl-titlepos">Title position</h3>
@@ -434,32 +478,22 @@
           </section>
         {/if}
 
-        <section aria-labelledby="fl-locs">
-          <h3 id="fl-locs">Locations</h3>
-          {#if shownLocations.length === 0}
-            <p class="text-muted">No locations yet. <a href={adminOutreachHash('locations')}>Manage locations</a></p>
-          {:else}
-            <ul class="locs">
-              {#each shownLocations as l (l.id)}
-                <li>
-                  <label>
-                    <input type="checkbox" checked={l.id in copies} onchange={(e) => toggleLocation(l.id, e.currentTarget.checked)} />
-                    {l.name} <span class="mono">{l.code}</span>{l.active ? '' : ' (inactive)'}
-                  </label>
-                  {#if l.id in copies}
+          {#if selected.length > 0}
+            <section aria-labelledby="fl-copies">
+              <h3 id="fl-copies">Copies</h3>
+              <ul class="locs">
+                {#each shownLocations.filter((l) => l.id in copies) as l (l.id)}
+                  <li>
                     <label class="copies">
-                      Copies
+                      <span>Copies for {l.name}</span>
                       <input type="number" min="1" max="50" value={copies[l.id]} onchange={(e) => setCopies(l.id, e.currentTarget.value)} />
                     </label>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-            <p><a href={adminOutreachHash('locations')}>Manage locations</a></p>
+                  </li>
+                {/each}
+              </ul>
+            </section>
           {/if}
-          <p class="text-muted">{draftSummary}</p>
-          <p class="text-muted">Each link is tagged <span class="mono">{utmSummary(view.flyer.workshop_slug)}</span> and is shared by every flyer for this workshop and location.</p>
-        </section>
+        </details>
 
         <div class="row">
           <Button variant="primary" onclick={save} disabled={busy || !!textError}>Save</Button>
@@ -572,6 +606,25 @@
       grid-row: 1;
       position: sticky;
       top: var(--space-3);
+    }
+  }
+  .preview-toggle {
+    display: inline-block;
+    margin: 0 0 var(--space-2);
+  }
+  .more > summary {
+    cursor: pointer;
+    font-weight: 600;
+    margin: var(--space-3) 0 var(--space-2);
+  }
+  @media (max-width: 63.99rem) {
+    .preview-body.collapsed {
+      display: none;
+    }
+  }
+  @media (min-width: 64rem) {
+    .preview-toggle {
+      display: none;
     }
   }
   h3 {
