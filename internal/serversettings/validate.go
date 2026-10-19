@@ -25,7 +25,7 @@ const (
 	msgBucket     = "must be an S3 bucket name (3 to 63 lowercase letters, digits, dots or hyphens)"
 	msgBatch      = "must be a whole number from 1 to 500"
 	msgCardURL    = "must be short or canonical"
-	msgHashtags   = "must be up to 6 hashtags, each # followed by up to 40 letters or digits (not digits alone), such as #SanFrancisco"
+	msgHashtags   = "must be up to 6 hashtags, each # followed by up to 40 letters or digits (not digits alone), such as #sanfrancisco"
 	msgChannels   = "must name at least one of bluesky, mastodon, instagram, tiktok, youtube, separated by commas"
 	msgPostHour   = "must be a whole hour from 0 to 23 (Pacific time)"
 )
@@ -157,8 +157,8 @@ func validBucket(b string) bool {
 
 // NormalizeHashtags splits s on whitespace and checks that every token is a
 // "#" followed by letters or digits, at least one a letter and at most
-// MaxHashtagRunes in all (CamelCase is recommended, so screen
-// readers say the words apart) and that there are at most MaxOutreachHashtags.
+// MaxHashtagRunes in all, in any case (the default is lowercase, as most
+// people write them), and that there are at most MaxOutreachHashtags.
 // Duplicates, ignoring case, are dropped.
 func NormalizeHashtags(s string) ([]string, bool) {
 	var out []string

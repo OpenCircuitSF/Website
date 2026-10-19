@@ -334,12 +334,12 @@ func TestPublisher_ThumbnailRules(t *testing.T) {
 		{"nil", nil, ""},
 	}
 	for _, tc := range cases {
-		_, mime := pub.thumbnail(tc.cover)
+		_, mime, _ := pub.thumbnail(tc.cover)
 		if mime != tc.mime {
 			t.Errorf("%s: mime = %q, want %q", tc.name, mime, tc.mime)
 		}
 	}
-	if _, mime := NewPublisher(PublisherDeps{}).thumbnail(str("/media/ok.png")); mime != "" {
+	if _, mime, _ := NewPublisher(PublisherDeps{}).thumbnail(str("/media/ok.png")); mime != "" {
 		t.Error("no MEDIA_DIR means no thumbnail")
 	}
 }
@@ -352,11 +352,11 @@ func TestPublisher_MediaDirFnIsLive(t *testing.T) {
 	current := ""
 	pub := NewPublisher(PublisherDeps{MediaDirFn: func() string { return current }})
 	cover := "/media/ok.png"
-	if _, mime := pub.thumbnail(&cover); mime != "" {
+	if _, mime, _ := pub.thumbnail(&cover); mime != "" {
 		t.Errorf("empty dir: mime = %q", mime)
 	}
 	current = dir
-	if _, mime := pub.thumbnail(&cover); mime != "image/png" {
+	if _, mime, _ := pub.thumbnail(&cover); mime != "image/png" {
 		t.Errorf("after switch: mime = %q", mime)
 	}
 }

@@ -9,7 +9,7 @@
   import OutreachMastodonPreview from './OutreachMastodonPreview.svelte';
 
   interface Props {
-    view: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean };
+    view: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean; thumb_reason?: string };
     channel: OutreachChannel;
     post: OutreachPost;
     body?: string;

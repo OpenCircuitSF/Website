@@ -51,7 +51,8 @@ func (m *Manager) Test(ctx context.Context, group string) TestResult {
 			m.log.Warn("outreach: connection test failed", "group", group, "err", err)
 			return TestResult{Error: blueskyTestError(err)}
 		}
-		return TestResult{OK: true, Detail: "Signed in to Bluesky as @" + handle}
+		m.rememberBlueskyHandle(v, handle)
+		return TestResult{OK: true, Detail: "Signed in to Bluesky as @" + strings.TrimPrefix(handle, "@")}
 	case GroupMastodon:
 		c, err := mastodon.New(v[KeyMastodonBaseURL], v[KeyMastodonToken])
 		if err != nil {
@@ -133,4 +134,18 @@ func (m *Manager) rememberMastodonAccount(v map[string]string, acct string) {
 		return
 	}
 	m.maAcct.Store(&maAccount{key: key, acct: "@" + acct})
+}
+
+// rememberBlueskyHandle caches "@handle" for Account (#0601). A result fetched
+// under a config that is no longer current is discarded, as for Mastodon.
+func (m *Manager) rememberBlueskyHandle(v map[string]string, handle string) {
+	handle = strings.TrimPrefix(strings.TrimSpace(handle), "@")
+	if handle == "" {
+		return
+	}
+	key := strings.Join([]string{v[KeyBlueskyPDSURL], v[KeyBlueskyHandle], v[KeyBlueskyAppPassword]}, "\x00")
+	if key != m.cur.Load().bsKey {
+		return
+	}
+	m.bsAcct.Store(&maAccount{key: key, acct: "@" + handle})
 }

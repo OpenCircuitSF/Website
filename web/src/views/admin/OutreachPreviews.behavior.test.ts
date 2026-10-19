@@ -43,7 +43,11 @@ describe('Bluesky preview', () => {
   it('draws no picture when the server says the publisher would not attach one, and says so', () => {
     const { container } = render(OutreachPostPreview, { view: { workshop: workshop(), thumb_ok: false }, channel: bsky, post: post({}) });
     expect(container.querySelector('img')).toBeNull();
-    expect(screen.getByText('No image: the card goes out without a picture.')).toBeTruthy();
+    expect(screen.getByText('No picture: the card goes out without one.')).toBeTruthy();
+  });
+  it('shows the server\'s reason there is no picture (#0601)', () => {
+    render(OutreachPostPreview, { view: { workshop: workshop(), thumb_ok: false, thumb_reason: 'No picture: the cover file was not found on the server.' }, channel: bsky, post: post({}) });
+    expect(screen.getByText('No picture: the cover file was not found on the server.')).toBeTruthy();
   });
   it('shows the count against the limit', () => {
     render(OutreachPostPreview, { view: { workshop: workshop() }, channel: bsky, post: post({ body: 'abc' }) });

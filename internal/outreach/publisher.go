@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,7 +13,6 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mastodon"
-	"github.com/brennanMKE/OpenCircuitSF/internal/media"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 )
 
@@ -106,6 +103,7 @@ type Publisher struct {
 	poll     time.Duration
 	log      *slog.Logger
 	tracker  *Tracker
+	thumbs   thumbCache
 
 	stopCh   chan struct{}
 	doneCh   chan struct{}
@@ -426,7 +424,7 @@ func (p *Publisher) postBluesky(ctx context.Context, bsky *bluesky.Client, job S
 			URI: cardURI, Title: job.Title, Description: deref(job.Summary),
 		},
 	}
-	in.Embed.Thumb, in.Embed.ThumbMIME = p.thumbnail(job.CoverImage)
+	in.Embed.Thumb, in.Embed.ThumbMIME, _ = p.thumbnail(job.CoverImage)
 	return bsky.Post(ctx, in)
 }
 
@@ -435,52 +433,6 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
-}
-
-// ThumbOK reports whether a post for a workshop with this cover would go out
-// with a thumbnail (#0593): it is the same check the send makes, so the admin
-// preview drops the picture exactly when the publisher does. A nil publisher
-// attaches nothing.
-func (p *Publisher) ThumbOK(cover *string) bool {
-	if p == nil {
-		return false
-	}
-	data, _ := p.thumbnail(cover)
-	return data != nil
-}
-
-// thumbnail loads a workshop cover from local disk only. The value must be a
-// same-site /media/ path and a media directory must be configured; the file must sniff as
-// JPEG or PNG and fit Bluesky's blob limit. Anything else yields no
-// thumbnail and the card is sent without one. A server-side URL fetch is
-// never made.
-func (p *Publisher) thumbnail(cover *string) ([]byte, string) {
-	dir := p.mediaDir()
-	if cover == nil || dir == "" || !strings.HasPrefix(*cover, "/media/") {
-		return nil, ""
-	}
-	name := filepath.Base(*cover)
-	if name == "." || name == "/" || name == ".." || name == "" {
-		return nil, ""
-	}
-	full := filepath.Join(dir, name)
-	// Check the size before reading so an oversized file is never loaded.
-	if fi, err := os.Stat(full); err != nil || !fi.Mode().IsRegular() || fi.Size() == 0 || fi.Size() > int64(bluesky.MaxThumbBytes) {
-		return nil, ""
-	}
-	data, err := os.ReadFile(full)
-	if err != nil || len(data) == 0 || len(data) > bluesky.MaxThumbBytes {
-		return nil, ""
-	}
-	switch f, err := media.Sniff(data); {
-	case err != nil:
-		return nil, ""
-	case f == media.FormatJPEG:
-		return data, "image/jpeg"
-	case f == media.FormatPNG:
-		return data, "image/png"
-	}
-	return nil, ""
 }
 
 // postFailed turns a client error into a user-facing, secret-free last_error

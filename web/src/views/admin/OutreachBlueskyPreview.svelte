@@ -12,7 +12,7 @@
   import type { OutreachChannel, OutreachPost, WorkshopOutreach } from '../../lib/types';
 
   interface Props {
-    view: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean };
+    view: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean; thumb_reason?: string };
     channel: OutreachChannel;
     post: OutreachPost;
     /** The text to draw; defaults to the stored body. */
@@ -32,7 +32,7 @@
     {#if card.image}
       <img src={card.image} alt="" loading="lazy" />
     {:else}
-      <p class="no-image text-muted">No image: the card goes out without a picture.</p>
+      <p class="no-image text-muted">{view.thumb_reason || 'No picture: the card goes out without one.'}</p>
     {/if}
     <div class="card-text">
       <p class="card-title">{card.title}</p>
@@ -53,7 +53,7 @@
   }
   .hashtag,
   .link {
-    color: var(--accent-text, var(--accent));
+    color: var(--accent);
   }
   .link {
     text-decoration: underline;

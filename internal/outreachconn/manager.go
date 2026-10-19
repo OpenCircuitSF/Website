@@ -88,12 +88,19 @@ type Manager struct {
 	// verified, keyed by the config it was verified under (#0593): a changed
 	// instance or token invalidates it without any explicit clear.
 	maAcct atomic.Pointer[maAccount]
+	// bsAcct is the same for Bluesky (#0601): the handle the session reports,
+	// keyed by the PDS, sign-in identifier and app password it was verified
+	// under. The saved value may be the sign-in email, which is not a handle.
+	bsAcct atomic.Pointer[maAccount]
 
 	// lookups tracks in-flight reload account lookups; tests wait on it.
 	lookups sync.WaitGroup
 	// lookupAccount fetches the Mastodon account on reload (#0597). It is a
 	// field so a test can substitute it; the default asks the instance.
 	lookupAccount func(ctx context.Context, c *mastodon.Client) (mastodon.Account, error)
+	// lookupBlueskyHandle fetches the Bluesky session's handle on reload
+	// (#0601); a field for the same reason.
+	lookupBlueskyHandle func(ctx context.Context, c *bluesky.Client) (string, error)
 }
 
 // accountLookupTimeout bounds the reload-time verify_credentials call.
@@ -122,6 +129,9 @@ func NewManager(st store, env map[string]string, log *slog.Logger) *Manager {
 	}
 	m := &Manager{store: st, env: env, log: log}
 	m.lookupAccount = func(ctx context.Context, c *mastodon.Client) (mastodon.Account, error) {
+		return c.VerifyCredentials(ctx)
+	}
+	m.lookupBlueskyHandle = func(ctx context.Context, c *bluesky.Client) (string, error) {
 		return c.VerifyCredentials(ctx)
 	}
 	m.cur.Store(&state{errs: map[string]string{}, values: map[string]string{}, sources: map[string]Source{}, saved: map[string]string{}})
@@ -166,7 +176,7 @@ func (m *Manager) reloadLocked(ctx context.Context) error {
 	next.maKey = strings.Join([]string{v[KeyMastodonBaseURL], v[KeyMastodonToken]}, "\x00")
 
 	var ch Changed
-	var lookup bool
+	var lookup, lookupBs bool
 	if next.slKey == prev.slKey && prev.slKey != "" {
 		next.sl, next.errs[GroupShortLinks] = prev.sl, prev.errs[GroupShortLinks]
 	} else {
@@ -198,6 +208,7 @@ func (m *Manager) reloadLocked(ctx context.Context) error {
 		}
 		next.bs = c
 		m.log.Info("outreach: connection reloaded", "group", GroupBluesky, "configured", c != nil)
+		lookupBs = c != nil && !reservedHost(v[KeyBlueskyPDSURL])
 	}
 	if next.maKey == prev.maKey && prev.maKey != "" {
 		next.ma, next.errs[GroupMastodon] = prev.ma, prev.errs[GroupMastodon]
@@ -217,6 +228,9 @@ func (m *Manager) reloadLocked(ctx context.Context) error {
 		// Started only once next is current, so a fast answer is compared
 		// against the config it was fetched under, never the previous one.
 		m.lookupMastodonAccount(next.ma, v)
+	}
+	if lookupBs {
+		m.lookupBlueskyAccount(next.bs, v)
 	}
 	if ch != (Changed{}) {
 		m.lmu.Lock()
@@ -284,7 +298,10 @@ func (m *Manager) Apply(ctx context.Context, values map[string]string, now time.
 }
 
 // Account names the public account a channel posts as, from the current
-// values and with no network call (#0581): "@handle" for Bluesky, the
+// values and with no network call (#0581): for Bluesky the handle the session
+// reported once a connection test or the reload-time lookup has verified it
+// (#0601), the saved value before that only if it is not an email, else "";
+// for Mastodon the
 // "@user@host" for Mastodon once a connection test or the reload-time lookup
 // (#0597) has verified the account under the current instance and token
 // (cached in memory, not stored), the
@@ -293,8 +310,13 @@ func (m *Manager) Account(channel string) string {
 	v := m.cur.Load().values
 	switch channel {
 	case "bluesky":
+		if c := m.bsAcct.Load(); c != nil && c.key == m.cur.Load().bsKey && c.acct != "" {
+			return c.acct
+		}
+		// Not verified yet: the stored value shows only if it is a handle. A
+		// sign-in email is accepted by Bluesky but is not the account's name.
 		h := strings.TrimPrefix(strings.TrimSpace(v[KeyBlueskyHandle]), "@")
-		if h == "" {
+		if h == "" || strings.Contains(h, "@") {
 			return ""
 		}
 		return "@" + h
@@ -392,6 +414,25 @@ func (m *Manager) lookupMastodonAccount(c *mastodon.Client, v map[string]string)
 			return
 		}
 		m.rememberMastodonAccount(vals, acct.Acct)
+	}()
+}
+
+// lookupBlueskyAccount fetches the session's handle in the background, as
+// lookupMastodonAccount does for Mastodon (#0601). A failure leaves Account on
+// the stored value (or nothing, for an email) and logs the group name only.
+func (m *Manager) lookupBlueskyAccount(c *bluesky.Client, v map[string]string) {
+	vals := map[string]string{KeyBlueskyPDSURL: v[KeyBlueskyPDSURL], KeyBlueskyHandle: v[KeyBlueskyHandle], KeyBlueskyAppPassword: v[KeyBlueskyAppPassword]}
+	m.lookups.Add(1)
+	go func() {
+		defer m.lookups.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), accountLookupTimeout)
+		defer cancel()
+		h, err := m.lookupBlueskyHandle(ctx, c)
+		if err != nil || strings.TrimSpace(h) == "" {
+			m.log.Warn("outreach: bluesky account lookup failed", "group", GroupBluesky)
+			return
+		}
+		m.rememberBlueskyHandle(vals, h)
 	}()
 }
 

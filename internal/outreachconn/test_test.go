@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mastodon"
 )
 
@@ -252,6 +253,84 @@ func TestStaleMastodonAccountLookupIsDiscarded(t *testing.T) {
 	close(release)
 	m.lookups.Wait()
 	if got := m.Account("mastodon"); got != want {
+		t.Errorf("Account after the stale lookup answered = %q, want %q kept", got, want)
+	}
+}
+
+// #0601: the saved Bluesky identifier may be the sign-in email. Account shows
+// nothing for it until the session's own handle is known, then that handle.
+func TestBlueskyAccountShowsSessionHandleForEmail(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler()) // a loopback PDS; never called, the lookup is stubbed
+	defer srv.Close()
+	env := map[string]string{KeyBlueskyPDSURL: srv.URL, KeyBlueskyHandle: "owner@example.test", KeyBlueskyAppPassword: "pw-fake"}
+	m := NewManager(newFakeStore(nil), env, quietLog())
+	t.Cleanup(m.lookups.Wait)
+	m.lookupBlueskyHandle = func(context.Context, *bluesky.Client) (string, error) {
+		return "", errors.New("lookup failed")
+	}
+	if err := m.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m.lookups.Wait()
+	if got := m.Account("bluesky"); got != "" {
+		t.Errorf("Account for an email before the handle is known = %q, want empty", got)
+	}
+	// A reload with the handle available fetches it.
+	m.lookupBlueskyHandle = func(context.Context, *bluesky.Client) (string, error) {
+		return "www.example.test", nil
+	}
+	if _, err := m.Apply(context.Background(), map[string]string{KeyBlueskyAppPassword: "pw-fake-2"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m.lookups.Wait()
+	if got := m.Account("bluesky"); got != "@www.example.test" {
+		t.Errorf("Account after the lookup = %q, want @www.example.test", got)
+	}
+	// A saved plain handle shows before any lookup.
+	m2 := NewManager(newFakeStore(nil), map[string]string{KeyBlueskyPDSURL: "https://pds.example.test", KeyBlueskyHandle: "@alice.example.test", KeyBlueskyAppPassword: "pw"}, quietLog())
+	if err := m2.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := m2.Account("bluesky"); got != "@alice.example.test" {
+		t.Errorf("Account for a plain handle = %q", got)
+	}
+}
+
+// #0601: a Test connection result is cached for Account, and a lookup begun
+// under a replaced config is discarded.
+func TestStaleBlueskyHandleLookupIsDiscarded(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	m := NewManager(newFakeStore(nil), map[string]string{KeyBlueskyPDSURL: srv.URL, KeyBlueskyHandle: "owner@example.test", KeyBlueskyAppPassword: "pw-a-fake"}, quietLog())
+	t.Cleanup(m.lookups.Wait)
+	entered, release := make(chan struct{}), make(chan struct{})
+	m.lookupBlueskyHandle = func(context.Context, *bluesky.Client) (string, error) {
+		close(entered)
+		<-release
+		return "old.example.test", nil
+	}
+	if err := m.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	m.lookupBlueskyHandle = func(context.Context, *bluesky.Client) (string, error) {
+		return "new.example.test", nil
+	}
+	if _, err := m.Apply(context.Background(), map[string]string{KeyBlueskyAppPassword: "pw-b-fake"}, time.Now()); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	want := "@new.example.test"
+	for deadline := time.Now().Add(2 * time.Second); m.Account("bluesky") != want && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := m.Account("bluesky"); got != want {
+		close(release)
+		t.Fatalf("Account after the new config's lookup = %q, want %q", got, want)
+	}
+	close(release)
+	m.lookups.Wait()
+	if got := m.Account("bluesky"); got != want {
 		t.Errorf("Account after the stale lookup answered = %q, want %q kept", got, want)
 	}
 }

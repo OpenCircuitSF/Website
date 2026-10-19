@@ -54,8 +54,8 @@ export const FIELD_LABELS: Record<string, { label: string; placeholder: string; 
   },
   outreach_hashtags: {
     label: 'Outreach hashtags',
-    placeholder: '#SanFrancisco #Electronics',
-    help: 'Appended to new drafts on their own line. Up to 6, each # followed by up to 40 letters or digits. Use CamelCase (#SanFrancisco, not #sanfrancisco) so screen readers say the words apart.',
+    placeholder: '#sanfrancisco #electronics',
+    help: 'Appended to new drafts on their own line. Up to 6, each # followed by up to 40 letters or digits. Any case works; lowercase is the usual style (#sanfrancisco).',
   },
   outreach_channels: {
     label: 'Channels',

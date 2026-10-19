@@ -845,6 +845,8 @@ export interface WorkshopOutreach {
   card_host?: string;
   /** #0593: true when the publisher would attach the cover as the card's picture. */
   thumb_ok?: boolean;
+  /** #0601: the plain reason there is no picture, when thumb_ok is false. */
+  thumb_reason?: string;
   outreach: { id: number; workshop_id: number; campaign_slug: string; created_at: string } | null;
   channels: OutreachChannel[];
   waves: OutreachWave[];

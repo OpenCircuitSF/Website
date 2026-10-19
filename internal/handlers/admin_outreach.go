@@ -336,18 +336,24 @@ func (h *AdminOutreachHandler) cardHost() string {
 	return u.Host
 }
 
-// thumbOKer is the method thumbOK looks for on the posting seam. The assertion
-// below keeps a rename of Publisher.ThumbOK a compile error instead of a quiet
-// thumb_ok of false (#0597).
-type thumbOKer interface{ ThumbOK(cover *string) bool }
+// thumbStatuser is the method thumbStatus looks for on the posting seam. The
+// assertion below keeps a rename of Publisher.ThumbStatus a compile error
+// instead of a quiet thumb_ok of false (#0597, #0601).
+type thumbStatuser interface {
+	ThumbStatus(cover *string) (bool, string)
+}
 
-var _ thumbOKer = (*outreach.Publisher)(nil)
+var _ thumbStatuser = (*outreach.Publisher)(nil)
 
-// thumbOK asks the publisher whether it would attach the cover. A posting
-// seam that cannot say answers false, as the publisher would send no picture.
-func (h *AdminOutreachHandler) thumbOK(cover *string) bool {
-	t, ok := h.posting.(thumbOKer)
-	return ok && t.ThumbOK(cover)
+// thumbStatus asks the publisher whether it would attach the cover and, if
+// not, why. A posting seam that cannot say answers false with no reason, as
+// the publisher would send no picture.
+func (h *AdminOutreachHandler) thumbStatus(cover *string) (bool, string) {
+	t, ok := h.posting.(thumbStatuser)
+	if !ok {
+		return false, ""
+	}
+	return t.ThumbStatus(cover)
 }
 
 // nonEmptyPtr drops a nil or blank optional text field.
@@ -497,16 +503,21 @@ type outreachPanelView struct {
 	// ThumbOK is true when the publisher would attach the workshop cover as
 	// the Bluesky card's picture (#0593).
 	ThumbOK bool `json:"thumb_ok"`
+	// ThumbReason is the plain reason there is no picture, set only when
+	// ThumbOK is false and the publisher could say why (#0601).
+	ThumbReason string `json:"thumb_reason,omitempty"`
 	// LinkReport is set only on Start's response (#0568).
 	LinkReport *outreachLinkReport `json:"link_report,omitempty"`
 }
 
 func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop, o *outreach.Outreach) (outreachPanelView, error) {
+	thumbOK, thumbReason := h.thumbStatus(wk.CoverImage)
 	v := outreachPanelView{
 		Workshop:    outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt), Summary: nonEmptyPtr(wk.Summary), CoverImage: nonEmptyPtr(wk.CoverImage)},
 		BlueskyCard: h.blueskyCard(),
 		CardHost:    h.cardHost(),
-		ThumbOK:     h.thumbOK(wk.CoverImage),
+		ThumbOK:     thumbOK,
+		ThumbReason: thumbReason,
 		Channels:    h.channelViews(nil),
 		Waves:       []outreachWaveView{},
 		Posts:       []outreachPostView{},

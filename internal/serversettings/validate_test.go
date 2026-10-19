@@ -91,3 +91,16 @@ func TestNormalizeOutreachChannels(t *testing.T) {
 		}
 	}
 }
+
+// #0601: the default is lowercase; validation still accepts any case.
+func TestDefaultOutreachHashtagsLowercase(t *testing.T) {
+	if DefaultOutreachHashtags != "#sanfrancisco #electronics" {
+		t.Errorf("default = %q", DefaultOutreachHashtags)
+	}
+	if got, err := Normalize(KeyOutreachHashtags, DefaultOutreachHashtags); err != nil || got != DefaultOutreachHashtags {
+		t.Errorf("default does not validate: %q, %v", got, err)
+	}
+	if strings.Contains(msgHashtags, "CamelCase") || strings.Contains(msgHashtags, "SanFrancisco") {
+		t.Error("validation message must not recommend CamelCase")
+	}
+}

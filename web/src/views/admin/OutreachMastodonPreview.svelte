@@ -12,7 +12,7 @@
   import type { OutreachChannel, OutreachPost, WorkshopOutreach } from '../../lib/types';
 
   interface Props {
-    view: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean };
+    view: Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean; thumb_reason?: string };
     channel: OutreachChannel;
     post: OutreachPost;
     body?: string;
@@ -66,7 +66,7 @@
   }
   .hashtag,
   .link {
-    color: var(--accent-text, var(--accent));
+    color: var(--accent);
   }
   .link {
     text-decoration: underline;

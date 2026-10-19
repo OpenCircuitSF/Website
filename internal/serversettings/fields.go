@@ -37,7 +37,7 @@ const (
 	CardURLShort     = "short"
 	CardURLCanonical = "canonical"
 
-	DefaultOutreachHashtags = "#SanFrancisco #Electronics"
+	DefaultOutreachHashtags = "#sanfrancisco #electronics"
 	DefaultOutreachPostHour = "10"
 	// DefaultOutreachChannels is the set of channels outreach drafts, counts
 	// and shows until Settings says otherwise (#0588): the two the site posts

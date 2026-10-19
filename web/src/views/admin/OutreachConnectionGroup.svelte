@@ -145,6 +145,9 @@
           placeholder={f.source !== 'database' && f.value ? f.value : FIELD_LABELS[f.key].placeholder}
         />
         <p class="text-muted conn-desc">{sourceLabel(f)}</p>
+        {#if f.key === 'bluesky_handle'}
+          <p class="text-muted conn-desc">Your Bluesky handle (such as www.opencircuitsf.com) or the email you sign in with. Test connection shows the handle Bluesky reports.</p>
+        {/if}
         {#if urlHint(f.key)}
           <p class="text-error" role="alert">{urlHint(f.key)}</p>
         {/if}

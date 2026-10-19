@@ -12,7 +12,7 @@ export const GROUP_LABELS: Record<ConnectionGroup['name'], string> = {
 export const FIELD_LABELS: Record<string, { label: string; placeholder: string }> = {
   shortlinks_base_url: { label: 'Base URL', placeholder: 'https://go.opencircuitsf.com' },
   shortlinks_api_token: { label: 'API token', placeholder: '' },
-  bluesky_handle: { label: 'Handle', placeholder: 'opencircuitsf.bsky.social' },
+  bluesky_handle: { label: 'Handle or sign-in email', placeholder: 'www.opencircuitsf.com' },
   bluesky_app_password: { label: 'App password', placeholder: '' },
   bluesky_pds_url: { label: 'Bluesky server', placeholder: 'https://bsky.social' },
   mastodon_base_url: { label: 'Instance URL', placeholder: 'https://mastodon.social' },

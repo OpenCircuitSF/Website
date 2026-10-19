@@ -11,7 +11,12 @@ type thumbPosting struct {
 	ok bool
 }
 
-func (f thumbPosting) ThumbOK(*string) bool { return f.ok }
+func (f thumbPosting) ThumbStatus(*string) (bool, string) {
+	if f.ok {
+		return true, ""
+	}
+	return false, "No picture: test reason."
+}
 
 // #0593: the panel carries the canonical card host and the server's own
 // answer on whether the picture would be attached.
@@ -24,9 +29,13 @@ func TestAdminOutreach_PanelCardFacts(t *testing.T) {
 			t.Fatalf("panel = %d %s", code, b)
 		}
 		got := decodeOutreach[struct {
-			CardHost string `json:"card_host"`
-			ThumbOK  bool   `json:"thumb_ok"`
+			CardHost    string `json:"card_host"`
+			ThumbOK     bool   `json:"thumb_ok"`
+			ThumbReason string `json:"thumb_reason"`
 		}](t, b)
+		if (got.ThumbReason == "") != ok {
+			t.Errorf("thumb_reason = %q with thumb_ok %v", got.ThumbReason, ok)
+		}
 		if got.CardHost != "site.example.test" || got.ThumbOK != ok {
 			t.Errorf("panel card facts = %+v, want host site.example.test and thumb_ok %v", got, ok)
 		}

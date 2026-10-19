@@ -40,6 +40,9 @@ func TestOutreachServerLabelsAvoidBannedJargon(t *testing.T) {
 			t.Errorf("%s %q contains banned jargon", what, s)
 		}
 	}
+	for _, r := range []string{outreach.ThumbReasonNoCover, outreach.ThumbReasonNotUploaded, outreach.ThumbReasonNoStorage, outreach.ThumbReasonMissing, outreach.ThumbReasonFormat, outreach.ThumbReasonTooBig} {
+		check("thumbnail reason", r)
+	}
 	for _, c := range outreach.Channels() {
 		check("channel label", c.Label)
 	}

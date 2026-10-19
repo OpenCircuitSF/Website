@@ -37,7 +37,7 @@ export function hostOf(url: string | null | undefined, fallbackHost: string): st
   }
 }
 
-type CardView = Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean };
+type CardView = Pick<WorkshopOutreach, 'workshop'> & { bluesky_card?: 'short' | 'canonical'; card_host?: string; thumb_ok?: boolean; thumb_reason?: string };
 
 export interface LinkCard {
   title: string;
