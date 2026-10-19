@@ -2,11 +2,15 @@ package outreachconn
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/mastodon"
 )
 
 // Fakes only: nothing here reaches a real ShortLinks, Bluesky, or Mastodon
@@ -98,6 +102,12 @@ func TestMastodonConnection(t *testing.T) {
 	}))
 	defer srv.Close()
 	m := testMgr(t, map[string]string{KeyMastodonBaseURL: srv.URL, KeyMastodonToken: tokenCanary})
+	m.lookups.Wait()
+	// Make the reload lookup fail from here on, so the cache invalidation
+	// below is observable on its own (#0597 makes a reload fetch the account).
+	m.lookupAccount = func(context.Context, *mastodon.Client) (mastodon.Account, error) {
+		return mastodon.Account{}, errors.New("lookup disabled")
+	}
 	r := m.Test(context.Background(), GroupMastodon)
 	if !r.OK || r.Detail != "Signed in to Mastodon as @opencircuit" {
 		t.Errorf("ok result = %+v", r)
@@ -110,6 +120,7 @@ func TestMastodonConnection(t *testing.T) {
 	if _, err := m.Apply(context.Background(), map[string]string{KeyMastodonToken: "replacement-token-0593"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	m.lookups.Wait()
 	if got, want := m.Account("mastodon"), strings.TrimPrefix(srv.URL, "http://"); got != want {
 		t.Errorf("Account after a token change = %q, want the bare host %q", got, want)
 	}
@@ -160,5 +171,44 @@ func TestTestUsesAFreshClient(t *testing.T) {
 	m.Test(ctx, GroupBluesky)
 	if hits != 2 {
 		t.Errorf("createSession hits = %d, want 2 (one cached login, one fresh test)", hits)
+	}
+}
+
+// #0597: a reload fetches the Mastodon account itself, so "@user@host"
+// survives a restart without a manual Test; a failed fetch keeps the bare
+// host and logs the group name only.
+func TestMastodonAccountFetchedOnReload(t *testing.T) {
+	status := 200
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+tokenCanary {
+			w.WriteHeader(401)
+			return
+		}
+		w.WriteHeader(status)
+		w.Write([]byte(`{"acct":"opencircuit","url":"https://m.example/@opencircuit"}`))
+	}))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	env := map[string]string{KeyMastodonBaseURL: srv.URL, KeyMastodonToken: tokenCanary}
+
+	m := testMgr(t, env)
+	m.lookups.Wait()
+	if got, want := m.Account("mastodon"), "@opencircuit@"+host; got != want {
+		t.Errorf("Account after reload = %q, want %q", got, want)
+	}
+
+	// A failing instance falls back to the host; the log has no token.
+	status = 500
+	var logs strings.Builder
+	m2 := NewManager(newFakeStore(nil), env, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err := m2.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m2.lookups.Wait()
+	if got := m2.Account("mastodon"); got != host {
+		t.Errorf("Account after a failed lookup = %q, want the bare host %q", got, host)
+	}
+	if !strings.Contains(logs.String(), "account lookup failed") || strings.Contains(logs.String(), tokenCanary) {
+		t.Errorf("log = %q, want the failure named and no token", logs.String())
 	}
 }

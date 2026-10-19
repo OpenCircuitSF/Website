@@ -50,6 +50,12 @@ describe('splitBody and composeBody', () => {
     const s = splitBody(mast, MURL);
     expect(composeBody(s.message, s.tail)).toBe(mast);
   });
+  it('treats a final hashtag-only paragraph as tail even when typed (documented ambiguity, #0597), and still round-trips it', () => {
+    const body = 'Join us.\n\nLearn to solder.\n\n#typed';
+    const s = splitBody(body, null);
+    expect(s).toEqual({ message: 'Join us.\n\nLearn to solder.', tail: ['#typed'] });
+    expect(composeBody(s.message, s.tail)).toBe(body);
+  });
   it('a body with no tail is all message', () => {
     expect(splitBody('Just words.\n\nMore words.', null)).toEqual({ message: 'Just words.\n\nMore words.', tail: [] });
   });

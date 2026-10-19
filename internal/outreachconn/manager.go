@@ -88,7 +88,16 @@ type Manager struct {
 	// verified, keyed by the config it was verified under (#0593): a changed
 	// instance or token invalidates it without any explicit clear.
 	maAcct atomic.Pointer[maAccount]
+
+	// lookups tracks in-flight reload account lookups; tests wait on it.
+	lookups sync.WaitGroup
+	// lookupAccount fetches the Mastodon account on reload (#0597). It is a
+	// field so a test can substitute it; the default asks the instance.
+	lookupAccount func(ctx context.Context, c *mastodon.Client) (mastodon.Account, error)
 }
+
+// accountLookupTimeout bounds the reload-time verify_credentials call.
+const accountLookupTimeout = 5 * time.Second
 
 type maAccount struct{ key, acct string }
 
@@ -112,6 +121,9 @@ func NewManager(st store, env map[string]string, log *slog.Logger) *Manager {
 		log = slog.Default()
 	}
 	m := &Manager{store: st, env: env, log: log}
+	m.lookupAccount = func(ctx context.Context, c *mastodon.Client) (mastodon.Account, error) {
+		return c.VerifyCredentials(ctx)
+	}
 	m.cur.Store(&state{errs: map[string]string{}, values: map[string]string{}, sources: map[string]Source{}, saved: map[string]string{}})
 	return m
 }
@@ -197,6 +209,9 @@ func (m *Manager) reloadLocked(ctx context.Context) error {
 		}
 		next.ma = c
 		m.log.Info("outreach: connection reloaded", "group", GroupMastodon, "configured", c != nil)
+		if c != nil && !reservedHost(v[KeyMastodonBaseURL]) {
+			m.lookupMastodonAccount(c, v)
+		}
 	}
 	m.cur.Store(next)
 	if ch != (Changed{}) {
@@ -353,4 +368,40 @@ func loopbackURL(raw string) bool {
 	}
 	h := u.Hostname()
 	return h == "localhost" || h == "127.0.0.1" || h == "::1"
+}
+
+// lookupMastodonAccount fetches "@user@host" in the background so a restart
+// or a settings save need not wait on the instance (#0597). It is bounded by
+// accountLookupTimeout. A failure leaves Account on the bare host and logs the
+// group name only: neither the token nor upstream text is ever logged.
+func (m *Manager) lookupMastodonAccount(c *mastodon.Client, v map[string]string) {
+	vals := map[string]string{KeyMastodonBaseURL: v[KeyMastodonBaseURL], KeyMastodonToken: v[KeyMastodonToken]}
+	m.lookups.Add(1)
+	go func() {
+		defer m.lookups.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), accountLookupTimeout)
+		defer cancel()
+		acct, err := m.lookupAccount(ctx, c)
+		if err != nil || strings.TrimSpace(acct.Acct) == "" {
+			m.log.Warn("outreach: mastodon account lookup failed", "group", GroupMastodon)
+			return
+		}
+		m.rememberMastodonAccount(vals, acct.Acct)
+	}()
+}
+
+// reservedHost reports whether raw's host is in a TLD RFC 2606 / 6761
+// reserves and can never resolve, so a lookup would only waste a DNS query.
+func reservedHost(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	for _, tld := range []string{".test", ".example", ".invalid"} {
+		if strings.HasSuffix(h, tld) {
+			return true
+		}
+	}
+	return false
 }

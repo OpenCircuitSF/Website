@@ -177,3 +177,16 @@ describe('ServerSettings: outreach channels (#0588)', () => {
     expect((screen.getByRole('button', { name: 'Save Outreach' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe('shared store load failure (#0597)', () => {
+  it('announces the failure once across two mounts of one store', async () => {
+    const { ServerSettingsStore } = await import('../../lib/serverSettingsStore.svelte');
+    getServerSettings.mockRejectedValue(new Error('boom'));
+    const store = new ServerSettingsStore();
+    render(ServerSettingsView, { props: { scope: 'server', store } });
+    render(ServerSettingsView, { props: { scope: 'outreach', store, showNote: false, bare: true } });
+    await waitFor(() => expect(screen.getAllByText('Could not load server settings. Please try again.')).toHaveLength(2));
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+  });
+});

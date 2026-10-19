@@ -18,6 +18,15 @@ export function isHashtagParagraph(p: string): boolean {
  * Splits a post body into the part the Message field edits and the tail it
  * leaves alone: trailing paragraphs that are a hashtag line or carry the
  * tracked link (Mastodon's "sign up here" line).
+ *
+ * Known ambiguity (#0597): a body carries no marker saying whether its final
+ * hashtag-only paragraph came from the template or was typed into the message
+ * (Bluesky with hashtags off has no template line). The two look identical,
+ * so the final hashtag paragraph is always tail. Nothing is lost: Save message
+ * recomposes message + tail, so a typed final hashtag paragraph survives every
+ * save and only cannot be edited from the Message field. Resolving it for
+ * real needs the server to say which paragraph it appended; not worth an API
+ * change for this case.
  */
 export function splitBody(body: string, shortUrl: string | null): { message: string; tail: string[] } {
   const paras = body.split('\n\n');

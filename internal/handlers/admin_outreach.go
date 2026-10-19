@@ -336,10 +336,17 @@ func (h *AdminOutreachHandler) cardHost() string {
 	return u.Host
 }
 
+// thumbOKer is the method thumbOK looks for on the posting seam. The assertion
+// below keeps a rename of Publisher.ThumbOK a compile error instead of a quiet
+// thumb_ok of false (#0597).
+type thumbOKer interface{ ThumbOK(cover *string) bool }
+
+var _ thumbOKer = (*outreach.Publisher)(nil)
+
 // thumbOK asks the publisher whether it would attach the cover. A posting
 // seam that cannot say answers false, as the publisher would send no picture.
 func (h *AdminOutreachHandler) thumbOK(cover *string) bool {
-	t, ok := h.posting.(interface{ ThumbOK(cover *string) bool })
+	t, ok := h.posting.(thumbOKer)
 	return ok && t.ThumbOK(cover)
 }
 

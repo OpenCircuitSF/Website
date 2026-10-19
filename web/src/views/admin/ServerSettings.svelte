@@ -49,8 +49,15 @@
   {:else if store.unavailable}
     <p class="text-muted">Server settings are not available when the server runs without a database.</p>
   {:else if store.loadError}
-    <p class="text-error" role="alert">{store.loadError}</p>
-    <Button variant="primary" onclick={() => store.reload().finally(() => onloaded?.())}>Retry</Button>
+    <!-- One announcement per shared store (#0597): the mount that owns the
+         precedence note (showNote) is the one that announces and offers Retry;
+         the second mount shows the same text quietly. -->
+    {#if showNote}
+      <p class="text-error" role="alert">{store.loadError}</p>
+      <Button variant="primary" onclick={() => store.reload().finally(() => onloaded?.())}>Retry</Button>
+    {:else}
+      <p class="text-error">{store.loadError}</p>
+    {/if}
   {:else if store.settings}
     {#if showNote}
       <p class="text-muted srv-note">{PRECEDENCE_NOTE}</p>
