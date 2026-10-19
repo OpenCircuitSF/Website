@@ -29,22 +29,20 @@ import (
 // still active at expiry.
 //
 // The decline shape this test drives is deliberately NOT the SSE case the
-// budget test above covers: it opens a raw TCP connection and sends a
-// request header that never terminates, which parks the server-side
-// connection in StateNew. That state is invisible to every handler and to
-// any request-count diagnostic — nothing is "in flight" from the handler's
-// point of view — yet it holds Shutdown open exactly as an in-flight
-// handler does: net/http's quiescence check treats StateNew as idle only
-// after ~5s of unread request header, which collides with the 5s
-// production budget. It is the clearest demonstration that the deadline
-// error was never proof of a hang OR of benign timing: without naming the
-// connections, the bare deadline could not distinguish its own causes.
+// budget test above covers: it opens a raw TCP connection and sends
+// complete request headers announcing a body that never fully arrives,
+// which parks the server-side connection in StateActive inside the
+// handler's body read. Under #0536 this test sent an unterminated header
+// instead (StateNew); #0598 made a shutdown holding only StateNew
+// connections close them and return nil — no request was ever read, so
+// nothing is aborted — and that shape is now covered by
+// TestMountAndServe_ShutdownClosesNeverUsedConnections below. The named
+// error must still appear for any non-new connection, which this test pins.
 //
-// The test shrinks the production budget to 500ms (package var, the same
-// override the budget test uses) so the timed-out shutdown is
-// deterministic: a fresh StateNew connection is not treated as idle until
-// ~5s of unread header has elapsed, so a 500ms budget can never see this
-// connection go idle first.
+// The test shrinks the production budget to declineShutdownBudget (package
+// var, the same override the budget test uses) so the timed-out shutdown is
+// deterministic: Shutdown never treats an active connection as idle, so the
+// budget always expires with this connection still recorded.
 //
 // Handler arguments are typed nils except where a route this test actually
 // drives needs a real instance — the same shape noindex_wiring_test.go
@@ -75,7 +73,7 @@ func TestMountAndServe_ShutdownTimeoutNamesWhatHeldItOpen(t *testing.T) {
 	msg := err.Error()
 	for _, want := range []string{
 		"graceful shutdown incomplete",
-		(500 * time.Millisecond).String(),
+		declineShutdownBudget.String(),
 		"connections still active at expiry",
 		"1 connection(s)",
 		"127.0.0.1",
@@ -92,22 +90,39 @@ func TestMountAndServe_ShutdownTimeoutNamesWhatHeldItOpen(t *testing.T) {
 // Shutdown holds busy for ~5s (Go issue 22682) — the whole production
 // budget. With only such connections left there is nothing to drain, so
 // mountAndServe must close them and return nil, not a FAILURE.
+//
+// The elapsed-time floor proves the nil came from the all-new close path,
+// not from Shutdown finishing early because the connection never reached
+// the server's tracked set: the helper sleeps 250ms after hold before
+// SIGTERM, so a Shutdown that actually waited on the StateNew connection
+// returns no sooner than 250ms + declineShutdownBudget after hold began.
+// A lower bound only — load can lengthen it, never shorten it.
 func TestMountAndServe_ShutdownClosesNeverUsedConnections(t *testing.T) {
+	var held time.Time
 	err := runShutdownHoldingConn(t, func(t *testing.T, port int) {
 		raw, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
 			t.Fatalf("dial silent connection: %v", err)
 		}
 		t.Cleanup(func() { raw.Close() })
+		held = time.Now()
 	})
 	if err != nil {
 		t.Fatalf("mountAndServe returned %v for a shutdown holding only never-used connections, want nil", err)
 	}
+	if floor := 250*time.Millisecond + declineShutdownBudget; time.Since(held) < floor {
+		t.Fatalf("mountAndServe returned nil %s after the silent connection was opened, under the %s floor — "+
+			"Shutdown did not wait on it, so the all-new close path was not exercised", time.Since(held), floor)
+	}
 }
 
-// runShutdownHoldingConn starts mountAndServe with a 500ms shutdown budget,
-// lets hold open whatever connection the scenario needs, sends SIGTERM and
-// returns mountAndServe's result.
+// declineShutdownBudget is the shutdown budget both decline tests run under,
+// shared so the error-text assertion cannot drift from the override.
+const declineShutdownBudget = 500 * time.Millisecond
+
+// runShutdownHoldingConn starts mountAndServe with a declineShutdownBudget
+// shutdown budget, lets hold open whatever connection the scenario needs,
+// sends SIGTERM and returns mountAndServe's result.
 func runShutdownHoldingConn(t *testing.T, hold func(t *testing.T, port int)) error {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -138,8 +153,7 @@ func runShutdownHoldingConn(t *testing.T, hold func(t *testing.T, port int)) err
 	}
 
 	origServerTimeout := shutdownServerTimeout
-	const testShutdownServerTimeout = 500 * time.Millisecond
-	shutdownServerTimeout = testShutdownServerTimeout
+	shutdownServerTimeout = declineShutdownBudget
 	t.Cleanup(func() {
 		shutdownServerTimeout = origServerTimeout
 	})
