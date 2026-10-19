@@ -295,7 +295,6 @@ say so. Never route around it in a way that leaves the next agent to rediscover
 it. If clearing it is outside the issue's scope, file it — an obstacle that
 cost you an hour will cost the next agent an hour too.
 
-
 ### Orchestrator: pick and dispatch
 
 **Never enumerate the tracker by reading issue files.** There are over a
@@ -517,9 +516,8 @@ two agents test at the same time — see `AGENTS.md` §5a.
 
 - `scripts/check.sh`, `scripts/dev.sh`, `scripts/db-reset.sh`, `scripts/testdb.sh`, `scripts/deploy.sh` — each has an external harness that only `guards` runs (`dev_guard_test.sh` alone is ~48s and binds `:5173`).
 - `internal/testdb` and anything that changes how test databases are created or locked.
+- Client-side navigation (`web/src/lib/router.ts`, link handling, scroll and focus restoration, `document.title`): also run `scripts/check.sh browser-nav`. It builds the SPA and drives Safari through `safaridriver` inside a disposable Tart VM clone (`#0609`), never on the host, and checks title, focus and scroll across link clicks, `navigate()` and back/forward — what jsdom cannot evidence. It is not part of the phase-end run unless the phase touched navigation. Say in `## Verification` whether real-browser evidence came from this run or rests on jsdom alone.
 - A change spanning many packages, where picking the scoped set is itself a guess. When unsure, run the full tier.
-
-**Not in any tier:** `scripts/check.sh browser-nav` starts Safari and `safaridriver` on the host, which `AGENTS.md` §8 now forbids. Do not run it until it moves into a Tart VM guest (`#0609`). Real-browser evidence comes from a VM run or not at all; say which in `## Verification`.
 
 **There are no individually slow tests to split out.** Measured on 2026-10-19 with `go test -json` over the whole Go suite (1,940 top-level tests, 50s wall including compile): the slowest test takes 2.7s, three take over 1s, and eighteen over 0.5s, together 16s. The web suite is 86 files in 8s. So the tiers split by *suite*, not by test. The time worth recovering is elsewhere:
 
