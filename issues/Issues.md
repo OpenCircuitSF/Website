@@ -227,7 +227,7 @@ The rationale is measured, not assumed: in a comparable project, ten Opus · low
 | Time in `scripts/check.sh` | 1.0 min (3 runs) | 1.2 min (3 runs) | 0.1 min |
 | Model time (wall − tests) | 3.2 min | 2.5 min | 8.6 min |
 | Turns | 26 | 22 | 38 |
-| Cost (at the 2026-08-22 price cache) | $1.42 | $1.99 | $4.03 |
+| Cost (at 2026-10-19 prices) | $0.67 | $1.08 | $2.20 |
 
 Compare new work-log rows against this table to judge the change.
 
@@ -602,16 +602,16 @@ Every subagent dispatch gets a usage record on the issue it worked: which model 
 
 ### Pricing cache (`issues/model-pricing.json`)
 
-Anthropic publishes prices on the docs site (no API endpoint). Fetch once per day, cache to:
+Anthropic publishes prices on the docs site (no API endpoint); `docs.claude.com` now redirects to `platform.claude.com`. Fetch once per day, cache to:
 
 ```json
 {
   "fetched": "YYYY-MM-DD",
-  "source": "https://docs.claude.com/en/docs/about-claude/pricing",
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing",
   "currency": "USD per MTok",
   "models": {
-    "claude-opus-5-5": { "input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50 },
-    "claude-sonnet-5-5": { "input": 3.00, "output": 15.00, "cache_write_5m": 3.75, "cache_read": 0.30 }
+    "claude-opus-5-5": { "input": 4.00, "output": 20.00, "cache_write_5m": 5.00, "cache_write_1h": 8.00, "cache_read": 0.20 },
+    "claude-sonnet-5-5": { "input": 2.00, "output": 10.00, "cache_write_5m": 2.50, "cache_write_1h": 4.00, "cache_read": 0.10 }
   }
 }
 ```
