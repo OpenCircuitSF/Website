@@ -38,6 +38,16 @@ func TestRefreshBodyLink(t *testing.T) {
 	if got := RefreshBodyLink("x https://go.example.test/u/u", "https://go.example.test/u/u"); got != "x https://go.example.test/u/u" {
 		t.Errorf("key u, already repaired: %q", got)
 	}
+	// The production shape (#0604 review): a key beginning with "u", so the
+	// dead form host/uKEY and the live form host/u/uKEY differ only by the
+	// slash. The dead form is replaced; the live form is left alone.
+	const prodCur = "https://go.example.test/u/uXLcM0"
+	if got := RefreshBodyLink("Solder with us!\nhttps://go.example.test/uXLcM0\n#DIY", prodCur); got != "Solder with us!\n"+prodCur+"\n#DIY" {
+		t.Errorf("production shape: %q", got)
+	}
+	if got := RefreshBodyLink("Solder with us! "+prodCur, prodCur); got != "Solder with us! "+prodCur {
+		t.Errorf("production shape, already repaired: %q", got)
+	}
 	// A short URL not in the /u/ form has no derivable old form: unchanged.
 	if got := RefreshBodyLink("x https://go.example.test/abc", "https://go.example.test/abc"); got != "x https://go.example.test/abc" {
 		t.Errorf("non-/u/ short url: %q", got)

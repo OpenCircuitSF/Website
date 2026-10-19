@@ -128,11 +128,10 @@ func (p *Publisher) DeleteRemote(ctx context.Context, post Post) (bool, error) {
 		if !c.Enabled() {
 			return false, errors.New("Bluesky is not configured on this server")
 		}
-		rkey := bluesky.RKeyFromURI(*post.RemoteID)
-		if rkey == "" {
+		if bluesky.RKeyFromURI(*post.RemoteID) == "" {
 			return false, fmt.Errorf("the stored Bluesky post id %q is not recognised", *post.RemoteID)
 		}
-		return c.DeletePost(ctx, rkey)
+		return c.DeletePostURI(ctx, *post.RemoteID)
 	case "mastodon":
 		c := p.clients.Mastodon()
 		if !c.Enabled() {

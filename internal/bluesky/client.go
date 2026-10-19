@@ -200,18 +200,48 @@ func (c *Client) DeletePost(ctx context.Context, rkey string) (existed bool, err
 	return false, err
 }
 
+// DeletePostURI is DeletePost for a stored at:// post URI (#0604 review). It
+// refuses a URI in a different repo from the signed-in account's: DeletePost
+// looks in the signed-in account's repo, where another account's record is
+// always missing, so "already gone" would be a false success while the post
+// stays up under the other account.
+func (c *Client) DeletePostURI(ctx context.Context, uri string) (existed bool, err error) {
+	if c == nil {
+		return false, &APIError{Message: "client not configured", Permanent: true, kind: ErrAuth}
+	}
+	repo, rkey := splitPostURI(uri)
+	if rkey == "" {
+		return false, &APIError{Message: "not a Bluesky post URI", Permanent: true, kind: ErrInvalid}
+	}
+	did, _, err := c.identity(ctx)
+	if err != nil {
+		return false, err
+	}
+	if repo != did {
+		return false, &APIError{Message: "the post belongs to a different Bluesky account (" + repo + ") than the one connected (" + did + ")", Permanent: true, kind: ErrInvalid}
+	}
+	return c.DeletePost(ctx, rkey)
+}
+
 // RKeyFromURI returns the record key of an at:// post URI as stored in
 // outreach_posts.remote_id, or "" when uri is not an app.bsky.feed.post URI.
 func RKeyFromURI(uri string) string {
+	_, rkey := splitPostURI(uri)
+	return rkey
+}
+
+// splitPostURI splits an at:// app.bsky.feed.post URI into its repo and
+// record key; both are "" when uri is not one.
+func splitPostURI(uri string) (repo, rkey string) {
 	rest, ok := strings.CutPrefix(strings.TrimSpace(uri), "at://")
 	if !ok {
-		return ""
+		return "", ""
 	}
 	parts := strings.Split(rest, "/")
 	if len(parts) != 3 || parts[0] == "" || parts[1] != postCollection || parts[2] == "" {
-		return ""
+		return "", ""
 	}
-	return parts[2]
+	return parts[0], parts[2]
 }
 
 func mustJSON(v any) []byte {

@@ -553,6 +553,43 @@ func TestDeletePost_RecordVanishesBetweenTheTwoCalls(t *testing.T) {
 	}
 }
 
+// TestDeletePost_ExistenceCheckFailureIsNotGone: only RecordNotFound or a 404
+// from getRecord means "already gone" (#0604 review). A 5xx, a different 400,
+// or a dropped connection says nothing about whether the record exists, so it
+// must be an error and send no deleteRecord; treating it as gone would return
+// a still-live post to draft.
+func TestDeletePost_ExistenceCheckFailureIsNotGone(t *testing.T) {
+	for name, ov := range map[string]func(http.ResponseWriter, *http.Request){
+		"500": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) },
+		"502": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(502) },
+		"503": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) },
+		"400 InvalidRequest": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(400)
+			io.WriteString(w, `{"error":"InvalidRequest","message":"bad"}`)
+		},
+		"connection dropped": func(w http.ResponseWriter, r *http.Request) {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				conn.Close()
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakePDS(t)
+			f.records["2222222222222"] = true
+			f.override["/xrpc/com.atproto.repo.getRecord"] = ov
+			c := newTestClient(t, f)
+			existed, err := c.DeletePost(context.Background(), "2222222222222")
+			if err == nil {
+				t.Fatalf("DeletePost = %v, nil; want an error, not already-gone", existed)
+			}
+			if f.count("/xrpc/com.atproto.repo.deleteRecord") != 0 {
+				t.Error("deleteRecord called after a failed existence check")
+			}
+		})
+	}
+}
+
 func TestDeletePost_RealFailuresAreErrorsAndRedacted(t *testing.T) {
 	f := newFakePDS(t)
 	f.records["2222222222222"] = true
@@ -587,13 +624,50 @@ func TestDeletePost_BadInputAndNilClient(t *testing.T) {
 	}
 }
 
+// TestDeletePostURI: the stored at:// URI is deleted from the signed-in
+// account's repo, and a URI in another repo is refused with no write rather
+// than reported as already gone (#0604 review).
+func TestDeletePostURI(t *testing.T) {
+	f := newFakePDS(t)
+	f.records["3mz5t4fyzej34"] = true
+	c := newTestClient(t, f)
+	existed, err := c.DeletePostURI(context.Background(), "at://"+fakeDID+"/app.bsky.feed.post/3mz5t4fyzej34")
+	if err != nil || !existed || f.records["3mz5t4fyzej34"] {
+		t.Fatalf("DeletePostURI = %v, %v (record still there: %v); want existed, nil", existed, err, f.records["3mz5t4fyzej34"])
+	}
+	if existed, err := c.DeletePostURI(context.Background(), "at://"+fakeDID+"/app.bsky.feed.post/3mz5t4fyzej34"); err != nil || existed {
+		t.Errorf("second DeletePostURI = %v, %v; want already gone", existed, err)
+	}
+
+	f.records["3mz5t4fyzej35"] = true
+	_, err = c.DeletePostURI(context.Background(), "at://did:plc:someoneelse/app.bsky.feed.post/3mz5t4fyzej35")
+	if err == nil || !IsPermanent(err) {
+		t.Fatalf("other repo: err = %v, want a permanent refusal", err)
+	}
+	if f.count("/xrpc/com.atproto.repo.getRecord") != 2 || f.count("/xrpc/com.atproto.repo.deleteRecord") != 1 {
+		t.Errorf("other repo reached the PDS: getRecord %d, deleteRecord %d", f.count("/xrpc/com.atproto.repo.getRecord"), f.count("/xrpc/com.atproto.repo.deleteRecord"))
+	}
+	for _, bad := range []string{"", "3mz5t4fyzej35", "https://bsky.app/profile/x/post/3mz5t4fyzej35"} {
+		if _, err := c.DeletePostURI(context.Background(), bad); err == nil {
+			t.Errorf("DeletePostURI(%q) = nil error", bad)
+		}
+	}
+	var nilc *Client
+	if _, err := nilc.DeletePostURI(context.Background(), "at://"+fakeDID+"/app.bsky.feed.post/x"); err == nil {
+		t.Error("nil client must error")
+	}
+}
+
 func TestRKeyFromURI(t *testing.T) {
 	for uri, want := range map[string]string{
 		"at://did:plc:abc/app.bsky.feed.post/3k44deefqdk2g": "3k44deefqdk2g",
-		"at://did:plc:abc/app.bsky.feed.like/3k44":          "",
-		"at://did:plc:abc/app.bsky.feed.post/":              "",
-		"https://bsky.app/profile/x/post/3k44":              "",
-		"":                                                  "",
+		// The shape of a production row: a 24-character did:plc and a
+		// 13-character TID (both made up here).
+		"at://did:plc:abcdefghijklmnopqrstuvwx/app.bsky.feed.post/3mz5t4fyzej34": "3mz5t4fyzej34",
+		"at://did:plc:abc/app.bsky.feed.like/3k44":                               "",
+		"at://did:plc:abc/app.bsky.feed.post/":                                   "",
+		"https://bsky.app/profile/x/post/3k44":                                   "",
+		"":                                                                       "",
 	} {
 		if got := RKeyFromURI(uri); got != want {
 			t.Errorf("RKeyFromURI(%q) = %q, want %q", uri, got, want)
