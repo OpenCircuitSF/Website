@@ -2201,6 +2201,19 @@ func mountAndServe(
 		// deadline case is annotated; Shutdown can also return a
 		// listener-close error on its fast path, and wrapping that would
 		// misattribute it.
+		//
+		// #0598: when every connection still recorded is "new", there is
+		// nothing to drain: no request was ever read from any of them, so
+		// closing them aborts no work. Shutdown only waited because of the
+		// ~5s StateNew rule above. Close the server (which closes those
+		// connections) and report a clean stop instead of a spurious
+		// FAILURE. Any non-new connection (active, hijacked) takes the
+		// unchanged error path below.
+		if shutdownErr != nil && errors.Is(shutdownErr, context.DeadlineExceeded) && activeConns.allNew() {
+			log.Printf("opencircuit: srv.Shutdown reached its %s budget holding only never-used (new) connections; closing them", shutdownServerTimeout)
+			_ = srv.Close()
+			shutdownErr = nil
+		}
 		if shutdownErr != nil && errors.Is(shutdownErr, context.DeadlineExceeded) {
 			stillActive := activeConns.describe()
 			log.Printf("opencircuit: srv.Shutdown did not finish within %s: %v — "+
@@ -2375,6 +2388,24 @@ func (t *activeConnSet) track(c net.Conn, s http.ConnState) {
 	default:
 		delete(t.conns, c.RemoteAddr().String())
 	}
+}
+
+// allNew reports whether at least one connection is recorded and every
+// recorded connection is still in http.StateNew (#0598). An empty set is
+// false: that case keeps its existing "went idle between the deadline and
+// this report" report rather than being treated as a clean drain.
+func (t *activeConnSet) allNew() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.conns) == 0 {
+		return false
+	}
+	for _, st := range t.conns {
+		if st != http.StateNew.String() {
+			return false
+		}
+	}
+	return true
 }
 
 // describe returns a compact, deterministic summary of the connections

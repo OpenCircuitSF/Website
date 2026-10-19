@@ -51,6 +51,65 @@ import (
 // uses with okPinger, since the only route it exercises is GET /health
 // plus one raw connection that never completes a request.
 func TestMountAndServe_ShutdownTimeoutNamesWhatHeldItOpen(t *testing.T) {
+	// #0598: a request whose headers are complete but whose body never
+	// arrives is StateActive, which must still take the error path. (The
+	// half-open-header shape this test used under #0536 is StateNew, which
+	// #0598 now closes cleanly; see the test below.)
+	err := runShutdownHoldingConn(t, func(t *testing.T, port int) {
+		raw, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatalf("dial raw connection: %v", err)
+		}
+		t.Cleanup(func() { raw.Close() })
+		if _, err := raw.Write([]byte("POST /health HTTP/1.1\r\nHost: opencircuitsf.invalid\r\nContent-Length: 100\r\n\r\npartial")); err != nil {
+			t.Fatalf("write request with unfinished body: %v", err)
+		}
+	})
+	if err == nil {
+		t.Fatal("mountAndServe returned nil after SIGTERM with an active request outliving the budget — " +
+			"#0598's all-new check must not swallow a non-new connection")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("mountAndServe error %v does not wrap context.DeadlineExceeded", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"graceful shutdown incomplete",
+		(500 * time.Millisecond).String(),
+		"connections still active at expiry",
+		"1 connection(s)",
+		"127.0.0.1",
+		" active",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("decline error %q does not name %q", msg, want)
+		}
+	}
+}
+
+// TestMountAndServe_ShutdownClosesNeverUsedConnections is #0598: a client
+// connection that never sent a request is StateNew, which net/http's
+// Shutdown holds busy for ~5s (Go issue 22682) — the whole production
+// budget. With only such connections left there is nothing to drain, so
+// mountAndServe must close them and return nil, not a FAILURE.
+func TestMountAndServe_ShutdownClosesNeverUsedConnections(t *testing.T) {
+	err := runShutdownHoldingConn(t, func(t *testing.T, port int) {
+		raw, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatalf("dial silent connection: %v", err)
+		}
+		t.Cleanup(func() { raw.Close() })
+	})
+	if err != nil {
+		t.Fatalf("mountAndServe returned %v for a shutdown holding only never-used connections, want nil", err)
+	}
+}
+
+// runShutdownHoldingConn starts mountAndServe with a 500ms shutdown budget,
+// lets hold open whatever connection the scenario needs, sends SIGTERM and
+// returns mountAndServe's result.
+func runShutdownHoldingConn(t *testing.T, hold func(t *testing.T, port int)) error {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
@@ -94,21 +153,7 @@ func TestMountAndServe_ShutdownTimeoutNamesWhatHeldItOpen(t *testing.T) {
 	}()
 	waitForHealthy(t, &http.Client{Timeout: wiringHTTPTimeout}, baseURL, errCh, ready)
 
-	// The half-open connection: connect, send a header with no terminating
-	// blank line, and never finish the request. The server accepts the
-	// connection, reads the partial header, and parks the connection in
-	// StateNew for as long as the client stays silent. Closed in cleanup so
-	// the server-side read loop terminates when this test is done —
-	// mountAndServe's shutdown does not close this connection (that is the
-	// behavior under test), so the client side is what releases it.
-	raw, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		t.Fatalf("dial raw connection: %v", err)
-	}
-	t.Cleanup(func() { raw.Close() })
-	if _, err := raw.Write([]byte("GET / HTTP/1.1\r\nHost: opencircuitsf.invalid")); err != nil {
-		t.Fatalf("write partial header: %v", err)
-	}
+	hold(t, port)
 	// Let the accept loop pick the connection up and enter StateNew before
 	// the SIGTERM lands — otherwise Shutdown could close the listener while
 	// the connection is still in the kernel backlog, never entered the
@@ -120,35 +165,9 @@ func TestMountAndServe_ShutdownTimeoutNamesWhatHeldItOpen(t *testing.T) {
 	}
 	select {
 	case err := <-errCh:
-		if err == nil {
-			t.Fatal("mountAndServe returned nil after SIGTERM with a half-open connection — " +
-				"the shutdown completed instead of hitting its budget; the decline path was not exercised")
-		}
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Errorf("mountAndServe error %v does not wrap context.DeadlineExceeded — the named decline "+
-				"error must preserve the deadline identity for callers that match on it", err)
-		}
-		msg := err.Error()
-		for _, want := range []string{
-			"graceful shutdown incomplete",
-			testShutdownServerTimeout.String(),
-			"connections still active at expiry",
-			"1 connection(s)",
-			"127.0.0.1",
-			" new", // http.StateNew.String() — names the half-open conn's state
-		} {
-			if !strings.Contains(msg, want) {
-				t.Errorf("decline error %q does not name %q — a bare deadline with no statement of what "+
-					"was still active is exactly the silent-decline shape #0536 closed", msg, want)
-			}
-		}
+		return err
 	case <-time.After(10 * time.Second):
 		t.Fatal("mountAndServe did not return within 10s of SIGTERM")
+		return nil
 	}
-
-	// The half-open connection held the shutdown open but must not have
-	// wedged anything: the returned error names it, and cleanup closes it,
-	// which releases the server-side read loop. Nothing here outlives this
-	// test except that one goroutine's read error path, which the client
-	// close in cleanup terminates.
 }
