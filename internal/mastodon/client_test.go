@@ -131,3 +131,73 @@ func TestCountCharacters(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteStatus(t *testing.T) {
+	var method, path, auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path, auth = r.Method, r.URL.Path, r.Header.Get("Authorization")
+		io.WriteString(w, `{"id":"1234","text":"gone"}`)
+	}))
+	defer srv.Close()
+	c, _ := New(srv.URL, fakeToken)
+	existed, err := c.DeleteStatus(context.Background(), "1234")
+	if err != nil || !existed {
+		t.Fatalf("DeleteStatus = %v, %v", existed, err)
+	}
+	if method != http.MethodDelete || path != "/api/v1/statuses/1234" || auth != "Bearer "+fakeToken {
+		t.Errorf("request: %s %s auth ok=%v", method, path, auth == "Bearer "+fakeToken)
+	}
+}
+
+func TestDeleteStatus_AlreadyGoneIsSuccess(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusGone} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(code)
+			io.WriteString(w, `{"error":"Record not found"}`)
+		}))
+		c, _ := New(srv.URL, fakeToken)
+		existed, err := c.DeleteStatus(context.Background(), "1234")
+		srv.Close()
+		if err != nil || existed {
+			t.Errorf("HTTP %d: DeleteStatus = %v, %v; want not existed, nil", code, existed, err)
+		}
+	}
+}
+
+func TestDeleteStatus_FailuresAreErrorsAndRedacted(t *testing.T) {
+	for code, permanent := range map[int]bool{401: true, 403: true, 429: false, 500: false} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(code)
+			io.WriteString(w, `{"error":"nope `+fakeToken+`"}`)
+		}))
+		c, _ := New(srv.URL, fakeToken)
+		_, err := c.DeleteStatus(context.Background(), "1234")
+		srv.Close()
+		if err == nil || IsPermanent(err) != permanent {
+			t.Errorf("HTTP %d: err = %v, permanent = %v", code, err, IsPermanent(err))
+			continue
+		}
+		if strings.Contains(err.Error(), fakeToken) {
+			t.Errorf("HTTP %d: token leaked: %v", code, err)
+		}
+	}
+}
+
+func TestDeleteStatus_BadInputAndNilClient(t *testing.T) {
+	var nilc *Client
+	if _, err := nilc.DeleteStatus(context.Background(), "1"); !IsPermanent(err) {
+		t.Errorf("nil client err = %v", err)
+	}
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	defer srv.Close()
+	c, _ := New(srv.URL, fakeToken)
+	for _, bad := range []string{"", "1/2", "1?x"} {
+		if _, err := c.DeleteStatus(context.Background(), bad); !IsPermanent(err) {
+			t.Errorf("id %q: err = %v", bad, err)
+		}
+	}
+	if hit {
+		t.Error("a malformed id must not reach the network")
+	}
+}

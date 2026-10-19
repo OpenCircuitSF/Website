@@ -18,6 +18,7 @@
     unscheduleOutreachPost,
     markOutreachPosted,
     unmarkOutreachPosted,
+    takedownOutreachPost,
     ApiError,
   } from '../../lib/api';
   import { copyablePostLink } from '../../lib/outreachPreview';
@@ -144,6 +145,12 @@
         const updated = await unmarkOutreachPosted(post.id);
         onChange(updated);
         onNotice({ text: 'Unmarked. It is a post to make by hand again.', kind: 'status', status: updated.status });
+      } else if (mode === 'takedown') {
+        const updated = await takedownOutreachPost(post.id);
+        onChange(updated);
+        onNotice({ text: `Deleted from ${c.channel.label}. It is a draft again, with the current link.`, kind: 'status', status: updated.status });
+        // Nothing may be posted now, so the page's Reset availability changed.
+        reload();
       } else {
         const updated = await sendOutreachPost(post.id);
         onChange(updated);
@@ -153,7 +160,7 @@
     } catch (err) {
       dialogError = message(
         err,
-        mode === 'markPosted' ? 'Could not mark posted. Please try again.' : mode === 'unmark' ? 'Could not unmark. Please try again.' : 'Could not post. Please try again.',
+        mode === 'markPosted' ? 'Could not mark posted. Please try again.' : mode === 'unmark' ? 'Could not unmark. Please try again.' : mode === 'takedown' ? 'Could not delete the post. Please try again.' : 'Could not post. Please try again.',
       );
     } finally {
       busy = false;
@@ -240,6 +247,9 @@
         {/if}
         {#if btn.unmark}
           <Button onclick={() => openDialog('unmark')} disabled={busy}>Unmark</Button>
+        {/if}
+        {#if btn.takedown}
+          <Button onclick={() => openDialog('takedown')} disabled={busy}>Delete and redo…</Button>
         {/if}
         {#if btn.edit}
           <Button onclick={() => onEdit(p)} data-edit-for={p.id}>Edit</Button>

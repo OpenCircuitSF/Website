@@ -146,6 +146,13 @@ func (f *fakePDS) serve(w http.ResponseWriter, r *http.Request) {
 			f.records[in.RKey] = true
 			f.mu.Unlock()
 			json.NewEncoder(w).Encode(map[string]string{"uri": "at://" + fakeDID + "/app.bsky.feed.post/" + in.RKey, "cid": "fakecid"})
+		case "/xrpc/com.atproto.repo.deleteRecord":
+			var in struct{ RKey string }
+			json.Unmarshal(body, &in)
+			f.mu.Lock()
+			delete(f.records, in.RKey)
+			f.mu.Unlock()
+			io.WriteString(w, `{}`)
 		case "/xrpc/app.bsky.notification.listNotifications":
 			f.mu.Lock()
 			b, ok := f.notif[r.URL.Query().Get("cursor")]
@@ -491,5 +498,105 @@ func TestVerifyCredentialsNilClient(t *testing.T) {
 	var c *Client
 	if _, err := c.VerifyCredentials(context.Background()); !errors.Is(err, ErrAuth) {
 		t.Errorf("nil client must report ErrAuth, got %v", err)
+	}
+}
+
+func TestDeletePost_RemovesExistingRecord(t *testing.T) {
+	f := newFakePDS(t)
+	f.records["2222222222222"] = true
+	c := newTestClient(t, f)
+	existed, err := c.DeletePost(context.Background(), "2222222222222")
+	if err != nil || !existed {
+		t.Fatalf("DeletePost = %v, %v; want existed, nil", existed, err)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(f.last("/xrpc/com.atproto.repo.deleteRecord").Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["repo"] != fakeDID || body["collection"] != "app.bsky.feed.post" || body["rkey"] != "2222222222222" {
+		t.Errorf("deleteRecord body = %v", body)
+	}
+	if f.records["2222222222222"] {
+		t.Error("record still present on the fake PDS")
+	}
+}
+
+func TestDeletePost_AlreadyGoneIsSuccessWithoutAWrite(t *testing.T) {
+	f := newFakePDS(t)
+	c := newTestClient(t, f)
+	existed, err := c.DeletePost(context.Background(), "2222222222222")
+	if err != nil || existed {
+		t.Fatalf("DeletePost = %v, %v; want not existed, nil", existed, err)
+	}
+	if f.count("/xrpc/com.atproto.repo.deleteRecord") != 0 {
+		t.Error("deleteRecord called for a record getRecord says is missing")
+	}
+}
+
+func TestDeletePost_RecordVanishesBetweenTheTwoCalls(t *testing.T) {
+	for name, ov := range map[string]func(http.ResponseWriter, *http.Request){
+		"400 RecordNotFound": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(400)
+			io.WriteString(w, `{"error":"RecordNotFound","message":"Could not locate record"}`)
+		},
+		"404": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakePDS(t)
+			f.records["2222222222222"] = true
+			f.override["/xrpc/com.atproto.repo.deleteRecord"] = ov
+			c := newTestClient(t, f)
+			if existed, err := c.DeletePost(context.Background(), "2222222222222"); err != nil || existed {
+				t.Errorf("DeletePost = %v, %v; want not existed, nil", existed, err)
+			}
+		})
+	}
+}
+
+func TestDeletePost_RealFailuresAreErrorsAndRedacted(t *testing.T) {
+	f := newFakePDS(t)
+	f.records["2222222222222"] = true
+	f.override["/xrpc/com.atproto.repo.deleteRecord"] = func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		io.WriteString(w, `{"error":"InternalServerError","message":"boom `+fakePassword+`"}`)
+	}
+	c := newTestClient(t, f)
+	_, err := c.DeletePost(context.Background(), "2222222222222")
+	if err == nil || IsPermanent(err) || !errorsIs(err, ErrServer) {
+		t.Fatalf("err = %v, want transient server error", err)
+	}
+	if strings.Contains(err.Error(), fakePassword) || !strings.Contains(err.Error(), "[redacted]") {
+		t.Errorf("error not redacted: %v", err)
+	}
+}
+
+func TestDeletePost_BadInputAndNilClient(t *testing.T) {
+	var nilc *Client
+	if _, err := nilc.DeletePost(context.Background(), "x"); !IsPermanent(err) {
+		t.Errorf("nil client err = %v", err)
+	}
+	f := newFakePDS(t)
+	c := newTestClient(t, f)
+	for _, bad := range []string{"", "a/b", "a?b"} {
+		if _, err := c.DeletePost(context.Background(), bad); !IsPermanent(err) {
+			t.Errorf("rkey %q: err = %v, want permanent", bad, err)
+		}
+	}
+	if len(f.reqs) != 0 {
+		t.Error("a malformed rkey must not reach the network")
+	}
+}
+
+func TestRKeyFromURI(t *testing.T) {
+	for uri, want := range map[string]string{
+		"at://did:plc:abc/app.bsky.feed.post/3k44deefqdk2g": "3k44deefqdk2g",
+		"at://did:plc:abc/app.bsky.feed.like/3k44":          "",
+		"at://did:plc:abc/app.bsky.feed.post/":              "",
+		"https://bsky.app/profile/x/post/3k44":              "",
+		"":                                                  "",
+	} {
+		if got := RKeyFromURI(uri); got != want {
+			t.Errorf("RKeyFromURI(%q) = %q, want %q", uri, got, want)
+		}
 	}
 }

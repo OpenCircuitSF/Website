@@ -396,7 +396,7 @@ func (p *Publisher) postMastodon(ctx context.Context, masto *mastodon.Client, ro
 			return found, true, nil
 		}
 	}
-	st, err = masto.PostStatus(ctx, job.Body, "opencircuitsf-outreach-post-"+strconv.FormatInt(job.ID, 10))
+	st, err = masto.PostStatus(ctx, job.Body, MastodonIdempotencyKey(job.ID, job.AttemptGeneration))
 	return st, false, err
 }
 
@@ -418,7 +418,7 @@ func (p *Publisher) postBluesky(ctx context.Context, bsky *bluesky.Client, job S
 	}
 	in := bluesky.PostInput{
 		Text:      job.Body,
-		RKey:      bluesky.TID(job.CreatedAt.UnixMicro(), uint16(job.ID&1023)),
+		RKey:      BlueskyRKey(job.CreatedAt, job.ID, job.AttemptGeneration),
 		CreatedAt: time.Now(),
 		Embed: &bluesky.ExternalCard{
 			URI: cardURI, Title: job.Title, Description: deref(job.Summary),

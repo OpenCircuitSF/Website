@@ -160,6 +160,60 @@ func (c *Client) Post(ctx context.Context, in PostInput) (PostResult, error) {
 	return res, nil
 }
 
+// DeletePost removes the post record rkey from the account's repo
+// (com.atproto.repo.deleteRecord, collection app.bsky.feed.post) and reports
+// whether a record was actually there. A record that is already gone counts as
+// success (#0604): the caller's goal, "this post does not exist", already
+// holds, as when the operator deleted it by hand in the app.
+//
+// A PDS answers deleteRecord on a missing record with 200 as often as with an
+// error, depending on version, so existence is read first with getRecord:
+// not found means nothing to delete and no write is attempted. A
+// RecordNotFound or 404 from deleteRecord itself, as when the record vanishes
+// between the two calls, is also success.
+func (c *Client) DeletePost(ctx context.Context, rkey string) (existed bool, err error) {
+	if c == nil {
+		return false, &APIError{Message: "client not configured", Permanent: true, kind: ErrAuth}
+	}
+	rkey = strings.TrimSpace(rkey)
+	if rkey == "" || strings.ContainsAny(rkey, "/?#\\ ") {
+		return false, &APIError{Message: "missing or malformed record key", Permanent: true, kind: ErrInvalid}
+	}
+	did, _, err := c.identity(ctx)
+	if err != nil {
+		return false, err
+	}
+	if _, found, err := c.getRecord(ctx, did, rkey); err != nil {
+		return false, err
+	} else if !found {
+		return false, nil
+	}
+	err = c.authed(ctx, http.MethodPost, "/xrpc/com.atproto.repo.deleteRecord", nil, "application/json",
+		mustJSON(map[string]any{"repo": did, "collection": postCollection, "rkey": rkey}), nil)
+	if err == nil {
+		return true, nil
+	}
+	var ae *APIError
+	if errors.As(err, &ae) && (ae.Status == http.StatusNotFound || ae.Code == "RecordNotFound") {
+		return false, nil
+	}
+	return false, err
+}
+
+// RKeyFromURI returns the record key of an at:// post URI as stored in
+// outreach_posts.remote_id, or "" when uri is not an app.bsky.feed.post URI.
+func RKeyFromURI(uri string) string {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(uri), "at://")
+	if !ok {
+		return ""
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] != postCollection || parts[2] == "" {
+		return ""
+	}
+	return parts[2]
+}
+
 func mustJSON(v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {

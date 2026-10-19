@@ -1574,6 +1574,7 @@ func adminRoutes(
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/prepare", http.HandlerFunc(adminOutreachH.Prepare)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/posted", http.HandlerFunc(adminOutreachH.MarkPosted)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/unmark", http.HandlerFunc(adminOutreachH.UnmarkPosted)},
+			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/takedown", http.HandlerFunc(adminOutreachH.Takedown)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/send", http.HandlerFunc(adminOutreachH.SendPost)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/schedule", http.HandlerFunc(adminOutreachH.SchedulePost)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/unschedule", http.HandlerFunc(adminOutreachH.UnschedulePost)},

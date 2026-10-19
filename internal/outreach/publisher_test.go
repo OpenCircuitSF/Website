@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,7 @@ type fakeBsky struct {
 	paths   []string
 	records map[string]bool
 	created []string // createRecord bodies
+	deleted []string // deleteRecord rkeys (#0604)
 	failAll int      // when non-zero, createRecord answers this status
 }
 
@@ -70,6 +72,12 @@ func newFakeBsky(t *testing.T) *fakeBsky {
 			f.records[in.RKey] = true
 			f.created = append(f.created, string(body))
 			io.WriteString(w, `{"uri":"at://`+fakeDID+`/app.bsky.feed.post/`+in.RKey+`","cid":"fakecid"}`)
+		case "/xrpc/com.atproto.repo.deleteRecord":
+			var in struct{ RKey string }
+			json.Unmarshal(body, &in)
+			f.deleted = append(f.deleted, in.RKey)
+			delete(f.records, in.RKey)
+			io.WriteString(w, `{}`)
 		case "/xrpc/com.atproto.repo.uploadBlob":
 			io.WriteString(w, `{"blob":{"$type":"blob","ref":{"$link":"fakeblob"},"mimeType":"image/jpeg","size":4}}`)
 		default:
@@ -104,11 +112,18 @@ type fakeMasto struct {
 	status int // 0 = succeed
 	keys   []string
 	count  int
+	// byKey remembers the status id handed out per Idempotency-Key, as a real
+	// instance does for about an hour, so a reused key returns the same
+	// status (#0604).
+	byKey   map[string]string
+	deleted []string // DELETE paths
+	// deleteStatus, when non-zero, is the answer to DELETE.
+	deleteStatus int
 }
 
 func newFakeMasto(t *testing.T) *fakeMasto {
 	t.Helper()
-	f := &fakeMasto{}
+	f := &fakeMasto{byKey: map[string]string{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -122,13 +137,29 @@ func newFakeMasto(t *testing.T) *fakeMasto {
 			}
 			return
 		}
+		if r.Method == http.MethodDelete {
+			f.deleted = append(f.deleted, r.URL.Path)
+			if f.deleteStatus != 0 {
+				w.WriteHeader(f.deleteStatus)
+				io.WriteString(w, `{"error":"Record not found"}`)
+				return
+			}
+			io.WriteString(w, `{"id":"deleted"}`)
+			return
+		}
 		f.keys = append(f.keys, r.Header.Get("Idempotency-Key"))
 		if f.status != 0 {
 			w.WriteHeader(f.status)
 			io.WriteString(w, `{"error":"fake failure"}`)
 			return
 		}
-		io.WriteString(w, `{"id":"9001","url":"https://social.example.test/@alice/9001","uri":"u"}`)
+		key := r.Header.Get("Idempotency-Key")
+		id, seen := f.byKey[key]
+		if !seen {
+			id = strconv.Itoa(9001 + len(f.byKey))
+			f.byKey[key] = id
+		}
+		io.WriteString(w, `{"id":"`+id+`","url":"https://social.example.test/@alice/`+id+`","uri":"u"}`)
 	}))
 	t.Cleanup(f.srv.Close)
 	return f

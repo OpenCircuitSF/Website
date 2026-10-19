@@ -178,6 +178,10 @@ type fakePosting map[string]bool
 
 func (f fakePosting) ChannelConfigured(name string) bool { return f[name] }
 
+// DeleteRemote reports the post as deleted; takedown tests that care about the
+// remote's answer use fakeTakedownPosting.
+func (f fakePosting) DeleteRemote(context.Context, outreach.Post) (bool, error) { return true, nil }
+
 func outreachMuxPosting(pool *pgxpool.Pool, links shortLinker, posting outreachPosting) (http.Handler, *workshops.Store, *AdminOutreachHandler) {
 	ws := workshops.NewStore(pool)
 	h := NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), outreach.NewStore(pool), ws, links, audit.New(pool), "https://site.example.test", posting)
@@ -194,6 +198,7 @@ func outreachMuxPosting(pool *pgxpool.Pool, links shortLinker, posting outreachP
 	mux.Handle("POST /admin/outreach-posts/{id}/prepare", requireAdmin(http.HandlerFunc(h.Prepare)))
 	mux.Handle("POST /admin/outreach-posts/{id}/posted", requireAdmin(http.HandlerFunc(h.MarkPosted)))
 	mux.Handle("POST /admin/outreach-posts/{id}/unmark", requireAdmin(http.HandlerFunc(h.UnmarkPosted)))
+	mux.Handle("POST /admin/outreach-posts/{id}/takedown", requireAdmin(http.HandlerFunc(h.Takedown)))
 	mux.Handle("DELETE /admin/outreach-posts/{id}", requireAdmin(http.HandlerFunc(h.DeletePost)))
 	mux.Handle("POST /admin/outreach-posts/{id}/send", requireAdmin(http.HandlerFunc(h.SendPost)))
 	mux.Handle("POST /admin/outreach-posts/{id}/schedule", requireAdmin(http.HandlerFunc(h.SchedulePost)))
@@ -374,6 +379,7 @@ func TestAdminOutreach_AuthGuards(t *testing.T) {
 		{http.MethodPost, "/admin/outreach-posts/1/send"},
 		{http.MethodPost, "/admin/outreach-posts/1/schedule"},
 		{http.MethodPost, "/admin/outreach-posts/1/unschedule"},
+		{http.MethodPost, "/admin/outreach-posts/1/takedown"},
 	}
 	for _, p := range paths {
 		for token, want := range map[string]int{"": http.StatusUnauthorized, "outreach-user-token": http.StatusForbidden} {

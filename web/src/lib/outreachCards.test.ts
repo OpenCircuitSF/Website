@@ -69,9 +69,10 @@ describe('cardButtons', () => {
     expect(b.draft).toBe(true);
     expect(b.edit).toBe(false);
   });
-  it('posted: no actions', () => {
-    const b = cardButtons(post({ status: 'posted' }), auto, true);
-    expect(Object.values(b).some(Boolean)).toBe(false);
+  it('posted: no actions except Delete and redo (#0604)', () => {
+    const { takedown, ...rest } = cardButtons(post({ status: 'posted' }), auto, true);
+    expect(takedown).toBe(true);
+    expect(Object.values(rest).some(Boolean)).toBe(false);
   });
 });
 
@@ -176,5 +177,25 @@ describe('Unmark and the bio link (#0588)', () => {
     expect(flyerLinkFor(flyers, 6)).toEqual({ href: '#/outreach?view=flyers&flyer=3', label: 'Open flyer' });
     expect(flyerLinkFor(flyers, 7)).toEqual({ href: '#/outreach?view=flyers&workshop=7', label: 'Make a flyer' });
     expect(flyerLinkFor([], 7).label).toBe('Make a flyer');
+  });
+});
+
+describe('Delete and redo (#0604)', () => {
+  const hand: OutreachChannel = { ...auto, name: 'instagram', label: 'Instagram', automatic: false, configured: false };
+  const base = post({ status: 'posted' });
+
+  it('only a posted automatic card can be deleted and redone', () => {
+    expect(cardButtons(base, auto, true).takedown).toBe(true);
+    expect(cardButtons(post({ status: 'draft' }), auto, true).takedown).toBe(false);
+    expect(cardButtons(post({ status: 'queued' }), auto, true).takedown).toBe(false);
+    expect(cardButtons(base, hand, true).takedown).toBe(false);
+    expect(cardButtons(null, auto, true).takedown).toBe(false);
+  });
+
+  it('the dialog says the post is removed for everyone and returns to draft', () => {
+    const c = postDialogCopy('takedown', [{ label: 'Bluesky', account: '' }]);
+    expect(c.title).toBe('Delete this post from Bluesky?');
+    expect(c.warning).toBe('It will be removed for everyone, and the post goes back to draft so you can post it again.');
+    expect(c.confirmLabel).toBe('Delete post');
   });
 });

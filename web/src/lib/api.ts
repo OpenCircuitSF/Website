@@ -1376,6 +1376,11 @@ export function unmarkOutreachPosted(id: number): Promise<OutreachPost> {
   return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/unmark`);
 }
 
+/** POST /admin/outreach-posts/{id}/takedown (#0604) — delete a posted automatic post from its network and return it to draft. A post already deleted by hand counts as deleted. */
+export function takedownOutreachPost(id: number): Promise<OutreachPost> {
+  return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/takedown`);
+}
+
 /** POST /admin/outreach-posts/{id}/send — Post now, or Retry for a failed post (#0545). */
 export function sendOutreachPost(id: number): Promise<OutreachPost> {
   return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/send`);

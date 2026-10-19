@@ -343,6 +343,10 @@ const (
 	// ActionOutreachPostUnmarked (#0588) reverts a hand-posted post to its
 	// prepared manual state.
 	ActionOutreachPostUnmarked = "outreach_post.unmarked"
+	// ActionOutreachPostTakenDown (#0604) deletes a posted automatic post from
+	// its network and returns the row to draft. Metadata carries the remote
+	// URL and whether the post was already gone.
+	ActionOutreachPostTakenDown = "outreach_post.taken_down"
 	// ActionOutreachReset (#0592) targets the outreach row; metadata counts
 	// the posts and flyers removed.
 	ActionOutreachReset = "outreach.reset"

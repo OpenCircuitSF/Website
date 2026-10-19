@@ -67,6 +67,11 @@ type Post struct {
 	PostedAt     *time.Time
 	UpdatedAt    *time.Time
 	CreatedAt    time.Time
+	// AttemptGeneration counts takedowns (#0604). It is mixed into the
+	// Bluesky record key and the Mastodon idempotency key so a re-send after
+	// "Delete and redo" never recovers the deleted post. 0 keeps the original
+	// keys.
+	AttemptGeneration int
 }
 
 // Prepared reports whether the post's short link exists.
@@ -104,13 +109,13 @@ func scanOutreach(row pgx.Row) (Outreach, error) {
 
 const postColumns = `id, outreach_id, channel, wave, body, status, source_fingerprint, customized,
 	short_link_key, short_url, remote_id, remote_url, last_error,
-	scheduled_at, posted_at, updated_at, created_at`
+	scheduled_at, posted_at, updated_at, created_at, attempt_generation`
 
 func scanPost(row pgx.Row) (Post, error) {
 	var p Post
 	err := row.Scan(&p.ID, &p.OutreachID, &p.Channel, &p.Wave, &p.Body, &p.Status, &p.SourceFingerprint, &p.Customized,
 		&p.ShortLinkKey, &p.ShortURL, &p.RemoteID, &p.RemoteURL, &p.LastError,
-		&p.ScheduledAt, &p.PostedAt, &p.UpdatedAt, &p.CreatedAt)
+		&p.ScheduledAt, &p.PostedAt, &p.UpdatedAt, &p.CreatedAt, &p.AttemptGeneration)
 	return p, err
 }
 

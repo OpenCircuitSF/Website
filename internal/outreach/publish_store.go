@@ -100,7 +100,7 @@ func (s *Store) QueueNow(ctx context.Context, id int64) (post Post, prevStatus s
 // alias the table.
 const qualifiedPostColumns = `p.id, p.outreach_id, p.channel, p.wave, p.body, p.status, p.source_fingerprint, p.customized,
 	p.short_link_key, p.short_url, p.remote_id, p.remote_url, p.last_error,
-	p.scheduled_at, p.posted_at, p.updated_at, p.created_at`
+	p.scheduled_at, p.posted_at, p.updated_at, p.created_at, p.attempt_generation`
 
 func (s *Store) enqueueTx(ctx context.Context, tx pgx.Tx, postID int64) (int64, error) {
 	return s.outbox.EnqueueTx(ctx, tx, outbox.Item{
@@ -226,7 +226,7 @@ func (s *Store) LoadForSend(ctx context.Context, postID int64) (SendJob, error) 
 		  WHERE p.id = $1`, postID).Scan(
 		&j.ID, &j.OutreachID, &j.Channel, &j.Wave, &j.Body, &j.Status, &j.SourceFingerprint, &j.Customized,
 		&j.ShortLinkKey, &j.ShortURL, &j.RemoteID, &j.RemoteURL, &j.LastError,
-		&j.ScheduledAt, &j.PostedAt, &j.UpdatedAt, &j.CreatedAt,
+		&j.ScheduledAt, &j.PostedAt, &j.UpdatedAt, &j.CreatedAt, &j.AttemptGeneration,
 		&j.WorkshopStatus, &j.Title, &j.Slug, &j.Summary, &j.CoverImage)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SendJob{}, ErrNotFound

@@ -221,3 +221,46 @@ func (c *Client) apiError(status int, body []byte) *APIError {
 	}
 	return e
 }
+
+// DeleteStatus removes a status (DELETE /api/v1/statuses/{id}). A status that
+// is already gone (404) counts as success, reported as existed=false (#0604):
+// the caller's goal, "this post does not exist", already holds, as when the
+// operator deleted it by hand. Any other failure, including a 401, 403 or
+// 5xx, is returned with the token redacted.
+func (c *Client) DeleteStatus(ctx context.Context, id string) (existed bool, err error) {
+	if c == nil {
+		return false, &APIError{Message: "client not configured", Permanent: true, kind: ErrAuth}
+	}
+	id = strings.TrimSpace(id)
+	if id == "" || strings.ContainsAny(id, "/?#\\ ") {
+		return false, &APIError{Message: "missing or malformed status id", Permanent: true, kind: ErrInvalid}
+	}
+	u := *c.base
+	u.Path += "/api/v1/statuses/" + id
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
+	if err != nil {
+		return false, fmt.Errorf("mastodon: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return false, fmt.Errorf("mastodon: DELETE /api/v1/statuses: %w", ue.Err)
+		}
+		return false, fmt.Errorf("mastodon: DELETE /api/v1/statuses: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return false, fmt.Errorf("mastodon: read response: %w", err)
+	}
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return true, nil
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
+		return false, nil
+	}
+	return false, c.apiError(resp.StatusCode, body)
+}

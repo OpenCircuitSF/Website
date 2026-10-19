@@ -82,12 +82,14 @@ export interface CardButtons {
   markPosted: boolean;
   /** Take back a Mark posted (#0588): only a hand-posted channel's posted card. */
   unmark: boolean;
+  /** Delete the post from its network and return it to draft (#0604): an automatic channel's posted card. */
+  takedown: boolean;
   draft: boolean;
 }
 
 /** Which buttons a card shows; the rules themselves come from composerActions. */
 export function cardButtons(post: OutreachPost | null, channel: OutreachChannel, available: boolean): CardButtons {
-  const none: CardButtons = { edit: false, postNow: false, schedule: false, unschedule: false, retry: false, copy: false, markPosted: false, unmark: false, draft: false };
+  const none: CardButtons = { edit: false, postNow: false, schedule: false, unschedule: false, retry: false, copy: false, markPosted: false, unmark: false, takedown: false, draft: false };
   if (post === null) return { ...none, draft: available };
   const a = composerActions(post, channel, available);
   const auto = sendsItself(channel);
@@ -103,6 +105,7 @@ export function cardButtons(post: OutreachPost | null, channel: OutreachChannel,
     copy: !auto && !posted && !queued && post.prepared,
     markPosted: !auto && a.canMarkPosted,
     unmark: !auto && posted,
+    takedown: auto && posted,
   };
 }
 
@@ -161,7 +164,7 @@ export function visibleNotice(n: CardNotice | null, post: Pick<OutreachPost, 'st
   return (post?.status ?? null) === n.status ? n.text : '';
 }
 
-export type PostDialogMode = 'post' | 'retry' | 'markPosted' | 'unmark';
+export type PostDialogMode = 'post' | 'retry' | 'markPosted' | 'unmark' | 'takedown';
 export interface PostDialogCopy {
   title: string;
   warning: string;
@@ -187,6 +190,15 @@ export function postDialogCopy(mode: PostDialogMode, channels: { label: string; 
       warning: `Puts this back to a post you still have to make by hand. Edit and Copy come back. Nothing is removed from ${label}; delete the post there yourself if you took it down.`,
       accountLine: [],
       confirmLabel: 'Unmark',
+    };
+  }
+  if (mode === 'takedown') {
+    const label = channels[0]?.label ?? 'the channel';
+    return {
+      title: `Delete this post from ${label}?`,
+      warning: 'It will be removed for everyone, and the post goes back to draft so you can post it again.',
+      accountLine: [],
+      confirmLabel: 'Delete post',
     };
   }
   const accountLine = channels.map((c) =>

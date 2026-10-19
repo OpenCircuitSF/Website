@@ -12,6 +12,8 @@ import type { OutreachPost, WorkshopOutreach } from '../../lib/types';
 const sendOutreachPost = vi.fn();
 const updateOutreachPost = vi.fn();
 const unmarkOutreachPosted = vi.fn();
+const takedownOutreachPost = vi.fn();
+const reloadMock = vi.fn();
 vi.mock('../../lib/api', () => ({
   draftAllOutreach: vi.fn(),
   createOutreachPost: vi.fn(),
@@ -19,6 +21,7 @@ vi.mock('../../lib/api', () => ({
   unscheduleOutreachPost: vi.fn(),
   markOutreachPosted: vi.fn(),
   unmarkOutreachPosted: (id: number) => unmarkOutreachPosted(id),
+  takedownOutreachPost: (id: number) => takedownOutreachPost(id),
   updateOutreachPost: (id: number, b: unknown) => updateOutreachPost(id, b),
   prepareOutreachPost: vi.fn(),
   scheduleOutreachPost: vi.fn(),
@@ -32,6 +35,8 @@ afterEach(() => {
   cleanup();
   sendOutreachPost.mockReset();
   unmarkOutreachPosted.mockReset();
+  takedownOutreachPost.mockReset();
+  reloadMock.mockReset();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -70,7 +75,7 @@ function mountView(view: WorkshopOutreach, flyer?: { href: string; label: string
     view,
     flyer,
     results: null,
-    reload: vi.fn(),
+    reload: reloadMock,
     onChange: (p: OutreachPost) => {
       current = { ...current, posts: current.posts.map((x) => (x.id === p.id ? p : x)) };
       void r.rerender({ view: current });
@@ -508,5 +513,63 @@ describe('post cards: manual channels (#0588)', () => {
     const make = screen.getByRole('article', { name: 'Instagram Announce' }).querySelector('a.open-flyer');
     expect(make?.textContent).toBe('Make a flyer');
     expect(make?.getAttribute('href')).toBe('#/outreach?view=flyers&workshop=5');
+  });
+});
+
+describe('post cards: Delete and redo (#0604)', () => {
+  const posted = () =>
+    post({ id: 3, status: 'posted', body: 'Old body https://go.example/abc', posted_at: '2026-10-18T17:00:00Z', remote_url: 'https://bsky.app/profile/x/post/abc' });
+  const mount = (posts: OutreachPost[]) => mountView(viewOf({ posts }));
+
+  it('a site-sent posted card offers Delete and redo, confirmed in a dialog that says what happens', async () => {
+    const draft = post({ id: 3, status: 'draft', body: 'New body https://go.example/u/abc', posted_at: null, remote_url: null });
+    takedownOutreachPost.mockResolvedValue(draft);
+    mount([posted()]);
+    await screen.findByText(/Old body/);
+    const card = screen.getByRole('article', { name: 'Bluesky Announce' });
+    await fireEvent.click(within(card).getByRole('button', { name: 'Delete and redo…' }));
+    const dlg = screen.getByRole('dialog');
+    expect(dlg.textContent).toContain('Delete this post from Bluesky?');
+    expect(dlg.textContent).toContain('It will be removed for everyone, and the post goes back to draft so you can post it again.');
+    expect(takedownOutreachPost).not.toHaveBeenCalled();
+    await fireEvent.click(within(dlg).getByRole('button', { name: 'Delete post' }));
+    await waitFor(() => expect(takedownOutreachPost).toHaveBeenCalledWith(3));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // The card is the draft with the corrected link and the usual actions.
+    expect(await screen.findByText(/New body/)).toBeTruthy();
+    expect(within(card).getByRole('button', { name: 'Post now' })).toBeTruthy();
+    expect(within(card).getByRole('button', { name: 'Schedule…' })).toBeTruthy();
+    expect(within(card).queryByRole('button', { name: 'Delete and redo…' })).toBeNull();
+    expect(within(card).getByRole('status').textContent).toBe('Deleted from Bluesky. It is a draft again, with the current link.');
+    // The page refetches, so Reset reflects that nothing is posted any more.
+    expect(reloadMock).toHaveBeenCalled();
+  });
+
+  it('Cancel deletes nothing', async () => {
+    mount([posted()]);
+    await screen.findByText(/Old body/);
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete and redo…' }));
+    await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(takedownOutreachPost).not.toHaveBeenCalled();
+  });
+
+  it('shows the failure in the dialog, keeps it open and leaves the card posted', async () => {
+    takedownOutreachPost.mockRejectedValue(new Error('x'));
+    mount([posted()]);
+    await screen.findByText(/Old body/);
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete and redo…' }));
+    await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete post' }));
+    await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('alert').textContent).toContain('Could not delete the post. Please try again.'));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(reloadMock).not.toHaveBeenCalled();
+    expect(within(screen.getByRole('article', { name: 'Bluesky Announce' })).getByRole('button', { name: 'Delete and redo…' })).toBeTruthy();
+  });
+
+  it('a draft or a hand-posted card has no Delete and redo', async () => {
+    const chans = [...channels, { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false, account: '' }];
+    mountView(viewOf({ channels: chans, waves: [waves[0]], posts: [post({ id: 1 }), post({ id: 2, channel: 'instagram', status: 'posted', body: 'IG body', posted_at: '2026-10-18T17:00:00Z' })] }));
+    await screen.findByText('IG body');
+    expect(screen.queryByRole('button', { name: 'Delete and redo…' })).toBeNull();
   });
 });

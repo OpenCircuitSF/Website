@@ -41,6 +41,10 @@ type outreachStore interface {
 	MarkPosted(ctx context.Context, id int64, remoteURL *string, now time.Time) (outreach.Post, error)
 	// MarkUnposted undoes a hand-posted mark (#0588).
 	MarkUnposted(ctx context.Context, id int64) (outreach.Post, error)
+	// CheckTakedown and CompleteTakedown (#0604): delete a posted automatic
+	// post and return it to draft.
+	CheckTakedown(ctx context.Context, id int64) (outreach.Post, error)
+	CompleteTakedown(ctx context.Context, id int64, remoteID string) (outreach.Post, error)
 	DeletePost(ctx context.Context, id int64) error
 	// CanReset and Reset (#0592): start over while nothing is public.
 	CanReset(ctx context.Context, outreachID int64) (bool, error)
@@ -65,6 +69,9 @@ type outreachStore interface {
 // reports nothing configured.
 type outreachPosting interface {
 	ChannelConfigured(name string) bool
+	// DeleteRemote deletes a post from its network; existed is false when it
+	// was already gone, which is success (#0604).
+	DeleteRemote(ctx context.Context, p outreach.Post) (existed bool, err error)
 }
 
 // outreachWorkshopReader loads the workshop an outreach belongs to.
@@ -1175,6 +1182,92 @@ func (h *AdminOutreachHandler) UnmarkPosted(w http.ResponseWriter, r *http.Reque
 		})
 	}
 	writeJSON(w, http.StatusOK, h.postView(updated, h.facts(wk), wk.Status))
+}
+
+// takedownBudget bounds the remote delete in Takedown.
+const takedownBudget = 30 * time.Second
+
+// Takedown handles POST /admin/outreach-posts/{id}/takedown (#0604): delete a
+// posted automatic post from its network, then return the row to draft so it
+// can be posted again with its link refreshed. A post already gone from the
+// network (deleted by hand) counts as deleted. If the network refuses, the
+// row stays posted and the response says why.
+func (h *AdminOutreachHandler) Takedown(w http.ResponseWriter, r *http.Request) {
+	actor, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	id, ok := outreachPathID(w, r)
+	if !ok {
+		return
+	}
+	p, wk, ok := h.postContext(w, r, id)
+	if !ok {
+		return
+	}
+	ch, _ := outreach.ChannelByName(p.Channel)
+	if !ch.Automatic {
+		writeError(w, http.StatusConflict, "only a post the site sent itself can be deleted here; a hand-posted one is taken back with Unmark")
+		return
+	}
+	if !h.channelConfigured(p.Channel) {
+		writeError(w, http.StatusConflict, ch.Label+" is not connected on this server, so the post cannot be deleted from here")
+		return
+	}
+	checked, err := h.store.CheckTakedown(r.Context(), id)
+	if !h.takedownRefusal(w, err) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), takedownBudget)
+	defer cancel()
+	existed, err := h.posting.DeleteRemote(ctx, checked)
+	if err != nil {
+		slog.Warn("outreach: remote delete failed", "post_id", id, "channel", p.Channel, "err", err)
+		writeError(w, http.StatusBadGateway, ch.Label+" would not delete the post, so it is still marked posted: "+err.Error())
+		return
+	}
+	updated, err := h.store.CompleteTakedown(r.Context(), id, *checked.RemoteID)
+	if !h.takedownRefusal(w, err) {
+		return
+	}
+	if h.auditor != nil {
+		actorID := actor.ID
+		targetID := updated.ID
+		remoteURL := ""
+		if checked.RemoteURL != nil {
+			remoteURL = *checked.RemoteURL
+		}
+		h.auditor.Record(r.Context(), audit.Entry{
+			ActorID:    &actorID,
+			Action:     audit.ActionOutreachPostTakenDown,
+			TargetType: audit.TargetOutreachPost,
+			TargetID:   &targetID,
+			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "remote_url": remoteURL, "already_gone": !existed, "attempt_generation": updated.AttemptGeneration},
+			IP:         clientIP(r),
+		})
+	}
+	writeJSON(w, http.StatusOK, h.postView(updated, h.facts(wk), wk.Status))
+}
+
+// takedownRefusal writes the response for a takedown store error and reports
+// whether the request may continue (err was nil).
+func (h *AdminOutreachHandler) takedownRefusal(w http.ResponseWriter, err error) bool {
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, outreach.ErrNotFound):
+		writeError(w, http.StatusNotFound, "post not found")
+	case errors.Is(err, outreach.ErrTakedownNotPosted):
+		writeError(w, http.StatusConflict, "this post is not posted, or was not sent by the site")
+	case errors.Is(err, outreach.ErrTakedownInFlight):
+		writeError(w, http.StatusConflict, "this post is still being sent; try again in a minute")
+	case errors.Is(err, outreach.ErrTakedownChanged):
+		writeError(w, http.StatusConflict, "this post changed while it was being deleted; reload and check it")
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+	}
+	return false
 }
 
 // DeletePost handles DELETE /admin/outreach-posts/{id}.
