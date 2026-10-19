@@ -155,66 +155,38 @@ correct regardless and is what `#0001` writes into `go.mod`.
 
 ## 3. Model policy — cost is a first-class constraint
 
-**Fable is not used in the per-issue pipeline.** Opus replaces it wherever
-`Issues.md` previously named the top model.
+The per-issue pipeline, its models and effort levels, and the reasons for them
+are in [`issues/Issues.md`](issues/Issues.md) ("The standard workflow"). In
+short, revised 2026-10-19:
 
-**Fable is available for occasional, limited review tasks** (user's instruction,
-2026-08-19). The clear case is a **whole-implementation review**: reading the
-finished system rather than one diff, writing notes, and filing new issues for
-concerns and recommended improvements. That is a genuinely different task from
-reviewing a single change, and where the extra capability earns its cost.
-
-The boundary: Fable is for occasional standalone reviews, **not** a step in the
-plan → implement → review loop. Per-issue planning stays on Opus, implementation
-on Sonnet, per-issue review on Opus. Reach for Fable when the task is one review
-spanning many issues, not when it is one review of one issue.
-
-| Phase | Model | Runs as |
+| Phase | Model · effort | Runs as |
 |---|---|---|
 | Orchestration (queue, dispatch, usage accounting) | Opus | the main session |
-| 1 — Planning | **Opus** (`claude-opus-5`) | fresh subagent |
-| 2 — Implementation | **Sonnet** (`claude-sonnet-5`) | fresh subagent |
-| 3 — Review | **Opus** (`claude-opus-5`) | fresh subagent |
+| 1 — Plan, the day the issue is worked | **Opus · medium** | fresh subagent |
+| 2 — Implement | **Opus · low** (medium after a bounce or bail) | fresh subagent |
+| 3 — Review | **Opus · medium** | fresh subagent |
 
-Implementation is Sonnet by default and stays Sonnet. Escalate an
-implementation pass to Opus only after the reviewer has bounced the same issue
-twice, and record the escalation in `## Work log`.
+Pass `model` and `effort` explicitly on every dispatch and record both in the
+issue's `## Work log`. Every issue gets a plan, because a low-effort
+implementer does well with a concrete plan and poorly when it has to explore;
+the plan names files, tests and the verification tier.
 
-**Read that trigger as two bounces on the same *design* problem, not two
-bounces of any kind** (settled 2026-08-27, over `#0284` and `#0285`). The
-distinguishing question is whether the next pass has to **decide** something or
-merely **apply** something. A pass handed the replacement expression, the target
-number, and a proved-green verification is transcription, and Sonnet is the
-right tool for it at a fraction of the cost — measured twice that day, both
-third attempts landing complete in about three minutes at roughly half the
-tokens of the passes before them.
+**Fable is used only when the user asks.** The case it has been asked for is a
+**whole-implementation review** (user's instruction, 2026-08-19): reading the
+finished system rather than one diff, writing notes, and filing new issues for
+concerns and recommended improvements. It is never a step in the
+plan → implement → review loop.
 
-The corollary matters as much: **a bounce that specifies the remedy precisely
-enough is itself what keeps the next pass on Sonnet.** A reviewer that ends with
-"figure out the right value" has effectively chosen to escalate. Reviewers
-should write the remedy they want when they know it.
-
-Record the decision either way — a decision *not* to escalate after two bounces
-is worth the same `## Work log` line as a decision to escalate.
-
-### Planning is selective, not automatic
-
-`Issues.md` describes planning as happening at filing time. These 64 issues were
-filed **without** a planning pass and carry detailed acceptance criteria
-instead — 483 of them across the tracker. A planning pass that restates existing
-acceptance criteria is pure cost.
-
-**Run phase 1 only when an issue meets one of these:**
-
-- it is in Phase 4 or 5 (unsubscribe/hygiene, campaigns) — the subsystems with
-  real design latitude, notably `#0037`, `#0038`, `#0044`, `#0045`, `#0047`;
-- the reviewer has bounced it once and the failure was a design problem, not a
-  typo;
-- its acceptance criteria are ambiguous enough that two implementers would build
-  different things.
-
-**Skip phase 1** for Phase 0, 1, 2, and 6 issues. They are mechanical (copy,
-strip, rename), ports of already-validated work, or conventional CRUD.
+**A bounce that specifies the remedy keeps the next pass cheap** (settled
+2026-08-27, over `#0284` and `#0285`). The distinguishing question is whether
+the next pass has to **decide** something or merely **apply** something. A pass
+handed the replacement expression, the target number, and a proved-green
+verification is transcription — measured twice that day, both third attempts
+landing complete in about three minutes at roughly half the tokens of the
+passes before them. A reviewer that ends with "figure out the right value" has
+effectively asked for a re-plan. Reviewers should write the remedy they want
+when they know it; when the bounce is a design problem, the orchestrator
+re-runs phase 1 before phase 2.
 
 ### Keeping the orchestrator cheap
 
@@ -480,7 +452,7 @@ contend at all. `scripts/testdb.sh` clones a fully-migrated template database in
   (`ISSUE=NNNN scripts/check.sh`, or `scripts/testdb.sh create NNNN`). An agent
   that cannot get one shares the default and must then be the only one testing.
 - **Two of the three should be a pipelined pair**: while issue N is in review
-  (Opus), issue N+1's implementation (Sonnet) may start — *provided the two
+  (Opus · medium), issue N+1's implementation (Opus · low) may start — *provided the two
   touch disjoint files*. Check that before dispatching, not after.
 - **Do not exceed three**, and do not dispatch a fourth "while you wait". The
   ceiling is about the machine and about your own ability to follow what is

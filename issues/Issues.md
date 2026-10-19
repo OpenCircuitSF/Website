@@ -154,7 +154,7 @@ Any additional context, guesses at root cause, related code locations.
 4. Set status to `open`.
 5. Use today's date for First seen.
 6. Phrase the title as a single declarative sentence describing the bug, not a question or a fix description.
-7. **Plan it (phase 1).** Dispatch a fresh subagent on the **planning model (Opus)** to read this guide, `AGENTS.md`, the new issue, and the relevant code, then write a `## Plan` section into `issues/NNNN.md` (after `## Description`). It writes no code and leaves status at `open`. This gives whoever picks the issue up a running start. Record the planner's usage in `## Work log`. Skip if the user is jotting a quick note and doesn't want planning yet.
+7. **Do not plan it yet** unless it will be worked today. Phase 1 runs the day the issue is worked, against the code as it stands then (see "Why the plan is written the same day"). A filed issue carries its description and acceptance criteria; the plan comes later.
 8. **If `issues/` is tracked by git**, commit the new file with message `#NNNN <issue title>` so the issue enters git history with its `open` status — the `## Plan` rides along if it's landed, else commit it separately as `#NNNN Plan`. If ignored, skip.
 
 **This path has the same timing gap, in miniature (`#0478`).** A freshly
@@ -167,13 +167,13 @@ guards scan all of `issues/`, not just the file most recently touched, and
 run reads. So the very next phase 2 step 8 or phase 3 step 3/5 dispatched for
 *any* issue incidentally re-scans a newly filed file — the same mechanism that
 caught `#0476` late, i.e. by luck, not by design. Two things follow, short of
-a new check: when step 7's planning pass runs, that subagent already has a
-shell open before its own commit, so have it run
-`ISSUE=NNNN scripts/check.sh go ./internal/db/...` there, folding the re-run
-into a pass that already exists rather than adding one. When phase 1 is
-skipped — most issues, per `AGENTS.md` §Model policy — there is no subagent
-between drafting and commit, and this note does not create one; the filed text
-is caught, or not, by the next dispatch's ordinary run. `issues/0478.md` itself
+a new check: the planning pass (phase 1) already has a shell open before its
+own commit, so it runs `ISSUE=NNNN scripts/check.sh go ./internal/db/...`
+there, folding the re-run into a pass that already exists rather than adding
+one (see "What a plan contains"). Between filing and that plan — usually a gap
+of days, since plans are written the day the issue is worked — there is no
+subagent, and this note does not create one; the filed text is caught, or
+not, by the next dispatch's ordinary run. `issues/0478.md` itself
 was filed exactly this way.
 
 ## Updating an issue
@@ -199,17 +199,50 @@ Do **not** correct settled history in `resolved` issues. Their criteria describe
 
 ## The standard workflow (plan → implement → review)
 
-Issues move from filed to resolved through a **three-phase pipeline**. Each phase runs in a **fresh subagent** dispatched by the orchestrator, on the model that fits the work:
+Issues move from filed to resolved through a **three-phase pipeline**. Each phase runs in a **fresh subagent** dispatched by the orchestrator. The orchestrator never does phase work itself: it picks issues, dispatches, records usage, and keeps the queue current.
 
-| Phase | When | Model | The subagent does | Status after |
+| Phase | When | Model · effort | The subagent does | Status after |
 |---|---|---|---|---|
-| **1. Planning** | selectively, before an issue is worked (see `AGENTS.md` §Model policy) | **Opus** | reads conventions + issue, writes `## Plan`; no code | `open` |
-| **2. Implementation** | when the issue is worked | **Sonnet** | follows the plan, fixes, builds + verifies, code commit, drafts resolution sections | `in-progress` |
-| **3. Review** | after implementation returns | **Opus** | independently re-verifies the diff, then approves or bounces | `resolved` or `open` |
+| **1. Plan** | the day the issue is worked, before phase 2 | **Opus · medium** | reads this guide, `AGENTS.md`, the issue and the current code; writes `## Plan` (see "What a plan contains"); no code | `open` |
+| **2. Implement** | right after the plan lands | **Opus · low** (medium after a bounce or bail) | follows the plan, checks it compiles (build-only), runs the fast tier, commits the code, drafts the resolution sections | `in-progress` |
+| **3. Review** | after implementation returns | **Opus · medium** | reads the diff, re-runs verification itself, then resolves or bounces; only the reviewer sets `resolved` | `resolved` or `open` |
+
+**Pass `model` and `effort` explicitly on every dispatch**, in all three phases, and record both in the work log. Never rely on a default: a default that changes silently changes the cost and quality of every phase at once.
 
 Fresh context per phase is deliberate: each subagent reloads this guide and `AGENTS.md` cleanly, so edits to those files take effect on the next dispatch. Planning and review both run *only* in a subagent, never in the orchestrator's own context — the orchestrator stays cheap and holds the queue, not the code.
 
-**Fable is not used on this project.** Planning runs on Opus. See `AGENTS.md` §Model policy for which issues get a planning pass at all — most of this tracker's issues already carry acceptance criteria and skip phase 1.
+**Fable is used only when the user asks for it** (`AGENTS.md` §3). Nobody but the user sets `closed`.
+
+### Why the plan is written the same day, and why implementation runs at low effort
+
+A low-effort implementer does well with a concrete plan and poorly when it has to explore. So every issue gets a plan, and the plan is written against the code **as it stands the day the issue is worked** — a plan written at filing time goes stale as other issues land on the same files, and a stale plan is worse than none, because a low-effort implementer follows it.
+
+A bounce does not need a new plan when the reviewer's `## Review notes` say exactly what to change (`AGENTS.md` §3: a bounce that names the remedy keeps the next pass cheap). Re-plan only when the review found a design problem.
+
+The rationale is measured, not assumed: in a comparable project, ten Opus · low implementations working from same-day plans took about half the model time and turns of Sonnet · medium (2.2 vs 4.3 min, 14 vs 23 turns) at the same cost per run, and all ten passed review first time against a historical bounce rate of about 15%. This project's own baseline, from `scripts/worklog.py --scan` over its transcripts on 2026-10-19:
+
+| Median per run | Sonnet · medium implement (n=50) | Opus · medium review (n=48) | Opus · medium plan (n=11) |
+|---|---|---|---|
+| Wall | 4.2 min | 3.8 min | 8.7 min |
+| Time in `scripts/check.sh` | 1.0 min (3 runs) | 1.2 min (3 runs) | 0.1 min |
+| Model time (wall − tests) | 3.2 min | 2.5 min | 8.6 min |
+| Turns | 26 | 22 | 38 |
+| Cost (at the 2026-08-22 price cache) | $1.42 | $1.99 | $4.03 |
+
+Compare new work-log rows against this table to judge the change.
+
+### What a plan contains
+
+`## Plan`, after `## Description`, written by phase 1:
+
+- **Files** to change, by path.
+- **Approach** — what changes in each, in enough detail that implementing it is applying, not deciding.
+- **Tests by name** — the test functions or `it(...)` titles to add or change, and the file each lives in.
+- **Verification** — the tier (see "Build / verify command") and the exact `scripts/check.sh` commands, including every repo-wide guard package the change reaches (`AGENTS.md` §5's table). Say **full tier** if the change touches what a slow check guards.
+- **Check after deploy** — a short checklist for the user: what to open on `www.opencircuitsf.com` (or in the admin console) after deploying, and what they should see. This is what the user uses to decide to close the issue. Write it as the user will see the page, by label and location, not by component name.
+- **`## Obstacles`** alongside it (next section).
+
+The planner also runs `ISSUE=NNNN scripts/check.sh go ./internal/db/...` before its commit, so the new prose passes the issue-text guards (see "Filing a new issue"). Commit the plan as `#NNNN Plan`.
 
 ### Obstacles come first, in every phase
 
@@ -262,6 +295,7 @@ say so. Never route around it in a way that leaves the next agent to rediscover
 it. If clearing it is outside the issue's scope, file it — an obstacle that
 cost you an hour will cost the next agent an hour too.
 
+
 ### Orchestrator: pick and dispatch
 
 **Never enumerate the tracker by reading issue files.** There are over a
@@ -295,11 +329,12 @@ groups by phase and phases run in order, which is the order that matters.
    they depend on and block — and pick the one whose dependencies are already
    satisfied. Reading the whole tracker to make this decision is exactly the
    bloat this step exists to avoid.
-5. **Dispatch a fresh Sonnet subagent** (phase 2) with the issue id, dispatching **by reference, not by paraphrase**: point at phase 2 above and add only what is issue-specific (file scope, database needs, anything unusual). Do not restate part of phase 2's sequence in the brief — a brief that names the issue file's end state without also naming step 2 reads as the whole instruction and quietly overrides the rest (`#0496`).
-6. **When it returns, record its usage** and dispatch a fresh **Opus reviewer** (phase 3) for the same issue. Record the reviewer's usage when it returns.
-7. If the reviewer bounced the issue, re-dispatch phase 2. Otherwise return to step 2 — **re-run the script**, since the queue has changed and a review may have filed new issues.
+5. **Dispatch the planner** (phase 1, Opus · medium) unless the issue already carries a `## Plan` written today, or a bounce whose `## Review notes` name the remedy.
+6. **Dispatch the implementer** (phase 2, **Opus · low**; **medium** if the issue was bounced or bailed before) with the issue id, dispatching **by reference, not by paraphrase**: point at phase 2 below and add only what is issue-specific (file scope, database needs, anything unusual). Do not restate part of phase 2's sequence in the brief — a brief that names the issue file's end state without also naming step 2 reads as the whole instruction and quietly overrides the rest (`#0496`).
+7. **When it returns, record its usage** and dispatch a fresh **reviewer** (phase 3, Opus · medium) for the same issue. Record the reviewer's usage when it returns.
+8. If the reviewer bounced the issue, re-dispatch phase 2 at medium effort. Otherwise, **if the issue just resolved was its phase's last open issue, run the phase-end full tier** (see "Build / verify command"). Then return to step 2 — **re-run the script**, since the queue has changed and a review may have filed new issues.
 
-Usage is recorded per phase — locate the subagent's transcript, sum token counts (deduped by `requestId`), note the model, compute cost, and append a `## Work log` row. Bails and bounces get a row too. If the user names a specific issue ("fix 0046"), dispatch phase 2 to that id directly.
+Usage is recorded per phase with `scripts/worklog.py` (see "Token usage and cost tracking"), as a `## Work log` row. Bails and bounces get a row too. If the user names a specific issue ("fix 0046"), start at phase 1 for that id directly.
 
 > **Recording usage is not optional, and it is the step most often skipped.**
 > One session dispatched twenty subagents across seven issues (~2.5M tokens)
@@ -321,7 +356,7 @@ Usage is recorded per phase — locate the subagent's transcript, sum token coun
   per-phase completion percentage, so there is no reason to compute one by
   hand or from memory.
 
-### Phase 2 — Implementation subagent (Sonnet): claim → fix → build → commit
+### Phase 2 — Implementation subagent (Opus · low): claim → fix → build → commit
 
 A subagent starts with fresh context, so its first job is loading the project's conventions.
 
@@ -343,13 +378,15 @@ A subagent starts with fresh context, so its first job is loading the project's 
    row mid-fix is indistinguishable from untouched and invites a second agent
    to start the same fix. A commit here would only buy a second, status-only
    commit per issue for visibility the working-tree read already gives.
-3. **Make the code changes** required to fix the bug, following the `## Plan`. If you deviate, note why in `## Fix` so the reviewer understands.
-4. **Build *and* run the project's verification command, and confirm tests actually executed and passed.** Mandatory; cannot be shortcutted.
+3. **Make the code changes** required to fix the bug, following the `## Plan`. If you deviate, note why in `## Fix` so the reviewer understands. If the plan turns out to be wrong in a way that needs a design decision, bail (see "When the subagent can't finish") rather than improvising one.
+4. **Check it compiles, then run the fast tier, and confirm tests actually executed and passed.** Mandatory; cannot be shortcutted.
 
-   - **Compilation is not verification.** "It builds" / "no type errors" does not count. Tests must actually run — unit tests execute, UI tests run on a simulator, the app launches, whatever the project defines as proof. A green build with zero tests run is a failure of this step.
+   - **Build only first** (`scripts/check.sh build`; see "Build / verify command"). It stops in seconds on a compile or type error, instead of after a full run. It never counts as verification.
+   - **Then the fast tier**, exactly as the plan names it, and the full tier too if the plan says so.
+   - **Compilation is not verification.** "It builds" / "no type errors" does not count. Tests must actually run. A green build with zero tests run is a failure of this step.
    - **If you wrote or modified tests, you MUST execute those specific tests and observe them pass.** Confirm the test names appear in the output, the counts increased, and the result was success. A test that compiles but never ran proves nothing.
-   - **Read the output, don't just check the exit code.** "0 tests run", "skipped", "no tests found", or "build succeeded" with no test summary are red flags even at exit code 0. iOS in particular reports `xcodebuild` success when no tests ran.
-   - **If verification can't run in your environment** (no simulator, missing credentials, hardware, sandbox), you have not verified the fix. Bail per "When the subagent can't finish", naming the step you couldn't run.
+   - **Read the output, don't just check the exit code.** "0 tests run", "skipped", "no tests found", or "build succeeded" with no test summary are red flags even at exit code 0. Quote the `ok` lines, the vitest file and test counts, and the `VERIFICATION PASSED` line in `## Verification`.
+   - **If verification can't run in your environment** (missing credentials, a port you cannot bind, a step that needs the user), you have not verified the fix. Bail per "When the subagent can't finish", naming the step you couldn't run.
    - **If the build was already failing before you started**, note it and bail — don't fix unrelated breakage.
 
 5. **Make the code commit.** Stage *only the code changes* (not the issue markdown yet). The message starts with `#NNNN` and a short, declarative title — the verb that fits (`Fix`, `Add`, `Refactor`, `Update`, `Remove`, …); not every issue is a bug fix. Blank line, then a paragraph of detail. Example:
@@ -369,19 +406,20 @@ A subagent starts with fresh context, so its first job is loading the project's 
    - Add, all *after* `## Description`:
      - **`## Root cause`** — what was actually wrong.
      - **`## Fix`** — the approach taken; call out any divergence from the plan.
-     - **`## Verification`** — the exact command(s) you ran and what you observed (e.g. "`xcodebuild test -scheme MyAppUITests` — 14 tests passed including the 3 new in `ReplyButtonUITests`"). Name new tests and confirm they ran.
+     - **`## Verification`** — the exact command(s) you ran, which tier, and what you observed: the quoted `ok` lines, test counts and verdict line. Name new tests and confirm they ran. Say what the evidence rests on (Go tests, jsdom, a VM browser run).
      - **`## Files changed`** — one bullet per file, with a short note on what changed.
+     - **`## Check after deploy`** — the plan's checklist, updated to match what was built.
      - **`## Gotchas`** *(optional)* — surprises, dead ends, non-obvious behavior. Skip if nothing's notable; be specific when present.
 
 8. **Re-run the doc-scanning guards over the sections you just drafted.** Step
    4's run predates this text — `## Root cause`, `## Fix`, `## Verification`,
-   `## Files changed`, and `## Gotchas` did not exist yet when it passed. Of
-   those five, only `## Verification` sits inside the citation guards' reach:
+   `## Files changed`, `## Check after deploy`, and `## Gotchas` did not
+   exist yet when it passed. Of those six, only `## Verification` sits inside the citation guards' reach:
    `internal/db`'s undefined-test-name guard and its line-number-evidence
    sibling both resolve citations under one shared allowlist of nine section
    titles (`internal/db`'s `issueCitationSectionHeaders`), which admits
    `verification` and `work log` but not `root cause`, `fix`, `files
-   changed`, or `gotchas` (`#0480`). "Scanned" is three separate things here,
+   changed`, `check after deploy`, or `gotchas` (`#0480`). "Scanned" is three separate things here,
    not one: a *status* filter limits these guards to `open`/`in-progress`
    files; a *section* filter, the allowlist above, further limits them to a
    handful of headings within such a file; and each guard's own reach is a
@@ -400,16 +438,16 @@ A subagent starts with fresh context, so its first job is loading the project's 
    before moving on.
 9. **Do not commit the markdown draft.** Return to the orchestrator with a one-line summary. The reviewer makes the single resolution commit in phase 3.
 
-### Phase 3 — Review subagent (Opus): verify → resolve or bounce
+### Phase 3 — Review subagent (Opus · medium): verify → resolve or bounce
 
 An independent reviewer is the gate between "code landed" and "issue resolved". It owns the `resolved` transition; the implementation subagent never sets it.
 
 1. **Orient** the same way (this file, `AGENTS.md`, `issues/NNNN.md` including the `## Plan` and the drafted resolution sections).
-2. **Inspect the code commit** — read its diff (`git show <hash>`). Does it actually address the reported bug? Right scope? Any correctness, security, or regression risk?
-3. **Re-run the verification command yourself** and read the output — don't trust the drafted `## Verification`. Confirm tests actually executed and passed (same standard as phase 2, step 4). This independent run is the core of the review.
+2. **Inspect the code commit** — read its diff (`git show <hash>`). Does it actually address the reported bug? Right scope? Any correctness, security, or regression risk? **Would the `## Check after deploy` list actually pass on the live site?** Trace where the changed UI renders for the production data the issue describes, not only where a test mounts it.
+3. **Re-run the verification command yourself** and read the output — don't trust the drafted `## Verification`. Run the same tier the plan names (fast, or full when the plan says so or the diff touches what a slow check guards). Confirm tests actually executed and passed (same standard as phase 2, step 4). This independent run is the core of the review.
 4. **Decide:**
-   - **Approve** (fix is correct, verification passed): add a top-of-resolution `## Resolution notes` blockquote (`> 🟢 Resolved YYYY-MM-DD — <one sentence>.`) and ensure the `**Commit**` row is present. **Leave Status at `in-progress` for now** — step 5 covers when it flips to `resolved`, and doing that here would move this file out of scope before its own guard run.
-   - **Bounce** (verification failed, fix wrong, scope off): revert **Status** to `open`; add a `## Review notes` section stating exactly what failed and what the next implementation pass must fix. Leave the code commit in place unless you say otherwise in the notes.
+   - **Approve** (fix is correct, verification passed): add a top-of-resolution `## Resolution notes` blockquote (`> 🟢 Resolved YYYY-MM-DD — <one sentence>.`) and ensure the `**Commit**` row and `## Check after deploy` list are present. **Leave Status at `in-progress` for now** — step 5 covers when it flips to `resolved`, and doing that here would move this file out of scope before its own guard run.
+   - **Bounce** (verification failed, fix wrong, scope off): revert **Status** to `open`; add a `## Review notes` section stating exactly what failed and **the remedy you want** — the replacement, the file, the test — so the next pass applies it rather than deciding it. Leave the code commit in place unless you say otherwise in the notes.
 5. **Re-run the doc-scanning guards over the notes you just wrote, before
    either branch's commit in step 6.** Only `## Review notes` sits inside the
    citation guards' section allowlist. `## Resolution notes`, the approve
@@ -463,16 +501,51 @@ so the things that are easy to forget cannot be forgotten — it exports
 run proves nothing), forces `-p 2`, refuses `-count=N` for N>1, bounds output,
 prints `uptime` first, and audits the run for packages that reported no tests.
 
-```bash
-ISSUE=0123 scripts/check.sh go ./internal/handlers/...   # scoped, own database
-ISSUE=0123 scripts/check.sh                              # Go + web, own database
-scripts/check.sh web                                     # npm run check + npm test
-scripts/check.sh all                                     # whole suite — a batch's review pass only
-```
-
 **Always set `ISSUE=NNNN`.** It gives the run its own PostgreSQL database,
 cloned from a template in about 0.2s and dropped afterwards. That is what lets
 two agents test at the same time — see `AGENTS.md` §5a.
+
+#### Tiers
+
+| Stage | When | Command | What runs |
+|---|---|---|---|
+| **Build only** | implementer, after editing and before any test run | `scripts/check.sh build` (`#0607`; until it lands: `go build ./... && go vet ./...` and `(cd web && npm run check)`) | Go build and vet, `svelte-check`. Stops in seconds with the compiler or type errors. **Never counts as verification.** |
+| **Fast tier** (default) | every implementation and every review | `ISSUE=NNNN scripts/check.sh go <packages>` and/or `ISSUE=NNNN scripts/check.sh web` | build, vet, gofmt, the floor guard, the named Go packages (plus every repo-wide guard package the change reaches, per `AGENTS.md` §5's table), and/or `svelte-check` + vitest |
+| **Full tier** | when the plan or the diff touches what a slow check guards (below); and once at the end of each phase | `ISSUE=NNNN scripts/check.sh all` then `scripts/check.sh guards` | the whole Go suite and web suite, then the standalone shell guard tests |
+
+**What only the full tier checks**, so a change touching it runs the full tier:
+
+- `scripts/check.sh`, `scripts/dev.sh`, `scripts/db-reset.sh`, `scripts/testdb.sh`, `scripts/deploy.sh` — each has an external harness that only `guards` runs (`dev_guard_test.sh` alone is ~48s and binds `:5173`).
+- `internal/testdb` and anything that changes how test databases are created or locked.
+- A change spanning many packages, where picking the scoped set is itself a guess. When unsure, run the full tier.
+
+**Not in any tier:** `scripts/check.sh browser-nav` starts Safari and `safaridriver` on the host, which `AGENTS.md` §8 now forbids. Do not run it until it moves into a Tart VM guest (`#0609`). Real-browser evidence comes from a VM run or not at all; say which in `## Verification`.
+
+**There are no individually slow tests to split out.** Measured on 2026-10-19 with `go test -json` over the whole Go suite (1,940 top-level tests, 50s wall including compile): the slowest test takes 2.7s, three take over 1s, and eighteen over 0.5s, together 16s. The web suite is 86 files in 8s. So the tiers split by *suite*, not by test. The time worth recovering is elsewhere:
+
+- `check.sh`'s `go_test` runs every Go package **twice** — once for the result and again for the skip audit. On a typical `./internal/outreach/... ./internal/handlers/...` run that is 13.8s of tests plus a 12.2s repeat, 37% of a 33s run. `#0608` makes it one pass.
+- A compile error found by a full run costs the whole run; `build` (`#0607`) finds it in seconds.
+
+**Rules for every tier:**
+
+- Quote the `ok` lines, the vitest file and test counts, and the `VERIFICATION PASSED`/`FAILED` line in `## Verification`; the exit code alone is not evidence.
+- New tests must appear by name in the output as passed (`go test -run TestX -v` for the one package when the bounded output does not show them).
+- Zero skips. A DB-backed package that reports `ok` in 0.00s did not talk to a database.
+- A timing failure at load average above ~8 is the machine (`AGENTS.md` §5); at normal load it is a defect. Never widen a deadline.
+
+#### Phase end
+
+When the review of a phase's last open issue resolves it (every issue in that phase is `resolved`, `closed` or `wontfix`), the orchestrator runs the full tier once at `HEAD` and records the result — the `ok`/`FAIL` lines and verdicts of both commands — in its report to the user. Each distinct failure becomes a **new issue in that phase**, through the normal filing and planning steps. Never reopen a resolved issue for it. The phase is not finished until a full-tier run passes, and even then its issues stay `resolved`, not done, until the user closes them (see "Reporting progress to the user").
+
+#### Commands
+
+```bash
+ISSUE=0123 scripts/check.sh go ./internal/handlers/...   # fast tier, scoped, own database
+ISSUE=0123 scripts/check.sh                              # Go (default packages) + web, own database
+scripts/check.sh web                                     # npm run check + npm test
+ISSUE=0123 scripts/check.sh all                          # full tier, part 1: whole Go and web suites
+scripts/check.sh guards                                  # full tier, part 2: standalone shell guard tests
+```
 
 Database management:
 
@@ -525,7 +598,7 @@ Never use `wontfix` or `closed` to escape a stuck issue.
 
 ## Token usage and cost tracking
 
-Every subagent dispatch gets a usage record on the issue it worked: which model did the work, exactly how many tokens it consumed, and an estimated cost. The **orchestrator** records this after the subagent returns — a subagent can't measure its own totals. Under the three-phase workflow each issue accumulates a row per phase — **planning (Opus), when run; implementation (Sonnet); review (Opus)** — plus a row for every bounce or bail.
+Every subagent dispatch gets a usage record on the issue it worked: which model did the work, exactly how many tokens it consumed, and an estimated cost. The **orchestrator** records this after the subagent returns — a subagent can't measure its own totals. Under the three-phase workflow each issue accumulates a row per phase — **plan (Opus · medium); implement (Opus · low, or medium after a bounce or bail); review (Opus · medium)** — plus a row for every bounce or bail. Each row also records the effort, wall-clock time, and the time spent in `scripts/check.sh` runs, so model time (wall minus tests) can be compared against the baseline in "Why the plan is written the same day".
 
 ### Pricing cache (`issues/model-pricing.json`)
 
@@ -537,8 +610,8 @@ Anthropic publishes prices on the docs site (no API endpoint). Fetch once per da
   "source": "https://docs.claude.com/en/docs/about-claude/pricing",
   "currency": "USD per MTok",
   "models": {
-    "claude-opus-5": { "input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50 },
-    "claude-sonnet-5": { "input": 3.00, "output": 15.00, "cache_write_5m": 3.75, "cache_read": 0.30 }
+    "claude-opus-5-5": { "input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50 },
+    "claude-sonnet-5-5": { "input": 3.00, "output": 15.00, "cache_write_5m": 3.75, "cache_read": 0.30 }
   }
 }
 ```
@@ -558,6 +631,17 @@ cost = (input × input_rate + output × output_rate
 
 If no transcript is available (different harness), record whatever total the harness reported, or `—`. Never fabricate counts.
 
+**Output tokens are not in the transcript.** `message.usage` is the stream-start snapshot: `input_tokens` and `output_tokens` are near zero on every line, while the cache fields are exact. Estimate output as the character count of all assistant content (text, thinking, tool_use input) divided by 4, and mark it `~`. **Effort** is the `effort` field on assistant lines. **Wall** is the span between the first and last `timestamp`. **Tests** is the count and total duration of Bash calls that run `scripts/check.sh`, from the call to its result (or, for a background run, to its task notification).
+
+**`scripts/worklog.py` computes all of these** and prints a ready work-log row:
+
+```bash
+scripts/worklog.py <agent.jsonl> --phase implement --outcome reviewed   # one row
+scripts/worklog.py --scan                                               # JSON for every subagent transcript; how baselines are built
+```
+
+It reads `issues/model-pricing.json`, matching a model id such as `claude-opus-5-5[1m]` to the longest priced prefix.
+
 ### The `## Work log` section
 
 One row per work session, conventionally the last section of the issue file (always after `## Description`). The optional **Phase** column (`plan` / `implement` / `review`) makes the three-phase breakdown legible:
@@ -565,16 +649,16 @@ One row per work session, conventionally the last section of the issue file (alw
 ```markdown
 ## Work log
 
-| Date | Phase | Model | Input | Output | Cache read | Cache write | Cost |
-|---|---|---|---|---|---|---|---|
-| 2026-06-03 | plan | claude-opus-5 | 84 | 6,102 | 512,400 | 41,200 | $0.58 |
-| 2026-06-04 | implement | claude-sonnet-5 | 120 | 18,530 | 2,904,110 | 98,400 | $1.12 |
-| 2026-06-04 | review | claude-opus-5 | 96 | 9,240 | 1,331,200 | 44,800 | $1.05 |
+| Date | Phase | Model | Effort | Wall | Tests | Turns | Output | Cache read | Cache write | Cost | Outcome |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-20 | plan | claude-opus-5-5 | medium | 9m | 1 (0.1m) | 38 | ~29,400 | 2,088,496 | 157,531 | $2.38 | planned |
+| 2026-10-20 | implement | claude-opus-5-5 | low | 4m | 3 (1.0m) | 14 | ~12,000 | 1,400,000 | 90,000 | $0.90 | reviewed |
+| 2026-10-20 | review | claude-opus-5-5 | medium | 4m | 2 (1.1m) | 22 | ~4,800 | 2,431,182 | 117,810 | $1.19 | resolved |
 
-**Total: $2.75**
+**Total: $4.47**
 ```
 
-Update the `**Total**` line whenever a row is appended. The `plan` row lands at filing time; the `implement` and `review` rows land as each phase returns. Bails and bounces get a row too. Don't reformat existing rows.
+Update the `**Total**` line whenever a row is appended. Outcome is one of `planned`, `reviewed` (implementation handed to review), `resolved`, `bounced`, `bailed`, `stopped`. Older tables keep their columns; when an older issue gets a new row, extend its header to these columns and pad earlier rows with `—`, the one exception to "don't reformat". Each row lands as its phase returns. Bails and bounces get a row too. Don't reformat existing rows.
 
 ## Attachments
 
@@ -659,6 +743,8 @@ Issues carry a `**Phase**` metadata row matching the phased build plan in [`PRD.
 | 6 | Workshops | 0050–0056 |
 | 7 | Inbound and polish | 0057–0064 |
 | 8 | Archive, imports, and delivery health | 0123–0129 |
+
+When a phase's last open issue resolves, the orchestrator runs the full tier once (see "Phase end" under "Build / verify command").
 
 ## Issue format note
 
