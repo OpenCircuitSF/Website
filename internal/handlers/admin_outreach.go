@@ -1014,7 +1014,7 @@ func (h *AdminOutreachHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// A racing Create links may have won the slot: use the stored row.
-		row, _, ierr := h.store.InsertPostLink(r.Context(), o.ID, ch.Name, wv.Name, link.Key, base+"/"+link.Key)
+		row, _, ierr := h.store.InsertPostLink(r.Context(), o.ID, ch.Name, wv.Name, link.Key, shortlinks.ShortURL(base, link.Key))
 		if ierr != nil {
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return

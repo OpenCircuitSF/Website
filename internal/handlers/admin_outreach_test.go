@@ -471,8 +471,8 @@ func TestAdminOutreach_CreatePrepareAndPostFlow(t *testing.T) {
 		t.Fatalf("prepare = %d (%s)", code, b)
 	}
 	got := decodeOutreach[testPost](t, b)
-	if got.Status != "manual" || !got.Prepared || got.ShortURL == nil || *got.ShortURL != "https://go.example.test/k1" ||
-		strings.Contains(got.Body, outreach.LinkToken) || strings.Contains(got.Body, "https://go.example.test/k1") || !strings.Contains(got.Body, "link in our bio") {
+	if got.Status != "manual" || !got.Prepared || got.ShortURL == nil || *got.ShortURL != "https://go.example.test/u/k1" ||
+		strings.Contains(got.Body, outreach.LinkToken) || strings.Contains(got.Body, "https://go.example.test/u/k1") || !strings.Contains(got.Body, "link in our bio") {
 		t.Errorf("prepared instagram = %+v", got)
 	}
 	if len(e.links.links) != 1 {

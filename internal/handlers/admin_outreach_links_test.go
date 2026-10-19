@@ -148,6 +148,17 @@ func TestAdminOutreachLinks_StartCreatesEveryLink(t *testing.T) {
 	if posts != 15 || flyers < 2 || !sawPost || !sawFlyer {
 		t.Errorf("CreateLink calls: posts=%d flyers=%d sawPost=%v sawFlyer=%v", posts, flyers, sawPost, sawFlyer)
 	}
+	// #0603: every stored short URL is the redirect form host/u/KEY, never host/KEY.
+	var badPost, badFlyer int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM outreach_links WHERE short_url <> 'https://go.example.test/u/' || short_link_key`).Scan(&badPost); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM outreach_flyer_links WHERE short_url <> 'https://go.example.test/u/' || short_link_key`).Scan(&badFlyer); err != nil {
+		t.Fatal(err)
+	}
+	if badPost != 0 || badFlyer != 0 {
+		t.Errorf("short_url without /u/: outreach_links=%d outreach_flyer_links=%d", badPost, badFlyer)
+	}
 	var n int
 	_ = e.pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_log WHERE action = $1`, audit.ActionOutreachLinkCreated).Scan(&n)
 	if n != 15 {
@@ -379,7 +390,7 @@ func TestAdminOutreachLinks_View(t *testing.T) {
 	var sawFlyer bool
 	for _, r := range v.Links {
 		if r.LocationCode != nil && *r.LocationCode == locA.Code {
-			sawFlyer = r.ShortURL != nil && strings.HasPrefix(*r.ShortURL, "https://go.example.test/")
+			sawFlyer = r.ShortURL != nil && strings.HasPrefix(*r.ShortURL, "https://go.example.test/u/")
 		}
 	}
 	if !sawFlyer {

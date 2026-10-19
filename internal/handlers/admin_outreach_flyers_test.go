@@ -326,7 +326,7 @@ func TestAdminOutreachFlyers_GenerateHappyPathIsIdempotent(t *testing.T) {
 		t.Errorf("CreateLink request = %+v", req)
 	}
 	for _, s := range got.Selection {
-		if s.Link == nil || !s.Link.HasQR || s.Link.QRURL == nil || !strings.HasPrefix(s.Link.ShortURL, "https://go.example.test/k") {
+		if s.Link == nil || !s.Link.HasQR || s.Link.QRURL == nil || !strings.HasPrefix(s.Link.ShortURL, "https://go.example.test/u/k") {
 			t.Errorf("selection %+v has no complete link", s)
 		}
 		if n := outreachAuditCount(t, e.pool, "outreach_flyer_link.created", s.Link.ID); n != 1 {

@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000042`). No ORM — every
+(`migrations/`, numbered `000001`–`000043`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -112,6 +112,7 @@ why the activity log is not a second package of its own.
 | `000040_outreach_server_settings` | Widens `server_setting_values_key_check` (`000038`) with the three outreach content keys `bluesky_card_url`, `outreach_hashtags` and `outreach_post_hour` (`#0571`, `#0573`, `#0574`), edited through `internal/serversettings`. A new migration, not an edit to `000038`, which production has applied |
 | `000041_outreach_posts_customized` | Adds `outreach_posts.customized BOOLEAN NOT NULL DEFAULT false` (`#0582`): marks a hand-edited automatic post so saving the shared announcement message leaves it alone. Not derivable from the text (Bluesky and Mastodon leads differ by design), so it is stored; regenerating a post clears it. A new migration, not an edit to `000032`, which production has applied |
 | `000042_outreach_channels_setting` | Widens `server_setting_values_key_check` (`000040`) with `outreach_channels` (`#0588`): the comma list of outreach channels switched on in Settings (default `bluesky,mastodon,instagram`), edited through `internal/serversettings`. Disabled channels are not drafted, and their drafts are not counted or shown (a scheduled, queued, posted or failed post stays shown); their existing posts and links are kept. A new migration, not an edit to `000040`, which production has applied |
+| `000043_outreach_short_url_u_path` | Data repair (`#0603`): rewrites `short_url` in `outreach_links`, `outreach_flyer_links` and `outreach_posts` from `https://host/KEY` to `https://host/u/KEY` (ShortLinks serves redirects only at `/u/{key}`), touching only rows without `/u/`. Also replaces each row's old URL with its new one inside the `body` of draft, scheduled, failed and manual posts; posted and queued bodies are left as sent, and a body still carrying the `{link}` token needs no rewrite. The down migration reverses only the `short_url` columns, not bodies. No schema change |
 
 `internal/subscribers` (`imports.go`) owns `subscriber_imports`, alongside
 every other table that package already owns — see that file's doc comment.

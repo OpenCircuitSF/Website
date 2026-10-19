@@ -207,7 +207,7 @@ func (h *AdminOutreachHandler) ensureLinks(r *http.Request, actorID int64, o out
 				cerr = err
 				break
 			}
-			row, created, err := h.store.InsertPostLink(ctx, o.ID, t.channel.Name, t.wave.Name, link.Key, base+"/"+link.Key)
+			row, created, err := h.store.InsertPostLink(ctx, o.ID, t.channel.Name, t.wave.Name, link.Key, shortlinks.ShortURL(base, link.Key))
 			if err != nil {
 				return report, err
 			}

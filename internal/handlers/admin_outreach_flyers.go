@@ -684,7 +684,7 @@ func (h *AdminOutreachHandler) generateLink(ctx context.Context, o outreach.Outr
 	if err != nil {
 		return outreach.FlyerLink{}, false, err
 	}
-	return h.flyers.InsertFlyerLink(ctx, o.ID, s.LocationID, s.Code, link.Key, base+"/"+link.Key)
+	return h.flyers.InsertFlyerLink(ctx, o.ID, s.LocationID, s.Code, link.Key, shortlinks.ShortURL(base, link.Key))
 }
 
 // cacheQR fetches a link's QR code, rebuilds it through SanitizeQRSVG and
