@@ -519,10 +519,11 @@ two agents test at the same time — see `AGENTS.md` §5a.
 - Client-side navigation (`web/src/lib/router.ts`, link handling, scroll and focus restoration, `document.title`): also run `scripts/check.sh browser-nav`. It builds the SPA and drives Safari through `safaridriver` inside a disposable Tart VM clone (`#0609`), never on the host, and checks title, focus and scroll across link clicks, `navigate()` and back/forward — what jsdom cannot evidence. It is not part of the phase-end run unless the phase touched navigation. Say in `## Verification` whether real-browser evidence came from this run or rests on jsdom alone.
 - A change spanning many packages, where picking the scoped set is itself a guess. When unsure, run the full tier.
 
-**There are no individually slow tests to split out.** Measured on 2026-10-19 with `go test -json` over the whole Go suite (1,940 top-level tests, 50s wall including compile): the slowest test takes 2.7s, three take over 1s, and eighteen over 0.5s, together 16s. The web suite is 86 files in 8s. So the tiers split by *suite*, not by test. The time worth recovering is elsewhere:
+**There are no individually slow tests to split out.** Measured on 2026-10-19 with `go test -json` over the whole Go suite (1,940 top-level tests, 50s wall including compile): the slowest test takes 2.7s, three take over 1s, and eighteen over 0.5s, together 16s. The web suite is 86 files in 8s. So the tiers split by *suite*, not by test. Where the time went, and what was recovered:
 
-- `check.sh`'s `go_test` runs every Go package **twice** — once for the result and again for the skip audit. On a typical `./internal/outreach/... ./internal/handlers/...` run that is 13.8s of tests plus a 12.2s repeat, 37% of a 33s run. `#0608` makes it one pass.
+- `check.sh`'s `go_test` used to run every Go package **twice** — once for the result and again for the skip audit. `#0608` made it one pass: the same scoped `./internal/outreach/... ./internal/handlers/...` run went from 33.5s to 17.2s.
 - A compile error found by a full run costs the whole run; `build` (`#0607`) finds it in seconds.
+- The skip audit only catches `[no test files]`: without `-v`, `go test` prints no `--- SKIP` line for a package that passes. The real guard against silently skipped DB suites is that `check.sh` always exports `TEST_DATABASE_URL`.
 
 **Rules for every tier:**
 
