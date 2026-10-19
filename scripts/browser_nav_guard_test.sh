@@ -18,8 +18,8 @@
 # to preventScroll: true -- zero evidence, not weak evidence (measured by
 # #0238's implementation and independently by its review).
 #
-# This script drives a REAL browser (Safari, via safaridriver -- see "TOOL
-# CHOICE" below) against a real production build and asserts all four of
+# This script drives a REAL browser (Safari, via safaridriver inside a Tart
+# guest -- see "TOOL CHOICE" below) against a real production build and asserts all four of
 # document.title / document.activeElement / window.scrollY /
 # history.state.scrollY across all three navigation paths a route change can
 # come from: a real <a> click (router.ts's click-interception path), a
@@ -38,22 +38,15 @@
 # scrollIntoView, a change to router.ts's restore timing) still gets caught
 # here even though the AST guard would stay green.
 #
-# TOOL CHOICE (#0287 criterion 5): safaridriver, not Playwright.
-# safaridriver ships with macOS (`/System/Cryptexes/App/usr/bin/safaridriver`)
-# and needed NO install and NO sudo to drive a real WebDriver session on this
-# machine -- confirmed empirically while writing this script: `safaridriver -p
-# <port>` came up immediately and `POST /session` succeeded against a plain
-# Safari.app launch, with no `safaridriver --enable` step and no manual
-# "Allow Remote Automation" toggle needed (the `com.apple.Safari
-# AllowRemoteAutomation` default is not even set on this machine). Cost: $0,
-# 0 new files, 0 new dependencies. Playwright is NOT a web/package.json
-# dependency today (only jsdom + vitest are) -- adding it would mean a new
-# devDependency plus whatever `npx playwright install` needs beyond the
-# chromium/ffmpeg builds already cached under
-# ~/Library/Caches/ms-playwright, for a browser-diversity benefit this issue
-# does not ask for. safaridriver is also what all four prior throwaway rigs
-# this issue exists to stop re-hand-rolling used (#0063, #0244, #0238 x2), so
-# it is the path already proven in this exact codebase.
+# TOOL CHOICE (#0287 criterion 5, #0609): safaridriver, not Playwright --
+# but NEVER on the host. AGENTS.md §8 forbids launching any browser on the
+# host, so Safari and safaridriver run only inside a disposable Tart clone of
+# the golden image named by `tart-golden path`, per
+# ~/Developer/Homelab/cameron/tart-ui-test-vm.md: `tart-lease acquire`, a
+# uniquely named clone, `tart run --no-graphics --no-audio`. The guest runs
+# `sudo -n safaridriver --enable` itself; the golden image is never modified.
+# safaridriver ships with macOS, so this needs no new dependency, and it is
+# the path already proven in this codebase (#0063, #0244, #0238, #0561).
 #
 # BUILD STRATEGY: rsync's `web/` (minus node_modules and dist) into a fresh
 # temp directory rather than a `git worktree` -- this is deliberately NOT a
@@ -68,25 +61,22 @@
 # symlinked from the real web/node_modules rather than reinstalled, the same
 # shortcut #0238's own throwaway rigs used.
 #
-# PORTS (#0287 criteria 1, 3): both the static file server and safaridriver
-# bind a per-run port derived from ISSUE (falling back to $$), verified free
-# first via lsof, with the same collision-retry shape
-# scripts/dev_guard_test.sh's pick_pbase() uses (#0253/#0259) -- so two
-# concurrent runs of this script do not collide, and a stray unrelated
-# listener already on a candidate port is skipped rather than fought.
-# Ownership of the server actually answering is verified with a
-# BUILD-SPECIFIC detail (the hashed bundle filename this run's own `npm run
-# build` just produced), read back from `document.scripts` inside the
-# browser -- not by trusting a bare curl 200 (AGENTS.md §8b: "a curl that
-# succeeds is not evidence the right server answered").
+# PORTS (#0287 criteria 1, 3; #0609): nothing listens on ANY host interface.
+# The built dist/ and the stub server reach the guest through a read-only
+# Tart share; the guest copies them out and serves on its OWN loopback
+# (8765), and safaridriver binds the guest's loopback (4444). Fixed ports are
+# collision-free because every run has its own clone. Every WebDriver/HTTP
+# call is a `tart exec ... curl` inside the guest, request on stdin and
+# response on stdout. Ownership of the server actually answering is verified
+# with a BUILD-SPECIFIC detail (the hashed bundle filename this run's own
+# `npm run build` just produced), read back from `document.scripts` inside
+# the browser (AGENTS.md §8b).
 #
-# CLEANUP (#0287 criterion 6): the EXIT trap deletes the WebDriver session,
-# kills safaridriver and the static file server BY THE PIDS THIS SCRIPT
-# recorded when it started them (never a pattern-matched `pkill -f` -- AGENTS.md
-# §5a records that pattern-scoped cleanup has twice reached past its owner
-# and killed another agent's process), and removes the temp build directory.
-# Safari.app itself is left running if this script did not have to launch it
-# -- quitting a real user's browser is not this script's business.
+# CLEANUP (#0287 criterion 6, #0609): the EXIT trap deletes the WebDriver
+# session, stops and deletes THIS run's clone by its exact name (never a
+# pattern sweep -- AGENTS.md §5a; never anything named like the golden),
+# releases the lease, and removes the temp build directory. The guest's
+# server and safaridriver die with the clone.
 #
 # NOT wired into `scripts/check.sh`'s default/web/go/all targets, and
 # deliberately not folded into `scripts/check.sh guards` either (#0287
@@ -98,7 +88,7 @@
 #
 # Usage:
 #   scripts/browser_nav_guard_test.sh
-#   ISSUE=0287 scripts/browser_nav_guard_test.sh   # derives this run's ports
+#   ISSUE=0287 scripts/browser_nav_guard_test.sh   # names the not-found slug
 #
 # Exit 0 = every assertion held. Exit 1 = at least one FAIL line was printed
 # (see the FAIL: lines for which one and why) or setup itself failed.
@@ -115,7 +105,7 @@ note() { printf '  [note] %s\n' "$1"; }
 step() { printf '\n\033[1m=== %s\033[0m\n' "$1"; }
 
 # --- tool check (AGENTS.md §5b: surface a missing obstacle, don't paper over it) ---
-for tool in rsync python3 curl jq safaridriver npm; do
+for tool in rsync python3 jq npm tart tart-lease tart-golden; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "error: required tool '$tool' not found on PATH -- cannot run this check." >&2
     exit 1
@@ -128,65 +118,46 @@ if [ ! -d "$REPO/web/node_modules" ]; then
   exit 1
 fi
 
-# --- port selection: derive a per-run base, verified free, collision-retry ---
-# Same shape as scripts/dev_guard_test.sh's pick_pbase() (#0253/#0259): a
-# deterministic base from RUNID so a human-diffable, reproducible-by-default
-# run is the common case, with bounded retries against a genuinely occupied
-# candidate rather than fighting it. Range 20000..39900 is below macOS's
-# ephemeral-port floor and clear of the real listeners #0259 found occupying
-# the old 40000..59900 range on this machine.
-port_listeners() { lsof -ti tcp:"$1" -sTCP:LISTEN 2>/dev/null || true; }
-port_bound()     { [ -n "$(port_listeners "$1")" ]; }
-
-pick_pbase() {
-  local seed hash base collision attempt=0
-  while [ "$attempt" -lt 50 ]; do
-    seed="${RUNID}:${attempt}"
-    hash="$(printf '%s' "$seed" | cksum | awk '{print $1}')"
-    base=$(( 20000 + ( (hash % 200) * 100 ) ))
-    collision=0
-    for off in 1 11; do
-      if port_bound "$((base + off))"; then collision=1; break; fi
-    done
-    if [ "$collision" -eq 0 ]; then printf '%s\n' "$base"; return 0; fi
-    attempt=$((attempt + 1))
-  done
-  return 1
-}
-
 RUNID="${ISSUE:-$$}"
-PBASE="$(pick_pbase)" || {
-  echo "error: could not find a free port pair after 50 attempts." >&2
-  exit 1
-}
-SERVER_PORT="$((PBASE + 1))"
-DRIVER_PORT="$((PBASE + 11))"
+GUEST_SERVER_PORT=8765
+GUEST_DRIVER_PORT=4444
+GOLDEN="$(tart-golden path)" || { echo "error: no Tart golden image (tart-golden path failed)" >&2; exit 1; }
+CLONE="ocsf-browsernav-$$-$RANDOM"
+[ -n "$GOLDEN" ] && [ "$CLONE" != "$GOLDEN" ] || { echo "error: refusing: clone name equals golden" >&2; exit 1; }
 NOTFOUND_SLUG="guard-nav-check-missing-workshop-${RUNID}"
 
 # --- state torn down by the cleanup trap ---
 BUILD_DIR=""
-SERVER_PID=""
-DRIVER_PID=""
+LEASE_ID=""
+RUN_PID=""
+CLONE_MADE=0
 SID=""
 WD_BASE=""
 
 cleanup() {
   set +e
-  if [ -n "$SID" ] && [ -n "$WD_BASE" ]; then
-    curl -s -X DELETE "$WD_BASE" >/dev/null 2>&1
+  if [ -n "$SID" ] && [ -n "$WD_BASE" ] && [ "$CLONE_MADE" -eq 1 ]; then
+    gcurl -X DELETE "$WD_BASE" --max-time 10 </dev/null >/dev/null 2>&1
   fi
-  if [ -n "$DRIVER_PID" ]; then
-    kill "$DRIVER_PID" >/dev/null 2>&1
-    wait "$DRIVER_PID" 2>/dev/null
+  if [ "$CLONE_MADE" -eq 1 ]; then
+    tart stop "$CLONE" >/dev/null 2>&1
+    if [ -n "$RUN_PID" ] && kill -0 "$RUN_PID" 2>/dev/null; then
+      kill "$RUN_PID" >/dev/null 2>&1
+    fi
+    [ -n "$RUN_PID" ] && wait "$RUN_PID" 2>/dev/null
+    tart delete "$CLONE" >/dev/null 2>&1
   fi
-  if [ -n "$SERVER_PID" ]; then
-    kill "$SERVER_PID" >/dev/null 2>&1
-    wait "$SERVER_PID" 2>/dev/null
+  if [ -n "$LEASE_ID" ]; then
+    tart-lease release --id "$LEASE_ID" >/dev/null 2>&1
   fi
   if [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR" ]; then
     rm -rf "$BUILD_DIR"
   fi
 }
+
+# every WebDriver/HTTP call runs INSIDE the guest -- the host binds nothing (#0609)
+gcurl() { tart exec -i "$CLONE" curl -s "$@"; }
+
 trap cleanup EXIT INT TERM
 
 # --- build the SPA against the CURRENT working tree (see BUILD STRATEGY above) ---
@@ -214,8 +185,7 @@ if [ -z "$BUNDLE_JS" ]; then
 fi
 note "built bundle: $BUNDLE_JS"
 
-# --- serve the build on the per-run port, with a couple of API stubs ---
-step "Starting the static/stub server on 127.0.0.1:$SERVER_PORT"
+# --- the static/stub server the GUEST will run (written into the share) ---
 STUB_SERVER_PY="$BUILD_DIR/stub_server.py"
 cat > "$STUB_SERVER_PY" <<'PYEOF'
 import http.server
@@ -270,54 +240,79 @@ if __name__ == "__main__":
     srv.serve_forever()
 PYEOF
 
-python3 "$STUB_SERVER_PY" "$DIST" "$SERVER_PORT" "$NOTFOUND_SLUG" &
-SERVER_PID=$!
-
-for _ in $(seq 1 50); do
-  port_bound "$SERVER_PORT" && break
-  sleep 0.1
+# --- boot a disposable Tart guest (#0609) ---
+step "Starting a Tart guest ($CLONE from $GOLDEN)"
+LEASE_ID="$(tart-lease acquire --label ocsf-browser-nav --pid $$)" || { LEASE_ID=""; echo "error: tart-lease acquire failed" >&2; exit 1; }
+tart clone "$GOLDEN" "$CLONE" || { echo "error: tart clone failed" >&2; exit 1; }
+CLONE_MADE=1
+tart run "$CLONE" --no-graphics --no-audio --dir=run:"$BUILD_DIR":ro >"$BUILD_DIR/tart-run.log" 2>&1 &
+RUN_PID=$!
+booted=0
+for _ in $(seq 1 60); do               # ~180 s ceiling; a boot measured ~14 s
+  tart exec "$CLONE" true </dev/null >/dev/null 2>&1 && { booted=1; break; }
+  kill -0 "$RUN_PID" 2>/dev/null || break
+  sleep 3
 done
-if ! port_bound "$SERVER_PORT"; then
-  echo "error: stub server never bound :$SERVER_PORT" >&2
+if [ "$booted" -ne 1 ]; then
+  echo "error: guest never answered tart exec" >&2
+  tail -20 "$BUILD_DIR/tart-run.log" >&2
   exit 1
 fi
-note "stub server pid $SERVER_PID bound to :$SERVER_PORT"
+note "guest $CLONE up"
 
-# --- start safaridriver ---
-step "Starting safaridriver on 127.0.0.1:$DRIVER_PORT"
-# Safari must actually be running for safaridriver to pair with it -- an
-# already-quit Safari.app made the first session request time out while
-# writing this script; launching it first (a no-op if it is already open)
-# fixed that.
-open -a Safari >/dev/null 2>&1 || true
+step "Guest setup: copy the build out of the share, start the server and safaridriver"
+if ! tart exec -i "$CLONE" bash -s <<GUEST
+set -e
+rm -rf ~/bn && mkdir -p ~/bn
+cp -R "/Volumes/My Shared Files/run/web/dist" ~/bn/dist
+cp "/Volumes/My Shared Files/run/stub_server.py" ~/bn/
+(nohup python3 ~/bn/stub_server.py ~/bn/dist $GUEST_SERVER_PORT $NOTFOUND_SLUG >~/bn/server.log 2>&1 &)
+sudo -n safaridriver --enable
+(nohup safaridriver -p $GUEST_DRIVER_PORT >~/bn/safaridriver.log 2>&1 &)
+GUEST
+then
+  echo "error: guest setup failed" >&2
+  exit 1
+fi
 
-safaridriver -p "$DRIVER_PORT" >"$BUILD_DIR/safaridriver.log" 2>&1 &
-DRIVER_PID=$!
+SERVER_READY=0
+for _ in $(seq 1 50); do
+  code="$(gcurl "http://127.0.0.1:$GUEST_SERVER_PORT/" -o /dev/null -w '%{http_code}' </dev/null 2>/dev/null)"
+  [ "$code" = "200" ] && { SERVER_READY=1; break; }
+  sleep 0.2
+done
+if [ "$SERVER_READY" -ne 1 ]; then
+  echo "error: guest stub server never answered on :$GUEST_SERVER_PORT" >&2
+  tart exec "$CLONE" cat bn/server.log </dev/null >&2
+  exit 1
+fi
+note "guest stub server answering on guest 127.0.0.1:$GUEST_SERVER_PORT"
 
 DRIVER_READY=0
 for _ in $(seq 1 50); do
-  if curl -s "http://127.0.0.1:$DRIVER_PORT/status" 2>/dev/null | grep -q '"ready":true'; then
+  if gcurl "http://127.0.0.1:$GUEST_DRIVER_PORT/status" </dev/null 2>/dev/null | grep -q '"ready":true'; then
     DRIVER_READY=1
     break
   fi
   sleep 0.2
 done
 if [ "$DRIVER_READY" -ne 1 ]; then
-  echo "error: safaridriver never reported ready on :$DRIVER_PORT" >&2
-  cat "$BUILD_DIR/safaridriver.log" >&2
+  echo "error: guest safaridriver never reported ready on :$GUEST_DRIVER_PORT" >&2
+  tart exec "$CLONE" cat bn/safaridriver.log </dev/null >&2
   exit 1
 fi
-note "safaridriver pid $DRIVER_PID ready on :$DRIVER_PORT"
+note "guest safaridriver ready on guest 127.0.0.1:$GUEST_DRIVER_PORT"
 
-# --- WebDriver session ---
-SESSION_RESP="$(curl -s -X POST "http://127.0.0.1:$DRIVER_PORT/session" \
-  -H 'Content-Type: application/json' -d '{"capabilities":{}}' --max-time 30)"
+# --- WebDriver session (60 s: the first session launches Safari in a fresh guest) ---
+SESSION_RESP="$(printf '%s' '{"capabilities":{"alwaysMatch":{"browserName":"safari"}}}' | \
+  gcurl -X POST "http://127.0.0.1:$GUEST_DRIVER_PORT/session" \
+  -H 'Content-Type: application/json' --data-binary @- --max-time 60)"
 SID="$(echo "$SESSION_RESP" | jq -r '.value.sessionId // empty')"
 if [ -z "$SID" ]; then
   echo "error: could not create a WebDriver session: $SESSION_RESP" >&2
   exit 1
 fi
-WD_BASE="http://127.0.0.1:$DRIVER_PORT/session/$SID"
+WD_BASE="http://127.0.0.1:$GUEST_DRIVER_PORT/session/$SID"
 note "WebDriver session $SID"
 
 wd_exec() {
@@ -328,18 +323,18 @@ wd_exec() {
   local js="$1" argsjson="${2:-[]}"
   local body
   body="$(jq -n --arg s "$js" --argjson a "$argsjson" '{script:$s, args:$a}')"
-  curl -s -X POST "$WD_BASE/execute/sync" -H 'Content-Type: application/json' \
-    -d "$body" --max-time 15
+  printf '%s' "$body" | gcurl -X POST "$WD_BASE/execute/sync" \
+    -H 'Content-Type: application/json' --data-binary @- --max-time 15
 }
 
 wd_nav() {
-  curl -s -X POST "$WD_BASE/url" -H 'Content-Type: application/json' \
-    -d "$(jq -n --arg u "$1" '{url:$u}')" --max-time 20 >/dev/null
+  jq -n --arg u "$1" '{url:$u}' | gcurl -X POST "$WD_BASE/url" \
+    -H 'Content-Type: application/json' --data-binary @- --max-time 20 >/dev/null
 }
 
 wd_back() {
-  curl -s -X POST "$WD_BASE/back" -H 'Content-Type: application/json' \
-    -d '{}' --max-time 15 >/dev/null
+  printf '%s' '{}' | gcurl -X POST "$WD_BASE/back" \
+    -H 'Content-Type: application/json' --data-binary @- --max-time 15 >/dev/null
 }
 
 assert_eq() {
@@ -400,7 +395,7 @@ assert_nav_snapshot() {
 
 # --- Test sequence ------------------------------------------------------
 step "Navigating to /privacy and confirming server identity"
-wd_nav "http://127.0.0.1:$SERVER_PORT/privacy"
+wd_nav "http://127.0.0.1:$GUEST_SERVER_PORT/privacy"
 sleep 0.3
 
 OWN_CHECK_JS="$(cat <<'JS'
@@ -457,7 +452,7 @@ assert_nav_snapshot "popstate (Back) -> /privacy" \
   "Privacy Policy" "H1" "Privacy Policy" "1200" "1200"
 
 step "Path 3/3 -- programmatic navigate() (a <button onclick>, NOT an <a> -- does not touch click-interception)"
-wd_nav "http://127.0.0.1:$SERVER_PORT/workshops/$NOTFOUND_SLUG"
+wd_nav "http://127.0.0.1:$GUEST_SERVER_PORT/workshops/$NOTFOUND_SLUG"
 sleep 0.5
 CLICK_BUTTON_JS="$(cat <<'JS'
 var btns = document.querySelectorAll('button');
