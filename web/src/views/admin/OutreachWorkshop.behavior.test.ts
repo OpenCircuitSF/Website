@@ -4,7 +4,7 @@
 // OutreachAnnouncement, OutreachWaveRow and OutreachBulkActions) under jsdom with '../../lib/api'
 // mocked. jsdom is not a browser (AGENTS.md §1): DOM order is real, layout is
 // not.
-import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/svelte';
+import { render, cleanup, waitFor, screen, fireEvent, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
 
@@ -309,5 +309,25 @@ describe('OutreachWorkshop: Delete and redo (#0606)', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete and redo…' })).toBeNull());
     expect(getWorkshopOutreach.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('with Bluesky and Mastodon both posted, each offers Delete and redo, and taking one down leaves the other button (#0606 review)', async () => {
+    const both = [...channels, { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true, configured: true, account: '' }];
+    const masto = { ...posted(), id: 4, channel: 'mastodon', remote_url: 'https://mastodon.social/@x/1' } as unknown as OutreachPost;
+    const draft = { ...posted(), status: 'draft', posted_at: null, remote_url: null } as unknown as OutreachPost;
+    getWorkshopOutreach
+      .mockResolvedValueOnce(view({ channels: both, posts: [posted(), masto] }))
+      .mockResolvedValue(view({ channels: both, posts: [draft, masto] }));
+    getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
+    takedownOutreachPost.mockResolvedValue(draft);
+    render(OutreachWorkshop, { workshopId: 5 });
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Delete and redo…' })).toHaveLength(2));
+    const bsky = screen.getByRole('article', { name: 'Bluesky preview' });
+    await fireEvent.click(within(bsky).getByRole('button', { name: 'Delete and redo…' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete post' }));
+    await waitFor(() => expect(takedownOutreachPost).toHaveBeenCalledWith(3));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Delete and redo…' })).toHaveLength(1));
+    const mas = screen.getByRole('article', { name: 'Mastodon preview' });
+    expect(within(mas).getByRole('button', { name: 'Delete and redo…' })).toBeTruthy();
   });
 });
