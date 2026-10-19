@@ -34,8 +34,10 @@ describe('SubNav (#0600)', () => {
 
   it('the shared fade rule is pure CSS with a local-attachment cover', () => {
     const css = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../app.css'), 'utf-8');
-    const rule = css.slice(css.indexOf('.scroll-fade-x {'));
-    expect(rule).toMatch(/local/);
-    expect(rule).toMatch(/scroll;/);
+    const start = css.indexOf('.scroll-fade-x {');
+    expect(start).toBeGreaterThan(-1);
+    const rule = css.slice(start, css.indexOf('}', start));
+    expect(rule).toMatch(/var\(--bg-page\).*no-repeat local/);
+    expect(rule).toMatch(/no-repeat scroll;/);
   });
 });

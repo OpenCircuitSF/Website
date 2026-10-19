@@ -598,15 +598,19 @@ tbody tr:last-child td { border-bottom: none; }
   }
 }
 
-/* #0600: a row that scrolls sideways fades out at its right edge while more
- * items are off-screen, so touch users can see there is more. Pure CSS: the
- * fade is a scroll-attached background gradient and the "cover" gradient
- * (background-attachment: local) hides it once the row is scrolled to its
- * end, or when nothing overflows. It paints behind the content, so it never
- * hides focus indicators, and it adds no layout width. */
+/* #0600: a row that scrolls sideways shows a shadow at its right edge while
+ * more items are off-screen, so touch users can see there is more. Pure CSS
+ * scroll shadow: the shadow gradient is attached to the box (scroll) and a
+ * page-coloured cover (background-attachment: local) rides along with the
+ * content's far end, so it slides over the shadow once the row is scrolled
+ * to its end, or when nothing overflows. The cover is wider than the shadow
+ * so none of the shadow peeks out past it at the end. It is a background, so
+ * it paints behind the links and never hides a focus indicator, and it adds
+ * no layout width. The cover is --bg-page, so only use this class on a row
+ * that sits directly on the page background. Where `local` is unsupported
+ * the cover stays put over the shadow: no cue, nothing broken. */
 .scroll-fade-x {
   background:
-    linear-gradient(to right, var(--bg-page) 30%, transparent) left center / 24px 100% no-repeat local,
-    linear-gradient(to left, var(--bg-page) 30%, transparent) right center / 24px 100% no-repeat local,
-    linear-gradient(to left, var(--bg-subtle), transparent) right center / 24px 100% no-repeat scroll;
+    linear-gradient(to left, var(--bg-page) 50%, transparent) right center / 48px 100% no-repeat local,
+    linear-gradient(to left, var(--border), transparent) right center / 24px 100% no-repeat scroll;
 }
